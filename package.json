@@ -4,8 +4,11 @@
 	"private": true,
 	"description": "",
 	"scripts": {
+		"type-check": "tsc",
 		"lint": "eslint . --concurrency=auto --fix --cache --cache-location .cache/eslint/",
-		"lint:ci": "eslint . --concurrency=auto"
+		"lint:ci": "eslint . --concurrency=auto",
+		"update": "npx npm-check --update --save-exact",
+		"test": "vitest"
 	},
 	"repository": {
 		"type": "git",
@@ -17,6 +20,9 @@
 	},
 	"homepage": "https://github.com/dirkdev98/maligator#readme",
 	"devDependencies": {
-		"@lightbase/eslint-config": "4.1.1"
+		"@lightbase/eslint-config": "4.1.1",
+		"@vitest/coverage-v8": "4.0.15",
+		"typescript": "5.9.3",
+		"vitest": "4.0.15"
 	}
 }

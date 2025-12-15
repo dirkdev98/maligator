@@ -1,3 +1,6 @@
 .cache
 .idea
 node_modules
+
+tsconfig.tsbuildinfo
+TODO.md
