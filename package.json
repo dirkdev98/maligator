@@ -1,0 +1,22 @@
+{
+	"name": "maligator",
+	"version": "0.0.1",
+	"private": true,
+	"description": "",
+	"scripts": {
+		"lint": "eslint . --concurrency=auto --fix --cache --cache-location .cache/eslint/",
+		"lint:ci": "eslint . --concurrency=auto"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/dirkdev98/maligator.git"
+	},
+	"type": "module",
+	"bugs": {
+		"url": "https://github.com/dirkdev98/maligator/issues"
+	},
+	"homepage": "https://github.com/dirkdev98/maligator#readme",
+	"devDependencies": {
+		"@lightbase/eslint-config": "4.1.1"
+	}
+}
