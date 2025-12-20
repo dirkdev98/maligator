@@ -9,6 +9,7 @@ experience in building runtimes.
 
 - We depend on V8 to do our memory management and don't do exercises in memory
   optimization of the implementation.
+- We depend on V8 to handle internal representations of values like strings and numbers.
 
 ## Useful links
 
