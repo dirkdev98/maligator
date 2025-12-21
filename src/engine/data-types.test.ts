@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { EngineValue } from "./data-types.ts";
+import { EngineValue, WELL_KNOWN_SYMBOLS } from "./data-types.ts";
 
 test("create undefined", () => {
 	expect(() => EngineValue.undefined()).not.toThrow();
@@ -222,4 +222,100 @@ test("stringLastIndexOf handles empty search string", () => {
 	const search = EngineValue.string("");
 	const result = str.stringLastIndexOf(search, 5);
 	expect(result).toBe(5);
+});
+
+test("create symbol without description", () => {
+	expect(() => EngineValue.symbol()).not.toThrow();
+});
+
+test.for(["Symbol.iterator", "Symbol.toStringTag", "", "test"])(
+	"create symbol with description: %s",
+	(description) => {
+		expect(() => EngineValue.symbol(description)).not.toThrow();
+	},
+);
+
+test("assertIsSymbol passes for symbol value", () => {
+	const value = EngineValue.symbol();
+	expect(() => value.assertIsSymbol()).not.toThrow();
+});
+
+test.for([
+	EngineValue.undefined(),
+	EngineValue.null(),
+	EngineValue.boolean(true),
+	EngineValue.string("test"),
+])("assertIsSymbol throws for non-symbol value", (value) => {
+	expect(() => value.assertIsSymbol()).toThrow(
+		"Can't call this operation on a non-symbol value.",
+	);
+});
+
+test("asSymbol returns symbol value", () => {
+	const value = EngineValue.symbol();
+	const result = value.asSymbol();
+	expect(result).toBe(value);
+});
+
+test.for([
+	EngineValue.undefined(),
+	EngineValue.null(),
+	EngineValue.boolean(true),
+	EngineValue.string("test"),
+])("asSymbol throws for non-symbol value", (value) => {
+	expect(() => value.asSymbol()).toThrow(
+		"Can't call this operation on a non-symbol value.",
+	);
+});
+
+test("WELL_KNOWN_SYMBOLS contains all expected symbols", () => {
+	const expectedSymbols = [
+		"%Symbol.asyncIterator%",
+		"%Symbol.hasInstance%",
+		"%Symbol.isConcatSpreadable%",
+		"%Symbol.iterator%",
+		"%Symbol.match%",
+		"%Symbol.matchAll%",
+		"%Symbol.replace%",
+		"%Symbol.search%",
+		"%Symbol.species%",
+		"%Symbol.split%",
+		"%Symbol.toPrimitive%",
+		"%Symbol.toStringTag%",
+		"%Symbol.unscopables%",
+	];
+
+	expect(Object.keys(WELL_KNOWN_SYMBOLS)).toEqual(expectedSymbols);
+});
+
+test("all well-known symbols are symbol type", () => {
+	for (const symbol of Object.values(WELL_KNOWN_SYMBOLS)) {
+		expect(() => symbol.assertIsSymbol()).not.toThrow();
+	}
+});
+
+test("well-known symbols have correct descriptions", () => {
+	expect(WELL_KNOWN_SYMBOLS["%Symbol.asyncIterator%"].symbolDescription()).toBe(
+		"Symbol.asyncIterator",
+	);
+	expect(WELL_KNOWN_SYMBOLS["%Symbol.hasInstance%"].symbolDescription()).toBe(
+		"Symbol.hasInstance",
+	);
+	expect(WELL_KNOWN_SYMBOLS["%Symbol.iterator%"].symbolDescription()).toBe(
+		"Symbol.iterator",
+	);
+	expect(WELL_KNOWN_SYMBOLS["%Symbol.toStringTag%"].symbolDescription()).toBe(
+		"Symbol.toStringTag",
+	);
+});
+
+test("symbol without description has undefined description", () => {
+	const symbol = EngineValue.symbol();
+	expect(symbol.symbolDescription()).toBeUndefined();
+});
+
+test("symbol with description has correct description", () => {
+	const description = "test.description";
+	const symbol = EngineValue.symbol(description);
+	expect(symbol.symbolDescription()).toBe(description);
 });

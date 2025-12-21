@@ -16,6 +16,12 @@ type Value =
 	| {
 			type: "string";
 			value: string;
+	  }
+	| {
+			type: "symbol";
+
+			// Should this be an EngineValue<string>?
+			description?: string;
 	  };
 
 type ValueType = Value["type"];
@@ -55,6 +61,10 @@ export class EngineValue<T extends ValueType> {
 		return new EngineValue("string", { value });
 	}
 
+	static symbol(description?: string) {
+		return new EngineValue("symbol", { description });
+	}
+
 	private constructor(type: T, data: ValueProperties<T>) {
 		this.type = type;
 		this.data = data;
@@ -84,6 +94,12 @@ export class EngineValue<T extends ValueType> {
 		}
 	}
 
+	assertIsSymbol(): asserts this is EngineValue<"symbol"> {
+		if (this.type !== "symbol") {
+			throw new Error("Can't call this operation on a non-symbol value.");
+		}
+	}
+
 	asUndefined(): EngineValue<"undefined"> {
 		this.assertIsUndefined();
 		return this;
@@ -102,6 +118,18 @@ export class EngineValue<T extends ValueType> {
 	asString(): EngineValue<"string"> {
 		this.assertIsString();
 		return this;
+	}
+
+	asSymbol(): EngineValue<"symbol"> {
+		this.assertIsSymbol();
+		return this;
+	}
+
+	/**
+	 * Custom added to aid w/ testing
+	 */
+	symbolDescription(this: EngineValue<"symbol">): string | undefined {
+		return this.data.description;
 	}
 
 	// https://tc39.es/ecma262/#sec-stringindexof
@@ -152,3 +180,20 @@ export class EngineValue<T extends ValueType> {
 		return NOT_FOUND;
 	}
 }
+
+// https://tc39.es/ecma262/#sec-well-known-symbols
+export const WELL_KNOWN_SYMBOLS = {
+	"%Symbol.asyncIterator%": EngineValue.symbol("Symbol.asyncIterator"),
+	"%Symbol.hasInstance%": EngineValue.symbol("Symbol.hasInstance"),
+	"%Symbol.isConcatSpreadable%": EngineValue.symbol("Symbol.isConcatSpreadable"),
+	"%Symbol.iterator%": EngineValue.symbol("Symbol.iterator"),
+	"%Symbol.match%": EngineValue.symbol("Symbol.match"),
+	"%Symbol.matchAll%": EngineValue.symbol("Symbol.matchAll"),
+	"%Symbol.replace%": EngineValue.symbol("Symbol.replace"),
+	"%Symbol.search%": EngineValue.symbol("Symbol.search"),
+	"%Symbol.species%": EngineValue.symbol("Symbol.species"),
+	"%Symbol.split%": EngineValue.symbol("Symbol.split"),
+	"%Symbol.toPrimitive%": EngineValue.symbol("Symbol.toPrimitive"),
+	"%Symbol.toStringTag%": EngineValue.symbol("Symbol.toStringTag"),
+	"%Symbol.unscopables%": EngineValue.symbol("Symbol.unscopables"),
+};
