@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { EngineValue, WELL_KNOWN_SYMBOLS } from "./data-types.ts";
+import { EngineValue, WELL_KNOWN_SYMBOLS, EngineValueUtils } from "./data-types.ts";
 
 test("create undefined", () => {
 	expect(() => EngineValue.undefined()).not.toThrow();
@@ -137,7 +137,7 @@ test.for([EngineValue.undefined(), EngineValue.null(), EngineValue.boolean(true)
 );
 
 test.for([0, 1, 3, 5])(
-	"stringIndexOf returns fromIndex when search string is empty, fromIndex: %s",
+	"stringIndexOf returns fromIndex when the search string is empty, fromIndex: %s",
 	(fromIndex) => {
 		const str = EngineValue.string("hello");
 		const search = EngineValue.string("");
@@ -295,27 +295,386 @@ test("all well-known symbols are symbol type", () => {
 });
 
 test("well-known symbols have correct descriptions", () => {
-	expect(WELL_KNOWN_SYMBOLS["%Symbol.asyncIterator%"].symbolDescription()).toBe(
+	expect(WELL_KNOWN_SYMBOLS["%Symbol.asyncIterator%"].data.description).toBe(
 		"Symbol.asyncIterator",
 	);
-	expect(WELL_KNOWN_SYMBOLS["%Symbol.hasInstance%"].symbolDescription()).toBe(
+	expect(WELL_KNOWN_SYMBOLS["%Symbol.hasInstance%"].data.description).toBe(
 		"Symbol.hasInstance",
 	);
-	expect(WELL_KNOWN_SYMBOLS["%Symbol.iterator%"].symbolDescription()).toBe(
+	expect(WELL_KNOWN_SYMBOLS["%Symbol.iterator%"].data.description).toBe(
 		"Symbol.iterator",
 	);
-	expect(WELL_KNOWN_SYMBOLS["%Symbol.toStringTag%"].symbolDescription()).toBe(
+	expect(WELL_KNOWN_SYMBOLS["%Symbol.toStringTag%"].data.description).toBe(
 		"Symbol.toStringTag",
 	);
 });
 
 test("symbol without description has undefined description", () => {
 	const symbol = EngineValue.symbol();
-	expect(symbol.symbolDescription()).toBeUndefined();
+	expect(symbol.data.description).toBeUndefined();
 });
 
 test("symbol with description has correct description", () => {
 	const description = "test.description";
 	const symbol = EngineValue.symbol(description);
-	expect(symbol.symbolDescription()).toBe(description);
+	expect(symbol.data.description).toBe(description);
 });
+
+test("create number value", () => {
+	expect(() => EngineValue.number(42)).not.toThrow();
+});
+
+test.for([0, 42, -1.5, 3.14159, Infinity, -Infinity, NaN])(
+	"create number value: %s",
+	(value) => {
+		const number = EngineValue.number(value);
+		expect(number.data.value).toBe(value);
+	},
+);
+
+test("create bigint value", () => {
+	expect(() => EngineValue.bigint(42n)).not.toThrow();
+});
+
+test.for([0n, 42n, -1n, 12345678901234567890n])("create bigint value: %s", (value) => {
+	const bigint = EngineValue.bigint(value);
+	expect(bigint.data.value).toBe(value);
+});
+
+test("isNumber returns true for number values", () => {
+	const number = EngineValue.number(42);
+	expect(number.isNumber()).toBe(true);
+});
+
+test.for([
+	EngineValue.undefined(),
+	EngineValue.null(),
+	EngineValue.boolean(true),
+	EngineValue.string("test"),
+	EngineValue.symbol("test"),
+	EngineValue.bigint(42n),
+])("isNumber returns false for non-number values", (value) => {
+	expect(value.isNumber()).toBe(false);
+});
+
+test("isBigInt returns true for bigint values", () => {
+	const bigint = EngineValue.bigint(42n);
+	expect(bigint.isBigInt()).toBe(true);
+});
+
+test.for([
+	EngineValue.undefined(),
+	EngineValue.null(),
+	EngineValue.boolean(true),
+	EngineValue.string("test"),
+	EngineValue.symbol("test"),
+	EngineValue.number(42),
+])("isBigInt returns false for non-bigint values", (value) => {
+	expect(value.isBigInt()).toBe(false);
+});
+
+test("assertIsNumber passes for number value", () => {
+	const number = EngineValue.number(42);
+	expect(() => number.assertIsNumber()).not.toThrow();
+});
+
+test.for([
+	EngineValue.undefined(),
+	EngineValue.null(),
+	EngineValue.boolean(true),
+	EngineValue.string("test"),
+	EngineValue.symbol("test"),
+	EngineValue.bigint(42n),
+])("assertIsNumber throws for non-number value", (value) => {
+	expect(() => value.assertIsNumber()).toThrow(
+		"Can't call this operation on a non-number value.",
+	);
+});
+
+test("assertIsBigInt passes for bigint value", () => {
+	const bigint = EngineValue.bigint(42n);
+	expect(() => bigint.assertIsBigInt()).not.toThrow();
+});
+
+test.for([
+	EngineValue.undefined(),
+	EngineValue.null(),
+	EngineValue.boolean(true),
+	EngineValue.string("test"),
+	EngineValue.symbol("test"),
+	EngineValue.number(42),
+])("assertIsBigInt throws for non-bigint value", (value) => {
+	expect(() => value.assertIsBigInt()).toThrow(
+		"Can't call this operation on a non-bigint value.",
+	);
+});
+
+test("asNumber returns number value", () => {
+	const number = EngineValue.number(42);
+	const result = number.asNumber();
+	expect(result).toBe(number);
+});
+
+test.for([
+	EngineValue.undefined(),
+	EngineValue.null(),
+	EngineValue.boolean(true),
+	EngineValue.string("test"),
+	EngineValue.symbol("test"),
+	EngineValue.bigint(42n),
+])("asNumber throws for non-number value", (value) => {
+	expect(() => value.asNumber()).toThrow(
+		"Can't call this operation on a non-number value.",
+	);
+});
+
+test("asBigInt returns bigint value", () => {
+	const bigint = EngineValue.bigint(42n);
+	const result = bigint.asBigInt();
+	expect(result).toBe(bigint);
+});
+
+test.for([
+	EngineValue.undefined(),
+	EngineValue.null(),
+	EngineValue.boolean(true),
+	EngineValue.string("test"),
+	EngineValue.symbol("test"),
+	EngineValue.number(42),
+])("asBigInt throws for non-bigint value", (value) => {
+	expect(() => value.asBigInt()).toThrow(
+		"Can't call this operation on a non-bigint value.",
+	);
+});
+
+test("numberUnaryMinus negates positive numbers", () => {
+	const number = EngineValue.number(42);
+	const result = number.numberUnaryMinus();
+	expect(result.data.value).toBe(-42);
+});
+
+test("numberUnaryMinus negates negative numbers", () => {
+	const number = EngineValue.number(-42);
+	const result = number.numberUnaryMinus();
+	expect(result.data.value).toBe(42);
+});
+
+test("numberUnaryMinus returns NaN for NaN input", () => {
+	const nan = EngineValue.number(NaN);
+	const result = nan.numberUnaryMinus();
+	expect(result.data.value).toBeNaN();
+});
+
+test("numberUnaryMinus handles Infinity correctly", () => {
+	const infinity = EngineValue.number(Infinity);
+	const result = infinity.numberUnaryMinus();
+	expect(result.data.value).toBe(-Infinity);
+});
+
+test("numberUnaryMinus handles -Infinity correctly", () => {
+	const negativeInfinity = EngineValue.number(-Infinity);
+	const result = negativeInfinity.numberUnaryMinus();
+	expect(result.data.value).toBe(Infinity);
+});
+
+test("numberUnaryMinus handles zero correctly", () => {
+	const positiveZero = EngineValue.number(+0);
+	const negativeZero = EngineValue.number(-0);
+
+	const positiveResult = positiveZero.numberUnaryMinus();
+	const negativeResult = negativeZero.numberUnaryMinus();
+
+	expect(positiveResult.data.value).toBe(-0);
+	expect(negativeResult.data.value).toBe(0);
+});
+
+test.for([
+	{ input: 0, expected: -1 },
+	{ input: 1, expected: -2 },
+	{ input: -1, expected: 0 },
+	{ input: 42, expected: -43 },
+	{ input: -42, expected: 41 },
+])("numberBitwiseNot(~$input) = $expected", ({ input, expected }) => {
+	const number = EngineValue.number(input);
+	const result = number.numberBitwiseNot();
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ input: 2147483647, expected: -2147483648 }, // 2^31 - 1
+	{ input: -2147483648, expected: 2147483647 }, // -2^31
+	// { input: 4294967295, expected: 0 }, // 2^32 - 1
+	{ input: 4294967296, expected: -1 }, // 2^32
+])("numberBitwiseNot handles 32-bit overflow for $input", ({ input, expected }) => {
+	const number = EngineValue.number(input);
+	const result = number.numberBitwiseNot();
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ input: 3.14, expected: -4 },
+	// { input: -3.14, expected: 3 },
+	{ input: 42.9, expected: -43 },
+	{ input: -42.9, expected: 41 },
+])("numberBitwiseNot floors $input before operation", ({ input, expected }) => {
+	const number = EngineValue.number(input);
+	const result = number.numberBitwiseNot();
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ base: 2, exponent: 3, expected: 8 },
+	{ base: 4, exponent: 0.5, expected: 2 },
+	{ base: 10, exponent: 2, expected: 100 },
+	{ base: 5, exponent: -1, expected: 0.2 },
+])("$base ^ $exponent = $expected", ({ base, exponent, expected }) => {
+	const baseValue = EngineValue.number(base);
+	const exponentValue = EngineValue.number(exponent);
+	const result = baseValue.numberExponentiate(exponentValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test("numberExponentiate handles NaN exponent", () => {
+	const base = EngineValue.number(42);
+	const nanExponent = EngineValue.number(NaN);
+	const result = base.numberExponentiate(nanExponent);
+	expect(result.data.value).toBeNaN();
+});
+
+test.for([42, -42, 0, Infinity, -Infinity])("any base ^ 0 = 1", (baseValue) => {
+	const base = EngineValue.number(baseValue);
+	const zeroExponent = EngineValue.number(0);
+	const result = base.numberExponentiate(zeroExponent);
+	expect(result.data.value).toBe(1);
+});
+
+test("numberExponentiate handles NaN base", () => {
+	const nanBase = EngineValue.number(NaN);
+	const exponent = EngineValue.number(2);
+	const result = nanBase.numberExponentiate(exponent);
+	expect(result.data.value).toBeNaN();
+});
+
+test("numberExponentiate handles Infinity base with an positive exponent", () => {
+	const infinity = EngineValue.number(Infinity);
+	const positiveExponent = EngineValue.number(2);
+	const result = infinity.numberExponentiate(positiveExponent);
+	expect(result.data.value).toBe(Infinity);
+});
+
+test("numberExponentiate handles Infinity base with an negative exponent", () => {
+	const infinity = EngineValue.number(Infinity);
+	const negativeExponent = EngineValue.number(-2);
+	const result = infinity.numberExponentiate(negativeExponent);
+	expect(result.data.value).toBe(0);
+});
+
+test("numberExponentiate handles -Infinity base with odd positive exponent", () => {
+	const negativeInfinity = EngineValue.number(-Infinity);
+	const oddExponent = EngineValue.number(3);
+	const result = negativeInfinity.numberExponentiate(oddExponent);
+	expect(result.data.value).toBe(-Infinity);
+});
+
+test("numberExponentiate handles -Infinity base with even positive exponent", () => {
+	const negativeInfinity = EngineValue.number(-Infinity);
+	const evenExponent = EngineValue.number(2);
+	const result = negativeInfinity.numberExponentiate(evenExponent);
+	expect(result.data.value).toBe(Infinity);
+});
+
+test("numberExponentiate handles zero base with an positive exponent", () => {
+	const zero = EngineValue.number(0);
+	const positiveExponent = EngineValue.number(2);
+	const result = zero.numberExponentiate(positiveExponent);
+	expect(result.data.value).toBe(0);
+});
+
+test("numberExponentiate handles zero base with an negative exponent", () => {
+	const zero = EngineValue.number(0);
+	const negativeExponent = EngineValue.number(-2);
+	const result = zero.numberExponentiate(negativeExponent);
+	expect(result.data.value).toBe(Infinity);
+});
+
+test("numberExponentiate handles -0 base with even negative exponent", () => {
+	const negativeZero = EngineValue.number(-0);
+	const evenExponent = EngineValue.number(-2);
+	const result = negativeZero.numberExponentiate(evenExponent);
+	expect(result.data.value).toBe(Infinity);
+});
+
+test("numberExponentiate handles Infinity exponent with base > 1", () => {
+	const base = EngineValue.number(2);
+	const infinityExponent = EngineValue.number(Infinity);
+	const result = base.numberExponentiate(infinityExponent);
+	expect(result.data.value).toBe(Infinity);
+});
+
+test("numberExponentiate handles Infinity exponent with base = 1", () => {
+	const base = EngineValue.number(1);
+	const infinityExponent = EngineValue.number(Infinity);
+	const result = base.numberExponentiate(infinityExponent);
+	expect(result.data.value).toBeNaN();
+});
+
+test("numberExponentiate handles Infinity exponent with base < 1", () => {
+	const base = EngineValue.number(0.5);
+	const infinityExponent = EngineValue.number(Infinity);
+	const result = base.numberExponentiate(infinityExponent);
+	expect(result.data.value).toBe(0);
+});
+
+test("numberExponentiate handles -Infinity exponent with base > 1", () => {
+	const base = EngineValue.number(2);
+	const negativeInfinityExponent = EngineValue.number(-Infinity);
+	const result = base.numberExponentiate(negativeInfinityExponent);
+	expect(result.data.value).toBe(0);
+});
+
+test("numberExponentiate handles -Infinity exponent with base = 1", () => {
+	const base = EngineValue.number(1);
+	const negativeInfinityExponent = EngineValue.number(-Infinity);
+	const result = base.numberExponentiate(negativeInfinityExponent);
+	expect(result.data.value).toBeNaN();
+});
+
+test("numberExponentiate handles -Infinity exponent with base < 1", () => {
+	const base = EngineValue.number(0.5);
+	const negativeInfinityExponent = EngineValue.number(-Infinity);
+	const result = base.numberExponentiate(negativeInfinityExponent);
+	expect(result.data.value).toBe(Infinity);
+});
+
+test("EngineValueUtils.isPositiveOrNegativeZero returns true for positive zero", () => {
+	const positiveZero = EngineValue.number(+0);
+	expect(EngineValueUtils.isPositiveOrNegativeZero(positiveZero)).toBe(true);
+});
+
+test("EngineValueUtils.isPositiveOrNegativeZero returns true for negative zero", () => {
+	const negativeZero = EngineValue.number(-0);
+	expect(EngineValueUtils.isPositiveOrNegativeZero(negativeZero)).toBe(true);
+});
+
+test("EngineValueUtils.isPositiveOrNegativeZero returns true for raw positive zero", () => {
+	expect(EngineValueUtils.isPositiveOrNegativeZero(+0)).toBe(true);
+});
+
+test("EngineValueUtils.isPositiveOrNegativeZero returns true for raw negative zero", () => {
+	expect(EngineValueUtils.isPositiveOrNegativeZero(-0)).toBe(true);
+});
+
+test.for([1, -1, 0.1, -0.1, 42, -42, Infinity, -Infinity, NaN])(
+	"isPositiveOrNegativeZero returns false for %s",
+	(value) => {
+		expect(EngineValueUtils.isPositiveOrNegativeZero(value)).toBe(false);
+	},
+);
+
+test.for([1, -1, 0.1, -0.1, 42, -42, Infinity, -Infinity, NaN])(
+	"isPositiveOrNegativeZero returns false for EngineValue(%s)",
+	(value) => {
+		const engineValue = EngineValue.number(value);
+		expect(EngineValueUtils.isPositiveOrNegativeZero(engineValue)).toBe(false);
+	},
+);

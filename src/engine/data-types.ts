@@ -1,3 +1,5 @@
+import { toInt32 } from "./abstract-operations/type-conversion.ts";
+
 /**
  * https://tc39.es/ecma262/#sec-ecmascript-language-types
  */
@@ -22,6 +24,14 @@ type Value =
 
 			// Should this be an EngineValue<string>?
 			description?: string;
+	  }
+	| {
+			type: "number";
+			value: number;
+	  }
+	| {
+			type: "bigint";
+			value: bigint;
 	  };
 
 type ValueType = Value["type"];
@@ -41,9 +51,9 @@ const NOT_FOUND = -1;
  * For ease of implementation uses the runtimes semantics of string and numbers to manage the
  * valid representation of things like UTF-16 code units and floating point handling.
  */
-export class EngineValue<T extends ValueType> {
+export class EngineValue<T extends ValueType = ValueType> {
 	private type: T;
-	private data: ValueProperties<T>;
+	data: ValueProperties<T>;
 
 	static undefined() {
 		return new EngineValue("undefined", {});
@@ -65,9 +75,45 @@ export class EngineValue<T extends ValueType> {
 		return new EngineValue("symbol", { description });
 	}
 
+	static number(value: number) {
+		return new EngineValue("number", { value });
+	}
+
+	static bigint(value: bigint) {
+		return new EngineValue("bigint", { value });
+	}
+
 	private constructor(type: T, data: ValueProperties<T>) {
 		this.type = type;
 		this.data = data;
+	}
+
+	isUndefined(): this is EngineValue<"undefined"> {
+		return this.type === "undefined";
+	}
+
+	isNull(): this is EngineValue<"null"> {
+		return this.type === "null";
+	}
+
+	isBoolean(): this is EngineValue<"boolean"> {
+		return this.type === "boolean";
+	}
+
+	isString(): this is EngineValue<"string"> {
+		return this.type === "string";
+	}
+
+	isSymbol(): this is EngineValue<"symbol"> {
+		return this.type === "symbol";
+	}
+
+	isNumber(): this is EngineValue<"number"> {
+		return this.type === "number";
+	}
+
+	isBigInt(): this is EngineValue<"bigint"> {
+		return this.type === "bigint";
 	}
 
 	assertIsUndefined(): asserts this is EngineValue<"undefined"> {
@@ -100,6 +146,18 @@ export class EngineValue<T extends ValueType> {
 		}
 	}
 
+	assertIsNumber(): asserts this is EngineValue<"number"> {
+		if (this.type !== "number") {
+			throw new Error("Can't call this operation on a non-number value.");
+		}
+	}
+
+	assertIsBigInt(): asserts this is EngineValue<"bigint"> {
+		if (this.type !== "bigint") {
+			throw new Error("Can't call this operation on a non-bigint value.");
+		}
+	}
+
 	asUndefined(): EngineValue<"undefined"> {
 		this.assertIsUndefined();
 		return this;
@@ -125,11 +183,14 @@ export class EngineValue<T extends ValueType> {
 		return this;
 	}
 
-	/**
-	 * Custom added to aid w/ testing
-	 */
-	symbolDescription(this: EngineValue<"symbol">): string | undefined {
-		return this.data.description;
+	asNumber(): EngineValue<"number"> {
+		this.assertIsNumber();
+		return this;
+	}
+
+	asBigInt(): EngineValue<"bigint"> {
+		this.assertIsBigInt();
+		return this;
 	}
 
 	// https://tc39.es/ecma262/#sec-stringindexof
@@ -179,6 +240,111 @@ export class EngineValue<T extends ValueType> {
 
 		return NOT_FOUND;
 	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-unaryMinus
+	numberUnaryMinus(this: EngineValue<"number">) {
+		if (isNaN(this.data.value)) {
+			return EngineValue.number(NaN);
+		}
+
+		return EngineValue.number(-this.data.value);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-bitwiseNOT
+	numberBitwiseNot(this: EngineValue<"number">) {
+		const numberValue = toInt32(this);
+		if (numberValue.type === "throw") {
+			throw numberValue.error;
+		}
+
+		return EngineValue.number(~numberValue.value.data.value);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-exponentiate
+	numberExponentiate(
+		this: EngineValue<"number">,
+		exponent: EngineValue<"number">,
+	): EngineValue<"number"> {
+		const thisValue = this.data.value;
+		const expValue = exponent.data.value;
+
+		if (Number.isNaN(expValue)) {
+			return EngineValue.number(NaN);
+		}
+
+		if (EngineValueUtils.isPositiveOrNegativeZero(expValue)) {
+			return EngineValue.number(1);
+		}
+
+		if (Number.isNaN(thisValue)) {
+			return EngineValue.number(NaN);
+		}
+
+		if (thisValue === +Infinity) {
+			if (expValue > 0) {
+				return EngineValue.number(Infinity);
+			}
+
+			return EngineValue.number(0);
+		}
+
+		if (thisValue === -Infinity) {
+			if (expValue > 0) {
+				if (expValue % 2 !== 0) {
+					return EngineValue.number(-Infinity);
+				}
+				return EngineValue.number(Infinity);
+			}
+			if (expValue % 2 === 0) {
+				return EngineValue.number(-0);
+			}
+			return EngineValue.number(0);
+		}
+
+		if (thisValue === 0) {
+			if (expValue > 0) {
+				return EngineValue.number(0);
+			}
+			return EngineValue.number(Infinity);
+		}
+
+		if (EngineValueUtils.isNegativeZero(thisValue)) {
+			if (expValue > 0) {
+				if (expValue % 2 !== 0) {
+					return EngineValue.number(-0);
+				}
+				return EngineValue.number(0);
+			}
+			if (expValue % 2 !== 0) {
+				return EngineValue.number(-Infinity);
+			}
+			return EngineValue.number(+Infinity);
+		}
+
+		if (expValue === Infinity) {
+			const absBaseValue = Math.abs(thisValue);
+
+			if (absBaseValue > 1) {
+				return EngineValue.number(Infinity);
+			} else if (absBaseValue === 1) {
+				return EngineValue.number(NaN);
+			}
+			return EngineValue.number(0);
+		}
+
+		if (expValue === -Infinity) {
+			const absBaseValue = Math.abs(thisValue);
+
+			if (absBaseValue > 1) {
+				return EngineValue.number(0);
+			} else if (absBaseValue === 1) {
+				return EngineValue.number(NaN);
+			}
+			return EngineValue.number(Infinity);
+		}
+
+		return EngineValue.number(thisValue ** expValue);
+	}
 }
 
 // https://tc39.es/ecma262/#sec-well-known-symbols
@@ -196,4 +362,17 @@ export const WELL_KNOWN_SYMBOLS = {
 	"%Symbol.toPrimitive%": EngineValue.symbol("Symbol.toPrimitive"),
 	"%Symbol.toStringTag%": EngineValue.symbol("Symbol.toStringTag"),
 	"%Symbol.unscopables%": EngineValue.symbol("Symbol.unscopables"),
+};
+
+export const EngineValueUtils = {
+	isNegativeZero(value: EngineValue<"number"> | number) {
+		const v = typeof value === "number" ? value : value.data.value;
+		return Object.is(v, -0);
+	},
+
+	isPositiveOrNegativeZero(value: EngineValue<"number"> | number) {
+		const v = typeof value === "number" ? value : value.data.value;
+
+		return EngineValueUtils.isNegativeZero(v) || v === +0;
+	},
 };
