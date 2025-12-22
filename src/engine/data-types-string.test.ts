@@ -39,7 +39,7 @@ test.for([
 	},
 );
 
-test("stringIndexOf handles edge cases", () => {
+test("stringIndexOf returns 0 when searching for single character string at position 0", () => {
 	const str = EngineValue.string("a");
 	const search = EngineValue.string("a");
 	const result = str.stringIndexOf(search, 0);
@@ -67,7 +67,7 @@ test("stringLastIndexOf finds substring at start", () => {
 	expect(result).toBe(0);
 });
 
-test("stringLastIndexOf handles single character strings", () => {
+test("stringLastIndexOf returns 0 when searching for single character string at position 0", () => {
 	const str = EngineValue.string("a");
 	const search = EngineValue.string("a");
 	const result = str.stringLastIndexOf(search, 0);

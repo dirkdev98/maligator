@@ -30,7 +30,7 @@ test("toNumber throws for bigint input", () => {
 	expect(result.type).toBe("throw");
 	if (result.type === "throw") {
 		expect(result.error).toBeInstanceOf(TypeError);
-		expect(result.error.message).toBe("Cannot convert a Symbol value to a number");
+		expect(result.error.message).toBe("Cannot convert a BigInt value to a number");
 	}
 });
 
@@ -126,15 +126,18 @@ test.for([
 	{ input: -2147483648, expected: -2147483648 }, // -2^31
 	{ input: 4294967296, expected: 0 }, // 2^32 wraps to 0
 	{ input: 4294967297, expected: 1 }, // 2^32 + 1 wraps to 1
-])("toInt32 converts $input to $expected", ({ input, expected }) => {
-	const number = EngineValue.number(input);
-	const result = toInt32(number);
+])(
+	"toInt32 handles 32-bit integer overflow for $input by wrapping around modulo 2^32",
+	({ input, expected }) => {
+		const number = EngineValue.number(input);
+		const result = toInt32(number);
 
-	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
-		expect(result.value.data.value).toBe(expected);
-	}
-});
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value.data.value).toBe(expected);
+		}
+	},
+);
 
 test("toInt32 converts NaN to 0", () => {
 	const nan = EngineValue.number(NaN);
@@ -201,7 +204,7 @@ test.for([
 	{ input: -3.14, expected: -3 },
 	{ input: 42.9, expected: 42 },
 	{ input: -42.9, expected: -42 },
-])("toInt32 floors $input to $expected", ({ input, expected }) => {
+])("toInt32 floors $input before applying 32-bit conversion", ({ input, expected }) => {
 	const number = EngineValue.number(input);
 	const result = toInt32(number);
 

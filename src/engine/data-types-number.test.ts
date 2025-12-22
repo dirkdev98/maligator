@@ -31,7 +31,7 @@ test("numberUnaryMinus handles -Infinity correctly", () => {
 	expect(result.data.value).toBe(Infinity);
 });
 
-test("numberUnaryMinus handles zero correctly", () => {
+test("numberUnaryMinus converts positive zero to negative zero and negative zero to positive zero", () => {
 	const positiveZero = EngineValue.number(+0);
 	const negativeZero = EngineValue.number(-0);
 
@@ -48,7 +48,7 @@ test.for([
 	{ input: -1, expected: 0 },
 	{ input: 42, expected: -43 },
 	{ input: -42, expected: 41 },
-])("numberBitwiseNot(~$input) = $expected", ({ input, expected }) => {
+])("numberBitwiseNot returns bitwise complement: $input", ({ input, expected }) => {
 	const number = EngineValue.number(input);
 	const result = number.numberBitwiseNot();
 	expect(result.data.value).toBe(expected);
@@ -70,23 +70,29 @@ test.for([
 	// { input: -3.14, expected: 3 },
 	{ input: 42.9, expected: -43 },
 	{ input: -42.9, expected: 41 },
-])("numberBitwiseNot floors $input before operation", ({ input, expected }) => {
-	const number = EngineValue.number(input);
-	const result = number.numberBitwiseNot();
-	expect(result.data.value).toBe(expected);
-});
+])(
+	"numberBitwiseNot floors $input before applying bitwise complement",
+	({ input, expected }) => {
+		const number = EngineValue.number(input);
+		const result = number.numberBitwiseNot();
+		expect(result.data.value).toBe(expected);
+	},
+);
 
 test.for([
 	{ base: 2, exponent: 3, expected: 8 },
 	{ base: 4, exponent: 0.5, expected: 2 },
 	{ base: 10, exponent: 2, expected: 100 },
 	{ base: 5, exponent: -1, expected: 0.2 },
-])("$base ^ $exponent = $expected", ({ base, exponent, expected }) => {
-	const baseValue = EngineValue.number(base);
-	const exponentValue = EngineValue.number(exponent);
-	const result = baseValue.numberExponentiate(exponentValue);
-	expect(result.data.value).toBe(expected);
-});
+])(
+	"numberExponentiate handles integer, fractional, and negative exponents correctly for: $base ** $exponent",
+	({ base, exponent, expected }) => {
+		const baseValue = EngineValue.number(base);
+		const exponentValue = EngineValue.number(exponent);
+		const result = baseValue.numberExponentiate(exponentValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
 
 test("numberExponentiate handles NaN exponent", () => {
 	const base = EngineValue.number(42);
@@ -95,12 +101,15 @@ test("numberExponentiate handles NaN exponent", () => {
 	expect(result.data.value).toBeNaN();
 });
 
-test.for([42, -42, 0, Infinity, -Infinity])("any base ^ 0 = 1", (baseValue) => {
-	const base = EngineValue.number(baseValue);
-	const zeroExponent = EngineValue.number(0);
-	const result = base.numberExponentiate(zeroExponent);
-	expect(result.data.value).toBe(1);
-});
+test.for([42, -42, 0, Infinity, -Infinity])(
+	"numberExponentiate a zero-base with %o",
+	(baseValue) => {
+		const base = EngineValue.number(baseValue);
+		const zeroExponent = EngineValue.number(0);
+		const result = base.numberExponentiate(zeroExponent);
+		expect(result.data.value).toBe(1);
+	},
+);
 
 test("numberExponentiate handles NaN base", () => {
 	const nanBase = EngineValue.number(NaN);
@@ -210,7 +219,7 @@ test.for([
 	{ x: 1.5, y: 2, expected: 3 },
 	{ x: -1.5, y: 2, expected: -3 },
 	{ x: 1.5, y: -2, expected: -3 },
-])("$x * $y = $expected", ({ x, y, expected }) => {
+])("numberMultiply handles sign rules: $x * $y = $expected", ({ x, y, expected }) => {
 	const xValue = EngineValue.number(x);
 	const yValue = EngineValue.number(y);
 	const result = xValue.numberMultiply(yValue);
@@ -240,19 +249,22 @@ test("numberMultiply handles Infinity * zero = NaN", () => {
 test.for([
 	{ infinity: Infinity, positive: 5, expected: Infinity },
 	{ infinity: -Infinity, positive: 5, expected: -Infinity },
-])("$infinity * $positive = $expected", ({ infinity, positive, expected }) => {
-	const infinityValue = EngineValue.number(infinity);
-	const positiveValue = EngineValue.number(positive);
-	const result = infinityValue.numberMultiply(positiveValue);
-	expect(result.data.value).toBe(expected);
-});
+])(
+	"numberMultiply preserves $infinity when multiplying by positive finite number",
+	({ infinity, positive, expected }) => {
+		const infinityValue = EngineValue.number(infinity);
+		const positiveValue = EngineValue.number(positive);
+		const result = infinityValue.numberMultiply(positiveValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
 
 test.for([
 	{ x: -0, y: -0, expected: +0 },
 	{ x: -0, y: -5, expected: +0 },
 	{ x: -0, y: 5, expected: -0 },
 	{ x: -0, y: 0, expected: -0 },
-])("$x * $y = $expected (negative zero edge cases)", ({ x, y, expected }) => {
+])("numberMultiply handles negative zero sign: $x * $y", ({ x, y, expected }) => {
 	const xValue = EngineValue.number(x);
 	const yValue = EngineValue.number(y);
 	const result = xValue.numberMultiply(yValue);
@@ -262,12 +274,15 @@ test.for([
 test.for([
 	{ x: 0, y: -0, expected: -0 },
 	{ x: 5, y: -0, expected: -0 },
-])("$x * $y = $expected (negative zero as second operand)", ({ x, y, expected }) => {
-	const xValue = EngineValue.number(x);
-	const yValue = EngineValue.number(y);
-	const result = xValue.numberMultiply(yValue);
-	expect(Object.is(result.data.value, expected)).toBe(true);
-});
+])(
+	"numberMultiply produces negative zero when multiplying $x by negative zero as second operand",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberMultiply(yValue);
+		expect(Object.is(result.data.value, expected)).toBe(true);
+	},
+);
 
 test.for([
 	{ x: 6, y: 3, expected: 2 },
@@ -279,7 +294,7 @@ test.for([
 	{ x: -5, y: 2, expected: -2.5 },
 	{ x: 5, y: -2, expected: -2.5 },
 	{ x: -5, y: -2, expected: 2.5 },
-])("$x / $y = $expected", ({ x, y, expected }) => {
+])("numberDivide handles sign rules for $x / $y = $expected", ({ x, y, expected }) => {
 	const xValue = EngineValue.number(x);
 	const yValue = EngineValue.number(y);
 	const result = xValue.numberDivide(yValue);
@@ -308,24 +323,30 @@ test("numberDivide handles Infinity / Infinity = NaN", () => {
 test.for([
 	{ infinity: Infinity, positive: 5, expected: Infinity },
 	{ infinity: -Infinity, positive: 5, expected: -Infinity },
-])("$infinity / $positive = $expected", ({ infinity, positive, expected }) => {
-	const infinityValue = EngineValue.number(infinity);
-	const positiveValue = EngineValue.number(positive);
-	const result = infinityValue.numberDivide(positiveValue);
-	expect(result.data.value).toBe(expected);
-});
+])(
+	"numberDivide preserves $infinity when dividing by positive finite number",
+	({ infinity, positive, expected }) => {
+		const infinityValue = EngineValue.number(infinity);
+		const positiveValue = EngineValue.number(positive);
+		const result = infinityValue.numberDivide(positiveValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
 
 test.for([
 	{ x: 5, y: Infinity, expected: +0 },
 	{ x: -5, y: Infinity, expected: -0 },
 	{ x: 5, y: -Infinity, expected: -0 },
 	{ x: -5, y: -Infinity, expected: +0 },
-])("$x / $y = $expected (division by infinity)", ({ x, y, expected }) => {
-	const xValue = EngineValue.number(x);
-	const yValue = EngineValue.number(y);
-	const result = xValue.numberDivide(yValue);
-	expect(Object.is(result.data.value, expected)).toBe(true);
-});
+])(
+	"numberDivide returns zero with correct sign when dividing $x by infinity",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberDivide(yValue);
+		expect(Object.is(result.data.value, expected)).toBe(true);
+	},
+);
 
 test("numberDivide handles zero / zero = NaN", () => {
 	const positiveZero = EngineValue.number(+0);
@@ -341,35 +362,44 @@ test.for([
 	{ x: 5, y: 0, expected: Infinity },
 	{ x: -5, y: 0, expected: -Infinity },
 	{ x: 0, y: 5, expected: 0 },
-])("$x / $y = $expected (division by zero edge cases)", ({ x, y, expected }) => {
-	const xValue = EngineValue.number(x);
-	const yValue = EngineValue.number(y);
-	const result = xValue.numberDivide(yValue);
-	expect(result.data.value).toBe(expected);
-});
+])(
+	"numberDivide returns infinity with sign when dividing with zero: $x / $y",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberDivide(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
 
 test.for([
 	{ x: 5, y: -0, expected: -Infinity },
 	{ x: -5, y: -0, expected: Infinity },
-])("$x / $y = $expected (division by negative zero)", ({ x, y, expected }) => {
-	const xValue = EngineValue.number(x);
-	const yValue = EngineValue.number(y);
-	const result = xValue.numberDivide(yValue);
-	expect(result.data.value).toBe(expected);
-});
+])(
+	"numberDivide flips infinity sign when dividing by negative zero: $x / $y",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberDivide(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
 
 test.for([
 	{ x: +0, y: -5, expected: -0 },
 	{ x: +0, y: 5, expected: +0 },
 	{ x: -0, y: -5, expected: +0 },
 	{ x: -0, y: 5, expected: -0 },
-])("$x / $y = $expected (zero division edge cases)", ({ x, y, expected }) => {
-	const xValue = EngineValue.number(x);
-	const yValue = EngineValue.number(y);
-	const result = xValue.numberDivide(yValue);
+])(
+	"numberDivide preserves zero sign rules when dividing zero by non-zero: $x / $y",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberDivide(yValue);
 
-	expect(
-		Object.is(result.data.value, expected),
-		`${result.data.value}, ${expected}`,
-	).toBe(true);
-});
+		expect(
+			Object.is(result.data.value, expected),
+			`${result.data.value}, ${expected}`,
+		).toBe(true);
+	},
+);

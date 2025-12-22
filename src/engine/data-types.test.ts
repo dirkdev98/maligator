@@ -22,14 +22,15 @@ test("assertIsUndefined passes for undefined value", () => {
 	expect(() => value.assertIsUndefined()).not.toThrow();
 });
 
-test.for([EngineValue.null(), EngineValue.boolean(true), EngineValue.string("test")])(
-	"assertIsUndefined throws for non-undefined value",
-	(value) => {
-		expect(() => value.assertIsUndefined()).toThrow(
-			"Can't call this operation on a non-undefined value.",
-		);
-	},
-);
+test.for([
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+])("assertIsUndefined throws for $type value", ({ value }) => {
+	expect(() => value.assertIsUndefined()).toThrow(
+		"Can't call this operation on a non-undefined value.",
+	);
+});
 
 test("assertIsNull passes for null value", () => {
 	const value = EngineValue.null();
@@ -37,10 +38,10 @@ test("assertIsNull passes for null value", () => {
 });
 
 test.for([
-	EngineValue.undefined(),
-	EngineValue.boolean(true),
-	EngineValue.string("test"),
-])("assertIsNull throws for non-null value", (value) => {
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+])("assertIsNull throws TypeError for $type values", ({ value }) => {
 	expect(() => value.assertIsNull()).toThrow(
 		"Can't call this operation on a non-null value.",
 	);
@@ -51,14 +52,15 @@ test.for([true, false])("assertIsBoolean passes for boolean value: %s", (value) 
 	expect(() => boolValue.assertIsBoolean()).not.toThrow();
 });
 
-test.for([EngineValue.undefined(), EngineValue.null(), EngineValue.string("test")])(
-	"assertIsBoolean throws for non-boolean value",
-	(value) => {
-		expect(() => value.assertIsBoolean()).toThrow(
-			"Can't call this operation on a non-boolean value.",
-		);
-	},
-);
+test.for([
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "string", value: EngineValue.string("test") },
+])("assertIsBoolean throws TypeError for $type values", ({ value }) => {
+	expect(() => value.assertIsBoolean()).toThrow(
+		"Can't call this operation on a non-boolean value.",
+	);
+});
 
 test.for(["", "hello", "world"])(
 	"assertIsString passes for string value: %s",
@@ -68,14 +70,15 @@ test.for(["", "hello", "world"])(
 	},
 );
 
-test.for([EngineValue.undefined(), EngineValue.null(), EngineValue.boolean(true)])(
-	"assertIsString throws for non-string value",
-	(value) => {
-		expect(() => value.assertIsString()).toThrow(
-			"Can't call this operation on a non-string value.",
-		);
-	},
-);
+test.for([
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+])("assertIsString throws TypeError for $type values", ({ value }) => {
+	expect(() => value.assertIsString()).toThrow(
+		"Can't call this operation on a non-string value.",
+	);
+});
 
 test("asUndefined returns undefined value", () => {
 	const value = EngineValue.undefined();
@@ -83,14 +86,15 @@ test("asUndefined returns undefined value", () => {
 	expect(result).toBe(value);
 });
 
-test.for([EngineValue.null(), EngineValue.boolean(true), EngineValue.string("test")])(
-	"asUndefined throws for non-undefined value",
-	(value) => {
-		expect(() => value.asUndefined()).toThrow(
-			"Can't call this operation on a non-undefined value.",
-		);
-	},
-);
+test.for([
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+])("asUndefined throws TypeError for $type values", ({ value }) => {
+	expect(() => value.asUndefined()).toThrow(
+		"Can't call this operation on a non-undefined value.",
+	);
+});
 
 test("asNull returns null value", () => {
 	const value = EngineValue.null();
@@ -99,10 +103,10 @@ test("asNull returns null value", () => {
 });
 
 test.for([
-	EngineValue.undefined(),
-	EngineValue.boolean(true),
-	EngineValue.string("test"),
-])("asNull throws for non-null value", (value) => {
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+])("asNull throws TypeError for $type values", ({ value }) => {
 	expect(() => value.asNull()).toThrow("Can't call this operation on a non-null value.");
 });
 
@@ -112,14 +116,15 @@ test.for([true, false])("asBoolean returns boolean value: %s", (value) => {
 	expect(result).toBe(boolValue);
 });
 
-test.for([EngineValue.undefined(), EngineValue.null(), EngineValue.string("test")])(
-	"asBoolean throws for non-boolean value",
-	(value) => {
-		expect(() => value.asBoolean()).toThrow(
-			"Can't call this operation on a non-boolean value.",
-		);
-	},
-);
+test.for([
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "string", value: EngineValue.string("test") },
+])("asBoolean throws TypeError for $type values", ({ value }) => {
+	expect(() => value.asBoolean()).toThrow(
+		"Can't call this operation on a non-boolean value.",
+	);
+});
 
 test.for(["", "hello", "world"])("asString returns string value: %s", (value) => {
 	const stringValue = EngineValue.string(value);
@@ -127,14 +132,15 @@ test.for(["", "hello", "world"])("asString returns string value: %s", (value) =>
 	expect(result).toBe(stringValue);
 });
 
-test.for([EngineValue.undefined(), EngineValue.null(), EngineValue.boolean(true)])(
-	"asString throws for non-string value",
-	(value) => {
-		expect(() => value.asString()).toThrow(
-			"Can't call this operation on a non-string value.",
-		);
-	},
-);
+test.for([
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+])("asString throws TypeError for $type values", ({ value }) => {
+	expect(() => value.asString()).toThrow(
+		"Can't call this operation on a non-string value.",
+	);
+});
 
 test("create symbol without description", () => {
 	expect(() => EngineValue.symbol()).not.toThrow();
@@ -153,11 +159,11 @@ test("assertIsSymbol passes for symbol value", () => {
 });
 
 test.for([
-	EngineValue.undefined(),
-	EngineValue.null(),
-	EngineValue.boolean(true),
-	EngineValue.string("test"),
-])("assertIsSymbol throws for non-symbol value", (value) => {
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+])("assertIsSymbol throws TypeError for $type values", ({ value }) => {
 	expect(() => value.assertIsSymbol()).toThrow(
 		"Can't call this operation on a non-symbol value.",
 	);
@@ -170,11 +176,11 @@ test("asSymbol returns symbol value", () => {
 });
 
 test.for([
-	EngineValue.undefined(),
-	EngineValue.null(),
-	EngineValue.boolean(true),
-	EngineValue.string("test"),
-])("asSymbol throws for non-symbol value", (value) => {
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+])("asSymbol throws TypeError for $type values", ({ value }) => {
 	expect(() => value.asSymbol()).toThrow(
 		"Can't call this operation on a non-symbol value.",
 	);
@@ -259,13 +265,13 @@ test("isNumber returns true for number values", () => {
 });
 
 test.for([
-	EngineValue.undefined(),
-	EngineValue.null(),
-	EngineValue.boolean(true),
-	EngineValue.string("test"),
-	EngineValue.symbol("test"),
-	EngineValue.bigint(42n),
-])("isNumber returns false for non-number values", (value) => {
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+	{ type: "symbol", value: EngineValue.symbol("test") },
+	{ type: "bigint", value: EngineValue.bigint(42n) },
+])("isNumber returns false for $type values", ({ value }) => {
 	expect(value.isNumber()).toBe(false);
 });
 
@@ -275,13 +281,13 @@ test("isBigInt returns true for bigint values", () => {
 });
 
 test.for([
-	EngineValue.undefined(),
-	EngineValue.null(),
-	EngineValue.boolean(true),
-	EngineValue.string("test"),
-	EngineValue.symbol("test"),
-	EngineValue.number(42),
-])("isBigInt returns false for non-bigint values", (value) => {
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+	{ type: "symbol", value: EngineValue.symbol("test") },
+	{ type: "number", value: EngineValue.number(42) },
+])("isBigInt returns false for $type values", ({ value }) => {
 	expect(value.isBigInt()).toBe(false);
 });
 
@@ -291,13 +297,13 @@ test("assertIsNumber passes for number value", () => {
 });
 
 test.for([
-	EngineValue.undefined(),
-	EngineValue.null(),
-	EngineValue.boolean(true),
-	EngineValue.string("test"),
-	EngineValue.symbol("test"),
-	EngineValue.bigint(42n),
-])("assertIsNumber throws for non-number value", (value) => {
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+	{ type: "symbol", value: EngineValue.symbol("test") },
+	{ type: "bigint", value: EngineValue.bigint(42n) },
+])("assertIsNumber throws TypeError for $type values", ({ value }) => {
 	expect(() => value.assertIsNumber()).toThrow(
 		"Can't call this operation on a non-number value.",
 	);
@@ -309,13 +315,13 @@ test("assertIsBigInt passes for bigint value", () => {
 });
 
 test.for([
-	EngineValue.undefined(),
-	EngineValue.null(),
-	EngineValue.boolean(true),
-	EngineValue.string("test"),
-	EngineValue.symbol("test"),
-	EngineValue.number(42),
-])("assertIsBigInt throws for non-bigint value", (value) => {
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+	{ type: "symbol", value: EngineValue.symbol("test") },
+	{ type: "number", value: EngineValue.number(42) },
+])("assertIsBigInt throws TypeError for $type values", ({ value }) => {
 	expect(() => value.assertIsBigInt()).toThrow(
 		"Can't call this operation on a non-bigint value.",
 	);
@@ -328,13 +334,13 @@ test("asNumber returns number value", () => {
 });
 
 test.for([
-	EngineValue.undefined(),
-	EngineValue.null(),
-	EngineValue.boolean(true),
-	EngineValue.string("test"),
-	EngineValue.symbol("test"),
-	EngineValue.bigint(42n),
-])("asNumber throws for non-number value", (value) => {
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+	{ type: "symbol", value: EngineValue.symbol("test") },
+	{ type: "bigint", value: EngineValue.bigint(42n) },
+])("asNumber throws TypeError for $type values", ({ value }) => {
 	expect(() => value.asNumber()).toThrow(
 		"Can't call this operation on a non-number value.",
 	);
@@ -347,13 +353,13 @@ test("asBigInt returns bigint value", () => {
 });
 
 test.for([
-	EngineValue.undefined(),
-	EngineValue.null(),
-	EngineValue.boolean(true),
-	EngineValue.string("test"),
-	EngineValue.symbol("test"),
-	EngineValue.number(42),
-])("asBigInt throws for non-bigint value", (value) => {
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+	{ type: "symbol", value: EngineValue.symbol("test") },
+	{ type: "number", value: EngineValue.number(42) },
+])("asBigInt throws TypeError for $type values", ({ value }) => {
 	expect(() => value.asBigInt()).toThrow(
 		"Can't call this operation on a non-bigint value.",
 	);
@@ -378,14 +384,14 @@ test("EngineValueUtils.isPositiveOrNegativeZero returns true for raw negative ze
 });
 
 test.for([1, -1, 0.1, -0.1, 42, -42, Infinity, -Infinity, NaN])(
-	"isPositiveOrNegativeZero returns false for %s",
+	"isPositiveOrNegativeZero returns false for non-zero raw numbers: %o",
 	(value) => {
 		expect(EngineValueUtils.isPositiveOrNegativeZero(value)).toBe(false);
 	},
 );
 
 test.for([1, -1, 0.1, -0.1, 42, -42, Infinity, -Infinity, NaN])(
-	"isPositiveOrNegativeZero returns false for EngineValue(%s)",
+	"isPositiveOrNegativeZero returns false for EngineValue wrapping non-zero numbers: %o",
 	(value) => {
 		const engineValue = EngineValue.number(value);
 		expect(EngineValueUtils.isPositiveOrNegativeZero(engineValue)).toBe(false);
@@ -411,14 +417,14 @@ test("EngineValueUtils.isNegativeZero returns false for raw positive zero", () =
 });
 
 test.for([1, -1, 0.1, -0.1, 42, -42, Infinity, -Infinity, NaN])(
-	"isNegativeZero returns false for %s",
+	"isNegativeZero returns false for non-zero raw numbers: %o",
 	(value) => {
 		expect(EngineValueUtils.isNegativeZero(value)).toBe(false);
 	},
 );
 
 test.for([1, -1, 0.1, -0.1, 42, -42, Infinity, -Infinity, NaN])(
-	"isNegativeZero returns false for EngineValue(%s)",
+	"isNegativeZero returns false for EngineValue wrapping non-zero numbers: %o",
 	(value) => {
 		const engineValue = EngineValue.number(value);
 		expect(EngineValueUtils.isNegativeZero(engineValue)).toBe(false);

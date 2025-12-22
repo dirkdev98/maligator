@@ -52,7 +52,7 @@ const NOT_FOUND = -1;
  * valid representation of things like UTF-16 code units and floating point handling.
  */
 export class EngineValue<T extends ValueType = ValueType> {
-	private type: T;
+	readonly type: T;
 	data: ValueProperties<T>;
 
 	static undefined() {

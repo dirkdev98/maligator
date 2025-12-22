@@ -8,9 +8,14 @@ export function toNumber(argument: EngineValue): CompletionRecord<EngineValue<"n
 		return normalCompletion(argument);
 	}
 
-	if (argument.isSymbol() || argument.isBigInt()) {
+	if (argument.isSymbol()) {
 		// TODO: Error handling
 		return throwCompletion(new TypeError("Cannot convert a Symbol value to a number"));
+	}
+
+	if (argument.isBigInt()) {
+		// TODO: Error handling
+		return throwCompletion(new TypeError("Cannot convert a BigInt value to a number"));
 	}
 
 	if (argument.isUndefined()) {
