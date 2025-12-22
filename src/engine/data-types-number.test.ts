@@ -403,3 +403,272 @@ test.for([
 		).toBe(true);
 	},
 );
+
+test.for([
+	{ dividend: 10, divisor: 3, expected: 1 },
+	{ dividend: 10, divisor: -3, expected: 1 },
+	{ dividend: -10, divisor: 3, expected: -1 },
+	{ dividend: -10, divisor: -3, expected: -1 },
+	{ dividend: 7, divisor: 2.5, expected: 2 },
+	{ dividend: 0, divisor: 5, expected: 0 },
+	{ dividend: 5, divisor: 1, expected: 0 },
+])(
+	"numberRemainder handles basic cases: $dividend % $divisor = $expected",
+	({ dividend, divisor, expected }) => {
+		const dividendValue = EngineValue.number(dividend);
+		const divisorValue = EngineValue.number(divisor);
+		const result = dividendValue.numberRemainder(divisorValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test("numberRemainder returns NaN when either operand is NaN", () => {
+	const nan = EngineValue.number(NaN);
+	const normal = EngineValue.number(42);
+
+	expect(nan.numberRemainder(normal).data.value).toBeNaN();
+	expect(normal.numberRemainder(nan).data.value).toBeNaN();
+	expect(nan.numberRemainder(nan).data.value).toBeNaN();
+});
+
+test("numberRemainder returns NaN when dividend is Infinity", () => {
+	const infinity = EngineValue.number(Infinity);
+	const negativeInfinity = EngineValue.number(-Infinity);
+	const divisor = EngineValue.number(5);
+
+	expect(infinity.numberRemainder(divisor).data.value).toBeNaN();
+	expect(negativeInfinity.numberRemainder(divisor).data.value).toBeNaN();
+});
+
+test("numberRemainder returns dividend when divisor is Infinity", () => {
+	const dividend = EngineValue.number(42);
+	const negativeDividend = EngineValue.number(-42);
+	const infinity = EngineValue.number(Infinity);
+	const negativeInfinity = EngineValue.number(-Infinity);
+
+	expect(dividend.numberRemainder(infinity).data.value).toBe(42);
+	expect(dividend.numberRemainder(negativeInfinity).data.value).toBe(42);
+	expect(negativeDividend.numberRemainder(infinity).data.value).toBe(-42);
+	expect(negativeDividend.numberRemainder(negativeInfinity).data.value).toBe(-42);
+});
+
+test("numberRemainder returns NaN when divisor is zero", () => {
+	const dividend = EngineValue.number(42);
+	const positiveZero = EngineValue.number(+0);
+	const negativeZero = EngineValue.number(-0);
+
+	expect(dividend.numberRemainder(positiveZero).data.value).toBeNaN();
+	expect(dividend.numberRemainder(negativeZero).data.value).toBeNaN();
+});
+
+test.for([
+	{ dividend: 0, expected: 0 },
+	{ dividend: -0, expected: -0 },
+])(
+	"numberRemainder returns dividend when dividend is zero: $dividend % 5 = $expected",
+	({ dividend, expected }) => {
+		const dividendValue = EngineValue.number(dividend);
+		const divisor = EngineValue.number(5);
+		const result = dividendValue.numberRemainder(divisor);
+
+		if (Object.is(expected, -0)) {
+			expect(Object.is(result.data.value, -0)).toBe(true);
+		} else {
+			// For expected 0, check that it's positive zero
+			expect(result.data.value).toBe(0);
+		}
+	},
+);
+
+test("numberRemainder preserves negative zero in result when remainder is zero and dividend is negative", () => {
+	const dividend = EngineValue.number(-10);
+	const divisor = EngineValue.number(5);
+	const result = dividend.numberRemainder(divisor);
+	expect(Object.is(result.data.value, -0)).toBe(true);
+});
+
+test.for([
+	{ dividend: 6, divisor: 4, expected: 2 },
+	{ dividend: -6, divisor: 4, expected: -2 },
+	{ dividend: 6, divisor: -4, expected: 2 },
+	{ dividend: -6, divisor: -4, expected: -2 },
+])(
+	"numberRemainder follows truncating division remainder rule for $dividend % $divisor = $expected",
+	({ dividend, divisor, expected }) => {
+		const dividendValue = EngineValue.number(dividend);
+		const divisorValue = EngineValue.number(divisor);
+		const result = dividendValue.numberRemainder(divisorValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 2, y: 3, expected: 5 },
+	{ x: -2, y: 3, expected: 1 },
+	{ x: 2, y: -3, expected: -1 },
+	{ x: -2, y: -3, expected: -5 },
+	{ x: 0, y: 5, expected: 5 },
+	{ x: 5, y: 0, expected: 5 },
+	{ x: 1.5, y: 2.5, expected: 4 },
+	{ x: -1.5, y: 2.5, expected: 1 },
+	{ x: 1.5, y: -2.5, expected: -1 },
+	{ x: -1.5, y: -2.5, expected: -4 },
+])("numberAdd handles basic cases: $x + $y = $expected", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberAdd(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test("numberAdd returns NaN when either operand is NaN", () => {
+	const nan = EngineValue.number(NaN);
+	const normal = EngineValue.number(42);
+
+	expect(nan.numberAdd(normal).data.value).toBeNaN();
+	expect(normal.numberAdd(nan).data.value).toBeNaN();
+	expect(nan.numberAdd(nan).data.value).toBeNaN();
+});
+
+test("numberAdd handles Infinity + -Infinity = NaN", () => {
+	const infinity = EngineValue.number(Infinity);
+	const negativeInfinity = EngineValue.number(-Infinity);
+
+	expect(infinity.numberAdd(negativeInfinity).data.value).toBeNaN();
+	expect(negativeInfinity.numberAdd(infinity).data.value).toBeNaN();
+});
+
+test("numberAdd preserves Infinity when adding finite numbers", () => {
+	const infinity = EngineValue.number(Infinity);
+	const negativeInfinity = EngineValue.number(-Infinity);
+	const positive = EngineValue.number(5);
+	const negative = EngineValue.number(-5);
+
+	expect(infinity.numberAdd(positive).data.value).toBe(Infinity);
+	expect(infinity.numberAdd(negative).data.value).toBe(Infinity);
+	expect(negativeInfinity.numberAdd(positive).data.value).toBe(-Infinity);
+	expect(negativeInfinity.numberAdd(negative).data.value).toBe(-Infinity);
+});
+
+test("numberAdd preserves Infinity when both operands are Infinity with same sign", () => {
+	const infinity = EngineValue.number(Infinity);
+	const negativeInfinity = EngineValue.number(-Infinity);
+
+	expect(infinity.numberAdd(infinity).data.value).toBe(Infinity);
+	expect(negativeInfinity.numberAdd(negativeInfinity).data.value).toBe(-Infinity);
+});
+
+test.for([
+	{ x: +0, y: +0, expected: 0 },
+	{ x: -0, y: +0, expected: 0 },
+	{ x: +0, y: -0, expected: 0 },
+	{ x: -0, y: -0, expected: -0 },
+])(
+	"numberAdd handles zero addition correctly: $x + $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberAdd(yValue);
+
+		if (Object.is(expected, -0)) {
+			expect(Object.is(result.data.value, -0)).toBe(true);
+		} else {
+			// For expected 0, check that it's positive zero
+			expect(result.data.value).toBe(0);
+		}
+	},
+);
+
+test.for([
+	{ x: 10, y: Infinity, expected: Infinity },
+	{ x: -10, y: Infinity, expected: Infinity },
+	{ x: 10, y: -Infinity, expected: -Infinity },
+	{ x: -10, y: -Infinity, expected: -Infinity },
+])(
+	"numberAdd returns Infinity result when adding finite to Infinity: $x + $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberAdd(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 5, y: 3, expected: 2 },
+	{ x: -5, y: 3, expected: -8 },
+	{ x: 5, y: -3, expected: 8 },
+	{ x: -5, y: -3, expected: -2 },
+	{ x: 0, y: 5, expected: -5 },
+	{ x: 5, y: 0, expected: 5 },
+	{ x: 1.5, y: 0.5, expected: 1 },
+	{ x: -1.5, y: 0.5, expected: -2 },
+	{ x: 1.5, y: -0.5, expected: 2 },
+	{ x: -1.5, y: -0.5, expected: -1 },
+])("numberSubtract handles basic cases: $x - $y = $expected", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberSubtract(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test("numberSubtract returns NaN when either operand is NaN", () => {
+	const nan = EngineValue.number(NaN);
+	const normal = EngineValue.number(42);
+
+	expect(nan.numberSubtract(normal).data.value).toBeNaN();
+	expect(normal.numberSubtract(nan).data.value).toBeNaN();
+	expect(nan.numberSubtract(nan).data.value).toBeNaN();
+});
+
+test("numberSubtract handles Infinity - Infinity = NaN", () => {
+	const infinity = EngineValue.number(Infinity);
+	const negativeInfinity = EngineValue.number(-Infinity);
+
+	expect(infinity.numberSubtract(infinity).data.value).toBeNaN();
+	expect(negativeInfinity.numberSubtract(negativeInfinity).data.value).toBeNaN();
+});
+
+test("numberSubtract handles Infinity subtraction rules", () => {
+	const infinity = EngineValue.number(Infinity);
+	const negativeInfinity = EngineValue.number(-Infinity);
+	const positive = EngineValue.number(5);
+	const negative = EngineValue.number(-5);
+
+	expect(infinity.numberSubtract(positive).data.value).toBe(Infinity);
+	expect(infinity.numberSubtract(negative).data.value).toBe(Infinity);
+	expect(negativeInfinity.numberSubtract(positive).data.value).toBe(-Infinity);
+	expect(negativeInfinity.numberSubtract(negative).data.value).toBe(-Infinity);
+});
+
+test("numberSubtract handles finite - Infinity rules", () => {
+	const positive = EngineValue.number(5);
+	const negative = EngineValue.number(-5);
+	const infinity = EngineValue.number(Infinity);
+	const negativeInfinity = EngineValue.number(-Infinity);
+
+	expect(positive.numberSubtract(infinity).data.value).toBe(-Infinity);
+	expect(negative.numberSubtract(infinity).data.value).toBe(-Infinity);
+	expect(positive.numberSubtract(negativeInfinity).data.value).toBe(Infinity);
+	expect(negative.numberSubtract(negativeInfinity).data.value).toBe(Infinity);
+});
+
+test.for([
+	{ x: +0, y: +0, expected: 0 },
+	{ x: -0, y: +0, expected: -0 },
+	{ x: +0, y: -0, expected: 0 },
+	{ x: -0, y: -0, expected: 0 },
+])(
+	"numberSubtract handles zero subtraction correctly: $x - $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberSubtract(yValue);
+
+		if (Object.is(expected, -0)) {
+			expect(Object.is(result.data.value, -0)).toBe(true);
+		} else {
+			// For expected 0, check that it's positive zero
+			expect(result.data.value).toBe(0);
+		}
+	},
+);

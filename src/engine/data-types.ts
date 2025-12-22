@@ -462,6 +462,85 @@ export class EngineValue<T extends ValueType = ValueType> {
 
 		return EngineValue.number(xValue / yValue);
 	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-remainder
+	numberRemainder(
+		this: EngineValue<"number">,
+		divisor: EngineValue<"number">,
+	): EngineValue<"number"> {
+		const thisValue = this.data.value;
+		const divisorValue = divisor.data.value;
+
+		if (isNaN(thisValue) || isNaN(divisorValue)) {
+			return EngineValue.number(NaN);
+		}
+
+		if (thisValue === Infinity || thisValue === -Infinity) {
+			return EngineValue.number(NaN);
+		}
+
+		if (divisorValue === Infinity || divisorValue === -Infinity) {
+			return EngineValue.number(thisValue);
+		}
+
+		if (EngineValueUtils.isPositiveOrNegativeZero(divisorValue)) {
+			return EngineValue.number(NaN);
+		}
+
+		if (EngineValueUtils.isPositiveOrNegativeZero(thisValue)) {
+			return EngineValue.number(thisValue);
+		}
+
+		const quotient = thisValue / divisorValue;
+		const q = quotient < 0 ? -Math.floor(-quotient) : Math.floor(quotient);
+		const r = thisValue - divisorValue * q;
+
+		if (r === 0 && thisValue < 0) {
+			return EngineValue.number(-0);
+		}
+
+		return EngineValue.number(r);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-add
+	numberAdd(this: EngineValue<"number">, other: EngineValue<"number">) {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		if (isNaN(xValue) || isNaN(yValue)) {
+			return EngineValue.number(NaN);
+		}
+
+		if (xValue === Infinity && yValue === -Infinity) {
+			return EngineValue.number(NaN);
+		}
+
+		if (xValue === -Infinity && yValue === Infinity) {
+			return EngineValue.number(NaN);
+		}
+
+		if (xValue === Infinity || xValue === -Infinity) {
+			return EngineValue.number(xValue);
+		}
+
+		if (yValue === Infinity || yValue === -Infinity) {
+			return EngineValue.number(yValue);
+		}
+
+		if (
+			EngineValueUtils.isNegativeZero(xValue) &&
+			EngineValueUtils.isNegativeZero(yValue)
+		) {
+			return EngineValue.number(-0);
+		}
+
+		return EngineValue.number(xValue + yValue);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-subtract
+	numberSubtract(this: EngineValue<"number">, other: EngineValue<"number">) {
+		return this.numberAdd(other.numberUnaryMinus());
+	}
 }
 
 // https://tc39.es/ecma262/#sec-well-known-symbols
