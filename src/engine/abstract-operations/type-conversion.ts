@@ -71,3 +71,22 @@ export function toInt32(argument: EngineValue): CompletionRecord<EngineValue<"nu
 
 	return normalCompletion(EngineValue.number(int32bit));
 }
+
+// https://tc39.es/ecma262/#sec-touint32
+export function toUint32(argument: EngineValue): CompletionRecord<EngineValue<"number">> {
+	const numberValue = toNumber(argument);
+	if (numberValue.type === "throw") {
+		return numberValue;
+	}
+
+	const number = numberValue.value.data.value;
+
+	if (!isFinite(number) || EngineValueUtils.isPositiveOrNegativeZero(number)) {
+		return normalCompletion(EngineValue.number(0));
+	}
+
+	const int = number < 0 ? -Math.floor(-number) : Math.floor(number);
+	const int32bit = int >>> 0;
+
+	return normalCompletion(EngineValue.number(int32bit));
+}

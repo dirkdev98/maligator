@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { EngineValue } from "../data-types.ts";
-import { toNumber, stringToNumber, toInt32 } from "./type-conversion.ts";
+import { toNumber, stringToNumber, toInt32, toUint32 } from "./type-conversion.ts";
 
 test("toNumber returns normal completion for number input", () => {
 	const number = EngineValue.number(42);
@@ -213,3 +213,105 @@ test.for([
 		expect(result.value.data.value).toBe(expected);
 	}
 });
+
+test.for([
+	{ input: 0, expected: 0 },
+	{ input: 42, expected: 42 },
+	{ input: -42, expected: 4294967254 }, // -42 mod 2^32
+	{ input: 2147483647, expected: 2147483647 }, // 2^31 - 1
+	{ input: -2147483648, expected: 2147483648 }, // -2^32 + 2^31 = 2^31
+	{ input: 4294967295, expected: 4294967295 }, // 2^32 - 1
+	{ input: 4294967296, expected: 0 }, // 2^32 wraps to 0
+	{ input: 4294967297, expected: 1 }, // 2^32 + 1 wraps to 1
+	{ input: 8589934591, expected: 4294967295 }, // 2^33 - 1 wraps to 2^32 - 1
+	{ input: 8589934592, expected: 0 }, // 2^33 wraps to 0
+])(
+	"toUint32 handles 32-bit unsigned integer overflow for $input by wrapping around modulo 2^32",
+	({ input, expected }) => {
+		const number = EngineValue.number(input);
+		const result = toUint32(number);
+
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value.data.value).toBe(expected);
+		}
+	},
+);
+
+test("toUint32 converts NaN to 0", () => {
+	const nan = EngineValue.number(NaN);
+	const result = toUint32(nan);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(0);
+	}
+});
+
+test("toUint32 converts Infinity to 0", () => {
+	const infinity = EngineValue.number(Infinity);
+	const result = toUint32(infinity);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(0);
+	}
+});
+
+test("toUint32 converts -Infinity to 0", () => {
+	const negativeInfinity = EngineValue.number(-Infinity);
+	const result = toUint32(negativeInfinity);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(0);
+	}
+});
+
+test("toUint32 converts positive zero to 0", () => {
+	const positiveZero = EngineValue.number(+0);
+	const result = toUint32(positiveZero);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(0);
+	}
+});
+
+test("toUint32 converts negative zero to 0", () => {
+	const negativeZero = EngineValue.number(-0);
+	const result = toUint32(negativeZero);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(0);
+	}
+});
+
+test("toUint32 propagates errors from toNumber", () => {
+	const symbol = EngineValue.symbol("test");
+	const result = toUint32(symbol);
+
+	expect(result.type).toBe("throw");
+	if (result.type === "throw") {
+		expect(result.error).toBeInstanceOf(TypeError);
+	}
+});
+
+test.for([
+	{ input: 3.14, expected: 3 },
+	{ input: -3.14, expected: 4294967293 }, // -3 mod 2^32 = 2^32 - 3
+	{ input: 42.9, expected: 42 },
+	{ input: -42.9, expected: 4294967254 }, // -42 mod 2^32 = 2^32 - 42
+])(
+	"toUint32 floors $input before applying 32-bit unsigned conversion",
+	({ input, expected }) => {
+		const number = EngineValue.number(input);
+		const result = toUint32(number);
+
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value.data.value).toBe(expected);
+		}
+	},
+);

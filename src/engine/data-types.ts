@@ -1,4 +1,4 @@
-import { toInt32 } from "./abstract-operations/type-conversion.ts";
+import { toInt32, toUint32 } from "./abstract-operations/type-conversion.ts";
 
 /**
  * https://tc39.es/ecma262/#sec-ecmascript-language-types
@@ -540,6 +540,62 @@ export class EngineValue<T extends ValueType = ValueType> {
 	// https://tc39.es/ecma262/#sec-numeric-types-number-subtract
 	numberSubtract(this: EngineValue<"number">, other: EngineValue<"number">) {
 		return this.numberAdd(other.numberUnaryMinus());
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-leftShift
+	numberLeftShift(this: EngineValue<"number">, other: EngineValue<"number">) {
+		const lNumCompletion = toInt32(this);
+		if (lNumCompletion.type === "throw") {
+			throw lNumCompletion.error;
+		}
+
+		const rNumCompletion = toUint32(other);
+		if (rNumCompletion.type === "throw") {
+			throw rNumCompletion.error;
+		}
+
+		const shiftCount = rNumCompletion.value.data.value % 32;
+
+		return EngineValue.number(lNumCompletion.value.data.value << shiftCount);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-signedRightShift
+	numberSignedRightShift(
+		this: EngineValue<"number">,
+		other: EngineValue<"number">,
+	): EngineValue<"number"> {
+		const lNumCompletion = toInt32(this);
+		if (lNumCompletion.type === "throw") {
+			throw lNumCompletion.error;
+		}
+
+		const rNumCompletion = toUint32(other);
+		if (rNumCompletion.type === "throw") {
+			throw rNumCompletion.error;
+		}
+
+		const shiftCount = rNumCompletion.value.data.value % 32;
+
+		return EngineValue.number(lNumCompletion.value.data.value >> shiftCount);
+	}
+	// https://tc39.es/ecma262/#sec-numeric-types-number-unsignedRightShift
+	numberUnsignedRightShift(
+		this: EngineValue<"number">,
+		other: EngineValue<"number">,
+	): EngineValue<"number"> {
+		const lNumCompletion = toUint32(this);
+		if (lNumCompletion.type === "throw") {
+			throw lNumCompletion.error;
+		}
+
+		const rNumCompletion = toUint32(other);
+		if (rNumCompletion.type === "throw") {
+			throw rNumCompletion.error;
+		}
+
+		const shiftCount = rNumCompletion.value.data.value % 32;
+
+		return EngineValue.number(lNumCompletion.value.data.value >>> shiftCount);
 	}
 }
 

@@ -672,3 +672,289 @@ test.for([
 		}
 	},
 );
+
+test.for([
+	{ x: 1, y: 0, expected: 1 },
+	{ x: 1, y: 1, expected: 2 },
+	{ x: 1, y: 2, expected: 4 },
+	{ x: 1, y: 3, expected: 8 },
+	{ x: 2, y: 1, expected: 4 },
+	{ x: 2, y: 2, expected: 8 },
+	{ x: 4, y: 1, expected: 8 },
+	{ x: 8, y: 2, expected: 32 },
+	{ x: 16, y: 3, expected: 128 },
+])(
+	"numberLeftShift handles basic bit shifting: $x << $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberLeftShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: -1, y: 0, expected: -1 },
+	{ x: -1, y: 1, expected: -2 },
+	{ x: -1, y: 2, expected: -4 },
+	{ x: -1, y: 3, expected: -8 },
+	{ x: -2, y: 1, expected: -4 },
+	{ x: -4, y: 1, expected: -8 },
+	{ x: -8, y: 2, expected: -32 },
+])(
+	"numberLeftShift handles negative numbers: $x << $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberLeftShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 1073741824, y: 1, expected: -2147483648 }, // 2^30 << 1 = 2^31 (most significant bit set)
+	{ x: 1073741824, y: 2, expected: 0 }, // 2^30 << 2 = 2^32 = 0 (32-bit overflow)
+	{ x: 2147483647, y: 1, expected: -2 }, // (2^31 - 1) << 1 = -2
+	{ x: -2147483648, y: 1, expected: 0 }, // (-2^31) << 1 = 0
+])(
+	"numberLeftShift handles 32-bit signed overflow: $x << $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberLeftShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 1, y: 32, expected: 1 }, // 32 mod 32 = 0, so 1 << 0 = 1
+	{ x: 1, y: 33, expected: 2 }, // 33 mod 32 = 1, so 1 << 1 = 2
+	{ x: 1, y: 64, expected: 1 }, // 64 mod 32 = 0, so 1 << 0 = 1
+	{ x: 1, y: 65, expected: 2 }, // 65 mod 32 = 1, so 1 << 1 = 2
+	{ x: 2, y: 34, expected: 8 }, // 34 mod 32 = 2, so 2 << 2 = 8
+])(
+	"numberLeftShift handles shift counts >= 32 by modulo operation: $x << $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberLeftShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 3.14, y: 1, expected: 6 }, // 3 << 1 = 6
+	{ x: -3.14, y: 1, expected: -6 }, // -3 << 1 = -6
+	{ x: 5.9, y: 2, expected: 20 }, // 5 << 2 = 20
+	{ x: 1, y: 2.9, expected: 4 }, // 1 << 2 = 4
+])(
+	"numberLeftShift floors operands before shifting: $x << $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberLeftShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: NaN, y: 1, expected: 0 }, // toInt32(NaN) = 0
+	{ x: 1, y: NaN, expected: 1 }, // toUint32(NaN) = 0, so 1 << 0 = 1
+	{ x: Infinity, y: 1, expected: 0 }, // toInt32(Infinity) = 0
+	{ x: 1, y: Infinity, expected: 1 }, // toUint32(Infinity) = 0, so 1 << 0 = 1
+])("numberLeftShift handles special values: $x << $y", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberLeftShift(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: 8, y: 1, expected: 4 },
+	{ x: 8, y: 2, expected: 2 },
+	{ x: 8, y: 3, expected: 1 },
+	{ x: 16, y: 1, expected: 8 },
+	{ x: 16, y: 2, expected: 4 },
+	{ x: 32, y: 3, expected: 4 },
+	{ x: 64, y: 4, expected: 4 },
+])(
+	"numberSignedRightShift handles basic positive numbers: $x >> $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberSignedRightShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: -8, y: 1, expected: -4 },
+	{ x: -8, y: 2, expected: -2 },
+	{ x: -8, y: 3, expected: -1 },
+	{ x: -16, y: 1, expected: -8 },
+	{ x: -16, y: 2, expected: -4 },
+	{ x: -32, y: 3, expected: -4 },
+	{ x: -1, y: 1, expected: -1 }, // -1 stays -1 due to sign extension
+	{ x: -1, y: 31, expected: -1 }, // -1 stays -1 due to sign extension
+])(
+	"numberSignedRightShift handles negative numbers with sign extension: $x >> $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberSignedRightShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 1073741824, y: 1, expected: 536870912 }, // 2^30 >> 1 = 2^29
+	{ x: -2147483648, y: 1, expected: -1073741824 }, // -2^31 >> 1 = -2^30
+	{ x: -2147483648, y: 31, expected: -1 }, // -2^31 >> 31 = -1 (sign extension)
+	{ x: 2147483647, y: 1, expected: 1073741823 }, // (2^31 - 1) >> 1 = 2^30 - 1
+])(
+	"numberSignedRightShift handles 32-bit signed edge cases: $x >> $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberSignedRightShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 8, y: 32, expected: 8 }, // 32 mod 32 = 0, so 8 >> 0 = 8
+	{ x: 8, y: 33, expected: 4 }, // 33 mod 32 = 1, so 8 >> 1 = 4
+	{ x: 8, y: 64, expected: 8 }, // 64 mod 32 = 0, so 8 >> 0 = 8
+	{ x: -8, y: 32, expected: -8 }, // 32 mod 32 = 0, so -8 >> 0 = -8
+	{ x: -8, y: 33, expected: -4 }, // 33 mod 32 = 1, so -8 >> 1 = -4
+])(
+	"numberSignedRightShift handles shift counts >= 32 by modulo operation: $x >> $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberSignedRightShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 12.7, y: 1, expected: 6 }, // 12 >> 1 = 6
+	{ x: -12.7, y: 1, expected: -6 }, // -12 >> 1 = -6
+	{ x: 8, y: 1.9, expected: 4 }, // 8 >> 1 = 4
+])(
+	"numberSignedRightShift floors operands before shifting: $x >> $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberSignedRightShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: NaN, y: 1, expected: 0 }, // toInt32(NaN) = 0
+	{ x: 1, y: NaN, expected: 1 }, // toUint32(NaN) = 0, so 1 >> 0 = 1
+	{ x: Infinity, y: 1, expected: 0 }, // toInt32(Infinity) = 0
+	{ x: 1, y: Infinity, expected: 1 }, // toUint32(Infinity) = 0, so 1 >> 0 = 1
+])("numberSignedRightShift handles special values: $x >> $y", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberSignedRightShift(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: 8, y: 1, expected: 4 },
+	{ x: 8, y: 2, expected: 2 },
+	{ x: 8, y: 3, expected: 1 },
+	{ x: 16, y: 1, expected: 8 },
+	{ x: 16, y: 2, expected: 4 },
+	{ x: 32, y: 3, expected: 4 },
+	{ x: 64, y: 4, expected: 4 },
+])(
+	"numberUnsignedRightShift handles basic positive numbers: $x >>> $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberUnsignedRightShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: -1, y: 0, expected: 4294967295 }, // -1 >>> 0 = 0xFFFFFFFF
+	{ x: -1, y: 1, expected: 2147483647 }, // -1 >>> 1 = 0x7FFFFFFF
+	{ x: -1, y: 2, expected: 1073741823 }, // -1 >>> 2 = 0x3FFFFFFF
+	{ x: -1, y: 31, expected: 1 }, // -1 >>> 31 = 0x00000001
+	{ x: -1, y: 32, expected: 4294967295 }, // -1 >>> 32 = -1 >>> 0 = 0xFFFFFFFF
+	{ x: -2, y: 1, expected: 2147483647 }, // -2 >>> 1 = 0x7FFFFFFF
+	{ x: -2, y: 2, expected: 1073741823 }, // -2 >>> 2 = 0x3FFFFFFF
+	{ x: -8, y: 1, expected: 2147483644 }, // -8 >>> 1 = 0x7FFFFFFC
+	{ x: -8, y: 2, expected: 1073741822 }, // -8 >>> 2 = 0x3FFFFFFE
+])(
+	"numberUnsignedRightShift handles negative numbers with zero fill: $x >>> $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberUnsignedRightShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 1073741824, y: 1, expected: 536870912 }, // 2^30 >>> 1 = 2^29
+	{ x: -2147483648, y: 1, expected: 1073741824 }, // -2^31 >>> 1 = 2^30
+	{ x: -2147483648, y: 0, expected: 2147483648 }, // -2^31 >>> 0 = 2^31 (unsigned interpretation)
+	{ x: 2147483647, y: 1, expected: 1073741823 }, // (2^31 - 1) >>> 1 = 2^30 - 1
+	{ x: -2, y: 31, expected: 1 }, // -2 >>> 31 = 1
+])(
+	"numberUnsignedRightShift handles 32-bit signed/unsigned edge cases: $x >>> $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberUnsignedRightShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 8, y: 32, expected: 8 }, // 32 mod 32 = 0, so 8 >>> 0 = 8
+	{ x: 8, y: 33, expected: 4 }, // 33 mod 32 = 1, so 8 >>> 1 = 4
+	{ x: 8, y: 64, expected: 8 }, // 64 mod 32 = 0, so 8 >>> 0 = 8
+	{ x: -8, y: 32, expected: 4294967288 }, // 32 mod 32 = 0, so -8 >>> 0 = 4294967288
+	{ x: -8, y: 33, expected: 2147483644 }, // 33 mod 32 = 1, so -8 >>> 1 = 2147483644
+])(
+	"numberUnsignedRightShift handles shift counts >= 32 by modulo operation: $x >>> $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberUnsignedRightShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 12.7, y: 1, expected: 6 }, // 12 >>> 1 = 6
+	{ x: -12.7, y: 1, expected: 2147483642 }, // -12 >>> 1 = 2147483642
+	{ x: 8, y: 1.9, expected: 4 }, // 8 >>> 1 = 4
+])(
+	"numberUnsignedRightShift floors operands before shifting: $x >>> $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberUnsignedRightShift(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: NaN, y: 1, expected: 0 }, // toInt32(NaN) = 0
+	{ x: 1, y: NaN, expected: 1 }, // toUint32(NaN) = 0, so 1 >>> 0 = 1
+	{ x: Infinity, y: 1, expected: 0 }, // toInt32(Infinity) = 0
+	{ x: 1, y: Infinity, expected: 1 }, // toUint32(Infinity) = 0, so 1 >>> 0 = 1
+])("numberUnsignedRightShift handles special values: $x >>> $y", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberUnsignedRightShift(yValue);
+	expect(result.data.value).toBe(expected);
+});
