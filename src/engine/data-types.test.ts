@@ -678,3 +678,210 @@ test.for([1, -1, 0.1, -0.1, 42, -42, Infinity, -Infinity, NaN])(
 		expect(EngineValueUtils.isPositiveOrNegativeZero(engineValue)).toBe(false);
 	},
 );
+
+test("EngineValueUtils.isNegativeZero returns true for negative zero", () => {
+	const negativeZero = EngineValue.number(-0);
+	expect(EngineValueUtils.isNegativeZero(negativeZero)).toBe(true);
+});
+
+test("EngineValueUtils.isNegativeZero returns true for raw negative zero", () => {
+	expect(EngineValueUtils.isNegativeZero(-0)).toBe(true);
+});
+
+test("EngineValueUtils.isNegativeZero returns false for positive zero", () => {
+	const positiveZero = EngineValue.number(+0);
+	expect(EngineValueUtils.isNegativeZero(positiveZero)).toBe(false);
+});
+
+test("EngineValueUtils.isNegativeZero returns false for raw positive zero", () => {
+	expect(EngineValueUtils.isNegativeZero(+0)).toBe(false);
+});
+
+test.for([1, -1, 0.1, -0.1, 42, -42, Infinity, -Infinity, NaN])(
+	"isNegativeZero returns false for %s",
+	(value) => {
+		expect(EngineValueUtils.isNegativeZero(value)).toBe(false);
+	},
+);
+
+test.for([1, -1, 0.1, -0.1, 42, -42, Infinity, -Infinity, NaN])(
+	"isNegativeZero returns false for EngineValue(%s)",
+	(value) => {
+		const engineValue = EngineValue.number(value);
+		expect(EngineValueUtils.isNegativeZero(engineValue)).toBe(false);
+	},
+);
+
+test.for([
+	{ x: 2, y: 3, expected: 6 },
+	{ x: -2, y: 3, expected: -6 },
+	{ x: 2, y: -3, expected: -6 },
+	{ x: -2, y: -3, expected: 6 },
+	{ x: 0, y: 5, expected: 0 },
+	{ x: 5, y: 0, expected: 0 },
+	{ x: 1.5, y: 2, expected: 3 },
+	{ x: -1.5, y: 2, expected: -3 },
+	{ x: 1.5, y: -2, expected: -3 },
+])("$x * $y = $expected", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberMultiply(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test("numberMultiply returns NaN when either operand is NaN", () => {
+	const nan = EngineValue.number(NaN);
+	const normal = EngineValue.number(42);
+
+	expect(nan.numberMultiply(normal).data.value).toBeNaN();
+	expect(normal.numberMultiply(nan).data.value).toBeNaN();
+	expect(nan.numberMultiply(nan).data.value).toBeNaN();
+});
+
+test("numberMultiply handles Infinity * zero = NaN", () => {
+	const infinity = EngineValue.number(Infinity);
+	const positiveZero = EngineValue.number(+0);
+	const negativeZero = EngineValue.number(-0);
+
+	expect(infinity.numberMultiply(positiveZero).data.value).toBeNaN();
+	expect(infinity.numberMultiply(negativeZero).data.value).toBeNaN();
+	expect(EngineValue.number(-Infinity).numberMultiply(positiveZero).data.value).toBeNaN();
+	expect(EngineValue.number(-Infinity).numberMultiply(negativeZero).data.value).toBeNaN();
+});
+
+test.for([
+	{ infinity: Infinity, positive: 5, expected: Infinity },
+	{ infinity: -Infinity, positive: 5, expected: -Infinity },
+])("$infinity * $positive = $expected", ({ infinity, positive, expected }) => {
+	const infinityValue = EngineValue.number(infinity);
+	const positiveValue = EngineValue.number(positive);
+	const result = infinityValue.numberMultiply(positiveValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: -0, y: -0, expected: +0 },
+	{ x: -0, y: -5, expected: +0 },
+	{ x: -0, y: 5, expected: -0 },
+	{ x: -0, y: 0, expected: -0 },
+])("$x * $y = $expected (negative zero edge cases)", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberMultiply(yValue);
+	expect(Object.is(result.data.value, expected)).toBe(true);
+});
+
+test.for([
+	{ x: 0, y: -0, expected: -0 },
+	{ x: 5, y: -0, expected: -0 },
+])("$x * $y = $expected (negative zero as second operand)", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberMultiply(yValue);
+	expect(Object.is(result.data.value, expected)).toBe(true);
+});
+
+test.for([
+	{ x: 6, y: 3, expected: 2 },
+	{ x: -6, y: 3, expected: -2 },
+	{ x: 6, y: -3, expected: -2 },
+	{ x: -6, y: -3, expected: 2 },
+	{ x: 0, y: 5, expected: 0 },
+	{ x: 5, y: 2, expected: 2.5 },
+	{ x: -5, y: 2, expected: -2.5 },
+	{ x: 5, y: -2, expected: -2.5 },
+	{ x: -5, y: -2, expected: 2.5 },
+])("$x / $y = $expected", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberDivide(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test("numberDivide returns NaN when either operand is NaN", () => {
+	const nan = EngineValue.number(NaN);
+	const normal = EngineValue.number(42);
+
+	expect(nan.numberDivide(normal).data.value).toBeNaN();
+	expect(normal.numberDivide(nan).data.value).toBeNaN();
+	expect(nan.numberDivide(nan).data.value).toBeNaN();
+});
+
+test("numberDivide handles Infinity / Infinity = NaN", () => {
+	const infinity = EngineValue.number(Infinity);
+	const negativeInfinity = EngineValue.number(-Infinity);
+
+	expect(infinity.numberDivide(infinity).data.value).toBeNaN();
+	expect(infinity.numberDivide(negativeInfinity).data.value).toBeNaN();
+	expect(negativeInfinity.numberDivide(infinity).data.value).toBeNaN();
+	expect(negativeInfinity.numberDivide(negativeInfinity).data.value).toBeNaN();
+});
+
+test.for([
+	{ infinity: Infinity, positive: 5, expected: Infinity },
+	{ infinity: -Infinity, positive: 5, expected: -Infinity },
+])("$infinity / $positive = $expected", ({ infinity, positive, expected }) => {
+	const infinityValue = EngineValue.number(infinity);
+	const positiveValue = EngineValue.number(positive);
+	const result = infinityValue.numberDivide(positiveValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: 5, y: Infinity, expected: +0 },
+	{ x: -5, y: Infinity, expected: -0 },
+	{ x: 5, y: -Infinity, expected: -0 },
+	{ x: -5, y: -Infinity, expected: +0 },
+])("$x / $y = $expected (division by infinity)", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberDivide(yValue);
+	expect(Object.is(result.data.value, expected)).toBe(true);
+});
+
+test("numberDivide handles zero / zero = NaN", () => {
+	const positiveZero = EngineValue.number(+0);
+	const negativeZero = EngineValue.number(-0);
+
+	expect(positiveZero.numberDivide(positiveZero).data.value).toBeNaN();
+	expect(positiveZero.numberDivide(negativeZero).data.value).toBeNaN();
+	expect(negativeZero.numberDivide(positiveZero).data.value).toBeNaN();
+	expect(negativeZero.numberDivide(negativeZero).data.value).toBeNaN();
+});
+
+test.for([
+	{ x: 5, y: 0, expected: Infinity },
+	{ x: -5, y: 0, expected: -Infinity },
+	{ x: 0, y: 5, expected: 0 },
+])("$x / $y = $expected (division by zero edge cases)", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberDivide(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: 5, y: -0, expected: -Infinity },
+	{ x: -5, y: -0, expected: Infinity },
+])("$x / $y = $expected (division by negative zero)", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberDivide(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: +0, y: -5, expected: -0 },
+	{ x: +0, y: 5, expected: +0 },
+	{ x: -0, y: -5, expected: +0 },
+	{ x: -0, y: 5, expected: -0 },
+])("$x / $y = $expected (zero division edge cases)", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberDivide(yValue);
+
+	expect(
+		Object.is(result.data.value, expected),
+		`${result.data.value}, ${expected}`,
+	).toBe(true);
+});

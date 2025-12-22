@@ -345,6 +345,123 @@ export class EngineValue<T extends ValueType = ValueType> {
 
 		return EngineValue.number(thisValue ** expValue);
 	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-multiply
+	numberMultiply(
+		this: EngineValue<"number">,
+		other: EngineValue<"number">,
+	): EngineValue<"number"> {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		if (isNaN(xValue) || isNaN(yValue)) {
+			return EngineValue.number(NaN);
+		}
+
+		if (xValue === Infinity || xValue === -Infinity) {
+			if (EngineValueUtils.isPositiveOrNegativeZero(yValue)) {
+				return EngineValue.number(NaN);
+			} else if (yValue > 0) {
+				return EngineValue.number(xValue);
+			}
+
+			return EngineValue.number(-xValue);
+		}
+
+		if (yValue === Infinity || yValue === -Infinity) {
+			if (EngineValueUtils.isPositiveOrNegativeZero(xValue)) {
+				return EngineValue.number(NaN);
+			} else if (xValue > 0) {
+				return EngineValue.number(yValue);
+			}
+			return EngineValue.number(-yValue);
+		}
+
+		if (EngineValueUtils.isNegativeZero(xValue)) {
+			if (EngineValueUtils.isNegativeZero(yValue) || yValue < 0) {
+				return EngineValue.number(+0);
+			}
+			return EngineValue.number(-0);
+		}
+
+		if (EngineValueUtils.isNegativeZero(yValue)) {
+			if (xValue < 0) {
+				return EngineValue.number(+0);
+			}
+			return EngineValue.number(-0);
+		}
+
+		return EngineValue.number(xValue * yValue);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-divide
+	numberDivide(
+		this: EngineValue<"number">,
+		other: EngineValue<"number">,
+	): EngineValue<"number"> {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		if (isNaN(xValue) || isNaN(yValue)) {
+			return EngineValue.number(NaN);
+		}
+
+		if (xValue === Infinity || xValue === -Infinity) {
+			if (yValue === Infinity || yValue === -Infinity) {
+				return EngineValue.number(NaN);
+			}
+
+			if (yValue >= 0) {
+				return EngineValue.number(xValue);
+			}
+
+			return EngineValue.number(-xValue);
+		}
+
+		if (yValue === Infinity) {
+			if (xValue < 0 || EngineValueUtils.isNegativeZero(xValue)) {
+				return EngineValue.number(-0);
+			}
+
+			return EngineValue.number(+0);
+		}
+
+		if (yValue === -Infinity) {
+			if (xValue < 0 || EngineValueUtils.isNegativeZero(xValue)) {
+				return EngineValue.number(0);
+			}
+
+			return EngineValue.number(-0);
+		}
+
+		if (EngineValueUtils.isPositiveOrNegativeZero(xValue)) {
+			if (EngineValueUtils.isPositiveOrNegativeZero(yValue)) {
+				return EngineValue.number(NaN);
+			}
+
+			if (yValue > 0) {
+				return EngineValue.number(xValue);
+			}
+
+			return EngineValue.number(-xValue);
+		}
+
+		if (EngineValueUtils.isNegativeZero(yValue)) {
+			if (xValue > 0) {
+				return EngineValue.number(-Infinity);
+			}
+			return EngineValue.number(Infinity);
+		}
+
+		if (yValue === 0) {
+			if (xValue > 0) {
+				return EngineValue.number(Infinity);
+			}
+			return EngineValue.number(-Infinity);
+		}
+
+		return EngineValue.number(xValue / yValue);
+	}
 }
 
 // https://tc39.es/ecma262/#sec-well-known-symbols
