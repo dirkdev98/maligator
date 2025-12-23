@@ -578,6 +578,7 @@ export class EngineValue<T extends ValueType = ValueType> {
 
 		return EngineValue.number(lNumCompletion.value.data.value >> shiftCount);
 	}
+
 	// https://tc39.es/ecma262/#sec-numeric-types-number-unsignedRightShift
 	numberUnsignedRightShift(
 		this: EngineValue<"number">,
@@ -596,6 +597,185 @@ export class EngineValue<T extends ValueType = ValueType> {
 		const shiftCount = rNumCompletion.value.data.value % 32;
 
 		return EngineValue.number(lNumCompletion.value.data.value >>> shiftCount);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-lessThan
+	numberLessThan(this: EngineValue<"number">, other: EngineValue<"number">) {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		if (isNaN(xValue)) {
+			return EngineValue.undefined();
+		}
+
+		if (isNaN(yValue)) {
+			return EngineValue.undefined();
+		}
+
+		if (xValue === yValue) {
+			return EngineValue.boolean(false);
+		}
+
+		if (xValue === +0 && EngineValueUtils.isNegativeZero(yValue)) {
+			return EngineValue.boolean(false);
+		}
+
+		if (EngineValueUtils.isNegativeZero(xValue) && yValue === +0) {
+			return EngineValue.boolean(false);
+		}
+
+		if (xValue === Infinity) {
+			return EngineValue.boolean(false);
+		}
+
+		if (yValue === Infinity) {
+			return EngineValue.boolean(true);
+		}
+
+		if (yValue === -Infinity) {
+			return EngineValue.boolean(false);
+		}
+
+		if (xValue === -Infinity) {
+			return EngineValue.boolean(true);
+		}
+
+		return xValue < yValue ? EngineValue.boolean(true) : EngineValue.boolean(false);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-equal
+	numberEqual(this: EngineValue<"number">, other: EngineValue<"number">) {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		if (isNaN(xValue)) {
+			return EngineValue.boolean(false);
+		}
+
+		if (isNaN(yValue)) {
+			return EngineValue.boolean(false);
+		}
+
+		if (xValue === +0 && EngineValueUtils.isNegativeZero(yValue)) {
+			return EngineValue.boolean(true);
+		}
+
+		if (EngineValueUtils.isNegativeZero(xValue) && yValue === +0) {
+			return EngineValue.boolean(true);
+		}
+
+		if (xValue === yValue) {
+			return EngineValue.boolean(true);
+		}
+
+		return EngineValue.boolean(false);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-sameValue
+	numberSameValue(this: EngineValue<"number">, other: EngineValue<"number">) {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		if (isNaN(xValue) && isNaN(yValue)) {
+			return EngineValue.boolean(true);
+		}
+
+		if (xValue === +0 && EngineValueUtils.isNegativeZero(yValue)) {
+			return EngineValue.boolean(false);
+		}
+		if (EngineValueUtils.isNegativeZero(xValue) && yValue === +0) {
+			return EngineValue.boolean(false);
+		}
+
+		return EngineValue.boolean(xValue === yValue);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-sameValueZero
+	numberSameValueZero(this: EngineValue<"number">, other: EngineValue<"number">) {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		if (isNaN(xValue) && isNaN(yValue)) {
+			return EngineValue.boolean(true);
+		}
+
+		if (xValue === +0 && EngineValueUtils.isNegativeZero(yValue)) {
+			return EngineValue.boolean(true);
+		}
+		if (EngineValueUtils.isNegativeZero(xValue) && yValue === +0) {
+			return EngineValue.boolean(true);
+		}
+
+		return EngineValue.boolean(xValue === yValue);
+	}
+
+	// https://tc39.es/ecma262/#sec-numberbitwiseop
+	numberBitwiseOp(
+		this: EngineValue<"number">,
+		op: "&" | "^" | "|",
+		other: EngineValue<"number">,
+	) {
+		const lNumCompletion = toInt32(this);
+		if (lNumCompletion.type === "throw") {
+			throw lNumCompletion.error;
+		}
+		const rNumCompletion = toInt32(other);
+		if (rNumCompletion.type === "throw") {
+			throw rNumCompletion.error;
+		}
+
+		const lNum = lNumCompletion.value.data.value;
+		const rNum = rNumCompletion.value.data.value;
+
+		// Taking a wee shortcut here;
+
+		if (op === "&") {
+			return EngineValue.number(lNum & rNum);
+		} else if (op === "^") {
+			return EngineValue.number(lNum ^ rNum);
+		}
+		return EngineValue.number(lNum | rNum);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-bitwiseAND
+	numberBitwiseAND(this: EngineValue<"number">, other: EngineValue<"number">) {
+		return this.numberBitwiseOp("&", other);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-bitwiseXOR
+	numberBitwiseXOR(this: EngineValue<"number">, other: EngineValue<"number">) {
+		return this.numberBitwiseOp("^", other);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-bitwiseOR
+	numberBitwiseOR(this: EngineValue<"number">, other: EngineValue<"number">) {
+		return this.numberBitwiseOp("|", other);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-number-tostring
+	numberToString(this: EngineValue<"number">, radix: number): EngineValue<"string"> {
+		const x = this.data.value;
+
+		if (isNaN(x)) {
+			return EngineValue.string("NaN");
+		}
+
+		if (EngineValueUtils.isPositiveOrNegativeZero(x)) {
+			return EngineValue.string("0");
+		}
+
+		if (x < 0) {
+			return EngineValue.string(
+				`-${EngineValue.number(-x).numberToString(radix).data.value}`,
+			);
+		}
+
+		if (x === Infinity) {
+			return EngineValue.string("Infinity");
+		}
+
+		// Weee shortcut here;
+		return EngineValue.string(x.toString(radix));
 	}
 }
 

@@ -1,7 +1,10 @@
-import { defineProject } from "vitest/config";
+import { defineConfig } from "vitest/config";
 
-export default defineProject({
+export default defineConfig({
 	test: {
+		coverage: {
+			provider: "v8",
+		},
 		experimental: {
 			fsModuleCache: true,
 			fsModuleCachePath: ".cache/vitest",

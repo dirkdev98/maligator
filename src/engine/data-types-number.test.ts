@@ -958,3 +958,632 @@ test.for([
 	const result = xValue.numberUnsignedRightShift(yValue);
 	expect(result.data.value).toBe(expected);
 });
+
+// === COMPARISON OPERATIONS ===
+
+test.for([
+	{ x: 1, y: 2, expected: true },
+	{ x: -1, y: 0, expected: true },
+	{ x: 0, y: 1, expected: true },
+	{ x: -5, y: -3, expected: true },
+	{ x: -10, y: -5, expected: true },
+	{ x: 1.5, y: 2.5, expected: true },
+	{ x: -1.5, y: -0.5, expected: true },
+])("numberLessThan returns true for $x < $y", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberLessThan(yValue);
+	expect(result.isBoolean()).toBe(true);
+	if (result.isBoolean()) {
+		expect(result.data.value).toBe(expected);
+	}
+});
+
+test.for([
+	{ x: 1, y: 1, expected: false },
+	{ x: 0, y: 0, expected: false },
+	{ x: -1, y: -1, expected: false },
+	{ x: 2, y: 1, expected: false },
+	{ x: 5, y: -3, expected: false },
+	{ x: -1, y: -2, expected: false },
+	{ x: 3.14, y: 3.14, expected: false },
+])(
+	"numberLessThan returns false for non-less comparisons: $x < $y",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberLessThan(yValue);
+		expect(result.isBoolean()).toBe(true);
+		if (result.isBoolean()) {
+			expect(result.data.value).toBe(expected);
+		}
+	},
+);
+
+test("numberLessThan handles NaN comparisons correctly", () => {
+	const nan = EngineValue.number(NaN);
+	const normal = EngineValue.number(42);
+	const zero = EngineValue.number(0);
+	const infinity = EngineValue.number(Infinity);
+
+	// NaN compared with anything returns undefined
+	expect(nan.numberLessThan(normal).isUndefined()).toBe(true);
+	expect(normal.numberLessThan(nan).isUndefined()).toBe(true);
+	expect(nan.numberLessThan(nan).isUndefined()).toBe(true);
+	expect(nan.numberLessThan(zero).isUndefined()).toBe(true);
+	expect(nan.numberLessThan(infinity).isUndefined()).toBe(true);
+});
+
+test.for([
+	{ x: NaN, y: Infinity },
+	{ x: Infinity, y: NaN },
+	{ x: -Infinity, y: NaN },
+	{ x: NaN, y: -Infinity },
+])(
+	"numberLessThan returns undefined for NaN comparisons with Infinity: $x < $y",
+	({ x, y }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberLessThan(yValue);
+		expect(result.isUndefined()).toBe(true);
+	},
+);
+
+test.for([
+	{ x: 42, y: Infinity, expected: true },
+	{ x: -42, y: Infinity, expected: true },
+	{ x: -Infinity, y: 42, expected: true },
+	{ x: -Infinity, y: Infinity, expected: true },
+	{ x: Number.MAX_VALUE, y: Infinity, expected: true },
+	{ x: -Infinity, y: Number.MIN_VALUE, expected: true },
+])("numberLessThan handles Infinity comparisons: $x < $y", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberLessThan(yValue);
+	expect(result.isBoolean()).toBe(true);
+	if (result.isBoolean()) {
+		expect(result.data.value).toBe(expected);
+	}
+});
+
+test.for([
+	{ x: Infinity, y: 42, expected: false },
+	{ x: Infinity, y: -42, expected: false },
+	{ x: 42, y: -Infinity, expected: false },
+	{ x: Infinity, y: -Infinity, expected: false },
+	{ x: Infinity, y: Number.MAX_VALUE, expected: false },
+	{ x: Number.MIN_VALUE, y: -Infinity, expected: false },
+])(
+	"numberLessThan handles reverse Infinity comparisons: $x < $y",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberLessThan(yValue);
+		expect(result.isBoolean()).toBe(true);
+		if (result.isBoolean()) {
+			expect(result.data.value).toBe(expected);
+		}
+	},
+);
+
+test.for([
+	{ x: -0, y: +0, expected: false },
+	{ x: +0, y: -0, expected: false },
+	{ x: -0, y: -0, expected: false },
+	{ x: +0, y: +0, expected: false },
+])("numberLessThan handles zero sign comparisons: $x < $y", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberLessThan(yValue);
+	expect(result.isBoolean()).toBe(true);
+	if (result.isBoolean()) {
+		expect(result.data.value).toBe(expected);
+	}
+});
+
+test.for([
+	{ x: 1, y: 1, expected: true },
+	{ x: 0, y: 0, expected: true },
+	{ x: -1, y: -1, expected: true },
+	{ x: 42, y: 42, expected: true },
+	{ x: 3.14, y: 3.14, expected: true },
+	{ x: -42, y: -42, expected: true },
+	{ x: Infinity, y: Infinity, expected: true },
+	{ x: -Infinity, y: -Infinity, expected: true },
+])("numberEqual returns true for identical values: $x === $y", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberEqual(yValue);
+	expect(result.isBoolean()).toBe(true);
+	if (result.isBoolean()) {
+		expect(result.data.value).toBe(expected);
+	}
+});
+
+test.for([
+	{ x: 1, y: 2, expected: false },
+	{ x: 0, y: -0, expected: true }, // === treats -0 as equal to 0
+	{ x: -0, y: 0, expected: true }, // === treats -0 as equal to 0
+	{ x: 42, y: -42, expected: false },
+	{ x: Infinity, y: -Infinity, expected: false },
+	{ x: 3.14, y: 3.14159, expected: false },
+])("numberEqual handles inequality cases: $x === $y", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberEqual(yValue);
+	expect(result.isBoolean()).toBe(true);
+	if (result.isBoolean()) {
+		expect(result.data.value).toBe(expected);
+	}
+});
+
+test("numberEqual handles NaN comparisons correctly", () => {
+	const nan = EngineValue.number(NaN);
+	const normal = EngineValue.number(42);
+	const zero = EngineValue.number(0);
+	const infinity = EngineValue.number(Infinity);
+
+	// NaN compared with anything is false (even NaN === NaN)
+	expect(nan.numberEqual(normal).data.value).toBe(false);
+	expect(normal.numberEqual(nan).data.value).toBe(false);
+	expect(nan.numberEqual(nan).data.value).toBe(false);
+	expect(nan.numberEqual(zero).data.value).toBe(false);
+	expect(nan.numberEqual(infinity).data.value).toBe(false);
+});
+
+test.for([
+	{ x: 1, y: 1, expected: true },
+	{ x: 0, y: 0, expected: true },
+	{ x: -1, y: -1, expected: true },
+	{ x: 42, y: 42, expected: true },
+	{ x: 3.14, y: 3.14, expected: true },
+	{ x: -42, y: -42, expected: true },
+	{ x: Infinity, y: Infinity, expected: true },
+	{ x: -Infinity, y: -Infinity, expected: true },
+])(
+	"numberSameValue returns true for identical values: Object.is($x, $y)",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberSameValue(yValue);
+		expect(result.isBoolean()).toBe(true);
+		if (result.isBoolean()) {
+			expect(result.data.value).toBe(expected);
+		}
+	},
+);
+
+test("numberSameValue handles NaN correctly (Object.is semantics)", () => {
+	const nan1 = EngineValue.number(NaN);
+	const nan2 = EngineValue.number(0 / 0); // Different NaN source
+	const normal = EngineValue.number(42);
+
+	// Object.is(NaN, NaN) === true
+	expect(nan1.numberSameValue(nan2).data.value).toBe(true);
+	expect(nan1.numberSameValue(nan1).data.value).toBe(true);
+	expect(nan2.numberSameValue(nan2).data.value).toBe(true);
+
+	// NaN compared with non-NaN is false
+	expect(nan1.numberSameValue(normal).data.value).toBe(false);
+	expect(normal.numberSameValue(nan1).data.value).toBe(false);
+});
+
+test.for([
+	{ x: -0, y: +0, expected: false },
+	{ x: +0, y: -0, expected: false },
+])(
+	"numberSameValue distinguishes negative zero: Object.is($x, $y)",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberSameValue(yValue);
+		expect(result.isBoolean()).toBe(true);
+		if (result.isBoolean()) {
+			expect(result.data.value).toBe(expected);
+		}
+	},
+);
+
+test.for([
+	{ x: 1, y: 1, expected: true },
+	{ x: 0, y: 0, expected: true },
+	{ x: -1, y: -1, expected: true },
+	{ x: 42, y: 42, expected: true },
+	{ x: 3.14, y: 3.14, expected: true },
+	{ x: -42, y: -42, expected: true },
+	{ x: Infinity, y: Infinity, expected: true },
+	{ x: -Infinity, y: -Infinity, expected: true },
+])(
+	"numberSameValueZero returns true for identical values: SameValueZero($x, $y)",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberSameValueZero(yValue);
+		expect(result.isBoolean()).toBe(true);
+		if (result.isBoolean()) {
+			expect(result.data.value).toBe(expected);
+		}
+	},
+);
+
+test("numberSameValueZero handles NaN correctly (SameValueZero semantics)", () => {
+	const nan1 = EngineValue.number(NaN);
+	const nan2 = EngineValue.number(0 / 0); // Different NaN source
+	const normal = EngineValue.number(42);
+
+	// SameValueZero(NaN, NaN) === true (like Map/Set key equality)
+	expect(nan1.numberSameValueZero(nan2).data.value).toBe(true);
+	expect(nan1.numberSameValueZero(nan1).data.value).toBe(true);
+	expect(nan2.numberSameValueZero(nan2).data.value).toBe(true);
+
+	// NaN compared with non-NaN is false
+	expect(nan1.numberSameValueZero(normal).data.value).toBe(false);
+	expect(normal.numberSameValueZero(nan1).data.value).toBe(false);
+});
+
+test.for([
+	{ x: -0, y: +0, expected: true },
+	{ x: +0, y: -0, expected: true },
+	{ x: -0, y: -0, expected: true },
+	{ x: +0, y: +0, expected: true },
+])(
+	"numberSameValueZero treats all zeros as equal: SameValueZero($x, $y)",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberSameValueZero(yValue);
+		expect(result.isBoolean()).toBe(true);
+		if (result.isBoolean()) {
+			expect(result.data.value).toBe(expected);
+		}
+	},
+);
+
+// === BITWISE OPERATIONS ===
+
+test.for([
+	{ x: 5, y: 3, expected: 1 }, // 0101 & 0011 = 0001
+	{ x: 12, y: 10, expected: 8 }, // 1100 & 1010 = 1000
+	{ x: 15, y: 0, expected: 0 }, // 1111 & 0000 = 0000
+	{ x: 8, y: 8, expected: 8 }, // 1000 & 1000 = 1000
+	{ x: 255, y: 15, expected: 15 }, // 11111111 & 00001111 = 00001111
+	{ x: 1023, y: 511, expected: 511 }, // 1111111111 & 0111111111 = 0111111111
+])("numberBitwiseAND handles basic cases: $x & $y = $expected", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberBitwiseAND(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: -5, y: 3, expected: 3 }, // -5 & 3 (two's complement)
+	{ x: -1, y: 1, expected: 1 }, // -1 & 1 = 1 (all bits set & 0001 = 0001)
+	{ x: -8, y: 7, expected: 0 }, // -8 & 7 = 0
+	{ x: -2, y: -3, expected: -4 }, // -2 & -3 = -4
+	{ x: -1, y: -1, expected: -1 }, // -1 & -1 = -1 (all bits set)
+])(
+	"numberBitwiseAND handles negative numbers: $x & $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberBitwiseAND(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 0, y: 5, expected: 0 }, // 0 & anything = 0
+	{ x: 5, y: 0, expected: 0 }, // anything & 0 = 0
+	{ x: 0, y: 0, expected: 0 }, // 0 & 0 = 0
+	{ x: 0, y: -1, expected: 0 }, // 0 & -1 = 0
+])(
+	"numberBitwiseAND handles zero operands: $x & $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberBitwiseAND(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 5, y: 3, expected: 6 }, // 0101 ^ 0011 = 0110
+	{ x: 12, y: 10, expected: 6 }, // 1100 ^ 1010 = 0110
+	{ x: 15, y: 0, expected: 15 }, // 1111 ^ 0000 = 1111
+	{ x: 8, y: 8, expected: 0 }, // 1000 ^ 1000 = 0000
+	{ x: 255, y: 15, expected: 240 }, // 11111111 ^ 00001111 = 11110000
+])("numberBitwiseXOR handles basic cases: $x ^ $y = $expected", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberBitwiseXOR(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: -5, y: 3, expected: -8 }, // -5 ^ 3
+	{ x: -1, y: 1, expected: -2 }, // -1 ^ 1 = -2
+	{ x: -8, y: 7, expected: -1 }, // -8 ^ 7 = -1
+	{ x: -2, y: -3, expected: 3 }, // -2 ^ -3 = 3
+	{ x: -1, y: -1, expected: 0 }, // -1 ^ -1 = 0
+])(
+	"numberBitwiseXOR handles negative numbers: $x ^ $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberBitwiseXOR(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 5, y: 3, expected: 7 }, // 0101 | 0011 = 0111
+	{ x: 12, y: 10, expected: 14 }, // 1100 | 1010 = 1110
+	{ x: 15, y: 0, expected: 15 }, // 1111 | 0000 = 1111
+	{ x: 8, y: 8, expected: 8 }, // 1000 | 1000 = 1000
+	{ x: 255, y: 15, expected: 255 }, // 11111111 | 00001111 = 11111111
+])("numberBitwiseOR handles basic cases: $x | $y = $expected", ({ x, y, expected }) => {
+	const xValue = EngineValue.number(x);
+	const yValue = EngineValue.number(y);
+	const result = xValue.numberBitwiseOR(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: -5, y: 3, expected: -5 }, // -5 | 3 = -5
+	{ x: -1, y: 1, expected: -1 }, // -1 | 1 = -1 (all bits set)
+	{ x: -8, y: 7, expected: -1 }, // -8 | 7 = -1 (all bits set)
+	{ x: -2, y: -3, expected: -1 }, // -2 | -3 = -1
+	{ x: -1, y: -1, expected: -1 }, // -1 | -1 = -1 (all bits set)
+])(
+	"numberBitwiseOR handles negative numbers: $x | $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberBitwiseOR(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: NaN, y: 5, expected: 0 }, // NaN becomes 0 via toInt32
+	{ x: 5, y: NaN, expected: 0 }, // NaN becomes 0 via toInt32, so 5 & 0 = 0
+	{ x: Infinity, y: 1, expected: 0 }, // Infinity becomes 0 via toInt32
+	{ x: 1, y: Infinity, expected: 0 }, // Infinity becomes 0 via toInt32, so 1 & 0 = 0
+	{ x: NaN, y: NaN, expected: 0 }, // Both become 0
+])(
+	"numberBitwiseAND handles special values: $x & $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberBitwiseAND(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: NaN, y: 5, expected: 5 }, // NaN becomes 0 via toInt32
+	{ x: 5, y: NaN, expected: 5 }, // NaN becomes 0 via toInt32, so 5 ^ 0 = 5
+	{ x: Infinity, y: 1, expected: 1 }, // Infinity becomes 0 via toInt32
+	{ x: 1, y: Infinity, expected: 1 }, // Infinity becomes 0 via toInt32, so 1 ^ 0 = 1
+	{ x: NaN, y: NaN, expected: 0 }, // Both become 0
+])(
+	"numberBitwiseXOR handles special values: $x ^ $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberBitwiseXOR(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: NaN, y: 5, expected: 5 }, // NaN becomes 0 via toInt32
+	{ x: 5, y: NaN, expected: 5 }, // NaN becomes 0 via toInt32, so 5 | 0 = 5
+	{ x: Infinity, y: 1, expected: 1 }, // Infinity becomes 0 via toInt32
+	{ x: 1, y: Infinity, expected: 1 }, // Infinity becomes 0 via toInt32, so 1 | 0 = 1
+	{ x: NaN, y: NaN, expected: 0 }, // Both become 0
+])(
+	"numberBitwiseOR handles special values: $x | $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberBitwiseOR(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 3.14, y: 1, expected: 3 }, // 3 | 1 = 3 (3.14 floors to 3)
+	{ x: 5.9, y: 2, expected: 7 }, // 5 | 2 = 7 (5.9 floors to 5)
+	{ x: 1, y: 2.9, expected: 3 }, // 1 | 2 = 3 (2.9 floors to 2)
+	{ x: -3.14, y: 1, expected: -3 }, // -3 | 1 = -3 (-3.14 floors to -3)
+	{ x: -5.9, y: 2, expected: -5 }, // -5 | 2 = -7 (-5.9 floors to -5)
+])(
+	"numberBitwiseOR floors operands before operation: $x | $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberBitwiseOR(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 3.14, y: 1, expected: 2 }, // 3 ^ 1 = 2 (3.14 floors to 3)
+	{ x: 5.9, y: 2, expected: 7 }, // 5 ^ 2 = 7 (5.9 floors to 5)
+	{ x: 1, y: 2.9, expected: 3 }, // 1 ^ 2 = 3 (2.9 floors to 2)
+	{ x: -3.14, y: 1, expected: -4 }, // -3 ^ 1 = -4 (-3.14 floors to -3)
+	{ x: -5.9, y: 2, expected: -7 }, // -5 ^ 2 = -7 (-5.9 floors to -5)
+])(
+	"numberBitwiseXOR floors operands before operation: $x ^ $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberBitwiseXOR(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 3.14, y: 1, expected: 1 }, // 3 & 1 = 1 (3.14 floors to 3)
+	{ x: 5.9, y: 2, expected: 0 }, // 5 & 2 = 0 (5.9 floors to 5)
+	{ x: 1, y: 2.9, expected: 0 }, // 1 & 2 = 0 (2.9 floors to 2)
+	{ x: -3.14, y: 1, expected: 1 }, // -3 & 1 = 1 (-3.14 floors to -3)
+	{ x: -5.9, y: 2, expected: 2 }, // -5 & 2 = 2 (-5.9 floors to -5)
+])(
+	"numberBitwiseAND floors operands before operation: $x & $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberBitwiseAND(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 2147483647, y: 1, expected: 1 }, // 0x7FFFFFFF & 1 = 1
+	{ x: 2147483647, y: 2, expected: 2 }, // 0x7FFFFFFF & 2 = 2
+	{ x: -2147483648, y: 1, expected: 0 }, // 0x80000000 & 1 = 0
+	{ x: -2147483648, y: 2, expected: 0 }, // 0x80000000 & 2 = 0
+	{ x: 1073741824, y: 1, expected: 0 }, // 0x40000000 & 1 = 0
+	{ x: 1073741824, y: 2, expected: 0 }, // 0x40000000 & 2 = 0
+])(
+	"numberBitwiseAND handles 32-bit overflow edge cases: $x & $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.number(x);
+		const yValue = EngineValue.number(y);
+		const result = xValue.numberBitwiseAND(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+// === NUMBER TO STRING CONVERSION ===
+
+test.for([
+	{ input: 42, expected: "42" },
+	{ input: 0, expected: "0" },
+	{ input: -42, expected: "-42" },
+	{ input: 3.14, expected: "3.14" },
+	{ input: -0.5, expected: "-0.5" },
+	{ input: 0.0, expected: "0" },
+])(
+	"numberToString converts integers and floats to decimal strings: $input -> '$expected'",
+	({ input, expected }) => {
+		const number = EngineValue.number(input);
+		const result = number.numberToString(10);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ input: NaN, expected: "NaN" },
+	{ input: Infinity, expected: "Infinity" },
+	{ input: -Infinity, expected: "-Infinity" },
+])(
+	"numberToString handles special values: $input -> '$expected'",
+	({ input, expected }) => {
+		const number = EngineValue.number(input);
+		const result = number.numberToString(10);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test("numberToString uses decimal (radix 10) by default", () => {
+	const number = EngineValue.number(42);
+	const result = number.numberToString(10);
+	expect(result.data.value).toBe("42");
+});
+
+test.for([
+	{ input: 42, radix: 1, expected: "" }, // Radix too small
+	{ input: 42, radix: 37, expected: "" }, // Radix too large
+	{ input: 42, radix: 0, expected: "" }, // Radix too small
+])(
+	"numberToString throws on invalid radices: $input -> radix $radix",
+	({ input, radix }) => {
+		const number = EngineValue.number(input);
+		expect(() => number.numberToString(radix)).toThrow();
+	},
+);
+
+test.for([
+	{ input: Number.MAX_SAFE_INTEGER, expected: "9007199254740991" },
+	{ input: Number.MIN_SAFE_INTEGER, expected: "-9007199254740991" },
+	{ input: Number.MAX_VALUE, expected: "1.7976931348623157e+308" },
+	{ input: Number.MIN_VALUE, expected: "5e-324" },
+])(
+	"numberToString handles boundary values: $input -> '$expected'",
+	({ input, expected }) => {
+		const number = EngineValue.number(input);
+		const result = number.numberToString(10);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ input: 5, radix: 2, expected: "101" },
+	{ input: 10, radix: 2, expected: "1010" },
+	{ input: 15, radix: 2, expected: "1111" },
+	{ input: 255, radix: 2, expected: "11111111" },
+	{ input: 8, radix: 8, expected: "10" },
+	{ input: 15, radix: 8, expected: "17" },
+	{ input: 64, radix: 8, expected: "100" },
+	{ input: 255, radix: 8, expected: "377" },
+])(
+	"numberToString converts to binary and octal: $input -> radix $radix = '$expected'",
+	({ input, radix, expected }) => {
+		const number = EngineValue.number(input);
+		const result = number.numberToString(radix);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ input: 10, radix: 16, expected: "a" },
+	{ input: 15, radix: 16, expected: "f" },
+	{ input: 255, radix: 16, expected: "ff" },
+	{ input: 4095, radix: 16, expected: "fff" },
+	{ input: 65535, radix: 16, expected: "ffff" },
+	{ input: 35, radix: 36, expected: "z" },
+	{ input: 1295, radix: 36, expected: "zz" },
+	{ input: 46655, radix: 36, expected: "zzz" },
+])(
+	"numberToString converts to hexadecimal and base-36: $input -> radix $radix = '$expected'",
+	({ input, radix, expected }) => {
+		const number = EngineValue.number(input);
+		const result = number.numberToString(radix);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ input: -10, radix: 2, expected: "-1010" },
+	{ input: -255, radix: 16, expected: "-ff" },
+	{ input: -35, radix: 36, expected: "-z" },
+])(
+	"numberToString handles negative numbers with different radices: $input -> radix $radix = '$expected'",
+	({ input, radix, expected }) => {
+		const number = EngineValue.number(input);
+		const result = number.numberToString(radix);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test("numberToString uses decimal (radix 10) by default", () => {
+	const number = EngineValue.number(42);
+	const result = number.numberToString(10);
+	expect(result.data.value).toBe("42");
+});
+
+test.for([
+	{ input: 42, radix: 2, expected: "101010" }, // Large binary numbers
+	{ input: 1000000, radix: 16, expected: "f4240" }, // Large hexadecimal numbers
+	{ input: Number.MAX_SAFE_INTEGER, radix: 36, expected: "2gosa7pa2gv" }, // Very large base-36
+])(
+	"numberToString handles large numbers with different radices: $input -> radix $radix = '$expected'",
+	({ input, radix, expected }) => {
+		const number = EngineValue.number(input);
+		const result = number.numberToString(radix);
+		expect(result.data.value).toBe(expected);
+	},
+);
