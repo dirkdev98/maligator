@@ -355,3 +355,171 @@ test("bigintUnsignedRightShift throws TypeError", () => {
 		expect(result.error.message).toBe("Cannot shift unsigned bigints");
 	}
 });
+
+test.for([
+	{ x: 3n, y: 5n, expected: true },
+	{ x: 5n, y: 3n, expected: false },
+	{ x: 3n, y: 3n, expected: false },
+	{ x: -5n, y: 3n, expected: true },
+	{ x: -3n, y: -5n, expected: false },
+	{ x: -5n, y: -3n, expected: true },
+	{ x: 0n, y: 0n, expected: false },
+	{ x: 0n, y: 5n, expected: true },
+	{ x: 5n, y: 0n, expected: false },
+])("bigintLessThan handles comparisons: $x < $y = $expected", ({ x, y, expected }) => {
+	const xValue = EngineValue.bigint(x);
+	const yValue = EngineValue.bigint(y);
+	const result = xValue.bigintLessThan(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: 5n, y: 5n, expected: true },
+	{ x: 5n, y: 3n, expected: false },
+	{ x: 3n, y: 5n, expected: false },
+	{ x: 0n, y: 0n, expected: true },
+	{ x: -5n, y: -5n, expected: true },
+	{ x: 42n, y: 42n, expected: true },
+])(
+	"bigintEqual returns true for equal bigints: $x === $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.bigint(x);
+		const yValue = EngineValue.bigint(y);
+		const result = xValue.bigintEqual(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: 1n, y: 1n, expected: 1n },
+	{ x: 1n, y: 0n, expected: 0n },
+	{ x: 0n, y: 1n, expected: 0n },
+	{ x: 0n, y: 0n, expected: 0n },
+	{ x: 5n, y: 3n, expected: 1n },
+	{ x: 7n, y: 3n, expected: 3n },
+	{ x: 6n, y: 3n, expected: 2n },
+	{ x: 12n, y: 10n, expected: 8n },
+	{ x: 15n, y: 10n, expected: 10n },
+])("bigintBitwiseAND handles bitwise AND: $x & $y = $expected", ({ x, y, expected }) => {
+	const xValue = EngineValue.bigint(x);
+	const yValue = EngineValue.bigint(y);
+	const result = xValue.bigintBitwiseAND(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: 1n, y: 1n, expected: 1n },
+	{ x: 1n, y: 0n, expected: 1n },
+	{ x: 0n, y: 1n, expected: 1n },
+	{ x: 0n, y: 0n, expected: 0n },
+	{ x: 5n, y: 3n, expected: 7n },
+	{ x: 7n, y: 3n, expected: 7n },
+	{ x: 6n, y: 3n, expected: 7n },
+	{ x: 12n, y: 10n, expected: 14n },
+	{ x: 15n, y: 10n, expected: 15n },
+])("bigintBitwiseOR handles bitwise OR: $x | $y = $expected", ({ x, y, expected }) => {
+	const xValue = EngineValue.bigint(x);
+	const yValue = EngineValue.bigint(y);
+	const result = xValue.bigintBitwiseOR(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: 1n, y: 1n, expected: 0n },
+	{ x: 1n, y: 0n, expected: 1n },
+	{ x: 0n, y: 1n, expected: 1n },
+	{ x: 0n, y: 0n, expected: 0n },
+	{ x: 5n, y: 3n, expected: 6n },
+	{ x: 7n, y: 3n, expected: 4n },
+	{ x: 6n, y: 3n, expected: 5n },
+	{ x: 12n, y: 10n, expected: 6n },
+	{ x: 15n, y: 10n, expected: 5n },
+])("bigintBitwiseXOR handles bitwise XOR: $x ^ $y = $expected", ({ x, y, expected }) => {
+	const xValue = EngineValue.bigint(x);
+	const yValue = EngineValue.bigint(y);
+	const result = xValue.bigintBitwiseXOR(yValue);
+	expect(result.data.value).toBe(expected);
+});
+
+test.for([
+	{ x: -1n, y: -1n, expected: -1n },
+	{ x: -1n, y: 0n, expected: 0n },
+	{ x: 0n, y: -1n, expected: 0n },
+	{ x: -5n, y: 3n, expected: 3n },
+	{ x: -6n, y: 3n, expected: 2n },
+	{ x: -7n, y: -3n, expected: -7n },
+])(
+	"bigintBitwiseAND handles negative numbers: $x & $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.bigint(x);
+		const yValue = EngineValue.bigint(y);
+		const result = xValue.bigintBitwiseAND(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: -1n, y: -1n, expected: -1n },
+	{ x: -1n, y: 0n, expected: -1n },
+	{ x: 0n, y: -1n, expected: -1n },
+	{ x: -5n, y: 3n, expected: -5n },
+	{ x: -6n, y: 3n, expected: -5n },
+	{ x: -7n, y: -3n, expected: -3n },
+])(
+	"bigintBitwiseOR handles negative numbers: $x | $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.bigint(x);
+		const yValue = EngineValue.bigint(y);
+		const result = xValue.bigintBitwiseOR(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ x: -1n, y: -1n, expected: 0n },
+	{ x: -1n, y: 0n, expected: -1n },
+	{ x: 0n, y: -1n, expected: -1n },
+	{ x: -5n, y: 3n, expected: -8n },
+	{ x: -6n, y: 3n, expected: -7n },
+	{ x: -7n, y: -3n, expected: 4n },
+])(
+	"bigintBitwiseXOR handles negative numbers: $x ^ $y = $expected",
+	({ x, y, expected }) => {
+		const xValue = EngineValue.bigint(x);
+		const yValue = EngineValue.bigint(y);
+		const result = xValue.bigintBitwiseXOR(yValue);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ value: 10n, radix: 2, expected: "1010" },
+	{ value: 10n, radix: 8, expected: "12" },
+	{ value: 10n, radix: 10, expected: "10" },
+	{ value: 10n, radix: 16, expected: "a" },
+	{ value: 10n, radix: 36, expected: "a" },
+	{ value: 0n, radix: 2, expected: "0" },
+	{ value: 255n, radix: 16, expected: "ff" },
+	{ value: 255n, radix: 2, expected: "11111111" },
+])(
+	"bigintToString handles positive numbers with radix $radix: $value = $expected",
+	({ value, radix, expected }) => {
+		const x = EngineValue.bigint(value);
+		const result = x.bigintToString(radix);
+		expect(result.data.value).toBe(expected);
+	},
+);
+
+test.for([
+	{ value: -10n, radix: 2, expected: "-1010" },
+	{ value: -10n, radix: 16, expected: "-a" },
+	{ value: -255n, radix: 16, expected: "-ff" },
+	{ value: -1n, radix: 2, expected: "-1" },
+])(
+	"bigintToString handles negative numbers with radix $radix: $value = $expected",
+	({ value, radix, expected }) => {
+		const x = EngineValue.bigint(value);
+		const result = x.bigintToString(radix);
+		expect(result.data.value).toBe(expected);
+	},
+);

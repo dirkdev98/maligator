@@ -880,6 +880,151 @@ export class EngineValue<T extends ValueType = ValueType> {
 	bigintUnsignedRightShift(this: EngineValue<"bigint">, _other: EngineValue<"bigint">) {
 		return throwCompletion(new TypeError("Cannot shift unsigned bigints"));
 	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-lessThan
+	bigintLessThan(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		return this.data.value < other.data.value ?
+				EngineValue.boolean(true)
+			:	EngineValue.boolean(false);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-equal
+	bigintEqual(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		return EngineValue.boolean(this.data.value === other.data.value);
+	}
+
+	// https://tc39.es/ecma262/#sec-binaryand
+	binaryAnd(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		if (xValue === 1n && yValue === 1n) {
+			return EngineValue.bigint(1n);
+		}
+
+		return EngineValue.bigint(0n);
+	}
+
+	// https://tc39.es/ecma262/#sec-binaryor
+	binaryOr(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		if (xValue === 1n || yValue === 1n) {
+			return EngineValue.bigint(1n);
+		}
+
+		return EngineValue.bigint(0n);
+	}
+
+	// https://tc39.es/ecma262/#sec-binaryxor
+	binaryXor(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		if (xValue === 1n && yValue === 0n) {
+			return EngineValue.bigint(1n);
+		}
+
+		if (xValue === 0n && yValue === 1n) {
+			return EngineValue.bigint(1n);
+		}
+
+		return EngineValue.bigint(0n);
+	}
+
+	// https://tc39.es/ecma262/#sec-bigintbitwiseop
+	bigintBitwiseOp(
+		this: EngineValue<"bigint">,
+		op: "&" | "^" | "|",
+		other: EngineValue<"bigint">,
+	): EngineValue<"bigint"> {
+		let xValue = this.data.value;
+		let yValue = other.data.value;
+
+		let result = 0n;
+		let shift = 0n;
+
+		while (!(xValue === 0n || xValue === -1n) || !(yValue === 0n || yValue === -1n)) {
+			const xDigit = xValue & 1n;
+			const yDigit = yValue & 1n;
+
+			if (op === "&") {
+				result =
+					result +
+					2n ** shift *
+						EngineValue.bigint(xDigit).binaryAnd(EngineValue.bigint(yDigit)).data.value;
+			} else if (op === "|") {
+				result =
+					result +
+					2n ** shift *
+						EngineValue.bigint(xDigit).binaryOr(EngineValue.bigint(yDigit)).data.value;
+			} else {
+				result =
+					result +
+					2n ** shift *
+						EngineValue.bigint(xDigit).binaryXor(EngineValue.bigint(yDigit)).data.value;
+			}
+
+			shift += 1n;
+			xValue = (xValue - xDigit) / 2n;
+			yValue = (yValue - yDigit) / 2n;
+		}
+
+		if (op === "&") {
+			const tmp = EngineValue.bigint(xValue & 1n).binaryAnd(
+				EngineValue.bigint(yValue & 1n),
+			);
+			if (tmp.data.value !== 0n) {
+				result = result - 2n ** shift;
+			}
+			return EngineValue.bigint(result);
+		} else if (op === "|") {
+			const tmp = EngineValue.bigint(xValue & 1n).binaryOr(
+				EngineValue.bigint(yValue & 1n),
+			);
+			if (tmp.data.value !== 0n) {
+				result = result - 2n ** shift;
+			}
+			return EngineValue.bigint(result);
+		}
+
+		const tmp = EngineValue.bigint(xValue & 1n).binaryXor(
+			EngineValue.bigint(yValue & 1n),
+		);
+		if (tmp.data.value !== 0n) {
+			result = result - 2n ** shift;
+		}
+
+		return EngineValue.bigint(result);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-bitwiseAND
+	bigintBitwiseAND(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		return this.bigintBitwiseOp("&", other);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-bitwiseXOR
+	bigintBitwiseXOR(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		return this.bigintBitwiseOp("^", other);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-bitwiseOR
+	bigintBitwiseOR(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		return this.bigintBitwiseOp("|", other);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-tostring
+	bigintToString(this: EngineValue<"bigint">, radix: number): EngineValue<"string"> {
+		if (this.data.value < 0n) {
+			return EngineValue.string(
+				`-${EngineValue.bigint(-this.data.value).bigintToString(radix).data.value}`,
+			);
+		}
+
+		// Weee shortcut here;
+		return EngineValue.string(this.data.value.toString(radix));
+	}
 }
 
 // https://tc39.es/ecma262/#sec-well-known-symbols
