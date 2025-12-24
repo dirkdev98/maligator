@@ -1,4 +1,5 @@
 import { toInt32, toUint32 } from "./abstract-operations/type-conversion.ts";
+import { normalCompletion, throwCompletion } from "./specification-types.ts";
 
 /**
  * https://tc39.es/ecma262/#sec-ecmascript-language-types
@@ -776,6 +777,108 @@ export class EngineValue<T extends ValueType = ValueType> {
 
 		// Weee shortcut here;
 		return EngineValue.string(x.toString(radix));
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-unaryMinus
+	bigintUnaryMinus(this: EngineValue<"bigint">) {
+		const value = this.data.value;
+		if (value === 0n) {
+			return EngineValue.bigint(0n);
+		}
+
+		return EngineValue.bigint(-this.data.value);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-bitwiseNOT
+	bigintBitwiseNOT(this: EngineValue<"bigint">) {
+		return EngineValue.bigint(-this.data.value - 1n);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-exponentiate
+	bigintExponentiate(this: EngineValue<"bigint">, exponent: EngineValue<"bigint">) {
+		const base = this.data.value;
+		const exp = exponent.data.value;
+
+		if (base < 0n) {
+			return throwCompletion(new RangeError("Cannot exponentiate negative numbers"));
+		}
+
+		if (base === 0n && exp === 0n) {
+			return normalCompletion(EngineValue.bigint(1n));
+		}
+
+		return normalCompletion(EngineValue.bigint(base ** exp));
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-multiply
+	bigintMultiply(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		return EngineValue.bigint(xValue * yValue);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-divide
+	bigintDivide(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		if (yValue === 0n) {
+			return throwCompletion(new RangeError("Cannot divide by zero"));
+		}
+
+		// Auto-truncates
+		const quotient = xValue / yValue;
+		return normalCompletion(EngineValue.bigint(quotient));
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-remainder
+	bigintRemainder(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		const nValue = this.data.value;
+		const dValue = other.data.value;
+
+		if (dValue === 0n) {
+			return throwCompletion(new RangeError("Cannot divide by zero"));
+		}
+
+		if (nValue === 0n) {
+			return normalCompletion(EngineValue.bigint(0n));
+		}
+
+		const quotient = nValue / dValue;
+		return normalCompletion(EngineValue.bigint(nValue - dValue * quotient));
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-add
+	bigintAdd(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		return EngineValue.bigint(this.data.value + other.data.value);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-subtract
+	bigintSubtract(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		return EngineValue.bigint(this.data.value - other.data.value);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-leftShift
+	bigintLeftShift(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		const xValue = this.data.value;
+		const yValue = other.data.value;
+
+		if (yValue < 0) {
+			return EngineValue.bigint(xValue / 2n ** -yValue);
+		}
+
+		return EngineValue.bigint(xValue * 2n ** yValue);
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-signedRightShift
+	bigintSignedRightShift(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
+		return this.bigintLeftShift(EngineValue.bigint(-other.data.value));
+	}
+
+	// https://tc39.es/ecma262/#sec-numeric-types-bigint-unsignedRightShift
+	bigintUnsignedRightShift(this: EngineValue<"bigint">, _other: EngineValue<"bigint">) {
+		return throwCompletion(new TypeError("Cannot shift unsigned bigints"));
 	}
 }
 
