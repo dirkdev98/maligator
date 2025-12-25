@@ -430,3 +430,63 @@ test.for([1, -1, 0.1, -0.1, 42, -42, Infinity, -Infinity, NaN])(
 		expect(EngineValueUtils.isNegativeZero(engineValue)).toBe(false);
 	},
 );
+
+test("create object value", () => {
+	expect(() => EngineValue.object([])).not.toThrow();
+});
+
+test("isObject returns true for object values", () => {
+	const object = EngineValue.object([]);
+	expect(object.isObject()).toBe(true);
+});
+
+test.for([
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+	{ type: "symbol", value: EngineValue.symbol("test") },
+	{ type: "number", value: EngineValue.number(42) },
+	{ type: "bigint", value: EngineValue.bigint(42n) },
+])("isObject returns false for $type values", ({ value }) => {
+	expect(value.isObject()).toBe(false);
+});
+
+test("assertIsObject passes for object value", () => {
+	const object = EngineValue.object([]);
+	expect(() => object.assertIsObject()).not.toThrow();
+});
+
+test.for([
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+	{ type: "symbol", value: EngineValue.symbol("test") },
+	{ type: "number", value: EngineValue.number(42) },
+	{ type: "bigint", value: EngineValue.bigint(42n) },
+])("assertIsObject throws TypeError for $type values", ({ value }) => {
+	expect(() => value.assertIsObject()).toThrow(
+		"Can't call this operation on a non-object value.",
+	);
+});
+
+test("asObject returns object value", () => {
+	const object = EngineValue.object([]);
+	const result = object.asObject();
+	expect(result).toBe(object);
+});
+
+test.for([
+	{ type: "undefined", value: EngineValue.undefined() },
+	{ type: "null", value: EngineValue.null() },
+	{ type: "boolean", value: EngineValue.boolean(true) },
+	{ type: "string", value: EngineValue.string("test") },
+	{ type: "symbol", value: EngineValue.symbol("test") },
+	{ type: "number", value: EngineValue.number(42) },
+	{ type: "bigint", value: EngineValue.bigint(42n) },
+])("asObject throws TypeError for $type values", ({ value }) => {
+	expect(() => value.asObject()).toThrow(
+		"Can't call this operation on a non-object value.",
+	);
+});

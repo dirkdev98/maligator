@@ -1,4 +1,8 @@
 import { toInt32, toUint32 } from "./abstract-operations/type-conversion.ts";
+import { ObjectPropertyMap } from "./data-types-object.ts";
+import type { OrdinaryInternalSlots } from "./data-types-object.ts";
+import type { EssentialInternalMethods } from "./data-types-object.ts";
+import type { InternalSlots } from "./data-types-object.ts";
 import { normalCompletion, throwCompletion } from "./specification-types.ts";
 
 /**
@@ -33,6 +37,12 @@ type Value =
 	| {
 			type: "bigint";
 			value: bigint;
+	  }
+	| {
+			type: "object";
+			properties: ObjectPropertyMap;
+			internalSlots: InternalSlots;
+			internalSlotsList: Array<string>;
 	  };
 
 type ValueType = Value["type"];
@@ -84,6 +94,14 @@ export class EngineValue<T extends ValueType = ValueType> {
 		return new EngineValue("bigint", { value });
 	}
 
+	static object(internalSlotsList: Array<string>) {
+		return new EngineValue("object", {
+			internalSlotsList,
+			internalSlots: {},
+			properties: new ObjectPropertyMap(),
+		});
+	}
+
 	private constructor(type: T, data: ValueProperties<T>) {
 		this.type = type;
 		this.data = data;
@@ -115,6 +133,10 @@ export class EngineValue<T extends ValueType = ValueType> {
 
 	isBigInt(): this is EngineValue<"bigint"> {
 		return this.type === "bigint";
+	}
+
+	isObject(): this is EngineValue<"object"> {
+		return this.type === "object";
 	}
 
 	assertIsUndefined(): asserts this is EngineValue<"undefined"> {
@@ -159,6 +181,12 @@ export class EngineValue<T extends ValueType = ValueType> {
 		}
 	}
 
+	assertIsObject(): asserts this is EngineValue<"object"> {
+		if (this.type !== "object") {
+			throw new Error("Can't call this operation on a non-object value.");
+		}
+	}
+
 	asUndefined(): EngineValue<"undefined"> {
 		this.assertIsUndefined();
 		return this;
@@ -191,6 +219,11 @@ export class EngineValue<T extends ValueType = ValueType> {
 
 	asBigInt(): EngineValue<"bigint"> {
 		this.assertIsBigInt();
+		return this;
+	}
+
+	asObject(): EngineValue<"object"> {
+		this.assertIsObject();
 		return this;
 	}
 
@@ -1024,6 +1057,15 @@ export class EngineValue<T extends ValueType = ValueType> {
 
 		// Weee shortcut here;
 		return EngineValue.string(this.data.value.toString(radix));
+	}
+
+	objectOrdinaryInternalSlots(this: EngineValue<"object">): OrdinaryInternalSlots {
+		return this.data.internalSlots as OrdinaryInternalSlots;
+	}
+
+	objectEssentialMethods(this: EngineValue<"object">): EssentialInternalMethods {
+		// TODO: runtime checks, based on behavior?
+		return this.data.internalSlots as EssentialInternalMethods;
 	}
 }
 
