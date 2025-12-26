@@ -1,6 +1,69 @@
 import { expect, test } from "vitest";
 import { EngineValue } from "../data-types.ts";
-import { toNumber, stringToNumber, toInt32, toUint32 } from "./type-conversion.ts";
+import {
+	toNumber,
+	stringToNumber,
+	toInt32,
+	toUint32,
+	toPrimitive,
+	ordinaryToPrimitive,
+	toBoolean,
+	toNumeric,
+	toIntegerOrInfinity,
+	toInt16,
+	toUint16,
+} from "./type-conversion.ts";
+
+test.skip("toPrimitive throws not implemented error", () => {
+	const value = EngineValue.object([]);
+	const result = toPrimitive(value);
+
+	expect(result.type).toBe("throw");
+	if (result.type === "throw") {
+		expect(result.error.message).toBe("Not implemented");
+	}
+});
+
+test.skip("ordinaryToPrimitive throws not implemented error", () => {
+	const value = EngineValue.object([]);
+	const result = ordinaryToPrimitive(value, "number");
+
+	expect(result.type).toBe("throw");
+	if (result.type === "throw") {
+		expect(result.error.message).toBe("Not implemented");
+	}
+});
+
+test.for([
+	EngineValue.undefined(),
+	EngineValue.null(),
+	EngineValue.boolean(false),
+	EngineValue.number(+0),
+	EngineValue.number(-0),
+	EngineValue.number(NaN),
+	EngineValue.string(""),
+	EngineValue.bigint(0n),
+])("toBoolean converts falsy values to false", (value) => {
+	const result = toBoolean(value);
+
+	expect(result.isBoolean()).toBe(true);
+	expect(result.data.value).toBe(false);
+});
+
+test.for([
+	EngineValue.boolean(true),
+	EngineValue.number(42),
+	EngineValue.number(-42),
+	EngineValue.string("hello"),
+	EngineValue.bigint(42n),
+	EngineValue.symbol("test"),
+	EngineValue.object([]),
+])("toBoolean converts truthy values to true", (value) => {
+	const result = toBoolean(value);
+
+	expect(result.isBoolean()).toBe(true);
+	expect(result.data.value).toBe(true);
+});
 
 test("toNumber returns normal completion for number input", () => {
 	const number = EngineValue.number(42);
@@ -116,6 +179,110 @@ test("stringToNumber converts an empty string to 0 (per JavaScript spec)", () =>
 test("stringToNumber converts invalid strings to NaN", () => {
 	expect(stringToNumber("abc").data.value).toBeNaN();
 	expect(stringToNumber("42abc").data.value).toBeNaN();
+});
+
+test.skip("toNumeric returns normal completion for number input", () => {
+	const value = EngineValue.number(42);
+	const result = toNumeric(value);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.isNumber()).toBe(true);
+		expect(result.value.data.value).toBe(42);
+	}
+});
+
+test.skip("toNumeric returns normal completion for bigint input", () => {
+	const value = EngineValue.bigint(42n);
+	const result = toNumeric(value);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.isBigInt()).toBe(true);
+		expect(result.value.data.value).toBe(42n);
+	}
+});
+
+test.skip("toNumeric converts numeric strings to numbers", () => {
+	const value = EngineValue.string("42");
+	const result = toNumeric(value);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.isNumber()).toBe(true);
+		expect(result.value.data.value).toBe(42);
+	}
+});
+
+test.skip("toNumeric converts symbol to throw completion", () => {
+	const value = EngineValue.symbol("test");
+	const result = toNumeric(value);
+
+	expect(result.type).toBe("throw");
+	if (result.type === "throw") {
+		expect(result.error).toBeInstanceOf(TypeError);
+	}
+});
+
+test.skip("toNumeric converts object using toPrimitive", () => {
+	const value = EngineValue.object([]);
+	const result = toNumeric(value);
+
+	expect(result.type).toBe("throw");
+	if (result.type === "throw") {
+		expect(result.error.message).toBe("Not implemented");
+	}
+});
+
+test.for([
+	{ input: 0, expected: 0 },
+	{ input: 42, expected: 42 },
+	{ input: -42, expected: -42 },
+	{ input: 3.14, expected: 3 },
+	{ input: -3.14, expected: -3 },
+	{ input: 42.9, expected: 42 },
+	{ input: -42.9, expected: -42 },
+])("toIntegerOrInfinity truncates $input to integer", ({ input, expected }) => {
+	const value = EngineValue.number(input);
+	const result = toIntegerOrInfinity(value);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value).toBe(expected);
+	}
+});
+
+test.for([NaN, +0, -0])("toIntegerOrInfinity converts $input to 0", (input) => {
+	const value = EngineValue.number(input);
+	const result = toIntegerOrInfinity(value);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value).toBe(0);
+	}
+});
+
+test.for([Infinity, -Infinity])(
+	"toIntegerOrInfinity returns $input unchanged",
+	(input) => {
+		const value = EngineValue.number(input);
+		const result = toIntegerOrInfinity(value);
+
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value).toBe(input);
+		}
+	},
+);
+
+test("toIntegerOrInfinity propagates errors from toNumber", () => {
+	const value = EngineValue.symbol("test");
+	const result = toIntegerOrInfinity(value);
+
+	expect(result.type).toBe("throw");
+	if (result.type === "throw") {
+		expect(result.error).toBeInstanceOf(TypeError);
+	}
 });
 
 test.for([
@@ -315,3 +482,145 @@ test.for([
 		}
 	},
 );
+
+test.for([
+	{ input: 0, expected: 0 },
+	{ input: 42, expected: 42 },
+	{ input: -42, expected: -42 },
+	{ input: 32767, expected: 32767 },
+	{ input: -32768, expected: -32768 },
+	{ input: 32768, expected: -32768 },
+	{ input: -32769, expected: -32769 },
+	{ input: 65536, expected: 0 },
+	{ input: -65536, expected: -0 },
+	{ input: 65537, expected: 1 },
+	{ input: -65537, expected: -1 },
+	{ input: 131072, expected: 0 },
+])("toInt16 handles 16-bit signed integer overflow for $input", ({ input, expected }) => {
+	const value = EngineValue.number(input);
+	const result = toInt16(value);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(expected);
+	}
+});
+
+test("toInt16 converts NaN to 0", () => {
+	const value = EngineValue.number(NaN);
+	const result = toInt16(value);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(0);
+	}
+});
+
+test.for([Infinity, -Infinity, +0, -0])("toInt16 converts $input to 0", (input) => {
+	const value = EngineValue.number(input);
+	const result = toInt16(value);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(0);
+	}
+});
+
+test.for([
+	{ input: 3.14, expected: 3 },
+	{ input: -3.14, expected: -3 },
+	{ input: 42.9, expected: 42 },
+	{ input: -42.9, expected: -42 },
+])("toInt16 floors $input before applying 16-bit conversion", ({ input, expected }) => {
+	const value = EngineValue.number(input);
+	const result = toInt16(value);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(expected);
+	}
+});
+
+test("toInt16 propagates errors from toNumber", () => {
+	const value = EngineValue.symbol("test");
+	const result = toInt16(value);
+
+	expect(result.type).toBe("throw");
+	if (result.type === "throw") {
+		expect(result.error).toBeInstanceOf(TypeError);
+	}
+});
+
+test.for([
+	{ input: 0, expected: 0 },
+	{ input: 42, expected: 42 },
+	{ input: -42, expected: 65494 },
+	{ input: 32767, expected: 32767 },
+	{ input: -32768, expected: 32768 },
+	{ input: 65535, expected: 65535 },
+	{ input: 65536, expected: 0 },
+	{ input: 65537, expected: 1 },
+	{ input: -1, expected: 65535 },
+	{ input: -65536, expected: 0 },
+	{ input: -65537, expected: 65535 },
+	{ input: 131072, expected: 0 },
+])(
+	"toUint16 handles 16-bit unsigned integer overflow for $input",
+	({ input, expected }) => {
+		const value = EngineValue.number(input);
+		const result = toUint16(value);
+
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value.data.value).toBe(expected);
+		}
+	},
+);
+
+test("toUint16 converts NaN to 0", () => {
+	const value = EngineValue.number(NaN);
+	const result = toUint16(value);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(0);
+	}
+});
+
+test.for([Infinity, -Infinity, +0, -0])("toUint16 converts $input to 0", (input) => {
+	const value = EngineValue.number(input);
+	const result = toUint16(value);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(0);
+	}
+});
+
+test.for([
+	{ input: 3.14, expected: 3 },
+	{ input: -3.14, expected: 65533 },
+	{ input: 42.9, expected: 42 },
+	{ input: -42.9, expected: 65494 },
+])(
+	"toUint16 floors $input before applying 16-bit unsigned conversion",
+	({ input, expected }) => {
+		const value = EngineValue.number(input);
+		const result = toUint16(value);
+
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value.data.value).toBe(expected);
+		}
+	},
+);
+
+test("toUint16 propagates errors from toNumber", () => {
+	const value = EngineValue.symbol("test");
+	const result = toUint16(value);
+
+	expect(result.type).toBe("throw");
+	if (result.type === "throw") {
+		expect(result.error).toBeInstanceOf(TypeError);
+	}
+});
