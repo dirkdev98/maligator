@@ -100,7 +100,7 @@ export class PropertyDescriptor {
 // Use string directly instead of EngineValue<"string">.
 //
 // Note that PropertyName is only represented by a EngineValue<"string">
-type PropertyKey = string | EngineValue<"symbol">;
+export type PropertyKey = string | EngineValue<"symbol">;
 
 // https://tc39.es/ecma262/#sec-privateelement-specification-type
 type PrivateElement =

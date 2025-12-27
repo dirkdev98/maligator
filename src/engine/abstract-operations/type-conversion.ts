@@ -1,3 +1,4 @@
+import type { PropertyKey } from "../data-types-object.ts";
 import { EngineValueUtils, EngineValue } from "../data-types.ts";
 import { normalCompletion, throwCompletion } from "../specification-types.ts";
 import type { CompletionRecord } from "../specification-types.ts";
@@ -7,7 +8,9 @@ export function toPrimitive(
 	_input: EngineValue,
 	_hint?: "default" | "string" | "number",
 ): CompletionRecord<EngineValue> {
-	throw new Error("Not implemented");
+	throw new Error(
+		"Not implemented. Requires GetMethod, Call and other abstract operations.",
+	);
 }
 
 // https://tc39.es/ecma262/#sec-ordinarytoprimitive
@@ -15,7 +18,7 @@ export function ordinaryToPrimitive(
 	_input: EngineValue,
 	_hint: "string" | "number",
 ): CompletionRecord<EngineValue> {
-	throw new Error("Not implemented");
+	throw new Error("Not implemented. Requires Get, Call and other abstract operations.");
 }
 
 // https://tc39.es/ecma262/#sec-toboolean
@@ -207,4 +210,235 @@ export function toUint16(argument: EngineValue): CompletionRecord<EngineValue<"n
 	const int = number < 0 ? -Math.floor(-number) : Math.floor(number);
 	const int16bit = int & 0xffff;
 	return normalCompletion(EngineValue.number(int16bit));
+}
+
+// https://tc39.es/ecma262/#sec-toint8
+export function toInt8(argument: EngineValue): CompletionRecord<EngineValue<"number">> {
+	const numberValue = toNumber(argument);
+	if (numberValue.type === "throw") {
+		return numberValue;
+	}
+
+	const number = numberValue.value.data.value;
+
+	if (!isFinite(number) || EngineValueUtils.isPositiveOrNegativeZero(number)) {
+		return normalCompletion(EngineValue.number(0));
+	}
+
+	const int = number < 0 ? -Math.floor(-number) : Math.floor(number);
+	const int8bit = int % 2 ** 8;
+
+	if (int8bit >= 2 ** 7) {
+		return normalCompletion(EngineValue.number(int8bit - 2 ** 8));
+	}
+
+	return normalCompletion(EngineValue.number(int8bit));
+}
+
+// https://tc39.es/ecma262/#sec-touint8
+export function toUint8(argument: EngineValue): CompletionRecord<EngineValue<"number">> {
+	const numberValue = toNumber(argument);
+	if (numberValue.type === "throw") {
+		return numberValue;
+	}
+	const number = numberValue.value.data.value;
+
+	if (!isFinite(number) || EngineValueUtils.isPositiveOrNegativeZero(number)) {
+		return normalCompletion(EngineValue.number(0));
+	}
+	const int = number < 0 ? -Math.floor(-number) : Math.floor(number);
+	const int8bit = int & 0xff;
+	return normalCompletion(EngineValue.number(int8bit));
+}
+
+// https://tc39.es/ecma262/#sec-touint8clamp
+export function toUint8Clamp(
+	argument: EngineValue,
+): CompletionRecord<EngineValue<"number">> {
+	const numberValue = toNumber(argument);
+	if (numberValue.type === "throw") {
+		return numberValue;
+	}
+	const number = numberValue.value.data.value;
+
+	if (isNaN(number)) {
+		return normalCompletion(EngineValue.number(0));
+	}
+
+	const clamped =
+		number < 0 ? 0
+		: number > 255 ? 255
+		: number;
+	const floored = Math.floor(clamped);
+	if (floored < clamped + 0.5) {
+		return normalCompletion(EngineValue.number(floored));
+	} else if (floored > clamped + 0.5) {
+		return normalCompletion(EngineValue.number(floored + 1));
+	}
+
+	// Round to even rule
+	if (floored % 2 === 0) {
+		return normalCompletion(EngineValue.number(floored));
+	}
+	return normalCompletion(EngineValue.number(floored + 1));
+}
+
+// https://tc39.es/ecma262/#sec-tobigint
+export function toBigint(argument: EngineValue) {
+	const prim = toPrimitive(argument, "number");
+	if (prim.type === "throw") {
+		return prim;
+	}
+
+	const value = prim.value;
+
+	if (value.isUndefined()) {
+		return throwCompletion(new TypeError("Cannot convert undefined to a BigInt"));
+	} else if (value.isNull()) {
+		return throwCompletion(new TypeError("Cannot convert null to a BigInt"));
+	} else if (value.isBoolean()) {
+		return normalCompletion(EngineValue.bigint(value.data.value ? 1n : 0n));
+	} else if (value.isNumber()) {
+		return throwCompletion(new TypeError("Cannot convert a number to a BigInt"));
+	} else if (value.isString()) {
+		// Wee shortcut here
+		const v = BigInt(value.data.value);
+		return normalCompletion(EngineValue.bigint(v));
+	} else if (value.isSymbol()) {
+		return throwCompletion(new TypeError("Cannot convert a Symbol value to a BigInt"));
+	}
+
+	throw new Error("Should never reach here.");
+}
+
+// https://tc39.es/ecma262/#sec-tobigint64
+export function toBigInt64(argument: EngineValue) {
+	const n = toBigint(argument);
+	if (n.type === "throw") {
+		return n;
+	}
+
+	const int64bit = n.value.data.value & 0xffffffffffffffffn;
+	return normalCompletion(EngineValue.bigint(int64bit));
+}
+
+// https://tc39.es/ecma262/#sec-tostring
+export function toString(argument: EngineValue): CompletionRecord<EngineValue<"string">> {
+	if (argument.isString()) {
+		return normalCompletion(argument);
+	}
+
+	if (argument.isSymbol()) {
+		return throwCompletion(new TypeError("Cannot convert a Symbol value to a string"));
+	}
+
+	if (argument.isUndefined()) {
+		return normalCompletion(EngineValue.string("undefined"));
+	}
+
+	if (argument.isNull()) {
+		return normalCompletion(EngineValue.string("null"));
+	}
+
+	if (argument.isBoolean()) {
+		return normalCompletion(EngineValue.string(argument.data.value ? "true" : "false"));
+	}
+
+	if (argument.isNumber()) {
+		return normalCompletion(argument.numberToString(10));
+	}
+
+	if (argument.isBigInt()) {
+		return normalCompletion(argument.bigintToString(10));
+	}
+
+	const primValue = toPrimitive(argument, "string");
+	if (primValue.type === "throw") {
+		return primValue;
+	}
+
+	return toString(primValue.value);
+}
+
+// https://tc39.es/ecma262/#sec-toobject
+export function toObject(
+	_argument: EngineValue,
+): CompletionRecord<EngineValue<"object">> {
+	throw new Error("Not implemented. Requires intrinsics for Boolean, Number, etc.");
+}
+
+// https://tc39.es/ecma262/#sec-topropertykey
+export function toPropertyKey(argument: EngineValue): CompletionRecord<PropertyKey> {
+	const key = toPrimitive(argument, "string");
+	if (key.type === "throw") {
+		return key;
+	}
+
+	const value = key.value;
+	if (value.isSymbol()) {
+		return normalCompletion(value);
+	}
+
+	const str = toString(value);
+	if (str.type === "throw") {
+		return str;
+	}
+
+	return normalCompletion(str.value?.data.value);
+}
+
+// https://tc39.es/ecma262/#sec-tolength
+export function toLength(argument: EngineValue): CompletionRecord<number> {
+	const len = toIntegerOrInfinity(argument);
+	if (len.type === "throw") {
+		return len;
+	}
+
+	const value = len.value;
+	if (value <= 0) {
+		return normalCompletion(0);
+	}
+
+	return normalCompletion(Math.min(value, 2 ** 53 - 1));
+}
+
+// https://tc39.es/ecma262/#sec-canonicalnumericindexstring
+export function canonicalNumericIndexString(
+	argument: EngineValue<"string">,
+): EngineValue<"number" | "undefined"> {
+	if (argument.data.value === "-0") {
+		return EngineValue.number(-0);
+	}
+
+	const n = toNumber(argument);
+	if (n.type === "throw") {
+		throw n.error;
+	}
+
+	const stringifiedArg = toString(n.value);
+	if (stringifiedArg.type === "throw") {
+		throw stringifiedArg.error;
+	}
+
+	if (stringifiedArg.value.data.value === argument.data.value) {
+		return n.value;
+	}
+
+	return EngineValue.undefined();
+}
+
+// https://tc39.es/ecma262/#sec-toindex
+export function toIndex(argument: EngineValue): CompletionRecord<number> {
+	const n = toIntegerOrInfinity(argument);
+	if (n.type === "throw") {
+		return n;
+	}
+
+	const value = n.value;
+
+	if (value < 0 || value > 2 ** 53 - 1) {
+		return throwCompletion(new RangeError("Index out of range"));
+	}
+
+	return normalCompletion(value);
 }
