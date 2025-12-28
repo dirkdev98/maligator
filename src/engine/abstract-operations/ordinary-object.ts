@@ -1,182 +1,27 @@
-import { EngineValue } from "./data-types.ts";
-import { normalCompletion } from "./specification-types.ts";
-import type { CompletionRecord } from "./specification-types.ts";
-
-// TODO: move somewhere else.
-function isNil(value: unknown): value is null | undefined {
-	return value === null || value === undefined;
-}
-
-// https://tc39.es/ecma262/#sec-property-attributes
-export class PropertyDescriptor {
-	value?: EngineValue;
-	writable?: boolean;
-
-	get?: EngineValue<"object" | "undefined">;
-	set?: EngineValue<"object" | "undefined">;
-
-	enumerable?: boolean;
-	configurable?: boolean;
-
-	constructor(init?: Partial<PropertyDescriptor>) {
-		Object.assign(this, init);
-	}
-
-	copyAccessor(): PropertyDescriptor {
-		return new PropertyDescriptor({
-			get: this.get,
-			set: this.set,
-			enumerable: this.enumerable,
-			configurable: this.configurable,
-		});
-	}
-
-	copyDescriptor(): PropertyDescriptor {
-		return new PropertyDescriptor({
-			value: this.value,
-			writable: this.writable,
-			enumerable: this.enumerable,
-			configurable: this.configurable,
-		});
-	}
-
-	hasFields() {
-		return (
-			!isNil(this.value) ||
-			!isNil(this.writable) ||
-			!isNil(this.get) ||
-			!isNil(this.set) ||
-			!isNil(this.enumerable) ||
-			!isNil(this.configurable)
-		);
-	}
-
-	// https://tc39.es/ecma262/#sec-isgenericdescriptor
-	isGenericDescriptor() {
-		return this.isAccessorDescriptor() || this.isDataDescriptor();
-	}
-
-	// https://tc39.es/ecma262/#sec-isaccessordescriptor
-	isDataDescriptor() {
-		return !isNil(this.value) || !isNil(this.writable);
-	}
-
-	// https://tc39.es/ecma262/#sec-isaccessordescriptor
-	isAccessorDescriptor() {
-		return !isNil(this.get) || !isNil(this.set);
-	}
-
-	setValueDefaultIfNotSet() {
-		this.value ??= EngineValue.undefined();
-	}
-
-	setWritableDefaultIfNotSet() {
-		this.writable ??= false;
-	}
-
-	setGetDefaultIfNotSet() {
-		this.get ??= EngineValue.undefined();
-	}
-
-	setSetDefaultIfNotSet() {
-		this.set ??= EngineValue.undefined();
-	}
-
-	setEnumerableDefaultIfNotSet() {
-		this.enumerable ??= false;
-	}
-
-	setConfigurableDefaultIfNotSet() {
-		this.configurable ??= false;
-	}
-
-	// TODO: https://tc39.es/ecma262/#sec-frompropertydescriptor
-
-	// TODO: https://tc39.es/ecma262/#sec-topropertydescriptor
-
-	// TODO: https://tc39.es/ecma262/#sec-completepropertydescriptor
-}
-
-// Use string directly instead of EngineValue<"string">.
-//
-// Note that PropertyName is only represented by a EngineValue<"string">
-export type PropertyKey = string | EngineValue<"symbol">;
-
-// https://tc39.es/ecma262/#sec-privateelement-specification-type
-type PrivateElement =
-	| {
-			key: string;
-			kind: "field" | "method";
-			value: EngineValue;
-	  }
-	| {
-			key: string;
-			kind: "accessor";
-			get: EngineValue<"object" | "undefined">;
-			set: EngineValue<"object" | "undefined">;
-	  };
-
-// https://tc39.es/ecma262/#sec-object-internal-methods-and-internal-slots
-type BaseInternalSlots = {
-	PrivateElements: Record<string, PrivateElement>;
-};
-
-// https://tc39.es/ecma262/#sec-object-internal-methods-and-internal-slots
-//
-// For implementations, see https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots
-export type EssentialInternalMethods = typeof OrdinaryObjectInternalMethods;
-
-type FunctionObjectInternalSlots = {
-	Call: EngineValue;
-	Construct: EngineValue;
-};
-
 // https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots
-export type OrdinaryInternalSlots = {
-	Prototype: EngineValue<"object" | "null">;
-	Extensible: boolean;
-};
+import { isNil } from "../../utils.ts";
+import { EngineValue } from "../data-types.ts";
+import { normalCompletion } from "./completion-record.ts";
+import type { CompletionRecord } from "./completion-record.ts";
+import { PropertyDescriptor } from "./property-map.ts";
+import type { PropertyKey } from "./property-map.ts";
 
-export type InternalSlots = Partial<
-	BaseInternalSlots &
-		EssentialInternalMethods &
-		FunctionObjectInternalSlots &
-		OrdinaryInternalSlots
->;
-
-export class ObjectPropertyMap {
-	private properties: Map<PropertyKey, PropertyDescriptor> = new Map();
-
-	has(key: PropertyKey) {
-		return this.properties.has(key);
-	}
-
-	get(key: PropertyKey) {
-		return this.properties.get(key)!;
-	}
-
-	set(key: PropertyKey, value: PropertyDescriptor) {
-		this.properties.set(key, value);
-	}
-}
-
-// https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots
 export const OrdinaryObjectInternalMethods = {
 	// https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-getprototypeof
 	GetPrototypeOf: (obj: EngineValue<"object">) => {
-		return normalCompletion(obj.objectOrdinaryInternalSlots().Prototype);
+		return normalCompletion(obj.objectGetInternalSlot("Prototype"));
 	},
 
 	// https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-setprototypeof-v
 	SetPrototypeOf: (obj: EngineValue<"object">, V: EngineValue<"object" | "null">) => {
-		const current = obj.objectOrdinaryInternalSlots().Prototype;
+		const current = obj.objectGetInternalSlot("Prototype");
 
 		// TODO: SameValue abstract operation;
 		if (current === V) {
 			return normalCompletion(EngineValue.boolean(true));
 		}
 
-		const extensible = obj.objectOrdinaryInternalSlots().Extensible;
+		const extensible = obj.objectGetInternalSlot("Extensible");
 		if (!extensible) {
 			return normalCompletion(EngineValue.boolean(false));
 		}
@@ -192,30 +37,28 @@ export const OrdinaryObjectInternalMethods = {
 			} else {
 				if (
 					!p.isObject() ||
-					p.objectEssentialMethods().GetPrototypeOf !==
+					p.objectGetInternalSlot("GetPrototypeOf") !==
 						OrdinaryObjectInternalMethods.GetPrototypeOf
 				) {
 					done = true;
 				} else {
-					p = p.objectOrdinaryInternalSlots().Prototype;
+					p = p.objectGetInternalSlot("Prototype");
 				}
 			}
 		}
 
-		obj.objectOrdinaryInternalSlots().Prototype = V;
+		obj.objectSetInternalSlot("Prototype", V);
 		return normalCompletion(EngineValue.boolean(true));
 	},
 
 	// https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-isextensible
 	IsExtensible: (obj: EngineValue<"object">) => {
-		return normalCompletion(
-			EngineValue.boolean(obj.objectOrdinaryInternalSlots().Extensible),
-		);
+		return normalCompletion(EngineValue.boolean(obj.objectGetInternalSlot("Extensible")));
 	},
 
 	// https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-setprototypeof-v
 	PreventExtensions: (obj: EngineValue<"object">) => {
-		obj.objectOrdinaryInternalSlots().Extensible = false;
+		obj.objectSetInternalSlot("Extensible", false);
 		return normalCompletion(EngineValue.boolean(true));
 	},
 
@@ -271,12 +114,12 @@ export function OrdinaryDefineOwnProperty(
 	P: PropertyKey,
 	Desc: PropertyDescriptor,
 ) {
-	const current = obj.objectEssentialMethods().GetOwnProperty(obj, P);
+	const current = obj.objectGetInternalSlot("GetOwnProperty")(obj, P);
 	if (current.type === "throw") {
 		return current;
 	}
 
-	const extensible = obj.objectEssentialMethods().IsExtensible(obj);
+	const extensible = obj.objectGetInternalSlot("IsExtensible")(obj);
 	if (extensible.type === "throw") {
 		return extensible;
 	}
@@ -421,7 +264,7 @@ export function ValidateAndApplyPropertyDescriptor(
 
 // https://tc39.es/ecma262/#sec-ordinaryhasproperty
 export function OrdinaryHasProperty(obj: EngineValue<"object">, P: PropertyKey) {
-	const hasOwn = obj.objectEssentialMethods().GetOwnProperty(obj, P);
+	const hasOwn = obj.objectGetInternalSlot("GetOwnProperty")(obj, P);
 	if (hasOwn.type === "throw") {
 		return hasOwn;
 	}
@@ -430,13 +273,13 @@ export function OrdinaryHasProperty(obj: EngineValue<"object">, P: PropertyKey) 
 		return normalCompletion(EngineValue.boolean(true));
 	}
 
-	const parent = obj.objectEssentialMethods().GetPrototypeOf(obj);
+	const parent = obj.objectGetInternalSlot("GetPrototypeOf")(obj);
 	if (parent.type === "throw") {
 		return parent;
 	}
 
 	if (parent.value.isObject()) {
-		return parent.value.objectEssentialMethods().HasProperty(parent.value, P);
+		return parent.value.objectGetInternalSlot("HasProperty")(parent.value, P);
 	}
 
 	return normalCompletion(EngineValue.boolean(false));

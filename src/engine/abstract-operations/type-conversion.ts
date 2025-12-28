@@ -1,7 +1,7 @@
-import type { PropertyKey } from "../data-types-object.ts";
 import { EngineValueUtils, EngineValue } from "../data-types.ts";
-import { normalCompletion, throwCompletion } from "../specification-types.ts";
-import type { CompletionRecord } from "../specification-types.ts";
+import { normalCompletion, throwCompletion } from "./completion-record.ts";
+import type { CompletionRecord } from "./completion-record.ts";
+import type { PropertyKey } from "./property-map.ts";
 
 // https://tc39.es/ecma262/#sec-toprimitive
 export function toPrimitive(

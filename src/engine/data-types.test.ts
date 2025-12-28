@@ -490,3 +490,71 @@ test.for([
 		"Can't call this operation on a non-object value.",
 	);
 });
+
+test("objectHasInternalSlot returns true for existing slot", () => {
+	const object = EngineValue.object([]);
+	object.objectSetInternalSlot("Prototype", EngineValue.null());
+
+	expect(object.objectHasInternalSlot("Prototype")).toBe(true);
+});
+
+test("objectHasInternalSlot returns false for non-existent slot", () => {
+	const object = EngineValue.object([]);
+
+	expect(object.objectHasInternalSlot("Prototype")).toBe(false);
+});
+
+test("objectGetInternalSlot returns value for existing Prototype slot", () => {
+	const object = EngineValue.object([]);
+	const prototype = EngineValue.null();
+	object.objectSetInternalSlot("Prototype", prototype);
+
+	const result = object.objectGetInternalSlot("Prototype");
+
+	expect(result).toBe(prototype);
+});
+
+test("objectGetInternalSlot returns value for existing Extensible slot", () => {
+	const object = EngineValue.object([]);
+	object.objectSetInternalSlot("Extensible", true);
+
+	const result = object.objectGetInternalSlot("Extensible");
+
+	expect(result).toBe(true);
+});
+
+test("objectGetInternalSlot returns value for existing GetPrototypeOf slot", () => {
+	const object = EngineValue.object([]);
+	const getPrototypeOf = () => ({ type: "normal" as const, value: EngineValue.null() });
+	object.objectSetInternalSlot("GetPrototypeOf", getPrototypeOf);
+
+	const result = object.objectGetInternalSlot("GetPrototypeOf");
+
+	expect(result).toBe(getPrototypeOf);
+});
+
+test("objectSetInternalSlot sets Prototype slot", () => {
+	const object = EngineValue.object([]);
+	const prototype = EngineValue.null();
+
+	object.objectSetInternalSlot("Prototype", prototype);
+
+	expect(object.objectGetInternalSlot("Prototype")).toBe(prototype);
+});
+
+test("objectSetInternalSlot sets Extensible slot", () => {
+	const object = EngineValue.object([]);
+
+	object.objectSetInternalSlot("Extensible", true);
+
+	expect(object.objectGetInternalSlot("Extensible")).toBe(true);
+});
+
+test("objectSetInternalSlot overwrites existing slot value", () => {
+	const object = EngineValue.object([]);
+	object.objectSetInternalSlot("Extensible", true);
+
+	object.objectSetInternalSlot("Extensible", false);
+
+	expect(object.objectGetInternalSlot("Extensible")).toBe(false);
+});

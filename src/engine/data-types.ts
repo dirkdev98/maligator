@@ -1,9 +1,73 @@
+import { isNil } from "../utils.ts";
+import {
+	normalCompletion,
+	throwCompletion,
+} from "./abstract-operations/completion-record.ts";
+import type { CompletionRecord } from "./abstract-operations/completion-record.ts";
+import type {
+	PropertyDescriptor,
+	PropertyKey,
+} from "./abstract-operations/property-map.ts";
+import { PropertyMap } from "./abstract-operations/property-map.ts";
 import { toInt32, toUint32 } from "./abstract-operations/type-conversion.ts";
-import { ObjectPropertyMap } from "./data-types-object.ts";
-import type { OrdinaryInternalSlots } from "./data-types-object.ts";
-import type { EssentialInternalMethods } from "./data-types-object.ts";
-import type { InternalSlots } from "./data-types-object.ts";
-import { normalCompletion, throwCompletion } from "./specification-types.ts";
+
+// https://tc39.es/ecma262/#sec-privateelement-specification-type
+type PrivateElement =
+	| {
+			key: string;
+			kind: "field" | "method";
+			value: EngineValue;
+	  }
+	| {
+			key: string;
+			kind: "accessor";
+			get: EngineValue<"object" | "undefined">;
+			set: EngineValue<"object" | "undefined">;
+	  };
+
+type ObjectInternalSlots = {
+	// https://tc39.es/ecma262/#sec-object-internal-methods-and-internal-slots
+	PrivateElements: Record<string, PrivateElement>;
+
+	// https://tc39.es/ecma262/#sec-object-internal-methods-and-internal-slots
+	//
+	// For implementations, see https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots
+	GetPrototypeOf: (
+		obj: EngineValue<"object">,
+	) => CompletionRecord<EngineValue<"object" | "null">>;
+
+	SetPrototypeOf: (
+		obj: EngineValue<"object">,
+		V: EngineValue<"object" | "null">,
+	) => CompletionRecord<EngineValue<"boolean">>;
+
+	IsExtensible: (obj: EngineValue<"object">) => CompletionRecord<EngineValue<"boolean">>;
+
+	PreventExtensions: (
+		obj: EngineValue<"object">,
+	) => CompletionRecord<EngineValue<"boolean">>;
+
+	GetOwnProperty: (
+		obj: EngineValue<"object">,
+		P: PropertyKey,
+	) => CompletionRecord<EngineValue<"undefined"> | PropertyDescriptor>;
+
+	DefineOwnProperty: (
+		obj: EngineValue<"object">,
+		P: PropertyKey,
+		Desc: PropertyDescriptor,
+	) => CompletionRecord<EngineValue<"boolean">>;
+
+	HasProperty: (
+		obj: EngineValue<"object">,
+		P: PropertyKey,
+	) => CompletionRecord<EngineValue<"boolean">>;
+
+	Call: EngineValue;
+	Construct: EngineValue;
+	Prototype: EngineValue<"object" | "null">;
+	Extensible: boolean;
+};
 
 /**
  * https://tc39.es/ecma262/#sec-ecmascript-language-types
@@ -40,8 +104,8 @@ type Value =
 	  }
 	| {
 			type: "object";
-			properties: ObjectPropertyMap;
-			internalSlots: InternalSlots;
+			properties: PropertyMap;
+			internalSlots: Partial<ObjectInternalSlots>;
 			internalSlotsList: Array<string>;
 	  };
 
@@ -57,7 +121,7 @@ type ValueProperties<Type extends ValueType> = Omit<
 const NOT_FOUND = -1;
 
 /**
- * Base engine value type to represent ECMAscript data types and values.
+ * Base engine value type to represent ECMAScript data types and values.
  *
  * For ease of implementation uses the runtimes semantics of string and numbers to manage the
  * valid representation of things like UTF-16 code units and floating point handling.
@@ -98,7 +162,7 @@ export class EngineValue<T extends ValueType = ValueType> {
 		return new EngineValue("object", {
 			internalSlotsList,
 			internalSlots: {},
-			properties: new ObjectPropertyMap(),
+			properties: new PropertyMap(),
 		});
 	}
 
@@ -1059,13 +1123,26 @@ export class EngineValue<T extends ValueType = ValueType> {
 		return EngineValue.string(this.data.value.toString(radix));
 	}
 
-	objectOrdinaryInternalSlots(this: EngineValue<"object">): OrdinaryInternalSlots {
-		return this.data.internalSlots as OrdinaryInternalSlots;
+	objectHasInternalSlot(
+		this: EngineValue<"object">,
+		slot: keyof ObjectInternalSlots,
+	): boolean {
+		return !isNil(this.data.internalSlots[slot]);
 	}
 
-	objectEssentialMethods(this: EngineValue<"object">): EssentialInternalMethods {
-		// TODO: runtime checks, based on behavior?
-		return this.data.internalSlots as EssentialInternalMethods;
+	objectGetInternalSlot<const K extends keyof ObjectInternalSlots>(
+		this: EngineValue<"object">,
+		slot: K,
+	): ObjectInternalSlots[K] {
+		return this.data.internalSlots[slot]!;
+	}
+
+	objectSetInternalSlot<const K extends keyof ObjectInternalSlots>(
+		this: EngineValue<"object">,
+		slot: K,
+		value: ObjectInternalSlots[K],
+	): void {
+		this.data.internalSlots[slot] = value;
 	}
 }
 

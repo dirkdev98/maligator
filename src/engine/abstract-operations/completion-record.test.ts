@@ -3,8 +3,8 @@ import {
 	normalCompletion,
 	returnCompletion,
 	throwCompletion,
-} from "./specification-types.ts";
-import type { CompletionRecord } from "./specification-types.ts";
+} from "./completion-record.ts";
+import type { CompletionRecord } from "./completion-record.ts";
 
 test("normalCompletion creates normal completion record", () => {
 	const value = "test value";
