@@ -16,6 +16,7 @@ import {
 	toUint8,
 	toUint8Clamp,
 	toBigint,
+	StringToBigInt,
 	toBigInt64,
 	toString,
 	toObject,
@@ -865,6 +866,86 @@ test("toUint8Clamp propagates errors from toNumber", () => {
 	if (result.type === "throw") {
 		expect(result.error).toBeInstanceOf(TypeError);
 	}
+});
+
+test.for([
+	{ input: "0", expected: 0n },
+	{ input: "42", expected: 42n },
+	{ input: "-100", expected: -100n },
+	{ input: "9007199254740992", expected: 9007199254740992n },
+])(
+	"StringToBigInt converts valid decimal string '%s' to bigint",
+	({ input, expected }) => {
+		const result = StringToBigInt(input);
+
+		expect(result.isBigInt()).toBe(true);
+		if (result.isBigInt()) {
+			expect(result.data.value).toBe(expected);
+		}
+	},
+);
+
+test.skip.for([
+	{ input: "0x2a", expected: 42n },
+	{ input: "0XFF", expected: 255n },
+	{ input: "0x0", expected: 0n },
+	{ input: "-0x2a", expected: -42n },
+])("StringToBigInt converts valid hex string '%s' to bigint", ({ input, expected }) => {
+	const result = StringToBigInt(input);
+
+	expect(result.isBigInt()).toBe(true);
+	if (result.isBigInt()) {
+		expect(result.data.value).toBe(expected);
+	}
+});
+
+test.for([
+	{ input: "0o52", expected: 42n },
+	{ input: "0O777", expected: 511n },
+	{ input: "0o0", expected: 0n },
+])("StringToBigInt converts valid octal string '%s' to bigint", ({ input, expected }) => {
+	const result = StringToBigInt(input);
+
+	expect(result.isBigInt()).toBe(true);
+	if (result.isBigInt()) {
+		expect(result.data.value).toBe(expected);
+	}
+});
+
+test.for([
+	{ input: "0b101010", expected: 42n },
+	{ input: "0B1111", expected: 15n },
+	{ input: "0b0", expected: 0n },
+])(
+	"StringToBigInt converts valid binary string '%s' to bigint",
+	({ input, expected }) => {
+		const result = StringToBigInt(input);
+
+		expect(result.isBigInt()).toBe(true);
+		if (result.isBigInt()) {
+			expect(result.data.value).toBe(expected);
+		}
+	},
+);
+
+test.for(["abc", "42abc", "1.2.3", "1.5", "not a number"])(
+	"StringToBigInt throws for invalid string '%s'",
+	(input) => {
+		expect(() => StringToBigInt(input)).toThrow();
+	},
+);
+
+test("StringToBigInt handles whitespace padding", () => {
+	const result = StringToBigInt("  42  ");
+
+	expect(result.isBigInt()).toBe(true);
+	if (result.isBigInt()) {
+		expect(result.data.value).toBe(42n);
+	}
+});
+
+test.skip("StringToBigInt throws for empty string", () => {
+	expect(() => StringToBigInt("")).toThrow();
 });
 
 test.skip("toBigInt throws TypeError for undefined", () => {

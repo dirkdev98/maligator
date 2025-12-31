@@ -301,14 +301,18 @@ export function toBigint(argument: EngineValue) {
 	} else if (value.isNumber()) {
 		return throwCompletion(new TypeError("Cannot convert a number to a BigInt"));
 	} else if (value.isString()) {
-		// Wee shortcut here
-		const v = BigInt(value.data.value);
-		return normalCompletion(EngineValue.bigint(v));
+		return normalCompletion(StringToBigInt(value.data.value));
 	} else if (value.isSymbol()) {
 		return throwCompletion(new TypeError("Cannot convert a Symbol value to a BigInt"));
 	}
 
 	throw new Error("Should never reach here.");
+}
+
+// https://tc39.es/ecma262/#sec-stringtobigint
+export function StringToBigInt(str: string) {
+	// Wee shortcut here
+	return EngineValue.bigint(BigInt(str));
 }
 
 // https://tc39.es/ecma262/#sec-tobigint64

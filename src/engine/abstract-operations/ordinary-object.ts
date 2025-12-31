@@ -5,6 +5,7 @@ import { normalCompletion } from "./completion-record.ts";
 import type { CompletionRecord } from "./completion-record.ts";
 import { PropertyDescriptor } from "./property-map.ts";
 import type { PropertyKey } from "./property-map.ts";
+import { sameValue, sameValueWrapped } from "./testing-and-comparison.ts";
 
 export const OrdinaryObjectInternalMethods = {
 	// https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-getprototypeof
@@ -16,8 +17,7 @@ export const OrdinaryObjectInternalMethods = {
 	SetPrototypeOf: (obj: EngineValue<"object">, V: EngineValue<"object" | "null">) => {
 		const current = obj.objectGetInternalSlot("Prototype");
 
-		// TODO: SameValue abstract operation;
-		if (current === V) {
+		if (sameValue(current, V)) {
 			return normalCompletion(EngineValue.boolean(true));
 		}
 
@@ -31,8 +31,7 @@ export const OrdinaryObjectInternalMethods = {
 		while (!done) {
 			if (p.isNull()) {
 				done = true;
-			} else if (p === obj) {
-				// TODO: SameValue
+			} else if (sameValue(p, obj)) {
 				return normalCompletion(EngineValue.boolean(false));
 			} else {
 				if (
@@ -209,25 +208,22 @@ export function ValidateAndApplyPropertyDescriptor(
 		}
 
 		if (current.isAccessorDescriptor()) {
-			// TODO: SameValue
-			if (!isNil(Desc.get) && Desc.get !== current.get) {
+			if (!isNil(Desc.get) && !isNil(current.get) && !sameValue(Desc.get, current.get)) {
 				return EngineValue.boolean(false);
 			}
 
-			// TODO: SameValue
-			if (!isNil(Desc.set) && Desc.set !== current.set) {
+			if (!isNil(Desc.set) && !isNil(current.set) && !sameValue(Desc.set, current.set)) {
 				return EngineValue.boolean(false);
 			}
 		}
 
-		if (current.writable !== false) {
+		if (current.writable === false) {
 			if (Desc.writable === true) {
 				return EngineValue.boolean(false);
 			}
 
 			if (!isNil(Desc.value)) {
-				// TODO: SameValue
-				return EngineValue.boolean(Desc.value === current.value);
+				return sameValueWrapped(Desc.value, current.value!);
 			}
 		}
 	}

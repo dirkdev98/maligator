@@ -778,9 +778,17 @@ export class EngineValue<T extends ValueType = ValueType> {
 			return EngineValue.boolean(true);
 		}
 
+		if (
+			EngineValueUtils.isNegativeZero(xValue) &&
+			EngineValueUtils.isNegativeZero(yValue)
+		) {
+			return EngineValue.boolean(true);
+		}
+
 		if (xValue === +0 && EngineValueUtils.isNegativeZero(yValue)) {
 			return EngineValue.boolean(false);
 		}
+
 		if (EngineValueUtils.isNegativeZero(xValue) && yValue === +0) {
 			return EngineValue.boolean(false);
 		}

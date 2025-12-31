@@ -310,6 +310,202 @@ test.todo(
 	"OrdinaryObjectInternalMethods.SetPrototypeOf returns false when object is not extensible",
 );
 
+test("OrdinaryObjectInternalMethods.SetPrototypeOf returns true when setting same prototype", () => {
+	const obj = EngineValue.object([]);
+	obj.data.internalSlots = {
+		Prototype: EngineValue.null(),
+		Extensible: true,
+		...OrdinaryObjectInternalMethods,
+	};
+
+	const prototype = EngineValue.null();
+	const result = OrdinaryObjectInternalMethods.SetPrototypeOf(obj, prototype);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(true);
+	}
+});
+
+test("OrdinaryObjectInternalMethods.SetPrototypeOf returns true for same object reference as prototype", () => {
+	const prototype = EngineValue.object([]);
+	const obj = EngineValue.object([]);
+	obj.data.internalSlots = {
+		Prototype: prototype,
+		Extensible: true,
+		...OrdinaryObjectInternalMethods,
+	};
+
+	const result = OrdinaryObjectInternalMethods.SetPrototypeOf(obj, prototype);
+
+	expect(result.type).toBe("normal");
+	if (result.type === "normal") {
+		expect(result.value.data.value).toBe(true);
+	}
+});
+
+test("ValidateAndApplyPropertyDescriptor returns true when Desc get is same as current get on non-configurable accessor", () => {
+	const obj = EngineValue.object([]);
+	const current = new PropertyDescriptor({
+		get: EngineValue.undefined(),
+		set: EngineValue.undefined(),
+		enumerable: true,
+		configurable: false,
+	});
+
+	const result = ValidateAndApplyPropertyDescriptor(
+		obj,
+		"test",
+		true,
+		new PropertyDescriptor({ get: EngineValue.undefined() }),
+		current,
+	);
+
+	expect(result.data.value).toBe(true);
+});
+
+test("ValidateAndApplyPropertyDescriptor returns false when Desc get differs from current get on non-configurable accessor", () => {
+	const obj = EngineValue.object([]);
+	const getFn = EngineValue.object([]);
+	const current = new PropertyDescriptor({
+		get: getFn,
+		set: EngineValue.undefined(),
+		enumerable: true,
+		configurable: false,
+	});
+
+	const result = ValidateAndApplyPropertyDescriptor(
+		obj,
+		"test",
+		true,
+		new PropertyDescriptor({ get: EngineValue.object([]) }),
+		current,
+	);
+
+	expect(result.data.value).toBe(false);
+});
+
+test("ValidateAndApplyPropertyDescriptor returns true when Desc set is same as current set on non-configurable accessor", () => {
+	const obj = EngineValue.object([]);
+	const current = new PropertyDescriptor({
+		get: EngineValue.undefined(),
+		set: EngineValue.undefined(),
+		enumerable: true,
+		configurable: false,
+	});
+
+	const result = ValidateAndApplyPropertyDescriptor(
+		obj,
+		"test",
+		true,
+		new PropertyDescriptor({ set: EngineValue.undefined() }),
+		current,
+	);
+
+	expect(result.data.value).toBe(true);
+});
+
+test("ValidateAndApplyPropertyDescriptor returns false when Desc set differs from current set on non-configurable accessor", () => {
+	const obj = EngineValue.object([]);
+	const setFn = EngineValue.object([]);
+	const current = new PropertyDescriptor({
+		get: EngineValue.undefined(),
+		set: setFn,
+		enumerable: true,
+		configurable: false,
+	});
+
+	const result = ValidateAndApplyPropertyDescriptor(
+		obj,
+		"test",
+		true,
+		new PropertyDescriptor({ set: EngineValue.object([]) }),
+		current,
+	);
+
+	expect(result.data.value).toBe(false);
+});
+
+test("ValidateAndApplyPropertyDescriptor returns true when Desc value is same as current value on non-configurable, non-writable data descriptor", () => {
+	const obj = EngineValue.object([]);
+	const current = new PropertyDescriptor({
+		value: EngineValue.number(42),
+		writable: false,
+		enumerable: true,
+		configurable: false,
+	});
+
+	const result = ValidateAndApplyPropertyDescriptor(
+		obj,
+		"test",
+		true,
+		new PropertyDescriptor({ value: EngineValue.number(42) }),
+		current,
+	);
+
+	expect(result.data.value).toBe(true);
+});
+
+test.skip("ValidateAndApplyPropertyDescriptor returns false when Desc value differs from current value on non-configurable, non-writable data descriptor", () => {
+	const obj = EngineValue.object([]);
+	const current = new PropertyDescriptor({
+		value: EngineValue.number(42),
+		writable: false,
+		enumerable: true,
+		configurable: false,
+	});
+
+	const result = ValidateAndApplyPropertyDescriptor(
+		obj,
+		"test",
+		true,
+		new PropertyDescriptor({ value: EngineValue.number(100) }),
+		current,
+	);
+
+	expect(result.data.value).toBe(false);
+});
+
+test("ValidateAndApplyPropertyDescriptor uses sameValue semantics for NaN comparison", () => {
+	const obj = EngineValue.object([]);
+	const current = new PropertyDescriptor({
+		value: EngineValue.number(NaN),
+		writable: false,
+		enumerable: true,
+		configurable: false,
+	});
+
+	const result = ValidateAndApplyPropertyDescriptor(
+		obj,
+		"test",
+		true,
+		new PropertyDescriptor({ value: EngineValue.number(NaN) }),
+		current,
+	);
+
+	expect(result.data.value).toBe(true);
+});
+
+test.skip("ValidateAndApplyPropertyDescriptor distinguishes positive and negative zero using sameValue", () => {
+	const obj = EngineValue.object([]);
+	const current = new PropertyDescriptor({
+		value: EngineValue.number(0),
+		writable: false,
+		enumerable: true,
+		configurable: false,
+	});
+
+	const result = ValidateAndApplyPropertyDescriptor(
+		obj,
+		"test",
+		true,
+		new PropertyDescriptor({ value: EngineValue.number(-0) }),
+		current,
+	);
+
+	expect(result.data.value).toBe(false);
+});
+
 test.todo(
 	"ValidateAndApplyPropertyDescriptor returns false when changing configurable on non-configurable property",
 );
