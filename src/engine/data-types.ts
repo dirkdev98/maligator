@@ -25,9 +25,9 @@ type PrivateElement =
 			set: EngineValue<"object" | "undefined">;
 	  };
 
-type ObjectInternalSlots = {
+export type ObjectInternalSlots = {
 	// https://tc39.es/ecma262/#sec-object-internal-methods-and-internal-slots
-	PrivateElements: Record<string, PrivateElement>;
+	PrivateElements: Array<PrivateElement>;
 
 	// https://tc39.es/ecma262/#sec-object-internal-methods-and-internal-slots
 	//

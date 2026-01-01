@@ -1,6 +1,7 @@
 // https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots
 import { isNil } from "../../utils.ts";
 import { EngineValue } from "../data-types.ts";
+import type { ObjectInternalSlots } from "../data-types.ts";
 import { normalCompletion } from "./completion-record.ts";
 import type { CompletionRecord } from "./completion-record.ts";
 import { PropertyDescriptor } from "./property-map.ts";
@@ -82,7 +83,7 @@ export const OrdinaryObjectInternalMethods = {
 	): CompletionRecord<EngineValue<"boolean">> => {
 		return OrdinaryHasProperty(obj, P);
 	},
-};
+} satisfies Partial<ObjectInternalSlots>;
 
 // https://tc39.es/ecma262/#sec-ordinarygetownproperty
 export function OrdinaryGetOwnProperty(obj: EngineValue<"object">, P: PropertyKey) {

@@ -929,9 +929,9 @@ test.for([
 );
 
 test.for(["abc", "42abc", "1.2.3", "1.5", "not a number"])(
-	"StringToBigInt throws for invalid string '%s'",
+	"StringToBigInt returns undefined for invalid string '%s'",
 	(input) => {
-		expect(() => StringToBigInt(input)).toThrow();
+		expect(StringToBigInt(input).isUndefined()).toBe(true);
 	},
 );
 
@@ -975,7 +975,8 @@ test.skip("toBigInt converts boolean true to bigint", () => {
 	const result = toBigint(value);
 
 	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
+	expect(result.value?.isBigInt()).toBe(true);
+	if (result.type === "normal" && result.value.isBigInt()) {
 		expect(result.value.data.value).toBe(1n);
 	}
 });
@@ -985,7 +986,8 @@ test.skip("toBigInt converts boolean false to bigint", () => {
 	const result = toBigint(value);
 
 	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
+	expect(result.value?.isBigInt()).toBe(true);
+	if (result.type === "normal" && result.value.isBigInt()) {
 		expect(result.value.data.value).toBe(0n);
 	}
 });
@@ -1006,7 +1008,8 @@ test.skip("toBigInt converts string '42' to bigint", () => {
 	const result = toBigint(value);
 
 	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
+	expect(result.value?.isBigInt()).toBe(true);
+	if (result.type === "normal" && result.value.isBigInt()) {
 		expect(result.value.data.value).toBe(42n);
 	}
 });
@@ -1016,7 +1019,8 @@ test.skip("toBigInt converts string '0' to bigint", () => {
 	const result = toBigint(value);
 
 	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
+	expect(result.value?.isBigInt()).toBe(true);
+	if (result.type === "normal" && result.value.isBigInt()) {
 		expect(result.value.data.value).toBe(0n);
 	}
 });
@@ -1026,7 +1030,8 @@ test.skip("toBigInt converts string '-100' to bigint", () => {
 	const result = toBigint(value);
 
 	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
+	expect(result.value?.isBigInt()).toBe(true);
+	if (result.type === "normal" && result.value.isBigInt()) {
 		expect(result.value.data.value).toBe(-100n);
 	}
 });
@@ -1036,7 +1041,8 @@ test.skip("toBigInt converts string '9007199254740992' to bigint", () => {
 	const result = toBigint(value);
 
 	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
+	expect(result.value?.isBigInt()).toBe(true);
+	if (result.type === "normal" && result.value.isBigInt()) {
 		expect(result.value.data.value).toBe(9007199254740992n);
 	}
 });

@@ -2,7 +2,7 @@ import { EngineValue } from "../data-types.ts";
 import { isArrayExoticObject } from "./array-exotic.ts";
 import { normalCompletion, throwCompletion } from "./completion-record.ts";
 import type { CompletionRecord } from "./completion-record.ts";
-import { StringToBigInt, toNumeric, toPrimitive } from "./type-conversion.ts";
+import { StringToBigInt, toNumber, toNumeric, toPrimitive } from "./type-conversion.ts";
 
 export const UNUSED = -1;
 
@@ -187,7 +187,7 @@ export function isLessThan(
 
 	if (px.isBigInt() && py.isString()) {
 		const ny = StringToBigInt(py.data.value);
-		if (ny === undefined) {
+		if (ny.isUndefined()) {
 			return normalCompletion(EngineValue.undefined());
 		}
 
@@ -197,7 +197,7 @@ export function isLessThan(
 	if (px.isString() && py.isBigInt()) {
 		const nx = StringToBigInt(px.data.value);
 
-		if (nx === undefined) {
+		if (nx.isUndefined()) {
 			return normalCompletion(EngineValue.undefined());
 		}
 
@@ -242,4 +242,108 @@ export function isLessThan(
 	}
 
 	return normalCompletion(EngineValue.boolean(nx.value.data.value < ny.value.data.value));
+}
+
+// https://tc39.es/ecma262/#sec-islooselyequal
+export function isLooselyEqual(
+	x: EngineValue,
+	y: EngineValue,
+): CompletionRecord<EngineValue<"boolean">> {
+	if (sameValue(x, y)) {
+		return normalCompletion(isStrictlyEqual(x, y));
+	}
+
+	if (x.isNull() && y.isUndefined()) {
+		return normalCompletion(EngineValue.boolean(true));
+	}
+
+	if (x.isUndefined() && y.isNull()) {
+		return normalCompletion(EngineValue.boolean(true));
+	}
+
+	if (x.isNumber() && y.isString()) {
+		const yN = toNumber(y);
+		if (yN.type === "throw") {
+			return yN;
+		}
+
+		return isLooselyEqual(x, yN.value);
+	}
+
+	if (x.isString() && y.isNumber()) {
+		const xN = toNumber(x);
+		if (xN.type === "throw") {
+			return xN;
+		}
+
+		return isLooselyEqual(xN.value, y);
+	}
+
+	if (x.isBigInt() && y.isString()) {
+		const n = StringToBigInt(y.data.value);
+		if (n.isUndefined()) {
+			return normalCompletion(EngineValue.boolean(false));
+		}
+
+		return isLooselyEqual(x, n);
+	}
+
+	if (x.isBoolean()) {
+		const xN = toNumber(x);
+		if (xN.type === "throw") {
+			return xN;
+		}
+
+		return isLooselyEqual(xN.value, y);
+	}
+
+	if (y.isBoolean()) {
+		const yN = toNumber(y);
+		if (yN.type === "throw") {
+			return yN;
+		}
+		return isLooselyEqual(x, yN.value);
+	}
+
+	if ((x.isString() || x.isNumber() || x.isBigInt() || x.isSymbol()) && y.isObject()) {
+		const yN = toPrimitive(y);
+		if (yN.type === "throw") {
+			return yN;
+		}
+		return isLooselyEqual(x, yN.value);
+	}
+
+	if (x.isObject() && (y.isString() || y.isNumber() || y.isBigInt() || y.isSymbol())) {
+		const xN = toPrimitive(x);
+		if (xN.type === "throw") {
+			return xN;
+		}
+		return isLooselyEqual(xN.value, y);
+	}
+
+	if ((x.isNumber() && y.isBigInt()) || (x.isBigInt() && y.isNumber())) {
+		const xV = x.data.value;
+		const yV = y.data.value;
+
+		if (!isFinite(Number(xV)) || !isFinite(Number(yV))) {
+			return normalCompletion(EngineValue.boolean(false));
+		}
+
+		return normalCompletion(EngineValue.boolean(Number(xV) === Number(yV)));
+	}
+
+	return normalCompletion(EngineValue.boolean(false));
+}
+
+// https://tc39.es/ecma262/#sec-isstrictlyequal
+export function isStrictlyEqual(x: EngineValue, y: EngineValue): EngineValue<"boolean"> {
+	if (!sameType(x, y)) {
+		return EngineValue.boolean(false);
+	}
+
+	if (x.isNumber() && y.isNumber()) {
+		return x.numberEqual(y);
+	}
+
+	return sameValueNonNumberWrapped(x, y);
 }

@@ -301,7 +301,11 @@ export function toBigint(argument: EngineValue) {
 	} else if (value.isNumber()) {
 		return throwCompletion(new TypeError("Cannot convert a number to a BigInt"));
 	} else if (value.isString()) {
-		return normalCompletion(StringToBigInt(value.data.value));
+		const n = StringToBigInt(value.data.value);
+		if (n.isUndefined()) {
+			return throwCompletion(new SyntaxError("Can't convert string to BigInt"));
+		}
+		return normalCompletion(n.asBigInt());
 	} else if (value.isSymbol()) {
 		return throwCompletion(new TypeError("Cannot convert a Symbol value to a BigInt"));
 	}
@@ -312,7 +316,11 @@ export function toBigint(argument: EngineValue) {
 // https://tc39.es/ecma262/#sec-stringtobigint
 export function StringToBigInt(str: string) {
 	// Wee shortcut here
-	return EngineValue.bigint(BigInt(str));
+	try {
+		return EngineValue.bigint(BigInt(str));
+	} catch {
+		return EngineValue.undefined();
+	}
 }
 
 // https://tc39.es/ecma262/#sec-tobigint64
