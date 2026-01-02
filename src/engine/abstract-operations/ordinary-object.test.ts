@@ -1,18 +1,18 @@
 import { expect, test } from "vitest";
 import { EngineValue } from "../data-types.ts";
 import {
-	IsCompatiblePropertyDescriptor,
-	OrdinaryDefineOwnProperty,
-	OrdinaryGetOwnProperty,
-	OrdinaryHasProperty,
+	isCompatiblePropertyDescriptor,
+	ordinaryDefineOwnProperty,
+	ordinaryGetOwnProperty,
+	ordinaryHasProperty,
 	OrdinaryObjectInternalMethods,
-	ValidateAndApplyPropertyDescriptor,
+	validateAndApplyPropertyDescriptor,
 } from "./ordinary-object.ts";
 import { PropertyDescriptor } from "./property-map.ts";
 
 test("OrdinaryGetOwnProperty returns undefined for non-existent property", () => {
 	const obj = EngineValue.object([]);
-	const result = OrdinaryGetOwnProperty(obj, "nonExistent");
+	const result = ordinaryGetOwnProperty(obj, "nonExistent");
 	expect(result).toEqual(EngineValue.undefined());
 });
 
@@ -26,7 +26,7 @@ test("OrdinaryGetOwnProperty returns descriptor for data descriptor property", (
 	});
 	obj.data.properties.set("test", desc);
 
-	const result = OrdinaryGetOwnProperty(obj, "test");
+	const result = ordinaryGetOwnProperty(obj, "test");
 
 	if (result instanceof PropertyDescriptor) {
 		expect(result.value).toEqual(EngineValue.number(42));
@@ -48,7 +48,7 @@ test("OrdinaryGetOwnProperty returns descriptor for accessor descriptor property
 	});
 	obj.data.properties.set("test", desc);
 
-	const result = OrdinaryGetOwnProperty(obj, "test");
+	const result = ordinaryGetOwnProperty(obj, "test");
 
 	if (result instanceof PropertyDescriptor) {
 		expect(result.get).toEqual(EngineValue.undefined());
@@ -69,7 +69,7 @@ test("OrdinaryDefineOwnProperty returns completion record", () => {
 	};
 
 	const desc = new PropertyDescriptor({ value: EngineValue.number(42) });
-	const result = OrdinaryDefineOwnProperty(obj, "test", desc);
+	const result = ordinaryDefineOwnProperty(obj, "test", desc);
 
 	expect(result.type).toBe("normal");
 });
@@ -83,7 +83,7 @@ test("OrdinaryDefineOwnProperty defines new property on extensible object", () =
 	};
 
 	const desc = new PropertyDescriptor({ value: EngineValue.number(42) });
-	const result = OrdinaryDefineOwnProperty(obj, "test", desc);
+	const result = ordinaryDefineOwnProperty(obj, "test", desc);
 
 	expect(result.value).toEqual(EngineValue.boolean(true));
 	expect(obj.data.properties.has("test")).toBe(true);
@@ -98,13 +98,13 @@ test("OrdinaryDefineOwnProperty returns false when defining property on non-exte
 	};
 
 	const desc = new PropertyDescriptor({ value: EngineValue.number(42) });
-	const result = OrdinaryDefineOwnProperty(obj, "test", desc);
+	const result = ordinaryDefineOwnProperty(obj, "test", desc);
 
 	expect(result.value).toEqual(EngineValue.boolean(false));
 });
 
 test("ValidateAndApplyPropertyDescriptor returns false when not extensible and property doesn't exist", () => {
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		EngineValue.undefined(),
 		"",
 		false,
@@ -116,7 +116,7 @@ test("ValidateAndApplyPropertyDescriptor returns false when not extensible and p
 });
 
 test("ValidateAndApplyPropertyDescriptor returns true when O is undefined and extensible", () => {
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		EngineValue.undefined(),
 		"",
 		true,
@@ -131,7 +131,7 @@ test("ValidateAndApplyPropertyDescriptor sets default values for accessor descri
 	const obj = EngineValue.object([]);
 
 	const desc = new PropertyDescriptor({ get: EngineValue.undefined() });
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		obj,
 		"test",
 		true,
@@ -151,7 +151,7 @@ test("ValidateAndApplyPropertyDescriptor sets default values for data descriptor
 	const obj = EngineValue.object([]);
 
 	const desc = new PropertyDescriptor({ value: EngineValue.number(42) });
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		obj,
 		"test",
 		true,
@@ -168,7 +168,7 @@ test("ValidateAndApplyPropertyDescriptor sets default values for data descriptor
 });
 
 test("ValidateAndApplyPropertyDescriptor returns true when Desc has no fields", () => {
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		EngineValue.undefined(),
 		"",
 		true,
@@ -180,7 +180,7 @@ test("ValidateAndApplyPropertyDescriptor returns true when Desc has no fields", 
 });
 
 test("IsCompatiblePropertyDescriptor returns false when not extensible and property doesn't exist", () => {
-	const result = IsCompatiblePropertyDescriptor(
+	const result = isCompatiblePropertyDescriptor(
 		false,
 		new PropertyDescriptor({ value: EngineValue.number(42) }),
 		EngineValue.undefined(),
@@ -190,7 +190,7 @@ test("IsCompatiblePropertyDescriptor returns false when not extensible and prope
 });
 
 test("IsCompatiblePropertyDescriptor returns true when extensible and property doesn't exist", () => {
-	const result = IsCompatiblePropertyDescriptor(
+	const result = isCompatiblePropertyDescriptor(
 		true,
 		new PropertyDescriptor({ value: EngineValue.number(42) }),
 		EngineValue.undefined(),
@@ -210,7 +210,7 @@ test("OrdinaryHasProperty returns true for own property", () => {
 	const desc = new PropertyDescriptor({ value: EngineValue.number(42) });
 	obj.data.properties.set("test", desc);
 
-	const result = OrdinaryHasProperty(obj, "test");
+	const result = ordinaryHasProperty(obj, "test");
 
 	expect(result.type).toBe("normal");
 	expect(result.value).toEqual(EngineValue.boolean(true));
@@ -224,7 +224,7 @@ test("OrdinaryHasProperty returns false for non-existent property with null prot
 		...OrdinaryObjectInternalMethods,
 	};
 
-	const result = OrdinaryHasProperty(obj, "nonExistent");
+	const result = ordinaryHasProperty(obj, "nonExistent");
 
 	expect(result.type).toBe("normal");
 	expect(result.value).toEqual(EngineValue.boolean(false));
@@ -353,7 +353,7 @@ test("ValidateAndApplyPropertyDescriptor returns true when Desc get is same as c
 		configurable: false,
 	});
 
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		obj,
 		"test",
 		true,
@@ -374,7 +374,7 @@ test("ValidateAndApplyPropertyDescriptor returns false when Desc get differs fro
 		configurable: false,
 	});
 
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		obj,
 		"test",
 		true,
@@ -394,7 +394,7 @@ test("ValidateAndApplyPropertyDescriptor returns true when Desc set is same as c
 		configurable: false,
 	});
 
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		obj,
 		"test",
 		true,
@@ -415,7 +415,7 @@ test("ValidateAndApplyPropertyDescriptor returns false when Desc set differs fro
 		configurable: false,
 	});
 
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		obj,
 		"test",
 		true,
@@ -435,7 +435,7 @@ test("ValidateAndApplyPropertyDescriptor returns true when Desc value is same as
 		configurable: false,
 	});
 
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		obj,
 		"test",
 		true,
@@ -455,7 +455,7 @@ test.skip("ValidateAndApplyPropertyDescriptor returns false when Desc value diff
 		configurable: false,
 	});
 
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		obj,
 		"test",
 		true,
@@ -475,7 +475,7 @@ test("ValidateAndApplyPropertyDescriptor uses sameValue semantics for NaN compar
 		configurable: false,
 	});
 
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		obj,
 		"test",
 		true,
@@ -495,7 +495,7 @@ test.skip("ValidateAndApplyPropertyDescriptor distinguishes positive and negativ
 		configurable: false,
 	});
 
-	const result = ValidateAndApplyPropertyDescriptor(
+	const result = validateAndApplyPropertyDescriptor(
 		obj,
 		"test",
 		true,

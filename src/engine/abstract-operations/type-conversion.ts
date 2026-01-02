@@ -1,24 +1,61 @@
-import { EngineValueUtils, EngineValue } from "../data-types.ts";
+import { EngineValueUtils, EngineValue, WELL_KNOWN_SYMBOLS } from "../data-types.ts";
 import { normalCompletion, throwCompletion } from "./completion-record.ts";
 import type { CompletionRecord } from "./completion-record.ts";
+import { get, getMethod } from "./object-operations.ts";
 import type { PropertyKey } from "./property-map.ts";
+import { isCallable } from "./testing-and-comparison.ts";
 
 // https://tc39.es/ecma262/#sec-toprimitive
 export function toPrimitive(
-	_input: EngineValue,
-	_hint?: "default" | "string" | "number",
+	input: EngineValue,
+	hint?: "default" | "string" | "number",
 ): CompletionRecord<EngineValue> {
-	throw new Error(
-		"Not implemented. Requires GetMethod, Call and other abstract operations.",
-	);
+	if (input.isObject()) {
+		const exoticPrim = getMethod(input, WELL_KNOWN_SYMBOLS["%Symbol.toPrimitive%"]);
+		if (exoticPrim.type === "throw") {
+			return exoticPrim;
+		}
+
+		if (!exoticPrim.value.isUndefined()) {
+			hint ??= "default";
+
+			throw new Error("Not implemented. Requires Call.");
+			//       iv. Let result be ? Call(exoticToPrim, input, « hint »).
+			//       v. If result is not an Object, return result.
+			//       vi. Throw a TypeError exception.
+		}
+
+		hint ??= "number";
+
+		return ordinaryToPrimitive(input, hint as "string" | "number");
+	}
+
+	return normalCompletion(input);
 }
 
 // https://tc39.es/ecma262/#sec-ordinarytoprimitive
 export function ordinaryToPrimitive(
-	_input: EngineValue,
-	_hint: "string" | "number",
+	input: EngineValue<"object">,
+	hint: "string" | "number",
 ): CompletionRecord<EngineValue> {
-	throw new Error("Not implemented. Requires Get, Call and other abstract operations.");
+	const methodNames =
+		hint === "string" ? ["toString", "valueOf"] : ["valueOf", "toString"];
+
+	for (const name of methodNames) {
+		const method = get(input, name);
+		if (method.type === "throw") {
+			return method;
+		}
+
+		if (isCallable(method.value).data.value) {
+			// Let result be ? Call(method, O).
+			//
+			// If result is not an Object, return result.
+			throw new Error("Not implemented. Requires Call.");
+		}
+	}
+
+	return throwCompletion(new TypeError("Cannot convert object to primitive value"));
 }
 
 // https://tc39.es/ecma262/#sec-toboolean

@@ -4,6 +4,7 @@ import { EngineValue } from "../data-types.ts";
 import type { ObjectInternalSlots } from "../data-types.ts";
 import { normalCompletion } from "./completion-record.ts";
 import type { CompletionRecord } from "./completion-record.ts";
+import { createDataProperty } from "./object-operations.ts";
 import { PropertyDescriptor } from "./property-map.ts";
 import type { PropertyKey } from "./property-map.ts";
 import { sameValue, sameValueWrapped } from "./testing-and-comparison.ts";
@@ -64,7 +65,7 @@ export const OrdinaryObjectInternalMethods = {
 
 	// https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-getownproperty-p
 	GetOwnProperty: (obj: EngineValue<"object">, P: PropertyKey) => {
-		return normalCompletion(OrdinaryGetOwnProperty(obj, P));
+		return normalCompletion(ordinaryGetOwnProperty(obj, P));
 	},
 
 	// https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-defineownproperty-p-desc
@@ -73,7 +74,7 @@ export const OrdinaryObjectInternalMethods = {
 		P: PropertyKey,
 		Desc: PropertyDescriptor,
 	) => {
-		return OrdinaryDefineOwnProperty(obj, P, Desc);
+		return ordinaryDefineOwnProperty(obj, P, Desc);
 	},
 
 	// https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots-hasproperty-p
@@ -81,12 +82,39 @@ export const OrdinaryObjectInternalMethods = {
 		obj: EngineValue<"object">,
 		P: PropertyKey,
 	): CompletionRecord<EngineValue<"boolean">> => {
-		return OrdinaryHasProperty(obj, P);
+		return ordinaryHasProperty(obj, P);
+	},
+
+	// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinary-object-internal-methods-and-internal-slots-get-p-receiver
+	Get(
+		obj: EngineValue<"object">,
+		P: PropertyKey,
+		receiver: EngineValue,
+	): CompletionRecord<EngineValue> {
+		return ordinaryGet(obj, P, receiver);
+	},
+
+	// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinary-object-internal-methods-and-internal-slots-set-p-v-receiver
+	Set(
+		obj: EngineValue<"object">,
+		P: PropertyKey,
+		V: EngineValue,
+		receiver: EngineValue,
+	): CompletionRecord<EngineValue<"boolean">> {
+		return ordinarySet(obj, P, V, receiver);
+	},
+
+	// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinary-object-internal-methods-and-internal-slots-delete-p
+	Delete(
+		obj: EngineValue<"object">,
+		P: PropertyKey,
+	): CompletionRecord<EngineValue<"boolean">> {
+		return ordinaryDelete(obj, P);
 	},
 } satisfies Partial<ObjectInternalSlots>;
 
 // https://tc39.es/ecma262/#sec-ordinarygetownproperty
-export function OrdinaryGetOwnProperty(obj: EngineValue<"object">, P: PropertyKey) {
+export function ordinaryGetOwnProperty(obj: EngineValue<"object">, P: PropertyKey) {
 	if (!obj.data.properties.has(P)) {
 		return EngineValue.undefined();
 	}
@@ -109,7 +137,7 @@ export function OrdinaryGetOwnProperty(obj: EngineValue<"object">, P: PropertyKe
 }
 
 // https://tc39.es/ecma262/#sec-ordinarydefineownproperty
-export function OrdinaryDefineOwnProperty(
+export function ordinaryDefineOwnProperty(
 	obj: EngineValue<"object">,
 	P: PropertyKey,
 	Desc: PropertyDescriptor,
@@ -125,7 +153,7 @@ export function OrdinaryDefineOwnProperty(
 	}
 
 	return normalCompletion(
-		ValidateAndApplyPropertyDescriptor(
+		validateAndApplyPropertyDescriptor(
 			obj,
 			P,
 			extensible.value.data.value,
@@ -136,12 +164,12 @@ export function OrdinaryDefineOwnProperty(
 }
 
 // https://tc39.es/ecma262/#sec-iscompatiblepropertydescriptor
-export function IsCompatiblePropertyDescriptor(
+export function isCompatiblePropertyDescriptor(
 	extensible: boolean,
 	Desc: PropertyDescriptor,
 	Current: PropertyDescriptor | EngineValue<"undefined">,
 ) {
-	return ValidateAndApplyPropertyDescriptor(
+	return validateAndApplyPropertyDescriptor(
 		EngineValue.undefined(),
 		"",
 		extensible,
@@ -151,7 +179,7 @@ export function IsCompatiblePropertyDescriptor(
 }
 
 // https://tc39.es/ecma262/#sec-validateandapplypropertydescriptor
-export function ValidateAndApplyPropertyDescriptor(
+export function validateAndApplyPropertyDescriptor(
 	O: EngineValue<"object" | "undefined">,
 	P: PropertyKey,
 	extensible: boolean,
@@ -260,7 +288,7 @@ export function ValidateAndApplyPropertyDescriptor(
 }
 
 // https://tc39.es/ecma262/#sec-ordinaryhasproperty
-export function OrdinaryHasProperty(obj: EngineValue<"object">, P: PropertyKey) {
+export function ordinaryHasProperty(obj: EngineValue<"object">, P: PropertyKey) {
 	const hasOwn = obj.objectGetInternalSlot("GetOwnProperty")(obj, P);
 	if (hasOwn.type === "throw") {
 		return hasOwn;
@@ -277,6 +305,158 @@ export function OrdinaryHasProperty(obj: EngineValue<"object">, P: PropertyKey) 
 
 	if (parent.value.isObject()) {
 		return parent.value.objectGetInternalSlot("HasProperty")(parent.value, P);
+	}
+
+	return normalCompletion(EngineValue.boolean(false));
+}
+
+// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinaryget
+export function ordinaryGet(
+	obj: EngineValue<"object">,
+	P: PropertyKey,
+	receiver: EngineValue,
+): CompletionRecord<EngineValue> {
+	const desc = obj.objectGetInternalSlot("GetOwnProperty")(obj, P);
+	if (desc.type === "throw") {
+		return desc;
+	}
+
+	if (desc.value instanceof EngineValue && desc.value.isUndefined()) {
+		const parent = obj.objectGetInternalSlot("GetPrototypeOf")(obj);
+		if (parent.type === "throw") {
+			return parent;
+		}
+
+		if (parent.value.isNull()) {
+			return normalCompletion(EngineValue.undefined());
+		}
+
+		return parent.value.asObject().objectGetInternalSlot("Get")(
+			parent.value.asObject(),
+			P,
+			receiver,
+		);
+	}
+
+	if (desc.value.isDataDescriptor() && desc.value.value) {
+		return normalCompletion(desc.value.value);
+	}
+
+	const getter = desc.value.get!;
+	if (getter.isUndefined()) {
+		return normalCompletion(EngineValue.undefined());
+	}
+
+	// TODO: Return ? Call(getter, Receiver).
+	throw new Error("Not implemented. Requires 'Call'.");
+}
+
+// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinaryset
+export function ordinarySet(
+	obj: EngineValue<"object">,
+	P: PropertyKey,
+	V: EngineValue,
+	receiver: EngineValue,
+): CompletionRecord<EngineValue<"boolean">> {
+	const ownDesc = obj.objectGetInternalSlot("GetOwnProperty")(obj, P);
+	if (ownDesc.type === "throw") {
+		return ownDesc;
+	}
+
+	return ordinarySetWithOwnDescriptor(obj, P, V, receiver, ownDesc.value);
+}
+
+// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinarysetwithowndescriptor
+export function ordinarySetWithOwnDescriptor(
+	obj: EngineValue<"object">,
+	P: PropertyKey,
+	V: EngineValue,
+	receiver: EngineValue,
+	ownDesc: PropertyDescriptor | EngineValue<"undefined">,
+): CompletionRecord<EngineValue<"boolean">> {
+	if (ownDesc instanceof EngineValue && ownDesc.isUndefined()) {
+		const parent = obj.objectGetInternalSlot("GetPrototypeOf")(obj);
+		if (parent.type === "throw") {
+			return parent;
+		}
+
+		if (!parent.value.isNull()) {
+			return parent.value.asObject().objectGetInternalSlot("Set")(
+				parent.value.asObject(),
+				P,
+				V,
+				receiver,
+			);
+		}
+
+		ownDesc = new PropertyDescriptor({
+			value: EngineValue.undefined(),
+			writable: true,
+			enumerable: true,
+			configurable: true,
+		});
+	}
+
+	if (ownDesc.isDataDescriptor()) {
+		if (!ownDesc.writable) {
+			return normalCompletion(EngineValue.boolean(false));
+		}
+
+		if (!receiver.isObject()) {
+			return normalCompletion(EngineValue.boolean(false));
+		}
+
+		const existingDescriptor = receiver.objectGetInternalSlot("GetOwnProperty")(
+			receiver,
+			P,
+		);
+		if (existingDescriptor.type === "throw") {
+			return existingDescriptor;
+		}
+
+		if (existingDescriptor.value instanceof PropertyDescriptor) {
+			if (existingDescriptor.value.isAccessorDescriptor()) {
+				return normalCompletion(EngineValue.boolean(false));
+			}
+
+			if (existingDescriptor.value.writable === false) {
+				return normalCompletion(EngineValue.boolean(false));
+			}
+
+			const valueDesc = new PropertyDescriptor({
+				value: V,
+			});
+			return receiver.objectGetInternalSlot("DefineOwnProperty")(receiver, P, valueDesc);
+		}
+
+		return createDataProperty(receiver, P, V);
+	}
+
+	const setter = ownDesc.set!;
+	if (setter.isUndefined()) {
+		return normalCompletion(EngineValue.boolean(false));
+	}
+
+	// 6. Perform ? Call(setter, Receiver, « V »).
+	throw new Error("Not implemented. Requires 'Call'.");
+
+	// return normalCompletion(EngineValue.boolean(true));
+}
+
+// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinarydelete
+export function ordinaryDelete(obj: EngineValue<"object">, P: PropertyKey) {
+	const desc = obj.objectGetInternalSlot("GetOwnProperty")(obj, P);
+	if (desc.type === "throw") {
+		return desc;
+	}
+
+	if (desc.value instanceof EngineValue && desc.value.isUndefined()) {
+		return normalCompletion(EngineValue.boolean(true));
+	}
+
+	if (desc.value.configurable === true) {
+		obj.data.properties.delete(P);
+		return normalCompletion(EngineValue.boolean(true));
 	}
 
 	return normalCompletion(EngineValue.boolean(false));

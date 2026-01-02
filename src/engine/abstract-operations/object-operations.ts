@@ -1,0 +1,192 @@
+import { EngineValue } from "../data-types.ts";
+import type { ObjectInternalSlots } from "../data-types.ts";
+import { normalCompletion, throwCompletion } from "./completion-record.ts";
+import type { CompletionRecord } from "./completion-record.ts";
+import { OrdinaryObjectInternalMethods } from "./ordinary-object.ts";
+import { PropertyDescriptor } from "./property-map.ts";
+import type { PropertyKey } from "./property-map.ts";
+import { isCallable } from "./testing-and-comparison.ts";
+import { toObject } from "./type-conversion.ts";
+
+const UNUSED = -1;
+
+// https://tc39.es/ecma262/#sec-makebasicobject
+export function makeBasicObject(internalSlotsList: Array<string>): EngineValue<"object"> {
+	internalSlotsList = [...internalSlotsList, "PrivateElements"];
+	const obj = EngineValue.object(internalSlotsList);
+	obj.objectSetInternalSlot("PrivateElements", []);
+
+	for (const [key, value] of Object.entries(OrdinaryObjectInternalMethods)) {
+		obj.objectSetInternalSlot(key as keyof ObjectInternalSlots, value);
+	}
+
+	if (internalSlotsList.includes("Extensible")) {
+		obj.objectSetInternalSlot("Extensible", true);
+	}
+
+	return obj;
+}
+
+// https://tc39.es/ecma262/#sec-get-o-p
+export function get(
+	O: EngineValue<"object">,
+	P: PropertyKey,
+): CompletionRecord<EngineValue> {
+	return O.objectGetInternalSlot("Get")(O, P, O);
+}
+
+// https://tc39.es/ecma262/#sec-getv
+export function getV(V: EngineValue, P: PropertyKey): CompletionRecord<EngineValue> {
+	const O = toObject(V);
+	if (O.type === "throw") {
+		return O;
+	}
+
+	return O.value.objectGetInternalSlot("Get")(O.value, P, O.value);
+}
+
+// https://tc39.es/ecma262/#sec-set-o-p-v-throw
+export function set(
+	O: EngineValue<"object">,
+	P: PropertyKey,
+	V: EngineValue,
+	Throw: boolean = false,
+): CompletionRecord<typeof UNUSED> {
+	const success = O.objectGetInternalSlot("Set")(O, P, V, O);
+	if (success.type === "throw") {
+		return success;
+	}
+
+	if (!success.value.data.value && Throw) {
+		return throwCompletion(new TypeError("Cannot 'set' property."));
+	}
+
+	return normalCompletion(UNUSED);
+}
+
+// https://tc39.es/ecma262/#sec-createdataproperty
+export function createDataProperty(
+	O: EngineValue<"object">,
+	P: PropertyKey,
+	V: EngineValue,
+) {
+	const newDesc = new PropertyDescriptor({
+		value: V,
+		writable: true,
+		enumerable: true,
+		configurable: true,
+	});
+
+	return O.objectGetInternalSlot("DefineOwnProperty")(O, P, newDesc);
+}
+
+// https://tc39.es/ecma262/#sec-createdatapropertyorthrow
+export function createDataPropertyOrThrow(
+	O: EngineValue<"object">,
+	P: PropertyKey,
+	V: EngineValue,
+) {
+	const success = createDataProperty(O, P, V);
+
+	if (success.type === "throw") {
+		return success;
+	}
+
+	if (!success.value.data.value) {
+		return throwCompletion(new TypeError("Cannot create data property."));
+	}
+
+	return normalCompletion(UNUSED);
+}
+
+// https://tc39.es/ecma262/#sec-createnonenumerabledatapropertyorthrow
+export function createNonEnumerableDataPropertyOrThrow(
+	O: EngineValue<"object">,
+	P: PropertyKey,
+	V: EngineValue,
+) {
+	const desc = new PropertyDescriptor({
+		value: V,
+		writable: true,
+		enumerable: false,
+		configurable: true,
+	});
+
+	const result = definePropertyOrThrow(O, P, desc);
+	if (result.type === "throw") {
+		throw result.error;
+	}
+
+	return UNUSED;
+}
+
+// https://tc39.es/ecma262/#sec-definepropertyorthrow
+export function definePropertyOrThrow(
+	O: EngineValue<"object">,
+	P: PropertyKey,
+	Desc: PropertyDescriptor,
+): CompletionRecord<typeof UNUSED> {
+	const success = O.objectGetInternalSlot("DefineOwnProperty")(O, P, Desc);
+	if (success.type === "throw") {
+		return success;
+	}
+
+	return normalCompletion(UNUSED);
+}
+
+// https://tc39.es/ecma262/#sec-deletepropertyorthrow
+export function deletePropertyOrThrow(O: EngineValue<"object">, P: PropertyKey) {
+	const success = O.objectGetInternalSlot("Delete")(O, P);
+	if (success.type === "throw") {
+		return success;
+	}
+
+	if (!success.value.data.value) {
+		return throwCompletion(new TypeError("Cannot delete property."));
+	}
+
+	return normalCompletion(UNUSED);
+}
+
+// https://tc39.es/ecma262/multipage/abstract-operations.html#sec-getmethod
+export function getMethod(
+	V: EngineValue,
+	P: PropertyKey,
+): CompletionRecord<EngineValue<"object" | "undefined">> {
+	const func = getV(V, P);
+	if (func.type === "throw") {
+		return func;
+	}
+	const funcValue = func.value;
+	if (funcValue.isNull() || funcValue.isUndefined()) {
+		return normalCompletion(EngineValue.undefined());
+	}
+
+	const isCallableValue = isCallable(funcValue);
+	if (!isCallableValue.data.value) {
+		return throwCompletion(new TypeError("Property is not callable."));
+	}
+
+	return normalCompletion(funcValue.asObject());
+}
+
+// https://tc39.es/ecma262/multipage/abstract-operations.html#sec-hasproperty
+export function hasProperty(O: EngineValue<"object">, P: PropertyKey) {
+	return O.objectGetInternalSlot("HasProperty")(O, P);
+}
+
+// https://tc39.es/ecma262/multipage/abstract-operations.html#sec-hasownproperty
+export function hasOwnProperty(O: EngineValue<"object">, P: PropertyKey) {
+	const desc = O.objectGetInternalSlot("GetOwnProperty")(O, P);
+	if (desc.type === "throw") {
+		return desc;
+	}
+
+	const descValue = desc.value;
+
+	if (descValue instanceof EngineValue) {
+		return normalCompletion(EngineValue.boolean(!descValue.isUndefined()));
+	}
+
+	return normalCompletion(EngineValue.boolean(false));
+}

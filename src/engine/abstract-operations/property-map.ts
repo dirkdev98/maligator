@@ -110,4 +110,8 @@ export class PropertyMap {
 	set(key: PropertyKey, value: PropertyDescriptor) {
 		this.properties.set(key, value);
 	}
+
+	delete(key: PropertyKey) {
+		this.properties.delete(key);
+	}
 }

@@ -63,6 +63,24 @@ export type ObjectInternalSlots = {
 		P: PropertyKey,
 	) => CompletionRecord<EngineValue<"boolean">>;
 
+	Get: (
+		obj: EngineValue<"object">,
+		P: PropertyKey,
+		Receiver: EngineValue,
+	) => CompletionRecord<EngineValue>;
+
+	Set: (
+		obj: EngineValue<"object">,
+		P: PropertyKey,
+		V: EngineValue,
+		Receiver: EngineValue,
+	) => CompletionRecord<EngineValue<"boolean">>;
+
+	Delete: (
+		O: EngineValue<"object">,
+		P: PropertyKey,
+	) => CompletionRecord<EngineValue<"boolean">>;
+
 	Call: EngineValue;
 	Construct: EngineValue;
 	Prototype: EngineValue<"object" | "null">;
