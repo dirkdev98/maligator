@@ -1,5 +1,5 @@
 import { isNil } from "../../utils.ts";
-import { EngineValue } from "../data-types.ts";
+import { EngineValue } from "../types-and-values/data-types.ts";
 
 // https://tc39.es/ecma262/#sec-property-attributes
 export class PropertyDescriptor {

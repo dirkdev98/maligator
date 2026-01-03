@@ -1,7 +1,10 @@
-import { EngineValue } from "../data-types.ts";
-import type { ObjectInternalSlots } from "../data-types.ts";
-import { normalCompletion, throwCompletion } from "./completion-record.ts";
-import type { CompletionRecord } from "./completion-record.ts";
+import {
+	normalCompletion,
+	throwCompletion,
+} from "../types-and-values/completion-record.ts";
+import type { CompletionRecord } from "../types-and-values/completion-record.ts";
+import { EngineValue } from "../types-and-values/data-types.ts";
+import type { ObjectInternalSlots } from "../types-and-values/data-types.ts";
 import { OrdinaryObjectInternalMethods } from "./ordinary-object.ts";
 import { PropertyDescriptor } from "./property-map.ts";
 import type { PropertyKey } from "./property-map.ts";

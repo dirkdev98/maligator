@@ -1,4 +1,4 @@
-import type { EngineValue } from "../data-types.ts";
+import type { EngineValue } from "../types-and-values/data-types.ts";
 import type { PropertyDescriptor } from "./property-map.ts";
 import type { PropertyKey } from "./property-map.ts";
 

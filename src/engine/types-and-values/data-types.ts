@@ -1,15 +1,12 @@
-import { isNil } from "../utils.ts";
-import {
-	normalCompletion,
-	throwCompletion,
-} from "./abstract-operations/completion-record.ts";
-import type { CompletionRecord } from "./abstract-operations/completion-record.ts";
+import { isNil } from "../../utils.ts";
 import type {
 	PropertyDescriptor,
 	PropertyKey,
-} from "./abstract-operations/property-map.ts";
-import { PropertyMap } from "./abstract-operations/property-map.ts";
-import { toInt32, toUint32 } from "./abstract-operations/type-conversion.ts";
+} from "../abstract-operations/property-map.ts";
+import { PropertyMap } from "../abstract-operations/property-map.ts";
+import { toInt32, toUint32 } from "../abstract-operations/type-conversion.ts";
+import type { CompletionRecord } from "./completion-record.ts";
+import { normalCompletion, throwCompletion } from "./completion-record.ts";
 
 // https://tc39.es/ecma262/#sec-privateelement-specification-type
 type PrivateElement =
@@ -80,6 +77,11 @@ export type ObjectInternalSlots = {
 		O: EngineValue<"object">,
 		P: PropertyKey,
 	) => CompletionRecord<EngineValue<"boolean">>;
+
+	// Function objects
+	HomeObject: EngineValue<"object" | "undefined">;
+
+	/// WIP
 
 	Call: EngineValue;
 	Construct: EngineValue;

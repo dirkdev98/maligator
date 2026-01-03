@@ -1,6 +1,13 @@
-import { EngineValueUtils, EngineValue, WELL_KNOWN_SYMBOLS } from "../data-types.ts";
-import { normalCompletion, throwCompletion } from "./completion-record.ts";
-import type { CompletionRecord } from "./completion-record.ts";
+import {
+	normalCompletion,
+	throwCompletion,
+} from "../types-and-values/completion-record.ts";
+import type { CompletionRecord } from "../types-and-values/completion-record.ts";
+import {
+	EngineValueUtils,
+	EngineValue,
+	WELL_KNOWN_SYMBOLS,
+} from "../types-and-values/data-types.ts";
 import { get, getMethod } from "./object-operations.ts";
 import type { PropertyKey } from "./property-map.ts";
 import { isCallable } from "./testing-and-comparison.ts";

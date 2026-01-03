@@ -1,7 +1,10 @@
-import { EngineValue } from "../data-types.ts";
+import {
+	normalCompletion,
+	throwCompletion,
+} from "../types-and-values/completion-record.ts";
+import type { CompletionRecord } from "../types-and-values/completion-record.ts";
+import { EngineValue } from "../types-and-values/data-types.ts";
 import { isArrayExoticObject } from "./array-exotic.ts";
-import { normalCompletion, throwCompletion } from "./completion-record.ts";
-import type { CompletionRecord } from "./completion-record.ts";
 import { StringToBigInt, toNumber, toNumeric, toPrimitive } from "./type-conversion.ts";
 
 export const UNUSED = -1;

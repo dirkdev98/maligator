@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { EngineValue } from "../data-types.ts";
-import { normalCompletion } from "./completion-record.ts";
+import { normalCompletion } from "../types-and-values/completion-record.ts";
+import { EngineValue } from "../types-and-values/data-types.ts";
 import {
 	requireObjectCoercible,
 	UNUSED,
@@ -1296,10 +1296,7 @@ test("isStrictlyEqual returns true for same symbol reference", () => {
 });
 
 test("isStrictlyEqual returns false for different symbol references", () => {
-	const result = isStrictlyEqual(
-		EngineValue.symbol("test"),
-		EngineValue.symbol("test"),
-	);
+	const result = isStrictlyEqual(EngineValue.symbol("test"), EngineValue.symbol("test"));
 
 	expect(result.isBoolean()).toBe(true);
 	expect(result.data.value).toBe(false);
@@ -1314,10 +1311,7 @@ test("isStrictlyEqual returns true for same object reference", () => {
 });
 
 test("isStrictlyEqual returns false for different object references", () => {
-	const result = isStrictlyEqual(
-		EngineValue.object([]),
-		EngineValue.object([]),
-	);
+	const result = isStrictlyEqual(EngineValue.object([]), EngineValue.object([]));
 
 	expect(result.isBoolean()).toBe(true);
 	expect(result.data.value).toBe(false);
@@ -1329,15 +1323,12 @@ test.for([
 	{ x: EngineValue.boolean(true), y: EngineValue.string("true") },
 	{ x: EngineValue.undefined(), y: EngineValue.null() },
 	{ x: EngineValue.null(), y: EngineValue.undefined() },
-])(
-	"isStrictlyEqual returns false for different types: $type and $type",
-	({ x, y }) => {
-		const result = isStrictlyEqual(x, y);
+])("isStrictlyEqual returns false for different types: $type and $type", ({ x, y }) => {
+	const result = isStrictlyEqual(x, y);
 
-		expect(result.isBoolean()).toBe(true);
-		expect(result.data.value).toBe(false);
-	},
-);
+	expect(result.isBoolean()).toBe(true);
+	expect(result.data.value).toBe(false);
+});
 
 test.for([
 	{ x: EngineValue.number(42), y: EngineValue.number(42) },
@@ -1402,17 +1393,20 @@ test.for([
 test.for([
 	{ x: EngineValue.number(42), y: EngineValue.string("100") },
 	{ x: EngineValue.number(0), y: EngineValue.string("1") },
-])("isLooselyEqual returns false for number != numeric string: $x != '$y'", ({ x, y }) => {
-	const result = isLooselyEqual(x, y);
+])(
+	"isLooselyEqual returns false for number != numeric string: $x != '$y'",
+	({ x, y }) => {
+		const result = isLooselyEqual(x, y);
 
-	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
-		expect(result.value.isBoolean()).toBe(true);
-		if (result.value.isBoolean()) {
-			expect(result.value.data.value).toBe(false);
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value.isBoolean()).toBe(true);
+			if (result.value.isBoolean()) {
+				expect(result.value.data.value).toBe(false);
+			}
 		}
-	}
-});
+	},
+);
 
 test.for([
 	{ x: EngineValue.string("42"), y: EngineValue.number(42) },
@@ -1434,33 +1428,39 @@ test.for([
 	{ x: EngineValue.bigint(42n), y: EngineValue.string("42") },
 	{ x: EngineValue.bigint(0n), y: EngineValue.string("0") },
 	{ x: EngineValue.bigint(-100n), y: EngineValue.string("-100") },
-])("isLooselyEqual returns true for bigint == valid bigint string: $x == '$y'", ({ x, y }) => {
-	const result = isLooselyEqual(x, y);
+])(
+	"isLooselyEqual returns true for bigint == valid bigint string: $x == '$y'",
+	({ x, y }) => {
+		const result = isLooselyEqual(x, y);
 
-	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
-		expect(result.value.isBoolean()).toBe(true);
-		if (result.value.isBoolean()) {
-			expect(result.value.data.value).toBe(true);
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value.isBoolean()).toBe(true);
+			if (result.value.isBoolean()) {
+				expect(result.value.data.value).toBe(true);
+			}
 		}
-	}
-});
+	},
+);
 
 test.for([
 	{ x: EngineValue.bigint(42n), y: EngineValue.string("100") },
 	{ x: EngineValue.bigint(42n), y: EngineValue.string("abc") },
 	{ x: EngineValue.bigint(42n), y: EngineValue.string("42abc") },
-])("isLooselyEqual returns false for bigint != non-numeric/unequal string: $x != '$y'", ({ x, y }) => {
-	const result = isLooselyEqual(x, y);
+])(
+	"isLooselyEqual returns false for bigint != non-numeric/unequal string: $x != '$y'",
+	({ x, y }) => {
+		const result = isLooselyEqual(x, y);
 
-	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
-		expect(result.value.isBoolean()).toBe(true);
-		if (result.value.isBoolean()) {
-			expect(result.value.data.value).toBe(false);
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value.isBoolean()).toBe(true);
+			if (result.value.isBoolean()) {
+				expect(result.value.data.value).toBe(false);
+			}
 		}
-	}
-});
+	},
+);
 
 test.for([
 	{ x: EngineValue.boolean(true), y: EngineValue.number(1) },
@@ -1495,32 +1495,38 @@ test.for([
 test.for([
 	{ x: EngineValue.boolean(true), y: EngineValue.string("1") },
 	{ x: EngineValue.boolean(false), y: EngineValue.string("0") },
-])("isLooselyEqual returns true for boolean == numeric string: $x == '$y'", ({ x, y }) => {
-	const result = isLooselyEqual(x, y);
+])(
+	"isLooselyEqual returns true for boolean == numeric string: $x == '$y'",
+	({ x, y }) => {
+		const result = isLooselyEqual(x, y);
 
-	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
-		expect(result.value.isBoolean()).toBe(true);
-		if (result.value.isBoolean()) {
-			expect(result.value.data.value).toBe(true);
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value.isBoolean()).toBe(true);
+			if (result.value.isBoolean()) {
+				expect(result.value.data.value).toBe(true);
+			}
 		}
-	}
-});
+	},
+);
 
 test.for([
 	{ x: EngineValue.string("1"), y: EngineValue.boolean(true) },
 	{ x: EngineValue.string("0"), y: EngineValue.boolean(false) },
-])("isLooselyEqual returns true for numeric string == boolean: '$x' == $y", ({ x, y }) => {
-	const result = isLooselyEqual(x, y);
+])(
+	"isLooselyEqual returns true for numeric string == boolean: '$x' == $y",
+	({ x, y }) => {
+		const result = isLooselyEqual(x, y);
 
-	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
-		expect(result.value.isBoolean()).toBe(true);
-		if (result.value.isBoolean()) {
-			expect(result.value.data.value).toBe(true);
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value.isBoolean()).toBe(true);
+			if (result.value.isBoolean()) {
+				expect(result.value.data.value).toBe(true);
+			}
 		}
-	}
-});
+	},
+);
 
 test.for([
 	{ x: EngineValue.number(42), y: EngineValue.bigint(42n) },
@@ -1557,17 +1563,20 @@ test.for([
 	{ x: EngineValue.number(NaN), y: EngineValue.bigint(42n) },
 	{ x: EngineValue.bigint(42n), y: EngineValue.number(Infinity) },
 	{ x: EngineValue.bigint(42n), y: EngineValue.number(NaN) },
-])("isLooselyEqual returns false for infinity/NaN number vs bigint: $x != $y", ({ x, y }) => {
-	const result = isLooselyEqual(x, y);
+])(
+	"isLooselyEqual returns false for infinity/NaN number vs bigint: $x != $y",
+	({ x, y }) => {
+		const result = isLooselyEqual(x, y);
 
-	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
-		expect(result.value.isBoolean()).toBe(true);
-		if (result.value.isBoolean()) {
-			expect(result.value.data.value).toBe(false);
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value.isBoolean()).toBe(true);
+			if (result.value.isBoolean()) {
+				expect(result.value.data.value).toBe(false);
+			}
 		}
-	}
-});
+	},
+);
 
 test.skip.for([
 	{ x: EngineValue.string("hello"), y: EngineValue.object([]) },

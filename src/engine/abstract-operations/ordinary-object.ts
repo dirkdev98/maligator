@@ -1,9 +1,9 @@
 // https://tc39.es/ecma262/#sec-ordinary-object-internal-methods-and-internal-slots
 import { isNil } from "../../utils.ts";
-import { EngineValue } from "../data-types.ts";
-import type { ObjectInternalSlots } from "../data-types.ts";
-import { normalCompletion } from "./completion-record.ts";
-import type { CompletionRecord } from "./completion-record.ts";
+import { normalCompletion } from "../types-and-values/completion-record.ts";
+import type { CompletionRecord } from "../types-and-values/completion-record.ts";
+import { EngineValue } from "../types-and-values/data-types.ts";
+import type { ObjectInternalSlots } from "../types-and-values/data-types.ts";
 import { createDataProperty } from "./object-operations.ts";
 import { PropertyDescriptor } from "./property-map.ts";
 import type { PropertyKey } from "./property-map.ts";

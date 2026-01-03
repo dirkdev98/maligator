@@ -39,3 +39,14 @@ export function throwCompletion(err: Error): CompletionRecord<never> {
 		error: err,
 	};
 }
+
+/**
+ * Not in the spec.
+ */
+export function unwrapCompletion<T>(completion: CompletionRecord<T>): T {
+	if (completion.type === "throw") {
+		throw completion.error;
+	}
+
+	return completion.value;
+}

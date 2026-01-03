@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { EngineValue } from "../data-types.ts";
+import { EngineValue } from "../types-and-values/data-types.ts";
 import { isArrayExoticObject } from "./array-exotic.ts";
 import { OrdinaryObjectInternalMethods } from "./ordinary-object.ts";
 
