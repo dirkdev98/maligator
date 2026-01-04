@@ -10,6 +10,7 @@ experience in building runtimes.
 - We depend on V8 to do our memory management and don't do exercises in memory
   optimization of the implementation.
 - We depend on V8 to handle internal representations of values like strings and numbers.
+- We start parsing via Meriyah. We may want to hand roll an parser later on.
 
 ## Useful links
 

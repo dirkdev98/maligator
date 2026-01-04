@@ -19,6 +19,9 @@
 		"url": "https://github.com/dirkdev98/maligator/issues"
 	},
 	"homepage": "https://github.com/dirkdev98/maligator#readme",
+	"dependencies": {
+		"meriyah": "7.0.0"
+	},
 	"devDependencies": {
 		"@lightbase/eslint-config": "4.1.1",
 		"@vitest/coverage-v8": "4.0.15",

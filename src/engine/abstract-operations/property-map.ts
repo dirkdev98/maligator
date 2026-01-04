@@ -96,6 +96,31 @@ export class PropertyDescriptor {
 // Note that PropertyName is only represented by a EngineValue<"string">
 export type PropertyKey = string | EngineValue<"symbol">;
 
+export function isPropertyKey(
+	value: unknown,
+): value is string | EngineValue<"string" | "symbol"> {
+	return (
+		typeof value === "string" ||
+		(value instanceof EngineValue && (value.type === "string" || value.type === "symbol"))
+	);
+}
+
+export function unwrapPropertyKey(value: unknown): PropertyKey {
+	if (!isPropertyKey(value)) {
+		throw new Error("Unknown value.");
+	}
+
+	if (typeof value === "string") {
+		return value;
+	}
+
+	if (value.isString()) {
+		return value.data.value;
+	}
+
+	return value.asSymbol();
+}
+
 export class PropertyMap {
 	private properties: Map<PropertyKey, PropertyDescriptor> = new Map();
 
