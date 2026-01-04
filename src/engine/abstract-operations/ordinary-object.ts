@@ -4,7 +4,7 @@ import { normalCompletion } from "../types-and-values/completion-record.ts";
 import type { CompletionRecord } from "../types-and-values/completion-record.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
 import type { ObjectInternalSlots } from "../types-and-values/data-types.ts";
-import { createDataProperty } from "./object-operations.ts";
+import { createDataProperty, makeBasicObject } from "./object-operations.ts";
 import { PropertyDescriptor } from "./property-map.ts";
 import type { PropertyKey } from "./property-map.ts";
 import { sameValue, sameValueWrapped } from "./testing-and-comparison.ts";
@@ -460,4 +460,16 @@ export function ordinaryDelete(obj: EngineValue<"object">, P: PropertyKey) {
 	}
 
 	return normalCompletion(EngineValue.boolean(false));
+}
+
+// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinaryobjectcreate
+export function ordinaryObjectCreate(
+	proto: EngineValue<"object" | "null">,
+	additionalInternalSlots: Array<string> = [],
+) {
+	const internalSlots = ["Prototype", "Extensible", ...additionalInternalSlots];
+	const O = makeBasicObject(internalSlots);
+	O.objectSetInternalSlot("Prototype", proto);
+
+	return O;
 }

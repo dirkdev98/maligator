@@ -11,6 +11,7 @@ import { isExtensible } from "../abstract-operations/testing-and-comparison.ts";
 import { toBoolean } from "../abstract-operations/type-conversion.ts";
 import { unwrapCompletion } from "../types-and-values/completion-record.ts";
 import { EngineValue, WELL_KNOWN_SYMBOLS } from "../types-and-values/data-types.ts";
+import { ReferenceRecord } from "../types-and-values/reference-record.ts";
 
 export abstract class EnvironmentRecord {
 	outerEnv: EnvironmentRecord | null = null;
@@ -534,4 +535,65 @@ export class GlobalEnvironmentRecord extends EnvironmentRecord {
 // https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-module-environment-records
 export class ModuleEnvironmentRecord extends DeclarativeEnvironmentRecord {
 	// TODO!: Needs module records! Module stuff can be 'indirect' bindings for imports.
+}
+
+// https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-getidentifierreference
+export function getIdentifierReference(
+	env: EnvironmentRecord | null,
+	name: EngineValue<"string">,
+	strict: boolean,
+): ReferenceRecord {
+	if (env === null) {
+		return new ReferenceRecord({
+			base: undefined,
+			referencedName: name,
+			strict,
+			thisValue: null,
+		});
+	}
+
+	const exists = env.hasBinding(name.data.value);
+	if (exists) {
+		return new ReferenceRecord({
+			base: env,
+			referencedName: name,
+			strict,
+			thisValue: null,
+		});
+	}
+
+	const outer = env.outerEnv;
+	return getIdentifierReference(outer, name, strict);
+}
+
+// https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-newdeclarativeenvironment
+export function newDeclarativeEnvironment(E: EnvironmentRecord | null) {
+	const env = new DeclarativeEnvironmentRecord();
+	env.outerEnv = E;
+
+	return env;
+}
+
+// https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-newobjectenvironment
+export function newObjectEnvironment(
+	O: EngineValue<"object">,
+	W: boolean,
+	E: EnvironmentRecord | null,
+) {
+	const env = new ObjectEnvironmentRecord(O, W);
+	env.outerEnv = E;
+
+	return env;
+}
+
+// https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-newglobalenvironment
+export function newGlobalEnvironment(
+	G: EngineValue<"object">,
+	thisValue: EngineValue<"object">,
+) {
+	const objectEnv = newObjectEnvironment(G, false, null);
+	const declEnv = newDeclarativeEnvironment(null);
+	const env = new GlobalEnvironmentRecord(objectEnv, thisValue, declEnv);
+
+	return env;
 }
