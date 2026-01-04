@@ -4,6 +4,7 @@ import type { EngineValue } from "../types-and-values/data-types.ts";
 import { BinaryExpression } from "./binary-expression.ts";
 import { ExpressionStatement } from "./expression-statement.ts";
 import { Literal } from "./literal-expression.ts";
+import { LogicalExpression } from "./logical-expression.ts";
 
 export const evaluators: Partial<{
 	[K in ESTree.Node["type"]]: {
@@ -12,6 +13,7 @@ export const evaluators: Partial<{
 }> = {
 	BinaryExpression,
 	Literal,
+	LogicalExpression,
 
 	ExpressionStatement,
 };
