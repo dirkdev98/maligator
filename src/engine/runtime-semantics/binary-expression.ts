@@ -1,5 +1,9 @@
 import type { ESTree } from "meriyah";
-import { sameType } from "../abstract-operations/testing-and-comparison.ts";
+import {
+	isLooselyEqual,
+	isStrictlyEqual,
+	sameType,
+} from "../abstract-operations/testing-and-comparison.ts";
 import {
 	toNumeric,
 	toPrimitive,
@@ -29,6 +33,10 @@ export const BinaryExpression = {
 		}
 
 		const rVal = getValue(rRef.value);
+
+		if (["==", "!=", "===", "!=="].includes(node.operator)) {
+			return ApplyEqualityBinaryOperator(lVal, node.operator, rVal);
+		}
 
 		return ApplyStringOrNumericBinaryOperator(lVal, node.operator, rVal);
 	},
@@ -151,4 +159,32 @@ function ApplyStringOrNumericBinaryOperator(
 	}
 
 	throw new Error("Not implemented.");
+}
+
+// https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-equality-operators
+function ApplyEqualityBinaryOperator(
+	lValue: EngineValue,
+	opText: string,
+	rValue: EngineValue,
+): CompletionRecord<EngineValue> {
+	switch (opText) {
+		case "==":
+			return isLooselyEqual(rValue, lValue);
+		case "!=": {
+			const r = isLooselyEqual(rValue, lValue);
+			if (r.type === "throw") {
+				return r;
+			}
+			return normalCompletion(EngineValue.boolean(!r.value.data.value));
+		}
+		case "===":
+			return normalCompletion(isStrictlyEqual(rValue, lValue));
+		case "!==": {
+			const r = isStrictlyEqual(rValue, lValue);
+			return normalCompletion(EngineValue.boolean(!r.data.value));
+		}
+
+		default:
+			throw new Error(`Unknown equality operator: ${opText}`);
+	}
 }
