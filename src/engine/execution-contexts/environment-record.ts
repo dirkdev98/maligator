@@ -323,9 +323,9 @@ export class FunctionEnvironmentRecord extends DeclarativeEnvironmentRecord {
 
 // https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-global-environment-records
 export class GlobalEnvironmentRecord extends EnvironmentRecord {
-	private objectRecord: ObjectEnvironmentRecord;
+	objectRecord: ObjectEnvironmentRecord;
 	private globalThisValue: EngineValue<"object">;
-	private declarativeRecord: DeclarativeEnvironmentRecord;
+	declarativeRecord: DeclarativeEnvironmentRecord;
 
 	constructor(
 		objectRecord: ObjectEnvironmentRecord,

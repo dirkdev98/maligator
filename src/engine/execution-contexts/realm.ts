@@ -34,8 +34,11 @@ export class Realm {
 		);
 		const thisValue = globalObject;
 		realm.globalObject = globalObject;
-
 		realm.globalEnv = newGlobalEnvironment(globalObject, thisValue);
+
+		// TODO: Is this true?
+		newContext.lexicalEnvironment = realm.globalEnv.objectRecord;
+		newContext.variableEnvironment = realm.globalEnv.declarativeRecord;
 
 		realm.setDefaultGlobalBindings();
 	}

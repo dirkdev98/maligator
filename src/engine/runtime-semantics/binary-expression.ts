@@ -1,4 +1,3 @@
-import type { ESTree } from "meriyah";
 import {
 	isLooselyEqual,
 	isStrictlyEqual,
@@ -17,10 +16,11 @@ import type { CompletionRecord } from "../types-and-values/completion-record.ts"
 import { EngineValue } from "../types-and-values/data-types.ts";
 import { getValue } from "../types-and-values/reference-record.ts";
 import { evaluate } from "./index.ts";
+import type { Evaluator } from "./index.ts";
 
-export const BinaryExpression = {
+export const BinaryExpression: Evaluator<"BinaryExpression"> = {
 	// https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-evaluatestringornumericbinaryexpression
-	evaluate(node: ESTree.BinaryExpression): CompletionRecord<EngineValue> {
+	evaluate(node) {
 		const lRef = evaluate(node.left);
 		if (lRef.type === "throw") {
 			return lRef;

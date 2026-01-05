@@ -59,8 +59,7 @@ export class ReferenceRecord {
 	getValue(): EngineValue {
 		if (this.isUnresolvableReference()) {
 			throw new ReferenceError(
-				// eslint-disable-next-line @typescript-eslint/no-base-to-string,@typescript-eslint/restrict-template-expressions
-				`Cannot access unresolvable reference ${this.referencedName}`,
+				`Cannot access unresolvable reference ${JSON.stringify(this.referencedName)}`,
 			);
 		}
 
@@ -122,7 +121,11 @@ export class ReferenceRecord {
 	}
 }
 
-export function getValue(ref: ReferenceRecord | EngineValue): EngineValue {
+export function getValue(ref: ReferenceRecord | EngineValue | undefined): EngineValue {
+	if (ref === undefined) {
+		throw new ReferenceError("Cannot access unresolvable reference undefined");
+	}
+
 	if (ref instanceof ReferenceRecord) {
 		return ref.getValue();
 	}

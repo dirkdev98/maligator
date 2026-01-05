@@ -8,5 +8,5 @@ const txt = process.argv[2] ?? "1 + 1";
 Realm.init();
 
 const parsed = parseScript(txt, getCurrentRealm());
-const result = evaluate(parsed.ECMAScriptCode.body[0]!);
+const result = evaluate(parsed.ECMAScriptCode);
 console.dir(result, { depth: null });

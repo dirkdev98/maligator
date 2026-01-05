@@ -50,3 +50,15 @@ export function unwrapCompletion<T>(completion: CompletionRecord<T>): T {
 
 	return completion.value;
 }
+
+// https://tc39.es/ecma262/multipage/ecmascript-data-types-and-values.html#sec-updateempty
+export function updateEmptyCompletion<T>(
+	completion: CompletionRecord<T>,
+	value: T,
+): CompletionRecord<T> {
+	if (completion.type === "return" || completion.type === "throw") {
+		return completion;
+	}
+	completion.value ??= value;
+	return completion;
+}

@@ -1,11 +1,10 @@
-import type { ESTree } from "meriyah";
 import { normalCompletion } from "../types-and-values/completion-record.ts";
-import type { CompletionRecord } from "../types-and-values/completion-record.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
+import type { Evaluator } from "./index.ts";
 
-export const Literal = {
+export const Literal: Evaluator<"Literal"> = {
 	// https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-literals-runtime-semantics-evaluation
-	evaluate(node: ESTree.Literal): CompletionRecord<EngineValue> {
+	evaluate(node) {
 		if (node.value === null) {
 			return normalCompletion(EngineValue.null());
 		}
