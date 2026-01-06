@@ -33,11 +33,15 @@ export class ReferenceRecord {
 			return false;
 		}
 
-		if (this.base instanceof EnvironmentRecord) {
-			return false;
-		}
+		return !(this.base instanceof EnvironmentRecord);
+	}
 
-		return true;
+	getPropertyBase() {
+		return this.base as EngineValue;
+	}
+
+	getEnvironmentRecordBase() {
+		return this.base as EnvironmentRecord;
 	}
 
 	// https://tc39.es/ecma262/multipage/ecmascript-data-types-and-values.html#sec-isunresolvablereference
