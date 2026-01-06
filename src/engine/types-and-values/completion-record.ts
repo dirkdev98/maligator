@@ -59,6 +59,10 @@ export function updateEmptyCompletion<T>(
 	if (completion.type === "return" || completion.type === "throw") {
 		return completion;
 	}
-	completion.value ??= value;
+
+	if (value) {
+		completion.value = value;
+	}
+
 	return completion;
 }

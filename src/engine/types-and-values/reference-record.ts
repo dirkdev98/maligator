@@ -1,7 +1,14 @@
+import { set } from "../abstract-operations/object-operations.ts";
 import { isPropertyKey, unwrapPropertyKey } from "../abstract-operations/property-map.ts";
 import { toObject, toPropertyKey } from "../abstract-operations/type-conversion.ts";
 import { EnvironmentRecord } from "../execution-contexts/environment-record.ts";
-import { unwrapCompletion } from "./completion-record.ts";
+import { getGlobalObject } from "../execution-contexts/execution-context.ts";
+import {
+	normalCompletion,
+	throwCompletion,
+	unwrapCompletion,
+} from "./completion-record.ts";
+import type { CompletionRecord } from "./completion-record.ts";
 import { EngineValue } from "./data-types.ts";
 
 // TODO: Implement PrivateName class
@@ -98,10 +105,8 @@ export class ReferenceRecord {
 	}
 
 	// https://tc39.es/ecma262/multipage/ecmascript-data-types-and-values.html#sec-putvalue
-	putValue() {
-		throw new Error(
-			"Not implemented. Needs more logic for global object, private names, etc.",
-		);
+	putValue(W: EngineValue) {
+		putValue(this, W);
 	}
 
 	// https://tc39.es/ecma262/multipage/ecmascript-data-types-and-values.html#sec-getthisvalue
@@ -135,4 +140,67 @@ export function getValue(ref: ReferenceRecord | EngineValue | undefined): Engine
 	}
 
 	return ref;
+}
+
+// https://tc39.es/ecma262/multipage/ecmascript-data-types-and-values.html#sec-putvalue
+export function putValue(
+	ref: ReferenceRecord | EngineValue | undefined,
+	W: EngineValue,
+): CompletionRecord<undefined> {
+	if (!(ref instanceof ReferenceRecord)) {
+		return throwCompletion(new ReferenceError("Cannot access unresolvable reference."));
+	}
+
+	if (ref.isUnresolvableReference()) {
+		if (ref.strict) {
+			return throwCompletion(new ReferenceError("Cannot access unresolvable reference."));
+		}
+
+		const globalObj = getGlobalObject();
+		set(globalObj, unwrapPropertyKey(ref.referencedName), W, false);
+
+		return normalCompletion(undefined);
+	}
+
+	if (ref.isPropertyReference()) {
+		const baseObj = toObject(ref.getPropertyBase());
+		if (baseObj.type === "throw") {
+			return baseObj;
+		}
+
+		if (ref.isPrivateReference()) {
+			// TODO: i. Return ? PrivateSet(baseObj, V.[[ReferencedName]], W).
+			throw new Error("Not implemented. Needs PrivateSet support");
+		}
+
+		if (!isPropertyKey(ref.referencedName)) {
+			ref.referencedName = unwrapCompletion(
+				toPropertyKey(ref.referencedName as EngineValue),
+			);
+		}
+
+		const succeeded = baseObj.value.objectGetInternalSlot("Set")(
+			baseObj.value,
+			unwrapPropertyKey(ref.referencedName),
+			W,
+			ref.getThisValue(),
+		);
+
+		if (succeeded.type === "throw") {
+			return succeeded;
+		}
+
+		if (!succeeded.value.data.value && ref.strict) {
+			return throwCompletion(
+				new TypeError("Cannot redefine property of primitive value"),
+			);
+		}
+
+		return normalCompletion(undefined);
+	}
+
+	const base = ref.getEnvironmentRecordBase();
+	base.setMutableBinding(unwrapPropertyKey(ref.referencedName) as string, W, ref.strict);
+
+	return normalCompletion(undefined);
 }

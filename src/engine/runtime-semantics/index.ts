@@ -9,6 +9,7 @@ import { Identifier } from "./identifier.ts";
 import { Literal } from "./literal-expression.ts";
 import { LogicalExpression } from "./logical-expression.ts";
 import { UnaryExpression } from "./unary-expression.ts";
+import { UpdateExpression } from "./update-expression.ts";
 import { VariableDeclaration } from "./variable-declaration.ts";
 
 export type Evaluator<K extends ESTree.Node["type"]> = {
@@ -25,6 +26,7 @@ export const evaluators: Partial<{
 	Literal,
 	LogicalExpression,
 	UnaryExpression,
+	UpdateExpression,
 
 	BlockStatement,
 	Program: BlockStatement as unknown as Evaluator<"Program">,
