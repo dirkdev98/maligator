@@ -446,7 +446,7 @@ test("ValidateAndApplyPropertyDescriptor returns true when Desc value is same as
 	expect(result.data.value).toBe(true);
 });
 
-test.skip("ValidateAndApplyPropertyDescriptor returns false when Desc value differs from current value on non-configurable, non-writable data descriptor", () => {
+test("ValidateAndApplyPropertyDescriptor returns false when Desc value differs from current value on non-configurable, non-writable data descriptor", () => {
 	const obj = EngineValue.object([]);
 	const current = new PropertyDescriptor({
 		value: EngineValue.number(42),
@@ -486,7 +486,7 @@ test("ValidateAndApplyPropertyDescriptor uses sameValue semantics for NaN compar
 	expect(result.data.value).toBe(true);
 });
 
-test.skip("ValidateAndApplyPropertyDescriptor distinguishes positive and negative zero using sameValue", () => {
+test("ValidateAndApplyPropertyDescriptor distinguishes positive and negative zero using sameValue", () => {
 	const obj = EngineValue.object([]);
 	const current = new PropertyDescriptor({
 		value: EngineValue.number(0),

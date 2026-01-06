@@ -336,7 +336,9 @@ export function toBigint(argument: EngineValue) {
 
 	const value = prim.value;
 
-	if (value.isUndefined()) {
+	if (value.isBigInt()) {
+		return normalCompletion(value);
+	} else if (value.isUndefined()) {
 		return throwCompletion(new TypeError("Cannot convert undefined to a BigInt"));
 	} else if (value.isNull()) {
 		return throwCompletion(new TypeError("Cannot convert null to a BigInt"));

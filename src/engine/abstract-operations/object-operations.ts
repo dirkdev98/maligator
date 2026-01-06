@@ -134,6 +134,10 @@ export function definePropertyOrThrow(
 		return success;
 	}
 
+	if (!success.value.data.value) {
+		return throwCompletion(new TypeError("Can't define property."));
+	}
+
 	return normalCompletion(UNUSED);
 }
 
@@ -187,9 +191,9 @@ export function hasOwnProperty(O: EngineValue<"object">, P: PropertyKey) {
 
 	const descValue = desc.value;
 
-	if (descValue instanceof EngineValue) {
-		return normalCompletion(EngineValue.boolean(!descValue.isUndefined()));
+	if (descValue instanceof EngineValue && descValue.isUndefined()) {
+		return normalCompletion(EngineValue.boolean(false));
 	}
 
-	return normalCompletion(EngineValue.boolean(false));
+	return normalCompletion(EngineValue.boolean(true));
 }

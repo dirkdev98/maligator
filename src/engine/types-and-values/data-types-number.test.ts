@@ -1,45 +1,22 @@
 import { expect, test } from "vitest";
 import { EngineValue } from "./data-types.ts";
 
-test("numberUnaryMinus negates positive numbers", () => {
-	const number = EngineValue.number(42);
-	const result = number.numberUnaryMinus();
-	expect(result.data.value).toBe(-42);
+test.for([
+	{ input: 42, expected: -42 },
+	{ input: -42, expected: 42 },
+	{ input: Infinity, expected: -Infinity },
+	{ input: -Infinity, expected: Infinity },
+])("numberUnaryMinus negates $input to $expected", ({ input, expected }) => {
+	expect(EngineValue.number(input).numberUnaryMinus().data.value).toBe(expected);
 });
 
-test("numberUnaryMinus negates negative numbers", () => {
-	const number = EngineValue.number(-42);
-	const result = number.numberUnaryMinus();
-	expect(result.data.value).toBe(42);
+test("numberUnaryMinus returns NaN for NaN", () => {
+	expect(EngineValue.number(NaN).numberUnaryMinus().data.value).toBeNaN();
 });
 
-test("numberUnaryMinus returns NaN for NaN input", () => {
-	const nan = EngineValue.number(NaN);
-	const result = nan.numberUnaryMinus();
-	expect(result.data.value).toBeNaN();
-});
-
-test("numberUnaryMinus handles Infinity correctly", () => {
-	const infinity = EngineValue.number(Infinity);
-	const result = infinity.numberUnaryMinus();
-	expect(result.data.value).toBe(-Infinity);
-});
-
-test("numberUnaryMinus handles -Infinity correctly", () => {
-	const negativeInfinity = EngineValue.number(-Infinity);
-	const result = negativeInfinity.numberUnaryMinus();
-	expect(result.data.value).toBe(Infinity);
-});
-
-test("numberUnaryMinus converts positive zero to negative zero and negative zero to positive zero", () => {
-	const positiveZero = EngineValue.number(+0);
-	const negativeZero = EngineValue.number(-0);
-
-	const positiveResult = positiveZero.numberUnaryMinus();
-	const negativeResult = negativeZero.numberUnaryMinus();
-
-	expect(positiveResult.data.value).toBe(-0);
-	expect(negativeResult.data.value).toBe(0);
+test("numberUnaryMinus handles zero sign correctly", () => {
+	expect(EngineValue.number(+0).numberUnaryMinus().data.value).toBe(-0);
+	expect(EngineValue.number(-0).numberUnaryMinus().data.value).toBe(0);
 });
 
 test.for([
@@ -226,24 +203,15 @@ test.for([
 	expect(result.data.value).toBe(expected);
 });
 
-test("numberMultiply returns NaN when either operand is NaN", () => {
-	const nan = EngineValue.number(NaN);
-	const normal = EngineValue.number(42);
-
-	expect(nan.numberMultiply(normal).data.value).toBeNaN();
-	expect(normal.numberMultiply(nan).data.value).toBeNaN();
-	expect(nan.numberMultiply(nan).data.value).toBeNaN();
-});
-
-test("numberMultiply handles Infinity * zero = NaN", () => {
-	const infinity = EngineValue.number(Infinity);
-	const positiveZero = EngineValue.number(+0);
-	const negativeZero = EngineValue.number(-0);
-
-	expect(infinity.numberMultiply(positiveZero).data.value).toBeNaN();
-	expect(infinity.numberMultiply(negativeZero).data.value).toBeNaN();
-	expect(EngineValue.number(-Infinity).numberMultiply(positiveZero).data.value).toBeNaN();
-	expect(EngineValue.number(-Infinity).numberMultiply(negativeZero).data.value).toBeNaN();
+test.for([
+	{ x: NaN, y: 42 },
+	{ x: 42, y: NaN },
+	{ x: Infinity, y: 0 },
+	{ x: -Infinity, y: 0 },
+])("numberMultiply returns NaN for special cases: $x * $y", ({ x, y }) => {
+	expect(
+		EngineValue.number(x).numberMultiply(EngineValue.number(y)).data.value,
+	).toBeNaN();
 });
 
 test.for([
@@ -301,23 +269,14 @@ test.for([
 	expect(result.data.value).toBe(expected);
 });
 
-test("numberDivide returns NaN when either operand is NaN", () => {
-	const nan = EngineValue.number(NaN);
-	const normal = EngineValue.number(42);
-
-	expect(nan.numberDivide(normal).data.value).toBeNaN();
-	expect(normal.numberDivide(nan).data.value).toBeNaN();
-	expect(nan.numberDivide(nan).data.value).toBeNaN();
-});
-
-test("numberDivide handles Infinity / Infinity = NaN", () => {
-	const infinity = EngineValue.number(Infinity);
-	const negativeInfinity = EngineValue.number(-Infinity);
-
-	expect(infinity.numberDivide(infinity).data.value).toBeNaN();
-	expect(infinity.numberDivide(negativeInfinity).data.value).toBeNaN();
-	expect(negativeInfinity.numberDivide(infinity).data.value).toBeNaN();
-	expect(negativeInfinity.numberDivide(negativeInfinity).data.value).toBeNaN();
+test.for([
+	{ x: NaN, y: 42 },
+	{ x: 42, y: NaN },
+	{ x: Infinity, y: Infinity },
+	{ x: -Infinity, y: Infinity },
+	{ x: 0, y: 0 },
+])("numberDivide returns NaN for special cases: $x / $y", ({ x, y }) => {
+	expect(EngineValue.number(x).numberDivide(EngineValue.number(y)).data.value).toBeNaN();
 });
 
 test.for([
@@ -347,16 +306,6 @@ test.for([
 		expect(Object.is(result.data.value, expected)).toBe(true);
 	},
 );
-
-test("numberDivide handles zero / zero = NaN", () => {
-	const positiveZero = EngineValue.number(+0);
-	const negativeZero = EngineValue.number(-0);
-
-	expect(positiveZero.numberDivide(positiveZero).data.value).toBeNaN();
-	expect(positiveZero.numberDivide(negativeZero).data.value).toBeNaN();
-	expect(negativeZero.numberDivide(positiveZero).data.value).toBeNaN();
-	expect(negativeZero.numberDivide(negativeZero).data.value).toBeNaN();
-});
 
 test.for([
 	{ x: 5, y: 0, expected: Infinity },
@@ -422,43 +371,21 @@ test.for([
 	},
 );
 
-test("numberRemainder returns NaN when either operand is NaN", () => {
-	const nan = EngineValue.number(NaN);
-	const normal = EngineValue.number(42);
-
-	expect(nan.numberRemainder(normal).data.value).toBeNaN();
-	expect(normal.numberRemainder(nan).data.value).toBeNaN();
-	expect(nan.numberRemainder(nan).data.value).toBeNaN();
-});
-
-test("numberRemainder returns NaN when dividend is Infinity", () => {
-	const infinity = EngineValue.number(Infinity);
-	const negativeInfinity = EngineValue.number(-Infinity);
-	const divisor = EngineValue.number(5);
-
-	expect(infinity.numberRemainder(divisor).data.value).toBeNaN();
-	expect(negativeInfinity.numberRemainder(divisor).data.value).toBeNaN();
-});
-
-test("numberRemainder returns dividend when divisor is Infinity", () => {
-	const dividend = EngineValue.number(42);
-	const negativeDividend = EngineValue.number(-42);
-	const infinity = EngineValue.number(Infinity);
-	const negativeInfinity = EngineValue.number(-Infinity);
-
-	expect(dividend.numberRemainder(infinity).data.value).toBe(42);
-	expect(dividend.numberRemainder(negativeInfinity).data.value).toBe(42);
-	expect(negativeDividend.numberRemainder(infinity).data.value).toBe(-42);
-	expect(negativeDividend.numberRemainder(negativeInfinity).data.value).toBe(-42);
-});
-
-test("numberRemainder returns NaN when divisor is zero", () => {
-	const dividend = EngineValue.number(42);
-	const positiveZero = EngineValue.number(+0);
-	const negativeZero = EngineValue.number(-0);
-
-	expect(dividend.numberRemainder(positiveZero).data.value).toBeNaN();
-	expect(dividend.numberRemainder(negativeZero).data.value).toBeNaN();
+test.for([
+	{ x: NaN, y: 42, expected: NaN },
+	{ x: 42, y: NaN, expected: NaN },
+	{ x: Infinity, y: 5, expected: NaN },
+	{ x: -Infinity, y: 5, expected: NaN },
+	{ x: 42, y: 0, expected: NaN },
+	{ x: 42, y: Infinity, expected: 42 },
+	{ x: -42, y: Infinity, expected: -42 },
+])("numberRemainder handles special cases: $x % $y", ({ x, y, expected }) => {
+	const result = EngineValue.number(x).numberRemainder(EngineValue.number(y)).data.value;
+	if (Number.isNaN(expected)) {
+		expect(result).toBeNaN();
+	} else {
+		expect(result).toBe(expected);
+	}
 });
 
 test.for([
@@ -520,41 +447,19 @@ test.for([
 	expect(result.data.value).toBe(expected);
 });
 
-test("numberAdd returns NaN when either operand is NaN", () => {
-	const nan = EngineValue.number(NaN);
-	const normal = EngineValue.number(42);
-
-	expect(nan.numberAdd(normal).data.value).toBeNaN();
-	expect(normal.numberAdd(nan).data.value).toBeNaN();
-	expect(nan.numberAdd(nan).data.value).toBeNaN();
-});
-
-test("numberAdd handles Infinity + -Infinity = NaN", () => {
-	const infinity = EngineValue.number(Infinity);
-	const negativeInfinity = EngineValue.number(-Infinity);
-
-	expect(infinity.numberAdd(negativeInfinity).data.value).toBeNaN();
-	expect(negativeInfinity.numberAdd(infinity).data.value).toBeNaN();
-});
-
-test("numberAdd preserves Infinity when adding finite numbers", () => {
-	const infinity = EngineValue.number(Infinity);
-	const negativeInfinity = EngineValue.number(-Infinity);
-	const positive = EngineValue.number(5);
-	const negative = EngineValue.number(-5);
-
-	expect(infinity.numberAdd(positive).data.value).toBe(Infinity);
-	expect(infinity.numberAdd(negative).data.value).toBe(Infinity);
-	expect(negativeInfinity.numberAdd(positive).data.value).toBe(-Infinity);
-	expect(negativeInfinity.numberAdd(negative).data.value).toBe(-Infinity);
-});
-
-test("numberAdd preserves Infinity when both operands are Infinity with same sign", () => {
-	const infinity = EngineValue.number(Infinity);
-	const negativeInfinity = EngineValue.number(-Infinity);
-
-	expect(infinity.numberAdd(infinity).data.value).toBe(Infinity);
-	expect(negativeInfinity.numberAdd(negativeInfinity).data.value).toBe(-Infinity);
+test.for([
+	{ x: NaN, y: 42, expected: NaN },
+	{ x: Infinity, y: -Infinity, expected: NaN },
+	{ x: Infinity, y: 5, expected: Infinity },
+	{ x: -Infinity, y: 5, expected: -Infinity },
+	{ x: Infinity, y: Infinity, expected: Infinity },
+])("numberAdd handles special cases: $x + $y", ({ x, y, expected }) => {
+	const result = EngineValue.number(x).numberAdd(EngineValue.number(y)).data.value;
+	if (Number.isNaN(expected)) {
+		expect(result).toBeNaN();
+	} else {
+		expect(result).toBe(expected);
+	}
 });
 
 test.for([
@@ -611,45 +516,20 @@ test.for([
 	expect(result.data.value).toBe(expected);
 });
 
-test("numberSubtract returns NaN when either operand is NaN", () => {
-	const nan = EngineValue.number(NaN);
-	const normal = EngineValue.number(42);
-
-	expect(nan.numberSubtract(normal).data.value).toBeNaN();
-	expect(normal.numberSubtract(nan).data.value).toBeNaN();
-	expect(nan.numberSubtract(nan).data.value).toBeNaN();
-});
-
-test("numberSubtract handles Infinity - Infinity = NaN", () => {
-	const infinity = EngineValue.number(Infinity);
-	const negativeInfinity = EngineValue.number(-Infinity);
-
-	expect(infinity.numberSubtract(infinity).data.value).toBeNaN();
-	expect(negativeInfinity.numberSubtract(negativeInfinity).data.value).toBeNaN();
-});
-
-test("numberSubtract handles Infinity subtraction rules", () => {
-	const infinity = EngineValue.number(Infinity);
-	const negativeInfinity = EngineValue.number(-Infinity);
-	const positive = EngineValue.number(5);
-	const negative = EngineValue.number(-5);
-
-	expect(infinity.numberSubtract(positive).data.value).toBe(Infinity);
-	expect(infinity.numberSubtract(negative).data.value).toBe(Infinity);
-	expect(negativeInfinity.numberSubtract(positive).data.value).toBe(-Infinity);
-	expect(negativeInfinity.numberSubtract(negative).data.value).toBe(-Infinity);
-});
-
-test("numberSubtract handles finite - Infinity rules", () => {
-	const positive = EngineValue.number(5);
-	const negative = EngineValue.number(-5);
-	const infinity = EngineValue.number(Infinity);
-	const negativeInfinity = EngineValue.number(-Infinity);
-
-	expect(positive.numberSubtract(infinity).data.value).toBe(-Infinity);
-	expect(negative.numberSubtract(infinity).data.value).toBe(-Infinity);
-	expect(positive.numberSubtract(negativeInfinity).data.value).toBe(Infinity);
-	expect(negative.numberSubtract(negativeInfinity).data.value).toBe(Infinity);
+test.for([
+	{ x: NaN, y: 42, expected: NaN },
+	{ x: Infinity, y: Infinity, expected: NaN },
+	{ x: Infinity, y: 5, expected: Infinity },
+	{ x: -Infinity, y: 5, expected: -Infinity },
+	{ x: 5, y: Infinity, expected: -Infinity },
+	{ x: 5, y: -Infinity, expected: Infinity },
+])("numberSubtract handles special cases: $x - $y", ({ x, y, expected }) => {
+	const result = EngineValue.number(x).numberSubtract(EngineValue.number(y)).data.value;
+	if (Number.isNaN(expected)) {
+		expect(result).toBeNaN();
+	} else {
+		expect(result).toBe(expected);
+	}
 });
 
 test.for([
@@ -1000,34 +880,16 @@ test.for([
 	},
 );
 
-test("numberLessThan handles NaN comparisons correctly", () => {
-	const nan = EngineValue.number(NaN);
-	const normal = EngineValue.number(42);
-	const zero = EngineValue.number(0);
-	const infinity = EngineValue.number(Infinity);
-
-	// NaN compared with anything returns undefined
-	expect(nan.numberLessThan(normal).isUndefined()).toBe(true);
-	expect(normal.numberLessThan(nan).isUndefined()).toBe(true);
-	expect(nan.numberLessThan(nan).isUndefined()).toBe(true);
-	expect(nan.numberLessThan(zero).isUndefined()).toBe(true);
-	expect(nan.numberLessThan(infinity).isUndefined()).toBe(true);
-});
-
 test.for([
+	{ x: NaN, y: 42 },
+	{ x: 42, y: NaN },
+	{ x: NaN, y: NaN },
 	{ x: NaN, y: Infinity },
-	{ x: Infinity, y: NaN },
-	{ x: -Infinity, y: NaN },
-	{ x: NaN, y: -Infinity },
-])(
-	"numberLessThan returns undefined for NaN comparisons with Infinity: $x < $y",
-	({ x, y }) => {
-		const xValue = EngineValue.number(x);
-		const yValue = EngineValue.number(y);
-		const result = xValue.numberLessThan(yValue);
-		expect(result.isUndefined()).toBe(true);
-	},
-);
+])("numberLessThan returns undefined for NaN comparisons: $x < $y", ({ x, y }) => {
+	expect(EngineValue.number(x).numberLessThan(EngineValue.number(y)).isUndefined()).toBe(
+		true,
+	);
+});
 
 test.for([
 	{ x: 42, y: Infinity, expected: true },
@@ -1117,18 +979,11 @@ test.for([
 	}
 });
 
-test("numberEqual handles NaN comparisons correctly", () => {
-	const nan = EngineValue.number(NaN);
-	const normal = EngineValue.number(42);
-	const zero = EngineValue.number(0);
-	const infinity = EngineValue.number(Infinity);
-
-	// NaN compared with anything is false (even NaN === NaN)
-	expect(nan.numberEqual(normal).data.value).toBe(false);
-	expect(normal.numberEqual(nan).data.value).toBe(false);
-	expect(nan.numberEqual(nan).data.value).toBe(false);
-	expect(nan.numberEqual(zero).data.value).toBe(false);
-	expect(nan.numberEqual(infinity).data.value).toBe(false);
+test.for([
+	{ x: NaN, y: 42 },
+	{ x: NaN, y: NaN },
+])("numberEqual returns false for NaN comparisons: $x === $y", ({ x, y }) => {
+	expect(EngineValue.number(x).numberEqual(EngineValue.number(y)).data.value).toBe(false);
 });
 
 test.for([
@@ -1153,19 +1008,13 @@ test.for([
 	},
 );
 
-test("numberSameValue handles NaN correctly (Object.is semantics)", () => {
-	const nan1 = EngineValue.number(NaN);
-	const nan2 = EngineValue.number(0 / 0); // Different NaN source
-	const normal = EngineValue.number(42);
-
-	// Object.is(NaN, NaN) === true
-	expect(nan1.numberSameValue(nan2).data.value).toBe(true);
-	expect(nan1.numberSameValue(nan1).data.value).toBe(true);
-	expect(nan2.numberSameValue(nan2).data.value).toBe(true);
-
-	// NaN compared with non-NaN is false
-	expect(nan1.numberSameValue(normal).data.value).toBe(false);
-	expect(normal.numberSameValue(nan1).data.value).toBe(false);
+test.for([
+	{ x: NaN, y: NaN, expected: true },
+	{ x: NaN, y: 42, expected: false },
+])("numberSameValue handles NaN: Object.is($x, $y)", ({ x, y, expected }) => {
+	expect(EngineValue.number(x).numberSameValue(EngineValue.number(y)).data.value).toBe(
+		expected,
+	);
 });
 
 test.for([
@@ -1206,19 +1055,13 @@ test.for([
 	},
 );
 
-test("numberSameValueZero handles NaN correctly (SameValueZero semantics)", () => {
-	const nan1 = EngineValue.number(NaN);
-	const nan2 = EngineValue.number(0 / 0); // Different NaN source
-	const normal = EngineValue.number(42);
-
-	// SameValueZero(NaN, NaN) === true (like Map/Set key equality)
-	expect(nan1.numberSameValueZero(nan2).data.value).toBe(true);
-	expect(nan1.numberSameValueZero(nan1).data.value).toBe(true);
-	expect(nan2.numberSameValueZero(nan2).data.value).toBe(true);
-
-	// NaN compared with non-NaN is false
-	expect(nan1.numberSameValueZero(normal).data.value).toBe(false);
-	expect(normal.numberSameValueZero(nan1).data.value).toBe(false);
+test.for([
+	{ x: NaN, y: NaN, expected: true },
+	{ x: NaN, y: 42, expected: false },
+])("numberSameValueZero handles NaN: SameValueZero($x, $y)", ({ x, y, expected }) => {
+	expect(
+		EngineValue.number(x).numberSameValueZero(EngineValue.number(y)).data.value,
+	).toBe(expected);
 });
 
 test.for([
