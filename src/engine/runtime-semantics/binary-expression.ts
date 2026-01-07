@@ -1,4 +1,5 @@
 import {
+	isLessThan,
 	isLooselyEqual,
 	isStrictlyEqual,
 	sameType,
@@ -35,15 +36,26 @@ export const BinaryExpression: Evaluator<"BinaryExpression"> = {
 		const rVal = getValue(rRef.value);
 
 		if (["==", "!=", "===", "!=="].includes(node.operator)) {
-			return ApplyEqualityBinaryOperator(lVal, node.operator, rVal);
+			return applyEqualityBinaryOperator(lVal, node.operator, rVal);
 		}
 
-		return ApplyStringOrNumericBinaryOperator(lVal, node.operator, rVal);
+		if (["instanceof", "in"].includes(node.operator)) {
+			// TODO: implement instanceof and in operators.
+			// https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-relational-operators
+			throw new Error(`Operator '${node.operator}' is not implemented.`);
+		}
+
+		if ([">", ">=", "<", "<="].includes(node.operator)) {
+			// https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-relational-operators
+			return applyRelationalBinaryOperator(lVal, node.operator, rVal);
+		}
+
+		return applyStringOrNumericBinaryOperator(lVal, node.operator, rVal);
 	},
 };
 
 // https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-applystringornumericbinaryoperator
-function ApplyStringOrNumericBinaryOperator(
+function applyStringOrNumericBinaryOperator(
 	lValue: EngineValue,
 	opText: string,
 	rValue: EngineValue,
@@ -162,7 +174,7 @@ function ApplyStringOrNumericBinaryOperator(
 }
 
 // https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-equality-operators
-function ApplyEqualityBinaryOperator(
+function applyEqualityBinaryOperator(
 	lValue: EngineValue,
 	opText: string,
 	rValue: EngineValue,
@@ -186,5 +198,60 @@ function ApplyEqualityBinaryOperator(
 
 		default:
 			throw new Error(`Unknown equality operator: ${opText}`);
+	}
+}
+
+// 			// https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-relational-operators
+function applyRelationalBinaryOperator(
+	lValue: EngineValue,
+	opText: string,
+	rValue: EngineValue,
+): CompletionRecord<EngineValue> {
+	switch (opText) {
+		case "<": {
+			const r = isLessThan(lValue, rValue, true);
+			if (r.type === "throw") {
+				return r;
+			}
+			if (r.value.isUndefined()) {
+				return normalCompletion(EngineValue.boolean(false));
+			}
+			return normalCompletion(r.value.asBoolean());
+		}
+		case ">": {
+			const r = isLessThan(rValue, lValue, true);
+			if (r.type === "throw") {
+				return r;
+			}
+			if (r.value.isUndefined()) {
+				return normalCompletion(EngineValue.boolean(false));
+			}
+			return normalCompletion(r.value.asBoolean());
+		}
+		case "<=": {
+			const r = isLessThan(rValue, lValue, false);
+			if (r.type === "throw") {
+				return r;
+			}
+			if (r.value.isUndefined() || r.value.asBoolean().data.value) {
+				return normalCompletion(EngineValue.boolean(false));
+			}
+
+			return normalCompletion(EngineValue.boolean(true));
+		}
+		case ">=": {
+			const r = isLessThan(lValue, lValue, false);
+			if (r.type === "throw") {
+				return r;
+			}
+			if (r.value.isUndefined() || r.value.asBoolean().data.value) {
+				return normalCompletion(EngineValue.boolean(false));
+			}
+
+			return normalCompletion(EngineValue.boolean(true));
+		}
+
+		default:
+			throw new Error(`Unknown relational operator: ${opText}`);
 	}
 }
