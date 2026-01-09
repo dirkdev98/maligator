@@ -26,6 +26,10 @@ export const BlockStatement: Evaluator<"BlockStatement"> = {
 
 		for (const statement of node.body) {
 			const res = evaluate(statement);
+			if (res.type === "throw") {
+				getCurrentExecutionContext().lexicalEnvironment = oldEnv;
+				return res;
+			}
 			updateEmptyCompletion(blockValue, res.value);
 		}
 
@@ -37,8 +41,8 @@ export const BlockStatement: Evaluator<"BlockStatement"> = {
 
 // https://tc39.es/ecma262/multipage/ecmascript-language-statements-and-declarations.html#sec-blockdeclarationinstantiation
 function blockDeclarationInstantiation(
-	statements: Array<ESTree.Statement>,
-	env: EnvironmentRecord,
+	_statements: Array<ESTree.Statement>,
+	_env: EnvironmentRecord,
 ) {
 	// TODO: Implement
 }

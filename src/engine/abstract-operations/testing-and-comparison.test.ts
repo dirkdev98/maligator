@@ -128,19 +128,22 @@ test("isConstructor returns false for object without Construct internal slot", (
 test.for([
 	{ extensible: true, expected: true },
 	{ extensible: false, expected: false },
-])("isExtensible returns $expected for object with extensible=$extensible", ({ extensible, expected }) => {
-	const obj = EngineValue.object([]);
-	obj.objectSetInternalSlot("IsExtensible", () => {
-		return normalCompletion(EngineValue.boolean(extensible));
-	});
+])(
+	"isExtensible returns $expected for object with extensible=$extensible",
+	({ extensible, expected }) => {
+		const obj = EngineValue.object([]);
+		obj.objectSetInternalSlot("IsExtensible", () => {
+			return normalCompletion(EngineValue.boolean(extensible));
+		});
 
-	const result = isExtensible(obj);
+		const result = isExtensible(obj);
 
-	expect(result.type).toBe("normal");
-	if (result.type === "normal") {
-		expect(result.value.data.value).toBe(expected);
-	}
-});
+		expect(result.type).toBe("normal");
+		if (result.type === "normal") {
+			expect(result.value.data.value).toBe(expected);
+		}
+	},
+);
 
 test.for([
 	{ x: EngineValue.undefined(), y: EngineValue.undefined() },
@@ -728,7 +731,9 @@ test("isStrictlyEqual returns true for same symbol reference", () => {
 });
 
 test("isStrictlyEqual returns false for different symbol references", () => {
-	expect(isStrictlyEqual(EngineValue.symbol("test"), EngineValue.symbol("test")).data.value).toBe(false);
+	expect(
+		isStrictlyEqual(EngineValue.symbol("test"), EngineValue.symbol("test")).data.value,
+	).toBe(false);
 });
 
 test("isStrictlyEqual returns true for same object reference", () => {
@@ -737,7 +742,9 @@ test("isStrictlyEqual returns true for same object reference", () => {
 });
 
 test("isStrictlyEqual returns false for different object references", () => {
-	expect(isStrictlyEqual(EngineValue.object([]), EngineValue.object([])).data.value).toBe(false);
+	expect(isStrictlyEqual(EngineValue.object([]), EngineValue.object([])).data.value).toBe(
+		false,
+	);
 });
 
 test.for([
