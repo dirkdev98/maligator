@@ -5,6 +5,7 @@ import type { ReferenceRecord } from "../types-and-values/reference-record.ts";
 import { AssignmentExpression } from "./assignment-expression.ts";
 import { BinaryExpression } from "./binary-expression.ts";
 import { BlockStatement } from "./block-statement.ts";
+import { ConditionalExpression } from "./conditional-expression.ts";
 import { ExpressionStatement } from "./expression-statement.ts";
 import { Identifier } from "./identifier.ts";
 import { Literal } from "./literal-expression.ts";
@@ -23,6 +24,7 @@ export const evaluators: Partial<{
 	[K in ESTree.Node["type"]]: Evaluator<K>;
 }> = {
 	BinaryExpression,
+	ConditionalExpression,
 	Identifier,
 	Literal,
 	LogicalExpression,
