@@ -26,7 +26,7 @@ export const BlockStatement: Evaluator<"BlockStatement"> = {
 
 		for (const statement of node.body) {
 			const res = evaluate(statement);
-			if (res.type === "throw") {
+			if (res.type !== "normal") {
 				getCurrentExecutionContext().lexicalEnvironment = oldEnv;
 				return res;
 			}

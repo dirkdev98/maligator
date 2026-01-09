@@ -60,6 +60,7 @@ export function updateEmptyCompletion<T>(
 		return completion;
 	}
 
+	// TODO: is this correct?
 	if (value) {
 		completion.value = value;
 	}
