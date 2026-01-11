@@ -6,6 +6,7 @@ import { AssignmentExpression } from "./assignment-expression.ts";
 import { BinaryExpression } from "./binary-expression.ts";
 import { BlockStatement } from "./block-statement.ts";
 import { BreakStatement } from "./break-statement.ts";
+import { CallExpression } from "./call-expression.ts";
 import { ConditionalExpression } from "./conditional-expression.ts";
 import { ContinueStatement } from "./continue-statement.ts";
 import { DoWhileStatement } from "./do-while-statement.ts";
@@ -31,6 +32,7 @@ export const evaluators: Partial<{
 	[K in ESTree.Node["type"]]: Evaluator<K>;
 }> = {
 	BinaryExpression,
+	CallExpression,
 	ConditionalExpression,
 	Identifier,
 	Literal,

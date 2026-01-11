@@ -1,9 +1,12 @@
+import { createBuiltinFunction } from "../abstract-operations/built-in-function-object.ts";
 import { definePropertyOrThrow } from "../abstract-operations/object-operations.ts";
 import { ordinaryObjectCreate } from "../abstract-operations/ordinary-object.ts";
 import { PropertyDescriptor } from "../abstract-operations/property-map.ts";
+import { toInt32, toNumber, toString } from "../abstract-operations/type-conversion.ts";
 import { intrinsicFunctionPrototype } from "../intrinsics/function-prototype.ts";
 import { intrinsicObjectPrototype } from "../intrinsics/object-prototype.ts";
 import { intrinsicObject } from "../intrinsics/object.ts";
+import { normalCompletion } from "../types-and-values/completion-record.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
 import { newGlobalEnvironment } from "./environment-record.ts";
 import type { GlobalEnvironmentRecord } from "./environment-record.ts";
@@ -70,6 +73,7 @@ export class Realm {
 		const global = this.globalObject!;
 
 		this.setGlobalValueProperties(global);
+		this.setGlobalFunctionProperties(global);
 	}
 
 	// https://tc39.es/ecma262/multipage/global-object.html#sec-value-properties-of-the-global-object
@@ -115,6 +119,112 @@ export class Realm {
 				writable: false,
 				enumerable: false,
 				configurable: false,
+			}),
+		);
+	}
+
+	// https://tc39.es/ecma262/multipage/global-object.html#sec-function-properties-of-the-global-object
+	setGlobalFunctionProperties(global: EngineValue<"object">) {
+		// https://tc39.es/ecma262/multipage/global-object.html#sec-isfinite-number
+		definePropertyOrThrow(
+			global,
+			"isFinite",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(_, [value], __) => {
+						const num = toNumber(value!);
+						if (num.type === "throw") {
+							return num;
+						}
+
+						return normalCompletion(EngineValue.boolean(isFinite(num.value.data.value)));
+					},
+					1,
+					"isFinite",
+					[],
+				),
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		// https://tc39.es/ecma262/multipage/global-object.html#sec-isnan-number
+		definePropertyOrThrow(
+			global,
+			"isNaN",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(_, [value], __) => {
+						const num = toNumber(value!);
+						if (num.type === "throw") {
+							return num;
+						}
+
+						return normalCompletion(EngineValue.boolean(isNaN(num.value.data.value)));
+					},
+					1,
+					"isNaN",
+					[],
+				),
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		// https://tc39.es/ecma262/multipage/global-object.html#sec-parsefloat-string
+		definePropertyOrThrow(
+			global,
+			"parseFloat",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(_, [value], __) => {
+						const num = toString(value!);
+						if (num.type === "throw") {
+							return num;
+						}
+
+						return normalCompletion(EngineValue.number(parseFloat(num.value.data.value)));
+					},
+					1,
+					"parseFloat",
+					[],
+				),
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		// https://tc39.es/ecma262/multipage/global-object.html#sec-parseint-string-radix
+		definePropertyOrThrow(
+			global,
+			"parseInt",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(_, [value, radixValue], __) => {
+						const num = toString(value!);
+						if (num.type === "throw") {
+							return num;
+						}
+
+						const radix = toInt32(radixValue!);
+						if (radix.type === "throw") {
+							return radix;
+						}
+
+						return normalCompletion(
+							EngineValue.number(parseInt(num.value.data.value, radix.value.data.value)),
+						);
+					},
+					1,
+					"parseInt",
+					[],
+				),
+				writable: false,
+				enumerable: false,
+				configurable: true,
 			}),
 		);
 	}
