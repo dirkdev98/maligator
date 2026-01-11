@@ -5,6 +5,7 @@ import type {
 } from "../abstract-operations/property-map.ts";
 import { PropertyMap } from "../abstract-operations/property-map.ts";
 import { toInt32, toUint32 } from "../abstract-operations/type-conversion.ts";
+import type { Realm } from "../execution-contexts/realm.ts";
 import type { CompletionRecord } from "./completion-record.ts";
 import { normalCompletion, throwCompletion } from "./completion-record.ts";
 
@@ -81,10 +82,29 @@ export type ObjectInternalSlots = {
 	// Function objects
 	HomeObject: EngineValue<"object" | "undefined">;
 
-	/// WIP
+	// Built-in Function objects
+	Realm: Realm;
+	InitialName: EngineValue<"null" | "string">;
+	Async: boolean;
+	_BuiltinCallback: (
+		thisArgument: EngineValue | undefined,
+		argumentsList: Array<EngineValue>,
+		newTarget?: EngineValue<"object">,
+	) => CompletionRecord<EngineValue>;
 
-	Call: EngineValue;
-	Construct: EngineValue;
+	// Exotic function or built-in function objects
+	Call: (
+		O: EngineValue<"object">,
+		thisArgument: EngineValue,
+		argumentsList: Array<EngineValue>,
+	) => CompletionRecord<EngineValue>;
+
+	Construct: (
+		O: EngineValue<"object">,
+		argumentsList: Array<EngineValue>,
+		newTarget?: EngineValue<"object">,
+	) => CompletionRecord<EngineValue<"object">>;
+
 	Prototype: EngineValue<"object" | "null">;
 	Extensible: boolean;
 };

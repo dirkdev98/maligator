@@ -197,3 +197,27 @@ export function hasOwnProperty(O: EngineValue<"object">, P: PropertyKey) {
 
 	return normalCompletion(EngineValue.boolean(true));
 }
+
+// https://tc39.es/ecma262/multipage/abstract-operations.html#sec-call
+export function call(
+	F: EngineValue<"object">,
+	thisArgument: EngineValue,
+	argumentsList?: Array<EngineValue>,
+) {
+	if (!isCallable(F).data.value) {
+		return throwCompletion(new TypeError("Function is not callable."));
+	}
+
+	return F.objectGetInternalSlot("Call")(F, thisArgument, argumentsList ?? []);
+}
+
+// https://tc39.es/ecma262/multipage/abstract-operations.html#sec-construct
+export function construct(
+	F: EngineValue<"object">,
+	argumentsList?: Array<EngineValue>,
+	newTarget?: EngineValue<"object">,
+) {
+	newTarget ??= F;
+
+	return F.objectGetInternalSlot("Construct")(F, argumentsList ?? [], newTarget);
+}

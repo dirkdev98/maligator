@@ -8,7 +8,7 @@ import {
 	EngineValue,
 	WELL_KNOWN_SYMBOLS,
 } from "../types-and-values/data-types.ts";
-import { get, getMethod } from "./object-operations.ts";
+import { call, get, getMethod } from "./object-operations.ts";
 import type { PropertyKey } from "./property-map.ts";
 import { isCallable } from "./testing-and-comparison.ts";
 
@@ -26,10 +26,18 @@ export function toPrimitive(
 		if (!exoticPrim.value.isUndefined()) {
 			hint ??= "default";
 
-			throw new Error("Not implemented. Requires Call.");
-			//       iv. Let result be ? Call(exoticToPrim, input, « hint »).
-			//       v. If result is not an Object, return result.
-			//       vi. Throw a TypeError exception.
+			const result = call(exoticPrim.value.asObject(), input, [EngineValue.string(hint)]);
+			if (result.type === "throw") {
+				return result;
+			}
+
+			if (result.value.isObject()) {
+				return throwCompletion(
+					new TypeError("result of @@toPrimitive should not be an object"),
+				);
+			}
+
+			return result;
 		}
 
 		hint ??= "number";
@@ -55,10 +63,18 @@ export function ordinaryToPrimitive(
 		}
 
 		if (isCallable(method.value).data.value) {
-			// Let result be ? Call(method, O).
-			//
-			// If result is not an Object, return result.
-			throw new Error("Not implemented. Requires Call.");
+			const result = call(method.value.asObject(), input);
+			if (result.type === "throw") {
+				return result;
+			}
+
+			if (result.value.isObject()) {
+				return throwCompletion(
+					new TypeError("result of @@toPrimitive should not be an object"),
+				);
+			}
+
+			return result;
 		}
 	}
 

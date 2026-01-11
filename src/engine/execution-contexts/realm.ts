@@ -1,6 +1,9 @@
 import { definePropertyOrThrow } from "../abstract-operations/object-operations.ts";
 import { ordinaryObjectCreate } from "../abstract-operations/ordinary-object.ts";
 import { PropertyDescriptor } from "../abstract-operations/property-map.ts";
+import { intrinsicFunctionPrototype } from "../intrinsics/function-prototype.ts";
+import { intrinsicObjectPrototype } from "../intrinsics/object-prototype.ts";
+import { intrinsicObject } from "../intrinsics/object.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
 import { newGlobalEnvironment } from "./environment-record.ts";
 import type { GlobalEnvironmentRecord } from "./environment-record.ts";
@@ -44,7 +47,23 @@ export class Realm {
 	}
 
 	// https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-createintrinsics
-	createIntrinsics() {}
+	createIntrinsics() {
+		const fns: Array<(realm: Realm) => void | (() => void)> = [
+			intrinsicObjectPrototype,
+			intrinsicObject,
+
+			intrinsicFunctionPrototype,
+		];
+
+		const callbacks = [];
+
+		for (const fn of fns) {
+			const returnCb = fn(this);
+			if (typeof returnCb === "function") {
+				callbacks.push(returnCb);
+			}
+		}
+	}
 
 	// https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-setdefaultglobalbindings
 	setDefaultGlobalBindings() {

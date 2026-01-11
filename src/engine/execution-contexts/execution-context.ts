@@ -51,6 +51,14 @@ export function pushNewExecutionContext(context: ExecutionContext) {
 	runningExecutionContext = context;
 }
 
+export function popExecutionContext(
+	newContext: ExecutionContext | undefined = undefined,
+) {
+	executionContextStack.pop();
+	runningExecutionContext =
+		newContext ?? executionContextStack[executionContextStack.length - 1]!;
+}
+
 // https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-resolvebinding
 export function resolveBinding(
 	name: EngineValue<"string">,

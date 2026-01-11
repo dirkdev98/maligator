@@ -471,5 +471,9 @@ export function ordinaryObjectCreate(
 	const O = makeBasicObject(internalSlots);
 	O.objectSetInternalSlot("Prototype", proto);
 
+	for (const [key, value] of Object.entries(OrdinaryObjectInternalMethods)) {
+		O.objectSetInternalSlot(key as keyof ObjectInternalSlots, value);
+	}
+
 	return O;
 }
