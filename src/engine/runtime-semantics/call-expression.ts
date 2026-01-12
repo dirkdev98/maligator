@@ -29,7 +29,7 @@ export function evaluateCall(
 	func: EngineValue,
 	ref: EngineValue | ReferenceRecord,
 	args: ReadonlyArray<ESTree.Expression>,
-	tailPosition: boolean,
+	_tailPosition: boolean,
 ): CompletionRecord<EngineValue> {
 	let thisValue: EngineValue = EngineValue.undefined();
 	if (ref instanceof ReferenceRecord) {

@@ -1,3 +1,4 @@
+import type { ESTree } from "meriyah";
 import { isNil } from "../../utils.ts";
 import type {
 	PropertyDescriptor,
@@ -5,6 +6,7 @@ import type {
 } from "../abstract-operations/property-map.ts";
 import { PropertyMap } from "../abstract-operations/property-map.ts";
 import { toInt32, toUint32 } from "../abstract-operations/type-conversion.ts";
+import type { EnvironmentRecord } from "../execution-contexts/environment-record.ts";
 import type { Realm } from "../execution-contexts/realm.ts";
 import type { CompletionRecord } from "./completion-record.ts";
 import { normalCompletion, throwCompletion } from "./completion-record.ts";
@@ -79,11 +81,7 @@ export type ObjectInternalSlots = {
 		P: PropertyKey,
 	) => CompletionRecord<EngineValue<"boolean">>;
 
-	// Function objects
-	HomeObject: EngineValue<"object" | "undefined">;
-
 	// Built-in Function objects
-	Realm: Realm;
 	InitialName: EngineValue<"null" | "string">;
 	Async: boolean;
 	_BuiltinCallback: (
@@ -93,6 +91,8 @@ export type ObjectInternalSlots = {
 	) => CompletionRecord<EngineValue>;
 
 	// Exotic function or built-in function objects
+	Realm: Realm;
+
 	Call: (
 		O: EngineValue<"object">,
 		thisArgument: EngineValue,
@@ -105,6 +105,24 @@ export type ObjectInternalSlots = {
 		newTarget?: EngineValue<"object">,
 	) => CompletionRecord<EngineValue<"object">>;
 
+	// Function slots
+	Environment: EnvironmentRecord;
+	FormalParameters: Array<ESTree.Parameter>;
+	ECMAScriptCode: ESTree.BlockStatementBase;
+	ConstructorKind: "BASE" | "DERIVED";
+	ScriptOrModule: ESTree.Program;
+	ThisMode: "LEXICAL" | "STRICT" | "GLOBAL";
+	Strict: boolean;
+	HomeObject: EngineValue<"object" | "undefined">;
+	SourceText: string;
+
+	// Class related function slots
+	Fields: Array<unknown>;
+	PrivateMethods: Array<unknown>;
+	ClassFieldInitializerName: string | EngineValue<"symbol"> | null;
+	IsClassConstructor: boolean;
+
+	// Shared between object and function
 	Prototype: EngineValue<"object" | "null">;
 	Extensible: boolean;
 };

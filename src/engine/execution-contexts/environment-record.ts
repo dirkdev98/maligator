@@ -263,12 +263,11 @@ export class ObjectEnvironmentRecord extends EnvironmentRecord {
 
 // https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-function-environment-records
 export class FunctionEnvironmentRecord extends DeclarativeEnvironmentRecord {
-	private thisValue: EngineValue | undefined;
-	private thisBindingStatus: "lexical" | "initialized" | "uninitialized" =
-		"uninitialized";
+	thisValue: EngineValue | undefined;
+	thisBindingStatus: "lexical" | "initialized" | "uninitialized" = "uninitialized";
 
-	private functionObject: EngineValue<"object"> | undefined;
-	private newTarget: EngineValue | undefined;
+	functionObject: EngineValue<"object"> | undefined;
+	newTarget: EngineValue | undefined;
 
 	// https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-bindthisvalue
 	bindThisValue(thisValue: EngineValue): void {
@@ -324,7 +323,7 @@ export class FunctionEnvironmentRecord extends DeclarativeEnvironmentRecord {
 // https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-global-environment-records
 export class GlobalEnvironmentRecord extends EnvironmentRecord {
 	objectRecord: ObjectEnvironmentRecord;
-	private globalThisValue: EngineValue<"object">;
+	globalThisValue: EngineValue<"object">;
 	declarativeRecord: DeclarativeEnvironmentRecord;
 
 	constructor(
@@ -582,6 +581,24 @@ export function newObjectEnvironment(
 ) {
 	const env = new ObjectEnvironmentRecord(O, W);
 	env.outerEnv = E;
+
+	return env;
+}
+
+// https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-newfunctionenvironment
+export function newFunctionEnvironment(
+	F: EngineValue<"object">,
+	newTarget?: EngineValue,
+) {
+	const env = new FunctionEnvironmentRecord();
+	env.functionObject = F;
+	env.newTarget = newTarget;
+
+	if (F.objectGetInternalSlot("ThisMode") === "LEXICAL") {
+		env.thisBindingStatus = "lexical";
+	}
+
+	env.outerEnv = F.objectGetInternalSlot("Environment");
 
 	return env;
 }

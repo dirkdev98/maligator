@@ -11,6 +11,7 @@ import { ConditionalExpression } from "./conditional-expression.ts";
 import { ContinueStatement } from "./continue-statement.ts";
 import { DoWhileStatement } from "./do-while-statement.ts";
 import { ExpressionStatement } from "./expression-statement.ts";
+import { FunctionDeclaration } from "./function-declaration.ts";
 import { Identifier } from "./identifier.ts";
 import { IfStatement } from "./if-statement.ts";
 import { Literal } from "./literal-expression.ts";
@@ -31,6 +32,7 @@ export type Evaluator<K extends ESTree.Node["type"]> = {
 export const evaluators: Partial<{
 	[K in ESTree.Node["type"]]: Evaluator<K>;
 }> = {
+	// Expressions
 	BinaryExpression,
 	CallExpression,
 	ConditionalExpression,
@@ -41,9 +43,11 @@ export const evaluators: Partial<{
 	UnaryExpression,
 	UpdateExpression,
 
+	// Meta
 	BlockStatement,
 	Program: BlockStatement as unknown as Evaluator<"Program">,
 
+	// Statements,
 	AssignmentExpression,
 	BreakStatement,
 	ContinueStatement,
@@ -53,6 +57,9 @@ export const evaluators: Partial<{
 	ReturnStatement,
 	VariableDeclaration,
 	WhileStatement,
+
+	/// Functions and classes
+	FunctionDeclaration,
 };
 
 export function evaluate(node: ESTree.Node) {

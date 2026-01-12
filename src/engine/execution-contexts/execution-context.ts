@@ -1,3 +1,4 @@
+import type { ESTree } from "meriyah";
 import { isNil } from "../../utils.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
 import { getIdentifierReference } from "./environment-record.ts";
@@ -13,7 +14,7 @@ export class ExecutionContext {
 	codeEvaluationState: "todo" = "todo" as const;
 	function: EngineValue<"object"> | null = null;
 	realm: Realm | null = null;
-	scriptOrModule: null = null;
+	scriptOrModule: ESTree.Program | null = null;
 
 	lexicalEnvironment: EnvironmentRecord | null = null;
 	variableEnvironment: EnvironmentRecord | null = null;
