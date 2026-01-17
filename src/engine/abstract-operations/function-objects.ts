@@ -6,6 +6,7 @@ import {
 	ExecutionContext,
 	getCurrentExecutionContext,
 	getCurrentRealm,
+	popExecutionContext,
 	pushNewExecutionContext,
 } from "../execution-contexts/execution-context.ts";
 import { evaluateFunctionBody } from "../runtime-semantics/function-meta.ts";
@@ -25,7 +26,7 @@ export const FunctionObjectInternalMethods = {
 		thisArgument: EngineValue,
 		argumentsList: Array<EngineValue>,
 	): CompletionRecord<EngineValue> => {
-		const _callerContext = getCurrentExecutionContext();
+		const callerContext = getCurrentExecutionContext();
 		// TODO: Suspend?
 
 		const calleeContext = prepareForOrdinaryCall(O, undefined);
@@ -36,7 +37,12 @@ export const FunctionObjectInternalMethods = {
 
 		ordinaryCallBindThis(O, calleeContext, thisArgument);
 
-		return ordinaryCallEvaluateBody(O, argumentsList);
+		const result = ordinaryCallEvaluateBody(O, argumentsList);
+
+		// Restore caller's execution context
+		popExecutionContext(callerContext);
+
+		return result;
 	},
 } satisfies Partial<ObjectInternalSlots>;
 
