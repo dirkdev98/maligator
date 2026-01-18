@@ -304,6 +304,11 @@ export function setFunctionName(
 	);
 }
 
+// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-makeclassconstructor
+export function makeClassConstructor(F: EngineValue<"object">) {
+	F.objectSetInternalSlot("IsClassConstructor", true);
+}
+
 // https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-setfunctionlength
 export function setFunctionLength(F: EngineValue<"object">, length: number) {
 	definePropertyOrThrow(

@@ -16,6 +16,7 @@ import { Identifier } from "./identifier.ts";
 import { IfStatement } from "./if-statement.ts";
 import { Literal } from "./literal-expression.ts";
 import { LogicalExpression } from "./logical-expression.ts";
+import { MemberExpression } from "./member-expression.ts";
 import { ReturnStatement } from "./return-statement.ts";
 import { SequenceExpression } from "./sequence-expression.ts";
 import { UnaryExpression } from "./unary-expression.ts";
@@ -39,6 +40,7 @@ export const evaluators: Partial<{
 	Identifier,
 	Literal,
 	LogicalExpression,
+	MemberExpression,
 	SequenceExpression,
 	UnaryExpression,
 	UpdateExpression,

@@ -435,9 +435,15 @@ export function toString(argument: EngineValue): CompletionRecord<EngineValue<"s
 }
 
 // https://tc39.es/ecma262/#sec-toobject
-export function toObject(
-	_argument: EngineValue,
-): CompletionRecord<EngineValue<"object">> {
+export function toObject(argument: EngineValue): CompletionRecord<EngineValue<"object">> {
+	if (argument.isUndefined() || argument.isNull()) {
+		return throwCompletion(new TypeError("Cannot convert undefined or null to object"));
+	}
+
+	if (argument.isObject()) {
+		return normalCompletion(argument);
+	}
+
 	throw new Error("Not implemented. Requires intrinsics for Boolean, Number, etc.");
 }
 

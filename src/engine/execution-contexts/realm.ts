@@ -53,9 +53,9 @@ export class Realm {
 	createIntrinsics() {
 		const fns: Array<(realm: Realm) => void | (() => void)> = [
 			intrinsicObjectPrototype,
-			intrinsicObject,
-
 			intrinsicFunctionPrototype,
+
+			intrinsicObject,
 		];
 
 		const callbacks = [];
@@ -66,6 +66,10 @@ export class Realm {
 				callbacks.push(returnCb);
 			}
 		}
+
+		for (const cb of callbacks) {
+			cb();
+		}
 	}
 
 	// https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-setdefaultglobalbindings
@@ -74,6 +78,7 @@ export class Realm {
 
 		this.setGlobalValueProperties(global);
 		this.setGlobalFunctionProperties(global);
+		this.setGlobalConstructorProperties(global);
 	}
 
 	// https://tc39.es/ecma262/multipage/global-object.html#sec-value-properties-of-the-global-object
@@ -222,6 +227,20 @@ export class Realm {
 					"parseInt",
 					[],
 				),
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+	}
+
+	// https://tc39.es/ecma262/multipage/global-object.html#sec-constructor-properties-of-the-global-object
+	setGlobalConstructorProperties(global: EngineValue<"object">) {
+		definePropertyOrThrow(
+			global,
+			"Object",
+			new PropertyDescriptor({
+				value: this.intrinsics["%Object%"]!,
 				writable: false,
 				enumerable: false,
 				configurable: true,

@@ -30,7 +30,7 @@ export function isArray(value: EngineValue): CompletionRecord<EngineValue<"boole
 		return normalCompletion(EngineValue.boolean(true));
 	}
 
-	throw new Error("Not implemented. Needs Proxy object detection.");
+	// TODO: Proxy object detection
 
 	return normalCompletion(EngineValue.boolean(false));
 }

@@ -125,6 +125,27 @@ export type ObjectInternalSlots = {
 	// Shared between object and function
 	Prototype: EngineValue<"object" | "null">;
 	Extensible: boolean;
+
+	// TODO: Arguments exotic.
+	ParameterMap: unknown;
+
+	// TODO: Error exotic.
+	ErrorData: unknown;
+
+	// TODO: Boolean
+	BooleanData: boolean;
+
+	// TODO: Number
+	NumberData: number;
+
+	// TODO: String
+	StringData: string;
+
+	// TODO: Date
+	DateValue: number;
+
+	// TODO: RegExp
+	RegExpMatcher: unknown;
 };
 
 /**
