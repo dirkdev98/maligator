@@ -1,4 +1,7 @@
-import { ordinaryFunctionCreate } from "../abstract-operations/function-objects.ts";
+import {
+	makeConstructor,
+	ordinaryFunctionCreate,
+} from "../abstract-operations/function-objects.ts";
 import { newDeclarativeEnvironment } from "../execution-contexts/environment-record.ts";
 import {
 	getCurrentExecutionContext,
@@ -28,7 +31,7 @@ export const FunctionDeclaration: Evaluator<"FunctionDeclaration"> = {
 			privateEnv,
 		);
 
-		// TODO: MakeConstructor
+		makeConstructor(closure);
 		funcEnv.initializeBinding(name, closure);
 
 		{

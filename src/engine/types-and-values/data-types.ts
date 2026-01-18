@@ -102,7 +102,7 @@ export type ObjectInternalSlots = {
 	Construct: (
 		O: EngineValue<"object">,
 		argumentsList: Array<EngineValue>,
-		newTarget?: EngineValue<"object">,
+		newTarget: EngineValue<"object">,
 	) => CompletionRecord<EngineValue<"object">>;
 
 	// Function slots

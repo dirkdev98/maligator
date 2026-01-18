@@ -4,7 +4,12 @@ import { normalCompletion } from "../types-and-values/completion-record.ts";
 import type { CompletionRecord } from "../types-and-values/completion-record.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
 import type { ObjectInternalSlots } from "../types-and-values/data-types.ts";
-import { createDataProperty, makeBasicObject } from "./object-operations.ts";
+import {
+	createDataProperty,
+	get,
+	getFunctionRealm,
+	makeBasicObject,
+} from "./object-operations.ts";
 import { PropertyDescriptor } from "./property-map.ts";
 import type { PropertyKey } from "./property-map.ts";
 import { sameValue, sameValueWrapped } from "./testing-and-comparison.ts";
@@ -476,4 +481,43 @@ export function ordinaryObjectCreate(
 	}
 
 	return O;
+}
+
+// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinarycreatefromconstructor
+export function ordinaryCreateFromConstructor(
+	constructor: EngineValue<"object">,
+	intrinsicDefaultProto: string,
+	internalSlotsList: Array<string> = [],
+) {
+	const proto = getPrototypeFromConstructor(constructor, intrinsicDefaultProto);
+
+	if (proto.type === "throw") {
+		throw proto.error;
+	}
+
+	return ordinaryObjectCreate(proto.value, internalSlotsList);
+}
+
+// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-getprototypefromconstructor
+export function getPrototypeFromConstructor(
+	constructor: EngineValue<"object">,
+	intrinsicDefaultProto: string,
+): CompletionRecord<EngineValue<"object">> {
+	const proto = get(constructor, "prototype");
+	if (proto.type === "throw") {
+		return proto;
+	}
+
+	if (proto.value.isObject()) {
+		return proto as CompletionRecord<EngineValue<"object">>;
+	}
+
+	const realm = getFunctionRealm(constructor);
+
+	const intrinsic = realm.intrinsics[intrinsicDefaultProto];
+	if (!intrinsic) {
+		throw new Error(`Unknown intrinsic: ${intrinsicDefaultProto}`);
+	}
+
+	return normalCompletion(intrinsic.asObject());
 }

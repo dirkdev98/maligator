@@ -10,17 +10,25 @@ import {
 	pushNewExecutionContext,
 } from "../execution-contexts/execution-context.ts";
 import { evaluateFunctionBody } from "../runtime-semantics/function-meta.ts";
-import { unwrapCompletion } from "../types-and-values/completion-record.ts";
+import {
+	returnCompletion,
+	unwrapCompletion,
+} from "../types-and-values/completion-record.ts";
 import type { CompletionRecord } from "../types-and-values/completion-record.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
 import type { ObjectInternalSlots } from "../types-and-values/data-types.ts";
+import { BuiltinFunctionObjectInternalMethods } from "./built-in-function-object.ts";
 import { definePropertyOrThrow } from "./object-operations.ts";
-import { ordinaryObjectCreate } from "./ordinary-object.ts";
+import {
+	ordinaryCreateFromConstructor,
+	ordinaryObjectCreate,
+} from "./ordinary-object.ts";
 import { PropertyDescriptor } from "./property-map.ts";
 import type { PropertyKey } from "./property-map.ts";
 import { toObject } from "./type-conversion.ts";
 
 export const FunctionObjectInternalMethods = {
+	// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ecmascript-function-objects-call-thisargument-argumentslist
 	Call: (
 		O: EngineValue<"object">,
 		thisArgument: EngineValue,
@@ -44,7 +52,63 @@ export const FunctionObjectInternalMethods = {
 
 		return result;
 	},
+
+	// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ecmascript-function-objects-construct-argumentslist-newtarget
+	Construct: (
+		F: EngineValue<"object">,
+		argumentsList: Array<EngineValue>,
+		newTarget: EngineValue<"object">,
+	): CompletionRecord<EngineValue<"object">> => {
+		const callerContext = getCurrentExecutionContext();
+		const kind = F.objectGetInternalSlot("ConstructorKind");
+
+		const thisArgument =
+			kind === "BASE" ?
+				ordinaryCreateFromConstructor(newTarget, "%Object.prototype%")
+			:	EngineValue.undefined();
+
+		const calleeContext = prepareForOrdinaryCall(F, newTarget);
+
+		if (kind === "BASE") {
+			ordinaryCallBindThis(F, calleeContext, thisArgument);
+
+			// TODO: Initialize instance elements
+		}
+
+		const constructorEnv = calleeContext.lexicalEnvironment;
+		const result = ordinaryCallEvaluateBody(F, argumentsList);
+
+		// Restore caller's execution context
+		popExecutionContext(callerContext);
+
+		if (result.type === "throw") {
+			return result;
+		}
+
+		if (result.value.isObject()) {
+			return returnCompletion(result.value.asObject());
+		}
+
+		if (kind === "BASE") {
+			return returnCompletion(thisArgument.asObject());
+		}
+
+		if (!result.value.isUndefined()) {
+			throw new TypeError("Constructor should return an object.");
+		}
+
+		return returnCompletion(
+			(constructorEnv as FunctionEnvironmentRecord).getThisBinding().asObject(),
+		);
+	},
 } satisfies Partial<ObjectInternalSlots>;
+
+export function isFunctionObject(F: EngineValue<"object">) {
+	return (
+		F.objectHasInternalSlot("Call") &&
+		F.objectGetInternalSlot("Call") === FunctionObjectInternalMethods.Call
+	);
+}
 
 // https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-prepareforordinarycall
 export function prepareForOrdinaryCall(
@@ -134,9 +198,7 @@ export function ordinaryFunctionCreate(
 	];
 	const F = ordinaryObjectCreate(functionPrototype, internalSlotsList);
 
-	for (const [key, value] of Object.entries(FunctionObjectInternalMethods)) {
-		F.objectSetInternalSlot(key as keyof ObjectInternalSlots, value);
-	}
+	F.objectSetInternalSlot("Call", FunctionObjectInternalMethods.Call);
 
 	F.objectSetInternalSlot("SourceText", sourceText);
 	F.objectSetInternalSlot("FormalParameters", parameterList);
@@ -165,6 +227,47 @@ export function ordinaryFunctionCreate(
 	setFunctionLength(F, parameterList.length);
 
 	return F;
+}
+
+// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-makeconstructor
+export function makeConstructor(
+	F: EngineValue<"object">,
+	writablePrototype?: boolean,
+	prototype?: EngineValue<"object">,
+) {
+	if (isFunctionObject(F)) {
+		F.objectSetInternalSlot("Construct", FunctionObjectInternalMethods.Construct);
+	} else {
+		F.objectSetInternalSlot("Construct", BuiltinFunctionObjectInternalMethods.Construct);
+	}
+
+	F.objectSetInternalSlot("ConstructorKind", "BASE");
+	writablePrototype ??= true;
+	prototype ??= ordinaryObjectCreate(
+		getCurrentRealm().intrinsics["%Object.prototype%"]!.asObject(),
+	);
+
+	definePropertyOrThrow(
+		prototype,
+		"constructor",
+		new PropertyDescriptor({
+			value: F,
+			writable: writablePrototype,
+			enumerable: false,
+			configurable: true,
+		}),
+	);
+
+	definePropertyOrThrow(
+		F,
+		"prototype",
+		new PropertyDescriptor({
+			value: prototype,
+			writable: writablePrototype,
+			enumerable: false,
+			configurable: false,
+		}),
+	);
 }
 
 // https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-setfunctionname

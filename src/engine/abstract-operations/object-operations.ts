@@ -1,3 +1,4 @@
+import { getCurrentRealm } from "../execution-contexts/execution-context.ts";
 import {
 	normalCompletion,
 	throwCompletion,
@@ -5,6 +6,7 @@ import {
 import type { CompletionRecord } from "../types-and-values/completion-record.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
 import type { ObjectInternalSlots } from "../types-and-values/data-types.ts";
+import { isBoundFunctionExotic } from "./bound-function-exotic.ts";
 import { OrdinaryObjectInternalMethods } from "./ordinary-object.ts";
 import { PropertyDescriptor } from "./property-map.ts";
 import type { PropertyKey } from "./property-map.ts";
@@ -220,4 +222,20 @@ export function construct(
 	newTarget ??= F;
 
 	return F.objectGetInternalSlot("Construct")(F, argumentsList ?? [], newTarget);
+}
+
+// https://tc39.es/ecma262/multipage/abstract-operations.html#sec-getfunctionrealm
+export function getFunctionRealm(F: EngineValue<"object">) {
+	if (F.objectHasInternalSlot("Realm")) {
+		return F.objectGetInternalSlot("Realm");
+	}
+
+	if (isBoundFunctionExotic(F)) {
+		// TODO: Bound exotics
+		throw new Error("Not implemented.");
+	}
+
+	// TODO: Proxy exotics.
+
+	return getCurrentRealm();
 }

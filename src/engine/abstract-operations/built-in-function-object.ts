@@ -12,7 +12,7 @@ import type { ObjectInternalSlots } from "../types-and-values/data-types.ts";
 import { setFunctionLength, setFunctionName } from "./function-objects.ts";
 import { ordinaryObjectCreate } from "./ordinary-object.ts";
 
-const BuiltinFunctionObjectInternalMethods = {
+export const BuiltinFunctionObjectInternalMethods = {
 	Call: (
 		O: EngineValue<"object">,
 		thisArgument: EngineValue,
@@ -24,7 +24,7 @@ const BuiltinFunctionObjectInternalMethods = {
 	Construct: (
 		O: EngineValue<"object">,
 		argumentsList: Array<EngineValue>,
-		newTarget?: EngineValue<"object">,
+		newTarget: EngineValue<"object">,
 	) => {
 		return builtinCallOrConstruct(
 			O,
