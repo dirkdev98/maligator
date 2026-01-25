@@ -126,25 +126,31 @@ export type ObjectInternalSlots = {
 	Prototype: EngineValue<"object" | "null">;
 	Extensible: boolean;
 
-	// TODO: Arguments exotic.
+	// Arguments exotic.
 	ParameterMap: unknown;
 
-	// TODO: Error exotic.
+	// Error exotic
 	ErrorData: unknown;
 
-	// TODO: Boolean
+	// Boolean
 	BooleanData: boolean;
 
-	// TODO: Number
+	// Number
 	NumberData: number;
 
-	// TODO: String
+	// BigInt
+	BigIntData: bigint;
+
+	// Symbol
+	Description: string | undefined;
+
+	// String
 	StringData: string;
 
-	// TODO: Date
+	// Date
 	DateValue: number;
 
-	// TODO: RegExp
+	// RegExp
 	RegExpMatcher: unknown;
 };
 
@@ -170,7 +176,6 @@ type Value =
 	| {
 			type: "symbol";
 
-			// Should this be an EngineValue<string>?
 			description?: string;
 	  }
 	| {

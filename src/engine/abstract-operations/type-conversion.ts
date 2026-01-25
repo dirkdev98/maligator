@@ -1,3 +1,4 @@
+import { getCurrentRealm } from "../execution-contexts/execution-context.ts";
 import {
 	normalCompletion,
 	throwCompletion,
@@ -9,6 +10,7 @@ import {
 	WELL_KNOWN_SYMBOLS,
 } from "../types-and-values/data-types.ts";
 import { call, get, getMethod } from "./object-operations.ts";
+import { ordinaryCreateFromConstructor } from "./ordinary-object.ts";
 import type { PropertyKey } from "./property-map.ts";
 import { isCallable } from "./testing-and-comparison.ts";
 
@@ -444,7 +446,59 @@ export function toObject(argument: EngineValue): CompletionRecord<EngineValue<"o
 		return normalCompletion(argument);
 	}
 
-	throw new Error("Not implemented. Requires intrinsics for Boolean, Number, etc.");
+	if (argument.isBoolean()) {
+		const instance = ordinaryCreateFromConstructor(
+			getCurrentRealm().intrinsics["%Boolean%"]!.asObject(),
+			"%Boolean.prototype%",
+			["BooleanData"],
+		);
+		instance.objectSetInternalSlot("BooleanData", argument.data.value);
+		return normalCompletion(instance);
+	}
+
+	if (argument.isNumber()) {
+		const instance = ordinaryCreateFromConstructor(
+			getCurrentRealm().intrinsics["%Number%"]!.asObject(),
+			"%Number.prototype%",
+			["NumberData"],
+		);
+		instance.objectSetInternalSlot("NumberData", argument.data.value);
+		return normalCompletion(instance);
+	}
+
+	if (argument.isBigInt()) {
+		const instance = ordinaryCreateFromConstructor(
+			getCurrentRealm().intrinsics["%BigInt%"]!.asObject(),
+			"%BigInt.prototype%",
+			["BigIntData"],
+		);
+		instance.objectSetInternalSlot("BigIntData", argument.data.value);
+		return normalCompletion(instance);
+	}
+
+	if (argument.isSymbol()) {
+		const instance = ordinaryCreateFromConstructor(
+			getCurrentRealm().intrinsics["%Symbol%"]!.asObject(),
+			"%Symbol.prototype%",
+			["Description"],
+		);
+		instance.objectSetInternalSlot("Description", argument.data.description);
+
+		return normalCompletion(instance);
+	}
+
+	if (argument.isString()) {
+		const instance = ordinaryCreateFromConstructor(
+			getCurrentRealm().intrinsics["%String%"]!.asObject(),
+			"%String.prototype%",
+			["StringData"],
+		);
+		instance.objectSetInternalSlot("StringData", argument.data.value);
+
+		return normalCompletion(instance);
+	}
+
+	throw new Error("Not implemented.", { cause: argument });
 }
 
 // https://tc39.es/ecma262/#sec-topropertykey

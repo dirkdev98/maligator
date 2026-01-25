@@ -3,9 +3,19 @@ import { definePropertyOrThrow } from "../abstract-operations/object-operations.
 import { ordinaryObjectCreate } from "../abstract-operations/ordinary-object.ts";
 import { PropertyDescriptor } from "../abstract-operations/property-map.ts";
 import { toInt32, toNumber, toString } from "../abstract-operations/type-conversion.ts";
+import { intrinsicBigIntPrototype } from "../intrinsics/bigint-prototype.ts";
+import { intrinsicBigInt } from "../intrinsics/bigint.ts";
+import { intrinsicBooleanPrototype } from "../intrinsics/boolean-prototype.ts";
+import { intrinsicBoolean } from "../intrinsics/boolean.ts";
 import { intrinsicFunctionPrototype } from "../intrinsics/function-prototype.ts";
+import { intrinsicNumberPrototype } from "../intrinsics/number-prototype.ts";
+import { intrinsicNumber } from "../intrinsics/number.ts";
 import { intrinsicObjectPrototype } from "../intrinsics/object-prototype.ts";
 import { intrinsicObject } from "../intrinsics/object.ts";
+import { intrinsicStringPrototype } from "../intrinsics/string-prototype.ts";
+import { intrinsicString } from "../intrinsics/string.ts";
+import { intrinsicSymbolPrototype } from "../intrinsics/symbol-prototype.ts";
+import { intrinsicSymbol } from "../intrinsics/symbol.ts";
 import { normalCompletion } from "../types-and-values/completion-record.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
 import { newGlobalEnvironment } from "./environment-record.ts";
@@ -56,6 +66,21 @@ export class Realm {
 			intrinsicFunctionPrototype,
 
 			intrinsicObject,
+
+			intrinsicBooleanPrototype,
+			intrinsicBoolean,
+
+			intrinsicSymbolPrototype,
+			intrinsicSymbol,
+
+			intrinsicNumberPrototype,
+			intrinsicNumber,
+
+			intrinsicBigIntPrototype,
+			intrinsicBigInt,
+
+			intrinsicStringPrototype,
+			intrinsicString,
 		];
 
 		const callbacks = [];
@@ -241,6 +266,57 @@ export class Realm {
 			"Object",
 			new PropertyDescriptor({
 				value: this.intrinsics["%Object%"]!,
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		definePropertyOrThrow(
+			global,
+			"Boolean",
+			new PropertyDescriptor({
+				value: this.intrinsics["%Boolean%"]!,
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+		definePropertyOrThrow(
+			global,
+			"Symbol",
+			new PropertyDescriptor({
+				value: this.intrinsics["%Symbol%"]!,
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+		definePropertyOrThrow(
+			global,
+			"Number",
+			new PropertyDescriptor({
+				value: this.intrinsics["%Number%"]!,
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+		definePropertyOrThrow(
+			global,
+			"BigInt",
+			new PropertyDescriptor({
+				value: this.intrinsics["%BigInt%"]!,
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+		definePropertyOrThrow(
+			global,
+			"String",
+			new PropertyDescriptor({
+				value: this.intrinsics["%String%"]!,
 				writable: false,
 				enumerable: false,
 				configurable: true,
