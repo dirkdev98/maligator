@@ -1,3 +1,5 @@
+import type { EngineValue } from "./data-types.ts";
+
 type CompletionType = "normal" | "break" | "continue" | "return";
 
 // https://tc39.es/ecma262/#sec-completion-record-specification-type
@@ -11,7 +13,7 @@ export type CompletionRecord<T> =
 	| {
 			type: "throw";
 			value?: never;
-			error: Error;
+			error: Error | EngineValue;
 	  };
 
 // https://tc39.es/ecma262/#sec-normalcompletion
@@ -33,7 +35,7 @@ export function returnCompletion<T>(value: T): CompletionRecord<T> {
 /**
  * Not in the spec.
  */
-export function throwCompletion(err: Error): CompletionRecord<never> {
+export function throwCompletion(err: Error | EngineValue): CompletionRecord<never> {
 	return {
 		type: "throw",
 		error: err,
@@ -45,7 +47,9 @@ export function throwCompletion(err: Error): CompletionRecord<never> {
  */
 export function unwrapCompletion<T>(completion: CompletionRecord<T>): T {
 	if (completion.type === "throw") {
-		throw completion.error;
+		throw new Error("Can't unwrap completion...", {
+			cause: completion.error,
+		});
 	}
 
 	return completion.value;

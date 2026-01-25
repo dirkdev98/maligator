@@ -13,11 +13,14 @@ import type { Evaluator } from "./index.ts";
 export const FunctionDeclaration: Evaluator<"FunctionDeclaration"> = {
 	// https://tc39.es/ecma262/multipage/ecmascript-language-functions-and-classes.html#sec-runtime-semantics-instantiateordinaryfunctionexpression
 	evaluate(node) {
-		const name = node.id?.name ?? "anonymous";
+		const name = node.id?.name ?? "";
 
 		const outerEnv = getCurrentExecutionContext().lexicalEnvironment!;
 		const funcEnv = newDeclarativeEnvironment(outerEnv);
-		funcEnv.createImmutableBinding(name, false);
+
+		if (name) {
+			funcEnv.createImmutableBinding(name, false);
+		}
 
 		const privateEnv = null;
 		const sourceText = "";
@@ -32,9 +35,12 @@ export const FunctionDeclaration: Evaluator<"FunctionDeclaration"> = {
 		);
 
 		makeConstructor(closure);
-		funcEnv.initializeBinding(name, closure);
 
-		{
+		if (name) {
+			funcEnv.initializeBinding(name, closure);
+		}
+
+		if (name) {
 			// TODO: Whacky. Once we implement BlockDeclarationInstantiation in Block, we can skip
 			// this.
 

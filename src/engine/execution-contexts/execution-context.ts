@@ -2,7 +2,7 @@ import type { ESTree } from "meriyah";
 import { isNil } from "../../utils.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
 import { getIdentifierReference } from "./environment-record.ts";
-import type { EnvironmentRecord } from "./environment-record.ts";
+import type { EnvironmentRecord, GlobalEnvironmentRecord } from "./environment-record.ts";
 import type { Realm } from "./realm.ts";
 
 export let runningExecutionContext: ExecutionContext;
@@ -72,4 +72,29 @@ export function resolveBinding(
 	// TODO: IsStrict;
 	const strict = true;
 	return getIdentifierReference(env, name, strict);
+}
+
+// https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-getthisenvironment
+export function getThisEnvironment(): GlobalEnvironmentRecord {
+	let env = getCurrentExecutionContext().lexicalEnvironment!;
+
+	while (env) {
+		if (env.hasThisBinding()) {
+			return env as GlobalEnvironmentRecord;
+		}
+
+		if (env.outerEnv === null) {
+			return env as GlobalEnvironmentRecord;
+		}
+
+		env = env.outerEnv;
+	}
+
+	throw new Error("unreachable");
+}
+
+// https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-resolvethisbinding
+export function resolveThisBinding() {
+	const env = getThisEnvironment();
+	return env.getThisBinding();
 }

@@ -154,8 +154,7 @@ export function ordinaryCallBindThis(
 			calleeRealm.globalEnv?.globalThisValue!
 		:	unwrapCompletion(toObject(thisArgument));
 
-	if (localEnv && !localEnv?.hasThisBinding()) {
-		localEnv.hasThisBinding();
+	if (localEnv) {
 		(localEnv as FunctionEnvironmentRecord).bindThisValue(thisValue);
 	}
 }

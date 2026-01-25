@@ -12,7 +12,7 @@ Realm.init();
 const parsed = parseScript(txt, getCurrentRealm());
 const result = evaluate(parsed.ECMAScriptCode);
 
-spawnSync(`bat`, ["./local.js"], {
+spawnSync(`bat`, ["--paging=never", "./local.js"], {
 	stdio: "inherit",
 	env: {
 		...process.env,
@@ -20,4 +20,4 @@ spawnSync(`bat`, ["./local.js"], {
 	},
 });
 
-console.dir(result?.value ?? result.error, { depth: null });
+console.dir(result?.value ?? result.error, { depth: 4 });

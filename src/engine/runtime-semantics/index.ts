@@ -17,8 +17,11 @@ import { IfStatement } from "./if-statement.ts";
 import { Literal } from "./literal-expression.ts";
 import { LogicalExpression } from "./logical-expression.ts";
 import { MemberExpression } from "./member-expression.ts";
+import { NewExpression } from "./new-expression.ts";
 import { ReturnStatement } from "./return-statement.ts";
 import { SequenceExpression } from "./sequence-expression.ts";
+import { ThisExpression } from "./this-expression.ts";
+import { ThrowStatement } from "./throw-statement.ts";
 import { UnaryExpression } from "./unary-expression.ts";
 import { UpdateExpression } from "./update-expression.ts";
 import { VariableDeclaration } from "./variable-declaration.ts";
@@ -38,10 +41,13 @@ export const evaluators: Partial<{
 	CallExpression,
 	ConditionalExpression,
 	Identifier,
+	FunctionExpression: FunctionDeclaration as unknown as Evaluator<"FunctionExpression">,
 	Literal,
 	LogicalExpression,
 	MemberExpression,
+	NewExpression,
 	SequenceExpression,
+	ThisExpression,
 	UnaryExpression,
 	UpdateExpression,
 
@@ -57,6 +63,7 @@ export const evaluators: Partial<{
 	ExpressionStatement,
 	IfStatement,
 	ReturnStatement,
+	ThrowStatement,
 	VariableDeclaration,
 	WhileStatement,
 
