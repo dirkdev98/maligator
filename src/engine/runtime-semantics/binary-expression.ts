@@ -55,7 +55,7 @@ export const BinaryExpression: Evaluator<"BinaryExpression"> = {
 };
 
 // https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-applystringornumericbinaryoperator
-function applyStringOrNumericBinaryOperator(
+export function applyStringOrNumericBinaryOperator(
 	lValue: EngineValue,
 	opText: string,
 	rValue: EngineValue,

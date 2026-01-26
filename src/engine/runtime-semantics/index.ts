@@ -22,6 +22,7 @@ import { ReturnStatement } from "./return-statement.ts";
 import { SequenceExpression } from "./sequence-expression.ts";
 import { ThisExpression } from "./this-expression.ts";
 import { ThrowStatement } from "./throw-statement.ts";
+import { TryStatement } from "./try-statement.ts";
 import { UnaryExpression } from "./unary-expression.ts";
 import { UpdateExpression } from "./update-expression.ts";
 import { VariableDeclaration } from "./variable-declaration.ts";
@@ -64,6 +65,7 @@ export const evaluators: Partial<{
 	IfStatement,
 	ReturnStatement,
 	ThrowStatement,
+	TryStatement,
 	VariableDeclaration,
 	WhileStatement,
 

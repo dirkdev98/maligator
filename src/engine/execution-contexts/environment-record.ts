@@ -114,7 +114,7 @@ export class DeclarativeEnvironmentRecord extends EnvironmentRecord {
 	override getBindingValue(name: string, _strict?: boolean): EngineValue {
 		const binding = this.bindings[name];
 		if (isNil(binding?.value)) {
-			throw new ReferenceError(`Binding for ${name} has not been initialized.`);
+			throw new ReferenceError(`Binding for '${name}' has not been initialized.`);
 		}
 
 		return binding.value;

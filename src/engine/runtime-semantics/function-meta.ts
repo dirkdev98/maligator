@@ -61,6 +61,6 @@ export function functionDeclarationInstantiation(
 		// TODO: https://tc39.es/ecma262/multipage/syntax-directed-operations.html#sec-runtime-semantics-iteratorbindinginitialization
 
 		env.createMutableBinding(param, false);
-		env.initializeBinding(param, argumentsList[i]!);
+		env.initializeBinding(param, argumentsList[i] ?? EngineValue.undefined());
 	}
 }
