@@ -14,7 +14,7 @@ export const VariableDeclaration: Evaluator<"VariableDeclaration"> = {
 		const kind = node.kind;
 
 		for (const declaration of node.declarations) {
-			if (kind === "let" || kind === "const") {
+			if (kind === "let" || kind === "const" || kind === "var") {
 				if (declaration.id.type === "Identifier") {
 					{
 						// TODO: Whacky. Once we implement BlockDeclarationInstantiation in Block, we can skip
@@ -22,7 +22,7 @@ export const VariableDeclaration: Evaluator<"VariableDeclaration"> = {
 
 						const env = getCurrentExecutionContext().lexicalEnvironment!;
 
-						if (kind === "let") {
+						if (kind === "let" || kind === "var") {
 							env.createMutableBinding(declaration.id.name, true);
 						} else if (kind === "const") {
 							env.createMutableBinding(declaration.id.name, false);

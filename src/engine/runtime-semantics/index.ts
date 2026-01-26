@@ -1,3 +1,4 @@
+import * as util from "node:util";
 import type { ESTree } from "meriyah";
 import type { CompletionRecord } from "../types-and-values/completion-record.ts";
 import type { EngineValue } from "../types-and-values/data-types.ts";
@@ -80,6 +81,24 @@ export function evaluate(node: ESTree.Node) {
 		throw new Error(`No evaluator for node type: ${node.type}`);
 	}
 
-	// @ts-expect-error: node is typed
-	return evaluator.evaluate(node);
+	try {
+		// @ts-expect-error: node is typed
+		return evaluator.evaluate(node);
+	} catch (e) {
+		if (e instanceof EvaluateError) {
+			throw e;
+		}
+
+		// eslint-disable-next-line @typescript-eslint/only-throw-error
+		throw new EvaluateError(e, node);
+	}
+}
+
+class EvaluateError {
+	private error: unknown;
+	private node: string;
+	constructor(error: unknown, node: ESTree.Node) {
+		this.error = error;
+		this.node = util.inspect(node, { depth: 3 });
+	}
 }

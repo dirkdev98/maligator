@@ -15,6 +15,7 @@ export function parseScript(sourceText: string, realm: Realm): ScriptRecord {
 	const script = meriyahParseScript(sourceText, {
 		impliedStrict: true,
 		validateRegex: false,
+		loc: true,
 	});
 
 	return {
