@@ -20,4 +20,8 @@ spawnSync(`bat`, ["--paging=never", "./local.js"], {
 	},
 });
 
-console.dir(result?.value ?? result.error, { depth: 4 });
+if (result.type !== "normal") {
+	console.dir(result?.value ?? result.error, { depth: 4 });
+} else {
+	console.dir(result?.value, { depth: 3 });
+}
