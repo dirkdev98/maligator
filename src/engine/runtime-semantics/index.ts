@@ -21,6 +21,7 @@ import { MemberExpression } from "./member-expression.ts";
 import { NewExpression } from "./new-expression.ts";
 import { ReturnStatement } from "./return-statement.ts";
 import { SequenceExpression } from "./sequence-expression.ts";
+import { SwitchStatement } from "./switch-statement.ts";
 import { ThisExpression } from "./this-expression.ts";
 import { ThrowStatement } from "./throw-statement.ts";
 import { TryStatement } from "./try-statement.ts";
@@ -65,6 +66,7 @@ export const evaluators: Partial<{
 	ExpressionStatement,
 	IfStatement,
 	ReturnStatement,
+	SwitchStatement,
 	ThrowStatement,
 	TryStatement,
 	VariableDeclaration,
