@@ -25,6 +25,10 @@ export const Literal: Evaluator<"Literal"> = {
 			return normalCompletion(EngineValue.string(node.value));
 		}
 
+		if (node.value instanceof RegExp) {
+			throw new Error(`Unknown literal type: RegExp`);
+		}
+
 		throw new Error(`Unknown literal type: ${typeof node.value}`);
 	},
 };
