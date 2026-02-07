@@ -139,4 +139,8 @@ export class PropertyMap {
 	delete(key: PropertyKey) {
 		this.properties.delete(key);
 	}
+
+	ownPropertyKeys() {
+		return [...this.properties.keys()];
+	}
 }

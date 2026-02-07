@@ -10,7 +10,7 @@ import { isBoundFunctionExotic } from "./bound-function-exotic.ts";
 import { OrdinaryObjectInternalMethods } from "./ordinary-object.ts";
 import { PropertyDescriptor } from "./property-map.ts";
 import type { PropertyKey } from "./property-map.ts";
-import { isCallable } from "./testing-and-comparison.ts";
+import { isCallable, sameValue } from "./testing-and-comparison.ts";
 import { toObject } from "./type-conversion.ts";
 
 const UNUSED = -1;
@@ -238,4 +238,61 @@ export function getFunctionRealm(F: EngineValue<"object">) {
 	// TODO: Proxy exotics.
 
 	return getCurrentRealm();
+}
+
+// https://tc39.es/ecma262/multipage/abstract-operations.html#sec-copydataproperties
+export function copyDataProperties(
+	target: EngineValue<"object">,
+	source: EngineValue,
+	excludedItems: Array<PropertyKey>,
+): CompletionRecord<unknown> {
+	if (source.isUndefined() || source.isNull()) {
+		return normalCompletion(undefined);
+	}
+
+	const from = toObject(source);
+	if (from.type === "throw") {
+		return from;
+	}
+
+	const keys = from.value.objectGetInternalSlot("OwnPropertyKeys")(from.value.asObject());
+	if (keys.type === "throw") {
+		return keys;
+	}
+
+	for (const key of keys.value) {
+		for (const excludedItem of excludedItems) {
+			if (typeof key === "string" && key === excludedItem) {
+				continue;
+			} else if (
+				key instanceof EngineValue &&
+				excludedItem instanceof EngineValue &&
+				sameValue(key, excludedItem)
+			) {
+				continue;
+			}
+
+			const desc = from.value.objectGetInternalSlot("GetOwnProperty")(
+				from.value.asObject(),
+				key,
+			);
+
+			if (desc.type === "throw") {
+				return desc;
+			}
+
+			if (desc.value instanceof EngineValue || desc.value.enumerable === false) {
+				continue;
+			}
+
+			const propValue = get(from.value.asObject(), key);
+			if (propValue.type === "throw") {
+				return propValue;
+			}
+
+			createDataPropertyOrThrow(target, key, propValue.value);
+		}
+	}
+
+	return normalCompletion(undefined);
 }

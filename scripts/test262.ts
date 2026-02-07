@@ -9,11 +9,11 @@ import {
 import { test262Log } from "../src/test262/log.ts";
 import { getFailuresWithSamples, test262RunFile } from "../src/test262/runtime.ts";
 
-test262Checkout();
-
 const cacheContext = test262LoadCache();
 
 if (!cacheContext.files.length) {
+	test262Checkout();
+
 	const fileIterator = test262ListFiles();
 	const files = await test262CollectFiles(fileIterator);
 

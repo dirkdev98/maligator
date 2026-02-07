@@ -81,6 +81,8 @@ export type ObjectInternalSlots = {
 		P: PropertyKey,
 	) => CompletionRecord<EngineValue<"boolean">>;
 
+	OwnPropertyKeys: (O: EngineValue<"object">) => CompletionRecord<Array<PropertyKey>>;
+
 	// Built-in Function objects
 	InitialName: EngineValue<"null" | "string">;
 	Async: boolean;

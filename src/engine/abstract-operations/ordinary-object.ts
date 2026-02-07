@@ -116,6 +116,11 @@ export const OrdinaryObjectInternalMethods = {
 	): CompletionRecord<EngineValue<"boolean">> {
 		return ordinaryDelete(obj, P);
 	},
+
+	// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinary-object-internal-methods-and-internal-slots-ownpropertykeys
+	OwnPropertyKeys: (obj: EngineValue<"object">) => {
+		return normalCompletion(ordinaryOwnPropertyKeys(obj));
+	},
 } satisfies Partial<ObjectInternalSlots>;
 
 // https://tc39.es/ecma262/#sec-ordinarygetownproperty
@@ -281,11 +286,13 @@ export function validateAndApplyPropertyDescriptor(
 			O.asObject().data.properties.set(P, copy);
 		} else {
 			current.value = Desc.value;
-			current.writable = Desc.writable;
-			current.get = Desc.get;
-			current.set = Desc.set;
-			current.enumerable = Desc.enumerable;
-			current.configurable = Desc.configurable;
+			current.writable = Desc.writable ?? current.writable;
+			current.get = Desc.get ?? current.get;
+			current.set = Desc.set ?? current.set;
+			current.enumerable = Desc.enumerable ?? current.enumerable;
+			current.configurable = Desc.configurable ?? current.configurable;
+
+			O.asObject().data.properties.set(P, current);
 		}
 	}
 
@@ -465,6 +472,11 @@ export function ordinaryDelete(obj: EngineValue<"object">, P: PropertyKey) {
 	}
 
 	return normalCompletion(EngineValue.boolean(false));
+}
+
+// https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinaryownpropertykeys
+export function ordinaryOwnPropertyKeys(obj: EngineValue<"object">) {
+	return obj.data.properties.ownPropertyKeys();
 }
 
 // https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinaryobjectcreate

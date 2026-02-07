@@ -18,6 +18,7 @@ import { Literal } from "./literal-expression.ts";
 import { LogicalExpression } from "./logical-expression.ts";
 import { MemberExpression } from "./member-expression.ts";
 import { NewExpression } from "./new-expression.ts";
+import { ObjectExpression } from "./object-expression.ts";
 import { ReturnStatement } from "./return-statement.ts";
 import { SequenceExpression } from "./sequence-expression.ts";
 import { SwitchStatement } from "./switch-statement.ts";
@@ -48,6 +49,7 @@ export const evaluators: Partial<{
 	LogicalExpression,
 	MemberExpression,
 	NewExpression,
+	ObjectExpression,
 	SequenceExpression,
 	ThisExpression,
 	UnaryExpression,
