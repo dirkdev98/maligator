@@ -10,6 +10,7 @@ import { CallExpression } from "./call-expression.ts";
 import { ConditionalExpression } from "./conditional-expression.ts";
 import { ContinueStatement } from "./continue-statement.ts";
 import { DoWhileStatement } from "./do-while-statement.ts";
+import { EmptyStatement } from "./empty-statement.ts";
 import { ExpressionStatement } from "./expression-statement.ts";
 import { FunctionDeclaration } from "./function-declaration.ts";
 import { Identifier } from "./identifier.ts";
@@ -64,6 +65,7 @@ export const evaluators: Partial<{
 	BreakStatement,
 	ContinueStatement,
 	DoWhileStatement,
+	EmptyStatement,
 	ExpressionStatement,
 	IfStatement,
 	ReturnStatement,
