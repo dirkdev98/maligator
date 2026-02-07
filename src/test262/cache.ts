@@ -1,12 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
-import type { Test262File } from "./types.ts";
-
-type Test262Cache = {
-	sha: string;
-	files: Array<Test262File>;
-};
+import type { Test262Cache } from "./types.ts";
 
 export function test262LoadCache() {
 	if (!existsSync(TEST262_METADATA.cacheFile)) {

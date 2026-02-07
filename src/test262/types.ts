@@ -16,5 +16,10 @@ export interface Test262File {
 	path: string;
 	frontmatter: Test262Frontmatter;
 	content: string;
-	result: "UNKNOWN" | "SKIPPED" | "PASSED" | "FAILED";
+	result: "UNKNOWN" | "SKIPPED" | "PASSED" | "FAILED" | "STRICT_FAILED";
 }
+
+export type Test262Cache = {
+	sha: string;
+	files: Array<Test262File>;
+};
