@@ -60,6 +60,12 @@ export function popExecutionContext(
 		newContext ?? executionContextStack[executionContextStack.length - 1]!;
 }
 
+export function popExecutionContextTillEmpty() {
+	while (executionContextStack.length > 0) {
+		executionContextStack.pop();
+	}
+}
+
 // https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-resolvebinding
 export function resolveBinding(
 	name: EngineValue<"string">,

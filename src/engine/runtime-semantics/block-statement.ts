@@ -21,7 +21,11 @@ export const BlockStatement: Evaluator<"BlockStatement"> = {
 
 		blockDeclarationInstantiation(node.body, blockEnv);
 
-		getCurrentExecutionContext().lexicalEnvironment = blockEnv;
+		// @ts-expect-error - we reuse this for Programs
+		if (node.type !== "Program") {
+			getCurrentExecutionContext().lexicalEnvironment = blockEnv;
+		}
+
 		const blockValue = normalCompletion(undefined);
 
 		for (const statement of node.body) {

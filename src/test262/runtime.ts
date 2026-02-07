@@ -4,14 +4,16 @@ import { createBuiltinFunction } from "../engine/abstract-operations/built-in-fu
 import { definePropertyOrThrow } from "../engine/abstract-operations/object-operations.ts";
 import { ordinaryObjectCreate } from "../engine/abstract-operations/ordinary-object.ts";
 import { PropertyDescriptor } from "../engine/abstract-operations/property-map.ts";
-import { getCurrentRealm } from "../engine/execution-contexts/execution-context.ts";
+import {
+	getCurrentRealm,
+	popExecutionContextTillEmpty,
+} from "../engine/execution-contexts/execution-context.ts";
 import { Realm } from "../engine/execution-contexts/realm.ts";
 import { parseScript } from "../engine/parser/script.ts";
 import { evaluate, EvaluateError } from "../engine/runtime-semantics/index.ts";
 import { normalCompletion } from "../engine/types-and-values/completion-record.ts";
 import { EngineValue } from "../engine/types-and-values/data-types.ts";
 import { TEST262_METADATA } from "./constants.ts";
-import { test262Log } from "./log.ts";
 import type { Test262File } from "./types.ts";
 
 const SKIPPED_FLAGS = ["module", "async", "CanBlockIsTrue"];
@@ -72,6 +74,8 @@ export function test262RunFile(file: Test262File) {
 		} catch (e) {
 			normalizeAndCountFailureReason(file, e);
 			file.result = "FAILED";
+		} finally {
+			popExecutionContextTillEmpty();
 		}
 	}
 
@@ -114,6 +118,8 @@ export function test262RunFile(file: Test262File) {
 		} catch (e) {
 			normalizeAndCountFailureReason(file, e);
 			file.result = "STRICT_FAILED";
+		} finally {
+			popExecutionContextTillEmpty();
 		}
 	}
 }
@@ -238,7 +244,22 @@ function normalizeAndCountFailureReason(file: Test262File, reason: unknown) {
 		return;
 	}
 
-	test262Log("Unknown failure: ", reason);
+	if (!!reason && typeof reason === "object" && "value" in reason) {
+		if (
+			reason.value instanceof EngineValue &&
+			reason.value.isObject() &&
+			reason.value.data.properties.has("message") &&
+			reason.value.data.properties.get("message").value?.isString()
+		) {
+			const msg = reason.value.data.properties.get("message").value!.asString()
+				.data.value;
+			FAILURE_CACHE[msg] ??= [];
+			FAILURE_CACHE[msg].push(file.path);
+			return;
+		}
+	}
+
+	// test262Log("Unknown failure: ", reason);
 
 	FAILURE_CACHE["unknown"] ??= [];
 	FAILURE_CACHE["unknown"].push(file.path);
@@ -254,7 +275,9 @@ export function getFailuresWithSamples() {
 		uniqueFailureReasons,
 		failures: sortedFailures.slice(0, 10).map(([reason, paths]) => ({
 			reason,
-			paths: paths.slice(0, 10),
+			paths: Array.from({ length: 10 }).map(
+				() => paths[Math.floor(Math.random() * paths.length)],
+			),
 		})),
 	};
 }
