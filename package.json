@@ -8,7 +8,8 @@
 		"lint": "eslint . --concurrency=auto --fix --cache --cache-location .cache/eslint/",
 		"lint:ci": "eslint . --concurrency=auto",
 		"update": "npx npm-check --update --save-exact",
-		"test": "vitest"
+		"test": "vitest",
+		"test262": "node ./scripts/test262.ts"
 	},
 	"repository": {
 		"type": "git",
@@ -25,6 +26,7 @@
 	"devDependencies": {
 		"@lightbase/eslint-config": "4.1.1",
 		"@vitest/coverage-v8": "4.0.16",
+		"yaml": "2.8.2",
 		"typescript": "5.9.3",
 		"vitest": "4.0.16"
 	}
