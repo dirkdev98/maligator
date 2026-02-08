@@ -24,7 +24,7 @@ export function intrinsicSymbol(realm: Realm) {
 				);
 			}
 
-			return throwCompletion(new Error("Symbol is not a constructor."));
+			return throwCompletion(new TypeError("Symbol is not a constructor."));
 		},
 		1,
 		"Symbol",

@@ -9,6 +9,8 @@ import { intrinsicBigIntPrototype } from "../intrinsics/bigint-prototype.ts";
 import { intrinsicBigInt } from "../intrinsics/bigint.ts";
 import { intrinsicBooleanPrototype } from "../intrinsics/boolean-prototype.ts";
 import { intrinsicBoolean } from "../intrinsics/boolean.ts";
+import { intrinsicErrorPrototype } from "../intrinsics/error-prototype.ts";
+import { intrinsicError } from "../intrinsics/error.ts";
 import { intrinsicFunctionPrototype } from "../intrinsics/function-prototype.ts";
 import { intrinsicFunction } from "../intrinsics/function.ts";
 import { intrinsicMath } from "../intrinsics/math.ts";
@@ -89,6 +91,9 @@ export class Realm {
 
 			intrinsicArrayPrototype,
 			intrinsicArray,
+
+			intrinsicErrorPrototype,
+			intrinsicError,
 
 			intrinsicMath,
 		];
@@ -349,6 +354,17 @@ export class Realm {
 			"Function",
 			new PropertyDescriptor({
 				value: this.intrinsics["%Function%"]!,
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		definePropertyOrThrow(
+			global,
+			"Error",
+			new PropertyDescriptor({
+				value: this.intrinsics["%Error%"]!,
 				writable: false,
 				enumerable: false,
 				configurable: true,

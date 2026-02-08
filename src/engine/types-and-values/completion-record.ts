@@ -34,9 +34,11 @@ export function returnCompletion<T>(value: T): CompletionRecord<T> {
 }
 
 /**
- * Not in the spec.
+ * Not in the spec. Use any built-in error which would be converted to an intrinsic.
  */
 export function throwCompletion(err: Error | EngineValue): CompletionRecord<never> {
+	// TODO: Convert to intrinsic?
+
 	return {
 		type: "throw",
 		error: err,
