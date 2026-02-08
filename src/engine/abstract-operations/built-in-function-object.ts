@@ -72,7 +72,7 @@ export function createBuiltinFunction(
 	name: string,
 	additionalInternalSlotsList: Array<string>,
 	realm?: Realm,
-	prototype?: EngineValue<"object">,
+	prototype?: EngineValue<"object" | "null">,
 	prefix?: string,
 	async?: boolean,
 ) {

@@ -9,10 +9,10 @@ import type { ObjectInternalSlots } from "../types-and-values/data-types.ts";
 import { arrayCreate } from "./array-exotic.ts";
 import { isBoundFunctionExotic } from "./bound-function-exotic.ts";
 import { OrdinaryObjectInternalMethods } from "./ordinary-object.ts";
-import { PropertyDescriptor } from "./property-map.ts";
+import { isPropertyKey, PropertyDescriptor } from "./property-map.ts";
 import type { PropertyKey } from "./property-map.ts";
 import { isCallable, sameValue } from "./testing-and-comparison.ts";
-import { toObject } from "./type-conversion.ts";
+import { toLength, toObject } from "./type-conversion.ts";
 
 const UNUSED = -1;
 
@@ -237,6 +237,52 @@ export function createArrayFromList(elements: Array<EngineValue>) {
 	}
 
 	return arr;
+}
+
+// https://tc39.es/ecma262/multipage/abstract-operations.html#sec-lengthofarraylike
+export function lengthOfArrayLike(obj: EngineValue<"object">) {
+	const len = get(obj, "length");
+	if (len.type === "throw") {
+		return len;
+	}
+	return toLength(len.value);
+}
+
+// https://tc39.es/ecma262/multipage/abstract-operations.html#sec-createlistfromarraylike
+export function createListFromArrayLike(
+	obj: EngineValue,
+	validElementTypes?: "all" | "property-key",
+) {
+	validElementTypes ??= "all";
+
+	if (!obj.isObject()) {
+		return throwCompletion(new TypeError("createListFromArrayLike called on non-object"));
+	}
+
+	const len = lengthOfArrayLike(obj);
+	if (len.type === "throw") {
+		return len;
+	}
+
+	const list: Array<EngineValue> = [];
+	let idx = 0;
+	while (idx < len.value) {
+		const next = get(obj, `${idx}`);
+		if (next.type === "throw") {
+			return next;
+		}
+
+		if (validElementTypes === "property-key" && !isPropertyKey(next.value)) {
+			return throwCompletion(
+				new TypeError("createListFromArrayLike called with invalid element types"),
+			);
+		}
+
+		list.push(next.value);
+		idx++;
+	}
+
+	return normalCompletion(list);
 }
 
 // https://tc39.es/ecma262/multipage/abstract-operations.html#sec-getfunctionrealm

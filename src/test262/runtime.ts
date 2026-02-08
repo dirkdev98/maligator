@@ -228,6 +228,11 @@ function normalizeAndCountFailureReason(file: Test262File, reason: unknown) {
 		return;
 	}
 
+	if (reason instanceof Error) {
+		FAILURE_CACHE[reason.message] ??= [];
+		FAILURE_CACHE[reason.message]!.push(file.path);
+	}
+
 	if (
 		!!reason &&
 		typeof reason === "object" &&

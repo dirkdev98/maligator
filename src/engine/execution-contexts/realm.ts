@@ -10,6 +10,7 @@ import { intrinsicBigInt } from "../intrinsics/bigint.ts";
 import { intrinsicBooleanPrototype } from "../intrinsics/boolean-prototype.ts";
 import { intrinsicBoolean } from "../intrinsics/boolean.ts";
 import { intrinsicFunctionPrototype } from "../intrinsics/function-prototype.ts";
+import { intrinsicFunction } from "../intrinsics/function.ts";
 import { intrinsicNumberPrototype } from "../intrinsics/number-prototype.ts";
 import { intrinsicNumber } from "../intrinsics/number.ts";
 import { intrinsicObjectPrototype } from "../intrinsics/object-prototype.ts";
@@ -68,6 +69,7 @@ export class Realm {
 			intrinsicFunctionPrototype,
 
 			intrinsicObject,
+			intrinsicFunction,
 
 			intrinsicBooleanPrototype,
 			intrinsicBoolean,
@@ -333,6 +335,17 @@ export class Realm {
 			"Array",
 			new PropertyDescriptor({
 				value: this.intrinsics["%Array%"]!,
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		definePropertyOrThrow(
+			global,
+			"Function",
+			new PropertyDescriptor({
+				value: this.intrinsics["%Function%"]!,
 				writable: false,
 				enumerable: false,
 				configurable: true,

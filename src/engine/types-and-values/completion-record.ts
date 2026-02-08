@@ -1,3 +1,4 @@
+import { EvaluateError } from "../runtime-semantics/index.ts";
 import type { EngineValue } from "./data-types.ts";
 
 type CompletionType = "normal" | "break" | "continue" | "return";
@@ -47,6 +48,12 @@ export function throwCompletion(err: Error | EngineValue): CompletionRecord<neve
  */
 export function unwrapCompletion<T>(completion: CompletionRecord<T>): T {
 	if (completion.type === "throw") {
+		if (completion.error instanceof EvaluateError) {
+			throw new Error(`Can't unwrap completion: ${completion.error.error.message}`, {
+				cause: completion.error,
+			});
+		}
+
 		throw new Error("Can't unwrap completion...", {
 			cause: completion.error,
 		});

@@ -124,6 +124,11 @@ export type ObjectInternalSlots = {
 	ClassFieldInitializerName: string | EngineValue<"symbol"> | null;
 	IsClassConstructor: boolean;
 
+	// Bound function exotic
+	BoundTargetFunction: EngineValue<"object">;
+	BoundThis: EngineValue;
+	BoundArguments: Array<EngineValue>;
+
 	// Shared between object and function
 	Prototype: EngineValue<"object" | "null">;
 	Extensible: boolean;
