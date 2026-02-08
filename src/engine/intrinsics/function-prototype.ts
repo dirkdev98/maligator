@@ -36,6 +36,18 @@ export function intrinsicFunctionPrototype(realm: Realm) {
 	realm.intrinsics["%Function.prototype%"] = functionPrototype;
 
 	return () => {
+		// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-function.prototype.constructor
+		definePropertyOrThrow(
+			functionPrototype,
+			"constructor",
+			new PropertyDescriptor({
+				value: realm.intrinsics["%Function%"]!,
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
 		// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-function.prototype.apply
 		definePropertyOrThrow(
 			functionPrototype,

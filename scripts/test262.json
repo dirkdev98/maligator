@@ -1,9 +1,9 @@
 {
   "sha": "f2d59ea6e4b2f6f87de9f0d18a41d73782b6a9bc",
   "summary": {
-    "FAILED": 30818,
+    "FAILED": 30816,
     "SKIPPED": 19777,
-    "PASSED": 1981,
+    "PASSED": 1983,
     "STRICT_FAILED": 306
   },
   "results": {
@@ -48359,12 +48359,12 @@
     "test/built-ins/AsyncGeneratorFunction/prototype/prop-desc.js": "FAILED",
     "test/built-ins/AsyncGeneratorFunction/prototype/prototype.js": "FAILED",
     "test/built-ins/AsyncFunction/AsyncFunction-construct.js": "FAILED",
-    "test/built-ins/AsyncFunction/AsyncFunction-is-extensible.js": "FAILED",
+    "test/built-ins/AsyncFunction/AsyncFunction-is-extensible.js": "PASSED",
     "test/built-ins/AsyncFunction/AsyncFunction-is-subclass.js": "FAILED",
     "test/built-ins/AsyncFunction/AsyncFunction-length.js": "FAILED",
     "test/built-ins/AsyncFunction/AsyncFunction-name.js": "FAILED",
     "test/built-ins/AsyncFunction/AsyncFunction-prototype.js": "FAILED",
-    "test/built-ins/AsyncFunction/AsyncFunction.js": "FAILED",
+    "test/built-ins/AsyncFunction/AsyncFunction.js": "PASSED",
     "test/built-ins/AsyncFunction/AsyncFunctionPrototype-is-extensible.js": "FAILED",
     "test/built-ins/AsyncFunction/AsyncFunctionPrototype-is-not-callable.js": "FAILED",
     "test/built-ins/AsyncFunction/AsyncFunctionPrototype-prototype.js": "FAILED",
