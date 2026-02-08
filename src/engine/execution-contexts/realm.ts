@@ -54,15 +54,14 @@ export class Realm {
 		pushNewExecutionContext(newContext);
 
 		const globalObject = ordinaryObjectCreate(
-			realm.intrinsics["%Object.prototype%"]?.asObject() ?? EngineValue.null(),
+			realm.intrinsics["%Object.prototype%"]!.asObject(),
 		);
 		const thisValue = globalObject;
 		realm.globalObject = globalObject;
 		realm.globalEnv = newGlobalEnvironment(globalObject, thisValue);
 
-		// TODO: Is this true?
-		newContext.lexicalEnvironment = realm.globalEnv.objectRecord;
-		newContext.variableEnvironment = realm.globalEnv.declarativeRecord;
+		newContext.lexicalEnvironment = realm.globalEnv;
+		newContext.variableEnvironment = realm.globalEnv;
 
 		realm.setDefaultGlobalBindings();
 	}

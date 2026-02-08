@@ -22,7 +22,10 @@ export const VariableDeclaration: Evaluator<"VariableDeclaration"> = {
 
 						const env = getCurrentExecutionContext().lexicalEnvironment!;
 
-						if (kind === "let" || kind === "var") {
+						if (
+							kind === "let" ||
+							(kind === "var" && !env.hasBinding(declaration.id.name))
+						) {
 							env.createMutableBinding(declaration.id.name, true);
 						} else if (kind === "const") {
 							env.createMutableBinding(declaration.id.name, false);
