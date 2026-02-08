@@ -1,14 +1,21 @@
-import { ArrayExoticMethods } from "../abstract-operations/array-exotic.ts";
+import {
+	ArrayExoticMethods,
+	arraySpeciesCreate,
+} from "../abstract-operations/array-exotic.ts";
 import { createBuiltinFunction } from "../abstract-operations/built-in-function-object.ts";
 import {
+	call,
+	createDataPropertyOrThrow,
 	definePropertyOrThrow,
 	get,
+	hasProperty,
 	lengthOfArrayLike,
 	makeBasicObject,
 	set,
 } from "../abstract-operations/object-operations.ts";
 import { OrdinaryObjectInternalMethods } from "../abstract-operations/ordinary-object.ts";
 import { PropertyDescriptor } from "../abstract-operations/property-map.ts";
+import { isCallable } from "../abstract-operations/testing-and-comparison.ts";
 import { toObject, toString } from "../abstract-operations/type-conversion.ts";
 import type { Realm } from "../execution-contexts/realm.ts";
 import {
@@ -55,6 +62,72 @@ export function intrinsicArrayPrototype(realm: Realm) {
 			"constructor",
 			new PropertyDescriptor({
 				value: realm.intrinsics["%Array%"]!,
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		// https://tc39.es/ecma262/multipage/indexed-collections.html#sec-array.prototype.foreach
+		definePropertyOrThrow(
+			arrayPrototype,
+			"forEach",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, argumentsList, _newTarget) => {
+						const o = toObject(thisArgument!);
+						if (o.type === "throw") {
+							return o;
+						}
+
+						const len = lengthOfArrayLike(o.value);
+						if (len.type === "throw") {
+							return len;
+						}
+
+						const callbackfn = argumentsList[0]!;
+						const thisArg = argumentsList[1] ?? EngineValue.undefined();
+
+						if (!isCallable(callbackfn).data.value) {
+							return throwCompletion(
+								new TypeError("Array.prototype.map: callbackfn is not callable"),
+							);
+						}
+
+						let k = 0;
+
+						while (k < len.value) {
+							const kPresent = hasProperty(o.value, `${k}`);
+							if (kPresent.type === "throw") {
+								return kPresent;
+							}
+
+							if (kPresent.value.data.value) {
+								const kValue = get(o.value, `${k}`);
+								if (kValue.type === "throw") {
+									return kValue;
+								}
+
+								const callResult = call(callbackfn.asObject(), thisArg, [
+									kValue.value,
+									EngineValue.number(k),
+									o.value,
+								]);
+								if (callResult.type === "throw") {
+									return callResult;
+								}
+							}
+
+							k++;
+						}
+
+						return normalCompletion(EngineValue.undefined());
+					},
+					2,
+					"forEach",
+					[],
+					realm,
+				),
 				writable: true,
 				enumerable: false,
 				configurable: true,
@@ -116,6 +189,74 @@ export function intrinsicArrayPrototype(realm: Realm) {
 					},
 					1,
 					"join",
+					[],
+					realm,
+				),
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		// https://tc39.es/ecma262/multipage/indexed-collections.html#sec-array.prototype.map
+		definePropertyOrThrow(
+			arrayPrototype,
+			"map",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, argumentsList, _newTarget) => {
+						const o = toObject(thisArgument!);
+						if (o.type === "throw") {
+							return o;
+						}
+
+						const len = lengthOfArrayLike(o.value);
+						if (len.type === "throw") {
+							return len;
+						}
+
+						const callbackfn = argumentsList[0]!;
+						const thisArg = argumentsList[1] ?? EngineValue.undefined();
+
+						if (!isCallable(callbackfn).data.value) {
+							return throwCompletion(
+								new TypeError("Array.prototype.map: callbackfn is not callable"),
+							);
+						}
+
+						const A = arraySpeciesCreate(o.value, len.value);
+						let k = 0;
+
+						while (k < len.value) {
+							const kPresent = hasProperty(o.value, `${k}`);
+							if (kPresent.type === "throw") {
+								return kPresent;
+							}
+							if (kPresent.value.data.value) {
+								const kValue = get(o.value, `${k}`);
+								if (kValue.type === "throw") {
+									return kValue;
+								}
+
+								const mappedValue = call(callbackfn.asObject(), thisArg, [
+									kValue.value,
+									EngineValue.number(k),
+									o.value,
+								]);
+								createDataPropertyOrThrow(
+									A.value!,
+									`${k}`,
+									mappedValue.value ?? EngineValue.undefined(),
+								);
+							}
+
+							k++;
+						}
+
+						return A;
+					},
+					2,
+					"map",
 					[],
 					realm,
 				),

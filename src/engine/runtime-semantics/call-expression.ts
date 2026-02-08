@@ -41,6 +41,7 @@ export function evaluateCall(
 		}
 	}
 
+	// TODO: SpreadElement
 	const funcArgs = args.map((arg) => getValue(evaluate(arg).value));
 
 	if (!func.isObject() || !isCallable(func)) {

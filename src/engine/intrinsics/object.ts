@@ -3,6 +3,7 @@ import { makeClassConstructor } from "../abstract-operations/function-objects.ts
 import {
 	createArrayFromList,
 	definePropertyOrThrow,
+	get,
 } from "../abstract-operations/object-operations.ts";
 import {
 	ordinaryCreateFromConstructor,
@@ -53,6 +54,44 @@ export function intrinsicObject(realm: Realm) {
 			writable: false,
 			enumerable: false,
 			configurable: false,
+		}),
+	);
+
+	// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-object.create
+	definePropertyOrThrow(
+		objectConstructor,
+		"create",
+		new PropertyDescriptor({
+			value: createBuiltinFunction(
+				(_thisArgument, argumentsList) => {
+					const O = argumentsList[0]!;
+					const properties = argumentsList[1]!;
+
+					if (!O || !O.isObject() || !O.isNull()) {
+						return throwCompletion(
+							new TypeError("First argument to Object.create must be an object."),
+						);
+					}
+
+					const obj = ordinaryObjectCreate(O);
+
+					if (properties) {
+						const res = objectDefineProperties(obj, properties);
+						if (res.type === "throw") {
+							return res;
+						}
+					}
+
+					return normalCompletion(obj);
+				},
+				2,
+				"create",
+				[],
+				realm,
+			),
+			writable: true,
+			enumerable: false,
+			configurable: true,
 		}),
 	);
 
@@ -193,6 +232,75 @@ export function intrinsicObject(realm: Realm) {
 			configurable: true,
 		}),
 	);
+
+	// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-object.getprototypeof
+	definePropertyOrThrow(
+		objectConstructor,
+		"getPrototypeOf",
+		new PropertyDescriptor({
+			value: createBuiltinFunction(
+				(_thisArgument, argumentsList) => {
+					const obj = toObject(argumentsList[0]!);
+					if (obj.type === "throw") {
+						return obj;
+					}
+
+					return obj.value.objectGetInternalSlot("GetPrototypeOf")(obj.value);
+				},
+				1,
+				"getPrototypeOf",
+				[],
+				realm,
+			),
+			writable: true,
+			enumerable: false,
+			configurable: true,
+		}),
+	);
+}
+
+// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-objectdefineproperties
+function objectDefineProperties(obj: EngineValue<"object">, properties: EngineValue) {
+	const props = toObject(properties);
+	if (props.type === "throw") {
+		return props;
+	}
+	const keys = props.value.objectGetInternalSlot("OwnPropertyKeys")(props.value);
+	if (keys.type === "throw") {
+		return keys;
+	}
+
+	const descriptors = [];
+	for (const nextKey of keys.value) {
+		const propDesc = props.value.objectGetInternalSlot("GetOwnProperty")(
+			props.value,
+			nextKey,
+		);
+		if (propDesc.type === "throw") {
+			return propDesc;
+		}
+
+		if (propDesc.value instanceof PropertyDescriptor && propDesc.value.enumerable) {
+			const descObj = get(props.value, nextKey);
+			if (descObj.type === "throw") {
+				return descObj;
+			}
+			const desc = PropertyDescriptor.toPropertyDescriptor(descObj.value);
+			if (desc.type === "throw") {
+				return desc;
+			}
+			descriptors.push({ key: nextKey, descriptor: desc.value });
+		}
+	}
+
+	for (const { key, descriptor } of descriptors) {
+		const res = definePropertyOrThrow(obj, key, descriptor);
+		if (res.type === "throw") {
+			return res;
+		}
+	}
+
+	return normalCompletion(obj);
 }
 
 // https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-getownpropertykeys
