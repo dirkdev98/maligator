@@ -3,6 +3,8 @@ import { definePropertyOrThrow } from "../abstract-operations/object-operations.
 import { ordinaryObjectCreate } from "../abstract-operations/ordinary-object.ts";
 import { PropertyDescriptor } from "../abstract-operations/property-map.ts";
 import { toInt32, toNumber, toString } from "../abstract-operations/type-conversion.ts";
+import { intrinsicArrayPrototype } from "../intrinsics/array-prototype.ts";
+import { intrinsicArray } from "../intrinsics/array.ts";
 import { intrinsicBigIntPrototype } from "../intrinsics/bigint-prototype.ts";
 import { intrinsicBigInt } from "../intrinsics/bigint.ts";
 import { intrinsicBooleanPrototype } from "../intrinsics/boolean-prototype.ts";
@@ -81,6 +83,9 @@ export class Realm {
 
 			intrinsicStringPrototype,
 			intrinsicString,
+
+			intrinsicArrayPrototype,
+			intrinsicArray,
 		];
 
 		const callbacks = [];
@@ -317,6 +322,17 @@ export class Realm {
 			"String",
 			new PropertyDescriptor({
 				value: this.intrinsics["%String%"]!,
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		definePropertyOrThrow(
+			global,
+			"Array",
+			new PropertyDescriptor({
+				value: this.intrinsics["%Array%"]!,
 				writable: false,
 				enumerable: false,
 				configurable: true,

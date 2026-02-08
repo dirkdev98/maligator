@@ -104,3 +104,7 @@ export function resolveThisBinding() {
 	const env = getThisEnvironment();
 	return env.getThisBinding();
 }
+
+export function getActiveFunctionObject() {
+	return getCurrentExecutionContext().function!;
+}

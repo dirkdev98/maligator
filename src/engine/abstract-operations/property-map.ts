@@ -123,6 +123,15 @@ export function unwrapPropertyKey(value: unknown): PropertyKey {
 
 export class PropertyMap {
 	private properties: Map<PropertyKey, PropertyDescriptor> = new Map();
+	private arrayIndexProperties: Array<string> = [];
+
+	static isArrayIndexProperty(key: PropertyKey): key is string {
+		return (
+			typeof key === "string" &&
+			parseInt(key, 10).toString() === key &&
+			parseInt(key, 10) < 2 ** 32 - 1
+		);
+	}
 
 	has(key: PropertyKey) {
 		return this.properties.has(key);
@@ -134,13 +143,28 @@ export class PropertyMap {
 
 	set(key: PropertyKey, value: PropertyDescriptor) {
 		this.properties.set(key, value);
+
+		if (PropertyMap.isArrayIndexProperty(key)) {
+			this.arrayIndexProperties.push(key);
+		}
 	}
 
 	delete(key: PropertyKey) {
 		this.properties.delete(key);
+
+		if (
+			PropertyMap.isArrayIndexProperty(key) &&
+			this.arrayIndexProperties.includes(key)
+		) {
+			this.arrayIndexProperties.splice(this.arrayIndexProperties.indexOf(key), 1);
+		}
 	}
 
 	ownPropertyKeys() {
 		return [...this.properties.keys()];
+	}
+
+	arrayIndexPropertyKeys() {
+		return [...this.arrayIndexProperties];
 	}
 }

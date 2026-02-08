@@ -21,9 +21,14 @@ if (!cacheContext.files.length) {
 	test262PersistCache(cacheContext);
 }
 
+const random = process.argv.includes("--random");
 let i = 0;
 
 for (const file of cacheContext.files) {
+	if (random && Math.random() < 0.95) {
+		continue;
+	}
+
 	i++;
 	test262RunFile(file);
 

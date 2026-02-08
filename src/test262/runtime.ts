@@ -275,6 +275,7 @@ export function getFailuresWithSamples() {
 		uniqueFailureReasons,
 		failures: sortedFailures.slice(0, 10).map(([reason, paths]) => ({
 			reason,
+			count: paths.length,
 			paths: Array.from({ length: 10 }).map(
 				() => paths[Math.floor(Math.random() * paths.length)],
 			),

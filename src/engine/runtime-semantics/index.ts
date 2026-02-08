@@ -2,6 +2,7 @@ import type { ESTree } from "meriyah";
 import type { CompletionRecord } from "../types-and-values/completion-record.ts";
 import type { EngineValue } from "../types-and-values/data-types.ts";
 import type { ReferenceRecord } from "../types-and-values/reference-record.ts";
+import { ArrayExpression } from "./array-expression.ts";
 import { AssignmentExpression } from "./assignment-expression.ts";
 import { BinaryExpression } from "./binary-expression.ts";
 import { BlockStatement } from "./block-statement.ts";
@@ -41,6 +42,7 @@ export const evaluators: Partial<{
 	[K in ESTree.Node["type"]]: Evaluator<K>;
 }> = {
 	// Expressions
+	ArrayExpression,
 	BinaryExpression,
 	CallExpression,
 	ConditionalExpression,
