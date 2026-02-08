@@ -11,7 +11,10 @@ import {
 import { Realm } from "../engine/execution-contexts/realm.ts";
 import { parseScript } from "../engine/parser/script.ts";
 import { evaluate, EvaluateError } from "../engine/runtime-semantics/index.ts";
-import { normalCompletion } from "../engine/types-and-values/completion-record.ts";
+import {
+	CompletionUnwrapError,
+	normalCompletion,
+} from "../engine/types-and-values/completion-record.ts";
 import { EngineValue } from "../engine/types-and-values/data-types.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import type { Test262File } from "./types.ts";
@@ -225,6 +228,11 @@ function normalizeAndCountFailureReason(file: Test262File, reason: unknown) {
 	if (reason instanceof EvaluateError) {
 		FAILURE_CACHE[reason.error.message] ??= [];
 		FAILURE_CACHE[reason.error.message]!.push(file.path);
+		return;
+	}
+
+	if (reason instanceof CompletionUnwrapError) {
+		normalizeAndCountFailureReason(file, reason.completion);
 		return;
 	}
 

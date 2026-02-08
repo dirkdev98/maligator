@@ -440,13 +440,9 @@ export class EngineValue<T extends ValueType = ValueType> {
 	}
 
 	// https://tc39.es/ecma262/#sec-numeric-types-number-bitwiseNOT
-	numberBitwiseNot(this: EngineValue<"number">) {
-		const numberValue = toInt32(this);
-		if (numberValue.type === "throw") {
-			throw numberValue.error;
-		}
-
-		return EngineValue.number(~numberValue.value.data.value);
+	numberBitwiseNot(this: EngineValue<"number">): EngineValue<"number"> {
+		const numberValue = toInt32(this).unwrap();
+		return EngineValue.number(~numberValue.data.value);
 	}
 
 	// https://tc39.es/ecma262/#sec-numeric-types-number-exponentiate
@@ -733,19 +729,12 @@ export class EngineValue<T extends ValueType = ValueType> {
 
 	// https://tc39.es/ecma262/#sec-numeric-types-number-leftShift
 	numberLeftShift(this: EngineValue<"number">, other: EngineValue<"number">) {
-		const lNumCompletion = toInt32(this);
-		if (lNumCompletion.type === "throw") {
-			throw lNumCompletion.error;
-		}
+		const lNumCompletion = toInt32(this).unwrap();
+		const rNumCompletion = toUint32(other).unwrap();
 
-		const rNumCompletion = toUint32(other);
-		if (rNumCompletion.type === "throw") {
-			throw rNumCompletion.error;
-		}
+		const shiftCount = rNumCompletion.data.value % 32;
 
-		const shiftCount = rNumCompletion.value.data.value % 32;
-
-		return EngineValue.number(lNumCompletion.value.data.value << shiftCount);
+		return EngineValue.number(lNumCompletion.data.value << shiftCount);
 	}
 
 	// https://tc39.es/ecma262/#sec-numeric-types-number-signedRightShift
@@ -753,19 +742,11 @@ export class EngineValue<T extends ValueType = ValueType> {
 		this: EngineValue<"number">,
 		other: EngineValue<"number">,
 	): EngineValue<"number"> {
-		const lNumCompletion = toInt32(this);
-		if (lNumCompletion.type === "throw") {
-			throw lNumCompletion.error;
-		}
+		const lNumCompletion = toInt32(this).unwrap();
+		const rNumCompletion = toUint32(other).unwrap();
+		const shiftCount = rNumCompletion.data.value % 32;
 
-		const rNumCompletion = toUint32(other);
-		if (rNumCompletion.type === "throw") {
-			throw rNumCompletion.error;
-		}
-
-		const shiftCount = rNumCompletion.value.data.value % 32;
-
-		return EngineValue.number(lNumCompletion.value.data.value >> shiftCount);
+		return EngineValue.number(lNumCompletion.data.value >> shiftCount);
 	}
 
 	// https://tc39.es/ecma262/#sec-numeric-types-number-unsignedRightShift
@@ -773,19 +754,12 @@ export class EngineValue<T extends ValueType = ValueType> {
 		this: EngineValue<"number">,
 		other: EngineValue<"number">,
 	): EngineValue<"number"> {
-		const lNumCompletion = toUint32(this);
-		if (lNumCompletion.type === "throw") {
-			throw lNumCompletion.error;
-		}
+		const lNumCompletion = toUint32(this).unwrap();
+		const rNumCompletion = toUint32(other).unwrap();
 
-		const rNumCompletion = toUint32(other);
-		if (rNumCompletion.type === "throw") {
-			throw rNumCompletion.error;
-		}
+		const shiftCount = rNumCompletion.data.value % 32;
 
-		const shiftCount = rNumCompletion.value.data.value % 32;
-
-		return EngineValue.number(lNumCompletion.value.data.value >>> shiftCount);
+		return EngineValue.number(lNumCompletion.data.value >>> shiftCount);
 	}
 
 	// https://tc39.es/ecma262/#sec-numeric-types-number-lessThan
@@ -911,18 +885,12 @@ export class EngineValue<T extends ValueType = ValueType> {
 		this: EngineValue<"number">,
 		op: "&" | "^" | "|",
 		other: EngineValue<"number">,
-	) {
-		const lNumCompletion = toInt32(this);
-		if (lNumCompletion.type === "throw") {
-			throw lNumCompletion.error;
-		}
-		const rNumCompletion = toInt32(other);
-		if (rNumCompletion.type === "throw") {
-			throw rNumCompletion.error;
-		}
+	): EngineValue<"number"> {
+		const lNumCompletion = toInt32(this).unwrap();
+		const rNumCompletion = toInt32(other).unwrap();
 
-		const lNum = lNumCompletion.value.data.value;
-		const rNum = rNumCompletion.value.data.value;
+		const lNum = lNumCompletion.data.value;
+		const rNum = rNumCompletion.data.value;
 
 		// Taking a wee shortcut here;
 

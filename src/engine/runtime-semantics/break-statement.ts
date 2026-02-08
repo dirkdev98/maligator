@@ -1,3 +1,4 @@
+import { unwrapCompletion } from "../types-and-values/completion-record.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
 import type { Evaluator } from "./index.ts";
 
@@ -8,6 +9,9 @@ export const BreakStatement: Evaluator<"BreakStatement"> = {
 			type: "break",
 			value: EngineValue.undefined(),
 			target: node.label?.name,
+			unwrap() {
+				return unwrapCompletion(this);
+			},
 		};
 	},
 };

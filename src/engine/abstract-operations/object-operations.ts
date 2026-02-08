@@ -58,12 +58,9 @@ export function set(
 	V: EngineValue,
 	Throw: boolean = false,
 ): CompletionRecord<typeof UNUSED> {
-	const success = O.objectGetInternalSlot("Set")(O, P, V, O);
-	if (success.type === "throw") {
-		return success;
-	}
+	const success = O.objectGetInternalSlot("Set")(O, P, V, O).unwrap();
 
-	if (!success.value.data.value && Throw) {
+	if (!success.data.value && Throw) {
 		return throwCompletion(new TypeError("Cannot 'set' property."));
 	}
 
@@ -118,10 +115,7 @@ export function createNonEnumerableDataPropertyOrThrow(
 		configurable: true,
 	});
 
-	const result = definePropertyOrThrow(O, P, desc);
-	if (result.type === "throw") {
-		throw result.error;
-	}
+	definePropertyOrThrow(O, P, desc).unwrap();
 
 	return UNUSED;
 }
@@ -227,25 +221,19 @@ export function construct(
 
 // https://tc39.es/ecma262/multipage/abstract-operations.html#sec-createarrayfromlist
 export function createArrayFromList(elements: Array<EngineValue>) {
-	const arr = arrayCreate(0);
-	if (arr.type === "throw") {
-		return arr;
-	}
+	const arr = arrayCreate(0).unwrap();
 
 	for (let i = 0; i < elements.length; i++) {
-		createDataPropertyOrThrow(arr.value, `${i}`, elements[i]!);
+		createDataPropertyOrThrow(arr, `${i}`, elements[i]!);
 	}
 
-	return arr;
+	return normalCompletion(arr);
 }
 
 // https://tc39.es/ecma262/multipage/abstract-operations.html#sec-lengthofarraylike
 export function lengthOfArrayLike(obj: EngineValue<"object">) {
-	const len = get(obj, "length");
-	if (len.type === "throw") {
-		return len;
-	}
-	return toLength(len.value);
+	const len = get(obj, "length").unwrap();
+	return toLength(len);
 }
 
 // https://tc39.es/ecma262/multipage/abstract-operations.html#sec-createlistfromarraylike
@@ -259,14 +247,11 @@ export function createListFromArrayLike(
 		return throwCompletion(new TypeError("createListFromArrayLike called on non-object"));
 	}
 
-	const len = lengthOfArrayLike(obj);
-	if (len.type === "throw") {
-		return len;
-	}
+	const len = lengthOfArrayLike(obj).unwrap();
 
 	const list: Array<EngineValue> = [];
 	let idx = 0;
-	while (idx < len.value) {
+	while (idx < len) {
 		const next = get(obj, `${idx}`);
 		if (next.type === "throw") {
 			return next;

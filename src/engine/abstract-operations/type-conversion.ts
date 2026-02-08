@@ -195,12 +195,9 @@ export function toIntegerOrInfinity(argument: EngineValue): CompletionRecord<num
 
 // https://tc39.es/ecma262/#sec-toint32
 export function toInt32(argument: EngineValue): CompletionRecord<EngineValue<"number">> {
-	const numberValue = toNumber(argument);
-	if (numberValue.type === "throw") {
-		return numberValue;
-	}
+	const numberValue = toNumber(argument).unwrap();
 
-	const number = numberValue.value.data.value;
+	const number = numberValue.data.value;
 
 	if (!isFinite(number) || EngineValueUtils.isPositiveOrNegativeZero(number)) {
 		return normalCompletion(EngineValue.number(0));
@@ -544,18 +541,11 @@ export function canonicalNumericIndexString(
 		return EngineValue.number(-0);
 	}
 
-	const n = toNumber(argument);
-	if (n.type === "throw") {
-		throw n.error;
-	}
+	const n = toNumber(argument).unwrap();
 
-	const stringifiedArg = toString(n.value);
-	if (stringifiedArg.type === "throw") {
-		throw stringifiedArg.error;
-	}
-
-	if (stringifiedArg.value.data.value === argument.data.value) {
-		return n.value;
+	const stringifiedArg = toString(n).unwrap();
+	if (stringifiedArg.data.value === argument.data.value) {
+		return n;
 	}
 
 	return EngineValue.undefined();

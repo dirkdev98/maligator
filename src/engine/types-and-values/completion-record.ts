@@ -1,7 +1,6 @@
 import { construct } from "../abstract-operations/object-operations.ts";
 import { getCurrentRealm } from "../execution-contexts/execution-context.ts";
 import { NATIVE_ERROR } from "../intrinsics/navite-error.ts";
-import { EvaluateError } from "../runtime-semantics/index.ts";
 import { EngineValue } from "./data-types.ts";
 
 type CompletionType = "normal" | "break" | "continue" | "return";
@@ -13,11 +12,13 @@ export type CompletionRecord<T> =
 			value: T;
 			error?: never;
 			target?: string;
+			unwrap(): T;
 	  }
 	| {
 			type: "throw";
 			value?: never;
 			error: Error | EngineValue;
+			unwrap(): never;
 	  };
 
 // https://tc39.es/ecma262/#sec-normalcompletion
@@ -25,6 +26,9 @@ export function normalCompletion<T>(value: T): CompletionRecord<T> {
 	return {
 		type: "normal",
 		value,
+		unwrap() {
+			return unwrapCompletion(this);
+		},
 	};
 }
 
@@ -33,6 +37,9 @@ export function returnCompletion<T>(value: T): CompletionRecord<T> {
 	return {
 		type: "return",
 		value,
+		unwrap() {
+			return unwrapCompletion(this);
+		},
 	};
 }
 
@@ -53,6 +60,9 @@ export function throwCompletion(err: Error | EngineValue): CompletionRecord<neve
 			return {
 				type: "throw",
 				error: O.value,
+				unwrap() {
+					throw new CompletionUnwrapError(this);
+				},
 			};
 		}
 	}
@@ -61,6 +71,9 @@ export function throwCompletion(err: Error | EngineValue): CompletionRecord<neve
 	return {
 		type: "throw",
 		error: err,
+		unwrap() {
+			throw new CompletionUnwrapError(this);
+		},
 	};
 }
 
@@ -69,15 +82,7 @@ export function throwCompletion(err: Error | EngineValue): CompletionRecord<neve
  */
 export function unwrapCompletion<T>(completion: CompletionRecord<T>): T {
 	if (completion.type === "throw") {
-		if (completion.error instanceof EvaluateError) {
-			throw new Error(`Can't unwrap completion: ${completion.error.error.message}`, {
-				cause: completion.error,
-			});
-		}
-
-		throw new Error("Can't unwrap completion...", {
-			cause: completion.error,
-		});
+		throw new CompletionUnwrapError(completion);
 	}
 
 	return completion.value;
@@ -98,4 +103,16 @@ export function updateEmptyCompletion<T>(
 	}
 
 	return completion;
+}
+
+type ThrowCompletion = Extract<CompletionRecord<unknown>, { type: "throw" }>;
+
+export class CompletionUnwrapError extends Error {
+	completion: ThrowCompletion;
+
+	constructor(completion: ThrowCompletion) {
+		super(`Can't unwrap completion`, { cause: completion.error });
+
+		this.completion = completion;
+	}
 }

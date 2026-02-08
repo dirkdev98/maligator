@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import { CompletionUnwrapError } from "../types-and-values/completion-record.ts";
 import type { CompletionRecord } from "../types-and-values/completion-record.ts";
 import type { EngineValue } from "../types-and-values/data-types.ts";
 import type { ReferenceRecord } from "../types-and-values/reference-record.ts";
@@ -94,6 +95,10 @@ export function evaluate(node: ESTree.Node) {
 	} catch (e) {
 		if (e instanceof EvaluateError) {
 			throw e;
+		}
+
+		if (e instanceof CompletionUnwrapError) {
+			return e.completion;
 		}
 
 		// eslint-disable-next-line @typescript-eslint/only-throw-error

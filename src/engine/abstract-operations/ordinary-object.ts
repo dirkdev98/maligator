@@ -501,13 +501,8 @@ export function ordinaryCreateFromConstructor(
 	intrinsicDefaultProto: string,
 	internalSlotsList: Array<string> = [],
 ) {
-	const proto = getPrototypeFromConstructor(constructor, intrinsicDefaultProto);
-
-	if (proto.type === "throw") {
-		throw proto.error;
-	}
-
-	return ordinaryObjectCreate(proto.value, internalSlotsList);
+	const proto = getPrototypeFromConstructor(constructor, intrinsicDefaultProto).unwrap();
+	return ordinaryObjectCreate(proto, internalSlotsList);
 }
 
 // https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-getprototypefromconstructor
