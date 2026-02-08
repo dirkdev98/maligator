@@ -1,5 +1,15 @@
 import { isNil } from "../../utils.ts";
+import { getCurrentRealm } from "../execution-contexts/execution-context.ts";
+import {
+	normalCompletion,
+	throwCompletion,
+	unwrapCompletion,
+} from "../types-and-values/completion-record.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
+import { createDataPropertyOrThrow, get, hasProperty } from "./object-operations.ts";
+import { ordinaryObjectCreate } from "./ordinary-object.ts";
+import { isCallable } from "./testing-and-comparison.ts";
+import { toBoolean } from "./type-conversion.ts";
 
 // https://tc39.es/ecma262/#sec-property-attributes
 export class PropertyDescriptor {
@@ -84,9 +94,108 @@ export class PropertyDescriptor {
 		this.configurable ??= false;
 	}
 
-	// TODO: https://tc39.es/ecma262/#sec-frompropertydescriptor
+	// https://tc39.es/ecma262/multipage/ecmascript-data-types-and-values.html#sec-frompropertydescriptor
+	static fromPropertyDescriptor(desc?: PropertyDescriptor | EngineValue<"undefined">) {
+		if (isNil(desc) || (desc instanceof EngineValue && desc.isUndefined())) {
+			return EngineValue.undefined();
+		}
 
-	// TODO: https://tc39.es/ecma262/#sec-topropertydescriptor
+		const obj = ordinaryObjectCreate(
+			getCurrentRealm().intrinsics["%Object.prototype%"]!.asObject(),
+		);
+
+		if (!isNil(desc.value)) {
+			createDataPropertyOrThrow(obj, "value", desc.value);
+		}
+
+		if (!isNil(desc.writable)) {
+			createDataPropertyOrThrow(obj, "writable", EngineValue.boolean(desc.writable));
+		}
+
+		if (!isNil(desc.get)) {
+			createDataPropertyOrThrow(obj, "get", desc.get);
+		}
+
+		if (!isNil(desc.set)) {
+			createDataPropertyOrThrow(obj, "set", desc.set);
+		}
+
+		if (!isNil(desc.enumerable)) {
+			createDataPropertyOrThrow(obj, "enumerable", EngineValue.boolean(desc.enumerable));
+		}
+
+		if (!isNil(desc.configurable)) {
+			createDataPropertyOrThrow(
+				obj,
+				"configurable",
+				EngineValue.boolean(desc.configurable),
+			);
+		}
+
+		return obj;
+	}
+
+	// https://tc39.es/ecma262/multipage/ecmascript-data-types-and-values.html#sec-topropertydescriptor
+	static toPropertyDescriptor(obj: EngineValue) {
+		if (!obj.isObject()) {
+			return throwCompletion(new TypeError("PropertyDescriptor input is not an object."));
+		}
+
+		const desc = new PropertyDescriptor();
+
+		const hasEnumerable = unwrapCompletion(hasProperty(obj, "enumerable"));
+		if (hasEnumerable.data.value) {
+			const enumerable = toBoolean(unwrapCompletion(get(obj, "enumerable")));
+			desc.enumerable = enumerable.data.value;
+		}
+
+		const hasConfigurable = unwrapCompletion(hasProperty(obj, "configurable"));
+		if (hasConfigurable.data.value) {
+			const configurable = toBoolean(unwrapCompletion(get(obj, "configurable")));
+			desc.configurable = configurable.data.value;
+		}
+
+		const hasValue = unwrapCompletion(hasProperty(obj, "value"));
+		if (hasValue.data.value) {
+			const value = unwrapCompletion(get(obj, "value"));
+			desc.value = value;
+		}
+
+		const hasWritable = unwrapCompletion(hasProperty(obj, "writable"));
+		if (hasWritable.data.value) {
+			const writable = toBoolean(unwrapCompletion(get(obj, "writable")));
+			desc.writable = writable.data.value;
+		}
+
+		const hasGet = unwrapCompletion(hasProperty(obj, "get"));
+		if (hasGet.data.value) {
+			const getter = unwrapCompletion(get(obj, "get"));
+			if (!isCallable(getter).data.value && !getter.isUndefined()) {
+				return throwCompletion(new TypeError("PropertyDescriptor get is not callable."));
+			}
+			desc.get = getter.asObject();
+		}
+
+		const hasSet = unwrapCompletion(hasProperty(obj, "set"));
+		if (hasSet.data.value) {
+			const setter = unwrapCompletion(get(obj, "set"));
+			if (!isCallable(setter).data.value && !setter.isUndefined()) {
+				return throwCompletion(new TypeError("PropertyDescriptor set is not callable."));
+			}
+			desc.set = setter.asObject();
+		}
+
+		if (
+			(desc.get !== undefined || desc.set !== undefined) &&
+			(desc.value !== undefined || desc.writable !== undefined)
+		) {
+			return throwCompletion(
+				new TypeError("PropertyDescriptor cannot have both get/set and value/writable."),
+			);
+		}
+
+		return normalCompletion(desc);
+	}
 
 	// TODO: https://tc39.es/ecma262/#sec-completepropertydescriptor
 }

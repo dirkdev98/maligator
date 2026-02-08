@@ -6,6 +6,7 @@ import {
 import type { CompletionRecord } from "../types-and-values/completion-record.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
 import type { ObjectInternalSlots } from "../types-and-values/data-types.ts";
+import { arrayCreate } from "./array-exotic.ts";
 import { isBoundFunctionExotic } from "./bound-function-exotic.ts";
 import { OrdinaryObjectInternalMethods } from "./ordinary-object.ts";
 import { PropertyDescriptor } from "./property-map.ts";
@@ -222,6 +223,20 @@ export function construct(
 	newTarget ??= F;
 
 	return F.objectGetInternalSlot("Construct")(F, argumentsList ?? [], newTarget);
+}
+
+// https://tc39.es/ecma262/multipage/abstract-operations.html#sec-createarrayfromlist
+export function createArrayFromList(elements: Array<EngineValue>) {
+	const arr = arrayCreate(0);
+	if (arr.type === "throw") {
+		return arr;
+	}
+
+	for (let i = 0; i < elements.length; i++) {
+		createDataPropertyOrThrow(arr.value, `${i}`, elements[i]!);
+	}
+
+	return arr;
 }
 
 // https://tc39.es/ecma262/multipage/abstract-operations.html#sec-getfunctionrealm
