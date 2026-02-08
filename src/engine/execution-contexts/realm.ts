@@ -14,6 +14,8 @@ import { intrinsicError } from "../intrinsics/error.ts";
 import { intrinsicFunctionPrototype } from "../intrinsics/function-prototype.ts";
 import { intrinsicFunction } from "../intrinsics/function.ts";
 import { intrinsicMath } from "../intrinsics/math.ts";
+import { intrinsicNativeErrorPrototype } from "../intrinsics/native-error-prototype.ts";
+import { intrinsicNativeError, NATIVE_ERROR } from "../intrinsics/navite-error.ts";
 import { intrinsicNumberPrototype } from "../intrinsics/number-prototype.ts";
 import { intrinsicNumber } from "../intrinsics/number.ts";
 import { intrinsicObjectPrototype } from "../intrinsics/object-prototype.ts";
@@ -94,6 +96,9 @@ export class Realm {
 
 			intrinsicErrorPrototype,
 			intrinsicError,
+
+			intrinsicNativeErrorPrototype,
+			intrinsicNativeError,
 
 			intrinsicMath,
 		];
@@ -370,6 +375,19 @@ export class Realm {
 				configurable: true,
 			}),
 		);
+
+		for (const name of NATIVE_ERROR) {
+			definePropertyOrThrow(
+				global,
+				name,
+				new PropertyDescriptor({
+					value: this.intrinsics[`%${name}%`]!,
+					writable: false,
+					enumerable: false,
+					configurable: true,
+				}),
+			);
+		}
 
 		definePropertyOrThrow(
 			global,

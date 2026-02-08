@@ -86,7 +86,7 @@ export function isArrayExoticObject(obj: EngineValue<"object">): boolean {
 
 // https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-arraycreate
 export function arrayCreate(length: number, proto?: EngineValue<"object">) {
-	if (length > 2 ** 32 - 1) {
+	if (length > Math.pow(2, 32) - 1) {
 		return throwCompletion(
 			new RangeError("Array length must be a finite integer <= 2^32 - 1."),
 		);

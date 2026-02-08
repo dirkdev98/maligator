@@ -225,6 +225,10 @@ export function intrinsicArrayPrototype(realm: Realm) {
 						}
 
 						const A = arraySpeciesCreate(o.value, len.value);
+						if (A.type === "throw") {
+							return A;
+						}
+
 						let k = 0;
 
 						while (k < len.value) {
@@ -244,7 +248,7 @@ export function intrinsicArrayPrototype(realm: Realm) {
 									o.value,
 								]);
 								createDataPropertyOrThrow(
-									A.value!,
+									A.value,
 									`${k}`,
 									mappedValue.value ?? EngineValue.undefined(),
 								);
