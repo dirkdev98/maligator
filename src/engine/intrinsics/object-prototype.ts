@@ -103,6 +103,9 @@ export function intrinsicObjectPrototype(realm: Realm) {
 					[],
 					realm,
 				),
+				writable: true,
+				enumerable: false,
+				configurable: true,
 			}),
 		);
 	};

@@ -3,13 +3,19 @@ import { createBuiltinFunction } from "../abstract-operations/built-in-function-
 import { makeClassConstructor } from "../abstract-operations/function-objects.ts";
 import {
 	createDataPropertyOrThrow,
+	definePropertyOrThrow,
 	set,
 } from "../abstract-operations/object-operations.ts";
 import { getPrototypeFromConstructor } from "../abstract-operations/ordinary-object.ts";
+import { PropertyDescriptor } from "../abstract-operations/property-map.ts";
+import { isArray } from "../abstract-operations/testing-and-comparison.ts";
 import { toUint32 } from "../abstract-operations/type-conversion.ts";
 import { getActiveFunctionObject } from "../execution-contexts/execution-context.ts";
 import type { Realm } from "../execution-contexts/realm.ts";
-import { unwrapCompletion } from "../types-and-values/completion-record.ts";
+import {
+	normalCompletion,
+	unwrapCompletion,
+} from "../types-and-values/completion-record.ts";
 import { EngineValue } from "../types-and-values/data-types.ts";
 
 // https://tc39.es/ecma262/multipage/indexed-collections.html#sec-array-constructor
@@ -75,4 +81,29 @@ export function intrinsicArray(realm: Realm) {
 	);
 
 	makeClassConstructor(realm.intrinsics["%Array%"].asObject());
+
+	const arrConstructor = realm.intrinsics["%Array%"].asObject();
+	definePropertyOrThrow(
+		arrConstructor,
+		"isArray",
+		new PropertyDescriptor({
+			value: createBuiltinFunction(
+				(_thisArgument, argumentsList) => {
+					const arg = argumentsList[0];
+					if (!arg) {
+						return normalCompletion(EngineValue.boolean(false));
+					}
+
+					return isArray(arg);
+				},
+				1,
+				"isArray",
+				[],
+				realm,
+			),
+			writable: true,
+			enumerable: false,
+			configurable: true,
+		}),
+	);
 }
