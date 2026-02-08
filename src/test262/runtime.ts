@@ -257,6 +257,19 @@ function normalizeAndCountFailureReason(file: Test262File, reason: unknown) {
 		return;
 	}
 
+	if (reason instanceof EngineValue) {
+		if (
+			reason.isObject() &&
+			reason.data.properties.has("message") &&
+			reason.data.properties.get("message").value?.isString()
+		) {
+			const msg = reason.data.properties.get("message").value!.asString().data.value;
+			FAILURE_CACHE[msg] ??= [];
+			FAILURE_CACHE[msg].push(file.path);
+			return;
+		}
+	}
+
 	if (!!reason && typeof reason === "object" && "value" in reason) {
 		if (
 			reason.value instanceof EngineValue &&

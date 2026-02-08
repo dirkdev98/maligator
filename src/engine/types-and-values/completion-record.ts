@@ -66,7 +66,6 @@ export function throwCompletion(err: Error | EngineValue): CompletionRecord<neve
 			};
 		}
 	}
-	// TODO: Convert to intrinsic?
 
 	return {
 		type: "throw",
