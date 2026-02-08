@@ -1,5 +1,8 @@
+import { construct } from "../abstract-operations/object-operations.ts";
+import { getCurrentRealm } from "../execution-contexts/execution-context.ts";
+import { NATIVE_ERROR } from "../intrinsics/navite-error.ts";
 import { EvaluateError } from "../runtime-semantics/index.ts";
-import type { EngineValue } from "./data-types.ts";
+import { EngineValue } from "./data-types.ts";
 
 type CompletionType = "normal" | "break" | "continue" | "return";
 
@@ -37,6 +40,22 @@ export function returnCompletion<T>(value: T): CompletionRecord<T> {
  * Not in the spec. Use any built-in error which would be converted to an intrinsic.
  */
 export function throwCompletion(err: Error | EngineValue): CompletionRecord<never> {
+	if (NATIVE_ERROR.includes(err.constructor.name) && "message" in err) {
+		const O = construct(
+			getCurrentRealm().intrinsics[`%${err.constructor.name}%`]!.asObject(),
+			[EngineValue.string(err.message)],
+		);
+		if (O.type === "throw") {
+			throw new Error("Could not construct internal error from native error", {
+				cause: O,
+			});
+		} else {
+			return {
+				type: "throw",
+				error: O.value,
+			};
+		}
+	}
 	// TODO: Convert to intrinsic?
 
 	return {
