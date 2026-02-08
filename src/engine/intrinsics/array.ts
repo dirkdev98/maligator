@@ -83,6 +83,18 @@ export function intrinsicArray(realm: Realm) {
 	makeClassConstructor(realm.intrinsics["%Array%"].asObject());
 
 	const arrConstructor = realm.intrinsics["%Array%"].asObject();
+
+	definePropertyOrThrow(
+		arrConstructor,
+		"prototype",
+		new PropertyDescriptor({
+			value: realm.intrinsics["%Array.prototype%"]!,
+			writable: false,
+			enumerable: false,
+			configurable: false,
+		}),
+	);
+
 	definePropertyOrThrow(
 		arrConstructor,
 		"isArray",

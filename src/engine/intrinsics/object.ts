@@ -45,6 +45,17 @@ export function intrinsicObject(realm: Realm) {
 
 	const objectConstructor = realm.intrinsics["%Object%"].asObject();
 
+	definePropertyOrThrow(
+		objectConstructor,
+		"prototype",
+		new PropertyDescriptor({
+			value: realm.intrinsics["%Object.prototype%"]!,
+			writable: false,
+			enumerable: false,
+			configurable: false,
+		}),
+	);
+
 	// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-object.defineproperty
 	definePropertyOrThrow(
 		objectConstructor,

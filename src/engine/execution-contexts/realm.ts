@@ -11,6 +11,7 @@ import { intrinsicBooleanPrototype } from "../intrinsics/boolean-prototype.ts";
 import { intrinsicBoolean } from "../intrinsics/boolean.ts";
 import { intrinsicFunctionPrototype } from "../intrinsics/function-prototype.ts";
 import { intrinsicFunction } from "../intrinsics/function.ts";
+import { intrinsicMath } from "../intrinsics/math.ts";
 import { intrinsicNumberPrototype } from "../intrinsics/number-prototype.ts";
 import { intrinsicNumber } from "../intrinsics/number.ts";
 import { intrinsicObjectPrototype } from "../intrinsics/object-prototype.ts";
@@ -88,6 +89,8 @@ export class Realm {
 
 			intrinsicArrayPrototype,
 			intrinsicArray,
+
+			intrinsicMath,
 		];
 
 		const callbacks = [];
@@ -346,6 +349,17 @@ export class Realm {
 			"Function",
 			new PropertyDescriptor({
 				value: this.intrinsics["%Function%"]!,
+				writable: false,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		definePropertyOrThrow(
+			global,
+			"Math",
+			new PropertyDescriptor({
+				value: this.intrinsics["%Math%"]!,
 				writable: false,
 				enumerable: false,
 				configurable: true,
