@@ -1,3 +1,4 @@
+import { getCurrentRealm } from "../../src/engine/execution-contexts/execution-context.ts";
 import { Realm } from "../../src/engine/execution-contexts/realm.ts";
 import { parseScript } from "../../src/engine/parser/script.ts";
 import { evaluate } from "../../src/engine/runtime-semantics/index.ts";
@@ -9,8 +10,9 @@ type EvalResult = CompletionRecord<EngineValue | undefined>;
 
 export function evaluateCode(code: string): EvalResult {
 	Realm.init();
-	const script = parseScript(code, {} as never);
-	const result = evaluate(script.ECMAScriptCode);
+	const parsed = parseScript(code, {} as never);
+	getCurrentRealm().isStrict ||= parsed.isStrict;
+	const result = evaluate(parsed.ECMAScriptCode);
 
 	if (result.type === "throw") {
 		return result;

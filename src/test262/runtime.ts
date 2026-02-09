@@ -55,6 +55,7 @@ export function test262RunFile(file: Test262File) {
 			for (const path of fileToLoad) {
 				const contents = loadHarnessFile(path);
 				const parsed = parseScript(contents, realm);
+				realm.isStrict ||= parsed.isStrict;
 				const result = evaluate(parsed.ECMAScriptCode);
 
 				if (result.type !== "normal") {
@@ -66,6 +67,7 @@ export function test262RunFile(file: Test262File) {
 
 			if (file.result !== "FAILED") {
 				const parsed = parseScript(`${file.content}`, getCurrentRealm());
+				realm.isStrict ||= parsed.isStrict;
 				const result = evaluate(parsed.ECMAScriptCode);
 				if (result.type !== "normal") {
 					normalizeAndCountFailureReason(file, result);
@@ -98,6 +100,7 @@ export function test262RunFile(file: Test262File) {
 			for (const path of fileToLoad) {
 				const contents = loadHarnessFile(path);
 				const parsed = parseScript(contents, realm);
+				realm.isStrict ||= parsed.isStrict;
 				const result = evaluate(parsed.ECMAScriptCode);
 
 				if (result.type !== "normal") {
@@ -109,6 +112,7 @@ export function test262RunFile(file: Test262File) {
 
 			if (file.result !== "FAILED") {
 				const parsed = parseScript(`"use strict";\n${file.content}`, getCurrentRealm());
+				realm.isStrict ||= parsed.isStrict;
 				const result = evaluate(parsed.ECMAScriptCode);
 
 				if (result.type !== "normal") {

@@ -1,5 +1,8 @@
 import type { ESTree } from "meriyah";
-import { createUnmappedArgumentsObject } from "../abstract-operations/arguments-exotic.ts";
+import {
+	createMappedArgumentsObject,
+	createUnmappedArgumentsObject,
+} from "../abstract-operations/arguments-exotic.ts";
 import { getCurrentExecutionContext } from "../execution-contexts/execution-context.ts";
 import { returnCompletion } from "../types-and-values/completion-record.ts";
 import type { CompletionRecord } from "../types-and-values/completion-record.ts";
@@ -36,7 +39,7 @@ export function functionDeclarationInstantiation(
 ) {
 	const calleeContext = getCurrentExecutionContext();
 	const _code = F.objectGetInternalSlot("ECMAScriptCode");
-	const _strict = F.objectGetInternalSlot("Strict");
+	const strict = F.objectGetInternalSlot("Strict");
 	const formals = F.objectGetInternalSlot("FormalParameters");
 	const paramNames = formals.map((it) => {
 		switch (it.type) {
@@ -46,7 +49,7 @@ export function functionDeclarationInstantiation(
 				return "";
 		}
 	});
-	const _simpleParameterList = true;
+	const simpleParameterList = formals.every((it) => it.type === "Identifier");
 	const _hasParameterExpressions = false;
 	const _varNames = [];
 	const _varDeclarations = [];
@@ -74,8 +77,12 @@ export function functionDeclarationInstantiation(
 	}
 
 	if (argumentsObjectNeeded) {
-		if (_strict || _simpleParameterList) {
+		if (strict || !simpleParameterList) {
 			const ao = createUnmappedArgumentsObject(argumentsList);
+			env.createMutableBinding("arguments", false);
+			env.initializeBinding("arguments", ao);
+		} else {
+			const ao = createMappedArgumentsObject(F, paramNames, argumentsList, env);
 			env.createMutableBinding("arguments", false);
 			env.initializeBinding("arguments", ao);
 		}

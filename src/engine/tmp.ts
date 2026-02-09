@@ -10,6 +10,7 @@ const txt = readFileSync("./local.js", "utf-8");
 Realm.init();
 
 const parsed = parseScript(txt, getCurrentRealm());
+getCurrentRealm().isStrict ||= parsed.isStrict;
 const result = evaluate(parsed.ECMAScriptCode);
 
 spawnSync(`bat`, ["--paging=never", "./local.js"], {

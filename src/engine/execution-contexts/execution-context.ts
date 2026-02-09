@@ -75,8 +75,7 @@ export function resolveBinding(
 		env = getCurrentExecutionContext().lexicalEnvironment!;
 	}
 
-	// TODO: IsStrict;
-	const strict = true;
+	const strict = getCurrentRealm().isStrict;
 	return getIdentifierReference(env, name, strict);
 }
 

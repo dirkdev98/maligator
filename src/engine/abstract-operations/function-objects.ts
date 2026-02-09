@@ -9,6 +9,7 @@ import {
 	popExecutionContext,
 	pushNewExecutionContext,
 } from "../execution-contexts/execution-context.ts";
+import { isStrictNode } from "../parser/script.ts";
 import { evaluateFunctionBody } from "../runtime-semantics/function-meta.ts";
 import {
 	returnCompletion,
@@ -202,7 +203,7 @@ export function ordinaryFunctionCreate(
 	F.objectSetInternalSlot("SourceText", sourceText);
 	F.objectSetInternalSlot("FormalParameters", parameterList);
 	F.objectSetInternalSlot("ECMAScriptCode", body);
-	F.objectSetInternalSlot("Strict", true);
+	F.objectSetInternalSlot("Strict", getCurrentRealm().isStrict || isStrictNode(body));
 	if (thisMode === "LEXICAL-THIS") {
 		F.objectSetInternalSlot("ThisMode", "LEXICAL");
 	} else {

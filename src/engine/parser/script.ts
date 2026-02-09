@@ -8,6 +8,7 @@ type ScriptRecord = {
 	ECMAScriptCode: ESTree.Program;
 	loadedModules: Array<unknown>;
 	hostDefined?: unknown;
+	isStrict: boolean;
 };
 
 // https://tc39.es/ecma262/multipage/ecmascript-language-scripts-and-modules.html#sec-parse-script
@@ -22,5 +23,14 @@ export function parseScript(sourceText: string, realm: Realm): ScriptRecord {
 		realm,
 		ECMAScriptCode: script,
 		loadedModules: [],
+		isStrict: isStrictNode(script),
 	};
+}
+
+export function isStrictNode(node: { body: Array<ESTree.Node> }) {
+	return (
+		!!node.body[0] &&
+		"directive" in node.body[0] &&
+		node.body[0].directive === "use strict"
+	);
 }

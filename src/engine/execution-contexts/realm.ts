@@ -43,6 +43,8 @@ export class Realm {
 
 	templateMap = [];
 
+	isStrict = false;
+
 	// https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-initializehostdefinedrealm
 	static init() {
 		const realm = new Realm();
@@ -253,18 +255,11 @@ export class Realm {
 			new PropertyDescriptor({
 				value: createBuiltinFunction(
 					(_, [value, radixValue], __) => {
-						const num = toString(value!);
-						if (num.type === "throw") {
-							return num;
-						}
-
-						const radix = toInt32(radixValue!);
-						if (radix.type === "throw") {
-							return radix;
-						}
+						const num = toString(value ?? EngineValue.undefined()).unwrap();
+						const radix = toInt32(radixValue ?? EngineValue.number(10)).unwrap();
 
 						return normalCompletion(
-							EngineValue.number(parseInt(num.value.data.value, radix.value.data.value)),
+							EngineValue.number(parseInt(num.data.value, radix.data.value)),
 						);
 					},
 					1,

@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import { getCurrentRealm } from "../execution-contexts/execution-context.ts";
 import { normalCompletion } from "../types-and-values/completion-record.ts";
 import type { EngineValue } from "../types-and-values/data-types.ts";
 import { getValue, ReferenceRecord } from "../types-and-values/reference-record.ts";
@@ -13,7 +14,7 @@ export const MemberExpression: Evaluator<"MemberExpression"> = {
 			return baseRef;
 		}
 		const baseValue = getValue(baseRef.value);
-		const isStrict = true;
+		const isStrict = getCurrentRealm().isStrict;
 
 		if (node.computed) {
 			return evaluatePropertyAccessWithExpressionKey(baseValue, node.property, isStrict);
