@@ -121,6 +121,34 @@ export function intrinsicObjectPrototype(realm: Realm) {
 			}),
 		);
 
+		// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-object.prototype.propertyisenumerable
+		definePropertyOrThrow(
+			objectPrototype,
+			"propertyIsEnumerable",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, argumentsList, _newTarget) => {
+						const P = toPropertyKey(argumentsList[0] ?? EngineValue.undefined()).unwrap();
+						const O = toObject(thisArgument!).unwrap();
+
+						const desc = O.objectGetInternalSlot("GetOwnProperty")(O, P).unwrap();
+						if (desc instanceof EngineValue) {
+							return normalCompletion(EngineValue.boolean(false));
+						}
+
+						return normalCompletion(EngineValue.boolean(desc.enumerable ?? false));
+					},
+					1,
+					"propertyIsEnumerable",
+					[],
+					realm,
+				),
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
 		// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-object.prototype.tostring
 		definePropertyOrThrow(
 			objectPrototype,
