@@ -89,14 +89,9 @@ export function createDataPropertyOrThrow(
 	P: PropertyKey,
 	V: EngineValue,
 ) {
-	const success = createDataProperty(O, P, V);
-
-	if (success.type === "throw") {
-		return success;
-	}
-
-	if (!success.value.data.value) {
-		return throwCompletion(new TypeError("Cannot create data property."));
+	const success = createDataProperty(O, P, V).unwrap();
+	if (!success.data.value) {
+		return throwCompletion(new TypeError("Cannot create data property.")).unwrap();
 	}
 
 	return normalCompletion(UNUSED);
@@ -126,13 +121,10 @@ export function definePropertyOrThrow(
 	P: PropertyKey,
 	Desc: PropertyDescriptor,
 ): CompletionRecord<typeof UNUSED> {
-	const success = O.objectGetInternalSlot("DefineOwnProperty")(O, P, Desc);
-	if (success.type === "throw") {
-		return success;
-	}
+	const success = O.objectGetInternalSlot("DefineOwnProperty")(O, P, Desc).unwrap();
 
-	if (!success.value.data.value) {
-		return throwCompletion(new TypeError("Can't define property."));
+	if (!success.data.value) {
+		return throwCompletion(new TypeError("Can't define property.")).unwrap();
 	}
 
 	return normalCompletion(UNUSED);
@@ -140,13 +132,10 @@ export function definePropertyOrThrow(
 
 // https://tc39.es/ecma262/#sec-deletepropertyorthrow
 export function deletePropertyOrThrow(O: EngineValue<"object">, P: PropertyKey) {
-	const success = O.objectGetInternalSlot("Delete")(O, P);
-	if (success.type === "throw") {
-		return success;
-	}
+	const success = O.objectGetInternalSlot("Delete")(O, P).unwrap();
 
-	if (!success.value.data.value) {
-		return throwCompletion(new TypeError("Cannot delete property."));
+	if (!success.data.value) {
+		return throwCompletion(new TypeError("Cannot delete property.")).unwrap();
 	}
 
 	return normalCompletion(UNUSED);

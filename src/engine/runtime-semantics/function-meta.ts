@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import { createUnmappedArgumentsObject } from "../abstract-operations/arguments-exotic.ts";
 import { getCurrentExecutionContext } from "../execution-contexts/execution-context.ts";
 import { returnCompletion } from "../types-and-values/completion-record.ts";
 import type { CompletionRecord } from "../types-and-values/completion-record.ts";
@@ -52,6 +53,14 @@ export function functionDeclarationInstantiation(
 	const _lexicalNames = [];
 	const _functionNames = [];
 
+	let argumentsObjectNeeded = true;
+	if (F.objectGetInternalSlot("ThisMode") === "LEXICAL") {
+		argumentsObjectNeeded = false;
+	} else if (paramNames.includes("arguments")) {
+		argumentsObjectNeeded = false;
+	} else if (_hasParameterExpressions) {
+		argumentsObjectNeeded = false;
+	}
 	// TODO: Initialize vars
 
 	const env = calleeContext.lexicalEnvironment!;
@@ -62,5 +71,13 @@ export function functionDeclarationInstantiation(
 
 		env.createMutableBinding(param, false);
 		env.initializeBinding(param, argumentsList[i] ?? EngineValue.undefined());
+	}
+
+	if (argumentsObjectNeeded) {
+		if (_strict || _simpleParameterList) {
+			const ao = createUnmappedArgumentsObject(argumentsList);
+			env.createMutableBinding("arguments", false);
+			env.initializeBinding("arguments", ao);
+		}
 	}
 }

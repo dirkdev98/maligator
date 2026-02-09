@@ -134,9 +134,10 @@ export type ObjectInternalSlots = {
 	Extensible: boolean;
 
 	// Arguments exotic.
-	ParameterMap: unknown;
+	ParameterMap: EngineValue<"object" | "undefined">;
 
 	// Error exotic
+	// Only used to identify.
 	ErrorData: unknown;
 
 	// Boolean
