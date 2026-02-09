@@ -80,6 +80,47 @@ export function intrinsicObjectPrototype(realm: Realm) {
 			}),
 		);
 
+		// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-object.prototype.isprototypeof
+		definePropertyOrThrow(
+			objectPrototype,
+			"isPrototypeOf",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, argumentsList, _newTarget) => {
+						const arg = argumentsList[0];
+						if (!arg || !arg.isObject()) {
+							return normalCompletion(EngineValue.boolean(false));
+						}
+
+						let V = arg.asObject();
+
+						const O = toObject(thisArgument!).unwrap();
+
+						while (true) {
+							const nextPrototype = V.objectGetInternalSlot("GetPrototypeOf")(V).unwrap();
+
+							if (nextPrototype.isNull()) {
+								return normalCompletion(EngineValue.boolean(false));
+							}
+
+							if (nextPrototype === O) {
+								return normalCompletion(EngineValue.boolean(true));
+							}
+
+							V = nextPrototype.asObject();
+						}
+					},
+					1,
+					"isPrototypeOf",
+					[],
+					realm,
+				),
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
 		// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-object.prototype.tostring
 		definePropertyOrThrow(
 			objectPrototype,
