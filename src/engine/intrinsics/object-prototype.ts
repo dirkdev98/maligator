@@ -3,15 +3,17 @@ import { ImmutablePrototypeExoticMethods } from "../abstract-operations/immutabl
 import {
 	definePropertyOrThrow,
 	get,
+	hasOwnProperty,
 	makeBasicObject,
 } from "../abstract-operations/object-operations.ts";
 import { OrdinaryObjectInternalMethods } from "../abstract-operations/ordinary-object.ts";
 import { PropertyDescriptor } from "../abstract-operations/property-map.ts";
 import { isArray } from "../abstract-operations/testing-and-comparison.ts";
-import { toObject } from "../abstract-operations/type-conversion.ts";
+import { toObject, toPropertyKey } from "../abstract-operations/type-conversion.ts";
 import type { Realm } from "../execution-contexts/realm.ts";
 import {
 	normalCompletion,
+	throwCompletion,
 	unwrapCompletion,
 } from "../types-and-values/completion-record.ts";
 import { EngineValue, WELL_KNOWN_SYMBOLS } from "../types-and-values/data-types.ts";
@@ -41,6 +43,37 @@ export function intrinsicObjectPrototype(realm: Realm) {
 			"constructor",
 			new PropertyDescriptor({
 				value: realm.intrinsics["%Object%"]!,
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-object.prototype.hasownproperty
+		definePropertyOrThrow(
+			objectPrototype,
+			"hasOwnProperty",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, argumentsList, _newTarget) => {
+						const V = argumentsList[0];
+						if (!V) {
+							return throwCompletion(
+								new TypeError(
+									"undefined is not an object (evaluating 'O.hasOwnProperty(V)')",
+								),
+							);
+						}
+						const P = toPropertyKey(V).unwrap();
+						const O = toObject(thisArgument!).unwrap();
+
+						return hasOwnProperty(O, P);
+					},
+					1,
+					"hasOwnProperty",
+					[],
+					realm,
+				),
 				writable: true,
 				enumerable: false,
 				configurable: true,
