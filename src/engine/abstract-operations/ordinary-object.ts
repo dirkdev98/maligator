@@ -5,6 +5,7 @@ import type { CompletionRecord } from "../types-and-values/completion-record.ts"
 import { EngineValue } from "../types-and-values/data-types.ts";
 import type { ObjectInternalSlots } from "../types-and-values/data-types.ts";
 import {
+	call,
 	createDataProperty,
 	get,
 	getFunctionRealm,
@@ -359,8 +360,7 @@ export function ordinaryGet(
 		return normalCompletion(EngineValue.undefined());
 	}
 
-	// TODO: Return ? Call(getter, Receiver).
-	throw new Error("Not implemented. Requires 'Call'.");
+	return call(getter.asObject(), receiver);
 }
 
 // https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinaryset
@@ -449,10 +449,9 @@ export function ordinarySetWithOwnDescriptor(
 		return normalCompletion(EngineValue.boolean(false));
 	}
 
-	// 6. Perform ? Call(setter, Receiver, « V »).
-	throw new Error("Not implemented. Requires 'Call'.");
+	call(setter.asObject(), receiver, [V]).unwrap();
 
-	// return normalCompletion(EngineValue.boolean(true));
+	return normalCompletion(EngineValue.boolean(true));
 }
 
 // https://tc39.es/ecma262/multipage/ordinary-and-exotic-objects-behaviours.html#sec-ordinarydelete
