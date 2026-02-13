@@ -31,7 +31,7 @@ export const TryStatement: Evaluator<"TryStatement"> = {
 
 function catchClauseEvaluation(node: ESTree.CatchClause, errValue: EngineValue | Error) {
 	if (errValue instanceof Error) {
-		throw new Error("Can't catch internal errors yet.", {
+		throw new Error(`Can't catch internal errors yet. '${errValue.message}`, {
 			cause: errValue,
 		});
 	}

@@ -43,17 +43,8 @@ export const ArrayExoticMethods = {
 			}
 
 			const length = lengthDesc.value?.asNumber();
-			const index = toUint32(EngineValue.string(P));
-
-			if (index.type === "throw") {
-				return index;
-			}
-			const indexValue = index.value.asNumber();
-
-			if (
-				indexValue.data.value >= (length?.data.value ?? 0) &&
-				lengthDesc.writable === false
-			) {
+			const index = toUint32(EngineValue.string(P)).unwrap().asNumber().data.value;
+			if (index >= (length?.data.value ?? 0) && lengthDesc.writable === false) {
 				return normalCompletion(EngineValue.boolean(false));
 			}
 
@@ -65,8 +56,8 @@ export const ArrayExoticMethods = {
 				return succeeded;
 			}
 
-			if (indexValue.data.value > (length?.data.value ?? 0)) {
-				lengthDesc.value = EngineValue.number(indexValue.data.value + 1);
+			if (index >= (length?.data.value ?? 0)) {
+				lengthDesc.value = EngineValue.number(index + 1);
 				ordinaryDefineOwnProperty(obj, "length", lengthDesc);
 			}
 

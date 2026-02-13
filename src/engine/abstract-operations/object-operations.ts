@@ -266,8 +266,7 @@ export function getFunctionRealm(F: EngineValue<"object">) {
 	}
 
 	if (isBoundFunctionExotic(F)) {
-		// TODO: Bound exotics
-		throw new Error("Not implemented.");
+		return getFunctionRealm(F.objectGetInternalSlot("BoundTargetFunction"));
 	}
 
 	// TODO: Proxy exotics.
