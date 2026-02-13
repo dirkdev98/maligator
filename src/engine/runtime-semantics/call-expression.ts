@@ -12,16 +12,13 @@ import type { Evaluator } from "./index.ts";
 export const CallExpression: Evaluator<"CallExpression"> = {
 	// https://tc39.es/ecma262/multipage/ecmascript-language-expressions.html#sec-function-calls-runtime-semantics-evaluation
 	evaluate(node) {
-		const ref = evaluate(node.callee as ESTree.Node);
-		if (ref.type === "throw") {
-			return ref;
-		}
+		const ref = evaluate(node.callee as ESTree.Node).unwrap();
 
-		const func = getValue(ref.value);
+		const func = getValue(ref);
 
 		// TODO: IsInTailPosition
 
-		return evaluateCall(func, ref.value!, node.arguments, false);
+		return evaluateCall(func, ref!, node.arguments, false);
 	},
 };
 
@@ -45,7 +42,7 @@ export function evaluateCall(
 	const funcArgs = args.map((arg) => getValue(evaluate(arg).value));
 
 	if (!func.isObject() || !isCallable(func)) {
-		return throwCompletion(new TypeError("Function is not callable."));
+		return throwCompletion(new TypeError(`Function is not callable.`));
 	}
 
 	return call(func, thisValue, funcArgs);

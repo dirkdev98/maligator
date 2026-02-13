@@ -95,6 +95,35 @@ export function intrinsicObject(realm: Realm) {
 		}),
 	);
 
+	// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-object.defineproperties
+	definePropertyOrThrow(
+		objectConstructor,
+		"defineProperties",
+		new PropertyDescriptor({
+			value: createBuiltinFunction(
+				(_thisArgument, argumentsList) => {
+					const O = argumentsList[0];
+					const P = argumentsList[1];
+
+					if (!O || !O.isObject()) {
+						return throwCompletion(
+							new TypeError("First argument to Object.defineProperty is not an object."),
+						);
+					}
+
+					return objectDefineProperties(O, P ?? EngineValue.undefined());
+				},
+				2,
+				"defineProperties",
+				[],
+				realm,
+			),
+			writable: true,
+			enumerable: false,
+			configurable: true,
+		}),
+	);
+
 	// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-object.defineproperty
 	definePropertyOrThrow(
 		objectConstructor,
@@ -261,43 +290,24 @@ export function intrinsicObject(realm: Realm) {
 
 // https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-objectdefineproperties
 function objectDefineProperties(obj: EngineValue<"object">, properties: EngineValue) {
-	const props = toObject(properties);
-	if (props.type === "throw") {
-		return props;
-	}
-	const keys = props.value.objectGetInternalSlot("OwnPropertyKeys")(props.value);
-	if (keys.type === "throw") {
-		return keys;
-	}
+	const props = toObject(properties).unwrap();
+	const keys = props.objectGetInternalSlot("OwnPropertyKeys")(props).unwrap();
 
 	const descriptors = [];
-	for (const nextKey of keys.value) {
-		const propDesc = props.value.objectGetInternalSlot("GetOwnProperty")(
-			props.value,
-			nextKey,
-		);
-		if (propDesc.type === "throw") {
-			return propDesc;
-		}
+	for (const nextKey of keys) {
+		const propDesc = props
+			.objectGetInternalSlot("GetOwnProperty")(props, nextKey)
+			.unwrap();
 
-		if (propDesc.value instanceof PropertyDescriptor && propDesc.value.enumerable) {
-			const descObj = get(props.value, nextKey);
-			if (descObj.type === "throw") {
-				return descObj;
-			}
-			const desc = PropertyDescriptor.toPropertyDescriptor(descObj.value);
-			if (desc.type === "throw") {
-				return desc;
-			}
-			descriptors.push({ key: nextKey, descriptor: desc.value });
+		if (propDesc instanceof PropertyDescriptor && propDesc.enumerable) {
+			const descObj = get(props, nextKey).unwrap();
+			const desc = PropertyDescriptor.toPropertyDescriptor(descObj).unwrap();
+			descriptors.push({ key: nextKey, descriptor: desc });
 		}
 	}
 
 	for (const { key, descriptor } of descriptors) {
-		const res = definePropertyOrThrow(obj, key, descriptor);
-		if (res.type === "throw") {
-			return res;
-		}
+		definePropertyOrThrow(obj, key, descriptor);
 	}
 
 	return normalCompletion(obj);

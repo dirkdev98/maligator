@@ -303,10 +303,10 @@ export function getFailuresWithSamples() {
 	const uniqueFailureReasons = sortedFailures.length;
 	return {
 		uniqueFailureReasons,
-		failures: sortedFailures.slice(0, 10).map(([reason, paths]) => ({
+		failures: sortedFailures.slice(0, 20).map(([reason, paths]) => ({
 			reason,
 			count: paths.length,
-			paths: Array.from({ length: 10 }).map(
+			paths: Array.from({ length: 4 }).map(
 				() => paths[Math.floor(Math.random() * paths.length)],
 			),
 		})),
