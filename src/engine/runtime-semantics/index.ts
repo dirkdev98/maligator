@@ -14,6 +14,7 @@ import { ContinueStatement } from "./continue-statement.ts";
 import { DoWhileStatement } from "./do-while-statement.ts";
 import { EmptyStatement } from "./empty-statement.ts";
 import { ExpressionStatement } from "./expression-statement.ts";
+import { ForStatement } from "./for-statement.ts";
 import { FunctionDeclaration } from "./function-declaration.ts";
 import { Identifier } from "./identifier.ts";
 import { IfStatement } from "./if-statement.ts";
@@ -47,8 +48,8 @@ export const evaluators: Partial<{
 	BinaryExpression,
 	CallExpression,
 	ConditionalExpression,
-	Identifier,
 	FunctionExpression: FunctionDeclaration as unknown as Evaluator<"FunctionExpression">,
+	Identifier,
 	Literal,
 	LogicalExpression,
 	MemberExpression,
@@ -70,6 +71,7 @@ export const evaluators: Partial<{
 	DoWhileStatement,
 	EmptyStatement,
 	ExpressionStatement,
+	ForStatement,
 	IfStatement,
 	ReturnStatement,
 	SwitchStatement,
