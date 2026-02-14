@@ -66,6 +66,39 @@ export function intrinsicStringPrototype(realm: Realm) {
 			}),
 		);
 
+		// https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.at
+		definePropertyOrThrow(
+			stringPrototype,
+			"charAt",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, _argumentsList, _newTarget) => {
+						const O = thisArgument ?? EngineValue.undefined();
+						requireObjectCoercible(O).unwrap();
+						const S = toString(O).unwrap().data.value;
+
+						const size = S.length;
+						const position = toIntegerOrInfinity(
+							_argumentsList[0] ?? EngineValue.undefined(),
+						).unwrap();
+
+						if (position < 0 || position >= size) {
+							return normalCompletion(EngineValue.string(""));
+						}
+
+						return normalCompletion(EngineValue.string(S[position] ?? ""));
+					},
+					0,
+					"charAt",
+					[],
+					realm,
+				),
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
 		// https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.tostring
 		definePropertyOrThrow(
 			stringPrototype,
