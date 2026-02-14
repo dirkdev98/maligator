@@ -55,7 +55,7 @@ export function intrinsicStringPrototype(realm: Realm) {
 
 						return normalCompletion(EngineValue.string(S[k] ?? ""));
 					},
-					0,
+					1,
 					"at",
 					[],
 					realm,
@@ -66,7 +66,7 @@ export function intrinsicStringPrototype(realm: Realm) {
 			}),
 		);
 
-		// https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.at
+		// https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.charat
 		definePropertyOrThrow(
 			stringPrototype,
 			"charAt",
@@ -88,8 +88,107 @@ export function intrinsicStringPrototype(realm: Realm) {
 
 						return normalCompletion(EngineValue.string(S[position] ?? ""));
 					},
-					0,
+					1,
 					"charAt",
+					[],
+					realm,
+				),
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		// https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.charcodeat
+		definePropertyOrThrow(
+			stringPrototype,
+			"charCodeAt",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, _argumentsList, _newTarget) => {
+						const O = thisArgument ?? EngineValue.undefined();
+						requireObjectCoercible(O).unwrap();
+						const S = toString(O).unwrap().data.value;
+
+						const size = S.length;
+						const position = toIntegerOrInfinity(
+							_argumentsList[0] ?? EngineValue.undefined(),
+						).unwrap();
+
+						if (position < 0 || position >= size) {
+							return normalCompletion(EngineValue.number(NaN));
+						}
+
+						return normalCompletion(EngineValue.number(S.charCodeAt(position)));
+					},
+					1,
+					"charCodeAt",
+					[],
+					realm,
+				),
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		// https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.codepointat
+		definePropertyOrThrow(
+			stringPrototype,
+			"codePointAt",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, _argumentsList, _newTarget) => {
+						const O = thisArgument ?? EngineValue.undefined();
+						requireObjectCoercible(O).unwrap();
+						const S = toString(O).unwrap().data.value;
+
+						const size = S.length;
+						const position = toIntegerOrInfinity(
+							_argumentsList[0] ?? EngineValue.undefined(),
+						).unwrap();
+
+						if (position < 0 || position >= size) {
+							return normalCompletion(EngineValue.undefined());
+						}
+
+						const res = S.codePointAt(position);
+						return normalCompletion(
+							res !== undefined ? EngineValue.number(res) : EngineValue.undefined(),
+						);
+					},
+					1,
+					"codePointAt",
+					[],
+					realm,
+				),
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		// https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.concat
+		definePropertyOrThrow(
+			stringPrototype,
+			"concat",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, _argumentsList, _newTarget) => {
+						const O = thisArgument ?? EngineValue.undefined();
+						requireObjectCoercible(O).unwrap();
+						const S = toString(O).unwrap().data.value;
+						let R = S;
+
+						for (const arg of _argumentsList) {
+							const nextString = toString(arg).unwrap().data.value;
+							R += nextString;
+						}
+
+						return normalCompletion(EngineValue.string(R));
+					},
+					1,
+					"concat",
 					[],
 					realm,
 				),
