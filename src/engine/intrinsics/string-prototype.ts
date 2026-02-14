@@ -198,6 +198,144 @@ export function intrinsicStringPrototype(realm: Realm) {
 			}),
 		);
 
+		// https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.endswith
+		definePropertyOrThrow(
+			stringPrototype,
+			"endsWith",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, argumentsList, _newTarget) => {
+						const O = thisArgument ?? EngineValue.undefined();
+						requireObjectCoercible(O).unwrap();
+						const S = toString(O).unwrap().data.value;
+
+						// TODO: Regexp check.
+						// 4. Let isRegExp be ? IsRegExp(searchString).
+						// 5. If isRegExp is true, throw a TypeError exception.
+
+						const searchString = toString(
+							argumentsList[0] ?? EngineValue.undefined(),
+						).unwrap();
+						const len = S.length;
+
+						const pos =
+							argumentsList[1] === undefined || argumentsList[1].isUndefined() ?
+								len
+							:	toIntegerOrInfinity(argumentsList[1]).unwrap();
+
+						const end = Math.max(0, Math.min(len, pos));
+						const searchLength = searchString.data.value.length;
+						if (searchLength === 0) {
+							return normalCompletion(EngineValue.boolean(true));
+						}
+
+						const start = end - searchLength;
+						if (start < 0) {
+							return normalCompletion(EngineValue.boolean(false));
+						}
+
+						const substring = S.slice(start, end);
+						return normalCompletion(
+							EngineValue.boolean(substring === searchString.data.value),
+						);
+					},
+					2,
+					"endsWith",
+					[],
+					realm,
+				),
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		// https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.includes
+		definePropertyOrThrow(
+			stringPrototype,
+			"includes",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, argumentsList, _newTarget) => {
+						const O = thisArgument ?? EngineValue.undefined();
+						requireObjectCoercible(O).unwrap();
+						const S = toString(O).unwrap().data.value;
+
+						// TODO: Regexp check.
+						// 4. Let isRegExp be ? IsRegExp(searchString).
+						// 5. If isRegExp is true, throw a TypeError exception.
+
+						const searchString = toString(
+							argumentsList[0] ?? EngineValue.undefined(),
+						).unwrap();
+						const len = S.length;
+
+						const pos =
+							argumentsList[1] === undefined || argumentsList[1].isUndefined() ?
+								0
+							:	toIntegerOrInfinity(argumentsList[1]).unwrap();
+
+						const start = Math.max(0, Math.min(len, pos));
+						const index = EngineValue.string(S).stringIndexOf(searchString, start);
+
+						if (index === -1) {
+							return normalCompletion(EngineValue.boolean(false));
+						}
+
+						return normalCompletion(EngineValue.boolean(true));
+					},
+					2,
+					"includes",
+					[],
+					realm,
+				),
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
+		// https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.indexof
+		definePropertyOrThrow(
+			stringPrototype,
+			"indexOf",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, argumentsList, _newTarget) => {
+						const O = thisArgument ?? EngineValue.undefined();
+						requireObjectCoercible(O).unwrap();
+						const S = toString(O).unwrap().data.value;
+
+						// TODO: Regexp check.
+						// 4. Let isRegExp be ? IsRegExp(searchString).
+						// 5. If isRegExp is true, throw a TypeError exception.
+
+						const searchString = toString(
+							argumentsList[0] ?? EngineValue.undefined(),
+						).unwrap();
+						const len = S.length;
+
+						const pos =
+							argumentsList[1] === undefined || argumentsList[1].isUndefined() ?
+								0
+							:	toIntegerOrInfinity(argumentsList[1]).unwrap();
+
+						const start = Math.max(0, Math.min(len, pos));
+						const index = EngineValue.string(S).stringIndexOf(searchString, start);
+
+						return normalCompletion(EngineValue.number(index));
+					},
+					2,
+					"indexOf",
+					[],
+					realm,
+				),
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
+
 		// https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.tostring
 		definePropertyOrThrow(
 			stringPrototype,
