@@ -57,7 +57,7 @@ function forBodyEvaluation(
 	createPerIterationEnvironment();
 
 	const start = Date.now();
-	const endTime = 1500;
+	const endTime = 500;
 
 	while (Date.now() < start + endTime) {
 		if (test) {
