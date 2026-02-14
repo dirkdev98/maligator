@@ -12,6 +12,7 @@ import {
 import { call, get, getMethod } from "./object-operations.ts";
 import { ordinaryCreateFromConstructor } from "./ordinary-object.ts";
 import type { PropertyKey } from "./property-map.ts";
+import { stringCreate } from "./string-exotic.ts";
 import { isCallable } from "./testing-and-comparison.ts";
 
 // https://tc39.es/ecma262/#sec-toprimitive
@@ -485,12 +486,10 @@ export function toObject(argument: EngineValue): CompletionRecord<EngineValue<"o
 	}
 
 	if (argument.isString()) {
-		const instance = ordinaryCreateFromConstructor(
-			getCurrentRealm().intrinsics["%String%"]!.asObject(),
-			"%String.prototype%",
-			["StringData"],
+		const instance = stringCreate(
+			argument,
+			getCurrentRealm().intrinsics["%String.prototype%"]!.asObject(),
 		);
-		instance.objectSetInternalSlot("StringData", argument.data.value);
 
 		return normalCompletion(instance);
 	}

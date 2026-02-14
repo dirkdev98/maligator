@@ -210,5 +210,25 @@ export function intrinsicObjectPrototype(realm: Realm) {
 				configurable: true,
 			}),
 		);
+
+		// https://tc39.es/ecma262/multipage/fundamental-objects.html#sec-object.prototype.valueof
+		definePropertyOrThrow(
+			objectPrototype,
+			"valueOf",
+			new PropertyDescriptor({
+				value: createBuiltinFunction(
+					(thisArgument, _argumentsList, _newTarget) => {
+						return toObject(thisArgument ?? EngineValue.undefined());
+					},
+					0,
+					"valueOf",
+					[],
+					realm,
+				),
+				writable: true,
+				enumerable: false,
+				configurable: true,
+			}),
+		);
 	};
 }

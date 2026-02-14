@@ -1,28 +1,42 @@
 import { createBuiltinFunction } from "../abstract-operations/built-in-function-object.ts";
 import { makeClassConstructor } from "../abstract-operations/function-objects.ts";
 import { definePropertyOrThrow } from "../abstract-operations/object-operations.ts";
-import { ordinaryCreateFromConstructor } from "../abstract-operations/ordinary-object.ts";
+import { getPrototypeFromConstructor } from "../abstract-operations/ordinary-object.ts";
 import { PropertyDescriptor } from "../abstract-operations/property-map.ts";
+import { stringCreate } from "../abstract-operations/string-exotic.ts";
 import { toString } from "../abstract-operations/type-conversion.ts";
 import type { Realm } from "../execution-contexts/realm.ts";
 import { normalCompletion } from "../types-and-values/completion-record.ts";
+import { EngineValue } from "../types-and-values/data-types.ts";
+import { symbolDescriptiveString } from "./symbol-prototype.ts";
 
 // https://tc39.es/ecma262/multipage/text-processing.html#sec-string-constructor
 export function intrinsicString(realm: Realm) {
 	realm.intrinsics["%String%"] = createBuiltinFunction(
 		(_thisValue, argumentsList, newTarget) => {
-			const b = toString(argumentsList[0]!);
+			// https://tc39.es/ecma262/multipage/text-processing.html#sec-string-constructor-string-value
+			let input = argumentsList[0];
 
-			if (newTarget === undefined || b.type === "throw") {
-				return b;
+			if (!input) {
+				input = EngineValue.string("");
+			} else {
+				if ((newTarget === undefined || newTarget.isUndefined()) && input.isSymbol()) {
+					return normalCompletion(symbolDescriptiveString(input));
+				}
+
+				input = toString(input).unwrap();
 			}
 
-			const o = ordinaryCreateFromConstructor(newTarget, "%String.prototype%", [
-				"StringData",
-			]);
-			o.objectSetInternalSlot("StringData", b.value.data.value);
+			if (newTarget === undefined || newTarget.isUndefined()) {
+				return normalCompletion(input);
+			}
 
-			return normalCompletion(o);
+			return normalCompletion(
+				stringCreate(
+					input.asString(),
+					getPrototypeFromConstructor(newTarget, "%String.prototype%").unwrap(),
+				),
+			);
 		},
 		1,
 		"String",

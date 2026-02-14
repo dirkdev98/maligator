@@ -509,13 +509,10 @@ export function getPrototypeFromConstructor(
 	constructor: EngineValue<"object">,
 	intrinsicDefaultProto: string,
 ): CompletionRecord<EngineValue<"object">> {
-	const proto = get(constructor, "prototype");
-	if (proto.type === "throw") {
-		return proto;
-	}
+	const proto = get(constructor, "prototype").unwrap();
 
-	if (proto.value.isObject()) {
-		return proto as CompletionRecord<EngineValue<"object">>;
+	if (proto.isObject()) {
+		return normalCompletion(proto.asObject());
 	}
 
 	const realm = getFunctionRealm(constructor);

@@ -15,13 +15,15 @@ const parsed = parseScript(txt, getCurrentRealm());
 getCurrentRealm().isStrict ||= parsed.isStrict;
 const result = evaluate(parsed.ECMAScriptCode);
 
-spawnSync(`bat`, ["--paging=never", "./local.js"], {
-	stdio: "inherit",
-	env: {
-		...process.env,
-		FORCE_COLOR: "1",
-	},
-});
+if (process.argv.includes("--inspect")) {
+	spawnSync(`bat`, ["--paging=never", "./local.js"], {
+		stdio: "inherit",
+		env: {
+			...process.env,
+			FORCE_COLOR: "1",
+		},
+	});
+}
 
 if (result.type !== "normal") {
 	console.dir(result?.value ?? result.error, { depth: 4 });
