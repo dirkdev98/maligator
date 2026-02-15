@@ -1,28 +1,18 @@
 # Maligator
 
-To start with, we are building an ECMA 262 compliant engine. After that we'll see where we
-end up. This sounds like a big enough challenge for now :) The goal is purely an exercise
-in spec-based implementing, to get to know ECMAScript just a tad more and to get more
-experience in building runtimes.
+We started with an ECMA 262 compliant engine in `src/engine`. It is a naive one-to-one
+implementation of the spec. Most basic things work for now, but various parts are not
+implemented. Things like classes, template literals, generators, async functions and a
+whole slew of intrinsics are skipped.
 
-## Design choices
+With this implementation I learned a lot about the inner workings of ECMAScript, spec
+reading and the ungodly amount of work it is to write a compliant engine. But I also took
+some things for granted, like the internal string and number representations of V8 and
+garbage collection by V8.
 
-- We depend on V8 to do our memory management and don't do exercises in memory
-  optimization of the implementation.
-- We depend on V8 to handle internal representations of values like strings, bigints and
-  numbers.
-- We start parsing via Meriyah. We may want to hand roll a parser later on.
+Now we want to upgrade to a more efficient (hopefully) and interesting approach. An
+ahead-of-time compiler to C.
 
 ## Useful links
 
-- [The Standard](https://tc39.es/ecma262/)
-
----
-
-## Some wild ideas
-
-We can do anything as long as we put in the work to get there.
-
-- Build a native runtime and compile to bytecode for that runtime.
-- Build a new dev-toolchain (linting, formatting, whatevs)
-- Perform dynamic type analysis on TypeScript ionputs.
+- [The Standard](https://tc39.es/ecma262/multipage)
