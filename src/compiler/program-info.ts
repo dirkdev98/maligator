@@ -7,6 +7,10 @@ export interface CreateScope {
 	createScope(node: ESTree.Node, type: ScopeInformation["type"]): ScopeInformation;
 }
 
+type DebugArgs = {
+	withBindings?: boolean;
+};
+
 export class ProgramInformation {
 	// Global Environment (JSON, Math, Object, etc);
 	public rootScope: ScopeInformation;
@@ -96,8 +100,47 @@ export class ProgramInformation {
 		this.scopes.set(node, scope);
 	}
 
-	debug() {
-		const scopes = this.rootScope.debug();
+	getScopeForNode(node: ESTree.Node) {
+		if (this.scopes.has(node)) {
+			return this.scopes.get(node)!;
+		}
+
+		const scriptOrModule =
+			this.scripts.get(node.loc?.source ?? "___") ??
+			this.modules.get(node.loc?.source ?? "___");
+
+		if (!scriptOrModule) {
+			return this.rootScope;
+		}
+
+		const nodeInNode = (node: ESTree.Node, potentialParent: ESTree.Node) => {
+			return (
+				potentialParent.loc!.start.line <= node.loc!.start.line &&
+				potentialParent.loc!.end.line >= node.loc!.end.line
+			);
+		};
+
+		const recurse = (scope: ScopeInformation) => {
+			for (const child of scope.children) {
+				if (nodeInNode(node, child.node)) {
+					return recurse(child);
+				}
+			}
+
+			return scope;
+		};
+
+		const result = recurse(scriptOrModule.rootScope);
+		if (result) {
+			this.scopes.set(node, result);
+			return result;
+		}
+
+		throw new Error(`Can't find the scope for ${JSON.stringify(node.loc, null, 2)}`);
+	}
+
+	debug(opts: DebugArgs = {}) {
+		const scopes = this.rootScope.debug(opts);
 
 		return scopes.join("\n");
 	}
@@ -185,13 +228,30 @@ export class ScopeInformation {
 		return childScope;
 	}
 
-	debug(): Array<string> {
+	createBinding(
+		name: string | { name: string; isPrivate: boolean },
+		definition: ESTree.Node,
+		kind: Binding["kind"],
+	): Binding {
+		const binding = new Binding(name, definition, kind);
+		this.bindings.set(binding.name, binding);
+
+		return binding;
+	}
+
+	debug(opts: DebugArgs = {}): Array<string> {
 		const str = [
 			`- Scope[${this.type}]: ${this.node.loc?.source ?? "[unknown].js"}:${this.node.loc?.start?.line ?? "-"}:${this.node.loc?.start?.column ?? "-"}`,
 		];
 
+		if (opts.withBindings) {
+			for (const binding of this.bindings.values()) {
+				str.push(`    - ${binding.name} (${binding.kind})`);
+			}
+		}
+
 		for (const child of this.children) {
-			const result = child.debug();
+			const result = child.debug(opts);
 			for (const row of result) {
 				str.push(`  ${row}`);
 			}
@@ -204,13 +264,19 @@ export class ScopeInformation {
 class Binding {
 	public name: string;
 	public definition: ESTree.Node;
-	public kind: "let" | "const" | "var" | "param";
+	public isPrivate: boolean = false;
+	public kind: "import" | "label" | "let" | "const" | "var" | "function" | "param";
 	public isCaptured: boolean = false;
 	public isMutated: boolean = true;
 
-	constructor(name: string, definition: ESTree.Node, kind: Binding["kind"]) {
-		this.name = name;
+	constructor(
+		name: string | { name: string; isPrivate: boolean },
+		definition: ESTree.Node,
+		kind: Binding["kind"],
+	) {
+		this.name = typeof name === "string" ? name : name.name;
 		this.definition = definition;
+		this.isPrivate = typeof name === "string" ? false : name.isPrivate;
 		this.kind = kind;
 	}
 

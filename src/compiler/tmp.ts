@@ -7,4 +7,4 @@ program.loadModule("./local.js");
 doScopeAnalysis(program);
 
 // eslint-disable-next-line no-console
-console.log(program.debug());
+console.log(program.debug({ withBindings: true }));

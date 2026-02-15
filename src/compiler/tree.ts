@@ -74,7 +74,7 @@ const WALKER_PROPS = {
 	TemplateLiteral: ["expressions", "quasis"],
 	ThisExpression: [],
 	ThrowStatement: ["argument"],
-	TryStatement: ["block"],
+	TryStatement: ["block", "handler", "finalizer"],
 	UnaryExpression: ["argument"],
 	UpdateExpression: ["argument"],
 	VariableDeclaration: ["declarations"],
