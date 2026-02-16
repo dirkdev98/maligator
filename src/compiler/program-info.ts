@@ -239,6 +239,20 @@ export class ScopeInformation {
 		return binding;
 	}
 
+	getBinding(name: string | { name: string }): Binding | null {
+		const n = typeof name === "string" ? name : name.name;
+		const res = this.bindings.get(n);
+		if (res) {
+			return res;
+		}
+
+		if (this.parent) {
+			return this.parent.getBinding(name);
+		}
+
+		return null;
+	}
+
 	debug(opts: DebugArgs = {}): Array<string> {
 		const str = [
 			`- Scope[${this.type}]: ${this.node.loc?.source ?? "[unknown].js"}:${this.node.loc?.start?.line ?? "-"}:${this.node.loc?.start?.column ?? "-"}`,
@@ -246,7 +260,10 @@ export class ScopeInformation {
 
 		if (opts.withBindings) {
 			for (const binding of this.bindings.values()) {
-				str.push(`    - ${binding.name} (${binding.kind})`);
+				const result = binding.debug();
+				for (const row of result) {
+					str.push(`    ${row}`);
+				}
 			}
 		}
 
@@ -268,6 +285,7 @@ class Binding {
 	public kind: "import" | "label" | "let" | "const" | "var" | "function" | "param";
 	public isCaptured: boolean = false;
 	public isMutated: boolean = true;
+	public updateNodes: Array<ESTree.Node> = [];
 
 	constructor(
 		name: string | { name: string; isPrivate: boolean },
@@ -282,5 +300,15 @@ class Binding {
 
 	canBeGloballyHoisted() {
 		return !this.isMutated;
+	}
+
+	addUpdateUsage(node: ESTree.Node) {
+		this.updateNodes.push(node);
+	}
+
+	debug() {
+		return [
+			`- Binding[${this.kind}]: ${this.name}${this.updateNodes.length > 0 ? ` (${this.updateNodes.length}x)` : ""}`,
+		];
 	}
 }

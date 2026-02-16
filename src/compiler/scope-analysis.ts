@@ -5,8 +5,7 @@ import { walkTree } from "./tree.ts";
 export function doScopeAnalysis(program: ProgramInformation) {
 	createScopeInformation(program);
 	initializeBindingInformation(program);
-
-	// TODO: Go through each Variable Declaration and arguments, and register them in a scope.
+	collectBindingUsageInformation(program);
 
 	// TODO: Go through all identifiers and link them up to the registered symbols.
 }
@@ -92,6 +91,38 @@ function initializeBindingInformation(program: ProgramInformation) {
 	}
 }
 
+function collectBindingUsageInformation(program: ProgramInformation) {
+	const collectInformation = (node: ESTree.Node) => {
+		const scope = program.getScopeForNode(node);
+
+		if (node.type === "AssignmentExpression") {
+			const names = extractNames(node.left);
+			for (const name of names) {
+				const binding = scope.getBinding(name);
+				if (binding) {
+					binding.addUpdateUsage(node);
+				}
+			}
+		}
+
+		if (node.type === "UpdateExpression") {
+			const names = extractNames(node.argument);
+			for (const name of names) {
+				const binding = scope.getBinding(name);
+				if (binding) {
+					binding.addUpdateUsage(node);
+				}
+			}
+		}
+
+		walkTree(node, collectInformation);
+	};
+
+	for (const module of program.iterateProgramParts()) {
+		walkTree(module.node, collectInformation);
+	}
+}
+
 function extractNames(
 	node:
 		| null
@@ -136,6 +167,8 @@ function extractNames(
 			return extractNames(node.argument);
 		case "Property":
 			return extractNames(node.key);
+		case "MemberExpression":
+			return extractNames(node.object);
 	}
 
 	return [];

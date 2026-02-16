@@ -3,6 +3,7 @@ import { doScopeAnalysis } from "./scope-analysis.ts";
 
 const program = new ProgramInformation();
 program.loadModule("./local.js");
+program.loadScript("./local2.js");
 
 doScopeAnalysis(program);
 
