@@ -1048,9 +1048,9 @@ export class EngineValue<T extends ValueType = ValueType> {
 
 	// https://tc39.es/ecma262/#sec-numeric-types-bigint-lessThan
 	bigintLessThan(this: EngineValue<"bigint">, other: EngineValue<"bigint">) {
-		return this.data.value < other.data.value ?
-				EngineValue.boolean(true)
-			:	EngineValue.boolean(false);
+		return this.data.value < other.data.value
+			? EngineValue.boolean(true)
+			: EngineValue.boolean(false);
 	}
 
 	// https://tc39.es/ecma262/#sec-numeric-types-bigint-equal

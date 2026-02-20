@@ -10,16 +10,16 @@ export const TryStatement: Evaluator<"TryStatement"> = {
 	evaluate(node) {
 		const tryResult = evaluate(node.block);
 		const catchResult =
-			tryResult.type === "throw" && node.handler !== null ?
-				catchClauseEvaluation(node.handler, tryResult.error)
-			:	undefined;
+			tryResult.type === "throw" && node.handler !== null
+				? catchClauseEvaluation(node.handler, tryResult.error)
+				: undefined;
 
 		const finallyResult = node.finalizer ? evaluate(node.finalizer) : undefined;
 
 		const result =
-			!finallyResult || finallyResult?.type === "normal" ?
-				(catchResult ?? tryResult)
-			:	finallyResult;
+			!finallyResult || finallyResult?.type === "normal"
+				? (catchResult ?? tryResult)
+				: finallyResult;
 
 		if (result.value === undefined) {
 			result.value = EngineValue.undefined();

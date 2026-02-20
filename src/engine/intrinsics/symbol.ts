@@ -13,10 +13,9 @@ import { EngineValue } from "../types-and-values/data-types.ts";
 export function intrinsicSymbol(realm: Realm) {
 	realm.intrinsics["%Symbol%"] = createBuiltinFunction(
 		(_thisValue, argumentsList, newTarget) => {
-			const desc =
-				argumentsList[0] ?
-					unwrapCompletion(toString(argumentsList[0]))
-				:	EngineValue.undefined();
+			const desc = argumentsList[0]
+				? unwrapCompletion(toString(argumentsList[0]))
+				: EngineValue.undefined();
 
 			if (newTarget === undefined) {
 				return normalCompletion(

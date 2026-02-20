@@ -5,9 +5,10 @@ import { walkTree } from "./tree.ts";
 export function doScopeAnalysis(program: ProgramInformation) {
 	createScopeInformation(program);
 	initializeBindingInformation(program);
-	collectBindingUsageInformation(program);
+	collectBindingWriteInformation(program);
 
-	// TODO: Go through all identifiers and link them up to the registered symbols.
+	// TODO: Track variable reads. We need this combined with the writes to check for escaped
+	//  variables.
 }
 
 function createScopeInformation(program: ProgramInformation) {
@@ -91,7 +92,7 @@ function initializeBindingInformation(program: ProgramInformation) {
 	}
 }
 
-function collectBindingUsageInformation(program: ProgramInformation) {
+function collectBindingWriteInformation(program: ProgramInformation) {
 	const collectInformation = (node: ESTree.Node) => {
 		const scope = program.getScopeForNode(node);
 

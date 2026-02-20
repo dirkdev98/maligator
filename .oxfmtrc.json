@@ -1,0 +1,13 @@
+{
+	"$schema": "./node_modules/oxfmt/configuration_schema.json",
+	"ignorePatterns": ["scripts/test262.json"],
+	"useTabs": true,
+	"printWidth": 90,
+	"experimentalSortImports": {
+		"newlinesBetween": false
+	},
+	"experimentalTailwindcss": {},
+	"experimentalSortPackageJson": {
+		"sortScripts": true
+	}
+}

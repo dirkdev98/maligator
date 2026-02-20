@@ -64,9 +64,9 @@ export const FunctionObjectInternalMethods = {
 		const kind = F.objectGetInternalSlot("ConstructorKind");
 
 		const thisArgument =
-			kind === "BASE" ?
-				ordinaryCreateFromConstructor(newTarget, "%Object.prototype%")
-			:	EngineValue.undefined();
+			kind === "BASE"
+				? ordinaryCreateFromConstructor(newTarget, "%Object.prototype%")
+				: EngineValue.undefined();
 
 		const calleeContext = prepareForOrdinaryCall(F, newTarget);
 
@@ -149,11 +149,12 @@ export function ordinaryCallBindThis(
 	const calleeRealm = F.objectGetInternalSlot("Realm");
 	const localEnv = calleeContext.lexicalEnvironment;
 	const thisValue =
-		thisMode === "STRICT" ? thisArgument
-		: thisArgument.isNull() || thisArgument.isUndefined() ?
-			// eslint-disable-next-line @typescript-eslint/no-non-null-asserted-optional-chain
-			calleeRealm.globalEnv?.globalThisValue!
-		:	unwrapCompletion(toObject(thisArgument));
+		thisMode === "STRICT"
+			? thisArgument
+			: thisArgument.isNull() || thisArgument.isUndefined()
+				? // eslint-disable-next-line @typescript-eslint/no-non-null-asserted-optional-chain
+					calleeRealm.globalEnv?.globalThisValue!
+				: unwrapCompletion(toObject(thisArgument));
 
 	if (localEnv) {
 		(localEnv as FunctionEnvironmentRecord).bindThisValue(thisValue);

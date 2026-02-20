@@ -38,10 +38,9 @@ export function test262RunFile(file: Test262File) {
 		return;
 	}
 
-	const fileToLoad =
-		file.frontmatter.flags?.includes("raw") ?
-			[]
-		:	["harness/assert.js", "harness/sta.js"];
+	const fileToLoad = file.frontmatter.flags?.includes("raw")
+		? []
+		: ["harness/assert.js", "harness/sta.js"];
 	fileToLoad.push(...(file.frontmatter.includes ?? []).map((it) => `harness/${it}`));
 
 	if (!file.frontmatter.flags?.includes("onlyStrict")) {

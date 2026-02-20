@@ -57,9 +57,11 @@ if (!("UNKNOWN" in result)) {
 				results: Object.fromEntries(
 					cacheContext.files.map((file) => [
 						file.path,
-						file.result === "PASSED" ? "PASSED"
-						: file.result === "SKIPPED" ? "SKIPPED"
-						: "FAILED",
+						file.result === "PASSED"
+							? "PASSED"
+							: file.result === "SKIPPED"
+								? "SKIPPED"
+								: "FAILED",
 					]),
 				),
 			},

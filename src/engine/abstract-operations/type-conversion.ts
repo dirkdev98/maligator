@@ -189,9 +189,9 @@ export function toIntegerOrInfinity(argument: EngineValue): CompletionRecord<num
 		return normalCompletion(value);
 	}
 
-	return value < 0 ?
-			normalCompletion(-Math.floor(-value))
-		:	normalCompletion(Math.floor(value));
+	return value < 0
+		? normalCompletion(-Math.floor(-value))
+		: normalCompletion(Math.floor(value));
 }
 
 // https://tc39.es/ecma262/#sec-toint32
@@ -325,10 +325,7 @@ export function toUint8Clamp(
 		return normalCompletion(EngineValue.number(0));
 	}
 
-	const clamped =
-		number < 0 ? 0
-		: number > 255 ? 255
-		: number;
+	const clamped = number < 0 ? 0 : number > 255 ? 255 : number;
 	const floored = Math.floor(clamped);
 	if (floored < clamped + 0.5) {
 		return normalCompletion(EngineValue.number(floored));

@@ -515,16 +515,16 @@ export class GlobalEnvironmentRecord extends EnvironmentRecord {
 		);
 
 		const desc =
-			existingProp instanceof EngineValue || existingProp.configurable ?
-				new PropertyDescriptor({
-					value,
-					writable: true,
-					enumerable: true,
-					configurable: deletable ?? false,
-				})
-			:	new PropertyDescriptor({
-					value,
-				});
+			existingProp instanceof EngineValue || existingProp.configurable
+				? new PropertyDescriptor({
+						value,
+						writable: true,
+						enumerable: true,
+						configurable: deletable ?? false,
+					})
+				: new PropertyDescriptor({
+						value,
+					});
 
 		definePropertyOrThrow(this.objectRecord.bindingObject, name, desc);
 		set(this.objectRecord.bindingObject, name, value, false);

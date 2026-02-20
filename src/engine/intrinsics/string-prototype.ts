@@ -219,9 +219,9 @@ export function intrinsicStringPrototype(realm: Realm) {
 						const len = S.length;
 
 						const pos =
-							argumentsList[1] === undefined || argumentsList[1].isUndefined() ?
-								len
-							:	toIntegerOrInfinity(argumentsList[1]).unwrap();
+							argumentsList[1] === undefined || argumentsList[1].isUndefined()
+								? len
+								: toIntegerOrInfinity(argumentsList[1]).unwrap();
 
 						const end = Math.max(0, Math.min(len, pos));
 						const searchLength = searchString.data.value.length;
@@ -271,9 +271,9 @@ export function intrinsicStringPrototype(realm: Realm) {
 						const len = S.length;
 
 						const pos =
-							argumentsList[1] === undefined || argumentsList[1].isUndefined() ?
-								0
-							:	toIntegerOrInfinity(argumentsList[1]).unwrap();
+							argumentsList[1] === undefined || argumentsList[1].isUndefined()
+								? 0
+								: toIntegerOrInfinity(argumentsList[1]).unwrap();
 
 						const start = Math.max(0, Math.min(len, pos));
 						const index = EngineValue.string(S).stringIndexOf(searchString, start);
@@ -316,9 +316,9 @@ export function intrinsicStringPrototype(realm: Realm) {
 						const len = S.length;
 
 						const pos =
-							argumentsList[1] === undefined || argumentsList[1].isUndefined() ?
-								0
-							:	toIntegerOrInfinity(argumentsList[1]).unwrap();
+							argumentsList[1] === undefined || argumentsList[1].isUndefined()
+								? 0
+								: toIntegerOrInfinity(argumentsList[1]).unwrap();
 
 						const start = Math.max(0, Math.min(len, pos));
 						const index = EngineValue.string(S).stringIndexOf(searchString, start);
