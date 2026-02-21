@@ -227,6 +227,8 @@ export class ScopeInformation {
 	public parent: ScopeInformation | null = null;
 	public children: Array<ScopeInformation> = [];
 
+	private usedArguments = false;
+
 	constructor(
 		program: ScopeInformation["program"],
 		node: ESTree.Node,
@@ -252,6 +254,8 @@ export class ScopeInformation {
 		definition: ESTree.Node,
 		kind: Binding["kind"],
 	): Binding {
+		// TODO: is it a syntax error when duplicate binding names are found?
+
 		const binding = new Binding(name, definition, kind);
 		this.bindings.set(binding.name, binding);
 
@@ -272,10 +276,23 @@ export class ScopeInformation {
 		return null;
 	}
 
+	usedFunctionArgumentsObject() {
+		if (this.type === "function") {
+			this.usedArguments = true;
+			return;
+		}
+
+		this.parent?.usedFunctionArgumentsObject();
+	}
+
 	debug(opts: DebugArgs = {}): Array<string> {
 		const str = [
 			`- Scope[${this.type}]: ${this.node.loc?.source ?? "[unknown].js"}:${this.node.loc?.start?.line ?? "-"}:${this.node.loc?.start?.column ?? "-"}`,
 		];
+
+		if (this.usedArguments) {
+			str[0] += " (arguments=1)";
+		}
 
 		if (opts.withBindings) {
 			for (const binding of this.bindings.values()) {

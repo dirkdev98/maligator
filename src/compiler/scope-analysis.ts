@@ -8,11 +8,6 @@ export function doScopeAnalysis(program: ProgramInformation) {
 	collectBindingWriteInformation(program);
 	collectBindingReadInformation(program);
 
-	// TODO: Track variable reads. We need this combined with the writes to check for escaped
-	//  variables.
-
-	// TODO: handle ambient identifiers like this, super, arguments
-
 	// TODO: track vars, functions, classes, etc on the correct scopes.
 
 	// TODO: track methods, private identifiers
@@ -20,6 +15,8 @@ export function doScopeAnalysis(program: ProgramInformation) {
 	// TODO: Determine the number of declarations, params
 
 	// TODO: Determine which variables are captured.
+
+	// TODO: Verify the behaviors against various Static Semantics from the ecma262 spec. i.e https://tc39.es/ecma262/multipage/syntax-directed-operations.html#sec-syntax-directed-operations-scope-analysis
 }
 
 function createScopeInformation(program: ProgramInformation) {
@@ -165,6 +162,11 @@ function collectBindingReadInformation(program: ProgramInformation) {
 		const scope = program.getScopeForNode(node);
 
 		if (node.type === "Identifier") {
+			if (node.name === "arguments") {
+				// Track arguments usage. This allows us to only compile the arguments object when its used.
+				scope.usedFunctionArgumentsObject();
+			}
+
 			const parent = treeGetNodeParent(node);
 			if (!parent) {
 				return;
