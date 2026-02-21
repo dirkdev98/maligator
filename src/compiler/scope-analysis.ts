@@ -13,13 +13,38 @@ export function doScopeAnalysis(program: ProgramInformation) {
 
 function createScopeInformation(program: ProgramInformation) {
 	const createScopes = (node: ESTree.Node, scopeCreator: CreateScope) => {
-		if (node.type === "FunctionDeclaration") {
+		if (
+			node.type === "FunctionDeclaration" ||
+			node.type === "FunctionExpression" ||
+			node.type === "ArrowFunctionExpression" ||
+			node.type === "MethodDefinition"
+		) {
 			const newScope = scopeCreator.createScope(node, "function");
 
 			walkTree(node, createScopes, newScope);
 			return;
-		} else if (node.type === "BlockStatement") {
+		} else if (node.type === "BlockStatement" || node.type === "StaticBlock") {
 			const newScope = scopeCreator.createScope(node, "block");
+			walkTree(node, createScopes, newScope);
+			return;
+		} else if (node.type === "ClassDeclaration") {
+			const newScope = scopeCreator.createScope(node, "class");
+			walkTree(node, createScopes, newScope);
+			return;
+		} else if (
+			node.type === "ForStatement" ||
+			node.type === "ForInStatement" ||
+			node.type === "ForOfStatement"
+		) {
+			const newScope = scopeCreator.createScope(node, "for-loop");
+			walkTree(node, createScopes, newScope);
+			return;
+		} else if (node.type === "WithStatement") {
+			const newScope = scopeCreator.createScope(node, "with-block");
+			walkTree(node, createScopes, newScope);
+			return;
+		} else if (node.type === "SwitchStatement") {
+			const newScope = scopeCreator.createScope(node, "switch-block");
 			walkTree(node, createScopes, newScope);
 			return;
 		}

@@ -114,10 +114,19 @@ export class ProgramInformation {
 		}
 
 		const nodeInNode = (node: ESTree.Node, potentialParent: ESTree.Node) => {
-			return (
-				potentialParent.loc!.start.line <= node.loc!.start.line &&
-				potentialParent.loc!.end.line >= node.loc!.end.line
-			);
+			const parentStart = potentialParent.loc!.start;
+			const parentEnd = potentialParent.loc!.end;
+			const nodeStart = node.loc!.start;
+			const nodeEnd = node.loc!.end;
+
+			const startsBeforeOrAt =
+				parentStart.line < nodeStart.line ||
+				(parentStart.line === nodeStart.line && parentStart.column <= nodeStart.column);
+			const endsAfterOrAt =
+				parentEnd.line > nodeEnd.line ||
+				(parentEnd.line === nodeEnd.line && parentEnd.column >= nodeEnd.column);
+
+			return startsBeforeOrAt && endsAfterOrAt;
 		};
 
 		const recurse = (scope: ScopeInformation) => {
@@ -202,7 +211,17 @@ export class ScriptInformation {
 
 export class ScopeInformation {
 	public program: ProgramInformation | ModuleInformation | ScriptInformation;
-	public type: "global" | "script-global" | "script" | "module" | "function" | "block";
+	public type:
+		| "global"
+		| "script-global"
+		| "script"
+		| "module"
+		| "function"
+		| "class"
+		| "block"
+		| "with-block"
+		| "switch-block"
+		| "for-loop";
 	public node: ESTree.Node;
 	public bindings: Map<string, Binding> = new Map();
 	public parent: ScopeInformation | null = null;
