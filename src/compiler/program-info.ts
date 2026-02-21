@@ -298,7 +298,7 @@ export class ScopeInformation {
 			for (const binding of this.bindings.values()) {
 				const result = binding.debug();
 				for (const row of result) {
-					str.push(`    ${row}`);
+					str.push(`  >${row}`);
 				}
 			}
 		}

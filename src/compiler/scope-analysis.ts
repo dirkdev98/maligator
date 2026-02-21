@@ -14,9 +14,17 @@ export function doScopeAnalysis(program: ProgramInformation) {
 
 	// TODO: Determine the number of declarations, params
 
-	// TODO: Determine which variables are captured.
+	// TODO: Determine which variables are captured in closures
 
 	// TODO: Verify the behaviors against various Static Semantics from the ecma262 spec. i.e https://tc39.es/ecma262/multipage/syntax-directed-operations.html#sec-syntax-directed-operations-scope-analysis
+
+	// TODO: Track async/generator flags
+
+	// TODO: track exported bindings
+
+	// TODO: Show rest parameter indicator (...args) vs regular params
+
+	// TODO: Track temporary dead zones  (let, const) vs hoisted (var, function)
 }
 
 function createScopeInformation(program: ProgramInformation) {
@@ -172,10 +180,6 @@ function collectBindingReadInformation(program: ProgramInformation) {
 				return;
 			}
 
-			if (parent.type === "MemberExpression" && parent.object === node) {
-				// Skip tracking foo in foo.x;
-				return;
-			}
 			if (parent.type === "MemberExpression" && parent.property === node) {
 				// Skip tracking foo in x.foo;
 				return;
@@ -215,10 +219,13 @@ function collectBindingReadInformation(program: ProgramInformation) {
 			}
 
 			if (
-				(parent.type === "FunctionDeclaration" || parent.type === "FunctionExpression") &&
-				parent.id === node
+				(parent.type === "FunctionDeclaration" ||
+					parent.type === "FunctionExpression" ||
+					parent.type === "ArrowFunctionExpression") &&
+				(("id" in parent && parent.id === node) || parent.params.includes(node))
 			) {
 				// Skip tracking foo in function foo() {}
+				// Skip tracking x in function foo(x) {}
 				return;
 			}
 
