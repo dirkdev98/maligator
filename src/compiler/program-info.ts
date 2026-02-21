@@ -338,6 +338,7 @@ class Binding {
 		| "var"
 		| "function"
 		| "class"
+		| "field"
 		| "param";
 	public isCaptured: boolean = false;
 	public isMutated: boolean = true;

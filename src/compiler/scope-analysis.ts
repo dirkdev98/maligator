@@ -8,8 +8,6 @@ export function doScopeAnalysis(program: ProgramInformation) {
 	collectBindingWriteInformation(program);
 	collectBindingReadInformation(program);
 
-	// TODO: track vars, functions, classes, etc on the correct scopes.
-
 	// TODO: track methods, private identifiers
 
 	// TODO: Determine the number of declarations, params
@@ -103,7 +101,7 @@ function initializeBindingInformation(program: ProgramInformation) {
 		if (node.type === "ClassDeclaration") {
 			const names = extractNames(node.id);
 			for (const name of names) {
-				scope.createBinding(name, node, "class");
+				scope.parent!.createBinding(name, node, "class");
 			}
 		}
 
@@ -138,6 +136,13 @@ function initializeBindingInformation(program: ProgramInformation) {
 			const names = extractNames(node.param);
 			for (const name of names) {
 				scope.createBinding(name, node, "let");
+			}
+		}
+
+		if (node.type === "PropertyDefinition") {
+			const names = extractNames(node.key);
+			for (const name of names) {
+				scope.createBinding(name, node, "field");
 			}
 		}
 
