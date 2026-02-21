@@ -32,15 +32,18 @@ function createScopeInformation(program: ProgramInformation) {
 		if (
 			node.type === "FunctionDeclaration" ||
 			node.type === "FunctionExpression" ||
-			node.type === "ArrowFunctionExpression" ||
-			node.type === "MethodDefinition"
+			node.type === "ArrowFunctionExpression"
 		) {
 			const newScope = scopeCreator.createScope(node, "function");
 
 			walkTree(node, createScopes, newScope);
 			return;
-		} else if (node.type === "BlockStatement" || node.type === "StaticBlock") {
+		} else if (node.type === "BlockStatement") {
 			const newScope = scopeCreator.createScope(node, "block");
+			walkTree(node, createScopes, newScope);
+			return;
+		} else if (node.type === "StaticBlock") {
+			const newScope = scopeCreator.createScope(node, "static-block");
 			walkTree(node, createScopes, newScope);
 			return;
 		} else if (node.type === "ClassDeclaration") {
@@ -82,11 +85,26 @@ function initializeBindingInformation(program: ProgramInformation) {
 			for (const declaration of node.declarations) {
 				const names = extractNames(declaration.id);
 				for (const name of names) {
+					// TODO: Var declarations that match parameter names should NOT create new bindings.
+					// Per ECMAScript: if a var declaration's name matches a parameter, it reuses that
+					// binding. Currently creates a duplicate Binding[var] instead of reusing Binding[param].
+					// See: local2.js:varShadowsParam - shows Binding[var]: param1 instead of reusing param.
+
+					// TODO: When both var and function declarations exist with same name, function wins.
+					// Currently both bindings are created. Function declaration should replace var binding.
+					// See: local2.js:funcVsVar, local2.js:varBeforeFunc
 					scope.createBinding(name, declaration, kind);
 				}
 			}
 
 			return;
+		}
+
+		if (node.type === "ClassDeclaration") {
+			const names = extractNames(node.id);
+			for (const name of names) {
+				scope.createBinding(name, node, "class");
+			}
 		}
 
 		if (
@@ -95,12 +113,14 @@ function initializeBindingInformation(program: ProgramInformation) {
 			node.type === "ArrowFunctionExpression"
 		) {
 			if (node.type === "FunctionDeclaration") {
-				// TODO: Shouldn't this one be hoisted to the parent scope?
-				//
-				// TODO: What about classes?
+				// TODO: Function declarations should be hoisted to the enclosing function/module/script
+				// scope, NOT the immediate parent scope. In sloppy mode, functions inside blocks should
+				// hoist to function scope. Currently the binding is created at the wrong scope level. See:
+				// local2.js:funcInBlock, local2.js:sloppyBlockFunc, local2.js:outerHoisting Per 14.2.2
+				// Static Semantics: VarScopedDeclarations, FunctionDeclaration is var-scoped.
 				const names = extractNames(node.id);
 				for (const name of names) {
-					scope.parent!.createBinding(name, node, "function");
+					scope.createBinding(name, node, "function");
 				}
 			}
 
@@ -119,8 +139,6 @@ function initializeBindingInformation(program: ProgramInformation) {
 			for (const name of names) {
 				scope.createBinding(name, node, "let");
 			}
-
-			return;
 		}
 
 		// TODO: Imports / exports
@@ -286,7 +304,7 @@ function extractNames(
 		case "SpreadElement":
 			return extractNames(node.argument);
 		case "Property":
-			return extractNames(node.key);
+			return extractNames(node.value);
 		case "MemberExpression":
 			return extractNames(node.object);
 	}

@@ -48,7 +48,7 @@ const WALKER_PROPS = {
 	ImportExpression: ["source", "options"],
 	ImportNamespaceSpecifier: ["local"],
 	ImportSpecifier: ["local", "imported"],
-	LabeledStatement: ["label"],
+	LabeledStatement: ["label", "body"],
 	Literal: [],
 	LogicalExpression: ["left", "right"],
 	MemberExpression: ["object", "property"],

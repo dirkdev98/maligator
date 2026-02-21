@@ -219,6 +219,7 @@ export class ScopeInformation {
 		| "function"
 		| "class"
 		| "block"
+		| "static-block"
 		| "with-block"
 		| "switch-block"
 		| "for-loop";
@@ -254,6 +255,17 @@ export class ScopeInformation {
 		definition: ESTree.Node,
 		kind: Binding["kind"],
 	): Binding {
+		if (
+			(kind === "var" || kind === "function") &&
+			this.type !== "function" &&
+			this.type !== "module" &&
+			this.type !== "script-global" &&
+			this.type !== "static-block" &&
+			this.parent
+		) {
+			return this.parent.createBinding(name, definition, kind);
+		}
+
 		// TODO: is it a syntax error when duplicate binding names are found?
 
 		const binding = new Binding(name, definition, kind);
@@ -318,7 +330,15 @@ class Binding {
 	public name: string;
 	public definition: ESTree.Node;
 	public isPrivate: boolean = false;
-	public kind: "import" | "label" | "let" | "const" | "var" | "function" | "param";
+	public kind:
+		| "import"
+		| "label"
+		| "let"
+		| "const"
+		| "var"
+		| "function"
+		| "class"
+		| "param";
 	public isCaptured: boolean = false;
 	public isMutated: boolean = true;
 	public updateNodes: Array<ESTree.Node> = [];
