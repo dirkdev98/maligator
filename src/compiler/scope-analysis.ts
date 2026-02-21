@@ -1,14 +1,25 @@
 import type { ESTree } from "meriyah";
 import type { CreateScope, ProgramInformation } from "./program-info.ts";
-import { walkTree } from "./tree.ts";
+import { treeGetNodeParent, walkTree } from "./tree.ts";
 
 export function doScopeAnalysis(program: ProgramInformation) {
 	createScopeInformation(program);
 	initializeBindingInformation(program);
 	collectBindingWriteInformation(program);
+	collectBindingReadInformation(program);
 
 	// TODO: Track variable reads. We need this combined with the writes to check for escaped
 	//  variables.
+
+	// TODO: handle ambient identifiers like this, super, arguments
+
+	// TODO: track vars, functions, classes, etc on the correct scopes.
+
+	// TODO: track methods, private identifiers
+
+	// TODO: Determine the number of declarations, params
+
+	// TODO: Determine which variables are captured.
 }
 
 function createScopeInformation(program: ProgramInformation) {
@@ -138,6 +149,80 @@ function collectBindingWriteInformation(program: ProgramInformation) {
 				if (binding) {
 					binding.addUpdateUsage(node);
 				}
+			}
+		}
+
+		walkTree(node, collectInformation);
+	};
+
+	for (const module of program.iterateProgramParts()) {
+		walkTree(module.node, collectInformation);
+	}
+}
+
+function collectBindingReadInformation(program: ProgramInformation) {
+	const collectInformation = (node: ESTree.Node) => {
+		const scope = program.getScopeForNode(node);
+
+		if (node.type === "Identifier") {
+			const parent = treeGetNodeParent(node);
+			if (!parent) {
+				return;
+			}
+
+			if (parent.type === "MemberExpression" && parent.object === node) {
+				// Skip tracking foo in foo.x;
+				return;
+			}
+			if (parent.type === "MemberExpression" && parent.property === node) {
+				// Skip tracking foo in x.foo;
+				return;
+			}
+
+			if (parent.type === "VariableDeclarator" && parent.id === node) {
+				// Skip tracking x in var x = foo;
+				return;
+			}
+
+			if (parent.type === "AssignmentExpression" && parent.left === node) {
+				// Skip tracking x in x = foo;
+				return;
+			}
+
+			if (parent.type === "AssignmentPattern" && parent.left === node) {
+				// Skip tracking x in let {x = z} = {};
+				return;
+			}
+
+			if (parent.type === "ArrayPattern") {
+				// Skip tracking x in let [x, y] = [];
+				return;
+			}
+
+			if (parent.type === "Property" && parent.key === node) {
+				// Skip tracking x in let f = { x: y };
+				return;
+			}
+
+			if (
+				parent.type === "Property" &&
+				treeGetNodeParent(parent)?.type === "ObjectPattern"
+			) {
+				// Skip tracking x in let {x} = {};
+				return;
+			}
+
+			if (
+				(parent.type === "FunctionDeclaration" || parent.type === "FunctionExpression") &&
+				parent.id === node
+			) {
+				// Skip tracking foo in function foo() {}
+				return;
+			}
+
+			const binding = scope.getBinding(node.name);
+			if (binding) {
+				binding.addReadUsage(node);
 			}
 		}
 

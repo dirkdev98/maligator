@@ -2,7 +2,10 @@ import { ProgramInformation } from "./program-info.ts";
 import { doScopeAnalysis } from "./scope-analysis.ts";
 
 const program = new ProgramInformation();
-program.loadModule("./local.js");
+
+if (!process.argv.includes("--short")) {
+	program.loadModule("./local.js");
+}
 program.loadScript("./local2.js");
 
 doScopeAnalysis(program);

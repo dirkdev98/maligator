@@ -305,6 +305,7 @@ class Binding {
 	public isCaptured: boolean = false;
 	public isMutated: boolean = true;
 	public updateNodes: Array<ESTree.Node> = [];
+	public readNodes: Array<ESTree.Node> = [];
 
 	constructor(
 		name: string | { name: string; isPrivate: boolean },
@@ -325,9 +326,27 @@ class Binding {
 		this.updateNodes.push(node);
 	}
 
+	addReadUsage(node: ESTree.Node) {
+		this.readNodes.push(node);
+	}
+
 	debug() {
-		return [
-			`- Binding[${this.kind}]: ${this.name}${this.updateNodes.length > 0 ? ` (${this.updateNodes.length}x)` : ""}`,
-		];
+		let suffix = "";
+
+		if (this.readNodes.length) {
+			suffix += `->${this.readNodes.length}`;
+		}
+
+		if (this.updateNodes.length) {
+			const s = `<-${this.updateNodes.length}`;
+
+			if (suffix) {
+				suffix = `${s}, ${suffix}`;
+			} else {
+				suffix = s;
+			}
+		}
+
+		return [`- Binding[${this.kind}]: ${this.name}${suffix ? ` (${suffix})` : ""}`];
 	}
 }

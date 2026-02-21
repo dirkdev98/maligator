@@ -23,7 +23,7 @@ const WALKER_PROPS = {
 	ClassBody: ["body"],
 	ClassDeclaration: ["id", "body", "superClass", "decorators"],
 	ClassExpression: ["id", "body", "superClass", "decorators"],
-	ConditionalExpression: ["type", "consequent", "alternate"],
+	ConditionalExpression: ["test", "consequent", "alternate"],
 	ContinueStatement: ["label"],
 	DebuggerStatement: [],
 	Decorator: ["expression"],
@@ -41,7 +41,7 @@ const WALKER_PROPS = {
 	FunctionDeclaration: ["id", "params", "body"],
 	FunctionExpression: ["id", "params", "body"],
 	Identifier: [],
-	IfStatement: ["type", "consequent", "alternate"],
+	IfStatement: ["test", "consequent", "alternate"],
 	ImportAttribute: ["key"],
 	ImportDeclaration: ["specifiers", "attributes"],
 	ImportDefaultSpecifier: ["local"],
@@ -67,7 +67,7 @@ const WALKER_PROPS = {
 	SpreadElement: ["argument"],
 	StaticBlock: ["body"],
 	Super: [],
-	SwitchCase: ["type", "consequent"],
+	SwitchCase: ["test", "consequent"],
 	SwitchStatement: ["discriminant", "cases"],
 	TaggedTemplateExpression: ["tag", "quasi"],
 	TemplateElement: [],
@@ -84,19 +84,14 @@ const WALKER_PROPS = {
 	YieldExpression: ["argument"],
 } satisfies WalkerProps;
 
+const _nodeParentMap = new WeakMap<ESTree.Node, ESTree.Node | null>();
+
 export function walkTree<Args extends Array<unknown>>(
-	tree: ESTree.Node | null | string | Array<ESTree.Node>,
+	tree: ESTree.Node | null | string,
 	cb: (node: ESTree.Node, ...args: Args) => void,
 	...args: NoInfer<Args>
 ): void {
 	if (tree === null || typeof tree === "string") {
-		return;
-	}
-
-	if (Array.isArray(tree)) {
-		for (const node of tree) {
-			walkTree(node, cb, ...args);
-		}
 		return;
 	}
 
@@ -115,11 +110,17 @@ export function walkTree<Args extends Array<unknown>>(
 		if (Array.isArray(val)) {
 			for (const it of val) {
 				if (isNode(it)) {
+					_nodeParentMap.set(it, tree);
 					cb(it, ...args);
 				}
 			}
 		} else if (isNode(val)) {
+			_nodeParentMap.set(val, tree);
 			cb(val, ...args);
 		}
 	}
+}
+
+export function treeGetNodeParent(node: ESTree.Node): ESTree.Node | null {
+	return _nodeParentMap.get(node) ?? null;
 }
