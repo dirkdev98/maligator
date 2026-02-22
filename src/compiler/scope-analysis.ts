@@ -8,11 +8,11 @@ export function doScopeAnalysis(program: ProgramInformation) {
 	collectBindingWriteInformation(program);
 	collectBindingReadInformation(program);
 
-	// TODO: track methods, private identifiers
-
-	// TODO: Determine the number of declarations, params
-
 	// TODO: Determine which variables are captured in closures
+
+	// TODO: Determine the number of declarations, params i.e registers of env values
+
+	// TODO: Assign register / env slots + unique names to functions
 
 	// TODO: Verify the behaviors against various Static Semantics from the ecma262 spec. i.e https://tc39.es/ecma262/multipage/syntax-directed-operations.html#sec-syntax-directed-operations-scope-analysis
 
@@ -165,7 +165,7 @@ function collectBindingWriteInformation(program: ProgramInformation) {
 			for (const name of names) {
 				const binding = scope.getBinding(name);
 				if (binding) {
-					binding.addUpdateUsage(node);
+					binding.addUpdateUsage(program, node);
 				}
 			}
 		}
@@ -175,7 +175,7 @@ function collectBindingWriteInformation(program: ProgramInformation) {
 			for (const name of names) {
 				const binding = scope.getBinding(name);
 				if (binding) {
-					binding.addUpdateUsage(node);
+					binding.addUpdateUsage(program, node);
 				}
 			}
 		}
@@ -254,7 +254,7 @@ function collectBindingReadInformation(program: ProgramInformation) {
 
 			const binding = scope.getBinding(node.name);
 			if (binding) {
-				binding.addReadUsage(node);
+				binding.addReadUsage(program, node);
 			}
 		}
 

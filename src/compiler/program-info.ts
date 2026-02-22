@@ -21,6 +21,7 @@ export class ProgramInformation {
 	public scripts: Map<string, ScriptInformation> = new Map();
 
 	public scopes: Map<ESTree.Node, ScopeInformation> = new Map();
+	private bindingNodeToScopeCache: Map<ESTree.Node, ScopeInformation> = new Map();
 
 	constructor() {
 		this.rootScope = new ScopeInformation(
@@ -148,6 +149,30 @@ export class ProgramInformation {
 		throw new Error(`Can't find the scope for ${JSON.stringify(node.loc, null, 2)}`);
 	}
 
+	getBindingScopeForNode(
+		node: ESTree.Node,
+		scope = this.rootScope,
+	): ScopeInformation | null {
+		if (this.bindingNodeToScopeCache.has(node)) {
+			return this.bindingNodeToScopeCache.get(node)!;
+		}
+
+		if (scope.bindingsByNode.has(node)) {
+			this.bindingNodeToScopeCache.set(node, scope);
+			return scope;
+		}
+
+		// Depth first traverse
+		for (const child of scope.children) {
+			const res = this.getBindingScopeForNode(node, child);
+			if (res) {
+				return res;
+			}
+		}
+
+		return null;
+	}
+
 	debug(opts: DebugArgs = {}) {
 		const scopes = this.rootScope.debug(opts);
 
@@ -224,7 +249,10 @@ export class ScopeInformation {
 		| "switch-block"
 		| "for-loop";
 	public node: ESTree.Node;
+
 	public bindings: Map<string, Binding> = new Map();
+	public bindingsByNode: Map<ESTree.Node, Binding> = new Map();
+
 	public parent: ScopeInformation | null = null;
 	public children: Array<ScopeInformation> = [];
 
@@ -269,7 +297,9 @@ export class ScopeInformation {
 		// TODO: is it a syntax error when duplicate binding names are found?
 
 		const binding = new Binding(name, definition, kind);
+
 		this.bindings.set(binding.name, binding);
+		this.bindingsByNode.set(definition, binding);
 
 		return binding;
 	}
@@ -341,7 +371,6 @@ class Binding {
 		| "field"
 		| "param";
 	public isCaptured: boolean = false;
-	public isMutated: boolean = true;
 	public updateNodes: Array<ESTree.Node> = [];
 	public readNodes: Array<ESTree.Node> = [];
 
@@ -356,35 +385,53 @@ class Binding {
 		this.kind = kind;
 	}
 
-	canBeGloballyHoisted() {
-		return !this.isMutated;
-	}
+	addUpdateUsage(program: ProgramInformation, node: ESTree.Node) {
+		if (!this.isCaptured) {
+			this.isCaptured = this.doesUsageCapture(program, node);
+		}
 
-	addUpdateUsage(node: ESTree.Node) {
 		this.updateNodes.push(node);
 	}
 
-	addReadUsage(node: ESTree.Node) {
+	addReadUsage(program: ProgramInformation, node: ESTree.Node) {
+		if (!this.isCaptured) {
+			this.isCaptured = this.doesUsageCapture(program, node);
+		}
+
 		this.readNodes.push(node);
 	}
 
-	debug() {
-		let suffix = "";
+	private doesUsageCapture(program: ProgramInformation, node: ESTree.Node) {
+		const thisScope = program.getBindingScopeForNode(this.definition);
 
-		if (this.readNodes.length) {
-			suffix += `->${this.readNodes.length}`;
+		let checkingScope = program.getScopeForNode(node);
+		while (checkingScope && checkingScope !== thisScope) {
+			if (checkingScope.type === "function") {
+				return true;
+			}
+			checkingScope = checkingScope.parent!;
 		}
+
+		return false;
+	}
+
+	debug() {
+		const suffix = [];
 
 		if (this.updateNodes.length) {
-			const s = `<-${this.updateNodes.length}`;
-
-			if (suffix) {
-				suffix = `${s}, ${suffix}`;
-			} else {
-				suffix = s;
-			}
+			suffix.push(`<-${this.updateNodes.length}`);
 		}
 
-		return [`- Binding[${this.kind}]: ${this.name}${suffix ? ` (${suffix})` : ""}`];
+		if (this.readNodes.length) {
+			suffix.push(`->${this.readNodes.length}`);
+		}
+
+		if (this.isCaptured) {
+			suffix.push("captured");
+		}
+
+		return [
+			`- Binding[${this.kind}]: ${this.name}${suffix.length ? ` (${suffix.join(", ")})` : ""}`,
+		];
 	}
 }
