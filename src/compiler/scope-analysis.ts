@@ -8,8 +8,6 @@ export function doScopeAnalysis(program: ProgramInformation) {
 	collectBindingWriteInformation(program);
 	collectBindingReadInformation(program);
 
-	// TODO: Determine which variables are captured in closures
-
 	// TODO: Determine the number of declarations, params i.e registers of env values
 
 	// TODO: Assign register / env slots + unique names to functions
