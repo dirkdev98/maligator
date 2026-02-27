@@ -43,21 +43,26 @@ typedef u64 MalValue;
 // Some other use cases might be to inline symbols, packaged strings, or differentiate types to pointer values.
 #define MAL_VALUE_DYNAMIC (MAL_VALUE_STATIC | MASK_SIGN_BIT)
 #define MAL_VALUE_INT32 (MAL_VALUE_STATIC | 0x0001000000000000)
+// We have a decision at some point to go from 48-bit pointers to 32-bit pointers.
+// This means that we have another 16-bits available, and could potentially store the MalHeapHeader inline.
+// The downside is that we constrain ourselves to a 4GB heap
 #define MAL_VALUE_PTR (MAL_VALUE_STATIC | 0x0002000000000000)
-
 
 typedef enum MalValueType {
     SYMBOL = 1,
+    STRING = 2,
     // etc.
 } MalValueType;
 
-typedef struct MalHeapValue {
+// Note that this will prob always be a 64-bit aligned, so we have plenty of room to store more things.
+typedef struct MalHeapHeader {
     MalValueType type;
+} MalHeapHeader;
 
-    union {
-        uptr as_pointer;
-    };
-} MalHeapValue;
+typedef struct MalHeapSymbol {
+    MalHeapHeader header;
+} MalHeapSymbol;
+
 
 /**
  * Reinterpret f64 as MalValue
