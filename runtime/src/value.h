@@ -155,3 +155,6 @@ i32 mal_value_to_i32(MalValue value);
  * Check if the value is an i32
  */
 bool mal_value_is_int32(MalValue value);
+
+
+void mal_value_debug(MalValue value);

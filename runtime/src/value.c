@@ -84,3 +84,39 @@ bool mal_value_is_int32(MalValue value) {
 
     return v == MAL_VALUE_INT32;
 }
+
+void mal_value_debug(MalValue value) {
+    if (mal_value_is_nan(value)) {
+        printf("NaN");
+        return;
+    }
+
+    if (mal_value_is_f64(value)) {
+        printf("%f", mal_value_to_f64(value));
+        return;
+    }
+
+    if (mal_value_is_boolean(value)) {
+        auto b = mal_value_to_boolean(value);
+        printf("%s", b ? "true" : "false");
+
+        return;
+    }
+
+    if (mal_value_is_undefined(value)) {
+        printf("undefined");
+        return;
+    }
+
+    if (mal_value_is_null(value)) {
+        printf("null");
+        return;
+    }
+
+    if (mal_value_is_int32(value)) {
+        printf("%d", mal_value_to_i32(value));
+        return;
+    }
+
+    printf("[unknown]");
+}

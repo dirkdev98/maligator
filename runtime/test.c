@@ -15,7 +15,8 @@ int main(void) {
     }
 
 
-    printf("%d", mal_value_to_i32(thread.registers[0]));
+    mal_value_debug(thread.registers[0]);
+    printf("\n");
 
     return 0;
 }
