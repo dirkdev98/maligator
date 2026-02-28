@@ -12,6 +12,7 @@ type DebugArgs = {
 };
 
 export class ProgramInformation {
+	public id = "[mal_root]";
 	// Global Environment (JSON, Math, Object, etc);
 	public rootScope: ScopeInformation;
 	// Shared parent for every script scope.
@@ -19,11 +20,20 @@ export class ProgramInformation {
 
 	public modules: Map<string, ModuleInformation> = new Map();
 	public scripts: Map<string, ScriptInformation> = new Map();
+	public entrypoint = "";
 
 	public scopes: Map<ESTree.Node, ScopeInformation> = new Map();
 	private bindingNodeToScopeCache: Map<ESTree.Node, ScopeInformation> = new Map();
 
-	constructor() {
+	constructor({
+		moduleEntrypoint,
+		scriptEntrypoint,
+		asScript,
+	}: {
+		moduleEntrypoint?: string;
+		scriptEntrypoint?: string;
+		asScript?: { nonStrict?: boolean };
+	} = {}) {
 		this.rootScope = new ScopeInformation(
 			this,
 			{ type: "global" as "Program", sourceType: "script", body: [] },
@@ -38,6 +48,8 @@ export class ProgramInformation {
 			},
 			"script-global",
 		);
+
+		this.loadEntrypoint(moduleEntrypoint ?? scriptEntrypoint, asScript);
 	}
 
 	*iterateProgramParts() {
@@ -46,6 +58,46 @@ export class ProgramInformation {
 		}
 		for (const module of this.modules.values()) {
 			yield module;
+		}
+	}
+
+	iterateProgramEntries(): Array<{
+		key: string;
+		scriptOrModule: ScriptInformation | ModuleInformation;
+	}> {
+		const entries = [];
+
+		for (const [key, script] of this.scripts.entries()) {
+			entries.push({
+				key,
+				scriptOrModule: script,
+			});
+		}
+		for (const [key, module] of this.modules.entries()) {
+			entries.push({
+				key,
+				scriptOrModule: module,
+			});
+		}
+
+		return entries;
+	}
+
+	private loadEntrypoint(
+		entrypoint: string | undefined,
+		asScript?: { nonStrict?: boolean },
+	) {
+		if (!entrypoint) {
+			throw new Error("No entrypoint provided");
+		}
+
+		const resolvedPath = path.resolve(entrypoint);
+		this.entrypoint = resolvedPath;
+
+		if (asScript) {
+			this.loadScript(resolvedPath, asScript);
+		} else {
+			this.loadModule(resolvedPath);
 		}
 	}
 
@@ -181,6 +233,7 @@ export class ProgramInformation {
 }
 
 export class ModuleInformation {
+	public id: string = "";
 	public program: ProgramInformation;
 	public node: ESTree.Program;
 	public rootScope: ScopeInformation;
@@ -198,9 +251,18 @@ export class ModuleInformation {
 	addScope(node: ESTree.Node, scope: ScopeInformation) {
 		return this.program.addScope(node, scope);
 	}
+
+	chunkInitSymbol() {
+		return `chunk_init_${this.id}`;
+	}
+
+	chunkEntrypointSymbol() {
+		return `chunk_entrypoint_${this.id}`;
+	}
 }
 
 export class ScriptInformation {
+	public id: string = "";
 	public program: ProgramInformation;
 	public node: ESTree.Program;
 	public rootScope: ScopeInformation;
@@ -231,6 +293,14 @@ export class ScriptInformation {
 
 	addScope(node: ESTree.Node, scope: ScopeInformation) {
 		return this.program.addScope(node, scope);
+	}
+
+	chunkInitSymbol() {
+		return `chunk_init_${this.id}`;
+	}
+
+	chunkEntrypointSymbol() {
+		return `chunk_entrypoint_${this.id}`;
 	}
 }
 
