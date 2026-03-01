@@ -332,6 +332,7 @@ export class ScopeInformation {
 	public children: Array<ScopeInformation> = [];
 
 	private usedArguments = false;
+	public registerCount = 0;
 
 	constructor(
 		program: ScopeInformation["program"],
@@ -448,6 +449,8 @@ class Binding {
 	public isCaptured: boolean = false;
 	public updateNodes: Array<ESTree.Node> = [];
 	public readNodes: Array<ESTree.Node> = [];
+
+	public register: number = -1;
 
 	constructor(
 		name: string | { name: string; isPrivate: boolean },
