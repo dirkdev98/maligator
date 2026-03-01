@@ -242,6 +242,7 @@ export class ModuleInformation {
 		this.program = program;
 		this.node = node;
 		this.rootScope = this.program.createScope(node, "module");
+		this.rootScope.program = this;
 	}
 
 	createScope(node: ESTree.Node, type: ScopeInformation["type"]) {
@@ -283,7 +284,10 @@ export class ScriptInformation {
 	) {
 		this.program = program;
 		this.node = node;
+
 		this.rootScope = this.program.scriptScope.createScope(node, "script");
+		this.rootScope.program = this;
+
 		this.strict = !nonStrict || ScriptInformation.isStrictNode(node);
 	}
 
@@ -305,6 +309,7 @@ export class ScriptInformation {
 }
 
 export class ScopeInformation {
+	public id = `[unused]`;
 	public program: ProgramInformation | ModuleInformation | ScriptInformation;
 	public type:
 		| "global"

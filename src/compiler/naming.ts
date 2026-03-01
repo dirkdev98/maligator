@@ -1,8 +1,10 @@
 import { isNil } from "../utils.ts";
+import type { ScopeInformation } from "./program-info.ts";
 import type { ProgramInformation } from "./program-info.ts";
 
 export function makeUniqueNames(program: ProgramInformation) {
 	assignScriptAndModuleNames(program);
+	assignFunctionDeclarationNames(program);
 }
 
 function assignScriptAndModuleNames(program: ProgramInformation) {
@@ -28,6 +30,40 @@ function assignScriptAndModuleNames(program: ProgramInformation) {
 		scriptOrModule.id = sanitizedName;
 	}
 }
+function assignFunctionDeclarationNames(program: ProgramInformation) {
+	const usedNames = new Set<string>();
+
+	const walkScopes = (scope: ScopeInformation) => {
+		if (scope.type === "function") {
+			if (scope.node.type === "FunctionDeclaration") {
+				let suffix = 0;
+				let name = `fn_${scope.program.id}_${scope.node.id?.name ?? "anon"}`;
+
+				while (usedNames.has(name)) {
+					const potentialName = `${name}_${suffix}`;
+					if (usedNames.has(potentialName)) {
+						suffix++;
+						continue;
+					}
+
+					name = potentialName;
+				}
+				usedNames.add(name);
+				scope.id = name;
+			}
+
+			return;
+		}
+
+		if (["global", "script-global", "module", "script"].includes(scope.type)) {
+			for (const child of scope.children) {
+				walkScopes(child);
+			}
+		}
+	};
+
+	walkScopes(program.rootScope);
+}
 
 function deriveRootPath(program: ProgramInformation) {
 	const paths = program.iterateProgramEntries().map((it) => it.key.split("/"));
@@ -43,8 +79,6 @@ function deriveRootPath(program: ProgramInformation) {
 		if (isNil(nextPart)) {
 			return pathParts.join("/");
 		}
-
-		console.log(paths, nextPart);
 
 		for (const path of paths) {
 			if (path[0] !== nextPart) {
