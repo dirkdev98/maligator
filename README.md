@@ -1,5 +1,30 @@
 # Maligator
 
+A JS to C compiler and runtime.
+
+## Getting started
+
+```shell
+npm install
+
+# Local development script when working on the interpreter.
+node ./src/engine/tmp.ts
+# Local development script when working on the compiler.
+node ./src/compiler/tmp.ts
+
+# In-repo tests
+npm test run
+
+# ESLint + formatting
+npm run lint
+npm run format
+
+# Test262 - JS interpreter
+npm run test262
+```
+
+## Background
+
 We started with an ECMA 262 compliant engine in `src/engine`. It is a naive one-to-one
 implementation of the spec. Most basic things work for now, but various parts are not
 implemented. Things like classes, template literals, generators, async functions and a
@@ -12,6 +37,14 @@ garbage collection by V8.
 
 Now we want to upgrade to a more efficient (hopefully) and interesting approach. An
 ahead-of-time compiler to C.
+
+## Structure
+
+- `docs/decisions`: Decision documents for direction changes.
+- `runtime`: Our C runtime library
+- `src/compiler`: The AOT-compiler source code.
+- `src/engine`: The JS interpreter source code.
+- `src/test262`: Test262 helpers
 
 ## Useful links
 

@@ -6,4 +6,3 @@ node_modules
 local*.js
 
 tsconfig.tsbuildinfo
-TODO.md
