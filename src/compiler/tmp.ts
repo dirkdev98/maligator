@@ -16,4 +16,4 @@ makeUniqueNames(program);
 doThreadAndEnvSlotAllocation(program);
 
 // eslint-disable-next-line no-console
-console.log(program.debug({ withBindings: false }));
+console.log(program.debug({ withBindings: true }));

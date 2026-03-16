@@ -3,6 +3,8 @@ import type { ScopeInformation } from "./program-info.ts";
 
 export function doThreadAndEnvSlotAllocation(program: ProgramInformation) {
 	doRegisterAllocation(program);
+
+	// TODO: slot allocation + depth tracking.
 }
 
 /**
