@@ -22,14 +22,14 @@
 		"update": "npx npm-check --update --save-exact"
 	},
 	"dependencies": {
-		"meriyah": "7.0.0"
+		"meriyah": "7.1.0"
 	},
 	"devDependencies": {
-		"@lightbase/eslint-config": "4.2.0",
-		"@vitest/coverage-v8": "4.0.16",
-		"oxfmt": "0.34.0",
+		"@lightbase/eslint-config": "4.2.1",
+		"@vitest/coverage-v8": "4.1.0",
+		"oxfmt": "0.41.0",
 		"typescript": "5.9.3",
-		"vitest": "4.0.16",
+		"vitest": "4.1.0",
 		"yaml": "2.8.2"
 	}
 }
