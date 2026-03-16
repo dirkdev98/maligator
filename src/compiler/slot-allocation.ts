@@ -3,8 +3,7 @@ import type { ScopeInformation } from "./program-info.ts";
 
 export function doThreadAndEnvSlotAllocation(program: ProgramInformation) {
 	doRegisterAllocation(program);
-
-	// TODO: slot allocation + depth tracking.
+	doSlotAllocation(program);
 }
 
 /**
@@ -40,4 +39,55 @@ function doRegisterAllocation(program: ProgramInformation) {
 	};
 
 	walkScopes(program.rootScope);
+}
+
+/**
+ * Give each escaped / hoisted variable a slot number and depth.
+ *
+ * These are values that have different lifetimes than a normal register / C-local variable.
+ */
+function doSlotAllocation(program: ProgramInformation) {
+	const walkScopes = (scope: ScopeInformation, depth: number) => {
+		const scopeTypesWithSlots: Array<ScopeInformation["type"]> = [
+			"function",
+			"module",
+			"script-global",
+			"static-block",
+		];
+
+		if (
+			scopeTypesWithSlots.includes(scope.type) ||
+			scope.bindings.values().some((it) => it.isCaptured)
+		) {
+			scope.envScopeDepth = depth = depth + 1;
+		}
+
+		let regIndex = 0;
+		for (const [_name, binding] of scope.bindings) {
+			if (binding.kind === "var" || binding.isCaptured) {
+				binding.envLocation = {
+					depth,
+					slot: regIndex++,
+				};
+			}
+		}
+
+		let hasUsedChildSlots = false;
+
+		for (const child of scope.children) {
+			hasUsedChildSlots = walkScopes(child, depth) || hasUsedChildSlots;
+		}
+
+		if (regIndex === 0 && !hasUsedChildSlots) {
+			if (scope.envScopeDepth >= 0) {
+				scope.envScopeDepth = -1;
+			}
+
+			return false;
+		}
+
+		return regIndex > 0;
+	};
+
+	walkScopes(program.rootScope, -1);
 }

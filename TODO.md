@@ -2,12 +2,6 @@
 
 Our TODO list in order of implementation. Below the fold there is also a list of experiments I want to do at some point once we compile and run most JS.
 
-- [ ] Extend ScopeAnalysis output to assign relative registers for params/locals/temps per function (`r0..rN`) via `src/compiler/register-plan.ts`.
-- [ ] Extend ScopeAnalysis output to compute `maxRegs` for every function from assigned relative registers.
-- [ ] Extend ScopeAnalysis output to assign a result register per compiled function. Runtime `mal_*` functions use `MalValue *out` pointers; compiled JS functions write their return value to `thread->registers[base + resultReg]`.
-- [ ] Determine per scope if it creates a `MalEnv`. i.e when is a LexicalEnvironment created (For-loops, functions, script-global).
-- [ ] Per captured OR hoisted binding, assign a slot and depth (number of parent envs that have to be resolved) in to MalEnv.
-- [ ] Extend ScopeAnalysis output to assign `envSlot` indices for captured bindings.
 - [ ] Extend ScopeAnalysis output to produce return-path metadata (`explicitReturn`, `implicitEnd`, `throwPath`).
 - [ ] Extend ScopeAnalysis output to produce resolved label ids for loop `break` and `continue` targets.
 - [ ] Add `src/compiler/aot-context.ts` to hold module id, symbol counters, label counters, diagnostics, and compile options.

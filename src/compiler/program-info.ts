@@ -333,6 +333,7 @@ export class ScopeInformation {
 
 	private usedArguments = false;
 	public registerCount = 0;
+	public envScopeDepth = -1;
 
 	constructor(
 		program: ScopeInformation["program"],
@@ -408,8 +409,21 @@ export class ScopeInformation {
 			`- Scope[${this.type}]: ${this.node.loc?.source ?? "[unknown].js"}:${this.node.loc?.start?.line ?? "-"}:${this.node.loc?.start?.column ?? "-"}`,
 		];
 
+		const parts = [];
 		if (this.usedArguments) {
-			str[0] += " (arguments=1)";
+			parts.push(`arguments=1`);
+		}
+
+		if (this.registerCount > 0) {
+			parts.push(`registers=${this.registerCount}`);
+		}
+
+		if (this.envScopeDepth >= 0) {
+			parts.push(`envScopeDepth=${this.envScopeDepth}`);
+		}
+
+		if (parts.length) {
+			str[0] += ` (${parts.join(",")})`;
 		}
 
 		if (opts.withBindings) {
@@ -451,6 +465,7 @@ class Binding {
 	public readNodes: Array<ESTree.Node> = [];
 
 	public register: number = -1;
+	public envLocation: undefined | { slot: number; depth: number };
 
 	constructor(
 		name: string | { name: string; isPrivate: boolean },
@@ -506,6 +521,14 @@ class Binding {
 
 		if (this.isCaptured) {
 			suffix.push("captured");
+		}
+
+		if (this.register >= 0) {
+			suffix.push(`register=${this.register}`);
+		}
+
+		if (this.envLocation) {
+			suffix.push(`envLocation=${this.envLocation.depth}:${this.envLocation.slot}`);
 		}
 
 		return [
