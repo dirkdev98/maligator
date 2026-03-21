@@ -2,8 +2,6 @@
 
 Our TODO list in order of implementation. Below the fold there is also a list of experiments I want to do at some point once we compile and run most JS.
 
-- [ ] Extend ScopeAnalysis output to produce return-path metadata (`explicitReturn`, `implicitEnd`, `throwPath`).
-- [ ] Extend ScopeAnalysis output to produce resolved label ids for loop `break` and `continue` targets.
 - [ ] Add `src/compiler/aot-context.ts` to hold module id, symbol counters, label counters, diagnostics, and compile options.
 - [ ] Add `src/compiler/runtime-symbols.ts` to centralize runtime C symbol names/signatures (`mal_ops_add`, thread window helpers, print helper).
 - [ ] Add `REG_CAPACITY` and `reg_top` to `runtime/src/thread.h` so register windows can be allocated at runtime.
@@ -14,7 +12,8 @@ Our TODO list in order of implementation. Below the fold there is also a list of
 - [ ] Add `src/compiler/emit-c.ts` that writes C in fixed order: includes, globals, forward declarations, function definitions, module init, module entry, optional main.
 - [ ] Add AST dispatch loop in `src/compiler/emit-c.ts` that walks the program body and routes each node to `emit-c-expr.ts`, `emit-c-stmt.ts`, or `emit-c-fn.ts` based on node type.
 - [ ] Add throw-check helper in `src/compiler/emit-c.ts` that emits `if (status != MAL_NORMAL) goto bail;` after every call to a `MalResult`-returning function, used by all emit-c-\*.ts files.
-- [ ] Add `src/compiler/emit-c-expr.ts` lowering for `NumericLiteral` to `mal_value_from_i32(...)` writes into relative registers.
+- [ ] Define emitted storage classes: C locals for ephemeral temps, thread->registers[base + ...] for ABI/result passing, MalEnv slots for captured bindings.
+- [ ] Add `src/compiler/emit-c-expr.ts` lowering for `NumericLiteral` to `mal_value_from_i32(...)` writes into C local variables.
 - [ ] Add `BooleanLiteral`, `NullLiteral`, and `Identifier[undefined]` lowering in `src/compiler/emit-c-expr.ts` to emit `MAL_VALUE_TRUE`/`MAL_VALUE_FALSE`, `MAL_VALUE_NULL`, and `MAL_VALUE_UNDEFINED` from `runtime/src/value.h` constants.
 - [ ] Add `src/compiler/emit-c-expr.ts` lowering for `BinaryExpression (+)` to `mal_ops_add(thread, env, &thread->registers[base + out], thread->registers[base + left], thread->registers[base + right])`.
 - [ ] Add `src/compiler/emit-c-stmt.ts` lowering for `VariableDeclaration` to a register write (`thread->registers[base + rN] = <init expr>`) and `ExpressionStatement` to evaluate the expression discarding the result.
@@ -56,6 +55,8 @@ Our TODO list in order of implementation. Below the fold there is also a list of
 - [ ] Create `src/test262/aot-allowlist.txt` with 5-10 test paths that only require shipped features (`NumericLiteral`, `+`, `-`, `*`, comparisons, return, simple local calls).
 - [ ] Add AOT progress files `src/test262/aot-passing.txt` and `src/test262/aot-known-failing.txt` and update them after each AOT run.
 - [ ] Add CI job to run AOT allowlist and fail only on regressions within that allowlist.
+- [ ] Extend ScopeAnalysis output to produce return-path metadata (`explicitReturn`, `implicitEnd`, `throwPath`).
+- [ ] Extend ScopeAnalysis output to produce resolved label ids for loop `break` and `continue` targets.
 
 ### You never know ideas
 

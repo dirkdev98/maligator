@@ -25,7 +25,7 @@
 		"meriyah": "7.1.0"
 	},
 	"devDependencies": {
-		"@lightbase/eslint-config": "4.2.1",
+		"@lightbase/eslint-config": "4.3.0",
 		"@vitest/coverage-v8": "4.1.0",
 		"oxfmt": "0.41.0",
 		"typescript": "5.9.3",
