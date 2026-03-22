@@ -11,7 +11,7 @@ const program = new ProgramInformation({
 });
 
 if (!process.argv.includes("--short")) {
-	program.loadModule("./local.js");
+	// program.loadModule("./local.js");
 }
 
 doScopeAnalysis(program);

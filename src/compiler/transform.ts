@@ -1,3 +1,4 @@
+import type { ESTree } from "meriyah";
 import type { ScopeInformation } from "./program-info.ts";
 import type { ModuleInformation, ScriptInformation } from "./program-info.ts";
 import type { ProgramInformation } from "./program-info.ts";
@@ -58,12 +59,17 @@ export class Transform {
 	 */
 	private compileModuleEntrypoint(
 		scriptOrModule: ScriptInformation | ModuleInformation,
-		scope: ScopeInformation,
+		_scope: ScopeInformation,
 	) {
+		const entrypointStatements = scriptOrModule.chunkEntryPointStatements();
+		const compiledStatements = this.compileStatements(entrypointStatements);
+
 		return `
     void ${scriptOrModule.chunkEntrypointSymbol()}(MalThread *thread, MalEnv *env) {
-      
-			MAL_RESULT_RETURN(MAL_NORMAL, mal_value_new_undefined());
+			thread->return_result = MAL_NORMAL;
+			thread->return_value = mal_value_new_undefined();
+
+      ${compiledStatements}  
     }
     `;
 	}
@@ -73,13 +79,70 @@ export class Transform {
 	 */
 	private compileModuleInit(
 		scriptOrModule: ScriptInformation | ModuleInformation,
-		scope: ScopeInformation,
+		_scope: ScopeInformation,
 	) {
 		return `
     void ${scriptOrModule.chunkInitSymbol()}(MalThread *thread, MalEnv *env) {
-        
-			MAL_RESULT_RETURN(MAL_NORMAL, mal_value_new_undefined());
+			thread->return_result = MAL_NORMAL;
+			thread->return_value = mal_value_new_undefined();
     }
     `;
+	}
+
+	compileStatements(statements: Array<ESTree.Statement>) {
+		return statements.map((it) => this.compileStatement(it)).join("\n");
+	}
+
+	compileStatement(statement: ESTree.Statement) {
+		switch (statement.type) {
+			case "ExpressionStatement":
+				return this.compileExpressionStatement(statement);
+			default:
+				throw new Error(`Unsupported statement type: ${statement.type}`);
+		}
+	}
+
+	compileExpressionStatement(expression: ESTree.ExpressionStatement) {
+		if (expression.expression.type === "BinaryExpression") {
+			return this.compileBinaryExpression(expression.expression);
+		}
+
+		throw new Error(`Unsupported expression type: ${expression.expression.type}`);
+	}
+
+	compileBinaryExpression(expression: ESTree.BinaryExpression) {
+		if (expression.operator === "+") {
+			return `mal_ops_add(thread, env, ${this.compileExpressionOrPrivateIdentifier(expression.left)}, ${this.compileExpressionOrPrivateIdentifier(expression.right)});`;
+		}
+	}
+
+	compileExpressionOrPrivateIdentifier(
+		expression: ESTree.Expression | ESTree.PrivateIdentifier,
+	) {
+		if (expression.type === "PrivateIdentifier") {
+			throw new Error("Private identifiers are not supported");
+		}
+
+		return this.compileExpression(expression);
+	}
+
+	compileExpression(expression: ESTree.Expression) {
+		if (expression.type === "Literal") {
+			return this.compileLiteral(expression);
+		}
+
+		throw new Error(`Unsupported expression type: ${expression.type}`);
+	}
+
+	compileLiteral(literal: ESTree.Literal) {
+		if (typeof literal.value === "number") {
+			if (Number.isInteger(literal.value)) {
+				return `mal_value_from_i32(${literal.value})`;
+			}
+
+			// return `mal_value_new_float(${literal.value})`;
+		}
+
+		throw new Error(`Unsupported literal type: ${literal.type}`);
 	}
 }

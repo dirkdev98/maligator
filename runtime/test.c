@@ -10,13 +10,13 @@ int main(void) {
     MalEnv env = {0};
 
     auto i = mal_value_from_i32(1500);
-    mal_ops_add(&thread, &env, &thread.registers[0], i, i);
+    mal_ops_add(&thread, &env, i, i);
     if (thread.return_result != MAL_NORMAL) {
         return 1;
     }
 
 
-    mal_value_debug(thread.registers[0]);
+    mal_value_debug(thread.return_value);
     printf("\n");
 
     return 0;

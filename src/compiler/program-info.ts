@@ -260,6 +260,14 @@ export class ModuleInformation {
 	chunkEntrypointSymbol() {
 		return `chunk_entrypoint_${this.id}`;
 	}
+
+	chunkEntryPointStatements() {
+		if ("body" in this.node) {
+			return this.node.body;
+		}
+
+		return [];
+	}
 }
 
 export class ScriptInformation {
@@ -305,6 +313,14 @@ export class ScriptInformation {
 
 	chunkEntrypointSymbol() {
 		return `chunk_entrypoint_${this.id}`;
+	}
+
+	chunkEntryPointStatements() {
+		if ("body" in this.node) {
+			return this.node.body;
+		}
+
+		return [];
 	}
 }
 

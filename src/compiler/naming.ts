@@ -66,7 +66,9 @@ function assignFunctionDeclarationNames(program: ProgramInformation) {
 }
 
 function deriveRootPath(program: ProgramInformation) {
-	const paths = program.iterateProgramEntries().map((it) => it.key.split("/"));
+	const paths = program
+		.iterateProgramEntries()
+		.map((it) => it.key.split("/").slice(0, -1));
 
 	if (paths.length === 0) {
 		return "";
