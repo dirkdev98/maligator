@@ -14,8 +14,14 @@ typedef enum MalResult {
     MAL_THROW = 8
 } MalResult;
 
+#define MAL_REG_CAP 2048
+#define MAL_RESULT_RETURN(result, value) \
+    thread->return_result = result;      \
+    thread->return_value = value;      \
+    return;
 
 typedef struct MalThread {
-    MalValue registers[256];
+    MalValue registers[MAL_REG_CAP];
+    MalValue return_value;
+    MalResult return_result;
 } MalThread;
-
