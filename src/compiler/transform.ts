@@ -179,23 +179,26 @@ ${this.compileStatements(stmts)}
 				return this.compileExpressionStatement(statement);
 			case "FunctionDeclaration":
 				return " // Skipped function, this is hoisted elsewhere.";
+			case "ReturnStatement":
+				return this.compileReturnStatement(statement);
 			default:
 				throw new Error(`Unsupported statement type: ${statement.type}`);
 		}
 	}
 
 	compileExpressionStatement(expression: ESTree.ExpressionStatement) {
-		if (expression.expression.type === "BinaryExpression") {
-			return this.compileBinaryExpression(expression.expression);
-		}
-
-		throw new Error(`Unsupported expression type: ${expression.expression.type}`);
+		return `${this.compileExpression(expression.expression)};`;
 	}
 
-	compileBinaryExpression(expression: ESTree.BinaryExpression) {
-		if (expression.operator === "+") {
-			return `mal_ops_add(thread, env, ${this.compileExpressionOrPrivateIdentifier(expression.left)}, ${this.compileExpressionOrPrivateIdentifier(expression.right)});`;
+	compileReturnStatement(statement: ESTree.ReturnStatement) {
+		let result = "";
+		if (statement.argument) {
+			result += `${this.compileExpression(statement.argument)};\n`;
 		}
+
+		result += `return;`;
+
+		return result;
 	}
 
 	compileExpressionOrPrivateIdentifier(
@@ -208,12 +211,24 @@ ${this.compileStatements(stmts)}
 		return this.compileExpression(expression);
 	}
 
-	compileExpression(expression: ESTree.Expression) {
+	compileExpression(expression: ESTree.Expression): string {
 		if (expression.type === "Literal") {
 			return this.compileLiteral(expression);
+		} else if (expression.type === "BinaryExpression") {
+			return this.compileBinaryExpression(expression);
 		}
 
 		throw new Error(`Unsupported expression type: ${expression.type}`);
+	}
+
+	compileBinaryExpression(expression: ESTree.BinaryExpression) {
+		if (expression.operator === "+") {
+			return `
+			
+			mal_ops_add(thread, env, ${this.compileExpressionOrPrivateIdentifier(expression.left)}, ${this.compileExpressionOrPrivateIdentifier(expression.right)})`;
+		}
+
+		throw new Error(`Unknown operator: ${expression.operator}`);
 	}
 
 	compileLiteral(literal: ESTree.Literal) {
