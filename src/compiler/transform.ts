@@ -47,15 +47,19 @@ export class Transform {
 	) {
 		const parts = [
 			Transform.includes(),
+
+			this.compileFunctionForwardRefs(scriptOrModule, scope),
+
 			this.compileModuleInit(scriptOrModule, scope),
 			this.compileModuleEntrypoint(scriptOrModule, scope),
+			this.compileFunctions(scriptOrModule, scope),
 		];
 
 		return parts.join("\n");
 	}
 
 	/**
-	 * Compile top-level statements.
+	 * Compile execution of top-level statements.
 	 */
 	private compileModuleEntrypoint(
 		scriptOrModule: ScriptInformation | ModuleInformation,
@@ -89,6 +93,76 @@ export class Transform {
     `;
 	}
 
+	private compileFunctionForwardRefs(
+		scriptOrModule: ScriptInformation | ModuleInformation,
+		scope: ScopeInformation,
+	) {
+		const parts: Array<string> = [];
+
+		const walkScope = (scope: ScopeInformation) => {
+			if (scope.type === "function") {
+				parts.push(`void ${scope.id}(MalThread *thread, MalEnv *env);`);
+			}
+
+			for (const child of scope.children) {
+				walkScope(child);
+			}
+		};
+
+		walkScope(scope);
+
+		return parts.join("\n");
+	}
+
+	/**
+	 * Compile functions
+	 */
+	private compileFunctions(
+		scriptOrModule: ScriptInformation | ModuleInformation,
+		scope: ScopeInformation,
+	) {
+		const parts: Array<string> = [];
+
+		const walkScope = (scope: ScopeInformation) => {
+			if (scope.type === "function") {
+				parts.push(this.compileFunction(scriptOrModule, scope));
+			}
+
+			for (const child of scope.children) {
+				walkScope(child);
+			}
+		};
+
+		walkScope(scope);
+
+		return parts.join("\n");
+	}
+
+	/**
+	 * Compile top-level statements.
+	 */
+	private compileFunction(
+		scriptOrModule: ScriptInformation | ModuleInformation,
+		scope: ScopeInformation,
+	) {
+		if (scope.type !== "function") {
+			throw new Error("Expected a function scope");
+		}
+
+		const stmts =
+			scope.node.type === "FunctionDeclaration" && scope.node.body
+				? scope.node.body.body
+				: [];
+
+		return `
+void ${scope.id}(MalThread *thread, MalEnv *env) {
+  thread->return_result = MAL_NORMAL;
+  thread->return_value = mal_value_new_undefined();
+
+${this.compileStatements(stmts)}
+}`;
+	}
+
 	compileStatements(statements: Array<ESTree.Statement>) {
 		const result = [];
 
@@ -103,6 +177,8 @@ export class Transform {
 		switch (statement.type) {
 			case "ExpressionStatement":
 				return this.compileExpressionStatement(statement);
+			case "FunctionDeclaration":
+				return " // Skipped function, this is hoisted elsewhere.";
 			default:
 				throw new Error(`Unsupported statement type: ${statement.type}`);
 		}

@@ -35,9 +35,13 @@ function assignFunctionDeclarationNames(program: ProgramInformation) {
 
 	const walkScopes = (scope: ScopeInformation) => {
 		if (scope.type === "function") {
-			if (scope.node.type === "FunctionDeclaration") {
+			if (
+				scope.node.type === "FunctionDeclaration" ||
+				scope.node.type === "ArrowFunctionExpression" ||
+				scope.node.type === "FunctionExpression"
+			) {
 				let suffix = 0;
-				let name = `fn_${scope.program.id}_${scope.node.id?.name ?? "anon"}`;
+				let name = `fn_${scope.program.id}_${"id" in scope.node ? (scope.node.id?.name ?? "anon") : "anon"}`;
 
 				while (usedNames.has(name)) {
 					const potentialName = `${name}_${suffix}`;
@@ -51,14 +55,10 @@ function assignFunctionDeclarationNames(program: ProgramInformation) {
 				usedNames.add(name);
 				scope.id = name;
 			}
-
-			return;
 		}
 
-		if (["global", "script-global", "module", "script"].includes(scope.type)) {
-			for (const child of scope.children) {
-				walkScopes(child);
-			}
+		for (const child of scope.children) {
+			walkScopes(child);
 		}
 	};
 
