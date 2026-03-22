@@ -21,7 +21,23 @@ typedef enum MalResult {
     return; } while(0);
 
 typedef struct MalThread {
-    MalValue registers[MAL_REG_CAP];
+    i32 register_base;
+
     MalValue return_value;
     MalResult return_result;
+
+    MalValue registers[MAL_REG_CAP];
 } MalThread;
+
+void mal_thread_init(MalThread *thread);
+
+/**
+ * Offset the register_base by caller_reg_count, and reset the next callee_reg_count slots to undefined.
+ */
+void mal_thread_base_push(MalThread *thread, i32 caller_reg_count, i32 callee_reg_count);
+
+void mal_thread_base_pop(MalThread *thread, i32 caller_reg_count);
+
+MalValue mal_thread_get(MalThread *thread, i32 register_index);
+
+void mal_thread_set(MalThread *thread, i32 register_index, MalValue value);

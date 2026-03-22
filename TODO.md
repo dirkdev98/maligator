@@ -2,13 +2,6 @@
 
 Our TODO list in order of implementation. Below the fold there is also a list of experiments I want to do at some point once we compile and run most JS.
 
-- [ ] Add a register capacity constant and a `register_base` field to `runtime/src/thread.h`.
-- [ ] Add `mal_thread_init(MalThread *thread)` to `runtime/src/thread.c` to initialize `register_base`, `return_result`, and `return_value`.
-- [ ] Add `mal_thread_base_push(MalThread *thread, size caller_reg_count, size callee_reg_count)` + initialize regs to undefined in `runtime/src/thread.c`.
-- [ ] Add `mal_thread_base_pop(MalThread *thread, size caller_reg_count)` to `runtime/src/thread.c`.
-- [ ] Add `mal_thread_get(MalThread *thread, size offset)` as a register access helper relative to `thread->register_base`.
-- [ ] Add `mal_thread_set(MalThread *thread, size offset, MalValue value)` as a register write helper relative to `thread->register_base`.
-- [ ] Update `src/compiler/c-comp.ts` to call `mal_thread_init(&thread)` before executing compiled code.
 - [ ] Add a helper in `src/compiler/transform.ts` for checking `thread->return_result` after helper calls and compiled-function calls.
 - [ ] Update top-level `ExpressionStatement` lowering in `src/compiler/transform.ts` so the final evaluated value remains in `thread->return_value`.
 - [ ] Update `src/compiler/slot-allocation.ts` so function scopes assign register slots to parameters only.

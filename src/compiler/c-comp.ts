@@ -53,6 +53,8 @@ ${Transform.includes()}
 	    MalThread thread = {0};
 	    MalEnv env = {0};
 	    (void)env;
+	    
+	    mal_thread_init(&thread);
 
 	${chunkInitCalls}
 	${chunkEntrypointCalls}
@@ -70,6 +72,30 @@ ${Transform.includes()}
 
 	const mainPath = path.join(baseDir, "main.c");
 	fs.writeFileSync(mainPath, main, "utf8");
+
+	const runtimeBuildResult = spawnSync(
+		"cmake",
+		["--build", runtimeBuildDir, "--target", "LibMaligator"],
+		{ encoding: "utf8" },
+	);
+
+	if (runtimeBuildResult.error) {
+		throw runtimeBuildResult.error;
+	}
+
+	if (runtimeBuildResult.status !== 0) {
+		if (runtimeBuildResult.stdout) {
+			process.stdout.write(runtimeBuildResult.stdout);
+		}
+
+		if (runtimeBuildResult.stderr) {
+			process.stderr.write(runtimeBuildResult.stderr);
+		}
+
+		throw new Error(
+			`LibMaligator rebuild exited with status ${runtimeBuildResult.status ?? "unknown"}`,
+		);
+	}
 
 	const result = spawnSync(
 		"clang",

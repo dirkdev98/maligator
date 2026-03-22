@@ -90,7 +90,13 @@ export class Transform {
 	}
 
 	compileStatements(statements: Array<ESTree.Statement>) {
-		return statements.map((it) => this.compileStatement(it)).join("\n");
+		const result = [];
+
+		for (const stmt of statements) {
+			result.push(this.compileStatement(stmt));
+		}
+
+		return result.join("\n");
 	}
 
 	compileStatement(statement: ESTree.Statement) {
