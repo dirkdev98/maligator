@@ -7,10 +7,8 @@ A JS to C compiler and runtime.
 ```shell
 npm install
 
-# Local development script when working on the interpreter.
-node ./src/engine/tmp.ts
 # Local development script when working on the compiler.
-node ./src/compiler/tmp.ts
+node ./src/index.ts
 
 # In-repo tests
 npm test run
@@ -35,6 +33,8 @@ reading and the ungodly amount of work it is to write a compliant engine. But I 
 some things for granted, like the internal string and number representations of V8 and
 garbage collection by V8.
 
+Note that this implementation was removed after [d81418d](https://github.com/dirkdev98/maligator/tree/d81418d79d41f4e964acf33d22693a97367e3c9d).
+
 Now we want to upgrade to a more efficient (hopefully) and interesting approach. An
 ahead-of-time compiler to C.
 
@@ -43,8 +43,6 @@ ahead-of-time compiler to C.
 - `docs/decisions`: Decision documents for direction changes.
 - `runtime`: Our C runtime library
 - `src/compiler`: The AOT-compiler source code.
-- `src/engine`: The JS interpreter source code.
-- `src/test262`: Test262 helpers
 
 ## Useful links
 

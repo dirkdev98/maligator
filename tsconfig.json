@@ -16,5 +16,6 @@
 		"noImplicitOverride": true,
 		"isolatedModules": true
 	},
-	"include": ["**/*"]
+	"include": ["**/*"],
+	"exclude": ["tests/local/**"]
 }

@@ -43,9 +43,9 @@
 
 ## Policy
 
-- You are allowed be used to help with writing tests.
+- You are allowed to be used to help with writing tests.
 - You should NOT be used to implement features A-Z. Do not even try to.
-- You may be used to as a Stackoverflow kinda resource, but smarter.
+- You may be used to as a Stackoverflow kinda resource, but be smarter.
 - You may be used as a code review tool.
 - You may be used to assist with tedious and repetitive refactoring.
 
