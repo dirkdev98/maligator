@@ -6,3 +6,5 @@ node_modules
 local*.js
 
 tsconfig.tsbuildinfo
+
+tests/local/tmp.js
