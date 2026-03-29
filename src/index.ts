@@ -13,7 +13,5 @@ if (!entrypoint || !existsSync(entrypoint)) {
 const entrypointPath = path.resolve(entrypoint);
 
 const semTiming = log.time("semantic analysis");
-const semanticProgram = loadAndAnalyze(entrypointPath);
+const _semanticProgram = loadAndAnalyze(entrypointPath);
 semTiming();
-
-log.debug(semanticProgram, 4);

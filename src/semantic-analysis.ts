@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { ESTree } from "meriyah";
 import { parseModule, parseScript } from "./parser.ts";
+import { log } from "./utils.ts";
 
 export interface SemanticProgram {
 	entrypointPath: string;
@@ -26,10 +27,38 @@ interface Scope {
 	bindings: Array<Binding>;
 }
 
+type BindingKind = "var" | "let" | "const";
+
 interface Binding {
+	kind: BindingKind;
 	name: string;
+
 	declarationNode?: ESTree.Node;
 	usageNodes: Array<ESTree.Node>;
+
+	undeclared?: true;
+}
+
+function debugSemanticProgram(program: SemanticProgram) {
+	let output = "";
+	const indent = "  ";
+
+	for (const file of program.files) {
+		output += `${file.path}\n`;
+
+		let scopeIdx = 0;
+		for (const scope of file.scopes) {
+			const parentIdx = file.scopes.findIndex((s) => s === scope.parent);
+
+			output += `${indent}Scope(${scopeIdx++} ${scope.node.type} (parent: ${parentIdx})\n`;
+
+			for (const binding of scope.bindings) {
+				output += `${indent}${indent}Binding(${binding.name} ${binding.kind} ${binding.declarationNode?.type ?? "unknown"}) (usages: ${binding.usageNodes.length}, declared: ${!binding.undeclared}) \n`;
+			}
+		}
+	}
+
+	log.debug(output);
 }
 
 export function loadAndAnalyze(entrypointPath: string): SemanticProgram {
@@ -38,7 +67,8 @@ export function loadAndAnalyze(entrypointPath: string): SemanticProgram {
 		files: [],
 	};
 
-	program.files.push(loadAndAnalyzeFile(program, entrypointPath));
+	loadAndAnalyzeFile(program, entrypointPath);
+	debugSemanticProgram(program);
 
 	return program;
 }
@@ -72,8 +102,7 @@ export function loadAndAnalyzeFile(
 function analyzeFile(file: SemanticFile) {
 	createScopesFromNode(file.ast, file);
 	collectBindingsForNode(file.ast, file);
-
-	// TODO: bindings, captures
+	registerBindingUsage(file.ast, file);
 }
 
 /**
@@ -105,7 +134,7 @@ function createScopesFromNode(
 		file.scopes.push(parentScope);
 	}
 
-	if (node.type === "BlockStatement") {
+	if (node.type === "BlockStatement" || node.type === "StaticBlock") {
 		// All blocks need their own scope.
 		parentScope = {
 			parent: parentScope,
@@ -119,9 +148,32 @@ function createScopesFromNode(
 	}
 
 	if (
-		["ForStatement", "ForInStatement", "ForOfStatement", "SwitchStatement"].includes(
-			node.type,
-		)
+		node.type === "ArrowFunctionExpression" &&
+		node.body?.type !== "BlockStatement" &&
+		node.params.length
+	) {
+		// We need a block scope for a single-line function expression if it has params
+		parentScope = {
+			parent: parentScope,
+			node: node.body,
+
+			strict,
+			bindings: [],
+		};
+
+		file.scopes.push(parentScope);
+	}
+
+	if (
+		[
+			"ForStatement",
+			"ForInStatement",
+			"ForOfStatement",
+			"SwitchStatement",
+			"FunctionDeclaration",
+			"FunctionExpression",
+			"ArrowFunctionExpression",
+		].includes(node.type)
 	) {
 		// All statements that can have a separate scope for their created variables.
 
@@ -160,9 +212,155 @@ function createScopesFromNode(
  * Build up the scope tree and infer strict modes.
  */
 function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
-	if ("id" in node) {
-		node.id;
+	const scope = file.nodeToScope.get(node);
+	if (!scope) {
+		return;
 	}
+
+	if (
+		node.type === "FunctionDeclaration" ||
+		node.type === "FunctionExpression" ||
+		node.type === "ArrowFunctionExpression"
+	) {
+		if ("id" in node && node.id) {
+			extractBindingsAndRegister(scope.parent!, node.id, scope.strict ? "let" : "var");
+		}
+
+		if (node.params.length) {
+			for (const param of node.params) {
+				extractBindingsAndRegister(scope, param, "var");
+			}
+		}
+	}
+
+	if (node.type === "VariableDeclaration") {
+		for (const decl of node.declarations) {
+			extractBindingsAndRegister(scope, decl.id, node.kind);
+		}
+	}
+
+	if (node.type === "CatchClause") {
+		if (node.param) {
+			extractBindingsAndRegister(scope, node.param, "let");
+		}
+	}
+
+	if (node.type === "ClassDeclaration") {
+		if ("id" in node && node.id) {
+			extractBindingsAndRegister(scope.parent!, node.id, "let");
+		}
+	}
+
+	recurseAst(node, collectBindingsForNode, file);
+}
+
+function extractBindingsAndRegister(scope: Scope, node: ESTree.Node, kind: BindingKind) {
+	const extractNames = (node?: ESTree.Node): Array<string> => {
+		if (!node) {
+			return [];
+		}
+
+		if (node.type === "Identifier") {
+			return [node.name];
+		}
+
+		if (node.type === "PrivateIdentifier") {
+			return [`#${node.name}`];
+		}
+
+		if (node.type === "ArrayPattern") {
+			return node.elements.flatMap(extractNames);
+		}
+
+		if (node.type === "ObjectPattern") {
+			return node.properties.flatMap(extractNames);
+		}
+
+		if (node.type === "RestElement") {
+			return extractNames(node.argument);
+		}
+
+		if (node.type === "AssignmentPattern") {
+			return extractNames(node.left);
+		}
+
+		if (node.type === "Property") {
+			return extractNames(node.value);
+		}
+
+		return [];
+	};
+
+	const names = extractNames(node);
+
+	let bindingScope = scope;
+	if (kind === "var" && !bindingScope.node.type.includes("Function")) {
+		while (bindingScope.parent) {
+			const parentType = bindingScope.parent.node.type;
+
+			if (
+				parentType !== "FunctionDeclaration" &&
+				parentType !== "FunctionExpression" &&
+				parentType !== "ArrowFunctionExpression"
+			) {
+				bindingScope = bindingScope.parent;
+			} else {
+				break;
+			}
+		}
+	}
+
+	for (const name of names) {
+		bindingScope.bindings.push({
+			kind,
+
+			name,
+			declarationNode: node,
+			usageNodes: [],
+		});
+	}
+}
+
+function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
+	const scope = file.nodeToScope.get(node);
+	if (!scope) {
+		return;
+	}
+
+	const walkScopes = (recurseScope: Scope, name: string) => {
+		const binding = recurseScope.bindings.find((b) => b.name === name);
+		if (binding) {
+			return binding;
+		}
+
+		if (!recurseScope.parent) {
+			const binding: Binding = {
+				kind: "var",
+				name,
+
+				declarationNode: node,
+				usageNodes: [],
+
+				undeclared: true,
+			};
+			scope.bindings.push(binding);
+			return binding;
+		}
+
+		return walkScopes(recurseScope.parent, name);
+	};
+
+	if (node.type === "MemberExpression" && !node.computed) {
+		// Right handside from member expressions, except when they are computed.
+		return registerBindingUsage(node.object, file);
+	}
+
+	if (node.type === "Identifier") {
+		const binding = walkScopes(scope, node.name);
+		binding.usageNodes.push(node);
+	}
+
+	recurseAst(node, registerBindingUsage, file);
 }
 
 /**

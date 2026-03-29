@@ -9,7 +9,12 @@ export const log = {
 		if (!debug) {
 			return;
 		}
-		this.dir(args, depth);
+
+		if (typeof args === "string") {
+			this.info(args);
+		} else {
+			this.dir(args, depth);
+		}
 	},
 	time(label: string) {
 		console.time(label);
