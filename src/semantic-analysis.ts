@@ -39,6 +39,9 @@ interface Binding {
 	undeclared?: true;
 }
 
+/**
+ * Util to dump the full scope + bindings for a program.
+ */
 function debugSemanticProgram(program: SemanticProgram) {
 	let output = "";
 	const indent = "  ";
@@ -61,7 +64,12 @@ function debugSemanticProgram(program: SemanticProgram) {
 	log.debug(output);
 }
 
-export function loadAndAnalyze(entrypointPath: string): SemanticProgram {
+/**
+ * Semantic analysis entrypoint
+ */
+export function loadEntrypointAndRunSemanticAnalysis(
+	entrypointPath: string,
+): SemanticProgram {
 	const program: SemanticProgram = {
 		entrypointPath,
 		files: [],
@@ -99,6 +107,9 @@ export function loadAndAnalyzeFile(
 	return file;
 }
 
+/**
+ * Exec all analyze steps for a file.
+ */
 function analyzeFile(file: SemanticFile) {
 	createScopesFromNode(file.ast, file);
 	collectBindingsForNode(file.ast, file);
@@ -170,6 +181,7 @@ function createScopesFromNode(
 			"ForInStatement",
 			"ForOfStatement",
 			"SwitchStatement",
+
 			"FunctionDeclaration",
 			"FunctionExpression",
 			"ArrowFunctionExpression",
@@ -203,8 +215,15 @@ function createScopesFromNode(
 	}
 
 	if (parentScope) {
+		// Make it easier to lookup a scope for a node in later passes.
+		//
+		// This prevents us from also having to walk the scopes while walking the AST.
+		//
+		// The thing is, at some point we are probably going to want to do a single AST walk tho, to
+		// optimize things, so then this will become obselete.
 		file.nodeToScope.set(node, parentScope);
 	}
+
 	recurseAst(node, createScopesFromNode, file, parentScope);
 }
 
@@ -223,6 +242,7 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 		node.type === "ArrowFunctionExpression"
 	) {
 		if ("id" in node && node.id) {
+			// Register a function as a binding in their parent scope.
 			extractBindingsAndRegister(scope.parent!, node.id, scope.strict ? "let" : "var");
 		}
 
@@ -247,6 +267,7 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 
 	if (node.type === "ClassDeclaration") {
 		if ("id" in node && node.id) {
+			// Register a class a binding in their parent scope.
 			extractBindingsAndRegister(scope.parent!, node.id, "let");
 		}
 	}
@@ -254,7 +275,15 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 	recurseAst(node, collectBindingsForNode, file);
 }
 
+/**
+ * Extract bindings for all function and class id's, params and variable declarations.
+ */
 function extractBindingsAndRegister(scope: Scope, node: ESTree.Node, kind: BindingKind) {
+	/**
+	 * Recursively walk expression to extract names.
+	 *
+	 * We need this for destructure patterns.
+	 */
 	const extractNames = (node?: ESTree.Node): Array<string> => {
 		if (!node) {
 			return [];
@@ -294,7 +323,9 @@ function extractBindingsAndRegister(scope: Scope, node: ESTree.Node, kind: Bindi
 	const names = extractNames(node);
 
 	let bindingScope = scope;
+
 	if (kind === "var" && !bindingScope.node.type.includes("Function")) {
+		// Hoist var bindings to their nearest function scope or the module root.
 		while (bindingScope.parent) {
 			const parentType = bindingScope.parent.node.type;
 
@@ -321,19 +352,29 @@ function extractBindingsAndRegister(scope: Scope, node: ESTree.Node, kind: Bindi
 	}
 }
 
+/**
+ * Raw resolve every identifier in the AST to its binding.
+ *
+ * Note that we also collect a usage for the declaration. So we have to handle this downstream or
+ * fix that here at some point.
+ */
 function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 	const scope = file.nodeToScope.get(node);
 	if (!scope) {
 		return;
 	}
 
-	const walkScopes = (recurseScope: Scope, name: string) => {
+	const resolveBindingByName = (recurseScope: Scope, name: string) => {
 		const binding = recurseScope.bindings.find((b) => b.name === name);
 		if (binding) {
 			return binding;
 		}
 
 		if (!recurseScope.parent) {
+			// No binding found, so we create an undeclared binding.
+			//
+			// These can be globals, like 'undefined' or intrinsics like 'Object'.
+
 			const binding: Binding = {
 				kind: "var",
 				name,
@@ -347,16 +388,16 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 			return binding;
 		}
 
-		return walkScopes(recurseScope.parent, name);
+		return resolveBindingByName(recurseScope.parent, name);
 	};
 
 	if (node.type === "MemberExpression" && !node.computed) {
-		// Right handside from member expressions, except when they are computed.
+		// Skip the property from member expressions, except when they are computed.
 		return registerBindingUsage(node.object, file);
 	}
 
 	if (node.type === "Identifier") {
-		const binding = walkScopes(scope, node.name);
+		const binding = resolveBindingByName(scope, node.name);
 		binding.usageNodes.push(node);
 	}
 

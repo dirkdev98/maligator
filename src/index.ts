@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import * as path from "node:path";
-import { loadAndAnalyze } from "./semantic-analysis.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-analysis.ts";
 import { log } from "./utils.ts";
 
 const entrypoint = process.argv[2];
@@ -13,5 +13,5 @@ if (!entrypoint || !existsSync(entrypoint)) {
 const entrypointPath = path.resolve(entrypoint);
 
 const semTiming = log.time("semantic analysis");
-const _semanticProgram = loadAndAnalyze(entrypointPath);
+const _semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypointPath);
 semTiming();

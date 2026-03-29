@@ -6,10 +6,6 @@ Our TODO list in order of implementation. Below the fold there is also a list of
 
 The first areas of work are going to be:
 
-- Frontend:
-  - Load file
-    - Load dependent files
-  - semantic analysis per file;
 - Intermediate:
   - Rollup everything in an IR per function
     - Explicit blocks, branches; hoist nested functions
