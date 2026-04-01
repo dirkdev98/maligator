@@ -36,7 +36,7 @@ export interface IRFunction {
 	/**
 	 * The next available register index (unoptimized).
 	 */
-	nextRegisterIndex: number;
+	nextRegisterDestination: number;
 }
 
 interface IRBlock {
@@ -46,39 +46,56 @@ interface IRBlock {
 export type IRInstruction =
 	| {
 			type: "return";
-			registerValue?: number;
+
+			// [return value]
+			registers: [number];
 	  }
 	| {
 			type: "jumpIf";
-			conditionRegister: number;
-			targetBlockIndex: number;
+
+			// [ifTrueRegister]
+			registers: [number];
+
+			// [jumpTarget];
+			blocks: [number];
 	  }
 	| {
 			type: "jump";
-			targetBlockIndex: number;
+
+			// [jumpTarget]
+			blocks: [number];
 	  }
 	| {
 			type: "loadNumber";
-			registerTarget: number;
+
+			// [destination]
+			registers: [number];
+
 			value: number;
 	  }
 	| {
 			type: "loadGlobal";
+
+			// [destination]
+			registers: [number];
+
 			globalIndex: number;
-			registerTarget: number;
 	  }
 	| {
 			type: "storeGlobal";
+
+			// [destination]
+			registers: [number];
+
 			globalIndex: number;
-			registerSource: number;
 	  }
 	| {
 			type: "binary";
-			registerTarget: number;
-			operator: "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "<<" | ">>" | ">>>";
 
-			registerSourceLeft: number;
-			registerSourceRight: number;
+			// [destination, left, right]
+			registers: [number, number, number];
+
+			operator: "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "<<" | ">>" | ">>>";
 	  };
 
 function debugIntermediateProgram(program: IntermediateProgram) {
@@ -148,7 +165,7 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 		parameterCount: 0,
 		blocks: [],
 
-		nextRegisterIndex: 0,
+		nextRegisterDestination: 0,
 	};
 
 	const idx = program.functions.push(fn);
@@ -223,14 +240,15 @@ function compileLiteral(
 	literal: ESTree.Literal,
 ): number {
 	if (typeof literal.value === "number" && Number.isInteger(literal.value)) {
-		const registerTarget = nextRegisterIndex(fn);
+		const destination = nextRegisterDestination(fn);
 		block.instructions.push({
 			type: "loadNumber",
-			registerTarget,
+			registers: [destination],
+
 			value: literal.value,
 		});
 
-		return registerTarget;
+		return destination;
 	}
 
 	return -1;
@@ -245,19 +263,18 @@ function compileBinary(
 	const left = compileExpression(program, fn, block, binaryExpression.left);
 	const right = compileExpression(program, fn, block, binaryExpression.right);
 
-	const registerTarget = nextRegisterIndex(fn);
+	const destination = nextRegisterDestination(fn);
+
 	block.instructions.push({
 		type: "binary",
 
+		registers: [destination, left, right],
+
 		// A tad hacky with types. The ESTree types don't have this strictly typed.
 		operator: binaryExpression.operator as "+",
-
-		registerSourceLeft: left,
-		registerSourceRight: right,
-		registerTarget,
 	});
 
-	return registerTarget;
+	return destination;
 }
 
 /**
@@ -266,6 +283,6 @@ function compileBinary(
  * At a later compiler stage these should be optimized to reduce the number of registers needed
  * with things like live-ness checking.
  */
-function nextRegisterIndex(fn: IRFunction) {
-	return fn.nextRegisterIndex++;
+function nextRegisterDestination(fn: IRFunction) {
+	return fn.nextRegisterDestination++;
 }
