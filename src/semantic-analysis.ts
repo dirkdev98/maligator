@@ -17,6 +17,7 @@ export interface SemanticFile {
 
 	scopes: Array<Scope>;
 	nodeToScope: Map<ESTree.Node, Scope>;
+	nodeToBinding: Map<ESTree.Node, Binding>;
 }
 
 interface Scope {
@@ -29,7 +30,7 @@ interface Scope {
 
 type BindingKind = "var" | "let" | "const";
 
-interface Binding {
+export interface Binding {
 	kind: BindingKind;
 	name: string;
 
@@ -37,6 +38,7 @@ interface Binding {
 	usageNodes: Array<ESTree.Node>;
 
 	undeclared?: true;
+	scopedTo?: "local" | "captured" | "global";
 }
 
 /**
@@ -56,7 +58,7 @@ function debugSemanticProgram(program: SemanticProgram) {
 			output += `${indent}Scope(${scopeIdx++} ${scope.node.type} (parent: ${parentIdx})\n`;
 
 			for (const binding of scope.bindings) {
-				output += `${indent}${indent}Binding(${binding.name} ${binding.kind} ${binding.declarationNode?.type ?? "unknown"}) (usages: ${binding.usageNodes.length}, declared: ${!binding.undeclared}) \n`;
+				output += `${indent}${indent}Binding(${binding.name} ${binding.kind} ${binding.scopedTo} ${binding.declarationNode?.type ?? "unknown"}) (usages: ${binding.usageNodes.length}, declared: ${!binding.undeclared}) \n`;
 			}
 		}
 	}
@@ -98,6 +100,7 @@ export function loadAndAnalyzeFile(
 
 		scopes: [],
 		nodeToScope: new Map(),
+		nodeToBinding: new Map(),
 	};
 
 	program.files.push(file);
@@ -114,6 +117,7 @@ function analyzeFile(file: SemanticFile) {
 	createScopesFromNode(file.ast, file);
 	collectBindingsForNode(file.ast, file);
 	registerBindingUsage(file.ast, file);
+	calculateBindingScopedTo(file);
 }
 
 /**
@@ -243,32 +247,37 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 	) {
 		if ("id" in node && node.id) {
 			// Register a function as a binding in their parent scope.
-			extractBindingsAndRegister(scope.parent!, node.id, scope.strict ? "let" : "var");
+			extractBindingsAndRegister(
+				file,
+				scope.parent!,
+				node.id,
+				scope.strict ? "let" : "var",
+			);
 		}
 
 		if (node.params.length) {
 			for (const param of node.params) {
-				extractBindingsAndRegister(scope, param, "var");
+				extractBindingsAndRegister(file, scope, param, "var");
 			}
 		}
 	}
 
 	if (node.type === "VariableDeclaration") {
 		for (const decl of node.declarations) {
-			extractBindingsAndRegister(scope, decl.id, node.kind);
+			extractBindingsAndRegister(file, scope, decl.id, node.kind);
 		}
 	}
 
 	if (node.type === "CatchClause") {
 		if (node.param) {
-			extractBindingsAndRegister(scope, node.param, "let");
+			extractBindingsAndRegister(file, scope, node.param, "let");
 		}
 	}
 
 	if (node.type === "ClassDeclaration") {
 		if ("id" in node && node.id) {
 			// Register a class a binding in their parent scope.
-			extractBindingsAndRegister(scope.parent!, node.id, "let");
+			extractBindingsAndRegister(file, scope.parent!, node.id, "let");
 		}
 	}
 
@@ -278,7 +287,12 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 /**
  * Extract bindings for all function and class id's, params and variable declarations.
  */
-function extractBindingsAndRegister(scope: Scope, node: ESTree.Node, kind: BindingKind) {
+function extractBindingsAndRegister(
+	file: SemanticFile,
+	scope: Scope,
+	node: ESTree.Node,
+	kind: BindingKind,
+) {
 	/**
 	 * Recursively walk expression to extract names.
 	 *
@@ -342,21 +356,24 @@ function extractBindingsAndRegister(scope: Scope, node: ESTree.Node, kind: Bindi
 	}
 
 	for (const name of names) {
-		bindingScope.bindings.push({
+		const binding = {
 			kind,
 
 			name,
 			declarationNode: node,
 			usageNodes: [],
-		});
+		};
+
+		bindingScope.bindings.push(binding);
+		file.nodeToBinding.set(node, binding);
 	}
 }
 
 /**
  * Raw resolve every identifier in the AST to its binding.
  *
- * Note that we also collect a usage for the declaration. So we have to handle this downstream or
- * fix that here at some point.
+ * Note that we also collect a usage for the declaration. So we have to handle this downstream
+ * or fix that here at some point.
  */
 function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 	const scope = file.nodeToScope.get(node);
@@ -399,9 +416,57 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 	if (node.type === "Identifier") {
 		const binding = resolveBindingByName(scope, node.name);
 		binding.usageNodes.push(node);
+		file.nodeToBinding.set(node, binding);
 	}
 
 	recurseAst(node, registerBindingUsage, file);
+}
+
+/**
+ * Based on usages of a binding, figure out where it is scoped to.
+ */
+function calculateBindingScopedTo(file: SemanticFile) {
+	const usageToDeclarationScopeCrossesFunction = (from: Scope, to: Scope) => {
+		if (from === to) {
+			return false;
+		}
+
+		let intermediate: Scope | null = from;
+
+		while (intermediate && intermediate !== to) {
+			if (intermediate.node.type.includes("Function")) {
+				return true;
+			}
+
+			intermediate = intermediate.parent;
+		}
+
+		return false;
+	};
+
+	const calculateScopedTo = (
+		declarationScope: Scope,
+		usageScopes: Array<Scope>,
+	): Binding["scopedTo"] => {
+		if (declarationScope.node.type === "Program") {
+			return "global";
+		}
+
+		for (const usage of usageScopes) {
+			if (usageToDeclarationScopeCrossesFunction(usage, declarationScope)) {
+				return "captured";
+			}
+		}
+
+		return "local";
+	};
+
+	for (const scope of file.scopes) {
+		for (const binding of scope.bindings) {
+			const usageScopes = binding.usageNodes.map((node) => file.nodeToScope.get(node)!);
+			binding.scopedTo = calculateScopedTo(scope, usageScopes);
+		}
+	}
 }
 
 /**
