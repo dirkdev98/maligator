@@ -7,11 +7,12 @@ Our TODO list in order of implementation. Below the fold there is also a list of
 The first areas of work are going to be:
 
 - Intermediate:
-  - Rollup everything in an IR per function
-    - Explicit blocks, branches; hoist nested functions
-    - Virtual registers
-    - explicit local/env/global access
-    - Basically a CFG IR. True to the source, but semantic names and fully flattened
+- Rollup everything in an IR per function
+  - Next up; functions (make sure to assign bindings, if-else statements and return statements.
+  - Explicit blocks, branches; hoist nested functions
+  - Virtual registers
+  - explicit local/env/global access
+  - Basically a CFG IR. True to the source, but semantic names and fully flattened
   - Linkup the different IR parts
     - Like, we could embed functions that are only used once.
     - And linkup things like control flow jumps.

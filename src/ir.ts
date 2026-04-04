@@ -1,5 +1,5 @@
 import type { ESTree } from "meriyah";
-import type { SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
+import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 import { log } from "./utils.ts";
 
 export interface IntermediateProgram {
@@ -27,16 +27,55 @@ export interface IntermediateProgram {
 	 * Compile each module init file only once.
 	 */
 	compiledModuleInitForPaths: Set<string>;
+
+	/**
+	 * Keep track of where the binding is stored.
+	 *
+	 * A binding can be:
+	 *
+	 * - local: non-captured variables. We can optimize this out later to keep them in the
+	 *   registers, I think.
+	 * - captured: captured variables.
+	 * - global: top-level declared variables.
+	 */
+	bindingToStorage: Map<
+		Binding,
+		{
+			type: "local" | "captured" | "global";
+			index: number;
+		}
+	>;
+
+	/**
+	 * Next available global variable index
+	 */
+	nextGlobalIndex: number;
 }
 
 export interface IRFunction {
-	parameterCount: number;
+	semanticFile: SemanticFile;
 	blocks: Array<IRBlock>;
+
+	/**
+	 * Expected number of initial register values. Before evaluating the arguments and assigning
+	 * them to (destructured) arguments.
+	 */
+	parameterCount: number;
 
 	/**
 	 * The next available register index (unoptimized).
 	 */
 	nextRegisterDestination: number;
+
+	/**
+	 * Next available local variable index
+	 */
+	nextLocalIndex: number;
+
+	/**
+	 * Next available captured variable index
+	 */
+	nextCapturedIndex: number;
 }
 
 interface IRBlock {
@@ -74,20 +113,26 @@ export type IRInstruction =
 			value: number;
 	  }
 	| {
-			type: "loadGlobal";
+			type: "loadUndefined";
 
 			// [destination]
 			registers: [number];
-
-			globalIndex: number;
 	  }
 	| {
-			type: "storeGlobal";
+			type: `load${"Local" | "Captured" | "Global"}`;
 
 			// [destination]
 			registers: [number];
+			index: number;
+	  }
+	| {
+			// TODO(opt): there is an optimization oppurtunity when a store is 'immediately' followed by
+			//  a load.
+			type: `store${"Local" | "Captured" | "Global"}`;
 
-			globalIndex: number;
+			// [source]
+			registers: [number];
+			index: number;
 	  }
 	| {
 			type: "binary";
@@ -134,6 +179,9 @@ export function compileSemanticProgramToIr(semantic: SemanticProgram) {
 		functions: [],
 
 		compiledModuleInitForPaths: new Set(),
+		bindingToStorage: new Map(),
+
+		nextGlobalIndex: 0,
 	};
 
 	const initFile = program.semantic.files.find(
@@ -162,10 +210,13 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 	program.compiledModuleInitForPaths.add(initFile.path);
 
 	const fn: IRFunction = {
-		parameterCount: 0,
+		semanticFile: initFile,
 		blocks: [],
 
+		parameterCount: 0,
 		nextRegisterDestination: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
 	};
 
 	const idx = program.functions.push(fn);
@@ -194,6 +245,11 @@ function compileStatementsToBlock(
 		switch (statement.type) {
 			case "ExpressionStatement": {
 				compileExpressionStatement(program, fn, block, statement);
+				break;
+			}
+			case "VariableDeclaration": {
+				compileVariableDeclaration(program, fn, block, statement);
+				break;
 			}
 		}
 	}
@@ -211,6 +267,58 @@ function compileExpressionStatement(
 }
 
 /**
+ * Naively compile variable declarations.
+ */
+function compileVariableDeclaration(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.VariableDeclaration,
+) {
+	for (const decl of statement.declarations) {
+		const source = compileExpression(
+			program,
+			fn,
+			block,
+			decl.init ?? { type: "Identifier", name: "undefined" },
+		);
+
+		const binding = fn.semanticFile.nodeToBinding.get(decl.id);
+		if (!binding) {
+			continue;
+		}
+
+		const location = getOrCreateBindingLocation(program, fn, binding);
+		switch (location.type) {
+			case "local": {
+				block.instructions.push({
+					type: "storeLocal",
+					registers: [source],
+					index: location.index,
+				});
+				break;
+			}
+			case "global": {
+				block.instructions.push({
+					type: "storeGlobal",
+					registers: [source],
+					index: location.index,
+				});
+				break;
+			}
+			case "captured": {
+				block.instructions.push({
+					type: "storeCaptured",
+					registers: [source],
+					index: location.index,
+				});
+				break;
+			}
+		}
+	}
+}
+
+/**
  * Expression compilation dispatch.
  *
  * Expressions always return the virtual register index they used.
@@ -222,36 +330,18 @@ function compileExpression(
 	expression: ESTree.Expression | ESTree.PrivateIdentifier,
 ) {
 	switch (expression.type) {
-		case "Literal": {
-			return compileLiteral(program, fn, block, expression);
-		}
 		case "BinaryExpression": {
 			return compileBinary(program, fn, block, expression);
+		}
+		case "Identifier": {
+			return compileIdentifier(program, fn, block, expression);
+		}
+		case "Literal": {
+			return compileLiteral(program, fn, block, expression);
 		}
 		default:
 			return -1;
 	}
-}
-
-function compileLiteral(
-	program: IntermediateProgram,
-	fn: IRFunction,
-	block: IRBlock,
-	literal: ESTree.Literal,
-): number {
-	if (typeof literal.value === "number" && Number.isInteger(literal.value)) {
-		const destination = nextRegisterDestination(fn);
-		block.instructions.push({
-			type: "loadNumber",
-			registers: [destination],
-
-			value: literal.value,
-		});
-
-		return destination;
-	}
-
-	return -1;
 }
 
 function compileBinary(
@@ -278,6 +368,85 @@ function compileBinary(
 }
 
 /**
+ * Compile identifiers to load instructions.
+ *
+ * Statements that store the a variable internally handle the store instructions.
+ */
+function compileIdentifier(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	identifier: ESTree.Identifier,
+): number {
+	if (identifier.name === "undefined") {
+		const destination = nextRegisterDestination(fn);
+		block.instructions.push({
+			type: "loadUndefined",
+			registers: [destination],
+		});
+
+		return destination;
+	}
+
+	const binding = fn.semanticFile.nodeToBinding.get(identifier);
+	if (!binding) {
+		return -1;
+	}
+	const location = getOrCreateBindingLocation(program, fn, binding);
+
+	const destination = nextRegisterDestination(fn);
+	switch (location.type) {
+		case "local": {
+			block.instructions.push({
+				type: "loadLocal",
+				registers: [destination],
+				index: location.index,
+			});
+			break;
+		}
+		case "global": {
+			block.instructions.push({
+				type: "loadGlobal",
+				registers: [destination],
+				index: location.index,
+			});
+			break;
+		}
+		case "captured": {
+			block.instructions.push({
+				type: "loadCaptured",
+				registers: [destination],
+				index: location.index,
+			});
+			break;
+		}
+	}
+
+	return destination;
+}
+
+function compileLiteral(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	literal: ESTree.Literal,
+): number {
+	if (typeof literal.value === "number" && Number.isInteger(literal.value)) {
+		const destination = nextRegisterDestination(fn);
+		block.instructions.push({
+			type: "loadNumber",
+			registers: [destination],
+
+			value: literal.value,
+		});
+
+		return destination;
+	}
+
+	return -1;
+}
+
+/**
  * We use virtual register per function in this conversion pass.
  *
  * At a later compiler stage these should be optimized to reduce the number of registers needed
@@ -285,4 +454,50 @@ function compileBinary(
  */
 function nextRegisterDestination(fn: IRFunction) {
 	return fn.nextRegisterDestination++;
+}
+
+/**
+ * Get or create a binding location.
+ * We use incremental indices to assign unique locations to bindings. Memoizing the location
+ * per binding.
+ */
+function getOrCreateBindingLocation(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	binding: Binding,
+) {
+	let location = program.bindingToStorage.get(binding);
+	if (!location) {
+		switch (binding.scopedTo) {
+			case "local": {
+				location = {
+					type: "local",
+					index: fn.nextLocalIndex++,
+				};
+				break;
+			}
+			case "captured": {
+				location = {
+					type: "captured",
+					index: fn.nextCapturedIndex++,
+				};
+				break;
+			}
+			case "global": {
+				location = {
+					type: "global",
+					index: program.nextGlobalIndex++,
+				};
+				break;
+			}
+			default:
+				throw new Error(
+					`Unknown binding scope: ${binding.scopedTo} ${binding.name} ${binding.kind}`,
+				);
+		}
+
+		program.bindingToStorage.set(binding, location);
+	}
+
+	return location;
 }
