@@ -99,6 +99,7 @@ export type IRInstruction =
 			blocks: [number];
 	  }
 	| {
+			// TODO(opt): strip any jump or jumpIf instruction after a previous jump instruction.
 			type: "jump";
 
 			// [jumpTarget]
@@ -219,7 +220,7 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 		nextCapturedIndex: 0,
 	};
 
-	const idx = program.functions.push(fn);
+	const idx = program.functions.push(fn) - 1;
 	compileStatementsToBlock(program, fn, initFile.ast.body);
 
 	return idx;
@@ -235,16 +236,56 @@ function compileStatementsToBlock(
 	fn: IRFunction,
 	statements: Array<ESTree.Statement>,
 ): number {
-	const block: IRBlock = {
+	let block: IRBlock = {
 		instructions: [],
 	};
-
-	const blockIdx = fn.blocks.push(block);
+	// Store the first block index so we can return that to allow jumping to that block.
+	const blockIdx = fn.blocks.push(block) - 1;
 
 	for (const statement of statements) {
+		const lastBlock = fn.blocks.at(-1);
+		if (lastBlock !== block) {
+			// Any statement may create new blocks. The following logic detects this and starts a new
+			// block. It patches up all intermediate blocks to resume control after the statement.
+			//
+			// For example, with an if-statement:
+			//
+			// ```
+			// BLOCK:
+			//   loadNumber 1 in reg1
+			//   jumpIf reg1 BLOCK2
+			// BLOCK2:
+			//   call somefn
+			//   jump BLOCK3  <-- This is added.
+			// BLOCK3:
+			//   ...
+			// ```
+			//
+			// Blocks may add other nested blocks that are jumped between. So we may add unnecessary jump
+			// instructions to them. We optimize these out later.
+			const lastBlockIdx = fn.blocks.indexOf(block);
+
+			block = {
+				instructions: [],
+			};
+
+			const jumpTarget = fn.blocks.push(block) - 1;
+			// Unconditionally add the jump. In a later pass we can optimize these jumps out.
+			for (let i = lastBlockIdx + 1; i < jumpTarget; i++) {
+				fn.blocks[i]!.instructions.push({
+					type: "jump",
+					blocks: [jumpTarget],
+				});
+			}
+		}
+
 		switch (statement.type) {
 			case "ExpressionStatement": {
 				compileExpressionStatement(program, fn, block, statement);
+				break;
+			}
+			case "IfStatement": {
+				compileIfStatement(program, fn, block, statement);
 				break;
 			}
 			case "VariableDeclaration": {
@@ -267,6 +308,40 @@ function compileExpressionStatement(
 }
 
 /**
+ * Compile an if statement, reading the condition and jumping to the consequent or alternate block.
+ */
+function compileIfStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.IfStatement,
+) {
+	const condition = compileExpression(program, fn, block, statement.test);
+	const consequentBlock = compileStatementsToBlock(
+		program,
+		fn,
+		normalizeStatementOrBlock(statement.consequent),
+	);
+	block.instructions.push({
+		type: "jumpIf",
+		registers: [condition],
+		blocks: [consequentBlock],
+	});
+
+	if (statement.alternate) {
+		const alternateBlock = compileStatementsToBlock(
+			program,
+			fn,
+			normalizeStatementOrBlock(statement.alternate),
+		);
+		block.instructions.push({
+			type: "jump",
+			blocks: [alternateBlock],
+		});
+	}
+}
+
+/**
  * Naively compile variable declarations.
  */
 function compileVariableDeclaration(
@@ -280,6 +355,8 @@ function compileVariableDeclaration(
 			program,
 			fn,
 			block,
+
+			// Initialize variables to undefined if they don't have an initializer.
 			decl.init ?? { type: "Identifier", name: "undefined" },
 		);
 
@@ -500,4 +577,16 @@ function getOrCreateBindingLocation(
 	}
 
 	return location;
+}
+
+/**
+ * Things like if-statements don't need a full block body so might be bare statements.
+ * We convert them to an array so we can keep if simple signature when compiling blocks.
+ */
+function normalizeStatementOrBlock(statement: ESTree.Statement) {
+	if (statement.type === "BlockStatement") {
+		return statement.body;
+	}
+
+	return [statement];
 }
