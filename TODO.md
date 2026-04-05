@@ -8,7 +8,7 @@ The first areas of work are going to be:
 
 - Intermediate:
 - Rollup everything in an IR per function
-  - Next up; functions (make sure to assign bindings, if-else statements and return statements.
+  - Next up; functions (make sure to assign bindings), if-else statements and return statements.
   - Explicit blocks, branches; hoist nested functions
   - Virtual registers
   - explicit local/env/global access

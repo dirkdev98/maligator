@@ -44,7 +44,7 @@ export interface Binding {
 /**
  * Util to dump the full scope + bindings for a program.
  */
-function debugSemanticProgram(program: SemanticProgram) {
+export function debugSemanticProgram(program: SemanticProgram) {
 	let output = "";
 	const indent = "  ";
 
@@ -64,6 +64,8 @@ function debugSemanticProgram(program: SemanticProgram) {
 	}
 
 	log.debug(output);
+
+	return output;
 }
 
 /**
@@ -247,12 +249,7 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 	) {
 		if ("id" in node && node.id) {
 			// Register a function as a binding in their parent scope.
-			extractBindingsAndRegister(
-				file,
-				scope.parent!,
-				node.id,
-				scope.strict ? "let" : "var",
-			);
+			extractBindingsAndRegister(file, scope.parent!, node, scope.strict ? "let" : "var");
 		}
 
 		if (node.params.length) {
@@ -277,7 +274,7 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 	if (node.type === "ClassDeclaration") {
 		if ("id" in node && node.id) {
 			// Register a class a binding in their parent scope.
-			extractBindingsAndRegister(file, scope.parent!, node.id, "let");
+			extractBindingsAndRegister(file, scope.parent!, node, "let");
 		}
 	}
 
@@ -301,6 +298,10 @@ function extractBindingsAndRegister(
 	const extractNames = (node?: ESTree.Node): Array<string> => {
 		if (!node) {
 			return [];
+		}
+
+		if ("id" in node && node.id) {
+			return extractNames(node.id);
 		}
 
 		if (node.type === "Identifier") {
