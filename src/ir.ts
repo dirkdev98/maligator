@@ -459,6 +459,10 @@ function compileStatementsToBlock(
 				compileIfStatement(program, fn, block, statement);
 				break;
 			}
+			case "ReturnStatement": {
+				compileReturnStatement(program, fn, block, statement);
+				break;
+			}
 			case "VariableDeclaration": {
 				compileVariableDeclaration(program, fn, block, statement);
 				break;
@@ -547,6 +551,28 @@ function compileIfStatement(
 	block.instructions.push({
 		type: "jump",
 		blocks: [alternateBlock],
+	});
+}
+
+/**
+ * Naively compile a return statement.
+ */
+function compileReturnStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.ReturnStatement,
+) {
+	const returnRegister = compileExpression(
+		program,
+		fn,
+		block,
+		statement.argument ?? { type: "Identifier", name: "undefined" },
+	);
+
+	block.instructions.push({
+		type: "return",
+		registers: [returnRegister],
 	});
 }
 
