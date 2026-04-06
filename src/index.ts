@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import * as path from "node:path";
+import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-analysis.ts";
 import { log } from "./utils.ts";
@@ -18,5 +19,9 @@ const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypointPath);
 semTiming();
 
 const irTiming = log.time("compile to ir");
-const _irProgram = compileSemanticProgramToIr(semanticProgram);
+const irProgram = compileSemanticProgramToIr(semanticProgram);
 irTiming();
+
+const irOptTiming = log.time("ir optimizations");
+executeIROptimizations(irProgram);
+irOptTiming();
