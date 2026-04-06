@@ -15,6 +15,8 @@ export interface SemanticFile {
 	strict: boolean;
 	ast: ESTree.Program;
 
+	// TODO: We ain't fully compliant here yet. Scripts evaluate to the same global scope, so
+	//  bindings might reference outside of this semantic file.
 	scopes: Array<Scope>;
 	nodeToScope: Map<ESTree.Node, Scope>;
 	nodeToBinding: Map<ESTree.Node, Binding>;
@@ -248,8 +250,15 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 		node.type === "ArrowFunctionExpression"
 	) {
 		if ("id" in node && node.id) {
-			// Register a function as a binding in their parent scope.
-			extractBindingsAndRegister(file, scope.parent!, node, scope.strict ? "let" : "var");
+			// Register a function as a binding in their scope.
+			extractBindingsAndRegister(
+				file,
+				// FunctionDeclarations are available in the parent scope, named FunctionExpressions are
+				// only available in their own scope.
+				node.type === "FunctionDeclaration" ? scope.parent! : scope,
+				node,
+				scope.strict ? "let" : "var",
+			);
 		}
 
 		if (node.params.length) {
