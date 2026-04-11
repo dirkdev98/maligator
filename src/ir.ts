@@ -101,6 +101,12 @@ interface IRBlock {
 
 export type IRInstruction =
 	| {
+			type: "move";
+
+			// [dest, source]
+			registers: [number, number];
+	  }
+	| {
 			type: "return";
 
 			// [return value]
@@ -173,7 +179,7 @@ export type IRInstruction =
 			operator: "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "<<" | ">>" | ">>>";
 	  };
 
-function debugIntermediateProgram(program: IntermediateProgram) {
+export function debugIntermediateProgram(program: IntermediateProgram) {
 	let output = "";
 	const indent = "  ";
 
