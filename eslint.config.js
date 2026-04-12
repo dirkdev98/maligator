@@ -6,6 +6,6 @@ export default defineConfig(
 		disableImportOrdering: true,
 	},
 	{
-		ignores: ["scripts/test262.json"],
+		ignores: ["tests/local"],
 	},
 );
