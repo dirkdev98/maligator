@@ -16,6 +16,7 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		optDropUnreferencedBlocks,
 		optLocalsToRegister,
 		optCombineLinearBlocks,
+		optPatchJumpsToDirectJumpBlocks,
 	];
 
 	// Run all passes a few times. We can probably do better, but this allows us to be a bit more
@@ -82,8 +83,24 @@ function optDropUnreferencedBlocks(program: IntermediateProgram) {
 			}
 		}
 
-		for (const blockIdx of [...blockIndices].toReversed()) {
+		for (const blockIdx of blockIndices) {
+			// Remove the block
 			fn.blocks.splice(blockIdx, 1);
+
+			// Patch up any blocks that reference blocks after the jumpTarget
+			for (let i = 0; i < fn.blocks.length; ++i) {
+				const block = fn.blocks[i]!;
+				for (let j = 0; j < block.instructions.length; ++j) {
+					const instruction = block.instructions[j]!;
+					if ("blocks" in instruction) {
+						for (let k = 0; k < instruction.blocks.length; ++k) {
+							if (instruction.blocks[k]! > blockIdx) {
+								instruction.blocks[k]!--;
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 }
@@ -179,23 +196,55 @@ function optCombineLinearBlocks(program: IntermediateProgram) {
 			sourceBlock.instructions.splice(sourceBlock.instructions.length - 1, 1);
 			sourceBlock.instructions.push(...targetBlock.instructions);
 
-			// Patch up consequent blocks that reference blocks after the jumpTarget
-			for (let i = jumpSource; i < fn.blocks.length; ++i) {
+			// Patch up blocks that reference blocks after the jumpTarget
+			for (let i = 0; i < fn.blocks.length; ++i) {
 				const block = fn.blocks[i]!;
-				for (
-					let j =
-						i === jumpSource
-							? sourceBlock.instructions.length - targetBlock.instructions.length
-							: 0;
-					j < block.instructions.length;
-					++j
-				) {
+				for (let j = 0; j < block.instructions.length; ++j) {
 					const instruction = block.instructions[j]!;
 					if ("blocks" in instruction) {
 						for (let k = 0; k < instruction.blocks.length; ++k) {
 							if (instruction.blocks[k]! > jumpTarget) {
 								instruction.blocks[k]!--;
 							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+/**
+ *
+ */
+function optPatchJumpsToDirectJumpBlocks(program: IntermediateProgram) {
+	for (const fn of program.functions) {
+		const jumpBlockToTarget = new Map<number, number>();
+
+		for (let i = 0; i < fn.blocks.length; i++) {
+			const block = fn.blocks[i]!;
+
+			if (block.instructions.length === 1 && block.instructions[0]?.type === "jump") {
+				jumpBlockToTarget.set(i, block.instructions[0].blocks[0]);
+			}
+		}
+
+		// Note that we don't trace through jumpBlockToTarget to compact jump-trains. i.e block 1
+		// jumps to 2 and 2 to 3 to compact it as 1 - 3.
+		// This is handled by running through the optimizations a few times.
+		// At some point we should just handle this tho.
+
+		// Blocks are automatically removed in a different optimization when they are not referenced
+		// anymore.
+
+		for (const block of fn.blocks) {
+			for (const instr of block.instructions) {
+				if ("blocks" in instr) {
+					for (let i = 0; i < instr.blocks.length; i++) {
+						const targetBlock = instr.blocks[i]!;
+						const jumpTarget = jumpBlockToTarget.get(targetBlock);
+						if (jumpTarget !== undefined) {
+							instr.blocks[i] = jumpTarget;
 						}
 					}
 				}
