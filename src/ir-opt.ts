@@ -15,6 +15,7 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		optDropInstructionsAfterJumpsOrReturns,
 		optDropUnreferencedBlocks,
 		optLocalsToRegister,
+		optCombineLinearBlocks,
 	];
 
 	// Run all passes a few times. We can probably do better, but this allows us to be a bit more
@@ -56,7 +57,7 @@ function optDropInstructionsAfterJumpsOrReturns(program: IntermediateProgram) {
 function optDropUnreferencedBlocks(program: IntermediateProgram) {
 	for (const fn of program.functions) {
 		const blockIndices = new Set(
-			// Note the slice. Our first block is our function entrypoint. If we skip that we skip
+			// Note the slice. Our first block is our function entrypoint. If we skip that, we skip
 			// everything.
 			Array.from({ length: fn.blocks.length }, (_, i) => i).slice(1),
 		);
@@ -117,6 +118,86 @@ function optLocalsToRegister(program: IntermediateProgram) {
 						type: "move",
 						registers: [register, instruction.registers[0]],
 					};
+				}
+			}
+		}
+	}
+}
+
+/**
+ * We can combine linear blocks into a single block, if they are only jumped to from the last
+ * instruction of the previous block.
+ */
+function optCombineLinearBlocks(program: IntermediateProgram) {
+	for (const fn of program.functions) {
+		const jumpTargetToSources = new Map<number, Array<number>>();
+
+		for (let jumpSource = 0; jumpSource < fn.blocks.length - 1; ++jumpSource) {
+			const block = fn.blocks[jumpSource]!;
+
+			for (const instr of block.instructions) {
+				if ("blocks" in instr) {
+					for (const targetBlock of instr.blocks) {
+						const jumpSourceList =
+							jumpTargetToSources.get(targetBlock) ??
+							jumpTargetToSources.set(targetBlock, []).get(targetBlock)!;
+
+						jumpSourceList.push(jumpSource);
+					}
+				}
+			}
+		}
+
+		for (const [jumpTarget, jumpSources] of jumpTargetToSources) {
+			if (jumpSources.length !== 1) {
+				// For now, we keep it simple and only combine linear jumps to the next block.
+				continue;
+			}
+
+			const jumpSource = jumpSources[0]!;
+			if (jumpSource + 1 !== jumpTarget) {
+				// Only combine if the jump is to the next block.
+				continue;
+			}
+
+			const targetBlock = fn.blocks[jumpTarget]!;
+			const sourceBlock = fn.blocks[jumpSource]!;
+
+			const lastSourceInstruction = sourceBlock.instructions.at(-1)!;
+			if (
+				lastSourceInstruction.type !== "jump" ||
+				lastSourceInstruction.blocks[0] !== jumpTarget
+			) {
+				// Only combine the last instruction of the source block is the jump if it is the jump to
+				// the consequent block.
+				continue;
+			}
+
+			// Drop the target block.
+			fn.blocks.splice(jumpTarget, 1);
+			// Add instruction to the previous block, while removing the last jump instruction
+			sourceBlock.instructions.splice(sourceBlock.instructions.length - 1, 1);
+			sourceBlock.instructions.push(...targetBlock.instructions);
+
+			// Patch up consequent blocks that reference blocks after the jumpTarget
+			for (let i = jumpSource; i < fn.blocks.length; ++i) {
+				const block = fn.blocks[i]!;
+				for (
+					let j =
+						i === jumpSource
+							? sourceBlock.instructions.length - targetBlock.instructions.length
+							: 0;
+					j < block.instructions.length;
+					++j
+				) {
+					const instruction = block.instructions[j]!;
+					if ("blocks" in instruction) {
+						for (let k = 0; k < instruction.blocks.length; ++k) {
+							if (instruction.blocks[k]! > jumpTarget) {
+								instruction.blocks[k]!--;
+							}
+						}
+					}
 				}
 			}
 		}
