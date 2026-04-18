@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import * as path from "node:path";
+import { emitVmDefinition } from "./emit-vm.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
+import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";
 import { allocateRegisters } from "./register-alloc.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-analysis.ts";
 import { log } from "./utils.ts";
@@ -30,3 +32,13 @@ irOptTiming();
 const registerAllocTiming = log.time("register allocation");
 allocateRegisters(irProgram);
 registerAllocTiming();
+
+const lowerTiming = log.time("lower to vm");
+const vmDefinition = lowerIrProgramToVmDefinition(irProgram);
+lowerTiming();
+
+const emitTiming = log.time("emit vm definition");
+const output = emitVmDefinition(vmDefinition);
+emitTiming();
+
+log.info(output);
