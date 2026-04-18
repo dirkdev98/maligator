@@ -44,7 +44,7 @@ function optDropInstructionsAfterJumpsOrReturns(program: IntermediateProgram) {
 
 				if (instruction.type === "jump" || instruction.type === "return") {
 					block.instructions.splice(i + 1);
-					return;
+					break;
 				}
 			}
 		}

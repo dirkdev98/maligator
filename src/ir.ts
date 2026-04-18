@@ -95,7 +95,7 @@ export interface IRFunction {
 	nextCapturedIndex: number;
 }
 
-interface IRBlock {
+export interface IRBlock {
 	instructions: Array<IRInstruction>;
 }
 

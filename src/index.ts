@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
+import { allocateRegisters } from "./register-alloc.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-analysis.ts";
 import { log } from "./utils.ts";
 
@@ -25,3 +26,7 @@ irTiming();
 const irOptTiming = log.time("ir optimizations");
 executeIROptimizations(irProgram);
 irOptTiming();
+
+const registerAllocTiming = log.time("register allocation");
+allocateRegisters(irProgram);
+registerAllocTiming();
