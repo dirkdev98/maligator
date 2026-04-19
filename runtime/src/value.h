@@ -154,5 +154,6 @@ i32 mal_value_to_i32(MalValue value);
  */
 bool mal_value_is_int32(MalValue value);
 
+bool mal_value_is_truthy(MalValue value);
 
 void mal_value_debug(MalValue value);

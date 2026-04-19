@@ -86,6 +86,35 @@ bool mal_value_is_int32(MalValue value) {
     return v == MAL_VALUE_INT32;
 }
 
+bool mal_value_is_truthy(MalValue value) {
+    if (mal_value_is_nil(value)) {
+        return false;
+    }
+
+    if (mal_value_is_boolean(value)) {
+        return mal_value_to_boolean(value);
+    }
+
+    if (mal_value_is_nan(value)) {
+        return false;
+    }
+
+    if (mal_value_is_f64(value)) {
+        return mal_value_to_f64(value) != 0;
+    }
+
+    if (mal_value_is_int32(value)) {
+        return mal_value_to_i32(value) != 0;
+    }
+
+    // TODO: Empty string
+
+    // TODO: Might need to check `valueOf` & BooleanData fields.
+
+    // Any object is truthy.
+    return true;
+}
+
 void mal_value_debug(MalValue value) {
     if (mal_value_is_nan(value)) {
         printf("NaN");

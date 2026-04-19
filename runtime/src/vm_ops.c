@@ -35,3 +35,13 @@ void mal_op_store_global(MalCallable *callable, MalInstruction *instruction) {
 void mal_op_load_global(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.load_global.dst] = callable->vm->globals[instruction->as.load_global.index];
 }
+
+void mal_op_jump(MalCallable *callable, MalInstruction *instruction) {
+    callable->instruction_pointer = instruction->as.jump.target_ip;
+}
+
+void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction) {
+    if (mal_value_is_truthy(callable->registers[instruction->as.jump_if.cond])) {
+        callable->instruction_pointer = instruction->as.jump.target_ip;
+    }
+}

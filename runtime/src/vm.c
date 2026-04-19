@@ -51,6 +51,12 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
                 mal_op_load_global(callable, &instruction);
                 break;
 
+            case MAL_OP_JUMP:
+                mal_op_jump(callable, &instruction);
+                break;
+            case MAL_OP_JUMP_IF:
+                mal_op_jump_if(callable, &instruction);
+                break;
 
             case MAL_OP_RETURN: {
                 for (i32 i = 0; i < callable->function->register_count; i++) {
