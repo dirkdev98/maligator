@@ -31,7 +31,12 @@ const MalVmDefinition mal_vm_definition = {
 };
 
 int main(void) {
-    auto i = mal_value_from_i32(1500);
+    MalVm vm;
+
+    mal_vm_init(&vm, &mal_vm_definition);
+    auto callable = mal_vm_create_callable(&vm, 0);
+    mal_vm_run(&vm, callable);
+
     printf("\n");
 
     return 0;
