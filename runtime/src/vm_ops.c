@@ -19,3 +19,11 @@ void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
             break;
     }
 }
+
+void mal_op_store_global(MalCallable *callable, MalInstruction *instruction) {
+    callable->vm->globals[instruction->as.store_global.index] = callable->registers[instruction->as.store_global.src];
+}
+
+void mal_op_load_global(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.store_global.src] = callable->vm->globals[instruction->as.store_global.index];
+}

@@ -1,25 +1,25 @@
 #include <stdio.h>
 
-#include "value.h"
-#include "value_ops.h"
 #include "vm.h"
 
 static const MalInstruction mal_function_0_instructions[] = {
     {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 1}},
-    {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 1, .value = 2}},
-    {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 2, .value = 3}},
-    {.opcode = MAL_OP_BINARY, .as.binary = {.dst = 3, .left = 1, .right = 2, .op = MAL_BIN_MUL}},
-    {.opcode = MAL_OP_BINARY, .as.binary = {.dst = 1, .left = 0, .right = 3, .op = MAL_BIN_ADD}},
-    {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 3}},
-    {.opcode = MAL_OP_RETURN, .as.ret = {.value = 3}},
+    {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 0, .index = 0}},
+    {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 2}},
+    {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 0, .index = 1}},
+    {.opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = {.dst = 0, .index = 0}},
+    {.opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = {.dst = 1, .index = 1}},
+    {.opcode = MAL_OP_BINARY, .as.binary = {.dst = 2, .left = 0, .right = 1, .op = MAL_BIN_ADD}},
+    {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 1}},
+    {.opcode = MAL_OP_RETURN, .as.ret = {.value = 1}},
 };
 
 static const MalFunction mal_functions[] = {
     {
         .parameter_count = 0,
-        .register_count = 4,
+        .register_count = 3,
         .captured_count = 0,
-        .instruction_count = 7,
+        .instruction_count = 9,
         .instructions = mal_function_0_instructions,
     },
 };
@@ -27,7 +27,7 @@ static const MalFunction mal_functions[] = {
 const MalVmDefinition mal_vm_definition = {
     .function_count = 1,
     .functions = mal_functions,
-    .global_count = 0,
+    .global_count = 2,
 };
 
 int main(void) {

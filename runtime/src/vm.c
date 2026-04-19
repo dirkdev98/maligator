@@ -37,6 +37,15 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
             case MAL_OP_BINARY:
                 mal_op_binary(callable, &instruction);
                 break;
+
+            case MAL_OP_STORE_GLOBAL:
+                mal_op_store_global(callable, &instruction);
+                break;
+            case MAL_OP_LOAD_GLOBAL:
+                mal_op_load_global(callable, &instruction);
+                break;
+
+
             case MAL_OP_RETURN: {
                 for (i32 i = 0; i < callable->function->register_count; i++) {
                     printf("Register %d:: ", i);
