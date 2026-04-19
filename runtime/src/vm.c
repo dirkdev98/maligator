@@ -31,7 +31,13 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
         auto instruction = callable->function->instructions[callable->instruction_pointer++];
 
         switch (instruction.opcode) {
+            case MAL_OP_MOVE:
+                mal_op_move(callable, &instruction);
+
             case MAL_OP_CREATE_NUMBER:
+                mal_op_create_number(callable, &instruction);
+                break;
+            case MAL_OP_CREATE_UNDEFINED:
                 mal_op_create_number(callable, &instruction);
                 break;
             case MAL_OP_BINARY:

@@ -2,8 +2,16 @@
 
 #include "value_ops.h"
 
+void mal_op_move(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.move.dst] = callable->registers[instruction->as.move.src];
+}
+
 void mal_op_create_number(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_number.dst] = mal_value_from_i32(instruction->as.create_number.value);
+}
+
+void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.create_number.dst] = mal_value_new_undefined();
 }
 
 void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
@@ -25,5 +33,5 @@ void mal_op_store_global(MalCallable *callable, MalInstruction *instruction) {
 }
 
 void mal_op_load_global(MalCallable *callable, MalInstruction *instruction) {
-    callable->registers[instruction->as.store_global.src] = callable->vm->globals[instruction->as.store_global.index];
+    callable->registers[instruction->as.load_global.dst] = callable->vm->globals[instruction->as.load_global.index];
 }

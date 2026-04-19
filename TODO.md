@@ -2,23 +2,13 @@
 
 Our TODO list in order of implementation. Below the fold there is also a list of experiments I want to do at some point once we compile and run most JS.
 
-- [ ] Let's start with a clean slate.
-
-The first areas of work are going to be:
-
-- Intermediate:
-- Rollup everything in an IR per function
-  - Start building things like:
-    - Debug location tables
-    - Constant pools
-  - Liveness analysis / register allocation
-- Backend:
-  - I kinda make decisions for here in the previous parts. So we'll have to build things hand in hand.
-  - Lower in to instructions
-  - Function metadata
-  - Memory Layouts
-  - The different tables/pools
-  - Compile it.
+- [ ] Implement jump_if and jump.
+- [ ] Create support a call frame + stack em.
+- [ ] Implement create_function
+- [ ] Decide on value_ops vs vm_op vs whatever?
+- [ ] Debug location tables
+- [ ] Arguments object
+- [ ] For-loops
 
 ### You never know ideas
 
