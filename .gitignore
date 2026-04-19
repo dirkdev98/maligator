@@ -7,4 +7,4 @@ local*.js
 
 tsconfig.tsbuildinfo
 
-tests/local/tmp.js
+tests/local/tmp*.js

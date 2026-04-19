@@ -2,7 +2,5 @@
 
 #include "./defaults.h"
 #include "value.h"
-#include "env.h"
-#include "thread.h"
 
-void mal_ops_add(MalThread *thread, MalEnv *env, MalValue left, MalValue right);
+void mal_ops_add(MalValue left, MalValue right);

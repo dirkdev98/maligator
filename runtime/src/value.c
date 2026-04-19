@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "value.h"
 
 MalValue mal_value_from_f64(f64 value) {
