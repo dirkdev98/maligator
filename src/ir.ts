@@ -184,7 +184,7 @@ export function debugIntermediateProgram(program: IntermediateProgram) {
 	const indent = "  ";
 
 	for (const fn of program.functions) {
-		output += `FN (params: ${fn.parameterCount})\n`;
+		output += `FN (params: ${fn.parameterCount}, regCount: ${fn.nextRegisterDestination})\n`;
 		for (const block of fn.blocks) {
 			output += `${indent}BLOCK\n`;
 
