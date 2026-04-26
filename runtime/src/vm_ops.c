@@ -42,6 +42,6 @@ void mal_op_jump(MalCallable *callable, MalInstruction *instruction) {
 
 void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction) {
     if (mal_value_is_truthy(callable->registers[instruction->as.jump_if.cond])) {
-        callable->instruction_pointer = instruction->as.jump.target_ip;
+        callable->instruction_pointer = instruction->as.jump_if.target_ip;
     }
 }
