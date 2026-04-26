@@ -20,7 +20,7 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	];
 
 	// Run all passes a few times. We can probably do better, but this allows us to be a bit more
-	// naive ;)
+	// naive for now ;)
 	for (let i = 0; i < 5; ++i) {
 		for (const pass of passes) {
 			pass(program);
@@ -83,9 +83,18 @@ function optDropUnreferencedBlocks(program: IntermediateProgram) {
 			}
 		}
 
-		for (const blockIdx of blockIndices) {
+		const indicesToPatch = [...blockIndices].sort((a, b) => a - b);
+		for (let patchIndex = 0; patchIndex < indicesToPatch.length; patchIndex++) {
+			const blockIdx = indicesToPatch[patchIndex]!;
+
 			// Remove the block
 			fn.blocks.splice(blockIdx, 1);
+
+			// Patch up subsequent patch targets, since they refer to the block index before
+			// removing a block.
+			for (let i = patchIndex + 1; i < indicesToPatch.length; ++i) {
+				indicesToPatch[i]!--;
+			}
 
 			// Patch up any blocks that reference blocks after the jumpTarget
 			for (let i = 0; i < fn.blocks.length; ++i) {
@@ -165,20 +174,33 @@ function optCombineLinearBlocks(program: IntermediateProgram) {
 			}
 		}
 
-		for (const [jumpTarget, jumpSources] of jumpTargetToSources) {
-			if (jumpSources.length !== 1) {
-				// For now, we keep it simple and only combine linear jumps to the next block.
-				continue;
-			}
+		// Normalize to a sorted array from source to target.
+		//
+		// This allows us to patch up consequent block indices and thus combine multiple blocks in
+		// one run.
+		const pairsToEvaluate = jumpTargetToSources
+			.entries()
+			.filter(
+				([jumpTarget, jumpSources]) =>
+					// Excludes multiple sources to a single target. And only
+					// support handling consequent blocks.
+					jumpSources.length === 1 && jumpSources[0]! + 1 === jumpTarget,
+			)
+			.map(
+				([jumpTarget, jumpSources]) => [jumpSources[0], jumpTarget] as [number, number],
+			)
+			.toArray()
+			.sort((a, b) => a[0] - b[0]);
 
-			const jumpSource = jumpSources[0]!;
-			if (jumpSource + 1 !== jumpTarget) {
-				// Only combine if the jump is to the next block.
-				continue;
-			}
+		for (
+			let evaluationIndex = 0;
+			evaluationIndex < pairsToEvaluate.length;
+			evaluationIndex++
+		) {
+			const [jumpSource, jumpTarget] = pairsToEvaluate[evaluationIndex]!;
 
-			const targetBlock = fn.blocks[jumpTarget]!;
 			const sourceBlock = fn.blocks[jumpSource]!;
+			const targetBlock = fn.blocks[jumpTarget]!;
 
 			const lastSourceInstruction = sourceBlock.instructions.at(-1)!;
 			if (
@@ -192,6 +214,19 @@ function optCombineLinearBlocks(program: IntermediateProgram) {
 
 			// Drop the target block.
 			fn.blocks.splice(jumpTarget, 1);
+
+			// Patch up all other found pairs. Note that these are sorted in source ascending order
+			// and we can't have multiple sources to a single target since we only check the last
+			// jump instruction.
+			for (
+				let patchIdx = evaluationIndex + 1;
+				patchIdx < pairsToEvaluate.length;
+				++patchIdx
+			) {
+				const [patchSource, patchTarget] = pairsToEvaluate[patchIdx]!;
+				pairsToEvaluate[patchIdx] = [patchSource - 1, patchTarget - 1];
+			}
+
 			// Add instruction to the previous block, while removing the last jump instruction
 			sourceBlock.instructions.splice(sourceBlock.instructions.length - 1, 1);
 			sourceBlock.instructions.push(...targetBlock.instructions);
@@ -215,7 +250,7 @@ function optCombineLinearBlocks(program: IntermediateProgram) {
 }
 
 /**
- *
+ * Trace down jumps to blocks with only a jump instruction. So we don't jump twice.
  */
 function optPatchJumpsToDirectJumpBlocks(program: IntermediateProgram) {
 	for (const fn of program.functions) {
@@ -243,6 +278,8 @@ function optPatchJumpsToDirectJumpBlocks(program: IntermediateProgram) {
 					for (let i = 0; i < instr.blocks.length; i++) {
 						const targetBlock = instr.blocks[i]!;
 						const jumpTarget = jumpBlockToTarget.get(targetBlock);
+
+						// Inline the jump if we have matching target.
 						if (jumpTarget !== undefined) {
 							instr.blocks[i] = jumpTarget;
 						}
