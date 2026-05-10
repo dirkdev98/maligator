@@ -4,6 +4,12 @@
 
 #define MAL_DEFAULT_HEAP_SIZE 16 * 1024
 
+#define MAL_HEAP_ALIGN_SIZE(size, type) \
+    (((size) + alignof(type) - 1) & ~(alignof(type) - 1))
+
+#define MAL_HEAP_ALIGN(type) \
+    MAL_HEAP_ALIGN_SIZE(sizeof(type), type)
+
 typedef struct MalHeap MalHeap;
 
 /**
@@ -55,6 +61,16 @@ void mal_heap_init(MalHeap *heap, usize capacity);
 void mal_heap_free(MalHeap *heap);
 
 /**
- * Linkup a new heap with the given capacity. Pass in 0 to use the default capacity.
+ * Initialize a heap header in place.
  */
-void mal_heap_grow(MalHeap *heap, usize new_capacity);
+void mal_heap_header_init(MalHeapHeader *header, MalHeapType type);
+
+/**
+ * Read the type tag from a heap allocation header.
+ */
+MalHeapType mal_heap_header_type(const MalHeapHeader *header);
+
+/**
+ * Allocate a new heap object.
+ */
+void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type);

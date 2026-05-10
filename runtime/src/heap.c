@@ -25,7 +25,10 @@ void mal_heap_free(MalHeap *heap) {
     }
 }
 
-void mal_heap_grow(MalHeap *heap, usize alloc_size) {
+/**
+ * Linkup a new heap with the given capacity. Pass in 0 to use the default capacity.
+ */
+static void mal_heap_grow(MalHeap *heap, usize alloc_size) {
     if (alloc_size == 0) {
         alloc_size = MAL_DEFAULT_HEAP_SIZE;
     }
@@ -37,10 +40,41 @@ void mal_heap_grow(MalHeap *heap, usize alloc_size) {
 
     // When allocating new stuff, we have to make sure that we keep enough space reserved for the next MalHeap*
     heap->next_heap = heap->next_ptr;
-    heap->next_ptr += 8;
+    heap->next_ptr += MAL_HEAP_ALIGN(MalHeap);
 
     mal_heap_init(heap->next_heap, alloc_size);
 }
 
-// TODO: when allocating find the next heap that can accomodate the alloc.
-//   So we might grow dynamically and fill up 'previous' heaps with smaller objects as we go.
+void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
+    // TODO: at some point we can add GC tracking here.
+    header->type = type;
+}
+
+void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
+    size available_capacity = heap->capacity - (heap->next_ptr - heap->ptr);
+
+    if (heap->next_heap == nullptr) {
+        // Make sure that we reserve enough space for the next MalHeap.
+        available_capacity = available_capacity - MAL_HEAP_ALIGN(MalHeap);
+    }
+
+    // Make sure that we align things properly.
+    size aligned_alloc_size = MAL_HEAP_ALIGN_SIZE(alloc_size, void*);
+
+    // Pretty inefficient all around, but I guess that it works for now.
+    if (available_capacity < aligned_alloc_size) {
+        if (heap->next_heap != nullptr) {
+            return mal_heap_alloc(heap->next_heap, alloc_size, type);
+        }
+
+        mal_heap_grow(heap, alloc_size > MAL_DEFAULT_HEAP_SIZE ? alloc_size : MAL_DEFAULT_HEAP_SIZE);
+        return mal_heap_alloc(heap->next_heap, alloc_size, type);
+    }
+
+    void *ptr = heap->next_ptr;
+    heap->next_ptr += aligned_alloc_size;
+
+    mal_heap_header_init(ptr, type);
+
+    return ptr;
+}
