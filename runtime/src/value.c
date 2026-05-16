@@ -86,6 +86,121 @@ bool mal_value_is_int32(MalValue value) {
     return v == MAL_VALUE_INT32;
 }
 
+MalValue mal_value_from_heap(MalHeapHeader *heap) {
+    return MAL_VALUE_PTR | ((uptr) heap & MAKS_PTR);
+}
+
+bool mal_value_is_heap(MalValue value) {
+    auto v = value & MAL_VALUE_PTR;
+
+    return v == MAL_VALUE_PTR;
+}
+
+MalHeapHeader *mal_value_to_heap(MalValue value) {
+    return (MalHeapHeader *) (uptr) (value & MAKS_PTR);
+}
+
+const MalHeapHeader *mal_value_to_heap_const(MalValue value) {
+    return (const MalHeapHeader *) (uptr) (value & MAKS_PTR);
+}
+
+MalHeapType mal_value_heap_type(MalValue value) {
+    return mal_value_to_heap_const(value)->type;
+}
+
+bool mal_value_is_heap_type(MalValue value, MalHeapType type) {
+    if (!mal_value_is_heap(value)) {
+        return false;
+    }
+
+    return mal_value_heap_type(value) == type;
+}
+
+bool mal_value_is_string(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_STRING);
+}
+
+bool mal_value_is_symbol(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_SYMBOL);
+}
+
+bool mal_value_is_object(MalValue value) {
+    if (!mal_value_is_heap(value)) {
+        return false;
+    }
+
+    auto type = mal_value_heap_type(value);
+
+    return type == MAL_HEAP_OBJECT ||
+        type == MAL_HEAP_FUNCTION_OBJECT ||
+        type == MAL_HEAP_NATIVE_FUNCTION_OBJECT ||
+        type == MAL_HEAP_ARRAY_OBJECT;
+}
+
+bool mal_value_is_function_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_FUNCTION_OBJECT);
+}
+
+bool mal_value_is_native_function_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_NATIVE_FUNCTION_OBJECT);
+}
+
+bool mal_value_is_array_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_ARRAY_OBJECT);
+}
+
+bool mal_value_is_callable(MalValue value) {
+    return mal_value_is_function_object(value) || mal_value_is_native_function_object(value);
+}
+
+MalString *mal_value_to_string(MalValue value) {
+    return (MalString *) mal_value_to_heap(value);
+}
+
+MalSymbol *mal_value_to_symbol(MalValue value) {
+    return (MalSymbol *) mal_value_to_heap(value);
+}
+
+MalObject *mal_value_to_object(MalValue value) {
+    return (MalObject *) mal_value_to_heap(value);
+}
+
+MalFunctionObject *mal_value_to_function_object(MalValue value) {
+    return (MalFunctionObject *) mal_value_to_heap(value);
+}
+
+MalNativeFunctionObject *mal_value_to_native_function_object(MalValue value) {
+    return (MalNativeFunctionObject *) mal_value_to_heap(value);
+}
+
+MalArrayObject *mal_value_to_array_object(MalValue value) {
+    return (MalArrayObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_string(MalString *string) {
+    return mal_value_from_heap((MalHeapHeader *) string);
+}
+
+MalValue mal_value_from_symbol(MalSymbol *symbol) {
+    return mal_value_from_heap((MalHeapHeader *) symbol);
+}
+
+MalValue mal_value_from_object(MalObject *object) {
+    return mal_value_from_heap((MalHeapHeader *) object);
+}
+
+MalValue mal_value_from_function_object(MalFunctionObject *function) {
+    return mal_value_from_heap((MalHeapHeader *) function);
+}
+
+MalValue mal_value_from_native_function_object(MalNativeFunctionObject *function) {
+    return mal_value_from_heap((MalHeapHeader *) function);
+}
+
+MalValue mal_value_from_array_object(MalArrayObject *array) {
+    return mal_value_from_heap((MalHeapHeader *) array);
+}
+
 bool mal_value_is_truthy(MalValue value) {
     if (mal_value_is_nil(value)) {
         return false;

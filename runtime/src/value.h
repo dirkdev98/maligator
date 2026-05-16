@@ -1,6 +1,14 @@
 #pragma once
 
 #include "./defaults.h"
+#include "heap.h"
+
+typedef struct MalString MalString;
+typedef struct MalSymbol MalSymbol;
+typedef struct MalObject MalObject;
+typedef struct MalFunctionObject MalFunctionObject;
+typedef struct MalNativeFunctionObject MalNativeFunctionObject;
+typedef struct MalArrayObject MalArrayObject;
 
 /**
  * NaN-Boxed MalValue representation.
@@ -42,24 +50,9 @@ typedef u64 MalValue;
 #define MAL_VALUE_DYNAMIC (MAL_VALUE_STATIC | MASK_SIGN_BIT)
 #define MAL_VALUE_INT32 (MAL_VALUE_STATIC | 0x0001000000000000)
 // We have a decision at some point to go from 48-bit pointers to 32-bit pointers.
-// This means that we have another 16-bits available, and could potentially store the MalHeapHeader inline.
+// This would mean that we have another 16-bits available, and could potentially store the MalHeapHeader inline.
 // The downside is that we constrain ourselves to a 4GB heap
 #define MAL_VALUE_PTR (MAL_VALUE_STATIC | 0x0002000000000000)
-
-typedef enum MalValueType {
-    SYMBOL = 1,
-    STRING = 2,
-    // etc.
-} MalValueType;
-
-// Note that this will prob always be a 64-bit aligned, so we have plenty of room to store more things.
-typedef struct MalHeapHeader {
-    MalValueType type;
-} MalHeapHeader;
-
-typedef struct MalHeapSymbol {
-    MalHeapHeader header;
-} MalHeapSymbol;
 
 
 /**
@@ -154,6 +147,137 @@ i32 mal_value_to_i32(MalValue value);
  */
 bool mal_value_is_int32(MalValue value);
 
+/**
+ * Box a heap allocation.
+ */
+MalValue mal_value_from_heap(MalHeapHeader *heap);
+
+/**
+ * Check if the value is heap-backed.
+ */
+bool mal_value_is_heap(MalValue value);
+
+/**
+ * Unbox a heap allocation.
+ */
+MalHeapHeader *mal_value_to_heap(MalValue value);
+
+/**
+ * Unbox a const heap allocation.
+ */
+const MalHeapHeader *mal_value_to_heap_const(MalValue value);
+
+/**
+ * Read the heap type tag.
+ */
+MalHeapType mal_value_heap_type(MalValue value);
+
+/**
+ * Check if the value has the given heap type.
+ */
+bool mal_value_is_heap_type(MalValue value, MalHeapType type);
+
+/**
+ * Check if the value is a string.
+ */
+bool mal_value_is_string(MalValue value);
+
+/**
+ * Check if the value is a symbol.
+ */
+bool mal_value_is_symbol(MalValue value);
+
+/**
+ * Check if the value is an object.
+ */
+bool mal_value_is_object(MalValue value);
+
+/**
+ * Check if the value is a function object.
+ */
+bool mal_value_is_function_object(MalValue value);
+
+/**
+ * Check if the value is a native function object.
+ */
+bool mal_value_is_native_function_object(MalValue value);
+
+/**
+ * Check if the value is an array object.
+ */
+bool mal_value_is_array_object(MalValue value);
+
+/**
+ * Check if the value is callable.
+ */
+bool mal_value_is_callable(MalValue value);
+
+/**
+ * Unbox a string.
+ */
+MalString *mal_value_to_string(MalValue value);
+
+/**
+ * Unbox a symbol.
+ */
+MalSymbol *mal_value_to_symbol(MalValue value);
+
+/**
+ * Unbox an object.
+ */
+MalObject *mal_value_to_object(MalValue value);
+
+/**
+ * Unbox a function object.
+ */
+MalFunctionObject *mal_value_to_function_object(MalValue value);
+
+/**
+ * Unbox a native function object.
+ */
+MalNativeFunctionObject *mal_value_to_native_function_object(MalValue value);
+
+/**
+ * Unbox an array object.
+ */
+MalArrayObject *mal_value_to_array_object(MalValue value);
+
+/**
+ * Box a string.
+ */
+MalValue mal_value_from_string(MalString *string);
+
+/**
+ * Box a symbol.
+ */
+MalValue mal_value_from_symbol(MalSymbol *symbol);
+
+/**
+ * Box an object.
+ */
+MalValue mal_value_from_object(MalObject *object);
+
+/**
+ * Box a function object.
+ */
+MalValue mal_value_from_function_object(MalFunctionObject *function);
+
+/**
+ * Box a native function object.
+ */
+MalValue mal_value_from_native_function_object(MalNativeFunctionObject *function);
+
+/**
+ * Box an array object.
+ */
+MalValue mal_value_from_array_object(MalArrayObject *array);
+
+/**
+ * Check if the value is truthy.
+ */
 bool mal_value_is_truthy(MalValue value);
 
+/**
+ * Print a debug representation.
+ */
 void mal_value_debug(MalValue value);
