@@ -1,0 +1,73 @@
+#pragma once
+
+#include "./defaults.h"
+#include "object.h"
+#include "property_store.h"
+
+/**
+ * JS-object flavored result of attempting to define or update an own property.
+ */
+typedef enum MalDefineOwnStatus {
+    MAL_DEFINE_OWN_APPLIED,
+    MAL_DEFINE_OWN_REJECTED,
+} MalDefineOwnStatus;
+
+/**
+ * Result of a JS-object flavored property lookup.
+ */
+typedef struct MalPropertyResolution {
+    bool found;
+    bool own;
+    MalObject *holder;
+    MalPropertyDesc desc;
+} MalPropertyResolution;
+
+/**
+ * Return the backing table for an object's own properties.
+ */
+MalTable *mal_object_properties(MalObject *object);
+
+/**
+ * Return whether the object currently accepts creation of new own properties.
+ */
+bool mal_object_is_extensible(const MalObject *object);
+
+/**
+ * Set the object's extensibility state.
+ */
+void mal_object_set_extensible(MalObject *object, bool extensible);
+
+/**
+ * Return the object's current prototype.
+ */
+MalObject *mal_object_get_prototype(const MalObject *object);
+
+/**
+ * Set the object's prototype.
+ */
+bool mal_object_set_prototype(MalObject *object, MalObject *prototype);
+
+/**
+ * Look up an own property descriptor without walking the prototype chain.
+ */
+MalPropertyLookup mal_object_get_own(const MalObject *object, MalKey key);
+
+/**
+ * Resolve a property by walking the ordinary prototype chain.
+ */
+MalPropertyResolution mal_object_resolve_property(const MalObject *object, MalKey key);
+
+/**
+ * Apply ordinary-object flavored define-own-property semantics.
+ */
+MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const MalPropertyDesc *desc);
+
+/**
+ * Perform an ordinary own-property deletion.
+ */
+bool mal_object_delete_own(MalObject *object, MalKey key);
+
+/**
+ * Perform a pragmatic ordinary set operation.
+ */
+bool mal_object_set(MalObject *object, MalKey key, MalValue value);
