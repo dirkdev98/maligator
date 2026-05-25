@@ -94,6 +94,21 @@ bool mal_table_delete(MalTable *table, MalKey key);
 void mal_table_compact(MalTable *table);
 
 /**
+ * Read the key stored for a live entry handle.
+ */
+MalKey mal_table_entry_key(const MalTable *table, void *entry);
+
+/**
+ * Read the data pointer stored for a live entry handle.
+ */
+void *mal_table_entry_data(const MalTable *table, void *entry);
+
+/**
+ * Replace the owned data pointer stored for a live entry handle.
+ */
+void mal_table_entry_set_owned_data(MalTable *table, void *entry, void *data);
+
+/**
  * Initialize a live storage-order iterator.
  */
 void mal_table_iter_init(MalTableIter *iter, MalTable *table, MalTableIterKind kind);

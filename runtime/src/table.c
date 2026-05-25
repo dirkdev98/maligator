@@ -10,6 +10,7 @@
 
 typedef struct MalTableEntry {
     MalKey key;
+    void *data;
     bool live;
 } MalTableEntry;
 
@@ -161,6 +162,10 @@ MalTable *mal_table_new(MalTableMode mode) {
 
 void mal_table_free(MalTable *table) {
     for (usize i = 0; i < table->order_capacity; i++) {
+        if (table->order[i] != nullptr) {
+            free(table->order[i]->data);
+        }
+
         free(table->order[i]);
     }
 
@@ -200,6 +205,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key) {
 
     MalTableEntry *entry = malloc(sizeof(MalTableEntry));
     entry->key = key;
+    entry->data = nullptr;
     entry->live = true;
 
     table->order[table->size + table->tombstone_count] = entry;
@@ -240,6 +246,7 @@ void mal_table_compact(MalTable *table) {
         }
 
         if (!entry->live) {
+            free(entry->data);
             free(entry);
             table->order[read_index] = nullptr;
             continue;
@@ -255,6 +262,24 @@ void mal_table_compact(MalTable *table) {
 
     table->tombstone_count = 0;
     mal_table_rehash(table, table->slot_capacity);
+}
+
+MalKey mal_table_entry_key(const MalTable *table, void *entry) {
+    (void) table;
+
+    return ((MalTableEntry *) entry)->key;
+}
+
+void *mal_table_entry_data(const MalTable *table, void *entry) {
+    (void) table;
+
+    return ((MalTableEntry *) entry)->data;
+}
+
+void mal_table_entry_set_owned_data(MalTable *table, void *entry, void *data) {
+    (void) table;
+
+    ((MalTableEntry *) entry)->data = data;
 }
 
 void mal_table_iter_init(MalTableIter *iter, MalTable *table, MalTableIterKind kind) {
