@@ -179,6 +179,26 @@ export type IRInstruction =
 			operator: "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "<<" | ">>" | ">>>";
 	  };
 
+type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
+
+const irBinaryOperators = new Set<string>([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+]);
+
+function isIRBinaryOperator(operator: string): operator is IRBinaryOperator {
+	return irBinaryOperators.has(operator);
+}
+
 export function debugIntermediateProgram(program: IntermediateProgram) {
 	let output = "";
 	const indent = "  ";
@@ -643,6 +663,10 @@ function compileBinary(
 	block: IRBlock,
 	binaryExpression: ESTree.BinaryExpression,
 ): number {
+	if (!isIRBinaryOperator(binaryExpression.operator)) {
+		throw new Error(`Unsupported binary operator ${binaryExpression.operator}`);
+	}
+
 	const left = compileExpression(program, fn, block, binaryExpression.left);
 	const right = compileExpression(program, fn, block, binaryExpression.right);
 
@@ -653,8 +677,7 @@ function compileBinary(
 
 		registers: [destination, left, right],
 
-		// A tad hacky with types. The ESTree types don't have this strictly typed.
-		operator: binaryExpression.operator as "+",
+		operator: binaryExpression.operator,
 	});
 
 	return destination;

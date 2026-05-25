@@ -12,7 +12,9 @@
 #include "property_store.h"
 #include "table.h"
 #include "value.h"
+#include "value_ops.h"
 #include "vm.h"
+#include "vm_ops.h"
 
 static const MalInstruction mal_function_0_instructions[] = {
     {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 1}},
@@ -69,6 +71,86 @@ static MalValue test_native_callback(MalVm *vm, MalValue this_value, const MalVa
     (void) args;
 
     return mal_value_from_i32(arg_count);
+}
+
+static void test_binary_value_ops_handle_int32_arithmetic(void) {
+    MalValue seven = mal_value_from_i32(7);
+    MalValue two = mal_value_from_i32(2);
+
+    assert(mal_value_to_i32(mal_ops_add(seven, two)) == 9);
+    assert(mal_value_to_i32(mal_ops_subtract(seven, two)) == 5);
+    assert(mal_value_to_i32(mal_ops_multiply(seven, two)) == 14);
+    assert(mal_value_to_i32(mal_ops_divide(seven, two)) == 3);
+    assert(mal_value_to_i32(mal_ops_remainder(seven, two)) == 1);
+}
+
+static void test_binary_value_ops_handle_bitwise_operations(void) {
+    MalValue seven = mal_value_from_i32(7);
+    MalValue two = mal_value_from_i32(2);
+    MalValue negative_one = mal_value_from_i32(-1);
+
+    assert(mal_value_to_i32(mal_ops_bit_and(seven, two)) == 2);
+    assert(mal_value_to_i32(mal_ops_bit_or(seven, two)) == 7);
+    assert(mal_value_to_i32(mal_ops_bit_xor(seven, two)) == 5);
+    assert(mal_value_to_i32(mal_ops_shift_left(seven, two)) == 28);
+    assert(mal_value_to_i32(mal_ops_shift_right(mal_value_from_i32(-8), two)) == -2);
+    assert(mal_value_to_f64(mal_ops_shift_right_unsigned(negative_one, mal_value_from_i32(0))) == 4294967295.0);
+}
+
+static void test_vm_binary_op_dispatches_all_binary_operators(void) {
+    MalVm vm;
+    MalCallable callable = {.vm = &vm, .function = NULL, .registers = (MalValue[3]) {0}, .instruction_pointer = 0};
+    MalInstruction instruction = {.opcode = MAL_OP_BINARY, .as.binary = {.dst = 2, .left = 0, .right = 1}};
+
+    callable.registers[0] = mal_value_from_i32(7);
+    callable.registers[1] = mal_value_from_i32(2);
+
+    instruction.as.binary.op = MAL_BIN_ADD;
+    mal_op_binary(&callable, &instruction);
+    assert(mal_value_to_i32(callable.registers[2]) == 9);
+
+    instruction.as.binary.op = MAL_BIN_SUB;
+    mal_op_binary(&callable, &instruction);
+    assert(mal_value_to_i32(callable.registers[2]) == 5);
+
+    instruction.as.binary.op = MAL_BIN_MUL;
+    mal_op_binary(&callable, &instruction);
+    assert(mal_value_to_i32(callable.registers[2]) == 14);
+
+    instruction.as.binary.op = MAL_BIN_DIV;
+    mal_op_binary(&callable, &instruction);
+    assert(mal_value_to_i32(callable.registers[2]) == 3);
+
+    instruction.as.binary.op = MAL_BIN_REM;
+    mal_op_binary(&callable, &instruction);
+    assert(mal_value_to_i32(callable.registers[2]) == 1);
+
+    instruction.as.binary.op = MAL_BIN_BIT_AND;
+    mal_op_binary(&callable, &instruction);
+    assert(mal_value_to_i32(callable.registers[2]) == 2);
+
+    instruction.as.binary.op = MAL_BIN_BIT_OR;
+    mal_op_binary(&callable, &instruction);
+    assert(mal_value_to_i32(callable.registers[2]) == 7);
+
+    instruction.as.binary.op = MAL_BIN_BIT_XOR;
+    mal_op_binary(&callable, &instruction);
+    assert(mal_value_to_i32(callable.registers[2]) == 5);
+
+    instruction.as.binary.op = MAL_BIN_SHL;
+    mal_op_binary(&callable, &instruction);
+    assert(mal_value_to_i32(callable.registers[2]) == 28);
+
+    instruction.as.binary.op = MAL_BIN_SHR;
+    callable.registers[0] = mal_value_from_i32(-8);
+    mal_op_binary(&callable, &instruction);
+    assert(mal_value_to_i32(callable.registers[2]) == -2);
+
+    instruction.as.binary.op = MAL_BIN_USHR;
+    callable.registers[0] = mal_value_from_i32(-1);
+    callable.registers[1] = mal_value_from_i32(0);
+    mal_op_binary(&callable, &instruction);
+    assert(mal_value_to_f64(callable.registers[2]) == 4294967295.0);
 }
 
 static void test_object_new_initializes_base_state(void) {
@@ -525,6 +607,9 @@ static void test_array_object_new_initializes_array_state(void) {
 }
 
 int main(void) {
+    test_binary_value_ops_handle_int32_arithmetic();
+    test_binary_value_ops_handle_bitwise_operations();
+    test_vm_binary_op_dispatches_all_binary_operators();
     test_object_new_initializes_base_state();
     test_string_new_copy_owns_byte_storage();
     test_string_new_external_borrows_byte_storage();

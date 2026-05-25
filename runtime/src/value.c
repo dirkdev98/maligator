@@ -73,7 +73,7 @@ bool mal_value_to_boolean(MalValue value) {
 }
 
 MalValue mal_value_from_i32(i32 value) {
-    return MAL_VALUE_INT32 | value;
+    return MAL_VALUE_INT32 | (u32) value;
 }
 
 i32 mal_value_to_i32(MalValue value) {

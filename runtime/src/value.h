@@ -32,6 +32,7 @@ typedef u64 MalValue;
 #define MASK_EXPONENT_BITS 0x7FF0000000000000
 #define MASK_QUIET_NAN 0x0008000000000000
 #define MASK_INT32 0x00000000FFFFFFFF
+#define MASK_UINT32_SIGN 0x0000000080000000
 #define MAKS_PTR 0x0000FFFFFFFFFFFF
 
 // Inline static values. We have lots of bits here to play with, so if it makes sense to add more things, we should do that.
