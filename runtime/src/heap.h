@@ -74,3 +74,8 @@ MalHeapType mal_heap_header_type(const MalHeapHeader *header);
  * Allocate a new heap object.
  */
 void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type);
+
+/**
+ * Allocate raw heap storage without initializing a heap header.
+ */
+void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size);

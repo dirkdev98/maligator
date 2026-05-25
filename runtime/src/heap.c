@@ -45,12 +45,7 @@ static void mal_heap_grow(MalHeap *heap, usize alloc_size) {
     mal_heap_init(heap->next_heap, alloc_size);
 }
 
-void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
-    // TODO: at some point we can add GC tracking here.
-    header->type = type;
-}
-
-void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
+static void *mal_heap_alloc_aligned(MalHeap *heap, usize alloc_size) {
     size available_capacity = heap->capacity - (heap->next_ptr - heap->ptr);
 
     if (heap->next_heap == nullptr) {
@@ -64,17 +59,31 @@ void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
     // Pretty inefficient all around, but I guess that it works for now.
     if (available_capacity < aligned_alloc_size) {
         if (heap->next_heap != nullptr) {
-            return mal_heap_alloc(heap->next_heap, alloc_size, type);
+            return mal_heap_alloc_aligned(heap->next_heap, alloc_size);
         }
 
         mal_heap_grow(heap, alloc_size > MAL_DEFAULT_HEAP_SIZE ? alloc_size : MAL_DEFAULT_HEAP_SIZE);
-        return mal_heap_alloc(heap->next_heap, alloc_size, type);
+        return mal_heap_alloc_aligned(heap->next_heap, alloc_size);
     }
 
     void *ptr = heap->next_ptr;
     heap->next_ptr += aligned_alloc_size;
 
+    return ptr;
+}
+
+void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
+    // TODO: at some point we can add GC tracking here.
+    header->type = type;
+}
+
+void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
+    void *ptr = mal_heap_alloc_aligned(heap, alloc_size);
     mal_heap_header_init(ptr, type);
 
     return ptr;
+}
+
+void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size) {
+    return mal_heap_alloc_aligned(heap, alloc_size);
 }
