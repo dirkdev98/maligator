@@ -26,10 +26,10 @@
 	},
 	"devDependencies": {
 		"@lightbase/eslint-config": "4.3.2",
-		"@vitest/coverage-v8": "4.1.6",
+		"@vitest/coverage-v8": "4.1.7",
 		"oxfmt": "0.51.0",
 		"typescript": "6.0.3",
-		"vitest": "4.1.6",
-		"yaml": "2.8.4"
+		"vitest": "4.1.7",
+		"yaml": "2.9.0"
 	}
 }
