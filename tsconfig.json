@@ -17,5 +17,5 @@
 		"isolatedModules": true
 	},
 	"include": ["**/*"],
-	"exclude": ["tests/local/**"]
+	"exclude": ["tests/local/**", "runtime/build/**", "runtime/cmake-build-debug/**"]
 }
