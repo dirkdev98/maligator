@@ -7,8 +7,7 @@ once we compile and run most JS.
 
 ## High level
 
-- [ ] Create support a call frame + stack em.
-- [ ] Implement create_function
+- [ ] Test call stack + call instructions
 - [ ] Decide on value_ops vs vm_op vs whatever?
 - [ ] Debug location tables
 - [ ] Arguments object
