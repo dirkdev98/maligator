@@ -14,6 +14,8 @@ export interface IntermediateProgram {
 	 * The first function in this list is the initial entrypoint.
 	 */
 	functions: Array<IRFunction>;
+	stringConstants: Array<Array<number>>;
+	stringConstantToIndex: Map<string, number>;
 
 	//////
 	// Various caches to prevent duplicate compilation or to look things up.
@@ -138,6 +140,14 @@ export type IRInstruction =
 			value: number;
 	  }
 	| {
+			type: "createString";
+
+			// [destination]
+			registers: [number];
+
+			stringIndex: number;
+	  }
+	| {
 			type: "createUndefined";
 
 			// [destination]
@@ -189,7 +199,26 @@ export type IRInstruction =
 			// [destination, left, right]
 			registers: [number, number, number];
 
-			operator: "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "<<" | ">>" | ">>>";
+			operator:
+				| "+"
+				| "-"
+				| "*"
+				| "/"
+				| "%"
+				| "&"
+				| "|"
+				| "^"
+				| "<<"
+				| ">>"
+				| ">>>"
+				| "<"
+				| "<="
+				| ">"
+				| ">="
+				| "=="
+				| "!="
+				| "==="
+				| "!==";
 	  };
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
@@ -206,6 +235,14 @@ const irBinaryOperators = new Set<string>([
 	"<<",
 	">>",
 	">>>",
+	"<",
+	"<=",
+	">",
+	">=",
+	"==",
+	"!=",
+	"===",
+	"!==",
 ]);
 
 function isIRBinaryOperator(operator: string): operator is IRBinaryOperator {
@@ -246,6 +283,8 @@ export function compileSemanticProgramToIr(semantic: SemanticProgram) {
 		semantic,
 
 		functions: [],
+		stringConstants: [],
+		stringConstantToIndex: new Map(),
 
 		compiledModuleInitForPaths: new Set(),
 		bindingToStorage: new Map(),
@@ -850,7 +889,34 @@ function compileLiteral(
 		return destination;
 	}
 
+	if (typeof literal.value === "string") {
+		const destination = nextRegisterDestination(fn);
+		block.instructions.push({
+			type: "createString",
+			registers: [destination],
+			stringIndex: getOrCreateStringConstant(program, literal.value),
+		});
+
+		return destination;
+	}
+
 	return -1;
+}
+
+function getOrCreateStringConstant(program: IntermediateProgram, value: string) {
+	const existing = program.stringConstantToIndex.get(value);
+	if (existing !== undefined) {
+		return existing;
+	}
+
+	const codeUnits = [];
+	for (let i = 0; i < value.length; i++) {
+		codeUnits.push(value.charCodeAt(i));
+	}
+
+	const index = program.stringConstants.push(codeUnits) - 1;
+	program.stringConstantToIndex.set(value, index);
+	return index;
 }
 
 /**

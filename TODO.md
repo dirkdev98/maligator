@@ -7,6 +7,13 @@ once we compile and run most JS.
 
 ## High level
 
+- [ ] Object literals end to end
+- [ ] Property reads and writes
+- [ ] Array literals end to end
+- [ ] Function expressions as values
+- [ ] Method calls with receiver / `this`
+- [ ] Minimal `Array.prototype.map`
+- [ ] End-to-end object and array fixture
 - [ ] Decide on value_ops vs vm_op vs whatever?
 - [ ] Debug location tables
 - [ ] Arguments object

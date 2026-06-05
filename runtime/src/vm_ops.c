@@ -15,6 +15,12 @@ void mal_op_create_number(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_number.dst] = mal_value_from_i32(instruction->as.create_number.value);
 }
 
+void mal_op_create_string(MalCallable *callable, MalInstruction *instruction) {
+    const MalStringConstant *constant = &callable->vm->definition->string_constants[instruction->as.create_string.string_index];
+    MalString *string = mal_string_new_external(&callable->vm->heap, constant->code_units, constant->length);
+    callable->registers[instruction->as.create_string.dst] = mal_value_from_string(string);
+}
+
 void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_undefined.dst] = mal_value_new_undefined();
 }
@@ -104,7 +110,7 @@ void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
 
     switch (instruction->as.binary.op) {
         case MAL_BIN_ADD:
-            callable->registers[instruction->as.binary.dst] = mal_ops_add(left, right);
+            callable->registers[instruction->as.binary.dst] = mal_ops_add(&callable->vm->heap, left, right);
             break;
         case MAL_BIN_SUB:
             callable->registers[instruction->as.binary.dst] = mal_ops_subtract(left, right);
@@ -135,6 +141,30 @@ void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
             break;
         case MAL_BIN_USHR:
             callable->registers[instruction->as.binary.dst] = mal_ops_shift_right_unsigned(left, right);
+            break;
+        case MAL_BIN_LT:
+            callable->registers[instruction->as.binary.dst] = mal_ops_less_than(left, right);
+            break;
+        case MAL_BIN_LTE:
+            callable->registers[instruction->as.binary.dst] = mal_ops_less_equal(left, right);
+            break;
+        case MAL_BIN_GT:
+            callable->registers[instruction->as.binary.dst] = mal_ops_greater_than(left, right);
+            break;
+        case MAL_BIN_GTE:
+            callable->registers[instruction->as.binary.dst] = mal_ops_greater_equal(left, right);
+            break;
+        case MAL_BIN_EQ:
+            callable->registers[instruction->as.binary.dst] = mal_ops_equal(left, right);
+            break;
+        case MAL_BIN_NEQ:
+            callable->registers[instruction->as.binary.dst] = mal_ops_not_equal(left, right);
+            break;
+        case MAL_BIN_STRICT_EQ:
+            callable->registers[instruction->as.binary.dst] = mal_ops_strict_equal(left, right);
+            break;
+        case MAL_BIN_STRICT_NEQ:
+            callable->registers[instruction->as.binary.dst] = mal_ops_strict_not_equal(left, right);
             break;
     }
 }

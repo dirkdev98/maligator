@@ -39,17 +39,7 @@ static u64 mal_table_hash_key(MalKey key) {
 
     if (key.kind == MAL_KEY_STRING) {
         const MalString *string = mal_value_to_string(key.value);
-        const byte *bytes = string->bytes;
-        usize length = string->length;
-
-        // FNV-1a keeps string hashing simple while the table substrate is young.
-        hash ^= 0xcbf29ce484222325;
-        for (usize i = 0; i < length; i++) {
-            hash ^= (u8) bytes[i];
-            hash *= 0x100000001b3;
-        }
-
-        return mal_table_hash_mix(hash);
+        return mal_table_hash_mix(hash ^ mal_string_hash(string));
     }
 
     return mal_table_hash_mix(hash ^ key.value);
@@ -64,24 +54,7 @@ static bool mal_table_key_equals(MalKey left, MalKey right) {
         return left.value == right.value;
     }
 
-    const MalString *left_string = mal_value_to_string(left.value);
-    const MalString *right_string = mal_value_to_string(right.value);
-    usize length = left_string->length;
-
-    if (length != right_string->length) {
-        return false;
-    }
-
-    const byte *left_bytes = left_string->bytes;
-    const byte *right_bytes = right_string->bytes;
-
-    for (usize i = 0; i < length; i++) {
-        if (left_bytes[i] != right_bytes[i]) {
-            return false;
-        }
-    }
-
-    return true;
+    return mal_string_equals(mal_value_to_string(left.value), mal_value_to_string(right.value));
 }
 
 static usize mal_table_find_slot(MalTableEntry **slots, usize capacity, MalKey key) {

@@ -8,6 +8,7 @@ type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
 export interface VmDefinition {
 	functionCount: number;
 	functions: Array<VmFunction>;
+	stringConstants: Array<Array<number>>;
 	globalCount: number;
 }
 
@@ -47,6 +48,11 @@ export type VmInstruction =
 			opcode: "CREATE_NUMBER";
 			dst: number;
 			value: number;
+	  }
+	| {
+			opcode: "CREATE_STRING";
+			dst: number;
+			stringIndex: number;
 	  }
 	| {
 			opcode: "CREATE_UNDEFINED";
@@ -105,6 +111,7 @@ export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDe
 	return {
 		functionCount: program.functions.length,
 		functions: program.functions.map(lowerFunctionToVmFunction),
+		stringConstants: program.stringConstants,
 		globalCount: program.nextGlobalIndex,
 	};
 }
@@ -184,6 +191,12 @@ function lowerInstructionToVmInstruction(
 				opcode: "CREATE_NUMBER",
 				dst: instruction.registers[0],
 				value: instruction.value,
+			};
+		case "createString":
+			return {
+				opcode: "CREATE_STRING",
+				dst: instruction.registers[0],
+				stringIndex: instruction.stringIndex,
 			};
 		case "createUndefined":
 			return {

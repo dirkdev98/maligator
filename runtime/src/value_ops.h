@@ -1,9 +1,15 @@
 #pragma once
 
 #include "./defaults.h"
+#include "heap.h"
+#include "heap_string.h"
 #include "value.h"
 
-MalValue mal_ops_add(MalValue left, MalValue right);
+MalString *mal_ops_to_string(MalHeap *heap, MalValue value);
+
+f64 mal_ops_to_number(MalValue value);
+
+MalValue mal_ops_add(MalHeap *heap, MalValue left, MalValue right);
 
 MalValue mal_ops_subtract(MalValue left, MalValue right);
 
@@ -24,3 +30,19 @@ MalValue mal_ops_shift_left(MalValue left, MalValue right);
 MalValue mal_ops_shift_right(MalValue left, MalValue right);
 
 MalValue mal_ops_shift_right_unsigned(MalValue left, MalValue right);
+
+MalValue mal_ops_less_than(MalValue left, MalValue right);
+
+MalValue mal_ops_less_equal(MalValue left, MalValue right);
+
+MalValue mal_ops_greater_than(MalValue left, MalValue right);
+
+MalValue mal_ops_greater_equal(MalValue left, MalValue right);
+
+MalValue mal_ops_equal(MalValue left, MalValue right);
+
+MalValue mal_ops_not_equal(MalValue left, MalValue right);
+
+MalValue mal_ops_strict_equal(MalValue left, MalValue right);
+
+MalValue mal_ops_strict_not_equal(MalValue left, MalValue right);

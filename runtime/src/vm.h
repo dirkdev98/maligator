@@ -10,6 +10,7 @@ typedef enum MalOpcode {
     MAL_OP_JUMP_IF,
     MAL_OP_JUMP,
     MAL_OP_CREATE_NUMBER,
+    MAL_OP_CREATE_STRING,
     MAL_OP_CREATE_UNDEFINED,
     MAL_OP_CREATE_FUNCTION,
     MAL_OP_CREATE_ARGUMENTS_OBJECT,
@@ -33,6 +34,14 @@ typedef enum MalBinaryOp {
     MAL_BIN_SHL,
     MAL_BIN_SHR,
     MAL_BIN_USHR,
+    MAL_BIN_LT,
+    MAL_BIN_LTE,
+    MAL_BIN_GT,
+    MAL_BIN_GTE,
+    MAL_BIN_EQ,
+    MAL_BIN_NEQ,
+    MAL_BIN_STRICT_EQ,
+    MAL_BIN_STRICT_NEQ,
 } MalBinaryOp;
 
 typedef struct MalInstruction {
@@ -58,6 +67,10 @@ typedef struct MalInstruction {
         struct {
             i32 dst, value;
         } create_number;
+
+        struct {
+            i32 dst, string_index;
+        } create_string;
 
         struct {
             i32 dst;
@@ -108,9 +121,17 @@ typedef struct MalFunction {
     const MalInstruction *instructions;
 } MalFunction;
 
+typedef struct MalStringConstant {
+    usize length;
+    const c16 *code_units;
+} MalStringConstant;
+
 typedef struct MalVmDefinition {
     i32 function_count;
     const MalFunction *functions;
+
+    i32 string_constant_count;
+    const MalStringConstant *string_constants;
 
     i32 global_count;
 } MalVmDefinition;

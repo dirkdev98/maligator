@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "heap_string.h"
 #include "value.h"
 
 MalValue mal_value_from_f64(f64 value) {
@@ -222,7 +223,9 @@ bool mal_value_is_truthy(MalValue value) {
         return mal_value_to_i32(value) != 0;
     }
 
-    // TODO: Empty string
+    if (mal_value_is_string(value)) {
+        return mal_string_length(mal_value_to_string(value)) != 0;
+    }
 
     // TODO: Might need to check `valueOf` & BooleanData fields.
 
@@ -260,6 +263,22 @@ void mal_value_debug(MalValue value) {
 
     if (mal_value_is_int32(value)) {
         printf("%d", mal_value_to_i32(value));
+        return;
+    }
+
+    if (mal_value_is_string(value)) {
+        MalString *string = mal_value_to_string(value);
+        const c16 *code_units = mal_string_code_units(string);
+        printf("\"");
+        for (usize i = 0; i < mal_string_length(string); i++) {
+            c16 code_unit = code_units[i];
+            if (code_unit >= 0x20 && code_unit <= 0x7E) {
+                printf("%c", (char) code_unit);
+            } else {
+                printf("\\u%04x", code_unit);
+            }
+        }
+        printf("\"");
         return;
     }
 

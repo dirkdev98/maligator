@@ -56,6 +56,8 @@ static const MalFunction mal_functions[] = {
 const MalVmDefinition mal_vm_definition = {
     .function_count = 2,
     .functions = mal_functions,
+    .string_constant_count = 0,
+    .string_constants = NULL,
     .global_count = 1,
 };
 
@@ -77,13 +79,17 @@ static MalValue test_native_callback(MalVm *vm, MalValue this_value, const MalVa
 }
 
 static void test_binary_value_ops_handle_int32_arithmetic(void) {
+    MalHeap heap;
+    mal_heap_init(&heap, 0);
     MalValue seven = mal_value_from_i32(7);
     MalValue two = mal_value_from_i32(2);
 
-    assert(mal_value_to_i32(mal_ops_add(seven, two)) == 9);
+    assert(mal_value_to_i32(mal_ops_add(&heap, seven, two)) == 9);
     assert(mal_value_to_i32(mal_ops_subtract(seven, two)) == 5);
     assert(mal_value_to_i32(mal_ops_multiply(seven, two)) == 14);
     assert(mal_value_to_i32(mal_ops_remainder(seven, two)) == 1);
+
+    mal_heap_free(&heap);
 }
 
 static void test_binary_value_ops_handle_bitwise_operations(void) {
@@ -97,6 +103,64 @@ static void test_binary_value_ops_handle_bitwise_operations(void) {
     assert(mal_value_to_i32(mal_ops_shift_left(seven, two)) == 28);
     assert(mal_value_to_i32(mal_ops_shift_right(mal_value_from_i32(-8), two)) == -2);
     assert(mal_value_to_f64(mal_ops_shift_right_unsigned(negative_one, mal_value_from_i32(0))) == 4294967295.0);
+}
+
+static void test_string_values_use_utf16_code_unit_length(void) {
+    MalHeap heap;
+    mal_heap_init(&heap, 0);
+
+    c16 pile_of_poo[] = {0xD83D, 0xDCA9};
+    MalString *string = mal_string_new_copy(&heap, pile_of_poo, countof(pile_of_poo));
+
+    assert(mal_string_length(string) == 2);
+    assert(mal_string_code_units(string)[0] == 0xD83D);
+    assert(mal_string_code_units(string)[1] == 0xDCA9);
+
+    mal_heap_free(&heap);
+}
+
+static void test_string_value_ops_concatenate_and_convert_values(void) {
+    MalHeap heap;
+    mal_heap_init(&heap, 0);
+
+    MalValue left = mal_value_from_string(mal_string_new_ascii(&heap, "a", lengthof("a")));
+    MalValue result = mal_ops_add(&heap, left, mal_value_from_i32(1));
+    MalString *string = mal_value_to_string(result);
+
+    assert(mal_string_length(string) == 2);
+    assert(mal_string_code_units(string)[0] == 'a');
+    assert(mal_string_code_units(string)[1] == '1');
+    assert(mal_value_to_i32(mal_ops_subtract(
+        mal_value_from_string(mal_string_new_ascii(&heap, "7", lengthof("7"))),
+        mal_value_from_i32(2)
+    )) == 5);
+
+    mal_heap_free(&heap);
+}
+
+static void test_string_value_ops_compare_strings_and_converted_numbers(void) {
+    MalHeap heap;
+    mal_heap_init(&heap, 0);
+
+    MalValue a = mal_value_from_string(mal_string_new_ascii(&heap, "a", lengthof("a")));
+    MalValue b = mal_value_from_string(mal_string_new_ascii(&heap, "b", lengthof("b")));
+    MalValue ten = mal_value_from_string(mal_string_new_ascii(&heap, "10", lengthof("10")));
+    MalValue two = mal_value_from_string(mal_string_new_ascii(&heap, "2", lengthof("2")));
+
+    assert(mal_value_to_boolean(mal_ops_less_than(a, b)));
+    assert(mal_value_to_boolean(mal_ops_greater_equal(b, b)));
+    assert(mal_value_to_boolean(mal_ops_less_than(ten, two)));
+    assert(!mal_value_to_boolean(mal_ops_less_than(mal_value_from_i32(10), two)));
+    assert(mal_value_to_boolean(mal_ops_strict_equal(
+        mal_value_from_string(mal_string_new_ascii(&heap, "abc", lengthof("abc"))),
+        mal_value_from_string(mal_string_new_ascii(&heap, "abc", lengthof("abc")))
+    )));
+    assert(mal_value_to_boolean(mal_ops_equal(
+        mal_value_from_string(mal_string_new_ascii(&heap, "1", lengthof("1"))),
+        mal_value_from_i32(1)
+    )));
+
+    mal_heap_free(&heap);
 }
 
 static void test_vm_binary_op_dispatches_all_binary_operators(void) {
@@ -175,7 +239,9 @@ static void test_vm_call_frame_returns_to_caller(void) {
             .instructions = callee_instructions
         },
     };
-    static const MalVmDefinition definition = {.function_count = 2, .functions = functions, .global_count = 1};
+    static const MalVmDefinition definition = {
+        .function_count = 2, .functions = functions, .string_constant_count = 0, .string_constants = NULL, .global_count = 1
+    };
 
     MalVm vm;
     mal_vm_init(&vm, &definition);
@@ -211,7 +277,9 @@ static void test_vm_call_frame_fills_missing_parameters_with_undefined(void) {
             .instructions = callee_instructions
         },
     };
-    static const MalVmDefinition definition = {.function_count = 2, .functions = functions, .global_count = 1};
+    static const MalVmDefinition definition = {
+        .function_count = 2, .functions = functions, .string_constant_count = 0, .string_constants = NULL, .global_count = 1
+    };
 
     MalVm vm;
     mal_vm_init(&vm, &definition);
@@ -220,6 +288,45 @@ static void test_vm_call_frame_fills_missing_parameters_with_undefined(void) {
     mal_vm_run(&vm, callable);
 
     assert(mal_value_is_undefined(vm.globals[0]));
+
+    mal_vm_free_callable(callable);
+    mal_vm_free(&vm);
+}
+
+static void test_vm_create_string_uses_utf16_string_constants(void) {
+    static const c16 code_units[] = {'o', 'k', 0xD83D, 0xDCA9};
+    static const MalStringConstant string_constants[] = {
+        {.length = countof(code_units), .code_units = code_units},
+    };
+    static const MalInstruction instructions[] = {
+        {.opcode = MAL_OP_CREATE_STRING, .as.create_string = {.dst = 0, .string_index = 0}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 0, .index = 0}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    };
+    static const MalFunction functions[] = {
+        {
+            .parameter_count = 0, .register_count = 1, .captured_count = 0, .instruction_count = countof(instructions),
+            .instructions = instructions
+        },
+    };
+    static const MalVmDefinition definition = {
+        .function_count = 1,
+        .functions = functions,
+        .string_constant_count = countof(string_constants),
+        .string_constants = string_constants,
+        .global_count = 1,
+    };
+
+    MalVm vm;
+    mal_vm_init(&vm, &definition);
+    MalCallable *callable = mal_vm_create_callable(&vm, 0);
+
+    mal_vm_run(&vm, callable);
+
+    MalString *string = mal_value_to_string(vm.globals[0]);
+    assert(mal_string_length(string) == 4);
+    assert(mal_string_code_units(string)[2] == 0xD83D);
+    assert(mal_string_code_units(string)[3] == 0xDCA9);
 
     mal_vm_free_callable(callable);
     mal_vm_free(&vm);
@@ -247,33 +354,35 @@ static void test_string_new_copy_owns_byte_storage(void) {
     MalHeap heap;
     mal_heap_init(&heap, 0);
 
-    byte bytes[] = "abc";
-    MalString *string = mal_string_new_copy(&heap, bytes, lengthof("abc"));
-    bytes[0] = 'z';
+    c16 code_units[] = {'a', 'b', 'c'};
+    MalString *string = mal_string_new_copy(&heap, code_units, countof(code_units));
+    code_units[0] = 'z';
 
     assert(string != NULL);
     assert(string->header.type == MAL_HEAP_STRING);
     assert(mal_string_storage(string) == MAL_STRING_STORAGE_OWNED);
-    assert(mal_string_length(string) == lengthof("abc"));
-    assert(mal_string_bytes(string) != bytes);
-    assert(memcmp(mal_string_bytes(string), "abc", lengthof("abc")) == 0);
+    assert(mal_string_length(string) == countof(code_units));
+    assert(mal_string_code_units(string) != code_units);
+    assert(mal_string_code_units(string)[0] == 'a');
+    assert(mal_string_code_units(string)[1] == 'b');
+    assert(mal_string_code_units(string)[2] == 'c');
     assert(mal_value_is_string(mal_value_from_string(string)));
 
     mal_heap_free(&heap);
 }
 
-static void test_string_new_external_borrows_byte_storage(void) {
+static void test_string_new_external_borrows_code_unit_storage(void) {
     MalHeap heap;
     mal_heap_init(&heap, 0);
 
-    byte bytes[] = "abc";
-    MalString *string = mal_string_new_external(&heap, bytes, lengthof("abc"));
+    c16 code_units[] = {'a', 'b', 'c'};
+    MalString *string = mal_string_new_external(&heap, code_units, countof(code_units));
 
     assert(string != NULL);
     assert(string->header.type == MAL_HEAP_STRING);
     assert(mal_string_storage(string) == MAL_STRING_STORAGE_EXTERNAL);
-    assert(mal_string_length(string) == lengthof("abc"));
-    assert(mal_string_bytes(string) == bytes);
+    assert(mal_string_length(string) == countof(code_units));
+    assert(mal_string_code_units(string) == code_units);
 
     mal_heap_free(&heap);
 }
@@ -282,7 +391,7 @@ static void test_symbol_new_stores_optional_description(void) {
     MalHeap heap;
     mal_heap_init(&heap, 0);
 
-    MalString *description = mal_string_new_external(&heap, "desc", lengthof("desc"));
+    MalString *description = mal_string_new_ascii(&heap, "desc", lengthof("desc"));
     MalSymbol *symbol = mal_symbol_new(&heap, description);
     MalSymbol *anonymous = mal_symbol_new(&heap, NULL);
 
@@ -301,8 +410,8 @@ static void test_table_uses_structural_string_keys_and_identity_symbol_keys(void
     mal_heap_init(&heap, 0);
 
     MalTable *table = mal_table_new(MAL_TABLE_MODE_OBJECT);
-    MalString *left = mal_string_new_copy(&heap, "key", lengthof("key"));
-    MalString *right = mal_string_new_copy(&heap, "key", lengthof("key"));
+    MalString *left = mal_string_new_ascii(&heap, "key", lengthof("key"));
+    MalString *right = mal_string_new_ascii(&heap, "key", lengthof("key"));
     MalSymbol *left_symbol = mal_symbol_new(&heap, left);
     MalSymbol *right_symbol = mal_symbol_new(&heap, left);
 
@@ -332,7 +441,7 @@ static void test_property_define_lookup_and_entry_accessors(void) {
     mal_heap_init(&heap, 0);
 
     MalTable *table = mal_table_new(MAL_TABLE_MODE_OBJECT);
-    MalString *name = mal_string_new_external(&heap, "name", lengthof("name"));
+    MalString *name = mal_string_new_ascii(&heap, "name", lengthof("name"));
     MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
     MalPropertyDesc first = test_data_desc(mal_value_from_i32(1), MAL_PROPERTY_ENUMERABLE);
     MalPropertyDesc second = test_data_desc(mal_value_from_i32(2), MAL_PROPERTY_WRITABLE);
@@ -378,8 +487,8 @@ static void test_property_iter_storage_order_yields_insertion_order(void) {
     mal_heap_init(&heap, 0);
 
     MalObject *object = mal_object_new(&heap, NULL);
-    MalString *a = mal_string_new_external(&heap, "a", lengthof("a"));
-    MalString *b = mal_string_new_external(&heap, "b", lengthof("b"));
+    MalString *a = mal_string_new_ascii(&heap, "a", lengthof("a"));
+    MalString *b = mal_string_new_ascii(&heap, "b", lengthof("b"));
     MalKey first = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(a)};
     MalKey second = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(2)};
     MalKey third = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(b)};
@@ -411,8 +520,8 @@ static void test_property_iter_own_property_order_groups_index_string_and_symbol
     mal_heap_init(&heap, 0);
 
     MalObject *object = mal_object_new(&heap, NULL);
-    MalString *a = mal_string_new_external(&heap, "a", lengthof("a"));
-    MalString *b = mal_string_new_external(&heap, "b", lengthof("b"));
+    MalString *a = mal_string_new_ascii(&heap, "a", lengthof("a"));
+    MalString *b = mal_string_new_ascii(&heap, "b", lengthof("b"));
     MalSymbol *left_symbol = mal_symbol_new(&heap, a);
     MalSymbol *right_symbol = mal_symbol_new(&heap, b);
     MalKey keys[] = {
@@ -457,8 +566,8 @@ static void test_property_iter_enumerable_own_property_order_skips_non_enumerabl
     mal_heap_init(&heap, 0);
 
     MalObject *object = mal_object_new(&heap, NULL);
-    MalString *visible = mal_string_new_external(&heap, "visible", lengthof("visible"));
-    MalString *hidden = mal_string_new_external(&heap, "hidden", lengthof("hidden"));
+    MalString *visible = mal_string_new_ascii(&heap, "visible", lengthof("visible"));
+    MalString *hidden = mal_string_new_ascii(&heap, "hidden", lengthof("hidden"));
     MalKey visible_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(visible)};
     MalKey hidden_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(hidden)};
     MalPropertyDesc enumerable = test_data_desc(mal_value_from_i32(1), MAL_PROPERTY_ENUMERABLE);
@@ -507,7 +616,7 @@ static void test_object_define_own_rejects_new_properties_on_non_extensible_obje
     mal_heap_init(&heap, 0);
 
     MalObject *object = mal_object_new(&heap, NULL);
-    MalString *name = mal_string_new_external(&heap, "name", lengthof("name"));
+    MalString *name = mal_string_new_ascii(&heap, "name", lengthof("name"));
     MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
     MalPropertyDesc desc = test_data_desc(mal_value_from_i32(1), MAL_PROPERTY_ENUMERABLE);
 
@@ -524,7 +633,7 @@ static void test_object_define_own_rejects_incompatible_non_configurable_changes
     mal_heap_init(&heap, 0);
 
     MalObject *object = mal_object_new(&heap, NULL);
-    MalString *name = mal_string_new_external(&heap, "fixed", lengthof("fixed"));
+    MalString *name = mal_string_new_ascii(&heap, "fixed", lengthof("fixed"));
     MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
     MalPropertyDesc fixed = test_data_desc(mal_value_from_i32(1), MAL_PROPERTY_NONE);
     MalPropertyDesc changed = test_data_desc(mal_value_from_i32(2), MAL_PROPERTY_NONE);
@@ -541,8 +650,8 @@ static void test_object_delete_own_respects_configurable_flag(void) {
     mal_heap_init(&heap, 0);
 
     MalObject *object = mal_object_new(&heap, NULL);
-    MalString *fixed_name = mal_string_new_external(&heap, "fixed", lengthof("fixed"));
-    MalString *loose_name = mal_string_new_external(&heap, "loose", lengthof("loose"));
+    MalString *fixed_name = mal_string_new_ascii(&heap, "fixed", lengthof("fixed"));
+    MalString *loose_name = mal_string_new_ascii(&heap, "loose", lengthof("loose"));
     MalKey fixed_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(fixed_name)};
     MalKey loose_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(loose_name)};
     MalPropertyDesc fixed = test_data_desc(mal_value_from_i32(1), MAL_PROPERTY_NONE);
@@ -565,7 +674,7 @@ static void test_object_resolve_property_walks_prototype_chain(void) {
 
     MalObject *root = mal_object_new(&heap, NULL);
     MalObject *child = mal_object_new(&heap, root);
-    MalString *name = mal_string_new_external(&heap, "inherited", lengthof("inherited"));
+    MalString *name = mal_string_new_ascii(&heap, "inherited", lengthof("inherited"));
     MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
     MalPropertyDesc desc = test_data_desc(mal_value_from_i32(7), MAL_PROPERTY_ENUMERABLE);
 
@@ -586,8 +695,8 @@ static void test_object_set_updates_writable_own_properties_and_creates_new_prop
     mal_heap_init(&heap, 0);
 
     MalObject *object = mal_object_new(&heap, NULL);
-    MalString *name = mal_string_new_external(&heap, "value", lengthof("value"));
-    MalString *new_name = mal_string_new_external(&heap, "new", lengthof("new"));
+    MalString *name = mal_string_new_ascii(&heap, "value", lengthof("value"));
+    MalString *new_name = mal_string_new_ascii(&heap, "new", lengthof("new"));
     MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
     MalKey new_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(new_name)};
     MalPropertyDesc desc = test_data_desc(mal_value_from_i32(1), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
@@ -607,7 +716,7 @@ static void test_object_set_rejects_non_writable_data_properties(void) {
     mal_heap_init(&heap, 0);
 
     MalObject *object = mal_object_new(&heap, NULL);
-    MalString *name = mal_string_new_external(&heap, "fixed", lengthof("fixed"));
+    MalString *name = mal_string_new_ascii(&heap, "fixed", lengthof("fixed"));
     MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
     MalPropertyDesc desc = test_data_desc(mal_value_from_i32(1), MAL_PROPERTY_CONFIGURABLE);
 
@@ -641,7 +750,7 @@ static void test_native_function_object_new_initializes_native_function_state(vo
     MalHeap heap;
     mal_heap_init(&heap, 0);
 
-    MalString *name = mal_string_new_external(&heap, "native", lengthof("native"));
+    MalString *name = mal_string_new_ascii(&heap, "native", lengthof("native"));
     MalNativeFunctionObject *function = mal_native_function_object_new(&heap, NULL, name, test_native_callback);
     MalNativeFunctionCallback callback = mal_native_function_object_callback(function);
 
@@ -681,12 +790,16 @@ static void test_array_object_new_initializes_array_state(void) {
 int main(void) {
     test_binary_value_ops_handle_int32_arithmetic();
     test_binary_value_ops_handle_bitwise_operations();
+    test_string_values_use_utf16_code_unit_length();
+    test_string_value_ops_concatenate_and_convert_values();
+    test_string_value_ops_compare_strings_and_converted_numbers();
     test_vm_binary_op_dispatches_all_binary_operators();
     test_vm_call_frame_returns_to_caller();
     test_vm_call_frame_fills_missing_parameters_with_undefined();
+    test_vm_create_string_uses_utf16_string_constants();
     test_object_new_initializes_base_state();
     test_string_new_copy_owns_byte_storage();
-    test_string_new_external_borrows_byte_storage();
+    test_string_new_external_borrows_code_unit_storage();
     test_symbol_new_stores_optional_description();
     test_table_uses_structural_string_keys_and_identity_symbol_keys();
     test_property_define_lookup_and_entry_accessors();

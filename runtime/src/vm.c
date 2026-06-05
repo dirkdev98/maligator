@@ -115,6 +115,9 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
             case MAL_OP_CREATE_NUMBER:
                 mal_op_create_number(frame, &instruction);
                 break;
+            case MAL_OP_CREATE_STRING:
+                mal_op_create_string(frame, &instruction);
+                break;
             case MAL_OP_CREATE_UNDEFINED:
                 mal_op_create_undefined(frame, &instruction);
                 break;
