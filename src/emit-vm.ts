@@ -57,6 +57,10 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = ${instruction.dst} } }`;
 		case "CREATE_FUNCTION":
 			return `{ .opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = { .dst = ${instruction.dst}, .function_index = ${instruction.functionIndex} } }`;
+		case "CREATE_ARGUMENTS_OBJECT":
+			return `{ .opcode = MAL_OP_CREATE_ARGUMENTS_OBJECT, .as.create_arguments_object = { .dst = ${instruction.dst} } }`;
+		case "CALL":
+			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .argument_count = ${instruction.argumentCount}, .arguments = ${emitCallArguments(instruction.arguments)} } }`;
 		case "LOAD_CAPTURED":
 			return `{ .opcode = MAL_OP_LOAD_CAPTURED, .as.load_captured = { .dst = ${instruction.dst}, .owner_function_index = ${instruction.ownerFunctionIndex}, .index = ${instruction.index} } }`;
 		case "LOAD_GLOBAL":
@@ -70,6 +74,14 @@ function emitInstruction(instruction: VmInstruction) {
 	}
 
 	throw new Error(`Unknown vm instruction ${(instruction as { opcode: string }).opcode}`);
+}
+
+function emitCallArguments(args: Array<number>) {
+	if (args.length === 0) {
+		return "nullptr";
+	}
+
+	return `(const i32[]) { ${args.join(", ")} }`;
 }
 
 /**

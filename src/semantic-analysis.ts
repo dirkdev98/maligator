@@ -35,6 +35,7 @@ type BindingKind = "var" | "let" | "const";
 export interface Binding {
 	kind: BindingKind;
 	name: string;
+	implicit?: "arguments";
 
 	declarationNode?: ESTree.Node;
 	usageNodes: Array<ESTree.Node>;
@@ -394,6 +395,25 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 	const resolveBindingByName = (recurseScope: Scope, name: string) => {
 		const binding = recurseScope.bindings.find((b) => b.name === name);
 		if (binding) {
+			return binding;
+		}
+
+		if (
+			name === "arguments" &&
+			(recurseScope.node.type === "FunctionDeclaration" ||
+				recurseScope.node.type === "FunctionExpression")
+		) {
+			// TODO(arguments): Have sema classify static arguments usages so IR can avoid
+			// materializing the arguments object for direct non-escaping reads like
+			// arguments.length and arguments[0].
+			const binding: Binding = {
+				kind: "var",
+				name: "arguments",
+				implicit: "arguments",
+				declarationNode: recurseScope.node,
+				usageNodes: [],
+			};
+			recurseScope.bindings.push(binding);
 			return binding;
 		}
 

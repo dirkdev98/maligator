@@ -2,7 +2,9 @@
 
 #include <stdlib.h>
 
+#include "array_object.h"
 #include "function_object.h"
+#include "object_ops.h"
 #include "value_ops.h"
 
 void mal_op_move(MalCallable *callable, MalInstruction *instruction) {
@@ -25,6 +27,27 @@ void mal_op_create_function(MalCallable *callable, MalInstruction *instruction) 
     );
 
     callable->registers[instruction->as.create_function.dst] = mal_value_from_function_object(function);
+}
+
+void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instruction) {
+    if (!mal_value_is_undefined(callable->arguments_object)) {
+        callable->registers[instruction->as.create_arguments_object.dst] = callable->arguments_object;
+        return;
+    }
+
+    MalArrayObject *arguments = mal_array_object_new(&callable->vm->heap, nullptr);
+    mal_array_object_set_length(arguments, callable->argument_count);
+
+    for (i32 i = 0; i < callable->argument_count; i++) {
+        mal_object_set(
+            (MalObject *) arguments,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)},
+            callable->arguments[i]
+        );
+    }
+
+    callable->arguments_object = mal_value_from_array_object(arguments);
+    callable->registers[instruction->as.create_arguments_object.dst] = callable->arguments_object;
 }
 
 void mal_op_call(MalCallable *callable, MalInstruction *instruction) {

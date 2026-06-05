@@ -19,8 +19,12 @@
 static const MalInstruction mal_function_0_instructions[] = {
     {.opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = {.dst = 0, .function_index = 1}},
     {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 0, .index = 0}},
-    {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 0}},
-    {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    {.opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = {.dst = 0, .index = 0}},
+    {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 1, .value = 1}},
+    {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 2, .value = 2}},
+    {.opcode = MAL_OP_CALL, .as.call = {.dst = 3, .callee = 0, .argument_count = 2, .arguments = (const i32[]) {1, 2}}},
+    {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 2}},
+    {.opcode = MAL_OP_RETURN, .as.ret = {.value = 2}},
 };
 
 static const MalInstruction mal_function_1_instructions[] = {
@@ -35,9 +39,9 @@ static const MalInstruction mal_function_1_instructions[] = {
 static const MalFunction mal_functions[] = {
     {
         .parameter_count = 0,
-        .register_count = 1,
+        .register_count = 4,
         .captured_count = 0,
-        .instruction_count = 4,
+        .instruction_count = 8,
         .instructions = mal_function_0_instructions,
     },
     {

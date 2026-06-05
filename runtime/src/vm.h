@@ -12,6 +12,7 @@ typedef enum MalOpcode {
     MAL_OP_CREATE_NUMBER,
     MAL_OP_CREATE_UNDEFINED,
     MAL_OP_CREATE_FUNCTION,
+    MAL_OP_CREATE_ARGUMENTS_OBJECT,
     MAL_OP_LOAD_CAPTURED,
     MAL_OP_LOAD_GLOBAL,
     MAL_OP_STORE_CAPTURED,
@@ -65,6 +66,10 @@ typedef struct MalInstruction {
         struct {
             i32 dst, function_index;
         } create_function;
+
+        struct {
+            i32 dst;
+        } create_arguments_object;
 
         struct {
             i32 dst, owner_function_index, index;
@@ -125,6 +130,9 @@ typedef struct MalVmFrame {
     MalVm *vm;
     const MalFunction *function;
     MalValue *registers;
+    MalValue *arguments;
+    i32 argument_count;
+    MalValue arguments_object;
 
     i32 instruction_pointer;
     i32 return_register;

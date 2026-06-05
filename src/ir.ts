@@ -72,6 +72,7 @@ export interface IRFunction {
 	functionIndex: number;
 
 	blocks: Array<IRBlock>;
+	argumentsObjectRegister?: number;
 
 	/**
 	 * Expected number of initial register values. Before evaluating the arguments and assigning
@@ -149,6 +150,18 @@ export type IRInstruction =
 			registers: [number];
 
 			functionIndex: number;
+	  }
+	| {
+			type: "createArgumentsObject";
+
+			// [destination]
+			registers: [number];
+	  }
+	| {
+			type: "call";
+
+			// [destination, callee, ...arguments]
+			registers: [number, number, ...Array<number>];
 	  }
 	| {
 			type: `load${"Local" | "Captured" | "Global"}`;
@@ -412,6 +425,16 @@ function compileFunctionParams(
 		}
 	}
 
+	const argumentsBinding = getArgumentsBinding(fn, node);
+	if (argumentsBinding && argumentsBinding.usageNodes.length > 0) {
+		const destination = nextRegisterDestination(fn);
+		fn.argumentsObjectRegister = destination;
+		block.instructions.push({
+			type: "createArgumentsObject",
+			registers: [destination],
+		});
+	}
+
 	// Always jump to the next block unconditionally. This will be the function body.
 	block.instructions.push({
 		type: "jump",
@@ -646,6 +669,9 @@ function compileExpression(
 		case "BinaryExpression": {
 			return compileBinary(program, fn, block, expression);
 		}
+		case "CallExpression": {
+			return compileCall(program, fn, block, expression);
+		}
 		case "Identifier": {
 			return compileIdentifier(program, fn, block, expression);
 		}
@@ -683,6 +709,40 @@ function compileBinary(
 	return destination;
 }
 
+function compileCall(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	callExpression: ESTree.CallExpression,
+): number {
+	const calleeNode = callExpression.callee as unknown as ESTree.Node;
+	if (calleeNode.type === "Super" || (calleeNode.type as string) === "Import") {
+		return -1;
+	}
+
+	const callee = compileExpression(
+		program,
+		fn,
+		block,
+		calleeNode as ESTree.Expression | ESTree.PrivateIdentifier,
+	);
+	const args = callExpression.arguments.map((arg) => {
+		if (arg.type === "SpreadElement") {
+			return -1;
+		}
+
+		return compileExpression(program, fn, block, arg);
+	});
+	const destination = nextRegisterDestination(fn);
+
+	block.instructions.push({
+		type: "call",
+		registers: [destination, callee, ...args],
+	});
+
+	return destination;
+}
+
 /**
  * Compile identifiers to load instructions.
  *
@@ -707,6 +767,20 @@ function compileIdentifier(
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
 	if (!binding) {
 		return -1;
+	}
+
+	if (binding.implicit === "arguments") {
+		if (fn.argumentsObjectRegister === undefined) {
+			throw new Error("Missing reserved arguments object register");
+		}
+
+		const destination = nextRegisterDestination(fn);
+		block.instructions.push({
+			type: "move",
+			registers: [destination, fn.argumentsObjectRegister],
+		});
+
+		return destination;
 	}
 
 	const location = getOrCreateBindingLocation(program, fn, binding);
@@ -741,6 +815,21 @@ function compileIdentifier(
 	}
 
 	return destination;
+}
+
+function getArgumentsBinding(
+	fn: IRFunction,
+	node:
+		| ESTree.FunctionDeclaration
+		| ESTree.FunctionExpression
+		| ESTree.ArrowFunctionExpression,
+) {
+	if (node.type === "ArrowFunctionExpression") {
+		return undefined;
+	}
+
+	const scope = fn.semanticFile.nodeToScope.get(node);
+	return scope?.bindings.find((binding) => binding.implicit === "arguments");
 }
 
 function compileLiteral(

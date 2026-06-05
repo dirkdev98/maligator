@@ -18,6 +18,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
 void mal_vm_free(MalVm *vm) {
     for (i32 i = 0; i < vm->frame_count; i++) {
         free(vm->frames[i].registers);
+        free(vm->frames[i].arguments);
     }
 
     free(vm->frames);
@@ -37,6 +38,9 @@ MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
     callable->vm = vm;
     callable->function = &vm->definition->functions[function_index];
     callable->registers = malloc(sizeof(MalValue) * callable->function->register_count);
+    callable->arguments = nullptr;
+    callable->argument_count = 0;
+    callable->arguments_object = mal_value_new_undefined();
     callable->instruction_pointer = 0;
     callable->return_register = -1;
     callable->caller_frame_index = -1;
@@ -46,6 +50,7 @@ MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
 
 void mal_vm_free_callable(MalCallable *callable) {
     free(callable->registers);
+    free(callable->arguments);
     free(callable);
 }
 
@@ -68,6 +73,9 @@ void mal_vm_push_function_frame(
     frame->vm = vm;
     frame->function = function;
     frame->registers = malloc(sizeof(MalValue) * function->register_count);
+    frame->arguments = arg_count > 0 ? malloc(sizeof(MalValue) * arg_count) : nullptr;
+    frame->argument_count = arg_count;
+    frame->arguments_object = mal_value_new_undefined();
     frame->instruction_pointer = 0;
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;
@@ -78,6 +86,10 @@ void mal_vm_push_function_frame(
 
     for (i32 i = 0; i < function->parameter_count; i++) {
         frame->registers[i] = i < arg_count ? args[i] : mal_value_new_undefined();
+    }
+
+    for (i32 i = 0; i < arg_count; i++) {
+        frame->arguments[i] = args[i];
     }
 }
 
@@ -108,6 +120,9 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
                 break;
             case MAL_OP_CREATE_FUNCTION:
                 mal_op_create_function(frame, &instruction);
+                break;
+            case MAL_OP_CREATE_ARGUMENTS_OBJECT:
+                mal_op_create_arguments_object(frame, &instruction);
                 break;
             case MAL_OP_BINARY:
                 mal_op_binary(frame, &instruction);
@@ -143,6 +158,7 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
                 i32 caller_frame_index = frame->caller_frame_index;
 
                 free(frame->registers);
+                free(frame->arguments);
                 vm->frame_count--;
 
                 if (caller_frame_index >= 0) {

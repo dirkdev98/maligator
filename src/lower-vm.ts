@@ -58,6 +58,17 @@ export type VmInstruction =
 			functionIndex: number;
 	  }
 	| {
+			opcode: "CREATE_ARGUMENTS_OBJECT";
+			dst: number;
+	  }
+	| {
+			opcode: "CALL";
+			dst: number;
+			callee: number;
+			argumentCount: number;
+			arguments: Array<number>;
+	  }
+	| {
 			opcode: "LOAD_CAPTURED";
 			dst: number;
 			ownerFunctionIndex: number;
@@ -184,6 +195,19 @@ function lowerInstructionToVmInstruction(
 				opcode: "CREATE_FUNCTION",
 				dst: instruction.registers[0],
 				functionIndex: instruction.functionIndex,
+			};
+		case "createArgumentsObject":
+			return {
+				opcode: "CREATE_ARGUMENTS_OBJECT",
+				dst: instruction.registers[0],
+			};
+		case "call":
+			return {
+				opcode: "CALL",
+				dst: instruction.registers[0],
+				callee: instruction.registers[1],
+				argumentCount: instruction.registers.length - 2,
+				arguments: instruction.registers.slice(2),
 			};
 		case "loadCaptured":
 			return {
