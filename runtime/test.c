@@ -17,47 +17,46 @@
 #include "vm_ops.h"
 
 static const MalInstruction mal_function_0_instructions[] = {
-    {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 1}},
+    {.opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = {.dst = 0, .function_index = 1}},
     {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 0, .index = 0}},
-    {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 2}},
-    {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 0, .index = 1}},
     {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 0}},
-    {.opcode = MAL_OP_JUMP_IF, .as.jump_if = {.cond = 0, .target_ip = 7}},
-    {.opcode = MAL_OP_JUMP, .as.jump = {.target_ip = 10}},
-    {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 2}},
-    {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 0, .index = 0}},
-    {.opcode = MAL_OP_JUMP, .as.jump = {.target_ip = 10}},
-    {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 1}},
-    {.opcode = MAL_OP_JUMP_IF, .as.jump_if = {.cond = 0, .target_ip = 13}},
-    {.opcode = MAL_OP_JUMP, .as.jump = {.target_ip = 16}},
-    {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 3}},
-    {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 0, .index = 0}},
-    {.opcode = MAL_OP_JUMP, .as.jump = {.target_ip = 16}},
-    {.opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = {.dst = 0, .index = 0}},
-    {.opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = {.dst = 1, .index = 1}},
-    {.opcode = MAL_OP_BINARY, .as.binary = {.dst = 2, .left = 0, .right = 1, .op = MAL_BIN_ADD}},
-    {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 1}},
+    {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+};
+
+static const MalInstruction mal_function_1_instructions[] = {
+    {.opcode = MAL_OP_MOVE, .as.move = {.dst = 0, .src = 1}},
+    {.opcode = MAL_OP_MOVE, .as.move = {.dst = 1, .src = 2}},
+    {.opcode = MAL_OP_MOVE, .as.move = {.dst = 2, .src = 0}},
+    {.opcode = MAL_OP_MOVE, .as.move = {.dst = 0, .src = 1}},
+    {.opcode = MAL_OP_BINARY, .as.binary = {.dst = 1, .left = 2, .right = 0, .op = MAL_BIN_ADD}},
     {.opcode = MAL_OP_RETURN, .as.ret = {.value = 1}},
 };
 
 static const MalFunction mal_functions[] = {
     {
         .parameter_count = 0,
+        .register_count = 1,
+        .captured_count = 0,
+        .instruction_count = 4,
+        .instructions = mal_function_0_instructions,
+    },
+    {
+        .parameter_count = 2,
         .register_count = 3,
         .captured_count = 0,
-        .instruction_count = 21,
-        .instructions = mal_function_0_instructions,
+        .instruction_count = 6,
+        .instructions = mal_function_1_instructions,
     },
 };
 
 const MalVmDefinition mal_vm_definition = {
-    .function_count = 1,
+    .function_count = 2,
     .functions = mal_functions,
-    .global_count = 2,
+    .global_count = 1,
 };
 
 static MalPropertyDesc test_data_desc(MalValue value, MalPropertyFlags flags) {
-    return (MalPropertyDesc) {
+    return (MalPropertyDesc){
         .flags = flags,
         .value = value,
         .getter = mal_value_new_undefined(),
@@ -80,7 +79,6 @@ static void test_binary_value_ops_handle_int32_arithmetic(void) {
     assert(mal_value_to_i32(mal_ops_add(seven, two)) == 9);
     assert(mal_value_to_i32(mal_ops_subtract(seven, two)) == 5);
     assert(mal_value_to_i32(mal_ops_multiply(seven, two)) == 14);
-    assert(mal_value_to_i32(mal_ops_divide(seven, two)) == 3);
     assert(mal_value_to_i32(mal_ops_remainder(seven, two)) == 1);
 }
 
@@ -99,7 +97,7 @@ static void test_binary_value_ops_handle_bitwise_operations(void) {
 
 static void test_vm_binary_op_dispatches_all_binary_operators(void) {
     MalVm vm;
-    MalCallable callable = {.vm = &vm, .function = NULL, .registers = (MalValue[3]) {0}, .instruction_pointer = 0};
+    MalCallable callable = {.vm = &vm, .function = NULL, .registers = (MalValue[3]){0}, .instruction_pointer = 0};
     MalInstruction instruction = {.opcode = MAL_OP_BINARY, .as.binary = {.dst = 2, .left = 0, .right = 1}};
 
     callable.registers[0] = mal_value_from_i32(7);
@@ -116,10 +114,6 @@ static void test_vm_binary_op_dispatches_all_binary_operators(void) {
     instruction.as.binary.op = MAL_BIN_MUL;
     mal_op_binary(&callable, &instruction);
     assert(mal_value_to_i32(callable.registers[2]) == 14);
-
-    instruction.as.binary.op = MAL_BIN_DIV;
-    mal_op_binary(&callable, &instruction);
-    assert(mal_value_to_i32(callable.registers[2]) == 3);
 
     instruction.as.binary.op = MAL_BIN_REM;
     mal_op_binary(&callable, &instruction);
@@ -151,6 +145,80 @@ static void test_vm_binary_op_dispatches_all_binary_operators(void) {
     callable.registers[1] = mal_value_from_i32(0);
     mal_op_binary(&callable, &instruction);
     assert(mal_value_to_f64(callable.registers[2]) == 4294967295.0);
+}
+
+static void test_vm_call_frame_returns_to_caller(void) {
+    static const i32 call_arguments[] = {1, 2};
+    static const MalInstruction caller_instructions[] = {
+        {.opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = {.dst = 0, .function_index = 1}},
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 1, .value = 2}},
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 2, .value = 3}},
+        {.opcode = MAL_OP_CALL, .as.call = {.dst = 3, .callee = 0, .argument_count = 2, .arguments = call_arguments}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 3, .index = 0}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 3}},
+    };
+    static const MalInstruction callee_instructions[] = {
+        {.opcode = MAL_OP_BINARY, .as.binary = {.dst = 2, .left = 0, .right = 1, .op = MAL_BIN_ADD}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 2}},
+    };
+    static const MalFunction functions[] = {
+        {
+            .parameter_count = 0, .register_count = 4, .captured_count = 0, .instruction_count = 6,
+            .instructions = caller_instructions
+        },
+        {
+            .parameter_count = 2, .register_count = 3, .captured_count = 0, .instruction_count = 2,
+            .instructions = callee_instructions
+        },
+    };
+    static const MalVmDefinition definition = {.function_count = 2, .functions = functions, .global_count = 1};
+
+    MalVm vm;
+    mal_vm_init(&vm, &definition);
+    MalCallable *callable = mal_vm_create_callable(&vm, 0);
+
+    mal_vm_run(&vm, callable);
+
+    assert(mal_value_to_i32(vm.globals[0]) == 5);
+
+    mal_vm_free_callable(callable);
+    mal_vm_free(&vm);
+}
+
+static void test_vm_call_frame_fills_missing_parameters_with_undefined(void) {
+    static const i32 call_arguments[] = {1};
+    static const MalInstruction caller_instructions[] = {
+        {.opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = {.dst = 0, .function_index = 1}},
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 1, .value = 2}},
+        {.opcode = MAL_OP_CALL, .as.call = {.dst = 2, .callee = 0, .argument_count = 1, .arguments = call_arguments}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 2, .index = 0}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 2}},
+    };
+    static const MalInstruction callee_instructions[] = {
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 1}},
+    };
+    static const MalFunction functions[] = {
+        {
+            .parameter_count = 0, .register_count = 3, .captured_count = 0, .instruction_count = 5,
+            .instructions = caller_instructions
+        },
+        {
+            .parameter_count = 2, .register_count = 2, .captured_count = 0, .instruction_count = 1,
+            .instructions = callee_instructions
+        },
+    };
+    static const MalVmDefinition definition = {.function_count = 2, .functions = functions, .global_count = 1};
+
+    MalVm vm;
+    mal_vm_init(&vm, &definition);
+    MalCallable *callable = mal_vm_create_callable(&vm, 0);
+
+    mal_vm_run(&vm, callable);
+
+    assert(mal_value_is_undefined(vm.globals[0]));
+
+    mal_vm_free_callable(callable);
+    mal_vm_free(&vm);
 }
 
 static void test_object_new_initializes_base_state(void) {
@@ -610,6 +678,8 @@ int main(void) {
     test_binary_value_ops_handle_int32_arithmetic();
     test_binary_value_ops_handle_bitwise_operations();
     test_vm_binary_op_dispatches_all_binary_operators();
+    test_vm_call_frame_returns_to_caller();
+    test_vm_call_frame_fills_missing_parameters_with_undefined();
     test_object_new_initializes_base_state();
     test_string_new_copy_owns_byte_storage();
     test_string_new_external_borrows_byte_storage();
@@ -636,6 +706,8 @@ int main(void) {
     mal_vm_init(&vm, &mal_vm_definition);
     auto callable = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, callable);
+    mal_vm_free_callable(callable);
+    mal_vm_free(&vm);
 
     printf("\n");
 

@@ -9,6 +9,10 @@ void mal_op_create_number(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_create_function(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_call(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_binary(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_store_global(MalCallable *callable, MalInstruction *instruction);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "./defaults.h"
+#include "heap.h"
 #include "value.h"
 
 typedef enum MalOpcode {
@@ -15,6 +16,7 @@ typedef enum MalOpcode {
     MAL_OP_LOAD_GLOBAL,
     MAL_OP_STORE_CAPTURED,
     MAL_OP_STORE_GLOBAL,
+    MAL_OP_CALL,
     MAL_OP_BINARY,
 } MalOpcode;
 
@@ -81,6 +83,11 @@ typedef struct MalInstruction {
         } store_global;
 
         struct {
+            i32 dst, callee, argument_count;
+            const i32 *arguments;
+        } call;
+
+        struct {
             i32 dst, left, right;
             MalBinaryOp op;
         } binary;
@@ -106,23 +113,41 @@ typedef struct MalVmDefinition {
 typedef struct MalVm {
     const MalVmDefinition *definition;
 
+    MalHeap heap;
     MalValue *globals;
 
-    // TODO: We probably want a callstack here, instead of recursing on the C callstack.
+    struct MalVmFrame *frames;
+    i32 frame_count;
+    i32 frame_capacity;
 } MalVm;
 
-typedef struct MalCallable {
+typedef struct MalVmFrame {
     MalVm *vm;
     const MalFunction *function;
     MalValue *registers;
 
     i32 instruction_pointer;
-} MalCallable;
+    i32 return_register;
+    i32 caller_frame_index;
+} MalVmFrame;
+
+typedef MalVmFrame MalCallable;
 
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition);
+
+void mal_vm_free(MalVm *vm);
 
 MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index);
 
 void mal_vm_free_callable(MalCallable *callable);
+
+void mal_vm_push_function_frame(
+    MalVm *vm,
+    i32 function_index,
+    const MalValue *args,
+    i32 arg_count,
+    i32 return_register,
+    i32 caller_frame_index
+);
 
 void mal_vm_run(MalVm *vm, MalCallable *callable);

@@ -7,7 +7,6 @@ once we compile and run most JS.
 
 ## High level
 
-- [ ] Test call stack + call instructions
 - [ ] Decide on value_ops vs vm_op vs whatever?
 - [ ] Debug location tables
 - [ ] Arguments object

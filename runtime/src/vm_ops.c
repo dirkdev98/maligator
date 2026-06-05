@@ -1,5 +1,8 @@
 #include "vm_ops.h"
 
+#include <stdlib.h>
+
+#include "function_object.h"
 #include "value_ops.h"
 
 void mal_op_move(MalCallable *callable, MalInstruction *instruction) {
@@ -11,7 +14,65 @@ void mal_op_create_number(MalCallable *callable, MalInstruction *instruction) {
 }
 
 void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction) {
-    callable->registers[instruction->as.create_number.dst] = mal_value_new_undefined();
+    callable->registers[instruction->as.create_undefined.dst] = mal_value_new_undefined();
+}
+
+void mal_op_create_function(MalCallable *callable, MalInstruction *instruction) {
+    MalFunctionObject *function = mal_function_object_new(
+        &callable->vm->heap,
+        nullptr,
+        instruction->as.create_function.function_index
+    );
+
+    callable->registers[instruction->as.create_function.dst] = mal_value_from_function_object(function);
+}
+
+void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
+    MalValue callee = callable->registers[instruction->as.call.callee];
+    i32 dst = instruction->as.call.dst;
+
+    if (mal_value_is_function_object(callee)) {
+        MalValue *arguments = malloc(sizeof(MalValue) * instruction->as.call.argument_count);
+        for (i32 i = 0; i < instruction->as.call.argument_count; i++) {
+            arguments[i] = callable->registers[instruction->as.call.arguments[i]];
+        }
+
+        i32 function_index = mal_function_object_function_index(mal_value_to_function_object(callee));
+        i32 caller_frame_index = callable->vm->frame_count - 1;
+        mal_vm_push_function_frame(
+            callable->vm,
+            function_index,
+            arguments,
+            instruction->as.call.argument_count,
+            dst,
+            caller_frame_index
+        );
+        free(arguments);
+
+        return;
+    }
+
+    if (mal_value_is_native_function_object(callee)) {
+        MalValue *arguments = malloc(sizeof(MalValue) * instruction->as.call.argument_count);
+        for (i32 i = 0; i < instruction->as.call.argument_count; i++) {
+            arguments[i] = callable->registers[instruction->as.call.arguments[i]];
+        }
+
+        MalNativeFunctionCallback callback = mal_native_function_object_callback(
+            mal_value_to_native_function_object(callee)
+        );
+        callable->registers[dst] = callback(
+            callable->vm,
+            mal_value_new_undefined(),
+            arguments,
+            instruction->as.call.argument_count
+        );
+        free(arguments);
+
+        return;
+    }
+
+    callable->registers[dst] = mal_value_new_undefined();
 }
 
 void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
