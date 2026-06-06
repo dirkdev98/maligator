@@ -252,6 +252,18 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_LOAD_UNDECLARED:
                 mal_op_load_undeclared(frame, &instruction);
                 break;
+            case MAL_OP_REQUIRE_COERCIBLE:
+                mal_op_require_coercible(frame, &instruction);
+                break;
+            case MAL_OP_CREATE_REST_ARGUMENTS:
+                mal_op_create_rest_arguments(frame, &instruction);
+                break;
+            case MAL_OP_ARRAY_REST:
+                mal_op_array_rest(frame, &instruction);
+                break;
+            case MAL_OP_COPY_DATA_PROPERTIES:
+                mal_op_copy_data_properties(frame, &instruction);
+                break;
 
             case MAL_OP_LOAD_CAPTURED:
                 mal_op_load_captured(frame, &instruction);
@@ -466,7 +478,7 @@ i32 mal_vm_callable_length(MalVm *vm, MalValue callee) {
     if (mal_value_is_function_object(callee)) {
         return vm->definition->functions[
             mal_function_object_function_index(mal_value_to_function_object(callee))
-        ].parameter_count;
+        ].length;
     }
 
     // TODO(functions): native functions don't carry an arity yet.

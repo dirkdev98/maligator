@@ -6,6 +6,7 @@
 void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prototype) {
     mal_object_init(heap, &array->object, MAL_HEAP_ARRAY_OBJECT, prototype);
     array->length = 0;
+    array->length_writable = true;
 }
 
 MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
@@ -43,6 +44,10 @@ bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
     if (key.kind == MAL_KEY_INDEX) {
         i32 index = mal_value_to_i32(key.value);
         if (index >= 0 && (u32) index >= array->length) {
+            // Growing an index past length also writes length.
+            if (!array->length_writable) {
+                return false;
+            }
             array->length = (u32) index + 1;
         }
 
@@ -52,7 +57,11 @@ bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
     if (mal_array_key_is_length(key)) {
         // TODO(arrays): shrinking should also delete the now out-of-range elements.
         if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
-            array->length = (u32) mal_value_to_i32(value);
+            u32 new_length = (u32) mal_value_to_i32(value);
+            if (!array->length_writable && new_length != array->length) {
+                return false;
+            }
+            array->length = new_length;
         }
         return true;
     }

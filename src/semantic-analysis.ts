@@ -475,6 +475,14 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 		return registerBindingUsage(node.object, file);
 	}
 
+	if ((node.type === "Property" || node.type === "MethodDefinition") && !node.computed) {
+		// Skip non-computed keys of object literals, object patterns and class
+		// members; only the value side contains references. Shorthand pattern
+		// properties share the key node as their value, so the value walk still
+		// registers those usages.
+		return registerBindingUsage(node.value, file);
+	}
+
 	if (node.type === "Identifier") {
 		const binding = resolveBindingByName(scope, node.name);
 		binding.usageNodes.push(node);

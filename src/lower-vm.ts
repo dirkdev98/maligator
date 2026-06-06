@@ -29,6 +29,7 @@ export interface VmExceptionHandler {
 export interface VmFunction {
 	nameStringIndex: number;
 	parameterCount: number;
+	length: number;
 	registerCount: number;
 	capturedCount: number;
 	strict: boolean;
@@ -202,11 +203,34 @@ export type VmInstruction =
 			opcode: "SET_PROTOTYPE";
 			object: number;
 			prototype: number;
+			literal: boolean;
 	  }
 	| {
 			opcode: "LOAD_UNDECLARED";
 			dst: number;
 			nameStringIndex: number;
+	  }
+	| {
+			opcode: "REQUIRE_COERCIBLE";
+			src: number;
+	  }
+	| {
+			opcode: "CREATE_REST_ARGUMENTS";
+			dst: number;
+			startIndex: number;
+	  }
+	| {
+			opcode: "ARRAY_REST";
+			dst: number;
+			src: number;
+			startIndex: number;
+	  }
+	| {
+			opcode: "COPY_DATA_PROPERTIES";
+			dst: number;
+			src: number;
+			excludedCount: number;
+			excluded: Array<number>;
 	  }
 	| {
 			opcode: "BINARY";
@@ -257,6 +281,7 @@ function lowerFunctionToVmFunction(fn: IRFunction): VmFunction {
 	return {
 		nameStringIndex: fn.nameStringIndex,
 		parameterCount: fn.parameterCount,
+		length: fn.length,
 		registerCount: fn.nextRegisterDestination,
 		capturedCount: fn.nextCapturedIndex,
 		strict: fn.semanticFile.strict,
@@ -525,12 +550,39 @@ function lowerInstructionToVmInstruction(
 				opcode: "SET_PROTOTYPE",
 				object: instruction.registers[0],
 				prototype: instruction.registers[1],
+				literal: instruction.literal,
 			};
 		case "loadUndeclared":
 			return {
 				opcode: "LOAD_UNDECLARED",
 				dst: instruction.registers[0],
 				nameStringIndex: instruction.nameStringIndex,
+			};
+		case "requireCoercible":
+			return {
+				opcode: "REQUIRE_COERCIBLE",
+				src: instruction.registers[0],
+			};
+		case "createRestArguments":
+			return {
+				opcode: "CREATE_REST_ARGUMENTS",
+				dst: instruction.registers[0],
+				startIndex: instruction.startIndex,
+			};
+		case "arrayRest":
+			return {
+				opcode: "ARRAY_REST",
+				dst: instruction.registers[0],
+				src: instruction.registers[1],
+				startIndex: instruction.startIndex,
+			};
+		case "copyDataProperties":
+			return {
+				opcode: "COPY_DATA_PROPERTIES",
+				dst: instruction.registers[0],
+				src: instruction.registers[1],
+				excludedCount: instruction.registers.length - 2,
+				excluded: instruction.registers.slice(2),
 			};
 		case "binary":
 			return {

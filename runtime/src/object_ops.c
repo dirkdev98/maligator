@@ -67,6 +67,14 @@ MalObject *mal_object_get_prototype(const MalObject *object) {
 }
 
 bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
+    if (object->prototype == prototype) {
+        return true;
+    }
+
+    if (!object->extensible) {
+        return false;
+    }
+
     for (MalObject *cursor = prototype; cursor != nullptr; cursor = cursor->prototype) {
         if (cursor == object) {
             return false;

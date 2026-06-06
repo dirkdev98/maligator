@@ -4,9 +4,11 @@
 
 #include "array_object.h"
 #include "bound_function_object.h"
+#include "builtin_array.h"
 #include "function_object.h"
 #include "heap_string.h"
 #include "object_ops.h"
+#include "property_iter.h"
 #include "value_ops.h"
 
 static MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
@@ -813,6 +815,148 @@ void mal_op_load_undeclared(MalCallable *callable, MalInstruction *instruction) 
     mal_vm_throw_error_value(callable->vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, message);
 }
 
+void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction) {
+    if (mal_value_is_nil(callable->registers[instruction->as.require_coercible.src])) {
+        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot destructure null or undefined");
+    }
+}
+
+void mal_op_create_rest_arguments(MalCallable *callable, MalInstruction *instruction) {
+    i32 start = instruction->as.create_rest_arguments.start_index;
+    i32 count = callable->argument_count > start ? callable->argument_count - start : 0;
+
+    MalArrayObject *rest = mal_array_object_new(
+        &callable->vm->heap,
+        mal_value_to_object(callable->vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])
+    );
+    mal_array_object_set_length(rest, (u32) count);
+
+    for (i32 i = 0; i < count; i++) {
+        mal_object_set(
+            (MalObject *) rest,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)},
+            callable->arguments[start + i]
+        );
+    }
+
+    callable->registers[instruction->as.create_rest_arguments.dst] = mal_value_from_array_object(rest);
+}
+
+void mal_op_array_rest(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue source = callable->registers[instruction->as.array_rest.src];
+    u32 start = (u32) instruction->as.array_rest.start_index;
+
+    if (mal_value_is_nil(source)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot destructure null or undefined");
+        return;
+    }
+
+    // Index-read approximation of the spec's iterator protocol, mirroring the
+    // pattern's positional element reads (TODO(iterators)).
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, source, &length)) {
+        return;
+    }
+
+    u32 count = length > start ? length - start : 0;
+    MalArrayObject *rest = mal_array_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])
+    );
+    mal_array_object_set_length(rest, count);
+
+    for (u32 i = 0; i < count; i++) {
+        // Holes read as dense undefined elements, like the array iterator
+        // yields them.
+        MalValue element = mal_value_new_undefined();
+        if (!mal_builtin_array_try_get(vm, source, start + i, &element) &&
+            vm->completion.kind == MAL_COMPLETION_THROW) {
+            return;
+        }
+
+        mal_object_set(
+            (MalObject *) rest,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)},
+            element
+        );
+    }
+
+    callable->registers[instruction->as.array_rest.dst] = mal_value_from_array_object(rest);
+}
+
+void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue source = callable->registers[instruction->as.copy_data_properties.src];
+
+    if (mal_value_is_nil(source)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot destructure null or undefined");
+        return;
+    }
+
+    // The excluded keys land in a throwaway object so the membership checks
+    // reuse the property table's key equality.
+    MalObject *excluded = nullptr;
+    i32 excluded_count = instruction->as.copy_data_properties.excluded_count;
+    if (excluded_count > 0) {
+        excluded = mal_object_new(&vm->heap, nullptr);
+        for (i32 i = 0; i < excluded_count; i++) {
+            MalValue key_value = callable->registers[instruction->as.copy_data_properties.excluded[i]];
+
+            MalKey key;
+            if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+                return;
+            }
+
+            mal_object_set(excluded, key, mal_value_new_boolean(true));
+        }
+    }
+
+    MalObject *copy = mal_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])
+    );
+
+    if (mal_value_is_string(source)) {
+        // String sources expose their code units as own enumerable index
+        // properties.
+        MalString *string = mal_value_to_string(source);
+        for (usize i = 0; i < mal_string_length(string); i++) {
+            MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+            if (excluded != nullptr && mal_object_get_own(excluded, key).present) {
+                continue;
+            }
+
+            mal_object_set(
+                copy,
+                key,
+                mal_value_from_string(mal_string_new_external(&vm->heap, mal_string_code_units(string) + i, 1))
+            );
+        }
+    } else if (mal_value_is_object(source)) {
+        MalPropertyIter iter;
+        mal_property_iter_init(&iter, mal_value_to_object(source), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
+
+        MalKey key;
+        MalPropertyDesc desc;
+        while (mal_property_iter_next(&iter, &key, &desc)) {
+            if (excluded != nullptr && mal_object_get_own(excluded, key).present) {
+                continue;
+            }
+
+            MalValue value;
+            if (!mal_vm_desc_read(vm, desc, source, &value)) {
+                return;
+            }
+
+            mal_object_set(copy, key, value);
+        }
+    }
+    // Other primitives carry no own enumerable properties.
+
+    callable->registers[instruction->as.copy_data_properties.dst] = mal_value_from_object(copy);
+}
+
 void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction) {
     MalValue object_value = callable->registers[instruction->as.define_accessor.object];
     MalValue key_value = callable->registers[instruction->as.define_accessor.key];
@@ -871,6 +1015,12 @@ void mal_op_set_prototype(MalCallable *callable, MalInstruction *instruction) {
     MalValue prototype_value = callable->registers[instruction->as.set_prototype.prototype];
 
     if (!mal_value_is_object(object_value)) {
+        return;
+    }
+
+    if (instruction->as.set_prototype.literal &&
+        !mal_value_is_object(prototype_value) && !mal_value_is_null(prototype_value)) {
+        // B.3.1: object literal `__proto__:` members ignore other values.
         return;
     }
 

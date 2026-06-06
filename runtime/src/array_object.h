@@ -6,6 +6,13 @@
 typedef struct MalArrayObject {
     MalObject object;
     u32 length;
+
+    /**
+     * length is writable by default; Object.defineProperty(arr, "length",
+     * { writable: false }) clears this, after which length-changing stores
+     * are rejected.
+     */
+    bool length_writable;
 } MalArrayObject;
 
 /**

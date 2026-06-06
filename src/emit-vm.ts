@@ -67,6 +67,7 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 		lines.push("    {");
 		lines.push(`        .name_string_index = ${fn.nameStringIndex},`);
 		lines.push(`        .parameter_count = ${fn.parameterCount},`);
+		lines.push(`        .length = ${fn.length},`);
 		lines.push(`        .register_count = ${fn.registerCount},`);
 		lines.push(`        .captured_count = ${fn.capturedCount},`);
 		lines.push(`        .strict = ${fn.strict},`);
@@ -163,9 +164,17 @@ function emitInstruction(instruction: VmInstruction) {
 		case "DEFINE_PROPERTY":
 			return `{ .opcode = MAL_OP_DEFINE_PROPERTY, .as.define_property = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value}, .enumerable = ${instruction.enumerable} } }`;
 		case "SET_PROTOTYPE":
-			return `{ .opcode = MAL_OP_SET_PROTOTYPE, .as.set_prototype = { .object = ${instruction.object}, .prototype = ${instruction.prototype} } }`;
+			return `{ .opcode = MAL_OP_SET_PROTOTYPE, .as.set_prototype = { .object = ${instruction.object}, .prototype = ${instruction.prototype}, .literal = ${instruction.literal} } }`;
 		case "LOAD_UNDECLARED":
 			return `{ .opcode = MAL_OP_LOAD_UNDECLARED, .as.load_undeclared = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex} } }`;
+		case "REQUIRE_COERCIBLE":
+			return `{ .opcode = MAL_OP_REQUIRE_COERCIBLE, .as.require_coercible = { .src = ${instruction.src} } }`;
+		case "CREATE_REST_ARGUMENTS":
+			return `{ .opcode = MAL_OP_CREATE_REST_ARGUMENTS, .as.create_rest_arguments = { .dst = ${instruction.dst}, .start_index = ${instruction.startIndex} } }`;
+		case "ARRAY_REST":
+			return `{ .opcode = MAL_OP_ARRAY_REST, .as.array_rest = { .dst = ${instruction.dst}, .src = ${instruction.src}, .start_index = ${instruction.startIndex} } }`;
+		case "COPY_DATA_PROPERTIES":
+			return `{ .opcode = MAL_OP_COPY_DATA_PROPERTIES, .as.copy_data_properties = { .dst = ${instruction.dst}, .src = ${instruction.src}, .excluded_count = ${instruction.excludedCount}, .excluded = ${emitCallArguments(instruction.excluded)} } }`;
 		case "BINARY":
 			return `{ .opcode = MAL_OP_BINARY, .as.binary = { .dst = ${instruction.dst}, .left = ${instruction.left}, .right = ${instruction.right}, .op = ${emitBinaryOperator(instruction.operator)} } }`;
 		case "UNARY":

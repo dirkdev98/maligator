@@ -112,6 +112,32 @@ static void mal_builtin_object_define_from_value(MalVm *vm, MalObject *target, M
         return;
     }
 
+    if (target->header.type == MAL_HEAP_ARRAY_OBJECT && mal_array_key_is_length(key)) {
+        // ArraySetLength-lite: length lives in the array header, not the
+        // property table. It is non-configurable, non-enumerable, and its
+        // writability downgrade is one-way.
+        MalArrayObject *array = (MalArrayObject *) target;
+        bool upgrades_writable =
+            !array->length_writable && parse.has_writable && (parse.desc.flags & MAL_PROPERTY_WRITABLE);
+        if (parse.has_get || parse.has_set ||
+            (parse.has_enumerable && (parse.desc.flags & MAL_PROPERTY_ENUMERABLE)) ||
+            (parse.has_configurable && (parse.desc.flags & MAL_PROPERTY_CONFIGURABLE)) ||
+            upgrades_writable) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
+            return;
+        }
+
+        if (parse.has_value && !mal_array_object_store(array, key, parse.desc.value)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
+            return;
+        }
+
+        if (parse.has_writable && !(parse.desc.flags & MAL_PROPERTY_WRITABLE)) {
+            array->length_writable = false;
+        }
+        return;
+    }
+
     // Merge fields the descriptor left out from the current descriptor, so
     // partial updates keep the unmentioned attributes.
     MalPropertyDesc desc = parse.desc;
@@ -202,6 +228,27 @@ static MalValue mal_builtin_object_define_properties(MalVm *vm, MalValue this_va
     return args[0];
 }
 
+/**
+ * FromPropertyDescriptor: build the plain descriptor object for a property.
+ */
+static MalValue mal_builtin_object_descriptor_object(MalVm *vm, MalPropertyDesc desc) {
+    MalObject *result = mal_intrinsic_new_object(vm);
+    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+
+    if (desc.flags & MAL_PROPERTY_ACCESSOR) {
+        mal_intrinsic_define_data(vm, result, "get", desc.getter, flags);
+        mal_intrinsic_define_data(vm, result, "set", desc.setter, flags);
+    } else {
+        mal_intrinsic_define_data(vm, result, "value", desc.value, flags);
+        mal_intrinsic_define_data(vm, result, "writable", mal_value_new_boolean(desc.flags & MAL_PROPERTY_WRITABLE), flags);
+    }
+
+    mal_intrinsic_define_data(vm, result, "enumerable", mal_value_new_boolean(desc.flags & MAL_PROPERTY_ENUMERABLE), flags);
+    mal_intrinsic_define_data(vm, result, "configurable", mal_value_new_boolean(desc.flags & MAL_PROPERTY_CONFIGURABLE), flags);
+
+    return mal_value_from_object(result);
+}
+
 static MalValue mal_builtin_object_get_own_property_descriptor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
     (void) this_value;
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
@@ -218,19 +265,37 @@ static MalValue mal_builtin_object_get_own_property_descriptor(MalVm *vm, MalVal
         return mal_value_new_undefined();
     }
 
-    MalObject *result = mal_intrinsic_new_object(vm);
-    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+    return mal_builtin_object_descriptor_object(vm, lookup.desc);
+}
 
-    if (lookup.desc.flags & MAL_PROPERTY_ACCESSOR) {
-        mal_intrinsic_define_data(vm, result, "get", lookup.desc.getter, flags);
-        mal_intrinsic_define_data(vm, result, "set", lookup.desc.setter, flags);
-    } else {
-        mal_intrinsic_define_data(vm, result, "value", lookup.desc.value, flags);
-        mal_intrinsic_define_data(vm, result, "writable", mal_value_new_boolean(lookup.desc.flags & MAL_PROPERTY_WRITABLE), flags);
+static MalValue mal_builtin_object_get_own_property_descriptors(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) this_value;
+    MalValue target = mal_builtin_object_arg(args, arg_count, 0);
+    if (mal_value_is_nil(target)) {
+        // ToObject rejects null and undefined.
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
+        return mal_value_new_undefined();
     }
 
-    mal_intrinsic_define_data(vm, result, "enumerable", mal_value_new_boolean(lookup.desc.flags & MAL_PROPERTY_ENUMERABLE), flags);
-    mal_intrinsic_define_data(vm, result, "configurable", mal_value_new_boolean(lookup.desc.flags & MAL_PROPERTY_CONFIGURABLE), flags);
+    MalObject *result = mal_intrinsic_new_object(vm);
+    if (!mal_value_is_object(target)) {
+        // Other primitives wrap to objects without own enumerable properties
+        // worth reporting here (string index slots are approximated away).
+        return mal_value_from_object(result);
+    }
+
+    MalPropertyIter iter;
+    mal_property_iter_init(&iter, mal_value_to_object(target), MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+
+    MalKey key;
+    MalPropertyDesc desc;
+    while (mal_property_iter_next(&iter, &key, &desc)) {
+        MalPropertyDesc entry = mal_intrinsic_data_desc(
+            mal_builtin_object_descriptor_object(vm, desc),
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
+        );
+        mal_object_define_own(result, key, &entry);
+    }
 
     return mal_value_from_object(result);
 }
@@ -395,16 +460,21 @@ static MalValue mal_builtin_object_get_prototype_of(MalVm *vm, MalValue this_val
 }
 
 static MalValue mal_builtin_object_set_prototype_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
-    (void) vm;
     (void) this_value;
     if (arg_count < 2 || !mal_value_is_object(args[0])) {
         return arg_count > 0 ? args[0] : mal_value_new_undefined();
     }
 
+    MalObject *prototype = nullptr;
     if (mal_value_is_object(args[1])) {
-        mal_object_set_prototype(mal_value_to_object(args[0]), mal_value_to_object(args[1]));
-    } else if (mal_value_is_null(args[1])) {
-        mal_object_set_prototype(mal_value_to_object(args[0]), nullptr);
+        prototype = mal_value_to_object(args[1]);
+    } else if (!mal_value_is_null(args[1])) {
+        return args[0];
+    }
+
+    // A failed [[SetPrototypeOf]] (non-extensible target or a cycle) throws.
+    if (!mal_object_set_prototype(mal_value_to_object(args[0]), prototype)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set prototype of non-extensible object");
     }
 
     return args[0];
@@ -431,9 +501,11 @@ static MalValue mal_builtin_object_is_extensible(MalVm *vm, MalValue this_value,
     return mal_value_new_boolean(mal_object_is_extensible(mal_value_to_object(args[0])));
 }
 
-static MalValue mal_builtin_object_freeze(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
-    (void) vm;
-    (void) this_value;
+/**
+ * SetIntegrityLevel: clear CONFIGURABLE (and for freeze WRITABLE on data
+ * properties) on every own property, then make the object non-extensible.
+ */
+static MalValue mal_builtin_object_set_integrity(const MalValue *args, i32 arg_count, bool clear_writable) {
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
         return arg_count > 0 ? args[0] : mal_value_new_undefined();
     }
@@ -461,7 +533,7 @@ static MalValue mal_builtin_object_freeze(MalVm *vm, MalValue this_value, const 
 
         MalPropertyDesc frozen = lookup.desc;
         frozen.flags &= ~MAL_PROPERTY_CONFIGURABLE;
-        if (!(frozen.flags & MAL_PROPERTY_ACCESSOR)) {
+        if (clear_writable && !(frozen.flags & MAL_PROPERTY_ACCESSOR)) {
             frozen.flags &= ~MAL_PROPERTY_WRITABLE;
         }
 
@@ -473,9 +545,11 @@ static MalValue mal_builtin_object_freeze(MalVm *vm, MalValue this_value, const 
     return args[0];
 }
 
-static MalValue mal_builtin_object_is_frozen(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
-    (void) vm;
-    (void) this_value;
+/**
+ * TestIntegrityLevel: non-extensible with no configurable (and for frozen no
+ * writable data) own properties.
+ */
+static MalValue mal_builtin_object_test_integrity(const MalValue *args, i32 arg_count, bool check_writable) {
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
         return mal_value_new_boolean(true);
     }
@@ -494,12 +568,36 @@ static MalValue mal_builtin_object_is_frozen(MalVm *vm, MalValue this_value, con
         if (desc.flags & MAL_PROPERTY_CONFIGURABLE) {
             return mal_value_new_boolean(false);
         }
-        if (!(desc.flags & MAL_PROPERTY_ACCESSOR) && (desc.flags & MAL_PROPERTY_WRITABLE)) {
+        if (check_writable && !(desc.flags & MAL_PROPERTY_ACCESSOR) && (desc.flags & MAL_PROPERTY_WRITABLE)) {
             return mal_value_new_boolean(false);
         }
     }
 
     return mal_value_new_boolean(true);
+}
+
+static MalValue mal_builtin_object_freeze(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) vm;
+    (void) this_value;
+    return mal_builtin_object_set_integrity(args, arg_count, true);
+}
+
+static MalValue mal_builtin_object_seal(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) vm;
+    (void) this_value;
+    return mal_builtin_object_set_integrity(args, arg_count, false);
+}
+
+static MalValue mal_builtin_object_is_frozen(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) vm;
+    (void) this_value;
+    return mal_builtin_object_test_integrity(args, arg_count, true);
+}
+
+static MalValue mal_builtin_object_is_sealed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) vm;
+    (void) this_value;
+    return mal_builtin_object_test_integrity(args, arg_count, false);
 }
 
 static bool mal_builtin_object_is_negative_zero(MalValue value) {
@@ -585,7 +683,7 @@ static MalValue mal_builtin_object_prototype_value_of(MalVm *vm, MalValue this_v
     return this_value;
 }
 
-static MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
     (void) args;
     (void) arg_count;
 
@@ -609,6 +707,315 @@ static MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_
     return mal_value_from_string(mal_intrinsic_ascii(vm, tag));
 }
 
+static MalValue mal_builtin_object_get_own_property_symbols(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) this_value;
+    MalValue target = mal_builtin_object_arg(args, arg_count, 0);
+    if (mal_value_is_nil(target)) {
+        // ToObject rejects null and undefined.
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
+        return mal_value_new_undefined();
+    }
+
+    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    if (!mal_value_is_object(target)) {
+        return mal_value_from_array_object(result);
+    }
+
+    MalPropertyIter iter;
+    mal_property_iter_init(&iter, mal_value_to_object(target), MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+
+    u32 count = 0;
+    MalKey key;
+    MalPropertyDesc desc;
+    while (mal_property_iter_next(&iter, &key, &desc)) {
+        if (key.kind != MAL_KEY_SYMBOL) {
+            continue;
+        }
+
+        mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)}, key.value);
+        count++;
+    }
+
+    return mal_value_from_array_object(result);
+}
+
+/**
+ * Read an indexed element through the prototype chain and accessor getters.
+ * Absent elements and getter throws both read as undefined.
+ */
+static MalValue mal_builtin_object_indexed(MalVm *vm, MalValue target, u32 index) {
+    if (!mal_value_is_object(target)) {
+        return mal_value_new_undefined();
+    }
+
+    MalPropertyResolution resolution = mal_object_resolve_property(
+        mal_value_to_object(target),
+        (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)}
+    );
+    if (!resolution.found) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue out = mal_value_new_undefined();
+    mal_vm_desc_read(vm, resolution.desc, target, &out);
+    return out;
+}
+
+static MalValue mal_builtin_object_from_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) this_value;
+    // Pragmatic: arrays are the only supported iterable.
+    if (arg_count < 1 || !mal_value_is_array_object(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object.fromEntries requires an array of entries");
+        return mal_value_new_undefined();
+    }
+
+    MalObject *result = mal_intrinsic_new_object(vm);
+    u32 length = mal_array_object_length(mal_value_to_array_object(args[0]));
+    for (u32 index = 0; index < length; index++) {
+        MalValue entry = mal_builtin_object_indexed(vm, args[0], index);
+        if (!mal_value_is_object(entry)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator value is not an entry object");
+            return mal_value_new_undefined();
+        }
+
+        MalKey key;
+        if (!mal_vm_value_to_property_key(vm, mal_builtin_object_indexed(vm, entry, 0), &key)) {
+            return mal_value_new_undefined();
+        }
+
+        mal_object_set(result, key, mal_builtin_object_indexed(vm, entry, 1));
+    }
+
+    return mal_value_from_object(result);
+}
+
+static MalValue mal_builtin_object_group_by(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) this_value;
+    // Pragmatic: arrays are the only supported iterable.
+    if (arg_count < 1 || !mal_value_is_array_object(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object.groupBy requires an array");
+        return mal_value_new_undefined();
+    }
+    if (arg_count < 2 || !mal_value_is_callable(args[1])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Callback is not a function");
+        return mal_value_new_undefined();
+    }
+
+    // Groups live on a null-prototype object.
+    MalObject *result = mal_object_new(&vm->heap, nullptr);
+    u32 length = mal_array_object_length(mal_value_to_array_object(args[0]));
+    for (u32 index = 0; index < length; index++) {
+        MalValue element = mal_builtin_object_indexed(vm, args[0], index);
+
+        MalValue callback_args[] = {element, mal_value_from_i32((i32) index)};
+        MalCompletion completion = mal_vm_call_value(vm, args[1], mal_value_new_undefined(), callback_args, 2);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = completion;
+            return mal_value_new_undefined();
+        }
+
+        MalKey key;
+        if (!mal_vm_value_to_property_key(vm, completion.value, &key)) {
+            return mal_value_new_undefined();
+        }
+
+        MalPropertyLookup existing = mal_object_get_own(result, key);
+        MalArrayObject *group;
+        if (existing.present) {
+            group = mal_value_to_array_object(existing.desc.value);
+        } else {
+            group = mal_intrinsic_new_array(vm, 0);
+            mal_object_set(result, key, mal_value_from_array_object(group));
+        }
+
+        mal_array_object_store(
+            group,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) mal_array_object_length(group))},
+            element
+        );
+    }
+
+    return mal_value_from_object(result);
+}
+
+/**
+ * Resolve the object whose chain serves property lookups for this receiver:
+ * the object itself, or the wrapper prototype for primitives.
+ */
+static MalObject *mal_builtin_object_receiver_holder(MalVm *vm, MalValue this_value) {
+    if (mal_value_is_object(this_value)) {
+        return mal_value_to_object(this_value);
+    }
+    if (mal_value_is_string(this_value)) {
+        return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_STRING_PROTOTYPE]);
+    }
+    if (mal_value_is_boolean(this_value)) {
+        return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_BOOLEAN_PROTOTYPE]);
+    }
+    if (mal_value_is_int32(this_value) || mal_value_is_f64_or_nan(this_value)) {
+        return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NUMBER_PROTOTYPE]);
+    }
+
+    return nullptr;
+}
+
+static MalValue mal_builtin_object_prototype_to_locale_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) args;
+    (void) arg_count;
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object.prototype.toLocaleString called on null or undefined");
+        return mal_value_new_undefined();
+    }
+
+    MalObject *holder = mal_builtin_object_receiver_holder(vm, this_value);
+    MalValue to_string = mal_value_new_undefined();
+    if (holder != nullptr) {
+        MalPropertyResolution resolution = mal_object_resolve_property(holder, mal_intrinsic_string_key(vm, "toString"));
+        if (resolution.found && !mal_vm_desc_read(vm, resolution.desc, this_value, &to_string)) {
+            return mal_value_new_undefined();
+        }
+    }
+
+    if (!mal_value_is_callable(to_string)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "this.toString is not a function");
+        return mal_value_new_undefined();
+    }
+
+    MalCompletion completion = mal_vm_call_value(vm, to_string, this_value, nullptr, 0);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        vm->completion = completion;
+        return mal_value_new_undefined();
+    }
+
+    return completion.value;
+}
+
+static MalValue mal_builtin_object_proto_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) args;
+    (void) arg_count;
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
+        return mal_value_new_undefined();
+    }
+
+    if (mal_value_is_object(this_value)) {
+        MalObject *prototype = mal_object_get_prototype(mal_value_to_object(this_value));
+        return prototype != nullptr ? mal_value_from_object(prototype) : mal_value_new_null();
+    }
+
+    // Primitive receivers answer with their wrapper prototype.
+    MalObject *holder = mal_builtin_object_receiver_holder(vm, this_value);
+    return holder != nullptr ? mal_value_from_object(holder) : mal_value_new_null();
+}
+
+static MalValue mal_builtin_object_proto_setter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
+        return mal_value_new_undefined();
+    }
+
+    if (!mal_value_is_object(this_value) || arg_count < 1) {
+        return mal_value_new_undefined();
+    }
+
+    MalObject *prototype = nullptr;
+    if (mal_value_is_object(args[0])) {
+        prototype = mal_value_to_object(args[0]);
+    } else if (!mal_value_is_null(args[0])) {
+        return mal_value_new_undefined();
+    }
+
+    // B.2.2.1.2: a failed [[SetPrototypeOf]] (non-extensible target or a
+    // cycle) throws.
+    if (!mal_object_set_prototype(mal_value_to_object(this_value), prototype)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set prototype of non-extensible object");
+    }
+
+    return mal_value_new_undefined();
+}
+
+/**
+ * Annex B __defineGetter__/__defineSetter__: define one accessor slot,
+ * keeping the other slot when redefining over an existing accessor.
+ */
+static MalValue mal_builtin_object_prototype_define_accessor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool is_setter) {
+    if (arg_count < 2 || !mal_value_is_callable(args[1])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, is_setter ? "Setter must be a function" : "Getter must be a function");
+        return mal_value_new_undefined();
+    }
+
+    MalKey key;
+    if (!mal_value_is_object(this_value) || !mal_vm_value_to_property_key(vm, args[0], &key)) {
+        return mal_value_new_undefined();
+    }
+
+    MalObject *object = mal_value_to_object(this_value);
+    MalPropertyDesc desc = {
+        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+        .value = mal_value_new_undefined(),
+        .getter = mal_value_new_undefined(),
+        .setter = mal_value_new_undefined(),
+    };
+
+    MalPropertyLookup existing = mal_object_get_own(object, key);
+    if (existing.present && (existing.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+        desc.getter = existing.desc.getter;
+        desc.setter = existing.desc.setter;
+    }
+
+    if (is_setter) {
+        desc.setter = args[1];
+    } else {
+        desc.getter = args[1];
+    }
+
+    if (mal_object_define_own(object, key, &desc) == MAL_DEFINE_OWN_REJECTED) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
+    }
+
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_builtin_object_prototype_define_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    return mal_builtin_object_prototype_define_accessor(vm, this_value, args, arg_count, false);
+}
+
+static MalValue mal_builtin_object_prototype_define_setter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    return mal_builtin_object_prototype_define_accessor(vm, this_value, args, arg_count, true);
+}
+
+/**
+ * Annex B __lookupGetter__/__lookupSetter__: walk the prototype chain for an
+ * accessor property and answer with the requested slot.
+ */
+static MalValue mal_builtin_object_prototype_lookup_accessor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool is_setter) {
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
+        return mal_value_new_undefined();
+    }
+
+    MalObject *holder = mal_builtin_object_receiver_holder(vm, this_value);
+    MalKey key;
+    if (holder == nullptr || !mal_vm_value_to_property_key(vm, mal_builtin_object_arg(args, arg_count, 0), &key)) {
+        return mal_value_new_undefined();
+    }
+
+    MalPropertyResolution resolution = mal_object_resolve_property(holder, key);
+    if (!resolution.found || !(resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+        return mal_value_new_undefined();
+    }
+
+    return is_setter ? resolution.desc.setter : resolution.desc.getter;
+}
+
+static MalValue mal_builtin_object_prototype_lookup_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    return mal_builtin_object_prototype_lookup_accessor(vm, this_value, args, arg_count, false);
+}
+
+static MalValue mal_builtin_object_prototype_lookup_setter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    return mal_builtin_object_prototype_lookup_accessor(vm, this_value, args, arg_count, true);
+}
+
 void mal_builtin_object_install(MalVm *vm) {
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     MalNativeFunctionObject *constructor = mal_native_function_object_new(
@@ -627,7 +1034,9 @@ void mal_builtin_object_install(MalVm *vm) {
         mal_intrinsic_define_method(vm, constructor_object, "defineProperty", mal_builtin_object_define_property);
     mal_intrinsic_define_method(vm, constructor_object, "defineProperties", mal_builtin_object_define_properties);
     mal_intrinsic_define_method(vm, constructor_object, "getOwnPropertyDescriptor", mal_builtin_object_get_own_property_descriptor);
+    mal_intrinsic_define_method(vm, constructor_object, "getOwnPropertyDescriptors", mal_builtin_object_get_own_property_descriptors);
     mal_intrinsic_define_method(vm, constructor_object, "getOwnPropertyNames", mal_builtin_object_get_own_property_names);
+    mal_intrinsic_define_method(vm, constructor_object, "getOwnPropertySymbols", mal_builtin_object_get_own_property_symbols);
     mal_intrinsic_define_method(vm, constructor_object, "keys", mal_builtin_object_keys);
     mal_intrinsic_define_method(vm, constructor_object, "values", mal_builtin_object_values);
     mal_intrinsic_define_method(vm, constructor_object, "entries", mal_builtin_object_entries);
@@ -639,12 +1048,41 @@ void mal_builtin_object_install(MalVm *vm) {
     mal_intrinsic_define_method(vm, constructor_object, "isExtensible", mal_builtin_object_is_extensible);
     mal_intrinsic_define_method(vm, constructor_object, "freeze", mal_builtin_object_freeze);
     mal_intrinsic_define_method(vm, constructor_object, "isFrozen", mal_builtin_object_is_frozen);
+    mal_intrinsic_define_method(vm, constructor_object, "seal", mal_builtin_object_seal);
+    mal_intrinsic_define_method(vm, constructor_object, "isSealed", mal_builtin_object_is_sealed);
     mal_intrinsic_define_method(vm, constructor_object, "is", mal_builtin_object_is);
     mal_intrinsic_define_method(vm, constructor_object, "hasOwn", mal_builtin_object_has_own);
+    mal_intrinsic_define_method(vm, constructor_object, "fromEntries", mal_builtin_object_from_entries);
+    mal_intrinsic_define_method(vm, constructor_object, "groupBy", mal_builtin_object_group_by);
 
     mal_intrinsic_define_method(vm, prototype, "hasOwnProperty", mal_builtin_object_prototype_has_own_property);
     mal_intrinsic_define_method(vm, prototype, "isPrototypeOf", mal_builtin_object_prototype_is_prototype_of);
     mal_intrinsic_define_method(vm, prototype, "propertyIsEnumerable", mal_builtin_object_prototype_property_is_enumerable);
     mal_intrinsic_define_method(vm, prototype, "valueOf", mal_builtin_object_prototype_value_of);
     mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_object_prototype_to_string);
+    mal_intrinsic_define_method(vm, prototype, "toLocaleString", mal_builtin_object_prototype_to_locale_string);
+    mal_intrinsic_define_method(vm, prototype, "__defineGetter__", mal_builtin_object_prototype_define_getter);
+    mal_intrinsic_define_method(vm, prototype, "__defineSetter__", mal_builtin_object_prototype_define_setter);
+    mal_intrinsic_define_method(vm, prototype, "__lookupGetter__", mal_builtin_object_prototype_lookup_getter);
+    mal_intrinsic_define_method(vm, prototype, "__lookupSetter__", mal_builtin_object_prototype_lookup_setter);
+
+    // Annex B __proto__ is an accessor pair on Object.prototype.
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalPropertyDesc proto_desc = {
+        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
+        .value = mal_value_new_undefined(),
+        .getter = mal_value_from_native_function_object(mal_native_function_object_new(
+            &vm->heap,
+            function_prototype,
+            mal_intrinsic_ascii(vm, "get __proto__"),
+            mal_builtin_object_proto_getter
+        )),
+        .setter = mal_value_from_native_function_object(mal_native_function_object_new(
+            &vm->heap,
+            function_prototype,
+            mal_intrinsic_ascii(vm, "set __proto__"),
+            mal_builtin_object_proto_setter
+        )),
+    };
+    mal_object_define_own(prototype, mal_intrinsic_string_key(vm, "__proto__"), &proto_desc);
 }

@@ -466,7 +466,13 @@ static MalValue mal_json_parse_object(MalJsonParser *parser) {
 
         MalKey property_key;
         mal_vm_value_to_property_key(parser->vm, key, &property_key);
-        mal_object_set(object, property_key, value);
+        // CreateDataProperty: JSON members become own properties, never
+        // routed through inherited setters (notably __proto__).
+        MalPropertyDesc desc = mal_intrinsic_data_desc(
+            value,
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
+        );
+        mal_object_define_own(object, property_key, &desc);
 
         mal_json_skip_whitespace(parser);
         if (mal_json_consume(parser, ',')) {

@@ -77,6 +77,14 @@ void mal_op_set_prototype(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_load_undeclared(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_create_rest_arguments(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_array_rest(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_jump(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction);

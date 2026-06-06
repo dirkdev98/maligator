@@ -100,6 +100,13 @@ export interface IRFunction {
 	parameterCount: number;
 
 	/**
+	 * The Function.prototype.length value: formal parameters before the first
+	 * default or rest parameter. Differs from parameterCount, which keeps the
+	 * full formal count for the calling convention.
+	 */
+	length: number;
+
+	/**
 	 * The next available register index (unoptimized).
 	 */
 	nextRegisterDestination: number;
@@ -360,6 +367,10 @@ export type IRInstruction =
 
 			// [object, prototype]
 			registers: [number, number];
+
+			// Object literal `__proto__:` definitions ignore values that are
+			// neither object nor null; class extends wiring always applies.
+			literal: boolean;
 	  }
 	| {
 			type: "loadUndeclared";
@@ -369,6 +380,45 @@ export type IRInstruction =
 			registers: [number];
 
 			nameStringIndex: number;
+	  }
+	| {
+			// RequireObjectCoercible: throws a TypeError when the value is null
+			// or undefined. Emitted at the start of destructuring patterns so
+			// nil sources throw even when the pattern reads no properties.
+			type: "requireCoercible";
+
+			// [value]
+			registers: [number];
+	  }
+	| {
+			// Collect the frame arguments from startIndex onward into a fresh
+			// array, for rest parameters.
+			type: "createRestArguments";
+
+			// [destination]
+			registers: [number];
+
+			startIndex: number;
+	  }
+	| {
+			// Collect the elements of an array-like source from startIndex
+			// onward into a fresh array, for array pattern rest elements.
+			// Approximates the spec's iterator protocol with index reads.
+			type: "arrayRest";
+
+			// [destination, source]
+			registers: [number, number];
+
+			startIndex: number;
+	  }
+	| {
+			// CopyDataProperties: copy the source's own enumerable properties
+			// into a fresh object, skipping the excluded keys. Used for object
+			// pattern rest elements.
+			type: "copyDataProperties";
+
+			// [destination, source, ...excludedKeys]
+			registers: [number, number, ...Array<number>];
 	  }
 	| {
 			type: "binary";
@@ -569,6 +619,7 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 		blocks: [],
 
 		parameterCount: 0,
+		length: 0,
 		nextRegisterDestination: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
@@ -621,6 +672,7 @@ function compileNewFunction(
 		blocks: [],
 
 		parameterCount: functionNode.params.length,
+		length: computeFunctionLength(functionNode),
 		nextRegisterDestination: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
@@ -629,8 +681,8 @@ function compileNewFunction(
 	program.functions.push(fn);
 	program.bindingToFunctionCache.set(binding, { fnIndex: fn.functionIndex });
 
-	compileFunctionParams(program, fn, functionNode);
-	compileStatementsToBlock(
+	const paramsCursor = compileFunctionParams(program, fn, functionNode);
+	const bodyBlock = compileStatementsToBlock(
 		program,
 		fn,
 		functionNode.body?.type === "BlockStatement"
@@ -642,6 +694,10 @@ function compileNewFunction(
 					})
 				: [],
 	);
+	paramsCursor.block.instructions.push({
+		type: "jump",
+		blocks: [bodyBlock],
+	});
 
 	endFunction(fn);
 
@@ -672,6 +728,7 @@ function compileNewFunctionExpression(
 		classContext,
 
 		parameterCount: functionNode.params.length,
+		length: computeFunctionLength(functionNode),
 		nextRegisterDestination: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
@@ -680,8 +737,8 @@ function compileNewFunctionExpression(
 	program.functions.push(compiledFn);
 	program.nodeToFunctionCache.set(functionNode, { fnIndex: compiledFn.functionIndex });
 
-	compileFunctionParams(program, compiledFn, functionNode);
-	compileStatementsToBlock(
+	const paramsCursor = compileFunctionParams(program, compiledFn, functionNode);
+	const bodyBlock = compileStatementsToBlock(
 		program,
 		compiledFn,
 		functionNode.body?.type === "BlockStatement"
@@ -693,6 +750,10 @@ function compileNewFunctionExpression(
 					})
 				: [],
 	);
+	paramsCursor.block.instructions.push({
+		type: "jump",
+		blocks: [bodyBlock],
+	});
 	endFunction(compiledFn);
 
 	return compiledFn.functionIndex;
@@ -708,6 +769,7 @@ function compileClass(
 	fn: IRFunction,
 	cursor: IRCursor,
 	classNode: ESTree.ClassDeclaration | ESTree.ClassExpression,
+	nameHint?: string,
 ): number {
 	let superBinding: Binding | undefined;
 	let parent = -1;
@@ -732,7 +794,8 @@ function compileClass(
 	);
 
 	const constructorNode = members.find((member) => member.kind === "constructor");
-	const className = classNode.id?.name ?? "";
+	// NamedEvaluation: anonymous class expressions take the binding name.
+	const className = classNode.id?.name ?? nameHint ?? "";
 	const constructorIndex =
 		constructorNode && constructorNode.value.type === "FunctionExpression"
 			? compileNewFunctionExpression(
@@ -769,6 +832,7 @@ function compileClass(
 		cursor.block.instructions.push({
 			type: "setPrototype",
 			registers: [prototype, parentPrototype],
+			literal: false,
 		});
 
 		const constructorKey = compileStaticString(program, fn, cursor, "constructor");
@@ -784,6 +848,7 @@ function compileClass(
 		cursor.block.instructions.push({
 			type: "setPrototype",
 			registers: [ctor, parent],
+			literal: false,
 		});
 	} else {
 		// Materializes the default prototype with its constructor backref.
@@ -876,6 +941,7 @@ function compileDefaultConstructor(
 		blocks: [],
 
 		parameterCount: 0,
+		length: 0,
 		nextRegisterDestination: 0,
 		nextLocalIndex: 0,
 		nextCapturedIndex: 0,
@@ -950,6 +1016,36 @@ function endFunction(fn: IRFunction) {
 	}
 }
 
+/**
+ * The Function.prototype.length value: formal parameters before the first
+ * default or rest parameter.
+ */
+function computeFunctionLength(
+	node:
+		| ESTree.FunctionDeclaration
+		| ESTree.FunctionExpression
+		| ESTree.ArrowFunctionExpression,
+) {
+	let length = 0;
+	for (const param of node.params) {
+		if (param.type === "AssignmentPattern" || param.type === "RestElement") {
+			break;
+		}
+		length++;
+	}
+
+	return length;
+}
+
+/**
+ * Compile the parameter prelude block(s): the VM places arguments in the first
+ * parameterCount registers, the prelude moves them into their binding
+ * locations, running destructuring and default value logic on the way.
+ *
+ * Defaults branch, so the prelude can span multiple blocks. The caller patches
+ * the returned cursor with the jump into the function body once that block
+ * index is known.
+ */
 function compileFunctionParams(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -957,38 +1053,21 @@ function compileFunctionParams(
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
 		| ESTree.ArrowFunctionExpression,
-) {
+): IRCursor {
 	const block: IRBlock = {
 		instructions: [],
 	};
 	fn.blocks.push(block);
+	const cursor: IRCursor = { block };
 
-	for (const param of node.params) {
-		// Always allocate a register for the parameter. So we kinda silently skip unsupported
-		// params for now.
-		const sourceRegister = nextRegisterDestination(fn);
+	// Claim the pinned parameter registers up front: destructuring and default
+	// expressions allocate registers of their own, so allocating per-parameter
+	// inside the loop would break the [0..parameterCount) calling convention.
+	const parameterRegisters = node.params.map(() => nextRegisterDestination(fn));
 
-		switch (param.type) {
-			case "ArrayPattern":
-				break;
-			case "AssignmentPattern":
-				break;
-			case "RestElement":
-				break;
-			case "ObjectPattern":
-				break;
-			case "Identifier": {
-				const binding = fn.semanticFile.nodeToBinding.get(param);
-				if (!binding) {
-					throw new Error(`No binding found for parameter ${param.name}`);
-				}
-				const location = getOrCreateBindingLocation(program, fn, binding);
-				storeRegisterAtLocation(block, location, sourceRegister);
-				break;
-			}
-		}
-	}
-
+	// The arguments object snapshots the frame arguments, which parameter
+	// initialization never mutates; creating it before the parameter logic
+	// keeps it available to default value expressions.
 	const argumentsBinding = getArgumentsBinding(fn, node);
 	if (argumentsBinding && argumentsBinding.usageNodes.length > 0) {
 		const destination = nextRegisterDestination(fn);
@@ -999,11 +1078,270 @@ function compileFunctionParams(
 		});
 	}
 
-	// Always jump to the next block unconditionally. This will be the function body.
-	block.instructions.push({
-		type: "jump",
-		blocks: [1],
+	for (let i = 0; i < node.params.length; i++) {
+		const param = node.params[i]!;
+
+		if (param.type === "RestElement") {
+			// The pinned register holds a stray positional argument; replace it
+			// with the collected rest array.
+			const rest = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "createRestArguments",
+				registers: [rest],
+				startIndex: i,
+			});
+			compilePatternTarget(program, fn, cursor, param.argument, rest);
+			continue;
+		}
+
+		compilePatternTarget(program, fn, cursor, param, parameterRegisters[i]!);
+	}
+
+	return cursor;
+}
+
+/**
+ * Initialize a destructuring target with the given value register. Handles
+ * both binding patterns (parameters, declarations, catch) and assignment
+ * patterns, where targets may also be member expressions.
+ */
+function compilePatternTarget(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	target: ESTree.Node,
+	value: number,
+) {
+	switch (target.type) {
+		case "Identifier": {
+			compileIdentifierTarget(program, fn, cursor, target, value);
+			break;
+		}
+		case "MemberExpression": {
+			const { object, key } = compileMemberObjectAndKey(program, fn, cursor, target);
+			if (object === -1 || key === -1) {
+				break;
+			}
+			cursor.block.instructions.push({
+				type: "storeProperty",
+				registers: [object, key, value],
+			});
+			break;
+		}
+		case "AssignmentPattern": {
+			const resolved = target.right
+				? compileDefaultedValue(
+						program,
+						fn,
+						cursor,
+						value,
+						target.right,
+						// NamedEvaluation: anonymous defaults take the target name.
+						target.left.type === "Identifier" ? target.left.name : undefined,
+					)
+				: value;
+			compilePatternTarget(program, fn, cursor, target.left, resolved);
+			break;
+		}
+		case "ObjectPattern": {
+			compileObjectPatternTarget(program, fn, cursor, target, value);
+			break;
+		}
+		case "ArrayPattern": {
+			compileArrayPatternTarget(program, fn, cursor, target, value);
+			break;
+		}
+		default:
+			break;
+	}
+}
+
+/**
+ * Store a value register at an identifier target, with the same unresolvable
+ * reference semantics as identifier assignment.
+ */
+function compileIdentifierTarget(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	identifier: ESTree.Identifier,
+	value: number,
+) {
+	const binding = fn.semanticFile.nodeToBinding.get(identifier);
+	if (!binding) {
+		throw new Error(`No binding found for pattern target ${identifier.name}`);
+	}
+
+	if (binding.undeclared && !isIRIntrinsic(binding.name)) {
+		// PutValue on an unresolvable reference throws ReferenceError.
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadUndeclared",
+			registers: [destination],
+			nameStringIndex: getOrCreateStringConstant(program, binding.name),
+		});
+		return;
+	}
+
+	const location = getOrCreateBindingLocation(program, fn, binding);
+	storeRegisterAtLocation(cursor.block, location, value);
+}
+
+/**
+ * Resolve a default value: `target = expr` initializes from expr only when the
+ * value is undefined. Same branch-and-join structure as ternaries.
+ */
+function compileDefaultedValue(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	value: number,
+	defaultExpression: ESTree.Expression,
+	nameHint?: string,
+): number {
+	const result = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "move",
+		registers: [result, value],
 	});
+
+	const undefinedRegister = compileUndefined(fn, cursor);
+	const condition = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "binary",
+		registers: [condition, value, undefinedRegister],
+		operator: "===",
+	});
+
+	const defaultJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [condition],
+		blocks: [-1],
+	};
+	const skipJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(defaultJump, skipJump);
+
+	const defaultIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[defaultIdx]!;
+	const defaultValue = compileExpression(
+		program,
+		fn,
+		cursor,
+		defaultExpression,
+		nameHint,
+	);
+	cursor.block.instructions.push({
+		type: "move",
+		registers: [result, defaultValue],
+	});
+	const joinJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(joinJump);
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	defaultJump.blocks[0] = defaultIdx;
+	skipJump.blocks[0] = joinIdx;
+	joinJump.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+
+	return result;
+}
+
+function compileObjectPatternTarget(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	pattern: ESTree.ObjectPattern,
+	value: number,
+) {
+	// Nil sources throw even when the pattern reads no properties.
+	cursor.block.instructions.push({
+		type: "requireCoercible",
+		registers: [value],
+	});
+
+	// Keys consumed by earlier properties are excluded from the rest copy.
+	const consumedKeys: Array<number> = [];
+
+	for (const property of pattern.properties) {
+		if (property.type === "RestElement" || property.type === "SpreadElement") {
+			// Rest is last by grammar. The typings allow SpreadElement here,
+			// both shapes carry the target in argument.
+			const rest = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "copyDataProperties",
+				registers: [rest, value, ...consumedKeys],
+			});
+			compilePatternTarget(program, fn, cursor, property.argument, rest);
+			continue;
+		}
+
+		if (property.type !== "Property") {
+			continue;
+		}
+
+		const key = compilePropertyKey(program, fn, cursor, property);
+		if (key === -1) {
+			continue;
+		}
+		consumedKeys.push(key);
+
+		const propertyValue = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadProperty",
+			registers: [propertyValue, value, key],
+		});
+		compilePatternTarget(program, fn, cursor, property.value, propertyValue);
+	}
+}
+
+function compileArrayPatternTarget(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	pattern: ESTree.ArrayPattern,
+	value: number,
+) {
+	// Nil sources throw even when the pattern reads no elements. For other
+	// non-iterable sources this approximation reads undefined elements where
+	// the spec throws on GetIterator (TODO(iterators)).
+	cursor.block.instructions.push({
+		type: "requireCoercible",
+		registers: [value],
+	});
+
+	for (let index = 0; index < pattern.elements.length; index++) {
+		const element = pattern.elements[index];
+		if (!element) {
+			// Holes only advance the element index.
+			continue;
+		}
+
+		if (element.type === "RestElement") {
+			// Rest is last by grammar.
+			const rest = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "arrayRest",
+				registers: [rest, value],
+				startIndex: index,
+			});
+			compilePatternTarget(program, fn, cursor, element.argument, rest);
+			break;
+		}
+
+		const key = compileNumberLiteral(fn, cursor, index);
+		const elementValue = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadProperty",
+			registers: [elementValue, value, key],
+		});
+		compilePatternTarget(program, fn, cursor, element, elementValue);
+	}
 }
 
 /**
@@ -1588,19 +1926,24 @@ function compileTryStatement(
 	});
 
 	if (statement.handler) {
-		if (statement.handler.param?.type === "Identifier") {
-			const binding = fn.semanticFile.nodeToBinding.get(statement.handler.param);
-			if (binding) {
-				const location = getOrCreateBindingLocation(program, fn, binding);
-				storeRegisterAtLocation(handlerBlock, location, caughtRegister);
-			}
+		// Catch parameter destructuring can branch; throws inside it happen
+		// past the protected range and so propagate outward, as specced.
+		const handlerCursor: IRCursor = { block: handlerBlock };
+		if (statement.handler.param) {
+			compilePatternTarget(
+				program,
+				fn,
+				handlerCursor,
+				statement.handler.param,
+				caughtRegister,
+			);
 		}
 
 		const catchBlock = compileStatementsToBlock(program, fn, [
 			...normalizeStatementOrBlock(statement.handler.body),
 			...finalizerStatements,
 		]);
-		handlerBlock.instructions.push({
+		handlerCursor.block.instructions.push({
 			type: "jump",
 			blocks: [catchBlock],
 		});
@@ -1698,7 +2041,15 @@ function compileVariableDeclaration(
 
 			// Initialize variables to undefined if they don't have an initializer.
 			decl.init ?? { type: "Identifier", name: "undefined" },
+
+			// NamedEvaluation: anonymous initializers take the binding name.
+			decl.id.type === "Identifier" ? decl.id.name : undefined,
 		);
+
+		if (decl.id.type === "ObjectPattern" || decl.id.type === "ArrayPattern") {
+			compilePatternTarget(program, fn, cursor, decl.id, source);
+			continue;
+		}
 
 		const binding = fn.semanticFile.nodeToBinding.get(decl.id);
 		if (!binding) {
@@ -1714,12 +2065,16 @@ function compileVariableDeclaration(
  * Expression compilation dispatch.
  *
  * Expressions always return the virtual register index they used.
+ *
+ * nameHint carries the NamedEvaluation name for anonymous function and class
+ * expressions: the binding or property name the value is assigned to.
  */
 function compileExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
 	cursor: IRCursor,
 	expression: ESTree.Expression | ESTree.PrivateIdentifier,
+	nameHint?: string,
 ) {
 	switch (expression.type) {
 		case "ArrayExpression": {
@@ -1739,10 +2094,10 @@ function compileExpression(
 		}
 		case "ArrowFunctionExpression":
 		case "FunctionExpression": {
-			return compileFunctionExpression(program, fn, cursor, expression);
+			return compileFunctionExpression(program, fn, cursor, expression, nameHint);
 		}
 		case "ClassExpression": {
-			return compileClass(program, fn, cursor, expression);
+			return compileClass(program, fn, cursor, expression, nameHint);
 		}
 		case "Identifier": {
 			return compileIdentifier(program, fn, cursor, expression);
@@ -1790,12 +2145,23 @@ function compileFunctionExpression(
 	fn: IRFunction,
 	cursor: IRCursor,
 	expression: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
+	nameHint?: string,
 ) {
+	// NamedEvaluation only applies to anonymous functions; a named function
+	// expression keeps its own name.
+	const anonymous = expression.type === "ArrowFunctionExpression" || !expression.id;
+
 	const destination = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "createFunction",
 		registers: [destination],
-		functionIndex: compileNewFunctionExpression(program, fn, expression),
+		functionIndex: compileNewFunctionExpression(
+			program,
+			fn,
+			expression,
+			undefined,
+			anonymous ? nameHint : undefined,
+		),
 	});
 
 	return destination;
@@ -1809,6 +2175,17 @@ function compileAssignment(
 ): number {
 	if (assignmentExpression.left.type === "Identifier") {
 		return compileIdentifierAssignment(program, fn, cursor, assignmentExpression);
+	}
+
+	if (
+		assignmentExpression.left.type === "ObjectPattern" ||
+		assignmentExpression.left.type === "ArrayPattern"
+	) {
+		// Destructuring assignment is only valid with the plain = operator. The
+		// expression evaluates to the right hand side value.
+		const value = compileExpression(program, fn, cursor, assignmentExpression.right);
+		compilePatternTarget(program, fn, cursor, assignmentExpression.left, value);
+		return value;
 	}
 
 	if (assignmentExpression.left.type !== "MemberExpression") {
@@ -1885,7 +2262,14 @@ function compileIdentifierAssignment(
 
 	let value: number;
 	if (assignmentExpression.operator === "=") {
-		value = compileExpression(program, fn, cursor, assignmentExpression.right);
+		value = compileExpression(
+			program,
+			fn,
+			cursor,
+			assignmentExpression.right,
+			// NamedEvaluation: anonymous right hand sides take the target name.
+			binding.name,
+		);
 	} else {
 		const binaryOperator = assignmentOperatorToBinaryOperator(
 			assignmentExpression.operator,
@@ -2288,6 +2672,26 @@ function compileBinary(
 	return destination;
 }
 
+/**
+ * The static property name of a non-computed key, used for the __proto__
+ * special form and for naming anonymous values.
+ */
+function staticPropertyName(property: ESTree.Property): string | undefined {
+	if (property.computed) {
+		return undefined;
+	}
+
+	if (property.key.type === "Identifier") {
+		return property.key.name;
+	}
+
+	if (property.key.type === "Literal" && typeof property.key.value === "string") {
+		return property.key.value;
+	}
+
+	return undefined;
+}
+
 function compileObjectExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -2305,6 +2709,31 @@ function compileObjectExpression(
 			return -1;
 		}
 
+		const name = staticPropertyName(property);
+
+		if (
+			name === "__proto__" &&
+			property.kind === "init" &&
+			!property.shorthand &&
+			!property.method
+		) {
+			// B.3.1: a literal `__proto__:` member sets the prototype when the
+			// value is an object or null, and is ignored otherwise. Shorthand,
+			// computed and method forms define an ordinary own property.
+			const prototype = compileExpression(
+				program,
+				fn,
+				cursor,
+				property.value as ESTree.Expression,
+			);
+			cursor.block.instructions.push({
+				type: "setPrototype",
+				registers: [object, prototype],
+				literal: true,
+			});
+			continue;
+		}
+
 		const key = compilePropertyKey(program, fn, cursor, property);
 
 		if (property.kind === "get" || property.kind === "set") {
@@ -2313,6 +2742,7 @@ function compileObjectExpression(
 				fn,
 				cursor,
 				property.value as ESTree.Expression,
+				name !== undefined ? `${property.kind} ${name}` : undefined,
 			);
 			cursor.block.instructions.push({
 				type: "defineAccessor",
@@ -2323,17 +2753,19 @@ function compileObjectExpression(
 			continue;
 		}
 
-		// TODO(objects): literal members should use define semantics; a store
-		// runs setters inherited from Object.prototype.
+		// PropertyDefinitionEvaluation uses CreateDataProperty: own defines
+		// that never run setters inherited from Object.prototype.
 		const value = compileExpression(
 			program,
 			fn,
 			cursor,
 			property.value as ESTree.Expression,
+			name,
 		);
 		cursor.block.instructions.push({
-			type: "storeProperty",
+			type: "defineProperty",
 			registers: [object, key, value],
+			enumerable: true,
 		});
 	}
 

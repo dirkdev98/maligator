@@ -37,6 +37,10 @@ typedef enum MalOpcode {
     MAL_OP_DEFINE_PROPERTY,
     MAL_OP_SET_PROTOTYPE,
     MAL_OP_LOAD_UNDECLARED,
+    MAL_OP_REQUIRE_COERCIBLE,
+    MAL_OP_CREATE_REST_ARGUMENTS,
+    MAL_OP_ARRAY_REST,
+    MAL_OP_COPY_DATA_PROPERTIES,
     MAL_OP_CALL,
     MAL_OP_CONSTRUCT,
     MAL_OP_BINARY,
@@ -204,11 +208,32 @@ typedef struct MalInstruction {
 
         struct {
             i32 object, prototype;
+
+            // Object literal `__proto__:` definitions ignore values that are
+            // neither object nor null; class extends wiring always applies.
+            bool literal;
         } set_prototype;
 
         struct {
             i32 dst, name_string_index;
         } load_undeclared;
+
+        struct {
+            i32 src;
+        } require_coercible;
+
+        struct {
+            i32 dst, start_index;
+        } create_rest_arguments;
+
+        struct {
+            i32 dst, src, start_index;
+        } array_rest;
+
+        struct {
+            i32 dst, src, excluded_count;
+            const i32 *excluded;
+        } copy_data_properties;
 
         struct {
             i32 dst, callee, this_value, argument_count;
@@ -245,6 +270,14 @@ typedef struct MalExceptionHandler {
 typedef struct MalFunction {
     i32 name_string_index;
     i32 parameter_count;
+
+    /**
+     * Function.prototype.length: formal parameters before the first default
+     * or rest parameter. parameter_count keeps the full formal count for the
+     * calling convention.
+     */
+    i32 length;
+
     i32 register_count;
     i32 captured_count;
     bool strict;

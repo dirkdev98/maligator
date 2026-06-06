@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "builtin_object.h"
 #include "heap_string.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -23,7 +24,7 @@ static u32 mal_builtin_array_length(MalValue this_value) {
  * threw; the latter leaves the throw completion on the vm, which also poisons
  * any follow-up calls until the caller returns.
  */
-static bool mal_builtin_array_try_get(MalVm *vm, MalValue this_value, u32 index, MalValue *out) {
+bool mal_builtin_array_try_get(MalVm *vm, MalValue this_value, u32 index, MalValue *out) {
     if (mal_value_is_string(this_value)) {
         MalString *string = mal_value_to_string(this_value);
         if (index >= mal_string_length(string)) {
@@ -60,6 +61,60 @@ static void mal_builtin_array_store_index(MalArrayObject *array, u32 index, MalV
 }
 
 /**
+ * Spec-flavored Set + ReturnIfAbrupt for mutating builtins: accessor setters
+ * run with the receiver, rejected writes throw TypeError. Returns false after
+ * throwing.
+ */
+static bool mal_builtin_array_set_or_throw(MalVm *vm, MalValue receiver, MalKey key, MalValue value) {
+    if (!mal_value_is_object(receiver)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot create property on a primitive");
+        return false;
+    }
+
+    MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(receiver), key);
+    if (resolution.found && (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+        if (!mal_value_is_callable(resolution.desc.setter)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set property which has only a getter");
+            return false;
+        }
+
+        MalCompletion completion = mal_vm_call_value(vm, resolution.desc.setter, receiver, &value, 1);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = completion;
+            return false;
+        }
+
+        return true;
+    }
+
+    bool stored = mal_value_is_array_object(receiver)
+        ? mal_array_object_store(mal_value_to_array_object(receiver), key, value)
+        : mal_object_set(mal_value_to_object(receiver), key, value);
+    if (!stored) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * DeletePropertyOrThrow for mutating builtins. Returns false after throwing.
+ */
+static bool mal_builtin_array_delete_or_throw(MalVm *vm, MalValue receiver, MalKey key) {
+    if (!mal_value_is_object(receiver)) {
+        return true;
+    }
+
+    if (!mal_object_delete_own(mal_value_to_object(receiver), key)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot delete property");
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * Call a (element, index, array) style callback on the given this, propagating
  * abnormal completions to the VM.
  */
@@ -81,7 +136,7 @@ static bool mal_builtin_array_invoke(MalVm *vm, MalValue callback, MalValue this
  * from its length property through a u32-clamped ToLength. Strings answer
  * with their code unit count, other primitives carry no elements.
  */
-static bool mal_builtin_array_this_length(MalVm *vm, MalValue this_value, u32 *length_out) {
+bool mal_builtin_array_this_length(MalVm *vm, MalValue this_value, u32 *length_out) {
     if (mal_value_is_nil(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Array.prototype method called on null or undefined");
         return false;
@@ -851,6 +906,598 @@ static MalValue mal_builtin_array_at(MalVm *vm, MalValue this_value, const MalVa
     return mal_builtin_array_get(vm, this_value, (u32) relative);
 }
 
+static MalValue mal_builtin_array_find_last(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
+        return mal_value_new_undefined();
+    }
+    for (u32 index = length; index-- > 0;) {
+        MalValue element = mal_builtin_array_get(vm, this_value, index);
+
+        MalValue matched;
+        if (!mal_builtin_array_invoke(vm, args[0], mal_builtin_array_this_arg(args, arg_count), element, index, this_value, &matched)) {
+            return mal_value_new_undefined();
+        }
+
+        if (mal_value_is_truthy(matched)) {
+            return element;
+        }
+    }
+
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_builtin_array_find_last_index(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
+        return mal_value_new_undefined();
+    }
+    for (u32 index = length; index-- > 0;) {
+        MalValue element = mal_builtin_array_get(vm, this_value, index);
+
+        MalValue matched;
+        if (!mal_builtin_array_invoke(vm, args[0], mal_builtin_array_this_arg(args, arg_count), element, index, this_value, &matched)) {
+            return mal_value_new_undefined();
+        }
+
+        if (mal_value_is_truthy(matched)) {
+            return mal_value_from_i32((i32) index);
+        }
+    }
+
+    return mal_value_from_i32(-1);
+}
+
+/**
+ * Read a numeric argument as a raw f64, mirroring the pragmatic numeric
+ * handling of mal_builtin_array_clamp_relative for non-number values.
+ */
+static f64 mal_builtin_array_number_arg(const MalValue *args, i32 arg_count, i32 index, f64 fallback) {
+    if (index >= arg_count) {
+        return fallback;
+    }
+    if (mal_value_is_int32(args[index])) {
+        return (f64) mal_value_to_i32(args[index]);
+    }
+    if (mal_value_is_f64(args[index])) {
+        return mal_value_to_f64(args[index]);
+    }
+
+    return fallback;
+}
+
+/**
+ * Append source's elements to result, recursing into nested arrays up to
+ * depth levels deep. Holes are dropped, matching FlattenIntoArray. Leaves any
+ * getter throw completion on the vm for the caller to check.
+ */
+static void mal_builtin_array_flatten_into(MalVm *vm, MalArrayObject *result, u32 *count, MalValue source, f64 depth) {
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, source, &length)) {
+        return;
+    }
+
+    for (u32 index = 0; index < length; index++) {
+        MalValue element;
+        if (!mal_builtin_array_try_get(vm, source, index, &element)) {
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return;
+            }
+            continue;
+        }
+
+        if (depth > 0 && mal_value_is_array_object(element)) {
+            mal_builtin_array_flatten_into(vm, result, count, element, depth - 1);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return;
+            }
+        } else {
+            mal_builtin_array_store_index(result, (*count)++, element);
+        }
+    }
+}
+
+static MalValue mal_builtin_array_flat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    u32 count = 0;
+    mal_builtin_array_flatten_into(vm, result, &count, this_value, mal_builtin_array_number_arg(args, arg_count, 0, 1));
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+
+    return mal_value_from_array_object(result);
+}
+
+static MalValue mal_builtin_array_flat_map(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
+        return mal_value_new_undefined();
+    }
+    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    u32 count = 0;
+
+    for (u32 index = 0; index < length; index++) {
+        MalValue element;
+        if (!mal_builtin_array_try_get(vm, this_value, index, &element)) {
+            continue;
+        }
+
+        MalValue mapped;
+        if (!mal_builtin_array_invoke(vm, args[0], mal_builtin_array_this_arg(args, arg_count), element, index, this_value, &mapped)) {
+            return mal_value_new_undefined();
+        }
+
+        if (mal_value_is_array_object(mapped)) {
+            u32 mapped_length = mal_array_object_length(mal_value_to_array_object(mapped));
+            for (u32 inner = 0; inner < mapped_length; inner++) {
+                MalValue inner_element;
+                if (mal_builtin_array_try_get(vm, mapped, inner, &inner_element)) {
+                    mal_builtin_array_store_index(result, count++, inner_element);
+                }
+            }
+        } else {
+            mal_builtin_array_store_index(result, count++, mapped);
+        }
+    }
+
+    return mal_value_from_array_object(result);
+}
+
+/**
+ * SortCompare without the undefined handling: callers partition undefined
+ * elements and holes up front. A NaN comparator result counts as equal.
+ */
+static bool mal_builtin_array_sort_order(MalVm *vm, MalValue comparator, MalValue left, MalValue right, f64 *order_out) {
+    if (mal_value_is_callable(comparator)) {
+        MalValue args[] = {left, right};
+        MalCompletion completion = mal_vm_call_value(vm, comparator, mal_value_new_undefined(), args, 2);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = completion;
+            return false;
+        }
+
+        f64 raw = mal_ops_to_number(completion.value);
+        *order_out = raw != raw ? 0 : raw;
+        return true;
+    }
+
+    *order_out = (f64) mal_string_compare(mal_ops_to_string(&vm->heap, left), mal_ops_to_string(&vm->heap, right));
+    return true;
+}
+
+/**
+ * Stable bottom-up merge sort over a value buffer. Returns false when the
+ * comparator threw; the buffer contents are unspecified in that case.
+ */
+static bool mal_builtin_array_sort_values(MalVm *vm, MalValue *values, u32 count, MalValue comparator) {
+    if (count < 2) {
+        return true;
+    }
+
+    MalValue *scratch = malloc(sizeof(MalValue) * count);
+    MalValue *from = values;
+    MalValue *to = scratch;
+    bool ok = true;
+
+    for (u32 width = 1; ok && width < count; width *= 2) {
+        for (u32 low = 0; ok && low < count; low += width * 2) {
+            u32 middle = low + width < count ? low + width : count;
+            u32 high = low + width * 2 < count ? low + width * 2 : count;
+            u32 left = low;
+            u32 right = middle;
+            u32 out = low;
+
+            while (ok && left < middle && right < high) {
+                f64 order;
+                ok = mal_builtin_array_sort_order(vm, comparator, from[left], from[right], &order);
+                if (ok) {
+                    to[out++] = order <= 0 ? from[left++] : from[right++];
+                }
+            }
+            while (left < middle) {
+                to[out++] = from[left++];
+            }
+            while (right < high) {
+                to[out++] = from[right++];
+            }
+        }
+
+        MalValue *swap = from;
+        from = to;
+        to = swap;
+    }
+
+    if (ok && from != values) {
+        memcpy(values, from, sizeof(MalValue) * count);
+    }
+
+    free(scratch);
+    return ok;
+}
+
+/**
+ * Validate the optional comparator argument, throwing the spec-mandated
+ * TypeError for non-callable non-undefined values.
+ */
+static bool mal_builtin_array_comparator_arg(MalVm *vm, const MalValue *args, i32 arg_count, MalValue *comparator_out) {
+    *comparator_out = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (mal_value_is_undefined(*comparator_out) || mal_value_is_callable(*comparator_out)) {
+        return true;
+    }
+
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "The comparison function must be either a function or undefined");
+    return false;
+}
+
+typedef struct MalBuiltinArraySorted {
+    bool ok;
+    MalValue *values;
+    u32 defined_count;
+    u32 undefined_count;
+} MalBuiltinArraySorted;
+
+/**
+ * Collect and sort the receiver's elements: defined values sorted first, with
+ * undefined values and holes counted so callers can re-append or trim them.
+ * On failure the buffer is already freed and a throw completion is pending.
+ */
+static MalBuiltinArraySorted mal_builtin_array_sorted_elements(MalVm *vm, MalValue this_value, u32 length, MalValue comparator) {
+    MalBuiltinArraySorted sorted = {.values = malloc(sizeof(MalValue) * (length > 0 ? length : 1))};
+
+    for (u32 index = 0; index < length; index++) {
+        MalValue element;
+        if (!mal_builtin_array_try_get(vm, this_value, index, &element)) {
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                free(sorted.values);
+                return sorted;
+            }
+            continue;
+        }
+
+        if (mal_value_is_undefined(element)) {
+            sorted.undefined_count++;
+        } else {
+            sorted.values[sorted.defined_count++] = element;
+        }
+    }
+
+    if (!mal_builtin_array_sort_values(vm, sorted.values, sorted.defined_count, comparator)) {
+        free(sorted.values);
+        return sorted;
+    }
+
+    sorted.ok = true;
+    return sorted;
+}
+
+static MalValue mal_builtin_array_sort(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    MalValue comparator;
+    if (!mal_builtin_array_comparator_arg(vm, args, arg_count, &comparator)) {
+        return mal_value_new_undefined();
+    }
+    if (!mal_value_is_array_object(this_value)) {
+        return mal_value_new_undefined();
+    }
+
+    MalArrayObject *array = mal_value_to_array_object(this_value);
+    MalObject *object = (MalObject *) array;
+    u32 length = mal_array_object_length(array);
+    MalBuiltinArraySorted sorted = mal_builtin_array_sorted_elements(vm, this_value, length, comparator);
+    if (!sorted.ok) {
+        return mal_value_new_undefined();
+    }
+
+    // Sorted values first, then undefined values; what remains were holes.
+    for (u32 index = 0; index < sorted.defined_count; index++) {
+        mal_object_set(object, mal_builtin_array_index_key(index), sorted.values[index]);
+    }
+    for (u32 index = sorted.defined_count; index < sorted.defined_count + sorted.undefined_count; index++) {
+        mal_object_set(object, mal_builtin_array_index_key(index), mal_value_new_undefined());
+    }
+    for (u32 index = sorted.defined_count + sorted.undefined_count; index < length; index++) {
+        mal_object_delete_own(object, mal_builtin_array_index_key(index));
+    }
+
+    free(sorted.values);
+    return this_value;
+}
+
+static MalValue mal_builtin_array_to_sorted(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    MalValue comparator;
+    u32 length;
+    if (!mal_builtin_array_comparator_arg(vm, args, arg_count, &comparator) || !mal_builtin_array_this_length(vm, this_value, &length)) {
+        return mal_value_new_undefined();
+    }
+
+    MalBuiltinArraySorted sorted = mal_builtin_array_sorted_elements(vm, this_value, length, comparator);
+    if (!sorted.ok) {
+        return mal_value_new_undefined();
+    }
+
+    // The copy is dense: undefined values and holes both sort to the end as
+    // undefined elements.
+    MalArrayObject *result = mal_intrinsic_new_array(vm, length);
+    for (u32 index = 0; index < length; index++) {
+        MalValue element = index < sorted.defined_count ? sorted.values[index] : mal_value_new_undefined();
+        mal_object_set((MalObject *) result, mal_builtin_array_index_key(index), element);
+    }
+
+    free(sorted.values);
+    return mal_value_from_array_object(result);
+}
+
+/**
+ * Shared splice/toSpliced delete-count handling: absent means "to the end",
+ * otherwise the count clamps to [0, length - start].
+ */
+static u32 mal_builtin_array_delete_count(const MalValue *args, i32 arg_count, u32 start, u32 length) {
+    if (arg_count == 0) {
+        return 0;
+    }
+    if (arg_count == 1) {
+        return length - start;
+    }
+
+    f64 raw = mal_builtin_array_number_arg(args, arg_count, 1, 0);
+    if (!(raw > 0)) {
+        return 0;
+    }
+    if (raw > (f64) (length - start)) {
+        return length - start;
+    }
+
+    return (u32) raw;
+}
+
+static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+        return mal_value_new_undefined();
+    }
+
+    if (!mal_value_is_object(this_value)) {
+        // Primitive receivers have nothing to remove or mutate.
+        return mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    }
+
+    // ArraySpeciesCreate approximation: a non-object, non-undefined
+    // constructor is rejected; object constructors fall back to the default
+    // array since Symbol.species is unsupported.
+    MalPropertyResolution ctor = mal_object_resolve_property(
+        mal_value_to_object(this_value),
+        mal_intrinsic_string_key(vm, "constructor")
+    );
+    if (ctor.found) {
+        MalValue ctor_value;
+        if (!mal_vm_desc_read(vm, ctor.desc, this_value, &ctor_value)) {
+            return mal_value_new_undefined();
+        }
+        if (!mal_value_is_undefined(ctor_value) && !mal_value_is_object(ctor_value)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Species constructor is not an object");
+            return mal_value_new_undefined();
+        }
+    }
+
+    u32 start = arg_count >= 1 ? mal_builtin_array_clamp_relative(args[0], 0, length) : 0;
+    u32 delete_count = mal_builtin_array_delete_count(args, arg_count, start, length);
+    u32 insert_count = arg_count > 2 ? (u32) (arg_count - 2) : 0;
+    u32 new_length = length - delete_count + insert_count;
+
+    MalArrayObject *removed = mal_intrinsic_new_array(vm, delete_count);
+    for (u32 index = 0; index < delete_count; index++) {
+        MalValue element;
+        if (mal_builtin_array_try_get(vm, this_value, start + index, &element)) {
+            mal_object_set((MalObject *) removed, mal_builtin_array_index_key(index), element);
+        } else if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+    }
+
+    if (insert_count < delete_count) {
+        for (u32 from = start + delete_count; from < length; from++) {
+            u32 to = from - delete_count + insert_count;
+            MalValue element;
+            bool present = mal_builtin_array_try_get(vm, this_value, from, &element);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return mal_value_new_undefined();
+            }
+            if (present
+                    ? !mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(to), element)
+                    : !mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(to))) {
+                return mal_value_new_undefined();
+            }
+        }
+        for (u32 index = new_length; index < length; index++) {
+            if (!mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(index))) {
+                return mal_value_new_undefined();
+            }
+        }
+    } else if (insert_count > delete_count) {
+        // Shift the tail upwards back-to-front so sources are read before
+        // they are overwritten.
+        for (u32 from = length; from-- > start + delete_count;) {
+            u32 to = from - delete_count + insert_count;
+            MalValue element;
+            bool present = mal_builtin_array_try_get(vm, this_value, from, &element);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return mal_value_new_undefined();
+            }
+            if (present
+                    ? !mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(to), element)
+                    : !mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(to))) {
+                return mal_value_new_undefined();
+            }
+        }
+    }
+
+    for (u32 index = 0; index < insert_count; index++) {
+        if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(start + index), args[2 + (i32) index])) {
+            return mal_value_new_undefined();
+        }
+    }
+
+    // The final length write honors non-writable array lengths and plain
+    // receivers whose length is a getter-only accessor.
+    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_value_from_i32((i32) new_length))) {
+        return mal_value_new_undefined();
+    }
+
+    return mal_value_from_array_object(removed);
+}
+
+static MalValue mal_builtin_array_to_spliced(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+        return mal_value_new_undefined();
+    }
+
+    u32 start = arg_count >= 1 ? mal_builtin_array_clamp_relative(args[0], 0, length) : 0;
+    u32 skip_count = mal_builtin_array_delete_count(args, arg_count, start, length);
+    u32 insert_count = arg_count > 2 ? (u32) (arg_count - 2) : 0;
+
+    MalArrayObject *result = mal_intrinsic_new_array(vm, length - skip_count + insert_count);
+    u32 out = 0;
+
+    for (u32 index = 0; index < start; index++) {
+        mal_object_set((MalObject *) result, mal_builtin_array_index_key(out++), mal_builtin_array_get(vm, this_value, index));
+    }
+    for (u32 index = 0; index < insert_count; index++) {
+        mal_object_set((MalObject *) result, mal_builtin_array_index_key(out++), args[2 + (i32) index]);
+    }
+    for (u32 index = start + skip_count; index < length; index++) {
+        mal_object_set((MalObject *) result, mal_builtin_array_index_key(out++), mal_builtin_array_get(vm, this_value, index));
+    }
+
+    return mal_value_from_array_object(result);
+}
+
+static MalValue mal_builtin_array_copy_within(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+        return mal_value_new_undefined();
+    }
+
+    if (!mal_value_is_object(this_value)) {
+        // Primitive receivers have nothing to mutate.
+        return this_value;
+    }
+
+    u32 target = arg_count >= 1 ? mal_builtin_array_clamp_relative(args[0], 0, length) : 0;
+    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(args[1], 0, length) : 0;
+    u32 end = arg_count >= 3 && !mal_value_is_undefined(args[2])
+        ? mal_builtin_array_clamp_relative(args[2], (f64) length, length)
+        : length;
+
+    u32 count = end > start ? end - start : 0;
+    if (count > length - target) {
+        count = length - target;
+    }
+
+    for (u32 step = 0; step < count; step++) {
+        // Overlapping regions copy back-to-front so sources are read before
+        // they are overwritten.
+        u32 moved = target > start ? count - 1 - step : step;
+
+        MalValue element;
+        bool present = mal_builtin_array_try_get(vm, this_value, start + moved, &element);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+        if (present
+                ? !mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(target + moved), element)
+                : !mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(target + moved))) {
+            return mal_value_new_undefined();
+        }
+    }
+
+    return this_value;
+}
+
+static MalValue mal_builtin_array_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+        return mal_value_new_undefined();
+    }
+
+    f64 relative = mal_builtin_array_number_arg(args, arg_count, 0, 0);
+    if (relative < 0) {
+        relative += (f64) length;
+    }
+    if (relative < 0 || relative >= (f64) length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid index");
+        return mal_value_new_undefined();
+    }
+
+    MalArrayObject *result = mal_intrinsic_new_array(vm, length);
+    for (u32 index = 0; index < length; index++) {
+        MalValue element = index == (u32) relative
+            ? (arg_count >= 2 ? args[1] : mal_value_new_undefined())
+            : mal_builtin_array_get(vm, this_value, index);
+        mal_object_set((MalObject *) result, mal_builtin_array_index_key(index), element);
+    }
+
+    return mal_value_from_array_object(result);
+}
+
+static MalValue mal_builtin_array_to_reversed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) args;
+    (void) arg_count;
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+        return mal_value_new_undefined();
+    }
+
+    MalArrayObject *result = mal_intrinsic_new_array(vm, length);
+    for (u32 index = 0; index < length; index++) {
+        mal_object_set(
+            (MalObject *) result,
+            mal_builtin_array_index_key(index),
+            mal_builtin_array_get(vm, this_value, length - 1 - index)
+        );
+    }
+
+    return mal_value_from_array_object(result);
+}
+
+static MalValue mal_builtin_array_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) args;
+    (void) arg_count;
+    // Array.prototype.toString delegates to this.join when callable.
+    if (mal_value_is_object(this_value)) {
+        MalPropertyResolution resolution = mal_object_resolve_property(
+            mal_value_to_object(this_value),
+            mal_intrinsic_string_key(vm, "join")
+        );
+
+        MalValue join = mal_value_new_undefined();
+        if (resolution.found && !mal_vm_desc_read(vm, resolution.desc, this_value, &join)) {
+            return mal_value_new_undefined();
+        }
+
+        if (mal_value_is_callable(join)) {
+            MalCompletion completion = mal_vm_call_value(vm, join, this_value, nullptr, 0);
+            if (completion.kind != MAL_COMPLETION_NORMAL) {
+                vm->completion = completion;
+                return mal_value_new_undefined();
+            }
+
+            return completion.value;
+        }
+    }
+
+    // No callable join: fall through to Object.prototype.toString, which
+    // tags primitives with their wrapper class.
+    return mal_builtin_object_prototype_to_string(vm, this_value, nullptr, 0);
+}
+
+static MalValue mal_builtin_array_to_locale_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) args;
+    (void) arg_count;
+    // Pragmatic: elements format through ToString rather than their own
+    // toLocaleString methods.
+    return mal_builtin_array_join(vm, this_value, nullptr, 0);
+}
+
 void mal_builtin_array_install(MalVm *vm) {
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]);
     MalNativeFunctionObject *constructor = mal_native_function_object_new(
@@ -877,6 +1524,10 @@ void mal_builtin_array_install(MalVm *vm) {
     mal_intrinsic_define_method(vm, prototype, "reduceRight", mal_builtin_array_reduce_right);
     mal_intrinsic_define_method(vm, prototype, "find", mal_builtin_array_find);
     mal_intrinsic_define_method(vm, prototype, "findIndex", mal_builtin_array_find_index);
+    mal_intrinsic_define_method(vm, prototype, "findLast", mal_builtin_array_find_last);
+    mal_intrinsic_define_method(vm, prototype, "findLastIndex", mal_builtin_array_find_last_index);
+    mal_intrinsic_define_method(vm, prototype, "flat", mal_builtin_array_flat);
+    mal_intrinsic_define_method(vm, prototype, "flatMap", mal_builtin_array_flat_map);
     mal_intrinsic_define_method(vm, prototype, "some", mal_builtin_array_some);
     mal_intrinsic_define_method(vm, prototype, "every", mal_builtin_array_every);
     mal_intrinsic_define_method(vm, prototype, "indexOf", mal_builtin_array_index_of);
@@ -892,4 +1543,13 @@ void mal_builtin_array_install(MalVm *vm) {
     mal_intrinsic_define_method(vm, prototype, "reverse", mal_builtin_array_reverse);
     mal_intrinsic_define_method(vm, prototype, "fill", mal_builtin_array_fill);
     mal_intrinsic_define_method(vm, prototype, "at", mal_builtin_array_at);
+    mal_intrinsic_define_method(vm, prototype, "sort", mal_builtin_array_sort);
+    mal_intrinsic_define_method(vm, prototype, "splice", mal_builtin_array_splice);
+    mal_intrinsic_define_method(vm, prototype, "copyWithin", mal_builtin_array_copy_within);
+    mal_intrinsic_define_method(vm, prototype, "with", mal_builtin_array_with);
+    mal_intrinsic_define_method(vm, prototype, "toReversed", mal_builtin_array_to_reversed);
+    mal_intrinsic_define_method(vm, prototype, "toSorted", mal_builtin_array_to_sorted);
+    mal_intrinsic_define_method(vm, prototype, "toSpliced", mal_builtin_array_to_spliced);
+    mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_array_to_string);
+    mal_intrinsic_define_method(vm, prototype, "toLocaleString", mal_builtin_array_to_locale_string);
 }
