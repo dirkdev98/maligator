@@ -37,38 +37,6 @@ static bool mal_vm_string_to_array_index(MalString *string, i32 *index_out) {
     return true;
 }
 
-static bool mal_vm_key_is_length(MalKey key) {
-    if (key.kind != MAL_KEY_STRING || !mal_value_is_string(key.value)) {
-        return false;
-    }
-
-    MalString *string = mal_value_to_string(key.value);
-    const c16 *code_units = mal_string_code_units(string);
-    return mal_string_length(string) == 6 &&
-        code_units[0] == 'l' &&
-        code_units[1] == 'e' &&
-        code_units[2] == 'n' &&
-        code_units[3] == 'g' &&
-        code_units[4] == 't' &&
-        code_units[5] == 'h';
-}
-
-static void mal_vm_update_array_length_for_store(MalArrayObject *array, MalKey key, MalValue value) {
-    if (key.kind == MAL_KEY_INDEX) {
-        i32 index = mal_value_to_i32(key.value);
-        if (index >= 0 && (u32) index >= mal_array_object_length(array)) {
-            mal_array_object_set_length(array, (u32) index + 1);
-        }
-        return;
-    }
-
-    if (mal_vm_key_is_length(key)) {
-        if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
-            mal_array_object_set_length(array, (u32) mal_value_to_i32(value));
-        }
-    }
-}
-
 static bool mal_vm_string_to_property_key(MalValue value, MalKey *key_out) {
     i32 index = 0;
     if (mal_vm_string_to_array_index(mal_value_to_string(value), &index)) {
@@ -80,7 +48,7 @@ static bool mal_vm_string_to_property_key(MalValue value, MalKey *key_out) {
     return true;
 }
 
-static bool mal_vm_value_to_property_key(MalCallable *callable, MalValue value, MalKey *key_out) {
+bool mal_vm_value_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
     if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
         *key_out = (MalKey) {.kind = MAL_KEY_INDEX, .value = value};
         return true;
@@ -96,7 +64,7 @@ static bool mal_vm_value_to_property_key(MalCallable *callable, MalValue value, 
     }
 
     return mal_vm_string_to_property_key(
-        mal_value_from_string(mal_ops_to_string(&callable->vm->heap, value)),
+        mal_value_from_string(mal_ops_to_string(&vm->heap, value)),
         key_out
     );
 }
@@ -109,6 +77,10 @@ void mal_op_create_number(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_number.dst] = mal_value_from_i32(instruction->as.create_number.value);
 }
 
+void mal_op_create_boolean(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.create_boolean.dst] = mal_value_new_boolean(instruction->as.create_boolean.value != 0);
+}
+
 void mal_op_create_string(MalCallable *callable, MalInstruction *instruction) {
     const MalStringConstant *constant = &callable->vm->definition->string_constants[instruction->as.create_string.string_index];
     MalString *string = mal_string_new_external(&callable->vm->heap, constant->code_units, constant->length);
@@ -116,12 +88,18 @@ void mal_op_create_string(MalCallable *callable, MalInstruction *instruction) {
 }
 
 void mal_op_create_object(MalCallable *callable, MalInstruction *instruction) {
-    MalObject *object = mal_object_new(&callable->vm->heap, nullptr);
+    MalObject *object = mal_object_new(
+        &callable->vm->heap,
+        mal_value_to_object(callable->vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])
+    );
     callable->registers[instruction->as.create_object.dst] = mal_value_from_object(object);
 }
 
 void mal_op_create_array(MalCallable *callable, MalInstruction *instruction) {
-    MalArrayObject *array = mal_array_object_new(&callable->vm->heap, nullptr);
+    MalArrayObject *array = mal_array_object_new(
+        &callable->vm->heap,
+        mal_value_to_object(callable->vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])
+    );
     mal_array_object_set_length(array, (u32) instruction->as.create_array.length);
     callable->registers[instruction->as.create_array.dst] = mal_value_from_array_object(array);
 }
@@ -133,7 +111,7 @@ void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction)
 void mal_op_create_function(MalCallable *callable, MalInstruction *instruction) {
     MalFunctionObject *function = mal_function_object_new(
         &callable->vm->heap,
-        nullptr,
+        mal_value_to_object(callable->vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         instruction->as.create_function.function_index
     );
 
@@ -163,6 +141,7 @@ void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instr
 
 void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
     MalValue callee = callable->registers[instruction->as.call.callee];
+    MalValue this_value = callable->registers[instruction->as.call.this_value];
     i32 dst = instruction->as.call.dst;
 
     if (mal_value_is_function_object(callee)) {
@@ -176,6 +155,7 @@ void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
         mal_vm_push_function_frame(
             callable->vm,
             function_index,
+            this_value,
             arguments,
             instruction->as.call.argument_count,
             dst,
@@ -195,12 +175,18 @@ void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
         MalNativeFunctionCallback callback = mal_native_function_object_callback(
             mal_value_to_native_function_object(callee)
         );
-        callable->registers[dst] = callback(
-            callable->vm,
-            mal_value_new_undefined(),
+        // The callback may push frames and realloc the frame array, which
+        // invalidates `callable`. Snapshot what we need and re-resolve the
+        // frame afterwards.
+        MalVm *vm = callable->vm;
+        i32 caller_frame_index = vm->frame_count - 1;
+        MalValue result = callback(
+            vm,
+            this_value,
             arguments,
             instruction->as.call.argument_count
         );
+        vm->frames[caller_frame_index].registers[dst] = result;
         free(arguments);
 
         return;
@@ -282,18 +268,22 @@ void mal_op_load_global(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.load_global.dst] = callable->vm->globals[instruction->as.load_global.index];
 }
 
+void mal_op_load_intrinsic(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.load_intrinsic.dst] = callable->vm->intrinsics[instruction->as.load_intrinsic.intrinsic];
+}
+
 void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
     MalValue object_value = callable->registers[instruction->as.load_property.object];
     MalValue key_value = callable->registers[instruction->as.load_property.key];
     i32 dst = instruction->as.load_property.dst;
 
     MalKey key;
-    if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(callable, key_value, &key)) {
+    if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
         callable->registers[dst] = mal_value_new_undefined();
         return;
     }
 
-    if (mal_value_is_array_object(object_value) && mal_vm_key_is_length(key)) {
+    if (mal_value_is_array_object(object_value) && mal_array_key_is_length(key)) {
         callable->registers[dst] = mal_value_from_i32((i32) mal_array_object_length(mal_value_to_array_object(object_value)));
         return;
     }
@@ -313,15 +303,12 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
     MalValue value = callable->registers[instruction->as.store_property.value];
 
     MalKey key;
-    if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(callable, key_value, &key)) {
+    if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
         return;
     }
 
     if (mal_value_is_array_object(object_value)) {
-        mal_vm_update_array_length_for_store(mal_value_to_array_object(object_value), key, value);
-    }
-
-    if (mal_value_is_array_object(object_value) && mal_vm_key_is_length(key)) {
+        mal_array_object_store(mal_value_to_array_object(object_value), key, value);
         return;
     }
 

@@ -51,6 +51,7 @@ export interface IntermediateProgram {
 			fnIndex: number;
 		}
 	>;
+	nodeToFunctionCache: Map<ESTree.Node, { fnIndex: number }>;
 
 	/**
 	 * Next available global variable index
@@ -140,6 +141,14 @@ export type IRInstruction =
 			value: number;
 	  }
 	| {
+			type: "createBoolean";
+
+			// [destination]
+			registers: [number];
+
+			value: boolean;
+	  }
+	| {
 			type: "createString";
 
 			// [destination]
@@ -184,8 +193,16 @@ export type IRInstruction =
 	| {
 			type: "call";
 
-			// [destination, callee, ...arguments]
-			registers: [number, number, ...Array<number>];
+			// [destination, callee, this, ...arguments]
+			registers: [number, number, number, ...Array<number>];
+	  }
+	| {
+			type: "loadIntrinsic";
+
+			// [destination]
+			registers: [number];
+
+			intrinsic: IRIntrinsic;
 	  }
 	| {
 			type: `load${"Local" | "Captured" | "Global"}`;
@@ -248,6 +265,7 @@ export type IRInstruction =
 	  };
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
+type IRIntrinsic = "Object" | "Array";
 
 const irBinaryOperators = new Set<string>([
 	"+",
@@ -315,6 +333,7 @@ export function compileSemanticProgramToIr(semantic: SemanticProgram) {
 		compiledModuleInitForPaths: new Set(),
 		bindingToStorage: new Map(),
 		bindingToFunctionCache: new Map(),
+		nodeToFunctionCache: new Map(),
 
 		nextGlobalIndex: 0,
 	};
@@ -423,6 +442,48 @@ function compileNewFunction(
 	endFunction(fn);
 
 	return fn.functionIndex;
+}
+
+function compileNewFunctionExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	functionNode: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
+) {
+	const cached = program.nodeToFunctionCache.get(functionNode);
+	if (cached) {
+		return cached.fnIndex;
+	}
+
+	const compiledFn: IRFunction = {
+		semanticFile: fn.semanticFile,
+		functionIndex: program.functions.length,
+		blocks: [],
+
+		parameterCount: functionNode.params.length,
+		nextRegisterDestination: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+
+	program.functions.push(compiledFn);
+	program.nodeToFunctionCache.set(functionNode, { fnIndex: compiledFn.functionIndex });
+
+	compileFunctionParams(program, compiledFn, functionNode);
+	compileStatementsToBlock(
+		program,
+		compiledFn,
+		functionNode.body?.type === "BlockStatement"
+			? normalizeStatementOrBlock(functionNode.body)
+			: functionNode.body
+				? normalizeStatementOrBlock({
+						type: "ReturnStatement",
+						argument: functionNode.body,
+					})
+				: [],
+	);
+	endFunction(compiledFn);
+
+	return compiledFn.functionIndex;
 }
 
 /**
@@ -743,6 +804,10 @@ function compileExpression(
 		case "CallExpression": {
 			return compileCall(program, fn, block, expression);
 		}
+		case "ArrowFunctionExpression":
+		case "FunctionExpression": {
+			return compileFunctionExpression(program, fn, block, expression);
+		}
 		case "Identifier": {
 			return compileIdentifier(program, fn, block, expression);
 		}
@@ -758,6 +823,22 @@ function compileExpression(
 		default:
 			return -1;
 	}
+}
+
+function compileFunctionExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	expression: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
+) {
+	const destination = nextRegisterDestination(fn);
+	block.instructions.push({
+		type: "createFunction",
+		registers: [destination],
+		functionIndex: compileNewFunctionExpression(program, fn, expression),
+	});
+
+	return destination;
 }
 
 function compileAssignment(
@@ -997,12 +1078,25 @@ function compileCall(
 		return -1;
 	}
 
-	const callee = compileExpression(
-		program,
-		fn,
-		block,
-		calleeNode as ESTree.Expression | ESTree.PrivateIdentifier,
-	);
+	let callee: number;
+	let thisRegister: number;
+	if (calleeNode.type === "MemberExpression") {
+		const member = compileMemberObjectAndKey(program, fn, block, calleeNode);
+		thisRegister = member.object;
+		callee = nextRegisterDestination(fn);
+		block.instructions.push({
+			type: "loadProperty",
+			registers: [callee, member.object, member.key],
+		});
+	} else {
+		callee = compileExpression(
+			program,
+			fn,
+			block,
+			calleeNode as ESTree.Expression | ESTree.PrivateIdentifier,
+		);
+		thisRegister = compileUndefined(fn, block);
+	}
 	const args = callExpression.arguments.map((arg) => {
 		if (arg.type === "SpreadElement") {
 			return -1;
@@ -1014,7 +1108,7 @@ function compileCall(
 
 	block.instructions.push({
 		type: "call",
-		registers: [destination, callee, ...args],
+		registers: [destination, callee, thisRegister, ...args],
 	});
 
 	return destination;
@@ -1032,18 +1126,25 @@ function compileIdentifier(
 	identifier: ESTree.Identifier,
 ): number {
 	if (identifier.name === "undefined") {
-		const destination = nextRegisterDestination(fn);
-		block.instructions.push({
-			type: "createUndefined",
-			registers: [destination],
-		});
-
-		return destination;
+		return compileUndefined(fn, block);
 	}
 
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
 	if (!binding) {
 		return -1;
+	}
+
+	if (
+		binding.undeclared &&
+		(identifier.name === "Object" || identifier.name === "Array")
+	) {
+		const destination = nextRegisterDestination(fn);
+		block.instructions.push({
+			type: "loadIntrinsic",
+			registers: [destination],
+			intrinsic: identifier.name,
+		});
+		return destination;
 	}
 
 	if (binding.implicit === "arguments") {
@@ -1119,6 +1220,17 @@ function compileLiteral(
 		return compileNumberLiteral(fn, block, literal.value);
 	}
 
+	if (typeof literal.value === "boolean") {
+		const destination = nextRegisterDestination(fn);
+		block.instructions.push({
+			type: "createBoolean",
+			registers: [destination],
+			value: literal.value,
+		});
+
+		return destination;
+	}
+
 	if (typeof literal.value === "string") {
 		const destination = nextRegisterDestination(fn);
 		block.instructions.push({
@@ -1131,6 +1243,16 @@ function compileLiteral(
 	}
 
 	return -1;
+}
+
+function compileUndefined(fn: IRFunction, block: IRBlock) {
+	const destination = nextRegisterDestination(fn);
+	block.instructions.push({
+		type: "createUndefined",
+		registers: [destination],
+	});
+
+	return destination;
 }
 
 function compileNumberLiteral(fn: IRFunction, block: IRBlock, value: number) {

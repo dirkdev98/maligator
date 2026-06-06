@@ -1,6 +1,7 @@
 import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
+type IRIntrinsic = Extract<IRInstruction, { type: "loadIntrinsic" }>["intrinsic"];
 
 /**
  * Keep inline with the C struct
@@ -50,6 +51,11 @@ export type VmInstruction =
 			value: number;
 	  }
 	| {
+			opcode: "CREATE_BOOLEAN";
+			dst: number;
+			value: boolean;
+	  }
+	| {
 			opcode: "CREATE_STRING";
 			dst: number;
 			stringIndex: number;
@@ -80,8 +86,14 @@ export type VmInstruction =
 			opcode: "CALL";
 			dst: number;
 			callee: number;
+			thisValue: number;
 			argumentCount: number;
 			arguments: Array<number>;
+	  }
+	| {
+			opcode: "LOAD_INTRINSIC";
+			dst: number;
+			intrinsic: IRIntrinsic;
 	  }
 	| {
 			opcode: "LOAD_CAPTURED";
@@ -213,6 +225,12 @@ function lowerInstructionToVmInstruction(
 				dst: instruction.registers[0],
 				value: instruction.value,
 			};
+		case "createBoolean":
+			return {
+				opcode: "CREATE_BOOLEAN",
+				dst: instruction.registers[0],
+				value: instruction.value,
+			};
 		case "createString":
 			return {
 				opcode: "CREATE_STRING",
@@ -251,8 +269,15 @@ function lowerInstructionToVmInstruction(
 				opcode: "CALL",
 				dst: instruction.registers[0],
 				callee: instruction.registers[1],
-				argumentCount: instruction.registers.length - 2,
-				arguments: instruction.registers.slice(2),
+				thisValue: instruction.registers[2],
+				argumentCount: instruction.registers.length - 3,
+				arguments: instruction.registers.slice(3),
+			};
+		case "loadIntrinsic":
+			return {
+				opcode: "LOAD_INTRINSIC",
+				dst: instruction.registers[0],
+				intrinsic: instruction.intrinsic,
 			};
 		case "loadCaptured":
 			return {

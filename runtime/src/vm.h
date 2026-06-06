@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "heap.h"
+#include "intrinsics.h"
 #include "value.h"
 
 typedef enum MalOpcode {
@@ -10,6 +11,7 @@ typedef enum MalOpcode {
     MAL_OP_JUMP_IF,
     MAL_OP_JUMP,
     MAL_OP_CREATE_NUMBER,
+    MAL_OP_CREATE_BOOLEAN,
     MAL_OP_CREATE_STRING,
     MAL_OP_CREATE_OBJECT,
     MAL_OP_CREATE_ARRAY,
@@ -18,6 +20,7 @@ typedef enum MalOpcode {
     MAL_OP_CREATE_ARGUMENTS_OBJECT,
     MAL_OP_LOAD_CAPTURED,
     MAL_OP_LOAD_GLOBAL,
+    MAL_OP_LOAD_INTRINSIC,
     MAL_OP_STORE_CAPTURED,
     MAL_OP_STORE_GLOBAL,
     MAL_OP_LOAD_PROPERTY,
@@ -48,6 +51,17 @@ typedef enum MalBinaryOp {
     MAL_BIN_STRICT_NEQ,
 } MalBinaryOp;
 
+typedef enum MalCompletionKind {
+    MAL_COMPLETION_NORMAL,
+    MAL_COMPLETION_RETURN,
+    MAL_COMPLETION_THROW,
+} MalCompletionKind;
+
+typedef struct MalCompletion {
+    MalCompletionKind kind;
+    MalValue value;
+} MalCompletion;
+
 typedef struct MalInstruction {
     MalOpcode opcode;
 
@@ -71,6 +85,10 @@ typedef struct MalInstruction {
         struct {
             i32 dst, value;
         } create_number;
+
+        struct {
+            i32 dst, value;
+        } create_boolean;
 
         struct {
             i32 dst, string_index;
@@ -105,6 +123,10 @@ typedef struct MalInstruction {
         } load_global;
 
         struct {
+            i32 dst, intrinsic;
+        } load_intrinsic;
+
+        struct {
             i32 src, owner_function_index, index;
         } store_captured;
 
@@ -121,7 +143,7 @@ typedef struct MalInstruction {
         } store_property;
 
         struct {
-            i32 dst, callee, argument_count;
+            i32 dst, callee, this_value, argument_count;
             const i32 *arguments;
         } call;
 
@@ -136,6 +158,7 @@ typedef struct MalFunction {
     i32 parameter_count;
     i32 register_count;
     i32 captured_count;
+    bool strict;
 
     i32 instruction_count;
     const MalInstruction *instructions;
@@ -161,6 +184,8 @@ typedef struct MalVm {
 
     MalHeap heap;
     MalValue *globals;
+    MalValue intrinsics[MAL_INTRINSIC_COUNT];
+    MalCompletion completion;
 
     struct MalVmFrame *frames;
     i32 frame_count;
@@ -173,6 +198,7 @@ typedef struct MalVmFrame {
     MalValue *registers;
     MalValue *arguments;
     i32 argument_count;
+    MalValue this_value;
     MalValue arguments_object;
 
     i32 instruction_pointer;
@@ -193,6 +219,7 @@ void mal_vm_free_callable(MalCallable *callable);
 void mal_vm_push_function_frame(
     MalVm *vm,
     i32 function_index,
+    MalValue this_value,
     const MalValue *args,
     i32 arg_count,
     i32 return_register,
@@ -200,3 +227,11 @@ void mal_vm_push_function_frame(
 );
 
 void mal_vm_run(MalVm *vm, MalCallable *callable);
+
+MalCompletion mal_vm_call_value(
+    MalVm *vm,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+);

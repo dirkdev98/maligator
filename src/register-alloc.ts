@@ -41,6 +41,14 @@ function allocateRegistersForFunction(fn: IRFunction) {
 	const freeRegisters = [];
 	let highestUsedRegister = -1;
 
+	// The VM places arguments in the first registers of the frame. Parameters are
+	// compiled to the first virtual registers, so pin them to keep the calling
+	// convention intact.
+	for (let i = 0; i < fn.parameterCount; ++i) {
+		virtualRegisterToRealRegister.set(i, i);
+		highestUsedRegister = i;
+	}
+
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
 			if (!("registers" in instruction)) {

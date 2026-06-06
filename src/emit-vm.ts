@@ -75,6 +75,8 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = ${instruction.targetIp} } }`;
 		case "CREATE_NUMBER":
 			return `{ .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = ${instruction.dst}, .value = ${instruction.value} } }`;
+		case "CREATE_BOOLEAN":
+			return `{ .opcode = MAL_OP_CREATE_BOOLEAN, .as.create_boolean = { .dst = ${instruction.dst}, .value = ${instruction.value ? 1 : 0} } }`;
 		case "CREATE_STRING":
 			return `{ .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = ${instruction.dst}, .string_index = ${instruction.stringIndex} } }`;
 		case "CREATE_OBJECT":
@@ -88,11 +90,13 @@ function emitInstruction(instruction: VmInstruction) {
 		case "CREATE_ARGUMENTS_OBJECT":
 			return `{ .opcode = MAL_OP_CREATE_ARGUMENTS_OBJECT, .as.create_arguments_object = { .dst = ${instruction.dst} } }`;
 		case "CALL":
-			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .argument_count = ${instruction.argumentCount}, .arguments = ${emitCallArguments(instruction.arguments)} } }`;
+			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .argument_count = ${instruction.argumentCount}, .arguments = ${emitCallArguments(instruction.arguments)} } }`;
 		case "LOAD_CAPTURED":
 			return `{ .opcode = MAL_OP_LOAD_CAPTURED, .as.load_captured = { .dst = ${instruction.dst}, .owner_function_index = ${instruction.ownerFunctionIndex}, .index = ${instruction.index} } }`;
 		case "LOAD_GLOBAL":
 			return `{ .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = ${instruction.dst}, .index = ${instruction.index} } }`;
+		case "LOAD_INTRINSIC":
+			return `{ .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = ${instruction.dst}, .intrinsic = ${emitIntrinsic(instruction.intrinsic)} } }`;
 		case "STORE_CAPTURED":
 			return `{ .opcode = MAL_OP_STORE_CAPTURED, .as.store_captured = { .src = ${instruction.src}, .owner_function_index = ${instruction.ownerFunctionIndex}, .index = ${instruction.index} } }`;
 		case "STORE_GLOBAL":
@@ -106,6 +110,17 @@ function emitInstruction(instruction: VmInstruction) {
 	}
 
 	throw new Error(`Unknown vm instruction ${(instruction as { opcode: string }).opcode}`);
+}
+
+function emitIntrinsic(
+	intrinsic: Extract<VmInstruction, { opcode: "LOAD_INTRINSIC" }>["intrinsic"],
+) {
+	switch (intrinsic) {
+		case "Object":
+			return "MAL_INTRINSIC_OBJECT_CONSTRUCTOR";
+		case "Array":
+			return "MAL_INTRINSIC_ARRAY_CONSTRUCTOR";
+	}
 }
 
 function emitCallArguments(args: Array<number>) {
