@@ -42,7 +42,11 @@ function optDropInstructionsAfterJumpsOrReturns(program: IntermediateProgram) {
 					continue;
 				}
 
-				if (instruction.type === "jump" || instruction.type === "return") {
+				if (
+					instruction.type === "jump" ||
+					instruction.type === "return" ||
+					instruction.type === "throw"
+				) {
 					block.instructions.splice(i + 1);
 					break;
 				}

@@ -74,6 +74,12 @@ export interface IRFunction {
 	semanticFile: SemanticFile;
 	functionIndex: number;
 
+	/**
+	 * String constant index of the function name, empty string for anonymous
+	 * functions.
+	 */
+	nameStringIndex: number;
+
 	blocks: Array<IRBlock>;
 	argumentsObjectRegister?: number;
 
@@ -197,6 +203,36 @@ export type IRInstruction =
 			registers: [number, number, number, ...Array<number>];
 	  }
 	| {
+			type: "construct";
+
+			// [destination, callee, ...arguments]
+			registers: [number, number, ...Array<number>];
+	  }
+	| {
+			type: "throw";
+
+			// [value]
+			registers: [number];
+	  }
+	| {
+			type: "catch";
+
+			// [destination]
+			registers: [number];
+	  }
+	| {
+			// Marks the start of a protected instruction range. Lowering turns the
+			// marker positions into the static exception handler table.
+			type: "tryBegin";
+
+			// [handlerBlock]
+			blocks: [number];
+	  }
+	| {
+			// Marks the end of a protected instruction range.
+			type: "tryEnd";
+	  }
+	| {
 			type: "loadIntrinsic";
 
 			// [destination]
@@ -265,7 +301,30 @@ export type IRInstruction =
 	  };
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
-type IRIntrinsic = "Object" | "Array";
+type IRIntrinsic =
+	| "Object"
+	| "Array"
+	| "Function"
+	| "Error"
+	| "TypeError"
+	| "RangeError"
+	| "ReferenceError"
+	| "SyntaxError";
+
+const irIntrinsics = new Set<string>([
+	"Object",
+	"Array",
+	"Function",
+	"Error",
+	"TypeError",
+	"RangeError",
+	"ReferenceError",
+	"SyntaxError",
+]);
+
+function isIRIntrinsic(name: string): name is IRIntrinsic {
+	return irIntrinsics.has(name);
+}
 
 const irBinaryOperators = new Set<string>([
 	"+",
@@ -366,6 +425,7 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 	const fn: IRFunction = {
 		semanticFile: initFile,
 		functionIndex: program.functions.length,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
 		blocks: [],
 
 		parameterCount: 0,
@@ -414,6 +474,10 @@ function compileNewFunction(
 	const fn: IRFunction = {
 		semanticFile: foundFile ?? program.semantic.files[0]!,
 		functionIndex: program.functions.length,
+		nameStringIndex: getOrCreateStringConstant(
+			program,
+			("id" in functionNode ? functionNode.id?.name : undefined) ?? binding.name,
+		),
 		blocks: [],
 
 		parameterCount: functionNode.params.length,
@@ -457,6 +521,10 @@ function compileNewFunctionExpression(
 	const compiledFn: IRFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
+		nameStringIndex: getOrCreateStringConstant(
+			program,
+			functionNode.type === "FunctionExpression" ? (functionNode.id?.name ?? "") : "",
+		),
 		blocks: [],
 
 		parameterCount: functionNode.params.length,
@@ -494,7 +562,11 @@ function endFunction(fn: IRFunction) {
 		// TODO(opt): once optimized we can probably do with scanning the whole block, since there
 		//  might be earlier returns happening.
 		const lastInstruction = block.instructions.at(-1);
-		if (lastInstruction?.type === "return" || lastInstruction?.type === "jump") {
+		if (
+			lastInstruction?.type === "return" ||
+			lastInstruction?.type === "jump" ||
+			lastInstruction?.type === "throw"
+		) {
 			continue;
 		}
 
@@ -638,6 +710,14 @@ function compileStatementsToBlock(
 				compileReturnStatement(program, fn, block, statement);
 				break;
 			}
+			case "ThrowStatement": {
+				compileThrowStatement(program, fn, block, statement);
+				break;
+			}
+			case "TryStatement": {
+				compileTryStatement(program, fn, block, statement);
+				break;
+			}
 			case "VariableDeclaration": {
 				compileVariableDeclaration(program, fn, block, statement);
 				break;
@@ -689,6 +769,118 @@ function compileFunctionDeclaration(
 	});
 
 	storeRegisterAtLocation(block, location, destination);
+}
+
+/**
+ * Compile a throw statement. The unwinding to the nearest handler happens in
+ * the VM based on the statically known handler ranges.
+ */
+function compileThrowStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.ThrowStatement,
+) {
+	const value = compileExpression(program, fn, block, statement.argument);
+	block.instructions.push({
+		type: "throw",
+		registers: [value],
+	});
+}
+
+/**
+ * Compile a try statement into a marker-delimited protected range with the
+ * handler compiled out-of-line.
+ *
+ * Invariant: no bare temporary register may be kept live across the tryEnd
+ * marker, since the exception edge is invisible to the register allocator.
+ * Values that cross the try/catch boundary go through bindings.
+ *
+ * TODO(finally): the finalizer is duplicated on the normal and caught exits
+ *  (and runs + rethrows for catch-less try/finally). It does not run when an
+ *  exception propagates out of the catch body itself, and return/break
+ *  through the finalizer is not intercepted.
+ */
+function compileTryStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.TryStatement,
+) {
+	const finalizerStatements = statement.finalizer
+		? normalizeStatementOrBlock(statement.finalizer)
+		: [];
+
+	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
+		type: "tryBegin",
+		// Patched below, once the handler block exists.
+		blocks: [-1],
+	};
+	block.instructions.push(tryBegin);
+
+	const tryBlock = compileStatementsToBlock(
+		program,
+		fn,
+		normalizeStatementOrBlock(statement.block),
+	);
+	block.instructions.push({
+		type: "jump",
+		blocks: [tryBlock],
+	});
+
+	// The end marker and the normal-exit finalizer copy live directly after
+	// the try body, so the protected range ends before them.
+	const tryBodyLastBlock = fn.blocks.at(-1)!;
+	const tryExitBlock = compileStatementsToBlock(program, fn, finalizerStatements);
+	fn.blocks[tryExitBlock]!.instructions.unshift({ type: "tryEnd" });
+	tryBodyLastBlock.instructions.push({
+		type: "jump",
+		blocks: [tryExitBlock],
+	});
+
+	// The handler block must start with the catch instruction, which consumes
+	// the throw completion the unwinder left in place.
+	const handlerBlock: IRBlock = {
+		instructions: [],
+	};
+	const handlerBlockIdx = fn.blocks.push(handlerBlock) - 1;
+	tryBegin.blocks[0] = handlerBlockIdx;
+
+	const caughtRegister = nextRegisterDestination(fn);
+	handlerBlock.instructions.push({
+		type: "catch",
+		registers: [caughtRegister],
+	});
+
+	if (statement.handler) {
+		if (statement.handler.param?.type === "Identifier") {
+			const binding = fn.semanticFile.nodeToBinding.get(statement.handler.param);
+			if (binding) {
+				const location = getOrCreateBindingLocation(program, fn, binding);
+				storeRegisterAtLocation(handlerBlock, location, caughtRegister);
+			}
+		}
+
+		const catchBlock = compileStatementsToBlock(program, fn, [
+			...normalizeStatementOrBlock(statement.handler.body),
+			...finalizerStatements,
+		]);
+		handlerBlock.instructions.push({
+			type: "jump",
+			blocks: [catchBlock],
+		});
+	} else {
+		// A catch-less try/finally runs the finalizer and rethrows.
+		const finalizerBlock = compileStatementsToBlock(program, fn, finalizerStatements);
+		handlerBlock.instructions.push({
+			type: "jump",
+			blocks: [finalizerBlock],
+		});
+		fn.blocks.at(-1)!.instructions.push({
+			type: "throw",
+			registers: [caughtRegister],
+		});
+	}
 }
 
 /**
@@ -804,6 +996,9 @@ function compileExpression(
 		case "CallExpression": {
 			return compileCall(program, fn, block, expression);
 		}
+		case "NewExpression": {
+			return compileNewExpression(program, fn, block, expression);
+		}
 		case "ArrowFunctionExpression":
 		case "FunctionExpression": {
 			return compileFunctionExpression(program, fn, block, expression);
@@ -847,6 +1042,10 @@ function compileAssignment(
 	block: IRBlock,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
+	if (assignmentExpression.left.type === "Identifier") {
+		return compileIdentifierAssignment(program, fn, block, assignmentExpression);
+	}
+
 	if (assignmentExpression.left.type !== "MemberExpression") {
 		return -1;
 	}
@@ -885,6 +1084,46 @@ function compileAssignment(
 		registers: [object, key, value],
 	});
 
+	return value;
+}
+
+function compileIdentifierAssignment(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	assignmentExpression: ESTree.AssignmentExpression,
+): number {
+	const binding = fn.semanticFile.nodeToBinding.get(assignmentExpression.left);
+	if (!binding) {
+		return -1;
+	}
+
+	const location = getOrCreateBindingLocation(program, fn, binding);
+
+	let value: number;
+	if (assignmentExpression.operator === "=") {
+		value = compileExpression(program, fn, block, assignmentExpression.right);
+	} else {
+		const binaryOperator = assignmentOperatorToBinaryOperator(
+			assignmentExpression.operator,
+		);
+		const current = loadRegisterFromLocation(fn, block, location);
+		const right = compileExpression(program, fn, block, assignmentExpression.right);
+		value = nextRegisterDestination(fn);
+		block.instructions.push({
+			type: "binary",
+			registers: [value, current, right],
+			operator: binaryOperator,
+		});
+	}
+
+	if (value === -1) {
+		// The right hand side is not supported yet; skip the store instead of
+		// emitting an invalid register reference.
+		return -1;
+	}
+
+	storeRegisterAtLocation(block, location, value);
 	return value;
 }
 
@@ -1115,6 +1354,39 @@ function compileCall(
 }
 
 /**
+ * Compile a new expression. The VM creates the this value from the callee's
+ * prototype property and substitutes non-object return values.
+ */
+function compileNewExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	expression: ESTree.NewExpression,
+): number {
+	const calleeNode = expression.callee as unknown as ESTree.Node;
+	if (calleeNode.type === "Super" || (calleeNode.type as string) === "Import") {
+		return -1;
+	}
+
+	const callee = compileExpression(program, fn, block, calleeNode as ESTree.Expression);
+	const args = expression.arguments.map((arg) => {
+		if (arg.type === "SpreadElement") {
+			return -1;
+		}
+
+		return compileExpression(program, fn, block, arg);
+	});
+	const destination = nextRegisterDestination(fn);
+
+	block.instructions.push({
+		type: "construct",
+		registers: [destination, callee, ...args],
+	});
+
+	return destination;
+}
+
+/**
  * Compile identifiers to load instructions.
  *
  * Statements that store the a variable internally handle the store instructions.
@@ -1134,10 +1406,7 @@ function compileIdentifier(
 		return -1;
 	}
 
-	if (
-		binding.undeclared &&
-		(identifier.name === "Object" || identifier.name === "Array")
-	) {
+	if (binding.undeclared && isIRIntrinsic(identifier.name)) {
 		const destination = nextRegisterDestination(fn);
 		block.instructions.push({
 			type: "loadIntrinsic",
@@ -1162,6 +1431,14 @@ function compileIdentifier(
 	}
 
 	const location = getOrCreateBindingLocation(program, fn, binding);
+	return loadRegisterFromLocation(fn, block, location);
+}
+
+function loadRegisterFromLocation(
+	fn: IRFunction,
+	block: IRBlock,
+	location: BindingLocation,
+) {
 	const destination = nextRegisterDestination(fn);
 	switch (location.type) {
 		case "local": {

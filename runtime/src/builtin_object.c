@@ -266,7 +266,7 @@ static MalValue mal_builtin_object_create(MalVm *vm, MalValue this_value, const 
     (void) this_value;
     MalValue prototype_value = mal_builtin_object_arg(args, arg_count, 0);
     if (!mal_value_is_object(prototype_value) && !mal_value_is_null(prototype_value)) {
-        // TODO(errors): should throw a TypeError once Error objects exist.
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object prototype may only be an Object or null");
         return mal_value_new_undefined();
     }
 

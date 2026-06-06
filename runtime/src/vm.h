@@ -8,6 +8,10 @@
 typedef enum MalOpcode {
     MAL_OP_MOVE,
     MAL_OP_RETURN,
+    MAL_OP_THROW,
+    MAL_OP_CATCH,
+    MAL_OP_TRY_BEGIN,
+    MAL_OP_TRY_END,
     MAL_OP_JUMP_IF,
     MAL_OP_JUMP,
     MAL_OP_CREATE_NUMBER,
@@ -26,6 +30,7 @@ typedef enum MalOpcode {
     MAL_OP_LOAD_PROPERTY,
     MAL_OP_STORE_PROPERTY,
     MAL_OP_CALL,
+    MAL_OP_CONSTRUCT,
     MAL_OP_BINARY,
 } MalOpcode;
 
@@ -73,6 +78,14 @@ typedef struct MalInstruction {
         struct {
             i32 value;
         } ret;
+
+        struct {
+            i32 value;
+        } thrown;
+
+        struct {
+            i32 dst;
+        } caught;
 
         struct {
             i32 cond, target_ip;
@@ -148,13 +161,29 @@ typedef struct MalInstruction {
         } call;
 
         struct {
+            i32 dst, callee, argument_count;
+            const i32 *arguments;
+        } construct;
+
+        struct {
             i32 dst, left, right;
             MalBinaryOp op;
         } binary;
     } as;
 } MalInstruction;
 
+/**
+ * Statically known protected instruction range. While the instruction pointer
+ * is inside [start_ip, end_ip), a throw unwinds to handler_ip.
+ */
+typedef struct MalExceptionHandler {
+    i32 start_ip;
+    i32 end_ip;
+    i32 handler_ip;
+} MalExceptionHandler;
+
 typedef struct MalFunction {
+    i32 name_string_index;
     i32 parameter_count;
     i32 register_count;
     i32 captured_count;
@@ -162,6 +191,9 @@ typedef struct MalFunction {
 
     i32 instruction_count;
     const MalInstruction *instructions;
+
+    i32 handler_count;
+    const MalExceptionHandler *handlers;
 } MalFunction;
 
 typedef struct MalStringConstant {
@@ -201,6 +233,11 @@ typedef struct MalVmFrame {
     MalValue this_value;
     MalValue arguments_object;
 
+    /**
+     * Construct frames replace non-object return values with this_value.
+     */
+    bool is_construct;
+
     i32 instruction_pointer;
     i32 return_register;
     i32 caller_frame_index;
@@ -235,3 +272,13 @@ MalCompletion mal_vm_call_value(
     const MalValue *args,
     i32 arg_count
 );
+
+/**
+ * Resolve the display name of a callable, or null for non-callables.
+ */
+MalString *mal_vm_callable_name(MalVm *vm, MalValue callee);
+
+/**
+ * Resolve the parameter count of a callable.
+ */
+i32 mal_vm_callable_length(MalVm *vm, MalValue callee);

@@ -35,17 +35,32 @@ export function emitVmDefinition(definition: VmDefinition) {
 		}
 
 		lines.push("};", "");
+
+		if (fn.handlers.length > 0) {
+			lines.push(`static const MalExceptionHandler mal_function_${i}_handlers[] = {`);
+			for (const handler of fn.handlers) {
+				lines.push(
+					`    { .start_ip = ${handler.startIp}, .end_ip = ${handler.endIp}, .handler_ip = ${handler.handlerIp} },`,
+				);
+			}
+			lines.push("};", "");
+		}
 	}
 
 	lines.push("static const MalFunction mal_functions[] = {");
 	for (let i = 0; i < definition.functions.length; ++i) {
 		const fn = definition.functions[i]!;
 		lines.push("    {");
+		lines.push(`        .name_string_index = ${fn.nameStringIndex},`);
 		lines.push(`        .parameter_count = ${fn.parameterCount},`);
 		lines.push(`        .register_count = ${fn.registerCount},`);
 		lines.push(`        .captured_count = ${fn.capturedCount},`);
 		lines.push(`        .instruction_count = ${fn.instructions.length},`);
 		lines.push(`        .instructions = mal_function_${i}_instructions,`);
+		lines.push(`        .handler_count = ${fn.handlers.length},`);
+		lines.push(
+			`        .handlers = ${fn.handlers.length > 0 ? `mal_function_${i}_handlers` : "nullptr"},`,
+		);
 		lines.push("    },");
 	}
 	lines.push("};", "");
@@ -91,6 +106,18 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_CREATE_ARGUMENTS_OBJECT, .as.create_arguments_object = { .dst = ${instruction.dst} } }`;
 		case "CALL":
 			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .argument_count = ${instruction.argumentCount}, .arguments = ${emitCallArguments(instruction.arguments)} } }`;
+		case "CONSTRUCT":
+			return `{ .opcode = MAL_OP_CONSTRUCT, .as.construct = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .argument_count = ${instruction.argumentCount}, .arguments = ${emitCallArguments(instruction.arguments)} } }`;
+		case "THROW":
+			return `{ .opcode = MAL_OP_THROW, .as.thrown = { .value = ${instruction.value} } }`;
+		case "CATCH":
+			return `{ .opcode = MAL_OP_CATCH, .as.caught = { .dst = ${instruction.dst} } }`;
+		case "TRY_BEGIN":
+			// The protected ranges live in the handler table; the markers only
+			// keep the instruction pointers stable.
+			return `{ .opcode = MAL_OP_TRY_BEGIN }`;
+		case "TRY_END":
+			return `{ .opcode = MAL_OP_TRY_END }`;
 		case "LOAD_CAPTURED":
 			return `{ .opcode = MAL_OP_LOAD_CAPTURED, .as.load_captured = { .dst = ${instruction.dst}, .owner_function_index = ${instruction.ownerFunctionIndex}, .index = ${instruction.index} } }`;
 		case "LOAD_GLOBAL":
@@ -120,6 +147,18 @@ function emitIntrinsic(
 			return "MAL_INTRINSIC_OBJECT_CONSTRUCTOR";
 		case "Array":
 			return "MAL_INTRINSIC_ARRAY_CONSTRUCTOR";
+		case "Function":
+			return "MAL_INTRINSIC_FUNCTION_CONSTRUCTOR";
+		case "Error":
+			return "MAL_INTRINSIC_ERROR_CONSTRUCTOR";
+		case "TypeError":
+			return "MAL_INTRINSIC_TYPE_ERROR_CONSTRUCTOR";
+		case "RangeError":
+			return "MAL_INTRINSIC_RANGE_ERROR_CONSTRUCTOR";
+		case "ReferenceError":
+			return "MAL_INTRINSIC_REFERENCE_ERROR_CONSTRUCTOR";
+		case "SyntaxError":
+			return "MAL_INTRINSIC_SYNTAX_ERROR_CONSTRUCTOR";
 	}
 }
 

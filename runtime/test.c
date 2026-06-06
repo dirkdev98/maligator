@@ -1,8 +1,10 @@
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "array_object.h"
+#include "bound_function_object.h"
 #include "function_object.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
@@ -17,59 +19,83 @@
 #include "vm_ops.h"
 
 // === GENERATED from tests/local/tmp2.js via `node src/index.ts tests/local/tmp2.js` ===
-static const c16 mal_string_0_code_units[] = { 100, 101, 102, 105, 110, 101, 80, 114, 111, 112, 101, 114, 116, 121 };
-static const c16 mal_string_1_code_units[] = { 120 };
-static const c16 mal_string_2_code_units[] = { 118, 97, 108, 117, 101 };
-static const c16 mal_string_3_code_units[] = { 119, 114, 105, 116, 97, 98, 108, 101 };
-static const c16 mal_string_4_code_units[] = { 101, 110, 117, 109, 101, 114, 97, 98, 108, 101 };
-static const c16 mal_string_5_code_units[] = { 109, 97, 112 };
-static const c16 mal_string_6_code_units[] = { 107, 101, 121, 115 };
-static const c16 mal_string_7_code_units[] = { 97, 115, 115, 105, 103, 110 };
-static const c16 mal_string_8_code_units[] = { 121 };
-static const c16 mal_string_9_code_units[] = { 102, 105, 108, 116, 101, 114 };
-static const c16 mal_string_10_code_units[] = { 114, 101, 100, 117, 99, 101 };
-static const c16 mal_string_11_code_units[] = { 102, 105, 110, 100 };
-static const c16 mal_string_12_code_units[] = { 112, 117, 115, 104 };
-static const c16 mal_string_13_code_units[] = { 108, 101, 110, 103, 116, 104 };
+static const c16 mal_string_0_code_units[] = { 0 };
+static const c16 mal_string_1_code_units[] = { 100, 101, 102, 105, 110, 101, 80, 114, 111, 112, 101, 114, 116, 121 };
+static const c16 mal_string_2_code_units[] = { 120 };
+static const c16 mal_string_3_code_units[] = { 118, 97, 108, 117, 101 };
+static const c16 mal_string_4_code_units[] = { 119, 114, 105, 116, 97, 98, 108, 101 };
+static const c16 mal_string_5_code_units[] = { 101, 110, 117, 109, 101, 114, 97, 98, 108, 101 };
+static const c16 mal_string_6_code_units[] = { 109, 97, 112 };
+static const c16 mal_string_7_code_units[] = { 107, 101, 121, 115 };
+static const c16 mal_string_8_code_units[] = { 114, 101, 100, 117, 99, 101 };
+static const c16 mal_string_9_code_units[] = { 97, 116, 116, 101, 109, 112, 116 };
+static const c16 mal_string_10_code_units[] = { 98, 111, 111, 109 };
+static const c16 mal_string_11_code_units[] = { 109, 101, 115, 115, 97, 103, 101 };
+static const c16 mal_string_12_code_units[] = { 110, 97, 109, 101 };
+static const c16 mal_string_13_code_units[] = { 87, 114, 97, 112, 112, 101, 114 };
+static const c16 mal_string_14_code_units[] = { 112, 114, 111, 116, 111, 116, 121, 112, 101 };
+static const c16 mal_string_15_code_units[] = { 107, 105, 110, 100 };
+static const c16 mal_string_16_code_units[] = { 111, 111, 112, 115 };
+static const c16 mal_string_17_code_units[] = { 111, 117, 116, 32, 111, 102, 32, 114, 97, 110, 103, 101 };
+static const c16 mal_string_18_code_units[] = { 112, 97, 105, 114, 83, 117, 109 };
+static const c16 mal_string_19_code_units[] = { 99, 97, 108, 108 };
+static const c16 mal_string_20_code_units[] = { 97, 112, 112, 108, 121 };
+static const c16 mal_string_21_code_units[] = { 98, 105, 110, 100 };
+static const c16 mal_string_22_code_units[] = { 108, 101, 110, 103, 116, 104 };
+static const c16 mal_string_23_code_units[] = { 84, 121, 112, 101, 69, 114, 114, 111, 114 };
+static const c16 mal_string_24_code_units[] = { 69, 114, 114, 111, 114 };
+static const c16 mal_string_25_code_units[] = { 82, 97, 110, 103, 101, 69, 114, 114, 111, 114 };
 
 static const MalStringConstant mal_string_constants[] = {
-    { .length = 14, .code_units = mal_string_0_code_units },
-    { .length = 1, .code_units = mal_string_1_code_units },
-    { .length = 5, .code_units = mal_string_2_code_units },
-    { .length = 8, .code_units = mal_string_3_code_units },
-    { .length = 10, .code_units = mal_string_4_code_units },
-    { .length = 3, .code_units = mal_string_5_code_units },
-    { .length = 4, .code_units = mal_string_6_code_units },
-    { .length = 6, .code_units = mal_string_7_code_units },
-    { .length = 1, .code_units = mal_string_8_code_units },
-    { .length = 6, .code_units = mal_string_9_code_units },
-    { .length = 6, .code_units = mal_string_10_code_units },
-    { .length = 4, .code_units = mal_string_11_code_units },
+    { .length = 0, .code_units = mal_string_0_code_units },
+    { .length = 14, .code_units = mal_string_1_code_units },
+    { .length = 1, .code_units = mal_string_2_code_units },
+    { .length = 5, .code_units = mal_string_3_code_units },
+    { .length = 8, .code_units = mal_string_4_code_units },
+    { .length = 10, .code_units = mal_string_5_code_units },
+    { .length = 3, .code_units = mal_string_6_code_units },
+    { .length = 4, .code_units = mal_string_7_code_units },
+    { .length = 6, .code_units = mal_string_8_code_units },
+    { .length = 7, .code_units = mal_string_9_code_units },
+    { .length = 4, .code_units = mal_string_10_code_units },
+    { .length = 7, .code_units = mal_string_11_code_units },
     { .length = 4, .code_units = mal_string_12_code_units },
-    { .length = 6, .code_units = mal_string_13_code_units },
+    { .length = 7, .code_units = mal_string_13_code_units },
+    { .length = 9, .code_units = mal_string_14_code_units },
+    { .length = 4, .code_units = mal_string_15_code_units },
+    { .length = 4, .code_units = mal_string_16_code_units },
+    { .length = 12, .code_units = mal_string_17_code_units },
+    { .length = 7, .code_units = mal_string_18_code_units },
+    { .length = 4, .code_units = mal_string_19_code_units },
+    { .length = 5, .code_units = mal_string_20_code_units },
+    { .length = 4, .code_units = mal_string_21_code_units },
+    { .length = 6, .code_units = mal_string_22_code_units },
+    { .length = 9, .code_units = mal_string_23_code_units },
+    { .length = 5, .code_units = mal_string_24_code_units },
+    { .length = 10, .code_units = mal_string_25_code_units },
 };
 
 static const MalInstruction mal_function_0_instructions[] = {
     { .opcode = MAL_OP_CREATE_OBJECT, .as.create_object = { .dst = 0 } },
     { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 0, .index = 0 } },
     { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 0, .intrinsic = MAL_INTRINSIC_OBJECT_CONSTRUCTOR } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 0 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 1 } },
     { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 2, .object = 0, .key = 1 } },
     { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 0 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 3, .string_index = 1 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 3, .string_index = 2 } },
     { .opcode = MAL_OP_CREATE_OBJECT, .as.create_object = { .dst = 4 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 5, .string_index = 2 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 5, .string_index = 3 } },
     { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 6, .value = 5 } },
     { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 4, .key = 5, .value = 6 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 6, .string_index = 3 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 6, .string_index = 4 } },
     { .opcode = MAL_OP_CREATE_BOOLEAN, .as.create_boolean = { .dst = 5, .value = 1 } },
     { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 4, .key = 6, .value = 5 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 5, .string_index = 4 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 5, .string_index = 5 } },
     { .opcode = MAL_OP_CREATE_BOOLEAN, .as.create_boolean = { .dst = 6, .value = 1 } },
     { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 4, .key = 5, .value = 6 } },
     { .opcode = MAL_OP_CALL, .as.call = { .dst = 5, .callee = 2, .this_value = 0, .argument_count = 3, .arguments = (const i32[]) { 1, 3, 4 } } },
     { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 0 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 3, .string_index = 1 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 3, .string_index = 2 } },
     { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 4, .key = 3 } },
     { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 1 } },
     { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 1, .right = 0, .op = MAL_BIN_ADD } },
@@ -86,124 +112,259 @@ static const MalInstruction mal_function_0_instructions[] = {
     { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 2, .key = 3, .value = 4 } },
     { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 2, .index = 1 } },
     { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 2, .index = 1 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 5 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 6 } },
     { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 3, .object = 2, .key = 4 } },
     { .opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = { .dst = 4, .function_index = 1 } },
     { .opcode = MAL_OP_CALL, .as.call = { .dst = 0, .callee = 3, .this_value = 2, .argument_count = 1, .arguments = (const i32[]) { 4 } } },
     { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 0, .index = 2 } },
-    { .opcode = MAL_OP_CREATE_ARRAY, .as.create_array = { .dst = 0, .length = 3 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 0 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 2, .value = 1 } },
-    { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 0, .key = 4, .value = 2 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 2, .value = 2 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 3 } },
-    { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 0, .key = 2, .value = 4 } },
-    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 0, .index = 3 } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 3 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 5 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 2, .object = 0, .key = 4 } },
-    { .opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = { .dst = 4, .function_index = 2 } },
-    { .opcode = MAL_OP_CALL, .as.call = { .dst = 3, .callee = 2, .this_value = 0, .argument_count = 1, .arguments = (const i32[]) { 4 } } },
-    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 4 } },
-    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 3, .intrinsic = MAL_INTRINSIC_OBJECT_CONSTRUCTOR } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 6 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 0, .object = 3, .key = 4 } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 0 } },
-    { .opcode = MAL_OP_CALL, .as.call = { .dst = 2, .callee = 0, .this_value = 3, .argument_count = 1, .arguments = (const i32[]) { 4 } } },
-    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 2, .index = 5 } },
-    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 2, .intrinsic = MAL_INTRINSIC_OBJECT_CONSTRUCTOR } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 0, .intrinsic = MAL_INTRINSIC_OBJECT_CONSTRUCTOR } },
     { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 7 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 3, .object = 2, .key = 4 } },
-    { .opcode = MAL_OP_CREATE_OBJECT, .as.create_object = { .dst = 4 } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 0 } },
-    { .opcode = MAL_OP_CREATE_OBJECT, .as.create_object = { .dst = 1 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 6, .string_index = 8 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 5, .value = 10 } },
-    { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 1, .key = 6, .value = 5 } },
-    { .opcode = MAL_OP_CALL, .as.call = { .dst = 5, .callee = 3, .this_value = 2, .argument_count = 3, .arguments = (const i32[]) { 4, 0, 1 } } },
-    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 5, .index = 6 } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 5, .index = 1 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 9 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 0, .object = 5, .key = 1 } },
-    { .opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = { .dst = 1, .function_index = 3 } },
-    { .opcode = MAL_OP_CALL, .as.call = { .dst = 4, .callee = 0, .this_value = 5, .argument_count = 1, .arguments = (const i32[]) { 1 } } },
-    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 4, .index = 7 } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 1 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 10 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 5, .object = 4, .key = 1 } },
-    { .opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = { .dst = 1, .function_index = 4 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 0 } },
-    { .opcode = MAL_OP_CALL, .as.call = { .dst = 2, .callee = 5, .this_value = 4, .argument_count = 2, .arguments = (const i32[]) { 1, 0 } } },
-    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 2, .index = 8 } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 2, .index = 1 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 11 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 2, .key = 0 } },
-    { .opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = { .dst = 0, .function_index = 5 } },
-    { .opcode = MAL_OP_CALL, .as.call = { .dst = 4, .callee = 1, .this_value = 2, .argument_count = 1, .arguments = (const i32[]) { 0 } } },
-    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 4, .index = 9 } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 1 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 12 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 2, .object = 4, .key = 0 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 4 } },
-    { .opcode = MAL_OP_CALL, .as.call = { .dst = 6, .callee = 2, .this_value = 4, .argument_count = 1, .arguments = (const i32[]) { 0 } } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 0 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 1 } },
     { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 2, .object = 0, .key = 4 } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 2 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 0 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 4, .key = 0 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 2, .right = 1, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 2 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 2, .value = 1 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 4, .object = 1, .key = 2 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 0, .right = 4, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 2 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 2 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 4, .key = 0 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 2, .right = 1, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 2 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 2, .string_index = 13 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 4, .object = 1, .key = 2 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 0, .right = 4, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 4 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 0 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 4, .key = 0 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 2, .right = 1, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 4 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 2, .value = 2 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 4, .object = 1, .key = 2 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 0, .right = 4, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 4 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 13 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 4, .key = 0 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 2, .right = 1, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 0 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 3, .callee = 2, .this_value = 0, .argument_count = 1, .arguments = (const i32[]) { 4 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 3 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 1 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 8 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 0, .object = 3, .key = 4 } },
+    { .opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = { .dst = 4, .function_index = 2 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 2, .value = 0 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 1, .callee = 0, .this_value = 3, .argument_count = 2, .arguments = (const i32[]) { 4, 2 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 4 } },
+    { .opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = { .dst = 1, .function_index = 3 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 5 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 1, .value = 0 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 6 } },
+    { .opcode = MAL_OP_TRY_BEGIN },
     { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 5 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 2, .string_index = 13 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 4, .object = 1, .key = 2 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 0, .right = 4, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 6 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 1 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 4, .key = 0 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 2, .right = 1, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 6 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 2, .string_index = 8 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 4, .object = 1, .key = 2 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 0, .right = 4, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 7 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 13 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 4, .key = 0 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 2, .right = 1, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 8 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 0, .right = 1, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 9 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 2, .right = 1, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 1 } },
-    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 2, .string_index = 13 } },
-    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 4, .object = 1, .key = 2 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 0, .right = 4, .op = MAL_BIN_ADD } },
-    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 2, .index = 10 } },
     { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 2 } },
-    { .opcode = MAL_OP_RETURN, .as.ret = { .value = 2 } },
+    { .opcode = MAL_OP_CREATE_BOOLEAN, .as.create_boolean = { .dst = 4, .value = 1 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 3, .callee = 1, .this_value = 2, .argument_count = 1, .arguments = (const i32[]) { 4 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 6 } },
+    { .opcode = MAL_OP_TRY_END },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 6 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 5 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 3, .right = 4, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 2, .index = 6 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 87 } },
+    { .opcode = MAL_OP_CATCH, .as.caught = { .dst = 2 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 4, .src = 2 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 2, .src = 4 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 11 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 3, .object = 2, .key = 4 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 10 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 3, .right = 4, .op = MAL_BIN_STRICT_EQ } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 2, .target_ip = 79 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 82 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 2, .value = 10 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 2, .index = 6 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 82 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 2, .index = 6 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 5 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 3, .left = 2, .right = 4, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 6 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 87 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 3, .string_index = 0 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 7 } },
+    { .opcode = MAL_OP_TRY_BEGIN },
+    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 3 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 4, .src = 3 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 3, .src = 4 } },
+    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 4 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 5, .callee = 3, .this_value = 4, .argument_count = 0, .arguments = nullptr } },
+    { .opcode = MAL_OP_TRY_END },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 104 } },
+    { .opcode = MAL_OP_CATCH, .as.caught = { .dst = 4 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 3, .src = 4 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 4, .src = 3 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 3, .string_index = 12 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 2, .object = 4, .key = 3 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 2, .index = 7 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 104 } },
+    { .opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = { .dst = 2, .function_index = 4 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 2, .index = 8 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 2, .index = 8 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 3, .string_index = 14 } },
+    { .opcode = MAL_OP_CREATE_OBJECT, .as.create_object = { .dst = 4 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 15 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 7 } },
+    { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 4, .key = 1, .value = 0 } },
+    { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 2, .key = 3, .value = 4 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 8 } },
+    { .opcode = MAL_OP_CONSTRUCT, .as.construct = { .dst = 3, .callee = 4, .argument_count = 0, .arguments = nullptr } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 9 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 3, .intrinsic = MAL_INTRINSIC_ERROR_CONSTRUCTOR } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 16 } },
+    { .opcode = MAL_OP_CONSTRUCT, .as.construct = { .dst = 2, .callee = 3, .argument_count = 1, .arguments = (const i32[]) { 4 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 2, .index = 10 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 2, .intrinsic = MAL_INTRINSIC_RANGE_ERROR_CONSTRUCTOR } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 17 } },
+    { .opcode = MAL_OP_CONSTRUCT, .as.construct = { .dst = 3, .callee = 2, .argument_count = 1, .arguments = (const i32[]) { 4 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 11 } },
+    { .opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = { .dst = 3, .function_index = 5 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 12 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 12 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 19 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 2, .object = 3, .key = 4 } },
+    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 4 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 3 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 1, .value = 4 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 6, .callee = 2, .this_value = 3, .argument_count = 3, .arguments = (const i32[]) { 4, 0, 1 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 13 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 12 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 20 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 0, .object = 6, .key = 1 } },
+    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 1 } },
+    { .opcode = MAL_OP_CREATE_ARRAY, .as.create_array = { .dst = 4, .length = 2 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 3, .value = 0 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 2, .value = 5 } },
+    { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 4, .key = 3, .value = 2 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 2, .value = 1 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 3, .value = 6 } },
+    { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 4, .key = 2, .value = 3 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 3, .callee = 0, .this_value = 6, .argument_count = 2, .arguments = (const i32[]) { 1, 4 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 14 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 12 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 21 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 3, .key = 4 } },
+    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 4 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 6, .value = 10 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 0, .callee = 1, .this_value = 3, .argument_count = 2, .arguments = (const i32[]) { 4, 6 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 0, .index = 15 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 15 } },
+    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 6 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 7 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 3, .callee = 0, .this_value = 6, .argument_count = 1, .arguments = (const i32[]) { 4 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 16 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 3, .value = 0 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 0 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 6, .string_index = 2 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 0, .object = 4, .key = 6 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 3, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 2 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 3, .value = 0 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 4, .object = 0, .key = 3 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 2 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 1 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 3, .key = 0 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 4, .right = 1, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 2 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 2 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 3, .object = 1, .key = 4 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 4, .left = 0, .right = 3, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 2 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 22 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 3, .key = 0 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 4, .right = 1, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 6, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 3 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 6, .string_index = 22 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 4, .object = 0, .key = 6 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 1, .right = 4, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 4 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 6, .right = 4, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 6 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 1, .right = 4, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 7 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 23 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 6, .right = 4, .op = MAL_BIN_STRICT_EQ } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 1, .target_ip = 204 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 209 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 17 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 3 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 1, .right = 4, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 17 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 209 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 9 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 15 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 0, .object = 4, .key = 1 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 6, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 10 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 11 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 6, .object = 1, .key = 0 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 16 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 6, .right = 0, .op = MAL_BIN_STRICT_EQ } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 1, .target_ip = 222 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 227 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 17 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 2 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 1, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 17 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 227 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 10 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 12 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 6, .key = 0 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 24 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 1, .right = 0, .op = MAL_BIN_STRICT_EQ } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 6, .target_ip = 234 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 239 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 17 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 2 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 6, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 17 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 239 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 11 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 12 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 6, .object = 1, .key = 0 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 25 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 6, .right = 0, .op = MAL_BIN_STRICT_EQ } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 1, .target_ip = 246 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 251 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 17 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 1 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 1, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 17 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 251 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 13 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 14 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 4, .left = 0, .right = 1, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 16 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 4, .right = 1, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 6, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 12 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 6, .string_index = 22 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 4, .object = 0, .key = 6 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 15 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 22 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 3, .object = 6, .key = 0 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 4, .right = 3, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 3, .left = 1, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 12 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 12 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 3, .key = 0 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 18 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 3, .left = 1, .right = 0, .op = MAL_BIN_STRICT_EQ } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 3, .target_ip = 276 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 282 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 17 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 6 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 3, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 17 } },
+    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 1 } },
+    { .opcode = MAL_OP_RETURN, .as.ret = { .value = 1 } },
+    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 1 } },
+    { .opcode = MAL_OP_RETURN, .as.ret = { .value = 1 } },
+};
+
+static const MalExceptionHandler mal_function_0_handlers[] = {
+    { .start_ip = 58, .end_ip = 64, .handler_ip = 70 },
+    { .start_ip = 89, .end_ip = 95, .handler_ip = 97 },
 };
 
 static const MalInstruction mal_function_1_instructions[] = {
@@ -215,22 +376,6 @@ static const MalInstruction mal_function_1_instructions[] = {
 };
 
 static const MalInstruction mal_function_2_instructions[] = {
-    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 1, .src = 0 } },
-    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 0, .src = 1 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 1, .value = 2 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 0, .right = 1, .op = MAL_BIN_MUL } },
-    { .opcode = MAL_OP_RETURN, .as.ret = { .value = 2 } },
-};
-
-static const MalInstruction mal_function_3_instructions[] = {
-    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 1, .src = 0 } },
-    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 0, .src = 1 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 1, .value = 1 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 0, .right = 1, .op = MAL_BIN_GT } },
-    { .opcode = MAL_OP_RETURN, .as.ret = { .value = 2 } },
-};
-
-static const MalInstruction mal_function_4_instructions[] = {
     { .opcode = MAL_OP_MOVE, .as.move = { .dst = 2, .src = 0 } },
     { .opcode = MAL_OP_MOVE, .as.move = { .dst = 0, .src = 1 } },
     { .opcode = MAL_OP_MOVE, .as.move = { .dst = 1, .src = 2 } },
@@ -239,65 +384,102 @@ static const MalInstruction mal_function_4_instructions[] = {
     { .opcode = MAL_OP_RETURN, .as.ret = { .value = 0 } },
 };
 
-static const MalInstruction mal_function_5_instructions[] = {
+static const MalInstruction mal_function_3_instructions[] = {
     { .opcode = MAL_OP_MOVE, .as.move = { .dst = 1, .src = 0 } },
     { .opcode = MAL_OP_MOVE, .as.move = { .dst = 0, .src = 1 } },
-    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 1, .value = 2 } },
-    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 0, .right = 1, .op = MAL_BIN_STRICT_EQ } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 0, .target_ip = 4 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 8 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 0, .intrinsic = MAL_INTRINSIC_TYPE_ERROR_CONSTRUCTOR } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 10 } },
+    { .opcode = MAL_OP_CONSTRUCT, .as.construct = { .dst = 2, .callee = 0, .argument_count = 1, .arguments = (const i32[]) { 1 } } },
+    { .opcode = MAL_OP_THROW, .as.thrown = { .value = 2 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 2, .value = 1 } },
     { .opcode = MAL_OP_RETURN, .as.ret = { .value = 2 } },
+};
+
+static const MalInstruction mal_function_4_instructions[] = {
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 0 } },
+    { .opcode = MAL_OP_RETURN, .as.ret = { .value = 0 } },
+};
+
+static const MalInstruction mal_function_5_instructions[] = {
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 2, .src = 0 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 0, .src = 1 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 1, .src = 2 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 2, .src = 0 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 1, .right = 2, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_RETURN, .as.ret = { .value = 0 } },
 };
 
 static const MalFunction mal_functions[] = {
     {
+        .name_string_index = 0,
         .parameter_count = 0,
         .register_count = 7,
         .captured_count = 0,
-        .instruction_count = 154,
+        .instruction_count = 284,
         .instructions = mal_function_0_instructions,
+        .handler_count = 2,
+        .handlers = mal_function_0_handlers,
     },
     {
+        .name_string_index = 0,
         .parameter_count = 1,
         .register_count = 3,
         .captured_count = 0,
         .instruction_count = 5,
         .instructions = mal_function_1_instructions,
+        .handler_count = 0,
+        .handlers = nullptr,
     },
     {
-        .parameter_count = 1,
-        .register_count = 3,
-        .captured_count = 0,
-        .instruction_count = 5,
-        .instructions = mal_function_2_instructions,
-    },
-    {
-        .parameter_count = 1,
-        .register_count = 3,
-        .captured_count = 0,
-        .instruction_count = 5,
-        .instructions = mal_function_3_instructions,
-    },
-    {
+        .name_string_index = 0,
         .parameter_count = 2,
         .register_count = 3,
         .captured_count = 0,
         .instruction_count = 6,
-        .instructions = mal_function_4_instructions,
+        .instructions = mal_function_2_instructions,
+        .handler_count = 0,
+        .handlers = nullptr,
     },
     {
+        .name_string_index = 9,
         .parameter_count = 1,
         .register_count = 3,
         .captured_count = 0,
-        .instruction_count = 5,
+        .instruction_count = 10,
+        .instructions = mal_function_3_instructions,
+        .handler_count = 0,
+        .handlers = nullptr,
+    },
+    {
+        .name_string_index = 13,
+        .parameter_count = 0,
+        .register_count = 1,
+        .captured_count = 0,
+        .instruction_count = 2,
+        .instructions = mal_function_4_instructions,
+        .handler_count = 0,
+        .handlers = nullptr,
+    },
+    {
+        .name_string_index = 18,
+        .parameter_count = 2,
+        .register_count = 3,
+        .captured_count = 0,
+        .instruction_count = 6,
         .instructions = mal_function_5_instructions,
+        .handler_count = 0,
+        .handlers = nullptr,
     },
 };
 
 const MalVmDefinition mal_vm_definition = {
     .function_count = 6,
     .functions = mal_functions,
-    .string_constant_count = 14,
+    .string_constant_count = 26,
     .string_constants = mal_string_constants,
-    .global_count = 11,
+    .global_count = 18,
 };
 // === END GENERATED ===
 
@@ -1194,6 +1376,499 @@ static MalValue test_builtin_native_function(MalVm *vm, const byte *name, MalNat
     ));
 }
 
+static MalValue test_builtin_call_throws(MalVm *vm, MalValue callee, MalValue this_value, const MalValue *args, i32 arg_count, const byte *expected_name) {
+    MalCompletion completion = mal_vm_call_value(vm, callee, this_value, args, arg_count);
+    assert(completion.kind == MAL_COMPLETION_THROW);
+    assert(mal_value_is_object(completion.value));
+    assert(test_builtin_value_is_ascii(vm, test_builtin_get(vm, completion.value, "name"), expected_name));
+
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    return completion.value;
+}
+
+static void test_builtin_error_constructors_and_to_string(void) {
+    MalVm vm;
+    mal_vm_init(&vm, &mal_vm_definition);
+
+    MalValue boom = mal_value_from_string(mal_intrinsic_ascii(&vm, "boom"));
+    MalValue error = test_builtin_call(&vm, vm.intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR], mal_value_new_undefined(), &boom, 1);
+    assert(mal_value_is_object(error));
+    assert(mal_object_get_prototype(mal_value_to_object(error)) == mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_ERROR_PROTOTYPE]));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_get(&vm, error, "message"), "boom"));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_get(&vm, error, "name"), "Error"));
+
+    MalValue to_string = test_builtin_get(&vm, error, "toString");
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, to_string, error, NULL, 0), "Error: boom"));
+
+    MalValue empty_error = test_builtin_call(&vm, vm.intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR], mal_value_new_undefined(), NULL, 0);
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, to_string, empty_error, NULL, 0), "Error"));
+
+    MalValue type_error = test_builtin_call(&vm, vm.intrinsics[MAL_INTRINSIC_TYPE_ERROR_CONSTRUCTOR], mal_value_new_undefined(), &boom, 1);
+    MalObject *type_error_prototype = mal_object_get_prototype(mal_value_to_object(type_error));
+    assert(type_error_prototype == mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE]));
+    assert(mal_object_get_prototype(type_error_prototype) == mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_ERROR_PROTOTYPE]));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_get(&vm, type_error, "name"), "TypeError"));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, to_string, type_error, NULL, 0), "TypeError: boom"));
+
+    mal_vm_free(&vm);
+}
+
+static void test_vm_throw_error_sets_completion_and_builtins_throw(void) {
+    MalVm vm;
+    mal_vm_init(&vm, &mal_vm_definition);
+
+    mal_vm_throw_error(&vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "nope");
+    assert(vm.completion.kind == MAL_COMPLETION_THROW);
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_get(&vm, vm.completion.value, "name"), "TypeError"));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_get(&vm, vm.completion.value, "message"), "nope"));
+    vm.completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+
+    // Reduce of an empty array without an initial value throws a TypeError.
+    MalValue empty = mal_value_from_array_object(mal_intrinsic_new_array(&vm, 0));
+    MalValue sum = test_builtin_native_function(&vm, "sum", test_builtin_sum_callback);
+    test_builtin_call_throws(
+        &vm,
+        test_builtin_get(&vm, vm.intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE], "reduce"),
+        empty,
+        &sum,
+        1,
+        "TypeError"
+    );
+
+    // Object.create with a non-object prototype throws a TypeError.
+    MalValue bad_prototype = mal_value_from_i32(5);
+    test_builtin_call_throws(
+        &vm,
+        test_builtin_get(&vm, vm.intrinsics[MAL_INTRINSIC_OBJECT_CONSTRUCTOR], "create"),
+        mal_value_new_undefined(),
+        &bad_prototype,
+        1,
+        "TypeError"
+    );
+
+    mal_vm_free(&vm);
+}
+
+static void test_vm_try_catch_unwinds_to_handler(void) {
+    static const MalInstruction instructions[] = {
+        {.opcode = MAL_OP_TRY_BEGIN},
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 42}},
+        {.opcode = MAL_OP_THROW, .as.thrown = {.value = 0}},
+        {.opcode = MAL_OP_TRY_END},
+        {.opcode = MAL_OP_JUMP, .as.jump = {.target_ip = 7}},
+        {.opcode = MAL_OP_CATCH, .as.caught = {.dst = 1}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 1, .index = 0}},
+        {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 0}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    };
+    static const MalExceptionHandler handlers[] = {
+        {.start_ip = 0, .end_ip = 4, .handler_ip = 5},
+    };
+    static const MalFunction functions[] = {
+        {
+            .parameter_count = 0, .register_count = 2, .captured_count = 0, .instruction_count = 9,
+            .instructions = instructions, .handler_count = 1, .handlers = handlers
+        },
+    };
+    static const MalVmDefinition definition = {
+        .function_count = 1, .functions = functions, .string_constant_count = 0, .string_constants = NULL, .global_count = 1
+    };
+
+    MalVm vm;
+    mal_vm_init(&vm, &definition);
+    MalCallable *callable = mal_vm_create_callable(&vm, 0);
+
+    mal_vm_run(&vm, callable);
+
+    assert(vm.completion.kind == MAL_COMPLETION_NORMAL);
+    assert(mal_value_to_i32(vm.globals[0]) == 42);
+
+    mal_vm_free_callable(callable);
+    mal_vm_free(&vm);
+}
+
+static void test_vm_nested_try_picks_innermost_handler_and_rethrows(void) {
+    static const MalInstruction instructions[] = {
+        {.opcode = MAL_OP_TRY_BEGIN},
+        {.opcode = MAL_OP_TRY_BEGIN},
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 1}},
+        {.opcode = MAL_OP_THROW, .as.thrown = {.value = 0}},
+        {.opcode = MAL_OP_TRY_END},
+        {.opcode = MAL_OP_JUMP, .as.jump = {.target_ip = 11}},
+        {.opcode = MAL_OP_CATCH, .as.caught = {.dst = 1}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 1, .index = 0}},
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 2, .value = 2}},
+        {.opcode = MAL_OP_THROW, .as.thrown = {.value = 2}},
+        {.opcode = MAL_OP_TRY_END},
+        {.opcode = MAL_OP_JUMP, .as.jump = {.target_ip = 14}},
+        {.opcode = MAL_OP_CATCH, .as.caught = {.dst = 3}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 3, .index = 1}},
+        {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 0}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    };
+    // The outer handler is listed first on purpose: innermost selection must
+    // come from range width, not table order.
+    static const MalExceptionHandler handlers[] = {
+        {.start_ip = 0, .end_ip = 10, .handler_ip = 12},
+        {.start_ip = 1, .end_ip = 4, .handler_ip = 6},
+    };
+    static const MalFunction functions[] = {
+        {
+            .parameter_count = 0, .register_count = 4, .captured_count = 0, .instruction_count = 16,
+            .instructions = instructions, .handler_count = 2, .handlers = handlers
+        },
+    };
+    static const MalVmDefinition definition = {
+        .function_count = 1, .functions = functions, .string_constant_count = 0, .string_constants = NULL, .global_count = 2
+    };
+
+    MalVm vm;
+    mal_vm_init(&vm, &definition);
+    MalCallable *callable = mal_vm_create_callable(&vm, 0);
+
+    mal_vm_run(&vm, callable);
+
+    assert(vm.completion.kind == MAL_COMPLETION_NORMAL);
+    assert(mal_value_to_i32(vm.globals[0]) == 1);
+    assert(mal_value_to_i32(vm.globals[1]) == 2);
+
+    mal_vm_free_callable(callable);
+    mal_vm_free(&vm);
+}
+
+static void test_vm_throw_unwinds_across_call_frames(void) {
+    static const MalInstruction caller_instructions[] = {
+        {.opcode = MAL_OP_TRY_BEGIN},
+        {.opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = {.dst = 0, .function_index = 1}},
+        {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 1}},
+        {.opcode = MAL_OP_CALL, .as.call = {.dst = 2, .callee = 0, .this_value = 1, .argument_count = 0, .arguments = NULL}},
+        {.opcode = MAL_OP_TRY_END},
+        {.opcode = MAL_OP_JUMP, .as.jump = {.target_ip = 8}},
+        {.opcode = MAL_OP_CATCH, .as.caught = {.dst = 3}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 3, .index = 0}},
+        // Calling a non-function throws a TypeError.
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 5}},
+        {.opcode = MAL_OP_TRY_BEGIN},
+        {.opcode = MAL_OP_CALL, .as.call = {.dst = 1, .callee = 0, .this_value = 0, .argument_count = 0, .arguments = NULL}},
+        {.opcode = MAL_OP_TRY_END},
+        {.opcode = MAL_OP_JUMP, .as.jump = {.target_ip = 15}},
+        {.opcode = MAL_OP_CATCH, .as.caught = {.dst = 2}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 2, .index = 1}},
+        {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 0}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    };
+    static const MalInstruction callee_instructions[] = {
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 9}},
+        {.opcode = MAL_OP_THROW, .as.thrown = {.value = 0}},
+        {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 0}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    };
+    static const MalExceptionHandler caller_handlers[] = {
+        {.start_ip = 0, .end_ip = 5, .handler_ip = 6},
+        {.start_ip = 9, .end_ip = 12, .handler_ip = 13},
+    };
+    static const MalFunction functions[] = {
+        {
+            .parameter_count = 0, .register_count = 4, .captured_count = 0, .instruction_count = 17,
+            .instructions = caller_instructions, .handler_count = 2, .handlers = caller_handlers
+        },
+        {
+            .parameter_count = 0, .register_count = 1, .captured_count = 0, .instruction_count = 4,
+            .instructions = callee_instructions
+        },
+    };
+    static const MalVmDefinition definition = {
+        .function_count = 2, .functions = functions, .string_constant_count = 0, .string_constants = NULL, .global_count = 2
+    };
+
+    MalVm vm;
+    mal_vm_init(&vm, &definition);
+    MalCallable *callable = mal_vm_create_callable(&vm, 0);
+
+    mal_vm_run(&vm, callable);
+
+    assert(vm.completion.kind == MAL_COMPLETION_NORMAL);
+    assert(vm.frame_count == 0);
+    assert(mal_value_to_i32(vm.globals[0]) == 9);
+    assert(mal_value_is_object(vm.globals[1]));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_get(&vm, vm.globals[1], "name"), "TypeError"));
+
+    mal_vm_free_callable(callable);
+    mal_vm_free(&vm);
+}
+
+static void test_vm_uncaught_throw_propagates_through_call_value(void) {
+    static const MalInstruction throwing_instructions[] = {
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 9}},
+        {.opcode = MAL_OP_THROW, .as.thrown = {.value = 0}},
+        {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 0}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    };
+    static const MalFunction functions[] = {
+        {
+            .parameter_count = 0, .register_count = 1, .captured_count = 0, .instruction_count = 4,
+            .instructions = throwing_instructions
+        },
+    };
+    static const MalVmDefinition definition = {
+        .function_count = 1, .functions = functions, .string_constant_count = 0, .string_constants = NULL, .global_count = 0
+    };
+
+    MalVm vm;
+    mal_vm_init(&vm, &definition);
+
+    MalFunctionObject *function = mal_function_object_new(&vm.heap, NULL, 0);
+    MalCompletion completion = mal_vm_call_value(&vm, mal_value_from_function_object(function), mal_value_new_undefined(), NULL, 0);
+
+    assert(completion.kind == MAL_COMPLETION_THROW);
+    assert(mal_value_to_i32(completion.value) == 9);
+    assert(vm.frame_count == 0);
+
+    mal_vm_free(&vm);
+}
+
+static void test_vm_construct_script_and_native_callees(void) {
+    static const c16 prototype_code_units[] = {'p', 'r', 'o', 't', 'o', 't', 'y', 'p', 'e'};
+    static const MalStringConstant string_constants[] = {
+        {.length = 9, .code_units = prototype_code_units},
+    };
+    static const i32 construct_arguments[] = {2};
+    static const i32 array_arguments[] = {1};
+    static const MalInstruction entry_instructions[] = {
+        {.opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = {.dst = 0, .function_index = 1}},
+        {.opcode = MAL_OP_CREATE_OBJECT, .as.create_object = {.dst = 1}},
+        {.opcode = MAL_OP_CREATE_STRING, .as.create_string = {.dst = 2, .string_index = 0}},
+        {.opcode = MAL_OP_STORE_PROPERTY, .as.store_property = {.object = 0, .key = 2, .value = 1}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 1, .index = 1}},
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 2, .value = 7}},
+        // Returns a number, so the constructed this is substituted.
+        {.opcode = MAL_OP_CONSTRUCT, .as.construct = {.dst = 3, .callee = 0, .argument_count = 1, .arguments = construct_arguments}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 3, .index = 0}},
+        {.opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = {.dst = 0, .function_index = 2}},
+        // Returns an object, which wins over the constructed this.
+        {.opcode = MAL_OP_CONSTRUCT, .as.construct = {.dst = 3, .callee = 0, .argument_count = 0, .arguments = NULL}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 3, .index = 2}},
+        {.opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = {.dst = 0, .intrinsic = MAL_INTRINSIC_ARRAY_CONSTRUCTOR}},
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 1, .value = 3}},
+        {.opcode = MAL_OP_CONSTRUCT, .as.construct = {.dst = 2, .callee = 0, .argument_count = 1, .arguments = array_arguments}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 2, .index = 3}},
+        {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 0}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    };
+    static const MalInstruction return_param_instructions[] = {
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    };
+    static const MalInstruction return_object_instructions[] = {
+        {.opcode = MAL_OP_CREATE_OBJECT, .as.create_object = {.dst = 0}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    };
+    static const MalFunction functions[] = {
+        {
+            .parameter_count = 0, .register_count = 4, .captured_count = 0, .instruction_count = 17,
+            .instructions = entry_instructions
+        },
+        {
+            .parameter_count = 1, .register_count = 1, .captured_count = 0, .instruction_count = 1,
+            .instructions = return_param_instructions
+        },
+        {
+            .parameter_count = 0, .register_count = 1, .captured_count = 0, .instruction_count = 2,
+            .instructions = return_object_instructions
+        },
+    };
+    static const MalVmDefinition definition = {
+        .function_count = 3, .functions = functions, .string_constant_count = 1, .string_constants = string_constants, .global_count = 4
+    };
+
+    MalVm vm;
+    mal_vm_init(&vm, &definition);
+    MalCallable *callable = mal_vm_create_callable(&vm, 0);
+
+    mal_vm_run(&vm, callable);
+
+    assert(vm.completion.kind == MAL_COMPLETION_NORMAL);
+    // The substituted this uses the callee's prototype property.
+    assert(mal_value_is_object(vm.globals[0]));
+    assert(mal_object_get_prototype(mal_value_to_object(vm.globals[0])) == mal_value_to_object(vm.globals[1]));
+    // The explicitly returned object is an ordinary object literal.
+    assert(mal_value_is_object(vm.globals[2]));
+    assert(mal_object_get_prototype(mal_value_to_object(vm.globals[2])) == mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    // new Array(3) constructs through the native constructor.
+    assert(mal_value_is_array_object(vm.globals[3]));
+    assert(mal_array_object_length(mal_value_to_array_object(vm.globals[3])) == 3);
+
+    mal_vm_free_callable(callable);
+    mal_vm_free(&vm);
+}
+
+static void test_bound_function_resolution_and_calls(void) {
+    static const MalInstruction add3_instructions[] = {
+        {.opcode = MAL_OP_BINARY, .as.binary = {.dst = 3, .left = 0, .right = 1, .op = MAL_BIN_ADD}},
+        {.opcode = MAL_OP_BINARY, .as.binary = {.dst = 4, .left = 3, .right = 2, .op = MAL_BIN_ADD}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 4}},
+    };
+    static const MalFunction functions[] = {
+        {
+            .parameter_count = 3, .register_count = 5, .captured_count = 0, .instruction_count = 3,
+            .instructions = add3_instructions
+        },
+    };
+    static const MalVmDefinition definition = {
+        .function_count = 1, .functions = functions, .string_constant_count = 0, .string_constants = NULL, .global_count = 0
+    };
+
+    MalVm vm;
+    mal_vm_init(&vm, &definition);
+
+    MalFunctionObject *target = mal_function_object_new(&vm.heap, NULL, 0);
+
+    MalValue inner_args[] = {mal_value_from_i32(1)};
+    MalBoundFunctionObject *inner = mal_bound_function_object_new(
+        &vm.heap, NULL, mal_value_from_function_object(target), mal_value_from_i32(42), inner_args, 1
+    );
+    MalValue outer_args[] = {mal_value_from_i32(2)};
+    MalBoundFunctionObject *outer = mal_bound_function_object_new(
+        &vm.heap, NULL, mal_value_from_bound_function_object(inner), mal_value_from_i32(99), outer_args, 1
+    );
+
+    assert(mal_value_is_callable(mal_value_from_bound_function_object(outer)));
+    assert(mal_value_is_object(mal_value_from_bound_function_object(outer)));
+
+    // Calling the nested bound function merges argument prefixes inner-first.
+    MalValue call_args[] = {mal_value_from_i32(3)};
+    MalCompletion completion = mal_vm_call_value(
+        &vm, mal_value_from_bound_function_object(outer), mal_value_new_undefined(), call_args, 1
+    );
+    assert(completion.kind == MAL_COMPLETION_NORMAL);
+    assert(mal_value_to_i32(completion.value) == 6);
+    assert(vm.frame_count == 0);
+
+    // The innermost bound this wins for calls; construct ignores it.
+    MalBoundResolution resolution = mal_bound_function_object_resolve(
+        mal_value_from_bound_function_object(outer), mal_value_new_undefined(), call_args, 1, true
+    );
+    assert(resolution.callee == mal_value_from_function_object(target));
+    assert(mal_value_to_i32(resolution.this_value) == 42);
+    assert(resolution.arg_count == 3);
+    assert(mal_value_to_i32(resolution.args[0]) == 1);
+    assert(mal_value_to_i32(resolution.args[1]) == 2);
+    assert(mal_value_to_i32(resolution.args[2]) == 3);
+    free(resolution.owned_args);
+
+    resolution = mal_bound_function_object_resolve(
+        mal_value_from_bound_function_object(outer), mal_value_new_undefined(), call_args, 1, false
+    );
+    assert(mal_value_is_undefined(resolution.this_value));
+    free(resolution.owned_args);
+
+    mal_vm_free(&vm);
+}
+
+static MalValue test_builtin_pair_sum_callback(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) vm;
+    assert(arg_count == 2);
+    // The receiver is folded in when it is a number, to observe this-binding.
+    i32 base = mal_value_is_int32(this_value) ? mal_value_to_i32(this_value) : 0;
+    return mal_value_from_i32(base + mal_value_to_i32(args[0]) + mal_value_to_i32(args[1]));
+}
+
+static void test_builtin_function_call_apply_bind_and_to_string(void) {
+    MalVm vm;
+    mal_vm_init(&vm, &mal_vm_definition);
+
+    MalValue function_prototype = vm.intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE];
+    MalValue target = test_builtin_native_function(&vm, "pairSum", test_builtin_pair_sum_callback);
+
+    // call(thisArg, ...args)
+    MalValue call_args[] = {mal_value_from_i32(100), mal_value_from_i32(1), mal_value_from_i32(2)};
+    MalValue call_result = test_builtin_call(&vm, test_builtin_get(&vm, function_prototype, "call"), target, call_args, 3);
+    assert(mal_value_to_i32(call_result) == 103);
+
+    // apply(thisArg, argsArray)
+    MalArrayObject *apply_array = mal_intrinsic_new_array(&vm, 2);
+    mal_object_set((MalObject *) apply_array, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, mal_value_from_i32(4));
+    mal_object_set((MalObject *) apply_array, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, mal_value_from_i32(5));
+    MalValue apply_args[] = {mal_value_from_i32(100), mal_value_from_array_object(apply_array)};
+    MalValue apply_result = test_builtin_call(&vm, test_builtin_get(&vm, function_prototype, "apply"), target, apply_args, 2);
+    assert(mal_value_to_i32(apply_result) == 109);
+
+    // bind(thisArg, ...partial) creates a callable bound function.
+    MalValue bind_args[] = {mal_value_from_i32(100), mal_value_from_i32(10)};
+    MalValue bound = test_builtin_call(&vm, test_builtin_get(&vm, function_prototype, "bind"), target, bind_args, 2);
+    assert(mal_value_is_bound_function_object(bound));
+    MalValue remaining = mal_value_from_i32(7);
+    MalValue bound_result = test_builtin_call(&vm, bound, mal_value_new_undefined(), &remaining, 1);
+    assert(mal_value_to_i32(bound_result) == 117);
+
+    // Bound functions inherit %Function.prototype%, so call() works on them.
+    MalValue bound_call_args[] = {mal_value_new_undefined(), mal_value_from_i32(8)};
+    MalValue bound_call_result = test_builtin_call(&vm, test_builtin_get(&vm, bound, "call"), bound, bound_call_args, 2);
+    assert(mal_value_to_i32(bound_call_result) == 118);
+
+    // toString stubs out the body.
+    MalValue to_string_result = test_builtin_call(&vm, test_builtin_get(&vm, function_prototype, "toString"), target, NULL, 0);
+    assert(test_builtin_value_is_ascii(&vm, to_string_result, "function pairSum() { [native code] }"));
+
+    // The Function constructor throws (no eval support).
+    test_builtin_call_throws(&vm, vm.intrinsics[MAL_INTRINSIC_FUNCTION_CONSTRUCTOR], mal_value_new_undefined(), NULL, 0, "TypeError");
+
+    // call on a non-callable throws.
+    MalValue non_callable_args[] = {mal_value_new_undefined()};
+    test_builtin_call_throws(&vm, test_builtin_get(&vm, function_prototype, "call"), mal_value_from_i32(5), non_callable_args, 1, "TypeError");
+
+    mal_vm_free(&vm);
+}
+
+static void test_vm_function_name_and_length_fast_path(void) {
+    static const c16 name_code_units[] = {'n', 'a', 'm', 'e'};
+    static const c16 length_code_units[] = {'l', 'e', 'n', 'g', 't', 'h'};
+    static const c16 my_fn_code_units[] = {'m', 'y', 'F', 'n'};
+    static const MalStringConstant string_constants[] = {
+        {.length = 4, .code_units = name_code_units},
+        {.length = 6, .code_units = length_code_units},
+        {.length = 4, .code_units = my_fn_code_units},
+    };
+    static const MalInstruction entry_instructions[] = {
+        {.opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = {.dst = 0, .function_index = 1}},
+        {.opcode = MAL_OP_CREATE_STRING, .as.create_string = {.dst = 1, .string_index = 0}},
+        {.opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = {.dst = 2, .object = 0, .key = 1}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 2, .index = 0}},
+        {.opcode = MAL_OP_CREATE_STRING, .as.create_string = {.dst = 1, .string_index = 1}},
+        {.opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = {.dst = 2, .object = 0, .key = 1}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 2, .index = 1}},
+        {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 0}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    };
+    static const MalInstruction named_instructions[] = {
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    };
+    static const MalFunction functions[] = {
+        {
+            .parameter_count = 0, .register_count = 3, .captured_count = 0, .instruction_count = 9,
+            .instructions = entry_instructions
+        },
+        {
+            .name_string_index = 2, .parameter_count = 2, .register_count = 2, .captured_count = 0,
+            .instruction_count = 1, .instructions = named_instructions
+        },
+    };
+    static const MalVmDefinition definition = {
+        .function_count = 2, .functions = functions, .string_constant_count = 3, .string_constants = string_constants, .global_count = 2
+    };
+
+    MalVm vm;
+    mal_vm_init(&vm, &definition);
+    MalCallable *callable = mal_vm_create_callable(&vm, 0);
+
+    mal_vm_run(&vm, callable);
+
+    assert(test_builtin_value_is_ascii(&vm, vm.globals[0], "myFn"));
+    assert(mal_value_to_i32(vm.globals[1]) == 2);
+
+    mal_vm_free_callable(callable);
+    mal_vm_free(&vm);
+}
+
 static void test_builtin_object_statics_and_prototype_methods(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_vm_definition);
@@ -1435,13 +2110,23 @@ int main(void) {
     test_array_object_new_initializes_array_state();
     test_builtin_object_statics_and_prototype_methods();
     test_builtin_array_constructor_and_prototype_methods();
+    test_builtin_error_constructors_and_to_string();
+    test_vm_throw_error_sets_completion_and_builtins_throw();
+    test_vm_try_catch_unwinds_to_handler();
+    test_vm_nested_try_picks_innermost_handler_and_rethrows();
+    test_vm_throw_unwinds_across_call_frames();
+    test_vm_uncaught_throw_propagates_through_call_value();
+    test_vm_construct_script_and_native_callees();
+    test_bound_function_resolution_and_calls();
+    test_builtin_function_call_apply_bind_and_to_string();
+    test_vm_function_name_and_length_fast_path();
 
     MalVm vm;
 
     mal_vm_init(&vm, &mal_vm_definition);
     auto callable = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, callable);
-    assert(mal_value_to_i32(vm.globals[10]) == 63);
+    assert(mal_value_to_i32(vm.globals[17]) == 102);
     mal_vm_free_callable(callable);
     mal_vm_free(&vm);
 

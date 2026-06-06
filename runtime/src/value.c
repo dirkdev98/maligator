@@ -135,6 +135,7 @@ bool mal_value_is_object(MalValue value) {
     return type == MAL_HEAP_OBJECT ||
         type == MAL_HEAP_FUNCTION_OBJECT ||
         type == MAL_HEAP_NATIVE_FUNCTION_OBJECT ||
+        type == MAL_HEAP_BOUND_FUNCTION_OBJECT ||
         type == MAL_HEAP_ARRAY_OBJECT;
 }
 
@@ -146,12 +147,18 @@ bool mal_value_is_native_function_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_NATIVE_FUNCTION_OBJECT);
 }
 
+bool mal_value_is_bound_function_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_BOUND_FUNCTION_OBJECT);
+}
+
 bool mal_value_is_array_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_ARRAY_OBJECT);
 }
 
 bool mal_value_is_callable(MalValue value) {
-    return mal_value_is_function_object(value) || mal_value_is_native_function_object(value);
+    return mal_value_is_function_object(value) ||
+        mal_value_is_native_function_object(value) ||
+        mal_value_is_bound_function_object(value);
 }
 
 MalString *mal_value_to_string(MalValue value) {
@@ -172,6 +179,10 @@ MalFunctionObject *mal_value_to_function_object(MalValue value) {
 
 MalNativeFunctionObject *mal_value_to_native_function_object(MalValue value) {
     return (MalNativeFunctionObject *) mal_value_to_heap(value);
+}
+
+MalBoundFunctionObject *mal_value_to_bound_function_object(MalValue value) {
+    return (MalBoundFunctionObject *) mal_value_to_heap(value);
 }
 
 MalArrayObject *mal_value_to_array_object(MalValue value) {
@@ -196,6 +207,10 @@ MalValue mal_value_from_function_object(MalFunctionObject *function) {
 
 MalValue mal_value_from_native_function_object(MalNativeFunctionObject *function) {
     return mal_value_from_heap((MalHeapHeader *) function);
+}
+
+MalValue mal_value_from_bound_function_object(MalBoundFunctionObject *bound) {
+    return mal_value_from_heap((MalHeapHeader *) bound);
 }
 
 MalValue mal_value_from_array_object(MalArrayObject *array) {
@@ -279,6 +294,21 @@ void mal_value_debug(MalValue value) {
             }
         }
         printf("\"");
+        return;
+    }
+
+    if (mal_value_is_callable(value)) {
+        printf("[function]");
+        return;
+    }
+
+    if (mal_value_is_array_object(value)) {
+        printf("[array]");
+        return;
+    }
+
+    if (mal_value_is_object(value)) {
+        printf("[object]");
         return;
     }
 

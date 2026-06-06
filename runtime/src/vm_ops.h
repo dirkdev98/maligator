@@ -30,6 +30,12 @@ void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instr
 
 void mal_op_call(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_construct(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_throw(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_catch(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_binary(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_store_global(MalCallable *callable, MalInstruction *instruction);

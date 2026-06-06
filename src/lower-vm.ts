@@ -16,11 +16,22 @@ export interface VmDefinition {
 /**
  * Keep inline with the C struct
  */
+export interface VmExceptionHandler {
+	startIp: number;
+	endIp: number;
+	handlerIp: number;
+}
+
+/**
+ * Keep inline with the C struct
+ */
 export interface VmFunction {
+	nameStringIndex: number;
 	parameterCount: number;
 	registerCount: number;
 	capturedCount: number;
 	instructions: Array<VmInstruction>;
+	handlers: Array<VmExceptionHandler>;
 }
 
 /**
@@ -89,6 +100,28 @@ export type VmInstruction =
 			thisValue: number;
 			argumentCount: number;
 			arguments: Array<number>;
+	  }
+	| {
+			opcode: "CONSTRUCT";
+			dst: number;
+			callee: number;
+			argumentCount: number;
+			arguments: Array<number>;
+	  }
+	| {
+			opcode: "THROW";
+			value: number;
+	  }
+	| {
+			opcode: "CATCH";
+			dst: number;
+	  }
+	| {
+			opcode: "TRY_BEGIN";
+			handlerIp: number;
+	  }
+	| {
+			opcode: "TRY_END";
 	  }
 	| {
 			opcode: "LOAD_INTRINSIC";
@@ -170,11 +203,47 @@ function lowerFunctionToVmFunction(fn: IRFunction): VmFunction {
 	}
 
 	return {
+		nameStringIndex: fn.nameStringIndex,
 		parameterCount: fn.parameterCount,
 		registerCount: fn.nextRegisterDestination,
 		capturedCount: fn.nextCapturedIndex,
 		instructions,
+		handlers: collectExceptionHandlers(instructions),
 	};
+}
+
+/**
+ * Convert the TRY_BEGIN / TRY_END marker positions in the flattened
+ * instruction stream into static exception handler ranges. Doing this after
+ * flattening keeps the ranges correct under all block-level optimizations.
+ */
+function collectExceptionHandlers(instructions: Array<VmInstruction>) {
+	const handlers: Array<VmExceptionHandler> = [];
+	const openRanges: Array<{ startIp: number; handlerIp: number }> = [];
+
+	for (let ip = 0; ip < instructions.length; ++ip) {
+		const instruction = instructions[ip]!;
+		if (instruction.opcode === "TRY_BEGIN") {
+			openRanges.push({ startIp: ip, handlerIp: instruction.handlerIp });
+		} else if (instruction.opcode === "TRY_END") {
+			const range = openRanges.pop();
+			if (!range) {
+				throw new Error(`Unbalanced try markers at instruction ${ip}`);
+			}
+
+			handlers.push({
+				startIp: range.startIp,
+				endIp: ip,
+				handlerIp: range.handlerIp,
+			});
+		}
+	}
+
+	if (openRanges.length > 0) {
+		throw new Error("Unbalanced try markers at end of function");
+	}
+
+	return handlers;
 }
 
 /**
@@ -272,6 +341,39 @@ function lowerInstructionToVmInstruction(
 				thisValue: instruction.registers[2],
 				argumentCount: instruction.registers.length - 3,
 				arguments: instruction.registers.slice(3),
+			};
+		case "construct":
+			return {
+				opcode: "CONSTRUCT",
+				dst: instruction.registers[0],
+				callee: instruction.registers[1],
+				argumentCount: instruction.registers.length - 2,
+				arguments: instruction.registers.slice(2),
+			};
+		case "throw":
+			return {
+				opcode: "THROW",
+				value: instruction.registers[0],
+			};
+		case "catch":
+			return {
+				opcode: "CATCH",
+				dst: instruction.registers[0],
+			};
+		case "tryBegin": {
+			const handlerIp = blockStartIps.get(instruction.blocks[0]);
+			if (handlerIp === undefined) {
+				throw new Error(`Unknown handler target block ${instruction.blocks[0]}`);
+			}
+
+			return {
+				opcode: "TRY_BEGIN",
+				handlerIp,
+			};
+		}
+		case "tryEnd":
+			return {
+				opcode: "TRY_END",
 			};
 		case "loadIntrinsic":
 			return {

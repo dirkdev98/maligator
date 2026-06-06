@@ -278,8 +278,11 @@ static MalValue mal_builtin_array_reduce(MalVm *vm, MalValue this_value, const M
         accumulator = completion.value;
     }
 
-    // TODO(errors): no accumulator means an empty array without an initial
-    //  value, which should throw a TypeError once Error objects exist.
+    if (!has_accumulator) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Reduce of empty array with no initial value");
+        return mal_value_new_undefined();
+    }
+
     return accumulator;
 }
 

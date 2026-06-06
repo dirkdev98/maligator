@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include "array_object.h"
+#include "bound_function_object.h"
 #include "function_object.h"
 #include "heap_string.h"
 #include "object_ops.h"
@@ -140,59 +141,111 @@ void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instr
 }
 
 void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
     MalValue callee = callable->registers[instruction->as.call.callee];
     MalValue this_value = callable->registers[instruction->as.call.this_value];
     i32 dst = instruction->as.call.dst;
+    i32 argument_count = instruction->as.call.argument_count;
 
-    if (mal_value_is_function_object(callee)) {
-        MalValue *arguments = malloc(sizeof(MalValue) * instruction->as.call.argument_count);
-        for (i32 i = 0; i < instruction->as.call.argument_count; i++) {
-            arguments[i] = callable->registers[instruction->as.call.arguments[i]];
-        }
-
-        i32 function_index = mal_function_object_function_index(mal_value_to_function_object(callee));
-        i32 caller_frame_index = callable->vm->frame_count - 1;
-        mal_vm_push_function_frame(
-            callable->vm,
-            function_index,
-            this_value,
-            arguments,
-            instruction->as.call.argument_count,
-            dst,
-            caller_frame_index
-        );
-        free(arguments);
-
-        return;
+    MalValue *arguments = malloc(sizeof(MalValue) * argument_count);
+    for (i32 i = 0; i < argument_count; i++) {
+        arguments[i] = callable->registers[instruction->as.call.arguments[i]];
     }
 
-    if (mal_value_is_native_function_object(callee)) {
-        MalValue *arguments = malloc(sizeof(MalValue) * instruction->as.call.argument_count);
-        for (i32 i = 0; i < instruction->as.call.argument_count; i++) {
-            arguments[i] = callable->registers[instruction->as.call.arguments[i]];
-        }
+    MalBoundResolution resolution = mal_bound_function_object_resolve(callee, this_value, arguments, argument_count, true);
 
+    if (mal_value_is_function_object(resolution.callee)) {
+        i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
+        mal_vm_push_function_frame(
+            vm,
+            function_index,
+            resolution.this_value,
+            resolution.args,
+            resolution.arg_count,
+            dst,
+            vm->frame_count - 1
+        );
+    } else if (mal_value_is_native_function_object(resolution.callee)) {
         MalNativeFunctionCallback callback = mal_native_function_object_callback(
-            mal_value_to_native_function_object(callee)
+            mal_value_to_native_function_object(resolution.callee)
         );
         // The callback may push frames and realloc the frame array, which
         // invalidates `callable`. Snapshot what we need and re-resolve the
         // frame afterwards.
-        MalVm *vm = callable->vm;
         i32 caller_frame_index = vm->frame_count - 1;
-        MalValue result = callback(
-            vm,
-            this_value,
-            arguments,
-            instruction->as.call.argument_count
-        );
+        MalValue result = callback(vm, resolution.this_value, resolution.args, resolution.arg_count);
         vm->frames[caller_frame_index].registers[dst] = result;
-        free(arguments);
-
-        return;
+    } else {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a function");
     }
 
-    callable->registers[dst] = mal_value_new_undefined();
+    free(resolution.owned_args);
+    free(arguments);
+}
+
+void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue callee = callable->registers[instruction->as.construct.callee];
+    i32 dst = instruction->as.construct.dst;
+    i32 argument_count = instruction->as.construct.argument_count;
+
+    MalValue *arguments = malloc(sizeof(MalValue) * argument_count);
+    for (i32 i = 0; i < argument_count; i++) {
+        arguments[i] = callable->registers[instruction->as.construct.arguments[i]];
+    }
+
+    // The bound this is ignored when constructing.
+    MalBoundResolution resolution = mal_bound_function_object_resolve(callee, mal_value_new_undefined(), arguments, argument_count, false);
+
+    if (mal_value_is_function_object(resolution.callee)) {
+        // Create this from the callee's prototype property.
+        MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+        MalPropertyLookup lookup = mal_object_get_own(
+            (MalObject *) mal_value_to_function_object(resolution.callee),
+            mal_intrinsic_string_key(vm, "prototype")
+        );
+        if (lookup.present && mal_value_is_object(lookup.desc.value)) {
+            prototype = mal_value_to_object(lookup.desc.value);
+        }
+
+        MalValue this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+        i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
+        mal_vm_push_function_frame(
+            vm,
+            function_index,
+            this_value,
+            resolution.args,
+            resolution.arg_count,
+            dst,
+            vm->frame_count - 1
+        );
+        vm->frames[vm->frame_count - 1].is_construct = true;
+    } else if (mal_value_is_native_function_object(resolution.callee)) {
+        // Construct and call behave the same for the native constructors.
+        MalNativeFunctionCallback callback = mal_native_function_object_callback(
+            mal_value_to_native_function_object(resolution.callee)
+        );
+        i32 caller_frame_index = vm->frame_count - 1;
+        MalValue result = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count);
+        vm->frames[caller_frame_index].registers[dst] = result;
+    } else {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
+    }
+
+    free(resolution.owned_args);
+    free(arguments);
+}
+
+void mal_op_throw(MalCallable *callable, MalInstruction *instruction) {
+    callable->vm->completion = (MalCompletion) {
+        .kind = MAL_COMPLETION_THROW,
+        .value = callable->registers[instruction->as.thrown.value],
+    };
+}
+
+void mal_op_catch(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.caught.dst] = callable->vm->completion.value;
+    callable->vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
 
 void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
@@ -272,6 +325,20 @@ void mal_op_load_intrinsic(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.load_intrinsic.dst] = callable->vm->intrinsics[instruction->as.load_intrinsic.intrinsic];
 }
 
+static bool mal_vm_key_is_name(MalKey key) {
+    if (key.kind != MAL_KEY_STRING || !mal_value_is_string(key.value)) {
+        return false;
+    }
+
+    MalString *string = mal_value_to_string(key.value);
+    const c16 *code_units = mal_string_code_units(string);
+    return mal_string_length(string) == 4 &&
+        code_units[0] == 'n' &&
+        code_units[1] == 'a' &&
+        code_units[2] == 'm' &&
+        code_units[3] == 'e';
+}
+
 void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
     MalValue object_value = callable->registers[instruction->as.load_property.object];
     MalValue key_value = callable->registers[instruction->as.load_property.key];
@@ -286,6 +353,19 @@ void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
     if (mal_value_is_array_object(object_value) && mal_array_key_is_length(key)) {
         callable->registers[dst] = mal_value_from_i32((i32) mal_array_object_length(mal_value_to_array_object(object_value)));
         return;
+    }
+
+    if (mal_value_is_callable(object_value)) {
+        if (mal_array_key_is_length(key)) {
+            callable->registers[dst] = mal_value_from_i32(mal_vm_callable_length(callable->vm, object_value));
+            return;
+        }
+
+        if (mal_vm_key_is_name(key)) {
+            MalString *name = mal_vm_callable_name(callable->vm, object_value);
+            callable->registers[dst] = name != nullptr ? mal_value_from_string(name) : mal_value_new_undefined();
+            return;
+        }
     }
 
     MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(object_value), key);

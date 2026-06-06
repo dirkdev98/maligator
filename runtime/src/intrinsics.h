@@ -18,7 +18,18 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_ARRAY_CONSTRUCTOR,
     MAL_INTRINSIC_ARRAY_PROTOTYPE,
     MAL_INTRINSIC_ARRAY_PROTOTYPE_MAP,
+    MAL_INTRINSIC_FUNCTION_CONSTRUCTOR,
     MAL_INTRINSIC_FUNCTION_PROTOTYPE,
+    MAL_INTRINSIC_ERROR_CONSTRUCTOR,
+    MAL_INTRINSIC_ERROR_PROTOTYPE,
+    MAL_INTRINSIC_TYPE_ERROR_CONSTRUCTOR,
+    MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+    MAL_INTRINSIC_RANGE_ERROR_CONSTRUCTOR,
+    MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+    MAL_INTRINSIC_REFERENCE_ERROR_CONSTRUCTOR,
+    MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+    MAL_INTRINSIC_SYNTAX_ERROR_CONSTRUCTOR,
+    MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
     MAL_INTRINSIC_COUNT,
 } MalIntrinsic;
 
@@ -64,3 +75,9 @@ MalObject *mal_intrinsic_new_object(MalVm *vm);
  * Allocate an array backed by %Array.prototype% with the given length.
  */
 MalArrayObject *mal_intrinsic_new_array(MalVm *vm, u32 length);
+
+/**
+ * Allocate an error backed by the given error prototype slot with the message
+ * set as an own property, and set it as the VM's throw completion.
+ */
+void mal_vm_throw_error(MalVm *vm, MalIntrinsic prototype_slot, const byte *message);

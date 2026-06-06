@@ -8,6 +8,7 @@ typedef struct MalSymbol MalSymbol;
 typedef struct MalObject MalObject;
 typedef struct MalFunctionObject MalFunctionObject;
 typedef struct MalNativeFunctionObject MalNativeFunctionObject;
+typedef struct MalBoundFunctionObject MalBoundFunctionObject;
 typedef struct MalArrayObject MalArrayObject;
 
 /**
@@ -204,6 +205,11 @@ bool mal_value_is_function_object(MalValue value);
 bool mal_value_is_native_function_object(MalValue value);
 
 /**
+ * Check if the value is a bound function object.
+ */
+bool mal_value_is_bound_function_object(MalValue value);
+
+/**
  * Check if the value is an array object.
  */
 bool mal_value_is_array_object(MalValue value);
@@ -239,6 +245,11 @@ MalFunctionObject *mal_value_to_function_object(MalValue value);
 MalNativeFunctionObject *mal_value_to_native_function_object(MalValue value);
 
 /**
+ * Unbox a bound function object.
+ */
+MalBoundFunctionObject *mal_value_to_bound_function_object(MalValue value);
+
+/**
  * Unbox an array object.
  */
 MalArrayObject *mal_value_to_array_object(MalValue value);
@@ -267,6 +278,11 @@ MalValue mal_value_from_function_object(MalFunctionObject *function);
  * Box a native function object.
  */
 MalValue mal_value_from_native_function_object(MalNativeFunctionObject *function);
+
+/**
+ * Box a bound function object.
+ */
+MalValue mal_value_from_bound_function_object(MalBoundFunctionObject *bound);
 
 /**
  * Box an array object.

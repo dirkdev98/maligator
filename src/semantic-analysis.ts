@@ -190,6 +190,7 @@ function createScopesFromNode(
 			"ForInStatement",
 			"ForOfStatement",
 			"SwitchStatement",
+			"CatchClause",
 
 			"FunctionDeclaration",
 			"FunctionExpression",

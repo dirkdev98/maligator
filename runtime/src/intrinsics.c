@@ -1,6 +1,8 @@
 #include "intrinsics.h"
 
 #include "builtin_array.h"
+#include "builtin_error.h"
+#include "builtin_function.h"
 #include "builtin_object.h"
 #include "heap_string.h"
 #include "vm.h"
@@ -66,5 +68,7 @@ void mal_intrinsics_init(MalVm *vm) {
     vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE] = mal_value_from_object(array_prototype);
 
     mal_builtin_object_install(vm);
+    mal_builtin_function_install(vm);
     mal_builtin_array_install(vm);
+    mal_builtin_error_install(vm);
 }
