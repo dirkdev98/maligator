@@ -118,6 +118,9 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
             case MAL_OP_CREATE_STRING:
                 mal_op_create_string(frame, &instruction);
                 break;
+            case MAL_OP_CREATE_OBJECT:
+                mal_op_create_object(frame, &instruction);
+                break;
             case MAL_OP_CREATE_UNDEFINED:
                 mal_op_create_undefined(frame, &instruction);
                 break;
@@ -136,6 +139,12 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
                 break;
             case MAL_OP_LOAD_GLOBAL:
                 mal_op_load_global(frame, &instruction);
+                break;
+            case MAL_OP_LOAD_PROPERTY:
+                mal_op_load_property(frame, &instruction);
+                break;
+            case MAL_OP_STORE_PROPERTY:
+                mal_op_store_property(frame, &instruction);
                 break;
 
             case MAL_OP_LOAD_CAPTURED:

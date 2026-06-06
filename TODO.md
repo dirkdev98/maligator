@@ -7,8 +7,6 @@ once we compile and run most JS.
 
 ## High level
 
-- [ ] Object literals end to end
-- [ ] Property reads and writes
 - [ ] Array literals end to end
 - [ ] Function expressions as values
 - [ ] Method calls with receiver / `this`

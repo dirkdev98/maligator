@@ -148,6 +148,12 @@ export type IRInstruction =
 			stringIndex: number;
 	  }
 	| {
+			type: "createObject";
+
+			// [destination]
+			registers: [number];
+	  }
+	| {
 			type: "createUndefined";
 
 			// [destination]
@@ -192,6 +198,18 @@ export type IRInstruction =
 
 			functionIndex?: number;
 			index: number;
+	  }
+	| {
+			type: "loadProperty";
+
+			// [destination, object, key]
+			registers: [number, number, number];
+	  }
+	| {
+			type: "storeProperty";
+
+			// [object, key, value]
+			registers: [number, number, number];
 	  }
 	| {
 			type: "binary";
@@ -705,6 +723,9 @@ function compileExpression(
 	expression: ESTree.Expression | ESTree.PrivateIdentifier,
 ) {
 	switch (expression.type) {
+		case "AssignmentExpression": {
+			return compileAssignment(program, fn, block, expression);
+		}
 		case "BinaryExpression": {
 			return compileBinary(program, fn, block, expression);
 		}
@@ -717,9 +738,75 @@ function compileExpression(
 		case "Literal": {
 			return compileLiteral(program, fn, block, expression);
 		}
+		case "MemberExpression": {
+			return compileMemberExpression(program, fn, block, expression);
+		}
+		case "ObjectExpression": {
+			return compileObjectExpression(program, fn, block, expression);
+		}
 		default:
 			return -1;
 	}
+}
+
+function compileAssignment(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	assignmentExpression: ESTree.AssignmentExpression,
+): number {
+	if (assignmentExpression.left.type !== "MemberExpression") {
+		return -1;
+	}
+
+	const { object, key } = compileMemberObjectAndKey(
+		program,
+		fn,
+		block,
+		assignmentExpression.left,
+	);
+
+	let value: number;
+	if (assignmentExpression.operator === "=") {
+		value = compileExpression(program, fn, block, assignmentExpression.right);
+	} else {
+		const binaryOperator = assignmentOperatorToBinaryOperator(
+			assignmentExpression.operator,
+		);
+		const current = nextRegisterDestination(fn);
+		block.instructions.push({
+			type: "loadProperty",
+			registers: [current, object, key],
+		});
+
+		const right = compileExpression(program, fn, block, assignmentExpression.right);
+		value = nextRegisterDestination(fn);
+		block.instructions.push({
+			type: "binary",
+			registers: [value, current, right],
+			operator: binaryOperator,
+		});
+	}
+
+	block.instructions.push({
+		type: "storeProperty",
+		registers: [object, key, value],
+	});
+
+	return value;
+}
+
+function assignmentOperatorToBinaryOperator(operator: string) {
+	if (operator === "=") {
+		throw new Error("Simple assignment has no binary operator");
+	}
+
+	const binaryOperator = operator.slice(0, -1);
+	if (!isIRBinaryOperator(binaryOperator)) {
+		throw new Error(`Unsupported assignment operator ${operator}`);
+	}
+
+	return binaryOperator;
 }
 
 function compileBinary(
@@ -743,6 +830,112 @@ function compileBinary(
 		registers: [destination, left, right],
 
 		operator: binaryExpression.operator,
+	});
+
+	return destination;
+}
+
+function compileObjectExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	objectExpression: ESTree.ObjectExpression,
+): number {
+	const object = nextRegisterDestination(fn);
+	block.instructions.push({
+		type: "createObject",
+		registers: [object],
+	});
+
+	for (const property of objectExpression.properties) {
+		if (property.type !== "Property" || property.kind !== "init" || property.method) {
+			return -1;
+		}
+
+		const key = compilePropertyKey(program, fn, block, property);
+		const value = compileExpression(
+			program,
+			fn,
+			block,
+			property.value as ESTree.Expression,
+		);
+		block.instructions.push({
+			type: "storeProperty",
+			registers: [object, key, value],
+		});
+	}
+
+	return object;
+}
+
+function compileMemberExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	memberExpression: ESTree.MemberExpression,
+): number {
+	const { object, key } = compileMemberObjectAndKey(program, fn, block, memberExpression);
+	const destination = nextRegisterDestination(fn);
+	block.instructions.push({
+		type: "loadProperty",
+		registers: [destination, object, key],
+	});
+
+	return destination;
+}
+
+function compileMemberObjectAndKey(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	memberExpression: ESTree.MemberExpression,
+) {
+	if (memberExpression.object.type === "Super") {
+		return { object: -1, key: -1 };
+	}
+
+	const object = compileExpression(program, fn, block, memberExpression.object);
+	const key = memberExpression.computed
+		? compileExpression(program, fn, block, memberExpression.property)
+		: memberExpression.property.type === "Identifier"
+			? compileStaticString(program, fn, block, memberExpression.property.name)
+			: -1;
+
+	return { object, key };
+}
+
+function compilePropertyKey(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	property: ESTree.Property,
+) {
+	if (property.computed) {
+		return compileExpression(program, fn, block, property.key);
+	}
+
+	if (property.key.type === "Identifier") {
+		return compileStaticString(program, fn, block, property.key.name);
+	}
+
+	if (property.key.type === "Literal") {
+		return compileLiteral(program, fn, block, property.key);
+	}
+
+	return -1;
+}
+
+function compileStaticString(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	value: string,
+) {
+	const destination = nextRegisterDestination(fn);
+	block.instructions.push({
+		type: "createString",
+		registers: [destination],
+		stringIndex: getOrCreateStringConstant(program, value),
 	});
 
 	return destination;

@@ -4,8 +4,70 @@
 
 #include "array_object.h"
 #include "function_object.h"
+#include "heap_string.h"
 #include "object_ops.h"
 #include "value_ops.h"
+
+static bool mal_vm_string_to_array_index(MalString *string, i32 *index_out) {
+    usize length = mal_string_length(string);
+    const c16 *code_units = mal_string_code_units(string);
+
+    if (length == 0) {
+        return false;
+    }
+
+    if (length > 1 && code_units[0] == '0') {
+        return false;
+    }
+
+    u64 value = 0;
+    for (usize i = 0; i < length; i++) {
+        c16 code_unit = code_units[i];
+        if (code_unit < '0' || code_unit > '9') {
+            return false;
+        }
+
+        value = value * 10 + (u64) (code_unit - '0');
+        if (value > INT32_MAX) {
+            return false;
+        }
+    }
+
+    *index_out = (i32) value;
+    return true;
+}
+
+static bool mal_vm_string_to_property_key(MalValue value, MalKey *key_out) {
+    i32 index = 0;
+    if (mal_vm_string_to_array_index(mal_value_to_string(value), &index)) {
+        *key_out = (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(index)};
+        return true;
+    }
+
+    *key_out = (MalKey) {.kind = MAL_KEY_STRING, .value = value};
+    return true;
+}
+
+static bool mal_vm_value_to_property_key(MalCallable *callable, MalValue value, MalKey *key_out) {
+    if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
+        *key_out = (MalKey) {.kind = MAL_KEY_INDEX, .value = value};
+        return true;
+    }
+
+    if (mal_value_is_string(value)) {
+        return mal_vm_string_to_property_key(value, key_out);
+    }
+
+    if (mal_value_is_symbol(value)) {
+        *key_out = (MalKey) {.kind = MAL_KEY_SYMBOL, .value = value};
+        return true;
+    }
+
+    return mal_vm_string_to_property_key(
+        mal_value_from_string(mal_ops_to_string(&callable->vm->heap, value)),
+        key_out
+    );
+}
 
 void mal_op_move(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.move.dst] = callable->registers[instruction->as.move.src];
@@ -19,6 +81,11 @@ void mal_op_create_string(MalCallable *callable, MalInstruction *instruction) {
     const MalStringConstant *constant = &callable->vm->definition->string_constants[instruction->as.create_string.string_index];
     MalString *string = mal_string_new_external(&callable->vm->heap, constant->code_units, constant->length);
     callable->registers[instruction->as.create_string.dst] = mal_value_from_string(string);
+}
+
+void mal_op_create_object(MalCallable *callable, MalInstruction *instruction) {
+    MalObject *object = mal_object_new(&callable->vm->heap, nullptr);
+    callable->registers[instruction->as.create_object.dst] = mal_value_from_object(object);
 }
 
 void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction) {
@@ -175,6 +242,39 @@ void mal_op_store_global(MalCallable *callable, MalInstruction *instruction) {
 
 void mal_op_load_global(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.load_global.dst] = callable->vm->globals[instruction->as.load_global.index];
+}
+
+void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
+    MalValue object_value = callable->registers[instruction->as.load_property.object];
+    MalValue key_value = callable->registers[instruction->as.load_property.key];
+    i32 dst = instruction->as.load_property.dst;
+
+    MalKey key;
+    if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(callable, key_value, &key)) {
+        callable->registers[dst] = mal_value_new_undefined();
+        return;
+    }
+
+    MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(object_value), key);
+    if (!resolution.found) {
+        callable->registers[dst] = mal_value_new_undefined();
+        return;
+    }
+
+    callable->registers[dst] = resolution.desc.value;
+}
+
+void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
+    MalValue object_value = callable->registers[instruction->as.store_property.object];
+    MalValue key_value = callable->registers[instruction->as.store_property.key];
+    MalValue value = callable->registers[instruction->as.store_property.value];
+
+    MalKey key;
+    if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(callable, key_value, &key)) {
+        return;
+    }
+
+    mal_object_set(mal_value_to_object(object_value), key, value);
 }
 
 void mal_op_jump(MalCallable *callable, MalInstruction *instruction) {

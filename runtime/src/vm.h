@@ -11,6 +11,7 @@ typedef enum MalOpcode {
     MAL_OP_JUMP,
     MAL_OP_CREATE_NUMBER,
     MAL_OP_CREATE_STRING,
+    MAL_OP_CREATE_OBJECT,
     MAL_OP_CREATE_UNDEFINED,
     MAL_OP_CREATE_FUNCTION,
     MAL_OP_CREATE_ARGUMENTS_OBJECT,
@@ -18,6 +19,8 @@ typedef enum MalOpcode {
     MAL_OP_LOAD_GLOBAL,
     MAL_OP_STORE_CAPTURED,
     MAL_OP_STORE_GLOBAL,
+    MAL_OP_LOAD_PROPERTY,
+    MAL_OP_STORE_PROPERTY,
     MAL_OP_CALL,
     MAL_OP_BINARY,
 } MalOpcode;
@@ -74,6 +77,10 @@ typedef struct MalInstruction {
 
         struct {
             i32 dst;
+        } create_object;
+
+        struct {
+            i32 dst;
         } create_undefined;
 
         struct {
@@ -99,6 +106,14 @@ typedef struct MalInstruction {
         struct {
             i32 src, index;
         } store_global;
+
+        struct {
+            i32 dst, object, key;
+        } load_property;
+
+        struct {
+            i32 object, key, value;
+        } store_property;
 
         struct {
             i32 dst, callee, argument_count;

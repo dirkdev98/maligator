@@ -55,6 +55,10 @@ export type VmInstruction =
 			stringIndex: number;
 	  }
 	| {
+			opcode: "CREATE_OBJECT";
+			dst: number;
+	  }
+	| {
 			opcode: "CREATE_UNDEFINED";
 			dst: number;
 	  }
@@ -95,6 +99,18 @@ export type VmInstruction =
 			opcode: "STORE_GLOBAL";
 			src: number;
 			index: number;
+	  }
+	| {
+			opcode: "LOAD_PROPERTY";
+			dst: number;
+			object: number;
+			key: number;
+	  }
+	| {
+			opcode: "STORE_PROPERTY";
+			object: number;
+			key: number;
+			value: number;
 	  }
 	| {
 			opcode: "BINARY";
@@ -198,6 +214,11 @@ function lowerInstructionToVmInstruction(
 				dst: instruction.registers[0],
 				stringIndex: instruction.stringIndex,
 			};
+		case "createObject":
+			return {
+				opcode: "CREATE_OBJECT",
+				dst: instruction.registers[0],
+			};
 		case "createUndefined":
 			return {
 				opcode: "CREATE_UNDEFINED",
@@ -253,6 +274,20 @@ function lowerInstructionToVmInstruction(
 				opcode: "STORE_GLOBAL",
 				src: instruction.registers[0],
 				index: instruction.index,
+			};
+		case "loadProperty":
+			return {
+				opcode: "LOAD_PROPERTY",
+				dst: instruction.registers[0],
+				object: instruction.registers[1],
+				key: instruction.registers[2],
+			};
+		case "storeProperty":
+			return {
+				opcode: "STORE_PROPERTY",
+				object: instruction.registers[0],
+				key: instruction.registers[1],
+				value: instruction.registers[2],
 			};
 		case "binary":
 			return {
