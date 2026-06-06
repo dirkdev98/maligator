@@ -1,0 +1,155 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
+import { test262LoadCache, test262PersistCache } from "../src/test262/cache.ts";
+import { TEST262_METADATA } from "../src/test262/constants.ts";
+import {
+	test262Checkout,
+	test262CollectFiles,
+	test262ListFiles,
+} from "../src/test262/files.ts";
+import { test262Log } from "../src/test262/log.ts";
+import {
+	getFailuresWithSamples,
+	getTimings,
+	test262PrepareBuild,
+	test262RunFile,
+} from "../src/test262/runtime.ts";
+import type { Test262File, Test262Output } from "../src/test262/types.ts";
+
+function argValue(name: string) {
+	const index = process.argv.indexOf(name);
+	return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+const random = process.argv.includes("--random");
+const filter = argValue("--filter");
+const jobs = Number(argValue("--jobs") ?? Math.max(1, os.cpus().length - 1));
+
+const cacheContext = test262LoadCache();
+
+if (!cacheContext.files.length) {
+	cacheContext.sha = test262Checkout();
+
+	const fileIterator = test262ListFiles();
+	cacheContext.files = await test262CollectFiles(fileIterator);
+	test262PersistCache(cacheContext);
+}
+
+test262PrepareBuild();
+
+let selection = cacheContext.files;
+if (filter) {
+	selection = selection.filter((file) => file.path.includes(filter));
+	test262Log(`Filtered to ${selection.length} files matching '${filter}'.`);
+}
+if (random) {
+	selection = selection.filter(() => Math.random() < 0.05);
+	test262Log(`Sampled ${selection.length} files.`);
+}
+
+const startedAt = Date.now();
+let completed = 0;
+
+async function worker(workerId: number, queue: Array<Test262File>) {
+	while (true) {
+		const file = queue.pop();
+		if (!file) {
+			return;
+		}
+
+		await test262RunFile(file, workerId);
+
+		completed++;
+		if (completed % 2500 === 0) {
+			const elapsed = ((Date.now() - startedAt) / 1000).toFixed(0);
+			test262Log(`Progress: ${completed} / ${selection.length} (${elapsed}s)`);
+		}
+	}
+}
+
+const queue = [...selection].reverse();
+await Promise.all(
+	Array.from({ length: Math.max(1, jobs) }, (_, workerId) => worker(workerId, queue)),
+);
+
+const summary = selection.reduce<Record<string, number>>((acc, file) => {
+	acc[file.result] = (acc[file.result] ?? 0) + 1;
+	return acc;
+}, {});
+
+test262Log(`Took ${((Date.now() - startedAt) / 1000).toFixed(0)}s with ${jobs} jobs.`);
+test262Log(`Result:`, summary);
+test262Log(`Timings:`, JSON.stringify(getTimings(), null, 2));
+test262Log(JSON.stringify(getFailuresWithSamples(), null, 2));
+
+// The console output is easy to lose; keep the full report next to the cache.
+writeFileSync(
+	`${TEST262_METADATA.buildPath}/report.json`,
+	JSON.stringify(
+		{ summary, timings: getTimings(), ...getFailuresWithSamples() },
+		null,
+		2,
+	),
+);
+
+/**
+ * Fold the detailed categories for the committed results file.
+ */
+function foldResult(file: Test262File): "PASSED" | "SKIPPED" | "FAILED" {
+	if (file.result === "PASSED") {
+		return "PASSED";
+	}
+	if (file.result === "SKIPPED" || file.result === "UNSUPPORTED") {
+		return "SKIPPED";
+	}
+	return "FAILED";
+}
+
+// Compare against the committed results to surface regressions, even on
+// partial runs.
+if (existsSync(TEST262_METADATA.outputFile)) {
+	const previous = JSON.parse(
+		readFileSync(TEST262_METADATA.outputFile, "utf-8"),
+	) as Test262Output;
+
+	const regressions: Array<string> = [];
+	const improvements: Array<string> = [];
+	for (const file of selection) {
+		const before = previous.results[file.path];
+		const after = foldResult(file);
+		if (before === "PASSED" && after === "FAILED") {
+			regressions.push(file.path);
+		} else if (before === "FAILED" && after === "PASSED") {
+			improvements.push(file.path);
+		}
+	}
+
+	test262Log(`Newly passing: ${improvements.length}.`);
+	if (regressions.length > 0) {
+		test262Log(`REGRESSIONS (${regressions.length}):`);
+		for (const path of regressions.slice(0, 50)) {
+			test262Log(`  ${path}`);
+		}
+	}
+}
+
+const isFullRun = !cacheContext.files.some((file) => file.result === "UNKNOWN");
+if (isFullRun) {
+	writeFileSync(
+		TEST262_METADATA.outputFile,
+		JSON.stringify(
+			{
+				sha: cacheContext.sha,
+				summary,
+				results: Object.fromEntries(
+					cacheContext.files.map((file) => [file.path, foldResult(file)]),
+				),
+			} satisfies Test262Output,
+			null,
+			2,
+		),
+	);
+	test262Log("Updated results in the repository.");
+} else {
+	test262Log("Partial run, not updating the committed results.");
+}

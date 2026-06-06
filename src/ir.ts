@@ -112,6 +112,10 @@ export interface IRFunction {
 }
 
 interface IRLoopContext {
+	/**
+	 * break targets the innermost breakable of any kind, continue only loops.
+	 */
+	kind: "loop" | "switch";
 	breakJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
 	continueJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
 }
@@ -232,6 +236,12 @@ export type IRInstruction =
 			registers: [number];
 	  }
 	| {
+			type: "loadThis";
+
+			// [destination]
+			registers: [number];
+	  }
+	| {
 			type: "call";
 
 			// [destination, callee, this, ...arguments]
@@ -260,8 +270,10 @@ export type IRInstruction =
 			// marker positions into the static exception handler table.
 			type: "tryBegin";
 
-			// [handlerBlock]
-			blocks: [number];
+			// [handlerBlock, tryEndBlock]
+			// The tryEnd block is referenced here so the optimizer cannot drop
+			// it when the try body terminates early (return / throw).
+			blocks: [number, number];
 	  }
 	| {
 			// Marks the end of a protected instruction range.
@@ -787,6 +799,10 @@ function compileStatementsToBlock(
 				compileTryStatement(program, fn, block, statement);
 				break;
 			}
+			case "SwitchStatement": {
+				compileSwitchStatement(program, fn, block, statement);
+				break;
+			}
 			case "WhileStatement": {
 				compileWhileStatement(program, fn, block, statement);
 				break;
@@ -861,6 +877,90 @@ function compileFunctionDeclaration(
 }
 
 /**
+ * Compile a switch statement: the discriminant and case tests stay in the
+ * entry block chain, the case bodies are compiled in source order as
+ * fall-through blocks, and break jumps are patched to the exit.
+ */
+function compileSwitchStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.SwitchStatement,
+) {
+	const switchContext: IRLoopContext = {
+		kind: "switch",
+		breakJumps: [],
+		continueJumps: [],
+	};
+	(fn.loops ??= []).push(switchContext);
+
+	const cursor: IRCursor = { block };
+	const discriminant = compileExpression(program, fn, cursor, statement.discriminant);
+
+	// Case bodies first, chained for fall-through, so the dispatch tests can
+	// reference their block indexes.
+	const bodyStarts: Array<number> = [];
+	let previousTail: IRBlock | undefined;
+	for (const switchCase of statement.cases) {
+		const start = compileStatementsToBlock(program, fn, switchCase.consequent);
+		if (previousTail) {
+			previousTail.instructions.push({
+				type: "jump",
+				blocks: [start],
+			});
+		}
+
+		bodyStarts.push(start);
+		previousTail = fn.blocks.at(-1)!;
+	}
+
+	// The last body and the all-misses path both continue at the exit.
+	const lastBodyExitJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	previousTail?.instructions.push(lastBodyExitJump);
+
+	let defaultCase = -1;
+	for (let i = 0; i < statement.cases.length; i++) {
+		const switchCase = statement.cases[i]!;
+		if (!switchCase.test) {
+			defaultCase = i;
+			continue;
+		}
+
+		const test = compileExpression(program, fn, cursor, switchCase.test);
+		const matches = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "binary",
+			registers: [matches, discriminant, test],
+			operator: "===",
+		});
+		cursor.block.instructions.push({
+			type: "jumpIf",
+			registers: [matches],
+			blocks: [bodyStarts[i]!],
+		});
+	}
+
+	const missJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [defaultCase >= 0 ? bodyStarts[defaultCase]! : -1],
+	};
+	cursor.block.instructions.push(missJump);
+
+	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	lastBodyExitJump.blocks[0] = exitIdx;
+	if (defaultCase < 0) {
+		missJump.blocks[0] = exitIdx;
+	}
+	for (const jump of switchContext.breakJumps) {
+		jump.blocks[0] = exitIdx;
+	}
+	fn.loops.pop();
+}
+
+/**
  * Compile a while loop: jump into a header block that evaluates the
  * condition, conditionally enters the body, and falls through to the exit.
  */
@@ -876,7 +976,7 @@ function compileWhileStatement(
 		blocks: [headerIdx],
 	});
 
-	const loop: IRLoopContext = { breakJumps: [], continueJumps: [] };
+	const loop: IRLoopContext = { kind: "loop", breakJumps: [], continueJumps: [] };
 	(fn.loops ??= []).push(loop);
 
 	const headerCursor: IRCursor = { block: fn.blocks[headerIdx]! };
@@ -926,7 +1026,7 @@ function compileDoWhileStatement(
 	block: IRBlock,
 	statement: ESTree.DoWhileStatement,
 ) {
-	const loop: IRLoopContext = { breakJumps: [], continueJumps: [] };
+	const loop: IRLoopContext = { kind: "loop", breakJumps: [], continueJumps: [] };
 	(fn.loops ??= []).push(loop);
 
 	const bodyIdx = compileStatementsToBlock(
@@ -995,7 +1095,7 @@ function compileForStatement(
 		blocks: [headerIdx],
 	});
 
-	const loop: IRLoopContext = { breakJumps: [], continueJumps: [] };
+	const loop: IRLoopContext = { kind: "loop", breakJumps: [], continueJumps: [] };
 	(fn.loops ??= []).push(loop);
 
 	const headerCursor: IRCursor = { block: fn.blocks[headerIdx]! };
@@ -1080,7 +1180,7 @@ function compileContinueStatement(
 	block: IRBlock,
 	statement: ESTree.ContinueStatement,
 ) {
-	const loop = fn.loops?.at(-1);
+	const loop = fn.loops?.findLast((context) => context.kind === "loop");
 	if (!loop || statement.label) {
 		// TODO(loops): labeled continue is not supported yet.
 		return;
@@ -1137,8 +1237,8 @@ function compileTryStatement(
 
 	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
-		// Patched below, once the handler block exists.
-		blocks: [-1],
+		// Patched below, once the handler and exit blocks exist.
+		blocks: [-1, -1],
 	};
 	block.instructions.push(tryBegin);
 
@@ -1157,6 +1257,7 @@ function compileTryStatement(
 	const tryBodyLastBlock = fn.blocks.at(-1)!;
 	const tryExitBlock = compileStatementsToBlock(program, fn, finalizerStatements);
 	fn.blocks[tryExitBlock]!.instructions.unshift({ type: "tryEnd" });
+	tryBegin.blocks[1] = tryExitBlock;
 	tryBodyLastBlock.instructions.push({
 		type: "jump",
 		blocks: [tryExitBlock],
@@ -1333,6 +1434,15 @@ function compileExpression(
 		case "Identifier": {
 			return compileIdentifier(program, fn, cursor, expression);
 		}
+		case "ThisExpression": {
+			// TODO(functions): arrow functions should capture the lexical this.
+			const destination = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "loadThis",
+				registers: [destination],
+			});
+			return destination;
+		}
 		case "LogicalExpression": {
 			return compileLogicalExpression(program, fn, cursor, expression);
 		}
@@ -1344,6 +1454,9 @@ function compileExpression(
 		}
 		case "ConditionalExpression": {
 			return compileConditionalExpression(program, fn, cursor, expression);
+		}
+		case "TemplateLiteral": {
+			return compileTemplateLiteral(program, fn, cursor, expression);
 		}
 		case "Literal": {
 			return compileLiteral(program, fn, cursor, expression);
@@ -1592,6 +1705,54 @@ function compileConditionalExpression(
 	consequentJoinJump.blocks[0] = joinIdx;
 	alternateJoinJump.blocks[0] = joinIdx;
 	cursor.block = fn.blocks[joinIdx]!;
+
+	return result;
+}
+
+/**
+ * Compile untagged template literals as a string concatenation chain. The
+ * leading quasi keeps the chain string-typed so + coerces the expressions.
+ */
+function compileTemplateLiteral(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	expression: ESTree.TemplateLiteral,
+): number {
+	let result = compileStaticString(
+		program,
+		fn,
+		cursor,
+		expression.quasis[0]?.value.cooked ?? "",
+	);
+
+	for (let i = 0; i < expression.expressions.length; i++) {
+		const part = compileExpression(
+			program,
+			fn,
+			cursor,
+			expression.expressions[i] as ESTree.Expression,
+		);
+		let next = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "binary",
+			registers: [next, result, part],
+			operator: "+",
+		});
+		result = next;
+
+		const quasi = expression.quasis[i + 1]?.value.cooked ?? "";
+		if (quasi.length > 0) {
+			const quasiRegister = compileStaticString(program, fn, cursor, quasi);
+			next = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "binary",
+				registers: [next, result, quasiRegister],
+				operator: "+",
+			});
+			result = next;
+		}
+	}
 
 	return result;
 }

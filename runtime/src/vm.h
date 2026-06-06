@@ -24,6 +24,7 @@ typedef enum MalOpcode {
     MAL_OP_CREATE_NULL,
     MAL_OP_CREATE_FUNCTION,
     MAL_OP_CREATE_ARGUMENTS_OBJECT,
+    MAL_OP_LOAD_THIS,
     MAL_OP_LOAD_CAPTURED,
     MAL_OP_LOAD_GLOBAL,
     MAL_OP_LOAD_INTRINSIC,
@@ -146,6 +147,10 @@ typedef struct MalInstruction {
         struct {
             i32 dst;
         } create_arguments_object;
+
+        struct {
+            i32 dst;
+        } load_this;
 
         struct {
             i32 dst, owner_function_index, index;

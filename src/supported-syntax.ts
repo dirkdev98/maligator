@@ -1,0 +1,191 @@
+import type { ESTree } from "meriyah";
+
+/**
+ * Node types the compiler has no lowering for at all.
+ */
+const unsupportedNodeTypes = new Map<string, string>([
+	["ClassDeclaration", "class"],
+	["ClassExpression", "class"],
+	["Super", "class"],
+	["PropertyDefinition", "class"],
+	["MethodDefinition", "class"],
+	["StaticBlock", "class"],
+	["MetaProperty", "new.target / import.meta"],
+	["ForInStatement", "for-in"],
+	["ForOfStatement", "for-of"],
+	["LabeledStatement", "labeled statement"],
+	["WithStatement", "with"],
+	["AwaitExpression", "async function"],
+	["YieldExpression", "generator function"],
+	["TaggedTemplateExpression", "tagged template"],
+	["SpreadElement", "spread"],
+	["RestElement", "rest parameter"],
+	["AssignmentPattern", "default parameter"],
+	["ObjectPattern", "destructuring"],
+	["ArrayPattern", "destructuring"],
+	["SequenceExpression", "sequence expression"],
+	["ChainExpression", "optional chaining"],
+	["ImportDeclaration", "module syntax"],
+	["ImportExpression", "module syntax"],
+	["ExportNamedDeclaration", "module syntax"],
+	["ExportDefaultDeclaration", "module syntax"],
+	["ExportAllDeclaration", "module syntax"],
+]);
+
+const supportedBinaryOperators = new Set<string>([
+	"+",
+	"-",
+	"*",
+	"/",
+	"%",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+	"<",
+	"<=",
+	">",
+	">=",
+	"==",
+	"!=",
+	"===",
+	"!==",
+]);
+
+const supportedUnaryOperators = new Set<string>(["!", "-", "+", "~", "typeof", "void"]);
+
+const supportedAssignmentOperators = new Set<string>([
+	"=",
+	"+=",
+	"-=",
+	"*=",
+	"/=",
+	"%=",
+	"&=",
+	"|=",
+	"^=",
+	"<<=",
+	">>=",
+	">>>=",
+]);
+
+/**
+ * Collect the unsupported language constructs used in an AST.
+ *
+ * The tracing compiler silently skips most constructs it cannot lower, which
+ * would otherwise turn into vacuously passing or crashing programs. Scanning
+ * upfront turns those into an explicit UNSUPPORTED verdict and doubles as a
+ * priority ranking for which features block the most tests.
+ */
+export function collectUnsupportedSyntax(node: ESTree.Node): Set<string> {
+	const unsupported = new Set<string>();
+	walk(node, unsupported, { inArrowFunction: false });
+	return unsupported;
+}
+
+interface WalkContext {
+	inArrowFunction: boolean;
+}
+
+function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
+	if (Array.isArray(value)) {
+		for (const entry of value) {
+			walk(entry, unsupported, context);
+		}
+		return;
+	}
+
+	if (!value || typeof value !== "object" || !("type" in value)) {
+		return;
+	}
+
+	const node = value as ESTree.Node;
+	const mapped = unsupportedNodeTypes.get(node.type);
+	if (mapped) {
+		unsupported.add(mapped);
+	}
+
+	switch (node.type) {
+		case "FunctionDeclaration":
+		case "FunctionExpression":
+		case "ArrowFunctionExpression": {
+			if (node.generator) {
+				unsupported.add("generator function");
+			}
+			if (node.async) {
+				unsupported.add("async function");
+			}
+
+			const innerContext: WalkContext = {
+				inArrowFunction: node.type === "ArrowFunctionExpression",
+			};
+			for (const key of Object.keys(node)) {
+				walk(
+					(node as unknown as Record<string, unknown>)[key],
+					unsupported,
+					innerContext,
+				);
+			}
+			return;
+		}
+		case "ThisExpression": {
+			// Frames carry their own this value; the lexical this of arrow
+			// functions is not captured yet.
+			if (context.inArrowFunction) {
+				unsupported.add("lexical this in arrow function");
+			}
+			break;
+		}
+		case "BinaryExpression": {
+			if (!supportedBinaryOperators.has(node.operator)) {
+				unsupported.add(`${node.operator} operator`);
+			}
+			break;
+		}
+		case "UnaryExpression": {
+			if (!supportedUnaryOperators.has(node.operator)) {
+				unsupported.add(`${node.operator} operator`);
+			}
+			break;
+		}
+		case "AssignmentExpression": {
+			if (!supportedAssignmentOperators.has(node.operator)) {
+				unsupported.add(`${node.operator} operator`);
+			}
+			break;
+		}
+		case "BreakStatement":
+		case "ContinueStatement": {
+			if (node.label) {
+				unsupported.add("labeled break / continue");
+			}
+			break;
+		}
+		case "Property": {
+			if (node.kind === "get" || node.kind === "set") {
+				unsupported.add("accessor property");
+			}
+			if (node.method) {
+				unsupported.add("object method shorthand");
+			}
+			break;
+		}
+		case "Literal": {
+			if ("regex" in node && node.regex) {
+				unsupported.add("regex literal");
+			}
+			if (typeof node.value === "bigint") {
+				unsupported.add("bigint literal");
+			}
+			break;
+		}
+		default:
+			break;
+	}
+
+	for (const key of Object.keys(node)) {
+		walk((node as unknown as Record<string, unknown>)[key], unsupported, context);
+	}
+}

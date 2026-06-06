@@ -32,6 +32,8 @@ void mal_op_create_function(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_load_this(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_call(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_construct(MalCallable *callable, MalInstruction *instruction);

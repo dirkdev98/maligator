@@ -9,6 +9,8 @@
 #include "object_ops.h"
 #include "value_ops.h"
 
+static MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
+
 static bool mal_vm_string_to_array_index(MalString *string, i32 *index_out) {
     usize length = mal_string_length(string);
     const c16 *code_units = mal_string_code_units(string);
@@ -148,6 +150,10 @@ void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instr
     callable->registers[instruction->as.create_arguments_object.dst] = callable->arguments_object;
 }
 
+void mal_op_load_this(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.load_this.dst] = callable->this_value;
+}
+
 void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     MalValue callee = callable->registers[instruction->as.call.callee];
@@ -208,12 +214,9 @@ void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
     if (mal_value_is_function_object(resolution.callee)) {
         // Create this from the callee's prototype property.
         MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-        MalPropertyLookup lookup = mal_object_get_own(
-            (MalObject *) mal_value_to_function_object(resolution.callee),
-            mal_intrinsic_string_key(vm, "prototype")
-        );
-        if (lookup.present && mal_value_is_object(lookup.desc.value)) {
-            prototype = mal_value_to_object(lookup.desc.value);
+        MalValue prototype_value = mal_vm_function_prototype(vm, resolution.callee);
+        if (mal_value_is_object(prototype_value)) {
+            prototype = mal_value_to_object(prototype_value);
         }
 
         MalValue this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
@@ -393,6 +396,48 @@ void mal_op_load_intrinsic(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.load_intrinsic.dst] = callable->vm->intrinsics[instruction->as.load_intrinsic.intrinsic];
 }
 
+static bool mal_vm_key_is_prototype(MalKey key) {
+    if (key.kind != MAL_KEY_STRING || !mal_value_is_string(key.value)) {
+        return false;
+    }
+
+    MalString *string = mal_value_to_string(key.value);
+    static const byte expected[] = "prototype";
+    if (mal_string_length(string) != lengthof(expected)) {
+        return false;
+    }
+
+    const c16 *code_units = mal_string_code_units(string);
+    for (usize i = 0; i < lengthof(expected); i++) {
+        if (code_units[i] != (c16) expected[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Script functions get their prototype property created lazily on first use,
+ * with the spec-mandated constructor back reference.
+ */
+static MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
+    MalObject *function = mal_value_to_object(function_value);
+    MalKey key = mal_intrinsic_string_key(vm, "prototype");
+
+    MalPropertyLookup lookup = mal_object_get_own(function, key);
+    if (lookup.present) {
+        return lookup.desc.value;
+    }
+
+    MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    mal_intrinsic_define_data(vm, prototype, "constructor", function_value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+
+    MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_from_object(prototype), MAL_PROPERTY_WRITABLE);
+    mal_object_define_own(function, key, &desc);
+    return desc.value;
+}
+
 static bool mal_vm_key_is_name(MalKey key) {
     if (key.kind != MAL_KEY_STRING || !mal_value_is_string(key.value)) {
         return false;
@@ -490,6 +535,11 @@ void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
         if (mal_vm_key_is_name(key)) {
             MalString *name = mal_vm_callable_name(callable->vm, object_value);
             callable->registers[dst] = name != nullptr ? mal_value_from_string(name) : mal_value_new_undefined();
+            return;
+        }
+
+        if (mal_value_is_function_object(object_value) && mal_vm_key_is_prototype(key)) {
+            callable->registers[dst] = mal_vm_function_prototype(callable->vm, object_value);
             return;
         }
     }

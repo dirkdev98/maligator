@@ -196,6 +196,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_CREATE_ARGUMENTS_OBJECT:
                 mal_op_create_arguments_object(frame, &instruction);
                 break;
+            case MAL_OP_LOAD_THIS:
+                mal_op_load_this(frame, &instruction);
+                break;
             case MAL_OP_BINARY:
                 mal_op_binary(frame, &instruction);
                 break;
@@ -291,8 +294,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
 /**
  * Print strings as display text instead of the quoted debug representation.
  */
-static void mal_vm_print_display(MalValue value) {
+static void mal_vm_print_display(FILE *stream, MalValue value) {
     if (!mal_value_is_string(value)) {
+        // The debug printer writes to stdout; only strings need streams here.
         mal_value_debug(value);
         return;
     }
@@ -302,15 +306,15 @@ static void mal_vm_print_display(MalValue value) {
     for (usize i = 0; i < mal_string_length(string); i++) {
         c16 code_unit = code_units[i];
         if (code_unit <= 0x7F) {
-            putchar((char) code_unit);
+            fputc((char) code_unit, stream);
         } else {
-            printf("\\u%04x", code_unit);
+            fprintf(stream, "\\u%04x", code_unit);
         }
     }
 }
 
 static void mal_vm_report_uncaught(MalVm *vm) {
-    printf("Uncaught ");
+    fprintf(stderr, "Uncaught ");
 
     if (mal_value_is_object(vm->completion.value)) {
         MalObject *error = mal_value_to_object(vm->completion.value);
@@ -318,18 +322,18 @@ static void mal_vm_report_uncaught(MalVm *vm) {
         MalPropertyResolution message = mal_object_resolve_property(error, mal_intrinsic_string_key(vm, "message"));
 
         if (name.found) {
-            mal_vm_print_display(name.desc.value);
+            mal_vm_print_display(stderr, name.desc.value);
             if (message.found) {
-                printf(": ");
-                mal_vm_print_display(message.desc.value);
+                fprintf(stderr, ": ");
+                mal_vm_print_display(stderr, message.desc.value);
             }
-            printf("\n");
+            fprintf(stderr, "\n");
             return;
         }
     }
 
-    mal_vm_print_display(vm->completion.value);
-    printf("\n");
+    mal_vm_print_display(stderr, vm->completion.value);
+    fprintf(stderr, "\n");
 }
 
 void mal_vm_run(MalVm *vm, MalCallable *callable) {

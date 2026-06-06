@@ -104,6 +104,10 @@ export type VmInstruction =
 			dst: number;
 	  }
 	| {
+			opcode: "LOAD_THIS";
+			dst: number;
+	  }
+	| {
 			opcode: "CALL";
 			dst: number;
 			callee: number;
@@ -358,6 +362,11 @@ function lowerInstructionToVmInstruction(
 		case "createArgumentsObject":
 			return {
 				opcode: "CREATE_ARGUMENTS_OBJECT",
+				dst: instruction.registers[0],
+			};
+		case "loadThis":
+			return {
+				opcode: "LOAD_THIS",
 				dst: instruction.registers[0],
 			};
 		case "call":
