@@ -4,12 +4,9 @@ import type { ESTree } from "meriyah";
  * Node types the compiler has no lowering for at all.
  */
 const unsupportedNodeTypes = new Map<string, string>([
-	["ClassDeclaration", "class"],
-	["ClassExpression", "class"],
-	["Super", "class"],
-	["PropertyDefinition", "class"],
-	["MethodDefinition", "class"],
-	["StaticBlock", "class"],
+	["PropertyDefinition", "class field"],
+	["StaticBlock", "class static block"],
+	["PrivateIdentifier", "private class member"],
 	["MetaProperty", "new.target / import.meta"],
 	["ForInStatement", "for-in"],
 	["ForOfStatement", "for-of"],
@@ -53,6 +50,7 @@ const supportedBinaryOperators = new Set<string>([
 	"===",
 	"!==",
 	"in",
+	"instanceof",
 ]);
 
 const supportedUnaryOperators = new Set<string>([
@@ -169,15 +167,6 @@ function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
 		case "ContinueStatement": {
 			if (node.label) {
 				unsupported.add("labeled break / continue");
-			}
-			break;
-		}
-		case "Property": {
-			if (node.kind === "get" || node.kind === "set") {
-				unsupported.add("accessor property");
-			}
-			if (node.method) {
-				unsupported.add("object method shorthand");
 			}
 			break;
 		}

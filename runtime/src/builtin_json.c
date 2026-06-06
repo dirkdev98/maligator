@@ -129,7 +129,10 @@ static bool mal_json_stringify_value(MalVm *vm, MalJsonBuilder *builder, MalValu
                 (MalObject *) array,
                 (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)}
             );
-            MalValue element = resolution.found ? resolution.desc.value : mal_value_new_undefined();
+            MalValue element = mal_value_new_undefined();
+            if (resolution.found && !mal_vm_desc_read(vm, resolution.desc, value, &element)) {
+                return false;
+            }
             // Holes, undefined and functions serialize as null inside arrays.
             if (!mal_json_stringify_value(vm, builder, element, depth + 1)) {
                 if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -156,8 +159,13 @@ static bool mal_json_stringify_value(MalVm *vm, MalJsonBuilder *builder, MalValu
             }
 
             // Probe the value first so omitted members don't leave a key.
+            MalValue member_value;
+            if (!mal_vm_desc_read(vm, desc, value, &member_value)) {
+                return false;
+            }
+
             MalJsonBuilder member = {0};
-            if (!mal_json_stringify_value(vm, &member, desc.value, depth + 1)) {
+            if (!mal_json_stringify_value(vm, &member, member_value, depth + 1)) {
                 free(member.code_units);
                 if (vm->completion.kind == MAL_COMPLETION_THROW) {
                     return false;

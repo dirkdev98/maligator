@@ -33,6 +33,10 @@ typedef enum MalOpcode {
     MAL_OP_LOAD_PROPERTY,
     MAL_OP_STORE_PROPERTY,
     MAL_OP_DELETE_PROPERTY,
+    MAL_OP_DEFINE_ACCESSOR,
+    MAL_OP_DEFINE_PROPERTY,
+    MAL_OP_SET_PROTOTYPE,
+    MAL_OP_LOAD_UNDECLARED,
     MAL_OP_CALL,
     MAL_OP_CONSTRUCT,
     MAL_OP_BINARY,
@@ -60,6 +64,7 @@ typedef enum MalBinaryOp {
     MAL_BIN_STRICT_EQ,
     MAL_BIN_STRICT_NEQ,
     MAL_BIN_IN,
+    MAL_BIN_INSTANCEOF,
 } MalBinaryOp;
 
 typedef enum MalUnaryOp {
@@ -187,6 +192,25 @@ typedef struct MalInstruction {
         } delete_property;
 
         struct {
+            i32 object, key, accessor;
+            bool is_setter;
+            bool enumerable;
+        } define_accessor;
+
+        struct {
+            i32 object, key, value;
+            bool enumerable;
+        } define_property;
+
+        struct {
+            i32 object, prototype;
+        } set_prototype;
+
+        struct {
+            i32 dst, name_string_index;
+        } load_undeclared;
+
+        struct {
             i32 dst, callee, this_value, argument_count;
             const i32 *arguments;
         } call;
@@ -247,6 +271,18 @@ typedef struct MalVmDefinition {
     i32 global_count;
 } MalVmDefinition;
 
+/**
+ * Heap-allocated captured-variable storage. One node per activation of a
+ * function with captured slots; closures keep their defining chain reachable
+ * through MalFunctionObject.creation_env. There is no GC yet, so nodes leak
+ * with the rest of the heap.
+ */
+typedef struct MalEnv {
+    struct MalEnv *parent;
+    i32 function_index;
+    MalValue slots[];
+} MalEnv;
+
 typedef struct MalVm {
     const MalVmDefinition *definition;
 
@@ -268,6 +304,12 @@ typedef struct MalVmFrame {
     i32 argument_count;
     MalValue this_value;
     MalValue arguments_object;
+
+    /**
+     * Own captured-slot node when the function has captured slots, otherwise
+     * the callee's creation environment passed through for chain walks.
+     */
+    MalEnv *env;
 
     /**
      * Construct frames replace non-object return values with this_value.
@@ -292,6 +334,7 @@ void mal_vm_free_callable(MalCallable *callable);
 void mal_vm_push_function_frame(
     MalVm *vm,
     i32 function_index,
+    MalEnv *creation_env,
     MalValue this_value,
     const MalValue *args,
     i32 arg_count,

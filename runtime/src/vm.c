@@ -52,6 +52,7 @@ MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
     callable->vm = vm;
     callable->function = &vm->definition->functions[function_index];
     callable->registers = malloc(sizeof(MalValue) * callable->function->register_count);
+    callable->env = nullptr;
     callable->arguments = nullptr;
     callable->argument_count = 0;
     callable->this_value = mal_value_new_undefined();
@@ -73,6 +74,7 @@ void mal_vm_free_callable(MalCallable *callable) {
 void mal_vm_push_function_frame(
     MalVm *vm,
     i32 function_index,
+    MalEnv *creation_env,
     MalValue this_value,
     const MalValue *args,
     i32 arg_count,
@@ -87,8 +89,21 @@ void mal_vm_push_function_frame(
     const MalFunction *function = &vm->definition->functions[function_index];
     MalVmFrame *frame = &vm->frames[vm->frame_count++];
 
+    // Functions without captured slots pass the creation chain through, so
+    // grandchild closures still find their owners.
+    MalEnv *env = creation_env;
+    if (function->captured_count > 0) {
+        env = malloc(sizeof(MalEnv) + sizeof(MalValue) * (usize) function->captured_count);
+        env->parent = creation_env;
+        env->function_index = function_index;
+        for (i32 i = 0; i < function->captured_count; i++) {
+            env->slots[i] = mal_value_new_undefined();
+        }
+    }
+
     frame->vm = vm;
     frame->function = function;
+    frame->env = env;
     frame->registers = malloc(sizeof(MalValue) * function->register_count);
     frame->arguments = arg_count > 0 ? malloc(sizeof(MalValue) * arg_count) : nullptr;
     frame->argument_count = arg_count;
@@ -225,11 +240,24 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_DELETE_PROPERTY:
                 mal_op_delete_property(frame, &instruction);
                 break;
+            case MAL_OP_DEFINE_ACCESSOR:
+                mal_op_define_accessor(frame, &instruction);
+                break;
+            case MAL_OP_DEFINE_PROPERTY:
+                mal_op_define_property(frame, &instruction);
+                break;
+            case MAL_OP_SET_PROTOTYPE:
+                mal_op_set_prototype(frame, &instruction);
+                break;
+            case MAL_OP_LOAD_UNDECLARED:
+                mal_op_load_undeclared(frame, &instruction);
+                break;
 
             case MAL_OP_LOAD_CAPTURED:
-                frame->registers[instruction.as.load_captured.dst] = mal_value_new_undefined();
+                mal_op_load_captured(frame, &instruction);
                 break;
             case MAL_OP_STORE_CAPTURED:
+                mal_op_store_captured(frame, &instruction);
                 break;
 
             case MAL_OP_CALL:
@@ -345,6 +373,7 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
     mal_vm_push_function_frame(
         vm,
         (i32) (callable->function - vm->definition->functions),
+        nullptr,
         mal_value_new_undefined(),
         nullptr,
         0,
@@ -366,6 +395,12 @@ MalCompletion mal_vm_call_value(
     const MalValue *args,
     i32 arg_count
 ) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        // A pending throw poisons further calls, so iterating natives without
+        // explicit bail-outs cannot clobber the original error.
+        return vm->completion;
+    }
+
     MalBoundResolution resolution = mal_bound_function_object_resolve(callee, this_value, args, arg_count, true);
     MalCompletion completion = {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
@@ -380,6 +415,7 @@ MalCompletion mal_vm_call_value(
         mal_vm_push_function_frame(
             vm,
             mal_function_object_function_index(mal_value_to_function_object(resolution.callee)),
+            mal_value_to_function_object(resolution.callee)->creation_env,
             resolution.this_value,
             resolution.args,
             resolution.arg_count,

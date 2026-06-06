@@ -37,4 +37,4 @@ bool mal_array_key_is_length(MalKey key);
  * Store with JS array semantics: index stores grow the length field, "length"
  * stores update the length field instead of defining a property.
  */
-void mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value);
+bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value);

@@ -39,15 +39,14 @@ bool mal_array_key_is_length(MalKey key) {
         code_units[5] == 'h';
 }
 
-void mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
+bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
     if (key.kind == MAL_KEY_INDEX) {
         i32 index = mal_value_to_i32(key.value);
         if (index >= 0 && (u32) index >= array->length) {
             array->length = (u32) index + 1;
         }
 
-        mal_object_set(&array->object, key, value);
-        return;
+        return mal_object_set(&array->object, key, value);
     }
 
     if (mal_array_key_is_length(key)) {
@@ -55,8 +54,8 @@ void mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
         if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
             array->length = (u32) mal_value_to_i32(value);
         }
-        return;
+        return true;
     }
 
-    mal_object_set(&array->object, key, value);
+    return mal_object_set(&array->object, key, value);
 }

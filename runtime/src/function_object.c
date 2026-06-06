@@ -8,6 +8,7 @@ void mal_function_object_init(
 ) {
     mal_object_init(heap, &function->object, MAL_HEAP_FUNCTION_OBJECT, prototype);
     function->function_index = function_index;
+    function->creation_env = nullptr;
 }
 
 MalFunctionObject *mal_function_object_new(

@@ -6,6 +6,7 @@
 #include "bound_function_object.h"
 #include "heap_string.h"
 #include "vm.h"
+#include "vm_ops.h"
 
 static MalValue mal_builtin_function_forward_completion(MalVm *vm, MalCompletion completion) {
     if (completion.kind != MAL_COMPLETION_NORMAL) {
@@ -66,7 +67,11 @@ static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_va
             mal_value_to_object(arguments_value),
             (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)}
         );
-        call_args[index] = resolution.found ? resolution.desc.value : mal_value_new_undefined();
+        call_args[index] = mal_value_new_undefined();
+        if (resolution.found && !mal_vm_desc_read(vm, resolution.desc, arguments_value, &call_args[index])) {
+            free(call_args);
+            return mal_value_new_undefined();
+        }
     }
 
     MalCompletion completion = mal_vm_call_value(vm, this_value, this_arg, call_args, (i32) length);

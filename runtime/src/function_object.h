@@ -5,10 +5,16 @@
 
 typedef struct MalVm MalVm;
 typedef struct MalString MalString;
+typedef struct MalEnv MalEnv;
 
 typedef struct MalFunctionObject {
     MalObject object;
     i32 function_index;
+
+    /**
+     * Captured-variable chain of the activation this closure was created in.
+     */
+    MalEnv *creation_env;
 } MalFunctionObject;
 
 /**

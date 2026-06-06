@@ -30,6 +30,10 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
     MAL_INTRINSIC_SYNTAX_ERROR_CONSTRUCTOR,
     MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
+    MAL_INTRINSIC_URI_ERROR_CONSTRUCTOR,
+    MAL_INTRINSIC_URI_ERROR_PROTOTYPE,
+    MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR,
+    MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,
     MAL_INTRINSIC_STRING_CONSTRUCTOR,
     MAL_INTRINSIC_STRING_PROTOTYPE,
     MAL_INTRINSIC_NUMBER_CONSTRUCTOR,
@@ -97,3 +101,8 @@ MalArrayObject *mal_intrinsic_new_array(MalVm *vm, u32 length);
  * set as an own property, and set it as the VM's throw completion.
  */
 void mal_vm_throw_error(MalVm *vm, MalIntrinsic prototype_slot, const byte *message);
+
+/**
+ * mal_vm_throw_error with an arbitrary value as the message.
+ */
+void mal_vm_throw_error_value(MalVm *vm, MalIntrinsic prototype_slot, MalValue message);

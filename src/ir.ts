@@ -70,6 +70,15 @@ type BindingLocation =
 			index: number;
 	  };
 
+/**
+ * Class body context carried by constructor and method functions so super
+ * references can reach the parent class through its captured binding.
+ */
+interface IRClassContext {
+	superBinding?: Binding;
+	isStatic: boolean;
+}
+
 export interface IRFunction {
 	semanticFile: SemanticFile;
 	functionIndex: number;
@@ -82,6 +91,7 @@ export interface IRFunction {
 
 	blocks: Array<IRBlock>;
 	argumentsObjectRegister?: number;
+	classContext?: IRClassContext;
 
 	/**
 	 * Expected number of initial register values. Before evaluating the arguments and assigning
@@ -326,6 +336,41 @@ export type IRInstruction =
 			registers: [number, number, number];
 	  }
 	| {
+			type: "defineAccessor";
+
+			// [object, key, accessor]
+			registers: [number, number, number];
+
+			kind: "get" | "set";
+
+			// Object literal accessors are enumerable, class accessors not.
+			enumerable: boolean;
+	  }
+	| {
+			type: "defineProperty";
+
+			// [object, key, value]; defines an own writable + configurable
+			// data property, used for class members.
+			registers: [number, number, number];
+
+			enumerable: boolean;
+	  }
+	| {
+			type: "setPrototype";
+
+			// [object, prototype]
+			registers: [number, number];
+	  }
+	| {
+			type: "loadUndeclared";
+
+			// [destination]; never written, the instruction always throws a
+			// ReferenceError naming the unresolvable identifier.
+			registers: [number];
+
+			nameStringIndex: number;
+	  }
+	| {
 			type: "binary";
 
 			// [destination, left, right]
@@ -351,7 +396,8 @@ export type IRInstruction =
 				| "!="
 				| "==="
 				| "!=="
-				| "in";
+				| "in"
+				| "instanceof";
 	  }
 	| {
 			type: "unary";
@@ -372,6 +418,8 @@ type IRIntrinsic =
 	| "RangeError"
 	| "ReferenceError"
 	| "SyntaxError"
+	| "URIError"
+	| "EvalError"
 	| "String"
 	| "Number"
 	| "Boolean"
@@ -395,6 +443,8 @@ const irIntrinsics = new Set<string>([
 	"RangeError",
 	"ReferenceError",
 	"SyntaxError",
+	"URIError",
+	"EvalError",
 	"String",
 	"Number",
 	"Boolean",
@@ -435,6 +485,7 @@ const irBinaryOperators = new Set<string>([
 	"===",
 	"!==",
 	"in",
+	"instanceof",
 ]);
 
 function isIRBinaryOperator(operator: string): operator is IRBinaryOperator {
@@ -601,6 +652,8 @@ function compileNewFunctionExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
 	functionNode: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
+	classContext?: IRClassContext,
+	nameOverride?: string,
 ) {
 	const cached = program.nodeToFunctionCache.get(functionNode);
 	if (cached) {
@@ -612,9 +665,11 @@ function compileNewFunctionExpression(
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(
 			program,
-			functionNode.type === "FunctionExpression" ? (functionNode.id?.name ?? "") : "",
+			nameOverride ??
+				(functionNode.type === "FunctionExpression" ? (functionNode.id?.name ?? "") : ""),
 		),
 		blocks: [],
+		classContext,
 
 		parameterCount: functionNode.params.length,
 		nextRegisterDestination: 0,
@@ -641,6 +696,228 @@ function compileNewFunctionExpression(
 	endFunction(compiledFn);
 
 	return compiledFn.functionIndex;
+}
+
+/**
+ * Compile a class body to its constructor function value. The parent class is
+ * stashed in a synthetic captured binding so constructor and method bodies
+ * can reach it for super references.
+ */
+function compileClass(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	classNode: ESTree.ClassDeclaration | ESTree.ClassExpression,
+): number {
+	let superBinding: Binding | undefined;
+	let parent = -1;
+	if (classNode.superClass) {
+		parent = compileExpression(program, fn, cursor, classNode.superClass);
+		if (parent === -1) {
+			return -1;
+		}
+
+		superBinding = {
+			kind: "const",
+			name: `__super_${program.functions.length}`,
+			usageNodes: [],
+			scopedTo: "captured",
+		};
+		const location = getOrCreateBindingLocation(program, fn, superBinding);
+		storeRegisterAtLocation(cursor.block, location, parent);
+	}
+
+	const members = classNode.body.body.filter(
+		(member): member is ESTree.MethodDefinition => member.type === "MethodDefinition",
+	);
+
+	const constructorNode = members.find((member) => member.kind === "constructor");
+	const className = classNode.id?.name ?? "";
+	const constructorIndex =
+		constructorNode && constructorNode.value.type === "FunctionExpression"
+			? compileNewFunctionExpression(
+					program,
+					fn,
+					constructorNode.value,
+					{ superBinding, isStatic: false },
+					className,
+				)
+			: compileDefaultConstructor(program, fn, superBinding, className);
+
+	const ctor = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createFunction",
+		registers: [ctor],
+		functionIndex: constructorIndex,
+	});
+
+	// Wire the prototype chains.
+	const prototypeKey = compileStaticString(program, fn, cursor, "prototype");
+	let prototype: number;
+	if (parent !== -1) {
+		const parentPrototype = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadProperty",
+			registers: [parentPrototype, parent, prototypeKey],
+		});
+
+		prototype = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createObject",
+			registers: [prototype],
+		});
+		cursor.block.instructions.push({
+			type: "setPrototype",
+			registers: [prototype, parentPrototype],
+		});
+
+		const constructorKey = compileStaticString(program, fn, cursor, "constructor");
+		cursor.block.instructions.push({
+			type: "defineProperty",
+			registers: [prototype, constructorKey, ctor],
+			enumerable: false,
+		});
+		cursor.block.instructions.push({
+			type: "storeProperty",
+			registers: [ctor, prototypeKey, prototype],
+		});
+		cursor.block.instructions.push({
+			type: "setPrototype",
+			registers: [ctor, parent],
+		});
+	} else {
+		// Materializes the default prototype with its constructor backref.
+		prototype = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadProperty",
+			registers: [prototype, ctor, prototypeKey],
+		});
+	}
+
+	for (const member of members) {
+		if (member.kind === "constructor" || member.value.type !== "FunctionExpression") {
+			continue;
+		}
+
+		const target = member.static ? ctor : prototype;
+		const key = compileClassMemberKey(program, fn, cursor, member);
+		const methodIndex = compileNewFunctionExpression(
+			program,
+			fn,
+			member.value,
+			{ superBinding, isStatic: member.static },
+			!member.computed && member.key?.type === "Identifier" ? member.key.name : "",
+		);
+		const method = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createFunction",
+			registers: [method],
+			functionIndex: methodIndex,
+		});
+
+		if (member.kind === "get" || member.kind === "set") {
+			cursor.block.instructions.push({
+				type: "defineAccessor",
+				registers: [target, key, method],
+				kind: member.kind,
+				enumerable: false,
+			});
+		} else {
+			cursor.block.instructions.push({
+				type: "defineProperty",
+				registers: [target, key, method],
+				enumerable: false,
+			});
+		}
+	}
+
+	return ctor;
+}
+
+function compileClassMemberKey(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	member: ESTree.MethodDefinition,
+): number {
+	if (!member.key) {
+		return -1;
+	}
+
+	if (member.computed) {
+		return compileExpression(program, fn, cursor, member.key);
+	}
+
+	if (member.key.type === "Identifier") {
+		return compileStaticString(program, fn, cursor, member.key.name);
+	}
+
+	if (member.key.type === "Literal") {
+		return compileLiteral(program, fn, cursor, member.key);
+	}
+
+	return -1;
+}
+
+/**
+ * Synthesize the default constructor: empty for base classes, forwarding all
+ * arguments to the parent constructor on the same this for derived ones.
+ */
+function compileDefaultConstructor(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	superBinding: Binding | undefined,
+	name: string,
+): number {
+	const ctorFn: IRFunction = {
+		semanticFile: fn.semanticFile,
+		functionIndex: program.functions.length,
+		nameStringIndex: getOrCreateStringConstant(program, name),
+		blocks: [],
+
+		parameterCount: 0,
+		nextRegisterDestination: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	program.functions.push(ctorFn);
+
+	const block: IRBlock = { instructions: [] };
+	ctorFn.blocks.push(block);
+
+	if (superBinding) {
+		const cursor: IRCursor = { block };
+		const location = getOrCreateBindingLocation(program, ctorFn, superBinding);
+		const parent = loadRegisterFromLocation(ctorFn, cursor.block, location);
+
+		const applyKey = compileStaticString(program, ctorFn, cursor, "apply");
+		const apply = nextRegisterDestination(ctorFn);
+		cursor.block.instructions.push({
+			type: "loadProperty",
+			registers: [apply, parent, applyKey],
+		});
+
+		const thisRegister = nextRegisterDestination(ctorFn);
+		cursor.block.instructions.push({
+			type: "loadThis",
+			registers: [thisRegister],
+		});
+
+		const argumentsObject = nextRegisterDestination(ctorFn);
+		cursor.block.instructions.push({
+			type: "createArgumentsObject",
+			registers: [argumentsObject],
+		});
+
+		const result = nextRegisterDestination(ctorFn);
+		cursor.block.instructions.push({
+			type: "call",
+			registers: [result, apply, parent, thisRegister, argumentsObject],
+		});
+	}
+
+	endFunction(ctorFn);
+	return ctorFn.functionIndex;
 }
 
 /**
@@ -835,10 +1112,35 @@ function compileStatementsToBlock(
 				compileVariableDeclaration(program, fn, block, statement);
 				break;
 			}
+			case "ClassDeclaration": {
+				compileClassDeclaration(program, fn, block, statement);
+				break;
+			}
 		}
 	}
 
 	return blockIdx;
+}
+
+function compileClassDeclaration(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.ClassDeclaration,
+) {
+	const binding = fn.semanticFile.nodeToBinding.get(statement);
+	if (!binding) {
+		return;
+	}
+
+	const cursor: IRCursor = { block };
+	const ctor = compileClass(program, fn, cursor, statement);
+	if (ctor === -1) {
+		return;
+	}
+
+	const location = getOrCreateBindingLocation(program, fn, binding);
+	storeRegisterAtLocation(cursor.block, location, ctor);
 }
 
 function compileExpressionStatement(
@@ -1439,6 +1741,9 @@ function compileExpression(
 		case "FunctionExpression": {
 			return compileFunctionExpression(program, fn, cursor, expression);
 		}
+		case "ClassExpression": {
+			return compileClass(program, fn, cursor, expression);
+		}
 		case "Identifier": {
 			return compileIdentifier(program, fn, cursor, expression);
 		}
@@ -1556,6 +1861,24 @@ function compileIdentifierAssignment(
 	const binding = fn.semanticFile.nodeToBinding.get(assignmentExpression.left);
 	if (!binding) {
 		return -1;
+	}
+
+	if (binding.undeclared && !isIRIntrinsic(binding.name)) {
+		// PutValue on an unresolvable reference throws ReferenceError; plain
+		// assignments still evaluate the right hand side first, compound
+		// forms throw on the read before it.
+		if (assignmentExpression.operator === "=") {
+			compileExpression(program, fn, cursor, assignmentExpression.right);
+		}
+
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadUndeclared",
+			registers: [destination],
+			nameStringIndex: getOrCreateStringConstant(program, binding.name),
+		});
+
+		return destination;
 	}
 
 	const location = getOrCreateBindingLocation(program, fn, binding);
@@ -1780,6 +2103,15 @@ function compileUnaryExpression(
 		return compileDeleteExpression(program, fn, cursor, expression);
 	}
 
+	if (expression.operator === "typeof" && expression.argument.type === "Identifier") {
+		const binding = fn.semanticFile.nodeToBinding.get(expression.argument);
+		if (binding?.undeclared && !isIRIntrinsic(expression.argument.name)) {
+			// typeof is the one reference read that resolves unresolvable
+			// identifiers to "undefined" instead of throwing.
+			return compileStaticString(program, fn, cursor, "undefined");
+		}
+	}
+
 	if (
 		expression.operator !== "!" &&
 		expression.operator !== "-" &&
@@ -1969,11 +2301,30 @@ function compileObjectExpression(
 	});
 
 	for (const property of objectExpression.properties) {
-		if (property.type !== "Property" || property.kind !== "init" || property.method) {
+		if (property.type !== "Property") {
 			return -1;
 		}
 
 		const key = compilePropertyKey(program, fn, cursor, property);
+
+		if (property.kind === "get" || property.kind === "set") {
+			const accessor = compileExpression(
+				program,
+				fn,
+				cursor,
+				property.value as ESTree.Expression,
+			);
+			cursor.block.instructions.push({
+				type: "defineAccessor",
+				registers: [object, key, accessor],
+				kind: property.kind,
+				enumerable: true,
+			});
+			continue;
+		}
+
+		// TODO(objects): literal members should use define semantics; a store
+		// runs setters inherited from Object.prototype.
 		const value = compileExpression(
 			program,
 			fn,
@@ -2050,11 +2401,16 @@ function compileMemberObjectAndKey(
 	cursor: IRCursor,
 	memberExpression: ESTree.MemberExpression,
 ) {
+	let object: number;
 	if (memberExpression.object.type === "Super") {
-		return { object: -1, key: -1 };
+		object = compileSuperObject(program, fn, cursor);
+		if (object === -1) {
+			return { object: -1, key: -1 };
+		}
+	} else {
+		object = compileExpression(program, fn, cursor, memberExpression.object);
 	}
 
-	const object = compileExpression(program, fn, cursor, memberExpression.object);
 	const key = memberExpression.computed
 		? compileExpression(program, fn, cursor, memberExpression.property)
 		: memberExpression.property.type === "Identifier"
@@ -2062,6 +2418,36 @@ function compileMemberObjectAndKey(
 			: -1;
 
 	return { object, key };
+}
+
+/**
+ * Resolve the super lookup object: the parent prototype in instance members,
+ * the parent itself in static ones.
+ */
+function compileSuperObject(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+): number {
+	const classContext = fn.classContext;
+	if (!classContext?.superBinding) {
+		return -1;
+	}
+
+	const location = getOrCreateBindingLocation(program, fn, classContext.superBinding);
+	const parent = loadRegisterFromLocation(fn, cursor.block, location);
+	if (classContext.isStatic) {
+		return parent;
+	}
+
+	const prototypeKey = compileStaticString(program, fn, cursor, "prototype");
+	const object = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadProperty",
+		registers: [object, parent, prototypeKey],
+	});
+
+	return object;
 }
 
 function compilePropertyKey(
@@ -2108,8 +2494,12 @@ function compileCall(
 	callExpression: ESTree.CallExpression,
 ): number {
 	const calleeNode = callExpression.callee as unknown as ESTree.Node;
-	if (calleeNode.type === "Super" || (calleeNode.type as string) === "Import") {
+	if ((calleeNode.type as string) === "Import") {
 		return -1;
+	}
+
+	if (calleeNode.type === "Super") {
+		return compileSuperCall(program, fn, cursor, callExpression);
 	}
 
 	let callee: number;
@@ -2117,6 +2507,15 @@ function compileCall(
 	if (calleeNode.type === "MemberExpression") {
 		const member = compileMemberObjectAndKey(program, fn, cursor, calleeNode);
 		thisRegister = member.object;
+		if (calleeNode.object.type === "Super") {
+			// Super method calls run on the current instance, not the parent
+			// prototype the method was looked up on.
+			thisRegister = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "loadThis",
+				registers: [thisRegister],
+			});
+		}
 		callee = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
 			type: "loadProperty",
@@ -2140,6 +2539,48 @@ function compileCall(
 	});
 	const destination = nextRegisterDestination(fn);
 
+	cursor.block.instructions.push({
+		type: "call",
+		registers: [destination, callee, thisRegister, ...args],
+	});
+
+	return destination;
+}
+
+/**
+ * Compile super(...) as a plain call of the captured parent constructor on
+ * the current this. The spec's this-substitution for object returns from the
+ * parent is approximated away.
+ */
+function compileSuperCall(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	callExpression: ESTree.CallExpression,
+): number {
+	const superBinding = fn.classContext?.superBinding;
+	if (!superBinding) {
+		return -1;
+	}
+
+	const location = getOrCreateBindingLocation(program, fn, superBinding);
+	const callee = loadRegisterFromLocation(fn, cursor.block, location);
+
+	const thisRegister = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadThis",
+		registers: [thisRegister],
+	});
+
+	const args = callExpression.arguments.map((arg) => {
+		if (arg.type === "SpreadElement") {
+			return -1;
+		}
+
+		return compileExpression(program, fn, cursor, arg);
+	});
+
+	const destination = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "call",
 		registers: [destination, callee, thisRegister, ...args],
@@ -2220,6 +2661,18 @@ function compileIdentifier(
 		cursor.block.instructions.push({
 			type: "move",
 			registers: [destination, fn.argumentsObjectRegister],
+		});
+
+		return destination;
+	}
+
+	if (binding.undeclared) {
+		// Reads of unresolvable references throw ReferenceError at runtime.
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadUndeclared",
+			registers: [destination],
+			nameStringIndex: getOrCreateStringConstant(program, identifier.name),
 		});
 
 		return destination;

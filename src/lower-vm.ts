@@ -184,6 +184,31 @@ export type VmInstruction =
 			key: number;
 	  }
 	| {
+			opcode: "DEFINE_ACCESSOR";
+			object: number;
+			key: number;
+			accessor: number;
+			isSetter: boolean;
+			enumerable: boolean;
+	  }
+	| {
+			opcode: "DEFINE_PROPERTY";
+			object: number;
+			key: number;
+			value: number;
+			enumerable: boolean;
+	  }
+	| {
+			opcode: "SET_PROTOTYPE";
+			object: number;
+			prototype: number;
+	  }
+	| {
+			opcode: "LOAD_UNDECLARED";
+			dst: number;
+			nameStringIndex: number;
+	  }
+	| {
 			opcode: "BINARY";
 			dst: number;
 			left: number;
@@ -477,6 +502,35 @@ function lowerInstructionToVmInstruction(
 				dst: instruction.registers[0],
 				object: instruction.registers[1],
 				key: instruction.registers[2],
+			};
+		case "defineAccessor":
+			return {
+				opcode: "DEFINE_ACCESSOR",
+				object: instruction.registers[0],
+				key: instruction.registers[1],
+				accessor: instruction.registers[2],
+				isSetter: instruction.kind === "set",
+				enumerable: instruction.enumerable,
+			};
+		case "defineProperty":
+			return {
+				opcode: "DEFINE_PROPERTY",
+				object: instruction.registers[0],
+				key: instruction.registers[1],
+				value: instruction.registers[2],
+				enumerable: instruction.enumerable,
+			};
+		case "setPrototype":
+			return {
+				opcode: "SET_PROTOTYPE",
+				object: instruction.registers[0],
+				prototype: instruction.registers[1],
+			};
+		case "loadUndeclared":
+			return {
+				opcode: "LOAD_UNDECLARED",
+				dst: instruction.registers[0],
+				nameStringIndex: instruction.nameStringIndex,
 			};
 		case "binary":
 			return {

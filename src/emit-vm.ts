@@ -158,6 +158,14 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value} } }`;
 		case "DELETE_PROPERTY":
 			return `{ .opcode = MAL_OP_DELETE_PROPERTY, .as.delete_property = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key} } }`;
+		case "DEFINE_ACCESSOR":
+			return `{ .opcode = MAL_OP_DEFINE_ACCESSOR, .as.define_accessor = { .object = ${instruction.object}, .key = ${instruction.key}, .accessor = ${instruction.accessor}, .is_setter = ${instruction.isSetter}, .enumerable = ${instruction.enumerable} } }`;
+		case "DEFINE_PROPERTY":
+			return `{ .opcode = MAL_OP_DEFINE_PROPERTY, .as.define_property = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value}, .enumerable = ${instruction.enumerable} } }`;
+		case "SET_PROTOTYPE":
+			return `{ .opcode = MAL_OP_SET_PROTOTYPE, .as.set_prototype = { .object = ${instruction.object}, .prototype = ${instruction.prototype} } }`;
+		case "LOAD_UNDECLARED":
+			return `{ .opcode = MAL_OP_LOAD_UNDECLARED, .as.load_undeclared = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex} } }`;
 		case "BINARY":
 			return `{ .opcode = MAL_OP_BINARY, .as.binary = { .dst = ${instruction.dst}, .left = ${instruction.left}, .right = ${instruction.right}, .op = ${emitBinaryOperator(instruction.operator)} } }`;
 		case "UNARY":
@@ -187,6 +195,10 @@ function emitIntrinsic(
 			return "MAL_INTRINSIC_REFERENCE_ERROR_CONSTRUCTOR";
 		case "SyntaxError":
 			return "MAL_INTRINSIC_SYNTAX_ERROR_CONSTRUCTOR";
+		case "URIError":
+			return "MAL_INTRINSIC_URI_ERROR_CONSTRUCTOR";
+		case "EvalError":
+			return "MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR";
 		case "String":
 			return "MAL_INTRINSIC_STRING_CONSTRUCTOR";
 		case "Number":
@@ -288,6 +300,8 @@ function emitBinaryOperator(operator: VmBinaryOperator) {
 			return "MAL_BIN_STRICT_NEQ";
 		case "in":
 			return "MAL_BIN_IN";
+		case "instanceof":
+			return "MAL_BIN_INSTANCEOF";
 	}
 
 	throw new Error("Unknown binary operator");

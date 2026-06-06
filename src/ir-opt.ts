@@ -19,11 +19,17 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		optPatchJumpsToDirectJumpBlocks,
 	];
 
-	// Run all passes a few times. We can probably do better, but this allows us to be a bit more
-	// naive for now ;)
-	for (let i = 0; i < 5; ++i) {
+	// Run all passes until a full round no longer changes the program. The cap is a safety net
+	// against passes that endlessly flip-flop the IR.
+	const maxRounds = 20;
+	for (let round = 0; round < maxRounds; ++round) {
+		let changed = false;
 		for (const pass of passes) {
-			pass(program);
+			changed = pass(program) || changed;
+		}
+
+		if (!changed) {
+			break;
 		}
 	}
 
@@ -33,7 +39,9 @@ export function executeIROptimizations(program: IntermediateProgram) {
 /**
  * Drop all instructions from a block after an unconditional jump or return.
  */
-function optDropInstructionsAfterJumpsOrReturns(program: IntermediateProgram) {
+function optDropInstructionsAfterJumpsOrReturns(program: IntermediateProgram): boolean {
+	let changed = false;
+
 	for (const fn of program.functions) {
 		for (const block of fn.blocks) {
 			for (let i = 0; i < block.instructions.length; ++i) {
@@ -47,19 +55,26 @@ function optDropInstructionsAfterJumpsOrReturns(program: IntermediateProgram) {
 					instruction.type === "return" ||
 					instruction.type === "throw"
 				) {
-					block.instructions.splice(i + 1);
+					if (i + 1 < block.instructions.length) {
+						block.instructions.splice(i + 1);
+						changed = true;
+					}
 					break;
 				}
 			}
 		}
 	}
+
+	return changed;
 }
 
 /**
  * Check if all blocks in the program are referenced. We can assume that all blocks are
  * referenced before we optimize, but in some future cases we might inline blocks or functions.
  */
-function optDropUnreferencedBlocks(program: IntermediateProgram) {
+function optDropUnreferencedBlocks(program: IntermediateProgram): boolean {
+	let changed = false;
+
 	for (const fn of program.functions) {
 		const blockIndices = new Set(
 			// Note the slice. Our first block is our function entrypoint. If we skip that, we skip
@@ -88,6 +103,10 @@ function optDropUnreferencedBlocks(program: IntermediateProgram) {
 		}
 
 		const indicesToPatch = [...blockIndices].sort((a, b) => a - b);
+		if (indicesToPatch.length > 0) {
+			changed = true;
+		}
+
 		for (let patchIndex = 0; patchIndex < indicesToPatch.length; patchIndex++) {
 			const blockIdx = indicesToPatch[patchIndex]!;
 
@@ -116,12 +135,16 @@ function optDropUnreferencedBlocks(program: IntermediateProgram) {
 			}
 		}
 	}
+
+	return changed;
 }
 
 /**
  * Move all local variable usages to use registers.
  */
-function optLocalsToRegister(program: IntermediateProgram) {
+function optLocalsToRegister(program: IntermediateProgram): boolean {
+	let changed = false;
+
 	for (const fn of program.functions) {
 		const localMap = new Map<number, number>();
 
@@ -143,22 +166,28 @@ function optLocalsToRegister(program: IntermediateProgram) {
 						type: "move",
 						registers: [instruction.registers[0], register],
 					};
+					changed = true;
 				} else if (instruction.type === "storeLocal") {
 					block.instructions[i] = {
 						type: "move",
 						registers: [register, instruction.registers[0]],
 					};
+					changed = true;
 				}
 			}
 		}
 	}
+
+	return changed;
 }
 
 /**
  * We can combine linear blocks into a single block, if they are only jumped to from the last
  * instruction of the previous block.
  */
-function optCombineLinearBlocks(program: IntermediateProgram) {
+function optCombineLinearBlocks(program: IntermediateProgram): boolean {
+	let changed = false;
+
 	for (const fn of program.functions) {
 		const jumpTargetToSources = new Map<number, Array<number>>();
 
@@ -218,6 +247,7 @@ function optCombineLinearBlocks(program: IntermediateProgram) {
 
 			// Drop the target block.
 			fn.blocks.splice(jumpTarget, 1);
+			changed = true;
 
 			// Patch up all other found pairs. Note that these are sorted in source ascending order
 			// and we can't have multiple sources to a single target since we only check the last
@@ -251,12 +281,16 @@ function optCombineLinearBlocks(program: IntermediateProgram) {
 			}
 		}
 	}
+
+	return changed;
 }
 
 /**
  * Trace down jumps to blocks with only a jump instruction. So we don't jump twice.
  */
-function optPatchJumpsToDirectJumpBlocks(program: IntermediateProgram) {
+function optPatchJumpsToDirectJumpBlocks(program: IntermediateProgram): boolean {
+	let changed = false;
+
 	for (const fn of program.functions) {
 		const jumpBlockToTarget = new Map<number, number>();
 
@@ -283,13 +317,17 @@ function optPatchJumpsToDirectJumpBlocks(program: IntermediateProgram) {
 						const targetBlock = instr.blocks[i]!;
 						const jumpTarget = jumpBlockToTarget.get(targetBlock);
 
-						// Inline the jump if we have matching target.
-						if (jumpTarget !== undefined) {
+						// Inline the jump if we have matching target. Self-jumps (e.g. an empty
+						// infinite loop) map to themselves; skip them so the fixpoint terminates.
+						if (jumpTarget !== undefined && jumpTarget !== targetBlock) {
 							instr.blocks[i] = jumpTarget;
+							changed = true;
 						}
 					}
 				}
 			}
 		}
 	}
+
+	return changed;
 }

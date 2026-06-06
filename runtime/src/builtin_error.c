@@ -6,6 +6,7 @@
 #include "heap_string.h"
 #include "value_ops.h"
 #include "vm.h"
+#include "vm_ops.h"
 
 /**
  * Allocate an error object backed by the given prototype slot, with the
@@ -49,13 +50,28 @@ static MalValue mal_builtin_syntax_error_constructor(MalVm *vm, MalValue this_va
     return mal_builtin_error_make(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, args, arg_count);
 }
 
+static MalValue mal_builtin_uri_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) this_value;
+    return mal_builtin_error_make(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, args, arg_count);
+}
+
+static MalValue mal_builtin_eval_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    (void) this_value;
+    return mal_builtin_error_make(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE, args, arg_count);
+}
+
 static MalString *mal_builtin_error_resolve_string(MalVm *vm, MalObject *error, const byte *name) {
     MalPropertyResolution resolution = mal_object_resolve_property(error, mal_intrinsic_string_key(vm, name));
-    if (!resolution.found || mal_value_is_undefined(resolution.desc.value)) {
+    if (!resolution.found) {
         return nullptr;
     }
 
-    return mal_ops_to_string(&vm->heap, resolution.desc.value);
+    MalValue value;
+    if (!mal_vm_desc_read(vm, resolution.desc, mal_value_from_object(error), &value) || mal_value_is_undefined(value)) {
+        return nullptr;
+    }
+
+    return mal_ops_to_string(&vm->heap, value);
 }
 
 static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
@@ -95,10 +111,13 @@ static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_v
 }
 
 void mal_vm_throw_error(MalVm *vm, MalIntrinsic prototype_slot, const byte *message) {
-    MalValue message_value = mal_value_from_string(mal_intrinsic_ascii(vm, message));
+    mal_vm_throw_error_value(vm, prototype_slot, mal_value_from_string(mal_intrinsic_ascii(vm, message)));
+}
+
+void mal_vm_throw_error_value(MalVm *vm, MalIntrinsic prototype_slot, MalValue message) {
     vm->completion = (MalCompletion) {
         .kind = MAL_COMPLETION_THROW,
-        .value = mal_builtin_error_make(vm, prototype_slot, &message_value, 1),
+        .value = mal_builtin_error_make(vm, prototype_slot, &message, 1),
     };
 }
 
@@ -144,4 +163,6 @@ void mal_builtin_error_install(MalVm *vm) {
     mal_builtin_error_install_kind(vm, "RangeError", MAL_INTRINSIC_RANGE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, error_prototype, mal_builtin_range_error_constructor);
     mal_builtin_error_install_kind(vm, "ReferenceError", MAL_INTRINSIC_REFERENCE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, error_prototype, mal_builtin_reference_error_constructor);
     mal_builtin_error_install_kind(vm, "SyntaxError", MAL_INTRINSIC_SYNTAX_ERROR_CONSTRUCTOR, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, error_prototype, mal_builtin_syntax_error_constructor);
+    mal_builtin_error_install_kind(vm, "URIError", MAL_INTRINSIC_URI_ERROR_CONSTRUCTOR, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, error_prototype, mal_builtin_uri_error_constructor);
+    mal_builtin_error_install_kind(vm, "EvalError", MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE, error_prototype, mal_builtin_eval_error_constructor);
 }
