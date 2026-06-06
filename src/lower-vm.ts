@@ -31,6 +31,7 @@ export interface VmFunction {
 	parameterCount: number;
 	registerCount: number;
 	capturedCount: number;
+	strict: boolean;
 	instructions: Array<VmInstruction>;
 	handlers: Array<VmExceptionHandler>;
 }
@@ -177,6 +178,12 @@ export type VmInstruction =
 			value: number;
 	  }
 	| {
+			opcode: "DELETE_PROPERTY";
+			dst: number;
+			object: number;
+			key: number;
+	  }
+	| {
 			opcode: "BINARY";
 			dst: number;
 			left: number;
@@ -227,6 +234,7 @@ function lowerFunctionToVmFunction(fn: IRFunction): VmFunction {
 		parameterCount: fn.parameterCount,
 		registerCount: fn.nextRegisterDestination,
 		capturedCount: fn.nextCapturedIndex,
+		strict: fn.semanticFile.strict,
 		instructions,
 		handlers: collectExceptionHandlers(instructions),
 	};
@@ -462,6 +470,13 @@ function lowerInstructionToVmInstruction(
 				object: instruction.registers[0],
 				key: instruction.registers[1],
 				value: instruction.registers[2],
+			};
+		case "deleteProperty":
+			return {
+				opcode: "DELETE_PROPERTY",
+				dst: instruction.registers[0],
+				object: instruction.registers[1],
+				key: instruction.registers[2],
 			};
 		case "binary":
 			return {

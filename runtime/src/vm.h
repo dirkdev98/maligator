@@ -32,6 +32,7 @@ typedef enum MalOpcode {
     MAL_OP_STORE_GLOBAL,
     MAL_OP_LOAD_PROPERTY,
     MAL_OP_STORE_PROPERTY,
+    MAL_OP_DELETE_PROPERTY,
     MAL_OP_CALL,
     MAL_OP_CONSTRUCT,
     MAL_OP_BINARY,
@@ -58,6 +59,7 @@ typedef enum MalBinaryOp {
     MAL_BIN_NEQ,
     MAL_BIN_STRICT_EQ,
     MAL_BIN_STRICT_NEQ,
+    MAL_BIN_IN,
 } MalBinaryOp;
 
 typedef enum MalUnaryOp {
@@ -179,6 +181,10 @@ typedef struct MalInstruction {
         struct {
             i32 object, key, value;
         } store_property;
+
+        struct {
+            i32 dst, object, key;
+        } delete_property;
 
         struct {
             i32 dst, callee, this_value, argument_count;

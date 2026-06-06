@@ -52,9 +52,18 @@ const supportedBinaryOperators = new Set<string>([
 	"!=",
 	"===",
 	"!==",
+	"in",
 ]);
 
-const supportedUnaryOperators = new Set<string>(["!", "-", "+", "~", "typeof", "void"]);
+const supportedUnaryOperators = new Set<string>([
+	"!",
+	"-",
+	"+",
+	"~",
+	"typeof",
+	"void",
+	"delete",
+]);
 
 const supportedAssignmentOperators = new Set<string>([
 	"=",

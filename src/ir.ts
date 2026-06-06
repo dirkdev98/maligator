@@ -320,6 +320,12 @@ export type IRInstruction =
 			registers: [number, number, number];
 	  }
 	| {
+			type: "deleteProperty";
+
+			// [destination, object, key]
+			registers: [number, number, number];
+	  }
+	| {
 			type: "binary";
 
 			// [destination, left, right]
@@ -344,7 +350,8 @@ export type IRInstruction =
 				| "=="
 				| "!="
 				| "==="
-				| "!==";
+				| "!=="
+				| "in";
 	  }
 	| {
 			type: "unary";
@@ -427,6 +434,7 @@ const irBinaryOperators = new Set<string>([
 	"!=",
 	"===",
 	"!==",
+	"in",
 ]);
 
 function isIRBinaryOperator(operator: string): operator is IRBinaryOperator {
@@ -1768,6 +1776,10 @@ function compileUnaryExpression(
 		return compileUndefined(fn, cursor);
 	}
 
+	if (expression.operator === "delete") {
+		return compileDeleteExpression(program, fn, cursor, expression);
+	}
+
 	if (
 		expression.operator !== "!" &&
 		expression.operator !== "-" &&
@@ -1775,7 +1787,6 @@ function compileUnaryExpression(
 		expression.operator !== "~" &&
 		expression.operator !== "typeof"
 	) {
-		// TODO(expressions): delete is not supported yet.
 		return -1;
 	}
 
@@ -1785,6 +1796,45 @@ function compileUnaryExpression(
 		type: "unary",
 		registers: [destination, operand],
 		operator: expression.operator,
+	});
+
+	return destination;
+}
+
+/**
+ * Compile delete. Member targets emit the delete instruction; any other
+ * operand only gets evaluated and the result is true. Deleting an identifier
+ * cannot reach this point: the parser rejects it in (implied) strict mode.
+ */
+function compileDeleteExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	expression: ESTree.UnaryExpression,
+): number {
+	if (expression.argument.type === "MemberExpression") {
+		const { object, key } = compileMemberObjectAndKey(
+			program,
+			fn,
+			cursor,
+			expression.argument,
+		);
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "deleteProperty",
+			registers: [destination, object, key],
+		});
+
+		return destination;
+	}
+
+	compileExpression(program, fn, cursor, expression.argument);
+
+	const destination = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createBoolean",
+		registers: [destination],
+		value: true,
 	});
 
 	return destination;

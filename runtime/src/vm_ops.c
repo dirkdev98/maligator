@@ -11,6 +11,8 @@
 
 static MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 
+static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *value_out);
+
 static bool mal_vm_string_to_array_index(MalString *string, i32 *index_out) {
     usize length = mal_string_length(string);
     const c16 *code_units = mal_string_code_units(string);
@@ -321,6 +323,24 @@ void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
         case MAL_BIN_STRICT_NEQ:
             callable->registers[instruction->as.binary.dst] = mal_ops_strict_not_equal(left, right);
             break;
+        case MAL_BIN_IN: {
+            if (!mal_value_is_object(right)) {
+                mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot use 'in' operator on a non-object");
+                break;
+            }
+
+            MalKey key;
+            if (!mal_vm_value_to_property_key(callable->vm, left, &key)) {
+                callable->registers[instruction->as.binary.dst] = mal_value_new_boolean(false);
+                break;
+            }
+
+            MalValue synthetic;
+            bool found = mal_vm_resolve_synthetic_property(callable->vm, right, key, &synthetic) ||
+                mal_object_resolve_property(mal_value_to_object(right), key).found;
+            callable->registers[instruction->as.binary.dst] = mal_value_new_boolean(found);
+            break;
+        }
     }
 }
 
@@ -464,6 +484,39 @@ static bool mal_vm_value_is_number(MalValue value) {
     return mal_value_is_int32(value) || mal_value_is_f64_or_nan(value) || value == MAL_VALUE_NEGATIVE_ZERO;
 }
 
+/**
+ * Resolve the synthetic properties that have no backing slot in the ordinary
+ * property tables: array length, callable length/name, and the lazily
+ * materialized script function prototype. Shared by load, `in`, and delete so
+ * the three operators agree on what exists.
+ */
+static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *value_out) {
+    if (mal_value_is_array_object(object_value) && mal_array_key_is_length(key)) {
+        *value_out = mal_value_from_i32((i32) mal_array_object_length(mal_value_to_array_object(object_value)));
+        return true;
+    }
+
+    if (mal_value_is_callable(object_value)) {
+        if (mal_array_key_is_length(key)) {
+            *value_out = mal_value_from_i32(mal_vm_callable_length(vm, object_value));
+            return true;
+        }
+
+        if (mal_vm_key_is_name(key)) {
+            MalString *name = mal_vm_callable_name(vm, object_value);
+            *value_out = name != nullptr ? mal_value_from_string(name) : mal_value_new_undefined();
+            return true;
+        }
+
+        if (mal_value_is_function_object(object_value) && mal_vm_key_is_prototype(key)) {
+            *value_out = mal_vm_function_prototype(vm, object_value);
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
     MalValue object_value = callable->registers[instruction->as.load_property.object];
     MalValue key_value = callable->registers[instruction->as.load_property.key];
@@ -521,27 +574,10 @@ void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
         return;
     }
 
-    if (mal_value_is_array_object(object_value) && mal_array_key_is_length(key)) {
-        callable->registers[dst] = mal_value_from_i32((i32) mal_array_object_length(mal_value_to_array_object(object_value)));
+    MalValue synthetic;
+    if (mal_vm_resolve_synthetic_property(callable->vm, object_value, key, &synthetic)) {
+        callable->registers[dst] = synthetic;
         return;
-    }
-
-    if (mal_value_is_callable(object_value)) {
-        if (mal_array_key_is_length(key)) {
-            callable->registers[dst] = mal_value_from_i32(mal_vm_callable_length(callable->vm, object_value));
-            return;
-        }
-
-        if (mal_vm_key_is_name(key)) {
-            MalString *name = mal_vm_callable_name(callable->vm, object_value);
-            callable->registers[dst] = name != nullptr ? mal_value_from_string(name) : mal_value_new_undefined();
-            return;
-        }
-
-        if (mal_value_is_function_object(object_value) && mal_vm_key_is_prototype(key)) {
-            callable->registers[dst] = mal_vm_function_prototype(callable->vm, object_value);
-            return;
-        }
     }
 
     MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(object_value), key);
@@ -575,6 +611,63 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
     }
 
     mal_object_set(mal_value_to_object(object_value), key, value);
+}
+
+/**
+ * Store a delete result, upgrading failures to the strict-mode TypeError.
+ */
+static void mal_vm_finish_delete(MalCallable *callable, i32 dst, bool deleted) {
+    if (!deleted && callable->function->strict) {
+        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot delete property");
+        return;
+    }
+
+    callable->registers[dst] = mal_value_new_boolean(deleted);
+}
+
+void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction) {
+    MalValue object_value = callable->registers[instruction->as.delete_property.object];
+    MalValue key_value = callable->registers[instruction->as.delete_property.key];
+    i32 dst = instruction->as.delete_property.dst;
+
+    if (mal_value_is_nil(object_value)) {
+        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
+        return;
+    }
+
+    MalKey key;
+    if (!mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
+        callable->registers[dst] = mal_value_new_boolean(true);
+        return;
+    }
+
+    if (!mal_value_is_object(object_value)) {
+        // The only own properties a primitive can carry live on strings:
+        // length and the in-range indices, all non-configurable.
+        bool deleted = true;
+        if (mal_value_is_string(object_value)) {
+            MalString *string = mal_value_to_string(object_value);
+            if (mal_array_key_is_length(key) ||
+                (key.kind == MAL_KEY_INDEX && (usize) mal_value_to_i32(key.value) < mal_string_length(string))) {
+                deleted = false;
+            }
+        }
+
+        mal_vm_finish_delete(callable, dst, deleted);
+        return;
+    }
+
+    MalValue synthetic;
+    if (mal_vm_resolve_synthetic_property(callable->vm, object_value, key, &synthetic)) {
+        // Synthetic properties have no table slot to remove. Array length and
+        // function prototype are non-configurable anyway; callable length and
+        // name are approximated as non-deletable. TODO(delete): the spec marks
+        // callable length and name configurable.
+        mal_vm_finish_delete(callable, dst, false);
+        return;
+    }
+
+    mal_vm_finish_delete(callable, dst, mal_object_delete_own(mal_value_to_object(object_value), key));
 }
 
 void mal_op_jump(MalCallable *callable, MalInstruction *instruction) {

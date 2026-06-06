@@ -69,6 +69,7 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 		lines.push(`        .parameter_count = ${fn.parameterCount},`);
 		lines.push(`        .register_count = ${fn.registerCount},`);
 		lines.push(`        .captured_count = ${fn.capturedCount},`);
+		lines.push(`        .strict = ${fn.strict},`);
 		lines.push(`        .instruction_count = ${fn.instructions.length},`);
 		lines.push(`        .instructions = mal_function_${i}_instructions${suffix},`);
 		lines.push(`        .handler_count = ${fn.handlers.length},`);
@@ -155,6 +156,8 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key} } }`;
 		case "STORE_PROPERTY":
 			return `{ .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value} } }`;
+		case "DELETE_PROPERTY":
+			return `{ .opcode = MAL_OP_DELETE_PROPERTY, .as.delete_property = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key} } }`;
 		case "BINARY":
 			return `{ .opcode = MAL_OP_BINARY, .as.binary = { .dst = ${instruction.dst}, .left = ${instruction.left}, .right = ${instruction.right}, .op = ${emitBinaryOperator(instruction.operator)} } }`;
 		case "UNARY":
@@ -283,6 +286,8 @@ function emitBinaryOperator(operator: VmBinaryOperator) {
 			return "MAL_BIN_STRICT_EQ";
 		case "!==":
 			return "MAL_BIN_STRICT_NEQ";
+		case "in":
+			return "MAL_BIN_IN";
 	}
 
 	throw new Error("Unknown binary operator");

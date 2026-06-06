@@ -222,6 +222,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_STORE_PROPERTY:
                 mal_op_store_property(frame, &instruction);
                 break;
+            case MAL_OP_DELETE_PROPERTY:
+                mal_op_delete_property(frame, &instruction);
+                break;
 
             case MAL_OP_LOAD_CAPTURED:
                 frame->registers[instruction.as.load_captured.dst] = mal_value_new_undefined();

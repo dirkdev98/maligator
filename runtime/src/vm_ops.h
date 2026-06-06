@@ -56,6 +56,8 @@ void mal_op_load_property(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_store_property(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_jump(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction);
