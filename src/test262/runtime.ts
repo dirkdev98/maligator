@@ -6,8 +6,9 @@ import { emitVmDefinition } from "../emit-vm.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
 import { compileSemanticProgramToIr } from "../ir.ts";
 import { lowerIrProgramToVmDefinition } from "../lower-vm.ts";
+import { parseScript } from "../parser.ts";
 import { allocateRegisters } from "../register-alloc.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "../semantic-analysis.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../semantic-analysis.ts";
 import { collectUnsupportedSyntax } from "../supported-syntax.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
@@ -33,6 +34,51 @@ const HARNESS_CACHE: Record<string, string> = {};
 const FAILURE_CACHE: Record<string, Array<string>> = {};
 const UNSUPPORTED_CACHE: Record<string, Array<string>> = {};
 
+const FAILURE_COUNTS: Record<string, number> = {};
+const UNSUPPORTED_COUNTS: Record<string, number> = {};
+
+/**
+ * Per-phase durations. Totals are summed per-test durations across all
+ * workers, so they exceed wall time on parallel runs. Run timings come from
+ * the batch driver's own per-test measurements.
+ */
+interface PhaseTimings {
+	totalMs: number;
+	count: number;
+	slowest: Array<{ path: string; ms: number }>;
+}
+
+const TIMINGS: Record<"compile" | "cc" | "run", PhaseTimings> = {
+	compile: { totalMs: 0, count: 0, slowest: [] },
+	cc: { totalMs: 0, count: 0, slowest: [] },
+	run: { totalMs: 0, count: 0, slowest: [] },
+};
+
+function recordTiming(phase: keyof typeof TIMINGS, label: string, ms: number) {
+	const timing = TIMINGS[phase];
+
+	timing.totalMs += ms;
+	timing.count++;
+	timing.slowest.push({ path: label, ms: Math.round(ms * 10) / 10 });
+	timing.slowest.sort((a, b) => b.ms - a.ms);
+	timing.slowest.length = Math.min(timing.slowest.length, 10);
+}
+
+export function getTimings() {
+	return Object.fromEntries(
+		Object.entries(TIMINGS).map(([phase, timing]) => [
+			phase,
+			{
+				totalSeconds: Math.round(timing.totalMs / 100) / 10,
+				count: timing.count,
+				averageMs:
+					timing.count > 0 ? Math.round((timing.totalMs / timing.count) * 10) / 10 : 0,
+				slowest: timing.slowest,
+			},
+		]),
+	);
+}
+
 export function test262PrepareBuild() {
 	rmSync(TEST262_METADATA.buildPath, { recursive: true, force: true });
 	mkdirSync(TEST262_METADATA.buildPath, { recursive: true });
@@ -40,9 +86,13 @@ export function test262PrepareBuild() {
 	test262Log("Building LibMaligator...");
 	execSync(`cmake --build runtime/build`, { stdio: "ignore" });
 
-	test262Log("Compiling harness main...");
+	test262Log("Compiling harness mains...");
 	execSync(
 		`cc -std=c2x -O1 -I runtime/src -c runtime/test262_main.c -o ${TEST262_METADATA.buildPath}/test262_main.o`,
+		{ stdio: "inherit" },
+	);
+	execSync(
+		`cc -std=c2x -O1 -I runtime/src -c runtime/test262_batch.c -o ${TEST262_METADATA.buildPath}/test262_batch.o`,
 		{ stdio: "inherit" },
 	);
 }
@@ -101,50 +151,6 @@ function recordFailure(
 	}
 }
 
-const FAILURE_COUNTS: Record<string, number> = {};
-const UNSUPPORTED_COUNTS: Record<string, number> = {};
-
-/**
- * Per-phase durations. Totals are summed per-test durations across all
- * workers, so they exceed wall time on parallel runs.
- */
-interface PhaseTimings {
-	totalMs: number;
-	count: number;
-	slowest: Array<{ path: string; ms: number }>;
-}
-
-const TIMINGS: Record<"compile" | "cc" | "run", PhaseTimings> = {
-	compile: { totalMs: 0, count: 0, slowest: [] },
-	cc: { totalMs: 0, count: 0, slowest: [] },
-	run: { totalMs: 0, count: 0, slowest: [] },
-};
-
-function recordTiming(phase: keyof typeof TIMINGS, file: Test262File, startedAt: number) {
-	const ms = performance.now() - startedAt;
-	const timing = TIMINGS[phase];
-
-	timing.totalMs += ms;
-	timing.count++;
-	timing.slowest.push({ path: file.path, ms: Math.round(ms * 10) / 10 });
-	timing.slowest.sort((a, b) => b.ms - a.ms);
-	timing.slowest.length = Math.min(timing.slowest.length, 10);
-}
-
-export function getTimings() {
-	return Object.fromEntries(
-		Object.entries(TIMINGS).map(([phase, timing]) => [
-			phase,
-			{
-				totalSeconds: Math.round(timing.totalMs / 100) / 10,
-				count: timing.count,
-				averageMs: timing.count > 0 ? Math.round(timing.totalMs / timing.count) : 0,
-				slowest: timing.slowest,
-			},
-		]),
-	);
-}
-
 function countReason(
 	counts: Record<string, number>,
 	cache: Record<string, Array<string>>,
@@ -155,39 +161,47 @@ function countReason(
 	recordFailure(cache, reason, file);
 }
 
-export async function test262RunFile(file: Test262File, workerId: number) {
+function firstLine(text: string) {
+	return text.split("\n")[0]?.trim() ?? "";
+}
+
+/**
+ * Compile a test to a C translation unit fragment, resolving the SKIPPED,
+ * UNSUPPORTED and COMPILE_FAILED verdicts along the way. Returns undefined
+ * when there is nothing to execute.
+ */
+function test262CompileToC(file: Test262File, symbolSuffix: string): string | undefined {
 	if (test262ShouldSkip(file)) {
 		file.result = "SKIPPED";
-		return;
+		return undefined;
 	}
 
 	const source = composeSource(file);
-	const baseName = path.join(TEST262_METADATA.buildPath, `t${workerId}`);
 
-	// Phase 1: compile JS to a C translation unit in-process.
 	const compileStartedAt = performance.now();
-	let cSource: string;
 	try {
-		writeFileSync(`${baseName}.js`, source);
-
-		const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
-			path.resolve(`${baseName}.js`),
-		);
-
-		const unsupported = collectUnsupportedSyntax(semanticProgram.files[0]!.ast);
+		// Parse and scan before any further work: unsupported tests stop here
+		// without paying for scope and binding analysis.
+		const parsed = parseScript(source, { strict: true });
+		const unsupported = collectUnsupportedSyntax(parsed.ast);
 		if (unsupported.size > 0) {
 			file.result = "UNSUPPORTED";
 			for (const feature of unsupported) {
 				countReason(UNSUPPORTED_COUNTS, UNSUPPORTED_CACHE, feature, file);
 			}
-			return;
+			return undefined;
 		}
 
+		const semanticProgram = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			file.path,
+			parsed,
+		);
 		const irProgram = compileSemanticProgramToIr(semanticProgram);
 		executeIROptimizations(irProgram);
 		allocateRegisters(irProgram);
 		const vmDefinition = lowerIrProgramToVmDefinition(irProgram);
-		cSource = emitVmDefinition(vmDefinition);
+		return emitVmDefinition(vmDefinition, { symbolSuffix, includeHeader: false });
 	} catch (e) {
 		file.result = "COMPILE_FAILED";
 		countReason(
@@ -196,15 +210,191 @@ export async function test262RunFile(file: Test262File, workerId: number) {
 			`compile: ${e instanceof Error ? e.message : String(e)}`,
 			file,
 		);
-		return;
+		return undefined;
 	} finally {
-		recordTiming("compile", file, compileStartedAt);
+		recordTiming("compile", file.path, performance.now() - compileStartedAt);
+	}
+}
+
+interface BatchEntry {
+	file: Test262File;
+	index: number;
+}
+
+/**
+ * Run a batch of tests as a single translation unit and binary. The batch
+ * driver forks per test, so cc and process-image setup are paid once per
+ * batch while crash and timeout isolation stay per test.
+ */
+export async function test262RunBatch(files: Array<Test262File>, workerId: number) {
+	const entries: Array<BatchEntry> = [];
+	const sources: Array<string> = ['#include "vm.h"', ""];
+
+	for (const file of files) {
+		const cSource = test262CompileToC(file, `_${entries.length}`);
+		if (cSource === undefined) {
+			continue;
+		}
+
+		sources.push(cSource, "");
+		entries.push({ file, index: entries.length });
 	}
 
-	// Phase 2: cc against the prebuilt harness main and runtime library.
+	if (entries.length === 0) {
+		return;
+	}
+
+	sources.push(
+		"const MalVmDefinition *const mal_test262_definitions[] = {",
+		...entries.map((entry) => `    &mal_vm_definition_${entry.index},`),
+		"};",
+		`const int mal_test262_definition_count = ${entries.length};`,
+		"",
+	);
+
+	const baseName = path.join(TEST262_METADATA.buildPath, `batch${workerId}`);
 	const ccStartedAt = performance.now();
 	try {
-		writeFileSync(`${baseName}.c`, cSource);
+		writeFileSync(`${baseName}.c`, sources.join("\n"));
+		await execFileAsync(
+			"cc",
+			[
+				"-std=c2x",
+				"-O0",
+				"-I",
+				"runtime/src",
+				`${baseName}.c`,
+				`${TEST262_METADATA.buildPath}/test262_batch.o`,
+				"runtime/build/libLibMaligator.a",
+				"-o",
+				`${baseName}.bin`,
+			],
+			{ timeout: TEST262_METADATA.compileTimeoutMs },
+		);
+	} catch (e) {
+		// A cc failure cannot be attributed to a single test; retry every test
+		// through the single-test path instead.
+		recordTiming(
+			"cc",
+			`batch(${entries.length}) FAILED`,
+			performance.now() - ccStartedAt,
+		);
+		test262Log(
+			`Batch cc failed on worker ${workerId}, retrying single tests: ${firstLine(
+				e instanceof Error ? e.message : String(e),
+			)}`,
+		);
+		for (const entry of entries) {
+			entry.file.result = "UNKNOWN";
+			await test262RunSingle(entry.file, workerId);
+		}
+		return;
+	}
+	recordTiming("cc", `batch(${entries.length})`, performance.now() - ccStartedAt);
+
+	let stdout = "";
+	try {
+		const result = await execFileAsync(
+			`${baseName}.bin`,
+			["--all", String(TEST262_METADATA.runTimeoutMs)],
+			{
+				timeout: entries.length * TEST262_METADATA.runTimeoutMs + 15_000,
+				maxBuffer: 64 * 1024 * 1024,
+			},
+		);
+		stdout = result.stdout;
+	} catch (e) {
+		stdout = (e as { stdout?: string }).stdout ?? "";
+	}
+
+	const resolved = parseBatchOutput(stdout, entries);
+
+	// Anything the driver never reported (driver crash, overall timeout)
+	// retries individually.
+	const unreported = entries.filter((entry) => !resolved.has(entry.index));
+	if (unreported.length > 0) {
+		writeFileSync(`${baseName}.last-stdout.txt`, stdout);
+		test262Log(
+			`Batch driver on worker ${workerId} left ${unreported.length}/${entries.length} unreported (stdout saved), retrying singly.`,
+		);
+	}
+	for (const entry of unreported) {
+		entry.file.result = "UNKNOWN";
+		await test262RunSingle(entry.file, workerId);
+	}
+}
+
+function parseBatchOutput(stdout: string, entries: Array<BatchEntry>): Set<number> {
+	const resolved = new Set<number>();
+	const byIndex = new Map(entries.map((entry) => [entry.index, entry.file]));
+
+	let currentOutput: Array<string> = [];
+
+	for (const line of stdout.split("\n")) {
+		if (/^##TEST \d+$/.test(line)) {
+			currentOutput = [];
+			continue;
+		}
+
+		const resultMatch = line.match(
+			/^##RESULT (\d+) (EXIT|SIGNAL|TIMEOUT|FORK_FAILED) (\d+)(?: (\d+)ms)?$/,
+		);
+		if (!resultMatch) {
+			currentOutput.push(line);
+			continue;
+		}
+
+		const index = Number(resultMatch[1]);
+		const kind = resultMatch[2]!;
+		const code = Number(resultMatch[3]);
+		const elapsedMs = Number(resultMatch[4] ?? 0);
+		const file = byIndex.get(index);
+		if (!file) {
+			continue;
+		}
+
+		resolved.add(index);
+		recordTiming("run", file.path, elapsedMs);
+
+		if (kind === "EXIT" && code === 0) {
+			file.result = "PASSED";
+		} else if (kind === "EXIT") {
+			file.result = "FAILED";
+			const reason =
+				currentOutput.find((it) => it.startsWith("Uncaught"))?.trim() || "non-zero exit";
+			countReason(FAILURE_COUNTS, FAILURE_CACHE, reason, file);
+		} else if (kind === "SIGNAL") {
+			file.result = "CRASHED";
+			countReason(FAILURE_COUNTS, FAILURE_CACHE, `signal: ${code}`, file);
+		} else if (kind === "TIMEOUT") {
+			file.result = "TIMEOUT";
+			countReason(FAILURE_COUNTS, FAILURE_CACHE, "timeout", file);
+		} else {
+			file.result = "CRASHED";
+			countReason(FAILURE_COUNTS, FAILURE_CACHE, "fork failed", file);
+		}
+
+		currentOutput = [];
+	}
+
+	return resolved;
+}
+
+/**
+ * Single-test execution, used as the fallback when a batch cannot be
+ * compiled or its driver died before reporting.
+ */
+export async function test262RunSingle(file: Test262File, workerId: number) {
+	const cSource = test262CompileToC(file, "");
+	if (cSource === undefined) {
+		return;
+	}
+
+	const baseName = path.join(TEST262_METADATA.buildPath, `t${workerId}`);
+
+	const ccStartedAt = performance.now();
+	try {
+		writeFileSync(`${baseName}.c`, `#include "vm.h"\n\n${cSource}`);
 		await execFileAsync(
 			"cc",
 			[
@@ -226,10 +416,9 @@ export async function test262RunFile(file: Test262File, workerId: number) {
 		countReason(FAILURE_COUNTS, FAILURE_CACHE, `cc: ${firstLine(message)}`, file);
 		return;
 	} finally {
-		recordTiming("cc", file, ccStartedAt);
+		recordTiming("cc", file.path, performance.now() - ccStartedAt);
 	}
 
-	// Phase 3: run the binary in isolation.
 	const runStartedAt = performance.now();
 	try {
 		await execFileAsync(`${baseName}.bin`, [], {
@@ -240,7 +429,6 @@ export async function test262RunFile(file: Test262File, workerId: number) {
 	} catch (e) {
 		const error = e as NodeJS.ErrnoException & {
 			signal?: string;
-			code?: number | string;
 			stderr?: string;
 			killed?: boolean;
 		};
@@ -257,12 +445,8 @@ export async function test262RunFile(file: Test262File, workerId: number) {
 			countReason(FAILURE_COUNTS, FAILURE_CACHE, reason, file);
 		}
 	} finally {
-		recordTiming("run", file, runStartedAt);
+		recordTiming("run", file.path, performance.now() - runStartedAt);
 	}
-}
-
-function firstLine(text: string) {
-	return text.split("\n")[0]?.trim() ?? "";
 }
 
 export function getFailuresWithSamples() {

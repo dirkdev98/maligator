@@ -5,22 +5,32 @@ type VmBinaryOperator = Extract<VmInstruction, { opcode: "BINARY" }>["operator"]
 /**
  * Emit a C translation unit with the static MalVmDefinition data.
  */
-export function emitVmDefinition(definition: VmDefinition) {
-	const lines = ['#include "vm.h"', ""];
+export interface EmitOptions {
+	/**
+	 * Suffix for all emitted symbols, so multiple definitions can live in a
+	 * single translation unit (used by the batched test262 runner).
+	 */
+	symbolSuffix?: string;
+	includeHeader?: boolean;
+}
+
+export function emitVmDefinition(definition: VmDefinition, options: EmitOptions = {}) {
+	const suffix = options.symbolSuffix ?? "";
+	const lines = options.includeHeader === false ? [] : ['#include "vm.h"', ""];
 
 	for (let i = 0; i < definition.stringConstants.length; ++i) {
 		const constant = definition.stringConstants[i]!;
 		lines.push(
-			`static const c16 mal_string_${i}_code_units[] = { ${constant.length > 0 ? constant.join(", ") : "0"} };`,
+			`static const c16 mal_string_${i}_code_units${suffix}[] = { ${constant.length > 0 ? constant.join(", ") : "0"} };`,
 		);
 	}
 
 	if (definition.stringConstants.length > 0) {
-		lines.push("", "static const MalStringConstant mal_string_constants[] = {");
+		lines.push("", `static const MalStringConstant mal_string_constants${suffix}[] = {`);
 		for (let i = 0; i < definition.stringConstants.length; ++i) {
 			const constant = definition.stringConstants[i]!;
 			lines.push(
-				`    { .length = ${constant.length}, .code_units = mal_string_${i}_code_units },`,
+				`    { .length = ${constant.length}, .code_units = mal_string_${i}_code_units${suffix} },`,
 			);
 		}
 		lines.push("};", "");
@@ -28,7 +38,9 @@ export function emitVmDefinition(definition: VmDefinition) {
 
 	for (let i = 0; i < definition.functions.length; ++i) {
 		const fn = definition.functions[i]!;
-		lines.push(`static const MalInstruction mal_function_${i}_instructions[] = {`);
+		lines.push(
+			`static const MalInstruction mal_function_${i}_instructions${suffix}[] = {`,
+		);
 
 		for (const instruction of fn.instructions) {
 			lines.push(`    ${emitInstruction(instruction)},`);
@@ -37,7 +49,9 @@ export function emitVmDefinition(definition: VmDefinition) {
 		lines.push("};", "");
 
 		if (fn.handlers.length > 0) {
-			lines.push(`static const MalExceptionHandler mal_function_${i}_handlers[] = {`);
+			lines.push(
+				`static const MalExceptionHandler mal_function_${i}_handlers${suffix}[] = {`,
+			);
 			for (const handler of fn.handlers) {
 				lines.push(
 					`    { .start_ip = ${handler.startIp}, .end_ip = ${handler.endIp}, .handler_ip = ${handler.handlerIp} },`,
@@ -47,7 +61,7 @@ export function emitVmDefinition(definition: VmDefinition) {
 		}
 	}
 
-	lines.push("static const MalFunction mal_functions[] = {");
+	lines.push(`static const MalFunction mal_functions${suffix}[] = {`);
 	for (let i = 0; i < definition.functions.length; ++i) {
 		const fn = definition.functions[i]!;
 		lines.push("    {");
@@ -56,21 +70,21 @@ export function emitVmDefinition(definition: VmDefinition) {
 		lines.push(`        .register_count = ${fn.registerCount},`);
 		lines.push(`        .captured_count = ${fn.capturedCount},`);
 		lines.push(`        .instruction_count = ${fn.instructions.length},`);
-		lines.push(`        .instructions = mal_function_${i}_instructions,`);
+		lines.push(`        .instructions = mal_function_${i}_instructions${suffix},`);
 		lines.push(`        .handler_count = ${fn.handlers.length},`);
 		lines.push(
-			`        .handlers = ${fn.handlers.length > 0 ? `mal_function_${i}_handlers` : "nullptr"},`,
+			`        .handlers = ${fn.handlers.length > 0 ? `mal_function_${i}_handlers${suffix}` : "nullptr"},`,
 		);
 		lines.push("    },");
 	}
 	lines.push("};", "");
 
-	lines.push("const MalVmDefinition mal_vm_definition = {");
+	lines.push(`const MalVmDefinition mal_vm_definition${suffix} = {`);
 	lines.push(`    .function_count = ${definition.functionCount},`);
-	lines.push("    .functions = mal_functions,");
+	lines.push(`    .functions = mal_functions${suffix},`);
 	lines.push(`    .string_constant_count = ${definition.stringConstants.length},`);
 	lines.push(
-		`    .string_constants = ${definition.stringConstants.length > 0 ? "mal_string_constants" : "nullptr"},`,
+		`    .string_constants = ${definition.stringConstants.length > 0 ? `mal_string_constants${suffix}` : "nullptr"},`,
 	);
 	lines.push(`    .global_count = ${definition.globalCount},`);
 	lines.push("};");
@@ -91,8 +105,10 @@ function emitInstruction(instruction: VmInstruction) {
 		case "CREATE_NUMBER":
 			return `{ .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = ${instruction.dst}, .value = ${instruction.value} } }`;
 		case "CREATE_F64":
-			// JS number stringification round-trips as a C double literal.
-			return `{ .opcode = MAL_OP_CREATE_F64, .as.create_f64 = { .dst = ${instruction.dst}, .value = ${instruction.value} } }`;
+			// Exponential notation always parses as a C double literal; plain
+			// stringification of large integral values would overflow as an
+			// integer literal.
+			return `{ .opcode = MAL_OP_CREATE_F64, .as.create_f64 = { .dst = ${instruction.dst}, .value = ${instruction.value.toExponential()} } }`;
 		case "CREATE_BOOLEAN":
 			return `{ .opcode = MAL_OP_CREATE_BOOLEAN, .as.create_boolean = { .dst = ${instruction.dst}, .value = ${instruction.value ? 1 : 0} } }`;
 		case "CREATE_STRING":

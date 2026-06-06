@@ -12,7 +12,7 @@ import {
 	getFailuresWithSamples,
 	getTimings,
 	test262PrepareBuild,
-	test262RunFile,
+	test262RunBatch,
 } from "../src/test262/runtime.ts";
 import type { Test262File, Test262Output } from "../src/test262/types.ts";
 
@@ -50,24 +50,29 @@ if (random) {
 const startedAt = Date.now();
 let completed = 0;
 
-async function worker(workerId: number, queue: Array<Test262File>) {
+const batches: Array<Array<Test262File>> = [];
+for (let i = 0; i < selection.length; i += TEST262_METADATA.batchSize) {
+	batches.push(selection.slice(i, i + TEST262_METADATA.batchSize));
+}
+
+async function worker(workerId: number, queue: Array<Array<Test262File>>) {
 	while (true) {
-		const file = queue.pop();
-		if (!file) {
+		const batch = queue.pop();
+		if (!batch) {
 			return;
 		}
 
-		await test262RunFile(file, workerId);
+		await test262RunBatch(batch, workerId);
 
-		completed++;
-		if (completed % 2500 === 0) {
+		completed += batch.length;
+		if (completed % 2500 < batch.length) {
 			const elapsed = ((Date.now() - startedAt) / 1000).toFixed(0);
 			test262Log(`Progress: ${completed} / ${selection.length} (${elapsed}s)`);
 		}
 	}
 }
 
-const queue = [...selection].reverse();
+const queue = [...batches].reverse();
 await Promise.all(
 	Array.from({ length: Math.max(1, jobs) }, (_, workerId) => worker(workerId, queue)),
 );

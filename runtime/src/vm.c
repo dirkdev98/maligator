@@ -7,6 +7,7 @@
 #include "function_object.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "value_ops.h"
 #include "vm_ops.h"
 
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
@@ -322,17 +323,18 @@ static void mal_vm_report_uncaught(MalVm *vm) {
         MalPropertyResolution message = mal_object_resolve_property(error, mal_intrinsic_string_key(vm, "message"));
 
         if (name.found) {
-            mal_vm_print_display(stderr, name.desc.value);
+            mal_vm_print_display(stderr, mal_value_from_string(mal_ops_to_string(&vm->heap, name.desc.value)));
             if (message.found) {
                 fprintf(stderr, ": ");
-                mal_vm_print_display(stderr, message.desc.value);
+                mal_vm_print_display(stderr, mal_value_from_string(mal_ops_to_string(&vm->heap, message.desc.value)));
             }
             fprintf(stderr, "\n");
             return;
         }
     }
 
-    mal_vm_print_display(stderr, vm->completion.value);
+    // ToString keeps the report on a single stream for any thrown value.
+    mal_vm_print_display(stderr, mal_value_from_string(mal_ops_to_string(&vm->heap, vm->completion.value)));
     fprintf(stderr, "\n");
 }
 

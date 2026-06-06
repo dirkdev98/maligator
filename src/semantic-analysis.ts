@@ -89,6 +89,37 @@ export function loadEntrypointAndRunSemanticAnalysis(
 }
 
 /**
+ * Run semantic analysis over in-memory source, optionally reusing an
+ * existing parse. Used by tooling that composes sources without disk files.
+ */
+export function analyzeSourceAndRunSemanticAnalysis(
+	contents: string,
+	virtualPath: string,
+	parsed?: Pick<SemanticFile, "type" | "strict" | "ast">,
+): SemanticProgram {
+	const program: SemanticProgram = {
+		entrypointPath: virtualPath,
+		files: [],
+	};
+
+	const file: SemanticFile = {
+		path: virtualPath,
+		contents,
+		...(parsed ?? parseScript(contents, { strict: true })),
+
+		scopes: [],
+		nodeToScope: new Map(),
+		nodeToBinding: new Map(),
+	};
+
+	program.files.push(file);
+	analyzeFile(file);
+	debugSemanticProgram(program);
+
+	return program;
+}
+
+/**
  * Add a file to be loaded in to the pgoram.
  */
 export function loadAndAnalyzeFile(

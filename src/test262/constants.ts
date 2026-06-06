@@ -10,5 +10,10 @@ export const TEST262_METADATA = {
 	 * are a real possibility.
 	 */
 	runTimeoutMs: 5_000,
-	compileTimeoutMs: 30_000,
+	compileTimeoutMs: 60_000,
+
+	/**
+	 * Tests per batched translation unit / binary.
+	 */
+	batchSize: 100,
 };

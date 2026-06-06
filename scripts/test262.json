@@ -3,10 +3,10 @@
   "summary": {
     "SKIPPED": 20111,
     "UNSUPPORTED": 17954,
-    "FAILED": 9294,
-    "PASSED": 4741,
-    "COMPILE_FAILED": 773,
+    "FAILED": 9310,
+    "PASSED": 4743,
     "TIMEOUT": 5,
+    "COMPILE_FAILED": 755,
     "CRASHED": 4
   },
   "results": {
@@ -8495,7 +8495,7 @@
     "test/built-ins/Math/sqrt/name.js": "SKIPPED",
     "test/built-ins/Math/sqrt/not-a-constructor.js": "FAILED",
     "test/built-ins/Math/sqrt/prop-desc.js": "SKIPPED",
-    "test/built-ins/Math/sqrt/results.js": "FAILED",
+    "test/built-ins/Math/sqrt/results.js": "PASSED",
     "test/built-ins/Math/sqrt/S15.8.2.17_A1.js": "PASSED",
     "test/built-ins/Math/sqrt/S15.8.2.17_A2.js": "PASSED",
     "test/built-ins/Math/sqrt/S15.8.2.17_A3.js": "PASSED",
@@ -12490,7 +12490,7 @@
     "test/built-ins/parseInt/S15.1.2.2_A7.1_T2.js": "PASSED",
     "test/built-ins/parseInt/S15.1.2.2_A7.2_T1.js": "FAILED",
     "test/built-ins/parseInt/S15.1.2.2_A7.2_T2.js": "PASSED",
-    "test/built-ins/parseInt/S15.1.2.2_A7.2_T3.js": "FAILED",
+    "test/built-ins/parseInt/S15.1.2.2_A7.2_T3.js": "PASSED",
     "test/built-ins/parseInt/S15.1.2.2_A7.3_T1.js": "FAILED",
     "test/built-ins/parseInt/S15.1.2.2_A7.3_T2.js": "PASSED",
     "test/built-ins/parseInt/S15.1.2.2_A7.3_T3.js": "PASSED",
