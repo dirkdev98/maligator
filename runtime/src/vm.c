@@ -121,6 +121,9 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
             case MAL_OP_CREATE_OBJECT:
                 mal_op_create_object(frame, &instruction);
                 break;
+            case MAL_OP_CREATE_ARRAY:
+                mal_op_create_array(frame, &instruction);
+                break;
             case MAL_OP_CREATE_UNDEFINED:
                 mal_op_create_undefined(frame, &instruction);
                 break;

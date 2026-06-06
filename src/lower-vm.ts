@@ -59,6 +59,11 @@ export type VmInstruction =
 			dst: number;
 	  }
 	| {
+			opcode: "CREATE_ARRAY";
+			dst: number;
+			length: number;
+	  }
+	| {
 			opcode: "CREATE_UNDEFINED";
 			dst: number;
 	  }
@@ -218,6 +223,12 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "CREATE_OBJECT",
 				dst: instruction.registers[0],
+			};
+		case "createArray":
+			return {
+				opcode: "CREATE_ARRAY",
+				dst: instruction.registers[0],
+				length: instruction.length,
 			};
 		case "createUndefined":
 			return {

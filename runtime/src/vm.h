@@ -12,6 +12,7 @@ typedef enum MalOpcode {
     MAL_OP_CREATE_NUMBER,
     MAL_OP_CREATE_STRING,
     MAL_OP_CREATE_OBJECT,
+    MAL_OP_CREATE_ARRAY,
     MAL_OP_CREATE_UNDEFINED,
     MAL_OP_CREATE_FUNCTION,
     MAL_OP_CREATE_ARGUMENTS_OBJECT,
@@ -78,6 +79,10 @@ typedef struct MalInstruction {
         struct {
             i32 dst;
         } create_object;
+
+        struct {
+            i32 dst, length;
+        } create_array;
 
         struct {
             i32 dst;

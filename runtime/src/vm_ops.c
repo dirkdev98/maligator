@@ -37,6 +37,38 @@ static bool mal_vm_string_to_array_index(MalString *string, i32 *index_out) {
     return true;
 }
 
+static bool mal_vm_key_is_length(MalKey key) {
+    if (key.kind != MAL_KEY_STRING || !mal_value_is_string(key.value)) {
+        return false;
+    }
+
+    MalString *string = mal_value_to_string(key.value);
+    const c16 *code_units = mal_string_code_units(string);
+    return mal_string_length(string) == 6 &&
+        code_units[0] == 'l' &&
+        code_units[1] == 'e' &&
+        code_units[2] == 'n' &&
+        code_units[3] == 'g' &&
+        code_units[4] == 't' &&
+        code_units[5] == 'h';
+}
+
+static void mal_vm_update_array_length_for_store(MalArrayObject *array, MalKey key, MalValue value) {
+    if (key.kind == MAL_KEY_INDEX) {
+        i32 index = mal_value_to_i32(key.value);
+        if (index >= 0 && (u32) index >= mal_array_object_length(array)) {
+            mal_array_object_set_length(array, (u32) index + 1);
+        }
+        return;
+    }
+
+    if (mal_vm_key_is_length(key)) {
+        if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
+            mal_array_object_set_length(array, (u32) mal_value_to_i32(value));
+        }
+    }
+}
+
 static bool mal_vm_string_to_property_key(MalValue value, MalKey *key_out) {
     i32 index = 0;
     if (mal_vm_string_to_array_index(mal_value_to_string(value), &index)) {
@@ -86,6 +118,12 @@ void mal_op_create_string(MalCallable *callable, MalInstruction *instruction) {
 void mal_op_create_object(MalCallable *callable, MalInstruction *instruction) {
     MalObject *object = mal_object_new(&callable->vm->heap, nullptr);
     callable->registers[instruction->as.create_object.dst] = mal_value_from_object(object);
+}
+
+void mal_op_create_array(MalCallable *callable, MalInstruction *instruction) {
+    MalArrayObject *array = mal_array_object_new(&callable->vm->heap, nullptr);
+    mal_array_object_set_length(array, (u32) instruction->as.create_array.length);
+    callable->registers[instruction->as.create_array.dst] = mal_value_from_array_object(array);
 }
 
 void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction) {
@@ -255,6 +293,11 @@ void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
         return;
     }
 
+    if (mal_value_is_array_object(object_value) && mal_vm_key_is_length(key)) {
+        callable->registers[dst] = mal_value_from_i32((i32) mal_array_object_length(mal_value_to_array_object(object_value)));
+        return;
+    }
+
     MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(object_value), key);
     if (!resolution.found) {
         callable->registers[dst] = mal_value_new_undefined();
@@ -271,6 +314,14 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
 
     MalKey key;
     if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(callable, key_value, &key)) {
+        return;
+    }
+
+    if (mal_value_is_array_object(object_value)) {
+        mal_vm_update_array_length_for_store(mal_value_to_array_object(object_value), key, value);
+    }
+
+    if (mal_value_is_array_object(object_value) && mal_vm_key_is_length(key)) {
         return;
     }
 

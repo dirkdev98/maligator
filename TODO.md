@@ -7,7 +7,6 @@ once we compile and run most JS.
 
 ## High level
 
-- [ ] Array literals end to end
 - [ ] Function expressions as values
 - [ ] Method calls with receiver / `this`
 - [ ] Minimal `Array.prototype.map`

@@ -154,6 +154,14 @@ export type IRInstruction =
 			registers: [number];
 	  }
 	| {
+			type: "createArray";
+
+			// [destination]
+			registers: [number];
+
+			length: number;
+	  }
+	| {
 			type: "createUndefined";
 
 			// [destination]
@@ -723,6 +731,9 @@ function compileExpression(
 	expression: ESTree.Expression | ESTree.PrivateIdentifier,
 ) {
 	switch (expression.type) {
+		case "ArrayExpression": {
+			return compileArrayExpression(program, fn, block, expression);
+		}
 		case "AssignmentExpression": {
 			return compileAssignment(program, fn, block, expression);
 		}
@@ -866,6 +877,40 @@ function compileObjectExpression(
 	}
 
 	return object;
+}
+
+function compileArrayExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	arrayExpression: ESTree.ArrayExpression,
+): number {
+	const array = nextRegisterDestination(fn);
+	block.instructions.push({
+		type: "createArray",
+		registers: [array],
+		length: arrayExpression.elements.length,
+	});
+
+	for (let index = 0; index < arrayExpression.elements.length; index++) {
+		const element = arrayExpression.elements[index];
+		if (!element) {
+			continue;
+		}
+
+		if (element.type === "SpreadElement") {
+			return -1;
+		}
+
+		const key = compileNumberLiteral(fn, block, index);
+		const value = compileExpression(program, fn, block, element);
+		block.instructions.push({
+			type: "storeProperty",
+			registers: [array, key, value],
+		});
+	}
+
+	return array;
 }
 
 function compileMemberExpression(
@@ -1071,15 +1116,7 @@ function compileLiteral(
 	literal: ESTree.Literal,
 ): number {
 	if (typeof literal.value === "number" && Number.isInteger(literal.value)) {
-		const destination = nextRegisterDestination(fn);
-		block.instructions.push({
-			type: "createNumber",
-			registers: [destination],
-
-			value: literal.value,
-		});
-
-		return destination;
+		return compileNumberLiteral(fn, block, literal.value);
 	}
 
 	if (typeof literal.value === "string") {
@@ -1094,6 +1131,18 @@ function compileLiteral(
 	}
 
 	return -1;
+}
+
+function compileNumberLiteral(fn: IRFunction, block: IRBlock, value: number) {
+	const destination = nextRegisterDestination(fn);
+	block.instructions.push({
+		type: "createNumber",
+		registers: [destination],
+
+		value,
+	});
+
+	return destination;
 }
 
 function getOrCreateStringConstant(program: IntermediateProgram, value: string) {
