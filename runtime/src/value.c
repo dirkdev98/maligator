@@ -11,6 +11,13 @@ MalValue mal_value_from_f64_convert_nan(f64 value) {
     auto v = mal_value & MASK_EXPONENT_BITS;
 
     if (v == MASK_EXPONENT_BITS) {
+        if (value > 0) {
+            return MAL_VALUE_POSITIVE_INFINITY;
+        }
+        if (value < 0) {
+            return MAL_VALUE_NEGATIVE_INFINITY;
+        }
+
         return mal_value_new_nan();
     }
 
@@ -249,6 +256,16 @@ bool mal_value_is_truthy(MalValue value) {
 }
 
 void mal_value_debug(MalValue value) {
+    if (value == MAL_VALUE_POSITIVE_INFINITY) {
+        printf("Infinity");
+        return;
+    }
+
+    if (value == MAL_VALUE_NEGATIVE_INFINITY) {
+        printf("-Infinity");
+        return;
+    }
+
     if (mal_value_is_nan(value)) {
         printf("NaN");
         return;

@@ -9,18 +9,31 @@
 #include "heap_string.h"
 
 static bool mal_ops_is_number(MalValue value) {
-    return mal_value_is_int32(value) || mal_value_is_f64_or_nan(value);
+    return mal_value_is_int32(value) ||
+        mal_value_is_f64_or_nan(value) ||
+        value == MAL_VALUE_NEGATIVE_ZERO ||
+        value == MAL_VALUE_POSITIVE_INFINITY ||
+        value == MAL_VALUE_NEGATIVE_INFINITY;
 }
 
 static f64 mal_ops_to_f64(MalValue value) {
     if (mal_value_is_int32(value)) {
         return mal_value_to_i32(value);
     }
+    if (value == MAL_VALUE_POSITIVE_INFINITY) {
+        return INFINITY;
+    }
+    if (value == MAL_VALUE_NEGATIVE_INFINITY) {
+        return -INFINITY;
+    }
+    if (value == MAL_VALUE_NEGATIVE_ZERO) {
+        return -0.0;
+    }
 
     return mal_value_to_f64(value);
 }
 
-static MalValue mal_ops_from_f64_or_i32(f64 value);
+MalValue mal_ops_number_value(f64 value);
 
 static MalString *mal_ops_string_from_ascii(MalHeap *heap, const byte *bytes) {
     return mal_string_new_ascii(heap, bytes, strlen(bytes));
@@ -64,7 +77,7 @@ static MalValue mal_ops_string_to_number(MalValue value) {
     }
 
     free(bytes);
-    return mal_ops_from_f64_or_i32(number);
+    return mal_ops_number_value(number);
 }
 
 MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
@@ -88,6 +101,14 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
         return mal_ops_string_from_ascii(heap, "NaN");
     }
 
+    if (value == MAL_VALUE_POSITIVE_INFINITY) {
+        return mal_ops_string_from_ascii(heap, "Infinity");
+    }
+
+    if (value == MAL_VALUE_NEGATIVE_INFINITY) {
+        return mal_ops_string_from_ascii(heap, "-Infinity");
+    }
+
     if (mal_value_is_int32(value)) {
         byte buffer[16];
         snprintf(buffer, sizeof(buffer), "%d", mal_value_to_i32(value));
@@ -106,6 +127,16 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
 f64 mal_ops_to_number(MalValue value) {
     if (mal_value_is_int32(value)) {
         return mal_value_to_i32(value);
+    }
+
+    if (value == MAL_VALUE_POSITIVE_INFINITY) {
+        return INFINITY;
+    }
+    if (value == MAL_VALUE_NEGATIVE_INFINITY) {
+        return -INFINITY;
+    }
+    if (value == MAL_VALUE_NEGATIVE_ZERO) {
+        return -0.0;
     }
 
     if (mal_value_is_f64(value)) {
@@ -144,7 +175,7 @@ static i32 mal_ops_to_i32(MalValue value) {
     return (i32) number;
 }
 
-static MalValue mal_ops_from_f64_or_i32(f64 value) {
+MalValue mal_ops_number_value(f64 value) {
     if (isnan(value)) {
         return mal_value_new_nan();
     }
@@ -153,7 +184,8 @@ static MalValue mal_ops_from_f64_or_i32(f64 value) {
         return mal_value_from_i32((i32) value);
     }
 
-    return mal_value_from_f64(value);
+    // Also maps infinities to their static encodings.
+    return mal_value_from_f64_convert_nan(value);
 }
 
 MalValue mal_ops_add(MalHeap *heap, MalValue left, MalValue right) {
@@ -176,7 +208,7 @@ MalValue mal_ops_add(MalHeap *heap, MalValue left, MalValue right) {
         return mal_value_from_i32(mal_value_to_i32(left) + mal_value_to_i32(right));
     }
 
-    return mal_ops_from_f64_or_i32(mal_ops_to_number(left) + mal_ops_to_number(right));
+    return mal_ops_number_value(mal_ops_to_number(left) + mal_ops_to_number(right));
 }
 
 static bool mal_ops_strict_equal_bool(MalValue left, MalValue right) {
@@ -304,7 +336,7 @@ MalValue mal_ops_subtract(MalValue left, MalValue right) {
         return mal_value_from_i32(mal_value_to_i32(left) - mal_value_to_i32(right));
     }
 
-    return mal_ops_from_f64_or_i32(mal_ops_to_number(left) - mal_ops_to_number(right));
+    return mal_ops_number_value(mal_ops_to_number(left) - mal_ops_to_number(right));
 }
 
 MalValue mal_ops_multiply(MalValue left, MalValue right) {
@@ -312,15 +344,15 @@ MalValue mal_ops_multiply(MalValue left, MalValue right) {
         return mal_value_from_i32(mal_value_to_i32(left) * mal_value_to_i32(right));
     }
 
-    return mal_ops_from_f64_or_i32(mal_ops_to_number(left) * mal_ops_to_number(right));
+    return mal_ops_number_value(mal_ops_to_number(left) * mal_ops_to_number(right));
 }
 
 MalValue mal_ops_divide(MalValue left, MalValue right) {
-    return mal_ops_from_f64_or_i32(mal_ops_to_number(left) / mal_ops_to_number(right));
+    return mal_ops_number_value(mal_ops_to_number(left) / mal_ops_to_number(right));
 }
 
 MalValue mal_ops_remainder(MalValue left, MalValue right) {
-    return mal_ops_from_f64_or_i32(fmod(mal_ops_to_number(left), mal_ops_to_number(right)));
+    return mal_ops_number_value(fmod(mal_ops_to_number(left), mal_ops_to_number(right)));
 }
 
 MalValue mal_ops_bit_and(MalValue left, MalValue right) {

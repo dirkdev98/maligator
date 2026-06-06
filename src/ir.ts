@@ -103,10 +103,31 @@ export interface IRFunction {
 	 * Next available captured variable index
 	 */
 	nextCapturedIndex: number;
+
+	/**
+	 * Stack of enclosing loops, used to patch break and continue jumps once
+	 * the loop exit and continue targets exist.
+	 */
+	loops?: Array<IRLoopContext>;
+}
+
+interface IRLoopContext {
+	breakJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
+	continueJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
 }
 
 export interface IRBlock {
 	instructions: Array<IRInstruction>;
+}
+
+/**
+ * Mutable handle to the block currently being emitted into.
+ *
+ * Short-circuit expressions create blocks mid-expression and advance the
+ * cursor, so instructions following a sub-expression land in the right block.
+ */
+interface IRCursor {
+	block: IRBlock;
 }
 
 export type IRInstruction =
@@ -147,6 +168,14 @@ export type IRInstruction =
 			value: number;
 	  }
 	| {
+			type: "createF64";
+
+			// [destination]
+			registers: [number];
+
+			value: number;
+	  }
+	| {
 			type: "createBoolean";
 
 			// [destination]
@@ -178,6 +207,12 @@ export type IRInstruction =
 	  }
 	| {
 			type: "createUndefined";
+
+			// [destination]
+			registers: [number];
+	  }
+	| {
+			type: "createNull";
 
 			// [destination]
 			registers: [number];
@@ -298,6 +333,14 @@ export type IRInstruction =
 				| "!="
 				| "==="
 				| "!==";
+	  }
+	| {
+			type: "unary";
+
+			// [destination, operand]
+			registers: [number, number];
+
+			operator: "!" | "-" | "+" | "~" | "typeof";
 	  };
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
@@ -309,7 +352,20 @@ type IRIntrinsic =
 	| "TypeError"
 	| "RangeError"
 	| "ReferenceError"
-	| "SyntaxError";
+	| "SyntaxError"
+	| "String"
+	| "Number"
+	| "Boolean"
+	| "parseInt"
+	| "parseFloat"
+	| "isNaN"
+	| "isFinite"
+	| "Math"
+	| "JSON"
+	| "console"
+	| "globalThis"
+	| "NaN"
+	| "Infinity";
 
 const irIntrinsics = new Set<string>([
 	"Object",
@@ -320,6 +376,19 @@ const irIntrinsics = new Set<string>([
 	"RangeError",
 	"ReferenceError",
 	"SyntaxError",
+	"String",
+	"Number",
+	"Boolean",
+	"parseInt",
+	"parseFloat",
+	"isNaN",
+	"isFinite",
+	"Math",
+	"JSON",
+	"console",
+	"globalThis",
+	"NaN",
+	"Infinity",
 ]);
 
 function isIRIntrinsic(name: string): name is IRIntrinsic {
@@ -718,6 +787,26 @@ function compileStatementsToBlock(
 				compileTryStatement(program, fn, block, statement);
 				break;
 			}
+			case "WhileStatement": {
+				compileWhileStatement(program, fn, block, statement);
+				break;
+			}
+			case "DoWhileStatement": {
+				compileDoWhileStatement(program, fn, block, statement);
+				break;
+			}
+			case "ForStatement": {
+				compileForStatement(program, fn, block, statement);
+				break;
+			}
+			case "BreakStatement": {
+				compileBreakStatement(fn, block, statement);
+				break;
+			}
+			case "ContinueStatement": {
+				compileContinueStatement(fn, block, statement);
+				break;
+			}
 			case "VariableDeclaration": {
 				compileVariableDeclaration(program, fn, block, statement);
 				break;
@@ -734,7 +823,7 @@ function compileExpressionStatement(
 	block: IRBlock,
 	statement: ESTree.ExpressionStatement,
 ) {
-	compileExpression(program, fn, block, statement.expression);
+	compileExpression(program, fn, { block }, statement.expression);
 }
 
 function compileFunctionDeclaration(
@@ -772,6 +861,240 @@ function compileFunctionDeclaration(
 }
 
 /**
+ * Compile a while loop: jump into a header block that evaluates the
+ * condition, conditionally enters the body, and falls through to the exit.
+ */
+function compileWhileStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.WhileStatement,
+) {
+	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
+	block.instructions.push({
+		type: "jump",
+		blocks: [headerIdx],
+	});
+
+	const loop: IRLoopContext = { breakJumps: [], continueJumps: [] };
+	(fn.loops ??= []).push(loop);
+
+	const headerCursor: IRCursor = { block: fn.blocks[headerIdx]! };
+	const condition = compileExpression(program, fn, headerCursor, statement.test);
+
+	const bodyIdx = compileStatementsToBlock(
+		program,
+		fn,
+		normalizeStatementOrBlock(statement.body),
+	);
+	headerCursor.block.instructions.push({
+		type: "jumpIf",
+		registers: [condition],
+		blocks: [bodyIdx],
+	});
+	const exitJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		// Patched below, once the exit block exists.
+		blocks: [-1],
+	};
+	headerCursor.block.instructions.push(exitJump);
+
+	// Back edge from the body tail to the condition.
+	fn.blocks.at(-1)!.instructions.push({
+		type: "jump",
+		blocks: [headerIdx],
+	});
+
+	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	exitJump.blocks[0] = exitIdx;
+	for (const jump of loop.breakJumps) {
+		jump.blocks[0] = exitIdx;
+	}
+	for (const jump of loop.continueJumps) {
+		jump.blocks[0] = headerIdx;
+	}
+	fn.loops.pop();
+}
+
+/**
+ * Compile a do-while loop: the body runs first, the condition block at the
+ * bottom decides on re-entry.
+ */
+function compileDoWhileStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.DoWhileStatement,
+) {
+	const loop: IRLoopContext = { breakJumps: [], continueJumps: [] };
+	(fn.loops ??= []).push(loop);
+
+	const bodyIdx = compileStatementsToBlock(
+		program,
+		fn,
+		normalizeStatementOrBlock(statement.body),
+	);
+	block.instructions.push({
+		type: "jump",
+		blocks: [bodyIdx],
+	});
+
+	const bodyLastBlock = fn.blocks.at(-1)!;
+	const conditionIdx = fn.blocks.push({ instructions: [] }) - 1;
+	bodyLastBlock.instructions.push({
+		type: "jump",
+		blocks: [conditionIdx],
+	});
+
+	const conditionCursor: IRCursor = { block: fn.blocks[conditionIdx]! };
+	const condition = compileExpression(program, fn, conditionCursor, statement.test);
+	conditionCursor.block.instructions.push({
+		type: "jumpIf",
+		registers: [condition],
+		blocks: [bodyIdx],
+	});
+	const exitJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	conditionCursor.block.instructions.push(exitJump);
+
+	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	exitJump.blocks[0] = exitIdx;
+	for (const jump of loop.breakJumps) {
+		jump.blocks[0] = exitIdx;
+	}
+	for (const jump of loop.continueJumps) {
+		jump.blocks[0] = conditionIdx;
+	}
+	fn.loops.pop();
+}
+
+/**
+ * Compile a classic for loop: init runs once, then it behaves like a while
+ * loop with the update block as the continue target.
+ */
+function compileForStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.ForStatement,
+) {
+	const initCursor: IRCursor = { block };
+	if (statement.init?.type === "VariableDeclaration") {
+		compileVariableDeclaration(program, fn, block, statement.init);
+		// The declaration manages its own cursor; re-resolve the tail block.
+		initCursor.block = fn.blocks.at(-1) === block ? block : fn.blocks.at(-1)!;
+	} else if (statement.init) {
+		compileExpression(program, fn, initCursor, statement.init);
+	}
+
+	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
+	initCursor.block.instructions.push({
+		type: "jump",
+		blocks: [headerIdx],
+	});
+
+	const loop: IRLoopContext = { breakJumps: [], continueJumps: [] };
+	(fn.loops ??= []).push(loop);
+
+	const headerCursor: IRCursor = { block: fn.blocks[headerIdx]! };
+	let condition: number;
+	if (statement.test) {
+		condition = compileExpression(program, fn, headerCursor, statement.test);
+	} else {
+		condition = nextRegisterDestination(fn);
+		headerCursor.block.instructions.push({
+			type: "createBoolean",
+			registers: [condition],
+			value: true,
+		});
+	}
+
+	const bodyIdx = compileStatementsToBlock(
+		program,
+		fn,
+		normalizeStatementOrBlock(statement.body),
+	);
+	headerCursor.block.instructions.push({
+		type: "jumpIf",
+		registers: [condition],
+		blocks: [bodyIdx],
+	});
+	const exitJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	headerCursor.block.instructions.push(exitJump);
+
+	// The update block is the continue target and closes the back edge.
+	const bodyLastBlock = fn.blocks.at(-1)!;
+	const updateIdx = fn.blocks.push({ instructions: [] }) - 1;
+	bodyLastBlock.instructions.push({
+		type: "jump",
+		blocks: [updateIdx],
+	});
+
+	const updateCursor: IRCursor = { block: fn.blocks[updateIdx]! };
+	if (statement.update) {
+		compileExpression(program, fn, updateCursor, statement.update);
+	}
+	updateCursor.block.instructions.push({
+		type: "jump",
+		blocks: [headerIdx],
+	});
+
+	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	exitJump.blocks[0] = exitIdx;
+	for (const jump of loop.breakJumps) {
+		jump.blocks[0] = exitIdx;
+	}
+	for (const jump of loop.continueJumps) {
+		jump.blocks[0] = updateIdx;
+	}
+	fn.loops.pop();
+}
+
+function compileBreakStatement(
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.BreakStatement,
+) {
+	const loop = fn.loops?.at(-1);
+	if (!loop || statement.label) {
+		// TODO(loops): labeled break is not supported yet.
+		return;
+	}
+
+	const jump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		// Patched by the enclosing loop once the exit block exists.
+		blocks: [-1],
+	};
+	block.instructions.push(jump);
+	loop.breakJumps.push(jump);
+}
+
+function compileContinueStatement(
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.ContinueStatement,
+) {
+	const loop = fn.loops?.at(-1);
+	if (!loop || statement.label) {
+		// TODO(loops): labeled continue is not supported yet.
+		return;
+	}
+
+	const jump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	block.instructions.push(jump);
+	loop.continueJumps.push(jump);
+}
+
+/**
  * Compile a throw statement. The unwinding to the nearest handler happens in
  * the VM based on the statically known handler ranges.
  */
@@ -781,8 +1104,9 @@ function compileThrowStatement(
 	block: IRBlock,
 	statement: ESTree.ThrowStatement,
 ) {
-	const value = compileExpression(program, fn, block, statement.argument);
-	block.instructions.push({
+	const cursor: IRCursor = { block };
+	const value = compileExpression(program, fn, cursor, statement.argument);
+	cursor.block.instructions.push({
 		type: "throw",
 		registers: [value],
 	});
@@ -893,13 +1217,14 @@ function compileIfStatement(
 	block: IRBlock,
 	statement: ESTree.IfStatement,
 ) {
-	const condition = compileExpression(program, fn, block, statement.test);
+	const cursor: IRCursor = { block };
+	const condition = compileExpression(program, fn, cursor, statement.test);
 	const consequentBlock = compileStatementsToBlock(
 		program,
 		fn,
 		normalizeStatementOrBlock(statement.consequent),
 	);
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "jumpIf",
 		registers: [condition],
 		blocks: [consequentBlock],
@@ -915,7 +1240,7 @@ function compileIfStatement(
 		fn,
 		normalizeStatementOrBlock(alternate),
 	);
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "jump",
 		blocks: [alternateBlock],
 	});
@@ -930,14 +1255,15 @@ function compileReturnStatement(
 	block: IRBlock,
 	statement: ESTree.ReturnStatement,
 ) {
+	const cursor: IRCursor = { block };
 	const returnRegister = compileExpression(
 		program,
 		fn,
-		block,
+		cursor,
 		statement.argument ?? { type: "Identifier", name: "undefined" },
 	);
 
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "return",
 		registers: [returnRegister],
 	});
@@ -952,11 +1278,12 @@ function compileVariableDeclaration(
 	block: IRBlock,
 	statement: ESTree.VariableDeclaration,
 ) {
+	const cursor: IRCursor = { block };
 	for (const decl of statement.declarations) {
 		const source = compileExpression(
 			program,
 			fn,
-			block,
+			cursor,
 
 			// Initialize variables to undefined if they don't have an initializer.
 			decl.init ?? { type: "Identifier", name: "undefined" },
@@ -968,7 +1295,7 @@ function compileVariableDeclaration(
 		}
 
 		const location = getOrCreateBindingLocation(program, fn, binding);
-		storeRegisterAtLocation(block, location, source);
+		storeRegisterAtLocation(cursor.block, location, source);
 	}
 }
 
@@ -980,40 +1307,52 @@ function compileVariableDeclaration(
 function compileExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	expression: ESTree.Expression | ESTree.PrivateIdentifier,
 ) {
 	switch (expression.type) {
 		case "ArrayExpression": {
-			return compileArrayExpression(program, fn, block, expression);
+			return compileArrayExpression(program, fn, cursor, expression);
 		}
 		case "AssignmentExpression": {
-			return compileAssignment(program, fn, block, expression);
+			return compileAssignment(program, fn, cursor, expression);
 		}
 		case "BinaryExpression": {
-			return compileBinary(program, fn, block, expression);
+			return compileBinary(program, fn, cursor, expression);
 		}
 		case "CallExpression": {
-			return compileCall(program, fn, block, expression);
+			return compileCall(program, fn, cursor, expression);
 		}
 		case "NewExpression": {
-			return compileNewExpression(program, fn, block, expression);
+			return compileNewExpression(program, fn, cursor, expression);
 		}
 		case "ArrowFunctionExpression":
 		case "FunctionExpression": {
-			return compileFunctionExpression(program, fn, block, expression);
+			return compileFunctionExpression(program, fn, cursor, expression);
 		}
 		case "Identifier": {
-			return compileIdentifier(program, fn, block, expression);
+			return compileIdentifier(program, fn, cursor, expression);
+		}
+		case "LogicalExpression": {
+			return compileLogicalExpression(program, fn, cursor, expression);
+		}
+		case "UnaryExpression": {
+			return compileUnaryExpression(program, fn, cursor, expression);
+		}
+		case "UpdateExpression": {
+			return compileUpdateExpression(program, fn, cursor, expression);
+		}
+		case "ConditionalExpression": {
+			return compileConditionalExpression(program, fn, cursor, expression);
 		}
 		case "Literal": {
-			return compileLiteral(program, fn, block, expression);
+			return compileLiteral(program, fn, cursor, expression);
 		}
 		case "MemberExpression": {
-			return compileMemberExpression(program, fn, block, expression);
+			return compileMemberExpression(program, fn, cursor, expression);
 		}
 		case "ObjectExpression": {
-			return compileObjectExpression(program, fn, block, expression);
+			return compileObjectExpression(program, fn, cursor, expression);
 		}
 		default:
 			return -1;
@@ -1023,11 +1362,11 @@ function compileExpression(
 function compileFunctionExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	expression: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
 ) {
 	const destination = nextRegisterDestination(fn);
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "createFunction",
 		registers: [destination],
 		functionIndex: compileNewFunctionExpression(program, fn, expression),
@@ -1039,11 +1378,11 @@ function compileFunctionExpression(
 function compileAssignment(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
 	if (assignmentExpression.left.type === "Identifier") {
-		return compileIdentifierAssignment(program, fn, block, assignmentExpression);
+		return compileIdentifierAssignment(program, fn, cursor, assignmentExpression);
 	}
 
 	if (assignmentExpression.left.type !== "MemberExpression") {
@@ -1053,33 +1392,33 @@ function compileAssignment(
 	const { object, key } = compileMemberObjectAndKey(
 		program,
 		fn,
-		block,
+		cursor,
 		assignmentExpression.left,
 	);
 
 	let value: number;
 	if (assignmentExpression.operator === "=") {
-		value = compileExpression(program, fn, block, assignmentExpression.right);
+		value = compileExpression(program, fn, cursor, assignmentExpression.right);
 	} else {
 		const binaryOperator = assignmentOperatorToBinaryOperator(
 			assignmentExpression.operator,
 		);
 		const current = nextRegisterDestination(fn);
-		block.instructions.push({
+		cursor.block.instructions.push({
 			type: "loadProperty",
 			registers: [current, object, key],
 		});
 
-		const right = compileExpression(program, fn, block, assignmentExpression.right);
+		const right = compileExpression(program, fn, cursor, assignmentExpression.right);
 		value = nextRegisterDestination(fn);
-		block.instructions.push({
+		cursor.block.instructions.push({
 			type: "binary",
 			registers: [value, current, right],
 			operator: binaryOperator,
 		});
 	}
 
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "storeProperty",
 		registers: [object, key, value],
 	});
@@ -1090,7 +1429,7 @@ function compileAssignment(
 function compileIdentifierAssignment(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
 	const binding = fn.semanticFile.nodeToBinding.get(assignmentExpression.left);
@@ -1102,15 +1441,15 @@ function compileIdentifierAssignment(
 
 	let value: number;
 	if (assignmentExpression.operator === "=") {
-		value = compileExpression(program, fn, block, assignmentExpression.right);
+		value = compileExpression(program, fn, cursor, assignmentExpression.right);
 	} else {
 		const binaryOperator = assignmentOperatorToBinaryOperator(
 			assignmentExpression.operator,
 		);
-		const current = loadRegisterFromLocation(fn, block, location);
-		const right = compileExpression(program, fn, block, assignmentExpression.right);
+		const current = loadRegisterFromLocation(fn, cursor.block, location);
+		const right = compileExpression(program, fn, cursor, assignmentExpression.right);
 		value = nextRegisterDestination(fn);
-		block.instructions.push({
+		cursor.block.instructions.push({
 			type: "binary",
 			registers: [value, current, right],
 			operator: binaryOperator,
@@ -1123,8 +1462,248 @@ function compileIdentifierAssignment(
 		return -1;
 	}
 
-	storeRegisterAtLocation(block, location, value);
+	storeRegisterAtLocation(cursor.block, location, value);
 	return value;
+}
+
+/**
+ * Compile short-circuit logical expressions by branching around the right
+ * hand side, with both sides writing the shared result register.
+ */
+function compileLogicalExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	expression: ESTree.LogicalExpression,
+): number {
+	const result = nextRegisterDestination(fn);
+	const left = compileExpression(program, fn, cursor, expression.left);
+	cursor.block.instructions.push({
+		type: "move",
+		registers: [result, left],
+	});
+
+	// The branch condition: && and || branch on the left value itself, while
+	// ?? branches on it being null or undefined.
+	let condition = left;
+	if (expression.operator === "??") {
+		const undefinedRegister = compileUndefined(fn, cursor);
+		condition = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "binary",
+			registers: [condition, left, undefinedRegister],
+			operator: "==",
+		});
+	}
+
+	const conditionalJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [condition],
+		blocks: [-1],
+	};
+	const fallthroughJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(conditionalJump, fallthroughJump);
+
+	const rightIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[rightIdx]!;
+	const right = compileExpression(program, fn, cursor, expression.right);
+	cursor.block.instructions.push({
+		type: "move",
+		registers: [result, right],
+	});
+	const rightJoinJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(rightJoinJump);
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	if (expression.operator === "||") {
+		// A truthy left value skips the right side.
+		conditionalJump.blocks[0] = joinIdx;
+		fallthroughJump.blocks[0] = rightIdx;
+	} else {
+		// && enters on a truthy left value, ?? enters on a nil left value.
+		conditionalJump.blocks[0] = rightIdx;
+		fallthroughJump.blocks[0] = joinIdx;
+	}
+	rightJoinJump.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+
+	return result;
+}
+
+/**
+ * Compile ternaries with the same branch-and-join structure as logical
+ * expressions.
+ */
+function compileConditionalExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	expression: ESTree.ConditionalExpression,
+): number {
+	const result = nextRegisterDestination(fn);
+	const condition = compileExpression(program, fn, cursor, expression.test);
+
+	const consequentJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [condition],
+		blocks: [-1],
+	};
+	const alternateJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(consequentJump, alternateJump);
+
+	const consequentIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[consequentIdx]!;
+	const consequent = compileExpression(program, fn, cursor, expression.consequent);
+	cursor.block.instructions.push({
+		type: "move",
+		registers: [result, consequent],
+	});
+	const consequentJoinJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(consequentJoinJump);
+
+	const alternateIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[alternateIdx]!;
+	const alternate = compileExpression(program, fn, cursor, expression.alternate);
+	cursor.block.instructions.push({
+		type: "move",
+		registers: [result, alternate],
+	});
+	const alternateJoinJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(alternateJoinJump);
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	consequentJump.blocks[0] = consequentIdx;
+	alternateJump.blocks[0] = alternateIdx;
+	consequentJoinJump.blocks[0] = joinIdx;
+	alternateJoinJump.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+
+	return result;
+}
+
+function compileUnaryExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	expression: ESTree.UnaryExpression,
+): number {
+	if (expression.operator === "void") {
+		compileExpression(program, fn, cursor, expression.argument);
+		return compileUndefined(fn, cursor);
+	}
+
+	if (
+		expression.operator !== "!" &&
+		expression.operator !== "-" &&
+		expression.operator !== "+" &&
+		expression.operator !== "~" &&
+		expression.operator !== "typeof"
+	) {
+		// TODO(expressions): delete is not supported yet.
+		return -1;
+	}
+
+	const operand = compileExpression(program, fn, cursor, expression.argument);
+	const destination = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "unary",
+		registers: [destination, operand],
+		operator: expression.operator,
+	});
+
+	return destination;
+}
+
+/**
+ * Compile ++ and -- on identifiers and members. The operand goes through
+ * ToNumber (unary plus) so the postfix result is the numeric old value.
+ */
+function compileUpdateExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	expression: ESTree.UpdateExpression,
+): number {
+	const operator = expression.operator === "++" ? "+" : "-";
+
+	if (expression.argument.type === "Identifier") {
+		const binding = fn.semanticFile.nodeToBinding.get(expression.argument);
+		if (!binding) {
+			return -1;
+		}
+
+		const location = getOrCreateBindingLocation(program, fn, binding);
+		const current = loadRegisterFromLocation(fn, cursor.block, location);
+		const oldValue = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "unary",
+			registers: [oldValue, current],
+			operator: "+",
+		});
+
+		const one = compileNumberLiteral(fn, cursor, 1);
+		const newValue = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "binary",
+			registers: [newValue, oldValue, one],
+			operator,
+		});
+		storeRegisterAtLocation(cursor.block, location, newValue);
+
+		return expression.prefix ? newValue : oldValue;
+	}
+
+	if (expression.argument.type === "MemberExpression") {
+		const { object, key } = compileMemberObjectAndKey(
+			program,
+			fn,
+			cursor,
+			expression.argument,
+		);
+		const current = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadProperty",
+			registers: [current, object, key],
+		});
+
+		const oldValue = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "unary",
+			registers: [oldValue, current],
+			operator: "+",
+		});
+
+		const one = compileNumberLiteral(fn, cursor, 1);
+		const newValue = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "binary",
+			registers: [newValue, oldValue, one],
+			operator,
+		});
+		cursor.block.instructions.push({
+			type: "storeProperty",
+			registers: [object, key, newValue],
+		});
+
+		return expression.prefix ? newValue : oldValue;
+	}
+
+	return -1;
 }
 
 function assignmentOperatorToBinaryOperator(operator: string) {
@@ -1143,19 +1722,19 @@ function assignmentOperatorToBinaryOperator(operator: string) {
 function compileBinary(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	binaryExpression: ESTree.BinaryExpression,
 ): number {
 	if (!isIRBinaryOperator(binaryExpression.operator)) {
 		throw new Error(`Unsupported binary operator ${binaryExpression.operator}`);
 	}
 
-	const left = compileExpression(program, fn, block, binaryExpression.left);
-	const right = compileExpression(program, fn, block, binaryExpression.right);
+	const left = compileExpression(program, fn, cursor, binaryExpression.left);
+	const right = compileExpression(program, fn, cursor, binaryExpression.right);
 
 	const destination = nextRegisterDestination(fn);
 
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "binary",
 
 		registers: [destination, left, right],
@@ -1169,11 +1748,11 @@ function compileBinary(
 function compileObjectExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	objectExpression: ESTree.ObjectExpression,
 ): number {
 	const object = nextRegisterDestination(fn);
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "createObject",
 		registers: [object],
 	});
@@ -1183,14 +1762,14 @@ function compileObjectExpression(
 			return -1;
 		}
 
-		const key = compilePropertyKey(program, fn, block, property);
+		const key = compilePropertyKey(program, fn, cursor, property);
 		const value = compileExpression(
 			program,
 			fn,
-			block,
+			cursor,
 			property.value as ESTree.Expression,
 		);
-		block.instructions.push({
+		cursor.block.instructions.push({
 			type: "storeProperty",
 			registers: [object, key, value],
 		});
@@ -1202,11 +1781,11 @@ function compileObjectExpression(
 function compileArrayExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	arrayExpression: ESTree.ArrayExpression,
 ): number {
 	const array = nextRegisterDestination(fn);
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "createArray",
 		registers: [array],
 		length: arrayExpression.elements.length,
@@ -1222,9 +1801,9 @@ function compileArrayExpression(
 			return -1;
 		}
 
-		const key = compileNumberLiteral(fn, block, index);
-		const value = compileExpression(program, fn, block, element);
-		block.instructions.push({
+		const key = compileNumberLiteral(fn, cursor, index);
+		const value = compileExpression(program, fn, cursor, element);
+		cursor.block.instructions.push({
 			type: "storeProperty",
 			registers: [array, key, value],
 		});
@@ -1236,12 +1815,17 @@ function compileArrayExpression(
 function compileMemberExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	memberExpression: ESTree.MemberExpression,
 ): number {
-	const { object, key } = compileMemberObjectAndKey(program, fn, block, memberExpression);
+	const { object, key } = compileMemberObjectAndKey(
+		program,
+		fn,
+		cursor,
+		memberExpression,
+	);
 	const destination = nextRegisterDestination(fn);
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "loadProperty",
 		registers: [destination, object, key],
 	});
@@ -1252,18 +1836,18 @@ function compileMemberExpression(
 function compileMemberObjectAndKey(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	memberExpression: ESTree.MemberExpression,
 ) {
 	if (memberExpression.object.type === "Super") {
 		return { object: -1, key: -1 };
 	}
 
-	const object = compileExpression(program, fn, block, memberExpression.object);
+	const object = compileExpression(program, fn, cursor, memberExpression.object);
 	const key = memberExpression.computed
-		? compileExpression(program, fn, block, memberExpression.property)
+		? compileExpression(program, fn, cursor, memberExpression.property)
 		: memberExpression.property.type === "Identifier"
-			? compileStaticString(program, fn, block, memberExpression.property.name)
+			? compileStaticString(program, fn, cursor, memberExpression.property.name)
 			: -1;
 
 	return { object, key };
@@ -1272,19 +1856,19 @@ function compileMemberObjectAndKey(
 function compilePropertyKey(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	property: ESTree.Property,
 ) {
 	if (property.computed) {
-		return compileExpression(program, fn, block, property.key);
+		return compileExpression(program, fn, cursor, property.key);
 	}
 
 	if (property.key.type === "Identifier") {
-		return compileStaticString(program, fn, block, property.key.name);
+		return compileStaticString(program, fn, cursor, property.key.name);
 	}
 
 	if (property.key.type === "Literal") {
-		return compileLiteral(program, fn, block, property.key);
+		return compileLiteral(program, fn, cursor, property.key);
 	}
 
 	return -1;
@@ -1293,11 +1877,11 @@ function compilePropertyKey(
 function compileStaticString(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	value: string,
 ) {
 	const destination = nextRegisterDestination(fn);
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "createString",
 		registers: [destination],
 		stringIndex: getOrCreateStringConstant(program, value),
@@ -1309,7 +1893,7 @@ function compileStaticString(
 function compileCall(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
 	const calleeNode = callExpression.callee as unknown as ESTree.Node;
@@ -1320,10 +1904,10 @@ function compileCall(
 	let callee: number;
 	let thisRegister: number;
 	if (calleeNode.type === "MemberExpression") {
-		const member = compileMemberObjectAndKey(program, fn, block, calleeNode);
+		const member = compileMemberObjectAndKey(program, fn, cursor, calleeNode);
 		thisRegister = member.object;
 		callee = nextRegisterDestination(fn);
-		block.instructions.push({
+		cursor.block.instructions.push({
 			type: "loadProperty",
 			registers: [callee, member.object, member.key],
 		});
@@ -1331,21 +1915,21 @@ function compileCall(
 		callee = compileExpression(
 			program,
 			fn,
-			block,
+			cursor,
 			calleeNode as ESTree.Expression | ESTree.PrivateIdentifier,
 		);
-		thisRegister = compileUndefined(fn, block);
+		thisRegister = compileUndefined(fn, cursor);
 	}
 	const args = callExpression.arguments.map((arg) => {
 		if (arg.type === "SpreadElement") {
 			return -1;
 		}
 
-		return compileExpression(program, fn, block, arg);
+		return compileExpression(program, fn, cursor, arg);
 	});
 	const destination = nextRegisterDestination(fn);
 
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "call",
 		registers: [destination, callee, thisRegister, ...args],
 	});
@@ -1360,7 +1944,7 @@ function compileCall(
 function compileNewExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	expression: ESTree.NewExpression,
 ): number {
 	const calleeNode = expression.callee as unknown as ESTree.Node;
@@ -1368,17 +1952,17 @@ function compileNewExpression(
 		return -1;
 	}
 
-	const callee = compileExpression(program, fn, block, calleeNode as ESTree.Expression);
+	const callee = compileExpression(program, fn, cursor, calleeNode as ESTree.Expression);
 	const args = expression.arguments.map((arg) => {
 		if (arg.type === "SpreadElement") {
 			return -1;
 		}
 
-		return compileExpression(program, fn, block, arg);
+		return compileExpression(program, fn, cursor, arg);
 	});
 	const destination = nextRegisterDestination(fn);
 
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "construct",
 		registers: [destination, callee, ...args],
 	});
@@ -1394,11 +1978,11 @@ function compileNewExpression(
 function compileIdentifier(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	identifier: ESTree.Identifier,
 ): number {
 	if (identifier.name === "undefined") {
-		return compileUndefined(fn, block);
+		return compileUndefined(fn, cursor);
 	}
 
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
@@ -1408,7 +1992,7 @@ function compileIdentifier(
 
 	if (binding.undeclared && isIRIntrinsic(identifier.name)) {
 		const destination = nextRegisterDestination(fn);
-		block.instructions.push({
+		cursor.block.instructions.push({
 			type: "loadIntrinsic",
 			registers: [destination],
 			intrinsic: identifier.name,
@@ -1422,7 +2006,7 @@ function compileIdentifier(
 		}
 
 		const destination = nextRegisterDestination(fn);
-		block.instructions.push({
+		cursor.block.instructions.push({
 			type: "move",
 			registers: [destination, fn.argumentsObjectRegister],
 		});
@@ -1431,7 +2015,7 @@ function compileIdentifier(
 	}
 
 	const location = getOrCreateBindingLocation(program, fn, binding);
-	return loadRegisterFromLocation(fn, block, location);
+	return loadRegisterFromLocation(fn, cursor.block, location);
 }
 
 function loadRegisterFromLocation(
@@ -1490,16 +2074,32 @@ function getArgumentsBinding(
 function compileLiteral(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	block: IRBlock,
+	cursor: IRCursor,
 	literal: ESTree.Literal,
 ): number {
-	if (typeof literal.value === "number" && Number.isInteger(literal.value)) {
-		return compileNumberLiteral(fn, block, literal.value);
+	if (
+		typeof literal.value === "number" &&
+		Number.isInteger(literal.value) &&
+		literal.value >= -2147483648 &&
+		literal.value <= 2147483647
+	) {
+		return compileNumberLiteral(fn, cursor, literal.value);
+	}
+
+	if (typeof literal.value === "number" && Number.isFinite(literal.value)) {
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createF64",
+			registers: [destination],
+			value: literal.value,
+		});
+
+		return destination;
 	}
 
 	if (typeof literal.value === "boolean") {
 		const destination = nextRegisterDestination(fn);
-		block.instructions.push({
+		cursor.block.instructions.push({
 			type: "createBoolean",
 			registers: [destination],
 			value: literal.value,
@@ -1510,7 +2110,7 @@ function compileLiteral(
 
 	if (typeof literal.value === "string") {
 		const destination = nextRegisterDestination(fn);
-		block.instructions.push({
+		cursor.block.instructions.push({
 			type: "createString",
 			registers: [destination],
 			stringIndex: getOrCreateStringConstant(program, literal.value),
@@ -1519,12 +2119,22 @@ function compileLiteral(
 		return destination;
 	}
 
+	if (literal.value === null) {
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createNull",
+			registers: [destination],
+		});
+
+		return destination;
+	}
+
 	return -1;
 }
 
-function compileUndefined(fn: IRFunction, block: IRBlock) {
+function compileUndefined(fn: IRFunction, cursor: IRCursor) {
 	const destination = nextRegisterDestination(fn);
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "createUndefined",
 		registers: [destination],
 	});
@@ -1532,9 +2142,9 @@ function compileUndefined(fn: IRFunction, block: IRBlock) {
 	return destination;
 }
 
-function compileNumberLiteral(fn: IRFunction, block: IRBlock, value: number) {
+function compileNumberLiteral(fn: IRFunction, cursor: IRCursor, value: number) {
 	const destination = nextRegisterDestination(fn);
-	block.instructions.push({
+	cursor.block.instructions.push({
 		type: "createNumber",
 		registers: [destination],
 

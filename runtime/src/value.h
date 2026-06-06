@@ -45,6 +45,10 @@ typedef u64 MalValue;
 #define MAL_VALUE_TRUE (MAL_VALUE_STATIC | 0x04)
 #define MAL_VALUE_FALSE (MAL_VALUE_STATIC | 0x05)
 #define MAL_VALUE_NEGATIVE_ZERO (MAL_VALUE_STATIC | 0x06)
+// Raw f64 infinities collide with the tag space check (exponent all ones), so
+// they get static encodings like NaN does.
+#define MAL_VALUE_POSITIVE_INFINITY (MAL_VALUE_STATIC | 0x07)
+#define MAL_VALUE_NEGATIVE_INFINITY (MAL_VALUE_STATIC | 0x08)
 
 
 // Inline dynamic values. We have room for 7 items (3 bits).

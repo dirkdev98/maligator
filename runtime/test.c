@@ -45,6 +45,32 @@ static const c16 mal_string_22_code_units[] = { 108, 101, 110, 103, 116, 104 };
 static const c16 mal_string_23_code_units[] = { 84, 121, 112, 101, 69, 114, 114, 111, 114 };
 static const c16 mal_string_24_code_units[] = { 69, 114, 114, 111, 114 };
 static const c16 mal_string_25_code_units[] = { 82, 97, 110, 103, 101, 69, 114, 114, 111, 114 };
+static const c16 mal_string_26_code_units[] = { 32, 32, 72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100, 32, 32 };
+static const c16 mal_string_27_code_units[] = { 116, 114, 105, 109 };
+static const c16 mal_string_28_code_units[] = { 116, 111, 85, 112, 112, 101, 114, 67, 97, 115, 101 };
+static const c16 mal_string_29_code_units[] = { 97, 44, 98, 44, 99 };
+static const c16 mal_string_30_code_units[] = { 115, 112, 108, 105, 116 };
+static const c16 mal_string_31_code_units[] = { 44 };
+static const c16 mal_string_32_code_units[] = { 52, 50 };
+static const c16 mal_string_33_code_units[] = { 105, 115, 73, 110, 116, 101, 103, 101, 114 };
+static const c16 mal_string_34_code_units[] = { 115, 116, 114, 105, 110, 103 };
+static const c16 mal_string_35_code_units[] = { 102, 97, 108, 108, 98, 97, 99, 107 };
+static const c16 mal_string_36_code_units[] = { 109, 97, 120 };
+static const c16 mal_string_37_code_units[] = { 109, 105, 110 };
+static const c16 mal_string_38_code_units[] = { 97, 98, 115 };
+static const c16 mal_string_39_code_units[] = { 102, 108, 111, 111, 114 };
+static const c16 mal_string_40_code_units[] = { 114, 111, 117, 110, 100 };
+static const c16 mal_string_41_code_units[] = { 116, 114, 117, 110, 99 };
+static const c16 mal_string_42_code_units[] = { 112, 111, 119 };
+static const c16 mal_string_43_code_units[] = { 115, 116, 114, 105, 110, 103, 105, 102, 121 };
+static const c16 mal_string_44_code_units[] = { 97 };
+static const c16 mal_string_45_code_units[] = { 98 };
+static const c16 mal_string_46_code_units[] = { 112, 97, 114, 115, 101 };
+static const c16 mal_string_47_code_units[] = { 77, 97, 116, 104 };
+static const c16 mal_string_48_code_units[] = { 108, 111, 103 };
+static const c16 mal_string_49_code_units[] = { 109, 97, 108, 105, 103, 97, 116, 111, 114, 32, 102, 105, 120, 116, 117, 114, 101, 32, 114, 101, 115, 117, 108, 116, 32, 105, 110, 99, 111, 109, 105, 110, 103, 58 };
+static const c16 mal_string_50_code_units[] = { 114, 101, 115, 117, 108, 116, 58 };
+static const c16 mal_string_51_code_units[] = { 116, 109, 112, 50, 46, 106, 115, 32, 101, 120, 112, 101, 99, 116, 101, 100, 32, 114, 101, 115, 117, 108, 116, 32, 49, 50, 51, 50, 32, 98, 117, 116, 32, 103, 111, 116, 32 };
 
 static const MalStringConstant mal_string_constants[] = {
     { .length = 0, .code_units = mal_string_0_code_units },
@@ -73,6 +99,32 @@ static const MalStringConstant mal_string_constants[] = {
     { .length = 9, .code_units = mal_string_23_code_units },
     { .length = 5, .code_units = mal_string_24_code_units },
     { .length = 10, .code_units = mal_string_25_code_units },
+    { .length = 15, .code_units = mal_string_26_code_units },
+    { .length = 4, .code_units = mal_string_27_code_units },
+    { .length = 11, .code_units = mal_string_28_code_units },
+    { .length = 5, .code_units = mal_string_29_code_units },
+    { .length = 5, .code_units = mal_string_30_code_units },
+    { .length = 1, .code_units = mal_string_31_code_units },
+    { .length = 2, .code_units = mal_string_32_code_units },
+    { .length = 9, .code_units = mal_string_33_code_units },
+    { .length = 6, .code_units = mal_string_34_code_units },
+    { .length = 8, .code_units = mal_string_35_code_units },
+    { .length = 3, .code_units = mal_string_36_code_units },
+    { .length = 3, .code_units = mal_string_37_code_units },
+    { .length = 3, .code_units = mal_string_38_code_units },
+    { .length = 5, .code_units = mal_string_39_code_units },
+    { .length = 5, .code_units = mal_string_40_code_units },
+    { .length = 5, .code_units = mal_string_41_code_units },
+    { .length = 3, .code_units = mal_string_42_code_units },
+    { .length = 9, .code_units = mal_string_43_code_units },
+    { .length = 1, .code_units = mal_string_44_code_units },
+    { .length = 1, .code_units = mal_string_45_code_units },
+    { .length = 5, .code_units = mal_string_46_code_units },
+    { .length = 4, .code_units = mal_string_47_code_units },
+    { .length = 3, .code_units = mal_string_48_code_units },
+    { .length = 34, .code_units = mal_string_49_code_units },
+    { .length = 7, .code_units = mal_string_50_code_units },
+    { .length = 37, .code_units = mal_string_51_code_units },
 };
 
 static const MalInstruction mal_function_0_instructions[] = {
@@ -351,15 +403,343 @@ static const MalInstruction mal_function_0_instructions[] = {
     { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 18 } },
     { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 3, .left = 1, .right = 0, .op = MAL_BIN_STRICT_EQ } },
     { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 3, .target_ip = 276 } },
-    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 282 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 281 } },
     { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 17 } },
     { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 6 } },
     { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 3, .right = 0, .op = MAL_BIN_ADD } },
     { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 17 } },
-    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 1 } },
-    { .opcode = MAL_OP_RETURN, .as.ret = { .value = 1 } },
-    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 1 } },
-    { .opcode = MAL_OP_RETURN, .as.ret = { .value = 1 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 281 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 1, .value = 0 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 18 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 1, .value = 0 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 0, .src = 1 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 286 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 1, .src = 0 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 3, .value = 10 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 4, .left = 1, .right = 3, .op = MAL_BIN_LT } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 4, .target_ip = 291 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 310 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 4, .src = 0 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 3, .value = 5 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 4, .right = 3, .op = MAL_BIN_STRICT_EQ } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 1, .target_ip = 304 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 1, .src = 0 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 3, .value = 7 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 4, .left = 1, .right = 3, .op = MAL_BIN_GT } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 4, .target_ip = 310 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 18 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 3, .src = 0 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 4, .right = 3, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 18 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 304 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 1, .src = 0 } },
+    { .opcode = MAL_OP_UNARY, .as.unary = { .dst = 3, .src = 1, .op = MAL_UNARY_PLUS } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 1, .value = 1 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 4, .left = 3, .right = 1, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 0, .src = 4 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 286 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 0 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 4, .index = 19 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 313 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 19 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 4 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 4, .right = 0, .op = MAL_BIN_LT } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 0, .src = 1 } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 1, .target_ip = 319 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 324 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 18 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 0 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 3, .left = 1, .right = 4, .op = MAL_BIN_GT } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 0, .src = 3 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 324 } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 0, .target_ip = 326 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 332 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 19 } },
+    { .opcode = MAL_OP_UNARY, .as.unary = { .dst = 3, .src = 0, .op = MAL_UNARY_PLUS } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 1 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 4, .left = 3, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 4, .index = 19 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 313 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 0 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 4, .index = 20 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 335 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 20 } },
+    { .opcode = MAL_OP_UNARY, .as.unary = { .dst = 0, .src = 4, .op = MAL_UNARY_PLUS } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 1 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 3, .left = 0, .right = 4, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 20 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 20 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 3 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 3, .right = 4, .op = MAL_BIN_LT } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 0, .target_ip = 335 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 26 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 27 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 3, .object = 0, .key = 4 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 4, .callee = 3, .this_value = 0, .argument_count = 0, .arguments = nullptr } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 28 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 3, .object = 4, .key = 0 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 0, .callee = 3, .this_value = 4, .argument_count = 0, .arguments = nullptr } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 0, .index = 21 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 29 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 30 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 3, .object = 0, .key = 4 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 31 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 1, .callee = 3, .this_value = 0, .argument_count = 1, .arguments = (const i32[]) { 4 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 22 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 1, .intrinsic = MAL_INTRINSIC_PARSE_INT } },
+    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 4 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 32 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 3, .value = 10 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 6, .callee = 1, .this_value = 4, .argument_count = 2, .arguments = (const i32[]) { 0, 3 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 23 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 6, .intrinsic = MAL_INTRINSIC_NUMBER_CONSTRUCTOR } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 3, .string_index = 33 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 0, .object = 6, .key = 3 } },
+    { .opcode = MAL_OP_CREATE_F64, .as.create_f64 = { .dst = 3, .value = 3.5 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 4, .callee = 0, .this_value = 6, .argument_count = 1, .arguments = (const i32[]) { 3 } } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 4, .target_ip = 371 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 374 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 1 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 3, .src = 4 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 377 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 2 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 3, .src = 4 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 377 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 24 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 23 } },
+    { .opcode = MAL_OP_UNARY, .as.unary = { .dst = 4, .src = 3, .op = MAL_UNARY_NEGATE } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 4, .index = 25 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 2 } },
+    { .opcode = MAL_OP_UNARY, .as.unary = { .dst = 3, .src = 4, .op = MAL_UNARY_TYPEOF } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 34 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 3, .right = 4, .op = MAL_BIN_STRICT_EQ } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 6, .target_ip = 387 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 390 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 6, .value = 1 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 4, .src = 6 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 393 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 6, .value = 0 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 4, .src = 6 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 393 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 4, .index = 26 } },
+    { .opcode = MAL_OP_CREATE_NULL, .as.create_null = { .dst = 4 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 6, .src = 4 } },
+    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 3 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 4, .right = 3, .op = MAL_BIN_EQ } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 0, .target_ip = 400 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 403 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 35 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 6, .src = 0 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 403 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 27 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 18 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 3, .left = 6, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 19 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 20 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 4, .left = 0, .right = 6, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 3, .right = 4, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 21 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 3, .string_index = 22 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 0, .object = 4, .key = 3 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 3, .left = 6, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 22 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 6, .string_index = 22 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 4, .object = 0, .key = 6 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 3, .right = 4, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 23 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 25 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 4, .right = 3, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 3, .left = 6, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 3, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 24 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 26 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 4, .left = 0, .right = 6, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 3, .right = 4, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 4, .index = 27 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 3, .string_index = 22 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 0, .object = 4, .key = 3 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 3, .left = 6, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 3, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 3, .intrinsic = MAL_INTRINSIC_MATH } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 36 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 6, .object = 3, .key = 0 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 1 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 9 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 1, .callee = 6, .this_value = 3, .argument_count = 2, .arguments = (const i32[]) { 0, 4 } } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 4, .intrinsic = MAL_INTRINSIC_MATH } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 37 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 3, .object = 4, .key = 0 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 2 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 6, .value = 5 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 2, .callee = 3, .this_value = 4, .argument_count = 2, .arguments = (const i32[]) { 0, 6 } } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 1, .right = 2, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 2, .intrinsic = MAL_INTRINSIC_MATH } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 38 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 0, .object = 2, .key = 1 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 1, .value = 3 } },
+    { .opcode = MAL_OP_UNARY, .as.unary = { .dst = 4, .src = 1, .op = MAL_UNARY_NEGATE } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 1, .callee = 0, .this_value = 2, .argument_count = 1, .arguments = (const i32[]) { 4 } } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 4, .left = 6, .right = 1, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 1, .intrinsic = MAL_INTRINSIC_MATH } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 6, .string_index = 39 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 2, .object = 1, .key = 6 } },
+    { .opcode = MAL_OP_CREATE_F64, .as.create_f64 = { .dst = 6, .value = 2.9 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 0, .callee = 2, .this_value = 1, .argument_count = 1, .arguments = (const i32[]) { 6 } } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 4, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 0, .intrinsic = MAL_INTRINSIC_MATH } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 40 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 0, .key = 4 } },
+    { .opcode = MAL_OP_CREATE_F64, .as.create_f64 = { .dst = 4, .value = 2.5 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 2, .callee = 1, .this_value = 0, .argument_count = 1, .arguments = (const i32[]) { 4 } } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 4, .left = 6, .right = 2, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 2, .intrinsic = MAL_INTRINSIC_MATH } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 6, .string_index = 41 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 0, .object = 2, .key = 6 } },
+    { .opcode = MAL_OP_CREATE_F64, .as.create_f64 = { .dst = 6, .value = 1.8 } },
+    { .opcode = MAL_OP_UNARY, .as.unary = { .dst = 1, .src = 6, .op = MAL_UNARY_NEGATE } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 6, .callee = 0, .this_value = 2, .argument_count = 1, .arguments = (const i32[]) { 1 } } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 4, .right = 6, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 28 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 1, .intrinsic = MAL_INTRINSIC_MATH } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 6, .string_index = 42 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 4, .object = 1, .key = 6 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 6, .value = 2 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 2, .value = 10 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 0, .callee = 4, .this_value = 1, .argument_count = 2, .arguments = (const i32[]) { 6, 2 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 0, .index = 29 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 0, .intrinsic = MAL_INTRINSIC_JSON } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 2, .string_index = 43 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 6, .object = 0, .key = 2 } },
+    { .opcode = MAL_OP_CREATE_OBJECT, .as.create_object = { .dst = 2 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 44 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 4, .value = 1 } },
+    { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 2, .key = 1, .value = 4 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 4, .string_index = 45 } },
+    { .opcode = MAL_OP_CREATE_ARRAY, .as.create_array = { .dst = 1, .length = 3 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 3, .value = 0 } },
+    { .opcode = MAL_OP_CREATE_BOOLEAN, .as.create_boolean = { .dst = 5, .value = 1 } },
+    { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 1, .key = 3, .value = 5 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 5, .value = 1 } },
+    { .opcode = MAL_OP_CREATE_NULL, .as.create_null = { .dst = 3 } },
+    { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 1, .key = 5, .value = 3 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 3, .value = 2 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 5, .string_index = 2 } },
+    { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 1, .key = 3, .value = 5 } },
+    { .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = 2, .key = 4, .value = 1 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 1, .callee = 6, .this_value = 0, .argument_count = 1, .arguments = (const i32[]) { 2 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 30 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 1, .intrinsic = MAL_INTRINSIC_JSON } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 2, .string_index = 46 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 0, .object = 1, .key = 2 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 2, .index = 30 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 6, .callee = 0, .this_value = 1, .argument_count = 1, .arguments = (const i32[]) { 2 } } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 6, .index = 31 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 6, .intrinsic = MAL_INTRINSIC_GLOBAL_THIS } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 2, .string_index = 47 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 6, .key = 2 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 2, .intrinsic = MAL_INTRINSIC_MATH } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 1, .right = 2, .op = MAL_BIN_STRICT_EQ } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 6, .target_ip = 525 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 528 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 6, .value = 1 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 2, .src = 6 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 531 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 6, .value = 0 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 2, .src = 6 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 531 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 2, .index = 32 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 2, .intrinsic = MAL_INTRINSIC_IS_NAN } },
+    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 6 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 1, .intrinsic = MAL_INTRINSIC_NAN_VALUE } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 0, .callee = 2, .this_value = 6, .argument_count = 1, .arguments = (const i32[]) { 1 } } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 0, .target_ip = 538 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 541 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 1 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 1, .src = 0 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 544 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 0 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 1, .src = 0 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 544 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 1, .index = 33 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 1, .intrinsic = MAL_INTRINSIC_INFINITY_VALUE } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 0, .value = 1000000 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 1, .right = 0, .op = MAL_BIN_GT } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 6, .target_ip = 550 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 553 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 6, .value = 1 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 0, .src = 6 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 556 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 6, .value = 0 } },
+    { .opcode = MAL_OP_MOVE, .as.move = { .dst = 0, .src = 6 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 556 } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 0, .index = 34 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 0, .intrinsic = MAL_INTRINSIC_CONSOLE } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 6, .string_index = 48 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 0, .key = 6 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 6, .string_index = 49 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 2, .index = 29 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 3, .callee = 1, .this_value = 0, .argument_count = 2, .arguments = (const i32[]) { 6, 2 } } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 2, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 28 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 2, .right = 6, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 0, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 29 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 0, .right = 6, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 2, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 2, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 30 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 0, .string_index = 22 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 6, .key = 0 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 2, .right = 1, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 0, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 31 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 2, .string_index = 45 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 6, .object = 1, .key = 2 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 2, .string_index = 22 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 1, .object = 6, .key = 2 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 0, .right = 1, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 2, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 2, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 1, .index = 32 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 33 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 6, .left = 1, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 0, .index = 34 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 1, .left = 6, .right = 0, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 2, .right = 1, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_STORE_GLOBAL, .as.store_global = { .src = 0, .index = 17 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 0, .intrinsic = MAL_INTRINSIC_CONSOLE } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 48 } },
+    { .opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = { .dst = 2, .object = 0, .key = 1 } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 50 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 17 } },
+    { .opcode = MAL_OP_CALL, .as.call = { .dst = 3, .callee = 2, .this_value = 0, .argument_count = 2, .arguments = (const i32[]) { 1, 6 } } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 17 } },
+    { .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = 1, .value = 1232 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 0, .left = 6, .right = 1, .op = MAL_BIN_STRICT_NEQ } },
+    { .opcode = MAL_OP_JUMP_IF, .as.jump_if = { .cond = 0, .target_ip = 604 } },
+    { .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = 610 } },
+    { .opcode = MAL_OP_LOAD_INTRINSIC, .as.load_intrinsic = { .dst = 0, .intrinsic = MAL_INTRINSIC_ERROR_CONSTRUCTOR } },
+    { .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = 1, .string_index = 51 } },
+    { .opcode = MAL_OP_LOAD_GLOBAL, .as.load_global = { .dst = 6, .index = 17 } },
+    { .opcode = MAL_OP_BINARY, .as.binary = { .dst = 2, .left = 1, .right = 6, .op = MAL_BIN_ADD } },
+    { .opcode = MAL_OP_CONSTRUCT, .as.construct = { .dst = 6, .callee = 0, .argument_count = 1, .arguments = (const i32[]) { 2 } } },
+    { .opcode = MAL_OP_THROW, .as.thrown = { .value = 6 } },
+    { .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = 6 } },
+    { .opcode = MAL_OP_RETURN, .as.ret = { .value = 6 } },
 };
 
 static const MalExceptionHandler mal_function_0_handlers[] = {
@@ -417,7 +797,7 @@ static const MalFunction mal_functions[] = {
         .parameter_count = 0,
         .register_count = 7,
         .captured_count = 0,
-        .instruction_count = 284,
+        .instruction_count = 612,
         .instructions = mal_function_0_instructions,
         .handler_count = 2,
         .handlers = mal_function_0_handlers,
@@ -477,9 +857,9 @@ static const MalFunction mal_functions[] = {
 const MalVmDefinition mal_vm_definition = {
     .function_count = 6,
     .functions = mal_functions,
-    .string_constant_count = 26,
+    .string_constant_count = 52,
     .string_constants = mal_string_constants,
-    .global_count = 18,
+    .global_count = 35,
 };
 // === END GENERATED ===
 
@@ -2076,6 +2456,283 @@ static void test_builtin_array_constructor_and_prototype_methods(void) {
     mal_vm_free(&vm);
 }
 
+static MalValue test_builtin_ascii(MalVm *vm, const byte *value) {
+    return mal_value_from_string(mal_intrinsic_ascii(vm, value));
+}
+
+static void test_builtin_string_constructor_and_prototype_methods(void) {
+    MalVm vm;
+    mal_vm_init(&vm, &mal_vm_definition);
+
+    MalValue string_prototype = vm.intrinsics[MAL_INTRINSIC_STRING_PROTOTYPE];
+    MalValue hello = test_builtin_ascii(&vm, "Hello World");
+
+    // String(x) coerces to a primitive string.
+    MalValue five = mal_value_from_i32(5);
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, vm.intrinsics[MAL_INTRINSIC_STRING_CONSTRUCTOR], mal_value_new_undefined(), &five, 1), "5"));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, vm.intrinsics[MAL_INTRINSIC_STRING_CONSTRUCTOR], mal_value_new_undefined(), NULL, 0), ""));
+
+    MalValue char_codes[] = {mal_value_from_i32(72), mal_value_from_i32(105)};
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, vm.intrinsics[MAL_INTRINSIC_STRING_CONSTRUCTOR], "fromCharCode"), mal_value_new_undefined(), char_codes, 2), "Hi"));
+
+    MalValue four = mal_value_from_i32(4);
+    MalValue negative_one = mal_value_from_i32(-1);
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "charAt"), hello, &four, 1), "o"));
+    assert(mal_value_to_i32(test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "charCodeAt"), hello, &four, 1)) == 'o');
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "at"), hello, &negative_one, 1), "d"));
+
+    MalValue world = test_builtin_ascii(&vm, "World");
+    assert(mal_value_to_i32(test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "indexOf"), hello, &world, 1)) == 6);
+    MalValue l_string = test_builtin_ascii(&vm, "l");
+    assert(mal_value_to_i32(test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "lastIndexOf"), hello, &l_string, 1)) == 9);
+    assert(mal_value_to_boolean(test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "includes"), hello, &world, 1)));
+    MalValue hello_prefix = test_builtin_ascii(&vm, "Hello");
+    assert(mal_value_to_boolean(test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "startsWith"), hello, &hello_prefix, 1)));
+    assert(mal_value_to_boolean(test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "endsWith"), hello, &world, 1)));
+
+    MalValue slice_args[] = {mal_value_from_i32(-5)};
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "slice"), hello, slice_args, 1), "World"));
+    MalValue substring_args[] = {mal_value_from_i32(5), mal_value_from_i32(0)};
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "substring"), hello, substring_args, 2), "Hello"));
+
+    MalValue exclaim = test_builtin_ascii(&vm, "!");
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "concat"), hello, &exclaim, 1), "Hello World!"));
+
+    MalValue ab = test_builtin_ascii(&vm, "ab");
+    MalValue three = mal_value_from_i32(3);
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "repeat"), ab, &three, 1), "ababab"));
+    MalValue negative_count = mal_value_from_i32(-1);
+    test_builtin_call_throws(&vm, test_builtin_get(&vm, string_prototype, "repeat"), ab, &negative_count, 1, "RangeError");
+
+    MalValue padded = test_builtin_ascii(&vm, "  pad  ");
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "trim"), padded, NULL, 0), "pad"));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "trimStart"), padded, NULL, 0), "pad  "));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "trimEnd"), padded, NULL, 0), "  pad"));
+
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "toUpperCase"), hello, NULL, 0), "HELLO WORLD"));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "toLowerCase"), hello, NULL, 0), "hello world"));
+
+    MalValue csv = test_builtin_ascii(&vm, "a,b,c");
+    MalValue comma = test_builtin_ascii(&vm, ",");
+    MalValue split_result = test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "split"), csv, &comma, 1);
+    assert(mal_array_object_length(mal_value_to_array_object(split_result)) == 3);
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_index(split_result, 1), "b"));
+
+    MalValue replace_args[] = {l_string, test_builtin_ascii(&vm, "L")};
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "replace"), hello, replace_args, 2), "HeLlo World"));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "replaceAll"), hello, replace_args, 2), "HeLLo WorLd"));
+
+    MalValue pad_args[] = {mal_value_from_i32(5), test_builtin_ascii(&vm, "0")};
+    MalValue forty_two = test_builtin_ascii(&vm, "42");
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "padStart"), forty_two, pad_args, 2), "00042"));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, string_prototype, "padEnd"), forty_two, pad_args, 2), "42000"));
+
+    mal_vm_free(&vm);
+}
+
+static void test_builtin_number_boolean_and_global_functions(void) {
+    MalVm vm;
+    mal_vm_init(&vm, &mal_vm_definition);
+
+    MalValue number_constructor = vm.intrinsics[MAL_INTRINSIC_NUMBER_CONSTRUCTOR];
+    MalValue number_prototype = vm.intrinsics[MAL_INTRINSIC_NUMBER_PROTOTYPE];
+
+    MalValue forty_two_string = test_builtin_ascii(&vm, "42");
+    assert(mal_value_to_i32(test_builtin_call(&vm, number_constructor, mal_value_new_undefined(), &forty_two_string, 1)) == 42);
+    assert(mal_value_to_i32(test_builtin_call(&vm, number_constructor, mal_value_new_undefined(), NULL, 0)) == 0);
+
+    MalValue three = mal_value_from_i32(3);
+    MalValue three_point_five = mal_value_from_f64(3.5);
+    assert(mal_value_to_boolean(test_builtin_call(&vm, test_builtin_get(&vm, number_constructor, "isInteger"), mal_value_new_undefined(), &three, 1)));
+    assert(!mal_value_to_boolean(test_builtin_call(&vm, test_builtin_get(&vm, number_constructor, "isInteger"), mal_value_new_undefined(), &three_point_five, 1)));
+
+    MalValue nan_value = mal_value_new_nan();
+    assert(mal_value_to_boolean(test_builtin_call(&vm, test_builtin_get(&vm, number_constructor, "isNaN"), mal_value_new_undefined(), &nan_value, 1)));
+    assert(!mal_value_to_boolean(test_builtin_call(&vm, test_builtin_get(&vm, number_constructor, "isNaN"), mal_value_new_undefined(), &three, 1)));
+    assert(mal_value_to_boolean(test_builtin_call(&vm, test_builtin_get(&vm, number_constructor, "isFinite"), mal_value_new_undefined(), &three, 1)));
+
+    // parseInt handles radix, hex prefixes and trailing garbage.
+    MalValue parse_int = vm.intrinsics[MAL_INTRINSIC_PARSE_INT];
+    MalValue int_args[] = {test_builtin_ascii(&vm, "  -42px")};
+    assert(mal_value_to_i32(test_builtin_call(&vm, parse_int, mal_value_new_undefined(), int_args, 1)) == -42);
+    MalValue hex_args[] = {test_builtin_ascii(&vm, "0xff")};
+    assert(mal_value_to_i32(test_builtin_call(&vm, parse_int, mal_value_new_undefined(), hex_args, 1)) == 255);
+    MalValue binary_args[] = {test_builtin_ascii(&vm, "101"), mal_value_from_i32(2)};
+    assert(mal_value_to_i32(test_builtin_call(&vm, parse_int, mal_value_new_undefined(), binary_args, 2)) == 5);
+    MalValue garbage_args[] = {test_builtin_ascii(&vm, "nope")};
+    assert(mal_value_is_nan(test_builtin_call(&vm, parse_int, mal_value_new_undefined(), garbage_args, 1)));
+
+    MalValue parse_float = vm.intrinsics[MAL_INTRINSIC_PARSE_FLOAT];
+    MalValue float_args[] = {test_builtin_ascii(&vm, "3.5rem")};
+    assert(mal_value_to_f64(test_builtin_call(&vm, parse_float, mal_value_new_undefined(), float_args, 1)) == 3.5);
+
+    // Global isNaN coerces, Number.isNaN does not.
+    MalValue nan_string = test_builtin_ascii(&vm, "not a number");
+    assert(mal_value_to_boolean(test_builtin_call(&vm, vm.intrinsics[MAL_INTRINSIC_IS_NAN], mal_value_new_undefined(), &nan_string, 1)));
+    assert(!mal_value_to_boolean(test_builtin_call(&vm, test_builtin_get(&vm, number_constructor, "isNaN"), mal_value_new_undefined(), &nan_string, 1)));
+    assert(mal_value_to_boolean(test_builtin_call(&vm, vm.intrinsics[MAL_INTRINSIC_IS_FINITE], mal_value_new_undefined(), &forty_two_string, 1)));
+
+    assert(mal_value_to_f64(test_builtin_get(&vm, number_constructor, "MAX_SAFE_INTEGER")) == 9007199254740991.0);
+
+    MalValue two_digits = mal_value_from_i32(2);
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, number_prototype, "toFixed"), three_point_five, &two_digits, 1), "3.50"));
+    MalValue bad_digits = mal_value_from_i32(200);
+    test_builtin_call_throws(&vm, test_builtin_get(&vm, number_prototype, "toFixed"), three, &bad_digits, 1, "RangeError");
+
+    MalValue boolean_constructor = vm.intrinsics[MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR];
+    MalValue boolean_prototype = vm.intrinsics[MAL_INTRINSIC_BOOLEAN_PROTOTYPE];
+    MalValue zero = mal_value_from_i32(0);
+    assert(mal_value_to_boolean(test_builtin_call(&vm, boolean_constructor, mal_value_new_undefined(), &three, 1)));
+    assert(!mal_value_to_boolean(test_builtin_call(&vm, boolean_constructor, mal_value_new_undefined(), &zero, 1)));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_call(&vm, test_builtin_get(&vm, boolean_prototype, "toString"), mal_value_new_boolean(true), NULL, 0), "true"));
+
+    mal_vm_free(&vm);
+}
+
+static void test_vm_primitive_dispatch_and_unary_ops(void) {
+    static const c16 length_units[] = {'l', 'e', 'n', 'g', 't', 'h'};
+    static const c16 abc_units[] = {'a', 'b', 'c'};
+    static const c16 upper_units[] = {'t', 'o', 'U', 'p', 'p', 'e', 'r', 'C', 'a', 's', 'e'};
+    static const MalStringConstant string_constants[] = {
+        {.length = 6, .code_units = length_units},
+        {.length = 3, .code_units = abc_units},
+        {.length = 11, .code_units = upper_units},
+    };
+    static const i32 no_arguments[] = {0};
+    static const MalInstruction entry_instructions[] = {
+        // "abc".length
+        {.opcode = MAL_OP_CREATE_STRING, .as.create_string = {.dst = 0, .string_index = 1}},
+        {.opcode = MAL_OP_CREATE_STRING, .as.create_string = {.dst = 1, .string_index = 0}},
+        {.opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = {.dst = 2, .object = 0, .key = 1}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 2, .index = 0}},
+        // "abc"[1]
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 1, .value = 1}},
+        {.opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = {.dst = 2, .object = 0, .key = 1}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 2, .index = 1}},
+        // "abc".toUpperCase() through the prototype dispatch
+        {.opcode = MAL_OP_CREATE_STRING, .as.create_string = {.dst = 1, .string_index = 2}},
+        {.opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = {.dst = 2, .object = 0, .key = 1}},
+        {.opcode = MAL_OP_CALL, .as.call = {.dst = 3, .callee = 2, .this_value = 0, .argument_count = 0, .arguments = NULL}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 3, .index = 2}},
+        // Unary operators
+        {.opcode = MAL_OP_CREATE_NUMBER, .as.create_number = {.dst = 0, .value = 7}},
+        {.opcode = MAL_OP_UNARY, .as.unary = {.dst = 1, .src = 0, .op = MAL_UNARY_NEGATE}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 1, .index = 3}},
+        {.opcode = MAL_OP_UNARY, .as.unary = {.dst = 1, .src = 0, .op = MAL_UNARY_NOT}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 1, .index = 4}},
+        {.opcode = MAL_OP_UNARY, .as.unary = {.dst = 1, .src = 0, .op = MAL_UNARY_BIT_NOT}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 1, .index = 5}},
+        {.opcode = MAL_OP_UNARY, .as.unary = {.dst = 1, .src = 0, .op = MAL_UNARY_TYPEOF}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 1, .index = 6}},
+        // Property loads on undefined throw a TypeError; catch it.
+        {.opcode = MAL_OP_TRY_BEGIN},
+        {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 0}},
+        {.opcode = MAL_OP_CREATE_STRING, .as.create_string = {.dst = 1, .string_index = 0}},
+        {.opcode = MAL_OP_LOAD_PROPERTY, .as.load_property = {.dst = 2, .object = 0, .key = 1}},
+        {.opcode = MAL_OP_TRY_END},
+        {.opcode = MAL_OP_JUMP, .as.jump = {.target_ip = 27}},
+        {.opcode = MAL_OP_CATCH, .as.caught = {.dst = 3}},
+        {.opcode = MAL_OP_STORE_GLOBAL, .as.store_global = {.src = 3, .index = 7}},
+        {.opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = {.dst = 0}},
+        {.opcode = MAL_OP_RETURN, .as.ret = {.value = 0}},
+    };
+    static const MalExceptionHandler handlers[] = {
+        {.start_ip = 20, .end_ip = 24, .handler_ip = 26},
+    };
+    static const MalFunction functions[] = {
+        {
+            .parameter_count = 0, .register_count = 4, .captured_count = 0, .instruction_count = 30,
+            .instructions = entry_instructions, .handler_count = 1, .handlers = handlers
+        },
+    };
+    static const MalVmDefinition definition = {
+        .function_count = 1, .functions = functions, .string_constant_count = 3, .string_constants = string_constants, .global_count = 8
+    };
+    (void) no_arguments;
+
+    MalVm vm;
+    mal_vm_init(&vm, &definition);
+    MalCallable *callable = mal_vm_create_callable(&vm, 0);
+
+    mal_vm_run(&vm, callable);
+
+    assert(vm.completion.kind == MAL_COMPLETION_NORMAL);
+    assert(mal_value_to_i32(vm.globals[0]) == 3);
+    assert(test_builtin_value_is_ascii(&vm, vm.globals[1], "b"));
+    assert(test_builtin_value_is_ascii(&vm, vm.globals[2], "ABC"));
+    assert(mal_value_to_i32(vm.globals[3]) == -7);
+    assert(!mal_value_to_boolean(vm.globals[4]));
+    assert(mal_value_to_i32(vm.globals[5]) == -8);
+    assert(test_builtin_value_is_ascii(&vm, vm.globals[6], "number"));
+    assert(test_builtin_value_is_ascii(&vm, test_builtin_get(&vm, vm.globals[7], "name"), "TypeError"));
+
+    mal_vm_free_callable(callable);
+    mal_vm_free(&vm);
+}
+
+static void test_builtin_math_json_console_and_global_this(void) {
+    MalVm vm;
+    mal_vm_init(&vm, &mal_vm_definition);
+
+    MalValue math = vm.intrinsics[MAL_INTRINSIC_MATH];
+    MalValue minus_five = mal_value_from_i32(-5);
+    assert(mal_value_to_i32(test_builtin_call(&vm, test_builtin_get(&vm, math, "abs"), math, &minus_five, 1)) == 5);
+
+    MalValue max_args[] = {mal_value_from_i32(1), mal_value_from_i32(7), mal_value_from_i32(3)};
+    assert(mal_value_to_i32(test_builtin_call(&vm, test_builtin_get(&vm, math, "max"), math, max_args, 3)) == 7);
+    assert(mal_value_to_i32(test_builtin_call(&vm, test_builtin_get(&vm, math, "min"), math, max_args, 3)) == 1);
+
+    MalValue pow_args[] = {mal_value_from_i32(2), mal_value_from_i32(8)};
+    assert(mal_value_to_i32(test_builtin_call(&vm, test_builtin_get(&vm, math, "pow"), math, pow_args, 2)) == 256);
+
+    MalValue half = mal_value_from_f64(2.5);
+    assert(mal_value_to_i32(test_builtin_call(&vm, test_builtin_get(&vm, math, "round"), math, &half, 1)) == 3);
+
+    f64 pi = mal_value_to_f64(test_builtin_get(&vm, math, "PI"));
+    assert(pi > 3.14 && pi < 3.15);
+
+    MalValue random = test_builtin_call(&vm, test_builtin_get(&vm, math, "random"), math, NULL, 0);
+    f64 random_value = mal_value_is_f64(random) ? mal_value_to_f64(random) : (f64) mal_value_to_i32(random);
+    assert(random_value >= 0 && random_value < 1);
+
+    // JSON round trip.
+    MalValue json = vm.intrinsics[MAL_INTRINSIC_JSON];
+    MalObject *payload = mal_intrinsic_new_object(&vm);
+    mal_intrinsic_define_data(&vm, payload, "a", mal_value_from_i32(1), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    MalArrayObject *list = mal_intrinsic_new_array(&vm, 2);
+    mal_object_set((MalObject *) list, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, mal_value_new_boolean(true));
+    mal_object_set((MalObject *) list, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, mal_value_new_null());
+    mal_intrinsic_define_data(&vm, payload, "b", mal_value_from_array_object(list), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+
+    MalValue payload_value = mal_value_from_object(payload);
+    MalValue stringified = test_builtin_call(&vm, test_builtin_get(&vm, json, "stringify"), json, &payload_value, 1);
+    assert(test_builtin_value_is_ascii(&vm, stringified, "{\"a\":1,\"b\":[true,null]}"));
+
+    MalValue parsed = test_builtin_call(&vm, test_builtin_get(&vm, json, "parse"), json, &stringified, 1);
+    assert(mal_value_to_i32(test_builtin_get(&vm, parsed, "a")) == 1);
+    assert(mal_array_object_length(mal_value_to_array_object(test_builtin_get(&vm, parsed, "b"))) == 2);
+    assert(mal_value_is_null(test_builtin_index(test_builtin_get(&vm, parsed, "b"), 1)));
+
+    MalValue escaped = test_builtin_ascii(&vm, "line\nbreak \"quoted\"");
+    MalValue escaped_json = test_builtin_call(&vm, test_builtin_get(&vm, json, "stringify"), json, &escaped, 1);
+    assert(test_builtin_value_is_ascii(&vm, escaped_json, "\"line\\nbreak \\\"quoted\\\"\""));
+
+    MalValue bad_json = test_builtin_ascii(&vm, "{\"a\":");
+    test_builtin_call_throws(&vm, test_builtin_get(&vm, json, "parse"), json, &bad_json, 1, "SyntaxError");
+
+    // globalThis wires the intrinsics together.
+    MalValue global_this = vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+    assert(test_builtin_get(&vm, global_this, "Math") == math);
+    assert(test_builtin_get(&vm, global_this, "globalThis") == global_this);
+    assert(mal_value_is_nan(test_builtin_get(&vm, global_this, "NaN")));
+
+    // console.log returns undefined and must not crash.
+    MalValue log_args[] = {test_builtin_ascii(&vm, "console test:"), mal_value_from_i32(42), payload_value};
+    assert(mal_value_is_undefined(test_builtin_call(&vm, test_builtin_get(&vm, vm.intrinsics[MAL_INTRINSIC_CONSOLE], "log"), vm.intrinsics[MAL_INTRINSIC_CONSOLE], log_args, 3)));
+
+    mal_vm_free(&vm);
+}
+
 int main(void) {
     test_binary_value_ops_handle_int32_arithmetic();
     test_binary_value_ops_handle_bitwise_operations();
@@ -2120,13 +2777,18 @@ int main(void) {
     test_bound_function_resolution_and_calls();
     test_builtin_function_call_apply_bind_and_to_string();
     test_vm_function_name_and_length_fast_path();
+    test_builtin_string_constructor_and_prototype_methods();
+    test_builtin_number_boolean_and_global_functions();
+    test_vm_primitive_dispatch_and_unary_ops();
+    test_builtin_math_json_console_and_global_this();
 
     MalVm vm;
 
     mal_vm_init(&vm, &mal_vm_definition);
     auto callable = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, callable);
-    assert(mal_value_to_i32(vm.globals[17]) == 102);
+    // tmp2.js checks its own result and throws on a mismatch.
+    assert(vm.completion.kind == MAL_COMPLETION_NORMAL);
     mal_vm_free_callable(callable);
     mal_vm_free(&vm);
 

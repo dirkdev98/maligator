@@ -78,6 +78,10 @@ void mal_op_create_number(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_number.dst] = mal_value_from_i32(instruction->as.create_number.value);
 }
 
+void mal_op_create_f64(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.create_f64.dst] = mal_value_from_f64_convert_nan(instruction->as.create_f64.value);
+}
+
 void mal_op_create_boolean(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_boolean.dst] = mal_value_new_boolean(instruction->as.create_boolean.value != 0);
 }
@@ -107,6 +111,10 @@ void mal_op_create_array(MalCallable *callable, MalInstruction *instruction) {
 
 void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_undefined.dst] = mal_value_new_undefined();
+}
+
+void mal_op_create_null(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.create_null.dst] = mal_value_new_null();
 }
 
 void mal_op_create_function(MalCallable *callable, MalInstruction *instruction) {
@@ -313,6 +321,66 @@ void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
     }
 }
 
+static const byte *mal_vm_typeof_tag(MalValue value) {
+    if (mal_value_is_undefined(value)) {
+        return "undefined";
+    }
+    if (mal_value_is_null(value)) {
+        return "object";
+    }
+    if (mal_value_is_boolean(value)) {
+        return "boolean";
+    }
+    if (mal_value_is_string(value)) {
+        return "string";
+    }
+    if (mal_value_is_symbol(value)) {
+        return "symbol";
+    }
+    if (mal_value_is_callable(value)) {
+        return "function";
+    }
+    if (mal_value_is_object(value)) {
+        return "object";
+    }
+
+    return "number";
+}
+
+void mal_op_unary(MalCallable *callable, MalInstruction *instruction) {
+    MalValue value = callable->registers[instruction->as.unary.src];
+    i32 dst = instruction->as.unary.dst;
+
+    switch (instruction->as.unary.op) {
+        case MAL_UNARY_NOT:
+            callable->registers[dst] = mal_value_new_boolean(!mal_value_is_truthy(value));
+            break;
+        case MAL_UNARY_NEGATE:
+            if (mal_value_is_int32(value) && mal_value_to_i32(value) != 0 && mal_value_to_i32(value) != INT32_MIN) {
+                callable->registers[dst] = mal_value_from_i32(-mal_value_to_i32(value));
+            } else {
+                // Keeps -0 and -INT32_MIN exact by going through f64.
+                callable->registers[dst] = mal_value_from_f64_convert_nan(-mal_ops_to_number(value));
+            }
+            break;
+        case MAL_UNARY_PLUS:
+            callable->registers[dst] = mal_ops_number_value(mal_ops_to_number(value));
+            break;
+        case MAL_UNARY_BIT_NOT:
+            callable->registers[dst] = mal_ops_bit_xor(value, mal_value_from_i32(-1));
+            break;
+        case MAL_UNARY_TYPEOF: {
+            const byte *tag = mal_vm_typeof_tag(value);
+            usize length = 0;
+            while (tag[length] != '\0') {
+                length++;
+            }
+            callable->registers[dst] = mal_value_from_string(mal_string_new_ascii(&callable->vm->heap, tag, length));
+            break;
+        }
+    }
+}
+
 void mal_op_store_global(MalCallable *callable, MalInstruction *instruction) {
     callable->vm->globals[instruction->as.store_global.index] = callable->registers[instruction->as.store_global.src];
 }
@@ -339,13 +407,71 @@ static bool mal_vm_key_is_name(MalKey key) {
         code_units[3] == 'e';
 }
 
+static void mal_vm_load_from_prototype_slot(MalCallable *callable, MalIntrinsic prototype_slot, MalKey key, i32 dst) {
+    MalPropertyResolution resolution = mal_object_resolve_property(
+        mal_value_to_object(callable->vm->intrinsics[prototype_slot]),
+        key
+    );
+    callable->registers[dst] = resolution.found ? resolution.desc.value : mal_value_new_undefined();
+}
+
+static bool mal_vm_value_is_number(MalValue value) {
+    return mal_value_is_int32(value) || mal_value_is_f64_or_nan(value) || value == MAL_VALUE_NEGATIVE_ZERO;
+}
+
 void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
     MalValue object_value = callable->registers[instruction->as.load_property.object];
     MalValue key_value = callable->registers[instruction->as.load_property.key];
     i32 dst = instruction->as.load_property.dst;
 
+    if (mal_value_is_nil(object_value)) {
+        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read properties of null or undefined");
+        return;
+    }
+
     MalKey key;
-    if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
+    if (!mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
+        callable->registers[dst] = mal_value_new_undefined();
+        return;
+    }
+
+    // Primitive receivers resolve against their prototype intrinsic, with
+    // string length and index reads answered by the string itself.
+    if (!mal_value_is_object(object_value)) {
+        if (mal_value_is_string(object_value)) {
+            MalString *string = mal_value_to_string(object_value);
+            if (mal_array_key_is_length(key)) {
+                callable->registers[dst] = mal_value_from_i32((i32) mal_string_length(string));
+                return;
+            }
+
+            if (key.kind == MAL_KEY_INDEX) {
+                i32 index = mal_value_to_i32(key.value);
+                if (index >= 0 && (usize) index < mal_string_length(string)) {
+                    // The borrowed code units stay alive with the source string.
+                    callable->registers[dst] = mal_value_from_string(
+                        mal_string_new_external(&callable->vm->heap, mal_string_code_units(string) + index, 1)
+                    );
+                } else {
+                    callable->registers[dst] = mal_value_new_undefined();
+                }
+                return;
+            }
+
+            mal_vm_load_from_prototype_slot(callable, MAL_INTRINSIC_STRING_PROTOTYPE, key, dst);
+            return;
+        }
+
+        if (mal_vm_value_is_number(object_value)) {
+            mal_vm_load_from_prototype_slot(callable, MAL_INTRINSIC_NUMBER_PROTOTYPE, key, dst);
+            return;
+        }
+
+        if (mal_value_is_boolean(object_value)) {
+            mal_vm_load_from_prototype_slot(callable, MAL_INTRINSIC_BOOLEAN_PROTOTYPE, key, dst);
+            return;
+        }
+
         callable->registers[dst] = mal_value_new_undefined();
         return;
     }
@@ -382,7 +508,13 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
     MalValue key_value = callable->registers[instruction->as.store_property.key];
     MalValue value = callable->registers[instruction->as.store_property.value];
 
+    if (mal_value_is_nil(object_value)) {
+        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set properties of null or undefined");
+        return;
+    }
+
     MalKey key;
+    // Stores on other primitives are silently ignored, like sloppy mode.
     if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
         return;
     }

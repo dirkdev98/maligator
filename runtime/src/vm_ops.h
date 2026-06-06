@@ -14,6 +14,8 @@ void mal_op_move(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_number(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_create_f64(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_create_boolean(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_string(MalCallable *callable, MalInstruction *instruction);
@@ -23,6 +25,8 @@ void mal_op_create_object(MalCallable *callable, MalInstruction *instruction);
 void mal_op_create_array(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_create_null(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_function(MalCallable *callable, MalInstruction *instruction);
 
@@ -37,6 +41,8 @@ void mal_op_throw(MalCallable *callable, MalInstruction *instruction);
 void mal_op_catch(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_binary(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_unary(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_store_global(MalCallable *callable, MalInstruction *instruction);
 

@@ -15,11 +15,13 @@ typedef enum MalOpcode {
     MAL_OP_JUMP_IF,
     MAL_OP_JUMP,
     MAL_OP_CREATE_NUMBER,
+    MAL_OP_CREATE_F64,
     MAL_OP_CREATE_BOOLEAN,
     MAL_OP_CREATE_STRING,
     MAL_OP_CREATE_OBJECT,
     MAL_OP_CREATE_ARRAY,
     MAL_OP_CREATE_UNDEFINED,
+    MAL_OP_CREATE_NULL,
     MAL_OP_CREATE_FUNCTION,
     MAL_OP_CREATE_ARGUMENTS_OBJECT,
     MAL_OP_LOAD_CAPTURED,
@@ -32,6 +34,7 @@ typedef enum MalOpcode {
     MAL_OP_CALL,
     MAL_OP_CONSTRUCT,
     MAL_OP_BINARY,
+    MAL_OP_UNARY,
 } MalOpcode;
 
 typedef enum MalBinaryOp {
@@ -55,6 +58,14 @@ typedef enum MalBinaryOp {
     MAL_BIN_STRICT_EQ,
     MAL_BIN_STRICT_NEQ,
 } MalBinaryOp;
+
+typedef enum MalUnaryOp {
+    MAL_UNARY_NOT,
+    MAL_UNARY_NEGATE,
+    MAL_UNARY_PLUS,
+    MAL_UNARY_BIT_NOT,
+    MAL_UNARY_TYPEOF,
+} MalUnaryOp;
 
 typedef enum MalCompletionKind {
     MAL_COMPLETION_NORMAL,
@@ -100,6 +111,11 @@ typedef struct MalInstruction {
         } create_number;
 
         struct {
+            i32 dst;
+            f64 value;
+        } create_f64;
+
+        struct {
             i32 dst, value;
         } create_boolean;
 
@@ -118,6 +134,10 @@ typedef struct MalInstruction {
         struct {
             i32 dst;
         } create_undefined;
+
+        struct {
+            i32 dst;
+        } create_null;
 
         struct {
             i32 dst, function_index;
@@ -169,6 +189,11 @@ typedef struct MalInstruction {
             i32 dst, left, right;
             MalBinaryOp op;
         } binary;
+
+        struct {
+            i32 dst, src;
+            MalUnaryOp op;
+        } unary;
     } as;
 } MalInstruction;
 

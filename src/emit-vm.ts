@@ -90,6 +90,9 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_JUMP, .as.jump = { .target_ip = ${instruction.targetIp} } }`;
 		case "CREATE_NUMBER":
 			return `{ .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = ${instruction.dst}, .value = ${instruction.value} } }`;
+		case "CREATE_F64":
+			// JS number stringification round-trips as a C double literal.
+			return `{ .opcode = MAL_OP_CREATE_F64, .as.create_f64 = { .dst = ${instruction.dst}, .value = ${instruction.value} } }`;
 		case "CREATE_BOOLEAN":
 			return `{ .opcode = MAL_OP_CREATE_BOOLEAN, .as.create_boolean = { .dst = ${instruction.dst}, .value = ${instruction.value ? 1 : 0} } }`;
 		case "CREATE_STRING":
@@ -100,6 +103,8 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_CREATE_ARRAY, .as.create_array = { .dst = ${instruction.dst}, .length = ${instruction.length} } }`;
 		case "CREATE_UNDEFINED":
 			return `{ .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = ${instruction.dst} } }`;
+		case "CREATE_NULL":
+			return `{ .opcode = MAL_OP_CREATE_NULL, .as.create_null = { .dst = ${instruction.dst} } }`;
 		case "CREATE_FUNCTION":
 			return `{ .opcode = MAL_OP_CREATE_FUNCTION, .as.create_function = { .dst = ${instruction.dst}, .function_index = ${instruction.functionIndex} } }`;
 		case "CREATE_ARGUMENTS_OBJECT":
@@ -134,6 +139,8 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_STORE_PROPERTY, .as.store_property = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value} } }`;
 		case "BINARY":
 			return `{ .opcode = MAL_OP_BINARY, .as.binary = { .dst = ${instruction.dst}, .left = ${instruction.left}, .right = ${instruction.right}, .op = ${emitBinaryOperator(instruction.operator)} } }`;
+		case "UNARY":
+			return `{ .opcode = MAL_OP_UNARY, .as.unary = { .dst = ${instruction.dst}, .src = ${instruction.src}, .op = ${emitUnaryOperator(instruction.operator)} } }`;
 	}
 
 	throw new Error(`Unknown vm instruction ${(instruction as { opcode: string }).opcode}`);
@@ -159,7 +166,52 @@ function emitIntrinsic(
 			return "MAL_INTRINSIC_REFERENCE_ERROR_CONSTRUCTOR";
 		case "SyntaxError":
 			return "MAL_INTRINSIC_SYNTAX_ERROR_CONSTRUCTOR";
+		case "String":
+			return "MAL_INTRINSIC_STRING_CONSTRUCTOR";
+		case "Number":
+			return "MAL_INTRINSIC_NUMBER_CONSTRUCTOR";
+		case "Boolean":
+			return "MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR";
+		case "parseInt":
+			return "MAL_INTRINSIC_PARSE_INT";
+		case "parseFloat":
+			return "MAL_INTRINSIC_PARSE_FLOAT";
+		case "isNaN":
+			return "MAL_INTRINSIC_IS_NAN";
+		case "isFinite":
+			return "MAL_INTRINSIC_IS_FINITE";
+		case "Math":
+			return "MAL_INTRINSIC_MATH";
+		case "JSON":
+			return "MAL_INTRINSIC_JSON";
+		case "console":
+			return "MAL_INTRINSIC_CONSOLE";
+		case "globalThis":
+			return "MAL_INTRINSIC_GLOBAL_THIS";
+		case "NaN":
+			return "MAL_INTRINSIC_NAN_VALUE";
+		case "Infinity":
+			return "MAL_INTRINSIC_INFINITY_VALUE";
 	}
+}
+
+function emitUnaryOperator(
+	operator: Extract<VmInstruction, { opcode: "UNARY" }>["operator"],
+) {
+	switch (operator) {
+		case "!":
+			return "MAL_UNARY_NOT";
+		case "-":
+			return "MAL_UNARY_NEGATE";
+		case "+":
+			return "MAL_UNARY_PLUS";
+		case "~":
+			return "MAL_UNARY_BIT_NOT";
+		case "typeof":
+			return "MAL_UNARY_TYPEOF";
+	}
+
+	throw new Error("Unknown unary operator");
 }
 
 function emitCallArguments(args: Array<number>) {

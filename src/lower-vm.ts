@@ -1,6 +1,7 @@
 import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
+type IRUnaryOperator = Extract<IRInstruction, { type: "unary" }>["operator"];
 type IRIntrinsic = Extract<IRInstruction, { type: "loadIntrinsic" }>["intrinsic"];
 
 /**
@@ -62,6 +63,11 @@ export type VmInstruction =
 			value: number;
 	  }
 	| {
+			opcode: "CREATE_F64";
+			dst: number;
+			value: number;
+	  }
+	| {
 			opcode: "CREATE_BOOLEAN";
 			dst: number;
 			value: boolean;
@@ -82,6 +88,10 @@ export type VmInstruction =
 	  }
 	| {
 			opcode: "CREATE_UNDEFINED";
+			dst: number;
+	  }
+	| {
+			opcode: "CREATE_NULL";
 			dst: number;
 	  }
 	| {
@@ -168,6 +178,12 @@ export type VmInstruction =
 			left: number;
 			right: number;
 			operator: IRBinaryOperator;
+	  }
+	| {
+			opcode: "UNARY";
+			dst: number;
+			src: number;
+			operator: IRUnaryOperator;
 	  };
 
 /**
@@ -294,6 +310,12 @@ function lowerInstructionToVmInstruction(
 				dst: instruction.registers[0],
 				value: instruction.value,
 			};
+		case "createF64":
+			return {
+				opcode: "CREATE_F64",
+				dst: instruction.registers[0],
+				value: instruction.value,
+			};
 		case "createBoolean":
 			return {
 				opcode: "CREATE_BOOLEAN",
@@ -320,6 +342,11 @@ function lowerInstructionToVmInstruction(
 		case "createUndefined":
 			return {
 				opcode: "CREATE_UNDEFINED",
+				dst: instruction.registers[0],
+			};
+		case "createNull":
+			return {
+				opcode: "CREATE_NULL",
 				dst: instruction.registers[0],
 			};
 		case "createFunction":
@@ -433,6 +460,13 @@ function lowerInstructionToVmInstruction(
 				dst: instruction.registers[0],
 				left: instruction.registers[1],
 				right: instruction.registers[2],
+				operator: instruction.operator,
+			};
+		case "unary":
+			return {
+				opcode: "UNARY",
+				dst: instruction.registers[0],
+				src: instruction.registers[1],
 				operator: instruction.operator,
 			};
 		case "loadLocal":

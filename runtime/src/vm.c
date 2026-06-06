@@ -169,6 +169,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_CREATE_NUMBER:
                 mal_op_create_number(frame, &instruction);
                 break;
+            case MAL_OP_CREATE_F64:
+                mal_op_create_f64(frame, &instruction);
+                break;
             case MAL_OP_CREATE_BOOLEAN:
                 mal_op_create_boolean(frame, &instruction);
                 break;
@@ -184,6 +187,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_CREATE_UNDEFINED:
                 mal_op_create_undefined(frame, &instruction);
                 break;
+            case MAL_OP_CREATE_NULL:
+                mal_op_create_null(frame, &instruction);
+                break;
             case MAL_OP_CREATE_FUNCTION:
                 mal_op_create_function(frame, &instruction);
                 break;
@@ -192,6 +198,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 break;
             case MAL_OP_BINARY:
                 mal_op_binary(frame, &instruction);
+                break;
+            case MAL_OP_UNARY:
+                mal_op_unary(frame, &instruction);
                 break;
 
             case MAL_OP_STORE_GLOBAL:
@@ -279,6 +288,27 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
     }
 }
 
+/**
+ * Print strings as display text instead of the quoted debug representation.
+ */
+static void mal_vm_print_display(MalValue value) {
+    if (!mal_value_is_string(value)) {
+        mal_value_debug(value);
+        return;
+    }
+
+    MalString *string = mal_value_to_string(value);
+    const c16 *code_units = mal_string_code_units(string);
+    for (usize i = 0; i < mal_string_length(string); i++) {
+        c16 code_unit = code_units[i];
+        if (code_unit <= 0x7F) {
+            putchar((char) code_unit);
+        } else {
+            printf("\\u%04x", code_unit);
+        }
+    }
+}
+
 static void mal_vm_report_uncaught(MalVm *vm) {
     printf("Uncaught ");
 
@@ -288,17 +318,17 @@ static void mal_vm_report_uncaught(MalVm *vm) {
         MalPropertyResolution message = mal_object_resolve_property(error, mal_intrinsic_string_key(vm, "message"));
 
         if (name.found) {
-            mal_value_debug(name.desc.value);
+            mal_vm_print_display(name.desc.value);
             if (message.found) {
                 printf(": ");
-                mal_value_debug(message.desc.value);
+                mal_vm_print_display(message.desc.value);
             }
             printf("\n");
             return;
         }
     }
 
-    mal_value_debug(vm->completion.value);
+    mal_vm_print_display(vm->completion.value);
     printf("\n");
 }
 
@@ -318,9 +348,6 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
         mal_vm_report_uncaught(vm);
         return;
     }
-
-    mal_value_debug(vm->completion.value);
-    printf(" returned \n");
 }
 
 MalCompletion mal_vm_call_value(

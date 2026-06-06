@@ -1,9 +1,17 @@
 #include "intrinsics.h"
 
+#include <math.h>
+
 #include "builtin_array.h"
+#include "builtin_boolean.h"
+#include "builtin_console.h"
 #include "builtin_error.h"
 #include "builtin_function.h"
+#include "builtin_json.h"
+#include "builtin_math.h"
+#include "builtin_number.h"
 #include "builtin_object.h"
+#include "builtin_string.h"
 #include "heap_string.h"
 #include "vm.h"
 
@@ -56,6 +64,8 @@ MalArrayObject *mal_intrinsic_new_array(MalVm *vm, u32 length) {
     return array;
 }
 
+static void mal_intrinsics_init_global_this(MalVm *vm);
+
 void mal_intrinsics_init(MalVm *vm) {
     // The prototypes are created upfront, so the builtin install passes can
     // reference them in any order.
@@ -71,4 +81,46 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_function_install(vm);
     mal_builtin_array_install(vm);
     mal_builtin_error_install(vm);
+    mal_builtin_string_install(vm);
+    mal_builtin_number_install(vm);
+    mal_builtin_boolean_install(vm);
+    mal_builtin_math_install(vm);
+    mal_builtin_json_install(vm);
+    mal_builtin_console_install(vm);
+
+    vm->intrinsics[MAL_INTRINSIC_NAN_VALUE] = mal_value_new_nan();
+    vm->intrinsics[MAL_INTRINSIC_INFINITY_VALUE] = mal_value_from_f64_convert_nan(INFINITY);
+    mal_intrinsics_init_global_this(vm);
+}
+
+/**
+ * Expose the intrinsics as properties of a globalThis namespace object.
+ */
+static void mal_intrinsics_init_global_this(MalVm *vm) {
+    MalObject *global_this = mal_intrinsic_new_object(vm);
+    vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS] = mal_value_from_object(global_this);
+
+    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE;
+    mal_intrinsic_define_data(vm, global_this, "globalThis", vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS], flags);
+    mal_intrinsic_define_data(vm, global_this, "Object", vm->intrinsics[MAL_INTRINSIC_OBJECT_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Array", vm->intrinsics[MAL_INTRINSIC_ARRAY_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Function", vm->intrinsics[MAL_INTRINSIC_FUNCTION_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Error", vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "TypeError", vm->intrinsics[MAL_INTRINSIC_TYPE_ERROR_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "RangeError", vm->intrinsics[MAL_INTRINSIC_RANGE_ERROR_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "ReferenceError", vm->intrinsics[MAL_INTRINSIC_REFERENCE_ERROR_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "SyntaxError", vm->intrinsics[MAL_INTRINSIC_SYNTAX_ERROR_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "String", vm->intrinsics[MAL_INTRINSIC_STRING_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Number", vm->intrinsics[MAL_INTRINSIC_NUMBER_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Boolean", vm->intrinsics[MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "parseInt", vm->intrinsics[MAL_INTRINSIC_PARSE_INT], flags);
+    mal_intrinsic_define_data(vm, global_this, "parseFloat", vm->intrinsics[MAL_INTRINSIC_PARSE_FLOAT], flags);
+    mal_intrinsic_define_data(vm, global_this, "isNaN", vm->intrinsics[MAL_INTRINSIC_IS_NAN], flags);
+    mal_intrinsic_define_data(vm, global_this, "isFinite", vm->intrinsics[MAL_INTRINSIC_IS_FINITE], flags);
+    mal_intrinsic_define_data(vm, global_this, "Math", vm->intrinsics[MAL_INTRINSIC_MATH], flags);
+    mal_intrinsic_define_data(vm, global_this, "JSON", vm->intrinsics[MAL_INTRINSIC_JSON], flags);
+    mal_intrinsic_define_data(vm, global_this, "console", vm->intrinsics[MAL_INTRINSIC_CONSOLE], flags);
+    mal_intrinsic_define_data(vm, global_this, "NaN", vm->intrinsics[MAL_INTRINSIC_NAN_VALUE], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, global_this, "Infinity", vm->intrinsics[MAL_INTRINSIC_INFINITY_VALUE], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, global_this, "undefined", mal_value_new_undefined(), MAL_PROPERTY_NONE);
 }
