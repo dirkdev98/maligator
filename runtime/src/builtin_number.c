@@ -109,7 +109,7 @@ static f64 mal_builtin_parse_float_units(const c16 *code_units, usize length) {
     return parsed ? value : NAN;
 }
 
-static MalValue mal_builtin_number_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_number_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     if (arg_count == 0) {
@@ -124,7 +124,7 @@ static MalValue mal_builtin_number_constructor(MalVm *vm, MalValue this_value, c
     return mal_ops_number_value(mal_ops_to_number(args[0]));
 }
 
-static MalValue mal_builtin_number_is_nan(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_number_is_nan(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     if (arg_count < 1) {
@@ -144,7 +144,7 @@ static bool mal_builtin_number_value_is_finite(MalValue value) {
     return mal_value_is_f64(value) && isfinite(mal_value_to_f64(value));
 }
 
-static MalValue mal_builtin_number_is_finite(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_number_is_finite(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     return mal_value_new_boolean(arg_count >= 1 && mal_builtin_number_value_is_finite(args[0]));
@@ -163,13 +163,13 @@ static bool mal_builtin_number_value_is_integer(MalValue value) {
     return isfinite(number) && trunc(number) == number;
 }
 
-static MalValue mal_builtin_number_is_integer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_number_is_integer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     return mal_value_new_boolean(arg_count >= 1 && mal_builtin_number_value_is_integer(args[0]));
 }
 
-static MalValue mal_builtin_number_is_safe_integer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_number_is_safe_integer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     if (arg_count < 1 || !mal_builtin_number_value_is_integer(args[0])) {
@@ -179,39 +179,39 @@ static MalValue mal_builtin_number_is_safe_integer(MalVm *vm, MalValue this_valu
     return mal_value_new_boolean(fabs(mal_ops_to_number(args[0])) <= 9007199254740991.0);
 }
 
-static MalValue mal_builtin_parse_int(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_parse_int(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     MalString *string = mal_ops_to_string(&vm->heap, arg_count >= 1 ? args[0] : mal_value_new_undefined());
     f64 radix = arg_count >= 2 ? mal_ops_to_number(args[1]) : 0;
     return mal_ops_number_value(mal_builtin_parse_int_units(mal_string_code_units(string), mal_string_length(string), radix));
 }
 
-static MalValue mal_builtin_parse_float(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_parse_float(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     MalString *string = mal_ops_to_string(&vm->heap, arg_count >= 1 ? args[0] : mal_value_new_undefined());
     return mal_ops_number_value(mal_builtin_parse_float_units(mal_string_code_units(string), mal_string_length(string)));
 }
 
-static MalValue mal_builtin_global_is_nan(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_global_is_nan(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     return mal_value_new_boolean(isnan(mal_ops_to_number(arg_count >= 1 ? args[0] : mal_value_new_undefined())));
 }
 
-static MalValue mal_builtin_global_is_finite(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_global_is_finite(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     return mal_value_new_boolean(isfinite(mal_ops_to_number(arg_count >= 1 ? args[0] : mal_value_new_undefined())));
 }
 
-static MalValue mal_builtin_number_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_number_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     // TODO(numbers): the radix argument is not supported yet.
     (void) args;
     (void) arg_count;
     return mal_value_from_string(mal_ops_to_string(&vm->heap, this_value));
 }
 
-static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     f64 digits = arg_count >= 1 ? mal_ops_to_number(args[0]) : 0;
     if (isnan(digits)) {
         digits = 0;
@@ -226,7 +226,7 @@ static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_v
     return mal_value_from_string(mal_string_new_ascii(&vm->heap, buffer, strlen(buffer)));
 }
 
-static MalValue mal_builtin_number_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_number_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) args;
     (void) arg_count;

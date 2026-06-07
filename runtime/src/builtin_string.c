@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "builtin_iterator.h"
 #include "heap_string.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -84,7 +85,7 @@ static bool mal_builtin_string_is_whitespace(c16 code_unit) {
         code_unit == 0xFEFF;
 }
 
-static MalValue mal_builtin_string_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     if (arg_count == 0) {
         return mal_builtin_string_empty(vm);
@@ -94,7 +95,7 @@ static MalValue mal_builtin_string_constructor(MalVm *vm, MalValue this_value, c
     return mal_value_from_string(mal_builtin_string_coerce(vm, args[0]));
 }
 
-static MalValue mal_builtin_string_from_char_code(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_from_char_code(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     c16 *code_units = malloc(sizeof(c16) * arg_count);
     for (i32 i = 0; i < arg_count; i++) {
@@ -107,7 +108,7 @@ static MalValue mal_builtin_string_from_char_code(MalVm *vm, MalValue this_value
     return result;
 }
 
-static MalValue mal_builtin_string_prototype_char_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_char_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString *string = mal_builtin_string_coerce(vm, this_value);
     f64 position = arg_count >= 1 ? mal_ops_to_number(args[0]) : 0;
     if (isnan(position) || position < 0 || position >= (f64) mal_string_length(string)) {
@@ -117,7 +118,7 @@ static MalValue mal_builtin_string_prototype_char_at(MalVm *vm, MalValue this_va
     return mal_builtin_string_from_units(vm, mal_string_code_units(string) + (usize) position, 1);
 }
 
-static MalValue mal_builtin_string_prototype_char_code_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_char_code_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString *string = mal_builtin_string_coerce(vm, this_value);
     f64 position = arg_count >= 1 ? mal_ops_to_number(args[0]) : 0;
     if (isnan(position) || position < 0 || position >= (f64) mal_string_length(string)) {
@@ -127,7 +128,7 @@ static MalValue mal_builtin_string_prototype_char_code_at(MalVm *vm, MalValue th
     return mal_value_from_i32(mal_string_code_units(string)[(usize) position]);
 }
 
-static MalValue mal_builtin_string_prototype_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString *string = mal_builtin_string_coerce(vm, this_value);
     f64 relative = arg_count >= 1 ? mal_ops_to_number(args[0]) : 0;
     if (isnan(relative)) {
@@ -143,7 +144,7 @@ static MalValue mal_builtin_string_prototype_at(MalVm *vm, MalValue this_value, 
     return mal_builtin_string_from_units(vm, mal_string_code_units(string) + (usize) relative, 1);
 }
 
-static MalValue mal_builtin_string_prototype_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString *string = mal_builtin_string_coerce(vm, this_value);
     MalString *search = mal_builtin_string_coerce(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
     usize from = arg_count >= 2 ? mal_builtin_string_clamp_relative(args[1], 0, mal_string_length(string)) : 0;
@@ -155,7 +156,7 @@ static MalValue mal_builtin_string_prototype_index_of(MalVm *vm, MalValue this_v
     return mal_value_from_i32((i32) mal_builtin_string_find(string, search, from));
 }
 
-static MalValue mal_builtin_string_prototype_last_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_last_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString *string = mal_builtin_string_coerce(vm, this_value);
     MalString *search = mal_builtin_string_coerce(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
     usize length = mal_string_length(string);
@@ -177,20 +178,20 @@ static MalValue mal_builtin_string_prototype_last_index_of(MalVm *vm, MalValue t
     return mal_value_from_i32(-1);
 }
 
-static MalValue mal_builtin_string_prototype_includes(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_includes(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString *string = mal_builtin_string_coerce(vm, this_value);
     MalString *search = mal_builtin_string_coerce(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
     return mal_value_new_boolean(mal_builtin_string_find(string, search, 0) >= 0);
 }
 
-static MalValue mal_builtin_string_prototype_starts_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_starts_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString *string = mal_builtin_string_coerce(vm, this_value);
     MalString *search = mal_builtin_string_coerce(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
     usize position = arg_count >= 2 ? mal_builtin_string_clamp_relative(args[1], 0, mal_string_length(string)) : 0;
     return mal_value_new_boolean(mal_builtin_string_matches_at(string, search, position));
 }
 
-static MalValue mal_builtin_string_prototype_ends_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_ends_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString *string = mal_builtin_string_coerce(vm, this_value);
     MalString *search = mal_builtin_string_coerce(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
     usize end = arg_count >= 2 && !mal_value_is_undefined(args[1])
@@ -204,7 +205,7 @@ static MalValue mal_builtin_string_prototype_ends_with(MalVm *vm, MalValue this_
     return mal_value_new_boolean(mal_builtin_string_matches_at(string, search, end - search_length));
 }
 
-static MalValue mal_builtin_string_prototype_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString *string = mal_builtin_string_coerce(vm, this_value);
     usize length = mal_string_length(string);
     usize start = arg_count >= 1 ? mal_builtin_string_clamp_relative(args[0], 0, length) : 0;
@@ -216,7 +217,7 @@ static MalValue mal_builtin_string_prototype_slice(MalVm *vm, MalValue this_valu
     return mal_builtin_string_from_units(vm, mal_string_code_units(string) + start, end - start);
 }
 
-static MalValue mal_builtin_string_prototype_substring(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_substring(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString *string = mal_builtin_string_coerce(vm, this_value);
     usize length = mal_string_length(string);
 
@@ -242,7 +243,7 @@ static MalValue mal_builtin_string_prototype_substring(MalVm *vm, MalValue this_
     return mal_builtin_string_from_units(vm, mal_string_code_units(string) + start, end - start);
 }
 
-static MalValue mal_builtin_string_prototype_concat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_concat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString **parts = malloc(sizeof(MalString *) * (arg_count + 1));
     parts[0] = mal_builtin_string_coerce(vm, this_value);
     usize total_length = mal_string_length(parts[0]);
@@ -264,7 +265,7 @@ static MalValue mal_builtin_string_prototype_concat(MalVm *vm, MalValue this_val
     return result;
 }
 
-static MalValue mal_builtin_string_prototype_repeat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_repeat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString *string = mal_builtin_string_coerce(vm, this_value);
     f64 count = arg_count >= 1 ? mal_ops_to_number(args[0]) : 0;
     if (count < 0 || isinf(count)) {
@@ -303,19 +304,19 @@ static MalValue mal_builtin_string_trim_impl(MalVm *vm, MalValue this_value, boo
     return mal_builtin_string_from_units(vm, code_units + start, end - start);
 }
 
-static MalValue mal_builtin_string_prototype_trim(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_trim(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) args;
     (void) arg_count;
     return mal_builtin_string_trim_impl(vm, this_value, true, true);
 }
 
-static MalValue mal_builtin_string_prototype_trim_start(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_trim_start(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) args;
     (void) arg_count;
     return mal_builtin_string_trim_impl(vm, this_value, true, false);
 }
 
-static MalValue mal_builtin_string_prototype_trim_end(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_trim_end(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) args;
     (void) arg_count;
     return mal_builtin_string_trim_impl(vm, this_value, false, true);
@@ -343,19 +344,19 @@ static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue this_value, boo
     return result;
 }
 
-static MalValue mal_builtin_string_prototype_to_upper_case(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_to_upper_case(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) args;
     (void) arg_count;
     return mal_builtin_string_case_impl(vm, this_value, true);
 }
 
-static MalValue mal_builtin_string_prototype_to_lower_case(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_to_lower_case(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) args;
     (void) arg_count;
     return mal_builtin_string_case_impl(vm, this_value, false);
 }
 
-static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalString *string = mal_builtin_string_coerce(vm, this_value);
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
     u32 result_length = 0;
@@ -461,11 +462,11 @@ static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, 
     return result;
 }
 
-static MalValue mal_builtin_string_prototype_replace(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_replace(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     return mal_builtin_string_replace_impl(vm, this_value, args, arg_count, false);
 }
 
-static MalValue mal_builtin_string_prototype_replace_all(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_replace_all(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     return mal_builtin_string_replace_impl(vm, this_value, args, arg_count, true);
 }
 
@@ -505,18 +506,34 @@ static MalValue mal_builtin_string_pad_impl(MalVm *vm, MalValue this_value, cons
     return result;
 }
 
-static MalValue mal_builtin_string_prototype_pad_start(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_pad_start(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     return mal_builtin_string_pad_impl(vm, this_value, args, arg_count, true);
 }
 
-static MalValue mal_builtin_string_prototype_pad_end(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_pad_end(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     return mal_builtin_string_pad_impl(vm, this_value, args, arg_count, false);
 }
 
-static MalValue mal_builtin_string_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_string_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) args;
     (void) arg_count;
     return mal_value_from_string(mal_builtin_string_coerce(vm, this_value));
+}
+
+static MalValue mal_builtin_string_prototype_iterator(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    (void) args;
+    (void) arg_count;
+
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot iterate null or undefined");
+        return mal_value_new_undefined();
+    }
+
+    MalValue string_value = mal_value_is_string(this_value)
+        ? this_value
+        : mal_value_from_string(mal_builtin_string_coerce(vm, this_value));
+
+    return mal_vm_new_builtin_iterator(vm, MAL_ITERATOR_STRING_VALUES, string_value);
 }
 
 void mal_builtin_string_install(MalVm *vm) {
@@ -560,4 +577,5 @@ void mal_builtin_string_install(MalVm *vm) {
     mal_intrinsic_define_method(vm, prototype, "padEnd", mal_builtin_string_prototype_pad_end);
     mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_string_prototype_to_string);
     mal_intrinsic_define_method(vm, prototype, "valueOf", mal_builtin_string_prototype_to_string);
+    mal_intrinsic_define_symbol_method(vm, prototype, MAL_INTRINSIC_SYMBOL_ITERATOR, "[Symbol.iterator]", mal_builtin_string_prototype_iterator);
 }

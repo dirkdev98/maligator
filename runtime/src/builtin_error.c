@@ -25,37 +25,37 @@ static MalValue mal_builtin_error_make(MalVm *vm, MalIntrinsic prototype_slot, c
 
 // Error constructors behave identically when called and when constructed, so
 // plain native callbacks cover both paths.
-static MalValue mal_builtin_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     return mal_builtin_error_make(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, args, arg_count);
 }
 
-static MalValue mal_builtin_type_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_type_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     return mal_builtin_error_make(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, args, arg_count);
 }
 
-static MalValue mal_builtin_range_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_range_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     return mal_builtin_error_make(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, args, arg_count);
 }
 
-static MalValue mal_builtin_reference_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_reference_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     return mal_builtin_error_make(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, args, arg_count);
 }
 
-static MalValue mal_builtin_syntax_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_syntax_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     return mal_builtin_error_make(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, args, arg_count);
 }
 
-static MalValue mal_builtin_uri_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_uri_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     return mal_builtin_error_make(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, args, arg_count);
 }
 
-static MalValue mal_builtin_eval_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_eval_error_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     return mal_builtin_error_make(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE, args, arg_count);
 }
@@ -74,7 +74,7 @@ static MalString *mal_builtin_error_resolve_string(MalVm *vm, MalObject *error, 
     return mal_ops_to_string(&vm->heap, value);
 }
 
-static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) args;
     (void) arg_count;
     if (!mal_value_is_object(this_value)) {

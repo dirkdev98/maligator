@@ -17,6 +17,23 @@ bool mal_vm_value_to_property_key(MalVm *vm, MalValue value, MalKey *key_out);
  */
 bool mal_vm_desc_read(MalVm *vm, MalPropertyDesc desc, MalValue receiver, MalValue *out);
 
+/**
+ * Spec-flavored Get(receiver, key) over any value: nil receivers throw,
+ * primitives resolve against their prototype intrinsics (string length and
+ * index reads answered by the string itself), synthetic properties and
+ * accessors are honored. Returns false when something threw; the missing
+ * property reads as undefined.
+ */
+bool mal_vm_get_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *out);
+
+/**
+ * Spec OrdinaryHasInstance: non-callable targets answer false, bound
+ * functions unwrap to their target, then the value's prototype chain is
+ * walked looking for target.prototype. Shared by the instanceof operator
+ * and %Function.prototype%[Symbol.hasInstance].
+ */
+bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value);
+
 void mal_op_move(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_number(MalCallable *callable, MalInstruction *instruction);
@@ -66,6 +83,10 @@ void mal_op_store_captured(MalCallable *callable, MalInstruction *instruction);
 void mal_op_load_property(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_store_property(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction);
 

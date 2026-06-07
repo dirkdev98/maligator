@@ -143,7 +143,10 @@ bool mal_value_is_object(MalValue value) {
         type == MAL_HEAP_FUNCTION_OBJECT ||
         type == MAL_HEAP_NATIVE_FUNCTION_OBJECT ||
         type == MAL_HEAP_BOUND_FUNCTION_OBJECT ||
-        type == MAL_HEAP_ARRAY_OBJECT;
+        type == MAL_HEAP_ARRAY_OBJECT ||
+        type == MAL_HEAP_MAP_OBJECT ||
+        type == MAL_HEAP_SET_OBJECT ||
+        type == MAL_HEAP_ITERATOR_OBJECT;
 }
 
 bool mal_value_is_function_object(MalValue value) {
@@ -160,6 +163,18 @@ bool mal_value_is_bound_function_object(MalValue value) {
 
 bool mal_value_is_array_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_ARRAY_OBJECT);
+}
+
+bool mal_value_is_map_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_MAP_OBJECT);
+}
+
+bool mal_value_is_set_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_SET_OBJECT);
+}
+
+bool mal_value_is_iterator_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_ITERATOR_OBJECT);
 }
 
 bool mal_value_is_callable(MalValue value) {
@@ -196,6 +211,14 @@ MalArrayObject *mal_value_to_array_object(MalValue value) {
     return (MalArrayObject *) mal_value_to_heap(value);
 }
 
+MalMapObject *mal_value_to_map_object(MalValue value) {
+    return (MalMapObject *) mal_value_to_heap(value);
+}
+
+MalIteratorObject *mal_value_to_iterator_object(MalValue value) {
+    return (MalIteratorObject *) mal_value_to_heap(value);
+}
+
 MalValue mal_value_from_string(MalString *string) {
     return mal_value_from_heap((MalHeapHeader *) string);
 }
@@ -222,6 +245,14 @@ MalValue mal_value_from_bound_function_object(MalBoundFunctionObject *bound) {
 
 MalValue mal_value_from_array_object(MalArrayObject *array) {
     return mal_value_from_heap((MalHeapHeader *) array);
+}
+
+MalValue mal_value_from_map_object(MalMapObject *map) {
+    return mal_value_from_heap((MalHeapHeader *) map);
+}
+
+MalValue mal_value_from_iterator_object(MalIteratorObject *iterator) {
+    return mal_value_from_heap((MalHeapHeader *) iterator);
 }
 
 bool mal_value_is_truthy(MalValue value) {

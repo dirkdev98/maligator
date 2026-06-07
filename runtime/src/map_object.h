@@ -1,0 +1,76 @@
+#pragma once
+
+#include "./defaults.h"
+#include "object.h"
+
+/**
+ * Backing storage for Map/Set/WeakMap/WeakSet instances. The heap type
+ * distinguishes map-shaped (key -> value) from set-shaped (key only) use;
+ * the weak flag brands the Weak* variants on the shared layout.
+ *
+ * TODO(gc): Weak* collections hold strong references. Without a GC this is
+ * observationally correct (no iteration surface, no finalization).
+ */
+typedef struct MalMapObject {
+    MalObject object;
+
+    /**
+     * General-mode ordered table. Entry keys are canonicalized through
+     * mal_map_key_from_value; map values live in the inline entry payload.
+     * The table is never compacted, so storage-order indexes stay stable for
+     * outstanding iterators.
+     */
+    MalTable *entries;
+
+    bool weak;
+} MalMapObject;
+
+/**
+ * Initialize map/set object state in caller-provided storage. type must be
+ * MAL_HEAP_MAP_OBJECT or MAL_HEAP_SET_OBJECT.
+ */
+void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalHeapType type, MalObject *prototype, bool weak);
+
+/**
+ * Allocate and initialize a new map/set object.
+ */
+MalMapObject *mal_map_object_new(MalHeap *heap, MalHeapType type, MalObject *prototype, bool weak);
+
+/**
+ * Build the canonical table key for a JS value under SameValueZero: int32-
+ * boxed numbers fold into their f64 encoding, every zero (raw +/-0 and the
+ * static -0) becomes raw +0, and NaNs collapse into the canonical NaN, so
+ * the table's bit-pattern equality implements SameValueZero exactly. The
+ * spec's set-key-to-+0 normalization for stored keys falls out for free.
+ */
+MalKey mal_map_key_from_value(MalValue value);
+
+/**
+ * Insert or update an entry (Map.prototype.set / Set.prototype.add).
+ */
+void mal_map_object_set(MalMapObject *map, MalValue key, MalValue value);
+
+/**
+ * Check for an entry under SameValueZero.
+ */
+bool mal_map_object_has(const MalMapObject *map, MalValue key);
+
+/**
+ * Read the value stored for key, or undefined when absent.
+ */
+MalValue mal_map_object_get(const MalMapObject *map, MalValue key);
+
+/**
+ * Delete the entry for key if present.
+ */
+bool mal_map_object_delete(MalMapObject *map, MalValue key);
+
+/**
+ * Number of live entries.
+ */
+usize mal_map_object_size(const MalMapObject *map);
+
+/**
+ * Remove all entries, keeping outstanding iterators valid.
+ */
+void mal_map_object_clear(MalMapObject *map);

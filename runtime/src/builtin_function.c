@@ -17,7 +17,7 @@ static MalValue mal_builtin_function_forward_completion(MalVm *vm, MalCompletion
     return completion.value;
 }
 
-static MalValue mal_builtin_function_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_function_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     (void) args;
     (void) arg_count;
@@ -25,7 +25,7 @@ static MalValue mal_builtin_function_constructor(MalVm *vm, MalValue this_value,
     return mal_value_new_undefined();
 }
 
-static MalValue mal_builtin_function_prototype_call(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_function_prototype_call(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     if (!mal_value_is_callable(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Function.prototype.call called on a non-callable");
         return mal_value_new_undefined();
@@ -41,7 +41,7 @@ static MalValue mal_builtin_function_prototype_call(MalVm *vm, MalValue this_val
     ));
 }
 
-static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     if (!mal_value_is_callable(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Function.prototype.apply called on a non-callable");
         return mal_value_new_undefined();
@@ -79,7 +79,7 @@ static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_va
     return mal_builtin_function_forward_completion(vm, completion);
 }
 
-static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     if (!mal_value_is_callable(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Function.prototype.bind called on a non-callable");
         return mal_value_new_undefined();
@@ -97,7 +97,15 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     return mal_value_from_bound_function_object(bound);
 }
 
-static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_function_prototype_has_instance(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    return mal_value_new_boolean(mal_vm_ordinary_has_instance(
+        vm,
+        this_value,
+        arg_count >= 1 ? args[0] : mal_value_new_undefined()
+    ));
+}
+
+static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) args;
     (void) arg_count;
     if (!mal_value_is_callable(this_value)) {
@@ -146,4 +154,17 @@ void mal_builtin_function_install(MalVm *vm) {
     mal_intrinsic_define_method(vm, prototype, "apply", mal_builtin_function_prototype_apply);
     mal_intrinsic_define_method(vm, prototype, "bind", mal_builtin_function_prototype_bind);
     mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_function_prototype_to_string);
+
+    // The default @@hasInstance every callable inherits; instanceof
+    // dispatches through it. Non-writable non-configurable per spec.
+    MalPropertyDesc has_instance_desc = mal_intrinsic_data_desc(
+        mal_value_from_native_function_object(mal_native_function_object_new(
+            &vm->heap,
+            prototype,
+            mal_intrinsic_ascii(vm, "[Symbol.hasInstance]"),
+            mal_builtin_function_prototype_has_instance
+        )),
+        MAL_PROPERTY_NONE
+    );
+    mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_HAS_INSTANCE), &has_instance_desc);
 }

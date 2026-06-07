@@ -22,6 +22,11 @@ typedef enum MalKeyKind {
     MAL_KEY_SYMBOL,
     MAL_KEY_NUMBER,
     MAL_KEY_OBJECT,
+    /**
+     * Statically encoded values (true/false/null/undefined) keyed by their
+     * bit pattern. Used by general-mode tables (Map/Set keys).
+     */
+    MAL_KEY_STATIC,
 } MalKeyKind;
 
 /**
@@ -89,6 +94,13 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key);
 bool mal_table_delete(MalTable *table, MalKey key);
 
 /**
+ * Delete all live entries. Entries become tombstones rather than being
+ * freed, so outstanding storage-order iterators stay valid and observe the
+ * emptied table (Map.prototype.clear semantics).
+ */
+void mal_table_clear(MalTable *table);
+
+/**
  * Rebuild internal hash and order structures to remove tombstones.
  */
 void mal_table_compact(MalTable *table);
@@ -107,6 +119,24 @@ void *mal_table_entry_data(const MalTable *table, void *entry);
  * Replace the owned data pointer stored for a live entry handle.
  */
 void mal_table_entry_set_owned_data(MalTable *table, void *entry, void *data);
+
+/**
+ * Read the inline value payload stored for an entry handle. The payload is
+ * not owned storage (unlike the data pointer) and defaults to undefined.
+ */
+MalValue mal_table_entry_value(const MalTable *table, void *entry);
+
+/**
+ * Replace the inline value payload stored for a live entry handle.
+ */
+void mal_table_entry_set_value(MalTable *table, void *entry, MalValue value);
+
+/**
+ * Check whether an entry handle still refers to a live entry. Storage-order
+ * iterators may outlive deletions, so callers holding entry handles use this
+ * to detect tombstoned entries.
+ */
+bool mal_table_entry_is_live(const MalTable *table, const void *entry);
 
 /**
  * Initialize a live storage-order iterator.

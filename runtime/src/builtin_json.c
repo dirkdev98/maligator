@@ -200,7 +200,7 @@ static bool mal_json_stringify_value(MalVm *vm, MalJsonBuilder *builder, MalValu
     return true;
 }
 
-static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     MalJsonBuilder builder = {0};
 
@@ -516,7 +516,7 @@ static MalValue mal_json_parse_value(MalJsonParser *parser) {
     return mal_json_parse_number(parser);
 }
 
-static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     MalString *text = mal_ops_to_string(&vm->heap, arg_count >= 1 ? args[0] : mal_value_new_undefined());
 
@@ -544,6 +544,12 @@ static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const Mal
 void mal_builtin_json_install(MalVm *vm) {
     MalObject *json = mal_intrinsic_new_object(vm);
     vm->intrinsics[MAL_INTRINSIC_JSON] = mal_value_from_object(json);
+
+    MalPropertyDesc tag_desc = mal_intrinsic_data_desc(
+        mal_value_from_string(mal_intrinsic_ascii(vm, "JSON")),
+        MAL_PROPERTY_CONFIGURABLE
+    );
+    mal_object_define_own(json, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag_desc);
 
     mal_intrinsic_define_method(vm, json, "stringify", mal_builtin_json_stringify);
     mal_intrinsic_define_method(vm, json, "parse", mal_builtin_json_parse);

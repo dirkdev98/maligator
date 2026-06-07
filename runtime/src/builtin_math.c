@@ -11,7 +11,7 @@ static f64 mal_builtin_math_arg(const MalValue *args, i32 arg_count, i32 index) 
 }
 
 #define MAL_BUILTIN_MATH_UNARY(name, expression) \
-    static MalValue mal_builtin_math_##name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) { \
+    static MalValue mal_builtin_math_##name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) { \
         (void) vm; \
         (void) this_value; \
         f64 x = mal_builtin_math_arg(args, arg_count, 0); \
@@ -40,19 +40,19 @@ MAL_BUILTIN_MATH_UNARY(atan, atan(x))
 
 #undef MAL_BUILTIN_MATH_UNARY
 
-static MalValue mal_builtin_math_pow(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_math_pow(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     return mal_ops_number_value(pow(mal_builtin_math_arg(args, arg_count, 0), mal_builtin_math_arg(args, arg_count, 1)));
 }
 
-static MalValue mal_builtin_math_atan2(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_math_atan2(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     return mal_ops_number_value(atan2(mal_builtin_math_arg(args, arg_count, 0), mal_builtin_math_arg(args, arg_count, 1)));
 }
 
-static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     f64 sum = 0;
@@ -64,7 +64,7 @@ static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const Mal
     return mal_ops_number_value(sqrt(sum));
 }
 
-static MalValue mal_builtin_math_min(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_math_min(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     f64 result = INFINITY;
@@ -81,7 +81,7 @@ static MalValue mal_builtin_math_min(MalVm *vm, MalValue this_value, const MalVa
     return mal_ops_number_value(result);
 }
 
-static MalValue mal_builtin_math_max(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_math_max(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     f64 result = -INFINITY;
@@ -100,7 +100,7 @@ static MalValue mal_builtin_math_max(MalVm *vm, MalValue this_value, const MalVa
 
 static u64 mal_builtin_math_random_state;
 
-static MalValue mal_builtin_math_random(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_math_random(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     (void) args;
@@ -123,6 +123,12 @@ void mal_builtin_math_install(MalVm *vm) {
 
     MalObject *math = mal_intrinsic_new_object(vm);
     vm->intrinsics[MAL_INTRINSIC_MATH] = mal_value_from_object(math);
+
+    MalPropertyDesc tag_desc = mal_intrinsic_data_desc(
+        mal_value_from_string(mal_intrinsic_ascii(vm, "Math")),
+        MAL_PROPERTY_CONFIGURABLE
+    );
+    mal_object_define_own(math, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag_desc);
 
     mal_intrinsic_define_data(vm, math, "PI", mal_value_from_f64(M_PI), MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, math, "E", mal_value_from_f64(M_E), MAL_PROPERTY_NONE);

@@ -179,6 +179,18 @@ export type VmInstruction =
 			value: number;
 	  }
 	| {
+			opcode: "STORE_SUPER_PROPERTY";
+			object: number;
+			key: number;
+			value: number;
+			receiver: number;
+	  }
+	| {
+			opcode: "LOAD_PROTOTYPE";
+			dst: number;
+			object: number;
+	  }
+	| {
 			opcode: "DELETE_PROPERTY";
 			dst: number;
 			object: number;
@@ -520,6 +532,20 @@ function lowerInstructionToVmInstruction(
 				object: instruction.registers[0],
 				key: instruction.registers[1],
 				value: instruction.registers[2],
+			};
+		case "storeSuperProperty":
+			return {
+				opcode: "STORE_SUPER_PROPERTY",
+				object: instruction.registers[0],
+				key: instruction.registers[1],
+				value: instruction.registers[2],
+				receiver: instruction.registers[3],
+			};
+		case "loadPrototype":
+			return {
+				opcode: "LOAD_PROTOTYPE",
+				dst: instruction.registers[0],
+				object: instruction.registers[1],
 			};
 		case "deleteProperty":
 			return {

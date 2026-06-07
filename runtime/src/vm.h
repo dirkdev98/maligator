@@ -32,6 +32,8 @@ typedef enum MalOpcode {
     MAL_OP_STORE_GLOBAL,
     MAL_OP_LOAD_PROPERTY,
     MAL_OP_STORE_PROPERTY,
+    MAL_OP_STORE_SUPER_PROPERTY,
+    MAL_OP_LOAD_PROTOTYPE,
     MAL_OP_DELETE_PROPERTY,
     MAL_OP_DEFINE_ACCESSOR,
     MAL_OP_DEFINE_PROPERTY,
@@ -190,6 +192,22 @@ typedef struct MalInstruction {
         struct {
             i32 object, key, value;
         } store_property;
+
+        /**
+         * super.x = v: the property lookup walks object (the super base)
+         * while the write applies to receiver (this), per
+         * OrdinarySetWithOwnDescriptor.
+         */
+        struct {
+            i32 object, key, value, receiver;
+        } store_super_property;
+
+        /**
+         * The object's [[Prototype]]; null for non-objects and chain ends.
+         */
+        struct {
+            i32 dst, object;
+        } load_prototype;
 
         struct {
             i32 dst, object, key;

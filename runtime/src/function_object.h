@@ -19,12 +19,17 @@ typedef struct MalFunctionObject {
 
 /**
  * Native callback ABI used by runtime-provided callable objects.
+ *
+ * new_target is undefined for plain calls and the resolved constructor for
+ * construct calls, so natives can branch on construct-ness (Map() must throw
+ * without new, Symbol() must throw with new).
  */
 typedef MalValue (*MalNativeFunctionCallback)(
     MalVm *vm,
     MalValue this_value,
     const MalValue *args,
-    i32 arg_count
+    i32 arg_count,
+    MalValue new_target
 );
 
 typedef struct MalNativeFunctionObject {

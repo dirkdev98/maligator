@@ -236,7 +236,7 @@ void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
         // invalidates `callable`. Snapshot what we need and re-resolve the
         // frame afterwards.
         i32 caller_frame_index = vm->frame_count - 1;
-        MalValue result = callback(vm, resolution.this_value, resolution.args, resolution.arg_count);
+        MalValue result = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined());
         vm->frames[caller_frame_index].registers[dst] = result;
     } else {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a function");
@@ -282,12 +282,13 @@ void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
         );
         vm->frames[vm->frame_count - 1].is_construct = true;
     } else if (mal_value_is_native_function_object(resolution.callee)) {
-        // Construct and call behave the same for the native constructors.
+        // Native constructors allocate their own this; new_target carries the
+        // construct-ness signal.
         MalNativeFunctionCallback callback = mal_native_function_object_callback(
             mal_value_to_native_function_object(resolution.callee)
         );
         i32 caller_frame_index = vm->frame_count - 1;
-        MalValue result = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count);
+        MalValue result = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, resolution.callee);
         vm->frames[caller_frame_index].registers[dst] = result;
     } else {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
@@ -390,39 +391,34 @@ void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
             break;
         }
         case MAL_BIN_INSTANCEOF: {
+            if (!mal_value_is_object(right)) {
+                mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Right-hand side of 'instanceof' is not an object");
+                break;
+            }
+
+            // Spec InstanceofOperator: a callable @@hasInstance method takes
+            // the decision (the default lives on Function.prototype).
+            MalValue method;
+            if (!mal_vm_get_property(callable->vm, right, mal_intrinsic_symbol_key(callable->vm, MAL_INTRINSIC_SYMBOL_HAS_INSTANCE), &method)) {
+                break;
+            }
+
+            if (mal_value_is_callable(method)) {
+                MalCompletion completion = mal_vm_call_value(callable->vm, method, right, &left, 1);
+                if (completion.kind == MAL_COMPLETION_NORMAL) {
+                    callable->registers[instruction->as.binary.dst] = mal_value_new_boolean(mal_value_is_truthy(completion.value));
+                }
+                break;
+            }
+
             if (!mal_value_is_callable(right)) {
                 mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Right-hand side of 'instanceof' is not callable");
                 break;
             }
 
-            // OrdinaryHasInstance: walk the left prototype chain looking for
-            // the constructor's prototype property.
-            MalKey key = mal_intrinsic_string_key(callable->vm, "prototype");
-            MalValue prototype_value = mal_value_new_undefined();
-            MalValue synthetic;
-            if (mal_vm_resolve_synthetic_property(callable->vm, right, key, &synthetic)) {
-                prototype_value = synthetic;
-            } else if (mal_value_is_object(right)) {
-                MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(right), key);
-                if (resolution.found) {
-                    prototype_value = resolution.desc.value;
-                }
-            }
-
-            bool matches = false;
-            if (mal_value_is_object(left) && mal_value_is_object(prototype_value)) {
-                MalObject *target = mal_value_to_object(prototype_value);
-                for (MalObject *walk = mal_object_get_prototype(mal_value_to_object(left));
-                     walk != nullptr;
-                     walk = mal_object_get_prototype(walk)) {
-                    if (walk == target) {
-                        matches = true;
-                        break;
-                    }
-                }
-            }
-
-            callable->registers[instruction->as.binary.dst] = mal_value_new_boolean(matches);
+            callable->registers[instruction->as.binary.dst] = mal_value_new_boolean(
+                mal_vm_ordinary_has_instance(callable->vm, right, left)
+            );
             break;
         }
     }
@@ -556,22 +552,6 @@ static bool mal_vm_key_is_name(MalKey key) {
         code_units[3] == 'e';
 }
 
-static void mal_vm_load_from_prototype_slot(MalCallable *callable, MalIntrinsic prototype_slot, MalValue receiver, MalKey key, i32 dst) {
-    MalPropertyResolution resolution = mal_object_resolve_property(
-        mal_value_to_object(callable->vm->intrinsics[prototype_slot]),
-        key
-    );
-    if (!resolution.found) {
-        callable->registers[dst] = mal_value_new_undefined();
-        return;
-    }
-
-    MalValue value;
-    if (mal_vm_desc_read(callable->vm, resolution.desc, receiver, &value)) {
-        callable->registers[dst] = value;
-    }
-}
-
 static bool mal_vm_value_is_number(MalValue value) {
     return mal_value_is_int32(value) || mal_value_is_f64_or_nan(value) || value == MAL_VALUE_NEGATIVE_ZERO;
 }
@@ -609,6 +589,124 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
     return false;
 }
 
+static bool mal_vm_get_from_prototype_slot(MalVm *vm, MalIntrinsic prototype_slot, MalValue receiver, MalKey key, MalValue *out) {
+    MalPropertyResolution resolution = mal_object_resolve_property(
+        mal_value_to_object(vm->intrinsics[prototype_slot]),
+        key
+    );
+    if (!resolution.found) {
+        *out = mal_value_new_undefined();
+        return true;
+    }
+
+    return mal_vm_desc_read(vm, resolution.desc, receiver, out);
+}
+
+bool mal_vm_get_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *out) {
+    *out = mal_value_new_undefined();
+
+    if (mal_value_is_nil(object_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read properties of null or undefined");
+        return false;
+    }
+
+    // Primitive receivers resolve against their prototype intrinsic, with
+    // string length and index reads answered by the string itself.
+    if (!mal_value_is_object(object_value)) {
+        if (mal_value_is_string(object_value)) {
+            MalString *string = mal_value_to_string(object_value);
+            if (mal_array_key_is_length(key)) {
+                *out = mal_value_from_i32((i32) mal_string_length(string));
+                return true;
+            }
+
+            if (key.kind == MAL_KEY_INDEX) {
+                i32 index = mal_value_to_i32(key.value);
+                if (index >= 0 && (usize) index < mal_string_length(string)) {
+                    // The borrowed code units stay alive with the source string.
+                    *out = mal_value_from_string(
+                        mal_string_new_external(&vm->heap, mal_string_code_units(string) + index, 1)
+                    );
+                }
+                return true;
+            }
+
+            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_STRING_PROTOTYPE, object_value, key, out);
+        }
+
+        if (mal_vm_value_is_number(object_value)) {
+            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_NUMBER_PROTOTYPE, object_value, key, out);
+        }
+
+        if (mal_value_is_boolean(object_value)) {
+            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_BOOLEAN_PROTOTYPE, object_value, key, out);
+        }
+
+        if (mal_value_is_symbol(object_value)) {
+            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_SYMBOL_PROTOTYPE, object_value, key, out);
+        }
+
+        return true;
+    }
+
+    MalValue synthetic;
+    if (mal_vm_resolve_synthetic_property(vm, object_value, key, &synthetic)) {
+        *out = synthetic;
+        return true;
+    }
+
+    MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(object_value), key);
+    if (!resolution.found) {
+        return true;
+    }
+
+    return mal_vm_desc_read(vm, resolution.desc, object_value, out);
+}
+
+bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
+    // Bound functions defer to their wrapped target.
+    while (mal_value_is_bound_function_object(target)) {
+        target = mal_value_to_bound_function_object(target)->target;
+    }
+
+    if (!mal_value_is_callable(target)) {
+        return false;
+    }
+
+    // Non-object values answer false before the prototype read.
+    if (!mal_value_is_object(value)) {
+        return false;
+    }
+
+    MalKey key = mal_intrinsic_string_key(vm, "prototype");
+    MalValue prototype_value = mal_value_new_undefined();
+    MalValue synthetic;
+    if (mal_vm_resolve_synthetic_property(vm, target, key, &synthetic)) {
+        prototype_value = synthetic;
+    } else if (mal_value_is_object(target)) {
+        MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(target), key);
+        if (resolution.found) {
+            prototype_value = resolution.desc.value;
+        }
+    }
+
+    if (!mal_value_is_object(prototype_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Function has non-object prototype in instanceof check");
+        return false;
+    }
+
+    MalObject *prototype = mal_value_to_object(prototype_value);
+    for (MalObject *walk = mal_object_get_prototype(mal_value_to_object(value));
+         walk != nullptr;
+         walk = mal_object_get_prototype(walk)) {
+        if (walk == prototype) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
     MalValue object_value = callable->registers[instruction->as.load_property.object];
     MalValue key_value = callable->registers[instruction->as.load_property.key];
@@ -625,61 +723,8 @@ void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
         return;
     }
 
-    // Primitive receivers resolve against their prototype intrinsic, with
-    // string length and index reads answered by the string itself.
-    if (!mal_value_is_object(object_value)) {
-        if (mal_value_is_string(object_value)) {
-            MalString *string = mal_value_to_string(object_value);
-            if (mal_array_key_is_length(key)) {
-                callable->registers[dst] = mal_value_from_i32((i32) mal_string_length(string));
-                return;
-            }
-
-            if (key.kind == MAL_KEY_INDEX) {
-                i32 index = mal_value_to_i32(key.value);
-                if (index >= 0 && (usize) index < mal_string_length(string)) {
-                    // The borrowed code units stay alive with the source string.
-                    callable->registers[dst] = mal_value_from_string(
-                        mal_string_new_external(&callable->vm->heap, mal_string_code_units(string) + index, 1)
-                    );
-                } else {
-                    callable->registers[dst] = mal_value_new_undefined();
-                }
-                return;
-            }
-
-            mal_vm_load_from_prototype_slot(callable, MAL_INTRINSIC_STRING_PROTOTYPE, object_value, key, dst);
-            return;
-        }
-
-        if (mal_vm_value_is_number(object_value)) {
-            mal_vm_load_from_prototype_slot(callable, MAL_INTRINSIC_NUMBER_PROTOTYPE, object_value, key, dst);
-            return;
-        }
-
-        if (mal_value_is_boolean(object_value)) {
-            mal_vm_load_from_prototype_slot(callable, MAL_INTRINSIC_BOOLEAN_PROTOTYPE, object_value, key, dst);
-            return;
-        }
-
-        callable->registers[dst] = mal_value_new_undefined();
-        return;
-    }
-
-    MalValue synthetic;
-    if (mal_vm_resolve_synthetic_property(callable->vm, object_value, key, &synthetic)) {
-        callable->registers[dst] = synthetic;
-        return;
-    }
-
-    MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(object_value), key);
-    if (!resolution.found) {
-        callable->registers[dst] = mal_value_new_undefined();
-        return;
-    }
-
     MalValue value;
-    if (mal_vm_desc_read(callable->vm, resolution.desc, object_value, &value)) {
+    if (mal_vm_get_property(callable->vm, object_value, key, &value)) {
         callable->registers[dst] = value;
     }
 }
@@ -745,6 +790,100 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
     if (!stored && strict) {
         mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
     }
+}
+
+void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruction) {
+    MalValue object_value = callable->registers[instruction->as.store_super_property.object];
+    MalValue key_value = callable->registers[instruction->as.store_super_property.key];
+    MalValue value = callable->registers[instruction->as.store_super_property.value];
+    MalValue receiver = callable->registers[instruction->as.store_super_property.receiver];
+    bool strict = callable->function->strict;
+
+    if (mal_value_is_nil(object_value)) {
+        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set properties of null or undefined");
+        return;
+    }
+
+    MalKey key;
+    if (!mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
+        return;
+    }
+
+    // OrdinarySetWithOwnDescriptor: the super base chain provides the
+    // controlling descriptor, the write applies to the receiver.
+    if (mal_value_is_object(object_value)) {
+        MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(object_value), key);
+
+        if (resolution.found && (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+            if (!mal_value_is_callable(resolution.desc.setter)) {
+                if (strict) {
+                    mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set property which has only a getter");
+                }
+                return;
+            }
+
+            MalCompletion completion = mal_vm_call_value(callable->vm, resolution.desc.setter, receiver, &value, 1);
+            if (completion.kind != MAL_COMPLETION_NORMAL) {
+                callable->vm->completion = completion;
+            }
+            return;
+        }
+
+        if (resolution.found && !(resolution.desc.flags & MAL_PROPERTY_WRITABLE)) {
+            if (strict) {
+                mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
+            }
+            return;
+        }
+    }
+
+    if (!mal_value_is_object(receiver)) {
+        if (strict) {
+            mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot create property on a primitive");
+        }
+        return;
+    }
+
+    MalObject *receiver_object = mal_value_to_object(receiver);
+    MalPropertyLookup own = mal_object_get_own(receiver_object, key);
+    if (own.present) {
+        bool rejected = (own.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+            !(own.desc.flags & MAL_PROPERTY_WRITABLE);
+        if (rejected) {
+            if (strict) {
+                mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
+            }
+            return;
+        }
+
+        own.desc.value = value;
+        mal_object_define_own(receiver_object, key, &own.desc);
+        return;
+    }
+
+    if (!mal_object_is_extensible(receiver_object)) {
+        if (strict) {
+            mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot add property to a non-extensible object");
+        }
+        return;
+    }
+
+    // CreateDataProperty on the receiver, ignoring its inherited properties.
+    mal_property_set_value(mal_object_properties(receiver_object), key, value);
+}
+
+void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction) {
+    MalValue value = callable->registers[instruction->as.load_prototype.object];
+    MalValue result = mal_value_new_null();
+
+    if (mal_value_is_object(value)) {
+        MalObject *prototype = mal_object_get_prototype(mal_value_to_object(value));
+        if (prototype != nullptr) {
+            result = mal_value_from_object(prototype);
+        }
+    }
+
+    callable->registers[instruction->as.load_prototype.dst] = result;
 }
 
 /**

@@ -40,6 +40,19 @@ typedef enum MalHeapType {
     MAL_HEAP_NATIVE_FUNCTION_OBJECT,
     MAL_HEAP_BOUND_FUNCTION_OBJECT,
     MAL_HEAP_ARRAY_OBJECT,
+    /**
+     * Map and WeakMap instances (MalMapObject; the weak flag distinguishes).
+     */
+    MAL_HEAP_MAP_OBJECT,
+    /**
+     * Set and WeakSet instances (MalMapObject with ignored entry values).
+     */
+    MAL_HEAP_SET_OBJECT,
+    /**
+     * Built-in iterator instances (MalIteratorObject) for the Map/Set/Array/
+     * String iteration methods.
+     */
+    MAL_HEAP_ITERATOR_OBJECT,
 } MalHeapType;
 
 /**

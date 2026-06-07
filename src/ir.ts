@@ -76,6 +76,14 @@ type BindingLocation =
  */
 interface IRClassContext {
 	superBinding?: Binding;
+
+	/**
+	 * The class constructor itself, for heritage-less classes: super
+	 * references resolve dynamically through the home object's prototype
+	 * chain so setPrototypeOf mutations are observed.
+	 */
+	classBinding?: Binding;
+
 	isStatic: boolean;
 }
 
@@ -337,6 +345,20 @@ export type IRInstruction =
 			registers: [number, number, number];
 	  }
 	| {
+			type: "storeSuperProperty";
+
+			// [object, key, value, receiver] — the lookup walks object (the
+			// super base) while the write applies to receiver (this).
+			registers: [number, number, number, number];
+	  }
+	| {
+			type: "loadPrototype";
+
+			// [destination, object] — the object's [[Prototype]], null for
+			// non-objects and end-of-chain.
+			registers: [number, number];
+	  }
+	| {
 			type: "deleteProperty";
 
 			// [destination, object, key]
@@ -473,6 +495,11 @@ type IRIntrinsic =
 	| "String"
 	| "Number"
 	| "Boolean"
+	| "Symbol"
+	| "Map"
+	| "Set"
+	| "WeakMap"
+	| "WeakSet"
 	| "parseInt"
 	| "parseFloat"
 	| "isNaN"
@@ -498,6 +525,11 @@ const irIntrinsics = new Set<string>([
 	"String",
 	"Number",
 	"Boolean",
+	"Symbol",
+	"Map",
+	"Set",
+	"WeakMap",
+	"WeakSet",
 	"parseInt",
 	"parseFloat",
 	"isNaN",
@@ -772,6 +804,7 @@ function compileClass(
 	nameHint?: string,
 ): number {
 	let superBinding: Binding | undefined;
+	let classBinding: Binding | undefined;
 	let parent = -1;
 	if (classNode.superClass) {
 		parent = compileExpression(program, fn, cursor, classNode.superClass);
@@ -787,6 +820,15 @@ function compileClass(
 		};
 		const location = getOrCreateBindingLocation(program, fn, superBinding);
 		storeRegisterAtLocation(cursor.block, location, parent);
+	} else {
+		// Heritage-less classes stash themselves so super references can walk
+		// the home object's live prototype chain.
+		classBinding = {
+			kind: "const",
+			name: `__class_${program.functions.length}`,
+			usageNodes: [],
+			scopedTo: "captured",
+		};
 	}
 
 	const members = classNode.body.body.filter(
@@ -802,7 +844,7 @@ function compileClass(
 					program,
 					fn,
 					constructorNode.value,
-					{ superBinding, isStatic: false },
+					{ superBinding, classBinding, isStatic: false },
 					className,
 				)
 			: compileDefaultConstructor(program, fn, superBinding, className);
@@ -813,6 +855,11 @@ function compileClass(
 		registers: [ctor],
 		functionIndex: constructorIndex,
 	});
+
+	if (classBinding) {
+		const location = getOrCreateBindingLocation(program, fn, classBinding);
+		storeRegisterAtLocation(cursor.block, location, ctor);
+	}
 
 	// Wire the prototype chains.
 	const prototypeKey = compileStaticString(program, fn, cursor, "prototype");
@@ -870,7 +917,7 @@ function compileClass(
 			program,
 			fn,
 			member.value,
-			{ superBinding, isStatic: member.static },
+			{ superBinding, classBinding, isStatic: member.static },
 			!member.computed && member.key?.type === "Identifier" ? member.key.name : "",
 		);
 		const method = nextRegisterDestination(fn);
@@ -2221,6 +2268,22 @@ function compileAssignment(
 		});
 	}
 
+	if (assignmentExpression.left.object.type === "Super") {
+		// super.x = v looks the property up on the super base but writes to
+		// the current instance.
+		const receiver = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadThis",
+			registers: [receiver],
+		});
+		cursor.block.instructions.push({
+			type: "storeSuperProperty",
+			registers: [object, key, value, receiver],
+		});
+
+		return value;
+	}
+
 	cursor.block.instructions.push({
 		type: "storeProperty",
 		registers: [object, key, value],
@@ -2862,8 +2925,37 @@ function compileSuperObject(
 	cursor: IRCursor,
 ): number {
 	const classContext = fn.classContext;
-	if (!classContext?.superBinding) {
+	if (!classContext) {
 		return -1;
+	}
+
+	if (!classContext.superBinding) {
+		if (!classContext.classBinding) {
+			return -1;
+		}
+
+		// Heritage-less classes resolve super through the home object's live
+		// prototype chain, so setPrototypeOf mutations are observed.
+		const location = getOrCreateBindingLocation(program, fn, classContext.classBinding);
+		let home = loadRegisterFromLocation(fn, cursor.block, location);
+
+		if (!classContext.isStatic) {
+			const prototypeKey = compileStaticString(program, fn, cursor, "prototype");
+			const prototype = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "loadProperty",
+				registers: [prototype, home, prototypeKey],
+			});
+			home = prototype;
+		}
+
+		const object = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadPrototype",
+			registers: [object, home],
+		});
+
+		return object;
 	}
 
 	const location = getOrCreateBindingLocation(program, fn, classContext.superBinding);

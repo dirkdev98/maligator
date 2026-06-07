@@ -10,6 +10,8 @@ typedef struct MalFunctionObject MalFunctionObject;
 typedef struct MalNativeFunctionObject MalNativeFunctionObject;
 typedef struct MalBoundFunctionObject MalBoundFunctionObject;
 typedef struct MalArrayObject MalArrayObject;
+typedef struct MalMapObject MalMapObject;
+typedef struct MalIteratorObject MalIteratorObject;
 
 /**
  * NaN-Boxed MalValue representation.
@@ -219,6 +221,21 @@ bool mal_value_is_bound_function_object(MalValue value);
 bool mal_value_is_array_object(MalValue value);
 
 /**
+ * Check if the value is a Map/WeakMap instance.
+ */
+bool mal_value_is_map_object(MalValue value);
+
+/**
+ * Check if the value is a Set/WeakSet instance.
+ */
+bool mal_value_is_set_object(MalValue value);
+
+/**
+ * Check if the value is a built-in iterator instance.
+ */
+bool mal_value_is_iterator_object(MalValue value);
+
+/**
  * Check if the value is callable.
  */
 bool mal_value_is_callable(MalValue value);
@@ -259,6 +276,16 @@ MalBoundFunctionObject *mal_value_to_bound_function_object(MalValue value);
 MalArrayObject *mal_value_to_array_object(MalValue value);
 
 /**
+ * Unbox a map/set object (shared layout for all four collection types).
+ */
+MalMapObject *mal_value_to_map_object(MalValue value);
+
+/**
+ * Unbox a built-in iterator object.
+ */
+MalIteratorObject *mal_value_to_iterator_object(MalValue value);
+
+/**
  * Box a string.
  */
 MalValue mal_value_from_string(MalString *string);
@@ -292,6 +319,16 @@ MalValue mal_value_from_bound_function_object(MalBoundFunctionObject *bound);
  * Box an array object.
  */
 MalValue mal_value_from_array_object(MalArrayObject *array);
+
+/**
+ * Box a map/set object.
+ */
+MalValue mal_value_from_map_object(MalMapObject *map);
+
+/**
+ * Box a built-in iterator object.
+ */
+MalValue mal_value_from_iterator_object(MalIteratorObject *iterator);
 
 /**
  * Check if the value is truthy.

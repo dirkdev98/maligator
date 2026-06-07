@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "builtin_iterator.h"
 #include "builtin_object.h"
 #include "heap_string.h"
 #include "value_ops.h"
@@ -233,7 +234,7 @@ static bool mal_builtin_array_same_value_zero(MalValue left, MalValue right) {
     return mal_value_is_nan(left) && mal_value_is_nan(right);
 }
 
-static MalValue mal_builtin_array_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     if (arg_count == 1 && mal_value_is_int32(args[0]) && mal_value_to_i32(args[0]) >= 0) {
         return mal_value_from_array_object(mal_intrinsic_new_array(vm, (u32) mal_value_to_i32(args[0])));
@@ -247,13 +248,13 @@ static MalValue mal_builtin_array_constructor(MalVm *vm, MalValue this_value, co
     return mal_value_from_array_object(array);
 }
 
-static MalValue mal_builtin_array_is_array(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_is_array(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) this_value;
     return mal_value_new_boolean(arg_count >= 1 && mal_value_is_array_object(args[0]));
 }
 
-static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     MalArrayObject *array = mal_intrinsic_new_array(vm, (u32) arg_count);
     for (i32 i = 0; i < arg_count; i++) {
@@ -263,7 +264,7 @@ static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalVa
     return mal_value_from_array_object(array);
 }
 
-static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     MalValue source = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     MalValue map_fn = arg_count >= 2 && mal_value_is_callable(args[1]) ? args[1] : mal_value_new_undefined();
@@ -306,7 +307,7 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
     return mal_value_from_array_object(result);
 }
 
-static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
@@ -330,7 +331,7 @@ static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalV
     return mal_value_from_array_object(result);
 }
 
-static MalValue mal_builtin_array_for_each(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_for_each(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
@@ -350,7 +351,7 @@ static MalValue mal_builtin_array_for_each(MalVm *vm, MalValue this_value, const
     return mal_value_new_undefined();
 }
 
-static MalValue mal_builtin_array_filter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_filter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
@@ -377,7 +378,7 @@ static MalValue mal_builtin_array_filter(MalVm *vm, MalValue this_value, const M
     return mal_value_from_array_object(result);
 }
 
-static MalValue mal_builtin_array_reduce(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_reduce(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
@@ -420,7 +421,7 @@ static MalValue mal_builtin_array_reduce(MalVm *vm, MalValue this_value, const M
     return accumulator;
 }
 
-static MalValue mal_builtin_array_reduce_right(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_reduce_right(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
@@ -467,7 +468,7 @@ static MalValue mal_builtin_array_reduce_right(MalVm *vm, MalValue this_value, c
     return accumulator;
 }
 
-static MalValue mal_builtin_array_find(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_find(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
@@ -488,7 +489,7 @@ static MalValue mal_builtin_array_find(MalVm *vm, MalValue this_value, const Mal
     return mal_value_new_undefined();
 }
 
-static MalValue mal_builtin_array_find_index(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_find_index(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
@@ -509,7 +510,7 @@ static MalValue mal_builtin_array_find_index(MalVm *vm, MalValue this_value, con
     return mal_value_from_i32(-1);
 }
 
-static MalValue mal_builtin_array_some(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_some(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
@@ -533,7 +534,7 @@ static MalValue mal_builtin_array_some(MalVm *vm, MalValue this_value, const Mal
     return mal_value_new_boolean(false);
 }
 
-static MalValue mal_builtin_array_every(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_every(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
@@ -557,7 +558,7 @@ static MalValue mal_builtin_array_every(MalVm *vm, MalValue this_value, const Ma
     return mal_value_new_boolean(true);
 }
 
-static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
@@ -579,7 +580,7 @@ static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const
     return mal_value_from_i32(-1);
 }
 
-static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
@@ -619,7 +620,7 @@ static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, 
     return mal_value_from_i32(-1);
 }
 
-static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
@@ -637,7 +638,7 @@ static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const
     return mal_value_new_boolean(false);
 }
 
-static MalValue mal_builtin_array_push(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_push(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     if (!mal_value_is_array_object(this_value)) {
         return mal_value_new_undefined();
@@ -652,7 +653,7 @@ static MalValue mal_builtin_array_push(MalVm *vm, MalValue this_value, const Mal
     return mal_value_from_i32((i32) mal_array_object_length(array));
 }
 
-static MalValue mal_builtin_array_pop(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_pop(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) args;
     (void) arg_count;
@@ -672,7 +673,7 @@ static MalValue mal_builtin_array_pop(MalVm *vm, MalValue this_value, const MalV
     return element;
 }
 
-static MalValue mal_builtin_array_shift(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_shift(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) args;
     (void) arg_count;
@@ -701,7 +702,7 @@ static MalValue mal_builtin_array_shift(MalVm *vm, MalValue this_value, const Ma
     return first;
 }
 
-static MalValue mal_builtin_array_unshift(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_unshift(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     if (!mal_value_is_array_object(this_value)) {
         return mal_value_new_undefined();
@@ -730,7 +731,7 @@ static MalValue mal_builtin_array_unshift(MalVm *vm, MalValue this_value, const 
     return mal_value_from_i32((i32) (length + (u32) arg_count));
 }
 
-static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     if (!mal_value_is_array_object(this_value)) {
         return mal_value_new_undefined();
     }
@@ -754,7 +755,7 @@ static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const Ma
     return mal_value_from_array_object(result);
 }
 
-static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     if (!mal_value_is_array_object(this_value)) {
         return mal_value_new_undefined();
     }
@@ -765,8 +766,28 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
     for (i32 i = -1; i < arg_count; i++) {
         MalValue source = i < 0 ? this_value : args[i];
 
-        if (mal_value_is_array_object(source)) {
-            u32 source_length = mal_array_object_length(mal_value_to_array_object(source));
+        // A defined @@isConcatSpreadable overrides the IsArray default.
+        bool spreadable = mal_value_is_array_object(source);
+        if (mal_value_is_object(source)) {
+            MalValue spreadable_value;
+            if (!mal_vm_get_property(vm, source, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_IS_CONCAT_SPREADABLE), &spreadable_value)) {
+                return mal_value_new_undefined();
+            }
+
+            if (!mal_value_is_undefined(spreadable_value)) {
+                spreadable = mal_value_is_truthy(spreadable_value);
+            }
+        }
+
+        if (spreadable) {
+            // Spreading non-arrays approximates with the generic array-like
+            // length read.
+            u32 source_length = 0;
+            if (mal_value_is_array_object(source)) {
+                source_length = mal_array_object_length(mal_value_to_array_object(source));
+            } else if (!mal_builtin_array_this_length(vm, source, &source_length)) {
+                return mal_value_new_undefined();
+            }
             for (u32 index = 0; index < source_length; index++) {
                 MalValue element;
                 if (mal_builtin_array_try_get(vm, source, index, &element)) {
@@ -785,7 +806,7 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
     return mal_value_from_array_object(result);
 }
 
-static MalValue mal_builtin_array_join(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_join(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     if (!mal_value_is_array_object(this_value)) {
         return mal_value_new_undefined();
     }
@@ -829,7 +850,7 @@ static MalValue mal_builtin_array_join(MalVm *vm, MalValue this_value, const Mal
     return mal_value_from_string(result);
 }
 
-static MalValue mal_builtin_array_reverse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_reverse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     (void) args;
     (void) arg_count;
@@ -865,7 +886,7 @@ static MalValue mal_builtin_array_reverse(MalVm *vm, MalValue this_value, const 
     return this_value;
 }
 
-static MalValue mal_builtin_array_fill(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_fill(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     if (!mal_value_is_array_object(this_value)) {
         return mal_value_new_undefined();
@@ -886,7 +907,7 @@ static MalValue mal_builtin_array_fill(MalVm *vm, MalValue this_value, const Mal
     return this_value;
 }
 
-static MalValue mal_builtin_array_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
     if (!mal_value_is_array_object(this_value)) {
         return mal_value_new_undefined();
@@ -906,7 +927,7 @@ static MalValue mal_builtin_array_at(MalVm *vm, MalValue this_value, const MalVa
     return mal_builtin_array_get(vm, this_value, (u32) relative);
 }
 
-static MalValue mal_builtin_array_find_last(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_find_last(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
@@ -927,7 +948,7 @@ static MalValue mal_builtin_array_find_last(MalVm *vm, MalValue this_value, cons
     return mal_value_new_undefined();
 }
 
-static MalValue mal_builtin_array_find_last_index(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_find_last_index(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
@@ -997,7 +1018,7 @@ static void mal_builtin_array_flatten_into(MalVm *vm, MalArrayObject *result, u3
     }
 }
 
-static MalValue mal_builtin_array_flat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_flat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
     u32 count = 0;
     mal_builtin_array_flatten_into(vm, result, &count, this_value, mal_builtin_array_number_arg(args, arg_count, 0, 1));
@@ -1008,7 +1029,7 @@ static MalValue mal_builtin_array_flat(MalVm *vm, MalValue this_value, const Mal
     return mal_value_from_array_object(result);
 }
 
-static MalValue mal_builtin_array_flat_map(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_flat_map(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
@@ -1170,7 +1191,7 @@ static MalBuiltinArraySorted mal_builtin_array_sorted_elements(MalVm *vm, MalVal
     return sorted;
 }
 
-static MalValue mal_builtin_array_sort(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_sort(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalValue comparator;
     if (!mal_builtin_array_comparator_arg(vm, args, arg_count, &comparator)) {
         return mal_value_new_undefined();
@@ -1202,7 +1223,7 @@ static MalValue mal_builtin_array_sort(MalVm *vm, MalValue this_value, const Mal
     return this_value;
 }
 
-static MalValue mal_builtin_array_to_sorted(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_to_sorted(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     MalValue comparator;
     u32 length;
     if (!mal_builtin_array_comparator_arg(vm, args, arg_count, &comparator) || !mal_builtin_array_this_length(vm, this_value, &length)) {
@@ -1249,7 +1270,7 @@ static u32 mal_builtin_array_delete_count(const MalValue *args, i32 arg_count, u
     return (u32) raw;
 }
 
-static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
@@ -1345,7 +1366,7 @@ static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const M
     return mal_value_from_array_object(removed);
 }
 
-static MalValue mal_builtin_array_to_spliced(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_to_spliced(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
@@ -1371,7 +1392,7 @@ static MalValue mal_builtin_array_to_spliced(MalVm *vm, MalValue this_value, con
     return mal_value_from_array_object(result);
 }
 
-static MalValue mal_builtin_array_copy_within(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_copy_within(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
@@ -1413,7 +1434,7 @@ static MalValue mal_builtin_array_copy_within(MalVm *vm, MalValue this_value, co
     return this_value;
 }
 
-static MalValue mal_builtin_array_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
@@ -1439,7 +1460,7 @@ static MalValue mal_builtin_array_with(MalVm *vm, MalValue this_value, const Mal
     return mal_value_from_array_object(result);
 }
 
-static MalValue mal_builtin_array_to_reversed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_to_reversed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) args;
     (void) arg_count;
     u32 length;
@@ -1459,7 +1480,7 @@ static MalValue mal_builtin_array_to_reversed(MalVm *vm, MalValue this_value, co
     return mal_value_from_array_object(result);
 }
 
-static MalValue mal_builtin_array_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) args;
     (void) arg_count;
     // Array.prototype.toString delegates to this.join when callable.
@@ -1487,15 +1508,42 @@ static MalValue mal_builtin_array_to_string(MalVm *vm, MalValue this_value, cons
 
     // No callable join: fall through to Object.prototype.toString, which
     // tags primitives with their wrapper class.
-    return mal_builtin_object_prototype_to_string(vm, this_value, nullptr, 0);
+    return mal_builtin_object_prototype_to_string(vm, this_value, nullptr, 0, mal_value_new_undefined());
 }
 
-static MalValue mal_builtin_array_to_locale_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+static MalValue mal_builtin_array_to_locale_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) args;
     (void) arg_count;
     // Pragmatic: elements format through ToString rather than their own
     // toLocaleString methods.
-    return mal_builtin_array_join(vm, this_value, nullptr, 0);
+    return mal_builtin_array_join(vm, this_value, nullptr, 0, mal_value_new_undefined());
+}
+
+static MalValue mal_builtin_array_prototype_iterator(MalVm *vm, MalValue this_value, MalIteratorKind kind) {
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot iterate null or undefined");
+        return mal_value_new_undefined();
+    }
+
+    return mal_vm_new_builtin_iterator(vm, kind, this_value);
+}
+
+static MalValue mal_builtin_array_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    (void) args;
+    (void) arg_count;
+    return mal_builtin_array_prototype_iterator(vm, this_value, MAL_ITERATOR_ARRAY_VALUES);
+}
+
+static MalValue mal_builtin_array_keys(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    (void) args;
+    (void) arg_count;
+    return mal_builtin_array_prototype_iterator(vm, this_value, MAL_ITERATOR_ARRAY_KEYS);
+}
+
+static MalValue mal_builtin_array_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    (void) args;
+    (void) arg_count;
+    return mal_builtin_array_prototype_iterator(vm, this_value, MAL_ITERATOR_ARRAY_ENTRIES);
 }
 
 void mal_builtin_array_install(MalVm *vm) {
@@ -1552,4 +1600,13 @@ void mal_builtin_array_install(MalVm *vm) {
     mal_intrinsic_define_method(vm, prototype, "toSpliced", mal_builtin_array_to_spliced);
     mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_array_to_string);
     mal_intrinsic_define_method(vm, prototype, "toLocaleString", mal_builtin_array_to_locale_string);
+    mal_intrinsic_define_method(vm, prototype, "keys", mal_builtin_array_keys);
+    mal_intrinsic_define_method(vm, prototype, "entries", mal_builtin_array_entries);
+    MalValue values = mal_intrinsic_define_method(vm, prototype, "values", mal_builtin_array_values);
+
+    // Array.prototype[Symbol.iterator] === Array.prototype.values
+    MalPropertyDesc iterator_desc = mal_intrinsic_data_desc(values, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &iterator_desc);
+
+    mal_intrinsic_define_species(vm, constructor_object);
 }

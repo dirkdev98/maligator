@@ -237,6 +237,12 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_STORE_PROPERTY:
                 mal_op_store_property(frame, &instruction);
                 break;
+            case MAL_OP_STORE_SUPER_PROPERTY:
+                mal_op_store_super_property(frame, &instruction);
+                break;
+            case MAL_OP_LOAD_PROTOTYPE:
+                mal_op_load_prototype(frame, &instruction);
+                break;
             case MAL_OP_DELETE_PROPERTY:
                 mal_op_delete_property(frame, &instruction);
                 break;
@@ -418,7 +424,7 @@ MalCompletion mal_vm_call_value(
 
     if (mal_value_is_native_function_object(resolution.callee)) {
         MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
-        MalValue value = callback(vm, resolution.this_value, resolution.args, resolution.arg_count);
+        MalValue value = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined());
         completion = vm->completion.kind == MAL_COMPLETION_THROW
             ? vm->completion
             : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};

@@ -40,6 +40,36 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_NUMBER_PROTOTYPE,
     MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR,
     MAL_INTRINSIC_BOOLEAN_PROTOTYPE,
+    MAL_INTRINSIC_SYMBOL_CONSTRUCTOR,
+    MAL_INTRINSIC_SYMBOL_PROTOTYPE,
+    // Well-known symbol values (Table 1 of the spec), referenced by both the
+    // VM and builtin install passes.
+    MAL_INTRINSIC_SYMBOL_ITERATOR,
+    MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR,
+    MAL_INTRINSIC_SYMBOL_TO_STRING_TAG,
+    MAL_INTRINSIC_SYMBOL_HAS_INSTANCE,
+    MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE,
+    MAL_INTRINSIC_SYMBOL_SPECIES,
+    MAL_INTRINSIC_SYMBOL_IS_CONCAT_SPREADABLE,
+    MAL_INTRINSIC_SYMBOL_MATCH,
+    MAL_INTRINSIC_SYMBOL_MATCH_ALL,
+    MAL_INTRINSIC_SYMBOL_REPLACE,
+    MAL_INTRINSIC_SYMBOL_SEARCH,
+    MAL_INTRINSIC_SYMBOL_SPLIT,
+    MAL_INTRINSIC_SYMBOL_UNSCOPABLES,
+    MAL_INTRINSIC_MAP_CONSTRUCTOR,
+    MAL_INTRINSIC_MAP_PROTOTYPE,
+    MAL_INTRINSIC_SET_CONSTRUCTOR,
+    MAL_INTRINSIC_SET_PROTOTYPE,
+    MAL_INTRINSIC_WEAK_MAP_CONSTRUCTOR,
+    MAL_INTRINSIC_WEAK_MAP_PROTOTYPE,
+    MAL_INTRINSIC_WEAK_SET_CONSTRUCTOR,
+    MAL_INTRINSIC_WEAK_SET_PROTOTYPE,
+    MAL_INTRINSIC_ITERATOR_PROTOTYPE,
+    MAL_INTRINSIC_MAP_ITERATOR_PROTOTYPE,
+    MAL_INTRINSIC_SET_ITERATOR_PROTOTYPE,
+    MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE,
+    MAL_INTRINSIC_STRING_ITERATOR_PROTOTYPE,
     MAL_INTRINSIC_PARSE_INT,
     MAL_INTRINSIC_PARSE_FLOAT,
     MAL_INTRINSIC_IS_NAN,
@@ -67,6 +97,30 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name);
  * Build a string property key from a NUL-terminated ASCII name.
  */
 MalKey mal_intrinsic_string_key(MalVm *vm, const byte *name);
+
+/**
+ * Build a symbol property key from a well-known symbol intrinsic slot.
+ */
+MalKey mal_intrinsic_symbol_key(MalVm *vm, MalIntrinsic symbol_slot);
+
+/**
+ * Create a native function and define it as a writable + configurable method
+ * under a well-known symbol key. display_name becomes the function name
+ * (e.g. "[Symbol.iterator]").
+ */
+MalValue mal_intrinsic_define_symbol_method(
+    MalVm *vm,
+    MalObject *object,
+    MalIntrinsic symbol_slot,
+    const byte *display_name,
+    MalNativeFunctionCallback callback
+);
+
+/**
+ * Define the spec-shaped `get [Symbol.species]` accessor (returns the
+ * receiver) on a constructor.
+ */
+void mal_intrinsic_define_species(MalVm *vm, MalObject *constructor);
 
 /**
  * Build a data property descriptor with the given flags.
