@@ -1723,6 +1723,24 @@ function compileStatementsToBlock(
 		}
 	}
 
+	// Join any dangling blocks left by the final statement into a single tail
+	// block, so callers (loops, if/try, the function epilogue) see one exit.
+	// The per-statement patch above only joins when a *following* statement is
+	// compiled; a statement list ending in an if/loop/try would otherwise leave
+	// several un-terminated blocks. In a loop body that meant the if-consequent
+	// fell through to the after-loop block instead of the update.
+	if (fn.blocks.at(-1) !== block) {
+		const lastBlockIdx = fn.blocks.indexOf(block);
+		block = { instructions: [] };
+		const jumpTarget = fn.blocks.push(block) - 1;
+		for (let i = lastBlockIdx + 1; i < jumpTarget; i++) {
+			fn.blocks[i]!.instructions.push({
+				type: "jump",
+				blocks: [jumpTarget],
+			});
+		}
+	}
+
 	return blockIdx;
 }
 
