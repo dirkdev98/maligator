@@ -9,13 +9,11 @@ const unsupportedNodeTypes = new Map<string, string>([
 	["PrivateIdentifier", "private class member"],
 	["MetaProperty", "new.target / import.meta"],
 	["ForInStatement", "for-in"],
-	["ForOfStatement", "for-of"],
 	["LabeledStatement", "labeled statement"],
 	["WithStatement", "with"],
 	["AwaitExpression", "async function"],
 	["YieldExpression", "generator function"],
 	["TaggedTemplateExpression", "tagged template"],
-	["SpreadElement", "spread"],
 	["SequenceExpression", "sequence expression"],
 	["ChainExpression", "optional chaining"],
 	["ImportDeclaration", "module syntax"],
@@ -108,6 +106,10 @@ function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
 	const mapped = unsupportedNodeTypes.get(node.type);
 	if (mapped) {
 		unsupported.add(mapped);
+	}
+
+	if (node.type === "ForOfStatement" && node.await) {
+		unsupported.add("for-await-of");
 	}
 
 	switch (node.type) {

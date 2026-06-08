@@ -41,6 +41,13 @@ function allocateRegistersForFunction(fn: IRFunction) {
 	const freeRegisters = [];
 	let highestUsedRegister = -1;
 
+	// A register used in multiple blocks may be live across a loop back edge,
+	// which the last-static-use model cannot see. Those registers are never
+	// freed for reuse.
+	const isFreeable = (virtualRegister: number, instruction: IRInstruction) =>
+		instruction === registerLastUsedIn.get(virtualRegister) &&
+		(registerUsedInMultipleBlocks.get(virtualRegister)?.size ?? 0) <= 1;
+
 	// The VM places arguments in the first registers of the frame. Parameters are
 	// compiled to the first virtual registers, so pin them to keep the calling
 	// convention intact.
@@ -67,7 +74,7 @@ function allocateRegistersForFunction(fn: IRFunction) {
 				if (mappedValue !== undefined) {
 					instruction.registers[i] = mappedValue;
 
-					if (instruction === registerLastUsedIn.get(virtualRegister)) {
+					if (isFreeable(virtualRegister, instruction)) {
 						// Free the register if this is the last use.
 						freeRegisters.push(mappedValue);
 					}
@@ -76,7 +83,7 @@ function allocateRegistersForFunction(fn: IRFunction) {
 				}
 
 				if (freeRegisters.length > 0) {
-					const isLastUse = instruction === registerLastUsedIn.get(virtualRegister);
+					const isLastUse = isFreeable(virtualRegister, instruction);
 					// Don't even claim it if it is the last use.
 					const mappedValue = isLastUse ? freeRegisters[0]! : freeRegisters.pop()!;
 
@@ -86,7 +93,7 @@ function allocateRegistersForFunction(fn: IRFunction) {
 					const nextRegister = highestUsedRegister + 1;
 					highestUsedRegister = nextRegister;
 
-					const isLastUse = instruction === registerLastUsedIn.get(virtualRegister);
+					const isLastUse = isFreeable(virtualRegister, instruction);
 
 					const mappedValue = nextRegister;
 					if (isLastUse) {

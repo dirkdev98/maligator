@@ -3,6 +3,7 @@
 void mal_symbol_init(MalSymbol *symbol, MalString *description) {
     mal_heap_header_init(&symbol->header, MAL_HEAP_SYMBOL);
     symbol->description = description;
+    symbol->registered = false;
 }
 
 MalSymbol *mal_symbol_new(MalHeap *heap, MalString *description) {

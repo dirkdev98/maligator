@@ -60,7 +60,11 @@ void mal_op_load_this(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_call(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_call_spread(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_construct(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_construct_spread(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_throw(MalCallable *callable, MalInstruction *instruction);
 
@@ -88,6 +92,12 @@ void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruct
 
 void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_get_iterator(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_iterator_step(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_iterator_close(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction);
@@ -105,6 +115,8 @@ void mal_op_create_rest_arguments(MalCallable *callable, MalInstruction *instruc
 void mal_op_array_rest(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_merge_data_properties(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_jump(MalCallable *callable, MalInstruction *instruction);
 

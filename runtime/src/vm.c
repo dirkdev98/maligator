@@ -26,6 +26,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     for (i32 i = 0; i < MAL_INTRINSIC_COUNT; i++) {
         vm->intrinsics[i] = mal_value_new_undefined();
     }
+    vm->symbol_registry = mal_table_new(MAL_TABLE_MODE_GENERAL);
     mal_intrinsics_init(vm);
 }
 
@@ -37,6 +38,7 @@ void mal_vm_free(MalVm *vm) {
 
     free(vm->frames);
     free(vm->globals);
+    mal_table_free(vm->symbol_registry);
     mal_heap_free(&vm->heap);
 
     vm->definition = nullptr;
@@ -237,11 +239,29 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_STORE_PROPERTY:
                 mal_op_store_property(frame, &instruction);
                 break;
+            case MAL_OP_CALL_SPREAD:
+                mal_op_call_spread(frame, &instruction);
+                break;
+            case MAL_OP_CONSTRUCT_SPREAD:
+                mal_op_construct_spread(frame, &instruction);
+                break;
             case MAL_OP_STORE_SUPER_PROPERTY:
                 mal_op_store_super_property(frame, &instruction);
                 break;
             case MAL_OP_LOAD_PROTOTYPE:
                 mal_op_load_prototype(frame, &instruction);
+                break;
+            case MAL_OP_MERGE_DATA_PROPERTIES:
+                mal_op_merge_data_properties(frame, &instruction);
+                break;
+            case MAL_OP_GET_ITERATOR:
+                mal_op_get_iterator(frame, &instruction);
+                break;
+            case MAL_OP_ITERATOR_STEP:
+                mal_op_iterator_step(frame, &instruction);
+                break;
+            case MAL_OP_ITERATOR_CLOSE:
+                mal_op_iterator_close(frame, &instruction);
                 break;
             case MAL_OP_DELETE_PROPERTY:
                 mal_op_delete_property(frame, &instruction);

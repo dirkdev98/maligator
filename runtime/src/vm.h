@@ -34,6 +34,9 @@ typedef enum MalOpcode {
     MAL_OP_STORE_PROPERTY,
     MAL_OP_STORE_SUPER_PROPERTY,
     MAL_OP_LOAD_PROTOTYPE,
+    MAL_OP_GET_ITERATOR,
+    MAL_OP_ITERATOR_STEP,
+    MAL_OP_ITERATOR_CLOSE,
     MAL_OP_DELETE_PROPERTY,
     MAL_OP_DEFINE_ACCESSOR,
     MAL_OP_DEFINE_PROPERTY,
@@ -43,8 +46,11 @@ typedef enum MalOpcode {
     MAL_OP_CREATE_REST_ARGUMENTS,
     MAL_OP_ARRAY_REST,
     MAL_OP_COPY_DATA_PROPERTIES,
+    MAL_OP_MERGE_DATA_PROPERTIES,
     MAL_OP_CALL,
+    MAL_OP_CALL_SPREAD,
     MAL_OP_CONSTRUCT,
+    MAL_OP_CONSTRUCT_SPREAD,
     MAL_OP_BINARY,
     MAL_OP_UNARY,
 } MalOpcode;
@@ -209,6 +215,28 @@ typedef struct MalInstruction {
             i32 dst, object;
         } load_prototype;
 
+        /**
+         * Spec GetIterator: iterator object and its cached next method land
+         * in two registers (the IteratorRecord).
+         */
+        struct {
+            i32 iterator_dst, next_dst, source;
+        } get_iterator;
+
+        /**
+         * Spec IteratorStep + value read: the step value and a done boolean.
+         */
+        struct {
+            i32 value_dst, done_dst, iterator, next;
+        } iterator_step;
+
+        /**
+         * Spec IteratorClose for abrupt loop exits (break/return/throw).
+         */
+        struct {
+            i32 iterator;
+        } iterator_close;
+
         struct {
             i32 dst, object, key;
         } delete_property;
@@ -253,6 +281,15 @@ typedef struct MalInstruction {
             const i32 *excluded;
         } copy_data_properties;
 
+        /**
+         * Object spread `{...src}`: merge src's own enumerable properties into
+         * the target object with CreateDataProperty semantics. nil sources are
+         * a no-op (unlike destructuring rest).
+         */
+        struct {
+            i32 target, src;
+        } merge_data_properties;
+
         struct {
             i32 dst, callee, this_value, argument_count;
             const i32 *arguments;
@@ -262,6 +299,17 @@ typedef struct MalInstruction {
             i32 dst, callee, argument_count;
             const i32 *arguments;
         } construct;
+
+        /**
+         * Calls with spread arguments take a materialized arguments array.
+         */
+        struct {
+            i32 dst, callee, this_value, arguments_array;
+        } call_spread;
+
+        struct {
+            i32 dst, callee, arguments_array;
+        } construct_spread;
 
         struct {
             i32 dst, left, right;
@@ -341,6 +389,11 @@ typedef struct MalVm {
     MalValue *globals;
     MalValue intrinsics[MAL_INTRINSIC_COUNT];
     MalCompletion completion;
+
+    /**
+     * Symbol.for registry: string key -> symbol value (inline payload).
+     */
+    MalTable *symbol_registry;
 
     struct MalVmFrame *frames;
     i32 frame_count;

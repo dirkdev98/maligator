@@ -2,6 +2,7 @@
 
 #include "builtin_iterator.h"
 #include "heap_string.h"
+#include "heap_symbol.h"
 #include "map_object.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -20,11 +21,14 @@ static MalMapObject *mal_builtin_map_this(MalVm *vm, MalValue this_value, bool w
 }
 
 /**
- * Spec CanBeHeldWeakly: objects and (pragmatically, with no registry) all
- * symbols qualify.
+ * Spec CanBeHeldWeakly: objects and non-registered symbols qualify.
  */
 static bool mal_builtin_map_can_be_held_weakly(MalValue value) {
-    return mal_value_is_object(value) || mal_value_is_symbol(value);
+    if (mal_value_is_object(value)) {
+        return true;
+    }
+
+    return mal_value_is_symbol(value) && !mal_value_to_symbol(value)->registered;
 }
 
 /**
@@ -126,6 +130,61 @@ static MalValue mal_builtin_map_construct(
 static MalValue mal_builtin_map_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     return mal_builtin_map_construct(vm, new_target, args, arg_count, MAL_INTRINSIC_MAP_PROTOTYPE, false, "Constructor Map requires 'new'");
+}
+
+static MalValue mal_builtin_map_group_by(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    (void) this_value;
+
+    if (arg_count < 2 || !mal_value_is_callable(args[1])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Callback is not a function");
+        return mal_value_new_undefined();
+    }
+
+    MalIteratorRecord record;
+    if (arg_count < 1 || !mal_vm_get_iterator(vm, args[0], &record)) {
+        return mal_value_new_undefined();
+    }
+
+    MalMapObject *result = mal_map_object_new(
+        &vm->heap,
+        MAL_HEAP_MAP_OBJECT,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE]),
+        false
+    );
+    i32 index = 0;
+    while (true) {
+        MalValue element;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &element, &done)) {
+            return mal_value_new_undefined();
+        }
+
+        if (done) {
+            return mal_value_from_map_object(result);
+        }
+
+        MalValue callback_args[] = {element, mal_value_from_i32(index)};
+        index++;
+        MalCompletion completion = mal_vm_call_value(vm, args[1], mal_value_new_undefined(), callback_args, 2);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = completion;
+            mal_vm_iterator_close(vm, &record);
+            return mal_value_new_undefined();
+        }
+
+        MalValue group = mal_map_object_get(result, completion.value);
+        if (!mal_map_object_has(result, completion.value)) {
+            group = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+            mal_map_object_set(result, completion.value, group);
+        }
+
+        MalArrayObject *group_array = mal_value_to_array_object(group);
+        mal_array_object_store(
+            group_array,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) mal_array_object_length(group_array))},
+            element
+        );
+    }
 }
 
 static MalValue mal_builtin_weak_map_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
@@ -365,6 +424,8 @@ void mal_builtin_map_install(MalVm *vm) {
         MAL_INTRINSIC_MAP_PROTOTYPE,
         "Map"
     );
+
+    mal_intrinsic_define_method(vm, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_CONSTRUCTOR]), "groupBy", mal_builtin_map_group_by);
 
     mal_intrinsic_define_method(vm, prototype, "get", mal_builtin_map_prototype_get);
     mal_intrinsic_define_method(vm, prototype, "set", mal_builtin_map_prototype_set);

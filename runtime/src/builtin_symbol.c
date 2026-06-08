@@ -63,6 +63,44 @@ static MalValue mal_builtin_symbol_prototype_value_of(MalVm *vm, MalValue this_v
     return this_value;
 }
 
+static MalValue mal_builtin_symbol_for(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    (void) this_value;
+
+    MalString *key = mal_ops_to_string(&vm->heap, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    MalKey registry_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(key)};
+
+    MalTableLookup lookup = mal_table_lookup(vm->symbol_registry, registry_key);
+    if (lookup.present) {
+        return mal_table_entry_value(vm->symbol_registry, lookup.entry);
+    }
+
+    MalSymbol *symbol = mal_symbol_new(&vm->heap, key);
+    symbol->registered = true;
+
+    void *entry = mal_table_upsert_entry(vm->symbol_registry, registry_key);
+    mal_table_entry_set_value(vm->symbol_registry, entry, mal_value_from_symbol(symbol));
+
+    return mal_value_from_symbol(symbol);
+}
+
+static MalValue mal_builtin_symbol_key_for(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    (void) this_value;
+
+    MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_symbol(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.keyFor expects a symbol");
+        return mal_value_new_undefined();
+    }
+
+    MalSymbol *symbol = mal_value_to_symbol(value);
+    if (!symbol->registered) {
+        return mal_value_new_undefined();
+    }
+
+    // Registered symbols carry their registry key as the description.
+    return mal_value_from_string(mal_symbol_description(symbol));
+}
+
 static MalValue mal_builtin_symbol_prototype_description_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) args;
     (void) arg_count;
@@ -125,8 +163,15 @@ void mal_builtin_symbol_install(MalVm *vm) {
     mal_builtin_symbol_well_known(vm, (MalObject *) constructor, MAL_INTRINSIC_SYMBOL_SPLIT, "split", "Symbol.split");
     mal_builtin_symbol_well_known(vm, (MalObject *) constructor, MAL_INTRINSIC_SYMBOL_UNSCOPABLES, "unscopables", "Symbol.unscopables");
 
+    mal_intrinsic_define_method(vm, (MalObject *) constructor, "for", mal_builtin_symbol_for);
+    mal_intrinsic_define_method(vm, (MalObject *) constructor, "keyFor", mal_builtin_symbol_key_for);
+
     mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_symbol_prototype_to_string);
     mal_intrinsic_define_method(vm, prototype, "valueOf", mal_builtin_symbol_prototype_value_of);
+
+    // Symbol.prototype[Symbol.toPrimitive] answers with the symbol itself
+    // (the spec's brand check matches valueOf).
+    mal_intrinsic_define_symbol_method(vm, prototype, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE, "[Symbol.toPrimitive]", mal_builtin_symbol_prototype_value_of);
 
     MalPropertyDesc description_desc = {
         .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,

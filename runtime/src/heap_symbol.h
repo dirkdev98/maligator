@@ -8,6 +8,12 @@ typedef struct MalString MalString;
 typedef struct MalSymbol {
     MalHeapHeader header;
     MalString *description;
+
+    /**
+     * Set for symbols created through the Symbol.for registry: keyFor
+     * answers with the description, and CanBeHeldWeakly excludes them.
+     */
+    bool registered;
 } MalSymbol;
 
 /**

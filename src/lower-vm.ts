@@ -191,6 +191,41 @@ export type VmInstruction =
 			object: number;
 	  }
 	| {
+			opcode: "GET_ITERATOR";
+			iteratorDst: number;
+			nextDst: number;
+			source: number;
+	  }
+	| {
+			opcode: "ITERATOR_STEP";
+			valueDst: number;
+			doneDst: number;
+			iterator: number;
+			next: number;
+	  }
+	| {
+			opcode: "ITERATOR_CLOSE";
+			iterator: number;
+	  }
+	| {
+			opcode: "CALL_SPREAD";
+			dst: number;
+			callee: number;
+			thisValue: number;
+			argumentsArray: number;
+	  }
+	| {
+			opcode: "CONSTRUCT_SPREAD";
+			dst: number;
+			callee: number;
+			argumentsArray: number;
+	  }
+	| {
+			opcode: "MERGE_DATA_PROPERTIES";
+			target: number;
+			src: number;
+	  }
+	| {
 			opcode: "DELETE_PROPERTY";
 			dst: number;
 			object: number;
@@ -546,6 +581,47 @@ function lowerInstructionToVmInstruction(
 				opcode: "LOAD_PROTOTYPE",
 				dst: instruction.registers[0],
 				object: instruction.registers[1],
+			};
+		case "getIterator":
+			return {
+				opcode: "GET_ITERATOR",
+				iteratorDst: instruction.registers[0],
+				nextDst: instruction.registers[1],
+				source: instruction.registers[2],
+			};
+		case "iteratorStep":
+			return {
+				opcode: "ITERATOR_STEP",
+				valueDst: instruction.registers[0],
+				doneDst: instruction.registers[1],
+				iterator: instruction.registers[2],
+				next: instruction.registers[3],
+			};
+		case "iteratorClose":
+			return {
+				opcode: "ITERATOR_CLOSE",
+				iterator: instruction.registers[0],
+			};
+		case "callSpread":
+			return {
+				opcode: "CALL_SPREAD",
+				dst: instruction.registers[0],
+				callee: instruction.registers[1],
+				thisValue: instruction.registers[2],
+				argumentsArray: instruction.registers[3],
+			};
+		case "constructSpread":
+			return {
+				opcode: "CONSTRUCT_SPREAD",
+				dst: instruction.registers[0],
+				callee: instruction.registers[1],
+				argumentsArray: instruction.registers[2],
+			};
+		case "mergeDataProperties":
+			return {
+				opcode: "MERGE_DATA_PROPERTIES",
+				target: instruction.registers[0],
+				src: instruction.registers[1],
 			};
 		case "deleteProperty":
 			return {

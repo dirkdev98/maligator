@@ -8,6 +8,7 @@
 #include "heap_string.h"
 #include "value_ops.h"
 #include "vm.h"
+#include "vm_ops.h"
 
 static MalString *mal_builtin_string_coerce(MalVm *vm, MalValue value) {
     return mal_ops_to_string(&vm->heap, value);
@@ -106,6 +107,125 @@ static MalValue mal_builtin_string_from_char_code(MalVm *vm, MalValue this_value
     MalValue result = mal_builtin_string_from_units(vm, code_units, (usize) arg_count);
     free(code_units);
     return result;
+}
+
+static MalValue mal_builtin_string_from_code_point(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    (void) this_value;
+    // Each code point expands to at most two code units.
+    c16 *code_units = malloc(sizeof(c16) * (usize) arg_count * 2);
+    usize length = 0;
+    for (i32 i = 0; i < arg_count; i++) {
+        if (mal_value_is_symbol(args[i])) {
+            free(code_units);
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol to a number");
+            return mal_value_new_undefined();
+        }
+
+        f64 raw = mal_ops_to_number(args[i]);
+        if (isnan(raw) || raw < 0 || raw > 0x10FFFF || raw != trunc(raw)) {
+            free(code_units);
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid code point");
+            return mal_value_new_undefined();
+        }
+
+        u32 code_point = (u32) raw;
+        if (code_point <= 0xFFFF) {
+            code_units[length++] = (c16) code_point;
+        } else {
+            code_point -= 0x10000;
+            code_units[length++] = (c16) (0xD800 + (code_point >> 10));
+            code_units[length++] = (c16) (0xDC00 + (code_point & 0x3FF));
+        }
+    }
+
+    MalValue result = mal_builtin_string_from_units(vm, code_units, length);
+    free(code_units);
+    return result;
+}
+
+static MalValue mal_builtin_string_raw(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    (void) this_value;
+
+    if (arg_count < 1) {
+        return mal_builtin_string_empty(vm);
+    }
+
+    // raw.length code-unit segments joined with the substitution values.
+    MalValue raw;
+    if (!mal_vm_get_property(vm, args[0], mal_intrinsic_string_key(vm, "raw"), &raw)) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue length_value;
+    if (!mal_vm_get_property(vm, raw, mal_intrinsic_string_key(vm, "length"), &length_value)) {
+        return mal_value_new_undefined();
+    }
+
+    if (mal_value_is_symbol(length_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol to a number");
+        return mal_value_new_undefined();
+    }
+
+    f64 length = mal_ops_to_number(length_value);
+    if (!(length > 0)) {
+        return mal_builtin_string_empty(vm);
+    }
+
+    MalValue result = mal_builtin_string_empty(vm);
+    for (u32 index = 0; index < (u32) length; index++) {
+        MalValue segment;
+        if (!mal_vm_get_property(vm, raw, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)}, &segment)) {
+            return mal_value_new_undefined();
+        }
+
+        if (mal_value_is_symbol(segment)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol to a string");
+            return mal_value_new_undefined();
+        }
+
+        result = mal_ops_add(&vm->heap, result, mal_value_from_string(mal_ops_to_string(&vm->heap, segment)));
+
+        if ((f64) index + 1 < length && (i32) index + 1 < arg_count) {
+            if (mal_value_is_symbol(args[index + 1])) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol to a string");
+                return mal_value_new_undefined();
+            }
+
+            result = mal_ops_add(&vm->heap, result, mal_value_from_string(mal_ops_to_string(&vm->heap, args[index + 1])));
+        }
+    }
+
+    return result;
+}
+
+static MalValue mal_builtin_string_prototype_code_point_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "String.prototype.codePointAt called on null or undefined");
+        return mal_value_new_undefined();
+    }
+
+    if (mal_value_is_symbol(this_value) || (arg_count >= 1 && mal_value_is_symbol(args[0]))) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol");
+        return mal_value_new_undefined();
+    }
+
+    MalString *string = mal_builtin_string_coerce(vm, this_value);
+    f64 position = arg_count >= 1 ? mal_ops_to_number(args[0]) : 0;
+    if (isnan(position) || position < 0 || position >= (f64) mal_string_length(string)) {
+        return mal_value_new_undefined();
+    }
+
+    const c16 *code_units = mal_string_code_units(string);
+    usize index = (usize) position;
+    c16 first = code_units[index];
+    if (first >= 0xD800 && first <= 0xDBFF && index + 1 < mal_string_length(string)) {
+        c16 second = code_units[index + 1];
+        if (second >= 0xDC00 && second <= 0xDFFF) {
+            return mal_value_from_i32(0x10000 + (((i32) first - 0xD800) << 10) + ((i32) second - 0xDC00));
+        }
+    }
+
+    return mal_value_from_i32(first);
 }
 
 static MalValue mal_builtin_string_prototype_char_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
@@ -552,9 +672,12 @@ void mal_builtin_string_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_STRING_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
     mal_intrinsic_define_method(vm, (MalObject *) constructor, "fromCharCode", mal_builtin_string_from_char_code);
+    mal_intrinsic_define_method(vm, (MalObject *) constructor, "fromCodePoint", mal_builtin_string_from_code_point);
+    mal_intrinsic_define_method(vm, (MalObject *) constructor, "raw", mal_builtin_string_raw);
 
     mal_intrinsic_define_method(vm, prototype, "charAt", mal_builtin_string_prototype_char_at);
     mal_intrinsic_define_method(vm, prototype, "charCodeAt", mal_builtin_string_prototype_char_code_at);
+    mal_intrinsic_define_method(vm, prototype, "codePointAt", mal_builtin_string_prototype_code_point_at);
     mal_intrinsic_define_method(vm, prototype, "at", mal_builtin_string_prototype_at);
     mal_intrinsic_define_method(vm, prototype, "indexOf", mal_builtin_string_prototype_index_of);
     mal_intrinsic_define_method(vm, prototype, "lastIndexOf", mal_builtin_string_prototype_last_index_of);

@@ -143,6 +143,12 @@ interface IRLoopContext {
 	kind: "loop" | "switch";
 	breakJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
 	continueJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
+
+	/**
+	 * for-of loops carry their iterator register so break and return can
+	 * emit the spec IteratorClose before leaving the loop.
+	 */
+	iteratorRegister?: number;
 }
 
 export interface IRBlock {
@@ -356,6 +362,44 @@ export type IRInstruction =
 
 			// [destination, object] — the object's [[Prototype]], null for
 			// non-objects and end-of-chain.
+			registers: [number, number];
+	  }
+	| {
+			type: "getIterator";
+
+			// [iterator_dst, next_dst, source] — spec GetIterator; the
+			// iterator object and its cached next method (the IteratorRecord).
+			registers: [number, number, number];
+	  }
+	| {
+			type: "iteratorStep";
+
+			// [value_dst, done_dst, iterator, next] — spec IteratorStep; the
+			// step value and a done boolean.
+			registers: [number, number, number, number];
+	  }
+	| {
+			type: "iteratorClose";
+
+			// [iterator] — spec IteratorClose for abrupt loop exits.
+			registers: [number];
+	  }
+	| {
+			type: "callSpread";
+
+			// [destination, callee, this, arguments_array]
+			registers: [number, number, number, number];
+	  }
+	| {
+			type: "constructSpread";
+
+			// [destination, callee, arguments_array]
+			registers: [number, number, number];
+	  }
+	| {
+			type: "mergeDataProperties";
+
+			// [target, source] — object spread {...source} into target.
 			registers: [number, number];
 	  }
 	| {
@@ -1347,6 +1391,88 @@ function compileObjectPatternTarget(
 	}
 }
 
+/**
+ * Drain an iterator into array[index++] with a step loop. The loop-carried
+ * registers survive the back edge because multi-block registers are never
+ * freed by the allocator.
+ */
+function compileIteratorDrainInto(
+	fn: IRFunction,
+	cursor: IRCursor,
+	array: number,
+	index: number,
+	one: number,
+	iteratorRegister: number,
+	nextRegister: number,
+) {
+	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block.instructions.push({
+		type: "jump",
+		blocks: [headerIdx],
+	});
+
+	const header = fn.blocks[headerIdx]!;
+	const valueRegister = nextRegisterDestination(fn);
+	const doneRegister = nextRegisterDestination(fn);
+	header.instructions.push({
+		type: "iteratorStep",
+		registers: [valueRegister, doneRegister, iteratorRegister, nextRegister],
+	});
+	const exitJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [doneRegister],
+		blocks: [-1],
+	};
+	header.instructions.push(exitJump);
+
+	const bodyIdx = fn.blocks.push({ instructions: [] }) - 1;
+	header.instructions.push({
+		type: "jump",
+		blocks: [bodyIdx],
+	});
+	const body = fn.blocks[bodyIdx]!;
+	body.instructions.push({
+		type: "storeProperty",
+		registers: [array, index, valueRegister],
+	});
+	// Increment in place: index is loop-carried.
+	body.instructions.push({
+		type: "binary",
+		registers: [index, index, one],
+		operator: "+",
+	});
+	body.instructions.push({
+		type: "jump",
+		blocks: [headerIdx],
+	});
+
+	const afterIdx = fn.blocks.push({ instructions: [] }) - 1;
+	exitJump.blocks[0] = afterIdx;
+	cursor.block = fn.blocks[afterIdx]!;
+}
+
+/**
+ * Drain the rest of an iterator into a fresh array.
+ */
+function compileIteratorRest(
+	fn: IRFunction,
+	cursor: IRCursor,
+	iteratorRegister: number,
+	nextRegister: number,
+): number {
+	const rest = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createArray",
+		registers: [rest],
+		length: 0,
+	});
+	const index = compileNumberLiteral(fn, cursor, 0);
+	const one = compileNumberLiteral(fn, cursor, 1);
+	compileIteratorDrainInto(fn, cursor, rest, index, one, iteratorRegister, nextRegister);
+
+	return rest;
+}
+
 function compileArrayPatternTarget(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -1354,41 +1480,80 @@ function compileArrayPatternTarget(
 	pattern: ESTree.ArrayPattern,
 	value: number,
 ) {
-	// Nil sources throw even when the pattern reads no elements. For other
-	// non-iterable sources this approximation reads undefined elements where
-	// the spec throws on GetIterator (TODO(iterators)).
+	// Spec-shaped: the source goes through GetIterator (nil and non-iterable
+	// values throw TypeError), elements consume steps in order.
+	const iteratorRegister = nextRegisterDestination(fn);
+	const nextRegister = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
-		type: "requireCoercible",
-		registers: [value],
+		type: "getIterator",
+		registers: [iteratorRegister, nextRegister, value],
 	});
 
-	for (let index = 0; index < pattern.elements.length; index++) {
-		const element = pattern.elements[index];
-		if (!element) {
-			// Holes only advance the element index.
-			continue;
-		}
-
-		if (element.type === "RestElement") {
-			// Rest is last by grammar.
-			const rest = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
-				type: "arrayRest",
-				registers: [rest, value],
-				startIndex: index,
-			});
+	let lastDoneRegister = -1;
+	for (const element of pattern.elements) {
+		if (element?.type === "RestElement") {
+			// Rest is last by grammar and exhausts the iterator: no close.
+			const rest = compileIteratorRest(fn, cursor, iteratorRegister, nextRegister);
 			compilePatternTarget(program, fn, cursor, element.argument, rest);
-			break;
+			return;
 		}
 
-		const key = compileNumberLiteral(fn, cursor, index);
+		// Holes consume a step without binding. An exhausted iterator steps
+		// to undefined; the extra next() calls past done are a known
+		// deviation from the spec's [[Done]] tracking (TODO(iterators)).
 		const elementValue = nextRegisterDestination(fn);
+		const doneRegister = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
-			type: "loadProperty",
-			registers: [elementValue, value, key],
+			type: "iteratorStep",
+			registers: [elementValue, doneRegister, iteratorRegister, nextRegister],
 		});
-		compilePatternTarget(program, fn, cursor, element, elementValue);
+		lastDoneRegister = doneRegister;
+
+		if (element) {
+			compilePatternTarget(program, fn, cursor, element, elementValue);
+		}
 	}
+
+	// IteratorClose when the pattern did not exhaust the iterator. With no
+	// elements the iterator is trivially unexhausted; otherwise the last
+	// step's done flag decides. Throws during element binding skip the close
+	// (TODO(iterators): spec closes on abrupt completions too).
+	if (lastDoneRegister === -1) {
+		cursor.block.instructions.push({
+			type: "iteratorClose",
+			registers: [iteratorRegister],
+		});
+		return;
+	}
+
+	const skipJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [lastDoneRegister],
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(skipJump);
+
+	const closeIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block.instructions.push({
+		type: "jump",
+		blocks: [closeIdx],
+	});
+	const joinJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	fn.blocks[closeIdx]!.instructions.push(
+		{
+			type: "iteratorClose",
+			registers: [iteratorRegister],
+		},
+		joinJump,
+	);
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	skipJump.blocks[0] = joinIdx;
+	joinJump.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
 }
 
 /**
@@ -1483,6 +1648,10 @@ function compileStatementsToBlock(
 			}
 			case "ForStatement": {
 				compileForStatement(program, fn, block, statement);
+				break;
+			}
+			case "ForOfStatement": {
+				compileForOfStatement(program, fn, block, statement);
 				break;
 			}
 			case "BreakStatement": {
@@ -1850,6 +2019,136 @@ function compileForStatement(
 	fn.loops.pop();
 }
 
+/**
+ * Compile for-of: GetIterator over the right side, a step header, and a
+ * protected binding+body region whose handler closes the iterator before
+ * rethrowing. break/return close through the loop context; continue jumps
+ * straight back to the step header (no close, per spec).
+ */
+function compileForOfStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.ForOfStatement,
+) {
+	const entryCursor: IRCursor = { block };
+	const iterable = compileExpression(program, fn, entryCursor, statement.right);
+	if (iterable === -1) {
+		return;
+	}
+
+	const iteratorRegister = nextRegisterDestination(fn);
+	const nextRegister = nextRegisterDestination(fn);
+	entryCursor.block.instructions.push({
+		type: "getIterator",
+		registers: [iteratorRegister, nextRegister, iterable],
+	});
+
+	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
+	entryCursor.block.instructions.push({
+		type: "jump",
+		blocks: [headerIdx],
+	});
+
+	const loop: IRLoopContext = {
+		kind: "loop",
+		breakJumps: [],
+		continueJumps: [],
+		iteratorRegister,
+	};
+	(fn.loops ??= []).push(loop);
+
+	const header = fn.blocks[headerIdx]!;
+	const valueRegister = nextRegisterDestination(fn);
+	const doneRegister = nextRegisterDestination(fn);
+	header.instructions.push({
+		type: "iteratorStep",
+		registers: [valueRegister, doneRegister, iteratorRegister, nextRegister],
+	});
+	const exitJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [doneRegister],
+		// Patched below, once the exit block exists.
+		blocks: [-1],
+	};
+	header.instructions.push(exitJump);
+
+	// Binding and body run inside a protected range; a throw closes the
+	// iterator and propagates. The step itself stays unprotected, as specced.
+	const bindBlock: IRBlock = { instructions: [] };
+	const bindIdx = fn.blocks.push(bindBlock) - 1;
+	header.instructions.push({
+		type: "jump",
+		blocks: [bindIdx],
+	});
+
+	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
+		type: "tryBegin",
+		// Patched below: [handler, end].
+		blocks: [-1, -1],
+	};
+	bindBlock.instructions.push(tryBegin);
+
+	const bindCursor: IRCursor = { block: bindBlock };
+	if (statement.left.type === "VariableDeclaration") {
+		const declaration = statement.left.declarations[0];
+		if (declaration) {
+			compilePatternTarget(program, fn, bindCursor, declaration.id, valueRegister);
+		}
+	} else {
+		compilePatternTarget(program, fn, bindCursor, statement.left, valueRegister);
+	}
+
+	const bodyIdx = compileStatementsToBlock(
+		program,
+		fn,
+		normalizeStatementOrBlock(statement.body),
+	);
+	bindCursor.block.instructions.push({
+		type: "jump",
+		blocks: [bodyIdx],
+	});
+
+	// The protected range ends before the back edge.
+	const bodyLastBlock = fn.blocks.at(-1)!;
+	const backIdx =
+		fn.blocks.push({
+			instructions: [{ type: "tryEnd" }, { type: "jump", blocks: [headerIdx] }],
+		}) - 1;
+	bodyLastBlock.instructions.push({
+		type: "jump",
+		blocks: [backIdx],
+	});
+	tryBegin.blocks[1] = backIdx;
+
+	// Handler: close the iterator, rethrow the original completion.
+	const handlerBlock: IRBlock = { instructions: [] };
+	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
+	const caughtRegister = nextRegisterDestination(fn);
+	handlerBlock.instructions.push({
+		type: "catch",
+		registers: [caughtRegister],
+	});
+	handlerBlock.instructions.push({
+		type: "iteratorClose",
+		registers: [iteratorRegister],
+	});
+	handlerBlock.instructions.push({
+		type: "throw",
+		registers: [caughtRegister],
+	});
+
+	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	exitJump.blocks[0] = exitIdx;
+	for (const jump of loop.breakJumps) {
+		jump.blocks[0] = exitIdx;
+	}
+	for (const jump of loop.continueJumps) {
+		jump.blocks[0] = headerIdx;
+	}
+	fn.loops.pop();
+}
+
 function compileBreakStatement(
 	fn: IRFunction,
 	block: IRBlock,
@@ -1859,6 +2158,14 @@ function compileBreakStatement(
 	if (!loop || statement.label) {
 		// TODO(loops): labeled break is not supported yet.
 		return;
+	}
+
+	if (loop.iteratorRegister !== undefined) {
+		// Breaking out of a for-of closes its iterator.
+		block.instructions.push({
+			type: "iteratorClose",
+			registers: [loop.iteratorRegister],
+		});
 	}
 
 	const jump: Extract<IRInstruction, { type: "jump" }> = {
@@ -2063,6 +2370,18 @@ function compileReturnStatement(
 		cursor,
 		statement.argument ?? { type: "Identifier", name: "undefined" },
 	);
+
+	// Returning from inside for-of loops closes their iterators, innermost
+	// first.
+	for (let i = (fn.loops?.length ?? 0) - 1; i >= 0; i--) {
+		const loop = fn.loops![i]!;
+		if (loop.iteratorRegister !== undefined) {
+			cursor.block.instructions.push({
+				type: "iteratorClose",
+				registers: [loop.iteratorRegister],
+			});
+		}
+	}
 
 	cursor.block.instructions.push({
 		type: "return",
@@ -2768,6 +3087,17 @@ function compileObjectExpression(
 	});
 
 	for (const property of objectExpression.properties) {
+		if (property.type === "SpreadElement") {
+			// Object spread copies the source's own enumerable properties into
+			// the literal under construction.
+			const source = compileExpression(program, fn, cursor, property.argument);
+			cursor.block.instructions.push({
+				type: "mergeDataProperties",
+				registers: [object, source],
+			});
+			continue;
+		}
+
 		if (property.type !== "Property") {
 			return -1;
 		}
@@ -2841,30 +3171,96 @@ function compileArrayExpression(
 	cursor: IRCursor,
 	arrayExpression: ESTree.ArrayExpression,
 ): number {
+	const hasSpread = arrayExpression.elements.some(
+		(element) => element?.type === "SpreadElement",
+	);
+
+	if (!hasSpread) {
+		const array = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createArray",
+			registers: [array],
+			length: arrayExpression.elements.length,
+		});
+
+		for (let index = 0; index < arrayExpression.elements.length; index++) {
+			const element = arrayExpression.elements[index];
+			if (!element) {
+				continue;
+			}
+
+			const key = compileNumberLiteral(fn, cursor, index);
+			const value = compileExpression(program, fn, cursor, element);
+			cursor.block.instructions.push({
+				type: "storeProperty",
+				registers: [array, key, value],
+			});
+		}
+
+		return array;
+	}
+
+	// Spread makes the element indexes dynamic: append through a running
+	// index register, spreads drain their source iterator.
 	const array = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "createArray",
 		registers: [array],
-		length: arrayExpression.elements.length,
+		length: 0,
 	});
+	const index = compileNumberLiteral(fn, cursor, 0);
+	const one = compileNumberLiteral(fn, cursor, 1);
 
-	for (let index = 0; index < arrayExpression.elements.length; index++) {
-		const element = arrayExpression.elements[index];
+	for (const element of arrayExpression.elements) {
 		if (!element) {
+			// Holes only advance the index; the final length store accounts
+			// for trailing ones.
+			cursor.block.instructions.push({
+				type: "binary",
+				registers: [index, index, one],
+				operator: "+",
+			});
 			continue;
 		}
 
 		if (element.type === "SpreadElement") {
-			return -1;
+			const source = compileExpression(program, fn, cursor, element.argument);
+			const iteratorRegister = nextRegisterDestination(fn);
+			const nextRegister = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "getIterator",
+				registers: [iteratorRegister, nextRegister, source],
+			});
+			compileIteratorDrainInto(
+				fn,
+				cursor,
+				array,
+				index,
+				one,
+				iteratorRegister,
+				nextRegister,
+			);
+			continue;
 		}
 
-		const key = compileNumberLiteral(fn, cursor, index);
 		const value = compileExpression(program, fn, cursor, element);
 		cursor.block.instructions.push({
 			type: "storeProperty",
-			registers: [array, key, value],
+			registers: [array, index, value],
+		});
+		cursor.block.instructions.push({
+			type: "binary",
+			registers: [index, index, one],
+			operator: "+",
 		});
 	}
+
+	// Trailing holes only bumped the index; sync the length field.
+	const lengthKey = compileStaticString(program, fn, cursor, "length");
+	cursor.block.instructions.push({
+		type: "storeProperty",
+		registers: [array, lengthKey, index],
+	});
 
 	return array;
 }
@@ -3011,6 +3407,61 @@ function compileStaticString(
 	return destination;
 }
 
+/**
+ * Materialize a spread-bearing argument list into an array register, plain
+ * arguments appended directly and spreads drained through their iterators.
+ */
+function compileSpreadArgumentsArray(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	args: Array<ESTree.Expression | ESTree.SpreadElement>,
+): number {
+	const array = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createArray",
+		registers: [array],
+		length: 0,
+	});
+	const index = compileNumberLiteral(fn, cursor, 0);
+	const one = compileNumberLiteral(fn, cursor, 1);
+
+	for (const arg of args) {
+		if (arg.type === "SpreadElement") {
+			const source = compileExpression(program, fn, cursor, arg.argument);
+			const iteratorRegister = nextRegisterDestination(fn);
+			const nextRegister = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "getIterator",
+				registers: [iteratorRegister, nextRegister, source],
+			});
+			compileIteratorDrainInto(
+				fn,
+				cursor,
+				array,
+				index,
+				one,
+				iteratorRegister,
+				nextRegister,
+			);
+			continue;
+		}
+
+		const value = compileExpression(program, fn, cursor, arg);
+		cursor.block.instructions.push({
+			type: "storeProperty",
+			registers: [array, index, value],
+		});
+		cursor.block.instructions.push({
+			type: "binary",
+			registers: [index, index, one],
+			operator: "+",
+		});
+	}
+
+	return array;
+}
+
 function compileCall(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -3054,6 +3505,22 @@ function compileCall(
 		);
 		thisRegister = compileUndefined(fn, cursor);
 	}
+	if (callExpression.arguments.some((arg) => arg.type === "SpreadElement")) {
+		const argumentsArray = compileSpreadArgumentsArray(
+			program,
+			fn,
+			cursor,
+			callExpression.arguments,
+		);
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "callSpread",
+			registers: [destination, callee, thisRegister, argumentsArray],
+		});
+
+		return destination;
+	}
+
 	const args = callExpression.arguments.map((arg) => {
 		if (arg.type === "SpreadElement") {
 			return -1;
@@ -3096,6 +3563,22 @@ function compileSuperCall(
 		registers: [thisRegister],
 	});
 
+	if (callExpression.arguments.some((arg) => arg.type === "SpreadElement")) {
+		const argumentsArray = compileSpreadArgumentsArray(
+			program,
+			fn,
+			cursor,
+			callExpression.arguments,
+		);
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "callSpread",
+			registers: [destination, callee, thisRegister, argumentsArray],
+		});
+
+		return destination;
+	}
+
 	const args = callExpression.arguments.map((arg) => {
 		if (arg.type === "SpreadElement") {
 			return -1;
@@ -3129,6 +3612,23 @@ function compileNewExpression(
 	}
 
 	const callee = compileExpression(program, fn, cursor, calleeNode as ESTree.Expression);
+
+	if (expression.arguments.some((arg) => arg.type === "SpreadElement")) {
+		const argumentsArray = compileSpreadArgumentsArray(
+			program,
+			fn,
+			cursor,
+			expression.arguments,
+		);
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "constructSpread",
+			registers: [destination, callee, argumentsArray],
+		});
+
+		return destination;
+	}
+
 	const args = expression.arguments.map((arg) => {
 		if (arg.type === "SpreadElement") {
 			return -1;

@@ -5,6 +5,7 @@
 #include "array_object.h"
 #include "bound_function_object.h"
 #include "builtin_array.h"
+#include "builtin_iterator.h"
 #include "function_object.h"
 #include "heap_string.h"
 #include "object_ops.h"
@@ -202,18 +203,12 @@ void mal_op_load_this(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.load_this.dst] = callable->this_value;
 }
 
-void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    MalValue callee = callable->registers[instruction->as.call.callee];
-    MalValue this_value = callable->registers[instruction->as.call.this_value];
-    i32 dst = instruction->as.call.dst;
-    i32 argument_count = instruction->as.call.argument_count;
-
-    MalValue *arguments = malloc(sizeof(MalValue) * argument_count);
-    for (i32 i = 0; i < argument_count; i++) {
-        arguments[i] = callable->registers[instruction->as.call.arguments[i]];
-    }
-
+/**
+ * Shared call dispatch: bound resolution, then script frame push or native
+ * invocation. The result register lives on the frame that was current when
+ * the dispatch started.
+ */
+static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value, const MalValue *arguments, i32 argument_count, i32 dst) {
     MalBoundResolution resolution = mal_bound_function_object_resolve(callee, this_value, arguments, argument_count, true);
 
     if (mal_value_is_function_object(resolution.callee)) {
@@ -233,8 +228,8 @@ void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
             mal_value_to_native_function_object(resolution.callee)
         );
         // The callback may push frames and realloc the frame array, which
-        // invalidates `callable`. Snapshot what we need and re-resolve the
-        // frame afterwards.
+        // invalidates any frame pointers. Snapshot what we need and
+        // re-resolve the frame afterwards.
         i32 caller_frame_index = vm->frame_count - 1;
         MalValue result = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined());
         vm->frames[caller_frame_index].registers[dst] = result;
@@ -243,20 +238,12 @@ void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
     }
 
     free(resolution.owned_args);
-    free(arguments);
 }
 
-void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    MalValue callee = callable->registers[instruction->as.construct.callee];
-    i32 dst = instruction->as.construct.dst;
-    i32 argument_count = instruction->as.construct.argument_count;
-
-    MalValue *arguments = malloc(sizeof(MalValue) * argument_count);
-    for (i32 i = 0; i < argument_count; i++) {
-        arguments[i] = callable->registers[instruction->as.construct.arguments[i]];
-    }
-
+/**
+ * Shared construct dispatch, mirroring mal_vm_call_dispatch.
+ */
+static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, const MalValue *arguments, i32 argument_count, i32 dst) {
     // The bound this is ignored when constructing.
     MalBoundResolution resolution = mal_bound_function_object_resolve(callee, mal_value_new_undefined(), arguments, argument_count, false);
 
@@ -295,6 +282,83 @@ void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
     }
 
     free(resolution.owned_args);
+}
+
+/**
+ * Materialize a spread-call arguments array into a malloc'd argument list.
+ */
+static MalValue *mal_vm_spread_arguments(MalVm *vm, MalValue array_value, i32 *count_out) {
+    *count_out = 0;
+    if (!mal_value_is_array_object(array_value)) {
+        return nullptr;
+    }
+
+    u32 length = mal_array_object_length(mal_value_to_array_object(array_value));
+    MalValue *arguments = length > 0 ? malloc(sizeof(MalValue) * length) : nullptr;
+    for (u32 i = 0; i < length; i++) {
+        arguments[i] = mal_value_new_undefined();
+        mal_builtin_array_try_get(vm, array_value, i, &arguments[i]);
+    }
+
+    *count_out = (i32) length;
+    return arguments;
+}
+
+void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue callee = callable->registers[instruction->as.call.callee];
+    MalValue this_value = callable->registers[instruction->as.call.this_value];
+    i32 dst = instruction->as.call.dst;
+    i32 argument_count = instruction->as.call.argument_count;
+
+    MalValue *arguments = malloc(sizeof(MalValue) * argument_count);
+    for (i32 i = 0; i < argument_count; i++) {
+        arguments[i] = callable->registers[instruction->as.call.arguments[i]];
+    }
+
+    mal_vm_call_dispatch(vm, callee, this_value, arguments, argument_count, dst);
+    free(arguments);
+}
+
+void mal_op_call_spread(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue callee = callable->registers[instruction->as.call_spread.callee];
+    MalValue this_value = callable->registers[instruction->as.call_spread.this_value];
+    MalValue arguments_array = callable->registers[instruction->as.call_spread.arguments_array];
+    i32 dst = instruction->as.call_spread.dst;
+
+    i32 argument_count;
+    MalValue *arguments = mal_vm_spread_arguments(vm, arguments_array, &argument_count);
+
+    mal_vm_call_dispatch(vm, callee, this_value, arguments, argument_count, dst);
+    free(arguments);
+}
+
+void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue callee = callable->registers[instruction->as.construct.callee];
+    i32 dst = instruction->as.construct.dst;
+    i32 argument_count = instruction->as.construct.argument_count;
+
+    MalValue *arguments = malloc(sizeof(MalValue) * argument_count);
+    for (i32 i = 0; i < argument_count; i++) {
+        arguments[i] = callable->registers[instruction->as.construct.arguments[i]];
+    }
+
+    mal_vm_construct_dispatch(vm, callee, arguments, argument_count, dst);
+    free(arguments);
+}
+
+void mal_op_construct_spread(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue callee = callable->registers[instruction->as.construct_spread.callee];
+    MalValue arguments_array = callable->registers[instruction->as.construct_spread.arguments_array];
+    i32 dst = instruction->as.construct_spread.dst;
+
+    i32 argument_count;
+    MalValue *arguments = mal_vm_spread_arguments(vm, arguments_array, &argument_count);
+
+    mal_vm_construct_dispatch(vm, callee, arguments, argument_count, dst);
     free(arguments);
 }
 
@@ -872,6 +936,43 @@ void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruct
     mal_property_set_value(mal_object_properties(receiver_object), key, value);
 }
 
+void mal_op_get_iterator(MalCallable *callable, MalInstruction *instruction) {
+    MalValue source = callable->registers[instruction->as.get_iterator.source];
+
+    MalIteratorRecord record;
+    if (!mal_vm_get_iterator(callable->vm, source, &record)) {
+        return;
+    }
+
+    callable->registers[instruction->as.get_iterator.iterator_dst] = record.iterator;
+    callable->registers[instruction->as.get_iterator.next_dst] = record.next_method;
+}
+
+void mal_op_iterator_step(MalCallable *callable, MalInstruction *instruction) {
+    MalIteratorRecord record = {
+        .iterator = callable->registers[instruction->as.iterator_step.iterator],
+        .next_method = callable->registers[instruction->as.iterator_step.next],
+    };
+
+    MalValue value;
+    bool done;
+    if (!mal_vm_iterator_step(callable->vm, &record, &value, &done)) {
+        return;
+    }
+
+    callable->registers[instruction->as.iterator_step.value_dst] = value;
+    callable->registers[instruction->as.iterator_step.done_dst] = mal_value_new_boolean(done);
+}
+
+void mal_op_iterator_close(MalCallable *callable, MalInstruction *instruction) {
+    MalIteratorRecord record = {
+        .iterator = callable->registers[instruction->as.iterator_close.iterator],
+        .next_method = mal_value_new_undefined(),
+    };
+
+    mal_vm_iterator_close(callable->vm, &record);
+}
+
 void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction) {
     MalValue value = callable->registers[instruction->as.load_prototype.object];
     MalValue result = mal_value_new_null();
@@ -1094,6 +1195,54 @@ void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruct
     // Other primitives carry no own enumerable properties.
 
     callable->registers[instruction->as.copy_data_properties.dst] = mal_value_from_object(copy);
+}
+
+void mal_op_merge_data_properties(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue target_value = callable->registers[instruction->as.merge_data_properties.target];
+    MalValue source = callable->registers[instruction->as.merge_data_properties.src];
+
+    // Spreading null/undefined contributes nothing.
+    if (mal_value_is_nil(source)) {
+        return;
+    }
+
+    MalObject *target = mal_value_to_object(target_value);
+
+    if (mal_value_is_string(source)) {
+        MalString *string = mal_value_to_string(source);
+        for (usize i = 0; i < mal_string_length(string); i++) {
+            MalPropertyDesc desc = mal_intrinsic_data_desc(
+                mal_value_from_string(mal_string_new_external(&vm->heap, mal_string_code_units(string) + i, 1)),
+                MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
+            );
+            mal_object_define_own(target, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &desc);
+        }
+        return;
+    }
+
+    if (!mal_value_is_object(source)) {
+        return;
+    }
+
+    MalPropertyIter iter;
+    mal_property_iter_init(&iter, mal_value_to_object(source), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
+
+    MalKey key;
+    MalPropertyDesc desc;
+    while (mal_property_iter_next(&iter, &key, &desc)) {
+        MalValue value;
+        if (!mal_vm_desc_read(vm, desc, source, &value)) {
+            return;
+        }
+
+        // CreateDataProperty: own enumerable data property, no inherited setters.
+        MalPropertyDesc data = mal_intrinsic_data_desc(
+            value,
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
+        );
+        mal_object_define_own(target, key, &data);
+    }
 }
 
 void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction) {

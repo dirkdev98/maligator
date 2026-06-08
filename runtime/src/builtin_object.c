@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include "builtin_iterator.h"
 #include "heap_string.h"
 #include "property_iter.h"
 #include "value_ops.h"
@@ -320,8 +321,18 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
         return mal_value_from_array_object(result);
     }
 
+    MalObject *object = mal_value_to_object(target);
+
+    // EnumerableOwnProperties snapshots the key list first; for value/entry
+    // collection a getter may mutate the object while we read, but only the
+    // snapshotted keys are visited (and re-checked for own-enumerability).
+    bool reads_values = collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS;
+    MalKey *keys = nullptr;
+    usize key_count = 0;
+    usize key_capacity = 0;
+
     MalPropertyIter iter;
-    mal_property_iter_init(&iter, mal_value_to_object(target), iter_kind);
+    mal_property_iter_init(&iter, object, iter_kind);
 
     u32 count = 0;
     MalKey key;
@@ -332,27 +343,51 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
             continue;
         }
 
-        MalValue element;
-        switch (collect) {
-            case MAL_BUILTIN_OBJECT_COLLECT_KEYS:
-                element = mal_builtin_object_key_to_string(vm, key);
-                break;
-            case MAL_BUILTIN_OBJECT_COLLECT_VALUES:
-                element = desc.value;
-                break;
-            case MAL_BUILTIN_OBJECT_COLLECT_ENTRIES: {
-                MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
-                mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, mal_builtin_object_key_to_string(vm, key));
-                mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, desc.value);
-                element = mal_value_from_array_object(entry);
-                break;
+        if (reads_values) {
+            // Defer value reads until the key list is fully snapshotted.
+            if (key_count == key_capacity) {
+                key_capacity = key_capacity == 0 ? 8 : key_capacity * 2;
+                keys = realloc(keys, sizeof(MalKey) * key_capacity);
             }
+            keys[key_count++] = key;
+            continue;
+        }
+
+        mal_array_object_store(
+            result,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+            mal_builtin_object_key_to_string(vm, key)
+        );
+        count++;
+    }
+
+    for (usize i = 0; i < key_count; i++) {
+        // Re-resolve: a property deleted or made non-enumerable mid-read is
+        // skipped, matching the spec's "still has the key" check.
+        MalPropertyLookup lookup = mal_object_get_own(object, keys[i]);
+        if (!lookup.present || !(lookup.desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+            continue;
+        }
+
+        MalValue value;
+        if (!mal_vm_desc_read(vm, lookup.desc, target, &value)) {
+            free(keys);
+            return mal_value_new_undefined();
+        }
+
+        MalValue element = value;
+        if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
+            MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
+            mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, mal_builtin_object_key_to_string(vm, keys[i]));
+            mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, value);
+            element = mal_value_from_array_object(entry);
         }
 
         mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)}, element);
         count++;
     }
 
+    free(keys);
     return mal_value_from_array_object(result);
 }
 
@@ -777,59 +812,88 @@ static MalValue mal_builtin_object_indexed(MalVm *vm, MalValue target, u32 index
 
 static MalValue mal_builtin_object_from_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
-    // Pragmatic: arrays are the only supported iterable.
-    if (arg_count < 1 || !mal_value_is_array_object(args[0])) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object.fromEntries requires an array of entries");
+
+    // A missing argument throws through GetIterator on undefined.
+    MalIteratorRecord record;
+    if (!mal_vm_get_iterator(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &record)) {
         return mal_value_new_undefined();
     }
 
     MalObject *result = mal_intrinsic_new_object(vm);
-    u32 length = mal_array_object_length(mal_value_to_array_object(args[0]));
-    for (u32 index = 0; index < length; index++) {
-        MalValue entry = mal_builtin_object_indexed(vm, args[0], index);
+    while (true) {
+        MalValue entry;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &entry, &done)) {
+            return mal_value_new_undefined();
+        }
+
+        if (done) {
+            return mal_value_from_object(result);
+        }
+
         if (!mal_value_is_object(entry)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator value is not an entry object");
+            mal_vm_iterator_close(vm, &record);
+            return mal_value_new_undefined();
+        }
+
+        MalValue key_value;
+        MalValue value;
+        if (!mal_vm_get_property(vm, entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, &key_value) ||
+            !mal_vm_get_property(vm, entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, &value)) {
+            mal_vm_iterator_close(vm, &record);
             return mal_value_new_undefined();
         }
 
         MalKey key;
-        if (!mal_vm_value_to_property_key(vm, mal_builtin_object_indexed(vm, entry, 0), &key)) {
+        if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+            mal_vm_iterator_close(vm, &record);
             return mal_value_new_undefined();
         }
 
-        mal_object_set(result, key, mal_builtin_object_indexed(vm, entry, 1));
+        mal_object_set(result, key, value);
     }
-
-    return mal_value_from_object(result);
 }
 
 static MalValue mal_builtin_object_group_by(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
-    // Pragmatic: arrays are the only supported iterable.
-    if (arg_count < 1 || !mal_value_is_array_object(args[0])) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object.groupBy requires an array");
-        return mal_value_new_undefined();
-    }
+
     if (arg_count < 2 || !mal_value_is_callable(args[1])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Callback is not a function");
         return mal_value_new_undefined();
     }
 
+    MalIteratorRecord record;
+    if (arg_count < 1 || !mal_vm_get_iterator(vm, args[0], &record)) {
+        return mal_value_new_undefined();
+    }
+
     // Groups live on a null-prototype object.
     MalObject *result = mal_object_new(&vm->heap, nullptr);
-    u32 length = mal_array_object_length(mal_value_to_array_object(args[0]));
-    for (u32 index = 0; index < length; index++) {
-        MalValue element = mal_builtin_object_indexed(vm, args[0], index);
+    i32 index = 0;
+    while (true) {
+        MalValue element;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &element, &done)) {
+            return mal_value_new_undefined();
+        }
 
-        MalValue callback_args[] = {element, mal_value_from_i32((i32) index)};
+        if (done) {
+            return mal_value_from_object(result);
+        }
+
+        MalValue callback_args[] = {element, mal_value_from_i32(index)};
+        index++;
         MalCompletion completion = mal_vm_call_value(vm, args[1], mal_value_new_undefined(), callback_args, 2);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
+            mal_vm_iterator_close(vm, &record);
             return mal_value_new_undefined();
         }
 
         MalKey key;
         if (!mal_vm_value_to_property_key(vm, completion.value, &key)) {
+            mal_vm_iterator_close(vm, &record);
             return mal_value_new_undefined();
         }
 
@@ -848,8 +912,6 @@ static MalValue mal_builtin_object_group_by(MalVm *vm, MalValue this_value, cons
             element
         );
     }
-
-    return mal_value_from_object(result);
 }
 
 /**

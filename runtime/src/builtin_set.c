@@ -2,6 +2,7 @@
 
 #include "builtin_iterator.h"
 #include "heap_string.h"
+#include "heap_symbol.h"
 #include "map_object.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -19,8 +20,15 @@ static MalMapObject *mal_builtin_set_this(MalVm *vm, MalValue this_value, bool w
     return mal_value_to_map_object(this_value);
 }
 
+/**
+ * Spec CanBeHeldWeakly: objects and non-registered symbols qualify.
+ */
 static bool mal_builtin_set_can_be_held_weakly(MalValue value) {
-    return mal_value_is_object(value) || mal_value_is_symbol(value);
+    if (mal_value_is_object(value)) {
+        return true;
+    }
+
+    return mal_value_is_symbol(value) && !mal_value_to_symbol(value)->registered;
 }
 
 static MalObject *mal_builtin_set_resolve_prototype(MalVm *vm, MalValue new_target, MalIntrinsic fallback_slot) {

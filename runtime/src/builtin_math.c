@@ -37,8 +37,37 @@ MAL_BUILTIN_MATH_UNARY(tan, tan(x))
 MAL_BUILTIN_MATH_UNARY(asin, asin(x))
 MAL_BUILTIN_MATH_UNARY(acos, acos(x))
 MAL_BUILTIN_MATH_UNARY(atan, atan(x))
+MAL_BUILTIN_MATH_UNARY(sinh, sinh(x))
+MAL_BUILTIN_MATH_UNARY(cosh, cosh(x))
+MAL_BUILTIN_MATH_UNARY(tanh, tanh(x))
+MAL_BUILTIN_MATH_UNARY(asinh, asinh(x))
+MAL_BUILTIN_MATH_UNARY(acosh, acosh(x))
+MAL_BUILTIN_MATH_UNARY(atanh, atanh(x))
+MAL_BUILTIN_MATH_UNARY(log1p, log1p(x))
+MAL_BUILTIN_MATH_UNARY(expm1, expm1(x))
+MAL_BUILTIN_MATH_UNARY(fround, (f64) (float) x)
 
 #undef MAL_BUILTIN_MATH_UNARY
+
+static MalValue mal_builtin_math_clz32(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    (void) vm;
+    (void) this_value;
+    f64 x = mal_builtin_math_arg(args, arg_count, 0);
+    u32 value = isfinite(x) ? (u32) (i64) x : 0;
+
+    return mal_value_from_i32(value == 0 ? 32 : __builtin_clz(value));
+}
+
+static MalValue mal_builtin_math_imul(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+    (void) vm;
+    (void) this_value;
+    f64 left = mal_builtin_math_arg(args, arg_count, 0);
+    f64 right = mal_builtin_math_arg(args, arg_count, 1);
+    u32 a = isfinite(left) ? (u32) (i64) left : 0;
+    u32 b = isfinite(right) ? (u32) (i64) right : 0;
+
+    return mal_value_from_i32((i32) (a * b));
+}
 
 static MalValue mal_builtin_math_pow(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) vm;
@@ -157,6 +186,17 @@ void mal_builtin_math_install(MalVm *vm) {
     mal_intrinsic_define_method(vm, math, "asin", mal_builtin_math_asin);
     mal_intrinsic_define_method(vm, math, "acos", mal_builtin_math_acos);
     mal_intrinsic_define_method(vm, math, "atan", mal_builtin_math_atan);
+    mal_intrinsic_define_method(vm, math, "sinh", mal_builtin_math_sinh);
+    mal_intrinsic_define_method(vm, math, "cosh", mal_builtin_math_cosh);
+    mal_intrinsic_define_method(vm, math, "tanh", mal_builtin_math_tanh);
+    mal_intrinsic_define_method(vm, math, "asinh", mal_builtin_math_asinh);
+    mal_intrinsic_define_method(vm, math, "acosh", mal_builtin_math_acosh);
+    mal_intrinsic_define_method(vm, math, "atanh", mal_builtin_math_atanh);
+    mal_intrinsic_define_method(vm, math, "log1p", mal_builtin_math_log1p);
+    mal_intrinsic_define_method(vm, math, "expm1", mal_builtin_math_expm1);
+    mal_intrinsic_define_method(vm, math, "fround", mal_builtin_math_fround);
+    mal_intrinsic_define_method(vm, math, "clz32", mal_builtin_math_clz32);
+    mal_intrinsic_define_method(vm, math, "imul", mal_builtin_math_imul);
     mal_intrinsic_define_method(vm, math, "atan2", mal_builtin_math_atan2);
     mal_intrinsic_define_method(vm, math, "pow", mal_builtin_math_pow);
     mal_intrinsic_define_method(vm, math, "hypot", mal_builtin_math_hypot);

@@ -206,11 +206,13 @@ static MalValue mal_builtin_array_this_arg(const MalValue *args, i32 arg_count) 
  * back from length, the result is clamped to [0, length].
  */
 static u32 mal_builtin_array_clamp_relative(MalValue value, f64 fallback, u32 length) {
+    // A present argument goes through ToIntegerOrInfinity (NaN -> 0,
+    // truncated toward zero); undefined keeps the caller's fallback so
+    // omitted end arguments still mean "to the end".
     f64 relative = fallback;
-    if (mal_value_is_int32(value)) {
-        relative = (f64) mal_value_to_i32(value);
-    } else if (mal_value_is_f64(value)) {
-        relative = mal_value_to_f64(value);
+    if (!mal_value_is_undefined(value)) {
+        f64 number = mal_ops_to_number(value);
+        relative = number != number ? 0 : (f64) (i64) number;
     }
 
     if (relative < 0) {
@@ -264,10 +266,72 @@ static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalVa
     return mal_value_from_array_object(array);
 }
 
+/**
+ * Apply the Array.from mapFn when present; returns false when it threw.
+ */
+static bool mal_builtin_array_from_map(MalVm *vm, MalValue map_fn, u32 index, MalValue *element) {
+    if (mal_value_is_undefined(map_fn)) {
+        return true;
+    }
+
+    MalValue mapped_args[] = {*element, mal_value_from_i32((i32) index)};
+    MalCompletion completion = mal_vm_call_value(vm, map_fn, mal_value_new_undefined(), mapped_args, 2);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        vm->completion = completion;
+        return false;
+    }
+
+    *element = completion.value;
+    return true;
+}
+
 static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
     (void) this_value;
     MalValue source = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    MalValue map_fn = arg_count >= 2 && mal_value_is_callable(args[1]) ? args[1] : mal_value_new_undefined();
+
+    MalValue map_fn = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    if (!mal_value_is_undefined(map_fn) && !mal_value_is_callable(map_fn)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Array.from mapper is not a function");
+        return mal_value_new_undefined();
+    }
+
+    // Iterables win over array-likes, per spec (arrays still take the fast
+    // indexed path below).
+    if (!mal_value_is_array_object(source) && !mal_value_is_nil(source)) {
+        MalValue method;
+        if (!mal_vm_get_property(vm, source, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &method)) {
+            return mal_value_new_undefined();
+        }
+
+        if (mal_value_is_callable(method)) {
+            MalIteratorRecord record;
+            if (!mal_vm_get_iterator(vm, source, &record)) {
+                return mal_value_new_undefined();
+            }
+
+            MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+            u32 index = 0;
+            while (true) {
+                MalValue element;
+                bool done;
+                if (!mal_vm_iterator_step(vm, &record, &element, &done)) {
+                    return mal_value_new_undefined();
+                }
+
+                if (done) {
+                    return mal_value_from_array_object(result);
+                }
+
+                if (!mal_builtin_array_from_map(vm, map_fn, index, &element)) {
+                    mal_vm_iterator_close(vm, &record);
+                    return mal_value_new_undefined();
+                }
+
+                mal_array_object_store(result, mal_builtin_array_index_key(index), element);
+                index++;
+            }
+        }
+    }
 
     u32 length = 0;
     if (mal_value_is_array_object(source)) {
@@ -974,17 +1038,21 @@ static MalValue mal_builtin_array_find_last_index(MalVm *vm, MalValue this_value
  * handling of mal_builtin_array_clamp_relative for non-number values.
  */
 static f64 mal_builtin_array_number_arg(const MalValue *args, i32 arg_count, i32 index, f64 fallback) {
-    if (index >= arg_count) {
+    if (index >= arg_count || mal_value_is_undefined(args[index])) {
         return fallback;
     }
-    if (mal_value_is_int32(args[index])) {
-        return (f64) mal_value_to_i32(args[index]);
+
+    // ToIntegerOrInfinity: NaN -> 0, infinities and out-of-range magnitudes
+    // preserved (callers clamp), else truncate toward zero.
+    f64 number = mal_ops_to_number(args[index]);
+    if (number != number) {
+        return 0;
     }
-    if (mal_value_is_f64(args[index])) {
-        return mal_value_to_f64(args[index]);
+    if (number > (f64) INT64_MAX || number < -(f64) INT64_MAX) {
+        return number;
     }
 
-    return fallback;
+    return (f64) (i64) number;
 }
 
 /**
