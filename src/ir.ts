@@ -138,9 +138,12 @@ export interface IRFunction {
 
 interface IRLoopContext {
 	/**
-	 * break targets the innermost breakable of any kind, continue only loops.
+	 * break targets the innermost breakable (loop/switch), continue the
+	 * innermost loop. "finally" entries carry no break/continue target but sit
+	 * on the same stack so that abrupt completions (return, and break/continue
+	 * in a later stage) route through enclosing finalizers in lexical order.
 	 */
-	kind: "loop" | "switch";
+	kind: "loop" | "switch" | "finally";
 	breakJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
 	continueJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
 
@@ -149,6 +152,21 @@ interface IRLoopContext {
 	 * emit the spec IteratorClose before leaving the loop.
 	 */
 	iteratorRegister?: number;
+
+	/**
+	 * For kind === "finally": jumps from each exit edge into the finalizer
+	 * entry block (patched once it exists), plus the registers carrying the
+	 * pending completion kind and value across the finalizer.
+	 */
+	finallyEntryJumps?: Array<Extract<IRInstruction, { type: "jump" }>>;
+	completionKindReg?: number;
+	completionValueReg?: number;
+
+	/**
+	 * For kind === "finally": which completion kinds actually route through, so
+	 * the epilogue only emits a dispatch arm (and out-of-line block) for those.
+	 */
+	routedKinds?: Set<number>;
 }
 
 export interface IRBlock {
@@ -2154,27 +2172,16 @@ function compileBreakStatement(
 	block: IRBlock,
 	statement: ESTree.BreakStatement,
 ) {
-	const loop = fn.loops?.at(-1);
-	if (!loop || statement.label) {
+	const target = fn.loops?.findLast(
+		(context) => context.kind === "loop" || context.kind === "switch",
+	);
+	if (!target || statement.label) {
 		// TODO(loops): labeled break is not supported yet.
 		return;
 	}
 
-	if (loop.iteratorRegister !== undefined) {
-		// Breaking out of a for-of closes its iterator.
-		block.instructions.push({
-			type: "iteratorClose",
-			registers: [loop.iteratorRegister],
-		});
-	}
-
-	const jump: Extract<IRInstruction, { type: "jump" }> = {
-		type: "jump",
-		// Patched by the enclosing loop once the exit block exists.
-		blocks: [-1],
-	};
-	block.instructions.push(jump);
-	loop.breakJumps.push(jump);
+	// Routes through any enclosing finalizers before reaching the target.
+	emitBreak(fn, block);
 }
 
 function compileContinueStatement(
@@ -2182,18 +2189,13 @@ function compileContinueStatement(
 	block: IRBlock,
 	statement: ESTree.ContinueStatement,
 ) {
-	const loop = fn.loops?.findLast((context) => context.kind === "loop");
-	if (!loop || statement.label) {
+	const target = fn.loops?.findLast((context) => context.kind === "loop");
+	if (!target || statement.label) {
 		// TODO(loops): labeled continue is not supported yet.
 		return;
 	}
 
-	const jump: Extract<IRInstruction, { type: "jump" }> = {
-		type: "jump",
-		blocks: [-1],
-	};
-	block.instructions.push(jump);
-	loop.continueJumps.push(jump);
+	emitContinue(fn, block);
 }
 
 /**
@@ -2215,17 +2217,9 @@ function compileThrowStatement(
 }
 
 /**
- * Compile a try statement into a marker-delimited protected range with the
- * handler compiled out-of-line.
- *
- * Invariant: no bare temporary register may be kept live across the tryEnd
- * marker, since the exception edge is invisible to the register allocator.
- * Values that cross the try/catch boundary go through bindings.
- *
- * TODO(finally): the finalizer is duplicated on the normal and caught exits
- *  (and runs + rethrows for catch-less try/finally). It does not run when an
- *  exception propagates out of the catch body itself, and return/break
- *  through the finalizer is not intercepted.
+ * Compile a try statement. try/catch without a finalizer keeps the simple
+ * marker-delimited handler shape; a finalizer switches to the completion-record
+ * model in compileTryFinally.
  */
 function compileTryStatement(
 	program: IntermediateProgram,
@@ -2233,10 +2227,27 @@ function compileTryStatement(
 	block: IRBlock,
 	statement: ESTree.TryStatement,
 ) {
-	const finalizerStatements = statement.finalizer
-		? normalizeStatementOrBlock(statement.finalizer)
-		: [];
+	if (statement.finalizer) {
+		compileTryFinally(program, fn, block, statement);
+	} else {
+		compileTryCatch(program, fn, block, statement);
+	}
+}
 
+/**
+ * Compile try/catch with no finalizer into a marker-delimited protected range
+ * with the handler compiled out-of-line.
+ *
+ * Invariant: no bare temporary register may be kept live across the tryEnd
+ * marker, since the exception edge is invisible to the register allocator.
+ * Values that cross the try/catch boundary go through bindings.
+ */
+function compileTryCatch(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.TryStatement,
+) {
 	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		// Patched below, once the handler and exit blocks exist.
@@ -2254,24 +2265,21 @@ function compileTryStatement(
 		blocks: [tryBlock],
 	});
 
-	// The end marker and the normal-exit finalizer copy live directly after
-	// the try body, so the protected range ends before them.
+	// The end marker lives directly after the try body, so the protected range
+	// ends before the handler.
 	const tryBodyLastBlock = fn.blocks.at(-1)!;
-	const tryExitBlock = compileStatementsToBlock(program, fn, finalizerStatements);
-	fn.blocks[tryExitBlock]!.instructions.unshift({ type: "tryEnd" });
-	tryBegin.blocks[1] = tryExitBlock;
+	const tryExit: IRBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryExitIdx = fn.blocks.push(tryExit) - 1;
+	tryBegin.blocks[1] = tryExitIdx;
 	tryBodyLastBlock.instructions.push({
 		type: "jump",
-		blocks: [tryExitBlock],
+		blocks: [tryExitIdx],
 	});
 
 	// The handler block must start with the catch instruction, which consumes
 	// the throw completion the unwinder left in place.
-	const handlerBlock: IRBlock = {
-		instructions: [],
-	};
-	const handlerBlockIdx = fn.blocks.push(handlerBlock) - 1;
-	tryBegin.blocks[0] = handlerBlockIdx;
+	const handlerBlock: IRBlock = { instructions: [] };
+	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
 
 	const caughtRegister = nextRegisterDestination(fn);
 	handlerBlock.instructions.push({
@@ -2293,26 +2301,190 @@ function compileTryStatement(
 			);
 		}
 
-		const catchBlock = compileStatementsToBlock(program, fn, [
-			...normalizeStatementOrBlock(statement.handler.body),
-			...finalizerStatements,
-		]);
+		const catchBlock = compileStatementsToBlock(
+			program,
+			fn,
+			normalizeStatementOrBlock(statement.handler.body),
+		);
 		handlerCursor.block.instructions.push({
 			type: "jump",
 			blocks: [catchBlock],
 		});
 	} else {
-		// A catch-less try/finally runs the finalizer and rethrows.
-		const finalizerBlock = compileStatementsToBlock(program, fn, finalizerStatements);
+		// try with neither catch nor finally is invalid; rethrow to be safe.
 		handlerBlock.instructions.push({
-			type: "jump",
-			blocks: [finalizerBlock],
-		});
-		fn.blocks.at(-1)!.instructions.push({
 			type: "throw",
 			registers: [caughtRegister],
 		});
 	}
+}
+
+/**
+ * Compile try { B } [catch (e) { C }] finally { F } with the finalizer
+ * compiled *once* and shared across every exit (normal, throw, return). Each
+ * exit edge sets a frame-local pending completion (kind + value registers) and
+ * jumps into the finalizer; the finalizer epilogue re-dispatches it. A throw
+ * out of the try body or the catch body both run the finalizer, and a return
+ * routes through it via emitReturn.
+ *
+ * The completion registers are written only on normal edges (the throw path
+ * rewrites them in the handler after `catch`), so nothing live crosses the
+ * exception edge; being live across multiple blocks keeps them off the
+ * register allocator's free list. return/break/continue out of the try/catch
+ * route through the finalizer via emitReturn/emitBreak/emitContinue.
+ */
+function compileTryFinally(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.TryStatement,
+) {
+	const kindReg = nextRegisterDestination(fn);
+	const valueReg = nextRegisterDestination(fn);
+	const finallyCtx: IRLoopContext = {
+		kind: "finally",
+		breakJumps: [],
+		continueJumps: [],
+		finallyEntryJumps: [],
+		completionKindReg: kindReg,
+		completionValueReg: valueReg,
+		routedKinds: new Set(),
+	};
+	const entryJumps = finallyCtx.finallyEntryJumps!;
+
+	// Set the pending completion in `target` and route it into the finalizer.
+	const routeToFinalizer = (target: IRBlock, kind: number, value?: number) =>
+		routeThroughFinalizer(target, finallyCtx, kind, value);
+
+	// --- protected try body ---
+	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
+		type: "tryBegin",
+		blocks: [-1, -1],
+	};
+	block.instructions.push(tryBegin);
+
+	fn.loops ??= [];
+	fn.loops.push(finallyCtx);
+	const tryBlock = compileStatementsToBlock(
+		program,
+		fn,
+		normalizeStatementOrBlock(statement.block),
+	);
+	block.instructions.push({ type: "jump", blocks: [tryBlock] });
+	const tryBodyLastBlock = fn.blocks.at(-1)!;
+	fn.loops.pop();
+
+	// Normal completion of the try body ends the protected range and enters the
+	// finalizer with a NORMAL completion.
+	const tryNormalExit: IRBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryNormalExitIdx = fn.blocks.push(tryNormalExit) - 1;
+	tryBegin.blocks[1] = tryNormalExitIdx;
+	tryBodyLastBlock.instructions.push({ type: "jump", blocks: [tryNormalExitIdx] });
+	routeToFinalizer(tryNormalExit, COMPLETION_NORMAL);
+
+	// --- handler for the try body ---
+	const handlerBlock: IRBlock = { instructions: [] };
+	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
+	const caughtRegister = nextRegisterDestination(fn);
+	handlerBlock.instructions.push({ type: "catch", registers: [caughtRegister] });
+
+	if (statement.handler) {
+		// Bind the catch parameter, then run the catch body in its own protected
+		// range so a throw out of it still runs the finalizer.
+		const handlerCursor: IRCursor = { block: handlerBlock };
+		if (statement.handler.param) {
+			compilePatternTarget(
+				program,
+				fn,
+				handlerCursor,
+				statement.handler.param,
+				caughtRegister,
+			);
+		}
+
+		const catchTryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
+			type: "tryBegin",
+			blocks: [-1, -1],
+		};
+		handlerCursor.block.instructions.push(catchTryBegin);
+
+		fn.loops.push(finallyCtx);
+		const catchBlock = compileStatementsToBlock(
+			program,
+			fn,
+			normalizeStatementOrBlock(statement.handler.body),
+		);
+		handlerCursor.block.instructions.push({ type: "jump", blocks: [catchBlock] });
+		const catchBodyLastBlock = fn.blocks.at(-1)!;
+		fn.loops.pop();
+
+		const catchNormalExit: IRBlock = { instructions: [{ type: "tryEnd" }] };
+		const catchNormalExitIdx = fn.blocks.push(catchNormalExit) - 1;
+		catchTryBegin.blocks[1] = catchNormalExitIdx;
+		catchBodyLastBlock.instructions.push({ type: "jump", blocks: [catchNormalExitIdx] });
+		routeToFinalizer(catchNormalExit, COMPLETION_NORMAL);
+
+		const catchHandler: IRBlock = { instructions: [] };
+		catchTryBegin.blocks[0] = fn.blocks.push(catchHandler) - 1;
+		const caught2 = nextRegisterDestination(fn);
+		catchHandler.instructions.push({ type: "catch", registers: [caught2] });
+		routeToFinalizer(catchHandler, COMPLETION_THROW, caught2);
+	} else {
+		// No catch clause: an exception in the body runs the finalizer then
+		// re-propagates.
+		routeToFinalizer(handlerBlock, COMPLETION_THROW, caughtRegister);
+	}
+
+	// --- finalizer body, compiled once with the finally context popped so its
+	// own abrupt completions route to *enclosing* finalizers and override the
+	// pending one. ---
+	const finalizerEntryIdx = compileStatementsToBlock(
+		program,
+		fn,
+		normalizeStatementOrBlock(statement.finalizer!),
+	);
+	const finalizerLastBlock = fn.blocks.at(-1)!;
+	for (const jump of entryJumps) {
+		jump.blocks[0] = finalizerEntryIdx;
+	}
+
+	// --- epilogue: re-dispatch the pending completion. One out-of-line block
+	// per abrupt kind that can actually reach this finalizer; the epilogue
+	// block itself is created last so its NORMAL fall-through reaches the code
+	// after the try (patched by compileStatementsToBlock, or returned by
+	// endFunction for a trailing try). ---
+	const routed = finallyCtx.routedKinds!;
+
+	// Each abrupt arm resumes its completion from the finalizer's position,
+	// which routes through any *enclosing* finalizers (finallyCtx is popped).
+	const dispatchBlocks: Array<{ kind: number; idx: number }> = [];
+	const addArm = (kind: number, fill: (block: IRBlock) => void) => {
+		if (!routed.has(kind)) {
+			return;
+		}
+		const armBlock: IRBlock = { instructions: [] };
+		const idx = fn.blocks.push(armBlock) - 1;
+		fill(armBlock);
+		dispatchBlocks.push({ kind, idx });
+	};
+
+	addArm(COMPLETION_THROW, (b) => b.instructions.push({ type: "throw", registers: [valueReg] }));
+	addArm(COMPLETION_RETURN, (b) => emitReturn(fn, b, valueReg));
+	addArm(COMPLETION_BREAK, (b) => emitBreak(fn, b));
+	addArm(COMPLETION_CONTINUE, (b) => emitContinue(fn, b));
+
+	const epilogue: IRBlock = { instructions: [] };
+	const epilogueIdx = fn.blocks.push(epilogue) - 1;
+	finalizerLastBlock.instructions.push({ type: "jump", blocks: [epilogueIdx] });
+
+	for (const { kind, idx } of dispatchBlocks) {
+		const constReg = nextRegisterDestination(fn);
+		const matchReg = nextRegisterDestination(fn);
+		epilogue.instructions.push({ type: "createNumber", registers: [constReg], value: kind });
+		epilogue.instructions.push({ type: "binary", registers: [matchReg, kindReg, constReg], operator: "===" });
+		epilogue.instructions.push({ type: "jumpIf", registers: [matchReg], blocks: [idx] });
+	}
+	// Fall through: NORMAL completion continues after the try.
 }
 
 /**
@@ -2355,6 +2527,138 @@ function compileIfStatement(
 }
 
 /**
+ * Pending-completion kind codes carried through a finalizer (see emitReturn /
+ * compileTryFinally). NORMAL falls through to the code after the try; the
+ * abrupt kinds are re-dispatched at the finalizer epilogue.
+ */
+const COMPLETION_NORMAL = 0;
+const COMPLETION_RETURN = 1;
+const COMPLETION_THROW = 2;
+const COMPLETION_BREAK = 3;
+const COMPLETION_CONTINUE = 4;
+
+/**
+ * Set a finalizer's pending completion and jump into it. The kind is recorded
+ * so the epilogue only emits a dispatch arm for completions that can reach it.
+ */
+function routeThroughFinalizer(
+	block: IRBlock,
+	scope: IRLoopContext,
+	kind: number,
+	valueRegister?: number,
+) {
+	block.instructions.push({
+		type: "createNumber",
+		registers: [scope.completionKindReg!],
+		value: kind,
+	});
+	if (valueRegister !== undefined) {
+		block.instructions.push({
+			type: "move",
+			registers: [scope.completionValueReg!, valueRegister],
+		});
+	}
+	const jump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	block.instructions.push(jump);
+	scope.finallyEntryJumps!.push(jump);
+	scope.routedKinds!.add(kind);
+}
+
+/**
+ * Emit a return, routing it through any enclosing finalizers and closing
+ * for-of iterators on the way out, innermost first. The innermost finalizer
+ * takes over the return: its epilogue resumes the walk from its own position
+ * once the finally body has run.
+ */
+function emitReturn(fn: IRFunction, block: IRBlock, valueRegister: number) {
+	const scopes = fn.loops ?? [];
+	for (let i = scopes.length - 1; i >= 0; i--) {
+		const scope = scopes[i]!;
+
+		if (scope.kind === "finally") {
+			routeThroughFinalizer(block, scope, COMPLETION_RETURN, valueRegister);
+			return;
+		}
+
+		if (scope.iteratorRegister !== undefined) {
+			block.instructions.push({
+				type: "iteratorClose",
+				registers: [scope.iteratorRegister],
+			});
+		}
+	}
+
+	block.instructions.push({
+		type: "return",
+		registers: [valueRegister],
+	});
+}
+
+/**
+ * Emit a break, routing through any enclosing finalizers first (innermost
+ * first); the innermost breakable loop/switch is the target. Breaking out of a
+ * for-of closes its iterator.
+ */
+function emitBreak(fn: IRFunction, block: IRBlock) {
+	const scopes = fn.loops ?? [];
+	for (let i = scopes.length - 1; i >= 0; i--) {
+		const scope = scopes[i]!;
+
+		if (scope.kind === "finally") {
+			routeThroughFinalizer(block, scope, COMPLETION_BREAK);
+			return;
+		}
+
+		// The first breakable scope is the target.
+		if (scope.iteratorRegister !== undefined) {
+			block.instructions.push({
+				type: "iteratorClose",
+				registers: [scope.iteratorRegister],
+			});
+		}
+		const jump: Extract<IRInstruction, { type: "jump" }> = {
+			type: "jump",
+			blocks: [-1],
+		};
+		block.instructions.push(jump);
+		scope.breakJumps.push(jump);
+		return;
+	}
+}
+
+/**
+ * Emit a continue, routing through any enclosing finalizers first; the target
+ * is the innermost loop (switches are skipped). continue does not close a
+ * for-of iterator — it re-steps it from the loop header.
+ */
+function emitContinue(fn: IRFunction, block: IRBlock) {
+	const scopes = fn.loops ?? [];
+	for (let i = scopes.length - 1; i >= 0; i--) {
+		const scope = scopes[i]!;
+
+		if (scope.kind === "finally") {
+			routeThroughFinalizer(block, scope, COMPLETION_CONTINUE);
+			return;
+		}
+
+		if (scope.kind === "switch") {
+			continue;
+		}
+
+		const jump: Extract<IRInstruction, { type: "jump" }> = {
+			type: "jump",
+			blocks: [-1],
+		};
+		block.instructions.push(jump);
+		scope.continueJumps.push(jump);
+		return;
+	}
+}
+
+/**
  * Naively compile a return statement.
  */
 function compileReturnStatement(
@@ -2371,22 +2675,7 @@ function compileReturnStatement(
 		statement.argument ?? { type: "Identifier", name: "undefined" },
 	);
 
-	// Returning from inside for-of loops closes their iterators, innermost
-	// first.
-	for (let i = (fn.loops?.length ?? 0) - 1; i >= 0; i--) {
-		const loop = fn.loops![i]!;
-		if (loop.iteratorRegister !== undefined) {
-			cursor.block.instructions.push({
-				type: "iteratorClose",
-				registers: [loop.iteratorRegister],
-			});
-		}
-	}
-
-	cursor.block.instructions.push({
-		type: "return",
-		registers: [returnRegister],
-	});
+	emitReturn(fn, cursor.block, returnRegister);
 }
 
 /**
