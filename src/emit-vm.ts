@@ -66,6 +66,9 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 		const fn = definition.functions[i]!;
 		lines.push("    {");
 		lines.push(`        .name_string_index = ${fn.nameStringIndex},`);
+		lines.push(
+			`        .kind = ${fn.isGenerator ? "MAL_FUNCTION_KIND_GENERATOR" : "MAL_FUNCTION_KIND_NORMAL"},`,
+		);
 		lines.push(`        .parameter_count = ${fn.parameterCount},`);
 		lines.push(`        .length = ${fn.length},`);
 		lines.push(`        .register_count = ${fn.registerCount},`);
@@ -143,6 +146,10 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_TRY_BEGIN }`;
 		case "TRY_END":
 			return `{ .opcode = MAL_OP_TRY_END }`;
+		case "GENERATOR_START":
+			return `{ .opcode = MAL_OP_GENERATOR_START }`;
+		case "YIELD":
+			return `{ .opcode = MAL_OP_YIELD, .as.yield = { .yielded_src = ${instruction.yieldedSrc}, .value_dst = ${instruction.valueDst}, .mode_dst = ${instruction.modeDst} } }`;
 		case "LOAD_CAPTURED":
 			return `{ .opcode = MAL_OP_LOAD_CAPTURED, .as.load_captured = { .dst = ${instruction.dst}, .owner_function_index = ${instruction.ownerFunctionIndex}, .index = ${instruction.index} } }`;
 		case "LOAD_GLOBAL":

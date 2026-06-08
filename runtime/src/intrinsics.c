@@ -7,6 +7,7 @@
 #include "builtin_console.h"
 #include "builtin_error.h"
 #include "builtin_function.h"
+#include "builtin_generator.h"
 #include "builtin_iterator.h"
 #include "builtin_json.h"
 #include "builtin_map.h"
@@ -156,6 +157,7 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_symbol_install(vm);
     mal_builtin_function_install(vm);
     mal_builtin_iterator_install(vm);
+    mal_builtin_generator_install(vm);
     mal_builtin_array_install(vm);
     mal_builtin_map_install(vm);
     mal_builtin_set_install(vm);

@@ -146,7 +146,8 @@ bool mal_value_is_object(MalValue value) {
         type == MAL_HEAP_ARRAY_OBJECT ||
         type == MAL_HEAP_MAP_OBJECT ||
         type == MAL_HEAP_SET_OBJECT ||
-        type == MAL_HEAP_ITERATOR_OBJECT;
+        type == MAL_HEAP_ITERATOR_OBJECT ||
+        type == MAL_HEAP_GENERATOR_OBJECT;
 }
 
 bool mal_value_is_function_object(MalValue value) {
@@ -175,6 +176,10 @@ bool mal_value_is_set_object(MalValue value) {
 
 bool mal_value_is_iterator_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_ITERATOR_OBJECT);
+}
+
+bool mal_value_is_generator_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_GENERATOR_OBJECT);
 }
 
 bool mal_value_is_callable(MalValue value) {

@@ -147,9 +147,16 @@ void mal_op_create_null(MalCallable *callable, MalInstruction *instruction) {
 }
 
 void mal_op_create_function(MalCallable *callable, MalInstruction *instruction) {
+    // Generator function objects inherit %GeneratorFunction.prototype%.
+    i32 function_index = instruction->as.create_function.function_index;
+    MalIntrinsic prototype_slot =
+        callable->vm->definition->functions[function_index].kind == MAL_FUNCTION_KIND_GENERATOR
+            ? MAL_INTRINSIC_GENERATOR_FUNCTION_PROTOTYPE
+            : MAL_INTRINSIC_FUNCTION_PROTOTYPE;
+
     MalFunctionObject *function = mal_function_object_new(
         &callable->vm->heap,
-        mal_value_to_object(callable->vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_value_to_object(callable->vm->intrinsics[prototype_slot]),
         instruction->as.create_function.function_index
     );
     function->creation_env = callable->env;
@@ -223,6 +230,7 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
             dst,
             vm->frame_count - 1
         );
+        vm->frames[vm->frame_count - 1].callee = resolution.callee;
     } else if (mal_value_is_native_function_object(resolution.callee)) {
         MalNativeFunctionCallback callback = mal_native_function_object_callback(
             mal_value_to_native_function_object(resolution.callee)
@@ -248,6 +256,14 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, const MalValue
     MalBoundResolution resolution = mal_bound_function_object_resolve(callee, mal_value_new_undefined(), arguments, argument_count, false);
 
     if (mal_value_is_function_object(resolution.callee)) {
+        i32 callee_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
+        if (vm->definition->functions[callee_index].kind != MAL_FUNCTION_KIND_NORMAL) {
+            // Generators (and other non-normal kinds) are not constructors.
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
+            free(resolution.owned_args);
+            return;
+        }
+
         // Create this from the callee's prototype property.
         MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
         MalValue prototype_value = mal_vm_function_prototype(vm, resolution.callee);
@@ -582,8 +598,22 @@ static bool mal_vm_key_is_prototype(MalKey key) {
 }
 
 /**
- * Script functions get their prototype property created lazily on first use,
- * with the spec-mandated constructor back reference.
+ * Whether a function object is a generator (its definition's kind).
+ */
+static bool mal_vm_function_is_generator(MalVm *vm, MalValue function_value) {
+    if (!mal_value_is_function_object(function_value)) {
+        return false;
+    }
+
+    i32 index = mal_function_object_function_index(mal_value_to_function_object(function_value));
+    return vm->definition->functions[index].kind == MAL_FUNCTION_KIND_GENERATOR;
+}
+
+/**
+ * Script functions get their prototype property created lazily on first use.
+ * Ordinary functions get the spec-mandated constructor back reference and an
+ * %Object.prototype%-backed object; generator functions get a
+ * %GeneratorPrototype%-backed object with no constructor.
  */
 static MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
     MalObject *function = mal_value_to_object(function_value);
@@ -594,8 +624,14 @@ static MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
         return lookup.desc.value;
     }
 
-    MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
-    mal_intrinsic_define_data(vm, prototype, "constructor", function_value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    bool is_generator = mal_vm_function_is_generator(vm, function_value);
+    MalObject *parent = mal_value_to_object(
+        vm->intrinsics[is_generator ? MAL_INTRINSIC_GENERATOR_PROTOTYPE : MAL_INTRINSIC_OBJECT_PROTOTYPE]
+    );
+    MalObject *prototype = mal_object_new(&vm->heap, parent);
+    if (!is_generator) {
+        mal_intrinsic_define_data(vm, prototype, "constructor", function_value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    }
 
     MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_from_object(prototype), MAL_PROPERTY_WRITABLE);
     mal_object_define_own(function, key, &desc);

@@ -5,6 +5,7 @@
 
 #include "bound_function_object.h"
 #include "function_object.h"
+#include "generator_object.h"
 #include "heap_string.h"
 #include "intrinsics.h"
 #include "value_ops.h"
@@ -59,6 +60,8 @@ MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
     callable->argument_count = 0;
     callable->this_value = mal_value_new_undefined();
     callable->arguments_object = mal_value_new_undefined();
+    callable->callee = mal_value_new_undefined();
+    callable->generator = nullptr;
     callable->is_construct = false;
     callable->instruction_pointer = 0;
     callable->return_register = -1;
@@ -111,6 +114,8 @@ void mal_vm_push_function_frame(
     frame->argument_count = arg_count;
     frame->this_value = this_value;
     frame->arguments_object = mal_value_new_undefined();
+    frame->callee = mal_value_new_undefined();
+    frame->generator = nullptr;
     frame->is_construct = false;
     frame->instruction_pointer = 0;
     frame->return_register = return_register;
@@ -263,6 +268,60 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_ITERATOR_CLOSE:
                 mal_op_iterator_close(frame, &instruction);
                 break;
+
+            case MAL_OP_GENERATOR_START: {
+                // The parameter prologue has run; capture this activation into a
+                // generator object, suspend it, and hand the generator back to
+                // the caller like a return. The instance inherits the generator
+                // function's own .prototype (which inherits %GeneratorPrototype%).
+                MalObject *generator_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GENERATOR_PROTOTYPE]);
+                MalValue prototype_value;
+                if (mal_value_is_object(frame->callee) &&
+                    mal_vm_get_property(vm, frame->callee, mal_intrinsic_string_key(vm, "prototype"), &prototype_value) &&
+                    mal_value_is_object(prototype_value)) {
+                    generator_prototype = mal_value_to_object(prototype_value);
+                }
+
+                MalGeneratorObject *generator = mal_generator_object_new(&vm->heap, generator_prototype);
+
+                i32 return_register = frame->return_register;
+                i32 caller_frame_index = frame->caller_frame_index;
+
+                generator->frame = *frame;
+                generator->frame.generator = generator;
+                generator->frame.return_register = -1;
+                generator->frame.caller_frame_index = -1;
+                generator->state = MAL_GENERATOR_SUSPENDED_START;
+
+                // Pop without freeing: the storage now belongs to the generator.
+                vm->frame_count--;
+
+                MalValue generator_value = mal_value_from_object((MalObject *) generator);
+                if (caller_frame_index >= 0) {
+                    vm->frames[caller_frame_index].registers[return_register] = generator_value;
+                }
+                vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = generator_value};
+                break;
+            }
+
+            case MAL_OP_YIELD: {
+                // Suspend the generator frame, leaving the yielded value on the
+                // generator and recording where the resume value/mode land. The
+                // instruction pointer was already advanced past the yield, so a
+                // resume continues with the dispatch that follows it.
+                MalGeneratorObject *generator = frame->generator;
+                generator->yielded_value = frame->registers[instruction.as.yield.yielded_src];
+                generator->resume_value_register = instruction.as.yield.value_dst;
+                generator->resume_mode_register = instruction.as.yield.mode_dst;
+                generator->state = MAL_GENERATOR_SUSPENDED_YIELD;
+
+                generator->frame = *frame;
+
+                // Pop without freeing: the storage belongs to the generator.
+                vm->frame_count--;
+                vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+                break;
+            }
             case MAL_OP_DELETE_PROPERTY:
                 mal_op_delete_property(frame, &instruction);
                 break;
@@ -327,6 +386,14 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 MalValue return_value = frame->registers[instruction.as.ret.value];
                 if (frame->is_construct && !mal_value_is_object(return_value)) {
                     return_value = frame->this_value;
+                }
+
+                // A generator body returning completes the generator. Its
+                // storage is freed here; the return value travels to the
+                // resume caller via the NORMAL completion below (the frame was
+                // reattached with no caller register).
+                if (frame->generator != nullptr) {
+                    frame->generator->state = MAL_GENERATOR_COMPLETED;
                 }
 
                 i32 return_register = frame->return_register;
@@ -426,6 +493,42 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
     }
 }
 
+void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue sent_value, i32 resume_mode) {
+    if (vm->frame_count == vm->frame_capacity) {
+        vm->frame_capacity = vm->frame_capacity == 0 ? 8 : vm->frame_capacity * 2;
+        vm->frames = realloc(vm->frames, sizeof(MalVmFrame) * vm->frame_capacity);
+    }
+
+    i32 target_frame_count = vm->frame_count;
+    MalVmFrame *frame = &vm->frames[vm->frame_count++];
+    *frame = generator->frame;
+    frame->vm = vm;
+    frame->generator = generator;
+    frame->return_register = -1;
+    frame->caller_frame_index = -1;
+
+    // Deliver the sent value and resume mode to the suspended yield expression,
+    // which the compiler-emitted dispatch following the yield consults. (A
+    // suspended-start resume has no recorded registers and ignores both.)
+    if (generator->resume_value_register >= 0) {
+        frame->registers[generator->resume_value_register] = sent_value;
+    }
+    if (generator->resume_mode_register >= 0) {
+        frame->registers[generator->resume_mode_register] = mal_value_from_i32(resume_mode);
+    }
+
+    generator->state = MAL_GENERATOR_EXECUTING;
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+
+    mal_vm_run_until_frame_count(vm, target_frame_count);
+
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        // The body threw past its own handlers; the run loop already popped and
+        // freed the frame, so the generator is finished.
+        generator->state = MAL_GENERATOR_COMPLETED;
+    }
+}
+
 MalCompletion mal_vm_call_value(
     MalVm *vm,
     MalValue callee,
@@ -460,6 +563,7 @@ MalCompletion mal_vm_call_value(
             -1,
             -1
         );
+        vm->frames[vm->frame_count - 1].callee = resolution.callee;
         mal_vm_run_until_frame_count(vm, target_frame_count);
         completion = vm->completion;
     }

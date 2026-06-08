@@ -28,6 +28,7 @@ export interface VmExceptionHandler {
  */
 export interface VmFunction {
 	nameStringIndex: number;
+	isGenerator: boolean;
 	parameterCount: number;
 	length: number;
 	registerCount: number;
@@ -138,6 +139,15 @@ export type VmInstruction =
 	  }
 	| {
 			opcode: "TRY_END";
+	  }
+	| {
+			opcode: "GENERATOR_START";
+	  }
+	| {
+			opcode: "YIELD";
+			yieldedSrc: number;
+			valueDst: number;
+			modeDst: number;
 	  }
 	| {
 			opcode: "LOAD_INTRINSIC";
@@ -327,6 +337,7 @@ function lowerFunctionToVmFunction(fn: IRFunction): VmFunction {
 
 	return {
 		nameStringIndex: fn.nameStringIndex,
+		isGenerator: fn.isGenerator ?? false,
 		parameterCount: fn.parameterCount,
 		length: fn.length,
 		registerCount: fn.nextRegisterDestination,
@@ -515,6 +526,17 @@ function lowerInstructionToVmInstruction(
 		case "tryEnd":
 			return {
 				opcode: "TRY_END",
+			};
+		case "generatorStart":
+			return {
+				opcode: "GENERATOR_START",
+			};
+		case "yield":
+			return {
+				opcode: "YIELD",
+				valueDst: instruction.registers[0],
+				modeDst: instruction.registers[1],
+				yieldedSrc: instruction.registers[2],
 			};
 		case "loadIntrinsic":
 			return {

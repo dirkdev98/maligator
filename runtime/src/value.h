@@ -236,6 +236,11 @@ bool mal_value_is_set_object(MalValue value);
 bool mal_value_is_iterator_object(MalValue value);
 
 /**
+ * Check if the value is a generator instance.
+ */
+bool mal_value_is_generator_object(MalValue value);
+
+/**
  * Check if the value is callable.
  */
 bool mal_value_is_callable(MalValue value);

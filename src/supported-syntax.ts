@@ -12,7 +12,6 @@ const unsupportedNodeTypes = new Map<string, string>([
 	["LabeledStatement", "labeled statement"],
 	["WithStatement", "with"],
 	["AwaitExpression", "async function"],
-	["YieldExpression", "generator function"],
 	["TaggedTemplateExpression", "tagged template"],
 	["SequenceExpression", "sequence expression"],
 	["ChainExpression", "optional chaining"],
@@ -112,13 +111,11 @@ function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
 		unsupported.add("for-await-of");
 	}
 
+
 	switch (node.type) {
 		case "FunctionDeclaration":
 		case "FunctionExpression":
 		case "ArrowFunctionExpression": {
-			if (node.generator) {
-				unsupported.add("generator function");
-			}
 			if (node.async) {
 				unsupported.add("async function");
 			}

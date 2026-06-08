@@ -37,6 +37,8 @@ typedef enum MalOpcode {
     MAL_OP_GET_ITERATOR,
     MAL_OP_ITERATOR_STEP,
     MAL_OP_ITERATOR_CLOSE,
+    MAL_OP_GENERATOR_START,
+    MAL_OP_YIELD,
     MAL_OP_DELETE_PROPERTY,
     MAL_OP_DEFINE_ACCESSOR,
     MAL_OP_DEFINE_PROPERTY,
@@ -237,6 +239,16 @@ typedef struct MalInstruction {
             i32 iterator;
         } iterator_close;
 
+        /**
+         * yield <src>: suspend the generator frame, leaving src as the yielded
+         * value. On resume, the sent value lands in value_dst and the resume
+         * mode (next / throw / return) in mode_dst, which the compiler-emitted
+         * dispatch following the yield consults.
+         */
+        struct {
+            i32 yielded_src, value_dst, mode_dst;
+        } yield;
+
         struct {
             i32 dst, object, key;
         } delete_property;
@@ -333,8 +345,19 @@ typedef struct MalExceptionHandler {
     i32 handler_ip;
 } MalExceptionHandler;
 
+/**
+ * Calling a generator function runs its parameter prologue eagerly, then the
+ * MAL_OP_GENERATOR_START prologue instruction suspends and returns a generator
+ * object instead of running the body.
+ */
+typedef enum MalFunctionKind {
+    MAL_FUNCTION_KIND_NORMAL,
+    MAL_FUNCTION_KIND_GENERATOR,
+} MalFunctionKind;
+
 typedef struct MalFunction {
     i32 name_string_index;
+    MalFunctionKind kind;
     i32 parameter_count;
 
     /**
@@ -400,6 +423,8 @@ typedef struct MalVm {
     i32 frame_capacity;
 } MalVm;
 
+typedef struct MalGeneratorObject MalGeneratorObject;
+
 typedef struct MalVmFrame {
     MalVm *vm;
     const MalFunction *function;
@@ -408,6 +433,20 @@ typedef struct MalVmFrame {
     i32 argument_count;
     MalValue this_value;
     MalValue arguments_object;
+
+    /**
+     * The function object that was called to push this frame (undefined for the
+     * top-level frame). GENERATOR_START reads its .prototype for the generator
+     * instance's [[Prototype]].
+     */
+    MalValue callee;
+
+    /**
+     * Non-null for a generator activation: the generator object that owns this
+     * frame's storage. RETURN consults it to mark the generator completed
+     * rather than freeing into a caller register.
+     */
+    MalGeneratorObject *generator;
 
     /**
      * Own captured-slot node when the function has captured slots, otherwise
@@ -447,6 +486,16 @@ void mal_vm_push_function_frame(
 );
 
 void mal_vm_run(MalVm *vm, MalCallable *callable);
+
+/**
+ * Resume a suspended generator: reattach its frame, deliver the sent value to
+ * the pending yield's resume register, and run until it yields, returns, or
+ * throws. Afterwards the generator state distinguishes a yield (SUSPENDED_YIELD,
+ * with yielded_value set) from completion (COMPLETED, with the return value in
+ * vm->completion.value); a throw leaves vm->completion as THROW and marks the
+ * generator COMPLETED.
+ */
+void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue sent_value, i32 resume_mode);
 
 MalCompletion mal_vm_call_value(
     MalVm *vm,

@@ -102,6 +102,12 @@ export interface IRFunction {
 	classContext?: IRClassContext;
 
 	/**
+	 * Generator functions get a GENERATOR_START prologue instruction (after the
+	 * parameter prologue) and may contain yield expressions.
+	 */
+	isGenerator?: boolean;
+
+	/**
 	 * Expected number of initial register values. Before evaluating the arguments and assigning
 	 * them to (destructured) arguments.
 	 */
@@ -401,6 +407,19 @@ export type IRInstruction =
 
 			// [iterator] — spec IteratorClose for abrupt loop exits.
 			registers: [number];
+	  }
+	| {
+			// Generator prologue: suspend the activation and return a generator
+			// object to the caller. No operands; uses the frame's return target.
+			type: "generatorStart";
+	  }
+	| {
+			type: "yield";
+
+			// [valueDst, modeDst, yieldedSrc] — yieldedSrc is handed out; on
+			// resume the sent value lands in valueDst and the resume mode code in
+			// modeDst.
+			registers: [number, number, number];
 	  }
 	| {
 			type: "callSpread";
@@ -764,6 +783,7 @@ function compileNewFunction(
 			("id" in functionNode ? functionNode.id?.name : undefined) ?? binding.name,
 		),
 		blocks: [],
+		isGenerator: functionNode.type !== "ArrowFunctionExpression" && functionNode.generator,
 
 		parameterCount: functionNode.params.length,
 		length: computeFunctionLength(functionNode),
@@ -793,6 +813,12 @@ function compileNewFunction(
 		blocks: [bodyBlock],
 	});
 
+	// The prologue runs after parameter setup (so defaults eval eagerly at call
+	// time) and suspends, returning the generator object.
+	if (fn.isGenerator) {
+		fn.blocks[bodyBlock]!.instructions.unshift({ type: "generatorStart" });
+	}
+
 	endFunction(fn);
 
 	return fn.functionIndex;
@@ -820,6 +846,7 @@ function compileNewFunctionExpression(
 		),
 		blocks: [],
 		classContext,
+		isGenerator: functionNode.type !== "ArrowFunctionExpression" && functionNode.generator,
 
 		parameterCount: functionNode.params.length,
 		length: computeFunctionLength(functionNode),
@@ -848,6 +875,11 @@ function compileNewFunctionExpression(
 		type: "jump",
 		blocks: [bodyBlock],
 	});
+
+	if (compiledFn.isGenerator) {
+		compiledFn.blocks[bodyBlock]!.instructions.unshift({ type: "generatorStart" });
+	}
+
 	endFunction(compiledFn);
 
 	return compiledFn.functionIndex;
@@ -2724,6 +2756,222 @@ function compileVariableDeclaration(
  * nameHint carries the NamedEvaluation name for anonymous function and class
  * expressions: the binding or property name the value is assigned to.
  */
+/**
+ * Resume mode codes written by the runtime into a yield's mode register and
+ * matched by the dispatch below. Must stay in sync with MalGeneratorResumeMode
+ * (NEXT = 0 is the fall-through and needs no comparison).
+ */
+const RESUME_MODE_THROW = 1;
+const RESUME_MODE_RETURN = 2;
+
+/**
+ * Compile yield* delegation. Desugars to the spec delegation loop: get the
+ * operand's iterator, then repeatedly advance it according to how the *outer*
+ * generator was resumed — next() forwards to the cached next, throw()/return()
+ * forward to the inner iterator's throw/return (looked up per use). Each inner
+ * value is yielded back out; the inner's final value becomes the yield*
+ * expression value. A return() resumption that finishes the inner returns from
+ * the outer generator; a throw() with no inner throw method closes the inner
+ * and throws a TypeError.
+ */
+function compileYieldStarExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	expression: ESTree.YieldExpression,
+) {
+	const operand = compileExpression(program, fn, cursor, expression.argument!);
+
+	// Loop-carried registers (kept alive across the back edge by the
+	// >1-block freeing guard in the allocator).
+	const iterator = nextRegisterDestination(fn);
+	const nextMethod = nextRegisterDestination(fn);
+	const sentValue = nextRegisterDestination(fn);
+	const mode = nextRegisterDestination(fn);
+	const result = nextRegisterDestination(fn);
+	const exprResult = nextRegisterDestination(fn);
+
+	cursor.block.instructions.push({ type: "getIterator", registers: [iterator, nextMethod, operand] });
+	cursor.block.instructions.push({ type: "createUndefined", registers: [sentValue] });
+	cursor.block.instructions.push({ type: "createNumber", registers: [mode], value: 0 });
+
+	const header: IRBlock = { instructions: [] };
+	const headerIdx = fn.blocks.push(header) - 1;
+	const nextMode: IRBlock = { instructions: [] };
+	const nextModeIdx = fn.blocks.push(nextMode) - 1;
+	const throwMode: IRBlock = { instructions: [] };
+	const throwModeIdx = fn.blocks.push(throwMode) - 1;
+	const noThrow: IRBlock = { instructions: [] };
+	const noThrowIdx = fn.blocks.push(noThrow) - 1;
+	const returnMode: IRBlock = { instructions: [] };
+	const returnModeIdx = fn.blocks.push(returnMode) - 1;
+	const noReturn: IRBlock = { instructions: [] };
+	const noReturnIdx = fn.blocks.push(noReturn) - 1;
+	const check: IRBlock = { instructions: [] };
+	const checkIdx = fn.blocks.push(check) - 1;
+	const doneBlock: IRBlock = { instructions: [] };
+	const doneIdx = fn.blocks.push(doneBlock) - 1;
+	const doneReturn: IRBlock = { instructions: [] };
+	const doneReturnIdx = fn.blocks.push(doneReturn) - 1;
+	const continuation: IRBlock = { instructions: [] };
+	const continuationIdx = fn.blocks.push(continuation) - 1;
+
+	cursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
+
+	const stringRegister = (block: IRBlock, value: string) => {
+		const reg = nextRegisterDestination(fn);
+		block.instructions.push({
+			type: "createString",
+			registers: [reg],
+			stringIndex: getOrCreateStringConstant(program, value),
+		});
+		return reg;
+	};
+	const nullishGuard = (block: IRBlock, valueReg: number, target: number) => {
+		const undef = nextRegisterDestination(fn);
+		const isNullish = nextRegisterDestination(fn);
+		block.instructions.push({ type: "createUndefined", registers: [undef] });
+		block.instructions.push({ type: "binary", registers: [isNullish, valueReg, undef], operator: "==" });
+		block.instructions.push({ type: "jumpIf", registers: [isNullish], blocks: [target] });
+	};
+	const modeEquals = (block: IRBlock, modeValue: number, target: number) => {
+		const constReg = nextRegisterDestination(fn);
+		const matchReg = nextRegisterDestination(fn);
+		block.instructions.push({ type: "createNumber", registers: [constReg], value: modeValue });
+		block.instructions.push({ type: "binary", registers: [matchReg, mode, constReg], operator: "===" });
+		block.instructions.push({ type: "jumpIf", registers: [matchReg], blocks: [target] });
+	};
+
+	// header: dispatch on the resume mode.
+	modeEquals(header, RESUME_MODE_THROW, throwModeIdx);
+	modeEquals(header, RESUME_MODE_RETURN, returnModeIdx);
+	header.instructions.push({ type: "jump", blocks: [nextModeIdx] });
+
+	// next(): advance via the cached next method.
+	nextMode.instructions.push({ type: "call", registers: [result, nextMethod, iterator, sentValue] });
+	nextMode.instructions.push({ type: "jump", blocks: [checkIdx] });
+
+	// throw(): forward to the inner throw, or close + TypeError if absent.
+	{
+		const throwM = nextRegisterDestination(fn);
+		throwMode.instructions.push({ type: "loadProperty", registers: [throwM, iterator, stringRegister(throwMode, "throw")] });
+		nullishGuard(throwMode, throwM, noThrowIdx);
+		throwMode.instructions.push({ type: "call", registers: [result, throwM, iterator, sentValue] });
+		throwMode.instructions.push({ type: "jump", blocks: [checkIdx] });
+	}
+	noThrow.instructions.push({ type: "iteratorClose", registers: [iterator] });
+	{
+		const te = nextRegisterDestination(fn);
+		noThrow.instructions.push({ type: "loadIntrinsic", registers: [te], intrinsic: "TypeError" });
+		const err = nextRegisterDestination(fn);
+		noThrow.instructions.push({
+			type: "construct",
+			registers: [err, te, stringRegister(noThrow, "The iterator does not provide a 'throw' method")],
+		});
+		noThrow.instructions.push({ type: "throw", registers: [err] });
+	}
+
+	// return(): forward to the inner return, or return the received value.
+	{
+		const returnM = nextRegisterDestination(fn);
+		returnMode.instructions.push({ type: "loadProperty", registers: [returnM, iterator, stringRegister(returnMode, "return")] });
+		nullishGuard(returnMode, returnM, noReturnIdx);
+		returnMode.instructions.push({ type: "call", registers: [result, returnM, iterator, sentValue] });
+		returnMode.instructions.push({ type: "jump", blocks: [checkIdx] });
+	}
+	emitReturn(fn, noReturn, sentValue);
+
+	// check: a done result ends the delegation; otherwise yield the value out
+	// and loop back to advance the inner iterator on the next resume.
+	{
+		const doneReg = nextRegisterDestination(fn);
+		check.instructions.push({ type: "loadProperty", registers: [doneReg, result, stringRegister(check, "done")] });
+		check.instructions.push({ type: "jumpIf", registers: [doneReg], blocks: [doneIdx] });
+		const valueReg = nextRegisterDestination(fn);
+		check.instructions.push({ type: "loadProperty", registers: [valueReg, result, stringRegister(check, "value")] });
+		// The inner yield: suspend the outer generator. On resume the sent value
+		// and resume mode drive the next loop iteration (no throw/return dispatch
+		// here — the mode is forwarded into the delegation above).
+		check.instructions.push({ type: "yield", registers: [sentValue, mode, valueReg] });
+		check.instructions.push({ type: "jump", blocks: [headerIdx] });
+	}
+
+	// doneBlock: extract the final value. A return() resumption that finishes
+	// the inner returns from the outer generator; otherwise it is the yield*
+	// expression value.
+	{
+		const doneValue = nextRegisterDestination(fn);
+		doneBlock.instructions.push({ type: "loadProperty", registers: [doneValue, result, stringRegister(doneBlock, "value")] });
+		modeEquals(doneBlock, RESUME_MODE_RETURN, doneReturnIdx);
+		doneBlock.instructions.push({ type: "move", registers: [exprResult, doneValue] });
+		doneBlock.instructions.push({ type: "jump", blocks: [continuationIdx] });
+		emitReturn(fn, doneReturn, doneValue);
+	}
+
+	cursor.block = continuation;
+	return exprResult;
+}
+
+/**
+ * Compile a yield expression: hand the operand out (suspending the generator),
+ * then on resume dispatch on the resume mode. A next() resumption falls through
+ * with the sent value; a throw() throws it at the yield point (reaching any
+ * enclosing catch/finally, since these blocks compile inside the protected
+ * range); a return() returns it, routed through enclosing finalizers.
+ */
+function compileYieldExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	expression: ESTree.YieldExpression,
+) {
+	if (expression.delegate) {
+		return compileYieldStarExpression(program, fn, cursor, expression);
+	}
+
+	const yieldedSrc = expression.argument
+		? compileExpression(program, fn, cursor, expression.argument)
+		: compileUndefined(fn, cursor);
+
+	const valueDst = nextRegisterDestination(fn);
+	const modeDst = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "yield",
+		registers: [valueDst, modeDst, yieldedSrc],
+	});
+
+	// throw() resumption: throw the sent value at the yield point.
+	const throwBlock: IRBlock = { instructions: [] };
+	const throwIdx = fn.blocks.push(throwBlock) - 1;
+	throwBlock.instructions.push({ type: "throw", registers: [valueDst] });
+
+	// return() resumption: return the sent value, through enclosing finalizers.
+	const returnBlock: IRBlock = { instructions: [] };
+	const returnIdx = fn.blocks.push(returnBlock) - 1;
+	emitReturn(fn, returnBlock, valueDst);
+
+	const continuation: IRBlock = { instructions: [] };
+	const continuationIdx = fn.blocks.push(continuation) - 1;
+
+	const throwConst = nextRegisterDestination(fn);
+	const isThrow = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "createNumber", registers: [throwConst], value: RESUME_MODE_THROW });
+	cursor.block.instructions.push({ type: "binary", registers: [isThrow, modeDst, throwConst], operator: "===" });
+	cursor.block.instructions.push({ type: "jumpIf", registers: [isThrow], blocks: [throwIdx] });
+
+	const returnConst = nextRegisterDestination(fn);
+	const isReturn = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "createNumber", registers: [returnConst], value: RESUME_MODE_RETURN });
+	cursor.block.instructions.push({ type: "binary", registers: [isReturn, modeDst, returnConst], operator: "===" });
+	cursor.block.instructions.push({ type: "jumpIf", registers: [isReturn], blocks: [returnIdx] });
+
+	cursor.block.instructions.push({ type: "jump", blocks: [continuationIdx] });
+
+	// next() resumption continues here with the sent value.
+	cursor.block = continuation;
+	return valueDst;
+}
+
 function compileExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -2777,6 +3025,9 @@ function compileExpression(
 		}
 		case "ConditionalExpression": {
 			return compileConditionalExpression(program, fn, cursor, expression);
+		}
+		case "YieldExpression": {
+			return compileYieldExpression(program, fn, cursor, expression);
 		}
 		case "TemplateLiteral": {
 			return compileTemplateLiteral(program, fn, cursor, expression);

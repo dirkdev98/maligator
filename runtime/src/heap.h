@@ -53,6 +53,10 @@ typedef enum MalHeapType {
      * String iteration methods.
      */
     MAL_HEAP_ITERATOR_OBJECT,
+    /**
+     * Generator instances (MalGeneratorObject) holding a suspended frame.
+     */
+    MAL_HEAP_GENERATOR_OBJECT,
 } MalHeapType;
 
 /**
