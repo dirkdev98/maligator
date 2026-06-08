@@ -170,9 +170,6 @@ function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
 			if ("regex" in node && node.regex) {
 				unsupported.add("regex literal");
 			}
-			if (typeof node.value === "bigint") {
-				unsupported.add("bigint literal");
-			}
 			break;
 		}
 		default:

@@ -100,6 +100,11 @@ static bool mal_json_stringify_value(MalVm *vm, MalJsonBuilder *builder, MalValu
         return false;
     }
 
+    if (mal_value_is_bigint(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Do not know how to serialize a BigInt");
+        return false;
+    }
+
     if (mal_value_is_null(value)) {
         mal_json_builder_push_ascii(builder, "null");
         return true;

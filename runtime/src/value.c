@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "heap_bigint.h"
 #include "heap_string.h"
 #include "value.h"
 
@@ -132,6 +133,10 @@ bool mal_value_is_symbol(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_SYMBOL);
 }
 
+bool mal_value_is_bigint(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_BIGINT);
+}
+
 bool mal_value_is_object(MalValue value) {
     if (!mal_value_is_heap(value)) {
         return false;
@@ -147,7 +152,10 @@ bool mal_value_is_object(MalValue value) {
         type == MAL_HEAP_MAP_OBJECT ||
         type == MAL_HEAP_SET_OBJECT ||
         type == MAL_HEAP_ITERATOR_OBJECT ||
-        type == MAL_HEAP_GENERATOR_OBJECT;
+        type == MAL_HEAP_GENERATOR_OBJECT ||
+        type == MAL_HEAP_ARRAY_BUFFER_OBJECT ||
+        type == MAL_HEAP_TYPED_ARRAY_OBJECT ||
+        type == MAL_HEAP_DATA_VIEW_OBJECT;
 }
 
 bool mal_value_is_function_object(MalValue value) {
@@ -182,6 +190,18 @@ bool mal_value_is_generator_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_GENERATOR_OBJECT);
 }
 
+bool mal_value_is_array_buffer_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_ARRAY_BUFFER_OBJECT);
+}
+
+bool mal_value_is_typed_array_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_TYPED_ARRAY_OBJECT);
+}
+
+bool mal_value_is_data_view_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_DATA_VIEW_OBJECT);
+}
+
 bool mal_value_is_callable(MalValue value) {
     return mal_value_is_function_object(value) ||
         mal_value_is_native_function_object(value) ||
@@ -194,6 +214,10 @@ MalString *mal_value_to_string(MalValue value) {
 
 MalSymbol *mal_value_to_symbol(MalValue value) {
     return (MalSymbol *) mal_value_to_heap(value);
+}
+
+MalBigInt *mal_value_to_bigint(MalValue value) {
+    return (MalBigInt *) mal_value_to_heap(value);
 }
 
 MalObject *mal_value_to_object(MalValue value) {
@@ -224,12 +248,28 @@ MalIteratorObject *mal_value_to_iterator_object(MalValue value) {
     return (MalIteratorObject *) mal_value_to_heap(value);
 }
 
+MalArrayBufferObject *mal_value_to_array_buffer_object(MalValue value) {
+    return (MalArrayBufferObject *) mal_value_to_heap(value);
+}
+
+MalTypedArrayObject *mal_value_to_typed_array_object(MalValue value) {
+    return (MalTypedArrayObject *) mal_value_to_heap(value);
+}
+
+MalDataViewObject *mal_value_to_data_view_object(MalValue value) {
+    return (MalDataViewObject *) mal_value_to_heap(value);
+}
+
 MalValue mal_value_from_string(MalString *string) {
     return mal_value_from_heap((MalHeapHeader *) string);
 }
 
 MalValue mal_value_from_symbol(MalSymbol *symbol) {
     return mal_value_from_heap((MalHeapHeader *) symbol);
+}
+
+MalValue mal_value_from_bigint(MalBigInt *bigint) {
+    return mal_value_from_heap((MalHeapHeader *) bigint);
 }
 
 MalValue mal_value_from_object(MalObject *object) {
@@ -260,6 +300,18 @@ MalValue mal_value_from_iterator_object(MalIteratorObject *iterator) {
     return mal_value_from_heap((MalHeapHeader *) iterator);
 }
 
+MalValue mal_value_from_array_buffer_object(MalArrayBufferObject *buffer) {
+    return mal_value_from_heap((MalHeapHeader *) buffer);
+}
+
+MalValue mal_value_from_typed_array_object(MalTypedArrayObject *array) {
+    return mal_value_from_heap((MalHeapHeader *) array);
+}
+
+MalValue mal_value_from_data_view_object(MalDataViewObject *view) {
+    return mal_value_from_heap((MalHeapHeader *) view);
+}
+
 bool mal_value_is_truthy(MalValue value) {
     if (mal_value_is_nil(value)) {
         return false;
@@ -283,6 +335,10 @@ bool mal_value_is_truthy(MalValue value) {
 
     if (mal_value_is_string(value)) {
         return mal_string_length(mal_value_to_string(value)) != 0;
+    }
+
+    if (mal_value_is_bigint(value)) {
+        return mal_bigint_value(mal_value_to_bigint(value)) != 0;
     }
 
     // TODO: Might need to check `valueOf` & BooleanData fields.
@@ -347,6 +403,26 @@ void mal_value_debug(MalValue value) {
             }
         }
         printf("\"");
+        return;
+    }
+
+    if (mal_value_is_bigint(value)) {
+        i128 magnitude = mal_bigint_value(mal_value_to_bigint(value));
+        bool negative = magnitude < 0;
+        u128 mag = negative ? (~(u128) magnitude + 1) : (u128) magnitude;
+        char buffer[48];
+        usize length = 0;
+        do {
+            buffer[length++] = (char) ('0' + (i32) (mag % 10));
+            mag /= 10;
+        } while (mag > 0);
+        if (negative) {
+            printf("-");
+        }
+        while (length > 0) {
+            printf("%c", buffer[--length]);
+        }
+        printf("n");
         return;
     }
 

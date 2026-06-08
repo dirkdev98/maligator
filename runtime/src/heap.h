@@ -35,6 +35,11 @@ typedef struct MalHeap {
 typedef enum MalHeapType {
     MAL_HEAP_STRING,
     MAL_HEAP_SYMBOL,
+    /**
+     * BigInt primitive (MalBigInt). Currently 128-bit backed, not arbitrary
+     * precision. TODO(bigint): real arbitrary-precision digits.
+     */
+    MAL_HEAP_BIGINT,
     MAL_HEAP_OBJECT,
     MAL_HEAP_FUNCTION_OBJECT,
     MAL_HEAP_NATIVE_FUNCTION_OBJECT,
@@ -57,6 +62,18 @@ typedef enum MalHeapType {
      * Generator instances (MalGeneratorObject) holding a suspended frame.
      */
     MAL_HEAP_GENERATOR_OBJECT,
+    /**
+     * ArrayBuffer / SharedArrayBuffer backing store (MalArrayBufferObject).
+     */
+    MAL_HEAP_ARRAY_BUFFER_OBJECT,
+    /**
+     * TypedArray views (MalTypedArrayObject; the kind field discriminates).
+     */
+    MAL_HEAP_TYPED_ARRAY_OBJECT,
+    /**
+     * DataView instances (MalDataViewObject).
+     */
+    MAL_HEAP_DATA_VIEW_OBJECT,
 } MalHeapType;
 
 /**

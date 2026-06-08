@@ -3,8 +3,12 @@
 #include <math.h>
 
 #include "builtin_array.h"
+#include "builtin_array_buffer.h"
+#include "builtin_bigint.h"
 #include "builtin_boolean.h"
 #include "builtin_console.h"
+#include "builtin_data_view.h"
+#include "builtin_typed_array.h"
 #include "builtin_error.h"
 #include "builtin_function.h"
 #include "builtin_generator.h"
@@ -155,12 +159,16 @@ void mal_intrinsics_init(MalVm *vm) {
     // toStringTag); the iterator prototypes install before the passes that
     // expose iteration methods over them.
     mal_builtin_symbol_install(vm);
+    mal_builtin_bigint_install(vm);
     mal_builtin_function_install(vm);
     mal_builtin_iterator_install(vm);
     mal_builtin_generator_install(vm);
     mal_builtin_array_install(vm);
     mal_builtin_map_install(vm);
     mal_builtin_set_install(vm);
+    mal_builtin_array_buffer_install(vm);
+    mal_builtin_typed_array_install(vm);
+    mal_builtin_data_view_install(vm);
     mal_builtin_error_install(vm);
     mal_builtin_string_install(vm);
     mal_builtin_number_install(vm);
@@ -195,10 +203,25 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "Number", vm->intrinsics[MAL_INTRINSIC_NUMBER_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Boolean", vm->intrinsics[MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Symbol", vm->intrinsics[MAL_INTRINSIC_SYMBOL_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "BigInt", vm->intrinsics[MAL_INTRINSIC_BIGINT_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Map", vm->intrinsics[MAL_INTRINSIC_MAP_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Set", vm->intrinsics[MAL_INTRINSIC_SET_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "WeakMap", vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "WeakSet", vm->intrinsics[MAL_INTRINSIC_WEAK_SET_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "ArrayBuffer", vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "SharedArrayBuffer", vm->intrinsics[MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Int8Array", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_INT8_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Uint8Array", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Uint8ClampedArray", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_CLAMPED_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Int16Array", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_INT16_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Uint16Array", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT16_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Int32Array", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_INT32_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Uint32Array", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT32_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Float32Array", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_FLOAT32_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Float64Array", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_FLOAT64_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "BigInt64Array", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_BIGINT64_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "BigUint64Array", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_BIGUINT64_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "DataView", vm->intrinsics[MAL_INTRINSIC_DATA_VIEW_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "parseInt", vm->intrinsics[MAL_INTRINSIC_PARSE_INT], flags);
     mal_intrinsic_define_data(vm, global_this, "parseFloat", vm->intrinsics[MAL_INTRINSIC_PARSE_FLOAT], flags);
     mal_intrinsic_define_data(vm, global_this, "isNaN", vm->intrinsics[MAL_INTRINSIC_IS_NAN], flags);

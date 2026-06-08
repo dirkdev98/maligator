@@ -81,6 +81,11 @@ export type VmInstruction =
 			stringIndex: number;
 	  }
 	| {
+			opcode: "CREATE_BIGINT";
+			dst: number;
+			stringIndex: number;
+	  }
+	| {
 			opcode: "CREATE_OBJECT";
 			dst: number;
 	  }
@@ -450,6 +455,12 @@ function lowerInstructionToVmInstruction(
 		case "createString":
 			return {
 				opcode: "CREATE_STRING",
+				dst: instruction.registers[0],
+				stringIndex: instruction.stringIndex,
+			};
+		case "createBigint":
+			return {
+				opcode: "CREATE_BIGINT",
 				dst: instruction.registers[0],
 				stringIndex: instruction.stringIndex,
 			};

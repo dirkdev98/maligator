@@ -7,9 +7,11 @@
 #include "builtin_array.h"
 #include "builtin_iterator.h"
 #include "function_object.h"
+#include "heap_bigint.h"
 #include "heap_string.h"
 #include "object_ops.h"
 #include "property_iter.h"
+#include "typed_array_object.h"
 #include "value_ops.h"
 
 static MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
@@ -119,6 +121,14 @@ void mal_op_create_string(MalCallable *callable, MalInstruction *instruction) {
     const MalStringConstant *constant = &callable->vm->definition->string_constants[instruction->as.create_string.string_index];
     MalString *string = mal_string_new_external(&callable->vm->heap, constant->code_units, constant->length);
     callable->registers[instruction->as.create_string.dst] = mal_value_from_string(string);
+}
+
+void mal_op_create_bigint(MalCallable *callable, MalInstruction *instruction) {
+    const MalStringConstant *constant = &callable->vm->definition->string_constants[instruction->as.create_bigint.string_index];
+    bool ok;
+    i128 value = mal_bigint_parse(constant->code_units, constant->length, &ok);
+    MalBigInt *bigint = mal_bigint_new(&callable->vm->heap, value);
+    callable->registers[instruction->as.create_bigint.dst] = mal_value_from_bigint(bigint);
 }
 
 void mal_op_create_object(MalCallable *callable, MalInstruction *instruction) {
@@ -390,9 +400,133 @@ void mal_op_catch(MalCallable *callable, MalInstruction *instruction) {
     callable->vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
 
+// BigInt `<<` semantics: a positive count shifts left (a * 2^count), a negative
+// count is an arithmetic right shift. Beyond the 128-bit backing width the value
+// saturates (TODO(bigint): arbitrary precision).
+static i128 mal_vm_bigint_shift_left(i128 value, i128 count) {
+    if (count >= 0) {
+        return count >= 128 ? 0 : value << count;
+    }
+    i128 right = -count;
+    if (right >= 128) {
+        return value < 0 ? -1 : 0;
+    }
+    return value >> right;
+}
+
+static bool mal_vm_op_is_bigint_arith(MalBinaryOp op) {
+    switch (op) {
+        case MAL_BIN_ADD:
+        case MAL_BIN_SUB:
+        case MAL_BIN_MUL:
+        case MAL_BIN_DIV:
+        case MAL_BIN_REM:
+        case MAL_BIN_POW:
+        case MAL_BIN_BIT_AND:
+        case MAL_BIN_BIT_OR:
+        case MAL_BIN_BIT_XOR:
+        case MAL_BIN_SHL:
+        case MAL_BIN_SHR:
+        case MAL_BIN_USHR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Arithmetic/bitwise/shift over BigInt operands. Mixing BigInt with any non-
+// BigInt (other than string concatenation via `+`) throws TypeError, matching
+// the spec's refusal to implicitly convert.
+static MalValue mal_vm_bigint_arith(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right) {
+    if (op == MAL_BIN_ADD && (mal_value_is_string(left) || mal_value_is_string(right))) {
+        return mal_ops_add(&vm->heap, left, right);
+    }
+
+    if (!mal_value_is_bigint(left) || !mal_value_is_bigint(right)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot mix BigInt and other types, use explicit conversions");
+        return mal_value_new_undefined();
+    }
+
+    i128 a = mal_bigint_value(mal_value_to_bigint(left));
+    i128 b = mal_bigint_value(mal_value_to_bigint(right));
+    i128 result = 0;
+
+    switch (op) {
+        case MAL_BIN_ADD:
+            result = a + b;
+            break;
+        case MAL_BIN_SUB:
+            result = a - b;
+            break;
+        case MAL_BIN_MUL:
+            result = a * b;
+            break;
+        case MAL_BIN_DIV:
+        case MAL_BIN_REM:
+            if (b == 0) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Division by zero");
+                return mal_value_new_undefined();
+            }
+            result = op == MAL_BIN_DIV ? a / b : a % b;
+            break;
+        case MAL_BIN_POW: {
+            if (b < 0) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Exponent must be non-negative");
+                return mal_value_new_undefined();
+            }
+            // Square-and-multiply so a huge exponent can't spin (wraps at 128 bits).
+            i128 base = a;
+            i128 exponent = b;
+            result = 1;
+            while (exponent > 0) {
+                if (exponent & 1) {
+                    result *= base;
+                }
+                base *= base;
+                exponent >>= 1;
+            }
+            break;
+        }
+        case MAL_BIN_BIT_AND:
+            result = a & b;
+            break;
+        case MAL_BIN_BIT_OR:
+            result = a | b;
+            break;
+        case MAL_BIN_BIT_XOR:
+            result = a ^ b;
+            break;
+        case MAL_BIN_SHL:
+            result = mal_vm_bigint_shift_left(a, b);
+            break;
+        case MAL_BIN_SHR:
+            result = mal_vm_bigint_shift_left(a, -b);
+            break;
+        case MAL_BIN_USHR:
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "BigInts have no unsigned right shift, use >> instead");
+            return mal_value_new_undefined();
+        default:
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Unsupported BigInt operation");
+            return mal_value_new_undefined();
+    }
+
+    return mal_value_from_bigint(mal_bigint_new(&vm->heap, result));
+}
+
 void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
     auto left = callable->registers[instruction->as.binary.left];
     auto right = callable->registers[instruction->as.binary.right];
+
+    // BigInt arithmetic/bitwise/shift is a separate domain (equality and
+    // relational comparison stay in the shared mal_ops_* path below).
+    if ((mal_value_is_bigint(left) || mal_value_is_bigint(right)) &&
+        mal_vm_op_is_bigint_arith(instruction->as.binary.op)) {
+        callable->registers[instruction->as.binary.dst] =
+            mal_vm_bigint_arith(callable->vm, instruction->as.binary.op, left, right);
+        return;
+    }
 
     switch (instruction->as.binary.op) {
         case MAL_BIN_ADD:
@@ -523,6 +657,9 @@ static const byte *mal_vm_typeof_tag(MalValue value) {
     if (mal_value_is_symbol(value)) {
         return "symbol";
     }
+    if (mal_value_is_bigint(value)) {
+        return "bigint";
+    }
     if (mal_value_is_callable(value)) {
         return "function";
     }
@@ -542,7 +679,10 @@ void mal_op_unary(MalCallable *callable, MalInstruction *instruction) {
             callable->registers[dst] = mal_value_new_boolean(!mal_value_is_truthy(value));
             break;
         case MAL_UNARY_NEGATE:
-            if (mal_value_is_int32(value) && mal_value_to_i32(value) != 0 && mal_value_to_i32(value) != INT32_MIN) {
+            if (mal_value_is_bigint(value)) {
+                callable->registers[dst] = mal_value_from_bigint(
+                    mal_bigint_new(&callable->vm->heap, -mal_bigint_value(mal_value_to_bigint(value))));
+            } else if (mal_value_is_int32(value) && mal_value_to_i32(value) != 0 && mal_value_to_i32(value) != INT32_MIN) {
                 callable->registers[dst] = mal_value_from_i32(-mal_value_to_i32(value));
             } else {
                 // Keeps -0 and -INT32_MIN exact by going through f64.
@@ -550,9 +690,19 @@ void mal_op_unary(MalCallable *callable, MalInstruction *instruction) {
             }
             break;
         case MAL_UNARY_PLUS:
+            if (mal_value_is_bigint(value)) {
+                mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Cannot convert a BigInt value to a number");
+                break;
+            }
             callable->registers[dst] = mal_ops_number_value(mal_ops_to_number(value));
             break;
         case MAL_UNARY_BIT_NOT:
+            if (mal_value_is_bigint(value)) {
+                callable->registers[dst] = mal_value_from_bigint(
+                    mal_bigint_new(&callable->vm->heap, ~mal_bigint_value(mal_value_to_bigint(value))));
+                break;
+            }
             callable->registers[dst] = mal_ops_bit_xor(value, mal_value_from_i32(-1));
             break;
         case MAL_UNARY_TYPEOF: {
@@ -671,6 +821,19 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
         return true;
     }
 
+    // Integer-indexed TypedArray reads bypass the property table. Only in-bounds
+    // indices resolve here; an out-of-bounds index is not an own property, so it
+    // falls through to the ordinary (empty) lookup, yielding undefined and a
+    // correct `in` result.
+    if (mal_value_is_typed_array_object(object_value) && key.kind == MAL_KEY_INDEX) {
+        MalTypedArrayObject *array = mal_value_to_typed_array_object(object_value);
+        i32 index = mal_value_to_i32(key.value);
+        if (index >= 0 && (u32) index < mal_typed_array_object_length(array)) {
+            *value_out = mal_typed_array_object_get(vm, array, (u32) index);
+            return true;
+        }
+    }
+
     if (mal_value_is_callable(object_value)) {
         if (mal_array_key_is_length(key)) {
             *value_out = mal_value_from_i32(mal_vm_callable_length(vm, object_value));
@@ -747,6 +910,10 @@ bool mal_vm_get_property(MalVm *vm, MalValue object_value, MalKey key, MalValue 
 
         if (mal_value_is_symbol(object_value)) {
             return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_SYMBOL_PROTOTYPE, object_value, key, out);
+        }
+
+        if (mal_value_is_bigint(object_value)) {
+            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_BIGINT_PROTOTYPE, object_value, key, out);
         }
 
         return true;
@@ -854,6 +1021,17 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
             mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot create property on a primitive");
         }
         return;
+    }
+
+    // Integer-indexed TypedArray writes go through IntegerIndexedElementSet
+    // (coerce, then write in-bounds; out-of-bounds is silently dropped) and
+    // never define an ordinary property.
+    if (mal_value_is_typed_array_object(object_value) && key.kind == MAL_KEY_INDEX) {
+        i32 index = mal_value_to_i32(key.value);
+        if (index >= 0) {
+            mal_typed_array_object_set(callable->vm, mal_value_to_typed_array_object(object_value), (u32) index, value);
+            return;
+        }
     }
 
     // Accessor properties anywhere on the prototype chain take the write.

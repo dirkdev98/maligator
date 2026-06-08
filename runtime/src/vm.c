@@ -201,6 +201,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_CREATE_STRING:
                 mal_op_create_string(frame, &instruction);
                 break;
+            case MAL_OP_CREATE_BIGINT:
+                mal_op_create_bigint(frame, &instruction);
+                break;
             case MAL_OP_CREATE_OBJECT:
                 mal_op_create_object(frame, &instruction);
                 break;

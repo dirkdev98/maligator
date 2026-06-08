@@ -251,6 +251,15 @@ export type IRInstruction =
 			stringIndex: number;
 	  }
 	| {
+			type: "createBigint";
+
+			// [destination] — the string constant holds the decimal digits the
+			// runtime parses into a BigInt.
+			registers: [number];
+
+			stringIndex: number;
+	  }
+	| {
 			type: "createObject";
 
 			// [destination]
@@ -585,6 +594,21 @@ type IRIntrinsic =
 	| "Number"
 	| "Boolean"
 	| "Symbol"
+	| "BigInt"
+	| "ArrayBuffer"
+	| "SharedArrayBuffer"
+	| "Int8Array"
+	| "Uint8Array"
+	| "Uint8ClampedArray"
+	| "Int16Array"
+	| "Uint16Array"
+	| "Int32Array"
+	| "Uint32Array"
+	| "Float32Array"
+	| "Float64Array"
+	| "BigInt64Array"
+	| "BigUint64Array"
+	| "DataView"
 	| "Map"
 	| "Set"
 	| "WeakMap"
@@ -615,6 +639,21 @@ const irIntrinsics = new Set<string>([
 	"Number",
 	"Boolean",
 	"Symbol",
+	"BigInt",
+	"ArrayBuffer",
+	"SharedArrayBuffer",
+	"Int8Array",
+	"Uint8Array",
+	"Uint8ClampedArray",
+	"Int16Array",
+	"Uint16Array",
+	"Int32Array",
+	"Uint32Array",
+	"Float32Array",
+	"Float64Array",
+	"BigInt64Array",
+	"BigUint64Array",
+	"DataView",
 	"Map",
 	"Set",
 	"WeakMap",
@@ -4857,6 +4896,17 @@ function compileLiteral(
 			type: "createString",
 			registers: [destination],
 			stringIndex: getOrCreateStringConstant(program, literal.value),
+		});
+
+		return destination;
+	}
+
+	if (typeof literal.value === "bigint") {
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createBigint",
+			registers: [destination],
+			stringIndex: getOrCreateStringConstant(program, String(literal.value)),
 		});
 
 		return destination;

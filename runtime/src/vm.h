@@ -18,6 +18,7 @@ typedef enum MalOpcode {
     MAL_OP_CREATE_F64,
     MAL_OP_CREATE_BOOLEAN,
     MAL_OP_CREATE_STRING,
+    MAL_OP_CREATE_BIGINT,
     MAL_OP_CREATE_OBJECT,
     MAL_OP_CREATE_ARRAY,
     MAL_OP_CREATE_UNDEFINED,
@@ -146,6 +147,10 @@ typedef struct MalInstruction {
         struct {
             i32 dst, string_index;
         } create_string;
+
+        struct {
+            i32 dst, string_index;
+        } create_bigint;
 
         struct {
             i32 dst;

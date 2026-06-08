@@ -44,6 +44,8 @@ void mal_op_create_boolean(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_string(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_create_bigint(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_create_object(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_array(MalCallable *callable, MalInstruction *instruction);

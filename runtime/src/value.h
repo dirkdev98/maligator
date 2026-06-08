@@ -5,6 +5,10 @@
 
 typedef struct MalString MalString;
 typedef struct MalSymbol MalSymbol;
+typedef struct MalBigInt MalBigInt;
+typedef struct MalArrayBufferObject MalArrayBufferObject;
+typedef struct MalTypedArrayObject MalTypedArrayObject;
+typedef struct MalDataViewObject MalDataViewObject;
 typedef struct MalObject MalObject;
 typedef struct MalFunctionObject MalFunctionObject;
 typedef struct MalNativeFunctionObject MalNativeFunctionObject;
@@ -196,6 +200,11 @@ bool mal_value_is_string(MalValue value);
 bool mal_value_is_symbol(MalValue value);
 
 /**
+ * Check if the value is a BigInt.
+ */
+bool mal_value_is_bigint(MalValue value);
+
+/**
  * Check if the value is an object.
  */
 bool mal_value_is_object(MalValue value);
@@ -241,6 +250,21 @@ bool mal_value_is_iterator_object(MalValue value);
 bool mal_value_is_generator_object(MalValue value);
 
 /**
+ * Check if the value is an ArrayBuffer / SharedArrayBuffer.
+ */
+bool mal_value_is_array_buffer_object(MalValue value);
+
+/**
+ * Check if the value is a TypedArray view.
+ */
+bool mal_value_is_typed_array_object(MalValue value);
+
+/**
+ * Check if the value is a DataView.
+ */
+bool mal_value_is_data_view_object(MalValue value);
+
+/**
  * Check if the value is callable.
  */
 bool mal_value_is_callable(MalValue value);
@@ -254,6 +278,11 @@ MalString *mal_value_to_string(MalValue value);
  * Unbox a symbol.
  */
 MalSymbol *mal_value_to_symbol(MalValue value);
+
+/**
+ * Unbox a BigInt.
+ */
+MalBigInt *mal_value_to_bigint(MalValue value);
 
 /**
  * Unbox an object.
@@ -291,6 +320,13 @@ MalMapObject *mal_value_to_map_object(MalValue value);
 MalIteratorObject *mal_value_to_iterator_object(MalValue value);
 
 /**
+ * Unbox an ArrayBuffer / TypedArray / DataView.
+ */
+MalArrayBufferObject *mal_value_to_array_buffer_object(MalValue value);
+MalTypedArrayObject *mal_value_to_typed_array_object(MalValue value);
+MalDataViewObject *mal_value_to_data_view_object(MalValue value);
+
+/**
  * Box a string.
  */
 MalValue mal_value_from_string(MalString *string);
@@ -299,6 +335,11 @@ MalValue mal_value_from_string(MalString *string);
  * Box a symbol.
  */
 MalValue mal_value_from_symbol(MalSymbol *symbol);
+
+/**
+ * Box a BigInt.
+ */
+MalValue mal_value_from_bigint(MalBigInt *bigint);
 
 /**
  * Box an object.
@@ -334,6 +375,13 @@ MalValue mal_value_from_map_object(MalMapObject *map);
  * Box a built-in iterator object.
  */
 MalValue mal_value_from_iterator_object(MalIteratorObject *iterator);
+
+/**
+ * Box an ArrayBuffer / TypedArray / DataView.
+ */
+MalValue mal_value_from_array_buffer_object(MalArrayBufferObject *buffer);
+MalValue mal_value_from_typed_array_object(MalTypedArrayObject *array);
+MalValue mal_value_from_data_view_object(MalDataViewObject *view);
 
 /**
  * Check if the value is truthy.

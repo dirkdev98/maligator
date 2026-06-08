@@ -118,6 +118,8 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_CREATE_BOOLEAN, .as.create_boolean = { .dst = ${instruction.dst}, .value = ${instruction.value ? 1 : 0} } }`;
 		case "CREATE_STRING":
 			return `{ .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = ${instruction.dst}, .string_index = ${instruction.stringIndex} } }`;
+		case "CREATE_BIGINT":
+			return `{ .opcode = MAL_OP_CREATE_BIGINT, .as.create_bigint = { .dst = ${instruction.dst}, .string_index = ${instruction.stringIndex} } }`;
 		case "CREATE_OBJECT":
 			return `{ .opcode = MAL_OP_CREATE_OBJECT, .as.create_object = { .dst = ${instruction.dst} } }`;
 		case "CREATE_ARRAY":
@@ -241,6 +243,36 @@ function emitIntrinsic(
 			return "MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR";
 		case "Symbol":
 			return "MAL_INTRINSIC_SYMBOL_CONSTRUCTOR";
+		case "BigInt":
+			return "MAL_INTRINSIC_BIGINT_CONSTRUCTOR";
+		case "ArrayBuffer":
+			return "MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR";
+		case "SharedArrayBuffer":
+			return "MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR";
+		case "Int8Array":
+			return "MAL_INTRINSIC_TYPED_ARRAY_INT8_CONSTRUCTOR";
+		case "Uint8Array":
+			return "MAL_INTRINSIC_TYPED_ARRAY_UINT8_CONSTRUCTOR";
+		case "Uint8ClampedArray":
+			return "MAL_INTRINSIC_TYPED_ARRAY_UINT8_CLAMPED_CONSTRUCTOR";
+		case "Int16Array":
+			return "MAL_INTRINSIC_TYPED_ARRAY_INT16_CONSTRUCTOR";
+		case "Uint16Array":
+			return "MAL_INTRINSIC_TYPED_ARRAY_UINT16_CONSTRUCTOR";
+		case "Int32Array":
+			return "MAL_INTRINSIC_TYPED_ARRAY_INT32_CONSTRUCTOR";
+		case "Uint32Array":
+			return "MAL_INTRINSIC_TYPED_ARRAY_UINT32_CONSTRUCTOR";
+		case "Float32Array":
+			return "MAL_INTRINSIC_TYPED_ARRAY_FLOAT32_CONSTRUCTOR";
+		case "Float64Array":
+			return "MAL_INTRINSIC_TYPED_ARRAY_FLOAT64_CONSTRUCTOR";
+		case "BigInt64Array":
+			return "MAL_INTRINSIC_TYPED_ARRAY_BIGINT64_CONSTRUCTOR";
+		case "BigUint64Array":
+			return "MAL_INTRINSIC_TYPED_ARRAY_BIGUINT64_CONSTRUCTOR";
+		case "DataView":
+			return "MAL_INTRINSIC_DATA_VIEW_CONSTRUCTOR";
 		case "Map":
 			return "MAL_INTRINSIC_MAP_CONSTRUCTOR";
 		case "Set":

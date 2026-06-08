@@ -6,7 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "heap_bigint.h"
 #include "heap_string.h"
+
+static i128 mal_ops_bigint_of(MalValue value) {
+    return mal_bigint_value(mal_value_to_bigint(value));
+}
 
 static bool mal_ops_is_number(MalValue value) {
     return mal_value_is_int32(value) ||
@@ -115,6 +120,10 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
         return mal_ops_string_from_ascii(heap, buffer);
     }
 
+    if (mal_value_is_bigint(value)) {
+        return mal_bigint_to_string(heap, mal_ops_bigint_of(value), 10);
+    }
+
     if (mal_value_is_f64(value)) {
         byte buffer[32];
         snprintf(buffer, sizeof(buffer), "%.15g", mal_value_to_f64(value));
@@ -145,6 +154,13 @@ f64 mal_ops_to_number(MalValue value) {
 
     if (mal_value_is_nan(value)) {
         return NAN;
+    }
+
+    // Abstract ToNumber throws on BigInt, but Number(bigint) and the relational
+    // operators rely on the numeric value; arithmetic/unary-plus paths that must
+    // throw intercept BigInt before reaching here.
+    if (mal_value_is_bigint(value)) {
+        return (f64) mal_ops_bigint_of(value);
     }
 
     if (mal_value_is_null(value)) {
@@ -227,6 +243,13 @@ static bool mal_ops_strict_equal_bool(MalValue left, MalValue right) {
         return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
     }
 
+    // BigInt is its own type: equal by value to another BigInt, never strictly
+    // equal to a Number (heap pointers differ, so this must be explicit).
+    if (mal_value_is_bigint(left) || mal_value_is_bigint(right)) {
+        return mal_value_is_bigint(left) && mal_value_is_bigint(right) &&
+            mal_ops_bigint_of(left) == mal_ops_bigint_of(right);
+    }
+
     if (mal_value_is_f64_or_nan(left) && mal_value_is_f64_or_nan(right)) {
         return mal_ops_to_f64(left) == mal_ops_to_f64(right);
     }
@@ -255,6 +278,28 @@ static bool mal_ops_equal_bool(MalValue left, MalValue right) {
         return mal_ops_to_f64(left) == mal_ops_to_f64(mal_ops_string_to_number(right));
     }
 
+    // BigInt loose equality across types compares mathematical values: against a
+    // Number (NaN/Infinity never match), and against a String parsed as a BigInt
+    // (a string that is not a valid BigInt never matches).
+    if (mal_value_is_bigint(left) && mal_ops_is_number(right)) {
+        return (f64) mal_ops_bigint_of(left) == mal_ops_to_f64(right);
+    }
+    if (mal_ops_is_number(left) && mal_value_is_bigint(right)) {
+        return mal_ops_to_f64(left) == (f64) mal_ops_bigint_of(right);
+    }
+    if (mal_value_is_bigint(left) && mal_value_is_string(right)) {
+        bool ok;
+        MalString *string = mal_value_to_string(right);
+        i128 parsed = mal_bigint_parse(mal_string_code_units(string), mal_string_length(string), &ok);
+        return ok && mal_ops_bigint_of(left) == parsed;
+    }
+    if (mal_value_is_string(left) && mal_value_is_bigint(right)) {
+        bool ok;
+        MalString *string = mal_value_to_string(left);
+        i128 parsed = mal_bigint_parse(mal_string_code_units(string), mal_string_length(string), &ok);
+        return ok && parsed == mal_ops_bigint_of(right);
+    }
+
     if (mal_value_is_boolean(left)) {
         return mal_ops_equal_bool(mal_value_from_i32(mal_value_to_boolean(left) ? 1 : 0), right);
     }
@@ -278,6 +323,23 @@ static bool mal_ops_relational_bool(MalValue left, MalValue right, i32 compariso
                 return string_comparison > 0;
             case 3:
                 return string_comparison >= 0;
+        }
+    }
+
+    // BigInt vs BigInt compares exact 128-bit values; mixed BigInt/Number falls
+    // through to the f64 path below (to_number returns a BigInt's numeric value).
+    if (mal_value_is_bigint(left) && mal_value_is_bigint(right)) {
+        i128 l = mal_ops_bigint_of(left);
+        i128 r = mal_ops_bigint_of(right);
+        switch (comparison) {
+            case 0:
+                return l < r;
+            case 1:
+                return l <= r;
+            case 2:
+                return l > r;
+            case 3:
+                return l >= r;
         }
     }
 
