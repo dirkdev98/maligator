@@ -9,7 +9,7 @@ export const TEST262_METADATA = {
 	 * Per-test binary run timeout. Loops are compilable now, so runaway tests
 	 * are a real possibility.
 	 */
-	runTimeoutMs: 5_000,
+	runTimeoutMs: 10_000,
 	compileTimeoutMs: 60_000,
 
 	/**

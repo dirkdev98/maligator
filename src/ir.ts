@@ -409,6 +409,13 @@ export type IRInstruction =
 			registers: [number];
 	  }
 	| {
+			type: "forInKeys";
+
+			// [destination, source] — collect the enumerable string keys of
+			// source into a fresh array the for-in loop then iterates.
+			registers: [number, number];
+	  }
+	| {
 			// Generator prologue: suspend the activation and return a generator
 			// object to the caller. No operands; uses the frame's return target.
 			type: "generatorStart";
@@ -535,6 +542,7 @@ export type IRInstruction =
 				| "*"
 				| "/"
 				| "%"
+				| "**"
 				| "&"
 				| "|"
 				| "^"
@@ -633,6 +641,7 @@ const irBinaryOperators = new Set<string>([
 	"*",
 	"/",
 	"%",
+	"**",
 	"&",
 	"|",
 	"^",
@@ -783,7 +792,8 @@ function compileNewFunction(
 			("id" in functionNode ? functionNode.id?.name : undefined) ?? binding.name,
 		),
 		blocks: [],
-		isGenerator: functionNode.type !== "ArrowFunctionExpression" && functionNode.generator,
+		isGenerator:
+			functionNode.type !== "ArrowFunctionExpression" && functionNode.generator,
 
 		parameterCount: functionNode.params.length,
 		length: computeFunctionLength(functionNode),
@@ -846,7 +856,8 @@ function compileNewFunctionExpression(
 		),
 		blocks: [],
 		classContext,
-		isGenerator: functionNode.type !== "ArrowFunctionExpression" && functionNode.generator,
+		isGenerator:
+			functionNode.type !== "ArrowFunctionExpression" && functionNode.generator,
 
 		parameterCount: functionNode.params.length,
 		length: computeFunctionLength(functionNode),
@@ -1704,6 +1715,10 @@ function compileStatementsToBlock(
 				compileForOfStatement(program, fn, block, statement);
 				break;
 			}
+			case "ForInStatement": {
+				compileForInStatement(program, fn, block, statement);
+				break;
+			}
 			case "BreakStatement": {
 				compileBreakStatement(fn, block, statement);
 				break;
@@ -2105,6 +2120,49 @@ function compileForOfStatement(
 		return;
 	}
 
+	compileForInOfLoop(program, fn, entryCursor, iterable, statement.left, statement.body);
+}
+
+/**
+ * for-in reuses the iterator-driven loop: a runtime op collects the source's
+ * enumerable property keys into an array, which is then iterated like any other
+ * iterable. for-in over null/undefined yields an empty key list (no iteration)
+ * rather than throwing, which the key-collection op handles.
+ */
+function compileForInStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.ForInStatement,
+) {
+	const entryCursor: IRCursor = { block };
+	const source = compileExpression(program, fn, entryCursor, statement.right);
+	if (source === -1) {
+		return;
+	}
+
+	const keys = nextRegisterDestination(fn);
+	entryCursor.block.instructions.push({
+		type: "forInKeys",
+		registers: [keys, source],
+	});
+
+	compileForInOfLoop(program, fn, entryCursor, keys, statement.left, statement.body);
+}
+
+/**
+ * The shared body of for-of and for-in: drive an iterable through the iterator
+ * protocol, binding each value to the loop target and running the body inside a
+ * protected range that closes the iterator on a throw.
+ */
+function compileForInOfLoop(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	entryCursor: IRCursor,
+	iterable: number,
+	left: ESTree.ForOfStatement["left"],
+	body: ESTree.Statement,
+) {
 	const iteratorRegister = nextRegisterDestination(fn);
 	const nextRegister = nextRegisterDestination(fn);
 	entryCursor.block.instructions.push({
@@ -2158,20 +2216,16 @@ function compileForOfStatement(
 	bindBlock.instructions.push(tryBegin);
 
 	const bindCursor: IRCursor = { block: bindBlock };
-	if (statement.left.type === "VariableDeclaration") {
-		const declaration = statement.left.declarations[0];
+	if (left.type === "VariableDeclaration") {
+		const declaration = left.declarations[0];
 		if (declaration) {
 			compilePatternTarget(program, fn, bindCursor, declaration.id, valueRegister);
 		}
 	} else {
-		compilePatternTarget(program, fn, bindCursor, statement.left, valueRegister);
+		compilePatternTarget(program, fn, bindCursor, left, valueRegister);
 	}
 
-	const bodyIdx = compileStatementsToBlock(
-		program,
-		fn,
-		normalizeStatementOrBlock(statement.body),
-	);
+	const bodyIdx = compileStatementsToBlock(program, fn, normalizeStatementOrBlock(body));
 	bindCursor.block.instructions.push({
 		type: "jump",
 		blocks: [bodyIdx],
@@ -2518,7 +2572,9 @@ function compileTryFinally(
 		dispatchBlocks.push({ kind, idx });
 	};
 
-	addArm(COMPLETION_THROW, (b) => b.instructions.push({ type: "throw", registers: [valueReg] }));
+	addArm(COMPLETION_THROW, (b) =>
+		b.instructions.push({ type: "throw", registers: [valueReg] }),
+	);
 	addArm(COMPLETION_RETURN, (b) => emitReturn(fn, b, valueReg));
 	addArm(COMPLETION_BREAK, (b) => emitBreak(fn, b));
 	addArm(COMPLETION_CONTINUE, (b) => emitContinue(fn, b));
@@ -2530,8 +2586,16 @@ function compileTryFinally(
 	for (const { kind, idx } of dispatchBlocks) {
 		const constReg = nextRegisterDestination(fn);
 		const matchReg = nextRegisterDestination(fn);
-		epilogue.instructions.push({ type: "createNumber", registers: [constReg], value: kind });
-		epilogue.instructions.push({ type: "binary", registers: [matchReg, kindReg, constReg], operator: "===" });
+		epilogue.instructions.push({
+			type: "createNumber",
+			registers: [constReg],
+			value: kind,
+		});
+		epilogue.instructions.push({
+			type: "binary",
+			registers: [matchReg, kindReg, constReg],
+			operator: "===",
+		});
 		epilogue.instructions.push({ type: "jumpIf", registers: [matchReg], blocks: [idx] });
 	}
 	// Fall through: NORMAL completion continues after the try.
@@ -2809,7 +2873,10 @@ function compileYieldStarExpression(
 	const result = nextRegisterDestination(fn);
 	const exprResult = nextRegisterDestination(fn);
 
-	cursor.block.instructions.push({ type: "getIterator", registers: [iterator, nextMethod, operand] });
+	cursor.block.instructions.push({
+		type: "getIterator",
+		registers: [iterator, nextMethod, operand],
+	});
 	cursor.block.instructions.push({ type: "createUndefined", registers: [sentValue] });
 	cursor.block.instructions.push({ type: "createNumber", registers: [mode], value: 0 });
 
@@ -2849,14 +2916,26 @@ function compileYieldStarExpression(
 		const undef = nextRegisterDestination(fn);
 		const isNullish = nextRegisterDestination(fn);
 		block.instructions.push({ type: "createUndefined", registers: [undef] });
-		block.instructions.push({ type: "binary", registers: [isNullish, valueReg, undef], operator: "==" });
+		block.instructions.push({
+			type: "binary",
+			registers: [isNullish, valueReg, undef],
+			operator: "==",
+		});
 		block.instructions.push({ type: "jumpIf", registers: [isNullish], blocks: [target] });
 	};
 	const modeEquals = (block: IRBlock, modeValue: number, target: number) => {
 		const constReg = nextRegisterDestination(fn);
 		const matchReg = nextRegisterDestination(fn);
-		block.instructions.push({ type: "createNumber", registers: [constReg], value: modeValue });
-		block.instructions.push({ type: "binary", registers: [matchReg, mode, constReg], operator: "===" });
+		block.instructions.push({
+			type: "createNumber",
+			registers: [constReg],
+			value: modeValue,
+		});
+		block.instructions.push({
+			type: "binary",
+			registers: [matchReg, mode, constReg],
+			operator: "===",
+		});
 		block.instructions.push({ type: "jumpIf", registers: [matchReg], blocks: [target] });
 	};
 
@@ -2866,25 +2945,42 @@ function compileYieldStarExpression(
 	header.instructions.push({ type: "jump", blocks: [nextModeIdx] });
 
 	// next(): advance via the cached next method.
-	nextMode.instructions.push({ type: "call", registers: [result, nextMethod, iterator, sentValue] });
+	nextMode.instructions.push({
+		type: "call",
+		registers: [result, nextMethod, iterator, sentValue],
+	});
 	nextMode.instructions.push({ type: "jump", blocks: [checkIdx] });
 
 	// throw(): forward to the inner throw, or close + TypeError if absent.
 	{
 		const throwM = nextRegisterDestination(fn);
-		throwMode.instructions.push({ type: "loadProperty", registers: [throwM, iterator, stringRegister(throwMode, "throw")] });
+		throwMode.instructions.push({
+			type: "loadProperty",
+			registers: [throwM, iterator, stringRegister(throwMode, "throw")],
+		});
 		nullishGuard(throwMode, throwM, noThrowIdx);
-		throwMode.instructions.push({ type: "call", registers: [result, throwM, iterator, sentValue] });
+		throwMode.instructions.push({
+			type: "call",
+			registers: [result, throwM, iterator, sentValue],
+		});
 		throwMode.instructions.push({ type: "jump", blocks: [checkIdx] });
 	}
 	noThrow.instructions.push({ type: "iteratorClose", registers: [iterator] });
 	{
 		const te = nextRegisterDestination(fn);
-		noThrow.instructions.push({ type: "loadIntrinsic", registers: [te], intrinsic: "TypeError" });
+		noThrow.instructions.push({
+			type: "loadIntrinsic",
+			registers: [te],
+			intrinsic: "TypeError",
+		});
 		const err = nextRegisterDestination(fn);
 		noThrow.instructions.push({
 			type: "construct",
-			registers: [err, te, stringRegister(noThrow, "The iterator does not provide a 'throw' method")],
+			registers: [
+				err,
+				te,
+				stringRegister(noThrow, "The iterator does not provide a 'throw' method"),
+			],
 		});
 		noThrow.instructions.push({ type: "throw", registers: [err] });
 	}
@@ -2892,9 +2988,15 @@ function compileYieldStarExpression(
 	// return(): forward to the inner return, or return the received value.
 	{
 		const returnM = nextRegisterDestination(fn);
-		returnMode.instructions.push({ type: "loadProperty", registers: [returnM, iterator, stringRegister(returnMode, "return")] });
+		returnMode.instructions.push({
+			type: "loadProperty",
+			registers: [returnM, iterator, stringRegister(returnMode, "return")],
+		});
 		nullishGuard(returnMode, returnM, noReturnIdx);
-		returnMode.instructions.push({ type: "call", registers: [result, returnM, iterator, sentValue] });
+		returnMode.instructions.push({
+			type: "call",
+			registers: [result, returnM, iterator, sentValue],
+		});
 		returnMode.instructions.push({ type: "jump", blocks: [checkIdx] });
 	}
 	emitReturn(fn, noReturn, sentValue);
@@ -2903,10 +3005,16 @@ function compileYieldStarExpression(
 	// and loop back to advance the inner iterator on the next resume.
 	{
 		const doneReg = nextRegisterDestination(fn);
-		check.instructions.push({ type: "loadProperty", registers: [doneReg, result, stringRegister(check, "done")] });
+		check.instructions.push({
+			type: "loadProperty",
+			registers: [doneReg, result, stringRegister(check, "done")],
+		});
 		check.instructions.push({ type: "jumpIf", registers: [doneReg], blocks: [doneIdx] });
 		const valueReg = nextRegisterDestination(fn);
-		check.instructions.push({ type: "loadProperty", registers: [valueReg, result, stringRegister(check, "value")] });
+		check.instructions.push({
+			type: "loadProperty",
+			registers: [valueReg, result, stringRegister(check, "value")],
+		});
 		// The inner yield: suspend the outer generator. On resume the sent value
 		// and resume mode drive the next loop iteration (no throw/return dispatch
 		// here — the mode is forwarded into the delegation above).
@@ -2919,7 +3027,10 @@ function compileYieldStarExpression(
 	// expression value.
 	{
 		const doneValue = nextRegisterDestination(fn);
-		doneBlock.instructions.push({ type: "loadProperty", registers: [doneValue, result, stringRegister(doneBlock, "value")] });
+		doneBlock.instructions.push({
+			type: "loadProperty",
+			registers: [doneValue, result, stringRegister(doneBlock, "value")],
+		});
 		modeEquals(doneBlock, RESUME_MODE_RETURN, doneReturnIdx);
 		doneBlock.instructions.push({ type: "move", registers: [exprResult, doneValue] });
 		doneBlock.instructions.push({ type: "jump", blocks: [continuationIdx] });
@@ -2973,15 +3084,39 @@ function compileYieldExpression(
 
 	const throwConst = nextRegisterDestination(fn);
 	const isThrow = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "createNumber", registers: [throwConst], value: RESUME_MODE_THROW });
-	cursor.block.instructions.push({ type: "binary", registers: [isThrow, modeDst, throwConst], operator: "===" });
-	cursor.block.instructions.push({ type: "jumpIf", registers: [isThrow], blocks: [throwIdx] });
+	cursor.block.instructions.push({
+		type: "createNumber",
+		registers: [throwConst],
+		value: RESUME_MODE_THROW,
+	});
+	cursor.block.instructions.push({
+		type: "binary",
+		registers: [isThrow, modeDst, throwConst],
+		operator: "===",
+	});
+	cursor.block.instructions.push({
+		type: "jumpIf",
+		registers: [isThrow],
+		blocks: [throwIdx],
+	});
 
 	const returnConst = nextRegisterDestination(fn);
 	const isReturn = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "createNumber", registers: [returnConst], value: RESUME_MODE_RETURN });
-	cursor.block.instructions.push({ type: "binary", registers: [isReturn, modeDst, returnConst], operator: "===" });
-	cursor.block.instructions.push({ type: "jumpIf", registers: [isReturn], blocks: [returnIdx] });
+	cursor.block.instructions.push({
+		type: "createNumber",
+		registers: [returnConst],
+		value: RESUME_MODE_RETURN,
+	});
+	cursor.block.instructions.push({
+		type: "binary",
+		registers: [isReturn, modeDst, returnConst],
+		operator: "===",
+	});
+	cursor.block.instructions.push({
+		type: "jumpIf",
+		registers: [isReturn],
+		blocks: [returnIdx],
+	});
 
 	cursor.block.instructions.push({ type: "jump", blocks: [continuationIdx] });
 
@@ -3059,9 +3194,225 @@ function compileExpression(
 		case "ObjectExpression": {
 			return compileObjectExpression(program, fn, cursor, expression);
 		}
+		case "SequenceExpression": {
+			// The comma operator evaluates each operand left to right and takes
+			// the value of the last one.
+			let value = -1;
+			for (const inner of expression.expressions) {
+				value = compileExpression(program, fn, cursor, inner);
+			}
+			return value;
+		}
+		case "ChainExpression": {
+			return compileOptionalChain(program, fn, cursor, expression.expression);
+		}
 		default:
 			return -1;
 	}
+}
+
+/**
+ * Compile an optional chain (the inside of a ChainExpression). Any optional
+ * link whose base is null or undefined short-circuits the whole chain to
+ * undefined; otherwise the chain evaluates normally. Short-circuit jumps from
+ * every optional link are collected and patched to a shared block that yields
+ * undefined.
+ */
+function compileOptionalChain(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	node: ESTree.Expression,
+): number {
+	const result = nextRegisterDestination(fn);
+	const shortCircuits: Array<Extract<IRInstruction, { type: "jumpIf" }>> = [];
+	const value = compileChainElement(program, fn, cursor, node, shortCircuits);
+	if (value === -1) {
+		return -1;
+	}
+
+	cursor.block.instructions.push({ type: "move", registers: [result, value] });
+	if (shortCircuits.length === 0) {
+		return result;
+	}
+
+	const successJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(successJump);
+
+	// Short-circuit landing block: the chain result is undefined.
+	const shortIdx = fn.blocks.push({ instructions: [] }) - 1;
+	const shortBlock = fn.blocks[shortIdx]!;
+	const shortCursor: IRCursor = { block: shortBlock };
+	const undefinedRegister = compileUndefined(fn, shortCursor);
+	shortBlock.instructions.push({ type: "move", registers: [result, undefinedRegister] });
+	const shortJoinJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	shortBlock.instructions.push(shortJoinJump);
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	successJump.blocks[0] = joinIdx;
+	shortJoinJump.blocks[0] = joinIdx;
+	for (const jump of shortCircuits) {
+		jump.blocks[0] = shortIdx;
+	}
+	cursor.block = fn.blocks[joinIdx]!;
+	return result;
+}
+
+/**
+ * Insert a short-circuit guard for an optional link: if the base register is
+ * null or undefined, jump to the chain's short-circuit block; otherwise
+ * continue in a fresh block. The recorded jump is patched by
+ * compileOptionalChain.
+ */
+function emitOptionalGuard(
+	fn: IRFunction,
+	cursor: IRCursor,
+	base: number,
+	shortCircuits: Array<Extract<IRInstruction, { type: "jumpIf" }>>,
+) {
+	const undefinedRegister = compileUndefined(fn, cursor);
+	const isNil = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "binary",
+		registers: [isNil, base, undefinedRegister],
+		operator: "==",
+	});
+
+	const shortJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [isNil],
+		blocks: [-1],
+	};
+	const continueJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(shortJump, continueJump);
+	shortCircuits.push(shortJump);
+
+	const continueIdx = fn.blocks.push({ instructions: [] }) - 1;
+	continueJump.blocks[0] = continueIdx;
+	cursor.block = fn.blocks[continueIdx]!;
+}
+
+/**
+ * Recursively compile one node of an optional chain, threading the short-
+ * circuit jump list through nested member accesses and calls.
+ */
+function compileChainElement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	node: ESTree.Expression,
+	shortCircuits: Array<Extract<IRInstruction, { type: "jumpIf" }>>,
+): number {
+	if (node.type === "MemberExpression") {
+		const object = compileChainElement(program, fn, cursor, node.object, shortCircuits);
+		if (object === -1) {
+			return -1;
+		}
+
+		if (node.optional) {
+			emitOptionalGuard(fn, cursor, object, shortCircuits);
+		}
+
+		const key = node.computed
+			? compileExpression(program, fn, cursor, node.property)
+			: node.property.type === "Identifier"
+				? compileStaticString(program, fn, cursor, node.property.name)
+				: -1;
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadProperty",
+			registers: [destination, object, key],
+		});
+		return destination;
+	}
+
+	if (node.type === "CallExpression") {
+		const calleeNode = node.callee as unknown as ESTree.Node;
+		let callee: number;
+		let thisRegister: number;
+		if (calleeNode.type === "MemberExpression") {
+			const object = compileChainElement(
+				program,
+				fn,
+				cursor,
+				calleeNode.object,
+				shortCircuits,
+			);
+			if (object === -1) {
+				return -1;
+			}
+
+			if (calleeNode.optional) {
+				emitOptionalGuard(fn, cursor, object, shortCircuits);
+			}
+
+			const key = calleeNode.computed
+				? compileExpression(program, fn, cursor, calleeNode.property)
+				: calleeNode.property.type === "Identifier"
+					? compileStaticString(program, fn, cursor, calleeNode.property.name)
+					: -1;
+			thisRegister = object;
+			callee = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "loadProperty",
+				registers: [callee, object, key],
+			});
+		} else {
+			callee = compileChainElement(
+				program,
+				fn,
+				cursor,
+				calleeNode as ESTree.Expression,
+				shortCircuits,
+			);
+			if (callee === -1) {
+				return -1;
+			}
+			thisRegister = compileUndefined(fn, cursor);
+		}
+
+		if (node.optional) {
+			emitOptionalGuard(fn, cursor, callee, shortCircuits);
+		}
+
+		if (node.arguments.some((arg) => arg.type === "SpreadElement")) {
+			const argumentsArray = compileSpreadArgumentsArray(
+				program,
+				fn,
+				cursor,
+				node.arguments,
+			);
+			const destination = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "callSpread",
+				registers: [destination, callee, thisRegister, argumentsArray],
+			});
+			return destination;
+		}
+
+		const args = node.arguments.map((arg) =>
+			arg.type === "SpreadElement" ? -1 : compileExpression(program, fn, cursor, arg),
+		);
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "call",
+			registers: [destination, callee, thisRegister, ...args],
+		});
+		return destination;
+	}
+
+	// The non-optional head of the chain (an identifier, this, parenthesized
+	// expression, etc.).
+	return compileExpression(program, fn, cursor, node);
 }
 
 function compileFunctionExpression(
@@ -3097,6 +3448,14 @@ function compileAssignment(
 	cursor: IRCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
+	if (
+		assignmentExpression.operator === "||=" ||
+		assignmentExpression.operator === "&&=" ||
+		assignmentExpression.operator === "??="
+	) {
+		return compileLogicalAssignment(program, fn, cursor, assignmentExpression);
+	}
+
 	if (assignmentExpression.left.type === "Identifier") {
 		return compileIdentifierAssignment(program, fn, cursor, assignmentExpression);
 	}
@@ -3232,6 +3591,144 @@ function compileIdentifierAssignment(
 
 	storeRegisterAtLocation(cursor.block, location, value);
 	return value;
+}
+
+/**
+ * Compile a logical assignment (||=, &&=, ??=). The target is read once, and
+ * the right hand side is evaluated and stored only when the short-circuit
+ * condition calls for it: ||= assigns on a falsy current value, &&= on a
+ * truthy one, ??= on null or undefined. The expression value is the current
+ * value when it short-circuits, otherwise the assigned value.
+ */
+function compileLogicalAssignment(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	assignmentExpression: ESTree.AssignmentExpression,
+): number {
+	const left = assignmentExpression.left;
+
+	let location: BindingLocation | undefined;
+	let nameHint: string | undefined;
+	let member: { object: number; key: number; isSuper: boolean } | undefined;
+	let current: number;
+
+	if (left.type === "Identifier") {
+		const binding = fn.semanticFile.nodeToBinding.get(left);
+		if (!binding) {
+			return -1;
+		}
+
+		if (binding.undeclared && !isIRIntrinsic(binding.name)) {
+			// GetValue on an unresolvable reference throws ReferenceError before
+			// the operator can short-circuit.
+			const destination = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "loadUndeclared",
+				registers: [destination],
+				nameStringIndex: getOrCreateStringConstant(program, binding.name),
+			});
+			return destination;
+		}
+
+		location = getOrCreateBindingLocation(program, fn, binding);
+		nameHint = binding.name;
+		current = loadRegisterFromLocation(fn, cursor.block, location);
+	} else if (left.type === "MemberExpression") {
+		const compiled = compileMemberObjectAndKey(program, fn, cursor, left);
+		member = {
+			object: compiled.object,
+			key: compiled.key,
+			isSuper: left.object.type === "Super",
+		};
+		current = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadProperty",
+			registers: [current, member.object, member.key],
+		});
+	} else {
+		return -1;
+	}
+
+	const result = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "move", registers: [result, current] });
+
+	// The condition register decides whether to enter the assign branch.
+	let condition = current;
+	if (assignmentExpression.operator === "??=") {
+		const undefinedRegister = compileUndefined(fn, cursor);
+		condition = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "binary",
+			registers: [condition, current, undefinedRegister],
+			operator: "==",
+		});
+	}
+
+	const conditionalJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [condition],
+		blocks: [-1],
+	};
+	const fallthroughJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(conditionalJump, fallthroughJump);
+
+	// Assign branch: evaluate the right hand side and store it.
+	const assignIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[assignIdx]!;
+	const right = compileExpression(
+		program,
+		fn,
+		cursor,
+		assignmentExpression.right,
+		nameHint,
+	);
+	if (right === -1) {
+		return -1;
+	}
+	cursor.block.instructions.push({ type: "move", registers: [result, right] });
+
+	if (location) {
+		storeRegisterAtLocation(cursor.block, location, right);
+	} else if (member) {
+		if (member.isSuper) {
+			const receiver = nextRegisterDestination(fn);
+			cursor.block.instructions.push({ type: "loadThis", registers: [receiver] });
+			cursor.block.instructions.push({
+				type: "storeSuperProperty",
+				registers: [member.object, member.key, right, receiver],
+			});
+		} else {
+			cursor.block.instructions.push({
+				type: "storeProperty",
+				registers: [member.object, member.key, right],
+			});
+		}
+	}
+
+	const assignJoinJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(assignJoinJump);
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	if (assignmentExpression.operator === "||=") {
+		// A truthy current value skips the assignment.
+		conditionalJump.blocks[0] = joinIdx;
+		fallthroughJump.blocks[0] = assignIdx;
+	} else {
+		// &&= enters on a truthy current value, ??= on a nil one.
+		conditionalJump.blocks[0] = assignIdx;
+		fallthroughJump.blocks[0] = joinIdx;
+	}
+	assignJoinJump.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+
+	return result;
 }
 
 /**

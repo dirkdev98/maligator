@@ -37,6 +37,7 @@ typedef enum MalOpcode {
     MAL_OP_GET_ITERATOR,
     MAL_OP_ITERATOR_STEP,
     MAL_OP_ITERATOR_CLOSE,
+    MAL_OP_FOR_IN_KEYS,
     MAL_OP_GENERATOR_START,
     MAL_OP_YIELD,
     MAL_OP_DELETE_PROPERTY,
@@ -63,6 +64,7 @@ typedef enum MalBinaryOp {
     MAL_BIN_MUL,
     MAL_BIN_DIV,
     MAL_BIN_REM,
+    MAL_BIN_POW,
     MAL_BIN_BIT_AND,
     MAL_BIN_BIT_OR,
     MAL_BIN_BIT_XOR,
@@ -238,6 +240,15 @@ typedef struct MalInstruction {
         struct {
             i32 iterator;
         } iterator_close;
+
+        /**
+         * for-in head: collect the enumerable string property keys of source
+         * (own + inherited, with shadowing) into a fresh array in dst, which
+         * the loop then iterates with the ordinary iterator protocol.
+         */
+        struct {
+            i32 dst, source;
+        } for_in_keys;
 
         /**
          * yield <src>: suspend the generator frame, leaving src as the yielded

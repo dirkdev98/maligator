@@ -98,6 +98,8 @@ void mal_op_iterator_step(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_iterator_close(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction);

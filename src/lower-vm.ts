@@ -218,6 +218,11 @@ export type VmInstruction =
 			iterator: number;
 	  }
 	| {
+			opcode: "FOR_IN_KEYS";
+			dst: number;
+			source: number;
+	  }
+	| {
 			opcode: "CALL_SPREAD";
 			dst: number;
 			callee: number;
@@ -623,6 +628,12 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "ITERATOR_CLOSE",
 				iterator: instruction.registers[0],
+			};
+		case "forInKeys":
+			return {
+				opcode: "FOR_IN_KEYS",
+				dst: instruction.registers[0],
+				source: instruction.registers[1],
 			};
 		case "callSpread":
 			return {

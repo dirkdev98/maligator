@@ -174,6 +174,8 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_ITERATOR_STEP, .as.iterator_step = { .value_dst = ${instruction.valueDst}, .done_dst = ${instruction.doneDst}, .iterator = ${instruction.iterator}, .next = ${instruction.next} } }`;
 		case "ITERATOR_CLOSE":
 			return `{ .opcode = MAL_OP_ITERATOR_CLOSE, .as.iterator_close = { .iterator = ${instruction.iterator} } }`;
+		case "FOR_IN_KEYS":
+			return `{ .opcode = MAL_OP_FOR_IN_KEYS, .as.for_in_keys = { .dst = ${instruction.dst}, .source = ${instruction.source} } }`;
 		case "CALL_SPREAD":
 			return `{ .opcode = MAL_OP_CALL_SPREAD, .as.call_spread = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .arguments_array = ${instruction.argumentsArray} } }`;
 		case "CONSTRUCT_SPREAD":
@@ -312,6 +314,8 @@ function emitBinaryOperator(operator: VmBinaryOperator) {
 			return "MAL_BIN_DIV";
 		case "%":
 			return "MAL_BIN_REM";
+		case "**":
+			return "MAL_BIN_POW";
 		case "&":
 			return "MAL_BIN_BIT_AND";
 		case "|":

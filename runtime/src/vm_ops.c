@@ -410,6 +410,9 @@ void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
         case MAL_BIN_REM:
             callable->registers[instruction->as.binary.dst] = mal_ops_remainder(left, right);
             break;
+        case MAL_BIN_POW:
+            callable->registers[instruction->as.binary.dst] = mal_ops_exponentiate(left, right);
+            break;
         case MAL_BIN_BIT_AND:
             callable->registers[instruction->as.binary.dst] = mal_ops_bit_and(left, right);
             break;
@@ -1007,6 +1010,91 @@ void mal_op_iterator_close(MalCallable *callable, MalInstruction *instruction) {
     };
 
     mal_vm_iterator_close(callable->vm, &record);
+}
+
+static MalValue mal_vm_for_in_key_string(MalVm *vm, MalKey key) {
+    if (key.kind == MAL_KEY_INDEX) {
+        return mal_value_from_string(mal_ops_to_string(&vm->heap, key.value));
+    }
+
+    return key.value;
+}
+
+void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue source = callable->registers[instruction->as.for_in_keys.source];
+
+    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    u32 count = 0;
+
+    // for-in over null/undefined performs no iteration.
+    if (mal_value_is_nil(source)) {
+        callable->registers[instruction->as.for_in_keys.dst] = mal_value_from_array_object(result);
+        return;
+    }
+
+    // Strings expose their characters as enumerable index properties; without a
+    // wrapper object we synthesize the index keys directly.
+    if (mal_value_is_string(source)) {
+        MalString *string = mal_value_to_string(source);
+        for (usize i = 0; i < mal_string_length(string); i++) {
+            mal_array_object_store(
+                result,
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+                mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) i)))
+            );
+            count++;
+        }
+        callable->registers[instruction->as.for_in_keys.dst] = mal_value_from_array_object(result);
+        return;
+    }
+
+    // Numbers, booleans, and symbols have no enumerable own properties.
+    if (!mal_value_is_object(source)) {
+        callable->registers[instruction->as.for_in_keys.dst] = mal_value_from_array_object(result);
+        return;
+    }
+
+    // EnumerateObjectProperties: walk the prototype chain visiting each string
+    // key once. A key seen on a nearer object shadows the same key further up,
+    // even when the nearer one is non-enumerable, so the shadow set records
+    // every own key regardless of enumerability. A throwaway object reuses the
+    // table's key equality for the set.
+    MalObject *seen = mal_intrinsic_new_object(vm);
+    MalPropertyDesc marker = mal_intrinsic_data_desc(mal_value_new_undefined(), 0);
+
+    for (MalObject *current = mal_value_to_object(source); current != nullptr;
+         current = mal_object_get_prototype(current)) {
+        MalPropertyIter iter;
+        mal_property_iter_init(&iter, current, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+
+        MalKey key;
+        MalPropertyDesc desc;
+        while (mal_property_iter_next(&iter, &key, &desc)) {
+            // Symbol keys are not enumerated by for-in.
+            if (key.kind == MAL_KEY_SYMBOL) {
+                continue;
+            }
+
+            if (mal_object_get_own(seen, key).present) {
+                continue;
+            }
+            mal_object_define_own(seen, key, &marker);
+
+            if (!(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+                continue;
+            }
+
+            mal_array_object_store(
+                result,
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+                mal_vm_for_in_key_string(vm, key)
+            );
+            count++;
+        }
+    }
+
+    callable->registers[instruction->as.for_in_keys.dst] = mal_value_from_array_object(result);
 }
 
 void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction) {

@@ -8,13 +8,10 @@ const unsupportedNodeTypes = new Map<string, string>([
 	["StaticBlock", "class static block"],
 	["PrivateIdentifier", "private class member"],
 	["MetaProperty", "new.target / import.meta"],
-	["ForInStatement", "for-in"],
 	["LabeledStatement", "labeled statement"],
 	["WithStatement", "with"],
 	["AwaitExpression", "async function"],
 	["TaggedTemplateExpression", "tagged template"],
-	["SequenceExpression", "sequence expression"],
-	["ChainExpression", "optional chaining"],
 	["ImportDeclaration", "module syntax"],
 	["ImportExpression", "module syntax"],
 	["ExportNamedDeclaration", "module syntax"],
@@ -28,6 +25,7 @@ const supportedBinaryOperators = new Set<string>([
 	"*",
 	"/",
 	"%",
+	"**",
 	"&",
 	"|",
 	"^",
@@ -63,12 +61,16 @@ const supportedAssignmentOperators = new Set<string>([
 	"*=",
 	"/=",
 	"%=",
+	"**=",
 	"&=",
 	"|=",
 	"^=",
 	"<<=",
 	">>=",
 	">>>=",
+	"||=",
+	"&&=",
+	"??=",
 ]);
 
 /**
@@ -110,7 +112,6 @@ function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
 	if (node.type === "ForOfStatement" && node.await) {
 		unsupported.add("for-await-of");
 	}
-
 
 	switch (node.type) {
 		case "FunctionDeclaration":

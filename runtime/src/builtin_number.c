@@ -97,8 +97,15 @@ static f64 mal_builtin_parse_float_units(const c16 *code_units, usize length) {
         (buffer[digits_start + 1] == 'x' || buffer[digits_start + 1] == 'X')) {
         buffer[digits_start + 1] = '\0';
     }
+    // parseFloat accepts a leading "Infinity" (exact spelling, after an optional
+    // sign); strtod would otherwise also accept "inf"/"infinity"/"nan", which
+    // the StrDecimalLiteral grammar does not.
+    if (buffer_length >= digits_start + 8 && memcmp(buffer + digits_start, "Infinity", 8) == 0) {
+        bool negative = digits_start == 1 && buffer[0] == '-';
+        free(buffer);
+        return negative ? -INFINITY : INFINITY;
+    }
     if (buffer_length > digits_start && (buffer[digits_start] == 'i' || buffer[digits_start] == 'I' || buffer[digits_start] == 'n' || buffer[digits_start] == 'N')) {
-        // TODO(numbers): the "Infinity" literal is not parsed yet.
         buffer[digits_start] = '\0';
     }
 

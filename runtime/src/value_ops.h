@@ -24,6 +24,8 @@ MalValue mal_ops_divide(MalValue left, MalValue right);
 
 MalValue mal_ops_remainder(MalValue left, MalValue right);
 
+MalValue mal_ops_exponentiate(MalValue left, MalValue right);
+
 MalValue mal_ops_bit_and(MalValue left, MalValue right);
 
 MalValue mal_ops_bit_or(MalValue left, MalValue right);

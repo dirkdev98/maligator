@@ -212,6 +212,13 @@ MalValue mal_ops_add(MalHeap *heap, MalValue left, MalValue right) {
 }
 
 static bool mal_ops_strict_equal_bool(MalValue left, MalValue right) {
+    // NaN is never strictly equal to anything, including itself. This has to
+    // run before the bitwise short-circuit below, since all NaNs share the
+    // canonical MAL_VALUE_NAN encoding and would otherwise compare equal.
+    if (mal_value_is_nan(left) || mal_value_is_nan(right)) {
+        return false;
+    }
+
     if (left == right) {
         return true;
     }
@@ -221,10 +228,6 @@ static bool mal_ops_strict_equal_bool(MalValue left, MalValue right) {
     }
 
     if (mal_value_is_f64_or_nan(left) && mal_value_is_f64_or_nan(right)) {
-        if (mal_value_is_nan(left) || mal_value_is_nan(right)) {
-            return false;
-        }
-
         return mal_ops_to_f64(left) == mal_ops_to_f64(right);
     }
 
@@ -353,6 +356,20 @@ MalValue mal_ops_divide(MalValue left, MalValue right) {
 
 MalValue mal_ops_remainder(MalValue left, MalValue right) {
     return mal_ops_number_value(fmod(mal_ops_to_number(left), mal_ops_to_number(right)));
+}
+
+MalValue mal_ops_exponentiate(MalValue left, MalValue right) {
+    double base = mal_ops_to_number(left);
+    double exponent = mal_ops_to_number(right);
+
+    // Number::exponentiate deviates from C pow in two cases: a NaN exponent is
+    // always NaN (C returns 1 for pow(1, NaN)), and an infinite exponent with a
+    // base of magnitude 1 is NaN (C returns 1).
+    if (isnan(exponent) || (isinf(exponent) && (base == 1.0 || base == -1.0))) {
+        return mal_ops_number_value(NAN);
+    }
+
+    return mal_ops_number_value(pow(base, exponent));
 }
 
 MalValue mal_ops_bit_and(MalValue left, MalValue right) {
