@@ -74,6 +74,54 @@ type BindingLocation =
  * Class body context carried by constructor and method functions so super
  * references can reach the parent class through its captured binding.
  */
+/**
+ * A single private member's resolution, shared by every function of the class
+ * through the class context. Exactly one of field/method/get/set is populated:
+ * a field carries its own-property key symbol, a method carries the shared
+ * function value, an accessor carries its get/set functions. brandBinding is
+ * the brand marker of the *declaring* class, so access from a nested class
+ * brand-checks against the right class.
+ */
+interface IRPrivateName {
+	static: boolean;
+	brandBinding: Binding;
+	fieldBinding?: Binding;
+	methodBinding?: Binding;
+	getBinding?: Binding;
+	setBinding?: Binding;
+}
+
+/**
+ * One entry of a constructor's InitializeInstanceElements sequence, in source
+ * order. Private fields install through their hidden symbol; public fields
+ * install as ordinary own data properties. Computed public keys are evaluated
+ * once at class definition and captured.
+ */
+type IRInstanceFieldKey =
+	// Non-computed public key, the own-property name.
+	| { kind: "name"; name: string }
+	// Instance computed key, evaluated once at class definition and captured.
+	| { kind: "captured"; binding: Binding }
+	// Static computed key, evaluated inline in the once-run static initializer.
+	| { kind: "node"; node: ESTree.Expression };
+
+type IRInstanceFieldPlanEntry =
+	| {
+			private: true;
+			fieldBinding: Binding;
+			valueNode: ESTree.Expression | null;
+			nameHint: string;
+	  }
+	| { private: false; key: IRInstanceFieldKey; valueNode: ESTree.Expression | null };
+
+/**
+ * A static class element in source order, run once by the static initializer
+ * with this = the constructor: a static field install or a static block body.
+ */
+type IRStaticElement =
+	| { kind: "field"; entry: IRInstanceFieldPlanEntry }
+	| { kind: "block"; body: Array<ESTree.Statement> };
+
 interface IRClassContext {
 	superBinding?: Binding;
 
@@ -85,6 +133,24 @@ interface IRClassContext {
 	classBinding?: Binding;
 
 	isStatic: boolean;
+
+	/**
+	 * The private environment, shared by the constructor and every method:
+	 * the per-class-evaluation symbols and brand markers are captured so any
+	 * `#x` reference resolves lexically with no dynamic lookup.
+	 */
+	privateNames?: Map<string, IRPrivateName>;
+	instanceBrandBinding?: Binding;
+	staticBrandBinding?: Binding;
+
+	/**
+	 * Constructor-only: drives where InitializeInstanceElements is woven in.
+	 * Base constructors install at the body prologue; derived constructors
+	 * install right after super() returns.
+	 */
+	isConstructor?: boolean;
+	isDerivedConstructor?: boolean;
+	instanceFieldPlan?: Array<IRInstanceFieldPlanEntry>;
 }
 
 export interface IRFunction {
@@ -140,18 +206,31 @@ export interface IRFunction {
 	 * the loop exit and continue targets exist.
 	 */
 	loops?: Array<IRLoopContext>;
+
+	/**
+	 * Labels collected by a LabeledStatement, consumed by the immediately
+	 * following loop/switch when it creates its context so labeled break and
+	 * continue can target it.
+	 */
+	pendingLabels?: Array<string>;
 }
 
 interface IRLoopContext {
 	/**
-	 * break targets the innermost breakable (loop/switch), continue the
-	 * innermost loop. "finally" entries carry no break/continue target but sit
-	 * on the same stack so that abrupt completions (return, and break/continue
-	 * in a later stage) route through enclosing finalizers in lexical order.
+	 * break targets the innermost breakable (loop/switch) or, when labeled, the
+	 * matching labeled scope; continue the innermost / matching loop. "label"
+	 * marks a labeled non-loop statement, a break-only target. "finally" entries
+	 * carry no target but sit on the same stack so abrupt completions route
+	 * through enclosing finalizers in lexical order.
 	 */
-	kind: "loop" | "switch" | "finally";
+	kind: "loop" | "switch" | "finally" | "label";
 	breakJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
 	continueJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
+
+	/**
+	 * Labels attached to this scope (a single statement may carry several).
+	 */
+	labels?: Set<string>;
 
 	/**
 	 * for-of loops carry their iterator register so break and return can
@@ -169,10 +248,13 @@ interface IRLoopContext {
 	completionValueReg?: number;
 
 	/**
-	 * For kind === "finally": which completion kinds actually route through, so
-	 * the epilogue only emits a dispatch arm (and out-of-line block) for those.
+	 * For kind === "finally": the abrupt-completion dispatch arms that actually
+	 * route through this finalizer. Keyed by routing identity (e.g. "return",
+	 * "break", "continue:outer") so each distinct target gets one arm; each
+	 * carries a unique kind code and the epilogue re-dispatch for it. NORMAL
+	 * needs no arm (it falls through).
 	 */
-	routedKinds?: Set<number>;
+	finalizerArms?: Map<string, { kind: number; fill: (block: IRBlock) => void }>;
 }
 
 export interface IRBlock {
@@ -361,6 +443,13 @@ export type IRInstruction =
 			index: number;
 	  }
 	| {
+			// [destination]; the active frame's new.target (undefined for a
+			// plain call, the constructor for a `new`/construct activation).
+			type: "loadNewTarget";
+
+			registers: [number];
+	  }
+	| {
 			// TODO(opt): there is an optimization opportunity when a store is 'immediately'
 			// followed by a load.
 			type: `store${"Local" | "Captured" | "Global"}`;
@@ -480,6 +569,42 @@ export type IRInstruction =
 			registers: [number, number, number];
 
 			enumerable: boolean;
+	  }
+	| {
+			// [destination]; mints a fresh hidden symbol that keys a private
+			// class member for this class evaluation.
+			type: "createPrivateName";
+
+			registers: [number];
+	  }
+	| {
+			// [object, key, value]; installs a private member (field or brand
+			// marker) keyed by the private symbol in key. Throws if already
+			// present.
+			type: "definePrivate";
+
+			registers: [number, number, number];
+	  }
+	| {
+			// [destination, object, key]; own-only read keyed by a private
+			// symbol. Throws TypeError when the receiver lacks the member.
+			type: "loadPrivate";
+
+			registers: [number, number, number];
+	  }
+	| {
+			// [object, key, value]; own-only write keyed by a private symbol.
+			// Throws TypeError when the receiver lacks the member.
+			type: "storePrivate";
+
+			registers: [number, number, number];
+	  }
+	| {
+			// [destination, object, key]; the `#x in o` brand check. Yields a
+			// boolean; throws TypeError when the receiver is not an object.
+			type: "hasPrivate";
+
+			registers: [number, number, number];
 	  }
 	| {
 			type: "setPrototype";
@@ -909,6 +1034,13 @@ function compileNewFunctionExpression(
 	program.nodeToFunctionCache.set(functionNode, { fnIndex: compiledFn.functionIndex });
 
 	const paramsCursor = compileFunctionParams(program, compiledFn, functionNode);
+
+	// Base constructors run InitializeInstanceElements before the body; derived
+	// constructors run it after super() returns (woven in by compileSuperCall).
+	if (classContext?.isConstructor && !classContext.isDerivedConstructor) {
+		emitInstanceElementInit(program, compiledFn, paramsCursor, classContext);
+	}
+
 	const bodyBlock = compileStatementsToBlock(
 		program,
 		compiledFn,
@@ -936,9 +1068,244 @@ function compileNewFunctionExpression(
 }
 
 /**
- * Compile a class body to its constructor function value. The parent class is
- * stashed in a synthetic captured binding so constructor and method bodies
- * can reach it for super references.
+ * Create a synthetic captured binding owned by the enclosing function, used
+ * for the class machinery (super, class self-reference, private symbols and
+ * shared private functions). Ownership is claimed here so inner functions
+ * resolve the slot through the enclosing frame's environment.
+ */
+function createCapturedBinding(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	name: string,
+): Binding {
+	const binding: Binding = { kind: "const", name, usageNodes: [], scopedTo: "captured" };
+	getOrCreateBindingLocation(program, fn, binding);
+	return binding;
+}
+
+/**
+ * The own-property name of a non-computed public class field key.
+ */
+function classFieldKeyName(key: ESTree.Expression | ESTree.PrivateIdentifier): string {
+	if (key.type === "Identifier") {
+		return key.name;
+	}
+
+	if (key.type === "Literal") {
+		return String(key.value);
+	}
+
+	return "";
+}
+
+/**
+ * Mint a fresh hidden private symbol into a captured slot at class definition
+ * time. Each class evaluation produces distinct identities, so instances of
+ * two evaluations of the same class source are not brand compatible.
+ */
+function mintPrivateName(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	binding: Binding | undefined,
+) {
+	if (!binding) {
+		return;
+	}
+
+	const symbol = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "createPrivateName", registers: [symbol] });
+	storeRegisterAtLocation(
+		cursor.block,
+		getOrCreateBindingLocation(program, fn, binding),
+		symbol,
+	);
+}
+
+/**
+ * Emit one field installation: a private field through its hidden symbol
+ * (definePrivate) or a public field as an own enumerable data property
+ * (CreateDataProperty). `this` is the receiver being initialized.
+ */
+function emitFieldInstall(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	entry: IRInstanceFieldPlanEntry,
+) {
+	const nameHint = entry.private
+		? entry.nameHint
+		: entry.key.kind === "name"
+			? entry.key.name
+			: undefined;
+
+	let value: number;
+	if (entry.valueNode) {
+		value = compileExpression(program, fn, cursor, entry.valueNode, nameHint);
+		if (value === -1) {
+			value = compileUndefined(fn, cursor);
+		}
+	} else {
+		value = compileUndefined(fn, cursor);
+	}
+
+	const thisRegister = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "loadThis", registers: [thisRegister] });
+
+	if (entry.private) {
+		const symbol = loadRegisterFromLocation(
+			fn,
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, entry.fieldBinding),
+		);
+		cursor.block.instructions.push({
+			type: "definePrivate",
+			registers: [thisRegister, symbol, value],
+		});
+		return;
+	}
+
+	let key: number;
+	if (entry.key.kind === "name") {
+		key = compileStaticString(program, fn, cursor, entry.key.name);
+	} else if (entry.key.kind === "captured") {
+		key = loadRegisterFromLocation(
+			fn,
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, entry.key.binding),
+		);
+	} else {
+		key = compileExpression(program, fn, cursor, entry.key.node);
+		if (key === -1) {
+			key = compileUndefined(fn, cursor);
+		}
+	}
+
+	cursor.block.instructions.push({
+		type: "defineProperty",
+		registers: [thisRegister, key, value],
+		enumerable: true,
+	});
+}
+
+/**
+ * Emit the InitializeInstanceElements sequence on `this`: install the brand
+ * marker (covering private methods/accessors) and then run public and private
+ * field initializers in source order. No-op when the class has none.
+ */
+function emitInstanceElementInit(
+	program: IntermediateProgram,
+	ctorFn: IRFunction,
+	cursor: IRCursor,
+	classContext: IRClassContext,
+) {
+	const brand = classContext.instanceBrandBinding;
+	const plan = classContext.instanceFieldPlan ?? [];
+	if (!brand && plan.length === 0) {
+		return;
+	}
+
+	if (brand) {
+		const thisRegister = nextRegisterDestination(ctorFn);
+		cursor.block.instructions.push({ type: "loadThis", registers: [thisRegister] });
+		const symbol = loadRegisterFromLocation(
+			ctorFn,
+			cursor.block,
+			getOrCreateBindingLocation(program, ctorFn, brand),
+		);
+		const marker = nextRegisterDestination(ctorFn);
+		cursor.block.instructions.push({
+			type: "createBoolean",
+			registers: [marker],
+			value: true,
+		});
+		cursor.block.instructions.push({
+			type: "definePrivate",
+			registers: [thisRegister, symbol, marker],
+		});
+	}
+
+	for (const entry of plan) {
+		emitFieldInstall(program, ctorFn, cursor, entry);
+	}
+}
+
+/**
+ * Build the static initializer: a synthetic function run once with
+ * this = constructor. It installs the static brand and runs static field
+ * initializers in source order.
+ */
+function buildStaticInitializer(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	staticContext: IRClassContext,
+	staticElements: Array<IRStaticElement>,
+	staticBrandBinding: Binding | undefined,
+): number {
+	const initFn: IRFunction = {
+		semanticFile: fn.semanticFile,
+		functionIndex: program.functions.length,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+		classContext: staticContext,
+		parameterCount: 0,
+		length: 0,
+		nextRegisterDestination: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	program.functions.push(initFn);
+
+	const block: IRBlock = { instructions: [] };
+	initFn.blocks.push(block);
+	const cursor: IRCursor = { block };
+
+	if (staticBrandBinding) {
+		const thisRegister = nextRegisterDestination(initFn);
+		cursor.block.instructions.push({ type: "loadThis", registers: [thisRegister] });
+		const symbol = loadRegisterFromLocation(
+			initFn,
+			cursor.block,
+			getOrCreateBindingLocation(program, initFn, staticBrandBinding),
+		);
+		const marker = nextRegisterDestination(initFn);
+		cursor.block.instructions.push({
+			type: "createBoolean",
+			registers: [marker],
+			value: true,
+		});
+		cursor.block.instructions.push({
+			type: "definePrivate",
+			registers: [thisRegister, symbol, marker],
+		});
+	}
+
+	// Static fields and static blocks run in source order. A block's statements
+	// are compiled into their own chain and the cursor resumes at its tail.
+	for (const element of staticElements) {
+		if (element.kind === "field") {
+			emitFieldInstall(program, initFn, cursor, element.entry);
+			continue;
+		}
+
+		const entryBlock = compileStatementsToBlock(program, initFn, element.body);
+		cursor.block.instructions.push({ type: "jump", blocks: [entryBlock] });
+		cursor.block = initFn.blocks.at(-1)!;
+	}
+
+	endFunction(initFn);
+	return initFn.functionIndex;
+}
+
+/**
+ * Compile a class body to its constructor function value.
+ *
+ * Besides the constructor and prototype/static methods, this wires up the
+ * private environment: per-class-evaluation hidden symbols (one brand marker
+ * for instances, one for statics, plus one key per private field) and the
+ * shared functions backing private methods/accessors, all stashed in captured
+ * bindings so every method resolves `#x` lexically. Public and private fields
+ * install through the constructor's InitializeInstanceElements sequence.
  */
 function compileClass(
 	program: IntermediateProgram,
@@ -947,6 +1314,8 @@ function compileClass(
 	classNode: ESTree.ClassDeclaration | ESTree.ClassExpression,
 	nameHint?: string,
 ): number {
+	const classId = program.functions.length;
+
 	let superBinding: Binding | undefined;
 	let classBinding: Binding | undefined;
 	let parent = -1;
@@ -956,42 +1325,180 @@ function compileClass(
 			return -1;
 		}
 
-		superBinding = {
-			kind: "const",
-			name: `__super_${program.functions.length}`,
-			usageNodes: [],
-			scopedTo: "captured",
-		};
-		const location = getOrCreateBindingLocation(program, fn, superBinding);
-		storeRegisterAtLocation(cursor.block, location, parent);
+		superBinding = createCapturedBinding(program, fn, `__super_${classId}`);
+		storeRegisterAtLocation(
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, superBinding),
+			parent,
+		);
 	} else {
 		// Heritage-less classes stash themselves so super references can walk
 		// the home object's live prototype chain.
-		classBinding = {
-			kind: "const",
-			name: `__class_${program.functions.length}`,
-			usageNodes: [],
-			scopedTo: "captured",
-		};
+		classBinding = createCapturedBinding(program, fn, `__class_${classId}`);
 	}
 
-	const members = classNode.body.body.filter(
-		(member): member is ESTree.MethodDefinition => member.type === "MethodDefinition",
-	);
+	// Scan the body once to build the private environment and field plans. The
+	// symbols are minted at class definition (below); here we only allocate the
+	// captured bindings that will hold them. ownNames holds this class's own
+	// declarations; they are layered over the enclosing class's private
+	// environment so a nested class can still reach an outer class's privates.
+	const ownNames = new Map<string, IRPrivateName>();
+	let instanceBrandBinding: Binding | undefined;
+	let staticBrandBinding: Binding | undefined;
+	const instanceFieldPlan: Array<IRInstanceFieldPlanEntry> = [];
+	const staticElements: Array<IRStaticElement> = [];
+	const computedInstanceKeys: Array<{ binding: Binding; node: ESTree.Expression }> = [];
 
-	const constructorNode = members.find((member) => member.kind === "constructor");
+	const ensurePrivateEntry = (name: string, isStatic: boolean): IRPrivateName => {
+		const brandBinding = isStatic
+			? (staticBrandBinding ??= createCapturedBinding(program, fn, `__sbrand_${classId}`))
+			: (instanceBrandBinding ??= createCapturedBinding(
+					program,
+					fn,
+					`__brand_${classId}`,
+				));
+
+		let entry = ownNames.get(name);
+		if (!entry) {
+			entry = { static: isStatic, brandBinding };
+			ownNames.set(name, entry);
+		}
+
+		return entry;
+	};
+
+	for (const member of classNode.body.body) {
+		if (member.type === "StaticBlock") {
+			staticElements.push({ kind: "block", body: member.body });
+			continue;
+		}
+
+		if (member.type === "PropertyDefinition") {
+			const valueNode = (member.value ?? null) as ESTree.Expression | null;
+			let entry: IRInstanceFieldPlanEntry;
+			if (member.key.type === "PrivateIdentifier") {
+				const name = `#${member.key.name}`;
+				const privateEntry = ensurePrivateEntry(name, member.static);
+				privateEntry.fieldBinding ??= createCapturedBinding(
+					program,
+					fn,
+					`__pf_${name}_${classId}`,
+				);
+				entry = {
+					private: true,
+					fieldBinding: privateEntry.fieldBinding,
+					valueNode,
+					nameHint: name,
+				};
+			} else if (member.computed && !member.static) {
+				// Instance computed keys are evaluated once, at class definition.
+				const keyBinding = createCapturedBinding(
+					program,
+					fn,
+					`__fk_${classId}_${computedInstanceKeys.length}`,
+				);
+				computedInstanceKeys.push({ binding: keyBinding, node: member.key });
+				entry = {
+					private: false,
+					key: { kind: "captured", binding: keyBinding },
+					valueNode,
+				};
+			} else if (member.computed) {
+				// Static computed keys evaluate inline in the once-run static init.
+				entry = { private: false, key: { kind: "node", node: member.key }, valueNode };
+			} else {
+				entry = {
+					private: false,
+					key: { kind: "name", name: classFieldKeyName(member.key) },
+					valueNode,
+				};
+			}
+
+			if (member.static) {
+				staticElements.push({ kind: "field", entry });
+			} else {
+				instanceFieldPlan.push(entry);
+			}
+			continue;
+		}
+
+		if (
+			member.type !== "MethodDefinition" ||
+			member.kind === "constructor" ||
+			!member.key
+		) {
+			continue;
+		}
+
+		if (member.key.type === "PrivateIdentifier") {
+			const name = `#${member.key.name}`;
+			const entry = ensurePrivateEntry(name, member.static);
+			if (member.kind === "get") {
+				entry.getBinding ??= createCapturedBinding(
+					program,
+					fn,
+					`__pg_${name}_${classId}`,
+				);
+			} else if (member.kind === "set") {
+				entry.setBinding ??= createCapturedBinding(
+					program,
+					fn,
+					`__ps_${name}_${classId}`,
+				);
+			} else {
+				entry.methodBinding ??= createCapturedBinding(
+					program,
+					fn,
+					`__pm_${name}_${classId}`,
+				);
+			}
+		}
+	}
+
+	// Layer this class's own private names over the enclosing private
+	// environment so nested classes resolve outer privates (with shadowing).
+	const privateNames = new Map<string, IRPrivateName>([
+		...(fn.classContext?.privateNames ?? []),
+		...ownNames,
+	]);
+
+	const sharedContext = {
+		superBinding,
+		classBinding,
+		privateNames: privateNames.size > 0 ? privateNames : undefined,
+		instanceBrandBinding,
+		staticBrandBinding,
+	};
+
+	const constructorNode = classNode.body.body.find(
+		(member): member is ESTree.MethodDefinition =>
+			member.type === "MethodDefinition" && member.kind === "constructor",
+	);
 	// NamedEvaluation: anonymous class expressions take the binding name.
 	const className = classNode.id?.name ?? nameHint ?? "";
+	const constructorContext: IRClassContext = {
+		...sharedContext,
+		isStatic: false,
+		isConstructor: true,
+		isDerivedConstructor: parent !== -1,
+		instanceFieldPlan,
+	};
 	const constructorIndex =
 		constructorNode && constructorNode.value.type === "FunctionExpression"
 			? compileNewFunctionExpression(
 					program,
 					fn,
 					constructorNode.value,
-					{ superBinding, classBinding, isStatic: false },
+					constructorContext,
 					className,
 				)
-			: compileDefaultConstructor(program, fn, superBinding, className);
+			: compileDefaultConstructor(
+					program,
+					fn,
+					superBinding,
+					className,
+					constructorContext,
+				);
 
 	const ctor = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
@@ -1001,8 +1508,45 @@ function compileClass(
 	});
 
 	if (classBinding) {
-		const location = getOrCreateBindingLocation(program, fn, classBinding);
-		storeRegisterAtLocation(cursor.block, location, ctor);
+		storeRegisterAtLocation(
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, classBinding),
+			ctor,
+		);
+	}
+
+	// Bind the class's own name to the constructor now, before static elements
+	// run, so the class body can reference itself by name (e.g. `static x = C`
+	// or `static { C.foo() }`). This is the class's inner name binding; the
+	// outer declaration store (if any) happens after compileClass and is
+	// redundant. The sema field-init/static-block scope boundary marks such
+	// references as captures, so the static initializer reaches this slot.
+	const selfBinding = fn.semanticFile.nodeToBinding.get(classNode);
+	if (selfBinding && !selfBinding.undeclared) {
+		storeRegisterAtLocation(
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, selfBinding),
+			ctor,
+		);
+	}
+
+	// Mint the per-evaluation private symbols (brand markers and field keys).
+	// Only this class's own names are minted here; inherited names were minted
+	// by their declaring class.
+	mintPrivateName(program, fn, cursor, instanceBrandBinding);
+	mintPrivateName(program, fn, cursor, staticBrandBinding);
+	for (const entry of ownNames.values()) {
+		mintPrivateName(program, fn, cursor, entry.fieldBinding);
+	}
+
+	// Evaluate computed instance field keys once, here at class definition.
+	for (const { binding, node } of computedInstanceKeys) {
+		const key = compileExpression(program, fn, cursor, node);
+		storeRegisterAtLocation(
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, binding),
+			key === -1 ? compileUndefined(fn, cursor) : key,
+		);
 	}
 
 	// Wire the prototype chains.
@@ -1050,19 +1594,30 @@ function compileClass(
 		});
 	}
 
-	for (const member of members) {
-		if (member.kind === "constructor" || member.value.type !== "FunctionExpression") {
+	for (const member of classNode.body.body) {
+		if (
+			member.type !== "MethodDefinition" ||
+			member.kind === "constructor" ||
+			member.value.type !== "FunctionExpression" ||
+			!member.key
+		) {
 			continue;
 		}
 
-		const target = member.static ? ctor : prototype;
-		const key = compileClassMemberKey(program, fn, cursor, member);
+		const isPrivate = member.key.type === "PrivateIdentifier";
+		const privateName = isPrivate
+			? `#${(member.key as ESTree.PrivateIdentifier).name}`
+			: "";
 		const methodIndex = compileNewFunctionExpression(
 			program,
 			fn,
 			member.value,
-			{ superBinding, classBinding, isStatic: member.static },
-			!member.computed && member.key?.type === "Identifier" ? member.key.name : "",
+			{ ...sharedContext, isStatic: member.static },
+			isPrivate
+				? privateName
+				: !member.computed && member.key.type === "Identifier"
+					? member.key.name
+					: "",
 		);
 		const method = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
@@ -1071,6 +1626,26 @@ function compileClass(
 			functionIndex: methodIndex,
 		});
 
+		if (isPrivate) {
+			// Private methods/accessors are shared values, not own properties;
+			// the per-instance brand marker gates access to them.
+			const entry = ownNames.get(privateName)!;
+			const targetBinding =
+				member.kind === "get"
+					? entry.getBinding
+					: member.kind === "set"
+						? entry.setBinding
+						: entry.methodBinding;
+			storeRegisterAtLocation(
+				cursor.block,
+				getOrCreateBindingLocation(program, fn, targetBinding!),
+				method,
+			);
+			continue;
+		}
+
+		const target = member.static ? ctor : prototype;
+		const key = compileClassMemberKey(program, fn, cursor, member);
 		if (member.kind === "get" || member.kind === "set") {
 			cursor.block.instructions.push({
 				type: "defineAccessor",
@@ -1085,6 +1660,29 @@ function compileClass(
 				enumerable: false,
 			});
 		}
+	}
+
+	// Run static field initializers and static blocks (and install the static
+	// brand) in source order with this = constructor.
+	if (staticElements.length > 0 || staticBrandBinding) {
+		const staticInitIndex = buildStaticInitializer(
+			program,
+			fn,
+			{ ...sharedContext, isStatic: true },
+			staticElements,
+			staticBrandBinding,
+		);
+		const initFunction = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createFunction",
+			registers: [initFunction],
+			functionIndex: staticInitIndex,
+		});
+		const result = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "call",
+			registers: [result, initFunction, ctor],
+		});
 	}
 
 	return ctor;
@@ -1115,6 +1713,178 @@ function compileClassMemberKey(
 	return -1;
 }
 
+function loadCapturedBinding(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	binding: Binding,
+): number {
+	return loadRegisterFromLocation(
+		fn,
+		cursor.block,
+		getOrCreateBindingLocation(program, fn, binding),
+	);
+}
+
+/**
+ * The brand marker binding gating a private member: the declaring class's
+ * brand, carried on the entry so access from a nested class brand-checks
+ * against the class that declared the member rather than the current one.
+ */
+function privateBrandBinding(_fn: IRFunction, entry: IRPrivateName): Binding | undefined {
+	return entry.brandBinding;
+}
+
+/**
+ * Brand-check a receiver against a private member's class. Reads the brand
+ * marker through loadPrivate, which throws a TypeError when the receiver was
+ * not branded by the declaring class. The loaded value is discarded.
+ */
+function emitPrivateBrandCheck(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	objectReg: number,
+	entry: IRPrivateName,
+) {
+	const brand = privateBrandBinding(fn, entry);
+	if (!brand) {
+		return;
+	}
+
+	const brandSymbol = loadCapturedBinding(program, fn, cursor, brand);
+	const discard = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadPrivate",
+		registers: [discard, objectReg, brandSymbol],
+	});
+}
+
+/**
+ * Emit `throw new TypeError(message)`. Control transfers at the throw, so any
+ * instructions the caller emits afterward are dead; the returned register is a
+ * placeholder for expression-position callers.
+ */
+function emitThrowTypeError(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	message: string,
+): number {
+	const constructor = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadIntrinsic",
+		registers: [constructor],
+		intrinsic: "TypeError",
+	});
+	const messageRegister = compileStaticString(program, fn, cursor, message);
+	const error = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "construct",
+		registers: [error, constructor, messageRegister],
+	});
+	cursor.block.instructions.push({ type: "throw", registers: [error] });
+	return error;
+}
+
+/**
+ * Compile a private member read `obj.#x`: a direct slot read for fields, the
+ * shared function for methods, or a brand-checked getter call for accessors.
+ */
+function compilePrivateMemberLoad(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	objectReg: number,
+	name: string,
+): number {
+	const entry = fn.classContext?.privateNames?.get(name);
+	if (!entry || objectReg === -1) {
+		return -1;
+	}
+
+	if (entry.fieldBinding) {
+		const symbol = loadCapturedBinding(program, fn, cursor, entry.fieldBinding);
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadPrivate",
+			registers: [destination, objectReg, symbol],
+		});
+		return destination;
+	}
+
+	if (entry.methodBinding) {
+		emitPrivateBrandCheck(program, fn, cursor, objectReg, entry);
+		return loadCapturedBinding(program, fn, cursor, entry.methodBinding);
+	}
+
+	// Accessor: the brand marker gates access; a getter call yields the value.
+	emitPrivateBrandCheck(program, fn, cursor, objectReg, entry);
+	if (entry.getBinding) {
+		const getter = loadCapturedBinding(program, fn, cursor, entry.getBinding);
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "call",
+			registers: [destination, getter, objectReg],
+		});
+		return destination;
+	}
+
+	// Reading a set-only private accessor: PrivateGet throws after the brand
+	// check confirms the receiver is in the class.
+	return emitThrowTypeError(
+		program,
+		fn,
+		cursor,
+		`'${name}' was defined without a getter`,
+	);
+}
+
+/**
+ * Compile a private member write `obj.#x = v`: a slot write for fields or a
+ * brand-checked setter call for accessors.
+ */
+function compilePrivateMemberStore(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	objectReg: number,
+	name: string,
+	valueReg: number,
+) {
+	const entry = fn.classContext?.privateNames?.get(name);
+	if (!entry || objectReg === -1) {
+		return;
+	}
+
+	if (entry.fieldBinding) {
+		const symbol = loadCapturedBinding(program, fn, cursor, entry.fieldBinding);
+		cursor.block.instructions.push({
+			type: "storePrivate",
+			registers: [objectReg, symbol, valueReg],
+		});
+		return;
+	}
+
+	emitPrivateBrandCheck(program, fn, cursor, objectReg, entry);
+	if (entry.setBinding) {
+		const setter = loadCapturedBinding(program, fn, cursor, entry.setBinding);
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "call",
+			registers: [destination, setter, objectReg, valueReg],
+		});
+		return;
+	}
+
+	// Writing a private method or a get-only accessor: PrivateSet throws after
+	// the brand check confirms the receiver is in the class.
+	const reason = entry.methodBinding
+		? "is not writable: it is a private method"
+		: "was defined without a setter";
+	emitThrowTypeError(program, fn, cursor, `'${name}' ${reason}`);
+}
+
 /**
  * Synthesize the default constructor: empty for base classes, forwarding all
  * arguments to the parent constructor on the same this for derived ones.
@@ -1124,12 +1894,14 @@ function compileDefaultConstructor(
 	fn: IRFunction,
 	superBinding: Binding | undefined,
 	name: string,
+	classContext: IRClassContext,
 ): number {
 	const ctorFn: IRFunction = {
 		semanticFile: fn.semanticFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(program, name),
 		blocks: [],
+		classContext,
 
 		parameterCount: 0,
 		length: 0,
@@ -1141,9 +1913,9 @@ function compileDefaultConstructor(
 
 	const block: IRBlock = { instructions: [] };
 	ctorFn.blocks.push(block);
+	const cursor: IRCursor = { block };
 
 	if (superBinding) {
-		const cursor: IRCursor = { block };
 		const location = getOrCreateBindingLocation(program, ctorFn, superBinding);
 		const parent = loadRegisterFromLocation(ctorFn, cursor.block, location);
 
@@ -1172,6 +1944,10 @@ function compileDefaultConstructor(
 			registers: [result, apply, parent, thisRegister, argumentsObject],
 		});
 	}
+
+	// InitializeInstanceElements: a base default constructor installs at entry;
+	// a derived one installs right after the synthesized super() returns.
+	emitInstanceElementInit(program, ctorFn, cursor, classContext);
 
 	endFunction(ctorFn);
 	return ctorFn.functionIndex;
@@ -1774,6 +2550,10 @@ function compileStatementsToBlock(
 				compileClassDeclaration(program, fn, block, statement);
 				break;
 			}
+			case "LabeledStatement": {
+				compileLabeledStatement(program, fn, block, statement);
+				break;
+			}
 		}
 	}
 
@@ -1877,6 +2657,7 @@ function compileSwitchStatement(
 		kind: "switch",
 		breakJumps: [],
 		continueJumps: [],
+		labels: takePendingLabels(fn),
 	};
 	(fn.loops ??= []).push(switchContext);
 
@@ -1962,7 +2743,12 @@ function compileWhileStatement(
 		blocks: [headerIdx],
 	});
 
-	const loop: IRLoopContext = { kind: "loop", breakJumps: [], continueJumps: [] };
+	const loop: IRLoopContext = {
+		kind: "loop",
+		breakJumps: [],
+		continueJumps: [],
+		labels: takePendingLabels(fn),
+	};
 	(fn.loops ??= []).push(loop);
 
 	const headerCursor: IRCursor = { block: fn.blocks[headerIdx]! };
@@ -2012,7 +2798,12 @@ function compileDoWhileStatement(
 	block: IRBlock,
 	statement: ESTree.DoWhileStatement,
 ) {
-	const loop: IRLoopContext = { kind: "loop", breakJumps: [], continueJumps: [] };
+	const loop: IRLoopContext = {
+		kind: "loop",
+		breakJumps: [],
+		continueJumps: [],
+		labels: takePendingLabels(fn),
+	};
 	(fn.loops ??= []).push(loop);
 
 	const bodyIdx = compileStatementsToBlock(
@@ -2081,7 +2872,12 @@ function compileForStatement(
 		blocks: [headerIdx],
 	});
 
-	const loop: IRLoopContext = { kind: "loop", breakJumps: [], continueJumps: [] };
+	const loop: IRLoopContext = {
+		kind: "loop",
+		breakJumps: [],
+		continueJumps: [],
+		labels: takePendingLabels(fn),
+	};
 	(fn.loops ??= []).push(loop);
 
 	const headerCursor: IRCursor = { block: fn.blocks[headerIdx]! };
@@ -2202,6 +2998,7 @@ function compileForInOfLoop(
 	left: ESTree.ForOfStatement["left"],
 	body: ESTree.Statement,
 ) {
+	const labels = takePendingLabels(fn);
 	const iteratorRegister = nextRegisterDestination(fn);
 	const nextRegister = nextRegisterDestination(fn);
 	entryCursor.block.instructions.push({
@@ -2220,6 +3017,7 @@ function compileForInOfLoop(
 		breakJumps: [],
 		continueJumps: [],
 		iteratorRegister,
+		labels,
 	};
 	(fn.loops ??= []).push(loop);
 
@@ -2310,21 +3108,91 @@ function compileForInOfLoop(
 	fn.loops.pop();
 }
 
+/**
+ * Consume the labels a LabeledStatement stashed for the loop/switch it
+ * immediately precedes, clearing them so nested statements don't inherit them.
+ */
+function takePendingLabels(fn: IRFunction): Set<string> | undefined {
+	const labels = fn.pendingLabels;
+	fn.pendingLabels = undefined;
+	return labels && labels.length > 0 ? new Set(labels) : undefined;
+}
+
+const LOOP_STATEMENT_TYPES = new Set<string>([
+	"ForStatement",
+	"ForInStatement",
+	"ForOfStatement",
+	"WhileStatement",
+	"DoWhileStatement",
+]);
+
+/**
+ * Compile a labeled statement. Labels on a loop/switch attach to that scope's
+ * context (so labeled break/continue can target it); a label on any other
+ * statement makes a break-only target whose break jumps to the join after it.
+ */
+function compileLabeledStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.LabeledStatement,
+) {
+	// Peel stacked labels (`a: b: for ...`) down to the labeled statement.
+	const labels: Array<string> = [];
+	let inner: ESTree.Statement = statement;
+	while (inner.type === "LabeledStatement") {
+		labels.push(inner.label.name);
+		inner = inner.body;
+	}
+
+	if (LOOP_STATEMENT_TYPES.has(inner.type)) {
+		// The following loop/switch claims these labels for its own context.
+		fn.pendingLabels = labels;
+		const entry = compileStatementsToBlock(program, fn, [inner]);
+		block.instructions.push({ type: "jump", blocks: [entry] });
+		return;
+	}
+
+	// Labeled non-loop statement: a break-only target.
+	const labelContext: IRLoopContext = {
+		kind: "label",
+		breakJumps: [],
+		continueJumps: [],
+		labels: new Set(labels),
+	};
+	(fn.loops ??= []).push(labelContext);
+	const bodyEntry = compileStatementsToBlock(
+		program,
+		fn,
+		normalizeStatementOrBlock(inner),
+	);
+	block.instructions.push({ type: "jump", blocks: [bodyEntry] });
+	const bodyTail = fn.blocks.at(-1)!;
+	fn.loops.pop();
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	bodyTail.instructions.push({ type: "jump", blocks: [joinIdx] });
+	for (const jump of labelContext.breakJumps) {
+		jump.blocks[0] = joinIdx;
+	}
+}
+
 function compileBreakStatement(
 	fn: IRFunction,
 	block: IRBlock,
 	statement: ESTree.BreakStatement,
 ) {
-	const target = fn.loops?.findLast(
-		(context) => context.kind === "loop" || context.kind === "switch",
-	);
-	if (!target || statement.label) {
-		// TODO(loops): labeled break is not supported yet.
+	const label = statement.label?.name;
+	const target =
+		label === undefined
+			? fn.loops?.findLast((c) => c.kind === "loop" || c.kind === "switch")
+			: fn.loops?.findLast((c) => c.labels?.has(label));
+	if (!target) {
 		return;
 	}
 
 	// Routes through any enclosing finalizers before reaching the target.
-	emitBreak(fn, block);
+	emitBreak(fn, block, label);
 }
 
 function compileContinueStatement(
@@ -2332,13 +3200,16 @@ function compileContinueStatement(
 	block: IRBlock,
 	statement: ESTree.ContinueStatement,
 ) {
-	const target = fn.loops?.findLast((context) => context.kind === "loop");
-	if (!target || statement.label) {
-		// TODO(loops): labeled continue is not supported yet.
+	const label = statement.label?.name;
+	const target =
+		label === undefined
+			? fn.loops?.findLast((c) => c.kind === "loop")
+			: fn.loops?.findLast((c) => c.kind === "loop" && c.labels?.has(label));
+	if (!target) {
 		return;
 	}
 
-	emitContinue(fn, block);
+	emitContinue(fn, block, label);
 }
 
 /**
@@ -2491,13 +3362,22 @@ function compileTryFinally(
 		finallyEntryJumps: [],
 		completionKindReg: kindReg,
 		completionValueReg: valueReg,
-		routedKinds: new Set(),
+		finalizerArms: new Map(),
 	};
 	const entryJumps = finallyCtx.finallyEntryJumps!;
 
-	// Set the pending completion in `target` and route it into the finalizer.
-	const routeToFinalizer = (target: IRBlock, kind: number, value?: number) =>
-		routeThroughFinalizer(target, finallyCtx, kind, value);
+	// Route a normal completion into the finalizer (falls through afterward).
+	const routeNormal = (target: IRBlock) =>
+		routeThroughFinalizer(target, finallyCtx, "normal", null);
+	// Route a thrown completion in: the epilogue re-throws the stashed value.
+	const routeThrow = (target: IRBlock, value: number) =>
+		routeThroughFinalizer(
+			target,
+			finallyCtx,
+			"throw",
+			(b) => b.instructions.push({ type: "throw", registers: [valueReg] }),
+			value,
+		);
 
 	// --- protected try body ---
 	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
@@ -2523,7 +3403,7 @@ function compileTryFinally(
 	const tryNormalExitIdx = fn.blocks.push(tryNormalExit) - 1;
 	tryBegin.blocks[1] = tryNormalExitIdx;
 	tryBodyLastBlock.instructions.push({ type: "jump", blocks: [tryNormalExitIdx] });
-	routeToFinalizer(tryNormalExit, COMPLETION_NORMAL);
+	routeNormal(tryNormalExit);
 
 	// --- handler for the try body ---
 	const handlerBlock: IRBlock = { instructions: [] };
@@ -2565,17 +3445,17 @@ function compileTryFinally(
 		const catchNormalExitIdx = fn.blocks.push(catchNormalExit) - 1;
 		catchTryBegin.blocks[1] = catchNormalExitIdx;
 		catchBodyLastBlock.instructions.push({ type: "jump", blocks: [catchNormalExitIdx] });
-		routeToFinalizer(catchNormalExit, COMPLETION_NORMAL);
+		routeNormal(catchNormalExit);
 
 		const catchHandler: IRBlock = { instructions: [] };
 		catchTryBegin.blocks[0] = fn.blocks.push(catchHandler) - 1;
 		const caught2 = nextRegisterDestination(fn);
 		catchHandler.instructions.push({ type: "catch", registers: [caught2] });
-		routeToFinalizer(catchHandler, COMPLETION_THROW, caught2);
+		routeThrow(catchHandler, caught2);
 	} else {
 		// No catch clause: an exception in the body runs the finalizer then
 		// re-propagates.
-		routeToFinalizer(handlerBlock, COMPLETION_THROW, caughtRegister);
+		routeThrow(handlerBlock, caughtRegister);
 	}
 
 	// --- finalizer body, compiled once with the finally context popped so its
@@ -2596,27 +3476,15 @@ function compileTryFinally(
 	// block itself is created last so its NORMAL fall-through reaches the code
 	// after the try (patched by compileStatementsToBlock, or returned by
 	// endFunction for a trailing try). ---
-	const routed = finallyCtx.routedKinds!;
-
 	// Each abrupt arm resumes its completion from the finalizer's position,
 	// which routes through any *enclosing* finalizers (finallyCtx is popped).
 	const dispatchBlocks: Array<{ kind: number; idx: number }> = [];
-	const addArm = (kind: number, fill: (block: IRBlock) => void) => {
-		if (!routed.has(kind)) {
-			return;
-		}
+	for (const { kind, fill } of finallyCtx.finalizerArms!.values()) {
 		const armBlock: IRBlock = { instructions: [] };
 		const idx = fn.blocks.push(armBlock) - 1;
 		fill(armBlock);
 		dispatchBlocks.push({ kind, idx });
-	};
-
-	addArm(COMPLETION_THROW, (b) =>
-		b.instructions.push({ type: "throw", registers: [valueReg] }),
-	);
-	addArm(COMPLETION_RETURN, (b) => emitReturn(fn, b, valueReg));
-	addArm(COMPLETION_BREAK, (b) => emitBreak(fn, b));
-	addArm(COMPLETION_CONTINUE, (b) => emitContinue(fn, b));
+	}
 
 	const epilogue: IRBlock = { instructions: [] };
 	const epilogueIdx = fn.blocks.push(epilogue) - 1;
@@ -2680,26 +3548,39 @@ function compileIfStatement(
 }
 
 /**
- * Pending-completion kind codes carried through a finalizer (see emitReturn /
- * compileTryFinally). NORMAL falls through to the code after the try; the
- * abrupt kinds are re-dispatched at the finalizer epilogue.
+ * NORMAL completion code carried through a finalizer: it falls through to the
+ * code after the try. Abrupt completions get their own dynamically-allocated
+ * kind codes and re-dispatch arms (see routeThroughFinalizer).
  */
 const COMPLETION_NORMAL = 0;
-const COMPLETION_RETURN = 1;
-const COMPLETION_THROW = 2;
-const COMPLETION_BREAK = 3;
-const COMPLETION_CONTINUE = 4;
 
 /**
- * Set a finalizer's pending completion and jump into it. The kind is recorded
- * so the epilogue only emits a dispatch arm for completions that can reach it.
+ * Set a finalizer's pending completion and jump into it. Each distinct routing
+ * `key` (e.g. "return", "break", "continue:outer") gets a unique kind code and
+ * an epilogue arm carrying its re-dispatch; NORMAL (key "normal") needs no arm
+ * and falls through. Kind codes are local to one finalizer's kind register.
  */
 function routeThroughFinalizer(
 	block: IRBlock,
 	scope: IRLoopContext,
-	kind: number,
+	key: string,
+	fill: ((block: IRBlock) => void) | null,
 	valueRegister?: number,
 ) {
+	const arms = scope.finalizerArms!;
+	let kind: number;
+	if (key === "normal") {
+		kind = COMPLETION_NORMAL;
+	} else {
+		const existing = arms.get(key);
+		if (existing) {
+			kind = existing.kind;
+		} else {
+			kind = arms.size + 1;
+			arms.set(key, { kind, fill: fill! });
+		}
+	}
+
 	block.instructions.push({
 		type: "createNumber",
 		registers: [scope.completionKindReg!],
@@ -2717,7 +3598,6 @@ function routeThroughFinalizer(
 	};
 	block.instructions.push(jump);
 	scope.finallyEntryJumps!.push(jump);
-	scope.routedKinds!.add(kind);
 }
 
 /**
@@ -2732,7 +3612,13 @@ function emitReturn(fn: IRFunction, block: IRBlock, valueRegister: number) {
 		const scope = scopes[i]!;
 
 		if (scope.kind === "finally") {
-			routeThroughFinalizer(block, scope, COMPLETION_RETURN, valueRegister);
+			routeThroughFinalizer(
+				block,
+				scope,
+				"return",
+				(b) => emitReturn(fn, b, scope.completionValueReg!),
+				valueRegister,
+			);
 			return;
 		}
 
@@ -2752,52 +3638,84 @@ function emitReturn(fn: IRFunction, block: IRBlock, valueRegister: number) {
 
 /**
  * Emit a break, routing through any enclosing finalizers first (innermost
- * first); the innermost breakable loop/switch is the target. Breaking out of a
- * for-of closes its iterator.
+ * first). The target is the innermost loop/switch, or the matching labeled
+ * scope when a label is given; for-of iterators of every loop left on the way
+ * out (including the target) are closed.
  */
-function emitBreak(fn: IRFunction, block: IRBlock) {
+function emitBreak(fn: IRFunction, block: IRBlock, label?: string) {
 	const scopes = fn.loops ?? [];
 	for (let i = scopes.length - 1; i >= 0; i--) {
 		const scope = scopes[i]!;
 
 		if (scope.kind === "finally") {
-			routeThroughFinalizer(block, scope, COMPLETION_BREAK);
+			routeThroughFinalizer(
+				block,
+				scope,
+				label === undefined ? "break" : `break:${label}`,
+				(b) => emitBreak(fn, b, label),
+			);
 			return;
 		}
 
-		// The first breakable scope is the target.
+		// Leaving this loop closes its for-of iterator.
 		if (scope.iteratorRegister !== undefined) {
 			block.instructions.push({
 				type: "iteratorClose",
 				registers: [scope.iteratorRegister],
 			});
 		}
-		const jump: Extract<IRInstruction, { type: "jump" }> = {
-			type: "jump",
-			blocks: [-1],
-		};
-		block.instructions.push(jump);
-		scope.breakJumps.push(jump);
-		return;
+
+		const isTarget =
+			label === undefined
+				? scope.kind === "loop" || scope.kind === "switch"
+				: scope.labels?.has(label) === true;
+		if (isTarget) {
+			const jump: Extract<IRInstruction, { type: "jump" }> = {
+				type: "jump",
+				blocks: [-1],
+			};
+			block.instructions.push(jump);
+			scope.breakJumps.push(jump);
+			return;
+		}
 	}
 }
 
 /**
  * Emit a continue, routing through any enclosing finalizers first; the target
- * is the innermost loop (switches are skipped). continue does not close a
- * for-of iterator — it re-steps it from the loop header.
+ * is the innermost loop, or the matching labeled loop when a label is given.
+ * Inner loops left on the way to a labeled outer loop close their for-of
+ * iterators; the target loop's iterator stays open (it re-steps from the header).
  */
-function emitContinue(fn: IRFunction, block: IRBlock) {
+function emitContinue(fn: IRFunction, block: IRBlock, label?: string) {
 	const scopes = fn.loops ?? [];
 	for (let i = scopes.length - 1; i >= 0; i--) {
 		const scope = scopes[i]!;
 
 		if (scope.kind === "finally") {
-			routeThroughFinalizer(block, scope, COMPLETION_CONTINUE);
+			routeThroughFinalizer(
+				block,
+				scope,
+				label === undefined ? "continue" : `continue:${label}`,
+				(b) => emitContinue(fn, b, label),
+			);
 			return;
 		}
 
-		if (scope.kind === "switch") {
+		if (scope.kind === "switch" || scope.kind === "label") {
+			continue;
+		}
+
+		const isTarget = label === undefined ? true : scope.labels?.has(label) === true;
+		if (!isTarget) {
+			// An inner loop being left to reach a labeled outer loop closes its
+			// for-of iterator.
+			if (scope.iteratorRegister !== undefined) {
+				block.instructions.push({
+					type: "iteratorClose",
+					registers: [scope.iteratorRegister],
+				});
+			}
 			continue;
 		}
 
@@ -3206,6 +4124,16 @@ function compileExpression(
 			});
 			return destination;
 		}
+		case "MetaProperty": {
+			// new.target: the active frame's new.target. import.meta is gated by
+			// the syntax scan and never reaches here.
+			const destination = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "loadNewTarget",
+				registers: [destination],
+			});
+			return destination;
+		}
 		case "LogicalExpression": {
 			return compileLogicalExpression(program, fn, cursor, expression);
 		}
@@ -3514,6 +4442,33 @@ function compileAssignment(
 		return -1;
 	}
 
+	if (assignmentExpression.left.property.type === "PrivateIdentifier") {
+		const name = `#${assignmentExpression.left.property.name}`;
+		const object = compileExpression(
+			program,
+			fn,
+			cursor,
+			assignmentExpression.left.object,
+		);
+
+		let value: number;
+		if (assignmentExpression.operator === "=") {
+			value = compileExpression(program, fn, cursor, assignmentExpression.right);
+		} else {
+			const current = compilePrivateMemberLoad(program, fn, cursor, object, name);
+			const right = compileExpression(program, fn, cursor, assignmentExpression.right);
+			value = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "binary",
+				registers: [value, current, right],
+				operator: assignmentOperatorToBinaryOperator(assignmentExpression.operator),
+			});
+		}
+
+		compilePrivateMemberStore(program, fn, cursor, object, name, value);
+		return value;
+	}
+
 	const { object, key } = compileMemberObjectAndKey(
 		program,
 		fn,
@@ -3650,6 +4605,7 @@ function compileLogicalAssignment(
 	let location: BindingLocation | undefined;
 	let nameHint: string | undefined;
 	let member: { object: number; key: number; isSuper: boolean } | undefined;
+	let privateMember: { object: number; name: string } | undefined;
 	let current: number;
 
 	if (left.type === "Identifier") {
@@ -3673,6 +4629,13 @@ function compileLogicalAssignment(
 		location = getOrCreateBindingLocation(program, fn, binding);
 		nameHint = binding.name;
 		current = loadRegisterFromLocation(fn, cursor.block, location);
+	} else if (
+		left.type === "MemberExpression" &&
+		left.property.type === "PrivateIdentifier"
+	) {
+		const object = compileExpression(program, fn, cursor, left.object);
+		privateMember = { object, name: `#${left.property.name}` };
+		current = compilePrivateMemberLoad(program, fn, cursor, object, privateMember.name);
 	} else if (left.type === "MemberExpression") {
 		const compiled = compileMemberObjectAndKey(program, fn, cursor, left);
 		member = {
@@ -3732,6 +4695,15 @@ function compileLogicalAssignment(
 
 	if (location) {
 		storeRegisterAtLocation(cursor.block, location, right);
+	} else if (privateMember) {
+		compilePrivateMemberStore(
+			program,
+			fn,
+			cursor,
+			privateMember.object,
+			privateMember.name,
+			right,
+		);
 	} else if (member) {
 		if (member.isSuper) {
 			const receiver = nextRegisterDestination(fn);
@@ -4072,17 +5044,27 @@ function compileUpdateExpression(
 	}
 
 	if (expression.argument.type === "MemberExpression") {
-		const { object, key } = compileMemberObjectAndKey(
-			program,
-			fn,
-			cursor,
-			expression.argument,
-		);
-		const current = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "loadProperty",
-			registers: [current, object, key],
-		});
+		const member = expression.argument;
+		const isPrivate = member.property.type === "PrivateIdentifier";
+		const privateName = isPrivate
+			? `#${(member.property as ESTree.PrivateIdentifier).name}`
+			: "";
+
+		const object = isPrivate ? compileExpression(program, fn, cursor, member.object) : -1;
+		const resolved = isPrivate
+			? { object, key: -1 }
+			: compileMemberObjectAndKey(program, fn, cursor, member);
+
+		const current = isPrivate
+			? compilePrivateMemberLoad(program, fn, cursor, object, privateName)
+			: (() => {
+					const reg = nextRegisterDestination(fn);
+					cursor.block.instructions.push({
+						type: "loadProperty",
+						registers: [reg, resolved.object, resolved.key],
+					});
+					return reg;
+				})();
 
 		const oldValue = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
@@ -4098,10 +5080,15 @@ function compileUpdateExpression(
 			registers: [newValue, oldValue, one],
 			operator,
 		});
-		cursor.block.instructions.push({
-			type: "storeProperty",
-			registers: [object, key, newValue],
-		});
+
+		if (isPrivate) {
+			compilePrivateMemberStore(program, fn, cursor, object, privateName, newValue);
+		} else {
+			cursor.block.instructions.push({
+				type: "storeProperty",
+				registers: [resolved.object, resolved.key, newValue],
+			});
+		}
 
 		return expression.prefix ? newValue : oldValue;
 	}
@@ -4128,6 +5115,29 @@ function compileBinary(
 	cursor: IRCursor,
 	binaryExpression: ESTree.BinaryExpression,
 ): number {
+	// Ergonomic brand check `#x in obj`: present iff obj carries the declaring
+	// class's brand marker.
+	if (
+		binaryExpression.operator === "in" &&
+		(binaryExpression.left as ESTree.Node).type === "PrivateIdentifier"
+	) {
+		const name = `#${(binaryExpression.left as unknown as ESTree.PrivateIdentifier).name}`;
+		const entry = fn.classContext?.privateNames?.get(name);
+		const object = compileExpression(program, fn, cursor, binaryExpression.right);
+		const brand = entry ? privateBrandBinding(fn, entry) : undefined;
+		if (!brand) {
+			return -1;
+		}
+
+		const brandSymbol = loadCapturedBinding(program, fn, cursor, brand);
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "hasPrivate",
+			registers: [destination, object, brandSymbol],
+		});
+		return destination;
+	}
+
 	if (!isIRBinaryOperator(binaryExpression.operator)) {
 		throw new Error(`Unsupported binary operator ${binaryExpression.operator}`);
 	}
@@ -4365,6 +5375,18 @@ function compileMemberExpression(
 	cursor: IRCursor,
 	memberExpression: ESTree.MemberExpression,
 ): number {
+	if (memberExpression.property.type === "PrivateIdentifier") {
+		// Private access is never on super and never computed.
+		const object = compileExpression(program, fn, cursor, memberExpression.object);
+		return compilePrivateMemberLoad(
+			program,
+			fn,
+			cursor,
+			object,
+			`#${memberExpression.property.name}`,
+		);
+	}
+
 	const { object, key } = compileMemberObjectAndKey(
 		program,
 		fn,
@@ -4573,7 +5595,21 @@ function compileCall(
 
 	let callee: number;
 	let thisRegister: number;
-	if (calleeNode.type === "MemberExpression") {
+	if (
+		calleeNode.type === "MemberExpression" &&
+		calleeNode.property.type === "PrivateIdentifier"
+	) {
+		// obj.#m(): the receiver is the call's this, and the brand-checked
+		// shared function (or accessor result) is the callee.
+		thisRegister = compileExpression(program, fn, cursor, calleeNode.object);
+		callee = compilePrivateMemberLoad(
+			program,
+			fn,
+			cursor,
+			thisRegister,
+			`#${calleeNode.property.name}`,
+		);
+	} else if (calleeNode.type === "MemberExpression") {
 		const member = compileMemberObjectAndKey(program, fn, cursor, calleeNode);
 		thisRegister = member.object;
 		if (calleeNode.object.type === "Super") {
@@ -4657,6 +5693,7 @@ function compileSuperCall(
 		registers: [thisRegister],
 	});
 
+	let destination: number;
 	if (callExpression.arguments.some((arg) => arg.type === "SpreadElement")) {
 		const argumentsArray = compileSpreadArgumentsArray(
 			program,
@@ -4664,28 +5701,32 @@ function compileSuperCall(
 			cursor,
 			callExpression.arguments,
 		);
-		const destination = nextRegisterDestination(fn);
+		destination = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
 			type: "callSpread",
 			registers: [destination, callee, thisRegister, argumentsArray],
 		});
+	} else {
+		const args = callExpression.arguments.map((arg) => {
+			if (arg.type === "SpreadElement") {
+				return -1;
+			}
 
-		return destination;
+			return compileExpression(program, fn, cursor, arg);
+		});
+
+		destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "call",
+			registers: [destination, callee, thisRegister, ...args],
+		});
 	}
 
-	const args = callExpression.arguments.map((arg) => {
-		if (arg.type === "SpreadElement") {
-			return -1;
-		}
-
-		return compileExpression(program, fn, cursor, arg);
-	});
-
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
-		type: "call",
-		registers: [destination, callee, thisRegister, ...args],
-	});
+	// InitializeInstanceElements for a derived class runs right after super()
+	// returns, with this now initialized.
+	if (fn.classContext?.isConstructor) {
+		emitInstanceElementInit(program, fn, cursor, fn.classContext);
+	}
 
 	return destination;
 }

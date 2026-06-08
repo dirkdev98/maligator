@@ -60,6 +60,8 @@ void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instr
 
 void mal_op_load_this(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_load_new_target(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_call(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_call_spread(MalCallable *callable, MalInstruction *instruction);
@@ -107,6 +109,16 @@ void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction);
 void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_define_property(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_create_private_name(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_define_private(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_load_private(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_store_private(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_has_private(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_set_prototype(MalCallable *callable, MalInstruction *instruction);
 

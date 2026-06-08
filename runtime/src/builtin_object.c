@@ -5,6 +5,7 @@
 
 #include "builtin_iterator.h"
 #include "heap_string.h"
+#include "heap_symbol.h"
 #include "property_iter.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -291,6 +292,11 @@ static MalValue mal_builtin_object_get_own_property_descriptors(MalVm *vm, MalVa
     MalKey key;
     MalPropertyDesc desc;
     while (mal_property_iter_next(&iter, &key, &desc)) {
+        // Private-member symbols never surface through reflection.
+        if (key.kind == MAL_KEY_SYMBOL && mal_symbol_is_private(mal_value_to_symbol(key.value))) {
+            continue;
+        }
+
         MalPropertyDesc entry = mal_intrinsic_data_desc(
             mal_builtin_object_descriptor_object(vm, desc),
             MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
@@ -778,6 +784,12 @@ static MalValue mal_builtin_object_get_own_property_symbols(MalVm *vm, MalValue 
     MalPropertyDesc desc;
     while (mal_property_iter_next(&iter, &key, &desc)) {
         if (key.kind != MAL_KEY_SYMBOL) {
+            continue;
+        }
+
+        // Private-member symbols are an implementation detail and stay hidden
+        // from reflection.
+        if (mal_symbol_is_private(mal_value_to_symbol(key.value))) {
             continue;
         }
 

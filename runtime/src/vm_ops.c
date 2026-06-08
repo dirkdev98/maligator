@@ -9,6 +9,7 @@
 #include "function_object.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
+#include "heap_symbol.h"
 #include "object_ops.h"
 #include "property_iter.h"
 #include "typed_array_object.h"
@@ -220,6 +221,10 @@ void mal_op_load_this(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.load_this.dst] = callable->this_value;
 }
 
+void mal_op_load_new_target(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.load_new_target.dst] = callable->new_target;
+}
+
 /**
  * Shared call dispatch: bound resolution, then script frame push or native
  * invocation. The result register lives on the frame that was current when
@@ -294,6 +299,8 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, const MalValue
             vm->frame_count - 1
         );
         vm->frames[vm->frame_count - 1].is_construct = true;
+        // new.target is the constructor being invoked through `new`.
+        vm->frames[vm->frame_count - 1].new_target = resolution.callee;
     } else if (mal_value_is_native_function_object(resolution.callee)) {
         // Native constructors allocate their own this; new_target carries the
         // construct-ness signal.
@@ -1607,6 +1614,109 @@ void mal_op_define_property(MalCallable *callable, MalInstruction *instruction) 
 
     MalPropertyDesc desc = mal_intrinsic_data_desc(value, flags);
     mal_object_define_own(mal_value_to_object(object_value), key, &desc);
+}
+
+/**
+ * The shared error for reading or writing a private member on a receiver that
+ * was not branded by the declaring class (PrivateElementFind returned empty).
+ */
+static const byte *const mal_private_absent_message =
+    "Cannot access private member on an object whose class did not declare it";
+
+void mal_op_create_private_name(MalCallable *callable, MalInstruction *instruction) {
+    MalSymbol *symbol = mal_symbol_new_private(&callable->vm->heap);
+    callable->registers[instruction->as.create_private_name.dst] = mal_value_from_symbol(symbol);
+}
+
+void mal_op_define_private(MalCallable *callable, MalInstruction *instruction) {
+    MalValue object_value = callable->registers[instruction->as.define_private.object];
+    MalValue key_value = callable->registers[instruction->as.define_private.key];
+    MalValue value = callable->registers[instruction->as.define_private.value];
+
+    // The receiver is always a freshly built instance or the class object.
+    if (!mal_value_is_object(object_value)) {
+        return;
+    }
+
+    MalObject *object = mal_value_to_object(object_value);
+    MalKey key = {.kind = MAL_KEY_SYMBOL, .value = key_value};
+
+    if (mal_object_get_own(object, key).present) {
+        // AddPrivateName rejects installing the same private element twice on
+        // one object (re-entrant construction of the same this).
+        mal_vm_throw_error(
+            callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot initialize the same private member twice on an object"
+        );
+        return;
+    }
+
+    // Private fields are writable but never enumerable or configurable, and
+    // the backing symbol is hidden from reflection.
+    MalPropertyDesc desc = mal_intrinsic_data_desc(value, MAL_PROPERTY_WRITABLE);
+    mal_object_define_own(object, key, &desc);
+}
+
+void mal_op_load_private(MalCallable *callable, MalInstruction *instruction) {
+    MalValue object_value = callable->registers[instruction->as.load_private.object];
+    MalValue key_value = callable->registers[instruction->as.load_private.key];
+    i32 dst = instruction->as.load_private.dst;
+
+    if (!mal_value_is_object(object_value)) {
+        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
+        return;
+    }
+
+    MalKey key = {.kind = MAL_KEY_SYMBOL, .value = key_value};
+    MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(object_value), key);
+    if (!lookup.present) {
+        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
+        return;
+    }
+
+    // Private fields and the brand marker are always data descriptors;
+    // private accessors are dispatched by the compiler, never stored here.
+    callable->registers[dst] = lookup.desc.value;
+}
+
+void mal_op_store_private(MalCallable *callable, MalInstruction *instruction) {
+    MalValue object_value = callable->registers[instruction->as.store_private.object];
+    MalValue key_value = callable->registers[instruction->as.store_private.key];
+    MalValue value = callable->registers[instruction->as.store_private.value];
+
+    if (!mal_value_is_object(object_value)) {
+        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
+        return;
+    }
+
+    MalObject *object = mal_value_to_object(object_value);
+    MalKey key = {.kind = MAL_KEY_SYMBOL, .value = key_value};
+    if (!mal_object_get_own(object, key).present) {
+        // PrivateSet requires the private name to already be installed.
+        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
+        return;
+    }
+
+    mal_property_set_value(mal_object_properties(object), key, value);
+}
+
+void mal_op_has_private(MalCallable *callable, MalInstruction *instruction) {
+    MalValue object_value = callable->registers[instruction->as.has_private.object];
+    MalValue key_value = callable->registers[instruction->as.has_private.key];
+    i32 dst = instruction->as.has_private.dst;
+
+    if (!mal_value_is_object(object_value)) {
+        // `#x in <non-object>` throws (ergonomic brand check step 6).
+        mal_vm_throw_error(
+            callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot use 'in' to check for a private member of a non-object"
+        );
+        return;
+    }
+
+    MalKey key = {.kind = MAL_KEY_SYMBOL, .value = key_value};
+    bool present = mal_object_get_own(mal_value_to_object(object_value), key).present;
+    callable->registers[dst] = mal_value_new_boolean(present);
 }
 
 void mal_op_set_prototype(MalCallable *callable, MalInstruction *instruction) {

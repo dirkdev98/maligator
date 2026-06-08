@@ -198,6 +198,21 @@ function createScopesFromNode(
 		file.scopes.push(parentScope);
 	}
 
+	if (node.type === "PropertyDefinition") {
+		// A class field initializer is its own scope: it is compiled as a
+		// distinct function (the constructor or static initializer), so outer
+		// references must resolve as captures, not as the enclosing locals.
+		parentScope = {
+			parent: parentScope,
+			node,
+
+			strict: true,
+			bindings: [],
+		};
+
+		file.scopes.push(parentScope);
+	}
+
 	if (
 		node.type === "ArrowFunctionExpression" &&
 		node.body?.type !== "BlockStatement" &&
@@ -504,7 +519,14 @@ function calculateBindingScopedTo(file: SemanticFile) {
 		let intermediate: Scope | null = from;
 
 		while (intermediate && intermediate !== to) {
-			if (intermediate.node.type.includes("Function")) {
+			// Functions are capture boundaries; so are class field initializers
+			// and static blocks, which are compiled as their own functions (the
+			// constructor / static initializer).
+			if (
+				intermediate.node.type.includes("Function") ||
+				intermediate.node.type === "PropertyDefinition" ||
+				intermediate.node.type === "StaticBlock"
+			) {
 				return true;
 			}
 

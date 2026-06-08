@@ -26,6 +26,7 @@ typedef enum MalOpcode {
     MAL_OP_CREATE_FUNCTION,
     MAL_OP_CREATE_ARGUMENTS_OBJECT,
     MAL_OP_LOAD_THIS,
+    MAL_OP_LOAD_NEW_TARGET,
     MAL_OP_LOAD_CAPTURED,
     MAL_OP_LOAD_GLOBAL,
     MAL_OP_LOAD_INTRINSIC,
@@ -44,6 +45,11 @@ typedef enum MalOpcode {
     MAL_OP_DELETE_PROPERTY,
     MAL_OP_DEFINE_ACCESSOR,
     MAL_OP_DEFINE_PROPERTY,
+    MAL_OP_CREATE_PRIVATE_NAME,
+    MAL_OP_DEFINE_PRIVATE,
+    MAL_OP_LOAD_PRIVATE,
+    MAL_OP_STORE_PRIVATE,
+    MAL_OP_HAS_PRIVATE,
     MAL_OP_SET_PROTOTYPE,
     MAL_OP_LOAD_UNDECLARED,
     MAL_OP_REQUIRE_COERCIBLE,
@@ -181,6 +187,10 @@ typedef struct MalInstruction {
         } load_this;
 
         struct {
+            i32 dst;
+        } load_new_target;
+
+        struct {
             i32 dst, owner_function_index, index;
         } load_captured;
 
@@ -279,6 +289,33 @@ typedef struct MalInstruction {
             i32 object, key, value;
             bool enumerable;
         } define_property;
+
+        /**
+         * Private class members are keyed by per-class-evaluation hidden
+         * symbols. create_private_name mints one; the others take the symbol
+         * in key and operate own-only (no prototype walk). define_private
+         * installs (throws on re-install), load/store require presence
+         * (TypeError otherwise), has_private answers the `#x in o` brand check.
+         */
+        struct {
+            i32 dst;
+        } create_private_name;
+
+        struct {
+            i32 object, key, value;
+        } define_private;
+
+        struct {
+            i32 dst, object, key;
+        } load_private;
+
+        struct {
+            i32 object, key, value;
+        } store_private;
+
+        struct {
+            i32 dst, object, key;
+        } has_private;
 
         struct {
             i32 object, prototype;
@@ -474,6 +511,12 @@ typedef struct MalVmFrame {
      * Construct frames replace non-object return values with this_value.
      */
     bool is_construct;
+
+    /**
+     * The new.target for this activation: the constructor when invoked through
+     * `new`/construct, undefined for an ordinary call. LOAD_NEW_TARGET reads it.
+     */
+    MalValue new_target;
 
     i32 instruction_pointer;
     i32 return_register;

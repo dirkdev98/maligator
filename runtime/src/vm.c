@@ -117,6 +117,7 @@ void mal_vm_push_function_frame(
     frame->callee = mal_value_new_undefined();
     frame->generator = nullptr;
     frame->is_construct = false;
+    frame->new_target = mal_value_new_undefined();
     frame->instruction_pointer = 0;
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;
@@ -224,6 +225,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 break;
             case MAL_OP_LOAD_THIS:
                 mal_op_load_this(frame, &instruction);
+                break;
+            case MAL_OP_LOAD_NEW_TARGET:
+                mal_op_load_new_target(frame, &instruction);
                 break;
             case MAL_OP_BINARY:
                 mal_op_binary(frame, &instruction);
@@ -336,6 +340,21 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 break;
             case MAL_OP_DEFINE_PROPERTY:
                 mal_op_define_property(frame, &instruction);
+                break;
+            case MAL_OP_CREATE_PRIVATE_NAME:
+                mal_op_create_private_name(frame, &instruction);
+                break;
+            case MAL_OP_DEFINE_PRIVATE:
+                mal_op_define_private(frame, &instruction);
+                break;
+            case MAL_OP_LOAD_PRIVATE:
+                mal_op_load_private(frame, &instruction);
+                break;
+            case MAL_OP_STORE_PRIVATE:
+                mal_op_store_private(frame, &instruction);
+                break;
+            case MAL_OP_HAS_PRIVATE:
+                mal_op_has_private(frame, &instruction);
                 break;
             case MAL_OP_SET_PROTOTYPE:
                 mal_op_set_prototype(frame, &instruction);

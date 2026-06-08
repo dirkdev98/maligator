@@ -4,11 +4,6 @@ import type { ESTree } from "meriyah";
  * Node types the compiler has no lowering for at all.
  */
 const unsupportedNodeTypes = new Map<string, string>([
-	["PropertyDefinition", "class field"],
-	["StaticBlock", "class static block"],
-	["PrivateIdentifier", "private class member"],
-	["MetaProperty", "new.target / import.meta"],
-	["LabeledStatement", "labeled statement"],
 	["WithStatement", "with"],
 	["AwaitExpression", "async function"],
 	["TaggedTemplateExpression", "tagged template"],
@@ -141,6 +136,17 @@ function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
 			}
 			break;
 		}
+		case "MetaProperty": {
+			// new.target reads the active frame's new.target. import.meta is
+			// module-only and unsupported; new.target in an arrow is lexical
+			// (the enclosing function's), which is not captured yet.
+			if (node.meta.name === "import") {
+				unsupported.add("import.meta");
+			} else if (context.inArrowFunction) {
+				unsupported.add("new.target in arrow function");
+			}
+			break;
+		}
 		case "BinaryExpression": {
 			if (!supportedBinaryOperators.has(node.operator)) {
 				unsupported.add(`${node.operator} operator`);
@@ -156,13 +162,6 @@ function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
 		case "AssignmentExpression": {
 			if (!supportedAssignmentOperators.has(node.operator)) {
 				unsupported.add(`${node.operator} operator`);
-			}
-			break;
-		}
-		case "BreakStatement":
-		case "ContinueStatement": {
-			if (node.label) {
-				unsupported.add("labeled break / continue");
 			}
 			break;
 		}

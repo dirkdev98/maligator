@@ -116,6 +116,10 @@ export type VmInstruction =
 			dst: number;
 	  }
 	| {
+			opcode: "LOAD_NEW_TARGET";
+			dst: number;
+	  }
+	| {
 			opcode: "CALL";
 			dst: number;
 			callee: number;
@@ -265,6 +269,34 @@ export type VmInstruction =
 			key: number;
 			value: number;
 			enumerable: boolean;
+	  }
+	| {
+			opcode: "CREATE_PRIVATE_NAME";
+			dst: number;
+	  }
+	| {
+			opcode: "DEFINE_PRIVATE";
+			object: number;
+			key: number;
+			value: number;
+	  }
+	| {
+			opcode: "LOAD_PRIVATE";
+			dst: number;
+			object: number;
+			key: number;
+	  }
+	| {
+			opcode: "STORE_PRIVATE";
+			object: number;
+			key: number;
+			value: number;
+	  }
+	| {
+			opcode: "HAS_PRIVATE";
+			dst: number;
+			object: number;
+			key: number;
 	  }
 	| {
 			opcode: "SET_PROTOTYPE";
@@ -501,6 +533,11 @@ function lowerInstructionToVmInstruction(
 				opcode: "LOAD_THIS",
 				dst: instruction.registers[0],
 			};
+		case "loadNewTarget":
+			return {
+				opcode: "LOAD_NEW_TARGET",
+				dst: instruction.registers[0],
+			};
 		case "call":
 			return {
 				opcode: "CALL",
@@ -690,6 +727,39 @@ function lowerInstructionToVmInstruction(
 				key: instruction.registers[1],
 				value: instruction.registers[2],
 				enumerable: instruction.enumerable,
+			};
+		case "createPrivateName":
+			return {
+				opcode: "CREATE_PRIVATE_NAME",
+				dst: instruction.registers[0],
+			};
+		case "definePrivate":
+			return {
+				opcode: "DEFINE_PRIVATE",
+				object: instruction.registers[0],
+				key: instruction.registers[1],
+				value: instruction.registers[2],
+			};
+		case "loadPrivate":
+			return {
+				opcode: "LOAD_PRIVATE",
+				dst: instruction.registers[0],
+				object: instruction.registers[1],
+				key: instruction.registers[2],
+			};
+		case "storePrivate":
+			return {
+				opcode: "STORE_PRIVATE",
+				object: instruction.registers[0],
+				key: instruction.registers[1],
+				value: instruction.registers[2],
+			};
+		case "hasPrivate":
+			return {
+				opcode: "HAS_PRIVATE",
+				dst: instruction.registers[0],
+				object: instruction.registers[1],
+				key: instruction.registers[2],
 			};
 		case "setPrototype":
 			return {
