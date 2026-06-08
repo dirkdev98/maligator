@@ -151,6 +151,21 @@ function recordFailure(
 	}
 }
 
+/**
+ * Collapse the variable parts of an uncaught-error message so similar failures
+ * cluster into one bucket: assertion values (`«…»`, quoted strings) and numeric
+ * literals become placeholders. Keeps the error name and message shape so a
+ * clustered correctness bug stands out instead of fragmenting into singletons.
+ */
+function normalizeFailureReason(reason: string): string {
+	return reason
+		.replace(/«[^»]*»/g, "«»")
+		.replace(/"[^"]*"/g, '"…"')
+		.replace(/'[^']*'/g, "'…'")
+		.replace(/0[xX][0-9a-fA-F]+/g, "N")
+		.replace(/-?\b\d+(\.\d+)?\b/g, "N");
+}
+
 function countReason(
 	counts: Record<string, number>,
 	cache: Record<string, Array<string>>,
@@ -360,9 +375,9 @@ function parseBatchOutput(stdout: string, entries: Array<BatchEntry>): Set<numbe
 			file.result = "PASSED";
 		} else if (kind === "EXIT") {
 			file.result = "FAILED";
-			const reason =
+			const raw =
 				currentOutput.find((it) => it.startsWith("Uncaught"))?.trim() || "non-zero exit";
-			countReason(FAILURE_COUNTS, FAILURE_CACHE, reason, file);
+			countReason(FAILURE_COUNTS, FAILURE_CACHE, normalizeFailureReason(raw), file);
 		} else if (kind === "SIGNAL") {
 			file.result = "CRASHED";
 			countReason(FAILURE_COUNTS, FAILURE_CACHE, `signal: ${code}`, file);

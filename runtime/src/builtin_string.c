@@ -398,6 +398,11 @@ static MalValue mal_builtin_string_prototype_repeat(MalVm *vm, MalValue this_val
 
     usize repeat = (usize) count;
     usize length = mal_string_length(string);
+    // Repeating an empty string (or zero times) is empty regardless of count;
+    // short-circuit so a huge count can't spin a multi-billion-iteration loop.
+    if (length == 0 || repeat == 0) {
+        return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
+    }
     c16 *code_units = malloc(sizeof(c16) * length * repeat);
     for (usize i = 0; i < repeat; i++) {
         memcpy(code_units + i * length, mal_string_code_units(string), (usize) sizeof(c16) * length);

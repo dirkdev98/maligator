@@ -1333,17 +1333,26 @@ void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction) 
         return;
     }
 
+    MalObject *object = mal_value_to_object(object_value);
+
+    // A real own property is deleted normally (honoring configurable). This must
+    // come before the synthetic check so a function's own `name` data property is
+    // genuinely removable, matching its configurable:true attribute.
+    if (mal_object_get_own(object, key).present) {
+        mal_vm_finish_delete(callable, dst, mal_object_delete_own(object, key));
+        return;
+    }
+
     MalValue synthetic;
     if (mal_vm_resolve_synthetic_property(callable->vm, object_value, key, &synthetic)) {
-        // Synthetic properties have no table slot to remove. Array length and
-        // function prototype are non-configurable anyway; callable length and
-        // name are approximated as non-deletable. TODO(delete): the spec marks
-        // callable length and name configurable.
+        // Remaining synthetic properties have no table slot. Array length and
+        // function prototype are non-configurable; callable length is still
+        // approximated as non-deletable. TODO(delete): length is configurable.
         mal_vm_finish_delete(callable, dst, false);
         return;
     }
 
-    mal_vm_finish_delete(callable, dst, mal_object_delete_own(mal_value_to_object(object_value), key));
+    mal_vm_finish_delete(callable, dst, mal_object_delete_own(object, key));
 }
 
 void mal_op_load_undeclared(MalCallable *callable, MalInstruction *instruction) {

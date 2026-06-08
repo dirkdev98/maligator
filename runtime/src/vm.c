@@ -458,25 +458,34 @@ static void mal_vm_print_display(FILE *stream, MalValue value) {
 
 static void mal_vm_report_uncaught(MalVm *vm) {
     fprintf(stderr, "Uncaught ");
+    MalValue value = vm->completion.value;
 
-    if (mal_value_is_object(vm->completion.value)) {
-        MalObject *error = mal_value_to_object(vm->completion.value);
-        MalPropertyResolution name = mal_object_resolve_property(error, mal_intrinsic_string_key(vm, "name"));
-        MalPropertyResolution message = mal_object_resolve_property(error, mal_intrinsic_string_key(vm, "message"));
+    if (mal_value_is_object(value)) {
+        // Invoke the thrown value's own toString (Error.prototype.toString
+        // yields "Name: message"; the test262 harness's Test262Error has a
+        // custom toString but no `name` property, so the previous name/message
+        // path fell back to the useless "[object Object]"). The mal_ops string
+        // coercion can't run a method, so call it directly. Clear the pending
+        // throw first or the sticky-throw guard poisons the call; restore after.
+        MalCompletion saved = vm->completion;
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
-        if (name.found) {
-            mal_vm_print_display(stderr, mal_value_from_string(mal_ops_to_string(&vm->heap, name.desc.value)));
-            if (message.found) {
-                fprintf(stderr, ": ");
-                mal_vm_print_display(stderr, mal_value_from_string(mal_ops_to_string(&vm->heap, message.desc.value)));
+        MalValue to_string;
+        if (mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, "toString"), &to_string) &&
+            mal_value_is_callable(to_string)) {
+            MalCompletion result = mal_vm_call_value(vm, to_string, value, nullptr, 0);
+            if (result.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(result.value)) {
+                vm->completion = saved;
+                mal_vm_print_display(stderr, result.value);
+                fprintf(stderr, "\n");
+                return;
             }
-            fprintf(stderr, "\n");
-            return;
         }
+        vm->completion = saved;
     }
 
     // ToString keeps the report on a single stream for any thrown value.
-    mal_vm_print_display(stderr, mal_value_from_string(mal_ops_to_string(&vm->heap, vm->completion.value)));
+    mal_vm_print_display(stderr, mal_value_from_string(mal_ops_to_string(&vm->heap, value)));
     fprintf(stderr, "\n");
 }
 
