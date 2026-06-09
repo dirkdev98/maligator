@@ -85,6 +85,12 @@ MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue rig
 
 void mal_op_unary(MalCallable *callable, MalInstruction *instruction);
 
+/**
+ * Value-returning core of a unary operator, shared by mal_op_unary and the
+ * compiled-function backend. Unary `+` on a BigInt throws via vm->completion.
+ */
+MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value);
+
 void mal_op_store_global(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_load_global(MalCallable *callable, MalInstruction *instruction);

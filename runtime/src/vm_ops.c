@@ -265,8 +265,13 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
 
             if (function->compiled != nullptr) {
                 // Native-backend function: invoke directly, no bytecode frame.
+                // The C stack, not the value stack, bounds this recursion.
                 i32 caller_frame_index = vm->frame_count - 1;
-                MalValue result = function->compiled(vm, resolution.this_value, &vm->value_stack[base], resolution.arg_count, mal_value_new_undefined(), env);
+                MalValue result = mal_value_new_undefined();
+                if (mal_vm_enter_compiled(vm)) {
+                    result = function->compiled(vm, resolution.this_value, &vm->value_stack[base], resolution.arg_count, mal_value_new_undefined(), env);
+                    mal_vm_leave_compiled(vm);
+                }
                 vm->frames[caller_frame_index].registers[dst] = result;
                 vm->value_stack_size = base;
             } else if (mal_vm_push_function_frame(vm, function_index, env, resolution.this_value, resolution.arg_count, dst, vm->frame_count - 1)) {
@@ -721,51 +726,52 @@ static const byte *mal_vm_typeof_tag(MalValue value) {
     return "number";
 }
 
-void mal_op_unary(MalCallable *callable, MalInstruction *instruction) {
-    MalValue value = callable->registers[instruction->as.unary.src];
-    i32 dst = instruction->as.unary.dst;
-
-    switch (instruction->as.unary.op) {
+// Value-returning core of a unary operator, shared by mal_op_unary and the
+// compiled backend. Unary `+` on a BigInt throws (via vm->completion).
+MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
+    switch (op) {
         case MAL_UNARY_NOT:
-            callable->registers[dst] = mal_value_new_boolean(!mal_value_is_truthy(value));
-            break;
+            return mal_value_new_boolean(!mal_value_is_truthy(value));
         case MAL_UNARY_NEGATE:
             if (mal_value_is_bigint(value)) {
-                callable->registers[dst] = mal_value_from_bigint(
-                    mal_bigint_new(&callable->vm->heap, -mal_bigint_value(mal_value_to_bigint(value))));
-            } else if (mal_value_is_int32(value) && mal_value_to_i32(value) != 0 && mal_value_to_i32(value) != INT32_MIN) {
-                callable->registers[dst] = mal_value_from_i32(-mal_value_to_i32(value));
-            } else {
-                // Keeps -0 and -INT32_MIN exact by going through f64.
-                callable->registers[dst] = mal_value_from_f64_convert_nan(-mal_ops_to_number(value));
+                return mal_value_from_bigint(mal_bigint_new(&vm->heap, -mal_bigint_value(mal_value_to_bigint(value))));
             }
-            break;
+            if (mal_value_is_int32(value) && mal_value_to_i32(value) != 0 && mal_value_to_i32(value) != INT32_MIN) {
+                return mal_value_from_i32(-mal_value_to_i32(value));
+            }
+            // Keeps -0 and -INT32_MIN exact by going through f64.
+            return mal_value_from_f64_convert_nan(-mal_ops_to_number(value));
         case MAL_UNARY_PLUS:
             if (mal_value_is_bigint(value)) {
-                mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                     "Cannot convert a BigInt value to a number");
-                break;
+                return mal_value_new_undefined();
             }
-            callable->registers[dst] = mal_ops_number_value(mal_ops_to_number(value));
-            break;
+            return mal_ops_number_value(mal_ops_to_number(value));
         case MAL_UNARY_BIT_NOT:
             if (mal_value_is_bigint(value)) {
-                callable->registers[dst] = mal_value_from_bigint(
-                    mal_bigint_new(&callable->vm->heap, ~mal_bigint_value(mal_value_to_bigint(value))));
-                break;
+                return mal_value_from_bigint(mal_bigint_new(&vm->heap, ~mal_bigint_value(mal_value_to_bigint(value))));
             }
-            callable->registers[dst] = mal_ops_bit_xor(value, mal_value_from_i32(-1));
-            break;
+            return mal_ops_bit_xor(value, mal_value_from_i32(-1));
         case MAL_UNARY_TYPEOF: {
             const byte *tag = mal_vm_typeof_tag(value);
             usize length = 0;
             while (tag[length] != '\0') {
                 length++;
             }
-            callable->registers[dst] = mal_value_from_string(mal_string_new_ascii(&callable->vm->heap, tag, length));
-            break;
+            return mal_value_from_string(mal_string_new_ascii(&vm->heap, tag, length));
         }
     }
+
+    return mal_value_new_undefined();
+}
+
+void mal_op_unary(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.unary.dst] = mal_vm_unary_op(
+        callable->vm,
+        instruction->as.unary.op,
+        callable->registers[instruction->as.unary.src]
+    );
 }
 
 void mal_op_store_global(MalCallable *callable, MalInstruction *instruction) {

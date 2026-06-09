@@ -221,7 +221,9 @@ MalValue mal_ops_add(MalHeap *heap, MalValue left, MalValue right) {
     }
 
     if (mal_value_is_int32(left) && mal_value_is_int32(right)) {
-        return mal_value_from_i32(mal_value_to_i32(left) + mal_value_to_i32(right));
+        // f64 sum keeps the result exact in int32 range and promotes to double
+        // on overflow (spec ToNumber arithmetic), instead of wrapping.
+        return mal_ops_number_value((f64) mal_value_to_i32(left) + (f64) mal_value_to_i32(right));
     }
 
     return mal_ops_number_value(mal_ops_to_number(left) + mal_ops_to_number(right));
@@ -398,7 +400,7 @@ MalValue mal_ops_strict_not_equal(MalValue left, MalValue right) {
 
 MalValue mal_ops_subtract(MalValue left, MalValue right) {
     if (mal_value_is_int32(left) && mal_value_is_int32(right)) {
-        return mal_value_from_i32(mal_value_to_i32(left) - mal_value_to_i32(right));
+        return mal_ops_number_value((f64) mal_value_to_i32(left) - (f64) mal_value_to_i32(right));
     }
 
     return mal_ops_number_value(mal_ops_to_number(left) - mal_ops_to_number(right));
@@ -406,7 +408,9 @@ MalValue mal_ops_subtract(MalValue left, MalValue right) {
 
 MalValue mal_ops_multiply(MalValue left, MalValue right) {
     if (mal_value_is_int32(left) && mal_value_is_int32(right)) {
-        return mal_value_from_i32(mal_value_to_i32(left) * mal_value_to_i32(right));
+        // f64 product is the spec result (it rounds beyond 2^53 just like JS);
+        // the old int32 multiply silently wrapped.
+        return mal_ops_number_value((f64) mal_value_to_i32(left) * (f64) mal_value_to_i32(right));
     }
 
     return mal_ops_number_value(mal_ops_to_number(left) * mal_ops_to_number(right));

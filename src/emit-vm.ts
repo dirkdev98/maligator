@@ -18,9 +18,12 @@ export interface EmitOptions {
 
 export function emitVmDefinition(definition: VmDefinition, options: EmitOptions = {}) {
 	const suffix = options.symbolSuffix ?? "";
-	// Compiled functions call mal_vm_binary_op (vm_ops.h); include it alongside vm.h.
+	// Compiled functions call mal_vm_binary_op (vm_ops.h) and box unboxed doubles
+	// via mal_ops_number_value (value_ops.h); include both alongside vm.h.
 	const lines =
-		options.includeHeader === false ? [] : ['#include "vm.h"', '#include "vm_ops.h"', ""];
+		options.includeHeader === false
+			? []
+			: ['#include "vm.h"', '#include "vm_ops.h"', '#include "value_ops.h"', ""];
 
 	for (let i = 0; i < definition.stringConstants.length; ++i) {
 		const constant = definition.stringConstants[i]!;
@@ -354,7 +357,7 @@ export function emitIntrinsic(
 	}
 }
 
-function emitUnaryOperator(
+export function emitUnaryOperator(
 	operator: Extract<VmInstruction, { opcode: "UNARY" }>["operator"],
 ) {
 	switch (operator) {

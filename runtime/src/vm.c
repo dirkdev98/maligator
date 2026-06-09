@@ -28,6 +28,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->value_stack_capacity = MAL_VALUE_STACK_CAPACITY;
     vm->value_stack = malloc(sizeof(MalValue) * (usize) vm->value_stack_capacity);
     vm->value_stack_size = 0;
+    vm->native_call_depth = 0;
 
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
@@ -673,6 +674,19 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
     }
 }
 
+bool mal_vm_enter_compiled(MalVm *vm) {
+    if (vm->native_call_depth >= MAL_NATIVE_CALL_DEPTH_LIMIT) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+        return false;
+    }
+    vm->native_call_depth++;
+    return true;
+}
+
+void mal_vm_leave_compiled(MalVm *vm) {
+    vm->native_call_depth--;
+}
+
 MalCompletion mal_vm_call_value(
     MalVm *vm,
     MalValue callee,
@@ -701,11 +715,17 @@ MalCompletion mal_vm_call_value(
         MalEnv *env = mal_value_to_function_object(resolution.callee)->creation_env;
 
         if (function->compiled != nullptr) {
-            // Native-backend function: invoke directly (no stack marshaling).
-            MalValue value = function->compiled(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), env);
-            completion = vm->completion.kind == MAL_COMPLETION_THROW
-                ? vm->completion
-                : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+            // Native-backend function: invoke directly (no stack marshaling). The
+            // C stack, not the value stack, bounds this recursion.
+            if (!mal_vm_enter_compiled(vm)) {
+                completion = vm->completion;
+            } else {
+                MalValue value = function->compiled(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), env);
+                mal_vm_leave_compiled(vm);
+                completion = vm->completion.kind == MAL_COMPLETION_THROW
+                    ? vm->completion
+                    : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+            }
         } else if (vm->value_stack_size + resolution.arg_count > vm->value_stack_capacity) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
             completion = vm->completion;
@@ -733,6 +753,13 @@ MalCompletion mal_vm_call_value(
             }
             completion = vm->completion;
         }
+    } else {
+        // A non-callable callee is a TypeError. Internal callers pre-check
+        // IsCallable, but the native backend dispatches user calls straight
+        // through here, so the throw must live in this shared entry point too
+        // (mirroring mal_vm_call_dispatch).
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a function");
+        completion = vm->completion;
     }
 
     free(resolution.owned_args);

@@ -537,7 +537,36 @@ typedef struct MalVm {
     struct MalVmFrame *frames;
     i32 frame_count;
     i32 frame_capacity;
+
+    /**
+     * Nesting depth of native-backend (MalFunction.compiled) invocations.
+     * Interpreted recursion is bounded by the value stack, but a compiled
+     * function calling another runs on the real C stack with no such window, so
+     * deep compiled recursion (e.g. non-tail-recursive functions) is bounded
+     * here instead — exceeding MAL_NATIVE_CALL_DEPTH_LIMIT throws a RangeError
+     * rather than overflowing the C stack.
+     */
+    i32 native_call_depth;
 } MalVm;
+
+/**
+ * Cap on nested compiled-function calls. Each level holds a real C frame (the
+ * compiled function plus the dispatch helper), so this is kept well below what
+ * an 8 MiB stack tolerates while staying far deeper than any realistic
+ * non-tail recursion. Tail self-calls compile to in-place loops and do not
+ * count against it.
+ */
+#define MAL_NATIVE_CALL_DEPTH_LIMIT 6000
+
+/**
+ * Enter a compiled-function invocation: throws a RangeError and returns false
+ * when the native call depth limit would be exceeded, otherwise increments the
+ * depth and returns true. Each successful enter must be paired with a leave.
+ */
+bool mal_vm_enter_compiled(MalVm *vm);
+
+/** Leave a compiled-function invocation, balancing a prior enter. */
+void mal_vm_leave_compiled(MalVm *vm);
 
 typedef struct MalGeneratorObject MalGeneratorObject;
 
