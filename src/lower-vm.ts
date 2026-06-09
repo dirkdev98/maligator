@@ -11,6 +11,7 @@ export interface VmDefinition {
 	functionCount: number;
 	functions: Array<VmFunction>;
 	stringConstants: Array<Array<number>>;
+	bigintConstants: Array<bigint>;
 	globalCount: number;
 }
 
@@ -34,6 +35,14 @@ export interface VmFunction {
 	registerCount: number;
 	capturedCount: number;
 	strict: boolean;
+
+	/**
+	 * Whether the function ever reads its passed arguments through the frame —
+	 * i.e. it materializes an `arguments` object or collects a rest parameter.
+	 * When false the activation skips allocating/copying the arguments slice.
+	 */
+	needsArguments: boolean;
+
 	instructions: Array<VmInstruction>;
 	handlers: Array<VmExceptionHandler>;
 }
@@ -83,7 +92,7 @@ export type VmInstruction =
 	| {
 			opcode: "CREATE_BIGINT";
 			dst: number;
-			stringIndex: number;
+			bigintIndex: number;
 	  }
 	| {
 			opcode: "CREATE_OBJECT";
@@ -348,11 +357,30 @@ export type VmInstruction =
 /**
  * Lower optimized IR to a VM definition that can then be emitted as C.
  */
+export interface VmDefinitionStats {
+	functionCount: number;
+	instructionCount: number;
+}
+
+/**
+ * Aggregate code-size metrics for a compiled definition: how many functions
+ * were emitted and the total instruction count across all of them.
+ */
+export function vmDefinitionStats(definition: VmDefinition): VmDefinitionStats {
+	let instructionCount = 0;
+	for (const fn of definition.functions) {
+		instructionCount += fn.instructions.length;
+	}
+
+	return { functionCount: definition.functions.length, instructionCount };
+}
+
 export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDefinition {
 	return {
 		functionCount: program.functions.length,
 		functions: program.functions.map(lowerFunctionToVmFunction),
 		stringConstants: program.stringConstants,
+		bigintConstants: program.bigintConstants,
 		globalCount: program.nextGlobalIndex,
 	};
 }
@@ -377,6 +405,15 @@ function lowerFunctionToVmFunction(fn: IRFunction): VmFunction {
 		}
 	}
 
+	// These are the only ops that read frame->arguments; if neither appears the
+	// activation never needs the arguments slice. Derived from the emitted
+	// stream so it can't drift from the actual reads.
+	const needsArguments = instructions.some(
+		(instruction) =>
+			instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
+			instruction.opcode === "CREATE_REST_ARGUMENTS",
+	);
+
 	return {
 		nameStringIndex: fn.nameStringIndex,
 		isGenerator: fn.isGenerator ?? false,
@@ -385,6 +422,7 @@ function lowerFunctionToVmFunction(fn: IRFunction): VmFunction {
 		registerCount: fn.nextRegisterDestination,
 		capturedCount: fn.nextCapturedIndex,
 		strict: fn.semanticFile.strict,
+		needsArguments,
 		instructions,
 		handlers: collectExceptionHandlers(instructions),
 	};
@@ -494,7 +532,7 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "CREATE_BIGINT",
 				dst: instruction.registers[0],
-				stringIndex: instruction.stringIndex,
+				bigintIndex: instruction.bigintIndex,
 			};
 		case "createObject":
 			return {

@@ -10,64 +10,65 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->next_ptr = heap->ptr;
     heap->capacity = capacity;
     heap->next_heap = nullptr;
+    heap->tail = heap;
 }
 
 void mal_heap_free(MalHeap *heap) {
-    free(heap->ptr);
-
-    heap->ptr = nullptr;
-    heap->capacity = 0;
-    heap->next_ptr = nullptr;
-
+    // Each next-pool MalHeap node is embedded in this pool's buffer, so free the
+    // rest of the chain (which reads those nodes) before releasing the buffer
+    // that hosts them.
     if (heap->next_heap != nullptr) {
         mal_heap_free(heap->next_heap);
         heap->next_heap = nullptr;
     }
+
+    free(heap->ptr);
+    heap->ptr = nullptr;
+    heap->capacity = 0;
+    heap->next_ptr = nullptr;
+    heap->tail = nullptr;
 }
 
 /**
- * Linkup a new heap with the given capacity. Pass in 0 to use the default capacity.
+ * Append a fresh pool after the current tail and make it the new tail. The new
+ * pool's MalHeap node is embedded at the old tail's bump pointer (room is always
+ * kept in reserve for it); its data buffer is a separate allocation.
  */
-static void mal_heap_grow(MalHeap *heap, usize alloc_size) {
-    if (alloc_size == 0) {
-        alloc_size = MAL_DEFAULT_HEAP_SIZE;
+static void mal_heap_grow(MalHeap *root, usize capacity) {
+    if (capacity == 0) {
+        capacity = MAL_DEFAULT_HEAP_SIZE;
     }
 
-    if (heap->next_heap) {
-        mal_heap_grow(heap->next_heap, alloc_size);
-        return;
-    }
+    MalHeap *tail = root->tail;
+    tail->next_heap = tail->next_ptr;
+    tail->next_ptr += MAL_HEAP_ALIGN(MalHeap);
 
-    // When allocating new stuff, we have to make sure that we keep enough space reserved for the next MalHeap*
-    heap->next_heap = heap->next_ptr;
-    heap->next_ptr += MAL_HEAP_ALIGN(MalHeap);
-
-    mal_heap_init(heap->next_heap, alloc_size);
+    mal_heap_init(tail->next_heap, capacity);
+    root->tail = tail->next_heap;
 }
 
-static void *mal_heap_alloc_aligned(MalHeap *heap, usize alloc_size) {
-    size available_capacity = heap->capacity - (heap->next_ptr - heap->ptr);
-
-    if (heap->next_heap == nullptr) {
-        // Make sure that we reserve enough space for the next MalHeap.
-        available_capacity = available_capacity - MAL_HEAP_ALIGN(MalHeap);
-    }
-
-    // Make sure that we align things properly.
+/**
+ * O(1) bump allocation: serve from the tail pool, growing the chain only when
+ * the tail is full. The tail always keeps MAL_HEAP_ALIGN(MalHeap) bytes in
+ * reserve to host the next pool's embedded node.
+ */
+static void *mal_heap_alloc_aligned(MalHeap *root, usize alloc_size) {
     size aligned_alloc_size = MAL_HEAP_ALIGN_SIZE(alloc_size, void*);
+    MalHeap *tail = root->tail;
 
-    // Pretty inefficient all around, but I guess that it works for now.
+    size available_capacity =
+        tail->capacity - (tail->next_ptr - tail->ptr) - MAL_HEAP_ALIGN(MalHeap);
+
     if (available_capacity < aligned_alloc_size) {
-        if (heap->next_heap != nullptr) {
-            return mal_heap_alloc_aligned(heap->next_heap, alloc_size);
-        }
-
-        mal_heap_grow(heap, alloc_size > MAL_DEFAULT_HEAP_SIZE ? alloc_size : MAL_DEFAULT_HEAP_SIZE);
-        return mal_heap_alloc_aligned(heap->next_heap, alloc_size);
+        // Size the new pool to fit this allocation plus the embedded-node
+        // reserve, so the retry below always succeeds without growing again.
+        usize needed = aligned_alloc_size + MAL_HEAP_ALIGN(MalHeap);
+        mal_heap_grow(root, needed > MAL_DEFAULT_HEAP_SIZE ? needed : MAL_DEFAULT_HEAP_SIZE);
+        tail = root->tail;
     }
 
-    void *ptr = heap->next_ptr;
-    heap->next_ptr += aligned_alloc_size;
+    void *ptr = tail->next_ptr;
+    tail->next_ptr += aligned_alloc_size;
 
     return ptr;
 }
@@ -75,6 +76,7 @@ static void *mal_heap_alloc_aligned(MalHeap *heap, usize alloc_size) {
 void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
     // TODO: at some point we can add GC tracking here.
     header->type = type;
+    header->storage = MAL_HEAP_STORAGE_DYNAMIC;
 }
 
 void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {

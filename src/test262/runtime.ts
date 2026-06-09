@@ -16,7 +16,7 @@ import type { Test262File } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
 
-const SKIPPED_FLAGS = ["module", "async", "onlyStrict", "CanBlockIsTrue"];
+const SKIPPED_FLAGS = ["async", "onlyStrict", "CanBlockIsTrue"];
 const SKIPPED_FEATURES = [
 	"IsHTMLDDA",
 	"decorators",
@@ -62,6 +62,23 @@ function recordTiming(phase: keyof typeof TIMINGS, label: string, ms: number) {
 	timing.slowest.push({ path: label, ms: Math.round(ms * 10) / 10 });
 	timing.slowest.sort((a, b) => b.ms - a.ms);
 	timing.slowest.length = Math.min(timing.slowest.length, 10);
+}
+
+/**
+ * Aggregate code-size metrics across every successfully compiled test, plus an
+ * opcode histogram to point performance work at the dominant instructions.
+ * Counts can double on the rare batch-cc-failure retry path, so treat them as
+ * tracking signals rather than exact totals.
+ */
+const CODE_STATS = { compiledFiles: 0, functionCount: 0, instructionCount: 0 };
+const OPCODE_COUNTS: Record<string, number> = {};
+
+export function getCodeStats() {
+	const opcodes = Object.entries(OPCODE_COUNTS)
+		.sort((a, b) => b[1] - a[1])
+		.map(([opcode, count]) => ({ opcode, count }));
+
+	return { ...CODE_STATS, opcodes };
 }
 
 export function getTimings() {
@@ -216,6 +233,16 @@ function test262CompileToC(file: Test262File, symbolSuffix: string): string | un
 		executeIROptimizations(irProgram);
 		allocateRegisters(irProgram);
 		const vmDefinition = lowerIrProgramToVmDefinition(irProgram);
+
+		CODE_STATS.compiledFiles++;
+		CODE_STATS.functionCount += vmDefinition.functions.length;
+		for (const fn of vmDefinition.functions) {
+			CODE_STATS.instructionCount += fn.instructions.length;
+			for (const instruction of fn.instructions) {
+				OPCODE_COUNTS[instruction.opcode] = (OPCODE_COUNTS[instruction.opcode] ?? 0) + 1;
+			}
+		}
+
 		return emitVmDefinition(vmDefinition, { symbolSuffix, includeHeader: false });
 	} catch (e) {
 		file.result = "COMPILE_FAILED";

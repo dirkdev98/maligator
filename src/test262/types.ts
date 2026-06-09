@@ -41,5 +41,16 @@ export interface Test262Cache {
 export interface Test262Output {
 	sha: string;
 	summary: Record<string, number>;
+
+	/**
+	 * Code-size totals over all compiled tests, tracked across commits so the
+	 * impact of optimizations (and added syntax coverage) is visible in the diff.
+	 */
+	code?: {
+		compiledFiles: number;
+		functionCount: number;
+		instructionCount: number;
+	};
+
 	results: Record<string, "PASSED" | "SKIPPED" | "FAILED">;
 }

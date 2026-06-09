@@ -2,6 +2,8 @@
 
 #include "./defaults.h"
 #include "heap.h"
+#include "heap_bigint.h"
+#include "heap_string.h"
 #include "intrinsics.h"
 #include "value.h"
 
@@ -155,7 +157,7 @@ typedef struct MalInstruction {
         } create_string;
 
         struct {
-            i32 dst, string_index;
+            i32 dst, bigint_index;
         } create_bigint;
 
         struct {
@@ -424,6 +426,13 @@ typedef struct MalFunction {
     i32 captured_count;
     bool strict;
 
+    /**
+     * The function reads its arguments through the frame (materializes an
+     * `arguments` object or a rest parameter). When false, the activation skips
+     * allocating and copying the arguments slice entirely.
+     */
+    bool needs_arguments;
+
     i32 instruction_count;
     const MalInstruction *instructions;
 
@@ -431,17 +440,25 @@ typedef struct MalFunction {
     const MalExceptionHandler *handlers;
 } MalFunction;
 
-typedef struct MalStringConstant {
-    usize length;
-    const c16 *code_units;
-} MalStringConstant;
-
 typedef struct MalVmDefinition {
     i32 function_count;
     const MalFunction *functions;
 
+    /**
+     * Immortal string constants baked into the program image (static storage,
+     * EXTERNAL code units). Their hashes are computed once in mal_vm_init, so
+     * the array is not const. CREATE_STRING and property-key loads hand back a
+     * pointer to one of these instead of allocating per execution.
+     */
     i32 string_constant_count;
-    const MalStringConstant *string_constants;
+    MalString *string_constants;
+
+    /**
+     * Immortal bigint constants, likewise baked into the image with their
+     * 128-bit value emitted at compile time. CREATE_BIGINT hands back a pointer.
+     */
+    i32 bigint_constant_count;
+    MalBigInt *bigint_constants;
 
     i32 global_count;
 } MalVmDefinition;
@@ -471,6 +488,27 @@ typedef struct MalVm {
      */
     MalTable *symbol_registry;
 
+    /**
+     * Interned runtime-internal key strings (the fixed vocabulary handed out by
+     * mal_intrinsic_ascii: "length", "prototype", …). Keyed by string content so
+     * each distinct name is allocated once for the VM lifetime instead of on
+     * every builtin call. A GC root (the atoms it holds stay reachable).
+     */
+    MalTable *atoms;
+
+    /**
+     * Contiguous register/argument storage for non-suspendable frames. Each such
+     * frame carves a window [stack_base, stack_base+slots); return pops it by
+     * restoring value_stack_size. Fixed capacity — overflow throws a RangeError
+     * ("Maximum call stack size exceeded") — so it never reallocates and the
+     * register/argument pointers held by live frames stay valid. Generator and
+     * (later) async activations live on the heap instead, since they outlive the
+     * synchronous stack across suspends, and so do not use this.
+     */
+    MalValue *value_stack;
+    i32 value_stack_size;
+    i32 value_stack_capacity;
+
     struct MalVmFrame *frames;
     i32 frame_count;
     i32 frame_capacity;
@@ -484,6 +522,15 @@ typedef struct MalVmFrame {
     MalValue *registers;
     MalValue *arguments;
     i32 argument_count;
+
+    /**
+     * For a value-stack frame, the value_stack_size to restore when this frame
+     * is torn down (also the base of its register/argument window). -1 marks a
+     * heap-resident activation (generators/async): its registers and arguments
+     * are owned heap buffers, freed on teardown rather than popped off the stack.
+     */
+    i32 stack_base;
+
     MalValue this_value;
     MalValue arguments_object;
 
@@ -533,12 +580,18 @@ MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index);
 
 void mal_vm_free_callable(MalCallable *callable);
 
-void mal_vm_push_function_frame(
+/**
+ * Push an activation for the given function. The caller must have placed the
+ * arg_count arguments in the top arg_count slots of the value stack (the callee
+ * adopts that region as its register window). Returns false without pushing when
+ * the value stack would overflow (a RangeError is left pending in that case);
+ * callers must not touch vm->frames[frame_count - 1] when it returns false.
+ */
+bool mal_vm_push_function_frame(
     MalVm *vm,
     i32 function_index,
     MalEnv *creation_env,
     MalValue this_value,
-    const MalValue *args,
     i32 arg_count,
     i32 return_register,
     i32 caller_frame_index

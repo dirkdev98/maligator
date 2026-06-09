@@ -1,17 +1,46 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
-import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";
+import { buildLocalBinary } from "./local-build.ts";
+import { lowerIrProgramToVmDefinition, vmDefinitionStats } from "./lower-vm.ts";
 import { allocateRegisters } from "./register-alloc.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-analysis.ts";
 import { log } from "./utils.ts";
 
-const entrypoint = process.argv[2];
+const FLAGS_WITH_VALUES = new Set(["--name"]);
+
+function argValue(name: string) {
+	const index = process.argv.indexOf(name);
+	return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+function argFlag(name: string) {
+	return process.argv.includes(name);
+}
+
+// The first non-flag argument is the entrypoint; flags may appear before it.
+const positionals: Array<string> = [];
+const argv = process.argv.slice(2);
+for (let i = 0; i < argv.length; i++) {
+	const arg = argv[i]!;
+	if (arg.startsWith("--")) {
+		if (FLAGS_WITH_VALUES.has(arg)) {
+			i++;
+		}
+		continue;
+	}
+	positionals.push(arg);
+}
+
+const entrypoint = positionals[0];
 
 if (!entrypoint || !existsSync(entrypoint)) {
-	log.info(`Usage: maligator [./entyproint.js]`);
+	log.info(
+		`Usage: maligator <entrypoint.js> [--name out] [--run] [--emit-c] [--verbose]`,
+	);
 	process.exit(1);
 }
 
@@ -37,8 +66,29 @@ const lowerTiming = log.time("lower to vm");
 const vmDefinition = lowerIrProgramToVmDefinition(irProgram);
 lowerTiming();
 
-const emitTiming = log.time("emit vm definition");
-const output = emitVmDefinition(vmDefinition);
-emitTiming();
+const stats = vmDefinitionStats(vmDefinition);
+log.info(`Functions: ${stats.functionCount}, instructions: ${stats.instructionCount}`);
 
-log.info(output);
+const output = emitVmDefinition(vmDefinition);
+if (argFlag("--emit-c") || argFlag("--print")) {
+	log.info(output);
+}
+
+const name = argValue("--name") ?? "out";
+const verbose = argFlag("--verbose");
+
+const buildTiming = log.time("build binary");
+const binaryPath = buildLocalBinary({ name, cSource: output, verbose });
+buildTiming();
+log.info(`Binary: ${binaryPath}`);
+
+if (argFlag("--run")) {
+	try {
+		execFileSync(binaryPath, { stdio: "inherit" });
+		log.info("Exit: 0");
+	} catch (error) {
+		const status = (error as { status?: number; signal?: string }).status;
+		const signal = (error as { signal?: string }).signal;
+		log.info(`Exit: ${signal ? `signal ${signal}` : (status ?? "error")}`);
+	}
+}

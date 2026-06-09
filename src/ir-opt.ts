@@ -191,7 +191,12 @@ function optCombineLinearBlocks(program: IntermediateProgram): boolean {
 	for (const fn of program.functions) {
 		const jumpTargetToSources = new Map<number, Array<number>>();
 
-		for (let jumpSource = 0; jumpSource < fn.blocks.length - 1; ++jumpSource) {
+		// Scan every block (including the last) so a target's source count is
+		// accurate. A back-edge from the final block — e.g. a self-recursive
+		// tail-call loop — still makes its target multi-sourced, which must
+		// prevent the wrong merge below. (The last block can never be a merge
+		// source itself: that needs jumpSource + 1 === jumpTarget.)
+		for (let jumpSource = 0; jumpSource < fn.blocks.length; ++jumpSource) {
 			const block = fn.blocks[jumpSource]!;
 
 			for (const instr of block.instructions) {

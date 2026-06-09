@@ -17,6 +17,24 @@ export interface IntermediateProgram {
 	stringConstants: Array<Array<number>>;
 	stringConstantToIndex: Map<string, number>;
 
+	/**
+	 * Immortal bigint constant pool, deduplicated by value. Each entry is baked
+	 * into the program image as a static MalBigInt with its value emitted at
+	 * compile time, so CREATE_BIGINT never parses or allocates at runtime.
+	 */
+	bigintConstants: Array<bigint>;
+	bigintConstantToIndex: Map<bigint, number>;
+
+	/**
+	 * For a `const f = <function/arrow>` declaration, maps f's binding to the
+	 * function node it is initialized with. Used to recognize a self-recursive
+	 * tail call reached through that binding — the binding's declarationNode is
+	 * the Identifier, not the function, so it carries no such link itself.
+	 * Populated before the initializer compiles, so the link is visible while
+	 * compiling the function's own body.
+	 */
+	bindingFunctionNode: Map<Binding, ESTree.Node>;
+
 	//////
 	// Various caches to prevent duplicate compilation or to look things up.
 	//
@@ -166,6 +184,20 @@ export interface IRFunction {
 	blocks: Array<IRBlock>;
 	argumentsObjectRegister?: number;
 	classContext?: IRClassContext;
+
+	/**
+	 * Self-recursive tail-call elimination. When the function is eligible (see
+	 * prepareTailCallLoop), `return f(args)` to itself is rewritten into "assign
+	 * params, JUMP to bodyEntryBlock" — turning tail recursion into a loop with
+	 * constant stack. tailCallNode is the source function (for its parameter
+	 * list); bodyEntryBlock is the loop header (the first body block).
+	 */
+	tcoEligible?: boolean;
+	bodyEntryBlock?: number;
+	tailCallNode?:
+		| ESTree.FunctionDeclaration
+		| ESTree.FunctionExpression
+		| ESTree.ArrowFunctionExpression;
 
 	/**
 	 * Generator functions get a GENERATOR_START prologue instruction (after the
@@ -335,11 +367,11 @@ export type IRInstruction =
 	| {
 			type: "createBigint";
 
-			// [destination] — the string constant holds the decimal digits the
-			// runtime parses into a BigInt.
+			// [destination]
 			registers: [number];
 
-			stringIndex: number;
+			// Index into the program's immortal bigint constant pool.
+			bigintIndex: number;
 	  }
 	| {
 			type: "createObject";
@@ -865,6 +897,11 @@ export function compileSemanticProgramToIr(semantic: SemanticProgram) {
 		stringConstants: [],
 		stringConstantToIndex: new Map(),
 
+		bigintConstants: [],
+		bigintConstantToIndex: new Map(),
+
+		bindingFunctionNode: new Map(),
+
 		compiledModuleInitForPaths: new Set(),
 		bindingToStorage: new Map(),
 		bindingToFunctionCache: new Map(),
@@ -970,6 +1007,7 @@ function compileNewFunction(
 	program.bindingToFunctionCache.set(binding, { fnIndex: fn.functionIndex });
 
 	const paramsCursor = compileFunctionParams(program, fn, functionNode);
+	prepareTailCallLoop(fn, functionNode);
 	const bodyBlock = compileStatementsToBlock(
 		program,
 		fn,
@@ -1041,6 +1079,7 @@ function compileNewFunctionExpression(
 		emitInstanceElementInit(program, compiledFn, paramsCursor, classContext);
 	}
 
+	prepareTailCallLoop(compiledFn, functionNode);
 	const bodyBlock = compileStatementsToBlock(
 		program,
 		compiledFn,
@@ -3730,6 +3769,159 @@ function emitContinue(fn: IRFunction, block: IRBlock, label?: string) {
 }
 
 /**
+ * Node types whose presence anywhere in a function body makes self-recursive
+ * tail-call → loop rewriting unsound, because frame reuse would change observed
+ * behavior:
+ *   - nested functions/classes capture this frame's variables (each recursive
+ *     activation must give fresh bindings; a reused frame shares them);
+ *   - `this`/`new.target` differ between the original call and a plain `f()`
+ *     recursive call;
+ *   - a `try` makes the call's result/exception observable, so it isn't a tail
+ *     position.
+ * (Generators, `arguments`, and non-Identifier params are excluded separately.)
+ */
+const TAIL_CALL_BLOCKERS = new Set([
+	"FunctionDeclaration",
+	"FunctionExpression",
+	"ArrowFunctionExpression",
+	"ClassDeclaration",
+	"ClassExpression",
+	"ThisExpression",
+	"Super",
+	"MetaProperty",
+	"TryStatement",
+]);
+
+function containsTailCallBlocker(node: unknown): boolean {
+	if (node === null || typeof node !== "object") {
+		return false;
+	}
+	if (Array.isArray(node)) {
+		return node.some(containsTailCallBlocker);
+	}
+	const type = (node as { type?: string }).type;
+	if (type !== undefined && TAIL_CALL_BLOCKERS.has(type)) {
+		return true;
+	}
+	for (const key of Object.keys(node)) {
+		if (key === "type") {
+			continue;
+		}
+		if (containsTailCallBlocker((node as Record<string, unknown>)[key])) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * Decide whether the function admits self-recursive tail-call elimination, and
+ * record the loop header. Called after parameter compilation (so
+ * argumentsObjectRegister is known) and immediately before the body is
+ * compiled, so the body block this records matches the one compileStatementsToBlock
+ * is about to push, and compileReturnStatement can see the eligibility.
+ */
+function prepareTailCallLoop(
+	fn: IRFunction,
+	functionNode:
+		| ESTree.FunctionDeclaration
+		| ESTree.FunctionExpression
+		| ESTree.ArrowFunctionExpression,
+) {
+	fn.tailCallNode = functionNode;
+	// compileStatementsToBlock pushes the body block first thing, so its index is
+	// the current block count.
+	fn.bodyEntryBlock = fn.blocks.length;
+	fn.tcoEligible =
+		!fn.isGenerator &&
+		fn.argumentsObjectRegister === undefined &&
+		functionNode.params.every((param) => param.type === "Identifier") &&
+		!containsTailCallBlocker(functionNode.body);
+}
+
+/**
+ * Try to rewrite `return f(args)` (where f is the current function, reached
+ * through an immutable binding) into a loop: evaluate the arguments, reassign
+ * the parameter registers, and jump to the body entry. Returns false (emitting
+ * nothing) when the call is not such a self-tail-call, so the caller falls back
+ * to an ordinary return.
+ */
+function tryEmitSelfTailCall(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	call: ESTree.CallExpression,
+): boolean {
+	if (fn.bodyEntryBlock === undefined || fn.tailCallNode === undefined) {
+		return false;
+	}
+	const callee = call.callee as unknown as ESTree.Node;
+	if (callee.type !== "Identifier") {
+		return false;
+	}
+	if (call.arguments.some((arg) => arg.type === "SpreadElement")) {
+		return false;
+	}
+
+	const binding = fn.semanticFile.nodeToBinding.get(callee);
+	if (!binding) {
+		return false;
+	}
+	// The callee must resolve to *this* function: either through a binding whose
+	// declaration is this function node (a function declaration, or a named
+	// function expression's internal name) or through a `const f = <function>`
+	// link recorded at declaration time.
+	const isSelf =
+		binding.declarationNode === fn.tailCallNode ||
+		program.bindingFunctionNode.get(binding) === fn.tailCallNode;
+	if (!isSelf) {
+		return false;
+	}
+	// ...and through a binding that can't be reassigned to point elsewhere: a
+	// const, or a named function expression's (immutable) internal name.
+	if (
+		binding.kind !== "const" &&
+		binding.declarationNode?.type !== "FunctionExpression"
+	) {
+		return false;
+	}
+
+	// Leaving the frame here must not skip cleanup: a for-of iterator close or a
+	// finally would otherwise be lost. (try/this/etc. are excluded function-wide.)
+	for (const scope of fn.loops ?? []) {
+		if (scope.iteratorRegister !== undefined || scope.kind === "finally") {
+			return false;
+		}
+	}
+
+	// Resolve parameter storage before emitting anything, so a defensive bail
+	// can't leave half-emitted instructions.
+	const locations = [];
+	for (const param of fn.tailCallNode.params) {
+		const paramBinding = fn.semanticFile.nodeToBinding.get(param);
+		if (!paramBinding) {
+			return false;
+		}
+		locations.push(getOrCreateBindingLocation(program, fn, paramBinding));
+	}
+
+	// Evaluate every argument first — an argument may read a parameter we are
+	// about to overwrite (e.g. `return f(b, a)`).
+	const argTemps = call.arguments.map((arg) =>
+		// SpreadElement is excluded above; the ternary only narrows the type.
+		arg.type === "SpreadElement" ? -1 : compileExpression(program, fn, cursor, arg),
+	);
+
+	for (let i = 0; i < locations.length; i++) {
+		const value = i < argTemps.length ? argTemps[i]! : compileUndefined(fn, cursor);
+		storeRegisterAtLocation(cursor.block, locations[i]!, value);
+	}
+
+	cursor.block.instructions.push({ type: "jump", blocks: [fn.bodyEntryBlock] });
+	return true;
+}
+
+/**
  * Naively compile a return statement.
  */
 function compileReturnStatement(
@@ -3739,6 +3931,15 @@ function compileReturnStatement(
 	statement: ESTree.ReturnStatement,
 ) {
 	const cursor: IRCursor = { block };
+
+	if (
+		fn.tcoEligible &&
+		statement.argument?.type === "CallExpression" &&
+		tryEmitSelfTailCall(program, fn, cursor, statement.argument)
+	) {
+		return;
+	}
+
 	const returnRegister = compileExpression(
 		program,
 		fn,
@@ -3760,6 +3961,20 @@ function compileVariableDeclaration(
 ) {
 	const cursor: IRCursor = { block };
 	for (const decl of statement.declarations) {
+		// Link `const f = <function>` so a self-recursive tail call reached through
+		// f is recognizable. Recorded before the initializer compiles, since that
+		// is when the function's own body (with the recursive call) is compiled.
+		if (
+			decl.id.type === "Identifier" &&
+			(decl.init?.type === "ArrowFunctionExpression" ||
+				decl.init?.type === "FunctionExpression")
+		) {
+			const binding = fn.semanticFile.nodeToBinding.get(decl.id);
+			if (binding) {
+				program.bindingFunctionNode.set(binding, decl.init);
+			}
+		}
+
 		const source = compileExpression(
 			program,
 			fn,
@@ -5947,7 +6162,7 @@ function compileLiteral(
 		cursor.block.instructions.push({
 			type: "createBigint",
 			registers: [destination],
-			stringIndex: getOrCreateStringConstant(program, String(literal.value)),
+			bigintIndex: getOrCreateBigintConstant(program, literal.value),
 		});
 
 		return destination;
@@ -6001,6 +6216,17 @@ function getOrCreateStringConstant(program: IntermediateProgram, value: string) 
 
 	const index = program.stringConstants.push(codeUnits) - 1;
 	program.stringConstantToIndex.set(value, index);
+	return index;
+}
+
+function getOrCreateBigintConstant(program: IntermediateProgram, value: bigint) {
+	const existing = program.bigintConstantToIndex.get(value);
+	if (existing !== undefined) {
+		return existing;
+	}
+
+	const index = program.bigintConstants.push(value) - 1;
+	program.bigintConstantToIndex.set(value, index);
 	return index;
 }
 

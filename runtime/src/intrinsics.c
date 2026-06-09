@@ -1,6 +1,7 @@
 #include "intrinsics.h"
 
 #include <math.h>
+#include <stdlib.h>
 
 #include "builtin_array.h"
 #include "builtin_array_buffer.h"
@@ -22,7 +23,12 @@
 #include "builtin_string.h"
 #include "builtin_symbol.h"
 #include "heap_string.h"
+#include "table.h"
 #include "vm.h"
+
+// Longest internal key in the codebase is well under this; longer names fall
+// back to a heap-converted probe buffer.
+#define MAL_INTERN_STACK_MAX 64
 
 MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     usize length = 0;
@@ -30,7 +36,32 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
         length++;
     }
 
-    return mal_string_new_ascii(&vm->heap, name, length);
+    // Probe the atom table with a stack-allocated (or, for rare long names,
+    // throwaway-heap) external key string so a hit costs no allocation. On a
+    // miss, allocate the canonical atom once and store it as its own key.
+    c16 stack_units[MAL_INTERN_STACK_MAX];
+    c16 *heap_units = length > MAL_INTERN_STACK_MAX ? malloc(sizeof(c16) * length) : nullptr;
+    c16 *units = heap_units != nullptr ? heap_units : stack_units;
+    for (usize i = 0; i < length; i++) {
+        units[i] = (u8) name[i];
+    }
+
+    MalString probe;
+    mal_string_init_external(&probe, units, length);
+    MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(&probe)};
+
+    MalTableLookup lookup = mal_table_lookup(vm->atoms, key);
+    if (lookup.present) {
+        free(heap_units);
+        return mal_value_to_string(mal_table_entry_key(vm->atoms, lookup.entry).value);
+    }
+
+    MalString *atom = mal_string_new_ascii(&vm->heap, name, length);
+    MalKey atom_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
+    mal_table_upsert_entry(vm->atoms, atom_key);
+
+    free(heap_units);
+    return atom;
 }
 
 MalKey mal_intrinsic_string_key(MalVm *vm, const byte *name) {

@@ -26,11 +26,25 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 	}
 
 	if (definition.stringConstants.length > 0) {
-		lines.push("", `static const MalStringConstant mal_string_constants${suffix}[] = {`);
+		// Immortal, pre-hashed string constants baked into the image. The hash is
+		// filled once in mal_vm_init (a static initializer can't run it), so the
+		// array is mutable static rather than const.
+		lines.push("", `static MalString mal_strings${suffix}[] = {`);
 		for (let i = 0; i < definition.stringConstants.length; ++i) {
 			const constant = definition.stringConstants[i]!;
 			lines.push(
-				`    { .length = ${constant.length}, .code_units = mal_string_${i}_code_units${suffix} },`,
+				`    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = ${constant.length}, .code_units = mal_string_${i}_code_units${suffix} },`,
+			);
+		}
+		lines.push("};", "");
+	}
+
+	if (definition.bigintConstants.length > 0) {
+		// Immortal bigint constants with their 128-bit value baked at compile time.
+		lines.push(`static MalBigInt mal_bigints${suffix}[] = {`);
+		for (const value of definition.bigintConstants) {
+			lines.push(
+				`    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_BIGINT), .value = ${emitBigintValue(value)} },`,
 			);
 		}
 		lines.push("};", "");
@@ -74,6 +88,7 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 		lines.push(`        .register_count = ${fn.registerCount},`);
 		lines.push(`        .captured_count = ${fn.capturedCount},`);
 		lines.push(`        .strict = ${fn.strict},`);
+		lines.push(`        .needs_arguments = ${fn.needsArguments},`);
 		lines.push(`        .instruction_count = ${fn.instructions.length},`);
 		lines.push(`        .instructions = mal_function_${i}_instructions${suffix},`);
 		lines.push(`        .handler_count = ${fn.handlers.length},`);
@@ -89,7 +104,11 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 	lines.push(`    .functions = mal_functions${suffix},`);
 	lines.push(`    .string_constant_count = ${definition.stringConstants.length},`);
 	lines.push(
-		`    .string_constants = ${definition.stringConstants.length > 0 ? `mal_string_constants${suffix}` : "nullptr"},`,
+		`    .string_constants = ${definition.stringConstants.length > 0 ? `mal_strings${suffix}` : "nullptr"},`,
+	);
+	lines.push(`    .bigint_constant_count = ${definition.bigintConstants.length},`);
+	lines.push(
+		`    .bigint_constants = ${definition.bigintConstants.length > 0 ? `mal_bigints${suffix}` : "nullptr"},`,
 	);
 	lines.push(`    .global_count = ${definition.globalCount},`);
 	lines.push("};");
@@ -119,7 +138,7 @@ function emitInstruction(instruction: VmInstruction) {
 		case "CREATE_STRING":
 			return `{ .opcode = MAL_OP_CREATE_STRING, .as.create_string = { .dst = ${instruction.dst}, .string_index = ${instruction.stringIndex} } }`;
 		case "CREATE_BIGINT":
-			return `{ .opcode = MAL_OP_CREATE_BIGINT, .as.create_bigint = { .dst = ${instruction.dst}, .string_index = ${instruction.stringIndex} } }`;
+			return `{ .opcode = MAL_OP_CREATE_BIGINT, .as.create_bigint = { .dst = ${instruction.dst}, .bigint_index = ${instruction.bigintIndex} } }`;
 		case "CREATE_OBJECT":
 			return `{ .opcode = MAL_OP_CREATE_OBJECT, .as.create_object = { .dst = ${instruction.dst} } }`;
 		case "CREATE_ARRAY":
@@ -333,6 +352,25 @@ function emitUnaryOperator(
 	}
 
 	throw new Error("Unknown unary operator");
+}
+
+/**
+ * Emit a non-negative bigint literal value as a C i128 initializer. The value is
+ * built in `unsigned __int128` (well-defined wrapping) then cast to i128, which
+ * preserves the two's-complement bit pattern and matches the runtime parser's
+ * wrap-at-128-bits behavior. BigInt literals are always non-negative (unary `-`
+ * is a separate operation).
+ */
+function emitBigintValue(value: bigint): string {
+	const mask = (1n << 64n) - 1n;
+	const lo = value & mask;
+	const hi = (value >> 64n) & mask;
+
+	if (hi === 0n) {
+		return `(i128) ${lo}ULL`;
+	}
+
+	return `(i128) (((unsigned __int128) ${hi}ULL << 64) | (unsigned __int128) ${lo}ULL)`;
 }
 
 function emitCallArguments(args: Array<number>) {

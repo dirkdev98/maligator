@@ -11,12 +11,23 @@
 #include "value_ops.h"
 #include "vm_ops.h"
 
+/**
+ * Capacity of the contiguous value stack, in MalValue slots. Recursion deeper
+ * than this throws a RangeError, matching engines that cap the call stack. A
+ * frame consumes register_count + arg_count slots, so this bounds call depth.
+ */
+#define MAL_VALUE_STACK_CAPACITY (256 * 1024)
+
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->definition = definition;
     vm->globals = malloc(sizeof(MalValue) * definition->global_count);
     vm->frames = nullptr;
     vm->frame_count = 0;
     vm->frame_capacity = 0;
+
+    vm->value_stack_capacity = MAL_VALUE_STACK_CAPACITY;
+    vm->value_stack = malloc(sizeof(MalValue) * (usize) vm->value_stack_capacity);
+    vm->value_stack_size = 0;
 
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
@@ -28,22 +39,42 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
         vm->intrinsics[i] = mal_value_new_undefined();
     }
     vm->symbol_registry = mal_table_new(MAL_TABLE_MODE_GENERAL);
+    // Must exist before mal_intrinsics_init, which interns keys through it.
+    vm->atoms = mal_table_new(MAL_TABLE_MODE_GENERAL);
+
+    // Baked string constants ship with a zero hash (a static initializer cannot
+    // run the hash function); fill them once here so every later use compares
+    // and hashes without recomputing. Idempotent across re-inits.
+    for (i32 i = 0; i < definition->string_constant_count; i++) {
+        MalString *string = &definition->string_constants[i];
+        string->hash = mal_string_hash_code_units(mal_string_code_units(string), mal_string_length(string));
+    }
+
     mal_intrinsics_init(vm);
 }
 
 void mal_vm_free(MalVm *vm) {
+    // Only heap-resident (generator/async) leftover frames own their buffers;
+    // value-stack frames live in vm->value_stack, freed below.
     for (i32 i = 0; i < vm->frame_count; i++) {
-        free(vm->frames[i].registers);
-        free(vm->frames[i].arguments);
+        if (vm->frames[i].stack_base < 0) {
+            free(vm->frames[i].registers);
+            free(vm->frames[i].arguments);
+        }
     }
 
     free(vm->frames);
+    free(vm->value_stack);
     free(vm->globals);
     mal_table_free(vm->symbol_registry);
+    mal_table_free(vm->atoms);
     mal_heap_free(&vm->heap);
 
     vm->definition = nullptr;
     vm->globals = nullptr;
+    vm->value_stack = nullptr;
+    vm->value_stack_size = 0;
+    vm->value_stack_capacity = 0;
     vm->frames = nullptr;
     vm->frame_count = 0;
     vm->frame_capacity = 0;
@@ -54,10 +85,13 @@ MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
 
     callable->vm = vm;
     callable->function = &vm->definition->functions[function_index];
-    callable->registers = malloc(sizeof(MalValue) * callable->function->register_count);
+    // mal_vm_run pushes a fresh activation; this handle only carries the
+    // function pointer, so it needs no register/argument storage of its own.
+    callable->registers = nullptr;
     callable->env = nullptr;
     callable->arguments = nullptr;
     callable->argument_count = 0;
+    callable->stack_base = -1;
     callable->this_value = mal_value_new_undefined();
     callable->arguments_object = mal_value_new_undefined();
     callable->callee = mal_value_new_undefined();
@@ -76,23 +110,110 @@ void mal_vm_free_callable(MalCallable *callable) {
     free(callable);
 }
 
-void mal_vm_push_function_frame(
+/**
+ * Release a frame's register/argument storage. A value-stack frame pops its
+ * window by restoring the bump pointer; a heap-resident activation frees its
+ * owned buffers. When unwinding several frames, apply this top-down: heap frames
+ * carve no value-stack space, so popping the stack frames lands the bump pointer
+ * at the correct level regardless of how the two kinds interleave. Generator
+ * suspension does NOT use this — it transfers the heap buffers to the generator.
+ */
+static void mal_vm_pop_frame_storage(MalVm *vm, MalVmFrame *frame) {
+    if (frame->stack_base >= 0) {
+        vm->value_stack_size = frame->stack_base;
+    } else {
+        free(frame->registers);
+        free(frame->arguments);
+    }
+}
+
+bool mal_vm_push_function_frame(
     MalVm *vm,
     i32 function_index,
     MalEnv *creation_env,
     MalValue this_value,
-    const MalValue *args,
     i32 arg_count,
     i32 return_register,
     i32 caller_frame_index
 ) {
+    const MalFunction *function = &vm->definition->functions[function_index];
+    i32 register_count = function->register_count;
+    i32 param_count = function->parameter_count;
+    bool wants_args = function->needs_arguments;
+
+    // Calling convention: the caller has placed the arguments in the top
+    // arg_count slots of the value stack, so the callee can adopt that region
+    // as the base of its register window — parameters need no copy in the
+    // common case. base points at the first argument.
+    i32 base = vm->value_stack_size - arg_count;
+    i32 params_present = param_count < arg_count ? param_count : arg_count;
+
+    // Generators (and async, later) keep their activation on the heap: it
+    // outlives the synchronous call stack across suspends. Everything else
+    // carves a window from the value stack.
+    bool heap_resident = function->kind != MAL_FUNCTION_KIND_NORMAL;
+
+    MalValue *registers;
+    MalValue *arguments;
+    i32 stack_base;
+
+    if (heap_resident) {
+        // Copy parameters (and arguments, if read) out of the marshaling area
+        // into owned heap storage, then release the area.
+        registers = malloc(sizeof(MalValue) * register_count);
+        arguments = (wants_args && arg_count > 0) ? malloc(sizeof(MalValue) * arg_count) : nullptr;
+        for (i32 i = 0; i < register_count; i++) {
+            registers[i] = mal_value_new_undefined();
+        }
+        for (i32 i = 0; i < params_present; i++) {
+            registers[i] = vm->value_stack[base + i];
+        }
+        for (i32 i = 0; wants_args && i < arg_count; i++) {
+            arguments[i] = vm->value_stack[base + i];
+        }
+        vm->value_stack_size = base;
+        stack_base = -1;
+    } else if (wants_args) {
+        // Keep the marshaling area as the arguments slice; the register window
+        // sits above it with parameters copied down.
+        i32 register_base = vm->value_stack_size;
+        if (register_base + register_count > vm->value_stack_capacity) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+            return false;
+        }
+        arguments = &vm->value_stack[base];
+        registers = &vm->value_stack[register_base];
+        for (i32 i = 0; i < register_count; i++) {
+            registers[i] = mal_value_new_undefined();
+        }
+        for (i32 i = 0; i < params_present; i++) {
+            registers[i] = arguments[i];
+        }
+        vm->value_stack_size = register_base + register_count;
+        stack_base = base;
+    } else {
+        // Common case: the register window IS the marshaling area, so the
+        // parameters already hold the arguments. Only the rest of the window
+        // (unfilled parameters and locals) needs clearing.
+        if (base + register_count > vm->value_stack_capacity) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+            return false;
+        }
+        registers = &vm->value_stack[base];
+        arguments = nullptr;
+        for (i32 i = params_present; i < register_count; i++) {
+            registers[i] = mal_value_new_undefined();
+        }
+        vm->value_stack_size = base + register_count;
+        stack_base = base;
+    }
+
+    // The frame metadata array may reallocate here; registers/arguments point
+    // into the (non-reallocating) value stack or the heap, so they stay valid.
     if (vm->frame_count == vm->frame_capacity) {
         vm->frame_capacity = vm->frame_capacity == 0 ? 8 : vm->frame_capacity * 2;
         vm->frames = realloc(vm->frames, sizeof(MalVmFrame) * vm->frame_capacity);
     }
-
-    const MalFunction *function = &vm->definition->functions[function_index];
-    MalVmFrame *frame = &vm->frames[vm->frame_count++];
 
     // Functions without captured slots pass the creation chain through, so
     // grandchild closures still find their owners.
@@ -106,12 +227,14 @@ void mal_vm_push_function_frame(
         }
     }
 
+    MalVmFrame *frame = &vm->frames[vm->frame_count++];
     frame->vm = vm;
     frame->function = function;
     frame->env = env;
-    frame->registers = malloc(sizeof(MalValue) * function->register_count);
-    frame->arguments = arg_count > 0 ? malloc(sizeof(MalValue) * arg_count) : nullptr;
+    frame->registers = registers;
+    frame->arguments = arguments;
     frame->argument_count = arg_count;
+    frame->stack_base = stack_base;
     frame->this_value = this_value;
     frame->arguments_object = mal_value_new_undefined();
     frame->callee = mal_value_new_undefined();
@@ -122,17 +245,7 @@ void mal_vm_push_function_frame(
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;
 
-    for (i32 i = 0; i < function->register_count; i++) {
-        frame->registers[i] = mal_value_new_undefined();
-    }
-
-    for (i32 i = 0; i < function->parameter_count; i++) {
-        frame->registers[i] = i < arg_count ? args[i] : mal_value_new_undefined();
-    }
-
-    for (i32 i = 0; i < arg_count; i++) {
-        frame->arguments[i] = args[i];
-    }
+    return true;
 }
 
 /**
@@ -168,8 +281,7 @@ static bool mal_vm_unwind_to_handler(MalVm *vm, i32 target_frame_count) {
         }
 
         for (i32 i = vm->frame_count - 1; i > frame_index; i--) {
-            free(vm->frames[i].registers);
-            free(vm->frames[i].arguments);
+            mal_vm_pop_frame_storage(vm, &vm->frames[i]);
         }
 
         vm->frame_count = frame_index + 1;
@@ -425,8 +537,7 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 i32 caller_frame_index = frame->caller_frame_index;
                 vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_RETURN, .value = return_value};
 
-                free(frame->registers);
-                free(frame->arguments);
+                mal_vm_pop_frame_storage(vm, frame);
                 vm->frame_count--;
 
                 if (caller_frame_index >= 0) {
@@ -443,8 +554,7 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             // No handler within this run loop; eagerly pop the frames it owns
             // and let the throw completion propagate to the caller.
             for (i32 i = vm->frame_count - 1; i >= target_frame_count; i--) {
-                free(vm->frames[i].registers);
-                free(vm->frames[i].arguments);
+                mal_vm_pop_frame_storage(vm, &vm->frames[i]);
             }
 
             vm->frame_count = target_frame_count;
@@ -509,12 +619,12 @@ static void mal_vm_report_uncaught(MalVm *vm) {
 }
 
 void mal_vm_run(MalVm *vm, MalCallable *callable) {
+    // The entry function takes no arguments, so the marshaling region is empty.
     mal_vm_push_function_frame(
         vm,
         (i32) (callable->function - vm->definition->functions),
         nullptr,
         mal_value_new_undefined(),
-        nullptr,
         0,
         -1,
         -1
@@ -586,20 +696,35 @@ MalCompletion mal_vm_call_value(
             ? vm->completion
             : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
     } else if (mal_value_is_function_object(resolution.callee)) {
-        i32 target_frame_count = vm->frame_count;
-        mal_vm_push_function_frame(
-            vm,
-            mal_function_object_function_index(mal_value_to_function_object(resolution.callee)),
-            mal_value_to_function_object(resolution.callee)->creation_env,
-            resolution.this_value,
-            resolution.args,
-            resolution.arg_count,
-            -1,
-            -1
-        );
-        vm->frames[vm->frame_count - 1].callee = resolution.callee;
-        mal_vm_run_until_frame_count(vm, target_frame_count);
-        completion = vm->completion;
+        // Marshal the resolved arguments onto the value stack so the callee can
+        // adopt them as its register window.
+        if (vm->value_stack_size + resolution.arg_count > vm->value_stack_capacity) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+            completion = vm->completion;
+        } else {
+            i32 base = vm->value_stack_size;
+            for (i32 i = 0; i < resolution.arg_count; i++) {
+                vm->value_stack[base + i] = resolution.args[i];
+            }
+            vm->value_stack_size = base + resolution.arg_count;
+
+            i32 target_frame_count = vm->frame_count;
+            if (mal_vm_push_function_frame(
+                    vm,
+                    mal_function_object_function_index(mal_value_to_function_object(resolution.callee)),
+                    mal_value_to_function_object(resolution.callee)->creation_env,
+                    resolution.this_value,
+                    resolution.arg_count,
+                    -1,
+                    -1
+                )) {
+                vm->frames[vm->frame_count - 1].callee = resolution.callee;
+                mal_vm_run_until_frame_count(vm, target_frame_count);
+            } else {
+                vm->value_stack_size = base;
+            }
+            completion = vm->completion;
+        }
     }
 
     free(resolution.owned_args);
@@ -622,8 +747,8 @@ MalString *mal_vm_callable_name(MalVm *vm, MalValue callee) {
         ].name_string_index;
 
         if (name_index >= 0 && name_index < vm->definition->string_constant_count) {
-            const MalStringConstant *constant = &vm->definition->string_constants[name_index];
-            return mal_string_new_external(&vm->heap, constant->code_units, constant->length);
+            // The baked constant is already an immortal MalString; hand it back.
+            return &vm->definition->string_constants[name_index];
         }
 
         return mal_string_new_ascii(&vm->heap, "", 0);

@@ -119,16 +119,16 @@ void mal_op_create_boolean(MalCallable *callable, MalInstruction *instruction) {
 }
 
 void mal_op_create_string(MalCallable *callable, MalInstruction *instruction) {
-    const MalStringConstant *constant = &callable->vm->definition->string_constants[instruction->as.create_string.string_index];
-    MalString *string = mal_string_new_external(&callable->vm->heap, constant->code_units, constant->length);
+    // The string constant is an immortal, pre-hashed static; hand back a
+    // pointer instead of allocating a fresh MalString per execution.
+    MalString *string = &callable->vm->definition->string_constants[instruction->as.create_string.string_index];
     callable->registers[instruction->as.create_string.dst] = mal_value_from_string(string);
 }
 
 void mal_op_create_bigint(MalCallable *callable, MalInstruction *instruction) {
-    const MalStringConstant *constant = &callable->vm->definition->string_constants[instruction->as.create_bigint.string_index];
-    bool ok;
-    i128 value = mal_bigint_parse(constant->code_units, constant->length, &ok);
-    MalBigInt *bigint = mal_bigint_new(&callable->vm->heap, value);
+    // The bigint constant is an immortal static with its value baked at compile
+    // time; hand back a pointer instead of parsing and allocating per execution.
+    MalBigInt *bigint = &callable->vm->definition->bigint_constants[instruction->as.create_bigint.bigint_index];
     callable->registers[instruction->as.create_bigint.dst] = mal_value_from_bigint(bigint);
 }
 
@@ -226,26 +226,54 @@ void mal_op_load_new_target(MalCallable *callable, MalInstruction *instruction) 
 }
 
 /**
- * Shared call dispatch: bound resolution, then script frame push or native
- * invocation. The result register lives on the frame that was current when
- * the dispatch started.
+ * A bound function's combined arguments aren't the region the caller marshaled
+ * at `base`, so replace that region with them in place — restoring the calling
+ * convention (args are the top arg_count slots) before the frame is pushed.
+ * Leaves a pending RangeError (and the stack reset to base) on overflow.
  */
-static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value, const MalValue *arguments, i32 argument_count, i32 dst) {
-    MalBoundResolution resolution = mal_bound_function_object_resolve(callee, this_value, arguments, argument_count, true);
+static void mal_vm_remarshal_bound_args(MalVm *vm, i32 base, const MalBoundResolution *resolution) {
+    if (resolution->owned_args == nullptr) {
+        return;
+    }
+
+    vm->value_stack_size = base;
+    if (base + resolution->arg_count > vm->value_stack_capacity) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+        return;
+    }
+    for (i32 i = 0; i < resolution->arg_count; i++) {
+        vm->value_stack[base + i] = resolution->args[i];
+    }
+    vm->value_stack_size = base + resolution->arg_count;
+}
+
+/**
+ * Shared call dispatch: bound resolution, then script frame push or native
+ * invocation. The arguments occupy the top `argument_count` value-stack slots
+ * starting at `base`. The result register lives on the frame that was current
+ * when the dispatch started.
+ */
+static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value, i32 base, i32 argument_count, i32 dst) {
+    MalBoundResolution resolution = mal_bound_function_object_resolve(callee, this_value, &vm->value_stack[base], argument_count, true);
 
     if (mal_value_is_function_object(resolution.callee)) {
-        i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
-        mal_vm_push_function_frame(
-            vm,
-            function_index,
-            mal_value_to_function_object(resolution.callee)->creation_env,
-            resolution.this_value,
-            resolution.args,
-            resolution.arg_count,
-            dst,
-            vm->frame_count - 1
-        );
-        vm->frames[vm->frame_count - 1].callee = resolution.callee;
+        mal_vm_remarshal_bound_args(vm, base, &resolution);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
+            if (mal_vm_push_function_frame(
+                    vm,
+                    function_index,
+                    mal_value_to_function_object(resolution.callee)->creation_env,
+                    resolution.this_value,
+                    resolution.arg_count,
+                    dst,
+                    vm->frame_count - 1
+                )) {
+                vm->frames[vm->frame_count - 1].callee = resolution.callee;
+            } else {
+                vm->value_stack_size = base;
+            }
+        }
     } else if (mal_value_is_native_function_object(resolution.callee)) {
         MalNativeFunctionCallback callback = mal_native_function_object_callback(
             mal_value_to_native_function_object(resolution.callee)
@@ -256,8 +284,10 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
         i32 caller_frame_index = vm->frame_count - 1;
         MalValue result = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined());
         vm->frames[caller_frame_index].registers[dst] = result;
+        vm->value_stack_size = base;
     } else {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a function");
+        vm->value_stack_size = base;
     }
 
     free(resolution.owned_args);
@@ -266,15 +296,22 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
 /**
  * Shared construct dispatch, mirroring mal_vm_call_dispatch.
  */
-static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, const MalValue *arguments, i32 argument_count, i32 dst) {
+static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 argument_count, i32 dst) {
     // The bound this is ignored when constructing.
-    MalBoundResolution resolution = mal_bound_function_object_resolve(callee, mal_value_new_undefined(), arguments, argument_count, false);
+    MalBoundResolution resolution = mal_bound_function_object_resolve(callee, mal_value_new_undefined(), &vm->value_stack[base], argument_count, false);
 
     if (mal_value_is_function_object(resolution.callee)) {
         i32 callee_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
         if (vm->definition->functions[callee_index].kind != MAL_FUNCTION_KIND_NORMAL) {
             // Generators (and other non-normal kinds) are not constructors.
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
+            vm->value_stack_size = base;
+            free(resolution.owned_args);
+            return;
+        }
+
+        mal_vm_remarshal_bound_args(vm, base, &resolution);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
             free(resolution.owned_args);
             return;
         }
@@ -287,20 +324,21 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, const MalValue
         }
 
         MalValue this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
-        i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
-        mal_vm_push_function_frame(
-            vm,
-            function_index,
-            mal_value_to_function_object(resolution.callee)->creation_env,
-            this_value,
-            resolution.args,
-            resolution.arg_count,
-            dst,
-            vm->frame_count - 1
-        );
-        vm->frames[vm->frame_count - 1].is_construct = true;
-        // new.target is the constructor being invoked through `new`.
-        vm->frames[vm->frame_count - 1].new_target = resolution.callee;
+        if (mal_vm_push_function_frame(
+                vm,
+                callee_index,
+                mal_value_to_function_object(resolution.callee)->creation_env,
+                this_value,
+                resolution.arg_count,
+                dst,
+                vm->frame_count - 1
+            )) {
+            vm->frames[vm->frame_count - 1].is_construct = true;
+            // new.target is the constructor being invoked through `new`.
+            vm->frames[vm->frame_count - 1].new_target = resolution.callee;
+        } else {
+            vm->value_stack_size = base;
+        }
     } else if (mal_value_is_native_function_object(resolution.callee)) {
         // Native constructors allocate their own this; new_target carries the
         // construct-ness signal.
@@ -310,31 +348,39 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, const MalValue
         i32 caller_frame_index = vm->frame_count - 1;
         MalValue result = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, resolution.callee);
         vm->frames[caller_frame_index].registers[dst] = result;
+        vm->value_stack_size = base;
     } else {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
+        vm->value_stack_size = base;
     }
 
     free(resolution.owned_args);
 }
 
 /**
- * Materialize a spread-call arguments array into a malloc'd argument list.
+ * Marshal a spread-call array's elements onto the top of the value stack,
+ * returning their count (the new top region for the call to adopt). Returns -1
+ * with a pending RangeError on overflow.
  */
-static MalValue *mal_vm_spread_arguments(MalVm *vm, MalValue array_value, i32 *count_out) {
-    *count_out = 0;
+static i32 mal_vm_marshal_spread(MalVm *vm, MalValue array_value) {
     if (!mal_value_is_array_object(array_value)) {
-        return nullptr;
+        return 0;
     }
 
     u32 length = mal_array_object_length(mal_value_to_array_object(array_value));
-    MalValue *arguments = length > 0 ? malloc(sizeof(MalValue) * length) : nullptr;
-    for (u32 i = 0; i < length; i++) {
-        arguments[i] = mal_value_new_undefined();
-        mal_builtin_array_try_get(vm, array_value, i, &arguments[i]);
+    if (vm->value_stack_size + (i32) length > vm->value_stack_capacity) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+        return -1;
     }
 
-    *count_out = (i32) length;
-    return arguments;
+    i32 base = vm->value_stack_size;
+    for (u32 i = 0; i < length; i++) {
+        MalValue element = mal_value_new_undefined();
+        mal_builtin_array_try_get(vm, array_value, i, &element);
+        vm->value_stack[base + (i32) i] = element;
+    }
+    vm->value_stack_size = base + (i32) length;
+    return (i32) length;
 }
 
 void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
@@ -344,13 +390,19 @@ void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
     i32 dst = instruction->as.call.dst;
     i32 argument_count = instruction->as.call.argument_count;
 
-    MalValue *arguments = malloc(sizeof(MalValue) * argument_count);
-    for (i32 i = 0; i < argument_count; i++) {
-        arguments[i] = callable->registers[instruction->as.call.arguments[i]];
+    // Marshal the arguments onto the top of the value stack; the callee adopts
+    // that region as its register window (no temp allocation, no param copy).
+    if (vm->value_stack_size + argument_count > vm->value_stack_capacity) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+        return;
     }
+    i32 base = vm->value_stack_size;
+    for (i32 i = 0; i < argument_count; i++) {
+        vm->value_stack[base + i] = callable->registers[instruction->as.call.arguments[i]];
+    }
+    vm->value_stack_size = base + argument_count;
 
-    mal_vm_call_dispatch(vm, callee, this_value, arguments, argument_count, dst);
-    free(arguments);
+    mal_vm_call_dispatch(vm, callee, this_value, base, argument_count, dst);
 }
 
 void mal_op_call_spread(MalCallable *callable, MalInstruction *instruction) {
@@ -360,11 +412,13 @@ void mal_op_call_spread(MalCallable *callable, MalInstruction *instruction) {
     MalValue arguments_array = callable->registers[instruction->as.call_spread.arguments_array];
     i32 dst = instruction->as.call_spread.dst;
 
-    i32 argument_count;
-    MalValue *arguments = mal_vm_spread_arguments(vm, arguments_array, &argument_count);
+    i32 base = vm->value_stack_size;
+    i32 argument_count = mal_vm_marshal_spread(vm, arguments_array);
+    if (argument_count < 0) {
+        return;
+    }
 
-    mal_vm_call_dispatch(vm, callee, this_value, arguments, argument_count, dst);
-    free(arguments);
+    mal_vm_call_dispatch(vm, callee, this_value, base, argument_count, dst);
 }
 
 void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
@@ -373,13 +427,17 @@ void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
     i32 dst = instruction->as.construct.dst;
     i32 argument_count = instruction->as.construct.argument_count;
 
-    MalValue *arguments = malloc(sizeof(MalValue) * argument_count);
-    for (i32 i = 0; i < argument_count; i++) {
-        arguments[i] = callable->registers[instruction->as.construct.arguments[i]];
+    if (vm->value_stack_size + argument_count > vm->value_stack_capacity) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+        return;
     }
+    i32 base = vm->value_stack_size;
+    for (i32 i = 0; i < argument_count; i++) {
+        vm->value_stack[base + i] = callable->registers[instruction->as.construct.arguments[i]];
+    }
+    vm->value_stack_size = base + argument_count;
 
-    mal_vm_construct_dispatch(vm, callee, arguments, argument_count, dst);
-    free(arguments);
+    mal_vm_construct_dispatch(vm, callee, base, argument_count, dst);
 }
 
 void mal_op_construct_spread(MalCallable *callable, MalInstruction *instruction) {
@@ -388,11 +446,13 @@ void mal_op_construct_spread(MalCallable *callable, MalInstruction *instruction)
     MalValue arguments_array = callable->registers[instruction->as.construct_spread.arguments_array];
     i32 dst = instruction->as.construct_spread.dst;
 
-    i32 argument_count;
-    MalValue *arguments = mal_vm_spread_arguments(vm, arguments_array, &argument_count);
+    i32 base = vm->value_stack_size;
+    i32 argument_count = mal_vm_marshal_spread(vm, arguments_array);
+    if (argument_count < 0) {
+        return;
+    }
 
-    mal_vm_construct_dispatch(vm, callee, arguments, argument_count, dst);
-    free(arguments);
+    mal_vm_construct_dispatch(vm, callee, base, argument_count, dst);
 }
 
 void mal_op_throw(MalCallable *callable, MalInstruction *instruction) {
@@ -1363,8 +1423,8 @@ void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction) 
 }
 
 void mal_op_load_undeclared(MalCallable *callable, MalInstruction *instruction) {
-    const MalStringConstant *constant = &callable->vm->definition->string_constants[instruction->as.load_undeclared.name_string_index];
-    MalValue name = mal_value_from_string(mal_string_new_external(&callable->vm->heap, constant->code_units, constant->length));
+    MalString *constant = &callable->vm->definition->string_constants[instruction->as.load_undeclared.name_string_index];
+    MalValue name = mal_value_from_string(constant);
     MalValue message = mal_ops_add(
         &callable->vm->heap,
         name,

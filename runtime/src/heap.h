@@ -27,6 +27,13 @@ typedef struct MalHeap {
     usize capacity;
 
     MalHeap *next_heap;
+
+    /**
+     * Root pool only: the last pool in the chain, i.e. the one with free space.
+     * Allocation goes straight here (O(1)) instead of re-walking the chain from
+     * the head on every call. Sub-pools leave this pointing at themselves.
+     */
+    MalHeap *tail;
 } MalHeap;
 
 /**
@@ -77,11 +84,33 @@ typedef enum MalHeapType {
 } MalHeapType;
 
 /**
+ * Storage class of a pointer-boxed value.
+ *
+ * DYNAMIC objects come from the heap allocator and will be owned by the GC once
+ * it exists. IMMORTAL objects live in static storage (compile-time constants
+ * baked into the program image): they are never freed, and a future GC neither
+ * collects them nor traces through them as owned. The boundary is defined here
+ * so the eventual GC is correct-by-construction for constants.
+ */
+typedef enum MalHeapStorage {
+    MAL_HEAP_STORAGE_DYNAMIC,
+    MAL_HEAP_STORAGE_IMMORTAL,
+} MalHeapStorage;
+
+/**
  * Common header stored at the start of every pointer-boxed heap allocation.
  */
 typedef struct MalHeapHeader {
     MalHeapType type;
+    MalHeapStorage storage;
 } MalHeapHeader;
+
+/**
+ * Static initializer for the header of an immortal (statically allocated)
+ * value. Used by the emitted program image for baked string/bigint constants.
+ */
+#define MAL_HEAP_HEADER_IMMORTAL(heap_type) \
+    { .type = (heap_type), .storage = MAL_HEAP_STORAGE_IMMORTAL }
 
 /**
  * Create a new heap runtime instance.

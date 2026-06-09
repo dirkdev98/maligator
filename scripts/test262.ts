@@ -9,6 +9,7 @@ import {
 } from "../src/test262/files.ts";
 import { test262Log } from "../src/test262/log.ts";
 import {
+	getCodeStats,
 	getFailuresWithSamples,
 	getTimings,
 	test262PrepareBuild,
@@ -82,8 +83,13 @@ const summary = selection.reduce<Record<string, number>>((acc, file) => {
 	return acc;
 }, {});
 
+const codeStats = getCodeStats();
+
 test262Log(`Took ${((Date.now() - startedAt) / 1000).toFixed(0)}s with ${jobs} jobs.`);
 test262Log(`Result:`, summary);
+test262Log(
+	`Code: ${codeStats.functionCount} functions, ${codeStats.instructionCount} instructions across ${codeStats.compiledFiles} compiled files.`,
+);
 test262Log(`Timings:`, JSON.stringify(getTimings(), null, 2));
 test262Log(JSON.stringify(getFailuresWithSamples(), null, 2));
 
@@ -91,7 +97,7 @@ test262Log(JSON.stringify(getFailuresWithSamples(), null, 2));
 writeFileSync(
 	`${TEST262_METADATA.buildPath}/report.json`,
 	JSON.stringify(
-		{ summary, timings: getTimings(), ...getFailuresWithSamples() },
+		{ summary, code: codeStats, timings: getTimings(), ...getFailuresWithSamples() },
 		null,
 		2,
 	),
@@ -112,6 +118,8 @@ function foldResult(file: Test262File): "PASSED" | "SKIPPED" | "FAILED" {
 
 // Compare against the committed results to surface regressions, even on
 // partial runs.
+const isFullRun = !cacheContext.files.some((file) => file.result === "UNKNOWN");
+
 if (existsSync(TEST262_METADATA.outputFile)) {
 	const previous = JSON.parse(
 		readFileSync(TEST262_METADATA.outputFile, "utf-8"),
@@ -130,6 +138,16 @@ if (existsSync(TEST262_METADATA.outputFile)) {
 	}
 
 	test262Log(`Newly passing: ${improvements.length}.`);
+
+	if (isFullRun && previous.code) {
+		const fnDelta = codeStats.functionCount - previous.code.functionCount;
+		const insnDelta = codeStats.instructionCount - previous.code.instructionCount;
+		const sign = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
+		test262Log(
+			`Code delta vs committed: ${sign(fnDelta)} functions, ${sign(insnDelta)} instructions.`,
+		);
+	}
+
 	if (regressions.length > 0) {
 		test262Log(`REGRESSIONS (${regressions.length}):`);
 		for (const path of regressions.slice(0, 50)) {
@@ -138,7 +156,6 @@ if (existsSync(TEST262_METADATA.outputFile)) {
 	}
 }
 
-const isFullRun = !cacheContext.files.some((file) => file.result === "UNKNOWN");
 if (isFullRun) {
 	writeFileSync(
 		TEST262_METADATA.outputFile,
@@ -146,6 +163,11 @@ if (isFullRun) {
 			{
 				sha: cacheContext.sha,
 				summary,
+				code: {
+					compiledFiles: codeStats.compiledFiles,
+					functionCount: codeStats.functionCount,
+					instructionCount: codeStats.instructionCount,
+				},
 				results: Object.fromEntries(
 					cacheContext.files.map((file) => [file.path, foldResult(file)]),
 				),

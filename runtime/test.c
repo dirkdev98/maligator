@@ -14,16 +14,16 @@ static const c16 mal_string_6_code_units[] = { 41 };
 static const c16 mal_string_7_code_units[] = { 112, 114, 105, 109, 101, 32, 98, 101, 110, 99, 104, 109, 97, 114, 107, 32, 101, 120, 112, 101, 99, 116, 101, 100, 32, 57, 53, 57, 50, 32, 112, 114, 105, 109, 101, 115, 32, 98, 117, 116, 32, 103, 111, 116, 32 };
 static const c16 mal_string_8_code_units[] = { 112, 114, 105, 109, 101, 32, 98, 101, 110, 99, 104, 109, 97, 114, 107, 32, 101, 120, 112, 101, 99, 116, 101, 100, 32, 108, 97, 114, 103, 101, 115, 116, 32, 112, 114, 105, 109, 101, 32, 57, 57, 57, 57, 49, 32, 98, 117, 116, 32, 103, 111, 116, 32 };
 
-static const MalStringConstant mal_string_constants[] = {
-    { .length = 0, .code_units = mal_string_0_code_units },
-    { .length = 7, .code_units = mal_string_1_code_units },
-    { .length = 3, .code_units = mal_string_2_code_units },
-    { .length = 12, .code_units = mal_string_3_code_units },
-    { .length = 1, .code_units = mal_string_4_code_units },
-    { .length = 9, .code_units = mal_string_5_code_units },
-    { .length = 1, .code_units = mal_string_6_code_units },
-    { .length = 45, .code_units = mal_string_7_code_units },
-    { .length = 53, .code_units = mal_string_8_code_units },
+static MalString mal_strings[] = {
+    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = 0, .code_units = mal_string_0_code_units },
+    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = 7, .code_units = mal_string_1_code_units },
+    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = 3, .code_units = mal_string_2_code_units },
+    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = 12, .code_units = mal_string_3_code_units },
+    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = 1, .code_units = mal_string_4_code_units },
+    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = 9, .code_units = mal_string_5_code_units },
+    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = 1, .code_units = mal_string_6_code_units },
+    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = 45, .code_units = mal_string_7_code_units },
+    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = 53, .code_units = mal_string_8_code_units },
 };
 
 static const MalInstruction mal_function_0_instructions[] = {
@@ -186,7 +186,9 @@ const MalVmDefinition mal_vm_definition = {
     .function_count = 2,
     .functions = mal_functions,
     .string_constant_count = 9,
-    .string_constants = mal_string_constants,
+    .string_constants = mal_strings,
+    .bigint_constant_count = 0,
+    .bigint_constants = nullptr,
     .global_count = 4,
 };
 // === END GENERATED ===
