@@ -76,6 +76,13 @@ void mal_op_catch(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_binary(MalCallable *callable, MalInstruction *instruction);
 
+/**
+ * Value-returning core of a binary operator, shared by mal_op_binary and the
+ * compiled-function backend. Throws (via vm->completion) on bad `in`/
+ * `instanceof` operands or BigInt domain errors, returning undefined.
+ */
+MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right);
+
 void mal_op_unary(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_store_global(MalCallable *callable, MalInstruction *instruction);

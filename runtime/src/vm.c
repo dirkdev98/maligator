@@ -696,9 +696,17 @@ MalCompletion mal_vm_call_value(
             ? vm->completion
             : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
     } else if (mal_value_is_function_object(resolution.callee)) {
-        // Marshal the resolved arguments onto the value stack so the callee can
-        // adopt them as its register window.
-        if (vm->value_stack_size + resolution.arg_count > vm->value_stack_capacity) {
+        i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
+        const MalFunction *function = &vm->definition->functions[function_index];
+        MalEnv *env = mal_value_to_function_object(resolution.callee)->creation_env;
+
+        if (function->compiled != nullptr) {
+            // Native-backend function: invoke directly (no stack marshaling).
+            MalValue value = function->compiled(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), env);
+            completion = vm->completion.kind == MAL_COMPLETION_THROW
+                ? vm->completion
+                : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+        } else if (vm->value_stack_size + resolution.arg_count > vm->value_stack_capacity) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
             completion = vm->completion;
         } else {

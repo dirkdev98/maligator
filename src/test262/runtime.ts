@@ -270,7 +270,7 @@ interface BatchEntry {
  */
 export async function test262RunBatch(files: Array<Test262File>, workerId: number) {
 	const entries: Array<BatchEntry> = [];
-	const sources: Array<string> = ['#include "vm.h"', ""];
+	const sources: Array<string> = ['#include "vm.h"', '#include "vm_ops.h"', ""];
 
 	for (const file of files) {
 		const cSource = test262CompileToC(file, `_${entries.length}`);
@@ -436,7 +436,7 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 
 	const ccStartedAt = performance.now();
 	try {
-		writeFileSync(`${baseName}.c`, `#include "vm.h"\n\n${cSource}`);
+		writeFileSync(`${baseName}.c`, `#include "vm.h"\n#include "vm_ops.h"\n\n${cSource}`);
 		await execFileAsync(
 			"cc",
 			[

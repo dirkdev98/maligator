@@ -1,3 +1,5 @@
+import { emitCompiledFunction } from "./emit-c.ts";
+import type { CompiledFunction } from "./emit-c.ts";
 import type { VmDefinition, VmInstruction } from "./lower-vm.ts";
 
 type VmBinaryOperator = Extract<VmInstruction, { opcode: "BINARY" }>["operator"];
@@ -16,7 +18,9 @@ export interface EmitOptions {
 
 export function emitVmDefinition(definition: VmDefinition, options: EmitOptions = {}) {
 	const suffix = options.symbolSuffix ?? "";
-	const lines = options.includeHeader === false ? [] : ['#include "vm.h"', ""];
+	// Compiled functions call mal_vm_binary_op (vm_ops.h); include it alongside vm.h.
+	const lines =
+		options.includeHeader === false ? [] : ['#include "vm.h"', '#include "vm_ops.h"', ""];
 
 	for (let i = 0; i < definition.stringConstants.length; ++i) {
 		const constant = definition.stringConstants[i]!;
@@ -48,6 +52,18 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 			);
 		}
 		lines.push("};", "");
+	}
+
+	// Native-backend functions. Emitted before the MalFunction table (which
+	// references their symbols) and after the constant pools (which they may
+	// reference). The bytecode is still emitted below as a fallback / for `new`.
+	const compiled: Array<CompiledFunction | null> = definition.functions.map((fn, i) =>
+		emitCompiledFunction(fn, i, suffix),
+	);
+	for (const fn of compiled) {
+		if (fn !== null) {
+			lines.push(fn.source, "");
+		}
 	}
 
 	for (let i = 0; i < definition.functions.length; ++i) {
@@ -94,6 +110,9 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 		lines.push(`        .handler_count = ${fn.handlers.length},`);
 		lines.push(
 			`        .handlers = ${fn.handlers.length > 0 ? `mal_function_${i}_handlers${suffix}` : "nullptr"},`,
+		);
+		lines.push(
+			`        .compiled = ${compiled[i] !== null ? compiled[i]!.symbol : "nullptr"},`,
 		);
 		lines.push("    },");
 	}
@@ -242,7 +261,7 @@ function emitInstruction(instruction: VmInstruction) {
 	throw new Error(`Unknown vm instruction ${(instruction as { opcode: string }).opcode}`);
 }
 
-function emitIntrinsic(
+export function emitIntrinsic(
 	intrinsic: Extract<VmInstruction, { opcode: "LOAD_INTRINSIC" }>["intrinsic"],
 ) {
 	switch (intrinsic) {
@@ -384,7 +403,7 @@ function emitCallArguments(args: Array<number>) {
 /**
  * Convert operator to enum
  */
-function emitBinaryOperator(operator: VmBinaryOperator) {
+export function emitBinaryOperator(operator: VmBinaryOperator) {
 	switch (operator) {
 		case "+":
 			return "MAL_BIN_ADD";

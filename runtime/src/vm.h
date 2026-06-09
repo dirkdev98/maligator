@@ -410,6 +410,26 @@ typedef enum MalFunctionKind {
     MAL_FUNCTION_KIND_GENERATOR,
 } MalFunctionKind;
 
+typedef struct MalVm MalVm;
+typedef struct MalEnv MalEnv;
+
+/**
+ * A function lowered directly to C by the native backend. When set on a
+ * MalFunction, an ordinary call invokes this instead of interpreting the
+ * bytecode (the bytecode is still emitted as a fallback and for `new`). The
+ * shape mirrors a native callback plus the creation environment for captures;
+ * args point at the caller-marshaled region, and a throw is signalled through
+ * vm->completion (the returned value is then ignored).
+ */
+typedef MalValue (*MalCompiledFunction)(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalEnv *env
+);
+
 typedef struct MalFunction {
     i32 name_string_index;
     MalFunctionKind kind;
@@ -438,6 +458,11 @@ typedef struct MalFunction {
 
     i32 handler_count;
     const MalExceptionHandler *handlers;
+
+    /**
+     * Native-backend entry point, or nullptr when the function is interpreted.
+     */
+    MalCompiledFunction compiled;
 } MalFunction;
 
 typedef struct MalVmDefinition {

@@ -260,15 +260,16 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
         mal_vm_remarshal_bound_args(vm, base, &resolution);
         if (vm->completion.kind != MAL_COMPLETION_THROW) {
             i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
-            if (mal_vm_push_function_frame(
-                    vm,
-                    function_index,
-                    mal_value_to_function_object(resolution.callee)->creation_env,
-                    resolution.this_value,
-                    resolution.arg_count,
-                    dst,
-                    vm->frame_count - 1
-                )) {
+            const MalFunction *function = &vm->definition->functions[function_index];
+            MalEnv *env = mal_value_to_function_object(resolution.callee)->creation_env;
+
+            if (function->compiled != nullptr) {
+                // Native-backend function: invoke directly, no bytecode frame.
+                i32 caller_frame_index = vm->frame_count - 1;
+                MalValue result = function->compiled(vm, resolution.this_value, &vm->value_stack[base], resolution.arg_count, mal_value_new_undefined(), env);
+                vm->frames[caller_frame_index].registers[dst] = result;
+                vm->value_stack_size = base;
+            } else if (mal_vm_push_function_frame(vm, function_index, env, resolution.this_value, resolution.arg_count, dst, vm->frame_count - 1)) {
                 vm->frames[vm->frame_count - 1].callee = resolution.callee;
             } else {
                 vm->value_stack_size = base;
@@ -582,130 +583,113 @@ static MalValue mal_vm_bigint_arith(MalVm *vm, MalBinaryOp op, MalValue left, Ma
     return mal_value_from_bigint(mal_bigint_new(&vm->heap, result));
 }
 
-void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
-    auto left = callable->registers[instruction->as.binary.left];
-    auto right = callable->registers[instruction->as.binary.right];
-
+// The value-returning core of a binary operator, shared by the interpreter op
+// (mal_op_binary) and the compiled-function backend. On a throwing operator
+// (`in`/`instanceof` on bad operands, BigInt domain errors) it sets the pending
+// completion and returns undefined; callers observe the throw via vm->completion.
+MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right) {
     // BigInt arithmetic/bitwise/shift is a separate domain (equality and
     // relational comparison stay in the shared mal_ops_* path below).
-    if ((mal_value_is_bigint(left) || mal_value_is_bigint(right)) &&
-        mal_vm_op_is_bigint_arith(instruction->as.binary.op)) {
-        callable->registers[instruction->as.binary.dst] =
-            mal_vm_bigint_arith(callable->vm, instruction->as.binary.op, left, right);
-        return;
+    if ((mal_value_is_bigint(left) || mal_value_is_bigint(right)) && mal_vm_op_is_bigint_arith(op)) {
+        return mal_vm_bigint_arith(vm, op, left, right);
     }
 
-    switch (instruction->as.binary.op) {
+    switch (op) {
         case MAL_BIN_ADD:
-            callable->registers[instruction->as.binary.dst] = mal_ops_add(&callable->vm->heap, left, right);
-            break;
+            return mal_ops_add(&vm->heap, left, right);
         case MAL_BIN_SUB:
-            callable->registers[instruction->as.binary.dst] = mal_ops_subtract(left, right);
-            break;
+            return mal_ops_subtract(left, right);
         case MAL_BIN_MUL:
-            callable->registers[instruction->as.binary.dst] = mal_ops_multiply(left, right);
-            break;
+            return mal_ops_multiply(left, right);
         case MAL_BIN_DIV:
-            callable->registers[instruction->as.binary.dst] = mal_ops_divide(left, right);
-            break;
+            return mal_ops_divide(left, right);
         case MAL_BIN_REM:
-            callable->registers[instruction->as.binary.dst] = mal_ops_remainder(left, right);
-            break;
+            return mal_ops_remainder(left, right);
         case MAL_BIN_POW:
-            callable->registers[instruction->as.binary.dst] = mal_ops_exponentiate(left, right);
-            break;
+            return mal_ops_exponentiate(left, right);
         case MAL_BIN_BIT_AND:
-            callable->registers[instruction->as.binary.dst] = mal_ops_bit_and(left, right);
-            break;
+            return mal_ops_bit_and(left, right);
         case MAL_BIN_BIT_OR:
-            callable->registers[instruction->as.binary.dst] = mal_ops_bit_or(left, right);
-            break;
+            return mal_ops_bit_or(left, right);
         case MAL_BIN_BIT_XOR:
-            callable->registers[instruction->as.binary.dst] = mal_ops_bit_xor(left, right);
-            break;
+            return mal_ops_bit_xor(left, right);
         case MAL_BIN_SHL:
-            callable->registers[instruction->as.binary.dst] = mal_ops_shift_left(left, right);
-            break;
+            return mal_ops_shift_left(left, right);
         case MAL_BIN_SHR:
-            callable->registers[instruction->as.binary.dst] = mal_ops_shift_right(left, right);
-            break;
+            return mal_ops_shift_right(left, right);
         case MAL_BIN_USHR:
-            callable->registers[instruction->as.binary.dst] = mal_ops_shift_right_unsigned(left, right);
-            break;
+            return mal_ops_shift_right_unsigned(left, right);
         case MAL_BIN_LT:
-            callable->registers[instruction->as.binary.dst] = mal_ops_less_than(left, right);
-            break;
+            return mal_ops_less_than(left, right);
         case MAL_BIN_LTE:
-            callable->registers[instruction->as.binary.dst] = mal_ops_less_equal(left, right);
-            break;
+            return mal_ops_less_equal(left, right);
         case MAL_BIN_GT:
-            callable->registers[instruction->as.binary.dst] = mal_ops_greater_than(left, right);
-            break;
+            return mal_ops_greater_than(left, right);
         case MAL_BIN_GTE:
-            callable->registers[instruction->as.binary.dst] = mal_ops_greater_equal(left, right);
-            break;
+            return mal_ops_greater_equal(left, right);
         case MAL_BIN_EQ:
-            callable->registers[instruction->as.binary.dst] = mal_ops_equal(left, right);
-            break;
+            return mal_ops_equal(left, right);
         case MAL_BIN_NEQ:
-            callable->registers[instruction->as.binary.dst] = mal_ops_not_equal(left, right);
-            break;
+            return mal_ops_not_equal(left, right);
         case MAL_BIN_STRICT_EQ:
-            callable->registers[instruction->as.binary.dst] = mal_ops_strict_equal(left, right);
-            break;
+            return mal_ops_strict_equal(left, right);
         case MAL_BIN_STRICT_NEQ:
-            callable->registers[instruction->as.binary.dst] = mal_ops_strict_not_equal(left, right);
-            break;
+            return mal_ops_strict_not_equal(left, right);
         case MAL_BIN_IN: {
             if (!mal_value_is_object(right)) {
-                mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot use 'in' operator on a non-object");
-                break;
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot use 'in' operator on a non-object");
+                return mal_value_new_undefined();
             }
 
             MalKey key;
-            if (!mal_vm_value_to_property_key(callable->vm, left, &key)) {
-                callable->registers[instruction->as.binary.dst] = mal_value_new_boolean(false);
-                break;
+            if (!mal_vm_value_to_property_key(vm, left, &key)) {
+                return mal_value_new_boolean(false);
             }
 
             MalValue synthetic;
-            bool found = mal_vm_resolve_synthetic_property(callable->vm, right, key, &synthetic) ||
+            bool found = mal_vm_resolve_synthetic_property(vm, right, key, &synthetic) ||
                 mal_object_resolve_property(mal_value_to_object(right), key).found;
-            callable->registers[instruction->as.binary.dst] = mal_value_new_boolean(found);
-            break;
+            return mal_value_new_boolean(found);
         }
         case MAL_BIN_INSTANCEOF: {
             if (!mal_value_is_object(right)) {
-                mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Right-hand side of 'instanceof' is not an object");
-                break;
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Right-hand side of 'instanceof' is not an object");
+                return mal_value_new_undefined();
             }
 
             // Spec InstanceofOperator: a callable @@hasInstance method takes
             // the decision (the default lives on Function.prototype).
             MalValue method;
-            if (!mal_vm_get_property(callable->vm, right, mal_intrinsic_symbol_key(callable->vm, MAL_INTRINSIC_SYMBOL_HAS_INSTANCE), &method)) {
-                break;
+            if (!mal_vm_get_property(vm, right, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_HAS_INSTANCE), &method)) {
+                return mal_value_new_undefined();
             }
 
             if (mal_value_is_callable(method)) {
-                MalCompletion completion = mal_vm_call_value(callable->vm, method, right, &left, 1);
-                if (completion.kind == MAL_COMPLETION_NORMAL) {
-                    callable->registers[instruction->as.binary.dst] = mal_value_new_boolean(mal_value_is_truthy(completion.value));
-                }
-                break;
+                MalCompletion completion = mal_vm_call_value(vm, method, right, &left, 1);
+                return completion.kind == MAL_COMPLETION_NORMAL
+                    ? mal_value_new_boolean(mal_value_is_truthy(completion.value))
+                    : mal_value_new_undefined();
             }
 
             if (!mal_value_is_callable(right)) {
-                mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Right-hand side of 'instanceof' is not callable");
-                break;
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Right-hand side of 'instanceof' is not callable");
+                return mal_value_new_undefined();
             }
 
-            callable->registers[instruction->as.binary.dst] = mal_value_new_boolean(
-                mal_vm_ordinary_has_instance(callable->vm, right, left)
-            );
-            break;
+            return mal_value_new_boolean(mal_vm_ordinary_has_instance(vm, right, left));
         }
     }
+
+    return mal_value_new_undefined();
+}
+
+void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.binary.dst] = mal_vm_binary_op(
+        callable->vm,
+        instruction->as.binary.op,
+        callable->registers[instruction->as.binary.left],
+        callable->registers[instruction->as.binary.right]
+    );
 }
 
 static const byte *mal_vm_typeof_tag(MalValue value) {
