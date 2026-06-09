@@ -13,29 +13,13 @@ static i128 mal_ops_bigint_of(MalValue value) {
     return mal_bigint_value(mal_value_to_bigint(value));
 }
 
-static bool mal_ops_is_number(MalValue value) {
-    return mal_value_is_int32(value) ||
-        mal_value_is_f64_or_nan(value) ||
-        value == MAL_VALUE_NEGATIVE_ZERO ||
-        value == MAL_VALUE_POSITIVE_INFINITY ||
-        value == MAL_VALUE_NEGATIVE_INFINITY;
-}
+// mal_ops_is_number lives in value_ops.h (static inline) so both the
+// interpreter and the native-C backend share one definition.
 
 static f64 mal_ops_to_f64(MalValue value) {
-    if (mal_value_is_int32(value)) {
-        return mal_value_to_i32(value);
-    }
-    if (value == MAL_VALUE_POSITIVE_INFINITY) {
-        return INFINITY;
-    }
-    if (value == MAL_VALUE_NEGATIVE_INFINITY) {
-        return -INFINITY;
-    }
-    if (value == MAL_VALUE_NEGATIVE_ZERO) {
-        return -0.0;
-    }
-
-    return mal_value_to_f64(value);
+    // Precondition: value is a Number (every caller checks). Defers to the
+    // shared inline recovery in value_ops.h.
+    return mal_ops_number_as_f64(value);
 }
 
 MalValue mal_ops_number_value(f64 value);
@@ -125,8 +109,13 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
     }
 
     if (mal_value_is_f64(value)) {
+        f64 number = mal_value_to_f64(value);
+        // Number::toString(±0) is "0"; "%.15g" would render -0.0 as "-0".
+        if (number == 0.0) {
+            return mal_ops_string_from_ascii(heap, "0");
+        }
         byte buffer[32];
-        snprintf(buffer, sizeof(buffer), "%.15g", mal_value_to_f64(value));
+        snprintf(buffer, sizeof(buffer), "%.15g", number);
         return mal_ops_string_from_ascii(heap, buffer);
     }
 
@@ -194,6 +183,15 @@ static i32 mal_ops_to_i32(MalValue value) {
 MalValue mal_ops_number_value(f64 value) {
     if (isnan(value)) {
         return mal_value_new_nan();
+    }
+
+    // Negative zero is a distinct Number (Object.is, 1/x, sameValue) and must
+    // not be canonicalized to the int32 +0 the next branch would produce. Keep
+    // it as a raw f64 — the same encoding the interpreter stores for a `-0`
+    // literal — so arithmetic that yields -0 (e.g. -1 * 0) and the compiled
+    // backend's boundary boxing both preserve it.
+    if (value == 0.0 && signbit(value)) {
+        return mal_value_from_f64(value);
     }
 
     if (value >= INT32_MIN && value <= INT32_MAX && trunc(value) == value) {

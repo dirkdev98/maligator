@@ -101,9 +101,27 @@ void mal_op_load_captured(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_store_captured(MalCallable *callable, MalInstruction *instruction);
 
+/**
+ * Read/write a captured binding by walking the environment chain to the owning
+ * activation. Shared by the load/store-captured ops and the compiled backend.
+ */
+MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index);
+
+void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, MalValue value);
+
 void mal_op_load_property(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_store_property(MalCallable *callable, MalInstruction *instruction);
+
+/**
+ * Value-returning Get / completion-signalling Set with an already-evaluated key
+ * value, shared by the load/store-property ops and the compiled backend. A load
+ * returns undefined and a store signals through vm->completion on a throw; the
+ * compiled caller passes its statically-known strictness to the store.
+ */
+MalValue mal_vm_op_load_property(MalVm *vm, MalValue object_value, MalValue key_value);
+
+void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict);
 
 void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruction);
 

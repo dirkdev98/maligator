@@ -175,25 +175,42 @@ void mal_op_create_function(MalCallable *callable, MalInstruction *instruction) 
     callable->registers[instruction->as.create_function.dst] = mal_value_from_function_object(function);
 }
 
-void mal_op_load_captured(MalCallable *callable, MalInstruction *instruction) {
-    MalValue value = mal_value_new_undefined();
-    for (MalEnv *env = callable->env; env != nullptr; env = env->parent) {
-        if (env->function_index == instruction->as.load_captured.owner_function_index) {
-            value = env->slots[instruction->as.load_captured.index];
-            break;
+// Walk the environment chain to the activation that owns the captured binding
+// and read its slot. Shared by the interpreter op and the native-C backend.
+MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index) {
+    for (; env != nullptr; env = env->parent) {
+        if (env->function_index == owner_function_index) {
+            return env->slots[index];
         }
     }
 
-    callable->registers[instruction->as.load_captured.dst] = value;
+    return mal_value_new_undefined();
 }
 
-void mal_op_store_captured(MalCallable *callable, MalInstruction *instruction) {
-    for (MalEnv *env = callable->env; env != nullptr; env = env->parent) {
-        if (env->function_index == instruction->as.store_captured.owner_function_index) {
-            env->slots[instruction->as.store_captured.index] = callable->registers[instruction->as.store_captured.src];
+void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, MalValue value) {
+    for (; env != nullptr; env = env->parent) {
+        if (env->function_index == owner_function_index) {
+            env->slots[index] = value;
             return;
         }
     }
+}
+
+void mal_op_load_captured(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.load_captured.dst] = mal_vm_load_captured(
+        callable->env,
+        instruction->as.load_captured.owner_function_index,
+        instruction->as.load_captured.index
+    );
+}
+
+void mal_op_store_captured(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_store_captured(
+        callable->env,
+        instruction->as.store_captured.owner_function_index,
+        instruction->as.store_captured.index,
+        callable->registers[instruction->as.store_captured.src]
+    );
 }
 
 void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instruction) {
@@ -1034,48 +1051,54 @@ bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
     return false;
 }
 
-void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
-    MalValue object_value = callable->registers[instruction->as.load_property.object];
-    MalValue key_value = callable->registers[instruction->as.load_property.key];
-    i32 dst = instruction->as.load_property.dst;
-
+// Spec Get over a value with an already-evaluated key value, returning the
+// result (undefined on a non-coercible key or a throw — the caller propagates
+// vm->completion). Shared by the interpreter op and the native-C backend.
+MalValue mal_vm_op_load_property(MalVm *vm, MalValue object_value, MalValue key_value) {
     if (mal_value_is_nil(object_value)) {
-        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read properties of null or undefined");
-        return;
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read properties of null or undefined");
+        return mal_value_new_undefined();
     }
 
     MalKey key;
-    if (!mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
-        callable->registers[dst] = mal_value_new_undefined();
-        return;
+    if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+        return mal_value_new_undefined();
     }
 
     MalValue value;
-    if (mal_vm_get_property(callable->vm, object_value, key, &value)) {
-        callable->registers[dst] = value;
+    if (mal_vm_get_property(vm, object_value, key, &value)) {
+        return value;
     }
+
+    return mal_value_new_undefined();
 }
 
-void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
-    MalValue object_value = callable->registers[instruction->as.store_property.object];
-    MalValue key_value = callable->registers[instruction->as.store_property.key];
-    MalValue value = callable->registers[instruction->as.store_property.value];
-    bool strict = callable->function->strict;
+void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.load_property.dst] = mal_vm_op_load_property(
+        callable->vm,
+        callable->registers[instruction->as.load_property.object],
+        callable->registers[instruction->as.load_property.key]
+    );
+}
 
+// Spec Set over a value with an already-evaluated key value, signalling a throw
+// through vm->completion. Shared by the interpreter op and the native-C backend
+// (which passes its statically-known strictness).
+void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict) {
     if (mal_value_is_nil(object_value)) {
-        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set properties of null or undefined");
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set properties of null or undefined");
         return;
     }
 
     MalKey key;
-    if (!mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
+    if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
         return;
     }
 
     if (!mal_value_is_object(object_value)) {
         // Primitives never grow own properties; strict assignments throw.
         if (strict) {
-            mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot create property on a primitive");
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot create property on a primitive");
         }
         return;
     }
@@ -1086,7 +1109,7 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
     if (mal_value_is_typed_array_object(object_value) && key.kind == MAL_KEY_INDEX) {
         i32 index = mal_value_to_i32(key.value);
         if (index >= 0) {
-            mal_typed_array_object_set(callable->vm, mal_value_to_typed_array_object(object_value), (u32) index, value);
+            mal_typed_array_object_set(vm, mal_value_to_typed_array_object(object_value), (u32) index, value);
             return;
         }
     }
@@ -1096,14 +1119,14 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
     if (resolution.found && (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
         if (!mal_value_is_callable(resolution.desc.setter)) {
             if (strict) {
-                mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set property which has only a getter");
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set property which has only a getter");
             }
             return;
         }
 
-        MalCompletion completion = mal_vm_call_value(callable->vm, resolution.desc.setter, object_value, &value, 1);
+        MalCompletion completion = mal_vm_call_value(vm, resolution.desc.setter, object_value, &value, 1);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
-            callable->vm->completion = completion;
+            vm->completion = completion;
         }
         return;
     }
@@ -1113,7 +1136,7 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
     if (mal_value_is_callable(object_value) &&
         (mal_array_key_is_length(key) || mal_vm_key_is_name(key))) {
         if (strict) {
-            mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
         }
         return;
     }
@@ -1126,8 +1149,18 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
     }
 
     if (!stored && strict) {
-        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
     }
+}
+
+void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_store_property(
+        callable->vm,
+        callable->registers[instruction->as.store_property.object],
+        callable->registers[instruction->as.store_property.key],
+        callable->registers[instruction->as.store_property.value],
+        callable->function->strict
+    );
 }
 
 void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruction) {

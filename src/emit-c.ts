@@ -15,15 +15,35 @@ import type { VmFunction, VmInstruction } from "./lower-vm.ts";
  * mal_ops_number_value, which canonicalizes int32/-0/NaN exactly as the
  * interpreter does) only at boundaries: when it flows into a boxed op, a global
  * store, a condition, or the return. This is guard-free: the proof is static, so
- * no runtime type checks are needed. (Untyped parameters stay boxed for now;
- * promoting them via a runtime guard is the next extension.)
+ * no runtime type checks are needed.
+ *
+ * MIXED-REP GUARDS: a binary op with one proven-number operand and one boxed
+ * operand (typically a still-boxed parameter, e.g. the `i < n` of a counted
+ * loop) emits a speculative fast path — `mal_ops_is_number(boxed) ? <native
+ * double op> : <fully-general op>`. The guard is a few inline bit tests
+ * (mal_ops_is_number / mal_ops_number_as_f64 are static inline in value_ops.h),
+ * cheap and perfectly predicted in a hot loop, so the boxed operand never forces
+ * a non-inlined value_ops call when it is in fact a number. The fast path is
+ * observably identical to the fallback by construction.
+ *
+ * BOOLEANS: a register that always holds a JS boolean — the result of a
+ * comparison, a logical `!`, or a boolean literal — gets the `boolean` rep and
+ * is emitted as a C `bool`. A comparison then writes a raw bool (no
+ * mal_value_new_boolean), a JUMP_IF on it branches directly (no
+ * mal_value_is_truthy), and it is boxed (mal_value_new_boolean) only at a
+ * boundary. A counted loop's `i < n` condition becomes a native compare feeding
+ * a native branch with no boxing round-trip at all.
  *
  * The int32-overflow fix in mal_ops (add/sub/mul now promote to f64) is what
  * makes the unboxed double arithmetic behavior-identical to the interpreter.
  */
 
-/** How a register's value is held in the emitted C. */
-type RegisterRep = "boxed" | "number";
+/**
+ * How a register's value is held in the emitted C: a raw C `double`, a raw C
+ * `bool`, or a boxed `MalValue`. A register reused across its lifetime for
+ * values of different reps joins to `boxed` (see inferReps).
+ */
+type RegisterRep = "boxed" | "number" | "boolean";
 
 export interface CompiledFunction {
 	/** The C symbol to install as MalFunction.compiled. */
@@ -32,8 +52,6 @@ export interface CompiledFunction {
 	source: string;
 }
 
-/** Binary operators that can throw, so they need a completion check after. */
-const THROWING_BINARY_OPERATORS = new Set(["in", "instanceof"]);
 /** Unary `+` on a BigInt throws, so it needs a completion check after. */
 const THROWING_UNARY_OPERATORS = new Set(["+"]);
 
@@ -52,6 +70,19 @@ const NATIVE_COMPARE: Record<string, string> = {
 	"!==": "!=",
 	"!=": "!=",
 };
+
+/**
+ * Whether a binary operator can leave a THROW completion that a boxed fallback
+ * must propagate. The comparison operators lower to a pure native compare and
+ * never throw; every other operator can — `in`/`instanceof` directly, and
+ * arithmetic/bitwise/shift whenever a BigInt operand forces the fully-general
+ * path (BigInt/Number mixing → TypeError, BigInt `/0` → RangeError, `>>>` on a
+ * BigInt → TypeError). The boxed (and mixed-rep fallback) paths reach that
+ * general op, so they need the completion check.
+ */
+function binaryOpCanThrow(operator: string): boolean {
+	return !(operator in NATIVE_COMPARE);
+}
 
 /**
  * Emit a compiled C function for `fn`, or null when it uses a construct the
@@ -91,17 +122,17 @@ export function emitCompiledFunction(
 	lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
 
-	// Registers are plain C locals: `number`-rep ones as doubles (unboxed),
-	// the rest as MalValue. Parameters adopt the incoming arguments (always
-	// boxed); other registers start at a rep-appropriate zero value.
+	// Registers are plain C locals: `number`-rep ones as doubles, `boolean`-rep
+	// as bool (both unboxed), the rest as MalValue. Parameters adopt the incoming
+	// arguments (always boxed); other registers start at a rep-appropriate zero.
 	for (let i = 0; i < fn.registerCount; i++) {
-		lines.push(`    ${reps[i] === "number" ? "double" : "MalValue"} r${i};`);
+		lines.push(`    ${cTypeOf(reps[i]!)} r${i};`);
 	}
 	for (let i = 0; i < fn.parameterCount; i++) {
 		lines.push(`    r${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`);
 	}
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
-		lines.push(`    r${i} = ${reps[i] === "number" ? "0.0" : "MAL_VALUE_UNDEFINED"};`);
+		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
 	}
 
 	lines.push(...body);
@@ -113,16 +144,39 @@ export function emitCompiledFunction(
 	return { symbol, source: lines.join("\n") };
 }
 
+/** The C type a register of the given rep is held in. */
+function cTypeOf(rep: RegisterRep): string {
+	return rep === "number" ? "double" : rep === "boolean" ? "bool" : "MalValue";
+}
+
+/** The zero/default value a register of the given rep is initialized to. */
+function zeroOf(rep: RegisterRep): string {
+	return rep === "number" ? "0.0" : rep === "boolean" ? "false" : "MAL_VALUE_UNDEFINED";
+}
+
 /**
- * Forward fixpoint: a register is `number` iff every instruction that writes it
- * is a native-number producer over `number`-rep inputs. Monotone — starts
- * optimistic (parameters excepted, since they hold boxed arguments) and only
- * demotes to `boxed`, so it converges.
+ * Join two reps for a register written by more than one instruction: a register
+ * that only ever holds one native kind keeps it; any disagreement (or a boxed
+ * definition) makes it `boxed`. `null` is the optimistic top (no info yet).
+ */
+function joinReps(current: RegisterRep | null, produced: RegisterRep): RegisterRep {
+	if (current === null) {
+		return produced;
+	}
+	return current === produced ? current : "boxed";
+}
+
+/**
+ * Forward fixpoint over the rep lattice (top = unknown, then {number, boolean},
+ * bottom = boxed). A register's rep is the join of the reps its definitions
+ * produce; producedRep depends on operand reps, so iterate to a fixpoint. Reps
+ * only move down (unknown → native → boxed), so it converges. Parameters hold
+ * incoming (boxed) arguments, so they start — and stay — boxed.
  */
 function inferReps(fn: VmFunction): Array<RegisterRep> {
-	const reps: Array<RegisterRep> = Array.from(
+	const reps: Array<RegisterRep | null> = Array.from(
 		{ length: fn.registerCount },
-		() => "number",
+		() => null,
 	);
 	for (let i = 0; i < fn.parameterCount; i++) {
 		reps[i] = "boxed";
@@ -133,17 +187,26 @@ function inferReps(fn: VmFunction): Array<RegisterRep> {
 		changed = false;
 		for (const instruction of fn.instructions) {
 			const dst = writeRegister(instruction);
-			if (dst === null || dst < 0 || reps[dst] !== "number") {
+			if (dst === null || dst < 0) {
 				continue;
 			}
-			if (!producesNumber(instruction, reps)) {
-				reps[dst] = "boxed";
+			const produced = producedRep(instruction, reps);
+			// A definition whose rep can't be determined yet (an operand is still
+			// unknown) is left for a later iteration rather than forced to boxed.
+			if (produced === null) {
+				continue;
+			}
+			const joined = joinReps(reps[dst] ?? null, produced);
+			if (joined !== reps[dst]) {
+				reps[dst] = joined;
 				changed = true;
 			}
 		}
 	}
 
-	return reps;
+	// A register never written (so never read in well-formed IR) resolves to a
+	// boxed undefined.
+	return reps.map((rep) => rep ?? "boxed");
 }
 
 /** The register an instruction writes (its dst), or null. */
@@ -152,27 +215,50 @@ function writeRegister(instruction: VmInstruction): number | null {
 	return typeof dst === "number" ? dst : null;
 }
 
-/** Whether the instruction's result is a native-emittable JS number. */
-function producesNumber(instruction: VmInstruction, reps: Array<RegisterRep>): boolean {
+/**
+ * The rep an instruction's result naturally has, given current operand reps, or
+ * null when an operand is still unknown (defer to a later fixpoint iteration).
+ * Comparisons and `!` always yield a boolean; native arithmetic over numbers
+ * yields a number; everything else is boxed.
+ */
+function producedRep(
+	instruction: VmInstruction,
+	reps: Array<RegisterRep | null>,
+): RegisterRep | null {
 	switch (instruction.opcode) {
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
-			return true;
+			return "number";
+		case "CREATE_BOOLEAN":
+			return "boolean";
 		case "MOVE":
-			return reps[instruction.src] === "number";
-		case "BINARY":
-			return (
-				instruction.operator in NATIVE_ARITH &&
-				reps[instruction.left] === "number" &&
-				reps[instruction.right] === "number"
-			);
-		case "UNARY":
-			return (
-				(instruction.operator === "-" || instruction.operator === "+") &&
-				reps[instruction.src] === "number"
-			);
+			return reps[instruction.src] ?? null;
+		case "BINARY": {
+			if (instruction.operator in NATIVE_COMPARE) {
+				return "boolean";
+			}
+			if (instruction.operator in NATIVE_ARITH) {
+				const left = reps[instruction.left] ?? null;
+				const right = reps[instruction.right] ?? null;
+				if (left === null || right === null) {
+					return null;
+				}
+				return left === "number" && right === "number" ? "number" : "boxed";
+			}
+			return "boxed";
+		}
+		case "UNARY": {
+			if (instruction.operator === "!") {
+				return "boolean";
+			}
+			if (instruction.operator === "-" || instruction.operator === "+") {
+				const src = reps[instruction.src] ?? null;
+				return src === null ? null : src === "number" ? "number" : "boxed";
+			}
+			return "boxed";
+		}
 		default:
-			return false;
+			return "boxed";
 	}
 }
 
@@ -198,7 +284,7 @@ function emitBody(
 			lines.push(`L${ip}:;`);
 		}
 
-		const emitted = emitInstruction(fn.instructions[ip]!, ip, suffix, reps);
+		const emitted = emitInstruction(fn.instructions[ip]!, ip, suffix, reps, fn.strict);
 		if (emitted === null) {
 			return null;
 		}
@@ -221,27 +307,50 @@ function emitInstruction(
 	ip: number,
 	suffix: string,
 	reps: Array<RegisterRep>,
+	strict: boolean,
 ): Array<string> | null {
-	// Read register r as a boxed MalValue (boxing a number-rep double).
+	// Read register r as a boxed MalValue (boxing a number-rep double or a
+	// boolean-rep bool).
 	const boxed = (r: number): string =>
-		reps[r] === "number" ? `mal_ops_number_value(r${r})` : `r${r}`;
+		reps[r] === "number"
+			? `mal_ops_number_value(r${r})`
+			: reps[r] === "boolean"
+				? `mal_value_new_boolean(r${r})`
+				: `r${r}`;
 	// Read register r as a raw double (only valid for a number-rep register).
 	const num = (r: number): string => `r${r}`;
+	// Read register r as a raw C bool (ToBoolean). A boolean-rep register is the
+	// bool itself; a number-rep one is truthy iff nonzero and not NaN; a boxed
+	// one defers to mal_value_is_truthy.
+	const truthy = (r: number): string =>
+		reps[r] === "boolean"
+			? `r${r}`
+			: reps[r] === "number"
+				? `(r${r} != 0.0 && r${r} == r${r})`
+				: `mal_value_is_truthy(r${r})`;
 
 	switch (instruction.opcode) {
-		case "MOVE":
-			return [
-				reps[instruction.dst] === "number"
-					? `r${instruction.dst} = ${num(instruction.src)};`
-					: `r${instruction.dst} = ${boxed(instruction.src)};`,
-			];
+		case "MOVE": {
+			// The dst and src share a rep (a MOVE produces its src's rep, so the
+			// dst's join can only differ by being boxed). Read src in the dst's rep.
+			const dst = instruction.dst;
+			const read =
+				reps[dst] === "number"
+					? num(instruction.src)
+					: reps[dst] === "boolean"
+						? truthy(instruction.src)
+						: boxed(instruction.src);
+			return [`r${dst} = ${read};`];
+		}
 		case "CREATE_UNDEFINED":
 			return [`r${instruction.dst} = MAL_VALUE_UNDEFINED;`];
 		case "CREATE_NULL":
 			return [`r${instruction.dst} = MAL_VALUE_NULL;`];
 		case "CREATE_BOOLEAN":
 			return [
-				`r${instruction.dst} = mal_value_new_boolean(${instruction.value ? "true" : "false"});`,
+				reps[instruction.dst] === "boolean"
+					? `r${instruction.dst} = ${instruction.value ? "true" : "false"};`
+					: `r${instruction.dst} = mal_value_new_boolean(${instruction.value ? "true" : "false"});`,
 			];
 		case "CREATE_NUMBER":
 			return [
@@ -259,6 +368,30 @@ function emitInstruction(
 			return [
 				`r${instruction.dst} = mal_value_from_string(&mal_strings${suffix}[${instruction.stringIndex}]);`,
 			];
+		case "CREATE_BIGINT":
+			return [
+				`r${instruction.dst} = mal_value_from_bigint(&mal_bigints${suffix}[${instruction.bigintIndex}]);`,
+			];
+		case "LOAD_THIS":
+			return [`r${instruction.dst} = this_value;`];
+		case "LOAD_CAPTURED":
+			return [
+				`r${instruction.dst} = mal_vm_load_captured(env, ${instruction.ownerFunctionIndex}, ${instruction.index});`,
+			];
+		case "STORE_CAPTURED":
+			return [
+				`mal_vm_store_captured(env, ${instruction.ownerFunctionIndex}, ${instruction.index}, ${boxed(instruction.src)});`,
+			];
+		case "LOAD_PROPERTY":
+			return [
+				`r${instruction.dst} = mal_vm_op_load_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
+				`if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
+			];
+		case "STORE_PROPERTY":
+			return [
+				`mal_vm_op_store_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict});`,
+				`if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
+			];
 		case "LOAD_GLOBAL":
 			return [`r${instruction.dst} = vm->globals[${instruction.index}];`];
 		case "STORE_GLOBAL":
@@ -268,57 +401,121 @@ function emitInstruction(
 				`r${instruction.dst} = vm->intrinsics[${emitIntrinsic(instruction.intrinsic)}];`,
 			];
 		case "BINARY": {
-			if (reps[instruction.dst] === "number") {
-				const op = NATIVE_ARITH[instruction.operator];
-				// The lattice only marks the dst `number` for these ops over
-				// number-rep inputs; bail defensively if that ever breaks.
-				if (
-					op === undefined ||
-					reps[instruction.left] !== "number" ||
-					reps[instruction.right] !== "number"
-				) {
+			const { dst, left, right, operator } = instruction;
+			const leftIsNum = reps[left] === "number";
+			const rightIsNum = reps[right] === "number";
+			const dstIsBool = reps[dst] === "boolean";
+			const arith = NATIVE_ARITH[operator];
+			const compare = NATIVE_COMPARE[operator];
+
+			// The dst is `number`-rep only when the lattice proved both operands
+			// are numbers and the op is native arithmetic — emit raw doubles.
+			if (reps[dst] === "number") {
+				// Bail defensively if the lattice invariant ever breaks.
+				if (arith === undefined || !leftIsNum || !rightIsNum) {
 					return null;
 				}
+				return [`r${dst} = ${num(left)} ${arith} ${num(right)};`];
+			}
+
+			const slow = `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`;
+			const completionCheck = `if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`;
+			// Store a C bool into the dst: raw for a boolean-rep register, boxed
+			// otherwise. Comparisons (and the boolean cases below) flow through here.
+			const storeBool = (boolExpr: string): string =>
+				dstIsBool
+					? `r${dst} = ${boolExpr};`
+					: `r${dst} = mal_value_new_boolean(${boolExpr});`;
+			// The numeric f64 of an operand: the raw double for a number-rep, else
+			// recovered from its boxed form (boxing a boolean-rep first, so we never
+			// feed a C bool to a MalValue helper).
+			const numericOf = (r: number): string =>
+				reps[r] === "number" ? `r${r}` : `mal_ops_number_as_f64(${boxed(r)})`;
+			const guardIsNumber = (r: number): string => `mal_ops_is_number(${boxed(r)})`;
+
+			// Comparisons yield a boolean and never throw. Emit a native compare
+			// when both operands are numbers; speculate when one is a boxed number
+			// (well-predicted in a hot loop); else use the fully-general op, whose
+			// result is already a boxed boolean.
+			if (compare !== undefined) {
+				if (leftIsNum && rightIsNum) {
+					return [storeBool(`${num(left)} ${compare} ${num(right)}`)];
+				}
+				if (leftIsNum !== rightIsNum) {
+					const guard = guardIsNumber(leftIsNum ? right : left);
+					const fastBool = `${numericOf(left)} ${compare} ${numericOf(right)}`;
+					return [
+						dstIsBool
+							? `r${dst} = ${guard} ? (${fastBool}) : mal_value_to_boolean(${slow});`
+							: `r${dst} = ${guard} ? mal_value_new_boolean(${fastBool}) : ${slow};`,
+					];
+				}
 				return [
-					`r${instruction.dst} = ${num(instruction.left)} ${op} ${num(instruction.right)};`,
+					dstIsBool ? `r${dst} = mal_value_to_boolean(${slow});` : `r${dst} = ${slow};`,
 				];
 			}
-			const compare = NATIVE_COMPARE[instruction.operator];
-			if (
-				compare !== undefined &&
-				reps[instruction.left] === "number" &&
-				reps[instruction.right] === "number"
-			) {
-				return [
-					`r${instruction.dst} = mal_value_new_boolean(${num(instruction.left)} ${compare} ${num(instruction.right)});`,
-				];
+
+			// Past here the result is boxed; a boolean-rep dst could only come from
+			// a comparison (handled above), so anything else is a lattice bug.
+			if (dstIsBool) {
+				return null;
 			}
-			const lowered = [
-				`r${instruction.dst} = mal_vm_binary_op(vm, ${emitBinaryOperator(instruction.operator)}, ${boxed(instruction.left)}, ${boxed(instruction.right)});`,
-			];
-			if (THROWING_BINARY_OPERATORS.has(instruction.operator)) {
-				lowered.push(
-					`if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
-				);
+
+			// Mixed rep on arithmetic: exactly one operand is a proven number, the
+			// other boxed. Speculate the boxed operand is a number and take a native
+			// double op when it is, else the fully-general op. `mal_ops_number_as_f64`
+			// recovers a number's exact f64 and `mal_ops_number_value` re-boxes with
+			// the interpreter's int32/-0/NaN canonicalization, so the fast path is
+			// observably identical to the fallback. (`+` stays correct: a proven
+			// number can't be a string, and the guard rejects a boxed string.)
+			if (leftIsNum !== rightIsNum && arith !== undefined) {
+				const guard = guardIsNumber(leftIsNum ? right : left);
+				const lines = [
+					`r${dst} = ${guard} ? mal_ops_number_value(${numericOf(left)} ${arith} ${numericOf(right)}) : ${slow};`,
+				];
+				if (binaryOpCanThrow(operator)) {
+					lines.push(completionCheck);
+				}
+				return lines;
+			}
+
+			// Fully general fallback: both operands boxed, or string/bigint/`in`/
+			// `instanceof`. Any non-comparison op can throw (BigInt domain errors),
+			// so propagate the completion — previously only `in`/`instanceof` did,
+			// which silently swallowed BigInt TypeErrors/RangeErrors here.
+			const lowered = [`r${dst} = ${slow};`];
+			if (binaryOpCanThrow(operator)) {
+				lowered.push(completionCheck);
 			}
 			return lowered;
 		}
 		case "UNARY": {
-			if (reps[instruction.dst] === "number") {
-				if (reps[instruction.src] !== "number") {
+			const { dst, src, operator } = instruction;
+			if (reps[dst] === "number") {
+				if (reps[src] !== "number") {
 					return null;
 				}
 				// Lattice marks dst `number` only for unary - / +.
+				return [operator === "-" ? `r${dst} = -${num(src)};` : `r${dst} = ${num(src)};`];
+			}
+			// Logical not yields a boolean: !ToBoolean(src). This is exactly
+			// mal_vm_unary_op(NOT) = mal_value_new_boolean(!mal_value_is_truthy(.)).
+			if (operator === "!") {
+				const negated = `!(${truthy(src)})`;
 				return [
-					instruction.operator === "-"
-						? `r${instruction.dst} = -${num(instruction.src)};`
-						: `r${instruction.dst} = ${num(instruction.src)};`,
+					reps[dst] === "boolean"
+						? `r${dst} = ${negated};`
+						: `r${dst} = mal_value_new_boolean(${negated});`,
 				];
 			}
+			// A boolean-rep dst can only come from `!` (handled above).
+			if (reps[dst] === "boolean") {
+				return null;
+			}
 			const lowered = [
-				`r${instruction.dst} = mal_vm_unary_op(vm, ${emitUnaryOperator(instruction.operator)}, ${boxed(instruction.src)});`,
+				`r${dst} = mal_vm_unary_op(vm, ${emitUnaryOperator(operator)}, ${boxed(src)});`,
 			];
-			if (THROWING_UNARY_OPERATORS.has(instruction.operator)) {
+			if (THROWING_UNARY_OPERATORS.has(operator)) {
 				lowered.push(
 					`if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
 				);
@@ -345,9 +542,9 @@ function emitInstruction(
 		case "JUMP":
 			return [`goto L${instruction.targetIp};`];
 		case "JUMP_IF":
-			return [
-				`if (mal_value_is_truthy(${boxed(instruction.cond)})) goto L${instruction.targetIp};`,
-			];
+			// Branch on a raw bool / native truthiness test — no boxing when the
+			// condition is already a boolean-rep (typically a comparison result).
+			return [`if (${truthy(instruction.cond)}) goto L${instruction.targetIp};`];
 		case "RETURN":
 			// Register -1 is the "no value" sentinel (a synthesized empty return).
 			return [
