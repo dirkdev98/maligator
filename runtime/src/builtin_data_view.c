@@ -86,7 +86,7 @@ static bool mal_data_view_to_index(MalVm *vm, MalValue value, u32 *out) {
     return true;
 }
 
-static MalValue mal_builtin_data_view_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_data_view_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     if (mal_value_is_undefined(new_target)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Constructor DataView requires 'new'");
@@ -325,12 +325,12 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
 }
 
 #define MAL_DV_GET(fn_name, type_value) \
-    static MalValue fn_name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) { \
+    static MalValue fn_name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) { \
         (void) new_target; \
         return mal_data_view_get(vm, this_value, args, arg_count, type_value); \
     }
 #define MAL_DV_SET(fn_name, type_value) \
-    static MalValue fn_name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) { \
+    static MalValue fn_name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) { \
         (void) new_target; \
         return mal_data_view_set(vm, this_value, args, arg_count, type_value); \
     }
@@ -356,7 +356,7 @@ MAL_DV_SET(mal_dv_set_float64, DV_FLOAT64)
 MAL_DV_SET(mal_dv_set_bigint64, DV_BIGINT64)
 MAL_DV_SET(mal_dv_set_biguint64, DV_BIGUINT64)
 
-static MalValue mal_dv_get_buffer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_dv_get_buffer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -364,7 +364,7 @@ static MalValue mal_dv_get_buffer(MalVm *vm, MalValue this_value, const MalValue
     return view == nullptr ? mal_value_new_undefined() : mal_value_from_array_buffer_object(view->buffer);
 }
 
-static MalValue mal_dv_get_byte_length(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_dv_get_byte_length(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -379,7 +379,7 @@ static MalValue mal_dv_get_byte_length(MalVm *vm, MalValue this_value, const Mal
     return mal_value_from_i32((i32) mal_data_view_current_length(view));
 }
 
-static MalValue mal_dv_get_byte_offset(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_dv_get_byte_offset(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;

@@ -27,6 +27,13 @@ bool mal_vm_desc_read(MalVm *vm, MalPropertyDesc desc, MalValue receiver, MalVal
 bool mal_vm_get_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *out);
 
 /**
+ * Spec ToNumber with full ToPrimitive(number) for objects (@@toPrimitive, else
+ * valueOf → toString). Throws TypeError on BigInt/Symbol (or a non-primitive
+ * ToPrimitive result) and returns false; otherwise writes the number.
+ */
+bool mal_vm_to_number(MalVm *vm, MalValue value, f64 *out);
+
+/**
  * Spec OrdinaryHasInstance: non-callable targets answer false, bound
  * functions unwrap to their target, then the value's prototype chain is
  * walked looking for target.prototype. Shared by the instanceof operator
@@ -158,6 +165,10 @@ void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruct
 void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_get_iterator(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_get_async_iterator(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_iterator_next(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_iterator_step(MalCallable *callable, MalInstruction *instruction);
 

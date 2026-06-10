@@ -5,6 +5,7 @@
 
 #include "builtin_array.h"
 #include "builtin_array_buffer.h"
+#include "builtin_async_generator.h"
 #include "builtin_bigint.h"
 #include "builtin_boolean.h"
 #include "builtin_console.h"
@@ -14,11 +15,13 @@
 #include "builtin_function.h"
 #include "builtin_generator.h"
 #include "builtin_iterator.h"
+#include "builtin_iterator_helpers.h"
 #include "builtin_json.h"
 #include "builtin_map.h"
 #include "builtin_math.h"
 #include "builtin_number.h"
 #include "builtin_object.h"
+#include "builtin_promise.h"
 #include "builtin_set.h"
 #include "builtin_string.h"
 #include "builtin_symbol.h"
@@ -117,7 +120,7 @@ MalValue mal_intrinsic_define_method(MalVm *vm, MalObject *object, const byte *n
     return value;
 }
 
-static MalValue mal_intrinsic_species_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_intrinsic_species_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) args;
     (void) arg_count;
@@ -156,7 +159,7 @@ static void mal_intrinsics_init_global_this(MalVm *vm);
  * %Function.prototype% is itself a function that accepts any arguments and
  * returns undefined, but has no [[Construct]].
  */
-static MalValue mal_intrinsic_function_prototype_callback(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_intrinsic_function_prototype_callback(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) args;
     (void) arg_count;
@@ -193,7 +196,9 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_bigint_install(vm);
     mal_builtin_function_install(vm);
     mal_builtin_iterator_install(vm);
+    mal_builtin_iterator_helpers_install(vm);
     mal_builtin_generator_install(vm);
+    mal_builtin_async_generator_install(vm);
     mal_builtin_array_install(vm);
     mal_builtin_map_install(vm);
     mal_builtin_set_install(vm);
@@ -207,6 +212,7 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_math_install(vm);
     mal_builtin_json_install(vm);
     mal_builtin_console_install(vm);
+    mal_builtin_promise_install(vm);
 
     vm->intrinsics[MAL_INTRINSIC_NAN_VALUE] = mal_value_new_nan();
     vm->intrinsics[MAL_INTRINSIC_INFINITY_VALUE] = mal_value_from_f64_convert_nan(INFINITY);
@@ -260,6 +266,10 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "Math", vm->intrinsics[MAL_INTRINSIC_MATH], flags);
     mal_intrinsic_define_data(vm, global_this, "JSON", vm->intrinsics[MAL_INTRINSIC_JSON], flags);
     mal_intrinsic_define_data(vm, global_this, "console", vm->intrinsics[MAL_INTRINSIC_CONSOLE], flags);
+    mal_intrinsic_define_data(vm, global_this, "Promise", vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "AggregateError", vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Iterator", vm->intrinsics[MAL_INTRINSIC_ITERATOR_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "AsyncIterator", vm->intrinsics[MAL_INTRINSIC_ASYNC_ITERATOR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "NaN", vm->intrinsics[MAL_INTRINSIC_NAN_VALUE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, global_this, "Infinity", vm->intrinsics[MAL_INTRINSIC_INFINITY_VALUE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, global_this, "undefined", mal_value_new_undefined(), MAL_PROPERTY_NONE);

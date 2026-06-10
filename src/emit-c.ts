@@ -307,8 +307,9 @@ export function emitCompiledFunction(
 	index: number,
 	suffix: string,
 ): CompiledFunction | null {
-	// Generators suspend mid-body; they are not straight-line C functions.
-	if (fn.isGenerator) {
+	// Generators and async functions suspend mid-body; they are not straight-line
+	// C functions (the resumable-compiled-function backend is a later milestone).
+	if (fn.isGenerator || fn.isAsync) {
 		return null;
 	}
 

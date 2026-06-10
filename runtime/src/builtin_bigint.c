@@ -35,7 +35,7 @@ bool mal_bigint_to_bigint(MalVm *vm, MalValue value, i128 *out) {
     return false;
 }
 
-static MalValue mal_builtin_bigint_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_bigint_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
 
     if (!mal_value_is_undefined(new_target)) {
@@ -80,7 +80,7 @@ static bool mal_builtin_bigint_this(MalVm *vm, MalValue this_value, i128 *out) {
     return true;
 }
 
-static MalValue mal_builtin_bigint_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_bigint_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
 
     i128 value;
@@ -101,7 +101,7 @@ static MalValue mal_builtin_bigint_prototype_to_string(MalVm *vm, MalValue this_
     return mal_value_from_string(mal_bigint_to_string(&vm->heap, value, radix));
 }
 
-static MalValue mal_builtin_bigint_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_bigint_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -128,7 +128,7 @@ static bool mal_builtin_bigint_bits_arg(MalVm *vm, const MalValue *args, i32 arg
     return true;
 }
 
-static MalValue mal_builtin_bigint_as_uint_n(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_bigint_as_uint_n(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
 
@@ -156,7 +156,7 @@ static MalValue mal_builtin_bigint_as_uint_n(MalVm *vm, MalValue this_value, con
     return mal_value_from_bigint(mal_bigint_new(&vm->heap, result));
 }
 
-static MalValue mal_builtin_bigint_as_int_n(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_bigint_as_int_n(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
 

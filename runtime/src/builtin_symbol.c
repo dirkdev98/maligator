@@ -5,7 +5,7 @@
 #include "value_ops.h"
 #include "vm.h"
 
-static MalValue mal_builtin_symbol_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_symbol_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
 
     if (!mal_value_is_undefined(new_target)) {
@@ -34,7 +34,7 @@ static MalSymbol *mal_builtin_symbol_this(MalVm *vm, MalValue this_value) {
     return mal_value_to_symbol(this_value);
 }
 
-static MalValue mal_builtin_symbol_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_symbol_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
 
@@ -52,7 +52,7 @@ static MalValue mal_builtin_symbol_prototype_to_string(MalVm *vm, MalValue this_
     return mal_ops_add(&vm->heap, text, mal_value_from_string(mal_intrinsic_ascii(vm, ")")));
 }
 
-static MalValue mal_builtin_symbol_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_symbol_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
 
@@ -63,7 +63,7 @@ static MalValue mal_builtin_symbol_prototype_value_of(MalVm *vm, MalValue this_v
     return this_value;
 }
 
-static MalValue mal_builtin_symbol_for(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_symbol_for(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
 
     MalString *key = mal_ops_to_string(&vm->heap, arg_count >= 1 ? args[0] : mal_value_new_undefined());
@@ -83,7 +83,7 @@ static MalValue mal_builtin_symbol_for(MalVm *vm, MalValue this_value, const Mal
     return mal_value_from_symbol(symbol);
 }
 
-static MalValue mal_builtin_symbol_key_for(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_symbol_key_for(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
 
     MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
@@ -101,7 +101,7 @@ static MalValue mal_builtin_symbol_key_for(MalVm *vm, MalValue this_value, const
     return mal_value_from_string(mal_symbol_description(symbol));
 }
 
-static MalValue mal_builtin_symbol_prototype_description_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_symbol_prototype_description_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
 

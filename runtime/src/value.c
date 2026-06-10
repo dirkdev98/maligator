@@ -48,6 +48,14 @@ bool mal_value_is_data_view_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_DATA_VIEW_OBJECT);
 }
 
+bool mal_value_is_promise_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_PROMISE_OBJECT);
+}
+
+bool mal_value_is_iterator_helper_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_ITERATOR_HELPER_OBJECT);
+}
+
 bool mal_value_is_callable(MalValue value) {
     return mal_value_is_function_object(value) ||
         mal_value_is_native_function_object(value) ||
@@ -106,6 +114,14 @@ MalDataViewObject *mal_value_to_data_view_object(MalValue value) {
     return (MalDataViewObject *) mal_value_to_heap(value);
 }
 
+MalPromiseObject *mal_value_to_promise_object(MalValue value) {
+    return (MalPromiseObject *) mal_value_to_heap(value);
+}
+
+MalIteratorHelperObject *mal_value_to_iterator_helper_object(MalValue value) {
+    return (MalIteratorHelperObject *) mal_value_to_heap(value);
+}
+
 MalValue mal_value_from_string(MalString *string) {
     return mal_value_from_heap((MalHeapHeader *) string);
 }
@@ -156,6 +172,14 @@ MalValue mal_value_from_typed_array_object(MalTypedArrayObject *array) {
 
 MalValue mal_value_from_data_view_object(MalDataViewObject *view) {
     return mal_value_from_heap((MalHeapHeader *) view);
+}
+
+MalValue mal_value_from_promise_object(MalPromiseObject *promise) {
+    return mal_value_from_heap((MalHeapHeader *) promise);
+}
+
+MalValue mal_value_from_iterator_helper_object(MalIteratorHelperObject *helper) {
+    return mal_value_from_heap((MalHeapHeader *) helper);
 }
 
 bool mal_value_is_truthy(MalValue value) {

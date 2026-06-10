@@ -3,11 +3,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "async_function.h"
+#include "builtin_async_generator.h"
 #include "bound_function_object.h"
 #include "function_object.h"
 #include "generator_object.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "microtask.h"
+#include "promise_object.h"
 #include "value_ops.h"
 #include "vm_ops.h"
 
@@ -31,6 +35,12 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->native_call_depth = 0;
 
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+
+    vm->job_head = nullptr;
+    vm->job_tail = nullptr;
+    vm->unhandled_rejections = nullptr;
+    vm->unhandled_count = 0;
+    vm->unhandled_capacity = 0;
 
     mal_heap_init(&vm->heap, 0);
     for (i32 i = 0; i < definition->global_count; i++) {
@@ -67,6 +77,23 @@ void mal_vm_free(MalVm *vm) {
     free(vm->frames);
     free(vm->value_stack);
     free(vm->globals);
+
+    // Free any microtasks left queued (e.g. the program exited with pending
+    // jobs). The MalValues they hold live in the heap, freed below.
+    MalJob *job = vm->job_head;
+    while (job != nullptr) {
+        MalJob *next = job->next;
+        free(job);
+        job = next;
+    }
+    vm->job_head = nullptr;
+    vm->job_tail = nullptr;
+
+    free(vm->unhandled_rejections);
+    vm->unhandled_rejections = nullptr;
+    vm->unhandled_count = 0;
+    vm->unhandled_capacity = 0;
+
     mal_table_free(vm->symbol_registry);
     mal_table_free(vm->atoms);
     mal_heap_free(&vm->heap);
@@ -382,6 +409,12 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_GET_ITERATOR:
                 mal_op_get_iterator(frame, &instruction);
                 break;
+            case MAL_OP_GET_ASYNC_ITERATOR:
+                mal_op_get_async_iterator(frame, &instruction);
+                break;
+            case MAL_OP_ITERATOR_NEXT:
+                mal_op_iterator_next(frame, &instruction);
+                break;
             case MAL_OP_ITERATOR_STEP:
                 mal_op_iterator_step(frame, &instruction);
                 break;
@@ -396,8 +429,12 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 // The parameter prologue has run; capture this activation into a
                 // generator object, suspend it, and hand the generator back to
                 // the caller like a return. The instance inherits the generator
-                // function's own .prototype (which inherits %GeneratorPrototype%).
-                MalObject *generator_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GENERATOR_PROTOTYPE]);
+                // function's own .prototype (which inherits %GeneratorPrototype%
+                // or %AsyncGeneratorPrototype%).
+                bool start_is_async_generator = frame->function->kind == MAL_FUNCTION_KIND_ASYNC_GENERATOR;
+                MalObject *generator_prototype = mal_value_to_object(vm->intrinsics[
+                    start_is_async_generator ? MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE : MAL_INTRINSIC_GENERATOR_PROTOTYPE
+                ]);
                 MalValue prototype_value;
                 if (mal_value_is_object(frame->callee) &&
                     mal_vm_get_property(vm, frame->callee, mal_intrinsic_string_key(vm, "prototype"), &prototype_value) &&
@@ -406,6 +443,12 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 }
 
                 MalGeneratorObject *generator = mal_generator_object_new(&vm->heap, generator_prototype);
+                if (start_is_async_generator) {
+                    // Async generators await in their body and settle request
+                    // promises; mark both so the await and yield ops route right.
+                    generator->is_async = true;
+                    generator->is_async_generator = true;
+                }
 
                 i32 return_register = frame->return_register;
                 i32 caller_frame_index = frame->caller_frame_index;
@@ -443,6 +486,41 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 // Pop without freeing: the storage belongs to the generator.
                 vm->frame_count--;
                 vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+
+                // An async generator's yield settles the front request promise
+                // with { value, done: false } and drives the next request (the
+                // yielded value was already awaited by the compiler-inserted
+                // await preceding this yield).
+                if (generator->is_async_generator) {
+                    mal_async_generator_yield(vm, generator);
+                }
+                break;
+            }
+
+            case MAL_OP_ASYNC_START: {
+                // Set up the async function's result promise + hidden state and
+                // hand the promise to the caller, then keep running this frame
+                // synchronously until its first await / return / throw.
+                mal_async_function_start(vm, frame);
+                break;
+            }
+
+            case MAL_OP_AWAIT: {
+                // Suspend the async frame on the awaited value (mirrors YIELD),
+                // then schedule its resumption when the value settles. The
+                // instruction pointer already points past the await, so a resume
+                // continues with the compiler-emitted resume dispatch.
+                MalGeneratorObject *state = frame->generator;
+                MalValue awaited = frame->registers[instruction.as.await.awaited_src];
+                state->resume_value_register = instruction.as.await.value_dst;
+                state->resume_mode_register = instruction.as.await.mode_dst;
+                state->state = MAL_GENERATOR_SUSPENDED_YIELD;
+
+                state->frame = *frame;
+
+                vm->frame_count--;
+                vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+                mal_async_function_await(vm, state, awaited);
                 break;
             }
             case MAL_OP_DELETE_PROPERTY:
@@ -526,32 +604,70 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                     return_value = frame->this_value;
                 }
 
-                // A generator body returning completes the generator. Its
-                // storage is freed here; the return value travels to the
-                // resume caller via the NORMAL completion below (the frame was
-                // reattached with no caller register).
-                if (frame->generator != nullptr) {
-                    frame->generator->state = MAL_GENERATOR_COMPLETED;
+                // A generator/async body returning completes the activation. Its
+                // storage is freed here; for a plain generator the value travels
+                // to the resume caller via the NORMAL completion below (the frame
+                // was reattached with no caller register).
+                MalGeneratorObject *coroutine = frame->generator;
+                if (coroutine != nullptr) {
+                    coroutine->state = MAL_GENERATOR_COMPLETED;
                 }
 
                 i32 return_register = frame->return_register;
                 i32 caller_frame_index = frame->caller_frame_index;
-                vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_RETURN, .value = return_value};
 
                 mal_vm_pop_frame_storage(vm, frame);
                 vm->frame_count--;
 
-                if (caller_frame_index >= 0) {
-                    vm->frames[caller_frame_index].registers[return_register] = vm->completion.value;
-                    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = vm->completion.value};
+                if (coroutine != nullptr && coroutine->is_async_generator) {
+                    // An async generator's return completes it and settles the
+                    // front request with { value, done: true }.
+                    mal_async_generator_return(vm, coroutine, return_value);
+                } else if (coroutine != nullptr && coroutine->is_async) {
+                    // Resolving the result promise is the async function's return.
+                    mal_async_function_settle_return(vm, coroutine, return_value);
+                } else if (caller_frame_index >= 0) {
+                    vm->frames[caller_frame_index].registers[return_register] = return_value;
+                    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = return_value};
                 } else {
-                    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = vm->completion.value};
+                    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = return_value};
                 }
                 break;
             }
         }
 
         if (vm->completion.kind == MAL_COMPLETION_THROW && !mal_vm_unwind_to_handler(vm, target_frame_count)) {
+            // An async function frame catches an otherwise-uncaught throw as a
+            // rejection of its result promise, stopping propagation there (its
+            // synchronous callees above it are unwound first). This is the async
+            // body's implicit try/catch.
+            i32 async_index = -1;
+            for (i32 i = vm->frame_count - 1; i >= target_frame_count; i--) {
+                if (vm->frames[i].generator != nullptr && vm->frames[i].generator->is_async) {
+                    async_index = i;
+                    break;
+                }
+            }
+
+            if (async_index >= 0) {
+                MalValue reason = vm->completion.value;
+                MalGeneratorObject *state = vm->frames[async_index].generator;
+                for (i32 i = vm->frame_count - 1; i >= async_index; i--) {
+                    mal_vm_pop_frame_storage(vm, &vm->frames[i]);
+                }
+                vm->frame_count = async_index;
+                vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+                if (state->is_async_generator) {
+                    // An uncaught throw completes the async generator and rejects
+                    // the front request.
+                    mal_async_generator_throw_done(vm, state, reason);
+                } else {
+                    state->state = MAL_GENERATOR_COMPLETED;
+                    mal_async_function_settle_throw(vm, state, reason);
+                }
+                continue;
+            }
+
             // No handler within this run loop; eagerly pop the frames it owns
             // and let the throw completion propagate to the caller.
             for (i32 i = vm->frame_count - 1; i >= target_frame_count; i--) {
@@ -586,9 +702,12 @@ static void mal_vm_print_display(FILE *stream, MalValue value) {
     }
 }
 
-static void mal_vm_report_uncaught(MalVm *vm) {
-    fprintf(stderr, "Uncaught ");
-    MalValue value = vm->completion.value;
+/**
+ * Print a thrown/rejected value to stderr after `prefix`, preferring the
+ * value's own toString (so Error objects render "Name: message").
+ */
+static void mal_vm_print_thrown(MalVm *vm, MalValue value, const byte *prefix) {
+    fprintf(stderr, "%s", prefix);
 
     if (mal_value_is_object(value)) {
         // Invoke the thrown value's own toString (Error.prototype.toString
@@ -619,6 +738,33 @@ static void mal_vm_report_uncaught(MalVm *vm) {
     fprintf(stderr, "\n");
 }
 
+static void mal_vm_report_uncaught(MalVm *vm) {
+    mal_vm_print_thrown(vm, vm->completion.value, "Uncaught ");
+}
+
+void mal_vm_note_unhandled_rejection(MalVm *vm, MalValue promise) {
+    if (vm->unhandled_count == vm->unhandled_capacity) {
+        vm->unhandled_capacity = vm->unhandled_capacity == 0 ? 8 : vm->unhandled_capacity * 2;
+        vm->unhandled_rejections = realloc(vm->unhandled_rejections, sizeof(MalValue) * (usize) vm->unhandled_capacity);
+    }
+    vm->unhandled_rejections[vm->unhandled_count++] = promise;
+}
+
+void mal_vm_report_unhandled_rejections(MalVm *vm) {
+    for (i32 i = 0; i < vm->unhandled_count; i++) {
+        MalValue promise_value = vm->unhandled_rejections[i];
+        if (!mal_value_is_promise_object(promise_value)) {
+            continue;
+        }
+        MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
+        // A handler attached between rejection and the checkpoint clears it.
+        if (promise->state == MAL_PROMISE_REJECTED && !promise->is_handled) {
+            mal_vm_print_thrown(vm, promise->result, "Uncaught (in promise) ");
+        }
+    }
+    vm->unhandled_count = 0;
+}
+
 void mal_vm_run(MalVm *vm, MalCallable *callable) {
     // The entry function takes no arguments, so the marshaling region is empty.
     mal_vm_push_function_frame(
@@ -632,7 +778,16 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
     );
     mal_vm_run_until_frame_count(vm, 0);
 
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+    // The top-level script has run to completion; capture its result, then run
+    // the microtask queue to empty (promise reactions, await resumptions). The
+    // drain happens at a baseline frame count so reaction handlers re-enter the
+    // interpreter without nesting on a partial activation.
+    MalCompletion script_completion = vm->completion;
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    mal_vm_drain_microtasks(vm);
+
+    if (script_completion.kind == MAL_COMPLETION_THROW) {
+        vm->completion = script_completion;
         mal_vm_report_uncaught(vm);
         return;
     }
@@ -747,7 +902,7 @@ MalCompletion mal_vm_call_value(
 
     if (mal_value_is_native_function_object(resolution.callee)) {
         MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
-        MalValue value = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined());
+        MalValue value = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), resolution.callee);
         completion = vm->completion.kind == MAL_COMPLETION_THROW
             ? vm->completion
             : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
@@ -807,7 +962,7 @@ MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue 
     if (mal_value_is_native_function_object(resolution.callee)) {
         // Native constructors allocate their own this; new_target signals construct.
         MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
-        MalValue value = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, resolution.callee);
+        MalValue value = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, resolution.callee, resolution.callee);
         completion = vm->completion.kind == MAL_COMPLETION_THROW
             ? vm->completion
             : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};

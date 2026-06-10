@@ -4,20 +4,20 @@
 #include "value_ops.h"
 #include "vm.h"
 
-static MalValue mal_builtin_boolean_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_boolean_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     // TODO(booleans): no wrapper objects, constructing also returns the primitive.
     return mal_value_new_boolean(arg_count >= 1 && mal_value_is_truthy(args[0]));
 }
 
-static MalValue mal_builtin_boolean_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_boolean_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     return mal_value_from_string(mal_intrinsic_ascii(vm, mal_value_is_truthy(this_value) ? "true" : "false"));
 }
 
-static MalValue mal_builtin_boolean_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_boolean_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) args;
     (void) arg_count;

@@ -48,7 +48,43 @@ typedef struct MalGeneratorObject {
      * The value handed out by the current suspension (gen -> caller).
      */
     MalValue yielded_value;
+
+    /**
+     * Async-function activations reuse this same suspendable-frame machinery
+     * (an async function is, in effect, a generator driven by an internal
+     * promise driver). When is_async is set, this object is the async
+     * function's hidden state: AWAIT suspends here, and async_resolve /
+     * async_reject are the result promise's resolving functions, invoked when
+     * the body returns or throws. Such an object is never exposed to user code.
+     */
+    bool is_async;
+    MalValue async_resolve;
+    MalValue async_reject;
+
+    /**
+     * Async generators (`async function*`) set is_async_generator (and is_async,
+     * so await works). Each next/throw/return call enqueues a request here and
+     * gets a promise back; the driver (builtin_async_generator.c) resolves the
+     * front request when the body yields/returns/throws. agen_running guards
+     * against re-entrant driving while the body is mid-step (e.g. awaiting).
+     */
+    bool is_async_generator;
+    bool agen_running;
+    struct MalAsyncGeneratorRequest *agen_queue_head;
+    struct MalAsyncGeneratorRequest *agen_queue_tail;
 } MalGeneratorObject;
+
+/**
+ * A queued next/throw/return on an async generator: the capability to settle
+ * and the resume mode/value to deliver to the body.
+ */
+typedef struct MalAsyncGeneratorRequest {
+    struct MalAsyncGeneratorRequest *next;
+    MalValue resolve;
+    MalValue reject;
+    i32 mode;
+    MalValue value;
+} MalAsyncGeneratorRequest;
 
 /**
  * Allocate a generator instance in the suspended-start state. The caller fills

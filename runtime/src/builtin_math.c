@@ -11,7 +11,7 @@ static f64 mal_builtin_math_arg(const MalValue *args, i32 arg_count, i32 index) 
 }
 
 #define MAL_BUILTIN_MATH_UNARY(name, expression) \
-    static MalValue mal_builtin_math_##name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) { \
+    static MalValue mal_builtin_math_##name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) { \
         (void) vm; \
         (void) this_value; \
         f64 x = mal_builtin_math_arg(args, arg_count, 0); \
@@ -49,7 +49,7 @@ MAL_BUILTIN_MATH_UNARY(fround, (f64) (float) x)
 
 #undef MAL_BUILTIN_MATH_UNARY
 
-static MalValue mal_builtin_math_clz32(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_math_clz32(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     f64 x = mal_builtin_math_arg(args, arg_count, 0);
@@ -58,7 +58,7 @@ static MalValue mal_builtin_math_clz32(MalVm *vm, MalValue this_value, const Mal
     return mal_value_from_i32(value == 0 ? 32 : __builtin_clz(value));
 }
 
-static MalValue mal_builtin_math_imul(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_math_imul(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     f64 left = mal_builtin_math_arg(args, arg_count, 0);
@@ -69,19 +69,19 @@ static MalValue mal_builtin_math_imul(MalVm *vm, MalValue this_value, const MalV
     return mal_value_from_i32((i32) (a * b));
 }
 
-static MalValue mal_builtin_math_pow(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_math_pow(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     return mal_ops_number_value(pow(mal_builtin_math_arg(args, arg_count, 0), mal_builtin_math_arg(args, arg_count, 1)));
 }
 
-static MalValue mal_builtin_math_atan2(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_math_atan2(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     return mal_ops_number_value(atan2(mal_builtin_math_arg(args, arg_count, 0), mal_builtin_math_arg(args, arg_count, 1)));
 }
 
-static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     f64 sum = 0;
@@ -93,7 +93,7 @@ static MalValue mal_builtin_math_hypot(MalVm *vm, MalValue this_value, const Mal
     return mal_ops_number_value(sqrt(sum));
 }
 
-static MalValue mal_builtin_math_min(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_math_min(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     f64 result = INFINITY;
@@ -110,7 +110,7 @@ static MalValue mal_builtin_math_min(MalVm *vm, MalValue this_value, const MalVa
     return mal_ops_number_value(result);
 }
 
-static MalValue mal_builtin_math_max(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_math_max(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     f64 result = -INFINITY;
@@ -129,7 +129,7 @@ static MalValue mal_builtin_math_max(MalVm *vm, MalValue this_value, const MalVa
 
 static u64 mal_builtin_math_random_state;
 
-static MalValue mal_builtin_math_random(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_math_random(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     (void) args;

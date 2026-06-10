@@ -206,6 +206,13 @@ export interface IRFunction {
 	isGenerator?: boolean;
 
 	/**
+	 * Async functions get an ASYNC_START prologue instruction (after the
+	 * parameter prologue) and may contain await expressions, which suspend the
+	 * activation on a promise and resume via the same machinery as yield.
+	 */
+	isAsync?: boolean;
+
+	/**
 	 * Expected number of initial register values. Before evaluating the arguments and assigning
 	 * them to (destructured) arguments.
 	 */
@@ -526,6 +533,20 @@ export type IRInstruction =
 			registers: [number, number, number];
 	  }
 	| {
+			type: "getAsyncIterator";
+
+			// [iterator_dst, next_dst, source] — GetIterator(source, async):
+			// @@asyncIterator, or the sync iterator wrapped. For for-await-of.
+			registers: [number, number, number];
+	  }
+	| {
+			type: "iteratorNext";
+
+			// [result_dst, iterator, next] — call next() and leave the raw
+			// result (a promise for async iteration) to be awaited.
+			registers: [number, number, number];
+	  }
+	| {
 			type: "iteratorStep";
 
 			// [value_dst, done_dst, iterator, next] — spec IteratorStep; the
@@ -551,11 +572,25 @@ export type IRInstruction =
 			type: "generatorStart";
 	  }
 	| {
+			// Async-function prologue: create the result promise + hidden state,
+			// hand the promise to the caller, then keep running the body. No
+			// operands.
+			type: "asyncStart";
+	  }
+	| {
 			type: "yield";
 
 			// [valueDst, modeDst, yieldedSrc] — yieldedSrc is handed out; on
 			// resume the sent value lands in valueDst and the resume mode code in
 			// modeDst.
+			registers: [number, number, number];
+	  }
+	| {
+			type: "await";
+
+			// [valueDst, modeDst, awaitedSrc] — awaitedSrc is awaited; on resume
+			// the settled value lands in valueDst and the resume mode code in
+			// modeDst (same layout as yield, so the resume dispatch is shared).
 			registers: [number, number, number];
 	  }
 	| {
@@ -747,6 +782,7 @@ type IRIntrinsic =
 	| "SyntaxError"
 	| "URIError"
 	| "EvalError"
+	| "AggregateError"
 	| "String"
 	| "Number"
 	| "Boolean"
@@ -770,6 +806,9 @@ type IRIntrinsic =
 	| "Set"
 	| "WeakMap"
 	| "WeakSet"
+	| "Promise"
+	| "Iterator"
+	| "AsyncIterator"
 	| "parseInt"
 	| "parseFloat"
 	| "isNaN"
@@ -792,6 +831,7 @@ const irIntrinsics = new Set<string>([
 	"SyntaxError",
 	"URIError",
 	"EvalError",
+	"AggregateError",
 	"String",
 	"Number",
 	"Boolean",
@@ -815,6 +855,9 @@ const irIntrinsics = new Set<string>([
 	"Set",
 	"WeakMap",
 	"WeakSet",
+	"Promise",
+	"Iterator",
+	"AsyncIterator",
 	"parseInt",
 	"parseFloat",
 	"isNaN",
@@ -995,6 +1038,7 @@ function compileNewFunction(
 		blocks: [],
 		isGenerator:
 			functionNode.type !== "ArrowFunctionExpression" && functionNode.generator,
+		isAsync: functionNode.async === true,
 
 		parameterCount: functionNode.params.length,
 		length: computeFunctionLength(functionNode),
@@ -1029,6 +1073,10 @@ function compileNewFunction(
 	// time) and suspends, returning the generator object.
 	if (fn.isGenerator) {
 		fn.blocks[bodyBlock]!.instructions.unshift({ type: "generatorStart" });
+	} else if (fn.isAsync) {
+		// Same placement: create the result promise after params evaluate, then
+		// run the body until the first await.
+		fn.blocks[bodyBlock]!.instructions.unshift({ type: "asyncStart" });
 	}
 
 	endFunction(fn);
@@ -1060,6 +1108,7 @@ function compileNewFunctionExpression(
 		classContext,
 		isGenerator:
 			functionNode.type !== "ArrowFunctionExpression" && functionNode.generator,
+		isAsync: functionNode.async === true,
 
 		parameterCount: functionNode.params.length,
 		length: computeFunctionLength(functionNode),
@@ -1099,6 +1148,8 @@ function compileNewFunctionExpression(
 
 	if (compiledFn.isGenerator) {
 		compiledFn.blocks[bodyBlock]!.instructions.unshift({ type: "generatorStart" });
+	} else if (compiledFn.isAsync) {
+		compiledFn.blocks[bodyBlock]!.instructions.unshift({ type: "asyncStart" });
 	}
 
 	endFunction(compiledFn);
@@ -2994,7 +3045,25 @@ function compileForOfStatement(
 		return;
 	}
 
-	compileForInOfLoop(program, fn, entryCursor, iterable, statement.left, statement.body);
+	if (statement.await) {
+		compileForAwaitOfLoop(
+			program,
+			fn,
+			entryCursor,
+			iterable,
+			statement.left,
+			statement.body,
+		);
+	} else {
+		compileForInOfLoop(
+			program,
+			fn,
+			entryCursor,
+			iterable,
+			statement.left,
+			statement.body,
+		);
+	}
 }
 
 /**
@@ -3135,6 +3204,137 @@ function compileForInOfLoop(
 		type: "throw",
 		registers: [caughtRegister],
 	});
+
+	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	exitJump.blocks[0] = exitIdx;
+	for (const jump of loop.breakJumps) {
+		jump.blocks[0] = exitIdx;
+	}
+	for (const jump of loop.continueJumps) {
+		jump.blocks[0] = headerIdx;
+	}
+	fn.loops.pop();
+}
+
+/**
+ * for-await-of: like for-of, but the source is obtained as an async iterator
+ * (@@asyncIterator, or the sync iterator wrapped) and each step's next() result
+ * is awaited before unpacking { value, done }. Only valid inside an async
+ * function/generator. Structurally mirrors compileForInOfLoop; the difference
+ * is the async-iterator get and the await-driven header step.
+ */
+function compileForAwaitOfLoop(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	entryCursor: IRCursor,
+	iterable: number,
+	left: ESTree.ForOfStatement["left"],
+	body: ESTree.Statement,
+) {
+	const labels = takePendingLabels(fn);
+	const iteratorRegister = nextRegisterDestination(fn);
+	const nextRegister = nextRegisterDestination(fn);
+	entryCursor.block.instructions.push({
+		type: "getAsyncIterator",
+		registers: [iteratorRegister, nextRegister, iterable],
+	});
+
+	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
+	entryCursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
+
+	const loop: IRLoopContext = {
+		kind: "loop",
+		breakJumps: [],
+		continueJumps: [],
+		iteratorRegister,
+		labels,
+	};
+	(fn.loops ??= []).push(loop);
+
+	// Header: raw = next.call(iterator); result = await raw; unpack done/value.
+	// The await splits the header — emitResumeDispatch moves the cursor onto a
+	// continuation block, where the unpack and exit test live.
+	const headerCursor: IRCursor = { block: fn.blocks[headerIdx]! };
+	const rawRegister = nextRegisterDestination(fn);
+	headerCursor.block.instructions.push({
+		type: "iteratorNext",
+		registers: [rawRegister, iteratorRegister, nextRegister],
+	});
+	const resultRegister = compileAwaitRegister(fn, headerCursor, rawRegister);
+
+	const doneRegister = nextRegisterDestination(fn);
+	const doneKey = nextRegisterDestination(fn);
+	headerCursor.block.instructions.push({
+		type: "createString",
+		registers: [doneKey],
+		stringIndex: getOrCreateStringConstant(program, "done"),
+	});
+	headerCursor.block.instructions.push({
+		type: "loadProperty",
+		registers: [doneRegister, resultRegister, doneKey],
+	});
+	const exitJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [doneRegister],
+		blocks: [-1],
+	};
+	headerCursor.block.instructions.push(exitJump);
+
+	const valueRegister = nextRegisterDestination(fn);
+	const valueKey = nextRegisterDestination(fn);
+	headerCursor.block.instructions.push({
+		type: "createString",
+		registers: [valueKey],
+		stringIndex: getOrCreateStringConstant(program, "value"),
+	});
+	headerCursor.block.instructions.push({
+		type: "loadProperty",
+		registers: [valueRegister, resultRegister, valueKey],
+	});
+
+	// Binding and body run inside a protected range; a throw closes the iterator.
+	const bindBlock: IRBlock = { instructions: [] };
+	const bindIdx = fn.blocks.push(bindBlock) - 1;
+	headerCursor.block.instructions.push({ type: "jump", blocks: [bindIdx] });
+
+	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
+		type: "tryBegin",
+		blocks: [-1, -1],
+	};
+	bindBlock.instructions.push(tryBegin);
+
+	const bindCursor: IRCursor = { block: bindBlock };
+	if (left.type === "VariableDeclaration") {
+		const declaration = left.declarations[0];
+		if (declaration) {
+			compilePatternTarget(program, fn, bindCursor, declaration.id, valueRegister);
+		}
+	} else {
+		compilePatternTarget(program, fn, bindCursor, left, valueRegister);
+	}
+
+	const bodyIdx = compileStatementsToBlock(program, fn, normalizeStatementOrBlock(body));
+	bindCursor.block.instructions.push({ type: "jump", blocks: [bodyIdx] });
+
+	const bodyLastBlock = fn.blocks.at(-1)!;
+	const backIdx =
+		fn.blocks.push({
+			instructions: [{ type: "tryEnd" }, { type: "jump", blocks: [headerIdx] }],
+		}) - 1;
+	bodyLastBlock.instructions.push({ type: "jump", blocks: [backIdx] });
+	tryBegin.blocks[1] = backIdx;
+
+	// Handler: close the iterator (sync return; an async return-await is a known
+	// deviation), rethrow the original completion.
+	const handlerBlock: IRBlock = { instructions: [] };
+	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
+	const caughtRegister = nextRegisterDestination(fn);
+	handlerBlock.instructions.push({ type: "catch", registers: [caughtRegister] });
+	handlerBlock.instructions.push({
+		type: "iteratorClose",
+		registers: [iteratorRegister],
+	});
+	handlerBlock.instructions.push({ type: "throw", registers: [caughtRegister] });
 
 	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
 	exitJump.blocks[0] = exitIdx;
@@ -4036,6 +4236,11 @@ function compileYieldStarExpression(
 ) {
 	const operand = compileExpression(program, fn, cursor, expression.argument!);
 
+	// In an async generator, yield* delegates to an ASYNC iterator and awaits
+	// each inner next/throw/return result and each yielded value (the spec's
+	// Await steps in yield* + AsyncGeneratorYield).
+	const isAsync = fn.isAsync === true;
+
 	// Loop-carried registers (kept alive across the back edge by the
 	// >1-block freeing guard in the allocator).
 	const iterator = nextRegisterDestination(fn);
@@ -4046,7 +4251,7 @@ function compileYieldStarExpression(
 	const exprResult = nextRegisterDestination(fn);
 
 	cursor.block.instructions.push({
-		type: "getIterator",
+		type: isAsync ? "getAsyncIterator" : "getIterator",
 		registers: [iterator, nextMethod, operand],
 	});
 	cursor.block.instructions.push({ type: "createUndefined", registers: [sentValue] });
@@ -4110,6 +4315,18 @@ function compileYieldStarExpression(
 		});
 		block.instructions.push({ type: "jumpIf", registers: [matchReg], blocks: [target] });
 	};
+	// After an inner next/throw/return call leaves its result in `result`, await
+	// it (async delegation) and continue to the done/value check.
+	const stepAndContinue = (block: IRBlock) => {
+		if (isAsync) {
+			const stepCursor: IRCursor = { block };
+			const awaited = compileAwaitRegister(fn, stepCursor, result);
+			stepCursor.block.instructions.push({ type: "move", registers: [result, awaited] });
+			stepCursor.block.instructions.push({ type: "jump", blocks: [checkIdx] });
+		} else {
+			block.instructions.push({ type: "jump", blocks: [checkIdx] });
+		}
+	};
 
 	// header: dispatch on the resume mode.
 	modeEquals(header, RESUME_MODE_THROW, throwModeIdx);
@@ -4121,7 +4338,7 @@ function compileYieldStarExpression(
 		type: "call",
 		registers: [result, nextMethod, iterator, sentValue],
 	});
-	nextMode.instructions.push({ type: "jump", blocks: [checkIdx] });
+	stepAndContinue(nextMode);
 
 	// throw(): forward to the inner throw, or close + TypeError if absent.
 	{
@@ -4135,7 +4352,7 @@ function compileYieldStarExpression(
 			type: "call",
 			registers: [result, throwM, iterator, sentValue],
 		});
-		throwMode.instructions.push({ type: "jump", blocks: [checkIdx] });
+		stepAndContinue(throwMode);
 	}
 	noThrow.instructions.push({ type: "iteratorClose", registers: [iterator] });
 	{
@@ -4169,7 +4386,7 @@ function compileYieldStarExpression(
 			type: "call",
 			registers: [result, returnM, iterator, sentValue],
 		});
-		returnMode.instructions.push({ type: "jump", blocks: [checkIdx] });
+		stepAndContinue(returnMode);
 	}
 	emitReturn(fn, noReturn, sentValue);
 
@@ -4189,9 +4406,17 @@ function compileYieldStarExpression(
 		});
 		// The inner yield: suspend the outer generator. On resume the sent value
 		// and resume mode drive the next loop iteration (no throw/return dispatch
-		// here — the mode is forwarded into the delegation above).
-		check.instructions.push({ type: "yield", registers: [sentValue, mode, valueReg] });
-		check.instructions.push({ type: "jump", blocks: [headerIdx] });
+		// here — the mode is forwarded into the delegation above). Async
+		// delegation awaits the value first (AsyncGeneratorYield).
+		const checkCursor: IRCursor = { block: check };
+		const yieldedReg = isAsync
+			? compileAwaitRegister(fn, checkCursor, valueReg)
+			: valueReg;
+		checkCursor.block.instructions.push({
+			type: "yield",
+			registers: [sentValue, mode, yieldedReg],
+		});
+		checkCursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
 	}
 
 	// doneBlock: extract the final value. A return() resumption that finishes
@@ -4230,9 +4455,15 @@ function compileYieldExpression(
 		return compileYieldStarExpression(program, fn, cursor, expression);
 	}
 
-	const yieldedSrc = expression.argument
+	let yieldedSrc = expression.argument
 		? compileExpression(program, fn, cursor, expression.argument)
 		: compileUndefined(fn, cursor);
+
+	// AsyncGeneratorYield: an async generator awaits the operand before handing
+	// it out (so `yield somePromise` yields the resolved value).
+	if (fn.isAsync && fn.isGenerator) {
+		yieldedSrc = compileAwaitRegister(fn, cursor, yieldedSrc);
+	}
 
 	const valueDst = nextRegisterDestination(fn);
 	const modeDst = nextRegisterDestination(fn);
@@ -4241,7 +4472,24 @@ function compileYieldExpression(
 		registers: [valueDst, modeDst, yieldedSrc],
 	});
 
-	// throw() resumption: throw the sent value at the yield point.
+	return emitResumeDispatch(fn, cursor, valueDst, modeDst);
+}
+
+/**
+ * The resume-mode dispatch the compiler emits immediately after a suspend
+ * (yield or await): `if mode === THROW: throw value; if mode === RETURN:
+ * return value (through enclosing finalizers); else continue with value as the
+ * expression result`. Shared by yield and await because the resume protocol
+ * is identical — fulfilled/next deliver a value, rejected/throw raise it,
+ * return() unwinds.
+ */
+function emitResumeDispatch(
+	fn: IRFunction,
+	cursor: IRCursor,
+	valueDst: number,
+	modeDst: number,
+): number {
+	// throw() resumption: throw the sent value at the suspend point.
 	const throwBlock: IRBlock = { instructions: [] };
 	const throwIdx = fn.blocks.push(throwBlock) - 1;
 	throwBlock.instructions.push({ type: "throw", registers: [valueDst] });
@@ -4292,9 +4540,35 @@ function compileYieldExpression(
 
 	cursor.block.instructions.push({ type: "jump", blocks: [continuationIdx] });
 
-	// next() resumption continues here with the sent value.
+	// next()/fulfilled resumption continues here with the sent/resolved value.
 	cursor.block = continuation;
 	return valueDst;
+}
+
+function compileAwaitExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	expression: ESTree.AwaitExpression,
+): number {
+	const awaitedSrc = compileExpression(program, fn, cursor, expression.argument);
+	return compileAwaitRegister(fn, cursor, awaitedSrc);
+}
+
+/** Suspend on the value in awaitedSrc and continue with the settled value. */
+function compileAwaitRegister(
+	fn: IRFunction,
+	cursor: IRCursor,
+	awaitedSrc: number,
+): number {
+	const valueDst = nextRegisterDestination(fn);
+	const modeDst = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "await",
+		registers: [valueDst, modeDst, awaitedSrc],
+	});
+
+	return emitResumeDispatch(fn, cursor, valueDst, modeDst);
 }
 
 function compileExpression(
@@ -4363,6 +4637,9 @@ function compileExpression(
 		}
 		case "YieldExpression": {
 			return compileYieldExpression(program, fn, cursor, expression);
+		}
+		case "AwaitExpression": {
+			return compileAwaitExpression(program, fn, cursor, expression);
 		}
 		case "TemplateLiteral": {
 			return compileTemplateLiteral(program, fn, cursor, expression);

@@ -49,19 +49,19 @@ function producesNumber(
 		case "createF64":
 			return true;
 		case "move":
-			return repOf(instruction.registers[1]!) === "number";
+			return repOf(instruction.registers[1]) === "number";
 		case "binary": {
 			const op = instruction.operator;
 			return (
 				(op === "+" || op === "-" || op === "*" || op === "/") &&
-				repOf(instruction.registers[1]!) === "number" &&
-				repOf(instruction.registers[2]!) === "number"
+				repOf(instruction.registers[1]) === "number" &&
+				repOf(instruction.registers[2]) === "number"
 			);
 		}
 		case "unary":
 			return (
 				(instruction.operator === "-" || instruction.operator === "+") &&
-				repOf(instruction.registers[1]!) === "number"
+				repOf(instruction.registers[1]) === "number"
 			);
 		default:
 			return false;

@@ -205,7 +205,7 @@ static bool mal_json_stringify_value(MalVm *vm, MalJsonBuilder *builder, MalValu
     return true;
 }
 
-static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     MalJsonBuilder builder = {0};
 
@@ -521,7 +521,7 @@ static MalValue mal_json_parse_value(MalJsonParser *parser) {
     return mal_json_parse_number(parser);
 }
 
-static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     MalString *text = mal_ops_to_string(&vm->heap, arg_count >= 1 ? args[0] : mal_value_new_undefined());
 

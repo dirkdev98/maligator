@@ -58,6 +58,8 @@ void mal_native_function_object_init(
     mal_object_init(heap, &function->object, MAL_HEAP_NATIVE_FUNCTION_OBJECT, prototype);
     function->name = name;
     function->callback = callback;
+    function->slots = nullptr;
+    function->slot_count = 0;
     mal_native_function_define_name(heap, &function->object, name);
 }
 
@@ -73,10 +75,43 @@ MalNativeFunctionObject *mal_native_function_object_new(
     return function;
 }
 
+MalNativeFunctionObject *mal_native_function_object_new_with_slots(
+    MalHeap *heap,
+    MalObject *prototype,
+    MalString *name,
+    MalNativeFunctionCallback callback,
+    const MalValue *slots,
+    i32 slot_count
+) {
+    MalNativeFunctionObject *function = mal_native_function_object_new(heap, prototype, name, callback);
+    if (slot_count > 0) {
+        function->slots = mal_heap_alloc_raw(heap, sizeof(MalValue) * slot_count);
+        function->slot_count = slot_count;
+        for (i32 i = 0; i < slot_count; i++) {
+            function->slots[i] = slots[i];
+        }
+    }
+
+    return function;
+}
+
 MalString *mal_native_function_object_name(const MalNativeFunctionObject *function) {
     return function->name;
 }
 
 MalNativeFunctionCallback mal_native_function_object_callback(const MalNativeFunctionObject *function) {
     return function->callback;
+}
+
+MalValue mal_native_function_object_get_slot(const MalNativeFunctionObject *function, i32 index) {
+    if (index < 0 || index >= function->slot_count) {
+        return mal_value_new_undefined();
+    }
+    return function->slots[index];
+}
+
+void mal_native_function_object_set_slot(MalNativeFunctionObject *function, i32 index, MalValue value) {
+    if (index >= 0 && index < function->slot_count) {
+        function->slots[index] = value;
+    }
 }

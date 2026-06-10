@@ -81,6 +81,17 @@ typedef enum MalHeapType {
      * DataView instances (MalDataViewObject).
      */
     MAL_HEAP_DATA_VIEW_OBJECT,
+    /**
+     * Promise instances (MalPromiseObject): state, settled result, and the
+     * pending fulfill/reject reaction lists.
+     */
+    MAL_HEAP_PROMISE_OBJECT,
+    /**
+     * Iterator Helper instances (map/filter/take/drop/flatMap results +
+     * Iterator.from wrappers): MalIteratorHelperObject, carrying the lazy
+     * transform state so next/return live on %IteratorHelperPrototype%.
+     */
+    MAL_HEAP_ITERATOR_HELPER_OBJECT,
 } MalHeapType;
 
 /**

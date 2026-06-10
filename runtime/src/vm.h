@@ -39,11 +39,15 @@ typedef enum MalOpcode {
     MAL_OP_STORE_SUPER_PROPERTY,
     MAL_OP_LOAD_PROTOTYPE,
     MAL_OP_GET_ITERATOR,
+    MAL_OP_GET_ASYNC_ITERATOR,
+    MAL_OP_ITERATOR_NEXT,
     MAL_OP_ITERATOR_STEP,
     MAL_OP_ITERATOR_CLOSE,
     MAL_OP_FOR_IN_KEYS,
     MAL_OP_GENERATOR_START,
     MAL_OP_YIELD,
+    MAL_OP_ASYNC_START,
+    MAL_OP_AWAIT,
     MAL_OP_DELETE_PROPERTY,
     MAL_OP_DEFINE_ACCESSOR,
     MAL_OP_DEFINE_PROPERTY,
@@ -245,6 +249,24 @@ typedef struct MalInstruction {
         } get_iterator;
 
         /**
+         * GetIterator(source, async): the async iterator object + cached next
+         * (or the sync iterator wrapped so next returns a promise). Same shape
+         * as get_iterator; used by for-await-of.
+         */
+        struct {
+            i32 iterator_dst, next_dst, source;
+        } get_async_iterator;
+
+        /**
+         * Call the iterator's cached next() and leave the RAW result (a promise,
+         * for async iteration) in result_dst — for-await-of awaits it before
+         * unpacking. (Sync iteration uses iterator_step, which unpacks inline.)
+         */
+        struct {
+            i32 result_dst, iterator, next;
+        } iterator_next;
+
+        /**
          * Spec IteratorStep + value read: the step value and a done boolean.
          */
         struct {
@@ -276,6 +298,17 @@ typedef struct MalInstruction {
         struct {
             i32 yielded_src, value_dst, mode_dst;
         } yield;
+
+        /**
+         * await <src>: suspend the async-function frame on the value in
+         * awaited_src. The runtime resolves it to a promise and resumes the
+         * frame when it settles — fulfilled delivers the value in value_dst
+         * with a NEXT mode in mode_dst, rejected delivers the reason with a
+         * THROW mode — reusing the yield resume-dispatch the compiler emits.
+         */
+        struct {
+            i32 awaited_src, value_dst, mode_dst;
+        } await;
 
         struct {
             i32 dst, object, key;
@@ -408,6 +441,8 @@ typedef struct MalExceptionHandler {
 typedef enum MalFunctionKind {
     MAL_FUNCTION_KIND_NORMAL,
     MAL_FUNCTION_KIND_GENERATOR,
+    MAL_FUNCTION_KIND_ASYNC,
+    MAL_FUNCTION_KIND_ASYNC_GENERATOR,
 } MalFunctionKind;
 
 typedef struct MalVm MalVm;
@@ -507,6 +542,24 @@ typedef struct MalVm {
     MalValue *globals;
     MalValue intrinsics[MAL_INTRINSIC_COUNT];
     MalCompletion completion;
+
+    /**
+     * PromiseJobs microtask queue (singly-linked FIFO). Settling a promise and
+     * Promise.prototype.then append jobs here; the top-level loop drains them to
+     * empty at a baseline frame count. See microtask.h.
+     */
+    struct MalJob *job_head;
+    struct MalJob *job_tail;
+
+    /**
+     * Promises that rejected while unhandled (no reject handler attached at
+     * rejection time). Reported at the microtask checkpoint unless a handler was
+     * attached before then (re-checked via [[PromiseIsHandled]]). A growable
+     * array of promise values; a GC root once tracing exists.
+     */
+    MalValue *unhandled_rejections;
+    i32 unhandled_count;
+    i32 unhandled_capacity;
 
     /**
      * Symbol.for registry: string key -> symbol value (inline payload).
@@ -629,6 +682,12 @@ typedef MalVmFrame MalCallable;
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition);
 
 void mal_vm_free(MalVm *vm);
+
+/** Record a promise that rejected while unhandled (for the microtask checkpoint). */
+void mal_vm_note_unhandled_rejection(MalVm *vm, MalValue promise);
+
+/** Report (to stderr) any still-unhandled rejected promises, then clear the list. */
+void mal_vm_report_unhandled_rejections(MalVm *vm);
 
 MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index);
 

@@ -182,7 +182,7 @@ static void mal_builtin_object_define_from_value(MalVm *vm, MalObject *target, M
     }
 }
 
-static MalValue mal_builtin_object_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     if (arg_count > 0 && mal_value_is_object(args[0])) {
         return args[0];
@@ -191,7 +191,7 @@ static MalValue mal_builtin_object_constructor(MalVm *vm, MalValue this_value, c
     return mal_value_from_object(mal_intrinsic_new_object(vm));
 }
 
-static MalValue mal_builtin_object_define_property(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_define_property(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object.defineProperty called on non-object");
@@ -207,7 +207,7 @@ static MalValue mal_builtin_object_define_property(MalVm *vm, MalValue this_valu
     return args[0];
 }
 
-static MalValue mal_builtin_object_define_properties(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_define_properties(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object.defineProperties called on non-object");
@@ -251,7 +251,7 @@ static MalValue mal_builtin_object_descriptor_object(MalVm *vm, MalPropertyDesc 
     return mal_value_from_object(result);
 }
 
-static MalValue mal_builtin_object_get_own_property_descriptor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_get_own_property_descriptor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
         return mal_value_new_undefined();
@@ -270,7 +270,7 @@ static MalValue mal_builtin_object_get_own_property_descriptor(MalVm *vm, MalVal
     return mal_builtin_object_descriptor_object(vm, lookup.desc);
 }
 
-static MalValue mal_builtin_object_get_own_property_descriptors(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_get_own_property_descriptors(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     MalValue target = mal_builtin_object_arg(args, arg_count, 0);
     if (mal_value_is_nil(target)) {
@@ -397,7 +397,7 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
     return mal_value_from_array_object(result);
 }
 
-static MalValue mal_builtin_object_keys(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_keys(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_object_collect(
         vm,
@@ -407,7 +407,7 @@ static MalValue mal_builtin_object_keys(MalVm *vm, MalValue this_value, const Ma
     );
 }
 
-static MalValue mal_builtin_object_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_object_collect(
         vm,
@@ -417,7 +417,7 @@ static MalValue mal_builtin_object_values(MalVm *vm, MalValue this_value, const 
     );
 }
 
-static MalValue mal_builtin_object_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_object_collect(
         vm,
@@ -427,7 +427,7 @@ static MalValue mal_builtin_object_entries(MalVm *vm, MalValue this_value, const
     );
 }
 
-static MalValue mal_builtin_object_get_own_property_names(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_get_own_property_names(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_object_collect(
         vm,
@@ -437,7 +437,7 @@ static MalValue mal_builtin_object_get_own_property_names(MalVm *vm, MalValue th
     );
 }
 
-static MalValue mal_builtin_object_assign(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_assign(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
@@ -463,7 +463,7 @@ static MalValue mal_builtin_object_assign(MalVm *vm, MalValue this_value, const 
     return args[0];
 }
 
-static MalValue mal_builtin_object_create(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_create(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     MalValue prototype_value = mal_builtin_object_arg(args, arg_count, 0);
     if (!mal_value_is_object(prototype_value) && !mal_value_is_null(prototype_value)) {
@@ -489,7 +489,7 @@ static MalValue mal_builtin_object_create(MalVm *vm, MalValue this_value, const 
     return mal_value_from_object(result);
 }
 
-static MalValue mal_builtin_object_get_prototype_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_get_prototype_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
@@ -500,7 +500,7 @@ static MalValue mal_builtin_object_get_prototype_of(MalVm *vm, MalValue this_val
     return prototype != nullptr ? mal_value_from_object(prototype) : mal_value_new_null();
 }
 
-static MalValue mal_builtin_object_set_prototype_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_set_prototype_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     if (arg_count < 2 || !mal_value_is_object(args[0])) {
         return arg_count > 0 ? args[0] : mal_value_new_undefined();
@@ -521,7 +521,7 @@ static MalValue mal_builtin_object_set_prototype_of(MalVm *vm, MalValue this_val
     return args[0];
 }
 
-static MalValue mal_builtin_object_prevent_extensions(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_prevent_extensions(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
@@ -532,7 +532,7 @@ static MalValue mal_builtin_object_prevent_extensions(MalVm *vm, MalValue this_v
     return args[0];
 }
 
-static MalValue mal_builtin_object_is_extensible(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_is_extensible(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
@@ -617,25 +617,25 @@ static MalValue mal_builtin_object_test_integrity(const MalValue *args, i32 arg_
     return mal_value_new_boolean(true);
 }
 
-static MalValue mal_builtin_object_freeze(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_freeze(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     return mal_builtin_object_set_integrity(args, arg_count, true);
 }
 
-static MalValue mal_builtin_object_seal(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_seal(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     return mal_builtin_object_set_integrity(args, arg_count, false);
 }
 
-static MalValue mal_builtin_object_is_frozen(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_is_frozen(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     return mal_builtin_object_test_integrity(args, arg_count, true);
 }
 
-static MalValue mal_builtin_object_is_sealed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_is_sealed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     return mal_builtin_object_test_integrity(args, arg_count, false);
@@ -649,7 +649,7 @@ static bool mal_builtin_object_is_negative_zero(MalValue value) {
     return mal_value_is_f64(value) && mal_value_to_f64(value) == 0.0 && signbit(mal_value_to_f64(value));
 }
 
-static MalValue mal_builtin_object_is(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_is(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     MalValue left = mal_builtin_object_arg(args, arg_count, 0);
@@ -675,7 +675,7 @@ static MalValue mal_builtin_object_has_own_with_target(MalVm *vm, MalValue targe
     return mal_value_new_boolean(mal_object_get_own(mal_value_to_object(target), key).present);
 }
 
-static MalValue mal_builtin_object_has_own(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_has_own(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_object_has_own_with_target(
         vm,
@@ -684,11 +684,11 @@ static MalValue mal_builtin_object_has_own(MalVm *vm, MalValue this_value, const
     );
 }
 
-static MalValue mal_builtin_object_prototype_has_own_property(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_prototype_has_own_property(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     return mal_builtin_object_has_own_with_target(vm, this_value, mal_builtin_object_arg(args, arg_count, 0));
 }
 
-static MalValue mal_builtin_object_prototype_is_prototype_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_prototype_is_prototype_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     if (!mal_value_is_object(this_value) || arg_count < 1 || !mal_value_is_object(args[0])) {
         return mal_value_new_boolean(false);
@@ -707,7 +707,7 @@ static MalValue mal_builtin_object_prototype_is_prototype_of(MalVm *vm, MalValue
     return mal_value_new_boolean(false);
 }
 
-static MalValue mal_builtin_object_prototype_property_is_enumerable(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_prototype_property_is_enumerable(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalKey key;
     if (!mal_value_is_object(this_value) || !mal_vm_value_to_property_key(vm, mal_builtin_object_arg(args, arg_count, 0), &key)) {
         return mal_value_new_boolean(false);
@@ -717,14 +717,14 @@ static MalValue mal_builtin_object_prototype_property_is_enumerable(MalVm *vm, M
     return mal_value_new_boolean(lookup.present && (lookup.desc.flags & MAL_PROPERTY_ENUMERABLE));
 }
 
-static MalValue mal_builtin_object_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) args;
     (void) arg_count;
     return this_value;
 }
 
-MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
 
@@ -762,7 +762,7 @@ MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, 
     return mal_value_from_string(mal_intrinsic_ascii(vm, tag));
 }
 
-static MalValue mal_builtin_object_get_own_property_symbols(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_get_own_property_symbols(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     MalValue target = mal_builtin_object_arg(args, arg_count, 0);
     if (mal_value_is_nil(target)) {
@@ -822,7 +822,7 @@ static MalValue mal_builtin_object_indexed(MalVm *vm, MalValue target, u32 index
     return out;
 }
 
-static MalValue mal_builtin_object_from_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_from_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
 
     // A missing argument throws through GetIterator on undefined.
@@ -867,7 +867,7 @@ static MalValue mal_builtin_object_from_entries(MalVm *vm, MalValue this_value, 
     }
 }
 
-static MalValue mal_builtin_object_group_by(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_group_by(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
 
     if (arg_count < 2 || !mal_value_is_callable(args[1])) {
@@ -947,7 +947,7 @@ static MalObject *mal_builtin_object_receiver_holder(MalVm *vm, MalValue this_va
     return nullptr;
 }
 
-static MalValue mal_builtin_object_prototype_to_locale_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_prototype_to_locale_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     if (mal_value_is_nil(this_value)) {
@@ -978,7 +978,7 @@ static MalValue mal_builtin_object_prototype_to_locale_string(MalVm *vm, MalValu
     return completion.value;
 }
 
-static MalValue mal_builtin_object_proto_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_proto_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     if (mal_value_is_nil(this_value)) {
@@ -996,7 +996,7 @@ static MalValue mal_builtin_object_proto_getter(MalVm *vm, MalValue this_value, 
     return holder != nullptr ? mal_value_from_object(holder) : mal_value_new_null();
 }
 
-static MalValue mal_builtin_object_proto_setter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_proto_setter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     if (mal_value_is_nil(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
         return mal_value_new_undefined();
@@ -1064,11 +1064,11 @@ static MalValue mal_builtin_object_prototype_define_accessor(MalVm *vm, MalValue
     return mal_value_new_undefined();
 }
 
-static MalValue mal_builtin_object_prototype_define_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_prototype_define_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     return mal_builtin_object_prototype_define_accessor(vm, this_value, args, arg_count, false);
 }
 
-static MalValue mal_builtin_object_prototype_define_setter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_prototype_define_setter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     return mal_builtin_object_prototype_define_accessor(vm, this_value, args, arg_count, true);
 }
 
@@ -1096,11 +1096,11 @@ static MalValue mal_builtin_object_prototype_lookup_accessor(MalVm *vm, MalValue
     return is_setter ? resolution.desc.setter : resolution.desc.getter;
 }
 
-static MalValue mal_builtin_object_prototype_lookup_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_prototype_lookup_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     return mal_builtin_object_prototype_lookup_accessor(vm, this_value, args, arg_count, false);
 }
 
-static MalValue mal_builtin_object_prototype_lookup_setter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_object_prototype_lookup_setter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     return mal_builtin_object_prototype_lookup_accessor(vm, this_value, args, arg_count, true);
 }
 

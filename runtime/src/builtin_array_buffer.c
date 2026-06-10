@@ -86,12 +86,12 @@ static MalValue mal_builtin_array_buffer_construct(MalVm *vm, const MalValue *ar
     return mal_value_from_array_buffer_object(buffer);
 }
 
-static MalValue mal_builtin_array_buffer_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_array_buffer_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_array_buffer_construct(vm, args, arg_count, new_target, false);
 }
 
-static MalValue mal_builtin_shared_array_buffer_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_shared_array_buffer_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_array_buffer_construct(vm, args, arg_count, new_target, true);
 }
@@ -104,7 +104,7 @@ static MalArrayBufferObject *mal_builtin_array_buffer_this(MalVm *vm, MalValue t
     return mal_value_to_array_buffer_object(this_value);
 }
 
-static MalValue mal_builtin_array_buffer_is_view(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_array_buffer_is_view(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) this_value;
     (void) new_target;
@@ -112,7 +112,7 @@ static MalValue mal_builtin_array_buffer_is_view(MalVm *vm, MalValue this_value,
     return mal_value_new_boolean(mal_value_is_typed_array_object(arg) || mal_value_is_data_view_object(arg));
 }
 
-static MalValue mal_builtin_array_buffer_byte_length_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_array_buffer_byte_length_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -123,7 +123,7 @@ static MalValue mal_builtin_array_buffer_byte_length_getter(MalVm *vm, MalValue 
     return mal_value_from_i32((i32) buffer->byte_length);
 }
 
-static MalValue mal_builtin_array_buffer_max_byte_length_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_array_buffer_max_byte_length_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -134,7 +134,7 @@ static MalValue mal_builtin_array_buffer_max_byte_length_getter(MalVm *vm, MalVa
     return mal_value_from_i32((i32) buffer->max_byte_length);
 }
 
-static MalValue mal_builtin_array_buffer_resizable_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_array_buffer_resizable_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -145,7 +145,7 @@ static MalValue mal_builtin_array_buffer_resizable_getter(MalVm *vm, MalValue th
     return mal_value_new_boolean(buffer->resizable);
 }
 
-static MalValue mal_builtin_array_buffer_detached_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_array_buffer_detached_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -172,7 +172,7 @@ static u32 mal_array_buffer_clamp(MalValue value, u32 length, u32 fallback) {
     return number > length ? length : (u32) number;
 }
 
-static MalValue mal_builtin_array_buffer_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_array_buffer_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalArrayBufferObject *buffer = mal_builtin_array_buffer_this(vm, this_value, false);
     if (buffer == nullptr) {
@@ -202,7 +202,7 @@ static MalValue mal_builtin_array_buffer_slice(MalVm *vm, MalValue this_value, c
     return mal_value_from_array_buffer_object(result);
 }
 
-static MalValue mal_builtin_array_buffer_resize(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_array_buffer_resize(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalArrayBufferObject *buffer = mal_builtin_array_buffer_this(vm, this_value, false);
     if (buffer == nullptr) {
@@ -220,7 +220,7 @@ static MalValue mal_builtin_array_buffer_resize(MalVm *vm, MalValue this_value, 
     return mal_value_new_undefined();
 }
 
-static MalValue mal_builtin_array_buffer_transfer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_array_buffer_transfer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalArrayBufferObject *buffer = mal_builtin_array_buffer_this(vm, this_value, false);
     if (buffer == nullptr) {
@@ -254,7 +254,7 @@ static MalValue mal_builtin_array_buffer_transfer(MalVm *vm, MalValue this_value
 }
 
 // @@species getter returns the receiver (the default behavior).
-static MalValue mal_builtin_array_buffer_species_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_array_buffer_species_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) args;
     (void) arg_count;

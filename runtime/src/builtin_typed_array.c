@@ -86,7 +86,7 @@ static bool mal_ta_copy_elements(MalVm *vm, MalTypedArrayObject *dst, u32 dst_st
     return true;
 }
 
-static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     if (mal_value_is_undefined(new_target)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Constructor TypedArray requires 'new'");
         return mal_value_new_undefined();
@@ -242,7 +242,7 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
     return result;
 }
 
-static MalValue mal_builtin_typed_array_abstract_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_typed_array_abstract_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) args;
     (void) arg_count;
@@ -252,9 +252,9 @@ static MalValue mal_builtin_typed_array_abstract_constructor(MalVm *vm, MalValue
 }
 
 #define MAL_TA_CONSTRUCTOR(fn_name, kind_value) \
-    static MalValue fn_name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) { \
+    static MalValue fn_name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) { \
         (void) this_value; \
-        return mal_typed_array_construct(vm, kind_value, args, arg_count, new_target); \
+        return mal_typed_array_construct(vm, kind_value, args, arg_count, new_target, callee); \
     }
 
 MAL_TA_CONSTRUCTOR(mal_ta_ctor_int8, MAL_TA_INT8)
@@ -285,7 +285,7 @@ static MalNativeFunctionCallback mal_ta_constructor_callbacks[MAL_TA_KIND_COUNT]
 
 // ---- getters -------------------------------------------------------------
 
-static MalValue mal_ta_get_length(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_get_length(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -293,7 +293,7 @@ static MalValue mal_ta_get_length(MalVm *vm, MalValue this_value, const MalValue
     return array == nullptr ? mal_value_new_undefined() : mal_value_from_i32((i32) mal_typed_array_object_length(array));
 }
 
-static MalValue mal_ta_get_byte_length(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_get_byte_length(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -301,7 +301,7 @@ static MalValue mal_ta_get_byte_length(MalVm *vm, MalValue this_value, const Mal
     return array == nullptr ? mal_value_new_undefined() : mal_value_from_i32((i32) mal_typed_array_object_byte_length(array));
 }
 
-static MalValue mal_ta_get_byte_offset(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_get_byte_offset(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -314,7 +314,7 @@ static MalValue mal_ta_get_byte_offset(MalVm *vm, MalValue this_value, const Mal
     return mal_value_from_i32((i32) offset);
 }
 
-static MalValue mal_ta_get_buffer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_get_buffer(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -322,7 +322,7 @@ static MalValue mal_ta_get_buffer(MalVm *vm, MalValue this_value, const MalValue
     return array == nullptr ? mal_value_new_undefined() : mal_value_from_array_buffer_object(array->buffer);
 }
 
-static MalValue mal_ta_get_to_string_tag(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_get_to_string_tag(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) args;
     (void) arg_count;
@@ -335,7 +335,7 @@ static MalValue mal_ta_get_to_string_tag(MalVm *vm, MalValue this_value, const M
 
 // ---- prototype methods ---------------------------------------------------
 
-static MalValue mal_ta_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
     if (array == nullptr) {
@@ -353,7 +353,7 @@ static MalValue mal_ta_at(MalVm *vm, MalValue this_value, const MalValue *args, 
     return mal_typed_array_object_get(vm, array, (u32) index);
 }
 
-static MalValue mal_ta_fill(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_fill(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
     if (array == nullptr) {
@@ -372,7 +372,7 @@ static MalValue mal_ta_fill(MalVm *vm, MalValue this_value, const MalValue *args
     return this_value;
 }
 
-static MalValue mal_ta_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
     if (array == nullptr) {
@@ -421,7 +421,7 @@ static MalValue mal_ta_set(MalVm *vm, MalValue this_value, const MalValue *args,
     return mal_value_new_undefined();
 }
 
-static MalValue mal_ta_subarray(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_subarray(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
     if (array == nullptr) {
@@ -440,7 +440,7 @@ static MalValue mal_ta_subarray(MalVm *vm, MalValue this_value, const MalValue *
     return mal_value_from_typed_array_object(result);
 }
 
-static MalValue mal_ta_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
     if (array == nullptr) {
@@ -456,7 +456,7 @@ static MalValue mal_ta_slice(MalVm *vm, MalValue this_value, const MalValue *arg
     return result;
 }
 
-static MalValue mal_ta_copy_within(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_copy_within(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
     if (array == nullptr) {
@@ -478,7 +478,7 @@ static MalValue mal_ta_copy_within(MalVm *vm, MalValue this_value, const MalValu
     return this_value;
 }
 
-static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
     if (array == nullptr) {
@@ -500,11 +500,11 @@ static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args
     return result;
 }
 
-static MalValue mal_ta_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
-    return mal_ta_join(vm, this_value, args, arg_count, new_target);
+static MalValue mal_ta_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    return mal_ta_join(vm, this_value, args, arg_count, new_target, callee);
 }
 
-static MalValue mal_ta_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
     if (array == nullptr) {
@@ -521,7 +521,7 @@ static MalValue mal_ta_index_of(MalVm *vm, MalValue this_value, const MalValue *
     return mal_value_from_i32(-1);
 }
 
-static MalValue mal_ta_last_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_last_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
     if (array == nullptr) {
@@ -537,7 +537,7 @@ static MalValue mal_ta_last_index_of(MalVm *vm, MalValue this_value, const MalVa
     return mal_value_from_i32(-1);
 }
 
-static MalValue mal_ta_includes(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_includes(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
     if (array == nullptr) {
@@ -557,7 +557,7 @@ static MalValue mal_ta_includes(MalVm *vm, MalValue this_value, const MalValue *
     return mal_value_new_boolean(false);
 }
 
-static MalValue mal_ta_reverse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_reverse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -697,7 +697,7 @@ static MalValue mal_ta_iterate(MalVm *vm, MalValue this_value, const MalValue *a
 }
 
 #define MAL_TA_ITER_METHOD(fn_name, op_value) \
-    static MalValue fn_name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) { \
+    static MalValue fn_name(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) { \
         (void) new_target; \
         return mal_ta_iterate(vm, this_value, args, arg_count, op_value); \
     }
@@ -750,12 +750,12 @@ static MalValue mal_ta_reduce_impl(MalVm *vm, MalValue this_value, const MalValu
     return accumulator;
 }
 
-static MalValue mal_ta_reduce(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_reduce(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     return mal_ta_reduce_impl(vm, this_value, args, arg_count, false);
 }
 
-static MalValue mal_ta_reduce_right(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_reduce_right(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     return mal_ta_reduce_impl(vm, this_value, args, arg_count, true);
 }
@@ -784,7 +784,7 @@ static i32 mal_ta_default_compare(MalValue a, MalValue b) {
     return 0;
 }
 
-static MalValue mal_ta_sort(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_sort(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
     if (array == nullptr) {
@@ -840,7 +840,7 @@ static MalValue mal_ta_sort(MalVm *vm, MalValue this_value, const MalValue *args
     return this_value;
 }
 
-static MalValue mal_ta_keys(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_keys(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -850,7 +850,7 @@ static MalValue mal_ta_keys(MalVm *vm, MalValue this_value, const MalValue *args
     return mal_vm_new_builtin_iterator(vm, MAL_ITERATOR_ARRAY_KEYS, this_value);
 }
 
-static MalValue mal_ta_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -860,7 +860,7 @@ static MalValue mal_ta_values(MalVm *vm, MalValue this_value, const MalValue *ar
     return mal_vm_new_builtin_iterator(vm, MAL_ITERATOR_ARRAY_VALUES, this_value);
 }
 
-static MalValue mal_ta_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     (void) new_target;
@@ -883,7 +883,7 @@ static MalTypedArrayKind mal_ta_kind_for_constructor(MalVm *vm, MalValue constru
     return MAL_TA_KIND_COUNT;
 }
 
-static MalValue mal_ta_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayKind kind = mal_ta_kind_for_constructor(vm, this_value);
     if (kind == MAL_TA_KIND_COUNT) {
@@ -901,7 +901,7 @@ static MalValue mal_ta_of(MalVm *vm, MalValue this_value, const MalValue *args, 
     return result;
 }
 
-static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayKind kind = mal_ta_kind_for_constructor(vm, this_value);
     if (kind == MAL_TA_KIND_COUNT) {
@@ -998,7 +998,7 @@ static void mal_ta_define_getter(MalVm *vm, MalObject *object, MalKey key, const
     mal_object_define_own(object, key, &desc);
 }
 
-static MalValue mal_ta_species_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_ta_species_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) args;
     (void) arg_count;

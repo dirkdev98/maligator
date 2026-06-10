@@ -30,6 +30,7 @@ export interface VmExceptionHandler {
 export interface VmFunction {
 	nameStringIndex: number;
 	isGenerator: boolean;
+	isAsync: boolean;
 	parameterCount: number;
 	length: number;
 	registerCount: number;
@@ -162,8 +163,17 @@ export type VmInstruction =
 			opcode: "GENERATOR_START";
 	  }
 	| {
+			opcode: "ASYNC_START";
+	  }
+	| {
 			opcode: "YIELD";
 			yieldedSrc: number;
+			valueDst: number;
+			modeDst: number;
+	  }
+	| {
+			opcode: "AWAIT";
+			awaitedSrc: number;
 			valueDst: number;
 			modeDst: number;
 	  }
@@ -223,6 +233,18 @@ export type VmInstruction =
 			iteratorDst: number;
 			nextDst: number;
 			source: number;
+	  }
+	| {
+			opcode: "GET_ASYNC_ITERATOR";
+			iteratorDst: number;
+			nextDst: number;
+			source: number;
+	  }
+	| {
+			opcode: "ITERATOR_NEXT";
+			resultDst: number;
+			iterator: number;
+			next: number;
 	  }
 	| {
 			opcode: "ITERATOR_STEP";
@@ -417,6 +439,7 @@ function lowerFunctionToVmFunction(fn: IRFunction): VmFunction {
 	return {
 		nameStringIndex: fn.nameStringIndex,
 		isGenerator: fn.isGenerator ?? false,
+		isAsync: fn.isAsync ?? false,
 		parameterCount: fn.parameterCount,
 		length: fn.length,
 		registerCount: fn.nextRegisterDestination,
@@ -622,12 +645,23 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "GENERATOR_START",
 			};
+		case "asyncStart":
+			return {
+				opcode: "ASYNC_START",
+			};
 		case "yield":
 			return {
 				opcode: "YIELD",
 				valueDst: instruction.registers[0],
 				modeDst: instruction.registers[1],
 				yieldedSrc: instruction.registers[2],
+			};
+		case "await":
+			return {
+				opcode: "AWAIT",
+				valueDst: instruction.registers[0],
+				modeDst: instruction.registers[1],
+				awaitedSrc: instruction.registers[2],
 			};
 		case "loadIntrinsic":
 			return {
@@ -701,6 +735,20 @@ function lowerInstructionToVmInstruction(
 				iteratorDst: instruction.registers[0],
 				nextDst: instruction.registers[1],
 				source: instruction.registers[2],
+			};
+		case "getAsyncIterator":
+			return {
+				opcode: "GET_ASYNC_ITERATOR",
+				iteratorDst: instruction.registers[0],
+				nextDst: instruction.registers[1],
+				source: instruction.registers[2],
+			};
+		case "iteratorNext":
+			return {
+				opcode: "ITERATOR_NEXT",
+				resultDst: instruction.registers[0],
+				iterator: instruction.registers[1],
+				next: instruction.registers[2],
 			};
 		case "iteratorStep":
 			return {

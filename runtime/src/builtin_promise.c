@@ -1,0 +1,1024 @@
+#include "builtin_promise.h"
+
+#include "array_object.h"
+#include "builtin_array.h"
+#include "builtin_error.h"
+#include "builtin_iterator.h"
+#include "function_object.h"
+#include "heap_string.h"
+#include "intrinsics.h"
+#include "microtask.h"
+#include "object_ops.h"
+#include "promise_object.h"
+#include "value.h"
+#include "vm.h"
+#include "vm_ops.h"
+
+// Internal-slot layout for the resolving functions (CreateResolvingFunctions).
+// A pair shares one [[AlreadyResolved]] guard: the resolve function owns it in
+// slot 1, and the reject function points at the resolve function so both read
+// and write the same cell.
+enum {
+    MAL_PROMISE_RESOLVE_SLOT_PROMISE = 0,
+    MAL_PROMISE_RESOLVE_SLOT_ALREADY_RESOLVED = 1,
+};
+enum {
+    MAL_PROMISE_REJECT_SLOT_PROMISE = 0,
+    MAL_PROMISE_REJECT_SLOT_RESOLVE_FN = 1,
+};
+
+static MalCompletion mal_promise_normal(void) {
+    return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+}
+
+static MalObject *mal_promise_function_prototype(MalVm *vm) {
+    return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+}
+
+/** Build an error value without leaving the throw pending (for rejecting with it). */
+static MalValue mal_promise_take_error(MalVm *vm, MalIntrinsic prototype_slot, const byte *message) {
+    mal_vm_throw_error(vm, prototype_slot, message);
+    MalValue error = vm->completion.value;
+    vm->completion = mal_promise_normal();
+    return error;
+}
+
+// --- Resolving functions -----------------------------------------------------
+
+static MalValue mal_promise_resolve_function(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    if (mal_value_is_truthy(mal_native_function_object_get_slot(self, MAL_PROMISE_RESOLVE_SLOT_ALREADY_RESOLVED))) {
+        return mal_value_new_undefined();
+    }
+    mal_native_function_object_set_slot(self, MAL_PROMISE_RESOLVE_SLOT_ALREADY_RESOLVED, mal_value_new_boolean(true));
+
+    MalValue promise_value = mal_native_function_object_get_slot(self, MAL_PROMISE_RESOLVE_SLOT_PROMISE);
+    MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
+    MalValue resolution = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+
+    // Resolving a promise with itself is a chaining cycle: reject with TypeError.
+    if (resolution == promise_value) {
+        MalValue error = mal_promise_take_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Chaining cycle detected for promise");
+        mal_promise_reject(vm, promise, error);
+        return mal_value_new_undefined();
+    }
+
+    if (!mal_value_is_object(resolution)) {
+        mal_promise_fulfill(vm, promise, resolution);
+        return mal_value_new_undefined();
+    }
+
+    // then = Get(resolution, "then"); a throwing getter rejects the promise.
+    MalValue then;
+    if (!mal_vm_get_property(vm, resolution, mal_intrinsic_string_key(vm, "then"), &then)) {
+        MalValue error = vm->completion.value;
+        vm->completion = mal_promise_normal();
+        mal_promise_reject(vm, promise, error);
+        return mal_value_new_undefined();
+    }
+
+    if (!mal_value_is_callable(then)) {
+        mal_promise_fulfill(vm, promise, resolution);
+        return mal_value_new_undefined();
+    }
+
+    // Assimilate the thenable on a fresh microtask with its own resolving pair.
+    MalValue job_resolve;
+    MalValue job_reject;
+    mal_promise_create_resolving(vm, promise_value, &job_resolve, &job_reject);
+    mal_vm_enqueue_thenable_job(vm, then, resolution, job_resolve, job_reject);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_promise_reject_function(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    // The shared guard lives on the paired resolve function.
+    MalValue resolve_value = mal_native_function_object_get_slot(self, MAL_PROMISE_REJECT_SLOT_RESOLVE_FN);
+    MalNativeFunctionObject *resolve = mal_value_to_native_function_object(resolve_value);
+    if (mal_value_is_truthy(mal_native_function_object_get_slot(resolve, MAL_PROMISE_RESOLVE_SLOT_ALREADY_RESOLVED))) {
+        return mal_value_new_undefined();
+    }
+    mal_native_function_object_set_slot(resolve, MAL_PROMISE_RESOLVE_SLOT_ALREADY_RESOLVED, mal_value_new_boolean(true));
+
+    MalValue promise_value = mal_native_function_object_get_slot(self, MAL_PROMISE_REJECT_SLOT_PROMISE);
+    MalValue reason = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    mal_promise_reject(vm, mal_value_to_promise_object(promise_value), reason);
+    return mal_value_new_undefined();
+}
+
+/** Give a resolving function the spec-mandated name "" and length 1. */
+static MalNativeFunctionObject *mal_promise_new_resolving_fn(
+    MalVm *vm,
+    MalNativeFunctionCallback callback,
+    const MalValue *slots,
+    i32 slot_count
+) {
+    MalNativeFunctionObject *fn = mal_native_function_object_new_with_slots(
+        &vm->heap,
+        mal_promise_function_prototype(vm),
+        mal_intrinsic_ascii(vm, ""),
+        callback,
+        slots,
+        slot_count
+    );
+    mal_intrinsic_define_data(vm, (MalObject *) fn, "length", mal_value_from_i32(1), MAL_PROPERTY_CONFIGURABLE);
+    return fn;
+}
+
+void mal_promise_create_resolving(MalVm *vm, MalValue promise, MalValue *out_resolve, MalValue *out_reject) {
+    MalValue resolve_slots[2] = {promise, mal_value_new_boolean(false)};
+    MalNativeFunctionObject *resolve = mal_promise_new_resolving_fn(vm, mal_promise_resolve_function, resolve_slots, 2);
+    MalValue resolve_value = mal_value_from_native_function_object(resolve);
+
+    MalValue reject_slots[2] = {promise, resolve_value};
+    MalNativeFunctionObject *reject = mal_promise_new_resolving_fn(vm, mal_promise_reject_function, reject_slots, 2);
+
+    *out_resolve = resolve_value;
+    *out_reject = mal_value_from_native_function_object(reject);
+}
+
+// --- NewPromiseCapability ----------------------------------------------------
+
+enum {
+    MAL_PROMISE_CAP_EXECUTOR_SLOT_RESOLVE = 0,
+    MAL_PROMISE_CAP_EXECUTOR_SLOT_REJECT = 1,
+};
+
+static MalValue mal_promise_capabilities_executor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    if (mal_value_is_callable(mal_native_function_object_get_slot(self, MAL_PROMISE_CAP_EXECUTOR_SLOT_RESOLVE)) ||
+        mal_value_is_callable(mal_native_function_object_get_slot(self, MAL_PROMISE_CAP_EXECUTOR_SLOT_REJECT))) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise capabilities executor already invoked");
+        return mal_value_new_undefined();
+    }
+
+    mal_native_function_object_set_slot(self, MAL_PROMISE_CAP_EXECUTOR_SLOT_RESOLVE, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    mal_native_function_object_set_slot(self, MAL_PROMISE_CAP_EXECUTOR_SLOT_REJECT, arg_count >= 2 ? args[1] : mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+bool mal_promise_new_capability(MalVm *vm, MalValue constructor, MalValue *out_promise, MalValue *out_resolve, MalValue *out_reject) {
+    // Fast path: the built-in %Promise% constructor needs no executor round-trip.
+    if (constructor == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR]) {
+        MalPromiseObject *promise = mal_promise_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
+        MalValue promise_value = mal_value_from_promise_object(promise);
+        mal_promise_create_resolving(vm, promise_value, out_resolve, out_reject);
+        *out_promise = promise_value;
+        return true;
+    }
+
+    if (!mal_value_is_callable(constructor)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise constructor is not a constructor");
+        return false;
+    }
+
+    MalValue executor_slots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalNativeFunctionObject *executor = mal_native_function_object_new_with_slots(
+        &vm->heap,
+        mal_promise_function_prototype(vm),
+        mal_intrinsic_ascii(vm, ""),
+        mal_promise_capabilities_executor,
+        executor_slots,
+        2
+    );
+    MalValue executor_value = mal_value_from_native_function_object(executor);
+
+    MalCompletion completion = mal_vm_construct_value(vm, constructor, &executor_value, 1);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        return false;
+    }
+
+    MalValue resolve = mal_native_function_object_get_slot(executor, MAL_PROMISE_CAP_EXECUTOR_SLOT_RESOLVE);
+    MalValue reject = mal_native_function_object_get_slot(executor, MAL_PROMISE_CAP_EXECUTOR_SLOT_REJECT);
+    if (!mal_value_is_callable(resolve) || !mal_value_is_callable(reject)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise resolve/reject is not callable");
+        return false;
+    }
+
+    *out_promise = completion.value;
+    *out_resolve = resolve;
+    *out_reject = reject;
+    return true;
+}
+
+// --- Constructor -------------------------------------------------------------
+
+static MalObject *mal_promise_resolve_prototype(MalVm *vm, MalValue new_target) {
+    MalValue prototype;
+    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
+        return nullptr;
+    }
+    if (mal_value_is_object(prototype)) {
+        return mal_value_to_object(prototype);
+    }
+    return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]);
+}
+
+static MalValue mal_promise_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) callee;
+
+    if (mal_value_is_undefined(new_target)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Constructor Promise requires 'new'");
+        return mal_value_new_undefined();
+    }
+
+    MalValue executor = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_callable(executor)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise executor is not a function");
+        return mal_value_new_undefined();
+    }
+
+    MalObject *prototype = mal_promise_resolve_prototype(vm, new_target);
+    if (prototype == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    MalPromiseObject *promise = mal_promise_object_new(&vm->heap, prototype);
+    MalValue promise_value = mal_value_from_promise_object(promise);
+
+    MalValue resolve;
+    MalValue reject;
+    mal_promise_create_resolving(vm, promise_value, &resolve, &reject);
+
+    MalValue executor_args[2] = {resolve, reject};
+    MalCompletion completion = mal_vm_call_value(vm, executor, mal_value_new_undefined(), executor_args, 2);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        // An abrupt executor rejects the promise with the thrown value.
+        MalValue error = completion.value;
+        vm->completion = mal_promise_normal();
+        mal_vm_call_value(vm, reject, mal_value_new_undefined(), &error, 1);
+        vm->completion = mal_promise_normal();
+    }
+
+    return promise_value;
+}
+
+// --- then / catch ------------------------------------------------------------
+
+/** PerformPromiseThen: register/schedule reactions against a result capability. */
+void mal_promise_perform_then(
+    MalVm *vm,
+    MalValue promise_value,
+    MalValue on_fulfilled,
+    MalValue on_rejected,
+    MalValue cap_resolve,
+    MalValue cap_reject
+) {
+    MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
+    MalValue fulfill_handler = mal_value_is_callable(on_fulfilled) ? on_fulfilled : mal_value_new_undefined();
+    MalValue reject_handler = mal_value_is_callable(on_rejected) ? on_rejected : mal_value_new_undefined();
+
+    promise->is_handled = true;
+
+    switch (promise->state) {
+        case MAL_PROMISE_PENDING:
+            mal_promise_append_reaction(promise, false, fulfill_handler, cap_resolve, cap_reject);
+            mal_promise_append_reaction(promise, true, reject_handler, cap_resolve, cap_reject);
+            break;
+        case MAL_PROMISE_FULFILLED:
+            mal_vm_enqueue_reaction_job(vm, fulfill_handler, false, cap_resolve, cap_reject, promise->result);
+            break;
+        case MAL_PROMISE_REJECTED:
+            mal_vm_enqueue_reaction_job(vm, reject_handler, true, cap_resolve, cap_reject, promise->result);
+            break;
+    }
+}
+
+/** SpeciesConstructor(O, %Promise%) for the result capability of then. */
+static MalValue mal_promise_species_constructor(MalVm *vm, MalValue object) {
+    MalValue constructor;
+    if (!mal_vm_get_property(vm, object, mal_intrinsic_string_key(vm, "constructor"), &constructor)) {
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_undefined(constructor)) {
+        return vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR];
+    }
+    if (!mal_value_is_object(constructor)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "constructor is not an object");
+        return mal_value_new_undefined();
+    }
+
+    MalValue species;
+    if (!mal_vm_get_property(vm, constructor, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_SPECIES), &species)) {
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_nil(species)) {
+        return vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR];
+    }
+    if (!mal_value_is_callable(species)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.species is not a constructor");
+        return mal_value_new_undefined();
+    }
+    return species;
+}
+
+static MalValue mal_promise_prototype_then(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+
+    if (!mal_value_is_promise_object(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise.prototype.then called on non-Promise");
+        return mal_value_new_undefined();
+    }
+
+    MalValue constructor = mal_promise_species_constructor(vm, this_value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue cap_promise;
+    MalValue cap_resolve;
+    MalValue cap_reject;
+    if (!mal_promise_new_capability(vm, constructor, &cap_promise, &cap_resolve, &cap_reject)) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue on_fulfilled = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue on_rejected = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    mal_promise_perform_then(vm, this_value, on_fulfilled, on_rejected, cap_resolve, cap_reject);
+    return cap_promise;
+}
+
+static MalValue mal_promise_prototype_catch(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+
+    // catch(onRejected) === this.then(undefined, onRejected) through the real
+    // (possibly overridden) then, so Get it rather than calling perform_then.
+    MalValue then;
+    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, "then"), &then)) {
+        return mal_value_new_undefined();
+    }
+    MalValue then_args[2] = {mal_value_new_undefined(), arg_count >= 1 ? args[0] : mal_value_new_undefined()};
+    MalCompletion completion = mal_vm_call_value(vm, then, this_value, then_args, 2);
+    return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
+}
+
+// --- Promise.resolve / Promise.reject ----------------------------------------
+
+static MalValue mal_promise_resolve_static(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+
+    if (!mal_value_is_object(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise.resolve called on non-object");
+        return mal_value_new_undefined();
+    }
+
+    MalValue x = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (mal_value_is_promise_object(x)) {
+        MalValue x_constructor;
+        if (!mal_vm_get_property(vm, x, mal_intrinsic_string_key(vm, "constructor"), &x_constructor)) {
+            return mal_value_new_undefined();
+        }
+        if (x_constructor == this_value) {
+            return x;
+        }
+    }
+
+    MalValue cap_promise;
+    MalValue cap_resolve;
+    MalValue cap_reject;
+    if (!mal_promise_new_capability(vm, this_value, &cap_promise, &cap_resolve, &cap_reject)) {
+        return mal_value_new_undefined();
+    }
+
+    mal_vm_call_value(vm, cap_resolve, mal_value_new_undefined(), &x, 1);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    return cap_promise;
+}
+
+static MalValue mal_promise_reject_static(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+
+    if (!mal_value_is_object(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise.reject called on non-object");
+        return mal_value_new_undefined();
+    }
+
+    MalValue cap_promise;
+    MalValue cap_resolve;
+    MalValue cap_reject;
+    if (!mal_promise_new_capability(vm, this_value, &cap_promise, &cap_resolve, &cap_reject)) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue reason = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    mal_vm_call_value(vm, cap_reject, mal_value_new_undefined(), &reason, 1);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    return cap_promise;
+}
+
+bool mal_promise_resolve_value(MalVm *vm, MalValue value, MalValue *out_promise) {
+    // Short-circuit a value that is already a native %Promise% (no extra wrap,
+    // matching the current spec's single-tick await on a native promise).
+    if (mal_value_is_promise_object(value)) {
+        MalValue constructor;
+        if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, "constructor"), &constructor)) {
+            return false;
+        }
+        if (constructor == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR]) {
+            *out_promise = value;
+            return true;
+        }
+    }
+
+    MalValue cap_promise;
+    MalValue cap_resolve;
+    MalValue cap_reject;
+    if (!mal_promise_new_capability(vm, vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], &cap_promise, &cap_resolve, &cap_reject)) {
+        return false;
+    }
+    mal_vm_call_value(vm, cap_resolve, mal_value_new_undefined(), &value, 1);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return false;
+    }
+    *out_promise = cap_promise;
+    return true;
+}
+
+// --- Combinators (all / race / allSettled) -----------------------------------
+
+static MalKey mal_promise_idx(i32 index) {
+    return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(index)};
+}
+
+/** A shared mutable integer cell (1-element array), for the remaining counter. */
+static MalValue mal_promise_counter_new(MalVm *vm, i32 initial) {
+    MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
+    mal_array_object_store(array, mal_promise_idx(0), mal_value_from_i32(initial));
+    return mal_value_from_array_object(array);
+}
+static i32 mal_promise_counter_get(MalVm *vm, MalValue counter) {
+    MalValue out;
+    mal_builtin_array_try_get(vm, counter, 0, &out);
+    return mal_value_to_i32(out);
+}
+static void mal_promise_counter_set(MalValue counter, i32 value) {
+    mal_array_object_store(mal_value_to_array_object(counter), mal_promise_idx(0), mal_value_from_i32(value));
+}
+
+/** A shared boolean cell; test_set returns the prior value and sets it true. */
+static MalValue mal_promise_flag_new(MalVm *vm) {
+    MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
+    mal_array_object_store(array, mal_promise_idx(0), mal_value_new_boolean(false));
+    return mal_value_from_array_object(array);
+}
+static bool mal_promise_flag_test_set(MalVm *vm, MalValue flag) {
+    MalValue out;
+    mal_builtin_array_try_get(vm, flag, 0, &out);
+    if (mal_value_is_truthy(out)) {
+        return true;
+    }
+    mal_array_object_store(mal_value_to_array_object(flag), mal_promise_idx(0), mal_value_new_boolean(true));
+    return false;
+}
+
+/** IfAbruptRejectPromise: reject the capability with the pending error, return its promise. */
+static MalValue mal_promise_reject_abrupt(MalVm *vm, MalValue cap_reject, MalValue cap_promise) {
+    MalValue error = vm->completion.value;
+    vm->completion = mal_promise_normal();
+    mal_vm_call_value(vm, cap_reject, mal_value_new_undefined(), &error, 1);
+    vm->completion = mal_promise_normal();
+    return cap_promise;
+}
+
+/** Invoke nextPromise.then(onFulfilled, onRejected). Returns false (pending throw) on failure. */
+static bool mal_promise_invoke_then(MalVm *vm, MalValue promise, MalValue on_fulfilled, MalValue on_rejected) {
+    MalValue then_fn;
+    if (!mal_vm_get_property(vm, promise, mal_intrinsic_string_key(vm, "then"), &then_fn)) {
+        return false;
+    }
+    MalValue then_args[2] = {on_fulfilled, on_rejected};
+    MalCompletion completion = mal_vm_call_value(vm, then_fn, promise, then_args, 2);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        return false;
+    }
+    return true;
+}
+
+/** Shared combinator prologue: capability + promiseResolve + GetIterator, with IfAbruptRejectPromise. */
+typedef struct {
+    bool ok;
+    MalValue result_promise;
+    MalValue cap_resolve;
+    MalValue cap_reject;
+    MalValue promise_resolve;
+    MalIteratorRecord iterator;
+} MalPromiseCombinator;
+
+static MalPromiseCombinator mal_promise_combinator_begin(MalVm *vm, MalValue constructor, const MalValue *args, i32 arg_count) {
+    MalPromiseCombinator ctx = {0};
+    ctx.result_promise = mal_value_new_undefined();
+
+    if (!mal_value_is_object(constructor)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise combinator called on non-object");
+        return ctx;
+    }
+    if (!mal_promise_new_capability(vm, constructor, &ctx.result_promise, &ctx.cap_resolve, &ctx.cap_reject)) {
+        return ctx; // pending throw, no promise to reject
+    }
+    if (!mal_vm_get_property(vm, constructor, mal_intrinsic_string_key(vm, "resolve"), &ctx.promise_resolve)) {
+        mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        return ctx;
+    }
+    if (!mal_value_is_callable(ctx.promise_resolve)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise.resolve is not callable");
+        mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        return ctx;
+    }
+    MalValue iterable = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_vm_get_iterator(vm, iterable, &ctx.iterator)) {
+        mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        return ctx;
+    }
+    ctx.ok = true;
+    return ctx;
+}
+
+/** promiseResolve.call(C, value) → the wrapped element promise. */
+static bool mal_promise_resolve_element(MalVm *vm, const MalPromiseCombinator *ctx, MalValue constructor, MalValue value, MalValue *out) {
+    MalCompletion completion = mal_vm_call_value(vm, ctx->promise_resolve, constructor, &value, 1);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        return false;
+    }
+    *out = completion.value;
+    return true;
+}
+
+// Element-closure internal-slot layout shared by all / allSettled.
+enum {
+    MAL_PROMISE_ELEMENT_SLOT_FLAG = 0,     // already-called (bool for all; cell for allSettled)
+    MAL_PROMISE_ELEMENT_SLOT_INDEX = 1,
+    MAL_PROMISE_ELEMENT_SLOT_VALUES = 2,
+    MAL_PROMISE_ELEMENT_SLOT_COUNTER = 3,
+    MAL_PROMISE_ELEMENT_SLOT_RESOLVE = 4,
+};
+
+static MalValue mal_promise_all_element(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    if (mal_value_is_truthy(mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_FLAG))) {
+        return mal_value_new_undefined();
+    }
+    mal_native_function_object_set_slot(self, MAL_PROMISE_ELEMENT_SLOT_FLAG, mal_value_new_boolean(true));
+
+    i32 index = mal_value_to_i32(mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_INDEX));
+    MalValue values = mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_VALUES);
+    MalValue counter = mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_COUNTER);
+    MalValue cap_resolve = mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_RESOLVE);
+
+    mal_array_object_store(mal_value_to_array_object(values), mal_promise_idx(index), arg_count >= 1 ? args[0] : mal_value_new_undefined());
+
+    i32 remaining = mal_promise_counter_get(vm, counter) - 1;
+    mal_promise_counter_set(counter, remaining);
+    if (remaining == 0) {
+        mal_vm_call_value(vm, cap_resolve, mal_value_new_undefined(), &values, 1);
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_promise_all(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+
+    MalPromiseCombinator ctx = mal_promise_combinator_begin(vm, this_value, args, arg_count);
+    if (!ctx.ok) {
+        return ctx.result_promise;
+    }
+
+    MalValue values = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue counter = mal_promise_counter_new(vm, 1);
+    i32 index = 0;
+
+    while (true) {
+        MalValue next_value;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &ctx.iterator, &next_value, &done)) {
+            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        }
+        if (done) {
+            i32 remaining = mal_promise_counter_get(vm, counter) - 1;
+            mal_promise_counter_set(counter, remaining);
+            if (remaining == 0) {
+                mal_vm_call_value(vm, ctx.cap_resolve, mal_value_new_undefined(), &values, 1);
+                vm->completion = mal_promise_normal();
+            }
+            return ctx.result_promise;
+        }
+
+        MalValue next_promise;
+        if (!mal_promise_resolve_element(vm, &ctx, this_value, next_value, &next_promise)) {
+            mal_vm_iterator_close(vm, &ctx.iterator);
+            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        }
+
+        mal_array_object_store(mal_value_to_array_object(values), mal_promise_idx(index), mal_value_new_undefined());
+        mal_promise_counter_set(counter, mal_promise_counter_get(vm, counter) + 1);
+
+        MalValue element_slots[5] = {mal_value_new_boolean(false), mal_value_from_i32(index), values, counter, ctx.cap_resolve};
+        MalValue on_fulfilled = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+            &vm->heap, mal_promise_function_prototype(vm), mal_intrinsic_ascii(vm, ""), mal_promise_all_element, element_slots, 5));
+
+        if (!mal_promise_invoke_then(vm, next_promise, on_fulfilled, ctx.cap_reject)) {
+            mal_vm_iterator_close(vm, &ctx.iterator);
+            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        }
+        index++;
+    }
+}
+
+static MalValue mal_promise_race(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+
+    MalPromiseCombinator ctx = mal_promise_combinator_begin(vm, this_value, args, arg_count);
+    if (!ctx.ok) {
+        return ctx.result_promise;
+    }
+
+    while (true) {
+        MalValue next_value;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &ctx.iterator, &next_value, &done)) {
+            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        }
+        if (done) {
+            return ctx.result_promise;
+        }
+
+        MalValue next_promise;
+        if (!mal_promise_resolve_element(vm, &ctx, this_value, next_value, &next_promise)) {
+            mal_vm_iterator_close(vm, &ctx.iterator);
+            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        }
+
+        // First settlement of any element wins; capability ignores the rest.
+        if (!mal_promise_invoke_then(vm, next_promise, ctx.cap_resolve, ctx.cap_reject)) {
+            mal_vm_iterator_close(vm, &ctx.iterator);
+            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        }
+    }
+}
+
+/** Build a {status, value|reason} record for allSettled. */
+static MalValue mal_promise_settled_record(MalVm *vm, const byte *status, const byte *field, MalValue value) {
+    MalObject *object = mal_intrinsic_new_object(vm);
+    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+    mal_intrinsic_define_data(vm, object, "status", mal_value_from_string(mal_intrinsic_ascii(vm, status)), flags);
+    mal_intrinsic_define_data(vm, object, field, value, flags);
+    return mal_value_from_object(object);
+}
+
+static void mal_promise_settled_finish(MalVm *vm, MalNativeFunctionObject *self, MalValue record) {
+    i32 index = mal_value_to_i32(mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_INDEX));
+    MalValue values = mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_VALUES);
+    MalValue counter = mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_COUNTER);
+    MalValue cap_resolve = mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_RESOLVE);
+
+    mal_array_object_store(mal_value_to_array_object(values), mal_promise_idx(index), record);
+    i32 remaining = mal_promise_counter_get(vm, counter) - 1;
+    mal_promise_counter_set(counter, remaining);
+    if (remaining == 0) {
+        mal_vm_call_value(vm, cap_resolve, mal_value_new_undefined(), &values, 1);
+    }
+}
+
+static MalValue mal_promise_settled_fulfill(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    if (mal_promise_flag_test_set(vm, mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_FLAG))) {
+        return mal_value_new_undefined();
+    }
+    MalValue record = mal_promise_settled_record(vm, "fulfilled", "value", arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    mal_promise_settled_finish(vm, self, record);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_promise_settled_reject(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    if (mal_promise_flag_test_set(vm, mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_FLAG))) {
+        return mal_value_new_undefined();
+    }
+    MalValue record = mal_promise_settled_record(vm, "rejected", "reason", arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    mal_promise_settled_finish(vm, self, record);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_promise_all_settled(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+
+    MalPromiseCombinator ctx = mal_promise_combinator_begin(vm, this_value, args, arg_count);
+    if (!ctx.ok) {
+        return ctx.result_promise;
+    }
+
+    MalValue values = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue counter = mal_promise_counter_new(vm, 1);
+    i32 index = 0;
+
+    while (true) {
+        MalValue next_value;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &ctx.iterator, &next_value, &done)) {
+            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        }
+        if (done) {
+            i32 remaining = mal_promise_counter_get(vm, counter) - 1;
+            mal_promise_counter_set(counter, remaining);
+            if (remaining == 0) {
+                mal_vm_call_value(vm, ctx.cap_resolve, mal_value_new_undefined(), &values, 1);
+                vm->completion = mal_promise_normal();
+            }
+            return ctx.result_promise;
+        }
+
+        MalValue next_promise;
+        if (!mal_promise_resolve_element(vm, &ctx, this_value, next_value, &next_promise)) {
+            mal_vm_iterator_close(vm, &ctx.iterator);
+            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        }
+
+        mal_array_object_store(mal_value_to_array_object(values), mal_promise_idx(index), mal_value_new_undefined());
+        mal_promise_counter_set(counter, mal_promise_counter_get(vm, counter) + 1);
+
+        // Fulfill and reject element closures share one already-called cell.
+        MalValue flag = mal_promise_flag_new(vm);
+        MalValue element_slots[5] = {flag, mal_value_from_i32(index), values, counter, ctx.cap_resolve};
+        MalValue on_fulfilled = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+            &vm->heap, mal_promise_function_prototype(vm), mal_intrinsic_ascii(vm, ""), mal_promise_settled_fulfill, element_slots, 5));
+        MalValue on_rejected = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+            &vm->heap, mal_promise_function_prototype(vm), mal_intrinsic_ascii(vm, ""), mal_promise_settled_reject, element_slots, 5));
+
+        if (!mal_promise_invoke_then(vm, next_promise, on_fulfilled, on_rejected)) {
+            mal_vm_iterator_close(vm, &ctx.iterator);
+            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        }
+        index++;
+    }
+}
+
+// --- any ---------------------------------------------------------------------
+
+// Reuses the element-slot layout, with the RESOLVE slot holding cap.reject and
+// the VALUES slot holding the collected errors.
+static MalValue mal_promise_any_reject_element(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    if (mal_value_is_truthy(mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_FLAG))) {
+        return mal_value_new_undefined();
+    }
+    mal_native_function_object_set_slot(self, MAL_PROMISE_ELEMENT_SLOT_FLAG, mal_value_new_boolean(true));
+
+    i32 index = mal_value_to_i32(mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_INDEX));
+    MalValue errors = mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_VALUES);
+    MalValue counter = mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_COUNTER);
+    MalValue cap_reject = mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_RESOLVE);
+
+    mal_array_object_store(mal_value_to_array_object(errors), mal_promise_idx(index), arg_count >= 1 ? args[0] : mal_value_new_undefined());
+
+    i32 remaining = mal_promise_counter_get(vm, counter) - 1;
+    mal_promise_counter_set(counter, remaining);
+    if (remaining == 0) {
+        // Every input promise rejected: reject with an AggregateError of reasons.
+        MalValue aggregate = mal_builtin_new_aggregate_error(vm, errors);
+        mal_vm_call_value(vm, cap_reject, mal_value_new_undefined(), &aggregate, 1);
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_promise_any(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+
+    MalPromiseCombinator ctx = mal_promise_combinator_begin(vm, this_value, args, arg_count);
+    if (!ctx.ok) {
+        return ctx.result_promise;
+    }
+
+    MalValue errors = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue counter = mal_promise_counter_new(vm, 1);
+    i32 index = 0;
+
+    while (true) {
+        MalValue next_value;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &ctx.iterator, &next_value, &done)) {
+            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        }
+        if (done) {
+            i32 remaining = mal_promise_counter_get(vm, counter) - 1;
+            mal_promise_counter_set(counter, remaining);
+            if (remaining == 0) {
+                MalValue aggregate = mal_builtin_new_aggregate_error(vm, errors);
+                mal_vm_call_value(vm, ctx.cap_reject, mal_value_new_undefined(), &aggregate, 1);
+                vm->completion = mal_promise_normal();
+            }
+            return ctx.result_promise;
+        }
+
+        MalValue next_promise;
+        if (!mal_promise_resolve_element(vm, &ctx, this_value, next_value, &next_promise)) {
+            mal_vm_iterator_close(vm, &ctx.iterator);
+            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        }
+
+        mal_array_object_store(mal_value_to_array_object(errors), mal_promise_idx(index), mal_value_new_undefined());
+        mal_promise_counter_set(counter, mal_promise_counter_get(vm, counter) + 1);
+
+        MalValue element_slots[5] = {mal_value_new_boolean(false), mal_value_from_i32(index), errors, counter, ctx.cap_reject};
+        MalValue on_rejected = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+            &vm->heap, mal_promise_function_prototype(vm), mal_intrinsic_ascii(vm, ""), mal_promise_any_reject_element, element_slots, 5));
+
+        // First fulfillment wins (cap.resolve directly); rejections collect.
+        if (!mal_promise_invoke_then(vm, next_promise, ctx.cap_resolve, on_rejected)) {
+            mal_vm_iterator_close(vm, &ctx.iterator);
+            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+        }
+        index++;
+    }
+}
+
+// --- finally -----------------------------------------------------------------
+
+enum {
+    MAL_PROMISE_FINALLY_SLOT_ON_FINALLY = 0,
+    MAL_PROMISE_FINALLY_SLOT_CONSTRUCTOR = 1,
+};
+
+/** PromiseResolve(C, value) via Invoke C.resolve. */
+static bool mal_promise_resolve_through(MalVm *vm, MalValue constructor, MalValue value, MalValue *out) {
+    MalValue resolve_fn;
+    if (!mal_vm_get_property(vm, constructor, mal_intrinsic_string_key(vm, "resolve"), &resolve_fn)) {
+        return false;
+    }
+    MalCompletion completion = mal_vm_call_value(vm, resolve_fn, constructor, &value, 1);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        return false;
+    }
+    *out = completion.value;
+    return true;
+}
+
+/** Thunk returning its single captured value, ignoring its argument. */
+static MalValue mal_promise_finally_value_thunk(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) vm;
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    return mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+}
+
+/** Thunk throwing its single captured value. */
+static MalValue mal_promise_finally_thrower(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0)};
+    return mal_value_new_undefined();
+}
+
+/** Shared body for thenFinally/catchFinally: run onFinally, wrap result, chain a passthrough/rethrow thunk. */
+static MalValue mal_promise_finally_react(MalVm *vm, MalValue callee, MalValue passed, bool is_catch) {
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    MalValue on_finally = mal_native_function_object_get_slot(self, MAL_PROMISE_FINALLY_SLOT_ON_FINALLY);
+    MalValue constructor = mal_native_function_object_get_slot(self, MAL_PROMISE_FINALLY_SLOT_CONSTRUCTOR);
+
+    MalCompletion result = mal_vm_call_value(vm, on_finally, mal_value_new_undefined(), nullptr, 0);
+    if (result.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined(); // propagates as the chained promise's rejection
+    }
+
+    MalValue inner;
+    if (!mal_promise_resolve_through(vm, constructor, result.value, &inner)) {
+        return mal_value_new_undefined();
+    }
+
+    // Chain a thunk that restores the original value (or rethrows the reason).
+    MalValue thunk_slots[1] = {passed};
+    MalValue thunk = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+        &vm->heap,
+        mal_promise_function_prototype(vm),
+        mal_intrinsic_ascii(vm, ""),
+        is_catch ? mal_promise_finally_thrower : mal_promise_finally_value_thunk,
+        thunk_slots,
+        1
+    ));
+
+    MalValue then_fn;
+    if (!mal_vm_get_property(vm, inner, mal_intrinsic_string_key(vm, "then"), &then_fn)) {
+        return mal_value_new_undefined();
+    }
+    MalCompletion completion = mal_vm_call_value(vm, then_fn, inner, &thunk, 1);
+    return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
+}
+
+static MalValue mal_promise_then_finally(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    return mal_promise_finally_react(vm, callee, arg_count >= 1 ? args[0] : mal_value_new_undefined(), false);
+}
+
+static MalValue mal_promise_catch_finally(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    return mal_promise_finally_react(vm, callee, arg_count >= 1 ? args[0] : mal_value_new_undefined(), true);
+}
+
+static MalValue mal_promise_prototype_finally(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+
+    if (!mal_value_is_object(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise.prototype.finally called on non-object");
+        return mal_value_new_undefined();
+    }
+
+    MalValue constructor = mal_promise_species_constructor(vm, this_value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue on_finally = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue then_finally;
+    MalValue catch_finally;
+    if (!mal_value_is_callable(on_finally)) {
+        then_finally = on_finally;
+        catch_finally = on_finally;
+    } else {
+        MalValue slots[2] = {on_finally, constructor};
+        then_finally = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+            &vm->heap, mal_promise_function_prototype(vm), mal_intrinsic_ascii(vm, ""), mal_promise_then_finally, slots, 2));
+        catch_finally = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+            &vm->heap, mal_promise_function_prototype(vm), mal_intrinsic_ascii(vm, ""), mal_promise_catch_finally, slots, 2));
+    }
+
+    MalValue then_fn;
+    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, "then"), &then_fn)) {
+        return mal_value_new_undefined();
+    }
+    MalValue then_args[2] = {then_finally, catch_finally};
+    MalCompletion completion = mal_vm_call_value(vm, then_fn, this_value, then_args, 2);
+    return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
+}
+
+// --- Install -----------------------------------------------------------------
+
+void mal_builtin_promise_install(MalVm *vm) {
+    MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+        &vm->heap,
+        mal_promise_function_prototype(vm),
+        mal_intrinsic_ascii(vm, "Promise"),
+        mal_promise_constructor
+    );
+
+    vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
+    vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE] = mal_value_from_object(prototype);
+
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+
+    MalPropertyDesc tag_desc = mal_intrinsic_data_desc(
+        mal_value_from_string(mal_intrinsic_ascii(vm, "Promise")),
+        MAL_PROPERTY_CONFIGURABLE
+    );
+    mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag_desc);
+
+    mal_intrinsic_define_method(vm, prototype, "then", mal_promise_prototype_then);
+    mal_intrinsic_define_method(vm, prototype, "catch", mal_promise_prototype_catch);
+    mal_intrinsic_define_method(vm, prototype, "finally", mal_promise_prototype_finally);
+
+    mal_intrinsic_define_method(vm, (MalObject *) constructor, "resolve", mal_promise_resolve_static);
+    mal_intrinsic_define_method(vm, (MalObject *) constructor, "reject", mal_promise_reject_static);
+    mal_intrinsic_define_method(vm, (MalObject *) constructor, "all", mal_promise_all);
+    mal_intrinsic_define_method(vm, (MalObject *) constructor, "race", mal_promise_race);
+    mal_intrinsic_define_method(vm, (MalObject *) constructor, "allSettled", mal_promise_all_settled);
+    mal_intrinsic_define_method(vm, (MalObject *) constructor, "any", mal_promise_any);
+    mal_intrinsic_define_species(vm, (MalObject *) constructor);
+}

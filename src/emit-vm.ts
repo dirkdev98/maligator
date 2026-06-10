@@ -100,7 +100,15 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 		lines.push("    {");
 		lines.push(`        .name_string_index = ${fn.nameStringIndex},`);
 		lines.push(
-			`        .kind = ${fn.isGenerator ? "MAL_FUNCTION_KIND_GENERATOR" : "MAL_FUNCTION_KIND_NORMAL"},`,
+			`        .kind = ${
+				fn.isAsync && fn.isGenerator
+					? "MAL_FUNCTION_KIND_ASYNC_GENERATOR"
+					: fn.isAsync
+						? "MAL_FUNCTION_KIND_ASYNC"
+						: fn.isGenerator
+							? "MAL_FUNCTION_KIND_GENERATOR"
+							: "MAL_FUNCTION_KIND_NORMAL"
+			},`,
 		);
 		lines.push(`        .parameter_count = ${fn.parameterCount},`);
 		lines.push(`        .length = ${fn.length},`);
@@ -193,8 +201,12 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_TRY_END }`;
 		case "GENERATOR_START":
 			return `{ .opcode = MAL_OP_GENERATOR_START }`;
+		case "ASYNC_START":
+			return `{ .opcode = MAL_OP_ASYNC_START }`;
 		case "YIELD":
 			return `{ .opcode = MAL_OP_YIELD, .as.yield = { .yielded_src = ${instruction.yieldedSrc}, .value_dst = ${instruction.valueDst}, .mode_dst = ${instruction.modeDst} } }`;
+		case "AWAIT":
+			return `{ .opcode = MAL_OP_AWAIT, .as.await = { .awaited_src = ${instruction.awaitedSrc}, .value_dst = ${instruction.valueDst}, .mode_dst = ${instruction.modeDst} } }`;
 		case "LOAD_CAPTURED":
 			return `{ .opcode = MAL_OP_LOAD_CAPTURED, .as.load_captured = { .dst = ${instruction.dst}, .owner_function_index = ${instruction.ownerFunctionIndex}, .index = ${instruction.index} } }`;
 		case "LOAD_GLOBAL":
@@ -215,6 +227,10 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_LOAD_PROTOTYPE, .as.load_prototype = { .dst = ${instruction.dst}, .object = ${instruction.object} } }`;
 		case "GET_ITERATOR":
 			return `{ .opcode = MAL_OP_GET_ITERATOR, .as.get_iterator = { .iterator_dst = ${instruction.iteratorDst}, .next_dst = ${instruction.nextDst}, .source = ${instruction.source} } }`;
+		case "GET_ASYNC_ITERATOR":
+			return `{ .opcode = MAL_OP_GET_ASYNC_ITERATOR, .as.get_async_iterator = { .iterator_dst = ${instruction.iteratorDst}, .next_dst = ${instruction.nextDst}, .source = ${instruction.source} } }`;
+		case "ITERATOR_NEXT":
+			return `{ .opcode = MAL_OP_ITERATOR_NEXT, .as.iterator_next = { .result_dst = ${instruction.resultDst}, .iterator = ${instruction.iterator}, .next = ${instruction.next} } }`;
 		case "ITERATOR_STEP":
 			return `{ .opcode = MAL_OP_ITERATOR_STEP, .as.iterator_step = { .value_dst = ${instruction.valueDst}, .done_dst = ${instruction.doneDst}, .iterator = ${instruction.iterator}, .next = ${instruction.next} } }`;
 		case "ITERATOR_CLOSE":
@@ -288,6 +304,8 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_URI_ERROR_CONSTRUCTOR";
 		case "EvalError":
 			return "MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR";
+		case "AggregateError":
+			return "MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR";
 		case "String":
 			return "MAL_INTRINSIC_STRING_CONSTRUCTOR";
 		case "Number":
@@ -334,6 +352,12 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_WEAK_MAP_CONSTRUCTOR";
 		case "WeakSet":
 			return "MAL_INTRINSIC_WEAK_SET_CONSTRUCTOR";
+		case "Promise":
+			return "MAL_INTRINSIC_PROMISE_CONSTRUCTOR";
+		case "Iterator":
+			return "MAL_INTRINSIC_ITERATOR_CONSTRUCTOR";
+		case "AsyncIterator":
+			return "MAL_INTRINSIC_ASYNC_ITERATOR_CONSTRUCTOR";
 		case "parseInt":
 			return "MAL_INTRINSIC_PARSE_INT";
 		case "parseFloat":

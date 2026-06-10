@@ -109,17 +109,17 @@ static MalValue mal_builtin_set_construct(
     }
 }
 
-static MalValue mal_builtin_set_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_set_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_set_construct(vm, new_target, args, arg_count, MAL_INTRINSIC_SET_PROTOTYPE, false, "Constructor Set requires 'new'");
 }
 
-static MalValue mal_builtin_weak_set_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_weak_set_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_set_construct(vm, new_target, args, arg_count, MAL_INTRINSIC_WEAK_SET_PROTOTYPE, true, "Constructor WeakSet requires 'new'");
 }
 
-static MalValue mal_builtin_set_prototype_add(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_set_prototype_add(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *set = mal_builtin_set_this(vm, this_value, false, "Receiver is not a Set");
     if (set == nullptr) {
         return mal_value_new_undefined();
@@ -131,7 +131,7 @@ static MalValue mal_builtin_set_prototype_add(MalVm *vm, MalValue this_value, co
     return this_value;
 }
 
-static MalValue mal_builtin_set_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_set_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *set = mal_builtin_set_this(vm, this_value, false, "Receiver is not a Set");
     if (set == nullptr) {
         return mal_value_new_undefined();
@@ -140,7 +140,7 @@ static MalValue mal_builtin_set_prototype_has(MalVm *vm, MalValue this_value, co
     return mal_value_new_boolean(mal_map_object_has(set, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
-static MalValue mal_builtin_set_prototype_delete(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_set_prototype_delete(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *set = mal_builtin_set_this(vm, this_value, false, "Receiver is not a Set");
     if (set == nullptr) {
         return mal_value_new_undefined();
@@ -149,7 +149,7 @@ static MalValue mal_builtin_set_prototype_delete(MalVm *vm, MalValue this_value,
     return mal_value_new_boolean(mal_map_object_delete(set, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
-static MalValue mal_builtin_set_prototype_clear(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_set_prototype_clear(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
 
@@ -163,7 +163,7 @@ static MalValue mal_builtin_set_prototype_clear(MalVm *vm, MalValue this_value, 
     return mal_value_new_undefined();
 }
 
-static MalValue mal_builtin_set_prototype_size_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_set_prototype_size_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
 
@@ -175,7 +175,7 @@ static MalValue mal_builtin_set_prototype_size_getter(MalVm *vm, MalValue this_v
     return mal_value_from_i32((i32) mal_map_object_size(set));
 }
 
-static MalValue mal_builtin_set_prototype_for_each(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_set_prototype_for_each(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *set = mal_builtin_set_this(vm, this_value, false, "Receiver is not a Set");
     if (set == nullptr) {
         return mal_value_new_undefined();
@@ -213,19 +213,19 @@ static MalValue mal_builtin_set_prototype_iterator(MalVm *vm, MalValue this_valu
     return mal_vm_new_builtin_iterator(vm, kind, this_value);
 }
 
-static MalValue mal_builtin_set_prototype_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_set_prototype_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     return mal_builtin_set_prototype_iterator(vm, this_value, MAL_ITERATOR_SET_VALUES);
 }
 
-static MalValue mal_builtin_set_prototype_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_set_prototype_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     return mal_builtin_set_prototype_iterator(vm, this_value, MAL_ITERATOR_SET_ENTRIES);
 }
 
-static MalValue mal_builtin_weak_set_prototype_add(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_weak_set_prototype_add(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *set = mal_builtin_set_this(vm, this_value, true, "Receiver is not a WeakSet");
     if (set == nullptr) {
         return mal_value_new_undefined();
@@ -242,7 +242,7 @@ static MalValue mal_builtin_weak_set_prototype_add(MalVm *vm, MalValue this_valu
     return this_value;
 }
 
-static MalValue mal_builtin_weak_set_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_weak_set_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *set = mal_builtin_set_this(vm, this_value, true, "Receiver is not a WeakSet");
     if (set == nullptr) {
         return mal_value_new_undefined();
@@ -251,7 +251,7 @@ static MalValue mal_builtin_weak_set_prototype_has(MalVm *vm, MalValue this_valu
     return mal_value_new_boolean(mal_map_object_has(set, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
-static MalValue mal_builtin_weak_set_prototype_delete(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_weak_set_prototype_delete(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *set = mal_builtin_set_this(vm, this_value, true, "Receiver is not a WeakSet");
     if (set == nullptr) {
         return mal_value_new_undefined();

@@ -35,7 +35,7 @@ static MalValue mal_generator_resume_result(MalVm *vm, MalGeneratorObject *gener
     return mal_vm_create_iter_result(vm, vm->completion.value, true);
 }
 
-static MalValue mal_builtin_generator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_generator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
 
     MalGeneratorObject *generator = mal_generator_this(vm, this_value, "Generator.prototype.next called on incompatible receiver");
@@ -58,7 +58,7 @@ static MalValue mal_builtin_generator_next(MalVm *vm, MalValue this_value, const
     return mal_generator_resume_result(vm, generator, sent, MAL_GENERATOR_RESUME_NEXT);
 }
 
-static MalValue mal_builtin_generator_throw(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_generator_throw(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
 
     MalGeneratorObject *generator = mal_generator_this(vm, this_value, "Generator.prototype.throw called on incompatible receiver");
@@ -86,7 +86,7 @@ static MalValue mal_builtin_generator_throw(MalVm *vm, MalValue this_value, cons
     return mal_generator_resume_result(vm, generator, exception, MAL_GENERATOR_RESUME_THROW);
 }
 
-static MalValue mal_builtin_generator_return(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_generator_return(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
 
     MalGeneratorObject *generator = mal_generator_this(vm, this_value, "Generator.prototype.return called on incompatible receiver");
@@ -118,7 +118,7 @@ static MalValue mal_builtin_generator_return(MalVm *vm, MalValue this_value, con
  * The GeneratorFunction constructor would dynamically compile source, which is
  * unsupported; it exists for the intrinsic hierarchy but throws when invoked.
  */
-static MalValue mal_builtin_generator_function_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_generator_function_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) args;
     (void) arg_count;

@@ -16,6 +16,8 @@ typedef struct MalBoundFunctionObject MalBoundFunctionObject;
 typedef struct MalArrayObject MalArrayObject;
 typedef struct MalMapObject MalMapObject;
 typedef struct MalIteratorObject MalIteratorObject;
+typedef struct MalPromiseObject MalPromiseObject;
+typedef struct MalIteratorHelperObject MalIteratorHelperObject;
 
 /**
  * NaN-Boxed MalValue representation.
@@ -238,7 +240,9 @@ static inline bool mal_value_is_object(MalValue value) {
         type == MAL_HEAP_GENERATOR_OBJECT ||
         type == MAL_HEAP_ARRAY_BUFFER_OBJECT ||
         type == MAL_HEAP_TYPED_ARRAY_OBJECT ||
-        type == MAL_HEAP_DATA_VIEW_OBJECT;
+        type == MAL_HEAP_DATA_VIEW_OBJECT ||
+        type == MAL_HEAP_PROMISE_OBJECT ||
+        type == MAL_HEAP_ITERATOR_HELPER_OBJECT;
 }
 
 /**
@@ -295,6 +299,16 @@ bool mal_value_is_typed_array_object(MalValue value);
  * Check if the value is a DataView.
  */
 bool mal_value_is_data_view_object(MalValue value);
+
+/**
+ * Check if the value is a Promise instance.
+ */
+bool mal_value_is_promise_object(MalValue value);
+
+/**
+ * Check if the value is an Iterator Helper instance.
+ */
+bool mal_value_is_iterator_helper_object(MalValue value);
 
 /**
  * Check if the value is callable.
@@ -359,6 +373,16 @@ MalTypedArrayObject *mal_value_to_typed_array_object(MalValue value);
 MalDataViewObject *mal_value_to_data_view_object(MalValue value);
 
 /**
+ * Unbox a Promise instance.
+ */
+MalPromiseObject *mal_value_to_promise_object(MalValue value);
+
+/**
+ * Unbox an Iterator Helper instance.
+ */
+MalIteratorHelperObject *mal_value_to_iterator_helper_object(MalValue value);
+
+/**
  * Box a string.
  */
 MalValue mal_value_from_string(MalString *string);
@@ -414,6 +438,16 @@ MalValue mal_value_from_iterator_object(MalIteratorObject *iterator);
 MalValue mal_value_from_array_buffer_object(MalArrayBufferObject *buffer);
 MalValue mal_value_from_typed_array_object(MalTypedArrayObject *array);
 MalValue mal_value_from_data_view_object(MalDataViewObject *view);
+
+/**
+ * Box a Promise instance.
+ */
+MalValue mal_value_from_promise_object(MalPromiseObject *promise);
+
+/**
+ * Box an Iterator Helper instance.
+ */
+MalValue mal_value_from_iterator_helper_object(MalIteratorHelperObject *helper);
 
 /**
  * Check if the value is truthy.

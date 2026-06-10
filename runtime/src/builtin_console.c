@@ -106,12 +106,12 @@ static MalValue mal_builtin_console_write(MalVm *vm, FILE *stream, const MalValu
     return mal_value_new_undefined();
 }
 
-static MalValue mal_builtin_console_log(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_console_log(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_console_write(vm, stdout, args, arg_count);
 }
 
-static MalValue mal_builtin_console_error(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_console_error(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_console_write(vm, stderr, args, arg_count);
 }

@@ -5,7 +5,6 @@ import type { ESTree } from "meriyah";
  */
 const unsupportedNodeTypes = new Map<string, string>([
 	["WithStatement", "with"],
-	["AwaitExpression", "async function"],
 	["TaggedTemplateExpression", "tagged template"],
 	["ImportDeclaration", "module syntax"],
 	["ImportExpression", "module syntax"],
@@ -78,12 +77,13 @@ const supportedAssignmentOperators = new Set<string>([
  */
 export function collectUnsupportedSyntax(node: ESTree.Node): Set<string> {
 	const unsupported = new Set<string>();
-	walk(node, unsupported, { inArrowFunction: false });
+	walk(node, unsupported, { inArrowFunction: false, inAsyncFunction: false });
 	return unsupported;
 }
 
 interface WalkContext {
 	inArrowFunction: boolean;
+	inAsyncFunction: boolean;
 }
 
 function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
@@ -104,20 +104,19 @@ function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
 		unsupported.add(mapped);
 	}
 
-	if (node.type === "ForOfStatement" && node.await) {
-		unsupported.add("for-await-of");
+	// await outside an async function (top-level await needs module semantics);
+	// guards the runtime, which expects await only in an async activation.
+	if (node.type === "AwaitExpression" && !context.inAsyncFunction) {
+		unsupported.add("top-level await");
 	}
 
 	switch (node.type) {
 		case "FunctionDeclaration":
 		case "FunctionExpression":
 		case "ArrowFunctionExpression": {
-			if (node.async) {
-				unsupported.add("async function");
-			}
-
 			const innerContext: WalkContext = {
 				inArrowFunction: node.type === "ArrowFunctionExpression",
+				inAsyncFunction: node.async === true,
 			};
 			for (const key of Object.keys(node)) {
 				walk(

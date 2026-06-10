@@ -205,31 +205,31 @@ static MalValue mal_builtin_iterator_next(
     return mal_value_new_undefined();
 }
 
-static MalValue mal_builtin_map_iterator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_iterator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     return mal_builtin_iterator_next(vm, this_value, MAL_ITERATOR_MAP_KEYS, MAL_ITERATOR_MAP_ENTRIES, "Receiver is not a Map iterator");
 }
 
-static MalValue mal_builtin_set_iterator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_set_iterator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     return mal_builtin_iterator_next(vm, this_value, MAL_ITERATOR_SET_VALUES, MAL_ITERATOR_SET_ENTRIES, "Receiver is not a Set iterator");
 }
 
-static MalValue mal_builtin_array_iterator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_array_iterator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     return mal_builtin_iterator_next(vm, this_value, MAL_ITERATOR_ARRAY_KEYS, MAL_ITERATOR_ARRAY_ENTRIES, "Receiver is not an Array iterator");
 }
 
-static MalValue mal_builtin_string_iterator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_string_iterator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     return mal_builtin_iterator_next(vm, this_value, MAL_ITERATOR_STRING_VALUES, MAL_ITERATOR_STRING_VALUES, "Receiver is not a String iterator");
 }
 
-static MalValue mal_builtin_iterator_prototype_iterator(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_iterator_prototype_iterator(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) vm;
     (void) args;
     (void) arg_count;

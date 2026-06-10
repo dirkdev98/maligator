@@ -5,6 +5,7 @@
 #include "array_object.h"
 #include "bound_function_object.h"
 #include "builtin_array.h"
+#include "builtin_async_iterator.h"
 #include "builtin_iterator.h"
 #include "function_object.h"
 #include "heap_bigint.h"
@@ -167,11 +168,23 @@ void mal_op_create_null(MalCallable *callable, MalInstruction *instruction) {
 }
 
 MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env) {
-    // Generator function objects inherit %GeneratorFunction.prototype%.
-    MalIntrinsic prototype_slot =
-        vm->definition->functions[function_index].kind == MAL_FUNCTION_KIND_GENERATOR
-            ? MAL_INTRINSIC_GENERATOR_FUNCTION_PROTOTYPE
-            : MAL_INTRINSIC_FUNCTION_PROTOTYPE;
+    // Generator/async-generator function objects inherit their respective
+    // %GeneratorFunction.prototype% / %AsyncGenerator%.
+    MalIntrinsic prototype_slot;
+    switch (vm->definition->functions[function_index].kind) {
+        case MAL_FUNCTION_KIND_GENERATOR:
+            prototype_slot = MAL_INTRINSIC_GENERATOR_FUNCTION_PROTOTYPE;
+            break;
+        case MAL_FUNCTION_KIND_ASYNC_GENERATOR:
+            prototype_slot = MAL_INTRINSIC_ASYNC_GENERATOR_FUNCTION_PROTOTYPE;
+            break;
+        case MAL_FUNCTION_KIND_ASYNC:
+            prototype_slot = MAL_INTRINSIC_ASYNC_FUNCTION_PROTOTYPE;
+            break;
+        default:
+            prototype_slot = MAL_INTRINSIC_FUNCTION_PROTOTYPE;
+            break;
+    }
 
     MalFunctionObject *function = mal_function_object_new(
         &vm->heap,
@@ -323,7 +336,7 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
         // invalidates any frame pointers. Snapshot what we need and
         // re-resolve the frame afterwards.
         i32 caller_frame_index = vm->frame_count - 1;
-        MalValue result = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined());
+        MalValue result = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), resolution.callee);
         vm->frames[caller_frame_index].registers[dst] = result;
         vm->value_stack_size = base;
     } else {
@@ -397,7 +410,7 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
             mal_value_to_native_function_object(resolution.callee)
         );
         i32 caller_frame_index = vm->frame_count - 1;
-        MalValue result = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, resolution.callee);
+        MalValue result = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, resolution.callee, resolution.callee);
         vm->frames[caller_frame_index].registers[dst] = result;
         vm->value_stack_size = base;
     } else {
@@ -879,12 +892,19 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
         return lookup.desc.value;
     }
 
-    bool is_generator = mal_vm_function_is_generator(vm, function_value);
-    MalObject *parent = mal_value_to_object(
-        vm->intrinsics[is_generator ? MAL_INTRINSIC_GENERATOR_PROTOTYPE : MAL_INTRINSIC_OBJECT_PROTOTYPE]
-    );
+    MalFunctionKind kind = MAL_FUNCTION_KIND_NORMAL;
+    if (mal_value_is_function_object(function_value)) {
+        i32 index = mal_function_object_function_index(mal_value_to_function_object(function_value));
+        kind = vm->definition->functions[index].kind;
+    }
+    bool is_generator_kind = kind == MAL_FUNCTION_KIND_GENERATOR || kind == MAL_FUNCTION_KIND_ASYNC_GENERATOR;
+
+    MalIntrinsic parent_slot = kind == MAL_FUNCTION_KIND_ASYNC_GENERATOR ? MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE
+        : kind == MAL_FUNCTION_KIND_GENERATOR                            ? MAL_INTRINSIC_GENERATOR_PROTOTYPE
+                                                                         : MAL_INTRINSIC_OBJECT_PROTOTYPE;
+    MalObject *parent = mal_value_to_object(vm->intrinsics[parent_slot]);
     MalObject *prototype = mal_object_new(&vm->heap, parent);
-    if (!is_generator) {
+    if (!is_generator_kind) {
         mal_intrinsic_define_data(vm, prototype, "constructor", function_value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     }
 
@@ -949,8 +969,13 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
         }
 
         if (mal_value_is_function_object(object_value) && mal_vm_key_is_prototype(key)) {
-            *value_out = mal_vm_function_prototype(vm, object_value);
-            return true;
+            // Async (non-generator) functions have no `prototype` property; fall
+            // through to the empty lookup (undefined value, false `in`).
+            i32 function_index = mal_function_object_function_index(mal_value_to_function_object(object_value));
+            if (vm->definition->functions[function_index].kind != MAL_FUNCTION_KIND_ASYNC) {
+                *value_out = mal_vm_function_prototype(vm, object_value);
+                return true;
+            }
         }
     }
 
@@ -968,6 +993,69 @@ static bool mal_vm_get_from_prototype_slot(MalVm *vm, MalIntrinsic prototype_slo
     }
 
     return mal_vm_desc_read(vm, resolution.desc, receiver, out);
+}
+
+bool mal_vm_to_number(MalVm *vm, MalValue value, f64 *out) {
+    // Objects first go through ToPrimitive(number): @@toPrimitive, else the
+    // OrdinaryToPrimitive order valueOf → toString.
+    if (mal_value_is_object(value)) {
+        MalValue exotic;
+        if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE), &exotic)) {
+            return false;
+        }
+        if (!mal_value_is_nil(exotic)) {
+            if (!mal_value_is_callable(exotic)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.toPrimitive is not a function");
+                return false;
+            }
+            MalValue hint = mal_value_from_string(mal_intrinsic_ascii(vm, "number"));
+            MalCompletion result = mal_vm_call_value(vm, exotic, value, &hint, 1);
+            if (result.kind != MAL_COMPLETION_NORMAL) {
+                return false;
+            }
+            if (mal_value_is_object(result.value)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
+                return false;
+            }
+            value = result.value;
+        } else {
+            const byte *methods[2] = {"valueOf", "toString"};
+            bool converted = false;
+            for (i32 i = 0; i < 2 && !converted; i++) {
+                MalValue method;
+                if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, methods[i]), &method)) {
+                    return false;
+                }
+                if (mal_value_is_callable(method)) {
+                    MalCompletion result = mal_vm_call_value(vm, method, value, nullptr, 0);
+                    if (result.kind != MAL_COMPLETION_NORMAL) {
+                        return false;
+                    }
+                    if (!mal_value_is_object(result.value)) {
+                        value = result.value;
+                        converted = true;
+                    }
+                }
+            }
+            if (!converted) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
+                return false;
+            }
+        }
+    }
+
+    // ToNumber proper: BigInt and Symbol are not convertible.
+    if (mal_value_is_bigint(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a BigInt value to a number");
+        return false;
+    }
+    if (mal_value_is_symbol(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value to a number");
+        return false;
+    }
+
+    *out = mal_ops_to_number(value);
+    return true;
 }
 
 bool mal_vm_get_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *out) {
@@ -1281,6 +1369,29 @@ void mal_op_get_iterator(MalCallable *callable, MalInstruction *instruction) {
 
     callable->registers[instruction->as.get_iterator.iterator_dst] = record.iterator;
     callable->registers[instruction->as.get_iterator.next_dst] = record.next_method;
+}
+
+void mal_op_get_async_iterator(MalCallable *callable, MalInstruction *instruction) {
+    MalValue source = callable->registers[instruction->as.get_async_iterator.source];
+
+    MalIteratorRecord record;
+    if (!mal_vm_get_async_iterator(callable->vm, source, &record)) {
+        return;
+    }
+
+    callable->registers[instruction->as.get_async_iterator.iterator_dst] = record.iterator;
+    callable->registers[instruction->as.get_async_iterator.next_dst] = record.next_method;
+}
+
+void mal_op_iterator_next(MalCallable *callable, MalInstruction *instruction) {
+    MalValue iterator = callable->registers[instruction->as.iterator_next.iterator];
+    MalValue next = callable->registers[instruction->as.iterator_next.next];
+
+    MalCompletion completion = mal_vm_call_value(callable->vm, next, iterator, nullptr, 0);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        return; // throw left pending; the run loop unwinds
+    }
+    callable->registers[instruction->as.iterator_next.result_dst] = completion.value;
 }
 
 void mal_op_iterator_step(MalCallable *callable, MalInstruction *instruction) {

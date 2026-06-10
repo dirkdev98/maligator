@@ -17,7 +17,7 @@ static MalValue mal_builtin_function_forward_completion(MalVm *vm, MalCompletion
     return completion.value;
 }
 
-static MalValue mal_builtin_function_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_function_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) args;
     (void) arg_count;
@@ -25,7 +25,7 @@ static MalValue mal_builtin_function_constructor(MalVm *vm, MalValue this_value,
     return mal_value_new_undefined();
 }
 
-static MalValue mal_builtin_function_prototype_call(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_function_prototype_call(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     if (!mal_value_is_callable(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Function.prototype.call called on a non-callable");
         return mal_value_new_undefined();
@@ -41,7 +41,7 @@ static MalValue mal_builtin_function_prototype_call(MalVm *vm, MalValue this_val
     ));
 }
 
-static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     if (!mal_value_is_callable(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Function.prototype.apply called on a non-callable");
         return mal_value_new_undefined();
@@ -79,7 +79,7 @@ static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_va
     return mal_builtin_function_forward_completion(vm, completion);
 }
 
-static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     if (!mal_value_is_callable(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Function.prototype.bind called on a non-callable");
         return mal_value_new_undefined();
@@ -97,7 +97,7 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     return mal_value_from_bound_function_object(bound);
 }
 
-static MalValue mal_builtin_function_prototype_has_instance(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_function_prototype_has_instance(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     return mal_value_new_boolean(mal_vm_ordinary_has_instance(
         vm,
         this_value,
@@ -105,7 +105,7 @@ static MalValue mal_builtin_function_prototype_has_instance(MalVm *vm, MalValue 
     ));
 }
 
-static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     if (!mal_value_is_callable(this_value)) {

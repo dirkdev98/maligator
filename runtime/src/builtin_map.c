@@ -127,12 +127,12 @@ static MalValue mal_builtin_map_construct(
     }
 }
 
-static MalValue mal_builtin_map_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_map_construct(vm, new_target, args, arg_count, MAL_INTRINSIC_MAP_PROTOTYPE, false, "Constructor Map requires 'new'");
 }
 
-static MalValue mal_builtin_map_group_by(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_group_by(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
 
     if (arg_count < 2 || !mal_value_is_callable(args[1])) {
@@ -187,12 +187,12 @@ static MalValue mal_builtin_map_group_by(MalVm *vm, MalValue this_value, const M
     }
 }
 
-static MalValue mal_builtin_weak_map_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_weak_map_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_map_construct(vm, new_target, args, arg_count, MAL_INTRINSIC_WEAK_MAP_PROTOTYPE, true, "Constructor WeakMap requires 'new'");
 }
 
-static MalValue mal_builtin_map_prototype_get(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_prototype_get(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
@@ -201,7 +201,7 @@ static MalValue mal_builtin_map_prototype_get(MalVm *vm, MalValue this_value, co
     return mal_map_object_get(map, arg_count >= 1 ? args[0] : mal_value_new_undefined());
 }
 
-static MalValue mal_builtin_map_prototype_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_prototype_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
@@ -214,7 +214,7 @@ static MalValue mal_builtin_map_prototype_set(MalVm *vm, MalValue this_value, co
     return this_value;
 }
 
-static MalValue mal_builtin_map_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
@@ -223,7 +223,7 @@ static MalValue mal_builtin_map_prototype_has(MalVm *vm, MalValue this_value, co
     return mal_value_new_boolean(mal_map_object_has(map, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
-static MalValue mal_builtin_map_prototype_delete(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_prototype_delete(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
@@ -232,7 +232,7 @@ static MalValue mal_builtin_map_prototype_delete(MalVm *vm, MalValue this_value,
     return mal_value_new_boolean(mal_map_object_delete(map, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
-static MalValue mal_builtin_map_prototype_clear(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_prototype_clear(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
 
@@ -246,7 +246,7 @@ static MalValue mal_builtin_map_prototype_clear(MalVm *vm, MalValue this_value, 
     return mal_value_new_undefined();
 }
 
-static MalValue mal_builtin_map_prototype_size_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_prototype_size_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
 
@@ -258,7 +258,7 @@ static MalValue mal_builtin_map_prototype_size_getter(MalVm *vm, MalValue this_v
     return mal_value_from_i32((i32) mal_map_object_size(map));
 }
 
-static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
     if (map == nullptr) {
         return mal_value_new_undefined();
@@ -301,25 +301,25 @@ static MalValue mal_builtin_map_prototype_iterator(MalVm *vm, MalValue this_valu
     return mal_vm_new_builtin_iterator(vm, kind, this_value);
 }
 
-static MalValue mal_builtin_map_prototype_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_prototype_entries(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     return mal_builtin_map_prototype_iterator(vm, this_value, MAL_ITERATOR_MAP_ENTRIES);
 }
 
-static MalValue mal_builtin_map_prototype_keys(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_prototype_keys(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     return mal_builtin_map_prototype_iterator(vm, this_value, MAL_ITERATOR_MAP_KEYS);
 }
 
-static MalValue mal_builtin_map_prototype_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_map_prototype_values(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
     return mal_builtin_map_prototype_iterator(vm, this_value, MAL_ITERATOR_MAP_VALUES);
 }
 
-static MalValue mal_builtin_weak_map_prototype_get(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_weak_map_prototype_get(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *map = mal_builtin_map_this(vm, this_value, true, "Receiver is not a WeakMap");
     if (map == nullptr) {
         return mal_value_new_undefined();
@@ -328,7 +328,7 @@ static MalValue mal_builtin_weak_map_prototype_get(MalVm *vm, MalValue this_valu
     return mal_map_object_get(map, arg_count >= 1 ? args[0] : mal_value_new_undefined());
 }
 
-static MalValue mal_builtin_weak_map_prototype_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_weak_map_prototype_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *map = mal_builtin_map_this(vm, this_value, true, "Receiver is not a WeakMap");
     if (map == nullptr) {
         return mal_value_new_undefined();
@@ -345,7 +345,7 @@ static MalValue mal_builtin_weak_map_prototype_set(MalVm *vm, MalValue this_valu
     return this_value;
 }
 
-static MalValue mal_builtin_weak_map_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_weak_map_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *map = mal_builtin_map_this(vm, this_value, true, "Receiver is not a WeakMap");
     if (map == nullptr) {
         return mal_value_new_undefined();
@@ -354,7 +354,7 @@ static MalValue mal_builtin_weak_map_prototype_has(MalVm *vm, MalValue this_valu
     return mal_value_new_boolean(mal_map_object_has(map, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
-static MalValue mal_builtin_weak_map_prototype_delete(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target) {
+static MalValue mal_builtin_weak_map_prototype_delete(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *map = mal_builtin_map_this(vm, this_value, true, "Receiver is not a WeakMap");
     if (map == nullptr) {
         return mal_value_new_undefined();
