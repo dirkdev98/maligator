@@ -123,6 +123,36 @@ MalValue mal_vm_op_load_property(MalVm *vm, MalValue object_value, MalValue key_
 
 void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict);
 
+/**
+ * Value-returning object/array/closure construction, shared by the create ops
+ * and the compiled backend. create_function captures `creation_env` (the
+ * creating frame's environment) so the closure resolves captured bindings.
+ */
+MalValue mal_vm_op_create_object(MalVm *vm);
+
+MalValue mal_vm_op_create_array(MalVm *vm, i32 length);
+
+MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env);
+
+/**
+ * Define an own data property (the object-literal / define-semantics path),
+ * shared by MAL_OP_DEFINE_PROPERTY and the compiled backend. Like the op, this
+ * cannot run user code, so it never leaves a pending throw.
+ */
+void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool enumerable);
+
+/**
+ * Throw "<name> is not defined" (ReferenceError), shared by MAL_OP_LOAD_UNDECLARED
+ * and the compiled backend; sets vm->completion to THROW.
+ */
+void mal_vm_op_load_undeclared(MalVm *vm, i32 name_string_index);
+
+/**
+ * Resolve (creating if absent) a function's `.prototype` object — the parent of
+ * instances built by [[Construct]]. Exposed for mal_vm_construct_value.
+ */
+MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
+
 void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction);

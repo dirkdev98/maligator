@@ -68,146 +68,178 @@ typedef u64 MalValue;
 
 
 /**
- * Reinterpret f64 as MalValue
+ * The numeric and tag-classification primitives below are `static inline` so
+ * the interpreter's hot loop and the native-C backend's boxed fallbacks lower
+ * to a few bit tests over the NaN-boxing layout instead of cross-TU calls (the
+ * same treatment mal_ops_is_number already gets in value_ops.h). They depend
+ * only on the heap header (heap.h, included above), so any value.h includer can
+ * use them. Definitions are ordered so each callee precedes its callers.
  */
-MalValue mal_value_from_f64(f64 value);
 
-/**
- * Reinterpret f64 as MalValue + convert any NaN to our only NaN.
- */
-MalValue mal_value_from_f64_convert_nan(f64 value);
+/** Reinterpret f64 as MalValue. */
+static inline MalValue mal_value_from_f64(f64 value) {
+    return *(MalValue *) &value;
+}
 
-/**
- * Reinterpret a MalValue as a f64
- */
-f64 mal_value_to_f64(MalValue value);
+/** Reinterpret a MalValue as a f64. */
+static inline f64 mal_value_to_f64(MalValue value) {
+    return *(f64 *) &value;
+}
 
+/** Returns true if the value is a f64. */
+static inline bool mal_value_is_f64(MalValue value) {
+    return (value & MASK_EXPONENT_BITS) != MASK_EXPONENT_BITS;
+}
 
-/**
- * Returns true if the value is a f64
- */
-bool mal_value_is_f64(MalValue value);
+/** Create a new NaN value. */
+static inline MalValue mal_value_new_nan() {
+    return MAL_VALUE_NAN;
+}
 
-/**
- * Returns true if the value is a f64 or NaN
- */
-bool mal_value_is_f64_or_nan(MalValue value);
+/** Check if the provided value is a NaN. */
+static inline bool mal_value_is_nan(MalValue value) {
+    return value == MAL_VALUE_NAN;
+}
 
-/**
- * Create a new NaN value.
- */
-MalValue mal_value_new_nan();
+/** Returns true if the value is a f64 or NaN. */
+static inline bool mal_value_is_f64_or_nan(MalValue value) {
+    return mal_value_is_nan(value) || mal_value_is_f64(value);
+}
 
-/**
- * Check if the provided value is a NaN
- */
-bool mal_value_is_nan(MalValue value);
+/** Reinterpret f64 as MalValue + convert any NaN to our only NaN. */
+static inline MalValue mal_value_from_f64_convert_nan(f64 value) {
+    MalValue mal_value = mal_value_from_f64(value);
+    if ((mal_value & MASK_EXPONENT_BITS) == MASK_EXPONENT_BITS) {
+        if (value > 0) {
+            return MAL_VALUE_POSITIVE_INFINITY;
+        }
+        if (value < 0) {
+            return MAL_VALUE_NEGATIVE_INFINITY;
+        }
+        return MAL_VALUE_NAN;
+    }
+    return mal_value;
+}
 
-/**
- * Create a new null value.
- */
-MalValue mal_value_new_null();
+/** Create a new null value. */
+static inline MalValue mal_value_new_null() {
+    return MAL_VALUE_NULL;
+}
 
-/**
- * Check if the provided value is a null
- */
-bool mal_value_is_null(MalValue value);
+/** Check if the provided value is a null. */
+static inline bool mal_value_is_null(MalValue value) {
+    return value == MAL_VALUE_NULL;
+}
 
+/** Create a new undefined value. */
+static inline MalValue mal_value_new_undefined() {
+    return MAL_VALUE_UNDEFINED;
+}
 
-/**
- * Create a new undefined value.
- */
-MalValue mal_value_new_undefined();
+/** Check if the provided value is an undefined. */
+static inline bool mal_value_is_undefined(MalValue value) {
+    return value == MAL_VALUE_UNDEFINED;
+}
 
-/**
- * Check if the provided value is an undefined
- */
-bool mal_value_is_undefined(MalValue value);
+/** Check if the value is null or undefined. */
+static inline bool mal_value_is_nil(MalValue value) {
+    return mal_value_is_null(value) || mal_value_is_undefined(value);
+}
 
-/**
- * Check if the value is null or undefined.
- */
-bool mal_value_is_nil(MalValue value);
+/** Create a new MalValue from a boolean. */
+static inline MalValue mal_value_new_boolean(bool value) {
+    return value ? MAL_VALUE_TRUE : MAL_VALUE_FALSE;
+}
 
-/**
- * Create a new MalValue from a boolean
- */
-MalValue mal_value_new_boolean(bool value);
+/** Check if the MalValue is a boolean. */
+static inline bool mal_value_is_boolean(MalValue value) {
+    return value == MAL_VALUE_TRUE || value == MAL_VALUE_FALSE;
+}
 
-/**
- * Check if the MalValue is a boolean.
- */
-bool mal_value_is_boolean(MalValue value);
+/** Convert MalValue to a boolean. */
+static inline bool mal_value_to_boolean(MalValue value) {
+    return value == MAL_VALUE_TRUE;
+}
 
-/**
- * Convert MalValue to a boolean.
- */
-bool mal_value_to_boolean(MalValue value);
+/** Create a MalValue from an i32. */
+static inline MalValue mal_value_from_i32(i32 value) {
+    return MAL_VALUE_INT32 | (u32) value;
+}
 
-/**
- * Create a MalValue from an i32
- */
-MalValue mal_value_from_i32(i32 value);
+/** Extract the i32 from a MalValue. */
+static inline i32 mal_value_to_i32(MalValue value) {
+    return (i32) (value & MASK_INT32);
+}
 
-/**
- * Extract the i32 from a MalValue
- */
-i32 mal_value_to_i32(MalValue value);
+/** Check if the value is an i32. */
+static inline bool mal_value_is_int32(MalValue value) {
+    return (value & MAL_VALUE_INT32) == MAL_VALUE_INT32;
+}
 
-/**
- * Check if the value is an i32
- */
-bool mal_value_is_int32(MalValue value);
+/** Box a heap allocation. */
+static inline MalValue mal_value_from_heap(MalHeapHeader *heap) {
+    return MAL_VALUE_PTR | ((uptr) heap & MAKS_PTR);
+}
 
-/**
- * Box a heap allocation.
- */
-MalValue mal_value_from_heap(MalHeapHeader *heap);
+/** Check if the value is heap-backed. */
+static inline bool mal_value_is_heap(MalValue value) {
+    return (value & MAL_VALUE_PTR) == MAL_VALUE_PTR;
+}
 
-/**
- * Check if the value is heap-backed.
- */
-bool mal_value_is_heap(MalValue value);
+/** Unbox a heap allocation. */
+static inline MalHeapHeader *mal_value_to_heap(MalValue value) {
+    return (MalHeapHeader *) (uptr) (value & MAKS_PTR);
+}
 
-/**
- * Unbox a heap allocation.
- */
-MalHeapHeader *mal_value_to_heap(MalValue value);
+/** Unbox a const heap allocation. */
+static inline const MalHeapHeader *mal_value_to_heap_const(MalValue value) {
+    return (const MalHeapHeader *) (uptr) (value & MAKS_PTR);
+}
 
-/**
- * Unbox a const heap allocation.
- */
-const MalHeapHeader *mal_value_to_heap_const(MalValue value);
+/** Read the heap type tag. */
+static inline MalHeapType mal_value_heap_type(MalValue value) {
+    return mal_value_to_heap_const(value)->type;
+}
 
-/**
- * Read the heap type tag.
- */
-MalHeapType mal_value_heap_type(MalValue value);
+/** Check if the value has the given heap type. */
+static inline bool mal_value_is_heap_type(MalValue value, MalHeapType type) {
+    return mal_value_is_heap(value) && mal_value_heap_type(value) == type;
+}
 
-/**
- * Check if the value has the given heap type.
- */
-bool mal_value_is_heap_type(MalValue value, MalHeapType type);
+/** Check if the value is a string. */
+static inline bool mal_value_is_string(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_STRING);
+}
 
-/**
- * Check if the value is a string.
- */
-bool mal_value_is_string(MalValue value);
+/** Check if the value is a symbol. */
+static inline bool mal_value_is_symbol(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_SYMBOL);
+}
 
-/**
- * Check if the value is a symbol.
- */
-bool mal_value_is_symbol(MalValue value);
+/** Check if the value is a BigInt. */
+static inline bool mal_value_is_bigint(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_BIGINT);
+}
 
-/**
- * Check if the value is a BigInt.
- */
-bool mal_value_is_bigint(MalValue value);
-
-/**
- * Check if the value is an object.
- */
-bool mal_value_is_object(MalValue value);
+/** Check if the value is an object. */
+static inline bool mal_value_is_object(MalValue value) {
+    if (!mal_value_is_heap(value)) {
+        return false;
+    }
+    MalHeapType type = mal_value_heap_type(value);
+    return type == MAL_HEAP_OBJECT ||
+        type == MAL_HEAP_FUNCTION_OBJECT ||
+        type == MAL_HEAP_NATIVE_FUNCTION_OBJECT ||
+        type == MAL_HEAP_BOUND_FUNCTION_OBJECT ||
+        type == MAL_HEAP_ARRAY_OBJECT ||
+        type == MAL_HEAP_MAP_OBJECT ||
+        type == MAL_HEAP_SET_OBJECT ||
+        type == MAL_HEAP_ITERATOR_OBJECT ||
+        type == MAL_HEAP_GENERATOR_OBJECT ||
+        type == MAL_HEAP_ARRAY_BUFFER_OBJECT ||
+        type == MAL_HEAP_TYPED_ARRAY_OBJECT ||
+        type == MAL_HEAP_DATA_VIEW_OBJECT;
+}
 
 /**
  * Check if the value is a function object.

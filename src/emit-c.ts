@@ -72,6 +72,38 @@ const NATIVE_COMPARE: Record<string, string> = {
 };
 
 /**
+ * Bitwise/shift operators emitted as native C on two `number`-rep operands.
+ * JS defines these over ToInt32 (mal_ops_number_to_i32), with the shift count
+ * masked to 5 bits. The signed-32-bit result is held as a `number`-rep double
+ * and boxed back to an int32 by mal_ops_number_value, behavior-identical to the
+ * interpreter's mal_ops_bit_and / shift_left and friends. (`>>>` yields a uint32
+ * and `%` a float remainder; both also produce `number`-rep, emitted bespoke.)
+ */
+const NATIVE_BITWISE: Record<string, string> = {
+	"&": "&",
+	"|": "|",
+	"^": "^",
+	"<<": "<<",
+	">>": ">>",
+};
+
+/**
+ * Whether a binary operator yields a JS Number from two Number operands — native
+ * arithmetic, the bitwise/shift operators, unsigned shift, and remainder. Such a
+ * result is `number`-rep (the integer-valued ones held exactly as a double).
+ * `**` is excluded: it stays boxed (its Number::exponentiate special cases are
+ * not worth inlining yet).
+ */
+function producesNumberFromNumbers(operator: string): boolean {
+	return (
+		operator in NATIVE_ARITH ||
+		operator in NATIVE_BITWISE ||
+		operator === ">>>" ||
+		operator === "%"
+	);
+}
+
+/**
  * Whether a binary operator can leave a THROW completion that a boxed fallback
  * must propagate. The comparison operators lower to a pure native compare and
  * never throw; every other operator can — `in`/`instanceof` directly, and
@@ -82,6 +114,188 @@ const NATIVE_COMPARE: Record<string, string> = {
  */
 function binaryOpCanThrow(operator: string): boolean {
 	return !(operator in NATIVE_COMPARE);
+}
+
+/**
+ * Binary operators whose operands are unambiguously numeric, so using a
+ * parameter as one is strong evidence the parameter is meant to be a number and
+ * justifies promoting it to `number`-rep (and hoisting an entry guard). `+` and
+ * the equality operators are deliberately excluded: `+` is also string
+ * concatenation and equality accepts any type, so a parameter used only there
+ * is left boxed to avoid an entry guard that would bail on ordinary non-numeric
+ * callers.
+ */
+const UNAMBIGUOUS_NUMERIC_BINARY = new Set<string>([
+	"-",
+	"*",
+	"/",
+	"%",
+	"**",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+	"<",
+	"<=",
+	">",
+	">=",
+]);
+
+/**
+ * PARAM-ENTRY UNBOXING: the parameter registers eligible for speculative
+ * number-rep promotion. A parameter qualifies when every read of it is
+ * numeric-friendly — at least one unambiguously-numeric use (so promotion
+ * actually pays; a parameter only boxed at a boundary gains nothing) and no use
+ * that strongly implies a non-number (a property base/key, a callee/receiver, a
+ * type query like `!`/typeof, or `in`/`instanceof`).
+ *
+ * Promotion is *speculative*, not a proof: a promoted parameter is unboxed once
+ * at function entry behind a guard that bails to the interpreter when an
+ * argument is not actually a number (see emitCompiledFunction), so the fast
+ * body then runs fully unboxed with no per-op guards. Correctness therefore
+ * does not depend on this scan — it only governs profitability and how often
+ * the guard bails. A parameter reassigned to a non-number is separately demoted
+ * to boxed by inferReps, so the entry guard only covers parameters that both
+ * qualify here and survive as number-rep.
+ *
+ * Returns the empty set if the function contains an opcode the backend doesn't
+ * lower: it won't compile, so promotion is moot, and this avoids classifying
+ * register reads the scan doesn't model.
+ */
+function numericParamCandidates(fn: VmFunction): Set<number> {
+	const paramCount = fn.parameterCount;
+	if (paramCount === 0) {
+		return new Set();
+	}
+
+	// Per-register direct-use classification, plus the forward value-copy graph.
+	// The register allocator pins parameters and routinely copies them into a
+	// working register before any arithmetic (`r1 = r0; ... r1 < n`), so a
+	// parameter's evidence has to be followed across MOVEs: `numericUse` /
+	// `disqualUse` record the *register* a use applies to, and a parameter
+	// inherits the uses of every register its value reaches via MOVE.
+	const numericUse = new Set<number>();
+	const disqualUse = new Set<number>();
+	const moveTargets = new Map<number, Array<number>>();
+	const addEdge = (src: number, dst: number): void => {
+		const list = moveTargets.get(src);
+		if (list === undefined) {
+			moveTargets.set(src, [dst]);
+		} else {
+			list.push(dst);
+		}
+	};
+
+	for (const instruction of fn.instructions) {
+		switch (instruction.opcode) {
+			case "MOVE":
+				addEdge(instruction.src, instruction.dst);
+				break;
+			// No register reads, or a neutral boundary read (the value is boxed
+			// there regardless) that neither justifies nor disqualifies promotion.
+			case "CREATE_UNDEFINED":
+			case "CREATE_NULL":
+			case "CREATE_BOOLEAN":
+			case "CREATE_NUMBER":
+			case "CREATE_F64":
+			case "CREATE_STRING":
+			case "CREATE_BIGINT":
+			case "CREATE_OBJECT":
+			case "CREATE_ARRAY":
+			case "CREATE_FUNCTION":
+			case "DEFINE_PROPERTY": // object is the literal; key/value boxed boundary reads
+			case "LOAD_THIS":
+			case "LOAD_NEW_TARGET":
+			case "LOAD_UNDECLARED":
+			case "LOAD_CAPTURED":
+			case "LOAD_GLOBAL":
+			case "LOAD_INTRINSIC":
+			case "STORE_GLOBAL": // src boxed at the global-store boundary
+			case "STORE_CAPTURED": // src boxed into the captured slot
+			case "THROW": // value boxed at the throw boundary
+			case "JUMP":
+			case "JUMP_IF": // cond read via native truthiness — fine for a number
+			case "RETURN": // value boxed at return
+				break;
+			case "CONSTRUCT":
+				disqualUse.add(instruction.callee);
+				// arguments are neutral boundary reads
+				break;
+			case "LOAD_PROPERTY":
+				disqualUse.add(instruction.object);
+				disqualUse.add(instruction.key);
+				break;
+			case "STORE_PROPERTY":
+				disqualUse.add(instruction.object);
+				disqualUse.add(instruction.key);
+				// value is a neutral boundary read
+				break;
+			case "CALL":
+				disqualUse.add(instruction.callee);
+				disqualUse.add(instruction.thisValue);
+				// arguments are neutral boundary reads
+				break;
+			case "BINARY":
+				if (instruction.operator === "in" || instruction.operator === "instanceof") {
+					disqualUse.add(instruction.left);
+					disqualUse.add(instruction.right);
+				} else if (UNAMBIGUOUS_NUMERIC_BINARY.has(instruction.operator)) {
+					numericUse.add(instruction.left);
+					numericUse.add(instruction.right);
+				}
+				// `+` and the equality operators are neutral
+				break;
+			case "UNARY":
+				if (
+					instruction.operator === "-" ||
+					instruction.operator === "+" ||
+					instruction.operator === "~"
+				) {
+					numericUse.add(instruction.src);
+				} else {
+					// !, typeof, void, delete — not numeric
+					disqualUse.add(instruction.src);
+				}
+				break;
+			default:
+				// An opcode the backend can't lower yet: the function won't compile.
+				return new Set();
+		}
+	}
+
+	const promotable = new Set<number>();
+	for (let p = 0; p < paramCount; p++) {
+		// Walk the forward MOVE closure of the parameter — the registers its value
+		// may reach. Register reuse can make this over-approximate, which only
+		// costs a missed or wasted promotion, never correctness: the entry guard
+		// makes any promotion sound regardless of how the parameter is used.
+		const seen = new Set<number>([p]);
+		const stack = [p];
+		let justified = false;
+		let disqualified = false;
+		while (stack.length > 0) {
+			const r = stack.pop()!;
+			if (disqualUse.has(r)) {
+				disqualified = true;
+				break;
+			}
+			if (numericUse.has(r)) {
+				justified = true;
+			}
+			for (const target of moveTargets.get(r) ?? []) {
+				if (!seen.has(target)) {
+					seen.add(target);
+					stack.push(target);
+				}
+			}
+		}
+		if (justified && !disqualified) {
+			promotable.add(p);
+		}
+	}
+	return promotable;
 }
 
 /**
@@ -98,7 +312,20 @@ export function emitCompiledFunction(
 		return null;
 	}
 
-	const reps = inferReps(fn);
+	// A function with its own captured slots needs a per-activation MalEnv node
+	// (function_index == this function) for LOAD/STORE_CAPTURED(owner == self)
+	// and for closures it creates to capture. The interpreter's
+	// push_function_frame allocates that node; the compiled dispatch invokes the
+	// function with its creation_env directly and never does, so such a function
+	// must stay interpreted. (Functions with captured_count == 0 are unaffected:
+	// they create only non-capturing closures, and inner closures read outer
+	// scopes through their creation_env, which is set correctly either way.)
+	if (fn.capturedCount > 0) {
+		return null;
+	}
+
+	const promotableParams = numericParamCandidates(fn);
+	const reps = inferReps(fn, promotableParams);
 
 	const body = emitBody(fn, suffix, reps);
 	if (body === null) {
@@ -112,6 +339,14 @@ export function emitCompiledFunction(
 		return null;
 	}
 
+	// Parameters that qualified for promotion AND survived inferReps as
+	// number-rep (i.e. were not reassigned to a non-number) are unboxed once at
+	// entry behind a speculative guard.
+	const promotedParams = Array.from({ length: fn.parameterCount }, (_, i) => i).filter(
+		(i) => promotableParams.has(i) && reps[i] === "number",
+	);
+	const isPromoted = new Set(promotedParams);
+
 	const symbol = `mal_compiled_${index}${suffix}`;
 	const lines: Array<string> = [];
 
@@ -123,12 +358,40 @@ export function emitCompiledFunction(
 	lines.push(`    (void) env;`);
 
 	// Registers are plain C locals: `number`-rep ones as doubles, `boolean`-rep
-	// as bool (both unboxed), the rest as MalValue. Parameters adopt the incoming
-	// arguments (always boxed); other registers start at a rep-appropriate zero.
+	// as bool (both unboxed), the rest as MalValue.
 	for (let i = 0; i < fn.registerCount; i++) {
 		lines.push(`    ${cTypeOf(reps[i]!)} r${i};`);
 	}
+
+	// Promoted parameters: load each boxed, guard that every one is a number,
+	// and bail to the interpreter — running THIS function's own bytecode by
+	// index — when any is not (a normal call dispatch would re-enter .compiled
+	// and loop forever). undefined (incl. a missing argument) is not a number,
+	// so under-application bails and interprets identically. Past the guard the
+	// fast body runs fully unboxed with no per-op number checks.
+	if (promotedParams.length > 0) {
+		for (const i of promotedParams) {
+			lines.push(
+				`    MalValue p${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`,
+			);
+		}
+		const guard = promotedParams.map((i) => `!mal_ops_is_number(p${i})`).join(" || ");
+		lines.push(`    if (${guard}) {`);
+		lines.push(
+			`        return mal_vm_interpret_function(vm, ${index}, MAL_VALUE_UNDEFINED, this_value, args, arg_count, new_target, env);`,
+		);
+		lines.push(`    }`);
+		for (const i of promotedParams) {
+			lines.push(`    r${i} = mal_ops_number_as_f64(p${i});`);
+		}
+	}
+
+	// Remaining parameters adopt the incoming arguments boxed; non-parameter
+	// registers start at a rep-appropriate zero.
 	for (let i = 0; i < fn.parameterCount; i++) {
+		if (isPromoted.has(i)) {
+			continue;
+		}
 		lines.push(`    r${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`);
 	}
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
@@ -137,8 +400,11 @@ export function emitCompiledFunction(
 
 	lines.push(...body);
 
-	// Falling off the end returns undefined (a missing explicit return).
-	lines.push(`    return MAL_VALUE_UNDEFINED;`);
+	// Falling off the end returns undefined — or `this` for a constructor with no
+	// explicit object return (mal_ops_construct_result with new_target set).
+	lines.push(
+		`    return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`,
+	);
 	lines.push("}");
 
 	return { symbol, source: lines.join("\n") };
@@ -170,16 +436,21 @@ function joinReps(current: RegisterRep | null, produced: RegisterRep): RegisterR
  * Forward fixpoint over the rep lattice (top = unknown, then {number, boolean},
  * bottom = boxed). A register's rep is the join of the reps its definitions
  * produce; producedRep depends on operand reps, so iterate to a fixpoint. Reps
- * only move down (unknown → native → boxed), so it converges. Parameters hold
- * incoming (boxed) arguments, so they start — and stay — boxed.
+ * only move down (unknown → native → boxed), so it converges.
+ *
+ * Parameters hold incoming (boxed) arguments, so by default they start — and
+ * stay — boxed. A parameter in `promotableParams` is instead *speculatively*
+ * seeded as `number`: if it has no other definition it stays number-rep (and is
+ * unboxed at entry behind a guard); if the body reassigns it to a non-number,
+ * that definition joins it back to boxed and it is not promoted.
  */
-function inferReps(fn: VmFunction): Array<RegisterRep> {
+function inferReps(fn: VmFunction, promotableParams: Set<number>): Array<RegisterRep> {
 	const reps: Array<RegisterRep | null> = Array.from(
 		{ length: fn.registerCount },
 		() => null,
 	);
 	for (let i = 0; i < fn.parameterCount; i++) {
-		reps[i] = "boxed";
+		reps[i] = promotableParams.has(i) ? "number" : "boxed";
 	}
 
 	let changed = true;
@@ -237,7 +508,7 @@ function producedRep(
 			if (instruction.operator in NATIVE_COMPARE) {
 				return "boolean";
 			}
-			if (instruction.operator in NATIVE_ARITH) {
+			if (producesNumberFromNumbers(instruction.operator)) {
 				const left = reps[instruction.left] ?? null;
 				const right = reps[instruction.right] ?? null;
 				if (left === null || right === null) {
@@ -251,7 +522,11 @@ function producedRep(
 			if (instruction.operator === "!") {
 				return "boolean";
 			}
-			if (instruction.operator === "-" || instruction.operator === "+") {
+			if (
+				instruction.operator === "-" ||
+				instruction.operator === "+" ||
+				instruction.operator === "~"
+			) {
 				const src = reps[instruction.src] ?? null;
 				return src === null ? null : src === "number" ? "number" : "boxed";
 			}
@@ -372,8 +647,29 @@ function emitInstruction(
 			return [
 				`r${instruction.dst} = mal_value_from_bigint(&mal_bigints${suffix}[${instruction.bigintIndex}]);`,
 			];
+		case "CREATE_OBJECT":
+			return [`r${instruction.dst} = mal_vm_op_create_object(vm);`];
+		case "CREATE_ARRAY":
+			return [`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`];
+		case "CREATE_FUNCTION":
+			// The closure captures this frame's environment. Only reachable when
+			// the enclosing function has no captured slots of its own (see the
+			// capturedCount guard in emitCompiledFunction), so `env` — the
+			// enclosing function's creation_env — is exactly what its interpreted
+			// frame's env would be, making the closure's creation_env correct.
+			return [
+				`r${instruction.dst} = mal_vm_op_create_function(vm, ${instruction.functionIndex}, env);`,
+			];
+		case "DEFINE_PROPERTY":
+			// Object-literal define semantics; cannot run user code, so no
+			// completion check (matching the interpreter's mal_op_define_property).
+			return [
+				`mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable});`,
+			];
 		case "LOAD_THIS":
 			return [`r${instruction.dst} = this_value;`];
+		case "LOAD_NEW_TARGET":
+			return [`r${instruction.dst} = new_target;`];
 		case "LOAD_CAPTURED":
 			return [
 				`r${instruction.dst} = mal_vm_load_captured(env, ${instruction.ownerFunctionIndex}, ${instruction.index});`,
@@ -408,14 +704,42 @@ function emitInstruction(
 			const arith = NATIVE_ARITH[operator];
 			const compare = NATIVE_COMPARE[operator];
 
-			// The dst is `number`-rep only when the lattice proved both operands
-			// are numbers and the op is native arithmetic — emit raw doubles.
+			// The dst is `number`-rep only when the lattice proved both operands are
+			// numbers (see producedRep / producesNumberFromNumbers) — emit native
+			// arithmetic or a native ToInt32-based bitwise/shift/remainder, all
+			// holding their integer-valued results as a double.
 			if (reps[dst] === "number") {
 				// Bail defensively if the lattice invariant ever breaks.
-				if (arith === undefined || !leftIsNum || !rightIsNum) {
+				if (!leftIsNum || !rightIsNum) {
 					return null;
 				}
-				return [`r${dst} = ${num(left)} ${arith} ${num(right)};`];
+				if (arith !== undefined) {
+					return [`r${dst} = ${num(left)} ${arith} ${num(right)};`];
+				}
+				const bitwise = NATIVE_BITWISE[operator];
+				if (bitwise !== undefined) {
+					// JS bitwise ops are over ToInt32; the shifts mask the count to 5
+					// bits. The signed-32-bit result becomes a double (boxed back to
+					// int32 by mal_ops_number_value, matching the interpreter's ops).
+					const right32 =
+						operator === "<<" || operator === ">>"
+							? `(mal_ops_number_to_i32(${num(right)}) & 0x1F)`
+							: `mal_ops_number_to_i32(${num(right)})`;
+					return [
+						`r${dst} = (f64) (mal_ops_number_to_i32(${num(left)}) ${bitwise} ${right32});`,
+					];
+				}
+				if (operator === ">>>") {
+					// Unsigned shift yields a uint32; a value ≥ 2^31 stays an f64 when
+					// boxed (mal_ops_number_value), like mal_ops_shift_right_unsigned.
+					return [
+						`r${dst} = (f64) ((u32) mal_ops_number_to_i32(${num(left)}) >> (mal_ops_number_to_i32(${num(right)}) & 0x1F));`,
+					];
+				}
+				if (operator === "%") {
+					return [`r${dst} = fmod(${num(left)}, ${num(right)});`];
+				}
+				return null;
 			}
 
 			const slow = `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`;
@@ -495,7 +819,12 @@ function emitInstruction(
 				if (reps[src] !== "number") {
 					return null;
 				}
-				// Lattice marks dst `number` only for unary - / +.
+				// Lattice marks dst `number` only for unary -, +, and ~ over a
+				// number. `~` is over ToInt32 (~to_i32 == bit_xor(., -1), the
+				// interpreter's MAL_UNARY_BIT_NOT), its int result held as a double.
+				if (operator === "~") {
+					return [`r${dst} = (f64) (~mal_ops_number_to_i32(${num(src)}));`];
+				}
 				return [operator === "-" ? `r${dst} = -${num(src)};` : `r${dst} = ${num(src)};`];
 			}
 			// Logical not yields a boolean: !ToBoolean(src). This is exactly
@@ -539,6 +868,38 @@ function emitInstruction(
 				`r${instruction.dst} = ${tmp}.value;`,
 			];
 		}
+		case "CONSTRUCT": {
+			// `new callee(args)`: marshal args (boxing numbers) and dispatch through
+			// mal_vm_construct_value, which allocates the instance, runs the
+			// constructor (compiled/interpreted/native), and returns the result.
+			const args = instruction.arguments;
+			const argsExpr =
+				args.length === 0
+					? "nullptr"
+					: `((MalValue[]){ ${args.map((r) => boxed(r)).join(", ")} })`;
+			const tmp = `construct_result_${ip}`;
+			return [
+				`MalCompletion ${tmp} = mal_vm_construct_value(vm, ${boxed(instruction.callee)}, ${argsExpr}, ${args.length});`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
+				`r${instruction.dst} = ${tmp}.value;`,
+			];
+		}
+		case "THROW":
+			// Set the throw completion and return; the caller (call/construct
+			// dispatch or the run loop) unwinds, exactly as MAL_OP_THROW does. A
+			// function with its own try/catch is ineligible (no handler table), so
+			// the throw always propagates out of this compiled frame.
+			return [
+				`vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_THROW, .value = ${boxed(instruction.value)} };`,
+				`return MAL_VALUE_UNDEFINED;`,
+			];
+		case "LOAD_UNDECLARED":
+			// An undeclared reference always throws ReferenceError; the helper sets
+			// the throw completion, so propagate it (the dst is never read).
+			return [
+				`mal_vm_op_load_undeclared(vm, ${instruction.nameStringIndex});`,
+				`return MAL_VALUE_UNDEFINED;`,
+			];
 		case "JUMP":
 			return [`goto L${instruction.targetIp};`];
 		case "JUMP_IF":
@@ -547,10 +908,13 @@ function emitInstruction(
 			return [`if (${truthy(instruction.cond)}) goto L${instruction.targetIp};`];
 		case "RETURN":
 			// Register -1 is the "no value" sentinel (a synthesized empty return).
+			// Route through mal_ops_construct_result so a [[Construct]] invocation
+			// (new_target set) substitutes `this` for a non-object completion; a
+			// plain call passes the value through unchanged.
 			return [
 				instruction.value < 0
-					? "return MAL_VALUE_UNDEFINED;"
-					: `return ${boxed(instruction.value)};`,
+					? "return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);"
+					: `return mal_ops_construct_result(${boxed(instruction.value)}, this_value, new_target);`,
 			];
 		default:
 			// Not lowered yet — the function stays on the interpreter. This is the

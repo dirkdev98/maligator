@@ -672,6 +672,36 @@ MalCompletion mal_vm_call_value(
 );
 
 /**
+ * Push a bytecode frame for `function_index` and run it to completion, marshaling
+ * `args` onto the top of the value stack as the callee's incoming window, and
+ * returning the result (vm->completion carries a throw out). Unlike
+ * mal_vm_call_value / the call dispatchers this ALWAYS interprets, ignoring
+ * function->compiled: it is the bail target for a native-backend function whose
+ * entry-guard speculation failed, where re-dispatching (which honors .compiled)
+ * would re-enter the same compiled function and loop forever. `callee` sets
+ * frame.callee (for generator .prototype); when `new_target` is an object the
+ * frame runs as a construct (is_construct, for a constructor bail).
+ */
+MalValue mal_vm_interpret_function(
+    MalVm *vm,
+    i32 function_index,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalEnv *env
+);
+
+/**
+ * `new callee(args)` as a value: allocate the instance, run the constructor
+ * (compiled, interpreted, or native) to completion, and return its result (a
+ * non-object body completion becomes the instance). The construct analogue of
+ * mal_vm_call_value, used by the native backend's CONSTRUCT.
+ */
+MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count);
+
+/**
  * Resolve the display name of a callable, or null for non-callables.
  */
 MalString *mal_vm_callable_name(MalVm *vm, MalValue callee);

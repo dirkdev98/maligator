@@ -47,6 +47,33 @@ static inline f64 mal_ops_number_as_f64(MalValue value) {
 }
 
 /**
+ * ToInt32 of a value already known to be a JS Number (precondition:
+ * mal_ops_is_number), for the native-C backend's unboxed bitwise/shift ops.
+ * Deliberately mirrors the interpreter's mal_ops_to_i32 (value_ops.c) for the
+ * non-int32-boxed path — a plain truncating cast with NaN/±Infinity/±0 → 0 —
+ * rather than the spec's modulo-2^32 reduction, so native bitwise is
+ * behavior-identical to the boxed op (the interpreter is itself non-spec for
+ * out-of-range magnitudes; matching it is what keeps the backend an overlay).
+ */
+static inline i32 mal_ops_number_to_i32(f64 number) {
+    if (isnan(number) || isinf(number) || number == 0.0) {
+        return 0;
+    }
+    return (i32) number;
+}
+
+/**
+ * The result of a function body for the native backend's RETURN: for a
+ * [[Construct]] call a non-object completion becomes `this`
+ * (OrdinaryCallEvaluateBody), mirroring the interpreter's frame->is_construct
+ * handling. `new_target` is the constructor object for a construct and undefined
+ * for a plain call, so a plain call always passes its value through unchanged.
+ */
+static inline MalValue mal_ops_construct_result(MalValue value, MalValue this_value, MalValue new_target) {
+    return (mal_value_is_object(new_target) && !mal_value_is_object(value)) ? this_value : value;
+}
+
+/**
  * Box a f64 as an int32 when integral and in range, else as f64/NaN.
  */
 MalValue mal_ops_number_value(f64 value);

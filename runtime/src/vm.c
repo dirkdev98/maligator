@@ -687,6 +687,48 @@ void mal_vm_leave_compiled(MalVm *vm) {
     vm->native_call_depth--;
 }
 
+MalValue mal_vm_interpret_function(
+    MalVm *vm,
+    i32 function_index,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalEnv *env
+) {
+    if (vm->value_stack_size + arg_count > vm->value_stack_capacity) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+        return mal_value_new_undefined();
+    }
+
+    // Marshal the arguments onto the top of the value stack: push adopts that
+    // region as the callee's incoming window. `args` may alias the caller's
+    // window lower on the stack (the in-VM call dispatch passes it from there),
+    // but never the region being written, so this copy is safe.
+    i32 base = vm->value_stack_size;
+    for (i32 i = 0; i < arg_count; i++) {
+        vm->value_stack[base + i] = args[i];
+    }
+    vm->value_stack_size = base + arg_count;
+
+    i32 target_frame_count = vm->frame_count;
+    if (mal_vm_push_function_frame(vm, function_index, env, this_value, arg_count, -1, -1)) {
+        MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
+        frame->callee = callee;
+        // A construct bail allocates `this` and passes new_target through; the
+        // RETURN handler then substitutes `this` for a non-object result.
+        if (mal_value_is_object(new_target)) {
+            frame->is_construct = true;
+            frame->new_target = new_target;
+        }
+        mal_vm_run_until_frame_count(vm, target_frame_count);
+    } else {
+        vm->value_stack_size = base;
+    }
+    return vm->completion.value;
+}
+
 MalCompletion mal_vm_call_value(
     MalVm *vm,
     MalValue callee,
@@ -726,31 +768,18 @@ MalCompletion mal_vm_call_value(
                     ? vm->completion
                     : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
             }
-        } else if (vm->value_stack_size + resolution.arg_count > vm->value_stack_capacity) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
-            completion = vm->completion;
         } else {
-            i32 base = vm->value_stack_size;
-            for (i32 i = 0; i < resolution.arg_count; i++) {
-                vm->value_stack[base + i] = resolution.args[i];
-            }
-            vm->value_stack_size = base + resolution.arg_count;
-
-            i32 target_frame_count = vm->frame_count;
-            if (mal_vm_push_function_frame(
-                    vm,
-                    mal_function_object_function_index(mal_value_to_function_object(resolution.callee)),
-                    mal_value_to_function_object(resolution.callee)->creation_env,
-                    resolution.this_value,
-                    resolution.arg_count,
-                    -1,
-                    -1
-                )) {
-                vm->frames[vm->frame_count - 1].callee = resolution.callee;
-                mal_vm_run_until_frame_count(vm, target_frame_count);
-            } else {
-                vm->value_stack_size = base;
-            }
+            // Interpreted function: marshal args, push a bytecode frame, run.
+            mal_vm_interpret_function(
+                vm,
+                function_index,
+                resolution.callee,
+                resolution.this_value,
+                resolution.args,
+                resolution.arg_count,
+                mal_value_new_undefined(),
+                env
+            );
             completion = vm->completion;
         }
     } else {
@@ -759,6 +788,84 @@ MalCompletion mal_vm_call_value(
         // through here, so the throw must live in this shared entry point too
         // (mirroring mal_vm_call_dispatch).
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a function");
+        completion = vm->completion;
+    }
+
+    free(resolution.owned_args);
+    return completion;
+}
+
+MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return vm->completion;
+    }
+
+    // [[Construct]] ignores the bound this; new_target is the constructor.
+    MalBoundResolution resolution = mal_bound_function_object_resolve(callee, mal_value_new_undefined(), args, arg_count, false);
+    MalCompletion completion = {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+
+    if (mal_value_is_native_function_object(resolution.callee)) {
+        // Native constructors allocate their own this; new_target signals construct.
+        MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
+        MalValue value = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, resolution.callee);
+        completion = vm->completion.kind == MAL_COMPLETION_THROW
+            ? vm->completion
+            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+    } else if (mal_value_is_function_object(resolution.callee)) {
+        i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
+        const MalFunction *function = &vm->definition->functions[function_index];
+        if (function->kind != MAL_FUNCTION_KIND_NORMAL) {
+            // Generators and other non-normal kinds are not constructors.
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
+            completion = vm->completion;
+        } else {
+            MalEnv *env = mal_value_to_function_object(resolution.callee)->creation_env;
+
+            // Allocate `this` from the constructor's prototype property.
+            MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+            MalValue prototype_value = mal_vm_function_prototype(vm, resolution.callee);
+            if (mal_value_is_object(prototype_value)) {
+                prototype = mal_value_to_object(prototype_value);
+            }
+            MalValue this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+
+            if (function->compiled != nullptr) {
+                // Native-backend constructor: the compiled body applies the
+                // non-object→this substitution at its RETURN, so use the result.
+                if (!mal_vm_enter_compiled(vm)) {
+                    completion = vm->completion;
+                } else {
+                    MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, resolution.callee, env);
+                    mal_vm_leave_compiled(vm);
+                    completion = vm->completion.kind == MAL_COMPLETION_THROW
+                        ? vm->completion
+                        : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+                }
+            } else if (vm->value_stack_size + resolution.arg_count > vm->value_stack_capacity) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+                completion = vm->completion;
+            } else {
+                // Interpreted: marshal args, push a construct frame, run. The
+                // RETURN handler performs the non-object→this substitution.
+                i32 base = vm->value_stack_size;
+                for (i32 i = 0; i < resolution.arg_count; i++) {
+                    vm->value_stack[base + i] = resolution.args[i];
+                }
+                vm->value_stack_size = base + resolution.arg_count;
+
+                i32 target_frame_count = vm->frame_count;
+                if (mal_vm_push_function_frame(vm, function_index, env, this_value, resolution.arg_count, -1, -1)) {
+                    vm->frames[vm->frame_count - 1].is_construct = true;
+                    vm->frames[vm->frame_count - 1].new_target = resolution.callee;
+                    mal_vm_run_until_frame_count(vm, target_frame_count);
+                } else {
+                    vm->value_stack_size = base;
+                }
+                completion = vm->completion;
+            }
+        }
+    } else {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
         completion = vm->completion;
     }
 

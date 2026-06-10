@@ -15,7 +15,7 @@
 #include "typed_array_object.h"
 #include "value_ops.h"
 
-static MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
+MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 
 static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *value_out);
 
@@ -132,21 +132,30 @@ void mal_op_create_bigint(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_bigint.dst] = mal_value_from_bigint(bigint);
 }
 
-void mal_op_create_object(MalCallable *callable, MalInstruction *instruction) {
+MalValue mal_vm_op_create_object(MalVm *vm) {
     MalObject *object = mal_object_new(
-        &callable->vm->heap,
-        mal_value_to_object(callable->vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])
     );
-    callable->registers[instruction->as.create_object.dst] = mal_value_from_object(object);
+    return mal_value_from_object(object);
+}
+
+void mal_op_create_object(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.create_object.dst] = mal_vm_op_create_object(callable->vm);
+}
+
+MalValue mal_vm_op_create_array(MalVm *vm, i32 length) {
+    MalArrayObject *array = mal_array_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])
+    );
+    mal_array_object_set_length(array, (u32) length);
+    return mal_value_from_array_object(array);
 }
 
 void mal_op_create_array(MalCallable *callable, MalInstruction *instruction) {
-    MalArrayObject *array = mal_array_object_new(
-        &callable->vm->heap,
-        mal_value_to_object(callable->vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])
-    );
-    mal_array_object_set_length(array, (u32) instruction->as.create_array.length);
-    callable->registers[instruction->as.create_array.dst] = mal_value_from_array_object(array);
+    callable->registers[instruction->as.create_array.dst] =
+        mal_vm_op_create_array(callable->vm, instruction->as.create_array.length);
 }
 
 void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction) {
@@ -157,22 +166,31 @@ void mal_op_create_null(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_null.dst] = mal_value_new_null();
 }
 
-void mal_op_create_function(MalCallable *callable, MalInstruction *instruction) {
+MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env) {
     // Generator function objects inherit %GeneratorFunction.prototype%.
-    i32 function_index = instruction->as.create_function.function_index;
     MalIntrinsic prototype_slot =
-        callable->vm->definition->functions[function_index].kind == MAL_FUNCTION_KIND_GENERATOR
+        vm->definition->functions[function_index].kind == MAL_FUNCTION_KIND_GENERATOR
             ? MAL_INTRINSIC_GENERATOR_FUNCTION_PROTOTYPE
             : MAL_INTRINSIC_FUNCTION_PROTOTYPE;
 
     MalFunctionObject *function = mal_function_object_new(
-        &callable->vm->heap,
-        mal_value_to_object(callable->vm->intrinsics[prototype_slot]),
-        instruction->as.create_function.function_index
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[prototype_slot]),
+        function_index
     );
-    function->creation_env = callable->env;
+    // The closure captures the creating frame's environment chain so its body
+    // resolves captured bindings by owner function index.
+    function->creation_env = creation_env;
 
-    callable->registers[instruction->as.create_function.dst] = mal_value_from_function_object(function);
+    return mal_value_from_function_object(function);
+}
+
+void mal_op_create_function(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.create_function.dst] = mal_vm_op_create_function(
+        callable->vm,
+        instruction->as.create_function.function_index,
+        callable->env
+    );
 }
 
 // Walk the environment chain to the activation that owns the captured binding
@@ -347,15 +365,25 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
         }
 
         MalValue this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
-        if (mal_vm_push_function_frame(
-                vm,
-                callee_index,
-                mal_value_to_function_object(resolution.callee)->creation_env,
-                this_value,
-                resolution.arg_count,
-                dst,
-                vm->frame_count - 1
-            )) {
+        const MalFunction *function = &vm->definition->functions[callee_index];
+        MalEnv *env = mal_value_to_function_object(resolution.callee)->creation_env;
+
+        if (function->compiled != nullptr) {
+            // Native-backend constructor: invoke directly with the allocated
+            // `this` and new_target = the constructor. The compiled body applies
+            // the [[Construct]] "non-object completion → this" substitution at its
+            // RETURN (mal_ops_construct_result), so the result is used as-is. A
+            // promoted-param guard that bails reaches mal_vm_interpret_function,
+            // which re-runs as a construct because new_target is an object.
+            i32 caller_frame_index = vm->frame_count - 1;
+            MalValue result = mal_value_new_undefined();
+            if (mal_vm_enter_compiled(vm)) {
+                result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, resolution.callee, env);
+                mal_vm_leave_compiled(vm);
+            }
+            vm->frames[caller_frame_index].registers[dst] = result;
+            vm->value_stack_size = base;
+        } else if (mal_vm_push_function_frame(vm, callee_index, env, this_value, resolution.arg_count, dst, vm->frame_count - 1)) {
             vm->frames[vm->frame_count - 1].is_construct = true;
             // new.target is the constructor being invoked through `new`.
             vm->frames[vm->frame_count - 1].new_target = resolution.callee;
@@ -842,7 +870,7 @@ static bool mal_vm_function_is_generator(MalVm *vm, MalValue function_value) {
  * %Object.prototype%-backed object; generator functions get a
  * %GeneratorPrototype%-backed object with no constructor.
  */
-static MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
+MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
     MalObject *function = mal_value_to_object(function_value);
     MalKey key = mal_intrinsic_string_key(vm, "prototype");
 
@@ -1445,15 +1473,19 @@ void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction) 
     mal_vm_finish_delete(callable, dst, mal_object_delete_own(object, key));
 }
 
-void mal_op_load_undeclared(MalCallable *callable, MalInstruction *instruction) {
-    MalString *constant = &callable->vm->definition->string_constants[instruction->as.load_undeclared.name_string_index];
+void mal_vm_op_load_undeclared(MalVm *vm, i32 name_string_index) {
+    MalString *constant = &vm->definition->string_constants[name_string_index];
     MalValue name = mal_value_from_string(constant);
     MalValue message = mal_ops_add(
-        &callable->vm->heap,
+        &vm->heap,
         name,
-        mal_value_from_string(mal_intrinsic_ascii(callable->vm, " is not defined"))
+        mal_value_from_string(mal_intrinsic_ascii(vm, " is not defined"))
     );
-    mal_vm_throw_error_value(callable->vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, message);
+    mal_vm_throw_error_value(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, message);
+}
+
+void mal_op_load_undeclared(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_load_undeclared(callable->vm, instruction->as.load_undeclared.name_string_index);
 }
 
 void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction) {
@@ -1680,23 +1712,29 @@ void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction) 
     mal_object_define_own(object, key, &desc);
 }
 
-void mal_op_define_property(MalCallable *callable, MalInstruction *instruction) {
-    MalValue object_value = callable->registers[instruction->as.define_property.object];
-    MalValue key_value = callable->registers[instruction->as.define_property.key];
-    MalValue value = callable->registers[instruction->as.define_property.value];
-
+void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool enumerable) {
     MalKey key;
-    if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
+    if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(vm, key_value, &key)) {
         return;
     }
 
     MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE;
-    if (instruction->as.define_property.enumerable) {
+    if (enumerable) {
         flags |= MAL_PROPERTY_ENUMERABLE;
     }
 
     MalPropertyDesc desc = mal_intrinsic_data_desc(value, flags);
     mal_object_define_own(mal_value_to_object(object_value), key, &desc);
+}
+
+void mal_op_define_property(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_define_property(
+        callable->vm,
+        callable->registers[instruction->as.define_property.object],
+        callable->registers[instruction->as.define_property.key],
+        callable->registers[instruction->as.define_property.value],
+        instruction->as.define_property.enumerable
+    );
 }
 
 /**
