@@ -27,6 +27,30 @@ bool mal_vm_desc_read(MalVm *vm, MalPropertyDesc desc, MalValue receiver, MalVal
 bool mal_vm_get_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *out);
 
 /**
+ * mal_vm_get_property with an explicit receiver passed to accessor getters,
+ * implementing the spec [[Get]](P, Receiver). Used by Reflect.get.
+ */
+bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey key, MalValue receiver, MalValue *out);
+
+/**
+ * Spec HasProperty(O, P) over an object: synthetic properties plus the ordinary
+ * prototype chain. Backs the `in` operator and Reflect.has.
+ */
+bool mal_vm_has_property(MalVm *vm, MalValue object_value, MalKey key);
+
+/**
+ * Spec [[Set]] returning the boolean success (no throw on plain rejection); a
+ * throwing user setter propagates via vm->completion. Backs Reflect.set.
+ */
+bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value, MalValue receiver);
+
+/**
+ * Spec [[Delete]] returning the boolean success. Backs the delete operator and
+ * Reflect.deleteProperty.
+ */
+bool mal_vm_delete_property(MalVm *vm, MalValue object_value, MalKey key);
+
+/**
  * Spec ToNumber with full ToPrimitive(number) for objects (@@toPrimitive, else
  * valueOf → toString). Throws TypeError on BigInt/Symbol (or a non-primitive
  * ToPrimitive result) and returns false; otherwise writes the number.
@@ -76,6 +100,13 @@ void mal_op_call_spread(MalCallable *callable, MalInstruction *instruction);
 void mal_op_construct(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_construct_spread(MalCallable *callable, MalInstruction *instruction);
+
+/**
+ * `super(...args)`: [[Construct]] the parent forwarding the derived
+ * constructor's new.target, then bind the result as `this`. The parent comes
+ * from registers[parent], the arguments from the array in registers[arguments_array].
+ */
+void mal_op_construct_super(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_throw(MalCallable *callable, MalInstruction *instruction);
 

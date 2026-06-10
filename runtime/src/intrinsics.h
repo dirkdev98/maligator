@@ -100,6 +100,7 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_IS_FINITE,
     MAL_INTRINSIC_MATH,
     MAL_INTRINSIC_JSON,
+    MAL_INTRINSIC_REFLECT,
     MAL_INTRINSIC_CONSOLE,
     MAL_INTRINSIC_GLOBAL_THIS,
     MAL_INTRINSIC_NAN_VALUE,
@@ -202,6 +203,13 @@ void mal_intrinsic_define_data(MalVm *vm, MalObject *object, const byte *name, M
  * intrinsic slot.
  */
 MalValue mal_intrinsic_define_method(MalVm *vm, MalObject *object, const byte *name, MalNativeFunctionCallback callback);
+
+/**
+ * mal_intrinsic_define_method with an explicit arity exposed as the method's
+ * `length` own property (the spec count of required parameters). Prefer this
+ * over mal_intrinsic_define_method so the function reports the spec length.
+ */
+MalValue mal_intrinsic_define_method_n(MalVm *vm, MalObject *object, const byte *name, i32 length, MalNativeFunctionCallback callback);
 
 /**
  * Allocate an ordinary object backed by %Object.prototype%.

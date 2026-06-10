@@ -241,6 +241,8 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_CALL_SPREAD, .as.call_spread = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .arguments_array = ${instruction.argumentsArray} } }`;
 		case "CONSTRUCT_SPREAD":
 			return `{ .opcode = MAL_OP_CONSTRUCT_SPREAD, .as.construct_spread = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .arguments_array = ${instruction.argumentsArray} } }`;
+		case "CONSTRUCT_SUPER":
+			return `{ .opcode = MAL_OP_CONSTRUCT_SUPER, .as.construct_super = { .dst = ${instruction.dst}, .parent = ${instruction.parent}, .arguments_array = ${instruction.argumentsArray} } }`;
 		case "MERGE_DATA_PROPERTIES":
 			return `{ .opcode = MAL_OP_MERGE_DATA_PROPERTIES, .as.merge_data_properties = { .target = ${instruction.target}, .src = ${instruction.src} } }`;
 		case "DELETE_PROPERTY":
@@ -370,6 +372,8 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_MATH";
 		case "JSON":
 			return "MAL_INTRINSIC_JSON";
+		case "Reflect":
+			return "MAL_INTRINSIC_REFLECT";
 		case "console":
 			return "MAL_INTRINSIC_CONSOLE";
 		case "globalThis":

@@ -298,32 +298,32 @@ void mal_builtin_array_buffer_install(MalVm *vm) {
 
     // ArrayBuffer
     MalObject *prototype = mal_object_new(&vm->heap, object_prototype);
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
-        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "ArrayBuffer"), mal_builtin_array_buffer_constructor);
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "ArrayBuffer"), 1, mal_builtin_array_buffer_constructor);
     vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
     vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE] = mal_value_from_object(prototype);
 
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_intrinsic_define_method(vm, (MalObject *) constructor, "isView", mal_builtin_array_buffer_is_view);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "isView", 1, mal_builtin_array_buffer_is_view);
     mal_builtin_array_buffer_define_species(vm, (MalObject *) constructor);
 
     mal_builtin_array_buffer_define_getter(vm, prototype, "byteLength", mal_builtin_array_buffer_byte_length_getter);
     mal_builtin_array_buffer_define_getter(vm, prototype, "maxByteLength", mal_builtin_array_buffer_max_byte_length_getter);
     mal_builtin_array_buffer_define_getter(vm, prototype, "resizable", mal_builtin_array_buffer_resizable_getter);
     mal_builtin_array_buffer_define_getter(vm, prototype, "detached", mal_builtin_array_buffer_detached_getter);
-    mal_intrinsic_define_method(vm, prototype, "slice", mal_builtin_array_buffer_slice);
-    mal_intrinsic_define_method(vm, prototype, "resize", mal_builtin_array_buffer_resize);
-    mal_intrinsic_define_method(vm, prototype, "transfer", mal_builtin_array_buffer_transfer);
-    mal_intrinsic_define_method(vm, prototype, "transferToFixedLength", mal_builtin_array_buffer_transfer);
+    mal_intrinsic_define_method_n(vm, prototype, "slice", 2, mal_builtin_array_buffer_slice);
+    mal_intrinsic_define_method_n(vm, prototype, "resize", 1, mal_builtin_array_buffer_resize);
+    mal_intrinsic_define_method_n(vm, prototype, "transfer", 0, mal_builtin_array_buffer_transfer);
+    mal_intrinsic_define_method_n(vm, prototype, "transferToFixedLength", 0, mal_builtin_array_buffer_transfer);
 
     MalPropertyDesc tag = mal_intrinsic_data_desc(mal_value_from_string(mal_intrinsic_ascii(vm, "ArrayBuffer")), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag);
 
     // SharedArrayBuffer (minimal: same shape, never detached, growable via grow)
     MalObject *shared_prototype = mal_object_new(&vm->heap, object_prototype);
-    MalNativeFunctionObject *shared_constructor = mal_native_function_object_new(
-        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "SharedArrayBuffer"), mal_builtin_shared_array_buffer_constructor);
+    MalNativeFunctionObject *shared_constructor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "SharedArrayBuffer"), 1, mal_builtin_shared_array_buffer_constructor);
     vm->intrinsics[MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR] = mal_value_from_native_function_object(shared_constructor);
     vm->intrinsics[MAL_INTRINSIC_SHARED_ARRAY_BUFFER_PROTOTYPE] = mal_value_from_object(shared_prototype);
 

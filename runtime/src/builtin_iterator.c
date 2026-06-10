@@ -330,14 +330,14 @@ void mal_builtin_iterator_install(MalVm *vm) {
     mal_intrinsic_define_symbol_method(vm, iterator_prototype, MAL_INTRINSIC_SYMBOL_ITERATOR, "[Symbol.iterator]", mal_builtin_iterator_prototype_iterator);
 
     MalObject *map_iterator = mal_builtin_iterator_prototype_new(vm, MAL_INTRINSIC_MAP_ITERATOR_PROTOTYPE, iterator_prototype, "Map Iterator");
-    mal_intrinsic_define_method(vm, map_iterator, "next", mal_builtin_map_iterator_next);
+    mal_intrinsic_define_method_n(vm, map_iterator, "next", 0, mal_builtin_map_iterator_next);
 
     MalObject *set_iterator = mal_builtin_iterator_prototype_new(vm, MAL_INTRINSIC_SET_ITERATOR_PROTOTYPE, iterator_prototype, "Set Iterator");
-    mal_intrinsic_define_method(vm, set_iterator, "next", mal_builtin_set_iterator_next);
+    mal_intrinsic_define_method_n(vm, set_iterator, "next", 0, mal_builtin_set_iterator_next);
 
     MalObject *array_iterator = mal_builtin_iterator_prototype_new(vm, MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE, iterator_prototype, "Array Iterator");
-    mal_intrinsic_define_method(vm, array_iterator, "next", mal_builtin_array_iterator_next);
+    mal_intrinsic_define_method_n(vm, array_iterator, "next", 0, mal_builtin_array_iterator_next);
 
     MalObject *string_iterator = mal_builtin_iterator_prototype_new(vm, MAL_INTRINSIC_STRING_ITERATOR_PROTOTYPE, iterator_prototype, "String Iterator");
-    mal_intrinsic_define_method(vm, string_iterator, "next", mal_builtin_string_iterator_next);
+    mal_intrinsic_define_method_n(vm, string_iterator, "next", 0, mal_builtin_string_iterator_next);
 }

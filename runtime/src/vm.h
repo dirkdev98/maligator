@@ -67,6 +67,7 @@ typedef enum MalOpcode {
     MAL_OP_CALL_SPREAD,
     MAL_OP_CONSTRUCT,
     MAL_OP_CONSTRUCT_SPREAD,
+    MAL_OP_CONSTRUCT_SUPER,
     MAL_OP_BINARY,
     MAL_OP_UNARY,
 } MalOpcode;
@@ -410,6 +411,10 @@ typedef struct MalInstruction {
         struct {
             i32 dst, callee, arguments_array;
         } construct_spread;
+
+        struct {
+            i32 dst, parent, arguments_array;
+        } construct_super;
 
         struct {
             i32 dst, left, right;
@@ -759,6 +764,13 @@ MalValue mal_vm_interpret_function(
  * mal_vm_call_value, used by the native backend's CONSTRUCT.
  */
 MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count);
+
+/**
+ * mal_vm_construct_value with an explicit new.target (whose `.prototype`
+ * parents the new instance), implementing the spec [[Construct]](args, newTarget).
+ * Backs Reflect.construct; mal_vm_construct_value forwards with newTarget = callee.
+ */
+MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target);
 
 /**
  * Resolve the display name of a callable, or null for non-callables.

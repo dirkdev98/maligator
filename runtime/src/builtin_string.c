@@ -663,10 +663,11 @@ static MalValue mal_builtin_string_prototype_iterator(MalVm *vm, MalValue this_v
 
 void mal_builtin_string_install(MalVm *vm) {
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "String"),
+        1,
         mal_builtin_string_constructor
     );
 
@@ -676,34 +677,34 @@ void mal_builtin_string_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_STRING_PROTOTYPE], MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_STRING_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    mal_intrinsic_define_method(vm, (MalObject *) constructor, "fromCharCode", mal_builtin_string_from_char_code);
-    mal_intrinsic_define_method(vm, (MalObject *) constructor, "fromCodePoint", mal_builtin_string_from_code_point);
-    mal_intrinsic_define_method(vm, (MalObject *) constructor, "raw", mal_builtin_string_raw);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "fromCharCode", 1, mal_builtin_string_from_char_code);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "fromCodePoint", 1, mal_builtin_string_from_code_point);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "raw", 1, mal_builtin_string_raw);
 
-    mal_intrinsic_define_method(vm, prototype, "charAt", mal_builtin_string_prototype_char_at);
-    mal_intrinsic_define_method(vm, prototype, "charCodeAt", mal_builtin_string_prototype_char_code_at);
-    mal_intrinsic_define_method(vm, prototype, "codePointAt", mal_builtin_string_prototype_code_point_at);
-    mal_intrinsic_define_method(vm, prototype, "at", mal_builtin_string_prototype_at);
-    mal_intrinsic_define_method(vm, prototype, "indexOf", mal_builtin_string_prototype_index_of);
-    mal_intrinsic_define_method(vm, prototype, "lastIndexOf", mal_builtin_string_prototype_last_index_of);
-    mal_intrinsic_define_method(vm, prototype, "includes", mal_builtin_string_prototype_includes);
-    mal_intrinsic_define_method(vm, prototype, "startsWith", mal_builtin_string_prototype_starts_with);
-    mal_intrinsic_define_method(vm, prototype, "endsWith", mal_builtin_string_prototype_ends_with);
-    mal_intrinsic_define_method(vm, prototype, "slice", mal_builtin_string_prototype_slice);
-    mal_intrinsic_define_method(vm, prototype, "substring", mal_builtin_string_prototype_substring);
-    mal_intrinsic_define_method(vm, prototype, "concat", mal_builtin_string_prototype_concat);
-    mal_intrinsic_define_method(vm, prototype, "repeat", mal_builtin_string_prototype_repeat);
-    mal_intrinsic_define_method(vm, prototype, "trim", mal_builtin_string_prototype_trim);
-    mal_intrinsic_define_method(vm, prototype, "trimStart", mal_builtin_string_prototype_trim_start);
-    mal_intrinsic_define_method(vm, prototype, "trimEnd", mal_builtin_string_prototype_trim_end);
-    mal_intrinsic_define_method(vm, prototype, "toUpperCase", mal_builtin_string_prototype_to_upper_case);
-    mal_intrinsic_define_method(vm, prototype, "toLowerCase", mal_builtin_string_prototype_to_lower_case);
-    mal_intrinsic_define_method(vm, prototype, "split", mal_builtin_string_prototype_split);
-    mal_intrinsic_define_method(vm, prototype, "replace", mal_builtin_string_prototype_replace);
-    mal_intrinsic_define_method(vm, prototype, "replaceAll", mal_builtin_string_prototype_replace_all);
-    mal_intrinsic_define_method(vm, prototype, "padStart", mal_builtin_string_prototype_pad_start);
-    mal_intrinsic_define_method(vm, prototype, "padEnd", mal_builtin_string_prototype_pad_end);
-    mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_string_prototype_to_string);
-    mal_intrinsic_define_method(vm, prototype, "valueOf", mal_builtin_string_prototype_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "charAt", 1, mal_builtin_string_prototype_char_at);
+    mal_intrinsic_define_method_n(vm, prototype, "charCodeAt", 1, mal_builtin_string_prototype_char_code_at);
+    mal_intrinsic_define_method_n(vm, prototype, "codePointAt", 1, mal_builtin_string_prototype_code_point_at);
+    mal_intrinsic_define_method_n(vm, prototype, "at", 1, mal_builtin_string_prototype_at);
+    mal_intrinsic_define_method_n(vm, prototype, "indexOf", 1, mal_builtin_string_prototype_index_of);
+    mal_intrinsic_define_method_n(vm, prototype, "lastIndexOf", 1, mal_builtin_string_prototype_last_index_of);
+    mal_intrinsic_define_method_n(vm, prototype, "includes", 1, mal_builtin_string_prototype_includes);
+    mal_intrinsic_define_method_n(vm, prototype, "startsWith", 1, mal_builtin_string_prototype_starts_with);
+    mal_intrinsic_define_method_n(vm, prototype, "endsWith", 1, mal_builtin_string_prototype_ends_with);
+    mal_intrinsic_define_method_n(vm, prototype, "slice", 2, mal_builtin_string_prototype_slice);
+    mal_intrinsic_define_method_n(vm, prototype, "substring", 2, mal_builtin_string_prototype_substring);
+    mal_intrinsic_define_method_n(vm, prototype, "concat", 1, mal_builtin_string_prototype_concat);
+    mal_intrinsic_define_method_n(vm, prototype, "repeat", 1, mal_builtin_string_prototype_repeat);
+    mal_intrinsic_define_method_n(vm, prototype, "trim", 0, mal_builtin_string_prototype_trim);
+    mal_intrinsic_define_method_n(vm, prototype, "trimStart", 0, mal_builtin_string_prototype_trim_start);
+    mal_intrinsic_define_method_n(vm, prototype, "trimEnd", 0, mal_builtin_string_prototype_trim_end);
+    mal_intrinsic_define_method_n(vm, prototype, "toUpperCase", 0, mal_builtin_string_prototype_to_upper_case);
+    mal_intrinsic_define_method_n(vm, prototype, "toLowerCase", 0, mal_builtin_string_prototype_to_lower_case);
+    mal_intrinsic_define_method_n(vm, prototype, "split", 2, mal_builtin_string_prototype_split);
+    mal_intrinsic_define_method_n(vm, prototype, "replace", 2, mal_builtin_string_prototype_replace);
+    mal_intrinsic_define_method_n(vm, prototype, "replaceAll", 2, mal_builtin_string_prototype_replace_all);
+    mal_intrinsic_define_method_n(vm, prototype, "padStart", 1, mal_builtin_string_prototype_pad_start);
+    mal_intrinsic_define_method_n(vm, prototype, "padEnd", 1, mal_builtin_string_prototype_pad_end);
+    mal_intrinsic_define_method_n(vm, prototype, "toString", 0, mal_builtin_string_prototype_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_string_prototype_to_string);
     mal_intrinsic_define_symbol_method(vm, prototype, MAL_INTRINSIC_SYMBOL_ITERATOR, "[Symbol.iterator]", mal_builtin_string_prototype_iterator);
 }

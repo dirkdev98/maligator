@@ -397,6 +397,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_CONSTRUCT_SPREAD:
                 mal_op_construct_spread(frame, &instruction);
                 break;
+            case MAL_OP_CONSTRUCT_SUPER:
+                mal_op_construct_super(frame, &instruction);
+                break;
             case MAL_OP_STORE_SUPER_PROPERTY:
                 mal_op_store_super_property(frame, &instruction);
                 break;
@@ -951,21 +954,54 @@ MalCompletion mal_vm_call_value(
 }
 
 MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count) {
+    return mal_vm_construct_value_with_target(vm, callee, args, arg_count, callee);
+}
+
+MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target) {
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return vm->completion;
     }
 
-    // [[Construct]] ignores the bound this; new_target is the constructor.
+    // [[Construct]] ignores the bound this.
     MalBoundResolution resolution = mal_bound_function_object_resolve(callee, mal_value_new_undefined(), args, arg_count, false);
     MalCompletion completion = {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
+    // BoundFunctionCreate [[Construct]]: a new.target that is the bound function
+    // itself becomes the (unwrapped) target. This also yields new.target = the
+    // resolved constructor for the default `new callee()` case.
+    MalValue effective_new_target = new_target == callee ? resolution.callee : new_target;
+
     if (mal_value_is_native_function_object(resolution.callee)) {
+        // A native that does not implement [[Construct]] is not new-able.
+        if (!mal_native_function_object_is_constructor(mal_value_to_native_function_object(resolution.callee))) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
+            free(resolution.owned_args);
+            return vm->completion;
+        }
         // Native constructors allocate their own this; new_target signals construct.
         MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
-        MalValue value = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, resolution.callee, resolution.callee);
-        completion = vm->completion.kind == MAL_COMPLETION_THROW
-            ? vm->completion
-            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+        MalValue value = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, effective_new_target, resolution.callee);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            free(resolution.owned_args);
+            return vm->completion;
+        }
+
+        // OrdinaryCreateFromConstructor: when subclassing a native (new.target is
+        // a derived class, not the native itself), the instance's [[Prototype]]
+        // is new.target.prototype. Native constructors build with their own
+        // prototype, so reparent here for `class X extends <native>`.
+        if (mal_value_is_object(value) && effective_new_target != resolution.callee &&
+            mal_value_is_object(effective_new_target)) {
+            MalValue derived_prototype;
+            if (!mal_vm_get_property(vm, effective_new_target, mal_intrinsic_string_key(vm, "prototype"), &derived_prototype)) {
+                free(resolution.owned_args);
+                return vm->completion;
+            }
+            if (mal_value_is_object(derived_prototype)) {
+                mal_object_set_prototype(mal_value_to_object(value), mal_value_to_object(derived_prototype));
+            }
+        }
+        completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
     } else if (mal_value_is_function_object(resolution.callee)) {
         i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
         const MalFunction *function = &vm->definition->functions[function_index];
@@ -976,11 +1012,18 @@ MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue 
         } else {
             MalEnv *env = mal_value_to_function_object(resolution.callee)->creation_env;
 
-            // Allocate `this` from the constructor's prototype property.
+            // OrdinaryCreateFromConstructor: allocate `this` from new.target's
+            // `.prototype` (falling back to %Object.prototype% when absent).
             MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-            MalValue prototype_value = mal_vm_function_prototype(vm, resolution.callee);
-            if (mal_value_is_object(prototype_value)) {
-                prototype = mal_value_to_object(prototype_value);
+            if (mal_value_is_object(effective_new_target)) {
+                MalValue prototype_value;
+                if (!mal_vm_get_property(vm, effective_new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype_value)) {
+                    free(resolution.owned_args);
+                    return vm->completion;
+                }
+                if (mal_value_is_object(prototype_value)) {
+                    prototype = mal_value_to_object(prototype_value);
+                }
             }
             MalValue this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
 
@@ -990,7 +1033,7 @@ MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue 
                 if (!mal_vm_enter_compiled(vm)) {
                     completion = vm->completion;
                 } else {
-                    MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, resolution.callee, env);
+                    MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, effective_new_target, env);
                     mal_vm_leave_compiled(vm);
                     completion = vm->completion.kind == MAL_COMPLETION_THROW
                         ? vm->completion
@@ -1011,7 +1054,7 @@ MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue 
                 i32 target_frame_count = vm->frame_count;
                 if (mal_vm_push_function_frame(vm, function_index, env, this_value, resolution.arg_count, -1, -1)) {
                     vm->frames[vm->frame_count - 1].is_construct = true;
-                    vm->frames[vm->frame_count - 1].new_target = resolution.callee;
+                    vm->frames[vm->frame_count - 1].new_target = effective_new_target;
                     mal_vm_run_until_frame_count(vm, target_frame_count);
                 } else {
                     vm->value_stack_size = base;

@@ -190,10 +190,11 @@ static MalValue mal_builtin_bigint_as_int_n(MalVm *vm, MalValue this_value, cons
 
 void mal_builtin_bigint_install(MalVm *vm) {
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "BigInt"),
+        1,
         mal_builtin_bigint_constructor
     );
 
@@ -203,12 +204,12 @@ void mal_builtin_bigint_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_BIGINT_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_BIGINT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    mal_intrinsic_define_method(vm, (MalObject *) constructor, "asUintN", mal_builtin_bigint_as_uint_n);
-    mal_intrinsic_define_method(vm, (MalObject *) constructor, "asIntN", mal_builtin_bigint_as_int_n);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "asUintN", 2, mal_builtin_bigint_as_uint_n);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "asIntN", 2, mal_builtin_bigint_as_int_n);
 
-    mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_bigint_prototype_to_string);
-    mal_intrinsic_define_method(vm, prototype, "toLocaleString", mal_builtin_bigint_prototype_to_string);
-    mal_intrinsic_define_method(vm, prototype, "valueOf", mal_builtin_bigint_prototype_value_of);
+    mal_intrinsic_define_method_n(vm, prototype, "toString", 0, mal_builtin_bigint_prototype_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0, mal_builtin_bigint_prototype_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_bigint_prototype_value_of);
 
     // BigInt.prototype[Symbol.toStringTag] = "BigInt"
     MalPropertyDesc tag_desc = mal_intrinsic_data_desc(

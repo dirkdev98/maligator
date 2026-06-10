@@ -375,10 +375,11 @@ static MalObject *mal_builtin_map_scaffold(
     const byte *tag
 ) {
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, name),
+        0,
         constructor_callback
     );
 
@@ -425,17 +426,17 @@ void mal_builtin_map_install(MalVm *vm) {
         "Map"
     );
 
-    mal_intrinsic_define_method(vm, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_CONSTRUCTOR]), "groupBy", mal_builtin_map_group_by);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_CONSTRUCTOR]), "groupBy", 2, mal_builtin_map_group_by);
 
-    mal_intrinsic_define_method(vm, prototype, "get", mal_builtin_map_prototype_get);
-    mal_intrinsic_define_method(vm, prototype, "set", mal_builtin_map_prototype_set);
-    mal_intrinsic_define_method(vm, prototype, "has", mal_builtin_map_prototype_has);
-    mal_intrinsic_define_method(vm, prototype, "delete", mal_builtin_map_prototype_delete);
-    mal_intrinsic_define_method(vm, prototype, "clear", mal_builtin_map_prototype_clear);
-    mal_intrinsic_define_method(vm, prototype, "forEach", mal_builtin_map_prototype_for_each);
-    mal_intrinsic_define_method(vm, prototype, "keys", mal_builtin_map_prototype_keys);
-    mal_intrinsic_define_method(vm, prototype, "values", mal_builtin_map_prototype_values);
-    MalValue entries = mal_intrinsic_define_method(vm, prototype, "entries", mal_builtin_map_prototype_entries);
+    mal_intrinsic_define_method_n(vm, prototype, "get", 1, mal_builtin_map_prototype_get);
+    mal_intrinsic_define_method_n(vm, prototype, "set", 2, mal_builtin_map_prototype_set);
+    mal_intrinsic_define_method_n(vm, prototype, "has", 1, mal_builtin_map_prototype_has);
+    mal_intrinsic_define_method_n(vm, prototype, "delete", 1, mal_builtin_map_prototype_delete);
+    mal_intrinsic_define_method_n(vm, prototype, "clear", 0, mal_builtin_map_prototype_clear);
+    mal_intrinsic_define_method_n(vm, prototype, "forEach", 1, mal_builtin_map_prototype_for_each);
+    mal_intrinsic_define_method_n(vm, prototype, "keys", 0, mal_builtin_map_prototype_keys);
+    mal_intrinsic_define_method_n(vm, prototype, "values", 0, mal_builtin_map_prototype_values);
+    MalValue entries = mal_intrinsic_define_method_n(vm, prototype, "entries", 0, mal_builtin_map_prototype_entries);
 
     // Map.prototype[Symbol.iterator] === Map.prototype.entries
     MalPropertyDesc iterator_desc = mal_intrinsic_data_desc(entries, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
@@ -453,8 +454,8 @@ void mal_builtin_map_install(MalVm *vm) {
         "WeakMap"
     );
 
-    mal_intrinsic_define_method(vm, weak_prototype, "get", mal_builtin_weak_map_prototype_get);
-    mal_intrinsic_define_method(vm, weak_prototype, "set", mal_builtin_weak_map_prototype_set);
-    mal_intrinsic_define_method(vm, weak_prototype, "has", mal_builtin_weak_map_prototype_has);
-    mal_intrinsic_define_method(vm, weak_prototype, "delete", mal_builtin_weak_map_prototype_delete);
+    mal_intrinsic_define_method_n(vm, weak_prototype, "get", 1, mal_builtin_weak_map_prototype_get);
+    mal_intrinsic_define_method_n(vm, weak_prototype, "set", 2, mal_builtin_weak_map_prototype_set);
+    mal_intrinsic_define_method_n(vm, weak_prototype, "has", 1, mal_builtin_weak_map_prototype_has);
+    mal_intrinsic_define_method_n(vm, weak_prototype, "delete", 1, mal_builtin_weak_map_prototype_delete);
 }

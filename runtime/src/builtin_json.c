@@ -556,6 +556,6 @@ void mal_builtin_json_install(MalVm *vm) {
     );
     mal_object_define_own(json, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag_desc);
 
-    mal_intrinsic_define_method(vm, json, "stringify", mal_builtin_json_stringify);
-    mal_intrinsic_define_method(vm, json, "parse", mal_builtin_json_parse);
+    mal_intrinsic_define_method_n(vm, json, "stringify", 3, mal_builtin_json_stringify);
+    mal_intrinsic_define_method_n(vm, json, "parse", 2, mal_builtin_json_parse);
 }

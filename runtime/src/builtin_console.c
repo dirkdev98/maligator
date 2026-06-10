@@ -120,8 +120,8 @@ void mal_builtin_console_install(MalVm *vm) {
     MalObject *console = mal_intrinsic_new_object(vm);
     vm->intrinsics[MAL_INTRINSIC_CONSOLE] = mal_value_from_object(console);
 
-    mal_intrinsic_define_method(vm, console, "log", mal_builtin_console_log);
-    mal_intrinsic_define_method(vm, console, "info", mal_builtin_console_log);
-    mal_intrinsic_define_method(vm, console, "warn", mal_builtin_console_error);
-    mal_intrinsic_define_method(vm, console, "error", mal_builtin_console_error);
+    mal_intrinsic_define_method_n(vm, console, "log", 0, mal_builtin_console_log);
+    mal_intrinsic_define_method_n(vm, console, "info", 0, mal_builtin_console_log);
+    mal_intrinsic_define_method_n(vm, console, "warn", 0, mal_builtin_console_error);
+    mal_intrinsic_define_method_n(vm, console, "error", 0, mal_builtin_console_error);
 }

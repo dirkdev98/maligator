@@ -1012,8 +1012,8 @@ void mal_builtin_typed_array_install(MalVm *vm) {
 
     // %TypedArray% and %TypedArray%.prototype.
     MalObject *ta_prototype = mal_object_new(&vm->heap, object_prototype);
-    MalNativeFunctionObject *ta_constructor = mal_native_function_object_new(
-        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "TypedArray"), mal_builtin_typed_array_abstract_constructor);
+    MalNativeFunctionObject *ta_constructor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "TypedArray"), 0, mal_builtin_typed_array_abstract_constructor);
     vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_CONSTRUCTOR] = mal_value_from_native_function_object(ta_constructor);
     vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_PROTOTYPE] = mal_value_from_object(ta_prototype);
 
@@ -1027,40 +1027,40 @@ void mal_builtin_typed_array_install(MalVm *vm) {
     mal_ta_define_getter(vm, ta_prototype, mal_intrinsic_string_key(vm, "buffer"), "get buffer", mal_ta_get_buffer);
     mal_ta_define_getter(vm, ta_prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), "get [Symbol.toStringTag]", mal_ta_get_to_string_tag);
 
-    mal_intrinsic_define_method(vm, ta_prototype, "at", mal_ta_at);
-    mal_intrinsic_define_method(vm, ta_prototype, "fill", mal_ta_fill);
-    mal_intrinsic_define_method(vm, ta_prototype, "set", mal_ta_set);
-    mal_intrinsic_define_method(vm, ta_prototype, "subarray", mal_ta_subarray);
-    mal_intrinsic_define_method(vm, ta_prototype, "slice", mal_ta_slice);
-    mal_intrinsic_define_method(vm, ta_prototype, "copyWithin", mal_ta_copy_within);
-    mal_intrinsic_define_method(vm, ta_prototype, "join", mal_ta_join);
-    mal_intrinsic_define_method(vm, ta_prototype, "toString", mal_ta_to_string);
-    mal_intrinsic_define_method(vm, ta_prototype, "toLocaleString", mal_ta_to_string);
-    mal_intrinsic_define_method(vm, ta_prototype, "indexOf", mal_ta_index_of);
-    mal_intrinsic_define_method(vm, ta_prototype, "lastIndexOf", mal_ta_last_index_of);
-    mal_intrinsic_define_method(vm, ta_prototype, "includes", mal_ta_includes);
-    mal_intrinsic_define_method(vm, ta_prototype, "reverse", mal_ta_reverse);
-    mal_intrinsic_define_method(vm, ta_prototype, "sort", mal_ta_sort);
-    mal_intrinsic_define_method(vm, ta_prototype, "forEach", mal_ta_for_each);
-    mal_intrinsic_define_method(vm, ta_prototype, "map", mal_ta_map);
-    mal_intrinsic_define_method(vm, ta_prototype, "filter", mal_ta_filter);
-    mal_intrinsic_define_method(vm, ta_prototype, "find", mal_ta_find);
-    mal_intrinsic_define_method(vm, ta_prototype, "findIndex", mal_ta_find_index);
-    mal_intrinsic_define_method(vm, ta_prototype, "findLast", mal_ta_find_last);
-    mal_intrinsic_define_method(vm, ta_prototype, "findLastIndex", mal_ta_find_last_index);
-    mal_intrinsic_define_method(vm, ta_prototype, "some", mal_ta_some);
-    mal_intrinsic_define_method(vm, ta_prototype, "every", mal_ta_every);
-    mal_intrinsic_define_method(vm, ta_prototype, "reduce", mal_ta_reduce);
-    mal_intrinsic_define_method(vm, ta_prototype, "reduceRight", mal_ta_reduce_right);
-    mal_intrinsic_define_method(vm, ta_prototype, "keys", mal_ta_keys);
-    mal_intrinsic_define_method(vm, ta_prototype, "entries", mal_ta_entries);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "at", 1, mal_ta_at);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "fill", 1, mal_ta_fill);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "set", 1, mal_ta_set);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "subarray", 2, mal_ta_subarray);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "slice", 2, mal_ta_slice);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "copyWithin", 2, mal_ta_copy_within);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "join", 1, mal_ta_join);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "toString", 0, mal_ta_to_string);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "toLocaleString", 0, mal_ta_to_string);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "indexOf", 1, mal_ta_index_of);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "lastIndexOf", 1, mal_ta_last_index_of);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "includes", 1, mal_ta_includes);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "reverse", 0, mal_ta_reverse);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "sort", 1, mal_ta_sort);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "forEach", 1, mal_ta_for_each);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "map", 1, mal_ta_map);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "filter", 1, mal_ta_filter);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "find", 1, mal_ta_find);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "findIndex", 1, mal_ta_find_index);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "findLast", 1, mal_ta_find_last);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "findLastIndex", 1, mal_ta_find_last_index);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "some", 1, mal_ta_some);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "every", 1, mal_ta_every);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "reduce", 1, mal_ta_reduce);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "reduceRight", 1, mal_ta_reduce_right);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "keys", 0, mal_ta_keys);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "entries", 0, mal_ta_entries);
 
-    MalValue values_method = mal_intrinsic_define_method(vm, ta_prototype, "values", mal_ta_values);
+    MalValue values_method = mal_intrinsic_define_method_n(vm, ta_prototype, "values", 0, mal_ta_values);
     MalPropertyDesc iterator_desc = mal_intrinsic_data_desc(values_method, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(ta_prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &iterator_desc);
 
-    mal_intrinsic_define_method(vm, (MalObject *) ta_constructor, "from", mal_ta_from);
-    mal_intrinsic_define_method(vm, (MalObject *) ta_constructor, "of", mal_ta_of);
+    mal_intrinsic_define_method_n(vm, (MalObject *) ta_constructor, "from", 1, mal_ta_from);
+    mal_intrinsic_define_method_n(vm, (MalObject *) ta_constructor, "of", 0, mal_ta_of);
     MalPropertyDesc species_desc = {
         .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
         .value = mal_value_new_undefined(),
@@ -1076,8 +1076,8 @@ void mal_builtin_typed_array_install(MalVm *vm) {
         const byte *name = mal_typed_array_name(kind);
 
         MalObject *prototype = mal_object_new(&vm->heap, ta_prototype);
-        MalNativeFunctionObject *constructor = mal_native_function_object_new(
-            &vm->heap, (MalObject *) ta_constructor, mal_intrinsic_ascii(vm, name), mal_ta_constructor_callbacks[kind]);
+        MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+            &vm->heap, (MalObject *) ta_constructor, mal_intrinsic_ascii(vm, name), 3, mal_ta_constructor_callbacks[kind]);
 
         vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_CONSTRUCTOR_BASE + kind] = mal_value_from_native_function_object(constructor);
         vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind] = mal_value_from_object(prototype);

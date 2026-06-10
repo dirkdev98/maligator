@@ -182,6 +182,31 @@ function loadHarnessFile(file: string) {
 	return HARNESS_CACHE[file];
 }
 
+/**
+ * The host-provided `$262` object (test262's realm/agent hook). We implement
+ * what the runtime can already back: `global`, a no-op `gc` (no collector yet),
+ * and `detachArrayBuffer` via ArrayBuffer.prototype.transfer (which detaches the
+ * original). evalScript/createRealm require eval/realms we do not have, so they
+ * are present (so `typeof` checks pass) but throw when invoked.
+ */
+const TEST262_HOST_PRELUDE = `var $262 = {
+  global: globalThis,
+  gc: function gc() {},
+  detachArrayBuffer: function detachArrayBuffer(buffer) {
+    if (buffer !== null && buffer !== undefined && typeof buffer.transfer === "function") {
+      buffer.transfer();
+    }
+    return null;
+  },
+  evalScript: function evalScript() {
+    throw new TypeError("$262.evalScript is not supported");
+  },
+  createRealm: function createRealm() {
+    throw new TypeError("$262.createRealm is not supported");
+  },
+};
+`;
+
 function composeSource(file: Test262File) {
 	if (file.frontmatter.flags?.includes("raw")) {
 		return file.content;
@@ -190,7 +215,7 @@ function composeSource(file: Test262File) {
 	const harnessFiles = ["harness/assert.js", "harness/sta.js"];
 	harnessFiles.push(...(file.frontmatter.includes ?? []).map((it) => `harness/${it}`));
 
-	return `${harnessFiles.map(loadHarnessFile).join("\n")}\n${file.content}`;
+	return `${TEST262_HOST_PRELUDE}${harnessFiles.map(loadHarnessFile).join("\n")}\n${file.content}`;
 }
 
 function recordFailure(

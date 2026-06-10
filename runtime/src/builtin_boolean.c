@@ -26,10 +26,11 @@ static MalValue mal_builtin_boolean_prototype_value_of(MalVm *vm, MalValue this_
 
 void mal_builtin_boolean_install(MalVm *vm) {
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "Boolean"),
+        1,
         mal_builtin_boolean_constructor
     );
 
@@ -39,6 +40,6 @@ void mal_builtin_boolean_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_BOOLEAN_PROTOTYPE], MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_boolean_prototype_to_string);
-    mal_intrinsic_define_method(vm, prototype, "valueOf", mal_builtin_boolean_prototype_value_of);
+    mal_intrinsic_define_method_n(vm, prototype, "toString", 0, mal_builtin_boolean_prototype_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_boolean_prototype_value_of);
 }

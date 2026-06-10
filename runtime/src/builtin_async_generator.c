@@ -249,10 +249,11 @@ void mal_builtin_async_generator_install(MalVm *vm) {
     mal_intrinsic_define_symbol_method(vm, async_iterator_prototype, MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR, "[Symbol.asyncIterator]", mal_agen_async_iterator);
 
     // %AsyncIterator% global (abstract constructor), with AsyncIterator.prototype.
-    MalNativeFunctionObject *async_iterator = mal_native_function_object_new(
+    MalNativeFunctionObject *async_iterator = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "AsyncIterator"),
+        0,
         mal_async_iterator_constructor
     );
     vm->intrinsics[MAL_INTRINSIC_ASYNC_ITERATOR_CONSTRUCTOR] = mal_value_from_native_function_object(async_iterator);
@@ -263,9 +264,9 @@ void mal_builtin_async_generator_install(MalVm *vm) {
     // %AsyncGeneratorPrototype%: next/throw/return, inheriting %AsyncIteratorPrototype%.
     MalObject *prototype = mal_object_new(&vm->heap, async_iterator_prototype);
     vm->intrinsics[MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE] = mal_value_from_object(prototype);
-    mal_intrinsic_define_method(vm, prototype, "next", mal_agen_next);
-    mal_intrinsic_define_method(vm, prototype, "throw", mal_agen_throw);
-    mal_intrinsic_define_method(vm, prototype, "return", mal_agen_return);
+    mal_intrinsic_define_method_n(vm, prototype, "next", 1, mal_agen_next);
+    mal_intrinsic_define_method_n(vm, prototype, "throw", 1, mal_agen_throw);
+    mal_intrinsic_define_method_n(vm, prototype, "return", 1, mal_agen_return);
     mal_agen_define_tag(vm, prototype, "AsyncGenerator");
 
     // %AsyncGenerator% (=AsyncGeneratorFunction.prototype), inheriting %Function.prototype%.

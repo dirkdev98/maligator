@@ -1,10 +1,12 @@
 #include "builtin_function.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "bound_function_object.h"
 #include "heap_string.h"
+#include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
 
@@ -85,16 +87,51 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
         return mal_value_new_undefined();
     }
 
+    i32 bound_count = arg_count > 1 ? arg_count - 1 : 0;
     MalBoundFunctionObject *bound = mal_bound_function_object_new(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         this_value,
         arg_count >= 1 ? args[0] : mal_value_new_undefined(),
         arg_count > 1 ? args + 1 : nullptr,
-        arg_count > 1 ? arg_count - 1 : 0
+        bound_count
     );
+    MalValue bound_value = mal_value_from_bound_function_object(bound);
 
-    return mal_value_from_bound_function_object(bound);
+    // SetFunctionLength: max(0, ToIntegerOrInfinity(target.length) - bound args)
+    // when target.length is a Number, else 0. Materialized as a real
+    // { writable: false, enumerable: false, configurable: true } own property.
+    MalValue target_length;
+    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, "length"), &target_length)) {
+        return mal_value_new_undefined();
+    }
+    i32 length = 0;
+    bool target_length_is_number = mal_value_is_int32(target_length) ||
+        mal_value_is_f64_or_nan(target_length) ||
+        target_length == MAL_VALUE_NEGATIVE_ZERO;
+    if (target_length_is_number) {
+        f64 numeric = mal_ops_to_number(target_length);
+        if (isfinite(numeric)) {
+            i32 truncated = (i32) numeric - bound_count;
+            length = truncated > 0 ? truncated : 0;
+        }
+    }
+    MalPropertyDesc length_desc = mal_intrinsic_data_desc(mal_value_from_i32(length), MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own((MalObject *) bound, mal_intrinsic_string_key(vm, "length"), &length_desc);
+
+    // SetFunctionName: "bound " ++ (target.name if a string, else "").
+    MalValue target_name;
+    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, "name"), &target_name)) {
+        return mal_value_new_undefined();
+    }
+    MalValue prefix = mal_value_from_string(mal_intrinsic_ascii(vm, "bound "));
+    MalValue name_value = mal_value_is_string(target_name)
+        ? mal_ops_add(&vm->heap, prefix, target_name)
+        : prefix;
+    MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own((MalObject *) bound, mal_intrinsic_string_key(vm, "name"), &name_desc);
+
+    return bound_value;
 }
 
 static MalValue mal_builtin_function_prototype_has_instance(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -139,10 +176,11 @@ static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue thi
 
 void mal_builtin_function_install(MalVm *vm) {
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         prototype,
         mal_intrinsic_ascii(vm, "Function"),
+        1,
         mal_builtin_function_constructor
     );
     vm->intrinsics[MAL_INTRINSIC_FUNCTION_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
@@ -150,10 +188,10 @@ void mal_builtin_function_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE], MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_FUNCTION_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    mal_intrinsic_define_method(vm, prototype, "call", mal_builtin_function_prototype_call);
-    mal_intrinsic_define_method(vm, prototype, "apply", mal_builtin_function_prototype_apply);
-    mal_intrinsic_define_method(vm, prototype, "bind", mal_builtin_function_prototype_bind);
-    mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_function_prototype_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "call", 1, mal_builtin_function_prototype_call);
+    mal_intrinsic_define_method_n(vm, prototype, "apply", 2, mal_builtin_function_prototype_apply);
+    mal_intrinsic_define_method_n(vm, prototype, "bind", 1, mal_builtin_function_prototype_bind);
+    mal_intrinsic_define_method_n(vm, prototype, "toString", 0, mal_builtin_function_prototype_to_string);
 
     // The default @@hasInstance every callable inherits; instanceof
     // dispatches through it. Non-writable non-configurable per spec.

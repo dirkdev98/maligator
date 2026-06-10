@@ -7,11 +7,14 @@ once we compile and run most JS.
 
 ## High level
 
-- [ ] Function expressions as values
+- [ ] Bundler things: modules, scripts, strict-mode, CommonJS, etc.
+- [ ] Debug location tables and error stack traces
+- [ ] More performance work.
+- [ ] RegExp objects
+- [ ] Date objects
+- [ ] Replace Meriyah with a type-stripping supporting parser
+- [ ] Eval & function constructor
 - [ ] Decide on value_ops vs vm_op vs whatever?
-- [ ] Debug location tables
-- [ ] Arguments object
-- [ ] For-loops
 
 ### Resources / reading list
 

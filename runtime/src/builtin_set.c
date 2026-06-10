@@ -269,10 +269,11 @@ static MalObject *mal_builtin_set_scaffold(
     const byte *tag
 ) {
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, name),
+        0,
         constructor_callback
     );
 
@@ -316,13 +317,13 @@ void mal_builtin_set_install(MalVm *vm) {
         "Set"
     );
 
-    mal_intrinsic_define_method(vm, prototype, "add", mal_builtin_set_prototype_add);
-    mal_intrinsic_define_method(vm, prototype, "has", mal_builtin_set_prototype_has);
-    mal_intrinsic_define_method(vm, prototype, "delete", mal_builtin_set_prototype_delete);
-    mal_intrinsic_define_method(vm, prototype, "clear", mal_builtin_set_prototype_clear);
-    mal_intrinsic_define_method(vm, prototype, "forEach", mal_builtin_set_prototype_for_each);
-    mal_intrinsic_define_method(vm, prototype, "entries", mal_builtin_set_prototype_entries);
-    MalValue values = mal_intrinsic_define_method(vm, prototype, "values", mal_builtin_set_prototype_values);
+    mal_intrinsic_define_method_n(vm, prototype, "add", 1, mal_builtin_set_prototype_add);
+    mal_intrinsic_define_method_n(vm, prototype, "has", 1, mal_builtin_set_prototype_has);
+    mal_intrinsic_define_method_n(vm, prototype, "delete", 1, mal_builtin_set_prototype_delete);
+    mal_intrinsic_define_method_n(vm, prototype, "clear", 0, mal_builtin_set_prototype_clear);
+    mal_intrinsic_define_method_n(vm, prototype, "forEach", 1, mal_builtin_set_prototype_for_each);
+    mal_intrinsic_define_method_n(vm, prototype, "entries", 0, mal_builtin_set_prototype_entries);
+    MalValue values = mal_intrinsic_define_method_n(vm, prototype, "values", 0, mal_builtin_set_prototype_values);
 
     // Set.prototype.keys and Set.prototype[Symbol.iterator] are the same
     // function object as Set.prototype.values.
@@ -342,7 +343,7 @@ void mal_builtin_set_install(MalVm *vm) {
         "WeakSet"
     );
 
-    mal_intrinsic_define_method(vm, weak_prototype, "add", mal_builtin_weak_set_prototype_add);
-    mal_intrinsic_define_method(vm, weak_prototype, "has", mal_builtin_weak_set_prototype_has);
-    mal_intrinsic_define_method(vm, weak_prototype, "delete", mal_builtin_weak_set_prototype_delete);
+    mal_intrinsic_define_method_n(vm, weak_prototype, "add", 1, mal_builtin_weak_set_prototype_add);
+    mal_intrinsic_define_method_n(vm, weak_prototype, "has", 1, mal_builtin_weak_set_prototype_has);
+    mal_intrinsic_define_method_n(vm, weak_prototype, "delete", 1, mal_builtin_weak_set_prototype_delete);
 }

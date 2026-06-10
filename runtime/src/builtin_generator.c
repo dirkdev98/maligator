@@ -144,9 +144,9 @@ void mal_builtin_generator_install(MalVm *vm) {
     );
     vm->intrinsics[MAL_INTRINSIC_GENERATOR_PROTOTYPE] = mal_value_from_object(prototype);
 
-    mal_intrinsic_define_method(vm, prototype, "next", mal_builtin_generator_next);
-    mal_intrinsic_define_method(vm, prototype, "throw", mal_builtin_generator_throw);
-    mal_intrinsic_define_method(vm, prototype, "return", mal_builtin_generator_return);
+    mal_intrinsic_define_method_n(vm, prototype, "next", 1, mal_builtin_generator_next);
+    mal_intrinsic_define_method_n(vm, prototype, "throw", 1, mal_builtin_generator_throw);
+    mal_intrinsic_define_method_n(vm, prototype, "return", 1, mal_builtin_generator_return);
     mal_generator_define_string_tag(vm, prototype, "Generator");
 
     // %Generator% (%GeneratorFunction.prototype%): the [[Prototype]] of generator

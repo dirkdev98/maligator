@@ -22,11 +22,13 @@
 #include "builtin_number.h"
 #include "builtin_object.h"
 #include "builtin_promise.h"
+#include "builtin_reflect.h"
 #include "builtin_set.h"
 #include "builtin_string.h"
 #include "builtin_symbol.h"
 #include "heap_string.h"
 #include "table.h"
+#include "typed_array_object.h"
 #include "vm.h"
 
 // Longest internal key in the codebase is well under this; longer names fall
@@ -109,10 +111,15 @@ void mal_intrinsic_define_data(MalVm *vm, MalObject *object, const byte *name, M
 }
 
 MalValue mal_intrinsic_define_method(MalVm *vm, MalObject *object, const byte *name, MalNativeFunctionCallback callback) {
-    MalNativeFunctionObject *function = mal_native_function_object_new(
+    return mal_intrinsic_define_method_n(vm, object, name, 0, callback);
+}
+
+MalValue mal_intrinsic_define_method_n(MalVm *vm, MalObject *object, const byte *name, i32 length, MalNativeFunctionCallback callback) {
+    MalNativeFunctionObject *function = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, name),
+        length,
         callback
     );
     MalValue value = mal_value_from_native_function_object(function);
@@ -211,8 +218,58 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_boolean_install(vm);
     mal_builtin_math_install(vm);
     mal_builtin_json_install(vm);
+    mal_builtin_reflect_install(vm);
     mal_builtin_console_install(vm);
     mal_builtin_promise_install(vm);
+
+    // Flag the built-in constructors as implementing [[Construct]]. Everything
+    // else (prototype methods, accessors, plain functions like parseInt) is a
+    // non-constructor, so `new method()` throws and IsConstructor reports false.
+    static const MalIntrinsic constructor_slots[] = {
+        MAL_INTRINSIC_OBJECT_CONSTRUCTOR,
+        MAL_INTRINSIC_ARRAY_CONSTRUCTOR,
+        MAL_INTRINSIC_FUNCTION_CONSTRUCTOR,
+        MAL_INTRINSIC_ERROR_CONSTRUCTOR,
+        MAL_INTRINSIC_TYPE_ERROR_CONSTRUCTOR,
+        MAL_INTRINSIC_RANGE_ERROR_CONSTRUCTOR,
+        MAL_INTRINSIC_REFERENCE_ERROR_CONSTRUCTOR,
+        MAL_INTRINSIC_SYNTAX_ERROR_CONSTRUCTOR,
+        MAL_INTRINSIC_URI_ERROR_CONSTRUCTOR,
+        MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR,
+        MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR,
+        MAL_INTRINSIC_STRING_CONSTRUCTOR,
+        MAL_INTRINSIC_NUMBER_CONSTRUCTOR,
+        MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR,
+        MAL_INTRINSIC_SYMBOL_CONSTRUCTOR,
+        MAL_INTRINSIC_BIGINT_CONSTRUCTOR,
+        MAL_INTRINSIC_MAP_CONSTRUCTOR,
+        MAL_INTRINSIC_SET_CONSTRUCTOR,
+        MAL_INTRINSIC_WEAK_MAP_CONSTRUCTOR,
+        MAL_INTRINSIC_WEAK_SET_CONSTRUCTOR,
+        MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR,
+        MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR,
+        MAL_INTRINSIC_DATA_VIEW_CONSTRUCTOR,
+        MAL_INTRINSIC_TYPED_ARRAY_CONSTRUCTOR,
+        MAL_INTRINSIC_PROMISE_CONSTRUCTOR,
+        MAL_INTRINSIC_ITERATOR_CONSTRUCTOR,
+        MAL_INTRINSIC_ASYNC_ITERATOR_CONSTRUCTOR,
+        MAL_INTRINSIC_GENERATOR_FUNCTION_CONSTRUCTOR,
+        MAL_INTRINSIC_ASYNC_GENERATOR_FUNCTION_CONSTRUCTOR,
+        MAL_INTRINSIC_ASYNC_FUNCTION_CONSTRUCTOR,
+    };
+    for (usize i = 0; i < countof(constructor_slots); i++) {
+        MalValue value = vm->intrinsics[constructor_slots[i]];
+        if (mal_value_is_native_function_object(value)) {
+            mal_native_function_object_set_constructor(mal_value_to_native_function_object(value));
+        }
+    }
+    // The per-kind TypedArray constructors are contiguous in MalTypedArrayKind order.
+    for (i32 kind = 0; kind < MAL_TA_KIND_COUNT; kind++) {
+        MalValue value = vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_CONSTRUCTOR_BASE + kind];
+        if (mal_value_is_native_function_object(value)) {
+            mal_native_function_object_set_constructor(mal_value_to_native_function_object(value));
+        }
+    }
 
     vm->intrinsics[MAL_INTRINSIC_NAN_VALUE] = mal_value_new_nan();
     vm->intrinsics[MAL_INTRINSIC_INFINITY_VALUE] = mal_value_from_f64_convert_nan(INFINITY);
@@ -265,6 +322,7 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "isFinite", vm->intrinsics[MAL_INTRINSIC_IS_FINITE], flags);
     mal_intrinsic_define_data(vm, global_this, "Math", vm->intrinsics[MAL_INTRINSIC_MATH], flags);
     mal_intrinsic_define_data(vm, global_this, "JSON", vm->intrinsics[MAL_INTRINSIC_JSON], flags);
+    mal_intrinsic_define_data(vm, global_this, "Reflect", vm->intrinsics[MAL_INTRINSIC_REFLECT], flags);
     mal_intrinsic_define_data(vm, global_this, "console", vm->intrinsics[MAL_INTRINSIC_CONSOLE], flags);
     mal_intrinsic_define_data(vm, global_this, "Promise", vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "AggregateError", vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR], flags);

@@ -195,6 +195,19 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
     // resolves captured bindings by owner function index.
     function->creation_env = creation_env;
 
+    // Materialize `length` and `name` as real { writable: false, enumerable:
+    // false, configurable: true } own data properties (not synthetic) so the
+    // reflective machinery and delete observe them with the right attributes.
+    const MalFunction *definition = &vm->definition->functions[function_index];
+    MalPropertyDesc length_desc = mal_intrinsic_data_desc(mal_value_from_i32(definition->length), MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(&function->object, mal_intrinsic_string_key(vm, "length"), &length_desc);
+
+    MalValue name_value = definition->name_string_index >= 0 && definition->name_string_index < vm->definition->string_constant_count
+        ? mal_value_from_string(&vm->definition->string_constants[definition->name_string_index])
+        : mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+    MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(&function->object, mal_intrinsic_string_key(vm, "name"), &name_desc);
+
     return mal_value_from_function_object(function);
 }
 
@@ -405,7 +418,14 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
         }
     } else if (mal_value_is_native_function_object(resolution.callee)) {
         // Native constructors allocate their own this; new_target carries the
-        // construct-ness signal.
+        // construct-ness signal. A native that does not implement [[Construct]]
+        // (a prototype method, accessor, parseInt, …) is not new-able.
+        if (!mal_native_function_object_is_constructor(mal_value_to_native_function_object(resolution.callee))) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
+            vm->value_stack_size = base;
+            free(resolution.owned_args);
+            return;
+        }
         MalNativeFunctionCallback callback = mal_native_function_object_callback(
             mal_value_to_native_function_object(resolution.callee)
         );
@@ -517,6 +537,49 @@ void mal_op_construct_spread(MalCallable *callable, MalInstruction *instruction)
     }
 
     mal_vm_construct_dispatch(vm, callee, base, argument_count, dst);
+}
+
+void mal_op_construct_super(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue parent = callable->registers[instruction->as.construct_super.parent];
+    MalValue arguments_array = callable->registers[instruction->as.construct_super.arguments_array];
+    i32 dst = instruction->as.construct_super.dst;
+    // The derived constructor's new.target is forwarded to the parent, so the
+    // instance is built from the most-derived class's prototype. A super() with
+    // no new.target means the derived class constructor was invoked without
+    // `new` (a class constructor has no [[Call]]); that is a TypeError.
+    MalValue new_target = callable->new_target;
+    if (mal_value_is_undefined(new_target)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Class constructor cannot be invoked without 'new'");
+        return;
+    }
+    // Frames may relocate while the parent constructor runs; address the caller
+    // by index for the post-construct writes rather than holding `callable`.
+    i32 caller_frame_index = vm->frame_count - 1;
+
+    // Marshal the super arguments onto the value stack (above the caller window).
+    i32 base = vm->value_stack_size;
+    i32 argument_count = mal_vm_marshal_spread(vm, arguments_array);
+    if (argument_count < 0) {
+        return;
+    }
+
+    MalCompletion completion = mal_vm_construct_value_with_target(vm, parent, &vm->value_stack[base], argument_count, new_target);
+    vm->value_stack_size = base;
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        vm->completion = completion;
+        return;
+    }
+
+    // BindThisValue: the derived constructor's `this` is the object the super
+    // constructor produced. A non-object result only arises from the deliberate
+    // lack of primitive wrapper objects (super to Number/String/Boolean returns
+    // a primitive); keep the eagerly-allocated `this` so the derived prototype
+    // chain — and `instanceof` — are preserved.
+    if (mal_value_is_object(completion.value)) {
+        vm->frames[caller_frame_index].this_value = completion.value;
+    }
+    vm->frames[caller_frame_index].registers[dst] = vm->frames[caller_frame_index].this_value;
 }
 
 void mal_op_throw(MalCallable *callable, MalInstruction *instruction) {
@@ -709,10 +772,7 @@ MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue rig
                 return mal_value_new_boolean(false);
             }
 
-            MalValue synthetic;
-            bool found = mal_vm_resolve_synthetic_property(vm, right, key, &synthetic) ||
-                mal_object_resolve_property(mal_value_to_object(right), key).found;
-            return mal_value_new_boolean(found);
+            return mal_value_new_boolean(mal_vm_has_property(vm, right, key));
         }
         case MAL_BIN_INSTANCEOF: {
             if (!mal_value_is_object(right)) {
@@ -913,20 +973,6 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
     return desc.value;
 }
 
-static bool mal_vm_key_is_name(MalKey key) {
-    if (key.kind != MAL_KEY_STRING || !mal_value_is_string(key.value)) {
-        return false;
-    }
-
-    MalString *string = mal_value_to_string(key.value);
-    const c16 *code_units = mal_string_code_units(string);
-    return mal_string_length(string) == 4 &&
-        code_units[0] == 'n' &&
-        code_units[1] == 'a' &&
-        code_units[2] == 'm' &&
-        code_units[3] == 'e';
-}
-
 static bool mal_vm_value_is_number(MalValue value) {
     return mal_value_is_int32(value) || mal_value_is_f64_or_nan(value) || value == MAL_VALUE_NEGATIVE_ZERO;
 }
@@ -957,17 +1003,10 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
     }
 
     if (mal_value_is_callable(object_value)) {
-        if (mal_array_key_is_length(key)) {
-            *value_out = mal_value_from_i32(mal_vm_callable_length(vm, object_value));
-            return true;
-        }
-
-        if (mal_vm_key_is_name(key)) {
-            MalString *name = mal_vm_callable_name(vm, object_value);
-            *value_out = name != nullptr ? mal_value_from_string(name) : mal_value_new_undefined();
-            return true;
-        }
-
+        // length and name are materialized as real own data properties at
+        // function creation (function_object.c / mal_vm_op_create_function /
+        // Function.prototype.bind), so the reflective machinery and delete see
+        // them; they are deliberately NOT resolved synthetically here.
         if (mal_value_is_function_object(object_value) && mal_vm_key_is_prototype(key)) {
             // Async (non-generator) functions have no `prototype` property; fall
             // through to the empty lookup (undefined value, false `in`).
@@ -1059,6 +1098,10 @@ bool mal_vm_to_number(MalVm *vm, MalValue value, f64 *out) {
 }
 
 bool mal_vm_get_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *out) {
+    return mal_vm_get_property_with_receiver(vm, object_value, key, object_value, out);
+}
+
+bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey key, MalValue receiver, MalValue *out) {
     *out = mal_value_new_undefined();
 
     if (mal_value_is_nil(object_value)) {
@@ -1087,23 +1130,23 @@ bool mal_vm_get_property(MalVm *vm, MalValue object_value, MalKey key, MalValue 
                 return true;
             }
 
-            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_STRING_PROTOTYPE, object_value, key, out);
+            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_STRING_PROTOTYPE, receiver, key, out);
         }
 
         if (mal_vm_value_is_number(object_value)) {
-            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_NUMBER_PROTOTYPE, object_value, key, out);
+            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_NUMBER_PROTOTYPE, receiver, key, out);
         }
 
         if (mal_value_is_boolean(object_value)) {
-            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_BOOLEAN_PROTOTYPE, object_value, key, out);
+            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_BOOLEAN_PROTOTYPE, receiver, key, out);
         }
 
         if (mal_value_is_symbol(object_value)) {
-            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_SYMBOL_PROTOTYPE, object_value, key, out);
+            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_SYMBOL_PROTOTYPE, receiver, key, out);
         }
 
         if (mal_value_is_bigint(object_value)) {
-            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_BIGINT_PROTOTYPE, object_value, key, out);
+            return mal_vm_get_from_prototype_slot(vm, MAL_INTRINSIC_BIGINT_PROTOTYPE, receiver, key, out);
         }
 
         return true;
@@ -1120,7 +1163,95 @@ bool mal_vm_get_property(MalVm *vm, MalValue object_value, MalKey key, MalValue 
         return true;
     }
 
-    return mal_vm_desc_read(vm, resolution.desc, object_value, out);
+    return mal_vm_desc_read(vm, resolution.desc, receiver, out);
+}
+
+/**
+ * Spec HasProperty(O, P): consults synthetic properties (array length, callable
+ * prototype, in-bounds typed-array indices) and the ordinary prototype chain.
+ * The caller has already verified O is an object.
+ */
+bool mal_vm_has_property(MalVm *vm, MalValue object_value, MalKey key) {
+    MalValue synthetic;
+    if (mal_vm_resolve_synthetic_property(vm, object_value, key, &synthetic)) {
+        return true;
+    }
+
+    return mal_object_resolve_property(mal_value_to_object(object_value), key).found;
+}
+
+/**
+ * Spec [[Set]] returning the boolean success (never throwing on a plain
+ * rejection) used by Reflect.set: an accessor invokes its setter with the
+ * receiver, a writable data property (or absent property) is created/updated on
+ * the receiver. A throwing user setter propagates through vm->completion.
+ */
+bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value, MalValue receiver) {
+    MalObject *object = mal_value_to_object(target);
+    MalPropertyResolution resolution = mal_object_resolve_property(object, key);
+
+    if (resolution.found && (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+        if (!mal_value_is_callable(resolution.desc.setter)) {
+            return false;
+        }
+        MalCompletion completion = mal_vm_call_value(vm, resolution.desc.setter, receiver, &value, 1);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = completion;
+            return false;
+        }
+        return true;
+    }
+
+    // Data (or absent) property. When the receiver is the target, defer to the
+    // pragmatic ordinary set (which honors array/exotic storage and the
+    // non-writable / non-extensible checks).
+    if (target == receiver) {
+        if (mal_value_is_array_object(target)) {
+            return mal_array_object_store(mal_value_to_array_object(target), key, value);
+        }
+        return mal_object_set(object, key, value);
+    }
+
+    // Distinct receiver: OrdinarySetWithOwnDescriptor writes the data value onto
+    // the receiver, respecting its own descriptor.
+    if (resolution.found && !(resolution.desc.flags & MAL_PROPERTY_WRITABLE)) {
+        return false;
+    }
+    if (!mal_value_is_object(receiver)) {
+        return false;
+    }
+    MalObject *receiver_object = mal_value_to_object(receiver);
+    MalPropertyLookup own = mal_object_get_own(receiver_object, key);
+    if (own.present) {
+        if ((own.desc.flags & MAL_PROPERTY_ACCESSOR) || !(own.desc.flags & MAL_PROPERTY_WRITABLE)) {
+            return false;
+        }
+        own.desc.value = value;
+        return mal_object_define_own(receiver_object, key, &own.desc) == MAL_DEFINE_OWN_APPLIED;
+    }
+    MalPropertyDesc desc = mal_intrinsic_data_desc(value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    return mal_object_define_own(receiver_object, key, &desc) == MAL_DEFINE_OWN_APPLIED;
+}
+
+/**
+ * Spec [[Delete]] returning the boolean success used by Reflect.deleteProperty
+ * and the delete operator: a real own property is removed honoring
+ * configurable; a non-configurable synthetic property (array length, callable
+ * prototype) cannot be deleted. The caller has verified O is an object.
+ */
+bool mal_vm_delete_property(MalVm *vm, MalValue object_value, MalKey key) {
+    MalObject *object = mal_value_to_object(object_value);
+
+    if (mal_object_get_own(object, key).present) {
+        return mal_object_delete_own(object, key);
+    }
+
+    MalValue synthetic;
+    if (mal_vm_resolve_synthetic_property(vm, object_value, key, &synthetic)) {
+        return false;
+    }
+
+    return mal_object_delete_own(object, key);
 }
 
 bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
@@ -1243,16 +1374,6 @@ void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_val
         MalCompletion completion = mal_vm_call_value(vm, resolution.desc.setter, object_value, &value, 1);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
-        }
-        return;
-    }
-
-    // Callable length and name are synthetic and non-writable; the prototype
-    // slot stays writable through the ordinary set below.
-    if (mal_value_is_callable(object_value) &&
-        (mal_array_key_is_length(key) || mal_vm_key_is_name(key))) {
-        if (strict) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
         }
         return;
     }
@@ -1562,26 +1683,7 @@ void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction) 
         return;
     }
 
-    MalObject *object = mal_value_to_object(object_value);
-
-    // A real own property is deleted normally (honoring configurable). This must
-    // come before the synthetic check so a function's own `name` data property is
-    // genuinely removable, matching its configurable:true attribute.
-    if (mal_object_get_own(object, key).present) {
-        mal_vm_finish_delete(callable, dst, mal_object_delete_own(object, key));
-        return;
-    }
-
-    MalValue synthetic;
-    if (mal_vm_resolve_synthetic_property(callable->vm, object_value, key, &synthetic)) {
-        // Remaining synthetic properties have no table slot. Array length and
-        // function prototype are non-configurable; callable length is still
-        // approximated as non-deletable. TODO(delete): length is configurable.
-        mal_vm_finish_delete(callable, dst, false);
-        return;
-    }
-
-    mal_vm_finish_delete(callable, dst, mal_object_delete_own(object, key));
+    mal_vm_finish_delete(callable, dst, mal_vm_delete_property(callable->vm, object_value, key));
 }
 
 void mal_vm_op_load_undeclared(MalVm *vm, i32 name_string_index) {

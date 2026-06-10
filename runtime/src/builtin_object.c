@@ -103,15 +103,15 @@ static MalBuiltinObjectDescParse mal_builtin_object_parse_descriptor(MalVm *vm, 
     return parse;
 }
 
-static void mal_builtin_object_define_from_value(MalVm *vm, MalObject *target, MalKey key, MalValue descriptor_value) {
+MalDefineOwnStatus mal_builtin_object_try_define(MalVm *vm, MalObject *target, MalKey key, MalValue descriptor_value) {
     if (!mal_value_is_object(descriptor_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Property description must be an object");
-        return;
+        return MAL_DEFINE_OWN_REJECTED;
     }
 
     MalBuiltinObjectDescParse parse = mal_builtin_object_parse_descriptor(vm, mal_value_to_object(descriptor_value));
     if (!parse.ok) {
-        return;
+        return MAL_DEFINE_OWN_REJECTED;
     }
 
     if (target->header.type == MAL_HEAP_ARRAY_OBJECT && mal_array_key_is_length(key)) {
@@ -125,19 +125,17 @@ static void mal_builtin_object_define_from_value(MalVm *vm, MalObject *target, M
             (parse.has_enumerable && (parse.desc.flags & MAL_PROPERTY_ENUMERABLE)) ||
             (parse.has_configurable && (parse.desc.flags & MAL_PROPERTY_CONFIGURABLE)) ||
             upgrades_writable) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
-            return;
+            return MAL_DEFINE_OWN_REJECTED;
         }
 
         if (parse.has_value && !mal_array_object_store(array, key, parse.desc.value)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
-            return;
+            return MAL_DEFINE_OWN_REJECTED;
         }
 
         if (parse.has_writable && !(parse.desc.flags & MAL_PROPERTY_WRITABLE)) {
             array->length_writable = false;
         }
-        return;
+        return MAL_DEFINE_OWN_APPLIED;
     }
 
     // Merge fields the descriptor left out from the current descriptor, so
@@ -177,7 +175,17 @@ static void mal_builtin_object_define_from_value(MalVm *vm, MalObject *target, M
         }
     }
 
-    if (mal_object_define_own(target, key, &desc) == MAL_DEFINE_OWN_REJECTED) {
+    return mal_object_define_own(target, key, &desc);
+}
+
+/**
+ * Object.defineProperty / .defineProperties / .create define path: like
+ * mal_builtin_object_try_define but a plain rejection (rather than a
+ * ToPropertyDescriptor throw) raises the "Cannot redefine property" TypeError.
+ */
+static void mal_builtin_object_define_from_value(MalVm *vm, MalObject *target, MalKey key, MalValue descriptor_value) {
+    if (mal_builtin_object_try_define(vm, target, key, descriptor_value) == MAL_DEFINE_OWN_REJECTED &&
+        vm->completion.kind != MAL_COMPLETION_THROW) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
     }
 }
@@ -233,7 +241,7 @@ static MalValue mal_builtin_object_define_properties(MalVm *vm, MalValue this_va
 /**
  * FromPropertyDescriptor: build the plain descriptor object for a property.
  */
-static MalValue mal_builtin_object_descriptor_object(MalVm *vm, MalPropertyDesc desc) {
+MalValue mal_builtin_object_descriptor_object(MalVm *vm, MalPropertyDesc desc) {
     MalObject *result = mal_intrinsic_new_object(vm);
     MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
 
@@ -1106,10 +1114,11 @@ static MalValue mal_builtin_object_prototype_lookup_setter(MalVm *vm, MalValue t
 
 void mal_builtin_object_install(MalVm *vm) {
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "Object"),
+        1,
         mal_builtin_object_constructor
     );
     MalObject *constructor_object = (MalObject *) constructor;
@@ -1119,40 +1128,40 @@ void mal_builtin_object_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_OBJECT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
     vm->intrinsics[MAL_INTRINSIC_OBJECT_DEFINE_PROPERTY] =
-        mal_intrinsic_define_method(vm, constructor_object, "defineProperty", mal_builtin_object_define_property);
-    mal_intrinsic_define_method(vm, constructor_object, "defineProperties", mal_builtin_object_define_properties);
-    mal_intrinsic_define_method(vm, constructor_object, "getOwnPropertyDescriptor", mal_builtin_object_get_own_property_descriptor);
-    mal_intrinsic_define_method(vm, constructor_object, "getOwnPropertyDescriptors", mal_builtin_object_get_own_property_descriptors);
-    mal_intrinsic_define_method(vm, constructor_object, "getOwnPropertyNames", mal_builtin_object_get_own_property_names);
-    mal_intrinsic_define_method(vm, constructor_object, "getOwnPropertySymbols", mal_builtin_object_get_own_property_symbols);
-    mal_intrinsic_define_method(vm, constructor_object, "keys", mal_builtin_object_keys);
-    mal_intrinsic_define_method(vm, constructor_object, "values", mal_builtin_object_values);
-    mal_intrinsic_define_method(vm, constructor_object, "entries", mal_builtin_object_entries);
-    mal_intrinsic_define_method(vm, constructor_object, "assign", mal_builtin_object_assign);
-    mal_intrinsic_define_method(vm, constructor_object, "create", mal_builtin_object_create);
-    mal_intrinsic_define_method(vm, constructor_object, "getPrototypeOf", mal_builtin_object_get_prototype_of);
-    mal_intrinsic_define_method(vm, constructor_object, "setPrototypeOf", mal_builtin_object_set_prototype_of);
-    mal_intrinsic_define_method(vm, constructor_object, "preventExtensions", mal_builtin_object_prevent_extensions);
-    mal_intrinsic_define_method(vm, constructor_object, "isExtensible", mal_builtin_object_is_extensible);
-    mal_intrinsic_define_method(vm, constructor_object, "freeze", mal_builtin_object_freeze);
-    mal_intrinsic_define_method(vm, constructor_object, "isFrozen", mal_builtin_object_is_frozen);
-    mal_intrinsic_define_method(vm, constructor_object, "seal", mal_builtin_object_seal);
-    mal_intrinsic_define_method(vm, constructor_object, "isSealed", mal_builtin_object_is_sealed);
-    mal_intrinsic_define_method(vm, constructor_object, "is", mal_builtin_object_is);
-    mal_intrinsic_define_method(vm, constructor_object, "hasOwn", mal_builtin_object_has_own);
-    mal_intrinsic_define_method(vm, constructor_object, "fromEntries", mal_builtin_object_from_entries);
-    mal_intrinsic_define_method(vm, constructor_object, "groupBy", mal_builtin_object_group_by);
+        mal_intrinsic_define_method_n(vm, constructor_object, "defineProperty", 3, mal_builtin_object_define_property);
+    mal_intrinsic_define_method_n(vm, constructor_object, "defineProperties", 2, mal_builtin_object_define_properties);
+    mal_intrinsic_define_method_n(vm, constructor_object, "getOwnPropertyDescriptor", 2, mal_builtin_object_get_own_property_descriptor);
+    mal_intrinsic_define_method_n(vm, constructor_object, "getOwnPropertyDescriptors", 1, mal_builtin_object_get_own_property_descriptors);
+    mal_intrinsic_define_method_n(vm, constructor_object, "getOwnPropertyNames", 1, mal_builtin_object_get_own_property_names);
+    mal_intrinsic_define_method_n(vm, constructor_object, "getOwnPropertySymbols", 1, mal_builtin_object_get_own_property_symbols);
+    mal_intrinsic_define_method_n(vm, constructor_object, "keys", 1, mal_builtin_object_keys);
+    mal_intrinsic_define_method_n(vm, constructor_object, "values", 1, mal_builtin_object_values);
+    mal_intrinsic_define_method_n(vm, constructor_object, "entries", 1, mal_builtin_object_entries);
+    mal_intrinsic_define_method_n(vm, constructor_object, "assign", 2, mal_builtin_object_assign);
+    mal_intrinsic_define_method_n(vm, constructor_object, "create", 2, mal_builtin_object_create);
+    mal_intrinsic_define_method_n(vm, constructor_object, "getPrototypeOf", 1, mal_builtin_object_get_prototype_of);
+    mal_intrinsic_define_method_n(vm, constructor_object, "setPrototypeOf", 2, mal_builtin_object_set_prototype_of);
+    mal_intrinsic_define_method_n(vm, constructor_object, "preventExtensions", 1, mal_builtin_object_prevent_extensions);
+    mal_intrinsic_define_method_n(vm, constructor_object, "isExtensible", 1, mal_builtin_object_is_extensible);
+    mal_intrinsic_define_method_n(vm, constructor_object, "freeze", 1, mal_builtin_object_freeze);
+    mal_intrinsic_define_method_n(vm, constructor_object, "isFrozen", 1, mal_builtin_object_is_frozen);
+    mal_intrinsic_define_method_n(vm, constructor_object, "seal", 1, mal_builtin_object_seal);
+    mal_intrinsic_define_method_n(vm, constructor_object, "isSealed", 1, mal_builtin_object_is_sealed);
+    mal_intrinsic_define_method_n(vm, constructor_object, "is", 2, mal_builtin_object_is);
+    mal_intrinsic_define_method_n(vm, constructor_object, "hasOwn", 2, mal_builtin_object_has_own);
+    mal_intrinsic_define_method_n(vm, constructor_object, "fromEntries", 1, mal_builtin_object_from_entries);
+    mal_intrinsic_define_method_n(vm, constructor_object, "groupBy", 2, mal_builtin_object_group_by);
 
-    mal_intrinsic_define_method(vm, prototype, "hasOwnProperty", mal_builtin_object_prototype_has_own_property);
-    mal_intrinsic_define_method(vm, prototype, "isPrototypeOf", mal_builtin_object_prototype_is_prototype_of);
-    mal_intrinsic_define_method(vm, prototype, "propertyIsEnumerable", mal_builtin_object_prototype_property_is_enumerable);
-    mal_intrinsic_define_method(vm, prototype, "valueOf", mal_builtin_object_prototype_value_of);
-    mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_object_prototype_to_string);
-    mal_intrinsic_define_method(vm, prototype, "toLocaleString", mal_builtin_object_prototype_to_locale_string);
-    mal_intrinsic_define_method(vm, prototype, "__defineGetter__", mal_builtin_object_prototype_define_getter);
-    mal_intrinsic_define_method(vm, prototype, "__defineSetter__", mal_builtin_object_prototype_define_setter);
-    mal_intrinsic_define_method(vm, prototype, "__lookupGetter__", mal_builtin_object_prototype_lookup_getter);
-    mal_intrinsic_define_method(vm, prototype, "__lookupSetter__", mal_builtin_object_prototype_lookup_setter);
+    mal_intrinsic_define_method_n(vm, prototype, "hasOwnProperty", 1, mal_builtin_object_prototype_has_own_property);
+    mal_intrinsic_define_method_n(vm, prototype, "isPrototypeOf", 1, mal_builtin_object_prototype_is_prototype_of);
+    mal_intrinsic_define_method_n(vm, prototype, "propertyIsEnumerable", 1, mal_builtin_object_prototype_property_is_enumerable);
+    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_object_prototype_value_of);
+    mal_intrinsic_define_method_n(vm, prototype, "toString", 0, mal_builtin_object_prototype_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0, mal_builtin_object_prototype_to_locale_string);
+    mal_intrinsic_define_method_n(vm, prototype, "__defineGetter__", 2, mal_builtin_object_prototype_define_getter);
+    mal_intrinsic_define_method_n(vm, prototype, "__defineSetter__", 2, mal_builtin_object_prototype_define_setter);
+    mal_intrinsic_define_method_n(vm, prototype, "__lookupGetter__", 1, mal_builtin_object_prototype_lookup_getter);
+    mal_intrinsic_define_method_n(vm, prototype, "__lookupSetter__", 1, mal_builtin_object_prototype_lookup_setter);
 
     // Annex B __proto__ is an accessor pair on Object.prototype.
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);

@@ -276,6 +276,12 @@ export type VmInstruction =
 			argumentsArray: number;
 	  }
 	| {
+			opcode: "CONSTRUCT_SUPER";
+			dst: number;
+			parent: number;
+			argumentsArray: number;
+	  }
+	| {
 			opcode: "MERGE_DATA_PROPERTIES";
 			target: number;
 			src: number;
@@ -782,6 +788,13 @@ function lowerInstructionToVmInstruction(
 				opcode: "CONSTRUCT_SPREAD",
 				dst: instruction.registers[0],
 				callee: instruction.registers[1],
+				argumentsArray: instruction.registers[2],
+			};
+		case "constructSuper":
+			return {
+				opcode: "CONSTRUCT_SUPER",
+				dst: instruction.registers[0],
+				parent: instruction.registers[1],
 				argumentsArray: instruction.registers[2],
 			};
 		case "mergeDataProperties":

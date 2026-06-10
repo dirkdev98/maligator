@@ -590,17 +590,17 @@ static void mal_iterator_define_accessor(MalVm *vm, MalObject *object, MalKey ke
 void mal_builtin_iterator_helpers_install(MalVm *vm) {
     MalObject *iterator_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE]);
 
-    mal_intrinsic_define_method(vm, iterator_prototype, "map", mal_ih_method_map);
-    mal_intrinsic_define_method(vm, iterator_prototype, "filter", mal_ih_method_filter);
-    mal_intrinsic_define_method(vm, iterator_prototype, "take", mal_ih_method_take);
-    mal_intrinsic_define_method(vm, iterator_prototype, "drop", mal_ih_method_drop);
-    mal_intrinsic_define_method(vm, iterator_prototype, "flatMap", mal_ih_method_flatmap);
-    mal_intrinsic_define_method(vm, iterator_prototype, "reduce", mal_ih_method_reduce);
-    mal_intrinsic_define_method(vm, iterator_prototype, "toArray", mal_ih_method_to_array);
-    mal_intrinsic_define_method(vm, iterator_prototype, "forEach", mal_ih_method_for_each);
-    mal_intrinsic_define_method(vm, iterator_prototype, "some", mal_ih_method_some);
-    mal_intrinsic_define_method(vm, iterator_prototype, "every", mal_ih_method_every);
-    mal_intrinsic_define_method(vm, iterator_prototype, "find", mal_ih_method_find);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "map", 1, mal_ih_method_map);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "filter", 1, mal_ih_method_filter);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "take", 1, mal_ih_method_take);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "drop", 1, mal_ih_method_drop);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "flatMap", 1, mal_ih_method_flatmap);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "reduce", 1, mal_ih_method_reduce);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "toArray", 0, mal_ih_method_to_array);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "forEach", 1, mal_ih_method_for_each);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "some", 1, mal_ih_method_some);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "every", 1, mal_ih_method_every);
+    mal_intrinsic_define_method_n(vm, iterator_prototype, "find", 1, mal_ih_method_find);
 
     mal_iterator_define_accessor(vm, iterator_prototype, mal_intrinsic_string_key(vm, "constructor"), mal_iterator_ctor_get, mal_iterator_ctor_set, "get constructor", "set constructor");
     mal_iterator_define_accessor(vm, iterator_prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), mal_iterator_tag_get, mal_iterator_tag_set, "get [Symbol.toStringTag]", "set [Symbol.toStringTag]");
@@ -608,21 +608,22 @@ void mal_builtin_iterator_helpers_install(MalVm *vm) {
     // %IteratorHelperPrototype%: shared next/return, inherits %IteratorPrototype%.
     MalObject *helper_prototype = mal_object_new(&vm->heap, iterator_prototype);
     vm->intrinsics[MAL_INTRINSIC_ITERATOR_HELPER_PROTOTYPE] = mal_value_from_object(helper_prototype);
-    mal_intrinsic_define_method(vm, helper_prototype, "next", mal_ih_proto_next);
-    mal_intrinsic_define_method(vm, helper_prototype, "return", mal_ih_proto_return);
+    mal_intrinsic_define_method_n(vm, helper_prototype, "next", 0, mal_ih_proto_next);
+    mal_intrinsic_define_method_n(vm, helper_prototype, "return", 0, mal_ih_proto_return);
     MalPropertyDesc tag_desc = mal_intrinsic_data_desc(
         mal_value_from_string(mal_intrinsic_ascii(vm, "Iterator Helper")),
         MAL_PROPERTY_CONFIGURABLE
     );
     mal_object_define_own(helper_prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag_desc);
 
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "Iterator"),
+        0,
         mal_iterator_constructor
     );
     vm->intrinsics[MAL_INTRINSIC_ITERATOR_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE], MAL_PROPERTY_NONE);
-    mal_intrinsic_define_method(vm, (MalObject *) constructor, "from", mal_iterator_from);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "from", 1, mal_iterator_from);
 }

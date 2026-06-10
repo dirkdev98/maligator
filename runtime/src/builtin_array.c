@@ -1616,10 +1616,11 @@ static MalValue mal_builtin_array_entries(MalVm *vm, MalValue this_value, const 
 
 void mal_builtin_array_install(MalVm *vm) {
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]);
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "Array"),
+        1,
         mal_builtin_array_constructor
     );
     MalObject *constructor_object = (MalObject *) constructor;
@@ -1628,49 +1629,49 @@ void mal_builtin_array_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, constructor_object, "prototype", vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE], MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_ARRAY_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    mal_intrinsic_define_method(vm, constructor_object, "isArray", mal_builtin_array_is_array);
-    mal_intrinsic_define_method(vm, constructor_object, "of", mal_builtin_array_of);
-    mal_intrinsic_define_method(vm, constructor_object, "from", mal_builtin_array_from);
+    mal_intrinsic_define_method_n(vm, constructor_object, "isArray", 1, mal_builtin_array_is_array);
+    mal_intrinsic_define_method_n(vm, constructor_object, "of", 0, mal_builtin_array_of);
+    mal_intrinsic_define_method_n(vm, constructor_object, "from", 1, mal_builtin_array_from);
 
     vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_MAP] =
-        mal_intrinsic_define_method(vm, prototype, "map", mal_builtin_array_map);
-    mal_intrinsic_define_method(vm, prototype, "forEach", mal_builtin_array_for_each);
-    mal_intrinsic_define_method(vm, prototype, "filter", mal_builtin_array_filter);
-    mal_intrinsic_define_method(vm, prototype, "reduce", mal_builtin_array_reduce);
-    mal_intrinsic_define_method(vm, prototype, "reduceRight", mal_builtin_array_reduce_right);
-    mal_intrinsic_define_method(vm, prototype, "find", mal_builtin_array_find);
-    mal_intrinsic_define_method(vm, prototype, "findIndex", mal_builtin_array_find_index);
-    mal_intrinsic_define_method(vm, prototype, "findLast", mal_builtin_array_find_last);
-    mal_intrinsic_define_method(vm, prototype, "findLastIndex", mal_builtin_array_find_last_index);
-    mal_intrinsic_define_method(vm, prototype, "flat", mal_builtin_array_flat);
-    mal_intrinsic_define_method(vm, prototype, "flatMap", mal_builtin_array_flat_map);
-    mal_intrinsic_define_method(vm, prototype, "some", mal_builtin_array_some);
-    mal_intrinsic_define_method(vm, prototype, "every", mal_builtin_array_every);
-    mal_intrinsic_define_method(vm, prototype, "indexOf", mal_builtin_array_index_of);
-    mal_intrinsic_define_method(vm, prototype, "lastIndexOf", mal_builtin_array_last_index_of);
-    mal_intrinsic_define_method(vm, prototype, "includes", mal_builtin_array_includes);
-    mal_intrinsic_define_method(vm, prototype, "push", mal_builtin_array_push);
-    mal_intrinsic_define_method(vm, prototype, "pop", mal_builtin_array_pop);
-    mal_intrinsic_define_method(vm, prototype, "shift", mal_builtin_array_shift);
-    mal_intrinsic_define_method(vm, prototype, "unshift", mal_builtin_array_unshift);
-    mal_intrinsic_define_method(vm, prototype, "slice", mal_builtin_array_slice);
-    mal_intrinsic_define_method(vm, prototype, "concat", mal_builtin_array_concat);
-    mal_intrinsic_define_method(vm, prototype, "join", mal_builtin_array_join);
-    mal_intrinsic_define_method(vm, prototype, "reverse", mal_builtin_array_reverse);
-    mal_intrinsic_define_method(vm, prototype, "fill", mal_builtin_array_fill);
-    mal_intrinsic_define_method(vm, prototype, "at", mal_builtin_array_at);
-    mal_intrinsic_define_method(vm, prototype, "sort", mal_builtin_array_sort);
-    mal_intrinsic_define_method(vm, prototype, "splice", mal_builtin_array_splice);
-    mal_intrinsic_define_method(vm, prototype, "copyWithin", mal_builtin_array_copy_within);
-    mal_intrinsic_define_method(vm, prototype, "with", mal_builtin_array_with);
-    mal_intrinsic_define_method(vm, prototype, "toReversed", mal_builtin_array_to_reversed);
-    mal_intrinsic_define_method(vm, prototype, "toSorted", mal_builtin_array_to_sorted);
-    mal_intrinsic_define_method(vm, prototype, "toSpliced", mal_builtin_array_to_spliced);
-    mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_array_to_string);
-    mal_intrinsic_define_method(vm, prototype, "toLocaleString", mal_builtin_array_to_locale_string);
-    mal_intrinsic_define_method(vm, prototype, "keys", mal_builtin_array_keys);
-    mal_intrinsic_define_method(vm, prototype, "entries", mal_builtin_array_entries);
-    MalValue values = mal_intrinsic_define_method(vm, prototype, "values", mal_builtin_array_values);
+        mal_intrinsic_define_method_n(vm, prototype, "map", 1, mal_builtin_array_map);
+    mal_intrinsic_define_method_n(vm, prototype, "forEach", 1, mal_builtin_array_for_each);
+    mal_intrinsic_define_method_n(vm, prototype, "filter", 1, mal_builtin_array_filter);
+    mal_intrinsic_define_method_n(vm, prototype, "reduce", 1, mal_builtin_array_reduce);
+    mal_intrinsic_define_method_n(vm, prototype, "reduceRight", 1, mal_builtin_array_reduce_right);
+    mal_intrinsic_define_method_n(vm, prototype, "find", 1, mal_builtin_array_find);
+    mal_intrinsic_define_method_n(vm, prototype, "findIndex", 1, mal_builtin_array_find_index);
+    mal_intrinsic_define_method_n(vm, prototype, "findLast", 1, mal_builtin_array_find_last);
+    mal_intrinsic_define_method_n(vm, prototype, "findLastIndex", 1, mal_builtin_array_find_last_index);
+    mal_intrinsic_define_method_n(vm, prototype, "flat", 0, mal_builtin_array_flat);
+    mal_intrinsic_define_method_n(vm, prototype, "flatMap", 1, mal_builtin_array_flat_map);
+    mal_intrinsic_define_method_n(vm, prototype, "some", 1, mal_builtin_array_some);
+    mal_intrinsic_define_method_n(vm, prototype, "every", 1, mal_builtin_array_every);
+    mal_intrinsic_define_method_n(vm, prototype, "indexOf", 1, mal_builtin_array_index_of);
+    mal_intrinsic_define_method_n(vm, prototype, "lastIndexOf", 1, mal_builtin_array_last_index_of);
+    mal_intrinsic_define_method_n(vm, prototype, "includes", 1, mal_builtin_array_includes);
+    mal_intrinsic_define_method_n(vm, prototype, "push", 1, mal_builtin_array_push);
+    mal_intrinsic_define_method_n(vm, prototype, "pop", 0, mal_builtin_array_pop);
+    mal_intrinsic_define_method_n(vm, prototype, "shift", 0, mal_builtin_array_shift);
+    mal_intrinsic_define_method_n(vm, prototype, "unshift", 1, mal_builtin_array_unshift);
+    mal_intrinsic_define_method_n(vm, prototype, "slice", 2, mal_builtin_array_slice);
+    mal_intrinsic_define_method_n(vm, prototype, "concat", 1, mal_builtin_array_concat);
+    mal_intrinsic_define_method_n(vm, prototype, "join", 1, mal_builtin_array_join);
+    mal_intrinsic_define_method_n(vm, prototype, "reverse", 0, mal_builtin_array_reverse);
+    mal_intrinsic_define_method_n(vm, prototype, "fill", 1, mal_builtin_array_fill);
+    mal_intrinsic_define_method_n(vm, prototype, "at", 1, mal_builtin_array_at);
+    mal_intrinsic_define_method_n(vm, prototype, "sort", 1, mal_builtin_array_sort);
+    mal_intrinsic_define_method_n(vm, prototype, "splice", 2, mal_builtin_array_splice);
+    mal_intrinsic_define_method_n(vm, prototype, "copyWithin", 2, mal_builtin_array_copy_within);
+    mal_intrinsic_define_method_n(vm, prototype, "with", 2, mal_builtin_array_with);
+    mal_intrinsic_define_method_n(vm, prototype, "toReversed", 0, mal_builtin_array_to_reversed);
+    mal_intrinsic_define_method_n(vm, prototype, "toSorted", 1, mal_builtin_array_to_sorted);
+    mal_intrinsic_define_method_n(vm, prototype, "toSpliced", 2, mal_builtin_array_to_spliced);
+    mal_intrinsic_define_method_n(vm, prototype, "toString", 0, mal_builtin_array_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0, mal_builtin_array_to_locale_string);
+    mal_intrinsic_define_method_n(vm, prototype, "keys", 0, mal_builtin_array_keys);
+    mal_intrinsic_define_method_n(vm, prototype, "entries", 0, mal_builtin_array_entries);
+    MalValue values = mal_intrinsic_define_method_n(vm, prototype, "values", 0, mal_builtin_array_values);
 
     // Array.prototype[Symbol.iterator] === Array.prototype.values
     MalPropertyDesc iterator_desc = mal_intrinsic_data_desc(values, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);

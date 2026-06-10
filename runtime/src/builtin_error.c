@@ -181,13 +181,15 @@ static MalObject *mal_builtin_error_install_kind(
     MalIntrinsic constructor_slot,
     MalIntrinsic prototype_slot,
     MalObject *parent_prototype,
+    i32 constructor_length,
     MalNativeFunctionCallback constructor_callback
 ) {
     MalObject *prototype = mal_object_new(&vm->heap, parent_prototype);
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, name),
+        constructor_length,
         constructor_callback
     );
 
@@ -209,15 +211,16 @@ void mal_builtin_error_install(MalVm *vm) {
         MAL_INTRINSIC_ERROR_CONSTRUCTOR,
         MAL_INTRINSIC_ERROR_PROTOTYPE,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+        1,
         mal_builtin_error_constructor
     );
-    mal_intrinsic_define_method(vm, error_prototype, "toString", mal_builtin_error_prototype_to_string);
+    mal_intrinsic_define_method_n(vm, error_prototype, "toString", 0, mal_builtin_error_prototype_to_string);
 
-    mal_builtin_error_install_kind(vm, "TypeError", MAL_INTRINSIC_TYPE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, error_prototype, mal_builtin_type_error_constructor);
-    mal_builtin_error_install_kind(vm, "RangeError", MAL_INTRINSIC_RANGE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, error_prototype, mal_builtin_range_error_constructor);
-    mal_builtin_error_install_kind(vm, "ReferenceError", MAL_INTRINSIC_REFERENCE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, error_prototype, mal_builtin_reference_error_constructor);
-    mal_builtin_error_install_kind(vm, "SyntaxError", MAL_INTRINSIC_SYNTAX_ERROR_CONSTRUCTOR, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, error_prototype, mal_builtin_syntax_error_constructor);
-    mal_builtin_error_install_kind(vm, "URIError", MAL_INTRINSIC_URI_ERROR_CONSTRUCTOR, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, error_prototype, mal_builtin_uri_error_constructor);
-    mal_builtin_error_install_kind(vm, "EvalError", MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE, error_prototype, mal_builtin_eval_error_constructor);
-    mal_builtin_error_install_kind(vm, "AggregateError", MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_AGGREGATE_ERROR_PROTOTYPE, error_prototype, mal_builtin_aggregate_error_constructor);
+    mal_builtin_error_install_kind(vm, "TypeError", MAL_INTRINSIC_TYPE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, error_prototype, 1, mal_builtin_type_error_constructor);
+    mal_builtin_error_install_kind(vm, "RangeError", MAL_INTRINSIC_RANGE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, error_prototype, 1, mal_builtin_range_error_constructor);
+    mal_builtin_error_install_kind(vm, "ReferenceError", MAL_INTRINSIC_REFERENCE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, error_prototype, 1, mal_builtin_reference_error_constructor);
+    mal_builtin_error_install_kind(vm, "SyntaxError", MAL_INTRINSIC_SYNTAX_ERROR_CONSTRUCTOR, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, error_prototype, 1, mal_builtin_syntax_error_constructor);
+    mal_builtin_error_install_kind(vm, "URIError", MAL_INTRINSIC_URI_ERROR_CONSTRUCTOR, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, error_prototype, 1, mal_builtin_uri_error_constructor);
+    mal_builtin_error_install_kind(vm, "EvalError", MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE, error_prototype, 1, mal_builtin_eval_error_constructor);
+    mal_builtin_error_install_kind(vm, "AggregateError", MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR, MAL_INTRINSIC_AGGREGATE_ERROR_PROTOTYPE, error_prototype, 2, mal_builtin_aggregate_error_constructor);
 }

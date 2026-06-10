@@ -242,10 +242,11 @@ static MalValue mal_builtin_number_prototype_value_of(MalVm *vm, MalValue this_v
 
 void mal_builtin_number_install(MalVm *vm) {
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "Number"),
+        1,
         mal_builtin_number_constructor
     );
     MalObject *constructor_object = (MalObject *) constructor;
@@ -265,16 +266,16 @@ void mal_builtin_number_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, constructor_object, "NEGATIVE_INFINITY", mal_value_from_f64_convert_nan(-INFINITY), MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, constructor_object, "NaN", mal_value_new_nan(), MAL_PROPERTY_NONE);
 
-    mal_intrinsic_define_method(vm, constructor_object, "isNaN", mal_builtin_number_is_nan);
-    mal_intrinsic_define_method(vm, constructor_object, "isFinite", mal_builtin_number_is_finite);
-    mal_intrinsic_define_method(vm, constructor_object, "isInteger", mal_builtin_number_is_integer);
-    mal_intrinsic_define_method(vm, constructor_object, "isSafeInteger", mal_builtin_number_is_safe_integer);
-    vm->intrinsics[MAL_INTRINSIC_PARSE_INT] = mal_intrinsic_define_method(vm, constructor_object, "parseInt", mal_builtin_parse_int);
-    vm->intrinsics[MAL_INTRINSIC_PARSE_FLOAT] = mal_intrinsic_define_method(vm, constructor_object, "parseFloat", mal_builtin_parse_float);
+    mal_intrinsic_define_method_n(vm, constructor_object, "isNaN", 1, mal_builtin_number_is_nan);
+    mal_intrinsic_define_method_n(vm, constructor_object, "isFinite", 1, mal_builtin_number_is_finite);
+    mal_intrinsic_define_method_n(vm, constructor_object, "isInteger", 1, mal_builtin_number_is_integer);
+    mal_intrinsic_define_method_n(vm, constructor_object, "isSafeInteger", 1, mal_builtin_number_is_safe_integer);
+    vm->intrinsics[MAL_INTRINSIC_PARSE_INT] = mal_intrinsic_define_method_n(vm, constructor_object, "parseInt", 2, mal_builtin_parse_int);
+    vm->intrinsics[MAL_INTRINSIC_PARSE_FLOAT] = mal_intrinsic_define_method_n(vm, constructor_object, "parseFloat", 1, mal_builtin_parse_float);
 
-    mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_number_prototype_to_string);
-    mal_intrinsic_define_method(vm, prototype, "toFixed", mal_builtin_number_prototype_to_fixed);
-    mal_intrinsic_define_method(vm, prototype, "valueOf", mal_builtin_number_prototype_value_of);
+    mal_intrinsic_define_method_n(vm, prototype, "toString", 1, mal_builtin_number_prototype_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "toFixed", 1, mal_builtin_number_prototype_to_fixed);
+    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_number_prototype_value_of);
 
     // The global function flavors coerce their argument, unlike the statics.
     MalNativeFunctionObject *global_is_nan = mal_native_function_object_new(

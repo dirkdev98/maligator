@@ -136,10 +136,11 @@ static void mal_builtin_symbol_well_known(
 
 void mal_builtin_symbol_install(MalVm *vm) {
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, "Symbol"),
+        0,
         mal_builtin_symbol_constructor
     );
 
@@ -163,11 +164,11 @@ void mal_builtin_symbol_install(MalVm *vm) {
     mal_builtin_symbol_well_known(vm, (MalObject *) constructor, MAL_INTRINSIC_SYMBOL_SPLIT, "split", "Symbol.split");
     mal_builtin_symbol_well_known(vm, (MalObject *) constructor, MAL_INTRINSIC_SYMBOL_UNSCOPABLES, "unscopables", "Symbol.unscopables");
 
-    mal_intrinsic_define_method(vm, (MalObject *) constructor, "for", mal_builtin_symbol_for);
-    mal_intrinsic_define_method(vm, (MalObject *) constructor, "keyFor", mal_builtin_symbol_key_for);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "for", 1, mal_builtin_symbol_for);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "keyFor", 1, mal_builtin_symbol_key_for);
 
-    mal_intrinsic_define_method(vm, prototype, "toString", mal_builtin_symbol_prototype_to_string);
-    mal_intrinsic_define_method(vm, prototype, "valueOf", mal_builtin_symbol_prototype_value_of);
+    mal_intrinsic_define_method_n(vm, prototype, "toString", 0, mal_builtin_symbol_prototype_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_symbol_prototype_value_of);
 
     // Symbol.prototype[Symbol.toPrimitive] answers with the symbol itself
     // (the spec's brand check matches valueOf).

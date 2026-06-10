@@ -21,7 +21,7 @@ But that's not really what this project is for. The goals haven't changed:
 - I want to learn JS more.
 - I want to learn more about compiler development.
 
-And here's the thing that makes regex special: a regex engine *is* a compiler and a VM. A
+And here's the thing that makes regex special: a regex engine _is_ a compiler and a VM. A
 pattern is parsed into an AST, lowered to bytecode, and executed on a backtracking virtual
 machine with its own stack and registers. It is a miniature of the exact thing we are
 already building. Picking "vendor it" would skip the single most on-theme sub-project we

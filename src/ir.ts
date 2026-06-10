@@ -606,6 +606,12 @@ export type IRInstruction =
 			registers: [number, number, number];
 	  }
 	| {
+			type: "constructSuper";
+
+			// [destination, parent, arguments_array]
+			registers: [number, number, number];
+	  }
+	| {
 			type: "mergeDataProperties";
 
 			// [target, source] — object spread {...source} into target.
@@ -815,6 +821,7 @@ type IRIntrinsic =
 	| "isFinite"
 	| "Math"
 	| "JSON"
+	| "Reflect"
 	| "console"
 	| "globalThis"
 	| "NaN"
@@ -864,6 +871,7 @@ const irIntrinsics = new Set<string>([
 	"isFinite",
 	"Math",
 	"JSON",
+	"Reflect",
 	"console",
 	"globalThis",
 	"NaN",
@@ -2009,29 +2017,20 @@ function compileDefaultConstructor(
 		const location = getOrCreateBindingLocation(program, ctorFn, superBinding);
 		const parent = loadRegisterFromLocation(ctorFn, cursor.block, location);
 
-		const applyKey = compileStaticString(program, ctorFn, cursor, "apply");
-		const apply = nextRegisterDestination(ctorFn);
+		// `constructor(...args) { super(...args); }`: forward every argument to
+		// the parent's [[Construct]] (with the active new.target) and bind the
+		// result as `this`.
+		const argumentsArray = nextRegisterDestination(ctorFn);
 		cursor.block.instructions.push({
-			type: "loadProperty",
-			registers: [apply, parent, applyKey],
-		});
-
-		const thisRegister = nextRegisterDestination(ctorFn);
-		cursor.block.instructions.push({
-			type: "loadThis",
-			registers: [thisRegister],
-		});
-
-		const argumentsObject = nextRegisterDestination(ctorFn);
-		cursor.block.instructions.push({
-			type: "createArgumentsObject",
-			registers: [argumentsObject],
+			type: "createRestArguments",
+			registers: [argumentsArray],
+			startIndex: 0,
 		});
 
 		const result = nextRegisterDestination(ctorFn);
 		cursor.block.instructions.push({
-			type: "call",
-			registers: [result, apply, parent, thisRegister, argumentsObject],
+			type: "constructSuper",
+			registers: [result, parent, argumentsArray],
 		});
 	}
 
@@ -6177,42 +6176,23 @@ function compileSuperCall(
 	}
 
 	const location = getOrCreateBindingLocation(program, fn, superBinding);
-	const callee = loadRegisterFromLocation(fn, cursor.block, location);
+	const parent = loadRegisterFromLocation(fn, cursor.block, location);
 
-	const thisRegister = nextRegisterDestination(fn);
+	// super(...) is [[Construct]](parent, args, new.target): the parent builds
+	// `this` (forwarding the derived class's new.target so the instance gets the
+	// derived prototype), which the op then binds as the active `this`. The args
+	// are collected into an array (handling spread) for the construct.
+	const argumentsArray = compileSpreadArgumentsArray(
+		program,
+		fn,
+		cursor,
+		callExpression.arguments,
+	);
+	const destination = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
-		type: "loadThis",
-		registers: [thisRegister],
+		type: "constructSuper",
+		registers: [destination, parent, argumentsArray],
 	});
-
-	let destination: number;
-	if (callExpression.arguments.some((arg) => arg.type === "SpreadElement")) {
-		const argumentsArray = compileSpreadArgumentsArray(
-			program,
-			fn,
-			cursor,
-			callExpression.arguments,
-		);
-		destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "callSpread",
-			registers: [destination, callee, thisRegister, argumentsArray],
-		});
-	} else {
-		const args = callExpression.arguments.map((arg) => {
-			if (arg.type === "SpreadElement") {
-				return -1;
-			}
-
-			return compileExpression(program, fn, cursor, arg);
-		});
-
-		destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "call",
-			registers: [destination, callee, thisRegister, ...args],
-		});
-	}
 
 	// InitializeInstanceElements for a derived class runs right after super()
 	// returns, with this now initialized.

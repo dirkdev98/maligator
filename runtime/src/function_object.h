@@ -45,6 +45,22 @@ typedef struct MalNativeFunctionObject {
     MalNativeFunctionCallback callback;
 
     /**
+     * The arity exposed as the `length` own property. Spec built-in functions
+     * carry the count of required parameters; materialized as a real
+     * { writable: false, enumerable: false, configurable: true } own property
+     * at creation (so reflection/delete see it), defaulting to 0.
+     */
+    i32 length;
+
+    /**
+     * Whether this native function implements [[Construct]]. Most built-ins
+     * (prototype methods, accessors, plain functions) do not; only the built-in
+     * constructors are flagged (in mal_intrinsics_init). Construct dispatch and
+     * IsConstructor (Reflect.construct) consult this.
+     */
+    bool is_constructor;
+
+    /**
      * Internal slots (the spec's [[...]] closure state). Heap-owned, nullptr
      * when the function carries none. Created via
      * mal_native_function_object_new_with_slots; a pair of functions can share
@@ -82,23 +98,36 @@ MalFunctionObject *mal_function_object_new(
 i32 mal_function_object_function_index(const MalFunctionObject *function);
 
 /**
- * Initialize native function object state in caller-provided storage.
+ * Initialize native function object state in caller-provided storage. `length`
+ * is the arity exposed as the `length` own property.
  */
 void mal_native_function_object_init(
     MalHeap *heap,
     MalNativeFunctionObject *function,
     MalObject *prototype,
     MalString *name,
+    i32 length,
     MalNativeFunctionCallback callback
 );
 
 /**
- * Allocate and initialize a new native function object.
+ * Allocate and initialize a new native function object with arity 0.
  */
 MalNativeFunctionObject *mal_native_function_object_new(
     MalHeap *heap,
     MalObject *prototype,
     MalString *name,
+    MalNativeFunctionCallback callback
+);
+
+/**
+ * Allocate a native function object with an explicit arity (its `length`).
+ */
+MalNativeFunctionObject *mal_native_function_object_new_arity(
+    MalHeap *heap,
+    MalObject *prototype,
+    MalString *name,
+    i32 length,
     MalNativeFunctionCallback callback
 );
 
@@ -127,6 +156,16 @@ MalString *mal_native_function_object_name(const MalNativeFunctionObject *functi
  * Return the callback carried by a native function object.
  */
 MalNativeFunctionCallback mal_native_function_object_callback(const MalNativeFunctionObject *function);
+
+/**
+ * Whether the native function implements [[Construct]].
+ */
+bool mal_native_function_object_is_constructor(const MalNativeFunctionObject *function);
+
+/**
+ * Flag the native function as a constructor (implements [[Construct]]).
+ */
+void mal_native_function_object_set_constructor(MalNativeFunctionObject *function);
 
 /**
  * Read internal slot `index` (the spec's closure state). Returns undefined when
