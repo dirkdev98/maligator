@@ -56,7 +56,11 @@ void mal_async_function_start(MalVm *vm, MalVmFrame *frame) {
     // frame until its first await/return/throw). Clearing the caller link makes
     // RETURN and an uncaught throw settle the promise instead of writing a
     // caller register.
-    if (frame->caller_frame_index >= 0 && frame->return_register >= 0) {
+    if (frame->caller_frame_index < 0) {
+        // No caller: this is the program entry (a top-level-await module). Record
+        // its result promise so the run can detect a rejected module evaluation.
+        vm->entry_async_promise = promise_value;
+    } else if (frame->return_register >= 0) {
         vm->frames[frame->caller_frame_index].registers[frame->return_register] = promise_value;
     }
     frame->return_register = -1;

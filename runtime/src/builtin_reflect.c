@@ -7,6 +7,7 @@
 #include "builtin_object.h"
 #include "function_object.h"
 #include "heap_symbol.h"
+#include "module_namespace_object.h"
 #include "object_ops.h"
 #include "property_iter.h"
 #include "typed_array_object.h"
@@ -304,6 +305,24 @@ static MalValue mal_reflect_own_keys(MalVm *vm, MalValue this_value, const MalVa
     MalObject *object = mal_value_to_object(target);
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
     u32 count = 0;
+
+    // A module namespace's own keys: sorted string exports, then @@toStringTag.
+    if (mal_value_is_module_namespace_object(target)) {
+        MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(target);
+        for (i32 i = 0; i < ns->export_count; i++) {
+            mal_array_object_store(
+                result,
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_value_from_string(ns->exports[i].name)
+            );
+        }
+        mal_array_object_store(
+            result,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG).value
+        );
+        return mal_value_from_array_object(result);
+    }
 
     bool is_typed_array = mal_value_is_typed_array_object(target);
     // TypedArray canonical numeric indices are exotic own keys, not table slots.

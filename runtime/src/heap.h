@@ -92,6 +92,12 @@ typedef enum MalHeapType {
      * transform state so next/return live on %IteratorHelperPrototype%.
      */
     MAL_HEAP_ITERATOR_HELPER_OBJECT,
+    /**
+     * ES Module Namespace exotic objects (`import * as ns`): null prototype,
+     * non-extensible, with live string-keyed exports (read from global slots)
+     * plus a @@toStringTag of "Module". See module_namespace_object.h.
+     */
+    MAL_HEAP_MODULE_NAMESPACE_OBJECT,
 } MalHeapType;
 
 /**

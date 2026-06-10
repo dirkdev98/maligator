@@ -20,6 +20,18 @@ bool mal_value_is_array_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_ARRAY_OBJECT);
 }
 
+bool mal_value_is_module_namespace_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_MODULE_NAMESPACE_OBJECT);
+}
+
+MalModuleNamespaceObject *mal_value_to_module_namespace_object(MalValue value) {
+    return (MalModuleNamespaceObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_module_namespace_object(MalModuleNamespaceObject *ns) {
+    return mal_value_from_heap((MalHeapHeader *) ns);
+}
+
 bool mal_value_is_map_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_MAP_OBJECT);
 }

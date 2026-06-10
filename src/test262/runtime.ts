@@ -6,9 +6,12 @@ import { emitVmDefinition } from "../emit-vm.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
 import { compileSemanticProgramToIr } from "../ir.ts";
 import { lowerIrProgramToVmDefinition } from "../lower-vm.ts";
-import { parseScript } from "../parser.ts";
+import { parseModule, parseScript } from "../parser.ts";
 import { allocateRegisters } from "../register-alloc.ts";
-import { analyzeSourceAndRunSemanticAnalysis } from "../semantic-analysis.ts";
+import {
+	analyzeSourceAndRunSemanticAnalysis,
+	loadEntrypointAndRunSemanticAnalysis,
+} from "../semantic-analysis.ts";
 import { collectUnsupportedSyntax } from "../supported-syntax.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
@@ -270,13 +273,16 @@ function test262CompileToC(file: Test262File, symbolSuffix: string): string | un
 	}
 
 	const source = composeSource(file);
+	const isModule = file.frontmatter.flags?.includes("module") ?? false;
 
 	const compileStartedAt = performance.now();
 	try {
 		// Parse and scan before any further work: unsupported tests stop here
-		// without paying for scope and binding analysis.
-		const parsed = parseScript(source, { strict: true });
-		const unsupported = collectUnsupportedSyntax(parsed.ast);
+		// without paying for scope and binding analysis. Module-flagged tests parse
+		// as modules; the harness is still prepended (its functions become
+		// module-scoped, which the test references in the same scope).
+		const parsed = isModule ? parseModule(source) : parseScript(source, { strict: true });
+		const unsupported = collectUnsupportedSyntax(parsed.ast, { isModule });
 		if (unsupported.size > 0) {
 			file.result = "UNSUPPORTED";
 			for (const feature of unsupported) {
@@ -285,11 +291,41 @@ function test262CompileToC(file: Test262File, symbolSuffix: string): string | un
 			return undefined;
 		}
 
-		const semanticProgram = analyzeSourceAndRunSemanticAnalysis(
-			source,
-			file.path,
-			parsed,
-		);
+		// Module tests run through the loader/graph pipeline so sibling
+		// `*_FIXTURE.js` imports resolve from the test's real directory; the
+		// composed harness+test is the in-memory entry, and every module in the
+		// graph is forced to the module goal (test262 fixtures are `.js`).
+		const semanticProgram = isModule
+			? loadEntrypointAndRunSemanticAnalysis(
+					path.join(TEST262_METADATA.path, file.path),
+					{
+						entrySource: source,
+						goalOverride: "module",
+					},
+				)
+			: analyzeSourceAndRunSemanticAnalysis(source, file.path, parsed);
+
+		// Imported sibling modules can use unsupported syntax (e.g. top-level
+		// await) the entry scan never saw. Catch it as UNSUPPORTED rather than
+		// letting it reach codegen and crash.
+		if (isModule) {
+			const deepUnsupported = new Set<string>();
+			for (const moduleFile of semanticProgram.files) {
+				for (const feature of collectUnsupportedSyntax(moduleFile.ast, {
+					isModule: true,
+				})) {
+					deepUnsupported.add(feature);
+				}
+			}
+			if (deepUnsupported.size > 0) {
+				file.result = "UNSUPPORTED";
+				for (const feature of deepUnsupported) {
+					countReason(UNSUPPORTED_COUNTS, UNSUPPORTED_CACHE, feature, file);
+				}
+				return undefined;
+			}
+		}
+
 		const irProgram = compileSemanticProgramToIr(semanticProgram);
 		executeIROptimizations(irProgram);
 		allocateRegisters(irProgram);

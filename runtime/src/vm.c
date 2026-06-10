@@ -41,6 +41,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->unhandled_rejections = nullptr;
     vm->unhandled_count = 0;
     vm->unhandled_capacity = 0;
+    vm->entry_async_promise = mal_value_new_undefined();
 
     mal_heap_init(&vm->heap, 0);
     for (i32 i = 0; i < definition->global_count; i++) {
@@ -351,8 +352,14 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_CREATE_ARRAY:
                 mal_op_create_array(frame, &instruction);
                 break;
+            case MAL_OP_CREATE_MODULE_NAMESPACE:
+                mal_op_create_module_namespace(frame, &instruction);
+                break;
             case MAL_OP_CREATE_UNDEFINED:
                 mal_op_create_undefined(frame, &instruction);
+                break;
+            case MAL_OP_CREATE_EMPTY:
+                mal_op_create_empty(frame, &instruction);
                 break;
             case MAL_OP_CREATE_NULL:
                 mal_op_create_null(frame, &instruction);
@@ -555,6 +562,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 break;
             case MAL_OP_LOAD_UNDECLARED:
                 mal_op_load_undeclared(frame, &instruction);
+                break;
+            case MAL_OP_THROW_IF_TDZ:
+                mal_op_throw_if_tdz(frame, &instruction);
                 break;
             case MAL_OP_REQUIRE_COERCIBLE:
                 mal_op_require_coercible(frame, &instruction);
@@ -793,6 +803,19 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
         vm->completion = script_completion;
         mal_vm_report_uncaught(vm);
         return;
+    }
+
+    // An async entry (a top-level-await module) records its result promise at
+    // ASYNC_START. If that promise rejected, the module failed to evaluate;
+    // surface it as a throw so the process exits non-zero (the checkpoint
+    // already printed it). Stray unhandled rejections from *other* promises do
+    // not fail the run.
+    if (mal_value_is_promise_object(vm->entry_async_promise)) {
+        MalPromiseObject *result = mal_value_to_promise_object(vm->entry_async_promise);
+        if (result->state == MAL_PROMISE_REJECTED) {
+            vm->completion =
+                (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = result->result};
+        }
     }
 }
 

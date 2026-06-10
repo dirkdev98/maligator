@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import { linkModules } from "./linker.ts";
 import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 import { log } from "./utils.ts";
 
@@ -75,6 +76,22 @@ export interface IntermediateProgram {
 	 * Next available global variable index
 	 */
 	nextGlobalIndex: number;
+
+	/**
+	 * ES module linkage. Synthetic bindings holding each module's anonymous
+	 * `export default` value, keyed by module path (see src/linker.ts).
+	 */
+	moduleDefaultBinding: Map<string, Binding>;
+
+	/**
+	 * `import * as ns` namespace objects to build per importing module path (see
+	 * src/linker.ts): the local binding plus the exported names and the exporter
+	 * binding each property reads live.
+	 */
+	namespaceImports: Map<
+		string,
+		Array<{ binding: Binding; exports: Array<{ name: string; exporter: Binding }> }>
+	>;
 }
 
 type BindingLocation =
@@ -395,7 +412,26 @@ export type IRInstruction =
 			length: number;
 	  }
 	| {
+			// Build an `import * as ns` module namespace exotic object. Each export
+			// names a string constant and the global slot holding its live value.
+			type: "createModuleNamespace";
+
+			// [destination]
+			registers: [number];
+
+			exports: Array<{ nameStringIndex: number; slot: number }>;
+	  }
+	| {
 			type: "createUndefined";
+
+			// [destination]
+			registers: [number];
+	  }
+	| {
+			// The uninitialized ("empty") sentinel for a binding in its temporal
+			// dead zone. Stored into let/const/class binding slots before the
+			// declaration runs; reading one (via throwIfTdz) throws ReferenceError.
+			type: "createEmpty";
 
 			// [destination]
 			registers: [number];
@@ -699,6 +735,16 @@ export type IRInstruction =
 			nameStringIndex: number;
 	  }
 	| {
+			// Throw ReferenceError if [source] holds the uninitialized sentinel:
+			// the named let/const/class binding is still in its temporal dead zone.
+			type: "throwIfTdz";
+
+			// [source]
+			registers: [number];
+
+			nameStringIndex: number;
+	  }
+	| {
 			// RequireObjectCoercible: throws a TypeError when the value is null
 			// or undefined. Emitted at the start of destructuring patterns so
 			// nil sources throw even when the pattern reads no properties.
@@ -959,7 +1005,21 @@ export function compileSemanticProgramToIr(semantic: SemanticProgram) {
 		nodeToFunctionCache: new Map(),
 
 		nextGlobalIndex: 0,
+
+		moduleDefaultBinding: new Map(),
+		namespaceImports: new Map(),
 	};
+
+	// Cross-module linking: aliases imported names to their exporter bindings (a
+	// no-op for a single-module program). Must run before any IR compilation so
+	// identifier resolution sees the aliased bindings.
+	const linkage = linkModules(semantic);
+	for (const [path, binding] of linkage.moduleDefaultBinding) {
+		program.moduleDefaultBinding.set(path, binding);
+	}
+	for (const [path, imports] of linkage.namespaceImports) {
+		program.namespaceImports.set(path, imports);
+	}
 
 	const initFile = program.semantic.files.find(
 		(it) => it.path === program.semantic.entrypointPath,
@@ -969,14 +1029,91 @@ export function compileSemanticProgramToIr(semantic: SemanticProgram) {
 		throw new Error(`Could not find entrypoint file ${program.semantic.entrypointPath}`);
 	}
 
-	compileFileInit(program, initFile);
+	const evaluationOrder = semantic.graph?.evaluationOrder ?? [initFile.path];
+
+	if (evaluationOrder.length <= 1) {
+		// Single module: the init is the entrypoint (function 0), exactly as a
+		// plain script compiles.
+		compileFileInit(program, initFile);
+	} else {
+		compileMergedModuleInit(program, evaluationOrder);
+	}
+
 	debugIntermediateProgram(program);
 
 	return program;
 }
 
 /**
- * Compile the top-level statements of a file to initialize all the things.
+ * Build the program entry for a multi-module ES program: a single merged init
+ * function (index 0) whose body is every module's top-level code, concatenated
+ * in evaluation order (dependencies first, entry last). This is scope hoisting
+ * — module bindings are already shared global slots and imports are aliased to
+ * their exporters, so the merged top-levels realize the cross-module data flow
+ * with live bindings, and there is no per-module init function or orchestrator.
+ */
+function compileMergedModuleInit(
+	program: IntermediateProgram,
+	evaluationOrder: Array<string>,
+) {
+	const fileByPath = new Map(program.semantic.files.map((file) => [file.path, file]));
+
+	// Nested functions are traced lazily and would otherwise try to compile a
+	// separate per-file init; mark every module compiled up front since the
+	// merged init already covers every module's top-level.
+	for (const modulePath of evaluationOrder) {
+		program.compiledModuleInitForPaths.add(modulePath);
+	}
+
+	const fn: IRFunction = {
+		// Switched to each module in turn so identifier resolution uses the right
+		// file's bindings while compiling that module's segment.
+		semanticFile: program.semantic.files[0]!,
+		functionIndex: program.functions.length,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+
+		parameterCount: 0,
+		length: 0,
+		nextRegisterDestination: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	program.functions.push(fn);
+
+	let tail: IRBlock | null = null;
+	for (const modulePath of evaluationOrder) {
+		const file = fileByPath.get(modulePath);
+		if (!file) {
+			continue;
+		}
+		fn.semanticFile = file;
+
+		const prologue: IRBlock = { instructions: [] };
+		const prologueIndex = fn.blocks.push(prologue) - 1;
+		// Chain the previous module's tail into this module's segment.
+		if (tail) {
+			tail.instructions.push({ type: "jump", blocks: [prologueIndex] });
+		}
+
+		emitModulePrologue(program, fn, prologue, file);
+		const bodyEntry = compileStatementsToBlock(program, fn, file.ast.body);
+		prologue.instructions.push({ type: "jump", blocks: [bodyEntry] });
+
+		tail = fn.blocks[fn.blocks.length - 1]!;
+	}
+
+	const modules = evaluationOrder
+		.map((modulePath) => fileByPath.get(modulePath))
+		.filter((file): file is SemanticFile => file !== undefined);
+	makeInitAsyncIfTopLevelAwait(fn, modules);
+
+	endFunction(fn);
+}
+
+/**
+ * Compile the top-level statements of a single-module program (or the
+ * entrypoint when there is only one module) into its own init function.
  */
 function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 	if (program.compiledModuleInitForPaths.has(initFile.path)) {
@@ -999,13 +1136,158 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 		nextCapturedIndex: 0,
 	};
 
-	// TODO: We trace collect these at the moment, so initialization order is incorrect.
 	program.functions.push(fn);
 
-	compileStatementsToBlock(program, fn, initFile.ast.body);
+	// A prologue block (TDZ inits + namespace objects) only when needed, so a
+	// module with only var/function top-levels compiles exactly as before.
+	if (moduleNeedsPrologue(program, initFile)) {
+		const prologue: IRBlock = { instructions: [] };
+		fn.blocks.push(prologue);
+		emitModulePrologue(program, fn, prologue, initFile);
+		const bodyEntry = compileStatementsToBlock(program, fn, initFile.ast.body);
+		prologue.instructions.push({ type: "jump", blocks: [bodyEntry] });
+	} else {
+		compileStatementsToBlock(program, fn, initFile.ast.body);
+	}
+
+	makeInitAsyncIfTopLevelAwait(fn, [initFile]);
 	endFunction(fn);
 
 	return fn.functionIndex;
+}
+
+/**
+ * Store the uninitialized ("empty") sentinel into a scope's let/const/class
+ * binding slots (their temporal dead zone), so a read before the declaration
+ * runs throws ReferenceError. Skips functions (hoisted) and imports (aliased).
+ */
+function emitTdzHoleInits(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	bindings: Array<Binding>,
+) {
+	for (const binding of bindings) {
+		if (!isTdzBinding(binding)) {
+			continue;
+		}
+		const location = getOrCreateBindingLocation(program, fn, binding);
+		const register = nextRegisterDestination(fn);
+		block.instructions.push({ type: "createEmpty", registers: [register] });
+		storeRegisterAtLocation(block, location, register);
+	}
+}
+
+/**
+ * Emit the TDZ hole-inits for a block-bodied function's own scope into `block`
+ * (the params block, before the jump to the body), so its let/const/class
+ * bindings start uninitialized at function entry. The empty value persists in
+ * the frame across a generator/async suspend, so this placement is correct for
+ * all function kinds.
+ */
+function emitFunctionBodyTdz(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	functionNode:
+		| ESTree.FunctionDeclaration
+		| ESTree.FunctionExpression
+		| ESTree.ArrowFunctionExpression,
+) {
+	if (functionNode.body?.type !== "BlockStatement") {
+		return;
+	}
+	const scope = fn.semanticFile.nodeToScope.get(functionNode.body);
+	if (scope) {
+		emitTdzHoleInits(program, fn, block, scope.bindings);
+	}
+}
+
+/**
+ * Whether a module needs an init prologue: it has top-level TDZ bindings
+ * (let/const/class) or `import * as ns` namespace objects to build.
+ */
+function moduleNeedsPrologue(program: IntermediateProgram, file: SemanticFile): boolean {
+	return (
+		(file.scopes[0]?.bindings ?? []).some(isTdzBinding) ||
+		(program.namespaceImports.get(file.path)?.length ?? 0) > 0
+	);
+}
+
+/**
+ * Emit a module's init prologue into `block`: store the uninitialized sentinel
+ * into top-level let/const/class slots (their temporal dead zone), then build
+ * any `import * as ns` namespace objects.
+ */
+function emitModulePrologue(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	file: SemanticFile,
+) {
+	emitTdzHoleInits(program, fn, block, file.scopes[0]?.bindings ?? []);
+	for (const namespaceImport of program.namespaceImports.get(file.path) ?? []) {
+		emitNamespaceObject(
+			program,
+			fn,
+			block,
+			namespaceImport.binding,
+			namespaceImport.exports,
+		);
+	}
+}
+
+/**
+ * If any of the given modules has top-level await, make the init an async
+ * function: it returns a promise and suspends on each top-level await,
+ * resuming via the microtask queue. Because the merged init runs modules'
+ * top-levels sequentially in evaluation order, a suspended await holds up the
+ * dependents that follow it — the spec ordering falls out for free.
+ */
+function makeInitAsyncIfTopLevelAwait(fn: IRFunction, modules: Array<SemanticFile>) {
+	if (modules.some((file) => hasTopLevelAwait(file.ast))) {
+		fn.isAsync = true;
+		fn.blocks[0]!.instructions.unshift({ type: "asyncStart" });
+	}
+}
+
+/**
+ * Whether a module has top-level await: an AwaitExpression that is not nested
+ * inside a function (so it runs as part of module evaluation).
+ */
+function hasTopLevelAwait(ast: ESTree.Program): boolean {
+	let found = false;
+	const visit = (node: unknown, inFunction: boolean) => {
+		if (found || !node || typeof node !== "object") {
+			return;
+		}
+		if (Array.isArray(node)) {
+			for (const item of node) {
+				visit(item, inFunction);
+			}
+			return;
+		}
+		if (!("type" in node)) {
+			return;
+		}
+		const typed = node as ESTree.Node;
+		if (typed.type === "AwaitExpression" && !inFunction) {
+			found = true;
+			return;
+		}
+		const entersFunction =
+			typed.type === "FunctionDeclaration" ||
+			typed.type === "FunctionExpression" ||
+			typed.type === "ArrowFunctionExpression";
+		for (const key of Object.keys(typed)) {
+			visit(
+				(typed as unknown as Record<string, unknown>)[key],
+				inFunction || entersFunction,
+			);
+		}
+	};
+	visit(ast.body, false);
+	return found;
 }
 
 function compileNewFunction(
@@ -1072,6 +1354,7 @@ function compileNewFunction(
 					})
 				: [],
 	);
+	emitFunctionBodyTdz(program, fn, paramsCursor.block, functionNode);
 	paramsCursor.block.instructions.push({
 		type: "jump",
 		blocks: [bodyBlock],
@@ -1149,6 +1432,7 @@ function compileNewFunctionExpression(
 					})
 				: [],
 	);
+	emitFunctionBodyTdz(program, compiledFn, paramsCursor.block, functionNode);
 	paramsCursor.block.instructions.push({
 		type: "jump",
 		blocks: [bodyBlock],
@@ -2639,8 +2923,40 @@ function compileStatementsToBlock(
 				compileClassDeclaration(program, fn, block, statement);
 				break;
 			}
+			case "BlockStatement": {
+				compileBlockStatement(program, fn, block, statement);
+				break;
+			}
 			case "LabeledStatement": {
 				compileLabeledStatement(program, fn, block, statement);
+				break;
+			}
+			case "ImportDeclaration": {
+				// No value-level code: import bindings are aliased to their exporters
+				// during linking, and the imported module's init runs via the
+				// multi-module orchestrator.
+				break;
+			}
+			case "ExportNamedDeclaration": {
+				// `export const/function/class` compiles its inner declaration; the
+				// export name itself is link-time metadata. `export { ... }` and
+				// `export { ... } from "m"` emit no value-level code.
+				const declaration = statement.declaration;
+				if (declaration?.type === "VariableDeclaration") {
+					compileVariableDeclaration(program, fn, block, declaration);
+				} else if (declaration?.type === "FunctionDeclaration") {
+					compileFunctionDeclaration(program, fn, block, declaration);
+				} else if (declaration?.type === "ClassDeclaration") {
+					compileClassDeclaration(program, fn, block, declaration);
+				}
+				break;
+			}
+			case "ExportDefaultDeclaration": {
+				compileExportDefault(program, fn, block, statement);
+				break;
+			}
+			case "ExportAllDeclaration": {
+				// `export * from "m"` is link-time only; m's init runs via the orchestrator.
 				break;
 			}
 		}
@@ -2686,6 +3002,65 @@ function compileClassDeclaration(
 
 	const location = getOrCreateBindingLocation(program, fn, binding);
 	storeRegisterAtLocation(cursor.block, location, ctor);
+}
+
+/**
+ * Compile an `export default`. A *named* default function/class binds its name
+ * normally and the default export resolves to that binding (handled by the
+ * linker), so it compiles as an ordinary declaration. An anonymous function or
+ * class, or an arbitrary expression, has its value stored into the module's
+ * synthetic default binding (created by the linker).
+ */
+function compileExportDefault(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.ExportDefaultDeclaration,
+) {
+	const declaration = statement.declaration;
+
+	if (declaration.type === "FunctionDeclaration" && declaration.id) {
+		compileFunctionDeclaration(program, fn, block, declaration);
+		return;
+	}
+	if (declaration.type === "ClassDeclaration" && declaration.id) {
+		compileClassDeclaration(program, fn, block, declaration);
+		return;
+	}
+
+	const cursor: IRCursor = { block };
+	let value: number;
+	if (declaration.type === "FunctionDeclaration") {
+		const functionIndex = compileNewFunctionExpression(
+			program,
+			fn,
+			declaration as unknown as ESTree.FunctionExpression,
+			undefined,
+			"default",
+		);
+		value = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createFunction",
+			registers: [value],
+			functionIndex,
+		});
+	} else if (declaration.type === "ClassDeclaration") {
+		value = compileClass(program, fn, cursor, declaration, "default");
+	} else {
+		value = compileExpression(
+			program,
+			fn,
+			cursor,
+			declaration as ESTree.Expression,
+			"default",
+		);
+	}
+
+	const binding = program.moduleDefaultBinding.get(fn.semanticFile.path);
+	if (binding) {
+		const location = getOrCreateBindingLocation(program, fn, binding);
+		storeRegisterAtLocation(cursor.block, location, value);
+	}
 }
 
 function compileExpressionStatement(
@@ -3744,6 +4119,26 @@ function compileTryFinally(
 		epilogue.instructions.push({ type: "jumpIf", registers: [matchReg], blocks: [idx] });
 	}
 	// Fall through: NORMAL completion continues after the try.
+}
+
+/**
+ * A bare block statement `{ ... }`: compile its body inline (block-scoped
+ * declarations are resolved by sema). Without this, block bodies were silently
+ * skipped, since the statement switch had no BlockStatement case.
+ */
+function compileBlockStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.BlockStatement,
+) {
+	// Block-scoped let/const/class start uninitialized (TDZ) at block entry.
+	const scope = fn.semanticFile.nodeToScope.get(statement);
+	if (scope) {
+		emitTdzHoleInits(program, fn, block, scope.bindings);
+	}
+	const bodyEntry = compileStatementsToBlock(program, fn, statement.body);
+	block.instructions.push({ type: "jump", blocks: [bodyEntry] });
 }
 
 /**
@@ -5042,6 +5437,16 @@ function compileIdentifierAssignment(
 		return destination;
 	}
 
+	if (binding.kind === "const") {
+		// Assignment to a const or imported binding is a TypeError (modules and
+		// our pipeline are always strict). A plain assignment still evaluates its
+		// right-hand side for its side effects before throwing.
+		if (assignmentExpression.operator === "=") {
+			compileExpression(program, fn, cursor, assignmentExpression.right);
+		}
+		return emitThrowTypeError(program, fn, cursor, "Assignment to constant variable.");
+	}
+
 	const location = getOrCreateBindingLocation(program, fn, binding);
 
 	let value: number;
@@ -5511,6 +5916,11 @@ function compileUpdateExpression(
 		const binding = fn.semanticFile.nodeToBinding.get(expression.argument);
 		if (!binding) {
 			return -1;
+		}
+
+		if (binding.kind === "const") {
+			// `x++` / `--x` on a const or imported binding is a TypeError.
+			return emitThrowTypeError(program, fn, cursor, "Assignment to constant variable.");
 		}
 
 		const location = getOrCreateBindingLocation(program, fn, binding);
@@ -6310,7 +6720,72 @@ function compileIdentifier(
 	}
 
 	const location = getOrCreateBindingLocation(program, fn, binding);
-	return loadRegisterFromLocation(fn, cursor.block, location);
+	const destination = loadRegisterFromLocation(fn, cursor.block, location);
+
+	if (isTdzBinding(binding)) {
+		// A let/const/class read before its declaration runs is in the temporal
+		// dead zone: throw ReferenceError. Harmless once initialized; bindings
+		// that are not hole-inited (catch params, loop vars) never read empty.
+		cursor.block.instructions.push({
+			type: "throwIfTdz",
+			registers: [destination],
+			nameStringIndex: getOrCreateStringConstant(program, identifier.name),
+		});
+	}
+
+	return destination;
+}
+
+/**
+ * Whether a binding is subject to the temporal dead zone: a let/const/class
+ * binding — but not a hoisted function declaration (kind "let" in strict mode)
+ * and not an import alias (its storage lives in, and is initialized by, the
+ * exporting module).
+ */
+function isTdzBinding(binding: Binding): boolean {
+	return (
+		!binding.undeclared &&
+		!binding.imported &&
+		(binding.kind === "let" || binding.kind === "const") &&
+		binding.declarationNode?.type !== "FunctionDeclaration"
+	);
+}
+
+/**
+ * Build an ES module namespace exotic object for `import * as ns from "m"` and
+ * store it into the local binding. The runtime serves each export live from its
+ * global slot (with TDZ enforcement) plus a @@toStringTag of "Module"; names
+ * arrive already sorted from the linker. Exporters are module-top-level (global)
+ * bindings; any that somehow are not are skipped.
+ */
+function emitNamespaceObject(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	binding: Binding,
+	exports: Array<{ name: string; exporter: Binding }>,
+) {
+	const entries: Array<{ nameStringIndex: number; slot: number }> = [];
+	for (const { name, exporter } of exports) {
+		const location = getOrCreateBindingLocation(program, fn, exporter);
+		if (location.type !== "global") {
+			continue;
+		}
+		entries.push({
+			nameStringIndex: getOrCreateStringConstant(program, name),
+			slot: location.index,
+		});
+	}
+
+	const namespace = nextRegisterDestination(fn);
+	block.instructions.push({
+		type: "createModuleNamespace",
+		registers: [namespace],
+		exports: entries,
+	});
+
+	const location = getOrCreateBindingLocation(program, fn, binding);
+	storeRegisterAtLocation(block, location, namespace);
 }
 
 function loadRegisterFromLocation(

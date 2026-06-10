@@ -6,11 +6,9 @@ import type { ESTree } from "meriyah";
 const unsupportedNodeTypes = new Map<string, string>([
 	["WithStatement", "with"],
 	["TaggedTemplateExpression", "tagged template"],
-	["ImportDeclaration", "module syntax"],
-	["ImportExpression", "module syntax"],
-	["ExportNamedDeclaration", "module syntax"],
-	["ExportDefaultDeclaration", "module syntax"],
-	["ExportAllDeclaration", "module syntax"],
+	// Static import/export are lowered (ES modules). Dynamic import() is not yet:
+	// it needs the static-string resolution + promise plumbing of a later step.
+	["ImportExpression", "dynamic import"],
 ]);
 
 const supportedBinaryOperators = new Set<string>([
@@ -75,15 +73,20 @@ const supportedAssignmentOperators = new Set<string>([
  * upfront turns those into an explicit UNSUPPORTED verdict and doubles as a
  * priority ranking for which features block the most tests.
  */
-export function collectUnsupportedSyntax(node: ESTree.Node): Set<string> {
+export function collectUnsupportedSyntax(
+	node: ESTree.Node,
+	{ isModule = false }: { isModule?: boolean } = {},
+): Set<string> {
 	const unsupported = new Set<string>();
-	walk(node, unsupported, { inArrowFunction: false, inAsyncFunction: false });
+	walk(node, unsupported, { inArrowFunction: false, inAsyncFunction: false, isModule });
 	return unsupported;
 }
 
 interface WalkContext {
 	inArrowFunction: boolean;
 	inAsyncFunction: boolean;
+	/** Module goal: top-level await is allowed. */
+	isModule: boolean;
 }
 
 function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
@@ -104,9 +107,10 @@ function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
 		unsupported.add(mapped);
 	}
 
-	// await outside an async function (top-level await needs module semantics);
-	// guards the runtime, which expects await only in an async activation.
-	if (node.type === "AwaitExpression" && !context.inAsyncFunction) {
+	// `await` outside an async function is top-level await — supported only in a
+	// module (the init becomes async). In a script it never parses, so this only
+	// guards the (impossible) script case defensively.
+	if (node.type === "AwaitExpression" && !context.inAsyncFunction && !context.isModule) {
 		unsupported.add("top-level await");
 	}
 
@@ -117,6 +121,7 @@ function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
 			const innerContext: WalkContext = {
 				inArrowFunction: node.type === "ArrowFunctionExpression",
 				inAsyncFunction: node.async === true,
+				isModule: context.isModule,
 			};
 			for (const key of Object.keys(node)) {
 				walk(
@@ -143,6 +148,14 @@ function walk(value: unknown, unsupported: Set<string>, context: WalkContext) {
 				unsupported.add("import.meta");
 			} else if (context.inArrowFunction) {
 				unsupported.add("new.target in arrow function");
+			}
+			break;
+		}
+		case "ExportAllDeclaration": {
+			// `export * from "m"` is supported; `export * as ns from "m"` (the
+			// namespace re-export form) is deferred.
+			if (node.exported) {
+				unsupported.add("namespace re-export");
 			}
 			break;
 		}

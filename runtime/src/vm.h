@@ -23,7 +23,9 @@ typedef enum MalOpcode {
     MAL_OP_CREATE_BIGINT,
     MAL_OP_CREATE_OBJECT,
     MAL_OP_CREATE_ARRAY,
+    MAL_OP_CREATE_MODULE_NAMESPACE,
     MAL_OP_CREATE_UNDEFINED,
+    MAL_OP_CREATE_EMPTY,
     MAL_OP_CREATE_NULL,
     MAL_OP_CREATE_FUNCTION,
     MAL_OP_CREATE_ARGUMENTS_OBJECT,
@@ -58,6 +60,7 @@ typedef enum MalOpcode {
     MAL_OP_HAS_PRIVATE,
     MAL_OP_SET_PROTOTYPE,
     MAL_OP_LOAD_UNDECLARED,
+    MAL_OP_THROW_IF_TDZ,
     MAL_OP_REQUIRE_COERCIBLE,
     MAL_OP_CREATE_REST_ARGUMENTS,
     MAL_OP_ARRAY_REST,
@@ -174,8 +177,21 @@ typedef struct MalInstruction {
         } create_array;
 
         struct {
+            // Build a module namespace object: `count` exports whose names are
+            // string constants (name_indices) and whose live values live in
+            // global slots (slots). Both arrays have `count` entries.
+            i32 dst, count;
+            const i32 *name_indices;
+            const i32 *slots;
+        } create_module_namespace;
+
+        struct {
             i32 dst;
         } create_undefined;
+
+        struct {
+            i32 dst;
+        } create_empty;
 
         struct {
             i32 dst;
@@ -364,6 +380,12 @@ typedef struct MalInstruction {
         struct {
             i32 dst, name_string_index;
         } load_undeclared;
+
+        struct {
+            // Throw ReferenceError if `src` holds the uninitialized sentinel (the
+            // binding named by name_string_index is still in its TDZ).
+            i32 src, name_string_index;
+        } throw_if_tdz;
 
         struct {
             i32 src;
@@ -565,6 +587,14 @@ typedef struct MalVm {
     MalValue *unhandled_rejections;
     i32 unhandled_count;
     i32 unhandled_capacity;
+
+    /**
+     * The result promise of an async program entry (a top-level-await module),
+     * recorded at its ASYNC_START since it has no caller register. After the
+     * microtask drain, a rejected entry promise means the module failed to
+     * evaluate, which the entry turns into a non-zero exit. Undefined otherwise.
+     */
+    MalValue entry_async_promise;
 
     /**
      * Symbol.for registry: string key -> symbol value (inline payload).

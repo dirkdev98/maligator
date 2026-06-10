@@ -16,6 +16,7 @@ typedef struct MalBoundFunctionObject MalBoundFunctionObject;
 typedef struct MalArrayObject MalArrayObject;
 typedef struct MalMapObject MalMapObject;
 typedef struct MalIteratorObject MalIteratorObject;
+typedef struct MalModuleNamespaceObject MalModuleNamespaceObject;
 typedef struct MalPromiseObject MalPromiseObject;
 typedef struct MalIteratorHelperObject MalIteratorHelperObject;
 
@@ -57,6 +58,9 @@ typedef u64 MalValue;
 // they get static encodings like NaN does.
 #define MAL_VALUE_POSITIVE_INFINITY (MAL_VALUE_STATIC | 0x07)
 #define MAL_VALUE_NEGATIVE_INFINITY (MAL_VALUE_STATIC | 0x08)
+// The "empty"/uninitialized sentinel: a let/const/class binding in its temporal
+// dead zone. Never a real JS value; reading one throws ReferenceError.
+#define MAL_VALUE_EMPTY (MAL_VALUE_STATIC | 0x09)
 
 
 // Inline dynamic values. We have room for 7 items (3 bits).
@@ -146,6 +150,16 @@ static inline bool mal_value_is_undefined(MalValue value) {
 /** Check if the value is null or undefined. */
 static inline bool mal_value_is_nil(MalValue value) {
     return mal_value_is_null(value) || mal_value_is_undefined(value);
+}
+
+/** Create the uninitialized ("empty") sentinel for a binding in its TDZ. */
+static inline MalValue mal_value_new_empty() {
+    return MAL_VALUE_EMPTY;
+}
+
+/** Check if the value is the uninitialized ("empty") sentinel. */
+static inline bool mal_value_is_empty(MalValue value) {
+    return value == MAL_VALUE_EMPTY;
 }
 
 /** Create a new MalValue from a boolean. */
@@ -242,7 +256,8 @@ static inline bool mal_value_is_object(MalValue value) {
         type == MAL_HEAP_TYPED_ARRAY_OBJECT ||
         type == MAL_HEAP_DATA_VIEW_OBJECT ||
         type == MAL_HEAP_PROMISE_OBJECT ||
-        type == MAL_HEAP_ITERATOR_HELPER_OBJECT;
+        type == MAL_HEAP_ITERATOR_HELPER_OBJECT ||
+        type == MAL_HEAP_MODULE_NAMESPACE_OBJECT;
 }
 
 /**
@@ -264,6 +279,11 @@ bool mal_value_is_bound_function_object(MalValue value);
  * Check if the value is an array object.
  */
 bool mal_value_is_array_object(MalValue value);
+
+/** Module namespace exotic object accessors. */
+bool mal_value_is_module_namespace_object(MalValue value);
+MalModuleNamespaceObject *mal_value_to_module_namespace_object(MalValue value);
+MalValue mal_value_from_module_namespace_object(MalModuleNamespaceObject *ns);
 
 /**
  * Check if the value is a Map/WeakMap instance.

@@ -1,11 +1,21 @@
-import { readFileSync } from "node:fs";
 import type { ESTree } from "meriyah";
-import { parseModule, parseScript } from "./parser.ts";
+import { buildModuleGraph } from "./module-graph.ts";
+import type {
+	BuildModuleGraphOptions,
+	ModuleGraph,
+	ModuleRecord,
+} from "./module-graph.ts";
+import { parseScript } from "./parser.ts";
 import { log } from "./utils.ts";
 
 export interface SemanticProgram {
 	entrypointPath: string;
 	files: Array<SemanticFile>;
+	/**
+	 * The module graph the program was built from (loader/graph phase). Absent
+	 * for in-memory composition (analyzeSourceAndRunSemanticAnalysis).
+	 */
+	graph?: ModuleGraph;
 }
 
 export interface SemanticFile {
@@ -42,6 +52,13 @@ export interface Binding {
 
 	undeclared?: true;
 	scopedTo?: "local" | "captured" | "global";
+
+	/**
+	 * An ES import binding. It aliases (shares storage with) the exporting
+	 * module's binding, so the importing module must not give it its own
+	 * uninitialized (TDZ) slot.
+	 */
+	imported?: true;
 }
 
 /**
@@ -72,17 +89,29 @@ export function debugSemanticProgram(program: SemanticProgram) {
 }
 
 /**
- * Semantic analysis entrypoint
+ * Semantic analysis entrypoint.
+ *
+ * Builds the module graph from the entrypoint (loader/graph phase) and runs
+ * semantic analysis over every reachable module in evaluation order
+ * (dependencies before dependents). A program with no imports is a single-node
+ * graph, so this is behaviorally identical to analyzing the one file.
  */
 export function loadEntrypointAndRunSemanticAnalysis(
 	entrypointPath: string,
+	options: BuildModuleGraphOptions = {},
 ): SemanticProgram {
+	const graph = buildModuleGraph(entrypointPath, options);
+
 	const program: SemanticProgram = {
-		entrypointPath,
+		entrypointPath: graph.entry,
 		files: [],
+		graph,
 	};
 
-	loadAndAnalyzeFile(program, entrypointPath);
+	for (const modulePath of graph.evaluationOrder) {
+		program.files.push(analyzeModuleRecord(graph.modules.get(modulePath)!));
+	}
+
 	debugSemanticProgram(program);
 
 	return program;
@@ -120,26 +149,21 @@ export function analyzeSourceAndRunSemanticAnalysis(
 }
 
 /**
- * Add a file to be loaded in to the pgoram.
+ * Build and analyze a SemanticFile from a module-graph record, reusing the
+ * record's goal-correct parse.
  */
-export function loadAndAnalyzeFile(
-	program: SemanticProgram,
-	path: string,
-	asModule = false,
-) {
-	const contents = readFileSync(path, "utf-8");
-
+function analyzeModuleRecord(record: ModuleRecord): SemanticFile {
 	const file: SemanticFile = {
-		path,
-		contents,
-		...(asModule ? parseModule(contents) : parseScript(contents, { strict: true })),
+		path: record.path,
+		contents: record.source,
+		type: record.parsed.type,
+		strict: record.parsed.strict,
+		ast: record.parsed.ast,
 
 		scopes: [],
 		nodeToScope: new Map(),
 		nodeToBinding: new Map(),
 	};
-
-	program.files.push(file);
 
 	analyzeFile(file);
 
@@ -335,6 +359,20 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 		}
 	}
 
+	if (node.type === "ImportDeclaration") {
+		// Each import introduces an immutable module-scoped binding for its local
+		// name. The linker later aliases usages of these to the exporting module's
+		// binding; until then they exist so references resolve to a real binding
+		// (not a spurious undeclared global).
+		for (const specifier of node.specifiers) {
+			extractBindingsAndRegister(file, scope, specifier.local, "const");
+			const binding = file.nodeToBinding.get(specifier.local);
+			if (binding) {
+				binding.imported = true;
+			}
+		}
+	}
+
 	recurseAst(node, collectBindingsForNode, file);
 }
 
@@ -484,6 +522,33 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 
 		return resolveBindingByName(recurseScope.parent, name);
 	};
+
+	if (node.type === "ImportDeclaration" || node.type === "ExportAllDeclaration") {
+		// Imports carry only declarations (specifier locals) and the source/imported
+		// names — never a local usage. `export * from` / `export * as ns` likewise
+		// reference the source module, not local bindings.
+		return;
+	}
+
+	if (node.type === "ExportNamedDeclaration") {
+		if (node.declaration) {
+			// `export const/function/class` — the real usages live in the declaration.
+			return registerBindingUsage(node.declaration, file);
+		}
+		if (node.source) {
+			// `export { x } from "m"` — specifiers name the source module's exports.
+			return;
+		}
+		// `export { a, b as c }` — each specifier's local is a usage of a local binding.
+		for (const specifier of node.specifiers) {
+			registerBindingUsage(specifier.local, file);
+		}
+		return;
+	}
+
+	if (node.type === "ExportDefaultDeclaration") {
+		return registerBindingUsage(node.declaration, file);
+	}
 
 	if (node.type === "MemberExpression" && !node.computed) {
 		// Skip the property from member expressions, except when they are computed.

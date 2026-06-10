@@ -11,6 +11,7 @@
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
+#include "module_namespace_object.h"
 #include "object_ops.h"
 #include "property_iter.h"
 #include "typed_array_object.h"
@@ -159,8 +160,48 @@ void mal_op_create_array(MalCallable *callable, MalInstruction *instruction) {
         mal_vm_op_create_array(callable->vm, instruction->as.create_array.length);
 }
 
+void mal_op_create_module_namespace(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    i32 count = instruction->as.create_module_namespace.count;
+    const i32 *name_indices = instruction->as.create_module_namespace.name_indices;
+    const i32 *slots = instruction->as.create_module_namespace.slots;
+
+    MalModuleNamespaceExport *exports =
+        count > 0 ? malloc(sizeof(MalModuleNamespaceExport) * (usize) count) : nullptr;
+    for (i32 i = 0; i < count; i++) {
+        exports[i].name = &vm->definition->string_constants[name_indices[i]];
+        exports[i].slot = slots[i];
+    }
+
+    MalModuleNamespaceObject *ns = mal_module_namespace_object_new(&vm->heap, exports, count);
+    callable->registers[instruction->as.create_module_namespace.dst] =
+        mal_value_from_module_namespace_object(ns);
+}
+
 void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_undefined.dst] = mal_value_new_undefined();
+}
+
+void mal_op_create_empty(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.create_empty.dst] = mal_value_new_empty();
+}
+
+void mal_op_throw_if_tdz(MalCallable *callable, MalInstruction *instruction) {
+    if (mal_value_is_empty(callable->registers[instruction->as.throw_if_tdz.src])) {
+        MalVm *vm = callable->vm;
+        MalString *constant =
+            &vm->definition->string_constants[instruction->as.throw_if_tdz.name_string_index];
+        MalValue message = mal_ops_add(
+            &vm->heap,
+            mal_value_from_string(mal_intrinsic_ascii(vm, "Cannot access '")),
+            mal_ops_add(
+                &vm->heap,
+                mal_value_from_string(constant),
+                mal_value_from_string(mal_intrinsic_ascii(vm, "' before initialization"))
+            )
+        );
+        mal_vm_throw_error_value(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, message);
+    }
 }
 
 void mal_op_create_null(MalCallable *callable, MalInstruction *instruction) {
@@ -1018,6 +1059,33 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
         }
     }
 
+    if (mal_value_is_module_namespace_object(object_value)) {
+        MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(object_value);
+
+        // @@toStringTag is "Module" (non-enumerable, non-configurable).
+        MalKey tag = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG);
+        if (key.kind == MAL_KEY_SYMBOL && key.value == tag.value) {
+            *value_out = mal_value_from_string(mal_intrinsic_ascii(vm, "Module"));
+            return true;
+        }
+
+        // A string export reads its live global slot; an uninitialized binding
+        // (still in its module's TDZ) throws ReferenceError.
+        if (key.kind == MAL_KEY_STRING) {
+            MalString *name = mal_value_to_string(key.value);
+            for (i32 i = 0; i < ns->export_count; i++) {
+                if (mal_string_equals(name, ns->exports[i].name)) {
+                    // Return the live value, which may still be the TDZ sentinel;
+                    // the GET path turns that into a ReferenceError, while
+                    // HasProperty and delete must report the export as present
+                    // without throwing.
+                    *value_out = vm->globals[ns->exports[i].slot];
+                    return true;
+                }
+            }
+        }
+    }
+
     return false;
 }
 
@@ -1154,6 +1222,16 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
 
     MalValue synthetic;
     if (mal_vm_resolve_synthetic_property(vm, object_value, key, &synthetic)) {
+        if (mal_value_is_empty(synthetic)) {
+            // A module-namespace export read while its binding is in the TDZ.
+            mal_vm_throw_error(
+                vm,
+                MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+                "Cannot access module export before initialization"
+            );
+            *out = mal_value_new_undefined();
+            return true;
+        }
         *out = synthetic;
         return true;
     }
@@ -1570,6 +1648,21 @@ void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
                 result,
                 (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
                 mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) i)))
+            );
+            count++;
+        }
+        callable->registers[instruction->as.for_in_keys.dst] = mal_value_from_array_object(result);
+        return;
+    }
+
+    // A module namespace enumerates its sorted string exports (all enumerable).
+    if (mal_value_is_module_namespace_object(source)) {
+        MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(source);
+        for (i32 i = 0; i < ns->export_count; i++) {
+            mal_array_object_store(
+                result,
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+                mal_value_from_string(ns->exports[i].name)
             );
             count++;
         }

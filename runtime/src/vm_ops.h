@@ -80,8 +80,11 @@ void mal_op_create_bigint(MalCallable *callable, MalInstruction *instruction);
 void mal_op_create_object(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_array(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_module_namespace(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_empty(MalCallable *callable, MalInstruction *instruction);
+void mal_op_throw_if_tdz(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_null(MalCallable *callable, MalInstruction *instruction);
 

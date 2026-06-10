@@ -105,7 +105,17 @@ export type VmInstruction =
 			length: number;
 	  }
 	| {
+			opcode: "CREATE_MODULE_NAMESPACE";
+			dst: number;
+			nameIndices: Array<number>;
+			slots: Array<number>;
+	  }
+	| {
 			opcode: "CREATE_UNDEFINED";
+			dst: number;
+	  }
+	| {
+			opcode: "CREATE_EMPTY";
 			dst: number;
 	  }
 	| {
@@ -347,6 +357,11 @@ export type VmInstruction =
 			nameStringIndex: number;
 	  }
 	| {
+			opcode: "THROW_IF_TDZ";
+			src: number;
+			nameStringIndex: number;
+	  }
+	| {
 			opcode: "REQUIRE_COERCIBLE";
 			src: number;
 	  }
@@ -574,9 +589,21 @@ function lowerInstructionToVmInstruction(
 				dst: instruction.registers[0],
 				length: instruction.length,
 			};
+		case "createModuleNamespace":
+			return {
+				opcode: "CREATE_MODULE_NAMESPACE",
+				dst: instruction.registers[0],
+				nameIndices: instruction.exports.map((entry) => entry.nameStringIndex),
+				slots: instruction.exports.map((entry) => entry.slot),
+			};
 		case "createUndefined":
 			return {
 				opcode: "CREATE_UNDEFINED",
+				dst: instruction.registers[0],
+			};
+		case "createEmpty":
+			return {
+				opcode: "CREATE_EMPTY",
 				dst: instruction.registers[0],
 			};
 		case "createNull":
@@ -871,6 +898,12 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "LOAD_UNDECLARED",
 				dst: instruction.registers[0],
+				nameStringIndex: instruction.nameStringIndex,
+			};
+		case "throwIfTdz":
+			return {
+				opcode: "THROW_IF_TDZ",
+				src: instruction.registers[0],
 				nameStringIndex: instruction.nameStringIndex,
 			};
 		case "requireCoercible":

@@ -6,6 +6,7 @@
 #include "builtin_iterator.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
+#include "module_namespace_object.h"
 #include "property_iter.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -270,6 +271,43 @@ static MalValue mal_builtin_object_get_own_property_descriptor(MalVm *vm, MalVal
         return mal_value_new_undefined();
     }
 
+    // Module namespace descriptors: exports are { value: live, writable: true,
+    // enumerable: true, configurable: false }; @@toStringTag is the non-writable,
+    // non-enumerable, non-configurable "Module".
+    if (mal_value_is_module_namespace_object(args[0])) {
+        MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(args[0]);
+        MalKey tag = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG);
+        if (key.kind == MAL_KEY_SYMBOL && key.value == tag.value) {
+            MalPropertyDesc desc = {
+                .value = mal_value_from_string(mal_intrinsic_ascii(vm, "Module")),
+                .flags = 0,
+            };
+            return mal_builtin_object_descriptor_object(vm, desc);
+        }
+        if (key.kind == MAL_KEY_STRING) {
+            MalString *name = mal_value_to_string(key.value);
+            for (i32 i = 0; i < ns->export_count; i++) {
+                if (mal_string_equals(name, ns->exports[i].name)) {
+                    MalValue live = vm->globals[ns->exports[i].slot];
+                    if (mal_value_is_empty(live)) {
+                        mal_vm_throw_error(
+                            vm,
+                            MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+                            "Cannot access module export before initialization"
+                        );
+                        return mal_value_new_undefined();
+                    }
+                    MalPropertyDesc desc = {
+                        .value = live,
+                        .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE,
+                    };
+                    return mal_builtin_object_descriptor_object(vm, desc);
+                }
+            }
+        }
+        return mal_value_new_undefined();
+    }
+
     MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(args[0]), key);
     if (!lookup.present) {
         return mal_value_new_undefined();
@@ -331,6 +369,33 @@ static MalValue mal_builtin_object_key_to_string(MalVm *vm, MalKey key) {
 
 static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalPropertyIterKind iter_kind, MalBuiltinObjectCollect collect) {
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+
+    // A module namespace's own keys are its sorted string exports (all
+    // enumerable); values/entries read each export live (which may throw on a
+    // binding still in its TDZ).
+    if (mal_value_is_module_namespace_object(target)) {
+        MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(target);
+        for (i32 i = 0; i < ns->export_count; i++) {
+            MalValue name = mal_value_from_string(ns->exports[i].name);
+            MalValue element = name;
+            if (collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
+                MalValue value;
+                if (!mal_vm_get_property(vm, target, (MalKey) {.kind = MAL_KEY_STRING, .value = name}, &value)) {
+                    return mal_value_new_undefined();
+                }
+                element = value;
+                if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
+                    MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
+                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, name);
+                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, value);
+                    element = mal_value_from_array_object(entry);
+                }
+            }
+            mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)}, element);
+        }
+        return mal_value_from_array_object(result);
+    }
+
     if (!mal_value_is_object(target)) {
         return mal_value_from_array_object(result);
     }
@@ -781,6 +846,16 @@ static MalValue mal_builtin_object_get_own_property_symbols(MalVm *vm, MalValue 
 
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
     if (!mal_value_is_object(target)) {
+        return mal_value_from_array_object(result);
+    }
+
+    // A module namespace's only symbol key is @@toStringTag.
+    if (mal_value_is_module_namespace_object(target)) {
+        mal_array_object_store(
+            result,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)},
+            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG).value
+        );
         return mal_value_from_array_object(result);
     }
 
