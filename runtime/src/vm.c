@@ -222,6 +222,22 @@ static void mal_vm_pop_frame_storage(MalVm *vm, MalVmFrame *frame) {
     }
 }
 
+/**
+ * The `this` value a callee actually sees. A non-strict (sloppy) function called
+ * with `undefined`/`null` this substitutes the global object (OrdinaryCallBindThis
+ * step 5). Strict functions, and any object/primitive this, pass through.
+ * Primitive-this boxing (ToObject) is not done yet — there are no wrapper objects.
+ */
+MalValue mal_vm_callee_this(MalVm *vm, const MalFunction *function, MalValue this_value) {
+    if (
+        !function->strict &&
+        (mal_value_is_undefined(this_value) || mal_value_is_null(this_value))
+    ) {
+        return vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+    }
+    return this_value;
+}
+
 bool mal_vm_push_function_frame(
     MalVm *vm,
     i32 function_index,
@@ -330,7 +346,7 @@ bool mal_vm_push_function_frame(
     frame->arguments = arguments;
     frame->argument_count = arg_count;
     frame->stack_base = stack_base;
-    frame->this_value = this_value;
+    frame->this_value = mal_vm_callee_this(vm, function, this_value);
     frame->arguments_object = mal_value_new_undefined();
     frame->callee = mal_value_new_undefined();
     frame->generator = nullptr;
@@ -1009,7 +1025,8 @@ MalCompletion mal_vm_call_value(
             if (!mal_vm_enter_compiled(vm)) {
                 completion = vm->completion;
             } else {
-                MalValue value = function->compiled(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), env);
+                MalValue this_value = mal_vm_callee_this(vm, function, resolution.this_value);
+                MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), env);
                 mal_vm_leave_compiled(vm);
                 completion = vm->completion.kind == MAL_COMPLETION_THROW
                     ? vm->completion

@@ -371,7 +371,8 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
                 i32 caller_frame_index = vm->frame_count - 1;
                 MalValue result = mal_value_new_undefined();
                 if (mal_vm_enter_compiled(vm)) {
-                    result = function->compiled(vm, resolution.this_value, &vm->value_stack[base], resolution.arg_count, mal_value_new_undefined(), env);
+                    MalValue this_value = mal_vm_callee_this(vm, function, resolution.this_value);
+                    result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, mal_value_new_undefined(), env);
                     mal_vm_leave_compiled(vm);
                 }
                 vm->frames[caller_frame_index].registers[dst] = result;

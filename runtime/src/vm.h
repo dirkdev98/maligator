@@ -833,6 +833,14 @@ MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue 
 MalValue mal_vm_cjs_require(MalVm *vm, i32 id);
 
 /**
+ * The `this` a callee sees after sloppy-mode substitution (undefined/null this in
+ * a non-strict function becomes the global object). Pass-through for strict
+ * functions. push_function_frame applies this for interpreted frames; the
+ * compiled-backend call paths apply it explicitly.
+ */
+MalValue mal_vm_callee_this(MalVm *vm, const MalFunction *function, MalValue this_value);
+
+/**
  * mal_vm_construct_value with an explicit new.target (whose `.prototype`
  * parents the new instance), implementing the spec [[Construct]](args, newTarget).
  * Backs Reflect.construct; mal_vm_construct_value forwards with newTarget = callee.

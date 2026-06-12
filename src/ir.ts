@@ -241,6 +241,15 @@ export interface IRFunction {
 	classContext?: IRClassContext;
 
 	/**
+	 * Whether this function runs in strict mode — its own body scope's strictness
+	 * (a `"use strict"` directive, or inheritance from strict surrounding code),
+	 * NOT the whole file's. A sloppy file can still contain strict functions and
+	 * vice versa. Undefined falls back to the file's strictness (correct for the
+	 * top-level entry, whose scope strictness equals the file's).
+	 */
+	strict?: boolean;
+
+	/**
 	 * Self-recursive tail-call elimination. When the function is eligible (see
 	 * prepareTailCallLoop), `return f(args)` to itself is rewritten into "assign
 	 * params, JUMP to bodyEntryBlock" — turning tail recursion into a loop with
@@ -1732,14 +1741,16 @@ function compileNewFunction(
 		}
 	}
 
+	const fnFile = foundFile ?? program.semantic.files[0]!;
 	const fn: IRFunction = {
-		semanticFile: foundFile ?? program.semantic.files[0]!,
+		semanticFile: fnFile,
 		functionIndex: program.functions.length,
 		nameStringIndex: getOrCreateStringConstant(
 			program,
 			("id" in functionNode ? functionNode.id?.name : undefined) ?? binding.name,
 		),
 		blocks: [],
+		strict: functionStrict(fnFile, functionNode),
 		isGenerator:
 			functionNode.type !== "ArrowFunctionExpression" && functionNode.generator,
 		isAsync: functionNode.async === true,
@@ -1811,6 +1822,7 @@ function compileNewFunctionExpression(
 		),
 		blocks: [],
 		classContext,
+		strict: functionStrict(fn.semanticFile, functionNode),
 		isGenerator:
 			functionNode.type !== "ArrowFunctionExpression" && functionNode.generator,
 		isAsync: functionNode.async === true,
@@ -2044,6 +2056,8 @@ function buildStaticInitializer(
 		nameStringIndex: getOrCreateStringConstant(program, ""),
 		blocks: [],
 		classContext: staticContext,
+		// Class code is always strict.
+		strict: true,
 		parameterCount: 0,
 		length: 0,
 		nextRegisterDestination: 0,
@@ -2698,6 +2712,8 @@ function compileDefaultConstructor(
 		nameStringIndex: getOrCreateStringConstant(program, name),
 		blocks: [],
 		classContext,
+		// Class code is always strict.
+		strict: true,
 
 		parameterCount: 0,
 		length: 0,
@@ -2768,6 +2784,29 @@ function endFunction(fn: IRFunction) {
 			},
 		);
 	}
+}
+
+/**
+ * A function's own strictness: its body scope's, which sema marks strict for a
+ * `"use strict"` directive or by inheritance from strict surrounding code. A
+ * block body carries that scope; an expression-bodied arrow (no directive
+ * possible) inherits the enclosing strictness.
+ */
+function functionStrict(
+	file: SemanticFile,
+	node:
+		| ESTree.FunctionDeclaration
+		| ESTree.FunctionExpression
+		| ESTree.ArrowFunctionExpression,
+): boolean {
+	if (node.body?.type === "BlockStatement") {
+		const bodyScope = file.nodeToScope.get(node.body);
+		if (bodyScope) {
+			return bodyScope.strict;
+		}
+	}
+	const bodyScope = node.body ? file.nodeToScope.get(node.body) : undefined;
+	return bodyScope?.strict ?? file.strict;
 }
 
 /**

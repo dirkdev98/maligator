@@ -64,7 +64,7 @@ export function test262PruneArtifactCache() {
 	}
 }
 
-const SKIPPED_FLAGS = ["async", "onlyStrict", "CanBlockIsTrue"];
+const SKIPPED_FLAGS = ["async", "CanBlockIsTrue"];
 const SKIPPED_FEATURES = [
 	"IsHTMLDDA",
 	"decorators",
@@ -347,6 +347,11 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 	}
 
 	const isModule = file.frontmatter.flags?.includes("module") ?? false;
+	// `noStrict` tests are sloppy-only; everything else runs strict (default tests
+	// get their sloppy half once the full dual-run driver lands). A sloppy parse
+	// just relaxes the early-error surface (octal, `with`, …); the sloppy runtime
+	// behaviors gate on the per-scope strict flag sema derives from it.
+	const strict = !(file.frontmatter.flags?.includes("noStrict") ?? false);
 
 	const compileStartedAt = performance.now();
 	try {
@@ -354,7 +359,7 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 		// without paying for scope and binding analysis. Module-flagged tests parse
 		// as modules; the harness is still prepended (its functions become
 		// module-scoped, which the test references in the same scope).
-		const parsed = isModule ? parseModule(source) : parseScript(source, { strict: true });
+		const parsed = isModule ? parseModule(source) : parseScript(source, { strict });
 		const unsupported = collectUnsupportedSyntax(parsed.ast, { isModule });
 		if (unsupported.size > 0) {
 			outcome.result = "UNSUPPORTED";

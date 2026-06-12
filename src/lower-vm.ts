@@ -472,7 +472,7 @@ function lowerFunctionToVmFunction(fn: IRFunction): VmFunction {
 		length: fn.length,
 		registerCount: fn.nextRegisterDestination,
 		capturedCount: fn.nextCapturedIndex,
-		strict: fn.semanticFile.strict,
+		strict: fn.strict ?? fn.semanticFile.strict,
 		needsArguments,
 		instructions,
 		handlers: collectExceptionHandlers(instructions),
