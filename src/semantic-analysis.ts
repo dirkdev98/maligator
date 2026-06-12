@@ -25,6 +25,14 @@ export interface SemanticFile {
 	strict: boolean;
 	ast: ESTree.Program;
 
+	/**
+	 * A CommonJS module. Its top level is the body of a wrapper function
+	 * `(module, exports, require, __filename, __dirname)`, so those names are
+	 * predefined bindings and the program scope behaves like a function scope
+	 * (top-level declarations are wrapper locals/captures, not globals).
+	 */
+	commonjs?: boolean;
+
 	// TODO: We ain't fully compliant here yet. Scripts evaluate to the same global scope, so
 	//  bindings might reference outside of this semantic file.
 	scopes: Array<Scope>;
@@ -159,6 +167,7 @@ function analyzeModuleRecord(record: ModuleRecord): SemanticFile {
 		type: record.parsed.type,
 		strict: record.parsed.strict,
 		ast: record.parsed.ast,
+		commonjs: record.goal === "cjs",
 
 		scopes: [],
 		nodeToScope: new Map(),
@@ -170,12 +179,47 @@ function analyzeModuleRecord(record: ModuleRecord): SemanticFile {
 	return file;
 }
 
+/** The wrapper parameters injected into every CommonJS module's program scope. */
+export const COMMONJS_BINDINGS = [
+	"module",
+	"exports",
+	"require",
+	"__filename",
+	"__dirname",
+] as const;
+
+/**
+ * Inject the CommonJS wrapper parameters (`module`, `exports`, `require`,
+ * `__filename`, `__dirname`) into the module's program scope so references
+ * resolve to them instead of throwing ReferenceError. A name the module already
+ * declares at top level wins (its declaration acts as the parameter).
+ */
+function injectCommonJsBindings(file: SemanticFile) {
+	const programScope = file.scopes[0];
+	if (!programScope) {
+		return;
+	}
+	for (const name of COMMONJS_BINDINGS) {
+		if (!programScope.bindings.some((binding) => binding.name === name)) {
+			programScope.bindings.push({
+				kind: "var",
+				name,
+				declarationNode: file.ast,
+				usageNodes: [],
+			});
+		}
+	}
+}
+
 /**
  * Exec all analyze steps for a file.
  */
 function analyzeFile(file: SemanticFile) {
 	createScopesFromNode(file.ast, file);
 	collectBindingsForNode(file.ast, file);
+	if (file.commonjs) {
+		injectCommonJsBindings(file);
+	}
 	registerBindingUsage(file.ast, file);
 	calculateBindingScopedTo(file);
 }
@@ -605,7 +649,9 @@ function calculateBindingScopedTo(file: SemanticFile) {
 		declarationScope: Scope,
 		usageScopes: Array<Scope>,
 	): Binding["scopedTo"] => {
-		if (declarationScope.node.type === "Program") {
+		// A CommonJS module's program scope is its wrapper function's scope, so
+		// top-level bindings are wrapper locals/captures rather than globals.
+		if (declarationScope.node.type === "Program" && !file.commonjs) {
 			return "global";
 		}
 

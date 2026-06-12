@@ -144,6 +144,13 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_TYPED_ARRAY_BIGUINT64_PROTOTYPE,
     MAL_INTRINSIC_PROMISE_CONSTRUCTOR,
     MAL_INTRINSIC_PROMISE_PROTOTYPE,
+    /**
+     * The CommonJS `require` native handed to module wrappers. Called with a
+     * numeric module id (the compiler resolves `require("lit")` to its id) and
+     * runs/caches that module via mal_vm_cjs_require; a non-numeric argument is a
+     * "dynamic require is not supported" TypeError. Not exposed on globalThis.
+     */
+    MAL_INTRINSIC_CJS_REQUIRE,
     MAL_INTRINSIC_COUNT,
 } MalIntrinsic;
 

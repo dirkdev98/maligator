@@ -1,5 +1,7 @@
 import type { ESTree } from "meriyah";
+import { isPureDataCjsModule } from "./cjs-exports.ts";
 import { linkModules } from "./linker.ts";
+import { COMMONJS_BINDINGS } from "./semantic-analysis.ts";
 import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 import { log } from "./utils.ts";
 
@@ -92,6 +94,42 @@ export interface IntermediateProgram {
 		string,
 		Array<{ binding: Binding; exports: Array<{ name: string; exporter: Binding }> }>
 	>;
+
+	/**
+	 * CommonJS modules, keyed by path to their integer module id. The id indexes
+	 * the runtime registry; `require("specifier")` is lowered to `__cjs_require(id)`
+	 * of the resolved module. Empty for programs with no CommonJS.
+	 */
+	cjsModuleId: Map<string, number>;
+
+	/**
+	 * id -> wrapper function index, filled as each CommonJS module's wrapper
+	 * compiles. Emitted as the definition's CJS module table.
+	 */
+	cjsWrapperFunctionIndex: Array<number>;
+
+	/**
+	 * ESM → CJS interop: per importing module path, the local bindings to
+	 * initialize from `require(cjsPath)` (see src/linker.ts).
+	 */
+	cjsImports: Map<
+		string,
+		Array<{
+			binding: Binding;
+			cjsPath: string;
+			kind: "default" | "named" | "namespace";
+			name?: string;
+			names?: Array<string>;
+		}>
+	>;
+
+	/**
+	 * Pure-data CommonJS modules (no observable side effects): cjs path -> a
+	 * global slot holding their `module.exports`, built once at program start.
+	 * `require()` of these resolves to a direct slot read instead of a runtime
+	 * call. See isPureDataCjsModule.
+	 */
+	cjsEagerSlot: Map<string, number>;
 }
 
 type BindingLocation =
@@ -871,7 +909,10 @@ type IRIntrinsic =
 	| "console"
 	| "globalThis"
 	| "NaN"
-	| "Infinity";
+	| "Infinity"
+	// The CommonJS require native. Not a user-visible global: the compiler emits
+	// it for the synthetic CJS entry and for resolved `require("specifier")` calls.
+	| "__cjs_require";
 
 const irIntrinsics = new Set<string>([
 	"Object",
@@ -922,6 +963,7 @@ const irIntrinsics = new Set<string>([
 	"globalThis",
 	"NaN",
 	"Infinity",
+	"__cjs_require",
 ]);
 
 function isIRIntrinsic(name: string): name is IRIntrinsic {
@@ -1008,6 +1050,11 @@ export function compileSemanticProgramToIr(semantic: SemanticProgram) {
 
 		moduleDefaultBinding: new Map(),
 		namespaceImports: new Map(),
+
+		cjsModuleId: new Map(),
+		cjsWrapperFunctionIndex: [],
+		cjsImports: new Map(),
+		cjsEagerSlot: new Map(),
 	};
 
 	// Cross-module linking: aliases imported names to their exporter bindings (a
@@ -1020,6 +1067,9 @@ export function compileSemanticProgramToIr(semantic: SemanticProgram) {
 	for (const [path, imports] of linkage.namespaceImports) {
 		program.namespaceImports.set(path, imports);
 	}
+	for (const [path, imports] of linkage.cjsImports) {
+		program.cjsImports.set(path, imports);
+	}
 
 	const initFile = program.semantic.files.find(
 		(it) => it.path === program.semantic.entrypointPath,
@@ -1031,12 +1081,21 @@ export function compileSemanticProgramToIr(semantic: SemanticProgram) {
 
 	const evaluationOrder = semantic.graph?.evaluationOrder ?? [initFile.path];
 
-	if (evaluationOrder.length <= 1) {
+	if (initFile.commonjs) {
+		// A CommonJS program: each module is a wrapper run lazily through require.
+		compileCjsProgram(program, initFile);
+	} else if (evaluationOrder.length <= 1) {
 		// Single module: the init is the entrypoint (function 0), exactly as a
 		// plain script compiles.
 		compileFileInit(program, initFile);
 	} else {
+		// An ES module graph, possibly importing CommonJS modules. Assign CJS ids
+		// + pure-data slots first so the merged init can lower `import … from "cjs"`;
+		// compile the CJS wrappers after.
+		assignCjsModuleIds(program);
+		classifyPureDataCjsModules(program);
 		compileMergedModuleInit(program, evaluationOrder);
+		compileCjsWrappers(program);
 	}
 
 	debugIntermediateProgram(program);
@@ -1082,9 +1141,23 @@ function compileMergedModuleInit(
 	program.functions.push(fn);
 
 	let tail: IRBlock | null = null;
+
+	// Pure-data CommonJS modules are built once up front, before any module body.
+	if (program.cjsEagerSlot.size > 0) {
+		const eagerBlock: IRBlock = { instructions: [] };
+		fn.blocks.push(eagerBlock);
+		emitCjsEagerInits(program, fn, { block: eagerBlock });
+		tail = eagerBlock;
+	}
+
 	for (const modulePath of evaluationOrder) {
 		const file = fileByPath.get(modulePath);
 		if (!file) {
+			continue;
+		}
+		// CommonJS modules are wrappers run lazily through require, not inlined
+		// into the eager ESM init.
+		if (file.commonjs) {
 			continue;
 		}
 		fn.semanticFile = file;
@@ -1097,6 +1170,8 @@ function compileMergedModuleInit(
 		}
 
 		emitModulePrologue(program, fn, prologue, file);
+		// Initialize CommonJS imports (require + property reads) before the body.
+		emitCjsImportInits(program, fn, { block: prologue }, file);
 		const bodyEntry = compileStatementsToBlock(program, fn, file.ast.body);
 		prologue.instructions.push({ type: "jump", blocks: [bodyEntry] });
 
@@ -1105,7 +1180,7 @@ function compileMergedModuleInit(
 
 	const modules = evaluationOrder
 		.map((modulePath) => fileByPath.get(modulePath))
-		.filter((file): file is SemanticFile => file !== undefined);
+		.filter((file): file is SemanticFile => file !== undefined && !file.commonjs);
 	makeInitAsyncIfTopLevelAwait(fn, modules);
 
 	endFunction(fn);
@@ -1154,6 +1229,345 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 	endFunction(fn);
 
 	return fn.functionIndex;
+}
+
+/**
+ * Compile a CommonJS program: every reachable module becomes a wrapper function
+ * run lazily through `require`, and a synthetic entry (function 0) kicks the
+ * graph off by requiring the entrypoint. CJS requiring an ES module is not
+ * supported yet (rejected loudly).
+ */
+function compileCjsProgram(program: IntermediateProgram, initFile: SemanticFile) {
+	assignCjsModuleIds(program);
+	classifyPureDataCjsModules(program);
+
+	const nonCjs = program.semantic.files.find((file) => !file.commonjs);
+	if (nonCjs) {
+		throw new Error(
+			`CommonJS requiring an ES module (${nonCjs.path}) is not supported yet`,
+		);
+	}
+
+	// Function 0 is the program entry: build pure-data modules, then require() the
+	// entrypoint module.
+	compileCjsEntryDriver(program, program.cjsModuleId.get(initFile.path)!);
+	compileCjsWrappers(program);
+}
+
+/** Assign a registry id to every CommonJS module in the graph. */
+function assignCjsModuleIds(program: IntermediateProgram) {
+	for (const file of program.semantic.files) {
+		if (file.commonjs && !program.cjsModuleId.has(file.path)) {
+			program.cjsModuleId.set(file.path, program.cjsModuleId.size);
+		}
+	}
+}
+
+/** Give each side-effect-free pure-data CommonJS module an eager exports slot. */
+function classifyPureDataCjsModules(program: IntermediateProgram) {
+	for (const file of program.semantic.files) {
+		if (
+			file.commonjs &&
+			!program.cjsEagerSlot.has(file.path) &&
+			isPureDataCjsModule(file.ast)
+		) {
+			program.cjsEagerSlot.set(file.path, program.nextGlobalIndex++);
+		}
+	}
+}
+
+/**
+ * A register holding a CommonJS module's `module.exports`: a direct slot read for
+ * a pure-data module (built once at init), else a lazy `require()` call.
+ */
+function emitCjsModuleExports(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	cjsPath: string,
+): number {
+	const slot = program.cjsEagerSlot.get(cjsPath);
+	if (slot !== undefined) {
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadGlobal",
+			registers: [destination],
+			index: slot,
+		});
+		return destination;
+	}
+	return emitCjsRequire(program, fn, cursor, program.cjsModuleId.get(cjsPath)!);
+}
+
+/**
+ * Build every pure-data module's exports once into its slot (via the registry,
+ * so identity is shared with any lazy require). Emitted at program start, before
+ * any module body runs; safe because these modules have no observable side
+ * effects.
+ */
+function emitCjsEagerInits(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+) {
+	for (const [cjsPath, slot] of program.cjsEagerSlot) {
+		const value = emitCjsRequire(program, fn, cursor, program.cjsModuleId.get(cjsPath)!);
+		cursor.block.instructions.push({
+			type: "storeGlobal",
+			registers: [value],
+			index: slot,
+		});
+	}
+}
+
+/** Compile every CommonJS module's wrapper, recording its index by id. */
+function compileCjsWrappers(program: IntermediateProgram) {
+	for (const file of program.semantic.files) {
+		if (file.commonjs) {
+			const id = program.cjsModuleId.get(file.path)!;
+			program.cjsWrapperFunctionIndex[id] = compileCjsModuleWrapper(program, file);
+		}
+	}
+}
+
+/**
+ * Initialize an ES module's CommonJS imports: each local binding is set from
+ * `require(cjsId)` — default/namespace = module.exports, named = a property of
+ * it. Emitted into the module's init prologue, before its body runs.
+ */
+function emitCjsImportInits(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	file: SemanticFile,
+) {
+	for (const cjsImport of program.cjsImports.get(file.path) ?? []) {
+		if (!program.cjsModuleId.has(cjsImport.cjsPath)) {
+			continue;
+		}
+		const exportsRegister = emitCjsModuleExports(program, fn, cursor, cjsImport.cjsPath);
+		let valueRegister = exportsRegister;
+		if (cjsImport.kind === "named" && cjsImport.name !== undefined) {
+			valueRegister = emitLoadProperty(
+				program,
+				fn,
+				cursor,
+				exportsRegister,
+				cjsImport.name,
+			);
+		} else if (cjsImport.kind === "namespace") {
+			// Build a namespace object: default = module.exports + a snapshot of each
+			// statically-detected named export (module.exports[name]).
+			valueRegister = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "createObject",
+				registers: [valueRegister],
+			});
+			emitStoreProperty(program, fn, cursor, valueRegister, "default", exportsRegister);
+			for (const name of cjsImport.names ?? []) {
+				const member = emitLoadProperty(program, fn, cursor, exportsRegister, name);
+				emitStoreProperty(program, fn, cursor, valueRegister, name, member);
+			}
+		}
+		const location = getOrCreateBindingLocation(program, fn, cjsImport.binding);
+		storeRegisterAtLocation(cursor.block, location, valueRegister);
+	}
+}
+
+/** `object.name` → a fresh register holding the loaded value. */
+function emitLoadProperty(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	objectRegister: number,
+	name: string,
+): number {
+	const keyRegister = compileStaticString(program, fn, cursor, name);
+	const destination = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadProperty",
+		registers: [destination, objectRegister, keyRegister],
+	});
+	return destination;
+}
+
+/** `object.name = value` (data store). */
+function emitStoreProperty(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	objectRegister: number,
+	name: string,
+	valueRegister: number,
+) {
+	const keyRegister = compileStaticString(program, fn, cursor, name);
+	cursor.block.instructions.push({
+		type: "storeProperty",
+		registers: [objectRegister, keyRegister, valueRegister],
+	});
+}
+
+/** The synthetic CJS program entry (function 0): `require(entryId)`. */
+function compileCjsEntryDriver(program: IntermediateProgram, entryId: number) {
+	const fn: IRFunction = {
+		semanticFile: program.semantic.files[0]!,
+		functionIndex: program.functions.length,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+
+		parameterCount: 0,
+		length: 0,
+		nextRegisterDestination: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	program.functions.push(fn);
+
+	const block: IRBlock = { instructions: [] };
+	fn.blocks.push(block);
+	const cursor: IRCursor = { block };
+	emitCjsEagerInits(program, fn, cursor);
+	emitCjsRequire(program, fn, cursor, entryId);
+
+	endFunction(fn);
+}
+
+/**
+ * Compile one CommonJS module as its wrapper function
+ * `(module, exports, require, __filename, __dirname) { …module body… }`. The
+ * wrapper's `this` is `exports` (set by mal_vm_cjs_require), so module top-level
+ * `this` resolves correctly with no special handling.
+ */
+function compileCjsModuleWrapper(
+	program: IntermediateProgram,
+	file: SemanticFile,
+): number {
+	program.compiledModuleInitForPaths.add(file.path);
+
+	const fn: IRFunction = {
+		semanticFile: file,
+		functionIndex: program.functions.length,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+
+		parameterCount: COMMONJS_BINDINGS.length,
+		length: COMMONJS_BINDINGS.length,
+		nextRegisterDestination: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	program.functions.push(fn);
+
+	const paramsBlock: IRBlock = { instructions: [] };
+	fn.blocks.push(paramsBlock);
+
+	// Bind the wrapper parameters to the incoming argument registers [0..5), in
+	// the order mal_vm_cjs_require passes them.
+	const programScope = file.scopes[0];
+	for (const name of COMMONJS_BINDINGS) {
+		const register = nextRegisterDestination(fn);
+		const binding = programScope?.bindings.find(
+			(candidate) => candidate.name === name && !candidate.undeclared,
+		);
+		if (binding) {
+			const location = getOrCreateBindingLocation(program, fn, binding);
+			storeRegisterAtLocation(paramsBlock, location, register);
+		}
+	}
+
+	// Top-level let/const start in their TDZ, then run the module body.
+	if (programScope) {
+		emitTdzHoleInits(program, fn, paramsBlock, programScope.bindings);
+	}
+	const bodyEntry = compileStatementsToBlock(program, fn, file.ast.body);
+	paramsBlock.instructions.push({ type: "jump", blocks: [bodyEntry] });
+
+	endFunction(fn);
+	return fn.functionIndex;
+}
+
+/** Emit a call to the CJS `require` intrinsic with a numeric module id. */
+function emitCjsRequire(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	moduleId: number,
+): number {
+	const callee = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadIntrinsic",
+		registers: [callee],
+		intrinsic: "__cjs_require",
+	});
+	const thisRegister = compileUndefined(fn, cursor);
+	const idRegister = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createNumber",
+		registers: [idRegister],
+		value: moduleId,
+	});
+	const destination = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "call",
+		registers: [destination, callee, thisRegister, idRegister],
+	});
+	return destination;
+}
+
+/**
+ * If this call is a static `require("specifier")` against the injected CommonJS
+ * `require`, lower it to `__cjs_require(id)` of the resolved module and return
+ * its result register; otherwise undefined (a normal call, e.g. a dynamic or
+ * shadowed require, which throws at runtime).
+ */
+function tryCompileCjsRequireCall(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	callExpression: ESTree.CallExpression,
+): number | undefined {
+	const callee = callExpression.callee as unknown as ESTree.Node;
+	if (callee.type !== "Identifier" || callee.name !== "require") {
+		return undefined;
+	}
+	// Only the injected wrapper `require` (declarationNode is the Program) — not a
+	// user binding that shadows the name.
+	const binding = fn.semanticFile.nodeToBinding.get(callee);
+	if (!binding || binding.declarationNode !== fn.semanticFile.ast) {
+		return undefined;
+	}
+	const args = callExpression.arguments;
+	const specifier = args[0];
+	if (
+		args.length !== 1 ||
+		!specifier ||
+		specifier.type !== "Literal" ||
+		typeof specifier.value !== "string"
+	) {
+		return undefined;
+	}
+	const cjsPath = resolveCjsModulePath(program, fn.semanticFile, specifier.value);
+	if (cjsPath === undefined || !program.cjsModuleId.has(cjsPath)) {
+		return undefined;
+	}
+	return emitCjsModuleExports(program, fn, cursor, cjsPath);
+}
+
+/** Resolve a `require` specifier to the target module's resolved path via the graph. */
+function resolveCjsModulePath(
+	program: IntermediateProgram,
+	file: SemanticFile,
+	specifier: string,
+): string | undefined {
+	const dependency = program.semantic.graph?.modules
+		.get(file.path)
+		?.dependencies.find(
+			(candidate) =>
+				candidate.kind === "require" &&
+				candidate.specifier === specifier &&
+				candidate.resolvedPath !== null,
+		);
+	return dependency?.resolvedPath ?? undefined;
 }
 
 /**
@@ -6492,6 +6906,14 @@ function compileCall(
 
 	if (calleeNode.type === "Super") {
 		return compileSuperCall(program, fn, cursor, callExpression);
+	}
+
+	if (fn.semanticFile.commonjs) {
+		// `require("specifier")` resolves at build time to `__cjs_require(id)`.
+		const required = tryCompileCjsRequireCall(program, fn, cursor, callExpression);
+		if (required !== undefined) {
+			return required;
+		}
 	}
 
 	let callee: number;

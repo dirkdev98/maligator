@@ -13,6 +13,7 @@ once we compile and run most JS.
 - [ ] RegExp objects
 - [ ] Date objects
 - [ ] Replace Meriyah with a type-stripping supporting parser
+- [ ] GC, malloc optimizations, compiled lifetimes
 - [ ] Eval & function constructor
 - [ ] Decide on value_ops vs vm_op vs whatever?
 

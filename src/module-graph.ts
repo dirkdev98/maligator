@@ -25,7 +25,9 @@ export type ModuleDependencyKind =
 	// `export ... from "x"` / `export * from "x"`
 	| "export"
 	// `import("x")`
-	| "dynamic";
+	| "dynamic"
+	// `require("x")` in a CommonJS module
+	| "require";
 
 export interface ModuleDependency {
 	/** The raw specifier as written, or null for a computed `import(expr)`. */
@@ -111,7 +113,7 @@ export function buildModuleGraph(
 		const source = sourceOverride ?? readFileSync(filePath, "utf-8");
 		const parsed = parseWithGoal(blankHashbang(source), goal);
 
-		const dependencies = extractDependencies(parsed.ast).map(
+		const dependencies = extractDependencies(parsed.ast, goal).map(
 			(dependency): ModuleDependency => {
 				if (dependency.specifier === null) {
 					// A computed `import(expr)` — unresolvable statically. Per the
@@ -256,13 +258,19 @@ interface ExtractedDependency {
 }
 
 /**
- * Collect every static import/export-from and dynamic `import()` in a module.
+ * Collect every static import/export-from and dynamic `import()` in a module —
+ * plus, in a CommonJS module, every `require("…")` call (which can be nested
+ * anywhere, so the whole-tree walk catches them too).
  *
  * Static import/export only appear at the top level, but we walk the whole tree
- * regardless so dynamic `import()` (which can be nested anywhere) is caught in
- * the same pass.
+ * regardless so dynamic `import()` and `require()` are caught in the same pass.
+ * A computed `require(expr)` records a null specifier — unresolvable statically,
+ * like a computed `import(expr)`.
  */
-function extractDependencies(ast: ESTree.Program): Array<ExtractedDependency> {
+function extractDependencies(
+	ast: ESTree.Program,
+	goal: ModuleGoal,
+): Array<ExtractedDependency> {
 	const dependencies: Array<ExtractedDependency> = [];
 
 	const visit = (node: unknown) => {
@@ -295,6 +303,24 @@ function extractDependencies(ast: ESTree.Program): Array<ExtractedDependency> {
 			case "ImportExpression":
 				dependencies.push({ specifier: literalString(typed.source), kind: "dynamic" });
 				break;
+			case "CallExpression": {
+				// `require("x")` in a CommonJS module. A naive callee-name match: a
+				// shadowed/reassigned `require` is a rare edge case refined later.
+				// meriyah types CallExpression.callee as `any`, so narrow explicitly.
+				const callee = typed.callee as ESTree.Node;
+				if (
+					goal === "cjs" &&
+					callee.type === "Identifier" &&
+					callee.name === "require" &&
+					typed.arguments.length === 1
+				) {
+					dependencies.push({
+						specifier: literalString(typed.arguments[0]),
+						kind: "require",
+					});
+				}
+				break;
+			}
 			default:
 				break;
 		}

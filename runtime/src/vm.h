@@ -548,7 +548,28 @@ typedef struct MalVmDefinition {
     MalBigInt *bigint_constants;
 
     i32 global_count;
+
+    /**
+     * CommonJS module table: cjs_module_function_indices[id] is the function
+     * index of module `id`'s wrapper — `function (module, exports, require,
+     * __filename, __dirname) { …module body… }`. mal_vm_cjs_require runs a
+     * wrapper once on first require and caches its `module.exports`. Zero/null
+     * for programs with no CommonJS modules.
+     */
+    i32 cjs_module_count;
+    const i32 *cjs_module_function_indices;
 } MalVmDefinition;
+
+/**
+ * A CommonJS module's registry slot. `module_object` is its `module` object
+ * (with the `exports` property); `loaded` is set true the moment loading begins
+ * — before the wrapper runs — so a circular `require` returns the partial
+ * `module.exports` rather than re-entering the wrapper.
+ */
+typedef struct MalCjsModuleSlot {
+    MalValue module_object;
+    bool loaded;
+} MalCjsModuleSlot;
 
 /**
  * Heap-allocated captured-variable storage. One node per activation of a
@@ -635,6 +656,13 @@ typedef struct MalVm {
      * rather than overflowing the C stack.
      */
     i32 native_call_depth;
+
+    /**
+     * CommonJS module registry, sized to definition->cjs_module_count (null when
+     * the program has none). Each slot caches a module's `module` object after
+     * (and during) its first require, so require() returns `module.exports` live.
+     */
+    MalCjsModuleSlot *cjs_registry;
 } MalVm;
 
 /**
@@ -794,6 +822,15 @@ MalValue mal_vm_interpret_function(
  * mal_vm_call_value, used by the native backend's CONSTRUCT.
  */
 MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count);
+
+/**
+ * Return a CommonJS module's `module.exports`, running its wrapper exactly once
+ * (lazily, on first require) and caching the result. The compiler resolves each
+ * `require("specifier")` to a module id and calls this through the CJS `require`
+ * native; a circular require observes the in-progress module's partial exports.
+ * A throw out of the wrapper is left in vm->completion and undefined returned.
+ */
+MalValue mal_vm_cjs_require(MalVm *vm, i32 id);
 
 /**
  * mal_vm_construct_value with an explicit new.target (whose `.prototype`

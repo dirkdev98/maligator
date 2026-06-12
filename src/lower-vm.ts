@@ -13,6 +13,12 @@ export interface VmDefinition {
 	stringConstants: Array<Array<number>>;
 	bigintConstants: Array<bigint>;
 	globalCount: number;
+
+	/**
+	 * CommonJS module table: index (module id) -> wrapper function index. Empty
+	 * for programs with no CommonJS modules.
+	 */
+	cjsModuleFunctionIndices: Array<number>;
 }
 
 /**
@@ -425,6 +431,7 @@ export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDe
 		stringConstants: program.stringConstants,
 		bigintConstants: program.bigintConstants,
 		globalCount: program.nextGlobalIndex,
+		cjsModuleFunctionIndices: program.cjsWrapperFunctionIndex,
 	};
 }
 

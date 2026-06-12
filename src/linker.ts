@@ -1,4 +1,6 @@
 import type { ESTree } from "meriyah";
+import { detectCjsExports } from "./cjs-exports.ts";
+import type { CjsExportInfo } from "./cjs-exports.ts";
 import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 
 /**
@@ -16,9 +18,11 @@ import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis
  * export share one slot: this is Rollup-style scope hoisting, and live bindings
  * fall out for free (a reassignment in the exporter is observed by importers).
  *
- * See docs/decisions/04-bundler.md. Deferred: namespace imports/re-exports
- * (`import * as ns`, `export * as ns`), `export *` ambiguity de-duplication,
- * and cycle TDZ.
+ * See docs/decisions/04-bundler.md. ESM → CommonJS interop is also resolved
+ * here: an `import` from a CJS module is recorded in `cjsImports` (not aliased)
+ * for ir.ts to initialize from `require(...)`. Deferred: re-exporting from CJS
+ * (`export … from "cjs"`), `export * as ns`, `export *` ambiguity de-dup, and
+ * cycle TDZ.
  */
 
 export interface ModuleLinkage {
@@ -38,6 +42,25 @@ export interface ModuleLinkage {
 	namespaceImports: Map<
 		string,
 		Array<{ binding: Binding; exports: Array<{ name: string; exporter: Binding }> }>
+	>;
+
+	/**
+	 * ESM → CommonJS interop. An `import` whose specifier resolves to a CommonJS
+	 * module cannot alias an exporter binding (the CJS module has none); instead
+	 * the importing module initializes the local binding from `require(cjsPath)`:
+	 * default = `module.exports`, named = `module.exports[name]`, namespace =
+	 * `module.exports` itself. Keyed by importing module path.
+	 */
+	cjsImports: Map<
+		string,
+		Array<{
+			binding: Binding;
+			cjsPath: string;
+			kind: "default" | "named" | "namespace";
+			name?: string;
+			/** For `namespace`: the statically-detected member names to expose. */
+			names?: Array<string>;
+		}>
 	>;
 }
 
@@ -62,6 +85,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 	const linkage: ModuleLinkage = {
 		moduleDefaultBinding: new Map(),
 		namespaceImports: new Map(),
+		cjsImports: new Map(),
 	};
 
 	const graph = program.graph;
@@ -84,19 +108,79 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		specifierToPath.set(path, map);
 	}
 
-	const resolveDependency = (file: SemanticFile, specifier: string): string => {
+	const goalOf = (path: string) => graph.modules.get(path)?.goal;
+
+	const resolveDependency = (
+		file: SemanticFile,
+		specifier: string,
+		allowCommonJs = false,
+	): string => {
 		const path = specifierToPath.get(file.path)?.get(specifier);
 		if (!path) {
 			throw new Error(`Linker: '${specifier}' is not a dependency of ${file.path}`);
 		}
-		const goal = graph.modules.get(path)?.goal;
-		if (goal === "cjs") {
+		// `import` from CommonJS is interop (handled by the caller); re-exporting
+		// from CommonJS is not supported yet.
+		if (!allowCommonJs && goalOf(path) === "cjs") {
 			throw new Error(
 				`Linker: '${specifier}' resolves to a CommonJS module (${path}); ` +
-					`CommonJS is not supported yet`,
+					`re-exporting from CommonJS is not supported yet`,
 			);
 		}
 		return path;
+	};
+
+	const recordCjsImport = (
+		file: SemanticFile,
+		binding: Binding,
+		cjsPath: string,
+		entry: {
+			kind: "default" | "named" | "namespace";
+			name?: string;
+			names?: Array<string>;
+		},
+	) => {
+		const list = linkage.cjsImports.get(file.path) ?? [];
+		list.push({ binding, cjsPath, ...entry });
+		linkage.cjsImports.set(file.path, list);
+	};
+
+	// `export … from "cjs"` has no exporter binding to alias, so synthesize one
+	// the re-exporting module initializes from `require(cjs)[localName]` (default
+	// = module.exports). Importers then alias to this synthetic binding normally.
+	const cjsReexportBinding = (
+		file: SemanticFile,
+		cjsPath: string,
+		localName: string,
+	): Binding => {
+		const binding: Binding = {
+			kind: "const",
+			name: `*cjs-reexport:${localName}*`,
+			usageNodes: [],
+			scopedTo: "global",
+		};
+		recordCjsImport(
+			file,
+			binding,
+			cjsPath,
+			localName === "default" ? { kind: "default" } : { kind: "named", name: localName },
+		);
+		return binding;
+	};
+
+	// Memoized static export-name detection for a CommonJS module.
+	const fileByPath = new Map(program.files.map((file) => [file.path, file]));
+	const exportInfoCache = new Map<string, CjsExportInfo>();
+	const cjsExportInfo = (cjsPath: string): CjsExportInfo => {
+		let info = exportInfoCache.get(cjsPath);
+		if (!info) {
+			const ast = fileByPath.get(cjsPath)?.ast;
+			info = ast
+				? detectCjsExports(ast)
+				: { names: new Set<string>(), complete: false, reassignsModuleExports: false };
+			exportInfoCache.set(cjsPath, info);
+		}
+		return info;
 	};
 
 	// import binding -> where it imports from. Lets resolveExport follow a
@@ -129,22 +213,39 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		for (const statement of file.ast.body) {
 			switch (statement.type) {
 				case "ImportDeclaration": {
-					const module = resolveDependency(file, literalValue(statement.source));
+					const module = resolveDependency(file, literalValue(statement.source), true);
+					const moduleIsCommonJs = goalOf(module) === "cjs";
 					for (const specifier of statement.specifiers) {
 						const binding = file.nodeToBinding.get(specifier.local);
 						if (specifier.type === "ImportNamespaceSpecifier") {
 							// `import * as ns` — a namespace object, built once all
 							// export tables exist (Phase B). Not aliased.
 							if (binding) {
-								namespaceToResolve.push({ file, binding, module });
+								if (moduleIsCommonJs) {
+									recordCjsImport(file, binding, module, {
+										kind: "namespace",
+										names: [...cjsExportInfo(module).names],
+									});
+								} else {
+									namespaceToResolve.push({ file, binding, module });
+								}
 							}
 							continue;
 						}
-						const name =
-							specifier.type === "ImportDefaultSpecifier"
-								? "default"
-								: specifierName(specifier.imported);
-						if (binding) {
+						const isDefault = specifier.type === "ImportDefaultSpecifier";
+						const name = isDefault ? "default" : specifierName(specifier.imported);
+						if (!binding) {
+							continue;
+						}
+						if (moduleIsCommonJs) {
+							// ESM → CJS: default = module.exports, named = module.exports[name].
+							recordCjsImport(
+								file,
+								binding,
+								module,
+								isDefault ? { kind: "default" } : { kind: "named", name },
+							);
+						} else {
 							importInfo.set(binding, { module, name });
 							importsToAlias.push({ file, binding, module, name });
 						}
@@ -160,13 +261,22 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 							}
 						}
 					} else if (statement.source) {
-						const module = resolveDependency(file, literalValue(statement.source));
+						const module = resolveDependency(file, literalValue(statement.source), true);
+						const moduleIsCommonJs = goalOf(module) === "cjs";
 						for (const specifier of statement.specifiers) {
-							moduleExports.named.set(specifierName(specifier.exported), {
-								kind: "indirect",
-								module,
-								name: specifierName(specifier.local),
-							});
+							const localName = specifierName(specifier.local);
+							if (moduleIsCommonJs) {
+								moduleExports.named.set(specifierName(specifier.exported), {
+									kind: "local",
+									binding: cjsReexportBinding(file, module, localName),
+								});
+							} else {
+								moduleExports.named.set(specifierName(specifier.exported), {
+									kind: "indirect",
+									module,
+									name: localName,
+								});
+							}
 						}
 					} else {
 						for (const specifier of statement.specifiers) {
@@ -195,9 +305,19 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 								`is not supported yet (${file.path})`,
 						);
 					}
-					moduleExports.stars.push(
-						resolveDependency(file, literalValue(statement.source)),
-					);
+					const module = resolveDependency(file, literalValue(statement.source), true);
+					if (goalOf(module) === "cjs") {
+						// `export * from "cjs"`: re-export each statically-detected name
+						// (default is excluded, as for ESM `export *`).
+						for (const name of cjsExportInfo(module).names) {
+							moduleExports.named.set(name, {
+								kind: "local",
+								binding: cjsReexportBinding(file, module, name),
+							});
+						}
+					} else {
+						moduleExports.stars.push(module);
+					}
 					break;
 				}
 				default:

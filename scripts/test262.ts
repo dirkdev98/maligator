@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
+import { Worker } from "node:worker_threads";
 import { test262LoadCache, test262PersistCache } from "../src/test262/cache.ts";
 import { TEST262_METADATA } from "../src/test262/constants.ts";
 import {
@@ -12,9 +13,12 @@ import {
 	getCodeStats,
 	getFailuresWithSamples,
 	getTimings,
+	test262MergeStats,
 	test262PrepareBuild,
+	test262PruneArtifactCache,
 	test262RunBatch,
 } from "../src/test262/runtime.ts";
+import type { StatsSnapshot } from "../src/test262/runtime.ts";
 import type { Test262File, Test262Output } from "../src/test262/types.ts";
 
 function argValue(name: string) {
@@ -25,6 +29,15 @@ function argValue(name: string) {
 const random = process.argv.includes("--random");
 const filter = argValue("--filter");
 const jobs = Number(argValue("--jobs") ?? Math.max(1, os.cpus().length - 1));
+
+/**
+ * When > 0, run the JS->C compile (plus its cc/run) across this many worker
+ * threads instead of the single-threaded queue. The compile is otherwise the
+ * run's serial bottleneck; parallelizing it lets cc/run saturate every core.
+ */
+const compileWorkers = Number(
+	argValue("--compile-workers") ?? process.env.T262_COMPILE_WORKERS ?? 0,
+);
 
 const cacheContext = test262LoadCache();
 
@@ -56,6 +69,15 @@ for (let i = 0; i < selection.length; i += TEST262_METADATA.batchSize) {
 	batches.push(selection.slice(i, i + TEST262_METADATA.batchSize));
 }
 
+function reportProgress(processed: number) {
+	const previous = completed;
+	completed += processed;
+	if (Math.floor(completed / 2500) > Math.floor(previous / 2500)) {
+		const elapsed = ((Date.now() - startedAt) / 1000).toFixed(0);
+		test262Log(`Progress: ${completed} / ${selection.length} (${elapsed}s)`);
+	}
+}
+
 async function worker(workerId: number, queue: Array<Array<Test262File>>) {
 	while (true) {
 		const batch = queue.pop();
@@ -64,19 +86,96 @@ async function worker(workerId: number, queue: Array<Array<Test262File>>) {
 		}
 
 		await test262RunBatch(batch, workerId);
-
-		completed += batch.length;
-		if (completed % 2500 < batch.length) {
-			const elapsed = ((Date.now() - startedAt) / 1000).toFixed(0);
-			test262Log(`Progress: ${completed} / ${selection.length} (${elapsed}s)`);
-		}
+		reportProgress(batch.length);
 	}
 }
 
-const queue = [...batches].reverse();
-await Promise.all(
-	Array.from({ length: Math.max(1, jobs) }, (_, workerId) => worker(workerId, queue)),
-);
+/**
+ * Drive the batch queue across worker threads. Each worker pulls the next batch
+ * (work-stealing - `nextBatch` is bumped on the single main-thread event loop, so
+ * no lock is needed), runs it to completion, and reports back; on drain it ships
+ * its accumulated stats for merging into the main report.
+ */
+async function runWithWorkers(
+	workerCount: number,
+	allBatches: Array<Array<Test262File>>,
+) {
+	const filesByPath = new Map(selection.map((file) => [file.path, file]));
+	let nextBatch = 0;
+
+	const workerUrl = new URL("../src/test262/compile-worker.ts", import.meta.url);
+
+	await Promise.all(
+		Array.from(
+			{ length: workerCount },
+			(_unused, workerId) =>
+				new Promise<void>((resolve, reject) => {
+					const thread = new Worker(workerUrl);
+
+					const sendNext = () => {
+						if (nextBatch < allBatches.length) {
+							const batch = allBatches[nextBatch++]!;
+							thread.postMessage({
+								type: "batch",
+								paths: batch.map((file) => file.path),
+								workerId,
+							});
+						} else {
+							thread.postMessage({ type: "drain" });
+						}
+					};
+
+					thread.on(
+						"message",
+						(
+							message:
+								| { type: "ready" }
+								| {
+										type: "batchDone";
+										results: Array<{ path: string; result: Test262File["result"] }>;
+										processed: number;
+								  }
+								| { type: "stats"; snapshot: StatsSnapshot },
+						) => {
+							if (message.type === "ready") {
+								sendNext();
+							} else if (message.type === "batchDone") {
+								for (const { path, result } of message.results) {
+									const file = filesByPath.get(path);
+									if (file) {
+										file.result = result;
+									}
+								}
+								reportProgress(message.processed);
+								sendNext();
+							} else {
+								test262MergeStats(message.snapshot);
+								void thread.terminate().then(() => resolve());
+							}
+						},
+					);
+					thread.on("error", reject);
+				}),
+		),
+	);
+}
+
+if (compileWorkers > 0) {
+	test262Log(`Compiling with ${compileWorkers} worker threads.`);
+	await runWithWorkers(compileWorkers, batches);
+} else {
+	const queue = [...batches].reverse();
+	await Promise.all(
+		Array.from({ length: Math.max(1, jobs) }, (_, workerId) => worker(workerId, queue)),
+	);
+}
+
+// A full, unfiltered run touches every current-fingerprint cache key, so any
+// untouched entry is stale and safe to drop. Skip pruning on partial runs - they
+// would wrongly delete entries for the batches they never visited.
+if (!filter && !random) {
+	test262PruneArtifactCache();
+}
 
 const summary = selection.reduce<Record<string, number>>((acc, file) => {
 	acc[file.result] = (acc[file.result] ?? 0) + 1;

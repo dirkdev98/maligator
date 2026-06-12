@@ -114,3 +114,43 @@ test("resolves a namespace import to the module's (sorted) exports", () => {
 		"y",
 	]);
 });
+
+test("records ESM imports from a CommonJS module instead of aliasing them", () => {
+	const root = tree({
+		"lib.cjs": `exports.greet = "hi";\nmodule.exports.extra = 7;\n`,
+		"main.mjs": `import lib, { greet } from "./lib.cjs";\nglobalThis.sink = [lib, greet];\n`,
+	});
+
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"));
+	const linkage = linkModules(program);
+
+	const cjsImports = linkage.cjsImports.get(path.join(root, "main.mjs"));
+	expect(cjsImports).toHaveLength(2);
+	expect(cjsImports?.map((entry) => ({ kind: entry.kind, name: entry.name }))).toEqual([
+		{ kind: "default", name: undefined },
+		{ kind: "named", name: "greet" },
+	]);
+	// All resolve to the one CommonJS module.
+	expect(new Set(cjsImports?.map((entry) => entry.cjsPath))).toEqual(
+		new Set([path.join(root, "lib.cjs")]),
+	);
+});
+
+test("re-exporting from a CommonJS module records cjs imports for it", () => {
+	const root = tree({
+		"lib.cjs": `exports.x = 1;\nexports.y = 2;\n`,
+		"main.mjs": `export { x as ex } from "./lib.cjs";\nexport * from "./lib.cjs";\n`,
+	});
+
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"));
+	const linkage = linkModules(program);
+
+	// A synthetic cjs import per re-exported name: `x` (renamed via `as ex`) plus
+	// the two detected names from `export *` (x, y).
+	const cjsImports = linkage.cjsImports.get(path.join(root, "main.mjs"));
+	expect(cjsImports?.length).toBe(3);
+	expect(cjsImports?.every((entry) => entry.cjsPath === path.join(root, "lib.cjs"))).toBe(
+		true,
+	);
+	expect(cjsImports?.map((entry) => entry.name).sort()).toEqual(["x", "x", "y"]);
+});

@@ -56,6 +56,21 @@ export const cycleB = 2;
 		JSON.stringify({ name: "pkg", type: "module", exports: { ".": "./index.mjs" } }),
 	);
 	write("node_modules/pkg/index.mjs", `export const dep = "dep";\n`);
+
+	// A small CommonJS tree: a top-level require, a nested (in-function) require,
+	// and a computed require (statically unresolvable).
+	write(
+		"cjs-entry.cjs",
+		`const b = require("./cjs-b.cjs");
+function lazy(name) {
+	return require("./cjs-c.cjs");
+}
+const dyn = require(name);
+module.exports = [b, lazy, dyn];
+`,
+	);
+	write("cjs-b.cjs", `exports.b = 1;\n`);
+	write("cjs-c.cjs", `module.exports = function () { return 2; };\n`);
 });
 
 afterAll(() => {
@@ -136,4 +151,32 @@ test("detects the cycle as a strongly-connected component", () => {
 
 	const cycleSets = graph.cycles.map((component) => new Set(component.map(rel)));
 	expect(cycleSets).toContainEqual(new Set(["cycle-a.mjs", "cycle-b.mjs"]));
+});
+
+test("extracts require() dependencies from a CommonJS module", () => {
+	const graph = buildModuleGraph(path.join(root, "cjs-entry.cjs"));
+
+	expect(graph.modules.get(graph.entry)!.goal).toBe("cjs");
+	expect(depSummary(graph, "cjs-entry.cjs")).toEqual([
+		{ specifier: "./cjs-b.cjs", kind: "require", resolved: "cjs-b.cjs" },
+		// Nested in a function body, still discovered by the whole-tree walk.
+		{ specifier: "./cjs-c.cjs", kind: "require", resolved: "cjs-c.cjs" },
+		// Computed `require(name)` — unresolvable statically.
+		{ specifier: null, kind: "require", resolved: null },
+	]);
+
+	// Resolved require edges are static, so they order dependencies before the
+	// entry; the computed one does not participate.
+	const order = graph.evaluationOrder.map(rel);
+	expect(order.at(-1)).toBe("cjs-entry.cjs");
+	expect(order.indexOf("cjs-b.cjs")).toBeLessThan(order.indexOf("cjs-entry.cjs"));
+});
+
+test("does not treat require() as a dependency in ESM/script modules", () => {
+	const graph = buildModuleGraph(path.join(root, "entry.mjs"));
+	for (const record of graph.modules.values()) {
+		expect(record.dependencies.every((dependency) => dependency.kind !== "require")).toBe(
+			true,
+		);
+	}
 });

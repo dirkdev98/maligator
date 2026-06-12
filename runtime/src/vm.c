@@ -11,6 +11,7 @@
 #include "heap_string.h"
 #include "intrinsics.h"
 #include "microtask.h"
+#include "object_ops.h"
 #include "promise_object.h"
 #include "value_ops.h"
 #include "vm_ops.h"
@@ -63,6 +64,70 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     }
 
     mal_intrinsics_init(vm);
+
+    // CommonJS module registry: one lazily-loaded slot per CJS module.
+    if (definition->cjs_module_count > 0) {
+        vm->cjs_registry = malloc(sizeof(MalCjsModuleSlot) * (usize) definition->cjs_module_count);
+        for (i32 i = 0; i < definition->cjs_module_count; i++) {
+            vm->cjs_registry[i] = (MalCjsModuleSlot) {
+                .module_object = mal_value_new_undefined(),
+                .loaded = false,
+            };
+        }
+    } else {
+        vm->cjs_registry = nullptr;
+    }
+}
+
+MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
+    if (id < 0 || id >= vm->definition->cjs_module_count) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "invalid CommonJS module id");
+        return mal_value_new_undefined();
+    }
+
+    MalCjsModuleSlot *slot = &vm->cjs_registry[id];
+    MalKey exports_key = mal_intrinsic_string_key(vm, (const byte *) "exports");
+
+    // Already loaded (or mid-load, for a circular require): hand back the live
+    // module.exports.
+    if (slot->loaded) {
+        MalValue exports;
+        mal_vm_get_property(vm, slot->module_object, exports_key, &exports);
+        return exports;
+    }
+
+    // module = { exports: {} }. Cache it before running the wrapper so a circular
+    // require sees the partial exports object rather than re-entering.
+    MalObject *exports_object = mal_intrinsic_new_object(vm);
+    MalValue exports_value = mal_value_from_object(exports_object);
+    MalObject *module_object = mal_intrinsic_new_object(vm);
+    MalValue module_value = mal_value_from_object(module_object);
+    mal_object_set(module_object, exports_key, exports_value);
+    slot->module_object = module_value;
+    slot->loaded = true;
+
+    // Run the wrapper: (module, exports, require, __filename, __dirname), this = exports.
+    // __filename/__dirname are undefined for now (TODO: bake the module path).
+    MalValue args[5] = {
+        module_value,
+        exports_value,
+        vm->intrinsics[MAL_INTRINSIC_CJS_REQUIRE],
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    i32 function_index = vm->definition->cjs_module_function_indices[id];
+    mal_vm_interpret_function(
+        vm, function_index, mal_value_new_undefined(), exports_value, args, 5,
+        mal_value_new_undefined(), nullptr
+    );
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+
+    // module.exports read live: the wrapper may have reassigned `module.exports`.
+    MalValue exports;
+    mal_vm_get_property(vm, slot->module_object, exports_key, &exports);
+    return exports;
 }
 
 void mal_vm_free(MalVm *vm) {
@@ -78,6 +143,7 @@ void mal_vm_free(MalVm *vm) {
     free(vm->frames);
     free(vm->value_stack);
     free(vm->globals);
+    free(vm->cjs_registry);
 
     // Free any microtasks left queued (e.g. the program exited with pending
     // jobs). The MalValues they hold live in the heap, freed below.

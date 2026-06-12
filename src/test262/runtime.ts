@@ -2,10 +2,11 @@ import { execFile, execSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { emitVmDefinition } from "../emit-vm.ts";
+import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
 import { compileSemanticProgramToIr } from "../ir.ts";
 import { lowerIrProgramToVmDefinition } from "../lower-vm.ts";
+import type { VmDefinition } from "../lower-vm.ts";
 import { parseModule, parseScript } from "../parser.ts";
 import { allocateRegisters } from "../register-alloc.ts";
 import {
@@ -13,11 +14,55 @@ import {
 	loadEntrypointAndRunSemanticAnalysis,
 } from "../semantic-analysis.ts";
 import { collectUnsupportedSyntax } from "../supported-syntax.ts";
+import {
+	batchCacheKey,
+	buildFingerprint,
+	cacheEnabled,
+	ensureCacheDir,
+	loadArtifact,
+	objectCachePath,
+	pruneUnused,
+	storeManifest,
+} from "./artifact-cache.ts";
+import type { BatchManifest } from "./artifact-cache.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
-import type { Test262File } from "./types.ts";
+import type { Test262File, Test262Result } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * cc invocation split into compile and link. Compiling the generated C is ~97%
+ * of the cost; linking against the (always freshly built) library is ~3%. The
+ * split lets the artifact cache reuse the compiled object across runs whenever
+ * only the runtime implementation changed.
+ */
+const CC_COMPILE_FLAGS = ["-std=c2x", "-O0", "-I", "runtime/src"];
+const CC_LINK_FLAGS = ["-std=c2x", "-O0"];
+
+/**
+ * Share byte-identical static arrays (the harness's instructions and string
+ * constants) across the tests in a batch, instead of re-emitting them per test.
+ * Halves the generated C and cuts cc ~25% on a cold run; content-addressed so it
+ * cannot change behaviour. On by default (set T262_SHARED_HARNESS=0 to compare).
+ * Folded into the cache key since it changes the compiled object.
+ */
+function sharedHarnessEnabled(): boolean {
+	return process.env.T262_SHARED_HARNESS !== "0";
+}
+
+function emitMode(): string {
+	return sharedHarnessEnabled() ? "shared-harness" : "per-test";
+}
+
+/** Keys touched this run, so stale cache entries can be pruned at the end. */
+const USED_CACHE_KEYS = new Set<string>();
+
+export function test262PruneArtifactCache() {
+	if (cacheEnabled()) {
+		pruneUnused(USED_CACHE_KEYS);
+	}
+}
 
 const SKIPPED_FLAGS = ["async", "onlyStrict", "CanBlockIsTrue"];
 const SKIPPED_FEATURES = [
@@ -81,9 +126,10 @@ interface PhaseTimings {
 	slowest: Array<{ path: string; ms: number }>;
 }
 
-const TIMINGS: Record<"compile" | "cc" | "run", PhaseTimings> = {
+const TIMINGS: Record<"compile" | "cc" | "link" | "run", PhaseTimings> = {
 	compile: { totalMs: 0, count: 0, slowest: [] },
 	cc: { totalMs: 0, count: 0, slowest: [] },
+	link: { totalMs: 0, count: 0, slowest: [] },
 	run: { totalMs: 0, count: 0, slowest: [] },
 };
 
@@ -262,17 +308,44 @@ function firstLine(text: string) {
 }
 
 /**
- * Compile a test to a C translation unit fragment, resolving the SKIPPED,
- * UNSUPPORTED and COMPILE_FAILED verdicts along the way. Returns undefined
- * when there is nothing to execute.
+ * The outcome of compiling one test. Kept side-effect free (apart from the
+ * compile timing) so the same value can both drive the live run and be folded
+ * into a cache manifest for replay on a later hit. `definition === undefined`
+ * means there is nothing to execute (skipped / unsupported / failed to compile).
+ * Emission to C is left to the caller, which picks per-test or shared-harness
+ * batch emission.
  */
-function test262CompileToC(file: Test262File, symbolSuffix: string): string | undefined {
+interface CompileOutcome {
+	definition: VmDefinition | undefined;
+	/** Verdict resolved at compile time; "UNKNOWN" means the run decides. */
+	result: Test262Result;
+	unsupported: Array<string>;
+	failure: string | undefined;
+	stats:
+		| { functionCount: number; instructionCount: number; opcodes: Record<string, number> }
+		| undefined;
+}
+
+/**
+ * Compile a test to a VM definition, resolving the SKIPPED, UNSUPPORTED and
+ * COMPILE_FAILED verdicts along the way. `source` is the pre-composed
+ * harness+test (also the cache-key input), passed in so it is built exactly once
+ * per test.
+ */
+function test262CompileToC(file: Test262File, source: string): CompileOutcome {
+	const outcome: CompileOutcome = {
+		definition: undefined,
+		result: "UNKNOWN",
+		unsupported: [],
+		failure: undefined,
+		stats: undefined,
+	};
+
 	if (test262ShouldSkip(file)) {
-		file.result = "SKIPPED";
-		return undefined;
+		outcome.result = "SKIPPED";
+		return outcome;
 	}
 
-	const source = composeSource(file);
 	const isModule = file.frontmatter.flags?.includes("module") ?? false;
 
 	const compileStartedAt = performance.now();
@@ -284,11 +357,9 @@ function test262CompileToC(file: Test262File, symbolSuffix: string): string | un
 		const parsed = isModule ? parseModule(source) : parseScript(source, { strict: true });
 		const unsupported = collectUnsupportedSyntax(parsed.ast, { isModule });
 		if (unsupported.size > 0) {
-			file.result = "UNSUPPORTED";
-			for (const feature of unsupported) {
-				countReason(UNSUPPORTED_COUNTS, UNSUPPORTED_CACHE, feature, file);
-			}
-			return undefined;
+			outcome.result = "UNSUPPORTED";
+			outcome.unsupported = [...unsupported];
+			return outcome;
 		}
 
 		// Module tests run through the loader/graph pipeline so sibling
@@ -318,11 +389,9 @@ function test262CompileToC(file: Test262File, symbolSuffix: string): string | un
 				}
 			}
 			if (deepUnsupported.size > 0) {
-				file.result = "UNSUPPORTED";
-				for (const feature of deepUnsupported) {
-					countReason(UNSUPPORTED_COUNTS, UNSUPPORTED_CACHE, feature, file);
-				}
-				return undefined;
+				outcome.result = "UNSUPPORTED";
+				outcome.unsupported = [...deepUnsupported];
+				return outcome;
 			}
 		}
 
@@ -331,27 +400,51 @@ function test262CompileToC(file: Test262File, symbolSuffix: string): string | un
 		allocateRegisters(irProgram);
 		const vmDefinition = lowerIrProgramToVmDefinition(irProgram);
 
-		CODE_STATS.compiledFiles++;
-		CODE_STATS.functionCount += vmDefinition.functions.length;
+		const opcodes: Record<string, number> = {};
+		let instructionCount = 0;
 		for (const fn of vmDefinition.functions) {
-			CODE_STATS.instructionCount += fn.instructions.length;
+			instructionCount += fn.instructions.length;
 			for (const instruction of fn.instructions) {
-				OPCODE_COUNTS[instruction.opcode] = (OPCODE_COUNTS[instruction.opcode] ?? 0) + 1;
+				opcodes[instruction.opcode] = (opcodes[instruction.opcode] ?? 0) + 1;
 			}
 		}
+		outcome.stats = {
+			functionCount: vmDefinition.functions.length,
+			instructionCount,
+			opcodes,
+		};
 
-		return emitVmDefinition(vmDefinition, { symbolSuffix, includeHeader: false });
+		outcome.definition = vmDefinition;
+		return outcome;
 	} catch (e) {
-		file.result = "COMPILE_FAILED";
-		countReason(
-			FAILURE_COUNTS,
-			FAILURE_CACHE,
-			`compile: ${e instanceof Error ? e.message : String(e)}`,
-			file,
-		);
-		return undefined;
+		outcome.result = "COMPILE_FAILED";
+		outcome.failure = `compile: ${e instanceof Error ? e.message : String(e)}`;
+		return outcome;
 	} finally {
 		recordTiming("compile", file.path, performance.now() - compileStartedAt);
+	}
+}
+
+/**
+ * Fold a compile outcome into the live result + the global failure/code-size
+ * accumulators. Shared by the compile path and by cache-hit replay so both
+ * produce identical reports.
+ */
+function applyOutcome(file: Test262File, outcome: CompileOutcome) {
+	file.result = outcome.result;
+	for (const feature of outcome.unsupported) {
+		countReason(UNSUPPORTED_COUNTS, UNSUPPORTED_CACHE, feature, file);
+	}
+	if (outcome.failure !== undefined) {
+		countReason(FAILURE_COUNTS, FAILURE_CACHE, outcome.failure, file);
+	}
+	if (outcome.stats !== undefined) {
+		CODE_STATS.compiledFiles++;
+		CODE_STATS.functionCount += outcome.stats.functionCount;
+		CODE_STATS.instructionCount += outcome.stats.instructionCount;
+		for (const [opcode, count] of Object.entries(outcome.stats.opcodes)) {
+			OPCODE_COUNTS[opcode] = (OPCODE_COUNTS[opcode] ?? 0) + count;
+		}
 	}
 }
 
@@ -360,61 +453,244 @@ interface BatchEntry {
 	index: number;
 }
 
+/** Link a compiled batch object against the freshly built library. Cheap (~3% of cc). */
+async function linkBatch(objectPath: string, binPath: string) {
+	const startedAt = performance.now();
+	await execFileAsync(
+		"cc",
+		[
+			...CC_LINK_FLAGS,
+			objectPath,
+			`${TEST262_METADATA.buildPath}/test262_batch.o`,
+			"runtime/build/libLibMaligator.a",
+			"-o",
+			binPath,
+		],
+		{ timeout: TEST262_METADATA.compileTimeoutMs },
+	);
+	recordTiming("link", "batch", performance.now() - startedAt);
+}
+
+/** Execute a batch binary, parse its per-test verdicts, retry any unreported tests singly. */
+async function runBatchBinary(
+	binPath: string,
+	entries: Array<BatchEntry>,
+	workerId: number,
+) {
+	let stdout = "";
+	try {
+		const result = await execFileAsync(
+			binPath,
+			["--all", String(TEST262_METADATA.runTimeoutMs)],
+			{
+				timeout: entries.length * TEST262_METADATA.runTimeoutMs + 15_000,
+				maxBuffer: 64 * 1024 * 1024,
+			},
+		);
+		stdout = result.stdout;
+	} catch (e) {
+		stdout = (e as { stdout?: string }).stdout ?? "";
+	}
+
+	const resolved = parseBatchOutput(stdout, entries);
+
+	// Anything the driver never reported (driver crash, overall timeout)
+	// retries individually.
+	const unreported = entries.filter((entry) => !resolved.has(entry.index));
+	if (unreported.length > 0) {
+		writeFileSync(`${binPath}.last-stdout.txt`, stdout);
+		test262Log(
+			`Batch driver on worker ${workerId} left ${unreported.length}/${entries.length} unreported (stdout saved), retrying singly.`,
+		);
+	}
+	for (const entry of unreported) {
+		entry.file.result = "UNKNOWN";
+		await test262RunSingle(entry.file, workerId);
+	}
+}
+
+/**
+ * Replay a cached manifest onto the live files: restore the resolved verdicts
+ * and their failure/code-size accounting, and reconstruct the runnable entries
+ * so the (still freshly executed) binary's output can be attributed.
+ */
+function applyManifest(
+	files: Array<Test262File>,
+	manifest: BatchManifest,
+): Array<BatchEntry> {
+	const byPath = new Map(files.map((file) => [file.path, file]));
+
+	for (const entry of manifest.resolved) {
+		const file = byPath.get(entry.path);
+		if (!file) {
+			continue;
+		}
+		applyOutcome(file, {
+			definition: undefined,
+			result: entry.result as Test262Result,
+			unsupported: entry.unsupported ?? [],
+			failure: entry.failure,
+			stats: undefined,
+		});
+	}
+
+	// The compiled tests' aggregate code stats were summed in the manifest.
+	CODE_STATS.compiledFiles += manifest.stats.compiledFiles;
+	CODE_STATS.functionCount += manifest.stats.functionCount;
+	CODE_STATS.instructionCount += manifest.stats.instructionCount;
+	for (const [opcode, count] of Object.entries(manifest.stats.opcodes)) {
+		OPCODE_COUNTS[opcode] = (OPCODE_COUNTS[opcode] ?? 0) + count;
+	}
+
+	const entries: Array<BatchEntry> = [];
+	for (const entry of manifest.entries) {
+		const file = byPath.get(entry.path);
+		if (file) {
+			entries.push({ file, index: entry.index });
+		}
+	}
+	return entries;
+}
+
 /**
  * Run a batch of tests as a single translation unit and binary. The batch
  * driver forks per test, so cc and process-image setup are paid once per
  * batch while crash and timeout isolation stay per test.
+ *
+ * Compiling the generated C dominates cost, so when the artifact cache is
+ * enabled we key the batch on (compiler + headers + every test's composed
+ * source) and reuse the compiled `.o` across runs - only re-linking and
+ * re-running. The binary is always executed, so results are never cached.
  */
 export async function test262RunBatch(files: Array<Test262File>, workerId: number) {
+	const useCache = cacheEnabled();
+	const baseName = path.join(TEST262_METADATA.buildPath, `batch${workerId}`);
+
+	// Compose every test once: it feeds both the cache key and the compiler.
+	const composed = files.map((file) => composeSource(file));
+
+	let cacheKey = "";
+	if (useCache) {
+		cacheKey = batchCacheKey(
+			buildFingerprint([...CC_COMPILE_FLAGS, ...CC_LINK_FLAGS]),
+			emitMode(),
+			composed,
+		);
+		USED_CACHE_KEYS.add(cacheKey);
+
+		const cached = loadArtifact(cacheKey);
+		if (cached) {
+			const entries = applyManifest(files, cached.manifest);
+			if (cached.objectPath !== undefined && entries.length > 0) {
+				await linkBatch(cached.objectPath, `${baseName}.bin`);
+				await runBatchBinary(`${baseName}.bin`, entries, workerId);
+			}
+			return;
+		}
+	}
+
 	const entries: Array<BatchEntry> = [];
+	const definitions: Array<VmDefinition> = [];
+	const resolved: BatchManifest["resolved"] = [];
+	const stats = {
+		compiledFiles: 0,
+		functionCount: 0,
+		instructionCount: 0,
+		opcodes: {} as Record<string, number>,
+	};
+
+	for (let i = 0; i < files.length; i++) {
+		const file = files[i]!;
+		const outcome = test262CompileToC(file, composed[i]!);
+		applyOutcome(file, outcome);
+
+		if (outcome.definition === undefined) {
+			resolved.push({
+				path: file.path,
+				result: outcome.result,
+				unsupported: outcome.unsupported.length > 0 ? outcome.unsupported : undefined,
+				failure: outcome.failure,
+			});
+			continue;
+		}
+
+		if (outcome.stats !== undefined) {
+			stats.compiledFiles++;
+			stats.functionCount += outcome.stats.functionCount;
+			stats.instructionCount += outcome.stats.instructionCount;
+			for (const [opcode, count] of Object.entries(outcome.stats.opcodes)) {
+				stats.opcodes[opcode] = (stats.opcodes[opcode] ?? 0) + count;
+			}
+		}
+
+		entries.push({ file, index: entries.length });
+		definitions.push(outcome.definition);
+	}
+
+	const manifest: BatchManifest = {
+		hasBinary: entries.length > 0,
+		entries: entries.map((entry) => ({ path: entry.file.path, index: entry.index })),
+		resolved,
+		stats,
+	};
+
+	if (entries.length === 0) {
+		if (useCache) {
+			storeManifest(cacheKey, manifest);
+		}
+		return;
+	}
+
+	// Emit the batch's C: one shared translation unit (deduping the harness) or
+	// each definition self-contained, headers prepended once either way.
+	const body = sharedHarnessEnabled()
+		? emitBatch(definitions)
+		: definitions
+				.map((definition, i) =>
+					emitVmDefinition(definition, { symbolSuffix: `_${i}`, includeHeader: false }),
+				)
+				.join("\n");
+
 	const sources: Array<string> = [
 		'#include "vm.h"',
 		'#include "vm_ops.h"',
 		'#include "value_ops.h"',
 		"",
-	];
-
-	for (const file of files) {
-		const cSource = test262CompileToC(file, `_${entries.length}`);
-		if (cSource === undefined) {
-			continue;
-		}
-
-		sources.push(cSource, "");
-		entries.push({ file, index: entries.length });
-	}
-
-	if (entries.length === 0) {
-		return;
-	}
-
-	sources.push(
+		body,
+		"",
 		"const MalVmDefinition *const mal_test262_definitions[] = {",
 		...entries.map((entry) => `    &mal_vm_definition_${entry.index},`),
 		"};",
 		`const int mal_test262_definition_count = ${entries.length};`,
 		"",
-	);
+	];
 
-	const baseName = path.join(TEST262_METADATA.buildPath, `batch${workerId}`);
 	const ccStartedAt = performance.now();
 	try {
 		writeFileSync(`${baseName}.c`, sources.join("\n"));
-		await execFileAsync(
-			"cc",
-			[
-				"-std=c2x",
-				"-O0",
-				"-I",
-				"runtime/src",
-				`${baseName}.c`,
-				`${TEST262_METADATA.buildPath}/test262_batch.o`,
-				"runtime/build/libLibMaligator.a",
-				"-o",
-				`${baseName}.bin`,
-			],
-			{ timeout: TEST262_METADATA.compileTimeoutMs },
-		);
+		if (useCache) {
+			// Compile straight into the cache so a hit needs only a re-link.
+			ensureCacheDir();
+			await execFileAsync(
+				"cc",
+				[...CC_COMPILE_FLAGS, "-c", `${baseName}.c`, "-o", objectCachePath(cacheKey)],
+				{ timeout: TEST262_METADATA.compileTimeoutMs },
+			);
+		} else {
+			// Baseline path: compile + link in one shot, no cache.
+			await execFileAsync(
+				"cc",
+				[
+					...CC_COMPILE_FLAGS,
+					`${baseName}.c`,
+					`${TEST262_METADATA.buildPath}/test262_batch.o`,
+					"runtime/build/libLibMaligator.a",
+					"-o",
+					`${baseName}.bin`,
+				],
+				{ timeout: TEST262_METADATA.compileTimeoutMs },
+			);
+		}
 	} catch (e) {
 		// A cc failure cannot be attributed to a single test; retry every test
 		// through the single-test path instead.
@@ -436,36 +712,13 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 	}
 	recordTiming("cc", `batch(${entries.length})`, performance.now() - ccStartedAt);
 
-	let stdout = "";
-	try {
-		const result = await execFileAsync(
-			`${baseName}.bin`,
-			["--all", String(TEST262_METADATA.runTimeoutMs)],
-			{
-				timeout: entries.length * TEST262_METADATA.runTimeoutMs + 15_000,
-				maxBuffer: 64 * 1024 * 1024,
-			},
-		);
-		stdout = result.stdout;
-	} catch (e) {
-		stdout = (e as { stdout?: string }).stdout ?? "";
+	if (useCache) {
+		// Publish the manifest only after the object compiled successfully.
+		storeManifest(cacheKey, manifest);
+		await linkBatch(objectCachePath(cacheKey), `${baseName}.bin`);
 	}
 
-	const resolved = parseBatchOutput(stdout, entries);
-
-	// Anything the driver never reported (driver crash, overall timeout)
-	// retries individually.
-	const unreported = entries.filter((entry) => !resolved.has(entry.index));
-	if (unreported.length > 0) {
-		writeFileSync(`${baseName}.last-stdout.txt`, stdout);
-		test262Log(
-			`Batch driver on worker ${workerId} left ${unreported.length}/${entries.length} unreported (stdout saved), retrying singly.`,
-		);
-	}
-	for (const entry of unreported) {
-		entry.file.result = "UNKNOWN";
-		await test262RunSingle(entry.file, workerId);
-	}
+	await runBatchBinary(`${baseName}.bin`, entries, workerId);
 }
 
 function parseBatchOutput(stdout: string, entries: Array<BatchEntry>): Set<number> {
@@ -529,10 +782,12 @@ function parseBatchOutput(stdout: string, entries: Array<BatchEntry>): Set<numbe
  * compiled or its driver died before reporting.
  */
 export async function test262RunSingle(file: Test262File, workerId: number) {
-	const cSource = test262CompileToC(file, "");
-	if (cSource === undefined) {
+	const outcome = test262CompileToC(file, composeSource(file));
+	applyOutcome(file, outcome);
+	if (outcome.definition === undefined) {
 		return;
 	}
+	const cSource = emitVmDefinition(outcome.definition, { includeHeader: false });
 
 	const baseName = path.join(TEST262_METADATA.buildPath, `t${workerId}`);
 
@@ -601,6 +856,85 @@ export function getFailuresWithSamples() {
 		unsupported: sortedWithSamples(UNSUPPORTED_COUNTS, UNSUPPORTED_CACHE),
 		failures: sortedWithSamples(FAILURE_COUNTS, FAILURE_CACHE),
 	};
+}
+
+/**
+ * A worker thread's full contribution to the aggregate report. Plain data so it
+ * survives a structured-clone postMessage back to the main thread.
+ */
+export interface StatsSnapshot {
+	timings: Record<string, PhaseTimings>;
+	codeStats: { compiledFiles: number; functionCount: number; instructionCount: number };
+	opcodes: Record<string, number>;
+	failureCounts: Record<string, number>;
+	failureCache: Record<string, Array<string>>;
+	unsupportedCounts: Record<string, number>;
+	unsupportedCache: Record<string, Array<string>>;
+	usedCacheKeys: Array<string>;
+}
+
+/** Snapshot this thread's accumulators (used by a compile worker before it exits). */
+export function test262DrainStats(): StatsSnapshot {
+	return {
+		timings: TIMINGS,
+		codeStats: { ...CODE_STATS },
+		opcodes: OPCODE_COUNTS,
+		failureCounts: FAILURE_COUNTS,
+		failureCache: FAILURE_CACHE,
+		unsupportedCounts: UNSUPPORTED_COUNTS,
+		unsupportedCache: UNSUPPORTED_CACHE,
+		usedCacheKeys: [...USED_CACHE_KEYS],
+	};
+}
+
+function mergeSampleCache(
+	dst: Record<string, Array<string>>,
+	src: Record<string, Array<string>>,
+) {
+	for (const [reason, samples] of Object.entries(src)) {
+		dst[reason] ??= [];
+		for (const sample of samples) {
+			if (dst[reason].length < 5 && !dst[reason].includes(sample)) {
+				dst[reason].push(sample);
+			}
+		}
+	}
+}
+
+/** Fold a worker's snapshot into the main thread's accumulators. */
+export function test262MergeStats(snapshot: StatsSnapshot) {
+	for (const phase of ["compile", "cc", "link", "run"] as const) {
+		const source = snapshot.timings[phase];
+		if (!source) {
+			continue;
+		}
+		const target = TIMINGS[phase];
+		target.totalMs += source.totalMs;
+		target.count += source.count;
+		target.slowest.push(...source.slowest);
+		target.slowest.sort((a, b) => b.ms - a.ms);
+		target.slowest.length = Math.min(target.slowest.length, 10);
+	}
+
+	CODE_STATS.compiledFiles += snapshot.codeStats.compiledFiles;
+	CODE_STATS.functionCount += snapshot.codeStats.functionCount;
+	CODE_STATS.instructionCount += snapshot.codeStats.instructionCount;
+	for (const [opcode, count] of Object.entries(snapshot.opcodes)) {
+		OPCODE_COUNTS[opcode] = (OPCODE_COUNTS[opcode] ?? 0) + count;
+	}
+
+	for (const [reason, count] of Object.entries(snapshot.failureCounts)) {
+		FAILURE_COUNTS[reason] = (FAILURE_COUNTS[reason] ?? 0) + count;
+	}
+	mergeSampleCache(FAILURE_CACHE, snapshot.failureCache);
+	for (const [reason, count] of Object.entries(snapshot.unsupportedCounts)) {
+		UNSUPPORTED_COUNTS[reason] = (UNSUPPORTED_COUNTS[reason] ?? 0) + count;
+	}
+	mergeSampleCache(UNSUPPORTED_CACHE, snapshot.unsupportedCache);
+
+	for (const key of snapshot.usedCacheKeys) {
+		USED_CACHE_KEYS.add(key);
+	}
 }
 
 function sortedWithSamples(

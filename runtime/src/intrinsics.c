@@ -178,6 +178,25 @@ static MalValue mal_intrinsic_function_prototype_callback(MalVm *vm, MalValue th
     return mal_value_new_undefined();
 }
 
+/**
+ * The CommonJS `require` handed to module wrappers. The compiler resolves a
+ * static `require("specifier")` to its module id and calls this with that
+ * (int32) id; a non-id argument means an unresolved/dynamic require, which this
+ * build does not support.
+ */
+static MalValue mal_intrinsic_cjs_require_callback(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+
+    if (arg_count < 1 || !mal_value_is_int32(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "dynamic require is not supported");
+        return mal_value_new_undefined();
+    }
+
+    return mal_vm_cjs_require(vm, mal_value_to_i32(args[0]));
+}
+
 void mal_intrinsics_init(MalVm *vm) {
     // The prototypes are created upfront, so the builtin install passes can
     // reference them in any order.
@@ -273,6 +292,19 @@ void mal_intrinsics_init(MalVm *vm) {
 
     vm->intrinsics[MAL_INTRINSIC_NAN_VALUE] = mal_value_new_nan();
     vm->intrinsics[MAL_INTRINSIC_INFINITY_VALUE] = mal_value_from_f64_convert_nan(INFINITY);
+
+    // The CommonJS `require` native (not exposed on globalThis); passed to module
+    // wrappers by mal_vm_cjs_require.
+    vm->intrinsics[MAL_INTRINSIC_CJS_REQUIRE] = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "require"),
+            1,
+            mal_intrinsic_cjs_require_callback
+        )
+    );
+
     mal_intrinsics_init_global_this(vm);
 }
 
