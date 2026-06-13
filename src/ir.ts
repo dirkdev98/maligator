@@ -141,6 +141,13 @@ type BindingLocation =
 			type: "captured";
 			functionIndex: number;
 			index: number;
+	  }
+	| {
+			// A sloppy-script top-level `var`/`function`: a property of the global
+			// object (read/written by name), so it is observable as `globalThis.x`.
+			// Strict scripts and modules keep the fast flat-slot `global` storage.
+			type: "globalProperty";
+			nameStringIndex: number;
 	  };
 
 /**
@@ -785,6 +792,13 @@ export type IRInstruction =
 			// Sloppy-mode read of an unresolved name: the global object property, or
 			// ReferenceError if absent. (Strict reads use loadUndeclared.)
 			type: "loadGlobalProperty";
+			registers: [number];
+			nameStringIndex: number;
+	  }
+	| {
+			// Write [src] to a global object property (created if absent): a
+			// sloppy-script top-level `var`/`function` binding store.
+			type: "storeGlobalProperty";
 			registers: [number];
 			nameStringIndex: number;
 	  }
@@ -2819,6 +2833,22 @@ function functionStrict(
 /** Whether code in this function runs sloppy (non-strict). */
 function isSloppyFunction(fn: IRFunction): boolean {
 	return !(fn.strict ?? fn.semanticFile.strict);
+}
+
+/**
+ * A sloppy-script top-level `var`/`function` binds a property of the global
+ * object (spec: CreateGlobalVarBinding/CreateGlobalFunctionBinding) — observable
+ * as `globalThis.x`. `let`/`const`/`class` go to the global declarative record
+ * (our flat slots), and modules / strict scripts keep slots too (we don't yet
+ * model strict-script var-as-global-property — a deliberate, low-risk scope:
+ * the strict default bucket stays on the fast slot path, unchanged).
+ */
+function isSloppyScriptGlobalProperty(file: SemanticFile, binding: Binding): boolean {
+	return (
+		file.type === "script" &&
+		!file.strict &&
+		(binding.kind === "var" || binding.declarationNode?.type === "FunctionDeclaration")
+	);
 }
 
 /** `globalThis[name] = value` — a sloppy assignment to an unresolved name. */
@@ -7361,6 +7391,26 @@ function loadRegisterFromLocation(
 			});
 			break;
 		}
+		case "globalProperty": {
+			// `globalThis[name]` — undefined when not yet assigned (a hoisted var).
+			const global = nextRegisterDestination(fn);
+			block.instructions.push({
+				type: "loadIntrinsic",
+				registers: [global],
+				intrinsic: "globalThis",
+			});
+			const key = nextRegisterDestination(fn);
+			block.instructions.push({
+				type: "createString",
+				registers: [key],
+				stringIndex: location.nameStringIndex,
+			});
+			block.instructions.push({
+				type: "loadProperty",
+				registers: [destination, global, key],
+			});
+			break;
+		}
 	}
 
 	return destination;
@@ -7541,10 +7591,17 @@ function getOrCreateBindingLocation(
 				break;
 			}
 			case "global": {
-				location = {
-					type: "global",
-					index: program.nextGlobalIndex++,
-				};
+				if (isSloppyScriptGlobalProperty(fn.semanticFile, binding)) {
+					location = {
+						type: "globalProperty",
+						nameStringIndex: getOrCreateStringConstant(program, binding.name),
+					};
+				} else {
+					location = {
+						type: "global",
+						index: program.nextGlobalIndex++,
+					};
+				}
 				break;
 			}
 			default:
@@ -7591,6 +7648,14 @@ function storeRegisterAtLocation(
 
 				functionIndex: location.functionIndex,
 				index: location.index,
+			});
+			break;
+		}
+		case "globalProperty": {
+			block.instructions.push({
+				type: "storeGlobalProperty",
+				registers: [register],
+				nameStringIndex: location.nameStringIndex,
 			});
 			break;
 		}

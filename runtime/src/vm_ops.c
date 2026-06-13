@@ -1819,6 +1819,24 @@ void mal_op_load_global_property(MalCallable *callable, MalInstruction *instruct
         mal_vm_op_load_global_property(callable->vm, instruction->as.load_global_property.name_string_index);
 }
 
+void mal_vm_op_store_global_property(MalVm *vm, i32 name_string_index, MalValue value) {
+    MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
+    MalKey key;
+    if (!mal_vm_value_to_property_key(vm, name, &key)) {
+        return;
+    }
+    MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+    mal_vm_set_property(vm, global, key, value, global);
+}
+
+void mal_op_store_global_property(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_store_global_property(
+        callable->vm,
+        instruction->as.store_global_property.name_string_index,
+        callable->registers[instruction->as.store_global_property.src]
+    );
+}
+
 void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction) {
     if (mal_value_is_nil(callable->registers[instruction->as.require_coercible.src])) {
         mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot destructure null or undefined");

@@ -648,6 +648,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_LOAD_GLOBAL_PROPERTY:
                 mal_op_load_global_property(frame, &instruction);
                 break;
+            case MAL_OP_STORE_GLOBAL_PROPERTY:
+                mal_op_store_global_property(frame, &instruction);
+                break;
             case MAL_OP_THROW_IF_TDZ:
                 mal_op_throw_if_tdz(frame, &instruction);
                 break;

@@ -61,6 +61,7 @@ typedef enum MalOpcode {
     MAL_OP_SET_PROTOTYPE,
     MAL_OP_LOAD_UNDECLARED,
     MAL_OP_LOAD_GLOBAL_PROPERTY,
+    MAL_OP_STORE_GLOBAL_PROPERTY,
     MAL_OP_THROW_IF_TDZ,
     MAL_OP_REQUIRE_COERCIBLE,
     MAL_OP_CREATE_REST_ARGUMENTS,
@@ -387,6 +388,12 @@ typedef struct MalInstruction {
             // property `name_string_index`, or ReferenceError if it is absent.
             i32 dst, name_string_index;
         } load_global_property;
+
+        struct {
+            // Write `src` to the global object property `name_string_index`
+            // (created if absent) — a sloppy-script `var`/`function` binding.
+            i32 src, name_string_index;
+        } store_global_property;
 
         struct {
             // Throw ReferenceError if `src` holds the uninitialized sentinel (the

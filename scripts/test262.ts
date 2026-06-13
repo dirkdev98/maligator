@@ -16,6 +16,7 @@ import {
 	test262MergeStats,
 	test262PrepareBuild,
 	test262PruneArtifactCache,
+	test262ResetStats,
 	test262RunBatch,
 } from "../src/test262/runtime.ts";
 import type { StatsSnapshot } from "../src/test262/runtime.ts";
@@ -31,25 +32,18 @@ const filter = argValue("--filter");
 const jobs = Number(argValue("--jobs") ?? Math.max(1, os.cpus().length - 1));
 
 /**
- * Opt-in dual-run variant: `--variant strict` / `--variant sloppy` forces every
- * script test to parse that way (vs the default, where only `noStrict` tests are
- * sloppy). Each variant keeps its own artifact cache (-strict / -sloppy) and its
- * own committed results file (scripts/test262-<variant>.json), so neither touches
- * the default single-run baseline. Threaded to the runtime + worker threads via
- * the T262_VARIANT env var.
+ * Run mode. No flag → strict-only: `noStrict` tests are skipped, everything else
+ * runs strict (the committed scripts/test262.json baseline). `--strict dual` →
+ * the full test262 spec: a strict pass (default + onlyStrict + module + raw,
+ * skipping noStrict) and a sloppy pass (default + noStrict scripts), each with
+ * its own artifact cache (`.cache/test262-artifacts-<variant>`) and results file
+ * (scripts/test262-<variant>.json), driven through the T262_VARIANT env var
+ * (which also reaches worker threads and the runtime's strictness/skip logic).
  */
-const variant = argValue("--variant") ?? process.env.T262_VARIANT;
-if (variant !== undefined && variant !== "strict" && variant !== "sloppy") {
-	throw new Error(`--variant must be 'strict' or 'sloppy', got '${variant}'`);
+const strictMode = argValue("--strict");
+if (strictMode !== undefined && strictMode !== "dual") {
+	throw new Error(`--strict only supports 'dual', got '${strictMode}'`);
 }
-if (variant) {
-	process.env.T262_VARIANT = variant;
-}
-
-/** The committed results file — per-variant for a dual-run so the baseline is untouched. */
-const outputFile = variant
-	? TEST262_METADATA.outputFile.replace(/\.json$/, `-${variant}.json`)
-	: TEST262_METADATA.outputFile;
 
 /**
  * When > 0, run the JS->C compile (plus its cc/run) across this many worker
@@ -70,8 +64,6 @@ if (!cacheContext.files.length) {
 	test262PersistCache(cacheContext);
 }
 
-test262PrepareBuild();
-
 let selection = cacheContext.files;
 if (filter) {
 	selection = selection.filter((file) => file.path.includes(filter));
@@ -82,13 +74,10 @@ if (random) {
 	test262Log(`Sampled ${selection.length} files.`);
 }
 
-const startedAt = Date.now();
+// Reset per suite by runSuite() so a dual-run's two passes each time and report
+// independently; the worker/progress closures below read these live.
+let startedAt = 0;
 let completed = 0;
-
-const batches: Array<Array<Test262File>> = [];
-for (let i = 0; i < selection.length; i += TEST262_METADATA.batchSize) {
-	batches.push(selection.slice(i, i + TEST262_METADATA.batchSize));
-}
 
 function reportProgress(processed: number) {
 	const previous = completed;
@@ -181,48 +170,6 @@ async function runWithWorkers(
 	);
 }
 
-if (compileWorkers > 0) {
-	test262Log(`Compiling with ${compileWorkers} worker threads.`);
-	await runWithWorkers(compileWorkers, batches);
-} else {
-	const queue = [...batches].reverse();
-	await Promise.all(
-		Array.from({ length: Math.max(1, jobs) }, (_, workerId) => worker(workerId, queue)),
-	);
-}
-
-// A full, unfiltered run touches every current-fingerprint cache key, so any
-// untouched entry is stale and safe to drop. Skip pruning on partial runs - they
-// would wrongly delete entries for the batches they never visited.
-if (!filter && !random) {
-	test262PruneArtifactCache();
-}
-
-const summary = selection.reduce<Record<string, number>>((acc, file) => {
-	acc[file.result] = (acc[file.result] ?? 0) + 1;
-	return acc;
-}, {});
-
-const codeStats = getCodeStats();
-
-test262Log(`Took ${((Date.now() - startedAt) / 1000).toFixed(0)}s with ${jobs} jobs.`);
-test262Log(`Result:`, summary);
-test262Log(
-	`Code: ${codeStats.functionCount} functions, ${codeStats.instructionCount} instructions across ${codeStats.compiledFiles} compiled files.`,
-);
-test262Log(`Timings:`, JSON.stringify(getTimings(), null, 2));
-test262Log(JSON.stringify(getFailuresWithSamples(), null, 2));
-
-// The console output is easy to lose; keep the full report next to the cache.
-writeFileSync(
-	`${TEST262_METADATA.buildPath}/report.json`,
-	JSON.stringify(
-		{ summary, code: codeStats, timings: getTimings(), ...getFailuresWithSamples() },
-		null,
-		2,
-	),
-);
-
 /**
  * Fold the detailed categories for the committed results file.
  */
@@ -236,65 +183,148 @@ function foldResult(file: Test262File): "PASSED" | "SKIPPED" | "FAILED" {
 	return "FAILED";
 }
 
-// Compare against the committed results to surface regressions, even on
-// partial runs.
-const isFullRun = !cacheContext.files.some((file) => file.result === "UNKNOWN");
-
-if (existsSync(outputFile)) {
-	const previous = JSON.parse(readFileSync(outputFile, "utf-8")) as Test262Output;
-
-	const regressions: Array<string> = [];
-	const improvements: Array<string> = [];
-	for (const file of selection) {
-		const before = previous.results[file.path];
-		const after = foldResult(file);
-		if (before === "PASSED" && after === "FAILED") {
-			regressions.push(file.path);
-		} else if (before === "FAILED" && after === "PASSED") {
-			improvements.push(file.path);
-		}
+/**
+ * Run the whole selection once under `variant` (undefined = the default
+ * strict-only mode) and write its results to `suiteOutputFile`. A `--strict dual`
+ * run calls this twice; each pass resets the run-level stats and every file's
+ * result so the two passes neither share accumulators nor leak each other's
+ * verdicts into the committed results.
+ */
+async function runSuite(
+	variant: "strict" | "sloppy" | undefined,
+	suiteOutputFile: string,
+) {
+	if (variant) {
+		process.env.T262_VARIANT = variant;
+		test262Log(`=== ${variant} pass ===`);
+	} else {
+		delete process.env.T262_VARIANT;
 	}
 
-	test262Log(`Newly passing: ${improvements.length}.`);
+	test262ResetStats();
+	for (const file of cacheContext.files) {
+		file.result = "UNKNOWN";
+	}
+	test262PrepareBuild();
 
-	if (isFullRun && previous.code) {
-		const fnDelta = codeStats.functionCount - previous.code.functionCount;
-		const insnDelta = codeStats.instructionCount - previous.code.instructionCount;
-		const sign = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
-		test262Log(
-			`Code delta vs committed: ${sign(fnDelta)} functions, ${sign(insnDelta)} instructions.`,
+	startedAt = Date.now();
+	completed = 0;
+
+	const batches: Array<Array<Test262File>> = [];
+	for (let i = 0; i < selection.length; i += TEST262_METADATA.batchSize) {
+		batches.push(selection.slice(i, i + TEST262_METADATA.batchSize));
+	}
+
+	if (compileWorkers > 0) {
+		test262Log(`Compiling with ${compileWorkers} worker threads.`);
+		await runWithWorkers(compileWorkers, batches);
+	} else {
+		const queue = [...batches].reverse();
+		await Promise.all(
+			Array.from({ length: Math.max(1, jobs) }, (_, workerId) => worker(workerId, queue)),
 		);
 	}
 
-	if (regressions.length > 0) {
-		test262Log(`REGRESSIONS (${regressions.length}):`);
-		for (const path of regressions.slice(0, 50)) {
-			test262Log(`  ${path}`);
-		}
+	// A full, unfiltered run touches every current-fingerprint cache key, so any
+	// untouched entry is stale and safe to drop. Skip pruning on partial runs - they
+	// would wrongly delete entries for the batches they never visited.
+	if (!filter && !random) {
+		test262PruneArtifactCache();
 	}
-}
 
-if (isFullRun) {
+	const summary = selection.reduce<Record<string, number>>((acc, file) => {
+		acc[file.result] = (acc[file.result] ?? 0) + 1;
+		return acc;
+	}, {});
+
+	const codeStats = getCodeStats();
+
+	test262Log(`Took ${((Date.now() - startedAt) / 1000).toFixed(0)}s with ${jobs} jobs.`);
+	test262Log(`Result:`, summary);
+	test262Log(
+		`Code: ${codeStats.functionCount} functions, ${codeStats.instructionCount} instructions across ${codeStats.compiledFiles} compiled files.`,
+	);
+	test262Log(`Timings:`, JSON.stringify(getTimings(), null, 2));
+	test262Log(JSON.stringify(getFailuresWithSamples(), null, 2));
+
+	// The console output is easy to lose; keep the full report next to the cache.
 	writeFileSync(
-		outputFile,
+		`${TEST262_METADATA.buildPath}/report${variant ? `-${variant}` : ""}.json`,
 		JSON.stringify(
-			{
-				sha: cacheContext.sha,
-				summary,
-				code: {
-					compiledFiles: codeStats.compiledFiles,
-					functionCount: codeStats.functionCount,
-					instructionCount: codeStats.instructionCount,
-				},
-				results: Object.fromEntries(
-					cacheContext.files.map((file) => [file.path, foldResult(file)]),
-				),
-			} satisfies Test262Output,
+			{ summary, code: codeStats, timings: getTimings(), ...getFailuresWithSamples() },
 			null,
 			2,
 		),
 	);
-	test262Log("Updated results in the repository.");
+
+	// Compare against the committed results to surface regressions, even on
+	// partial runs.
+	const isFullRun = !cacheContext.files.some((file) => file.result === "UNKNOWN");
+
+	if (existsSync(suiteOutputFile)) {
+		const previous = JSON.parse(readFileSync(suiteOutputFile, "utf-8")) as Test262Output;
+
+		const regressions: Array<string> = [];
+		const improvements: Array<string> = [];
+		for (const file of selection) {
+			const before = previous.results[file.path];
+			const after = foldResult(file);
+			if (before === "PASSED" && after === "FAILED") {
+				regressions.push(file.path);
+			} else if (before === "FAILED" && after === "PASSED") {
+				improvements.push(file.path);
+			}
+		}
+
+		test262Log(`Newly passing: ${improvements.length}.`);
+
+		if (isFullRun && previous.code) {
+			const fnDelta = codeStats.functionCount - previous.code.functionCount;
+			const insnDelta = codeStats.instructionCount - previous.code.instructionCount;
+			const sign = (n: number) => (n >= 0 ? `+${n}` : `${n}`);
+			test262Log(
+				`Code delta vs committed: ${sign(fnDelta)} functions, ${sign(insnDelta)} instructions.`,
+			);
+		}
+
+		if (regressions.length > 0) {
+			test262Log(`REGRESSIONS (${regressions.length}):`);
+			for (const path of regressions.slice(0, 50)) {
+				test262Log(`  ${path}`);
+			}
+		}
+	}
+
+	if (isFullRun) {
+		writeFileSync(
+			suiteOutputFile,
+			JSON.stringify(
+				{
+					sha: cacheContext.sha,
+					summary,
+					code: {
+						compiledFiles: codeStats.compiledFiles,
+						functionCount: codeStats.functionCount,
+						instructionCount: codeStats.instructionCount,
+					},
+					results: Object.fromEntries(
+						cacheContext.files.map((file) => [file.path, foldResult(file)]),
+					),
+				} satisfies Test262Output,
+				null,
+				2,
+			),
+		);
+		test262Log(`Updated results in ${suiteOutputFile}.`);
+	} else {
+		test262Log("Partial run, not updating the committed results.");
+	}
+}
+
+if (strictMode === "dual") {
+	const base = TEST262_METADATA.outputFile.replace(/\.json$/, "");
+	await runSuite("strict", `${base}-strict.json`);
+	await runSuite("sloppy", `${base}-sloppy.json`);
 } else {
-	test262Log("Partial run, not updating the committed results.");
+	await runSuite(undefined, TEST262_METADATA.outputFile);
 }

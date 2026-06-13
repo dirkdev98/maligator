@@ -175,6 +175,34 @@ export function getTimings() {
 	);
 }
 
+/**
+ * Clear all run-level accumulators. Used between the strict and sloppy passes of
+ * a `--strict dual` run so each pass reports its own timings, code stats, failure
+ * buckets, and pruned cache keys.
+ */
+export function test262ResetStats() {
+	for (const timing of Object.values(TIMINGS)) {
+		timing.totalMs = 0;
+		timing.count = 0;
+		timing.slowest.length = 0;
+	}
+	CODE_STATS.compiledFiles = 0;
+	CODE_STATS.functionCount = 0;
+	CODE_STATS.instructionCount = 0;
+	for (const record of [
+		OPCODE_COUNTS,
+		FAILURE_COUNTS,
+		UNSUPPORTED_COUNTS,
+		FAILURE_CACHE,
+		UNSUPPORTED_CACHE,
+	]) {
+		for (const key of Object.keys(record)) {
+			delete record[key];
+		}
+	}
+	USED_CACHE_KEYS.clear();
+}
+
 export function test262PrepareBuild() {
 	rmSync(TEST262_METADATA.buildPath, { recursive: true, force: true });
 	mkdirSync(TEST262_METADATA.buildPath, { recursive: true });
@@ -196,6 +224,19 @@ export function test262PrepareBuild() {
 export function test262ShouldSkip(file: Test262File): boolean {
 	if (file.frontmatter.negative) {
 		// TODO(test262): negative runtime tests could assert on the throw kind.
+		return true;
+	}
+
+	// Variant-aware run-mode filtering. The sloppy pass of `--strict dual` runs
+	// only the tests that have a sloppy variant (default + `noStrict`), skipping
+	// the strict-only / own-goal ones; every other mode (the strict pass, and the
+	// default strict-only run) skips `noStrict` tests, which cannot run strict.
+	const flags = file.frontmatter.flags ?? [];
+	if (process.env.T262_VARIANT === "sloppy") {
+		if (flags.includes("onlyStrict") || flags.includes("module") || flags.includes("raw")) {
+			return true;
+		}
+	} else if (flags.includes("noStrict")) {
 		return true;
 	}
 

@@ -368,6 +368,11 @@ export type VmInstruction =
 			nameStringIndex: number;
 	  }
 	| {
+			opcode: "STORE_GLOBAL_PROPERTY";
+			src: number;
+			nameStringIndex: number;
+	  }
+	| {
 			opcode: "THROW_IF_TDZ";
 			src: number;
 			nameStringIndex: number;
@@ -916,6 +921,12 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "LOAD_GLOBAL_PROPERTY",
 				dst: instruction.registers[0],
+				nameStringIndex: instruction.nameStringIndex,
+			};
+		case "storeGlobalProperty":
+			return {
+				opcode: "STORE_GLOBAL_PROPERTY",
+				src: instruction.registers[0],
 				nameStringIndex: instruction.nameStringIndex,
 			};
 		case "throwIfTdz":

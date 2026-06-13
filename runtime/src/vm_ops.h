@@ -194,6 +194,9 @@ void mal_vm_op_load_undeclared(MalVm *vm, i32 name_string_index);
  */
 MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index);
 
+/** Write `value` to the global object property `name_string_index` (creating it). */
+void mal_vm_op_store_global_property(MalVm *vm, i32 name_string_index, MalValue value);
+
 /**
  * Resolve (creating if absent) a function's `.prototype` object — the parent of
  * instances built by [[Construct]]. Exposed for mal_vm_construct_value.
@@ -237,6 +240,8 @@ void mal_op_set_prototype(MalCallable *callable, MalInstruction *instruction);
 void mal_op_load_undeclared(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_load_global_property(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_store_global_property(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction);
 
