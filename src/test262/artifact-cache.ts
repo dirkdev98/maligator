@@ -26,7 +26,15 @@ import * as path from "node:path";
  * always execute the binary - so flakes and behavioural changes still surface.
  */
 
-const CACHE_DIR = ".cache/test262-artifacts";
+// A dual-run variant (T262_VARIANT) keeps its own cache so the strict and sloppy
+// builds never collide with each other or with the default single-run cache.
+// Read lazily: the variant env var may be set (from --variant) after this module
+// is imported.
+function cacheDir(): string {
+	return process.env.T262_VARIANT
+		? `.cache/test262-artifacts-${process.env.T262_VARIANT}`
+		: ".cache/test262-artifacts";
+}
 
 /**
  * Per-batch manifest stored alongside the `.o`. It captures everything the
@@ -135,7 +143,7 @@ export function cacheEnabled(): boolean {
 }
 
 export function ensureCacheDir() {
-	mkdirSync(CACHE_DIR, { recursive: true });
+	mkdirSync(cacheDir(), { recursive: true });
 }
 
 /**
@@ -143,11 +151,11 @@ export function ensureCacheDir() {
  * miss (no copy), and the linker reads from here on a hit.
  */
 export function objectCachePath(key: string) {
-	return path.join(CACHE_DIR, `${key}.o`);
+	return path.join(cacheDir(), `${key}.o`);
 }
 
 function manifestPath(key: string) {
-	return path.join(CACHE_DIR, `${key}.json`);
+	return path.join(cacheDir(), `${key}.json`);
 }
 
 export interface CachedArtifact {
@@ -199,14 +207,14 @@ export function storeManifest(key: string, manifest: BatchManifest) {
  * set per historical compiler/header revision.
  */
 export function pruneUnused(usedKeys: Set<string>) {
-	if (!existsSync(CACHE_DIR)) {
+	if (!existsSync(cacheDir())) {
 		return;
 	}
 
-	for (const name of readdirSync(CACHE_DIR)) {
+	for (const name of readdirSync(cacheDir())) {
 		const key = name.replace(/\.(o|json)$/, "");
 		if (!usedKeys.has(key)) {
-			rmSync(path.join(CACHE_DIR, name), { force: true });
+			rmSync(path.join(cacheDir(), name), { force: true });
 		}
 	}
 }

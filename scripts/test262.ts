@@ -31,6 +31,27 @@ const filter = argValue("--filter");
 const jobs = Number(argValue("--jobs") ?? Math.max(1, os.cpus().length - 1));
 
 /**
+ * Opt-in dual-run variant: `--variant strict` / `--variant sloppy` forces every
+ * script test to parse that way (vs the default, where only `noStrict` tests are
+ * sloppy). Each variant keeps its own artifact cache (-strict / -sloppy) and its
+ * own committed results file (scripts/test262-<variant>.json), so neither touches
+ * the default single-run baseline. Threaded to the runtime + worker threads via
+ * the T262_VARIANT env var.
+ */
+const variant = argValue("--variant") ?? process.env.T262_VARIANT;
+if (variant !== undefined && variant !== "strict" && variant !== "sloppy") {
+	throw new Error(`--variant must be 'strict' or 'sloppy', got '${variant}'`);
+}
+if (variant) {
+	process.env.T262_VARIANT = variant;
+}
+
+/** The committed results file — per-variant for a dual-run so the baseline is untouched. */
+const outputFile = variant
+	? TEST262_METADATA.outputFile.replace(/\.json$/, `-${variant}.json`)
+	: TEST262_METADATA.outputFile;
+
+/**
  * When > 0, run the JS->C compile (plus its cc/run) across this many worker
  * threads instead of the single-threaded queue. The compile is otherwise the
  * run's serial bottleneck; parallelizing it lets cc/run saturate every core.
@@ -219,10 +240,8 @@ function foldResult(file: Test262File): "PASSED" | "SKIPPED" | "FAILED" {
 // partial runs.
 const isFullRun = !cacheContext.files.some((file) => file.result === "UNKNOWN");
 
-if (existsSync(TEST262_METADATA.outputFile)) {
-	const previous = JSON.parse(
-		readFileSync(TEST262_METADATA.outputFile, "utf-8"),
-	) as Test262Output;
+if (existsSync(outputFile)) {
+	const previous = JSON.parse(readFileSync(outputFile, "utf-8")) as Test262Output;
 
 	const regressions: Array<string> = [];
 	const improvements: Array<string> = [];
@@ -257,7 +276,7 @@ if (existsSync(TEST262_METADATA.outputFile)) {
 
 if (isFullRun) {
 	writeFileSync(
-		TEST262_METADATA.outputFile,
+		outputFile,
 		JSON.stringify(
 			{
 				sha: cacheContext.sha,

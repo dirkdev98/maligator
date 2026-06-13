@@ -347,11 +347,17 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 	}
 
 	const isModule = file.frontmatter.flags?.includes("module") ?? false;
-	// `noStrict` tests are sloppy-only; everything else runs strict (default tests
-	// get their sloppy half once the full dual-run driver lands). A sloppy parse
-	// just relaxes the early-error surface (octal, `with`, …); the sloppy runtime
-	// behaviors gate on the per-scope strict flag sema derives from it.
-	const strict = !(file.frontmatter.flags?.includes("noStrict") ?? false);
+	// Strictness of the script parse. A `--variant` dual-run forces every script
+	// one way (strict or sloppy); otherwise `noStrict` tests are sloppy and the
+	// rest strict. A sloppy parse just relaxes the early-error surface (octal,
+	// `with`, …); the sloppy runtime behaviors gate on the per-scope strict flag
+	// sema derives from it.
+	const strict =
+		process.env.T262_VARIANT === "strict"
+			? true
+			: process.env.T262_VARIANT === "sloppy"
+				? false
+				: !(file.frontmatter.flags?.includes("noStrict") ?? false);
 
 	const compileStartedAt = performance.now();
 	try {

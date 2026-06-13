@@ -363,6 +363,11 @@ export type VmInstruction =
 			nameStringIndex: number;
 	  }
 	| {
+			opcode: "LOAD_GLOBAL_PROPERTY";
+			dst: number;
+			nameStringIndex: number;
+	  }
+	| {
 			opcode: "THROW_IF_TDZ";
 			src: number;
 			nameStringIndex: number;
@@ -904,6 +909,12 @@ function lowerInstructionToVmInstruction(
 		case "loadUndeclared":
 			return {
 				opcode: "LOAD_UNDECLARED",
+				dst: instruction.registers[0],
+				nameStringIndex: instruction.nameStringIndex,
+			};
+		case "loadGlobalProperty":
+			return {
+				opcode: "LOAD_GLOBAL_PROPERTY",
 				dst: instruction.registers[0],
 				nameStringIndex: instruction.nameStringIndex,
 			};

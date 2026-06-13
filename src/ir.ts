@@ -782,6 +782,13 @@ export type IRInstruction =
 			nameStringIndex: number;
 	  }
 	| {
+			// Sloppy-mode read of an unresolved name: the global object property, or
+			// ReferenceError if absent. (Strict reads use loadUndeclared.)
+			type: "loadGlobalProperty";
+			registers: [number];
+			nameStringIndex: number;
+	  }
+	| {
 			// Throw ReferenceError if [source] holds the uninitialized sentinel:
 			// the named let/const/class binding is still in its temporal dead zone.
 			type: "throwIfTdz";
@@ -2809,6 +2816,32 @@ function functionStrict(
 	return bodyScope?.strict ?? file.strict;
 }
 
+/** Whether code in this function runs sloppy (non-strict). */
+function isSloppyFunction(fn: IRFunction): boolean {
+	return !(fn.strict ?? fn.semanticFile.strict);
+}
+
+/** `globalThis[name] = value` — a sloppy assignment to an unresolved name. */
+function emitGlobalPropertyStore(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	name: string,
+	value: number,
+) {
+	const global = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadIntrinsic",
+		registers: [global],
+		intrinsic: "globalThis",
+	});
+	const key = compileStaticString(program, fn, cursor, name);
+	cursor.block.instructions.push({
+		type: "storeProperty",
+		registers: [global, key, value],
+	});
+}
+
 /**
  * The Function.prototype.length value: formal parameters before the first
  * default or rest parameter.
@@ -2966,7 +2999,12 @@ function compileIdentifierTarget(
 	}
 
 	if (binding.undeclared && !isIRIntrinsic(binding.name)) {
-		// PutValue on an unresolvable reference throws ReferenceError.
+		if (isSloppyFunction(fn)) {
+			// Sloppy assignment to an unresolved name creates/sets a global property.
+			emitGlobalPropertyStore(program, fn, cursor, binding.name, value);
+			return;
+		}
+		// Strict: PutValue on an unresolvable reference throws ReferenceError.
 		const destination = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
 			type: "loadUndeclared",
@@ -5873,6 +5911,15 @@ function compileIdentifierAssignment(
 	}
 
 	if (binding.undeclared && !isIRIntrinsic(binding.name)) {
+		// Sloppy `x = v` for an unresolved x creates/sets a global property and
+		// evaluates to v. (Compound forms read first, so an absent global still
+		// throws below — correct.)
+		if (isSloppyFunction(fn) && assignmentExpression.operator === "=") {
+			const value = compileExpression(program, fn, cursor, assignmentExpression.right);
+			emitGlobalPropertyStore(program, fn, cursor, binding.name, value);
+			return value;
+		}
+
 		// PutValue on an unresolvable reference throws ReferenceError; plain
 		// assignments still evaluate the right hand side first, compound
 		// forms throw on the read before it.
@@ -6338,6 +6385,37 @@ function compileDeleteExpression(
 			registers: [destination, object, key],
 		});
 
+		return destination;
+	}
+
+	// `delete <identifier>` is only reachable in sloppy mode (strict rejects it).
+	if (expression.argument.type === "Identifier") {
+		const binding = fn.semanticFile.nodeToBinding.get(expression.argument);
+		// An unresolved name OR an intrinsic (both are global-object properties):
+		// delete the property. A declared binding cannot be deleted (false below).
+		if (binding?.undeclared) {
+			// Delete the global object property (true when already absent / configurable).
+			const global = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "loadIntrinsic",
+				registers: [global],
+				intrinsic: "globalThis",
+			});
+			const key = compileStaticString(program, fn, cursor, binding.name);
+			const destination = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "deleteProperty",
+				registers: [destination, global, key],
+			});
+			return destination;
+		}
+		// A resolvable binding cannot be deleted: `delete x` is false.
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createBoolean",
+			registers: [destination],
+			value: false,
+		});
 		return destination;
 	}
 
@@ -7169,10 +7247,11 @@ function compileIdentifier(
 	}
 
 	if (binding.undeclared) {
-		// Reads of unresolvable references throw ReferenceError at runtime.
+		// Strict: an unresolvable read throws ReferenceError. Sloppy: it resolves
+		// against the global object (still ReferenceError if absent there).
 		const destination = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
-			type: "loadUndeclared",
+			type: isSloppyFunction(fn) ? "loadGlobalProperty" : "loadUndeclared",
 			registers: [destination],
 			nameStringIndex: getOrCreateStringConstant(program, identifier.name),
 		});

@@ -1795,6 +1795,30 @@ void mal_op_load_undeclared(MalCallable *callable, MalInstruction *instruction) 
     mal_vm_op_load_undeclared(callable->vm, instruction->as.load_undeclared.name_string_index);
 }
 
+MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index) {
+    MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
+    MalKey key;
+    if (!mal_vm_value_to_property_key(vm, name, &key)) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+    if (mal_vm_has_property(vm, global, key)) {
+        MalValue out = mal_value_new_undefined();
+        mal_vm_get_property(vm, global, key, &out);
+        return out;
+    }
+
+    // Unresolved even on the global object: a ReferenceError, as in strict mode.
+    mal_vm_op_load_undeclared(vm, name_string_index);
+    return mal_value_new_undefined();
+}
+
+void mal_op_load_global_property(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.load_global_property.dst] =
+        mal_vm_op_load_global_property(callable->vm, instruction->as.load_global_property.name_string_index);
+}
+
 void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction) {
     if (mal_value_is_nil(callable->registers[instruction->as.require_coercible.src])) {
         mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot destructure null or undefined");

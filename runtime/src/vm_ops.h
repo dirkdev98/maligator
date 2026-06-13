@@ -189,6 +189,12 @@ void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_va
 void mal_vm_op_load_undeclared(MalVm *vm, i32 name_string_index);
 
 /**
+ * Sloppy-mode read of an unresolved name: return the global object's property
+ * `name_string_index`, or throw ReferenceError if it is absent.
+ */
+MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index);
+
+/**
  * Resolve (creating if absent) a function's `.prototype` object — the parent of
  * instances built by [[Construct]]. Exposed for mal_vm_construct_value.
  */
@@ -229,6 +235,8 @@ void mal_op_has_private(MalCallable *callable, MalInstruction *instruction);
 void mal_op_set_prototype(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_load_undeclared(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_load_global_property(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction);
 
