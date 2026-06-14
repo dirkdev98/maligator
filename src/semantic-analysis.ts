@@ -38,6 +38,15 @@ export interface SemanticFile {
 	scopes: Array<Scope>;
 	nodeToScope: Map<ESTree.Node, Scope>;
 	nodeToBinding: Map<ESTree.Node, Binding>;
+
+	/**
+	 * Identifier nodes whose name resolution crosses a `with` statement's
+	 * dynamic scope before reaching its static binding. The IR compiles these
+	 * to a runtime check of the active with-object(s) (honoring
+	 * `Symbol.unscopables`) with a fallback to the static binding. `with` is a
+	 * strict-mode SyntaxError, so these only occur in sloppy code.
+	 */
+	withDynamicNodes: Set<ESTree.Node>;
 }
 
 interface Scope {
@@ -46,6 +55,12 @@ interface Scope {
 
 	strict: boolean;
 	bindings: Array<Binding>;
+
+	/**
+	 * A `with` statement's object scope: it holds no static bindings but
+	 * dynamically intercepts every name looked up through it at runtime.
+	 */
+	dynamic?: true;
 }
 
 type BindingKind = "var" | "let" | "const";
@@ -147,6 +162,7 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		scopes: [],
 		nodeToScope: new Map(),
 		nodeToBinding: new Map(),
+		withDynamicNodes: new Set(),
 	};
 
 	program.files.push(file);
@@ -172,6 +188,7 @@ function analyzeModuleRecord(record: ModuleRecord): SemanticFile {
 		scopes: [],
 		nodeToScope: new Map(),
 		nodeToBinding: new Map(),
+		withDynamicNodes: new Set(),
 	};
 
 	analyzeFile(file);
@@ -238,6 +255,25 @@ function createScopesFromNode(
 	}
 
 	const strict = file.strict || parentScope?.strict || false;
+
+	if (node.type === "WithStatement") {
+		// The object expression is evaluated in the enclosing scope; only the body
+		// runs under the dynamic with-scope. Recurse into each explicitly so an
+		// identifier in the object is NOT flagged as intercepted by its own with.
+		createScopesFromNode(node.object, file, parentScope);
+
+		const withScope: Scope = {
+			parent: parentScope,
+			node,
+			strict,
+			bindings: [],
+			dynamic: true,
+		};
+		file.scopes.push(withScope);
+		file.nodeToScope.set(node, withScope);
+		createScopesFromNode(node.body, file, withScope);
+		return;
+	}
 
 	if (node.type === "Program") {
 		// Wrap each program in a scope.
@@ -521,7 +557,11 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 		return;
 	}
 
-	const resolveBindingByName = (recurseScope: Scope, name: string) => {
+	// Set when name resolution walks past a `with` statement's dynamic scope: the
+	// name is then intercepted at runtime by the active with-object(s).
+	let crossedDynamic = false;
+
+	const resolveBindingByName = (recurseScope: Scope, name: string): Binding => {
 		const binding = recurseScope.bindings.find((b) => b.name === name);
 		if (binding) {
 			return binding;
@@ -562,6 +602,10 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 			};
 			scope.bindings.push(binding);
 			return binding;
+		}
+
+		if (recurseScope.dynamic) {
+			crossedDynamic = true;
 		}
 
 		return resolveBindingByName(recurseScope.parent, name);
@@ -611,6 +655,9 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 		const binding = resolveBindingByName(scope, node.name);
 		binding.usageNodes.push(node);
 		file.nodeToBinding.set(node, binding);
+		if (crossedDynamic) {
+			file.withDynamicNodes.add(node);
+		}
 	}
 
 	recurseAst(node, registerBindingUsage, file);

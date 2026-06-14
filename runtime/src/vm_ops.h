@@ -81,6 +81,12 @@ void mal_op_create_object(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_array(MalCallable *callable, MalInstruction *instruction);
 void mal_op_create_module_namespace(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_template_object(MalCallable *callable, MalInstruction *instruction);
+void mal_op_with_enter(MalCallable *callable, MalInstruction *instruction);
+void mal_op_with_exit(MalCallable *callable, MalInstruction *instruction);
+void mal_op_with_get(MalCallable *callable, MalInstruction *instruction);
+void mal_op_with_set(MalCallable *callable, MalInstruction *instruction);
+void mal_op_is_empty(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction);
 void mal_op_create_empty(MalCallable *callable, MalInstruction *instruction);

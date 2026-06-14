@@ -62,6 +62,12 @@ typedef enum MalOpcode {
     MAL_OP_LOAD_UNDECLARED,
     MAL_OP_LOAD_GLOBAL_PROPERTY,
     MAL_OP_STORE_GLOBAL_PROPERTY,
+    MAL_OP_CREATE_TEMPLATE_OBJECT,
+    MAL_OP_WITH_ENTER,
+    MAL_OP_WITH_EXIT,
+    MAL_OP_WITH_GET,
+    MAL_OP_WITH_SET,
+    MAL_OP_IS_EMPTY,
     MAL_OP_THROW_IF_TDZ,
     MAL_OP_REQUIRE_COERCIBLE,
     MAL_OP_CREATE_REST_ARGUMENTS,
@@ -186,6 +192,44 @@ typedef struct MalInstruction {
             const i32 *name_indices;
             const i32 *slots;
         } create_module_namespace;
+
+        struct {
+            // Build (once, caching in global slot `cache_slot`) a tagged-template
+            // strings object: a frozen array of the `count` cooked strings with a
+            // frozen `.raw` array of the raw strings. A cooked index of -1 encodes
+            // an `undefined` cooked value (an invalid escape sequence). Both arrays
+            // have `count` entries.
+            i32 dst, cache_slot, count;
+            const i32 *cooked_indices;
+            const i32 *raw_indices;
+        } create_template_object;
+
+        struct {
+            // `with (obj)`: ToObject([object]) and push onto the frame with-stack.
+            i32 object;
+        } with_enter;
+
+        struct {
+            // Pop the innermost with-object.
+            i32 unused;
+        } with_exit;
+
+        struct {
+            // [dst] = with-object value for the name, or the EMPTY sentinel on a
+            // miss (so the compiler falls back to the static binding).
+            i32 dst, name_string_index;
+        } with_get;
+
+        struct {
+            // [found] = whether a with-object provided the name (and was written
+            // [value]); false → the compiler falls back to the static store.
+            i32 found, value, name_string_index;
+        } with_set;
+
+        struct {
+            // [dst] = ([src] is the EMPTY sentinel).
+            i32 dst, src;
+        } is_empty;
 
         struct {
             i32 dst;
@@ -752,6 +796,15 @@ typedef struct MalVmFrame {
     i32 instruction_pointer;
     i32 return_register;
     i32 caller_frame_index;
+
+    /**
+     * Stack of active `with` objects for this frame (innermost last), grown
+     * lazily by WITH_ENTER and shrunk by WITH_EXIT. Null until the frame first
+     * enters a `with`. Freed on frame teardown.
+     */
+    MalValue *with_objects;
+    i32 with_count;
+    i32 with_capacity;
 } MalVmFrame;
 
 typedef MalVmFrame MalCallable;

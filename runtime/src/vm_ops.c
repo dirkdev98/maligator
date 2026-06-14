@@ -178,6 +178,152 @@ void mal_op_create_module_namespace(MalCallable *callable, MalInstruction *instr
         mal_value_from_module_namespace_object(ns);
 }
 
+// Build one of a tagged template's two string arrays. Each element is a frozen
+// (enumerable, non-writable, non-configurable) data property; length is made
+// non-writable. The array is left EXTENSIBLE so the caller can attach `.raw`
+// before sealing — the caller flips extensibility off once it is done.
+static MalArrayObject *mal_vm_build_template_string_array(MalVm *vm, const i32 *indices, i32 count) {
+    MalArrayObject *array = mal_value_to_array_object(mal_vm_op_create_array(vm, 0));
+    for (i32 i = 0; i < count; i++) {
+        MalValue element = indices[i] < 0
+                               ? mal_value_new_undefined()
+                               : mal_value_from_string(&vm->definition->string_constants[indices[i]]);
+        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)};
+        MalPropertyDesc desc = {.flags = MAL_PROPERTY_ENUMERABLE, .value = element};
+        mal_object_define_own(&array->object, key, &desc);
+    }
+    mal_array_object_set_length(array, (u32) count);
+    array->length_writable = false;
+    return array;
+}
+
+void mal_op_create_template_object(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    i32 cache_slot = instruction->as.create_template_object.cache_slot;
+
+    // Stable identity: build the template object once, then hand back the cached
+    // value on every later evaluation of this same tagged-template site.
+    if (!mal_value_is_undefined(vm->globals[cache_slot])) {
+        callable->registers[instruction->as.create_template_object.dst] = vm->globals[cache_slot];
+        return;
+    }
+
+    i32 count = instruction->as.create_template_object.count;
+
+    MalArrayObject *raw =
+        mal_vm_build_template_string_array(vm, instruction->as.create_template_object.raw_indices, count);
+    mal_object_set_extensible(&raw->object, false);
+
+    MalArrayObject *cooked =
+        mal_vm_build_template_string_array(vm, instruction->as.create_template_object.cooked_indices, count);
+
+    // `raw` is a frozen, non-enumerable own property of the cooked array; attach
+    // it before sealing the cooked array (a non-extensible object rejects it).
+    MalKey raw_key = mal_intrinsic_string_key(vm, "raw");
+    MalPropertyDesc raw_desc = {.flags = MAL_PROPERTY_NONE, .value = mal_value_from_array_object(raw)};
+    mal_object_define_own(&cooked->object, raw_key, &raw_desc);
+    mal_object_set_extensible(&cooked->object, false);
+
+    MalValue result = mal_value_from_array_object(cooked);
+    vm->globals[cache_slot] = result;
+    callable->registers[instruction->as.create_template_object.dst] = result;
+}
+
+// Spec HasBinding for a `with` object environment record: HasProperty(O, P)
+// filtered through O[@@unscopables] (a truthy entry hides the binding). A
+// primitive with-expression provides nothing (no wrapper objects yet).
+static bool mal_vm_with_has_binding(MalVm *vm, MalValue object, MalKey key) {
+    if (!mal_value_is_object(object)) {
+        return false;
+    }
+    if (!mal_vm_has_property(vm, object, key)) {
+        return false;
+    }
+
+    MalKey unscopables_key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_UNSCOPABLES);
+    MalValue unscopables;
+    if (mal_vm_get_property(vm, object, unscopables_key, &unscopables) &&
+        mal_value_is_object(unscopables)) {
+        MalValue blocked;
+        if (mal_vm_get_property(vm, unscopables, key, &blocked) && mal_value_to_boolean(blocked)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void mal_op_with_enter(MalCallable *callable, MalInstruction *instruction) {
+    MalValue object = callable->registers[instruction->as.with_enter.object];
+    if (mal_value_is_nil(object)) {
+        mal_vm_throw_error(
+            callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot convert undefined or null to object"
+        );
+        return;
+    }
+
+    if (callable->with_count == callable->with_capacity) {
+        callable->with_capacity = callable->with_capacity == 0 ? 4 : callable->with_capacity * 2;
+        callable->with_objects =
+            realloc(callable->with_objects, sizeof(MalValue) * (usize) callable->with_capacity);
+    }
+    callable->with_objects[callable->with_count++] = object;
+}
+
+void mal_op_with_exit(MalCallable *callable, MalInstruction *instruction) {
+    (void) instruction;
+    if (callable->with_count > 0) {
+        callable->with_count--;
+    }
+}
+
+void mal_op_with_get(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue name =
+        mal_value_from_string(&vm->definition->string_constants[instruction->as.with_get.name_string_index]);
+    MalKey key;
+    if (mal_vm_value_to_property_key(vm, name, &key)) {
+        for (i32 i = callable->with_count - 1; i >= 0; i--) {
+            MalValue object = callable->with_objects[i];
+            if (mal_vm_with_has_binding(vm, object, key)) {
+                MalValue value;
+                if (!mal_vm_get_property(vm, object, key, &value)) {
+                    value = mal_value_new_undefined();
+                }
+                callable->registers[instruction->as.with_get.dst] = value;
+                return;
+            }
+        }
+    }
+    // Miss: the EMPTY sentinel tells the compiled fallback to use the static binding.
+    callable->registers[instruction->as.with_get.dst] = mal_value_new_empty();
+}
+
+void mal_op_with_set(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue name =
+        mal_value_from_string(&vm->definition->string_constants[instruction->as.with_set.name_string_index]);
+    MalValue value = callable->registers[instruction->as.with_set.value];
+    MalKey key;
+    if (mal_vm_value_to_property_key(vm, name, &key)) {
+        for (i32 i = callable->with_count - 1; i >= 0; i--) {
+            MalValue object = callable->with_objects[i];
+            if (mal_vm_with_has_binding(vm, object, key)) {
+                // `with` is sloppy-only, so a rejected set silently no-ops.
+                mal_vm_set_property(vm, object, key, value, object);
+                callable->registers[instruction->as.with_set.found] = mal_value_new_boolean(true);
+                return;
+            }
+        }
+    }
+    callable->registers[instruction->as.with_set.found] = mal_value_new_boolean(false);
+}
+
+void mal_op_is_empty(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.is_empty.dst] =
+        mal_value_new_boolean(mal_value_is_empty(callable->registers[instruction->as.is_empty.src]));
+}
+
 void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_undefined.dst] = mal_value_new_undefined();
 }
@@ -304,7 +450,8 @@ void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instr
         return;
     }
 
-    MalArrayObject *arguments = mal_array_object_new(&callable->vm->heap, nullptr);
+    MalVm *vm = callable->vm;
+    MalArrayObject *arguments = mal_array_object_new(&vm->heap, nullptr);
     mal_array_object_set_length(arguments, callable->argument_count);
 
     for (i32 i = 0; i < callable->argument_count; i++) {
@@ -313,6 +460,18 @@ void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instr
             (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)},
             callable->arguments[i]
         );
+    }
+
+    // Make the arguments object iterable: an own @@iterator = %Array.prototype.values%
+    // (spec CreateUnmappedArgumentsObject), non-enumerable/writable/configurable.
+    MalKey iterator_key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR);
+    MalValue array_values;
+    if (mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE], iterator_key, &array_values)) {
+        MalPropertyDesc iterator_desc = {
+            .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE,
+            .value = array_values,
+        };
+        mal_object_define_own((MalObject *) arguments, iterator_key, &iterator_desc);
     }
 
     callable->arguments_object = mal_value_from_array_object(arguments);

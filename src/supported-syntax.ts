@@ -4,8 +4,6 @@ import type { ESTree } from "meriyah";
  * Node types the compiler has no lowering for at all.
  */
 const unsupportedNodeTypes = new Map<string, string>([
-	["WithStatement", "with"],
-	["TaggedTemplateExpression", "tagged template"],
 	// Static import/export are lowered (ES modules). Dynamic import() is not yet:
 	// it needs the static-string resolution + promise plumbing of a later step.
 	["ImportExpression", "dynamic import"],

@@ -117,6 +117,13 @@ export type VmInstruction =
 			slots: Array<number>;
 	  }
 	| {
+			opcode: "CREATE_TEMPLATE_OBJECT";
+			dst: number;
+			cacheSlot: number;
+			cookedIndices: Array<number>;
+			rawIndices: Array<number>;
+	  }
+	| {
 			opcode: "CREATE_UNDEFINED";
 			dst: number;
 	  }
@@ -378,6 +385,29 @@ export type VmInstruction =
 			nameStringIndex: number;
 	  }
 	| {
+			opcode: "WITH_ENTER";
+			object: number;
+	  }
+	| {
+			opcode: "WITH_EXIT";
+	  }
+	| {
+			opcode: "WITH_GET";
+			dst: number;
+			nameStringIndex: number;
+	  }
+	| {
+			opcode: "WITH_SET";
+			found: number;
+			value: number;
+			nameStringIndex: number;
+	  }
+	| {
+			opcode: "IS_EMPTY";
+			dst: number;
+			src: number;
+	  }
+	| {
 			opcode: "REQUIRE_COERCIBLE";
 			src: number;
 	  }
@@ -612,6 +642,14 @@ function lowerInstructionToVmInstruction(
 				dst: instruction.registers[0],
 				nameIndices: instruction.exports.map((entry) => entry.nameStringIndex),
 				slots: instruction.exports.map((entry) => entry.slot),
+			};
+		case "createTemplateObject":
+			return {
+				opcode: "CREATE_TEMPLATE_OBJECT",
+				dst: instruction.registers[0],
+				cacheSlot: instruction.cacheSlot,
+				cookedIndices: instruction.cookedIndices,
+				rawIndices: instruction.rawIndices,
 			};
 		case "createUndefined":
 			return {
@@ -934,6 +972,32 @@ function lowerInstructionToVmInstruction(
 				opcode: "THROW_IF_TDZ",
 				src: instruction.registers[0],
 				nameStringIndex: instruction.nameStringIndex,
+			};
+		case "withEnter":
+			return {
+				opcode: "WITH_ENTER",
+				object: instruction.registers[0],
+			};
+		case "withExit":
+			return { opcode: "WITH_EXIT" };
+		case "withGet":
+			return {
+				opcode: "WITH_GET",
+				dst: instruction.registers[0],
+				nameStringIndex: instruction.nameStringIndex,
+			};
+		case "withSet":
+			return {
+				opcode: "WITH_SET",
+				found: instruction.registers[0],
+				value: instruction.registers[1],
+				nameStringIndex: instruction.nameStringIndex,
+			};
+		case "isEmpty":
+			return {
+				opcode: "IS_EMPTY",
+				dst: instruction.registers[0],
+				src: instruction.registers[1],
 			};
 		case "requireCoercible":
 			return {

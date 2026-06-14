@@ -195,6 +195,9 @@ MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
     callable->instruction_pointer = 0;
     callable->return_register = -1;
     callable->caller_frame_index = -1;
+    callable->with_objects = nullptr;
+    callable->with_count = 0;
+    callable->with_capacity = 0;
 
     return callable;
 }
@@ -202,6 +205,7 @@ MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
 void mal_vm_free_callable(MalCallable *callable) {
     free(callable->registers);
     free(callable->arguments);
+    free(callable->with_objects);
     free(callable);
 }
 
@@ -214,6 +218,13 @@ void mal_vm_free_callable(MalCallable *callable) {
  * suspension does NOT use this — it transfers the heap buffers to the generator.
  */
 static void mal_vm_pop_frame_storage(MalVm *vm, MalVmFrame *frame) {
+    // The with-object stack is heap-allocated independent of the register window,
+    // so release it on every teardown (it is null unless the frame entered a with).
+    free(frame->with_objects);
+    frame->with_objects = nullptr;
+    frame->with_count = 0;
+    frame->with_capacity = 0;
+
     if (frame->stack_base >= 0) {
         vm->value_stack_size = frame->stack_base;
     } else {
@@ -355,6 +366,9 @@ bool mal_vm_push_function_frame(
     frame->instruction_pointer = 0;
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;
+    frame->with_objects = nullptr;
+    frame->with_count = 0;
+    frame->with_capacity = 0;
 
     return true;
 }
@@ -436,6 +450,24 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 break;
             case MAL_OP_CREATE_MODULE_NAMESPACE:
                 mal_op_create_module_namespace(frame, &instruction);
+                break;
+            case MAL_OP_CREATE_TEMPLATE_OBJECT:
+                mal_op_create_template_object(frame, &instruction);
+                break;
+            case MAL_OP_WITH_ENTER:
+                mal_op_with_enter(frame, &instruction);
+                break;
+            case MAL_OP_WITH_EXIT:
+                mal_op_with_exit(frame, &instruction);
+                break;
+            case MAL_OP_WITH_GET:
+                mal_op_with_get(frame, &instruction);
+                break;
+            case MAL_OP_WITH_SET:
+                mal_op_with_set(frame, &instruction);
+                break;
+            case MAL_OP_IS_EMPTY:
+                mal_op_is_empty(frame, &instruction);
                 break;
             case MAL_OP_CREATE_UNDEFINED:
                 mal_op_create_undefined(frame, &instruction);

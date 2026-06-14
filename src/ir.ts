@@ -331,9 +331,10 @@ interface IRLoopContext {
 	 * matching labeled scope; continue the innermost / matching loop. "label"
 	 * marks a labeled non-loop statement, a break-only target. "finally" entries
 	 * carry no target but sit on the same stack so abrupt completions route
-	 * through enclosing finalizers in lexical order.
+	 * through enclosing finalizers in lexical order. "with" entries likewise carry
+	 * no target; they pop the active with-object as control leaves the body.
 	 */
-	kind: "loop" | "switch" | "finally" | "label";
+	kind: "loop" | "switch" | "finally" | "label" | "with";
 	breakJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
 	continueJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
 
@@ -474,6 +475,22 @@ export type IRInstruction =
 			registers: [number];
 
 			exports: Array<{ nameStringIndex: number; slot: number }>;
+	  }
+	| {
+			// Build (and cache, per call site) a tagged-template strings object: a
+			// frozen array of the cooked strings with a frozen `.raw` array of the
+			// raw strings. `cacheSlot` is a dedicated global slot the runtime fills
+			// on first evaluation so the object identity is stable across calls. A
+			// cooked index of -1 means the cooked value is `undefined` (an invalid
+			// escape sequence, legal only in a tagged template).
+			type: "createTemplateObject";
+
+			// [destination]
+			registers: [number];
+
+			cacheSlot: number;
+			cookedIndices: Array<number>;
+			rawIndices: Array<number>;
 	  }
 	| {
 			type: "createUndefined";
@@ -811,6 +828,52 @@ export type IRInstruction =
 			registers: [number];
 
 			nameStringIndex: number;
+	  }
+	| {
+			// `with (obj)` entry: ToObject([object]) and push it onto the frame's
+			// with-object stack (throws if [object] is null/undefined).
+			type: "withEnter";
+
+			// [object]
+			registers: [number];
+	  }
+	| {
+			// Pop the innermost with-object off the frame's stack. Emitted on every
+			// edge that leaves the with body (normal, break, continue, return).
+			type: "withExit";
+			registers: [];
+	  }
+	| {
+			// Dynamic `with`-scope read: [destination] gets the value if the named
+			// binding is provided by some active with-object (HasProperty honoring
+			// `Symbol.unscopables`, innermost first), else the EMPTY sentinel so the
+			// compiler can fall back to the static binding.
+			type: "withGet";
+
+			// [destination]
+			registers: [number];
+
+			nameStringIndex: number;
+	  }
+	| {
+			// Dynamic `with`-scope write: if some active with-object provides the
+			// named binding, set it there and write `true` to [found]; otherwise
+			// write `false` so the compiler falls back to the static store. [value]
+			// holds the value to assign.
+			type: "withSet";
+
+			// [found, value]
+			registers: [number, number];
+
+			nameStringIndex: number;
+	  }
+	| {
+			// [destination] = ([source] is the EMPTY sentinel). Lets the compiler
+			// branch on a withGet miss.
+			type: "isEmpty";
+
+			// [destination, source]
+			registers: [number, number];
 	  }
 	| {
 			// RequireObjectCoercible: throws a TypeError when the value is null
@@ -3023,6 +3086,66 @@ function compileIdentifierTarget(
 	identifier: ESTree.Identifier,
 	value: number,
 ) {
+	if (fn.semanticFile.withDynamicNodes.has(identifier)) {
+		compileWithDynamicWrite(program, fn, cursor, identifier, value);
+		return;
+	}
+	compileStaticIdentifierTarget(program, fn, cursor, identifier, value);
+}
+
+/**
+ * A `with`-intercepted write: if some active with-object provides the name, set
+ * it there (withSet writes `true` to the found flag); otherwise fall back to the
+ * static store.
+ */
+function compileWithDynamicWrite(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	identifier: ESTree.Identifier,
+	value: number,
+) {
+	const found = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "withSet",
+		registers: [found, value],
+		nameStringIndex: getOrCreateStringConstant(program, identifier.name),
+	});
+
+	const skipJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [found],
+		blocks: [-1],
+	};
+	const fallbackJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(skipJump, fallbackJump);
+
+	const fallbackIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[fallbackIdx]!;
+	compileStaticIdentifierTarget(program, fn, cursor, identifier, value);
+	const fallbackJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(fallbackJoin);
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	skipJump.blocks[0] = joinIdx;
+	fallbackJump.blocks[0] = fallbackIdx;
+	fallbackJoin.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+}
+
+function compileStaticIdentifierTarget(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	identifier: ESTree.Identifier,
+	value: number,
+) {
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
 	if (!binding) {
 		throw new Error(`No binding found for pattern target ${identifier.name}`);
@@ -3446,6 +3569,10 @@ function compileStatementsToBlock(
 			}
 			case "BlockStatement": {
 				compileBlockStatement(program, fn, block, statement);
+				break;
+			}
+			case "WithStatement": {
+				compileWithStatement(program, fn, block, statement);
 				break;
 			}
 			case "LabeledStatement": {
@@ -4663,6 +4790,50 @@ function compileBlockStatement(
 }
 
 /**
+ * Compile `with (object) body`. The object is coerced to an object and pushed
+ * onto the frame's with-object stack (withEnter); the body runs under a `with`
+ * loop-context so break/continue/return out of it pop the object, and normal
+ * completion pops via the withExit appended to the body tail. Identifiers in the
+ * body that the analyzer flagged as dynamic (`withDynamicNodes`) compile to a
+ * runtime with-object probe with a static fallback — see compileIdentifier.
+ *
+ * `with` is a strict-mode SyntaxError, so this only runs for sloppy code.
+ */
+function compileWithStatement(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	statement: ESTree.WithStatement,
+) {
+	const cursor: IRCursor = { block };
+	const object = compileExpression(program, fn, cursor, statement.object);
+	cursor.block.instructions.push({ type: "withEnter", registers: [object] });
+
+	const withContext: IRLoopContext = {
+		kind: "with",
+		breakJumps: [],
+		continueJumps: [],
+	};
+	(fn.loops ??= []).push(withContext);
+	const bodyEntry = compileStatementsToBlock(
+		program,
+		fn,
+		normalizeStatementOrBlock(statement.body),
+	);
+	fn.loops.pop();
+
+	cursor.block.instructions.push({ type: "jump", blocks: [bodyEntry] });
+
+	// Normal completion of the body pops the with-object, then falls through to
+	// a fresh exit block (the back edge / continuation the dispatch loop resumes
+	// from). Abrupt exits (break/continue/return) emit their own withExit.
+	const bodyTail = fn.blocks.at(-1)!;
+	bodyTail.instructions.push({ type: "withExit", registers: [] });
+	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	bodyTail.instructions.push({ type: "jump", blocks: [exitIdx] });
+}
+
+/**
  * Compile an if statement, reading the condition and jumping to the consequent or alternate
  * block.
  */
@@ -4776,6 +4947,10 @@ function emitReturn(fn: IRFunction, block: IRBlock, valueRegister: number) {
 			return;
 		}
 
+		if (scope.kind === "with") {
+			block.instructions.push({ type: "withExit", registers: [] });
+		}
+
 		if (scope.iteratorRegister !== undefined) {
 			block.instructions.push({
 				type: "iteratorClose",
@@ -4809,6 +4984,11 @@ function emitBreak(fn: IRFunction, block: IRBlock, label?: string) {
 				(b) => emitBreak(fn, b, label),
 			);
 			return;
+		}
+
+		// Leaving a with body pops its object.
+		if (scope.kind === "with") {
+			block.instructions.push({ type: "withExit", registers: [] });
 		}
 
 		// Leaving this loop closes its for-of iterator.
@@ -4854,6 +5034,13 @@ function emitContinue(fn: IRFunction, block: IRBlock, label?: string) {
 				(b) => emitContinue(fn, b, label),
 			);
 			return;
+		}
+
+		// Continuing out of a with body pops its object (a with is never a
+		// continue target).
+		if (scope.kind === "with") {
+			block.instructions.push({ type: "withExit", registers: [] });
+			continue;
 		}
 
 		if (scope.kind === "switch" || scope.kind === "label") {
@@ -5559,6 +5746,9 @@ function compileExpression(
 		case "TemplateLiteral": {
 			return compileTemplateLiteral(program, fn, cursor, expression);
 		}
+		case "TaggedTemplateExpression": {
+			return compileTaggedTemplate(program, fn, cursor, expression);
+		}
 		case "Literal": {
 			return compileLiteral(program, fn, cursor, expression);
 		}
@@ -5935,6 +6125,32 @@ function compileIdentifierAssignment(
 	cursor: IRCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
+	if (fn.semanticFile.withDynamicNodes.has(assignmentExpression.left)) {
+		const left = assignmentExpression.left as ESTree.Identifier;
+		let value: number;
+		if (assignmentExpression.operator === "=") {
+			value = compileExpression(
+				program,
+				fn,
+				cursor,
+				assignmentExpression.right,
+				left.name,
+			);
+		} else {
+			// Compound: the current value is itself a with-intercepted read.
+			const current = compileWithDynamicRead(program, fn, cursor, left);
+			const right = compileExpression(program, fn, cursor, assignmentExpression.right);
+			value = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "binary",
+				registers: [value, current, right],
+				operator: assignmentOperatorToBinaryOperator(assignmentExpression.operator),
+			});
+		}
+		compileWithDynamicWrite(program, fn, cursor, left, value);
+		return value;
+	}
+
 	const binding = fn.semanticFile.nodeToBinding.get(assignmentExpression.left);
 	if (!binding) {
 		return -1;
@@ -6346,6 +6562,83 @@ function compileTemplateLiteral(
 	return result;
 }
 
+/**
+ * Compile a tagged template `tag`a${x}b`` as `tag(strings, x)`, where `strings`
+ * is the frozen template object (cooked array + frozen `.raw`). The `this` for
+ * the call follows the same member/non-member rules as an ordinary call. The
+ * strings object is built once and cached in a per-site global slot so repeated
+ * evaluations of the same tagged template hand the tag a stable object identity
+ * (required by the spec — tags routinely use it as a cache key / WeakMap key).
+ */
+function compileTaggedTemplate(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	expression: ESTree.TaggedTemplateExpression,
+): number {
+	const tagNode = expression.tag as unknown as ESTree.Node;
+
+	let callee: number;
+	let thisRegister: number;
+	if (
+		tagNode.type === "MemberExpression" &&
+		tagNode.property.type === "PrivateIdentifier"
+	) {
+		thisRegister = compileExpression(program, fn, cursor, tagNode.object);
+		callee = compilePrivateMemberLoad(
+			program,
+			fn,
+			cursor,
+			thisRegister,
+			`#${tagNode.property.name}`,
+		);
+	} else if (tagNode.type === "MemberExpression") {
+		const member = compileMemberObjectAndKey(program, fn, cursor, tagNode);
+		thisRegister = member.object;
+		callee = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadProperty",
+			registers: [callee, member.object, member.key],
+		});
+	} else {
+		callee = compileExpression(program, fn, cursor, expression.tag);
+		thisRegister = compileUndefined(fn, cursor);
+	}
+
+	const quasis = expression.quasi.quasis;
+	const cookedIndices = quasis.map((quasi) =>
+		// An invalid escape sequence makes `cooked` null (legal only in a tagged
+		// template); -1 encodes that the element is `undefined`.
+		typeof quasi.value.cooked === "string"
+			? getOrCreateStringConstant(program, quasi.value.cooked)
+			: -1,
+	);
+	const rawIndices = quasis.map((quasi) =>
+		getOrCreateStringConstant(program, quasi.value.raw ?? ""),
+	);
+
+	const stringsRegister = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createTemplateObject",
+		registers: [stringsRegister],
+		cacheSlot: program.nextGlobalIndex++,
+		cookedIndices,
+		rawIndices,
+	});
+
+	const args = expression.quasi.expressions.map((argument) =>
+		compileExpression(program, fn, cursor, argument),
+	);
+
+	const destination = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "call",
+		registers: [destination, callee, thisRegister, stringsRegister, ...args],
+	});
+
+	return destination;
+}
+
 function compileUnaryExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -6362,8 +6655,14 @@ function compileUnaryExpression(
 	}
 
 	if (expression.operator === "typeof" && expression.argument.type === "Identifier") {
-		const binding = fn.semanticFile.nodeToBinding.get(expression.argument);
-		if (binding?.undeclared && !isIRIntrinsic(expression.argument.name)) {
+		const argument = expression.argument;
+		const binding = fn.semanticFile.nodeToBinding.get(argument);
+		if (binding?.undeclared && !isIRIntrinsic(argument.name)) {
+			if (fn.semanticFile.withDynamicNodes.has(argument)) {
+				// With-intercepted but otherwise unresolvable: consult the active
+				// with-object(s); only if none provide it is the result "undefined".
+				return compileWithDynamicTypeof(program, fn, cursor, argument);
+			}
 			// typeof is the one reference read that resolves unresolvable
 			// identifiers to "undefined" instead of throwing.
 			return compileStaticString(program, fn, cursor, "undefined");
@@ -7238,6 +7537,137 @@ function compileNewExpression(
  * Statements that store the a variable internally handle the store instructions.
  */
 function compileIdentifier(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	identifier: ESTree.Identifier,
+): number {
+	if (fn.semanticFile.withDynamicNodes.has(identifier)) {
+		return compileWithDynamicRead(program, fn, cursor, identifier);
+	}
+	return compileStaticIdentifier(program, fn, cursor, identifier);
+}
+
+/**
+ * A `with`-intercepted read: probe the active with-object(s) for the name; on a
+ * miss (EMPTY sentinel) fall back to the static binding resolution. The two
+ * paths join with the value in a single register.
+ */
+function compileWithDynamicRead(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	identifier: ESTree.Identifier,
+): number {
+	const result = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "withGet",
+		registers: [result],
+		nameStringIndex: getOrCreateStringConstant(program, identifier.name),
+	});
+
+	const emptyFlag = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, result] });
+
+	const fallbackJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [emptyFlag],
+		blocks: [-1],
+	};
+	const foundJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(fallbackJump, foundJump);
+
+	// Miss: resolve the static binding into the same result register.
+	const fallbackIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[fallbackIdx]!;
+	const staticValue = compileStaticIdentifier(program, fn, cursor, identifier);
+	cursor.block.instructions.push({ type: "move", registers: [result, staticValue] });
+	const fallbackJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(fallbackJoin);
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	fallbackJump.blocks[0] = fallbackIdx;
+	foundJump.blocks[0] = joinIdx;
+	fallbackJoin.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+
+	return result;
+}
+
+/**
+ * `typeof name` where name is with-intercepted and has no static binding: probe
+ * the with-object(s); a hit yields `typeof value`, a miss yields "undefined"
+ * (never a ReferenceError — typeof of an unresolvable name does not throw).
+ */
+function compileWithDynamicTypeof(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	identifier: ESTree.Identifier,
+): number {
+	const result = nextRegisterDestination(fn);
+	const probe = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "withGet",
+		registers: [probe],
+		nameStringIndex: getOrCreateStringConstant(program, identifier.name),
+	});
+	const emptyFlag = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, probe] });
+
+	const missJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [emptyFlag],
+		blocks: [-1],
+	};
+	const hitJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(missJump, hitJump);
+
+	// Hit: typeof the probed value.
+	const hitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[hitIdx]!;
+	cursor.block.instructions.push({
+		type: "unary",
+		registers: [result, probe],
+		operator: "typeof",
+	});
+	const hitJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(hitJoin);
+
+	// Miss: the name resolves nowhere → "undefined".
+	const missIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[missIdx]!;
+	const undefinedString = compileStaticString(program, fn, cursor, "undefined");
+	cursor.block.instructions.push({ type: "move", registers: [result, undefinedString] });
+	const missJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(missJoin);
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	missJump.blocks[0] = missIdx;
+	hitJump.blocks[0] = hitIdx;
+	hitJoin.blocks[0] = joinIdx;
+	missJoin.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+
+	return result;
+}
+
+function compileStaticIdentifier(
 	program: IntermediateProgram,
 	fn: IRFunction,
 	cursor: IRCursor,

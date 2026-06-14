@@ -233,7 +233,11 @@ export function test262ShouldSkip(file: Test262File): boolean {
 	// default strict-only run) skips `noStrict` tests, which cannot run strict.
 	const flags = file.frontmatter.flags ?? [];
 	if (process.env.T262_VARIANT === "sloppy") {
-		if (flags.includes("onlyStrict") || flags.includes("module") || flags.includes("raw")) {
+		if (
+			flags.includes("onlyStrict") ||
+			flags.includes("module") ||
+			flags.includes("raw")
+		) {
 			return true;
 		}
 	} else if (flags.includes("noStrict")) {
