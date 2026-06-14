@@ -26,10 +26,11 @@ import * as path from "node:path";
  * always execute the binary - so flakes and behavioural changes still surface.
  */
 
-// A dual-run variant (T262_VARIANT) keeps its own cache so the strict and sloppy
-// builds never collide with each other or with the default single-run cache.
-// Read lazily: the variant env var may be set (from --variant) after this module
-// is imported.
+// Each pass (T262_VARIANT) keeps its own cache so the strict and sloppy builds
+// never collide: their composed source is byte-identical (the strict pass adds no
+// `"use strict"` directive - strictness flows through the parser), so a shared
+// cache would alias the two different `.o`s under one key. Read lazily: the
+// variant env var is set by runVariant() after this module is imported.
 function cacheDir(): string {
 	return process.env.T262_VARIANT
 		? `.cache/test262-artifacts-${process.env.T262_VARIANT}`

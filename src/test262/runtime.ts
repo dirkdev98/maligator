@@ -64,7 +64,7 @@ export function test262PruneArtifactCache() {
 	}
 }
 
-const SKIPPED_FLAGS = ["async", "CanBlockIsTrue"];
+const SKIPPED_FLAGS = ["CanBlockIsTrue"];
 const SKIPPED_FEATURES = [
 	"IsHTMLDDA",
 	"decorators",
@@ -176,9 +176,9 @@ export function getTimings() {
 }
 
 /**
- * Clear all run-level accumulators. Used between the strict and sloppy passes of
- * a `--strict dual` run so each pass reports its own timings, code stats, failure
- * buckets, and pruned cache keys.
+ * Clear all run-level accumulators. Used between the strict and sloppy passes so
+ * each pass reports its own timings, code stats, failure buckets, and pruned
+ * cache keys.
  */
 export function test262ResetStats() {
 	for (const timing of Object.values(TIMINGS)) {
@@ -227,10 +227,10 @@ export function test262ShouldSkip(file: Test262File): boolean {
 		return true;
 	}
 
-	// Variant-aware run-mode filtering. The sloppy pass of `--strict dual` runs
-	// only the tests that have a sloppy variant (default + `noStrict`), skipping
-	// the strict-only / own-goal ones; every other mode (the strict pass, and the
-	// default strict-only run) skips `noStrict` tests, which cannot run strict.
+	// Variant-aware run-mode filtering. The sloppy pass runs only the tests that
+	// have a sloppy variant (default + `noStrict`), skipping the strict-only ones
+	// (`onlyStrict`/`module`/`raw`); the strict pass skips `noStrict` tests, which
+	// cannot run strict. A run always sets T262_VARIANT to one or the other.
 	const flags = file.frontmatter.flags ?? [];
 	if (process.env.T262_VARIANT === "sloppy") {
 		if (
@@ -392,11 +392,11 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 	}
 
 	const isModule = file.frontmatter.flags?.includes("module") ?? false;
-	// Strictness of the script parse. A `--variant` dual-run forces every script
-	// one way (strict or sloppy); otherwise `noStrict` tests are sloppy and the
-	// rest strict. A sloppy parse just relaxes the early-error surface (octal,
-	// `with`, …); the sloppy runtime behaviors gate on the per-scope strict flag
-	// sema derives from it.
+	// Strictness of the script parse. T262_VARIANT forces every script one way
+	// (the strict pass strict, the sloppy pass sloppy); the fallback only fires if
+	// a script runs with no variant set. A sloppy parse just relaxes the
+	// early-error surface (octal, `with`, …); the sloppy runtime behaviors gate on
+	// the per-scope strict flag sema derives from it.
 	const strict =
 		process.env.T262_VARIANT === "strict"
 			? true
