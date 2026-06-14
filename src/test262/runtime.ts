@@ -301,15 +301,75 @@ const TEST262_HOST_PRELUDE = `var $262 = {
 };
 `;
 
+/**
+ * `flags: [async]` tests signal completion by calling `$DONE`, defined in
+ * `harness/doneprintHandle.js`, which writes a `Test262:AsyncTestComplete` /
+ * `:AsyncTestFailure` sentinel through a host-provided `print`. We back `print`
+ * with `console.log` (it writes the bare string to stdout) and auto-include the
+ * handle ahead of the test's own `includes` (e.g. `asyncHelpers.js` references
+ * `$DONE`). The sentinel — not the exit code — decides the verdict; see
+ * `asyncVerdict`. The microtask drain that lets `$DONE` actually fire already
+ * happens in `mal_vm_run`.
+ */
+const TEST262_ASYNC_PRELUDE = `function print(message) { console.log(message); }
+`;
+
+function isAsyncTest(file: Test262File): boolean {
+	return file.frontmatter.flags?.includes("async") ?? false;
+}
+
 function composeSource(file: Test262File) {
 	if (file.frontmatter.flags?.includes("raw")) {
 		return file.content;
 	}
 
 	const harnessFiles = ["harness/assert.js", "harness/sta.js"];
+	if (isAsyncTest(file)) {
+		harnessFiles.push("harness/doneprintHandle.js");
+	}
 	harnessFiles.push(...(file.frontmatter.includes ?? []).map((it) => `harness/${it}`));
 
-	return `${TEST262_HOST_PRELUDE}${harnessFiles.map(loadHarnessFile).join("\n")}\n${file.content}`;
+	const prelude = TEST262_HOST_PRELUDE + (isAsyncTest(file) ? TEST262_ASYNC_PRELUDE : "");
+	return `${prelude}${harnessFiles.map(loadHarnessFile).join("\n")}\n${file.content}`;
+}
+
+/**
+ * Decide an async test's verdict from the captured stdout sentinel. A passing
+ * test prints exactly `Test262:AsyncTestComplete`; a failing one prints a
+ * `Test262:AsyncTestFailure:<detail>` line (via `$DONE(error)`). Neither line
+ * means the test never settled (a missing `$DONE`, a sync throw, an unhandled
+ * rejection) — also a failure.
+ */
+function asyncVerdict(output: Array<string>): {
+	passed: boolean;
+	reason: string;
+} {
+	const failure = output.find((line) =>
+		line.trim().startsWith("Test262:AsyncTestFailure"),
+	);
+	if (failure !== undefined) {
+		return { passed: false, reason: failure.trim() };
+	}
+	if (output.some((line) => line.trim() === "Test262:AsyncTestComplete")) {
+		return { passed: true, reason: "" };
+	}
+	return { passed: false, reason: "async test did not complete" };
+}
+
+/** Apply `asyncVerdict` to a raw stdout string (single-test path). */
+function applyAsyncVerdict(file: Test262File, stdout: string) {
+	const verdict = asyncVerdict(stdout.split("\n"));
+	if (verdict.passed) {
+		file.result = "PASSED";
+	} else {
+		file.result = "FAILED";
+		countReason(
+			FAILURE_COUNTS,
+			FAILURE_CACHE,
+			normalizeFailureReason(verdict.reason),
+			file,
+		);
+	}
 }
 
 function recordFailure(
@@ -809,7 +869,23 @@ function parseBatchOutput(stdout: string, entries: Array<BatchEntry>): Set<numbe
 		resolved.add(index);
 		recordTiming("run", file.path, elapsedMs);
 
-		if (kind === "EXIT" && code === 0) {
+		if (kind === "EXIT" && isAsyncTest(file)) {
+			// Async tests exit 0 whether they pass or fail (`$DONE` never throws);
+			// the stdout sentinel is authoritative. A non-zero exit means a sync
+			// throw before settling, which `asyncVerdict` reports as no completion.
+			const verdict = asyncVerdict(currentOutput);
+			if (verdict.passed) {
+				file.result = "PASSED";
+			} else {
+				file.result = "FAILED";
+				countReason(
+					FAILURE_COUNTS,
+					FAILURE_CACHE,
+					normalizeFailureReason(verdict.reason),
+					file,
+				);
+			}
+		} else if (kind === "EXIT" && code === 0) {
 			file.result = "PASSED";
 		} else if (kind === "EXIT") {
 			file.result = "FAILED";
@@ -879,14 +955,19 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 
 	const runStartedAt = performance.now();
 	try {
-		await execFileAsync(`${baseName}.bin`, [], {
+		const { stdout } = await execFileAsync(`${baseName}.bin`, [], {
 			timeout: TEST262_METADATA.runTimeoutMs,
 			maxBuffer: 1024 * 1024,
 		});
-		file.result = "PASSED";
+		if (isAsyncTest(file)) {
+			applyAsyncVerdict(file, stdout);
+		} else {
+			file.result = "PASSED";
+		}
 	} catch (e) {
 		const error = e as NodeJS.ErrnoException & {
 			signal?: string;
+			stdout?: string;
 			stderr?: string;
 			killed?: boolean;
 		};
@@ -897,6 +978,10 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 		} else if (error.signal) {
 			file.result = "CRASHED";
 			countReason(FAILURE_COUNTS, FAILURE_CACHE, `signal: ${error.signal}`, file);
+		} else if (isAsyncTest(file)) {
+			// A non-zero exit means the script threw before settling: no sentinel,
+			// so `asyncVerdict` reports it as an incomplete async test.
+			applyAsyncVerdict(file, error.stdout ?? "");
 		} else {
 			file.result = "FAILED";
 			const reason = firstLine(error.stderr ?? "") || "non-zero exit";
