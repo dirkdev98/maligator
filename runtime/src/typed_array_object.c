@@ -8,6 +8,7 @@
 #include "object_ops.h"
 #include "value_ops.h"
 #include "vm.h"
+#include "vm_ops.h"
 
 static const u32 mal_typed_array_sizes[MAL_TA_KIND_COUNT] = {
     [MAL_TA_INT8] = 1,
@@ -208,11 +209,13 @@ void mal_typed_array_object_set(MalVm *vm, MalTypedArrayObject *array, u32 index
             memcpy(bytes, &v, 8);
         }
     } else {
-        if (mal_value_is_bigint(value)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a BigInt value to a number");
+        // ToNumber runs full ToPrimitive(number) for objects (valueOf/toString
+        // or @@toPrimitive) and throws on BigInt/Symbol, exactly once, before
+        // the bounds check — per IntegerIndexedElementSet.
+        f64 number;
+        if (!mal_vm_to_number(vm, value, &number)) {
             return;
         }
-        f64 number = mal_ops_to_number(value);
         switch (array->kind) {
             case MAL_TA_INT8:
             case MAL_TA_UINT8: {

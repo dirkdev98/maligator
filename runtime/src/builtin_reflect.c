@@ -9,7 +9,9 @@
 #include "heap_symbol.h"
 #include "module_namespace_object.h"
 #include "object_ops.h"
+#include "primitive_wrapper_object.h"
 #include "property_iter.h"
+#include "proxy_object.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -46,6 +48,12 @@ static bool mal_reflect_require_object(MalVm *vm, MalValue target, const byte *m
  * assumed constructible (the runtime does not yet flag native non-constructors).
  */
 static bool mal_reflect_is_constructor(MalVm *vm, MalValue value) {
+    // A proxy is a constructor iff its (non-revoked) target chain ends at one.
+    value = mal_proxy_unwrap_target(value);
+    if (mal_value_is_proxy_object(value)) {
+        // A revoked proxy unwraps to itself; it is not a constructor.
+        return false;
+    }
     while (mal_value_is_bound_function_object(value)) {
         value = mal_value_to_bound_function_object(value)->target;
     }
@@ -114,6 +122,80 @@ static MalValue mal_reflect_key_to_value(MalVm *vm, MalKey key) {
     return key.value;
 }
 
+/**
+ * Spec ToPrimitive(input, "string") for an object input. The shared
+ * mal_vm_value_to_property_key intentionally stringifies objects without running
+ * user coercion (see its note), so an object propertyKey whose @@toPrimitive /
+ * toString / valueOf throws would be swallowed. Reflect must ReturnIfAbrupt on
+ * that throw, so this mirrors the OrdinaryToPrimitive logic in mal_vm_to_number
+ * but with the string-hint method order (toString → valueOf) and "string" hint.
+ * Returns false with a pending throw completion on an abrupt coercion.
+ */
+static bool mal_reflect_object_to_primitive_string(MalVm *vm, MalValue value, MalValue *out) {
+    MalValue exotic;
+    if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE), &exotic)) {
+        return false;
+    }
+    if (!mal_value_is_nil(exotic)) {
+        if (!mal_value_is_callable(exotic)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.toPrimitive is not a function");
+            return false;
+        }
+        MalValue hint = mal_value_from_string(mal_intrinsic_ascii(vm, "string"));
+        // @@toPrimitive runs with the object as `this` and the hint as its arg.
+        MalCompletion result = mal_vm_call_value(vm, exotic, value, &hint, 1);
+        if (result.kind != MAL_COMPLETION_NORMAL) {
+            return false;
+        }
+        if (mal_value_is_object(result.value)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
+            return false;
+        }
+        *out = result.value;
+        return true;
+    }
+
+    // OrdinaryToPrimitive with string hint: toString before valueOf.
+    const byte *methods[2] = {"toString", "valueOf"};
+    for (i32 i = 0; i < 2; i++) {
+        MalValue method;
+        if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, methods[i]), &method)) {
+            return false;
+        }
+        if (mal_value_is_callable(method)) {
+            MalCompletion result = mal_vm_call_value(vm, method, value, nullptr, 0);
+            if (result.kind != MAL_COMPLETION_NORMAL) {
+                return false;
+            }
+            if (!mal_value_is_object(result.value)) {
+                *out = result.value;
+                return true;
+            }
+        }
+    }
+
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
+    return false;
+}
+
+/**
+ * Spec ToPropertyKey for the Reflect entry points: run ToPrimitive(string) for
+ * an object first (surfacing any thrown user coercion), keep a Symbol result as
+ * a symbol key, otherwise feed the primitive back through the shared key builder
+ * (which handles string / array-index canonicalisation). Primitive inputs pass
+ * straight through, preserving the prior behaviour exactly.
+ */
+static bool mal_reflect_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
+    if (mal_value_is_object(value)) {
+        MalValue primitive;
+        if (!mal_reflect_object_to_primitive_string(vm, value, &primitive)) {
+            return false;
+        }
+        value = primitive;
+    }
+    return mal_vm_value_to_property_key(vm, value, key_out);
+}
+
 static MalValue mal_reflect_apply(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -172,7 +254,7 @@ static MalValue mal_reflect_get(MalVm *vm, MalValue this_value, const MalValue *
     }
 
     MalKey key;
-    if (!mal_vm_value_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_reflect_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
@@ -192,7 +274,7 @@ static MalValue mal_reflect_set(MalVm *vm, MalValue this_value, const MalValue *
     }
 
     MalKey key;
-    if (!mal_vm_value_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_reflect_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
@@ -215,7 +297,7 @@ static MalValue mal_reflect_has(MalVm *vm, MalValue this_value, const MalValue *
     }
 
     MalKey key;
-    if (!mal_vm_value_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_reflect_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
@@ -232,7 +314,7 @@ static MalValue mal_reflect_delete_property(MalVm *vm, MalValue this_value, cons
     }
 
     MalKey key;
-    if (!mal_vm_value_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_reflect_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
@@ -249,8 +331,16 @@ static MalValue mal_reflect_define_property(MalVm *vm, MalValue this_value, cons
     }
 
     MalKey key;
-    if (!mal_vm_value_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_reflect_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
+    }
+
+    if (mal_value_is_proxy_object(target)) {
+        bool ok = mal_proxy_define_own_property(vm, mal_value_to_proxy_object(target), key, mal_reflect_arg(args, arg_count, 2));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+        return mal_value_new_boolean(ok);
     }
 
     MalDefineOwnStatus status = mal_builtin_object_try_define(vm, mal_value_to_object(target), key, mal_reflect_arg(args, arg_count, 2));
@@ -270,8 +360,17 @@ static MalValue mal_reflect_get_own_property_descriptor(MalVm *vm, MalValue this
     }
 
     MalKey key;
-    if (!mal_vm_value_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_reflect_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
+    }
+
+    if (mal_value_is_proxy_object(target)) {
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_proxy_get_own_property_descriptor(vm, mal_value_to_proxy_object(target), key, &present, &desc)) {
+            return mal_value_new_undefined();
+        }
+        return present ? mal_builtin_object_descriptor_object(vm, desc) : mal_value_new_undefined();
     }
 
     // Array length lives in the header rather than the property table.
@@ -300,6 +399,14 @@ static MalValue mal_reflect_own_keys(MalVm *vm, MalValue this_value, const MalVa
     MalValue target = mal_reflect_arg(args, arg_count, 0);
     if (!mal_reflect_require_object(vm, target, "Reflect.ownKeys")) {
         return mal_value_new_undefined();
+    }
+
+    if (mal_value_is_proxy_object(target)) {
+        MalValue keys;
+        if (!mal_proxy_own_property_keys(vm, mal_value_to_proxy_object(target), &keys)) {
+            return mal_value_new_undefined();
+        }
+        return keys;
     }
 
     MalObject *object = mal_value_to_object(target);
@@ -335,6 +442,28 @@ static MalValue mal_reflect_own_keys(MalVm *vm, MalValue this_value, const MalVa
                 mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) index)))
             );
         }
+    }
+
+    // A String wrapper's exotic own keys are its indices, then a synthetic
+    // `length`, then its ordinary own keys; none live in the property table.
+    MalPropertyDesc string_exotic;
+    bool is_string_wrapper = mal_primitive_wrapper_string_exotic_own(
+        &vm->heap, object, mal_intrinsic_string_key(vm, "length"), &string_exotic
+    );
+    if (is_string_wrapper) {
+        u32 length = (u32) mal_value_to_i32(string_exotic.value);
+        for (u32 index = 0; index < length; index++) {
+            mal_array_object_store(
+                result,
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) index)))
+            );
+        }
+        mal_array_object_store(
+            result,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+            mal_value_from_string(mal_intrinsic_ascii(vm, "length"))
+        );
     }
 
     // Array length is a synthetic own string key that sits right after the
@@ -391,6 +520,14 @@ static MalValue mal_reflect_get_prototype_of(MalVm *vm, MalValue this_value, con
         return mal_value_new_undefined();
     }
 
+    if (mal_value_is_proxy_object(target)) {
+        MalValue proto;
+        if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(target), &proto)) {
+            return mal_value_new_undefined();
+        }
+        return proto;
+    }
+
     MalObject *prototype = mal_object_get_prototype(mal_value_to_object(target));
     return prototype != nullptr ? mal_value_from_object(prototype) : mal_value_new_null();
 }
@@ -410,6 +547,14 @@ static MalValue mal_reflect_set_prototype_of(MalVm *vm, MalValue this_value, con
         return mal_value_new_undefined();
     }
 
+    if (mal_value_is_proxy_object(target)) {
+        bool success;
+        if (!mal_proxy_set_prototype_of(vm, mal_value_to_proxy_object(target), proto_value, &success)) {
+            return mal_value_new_undefined();
+        }
+        return mal_value_new_boolean(success);
+    }
+
     MalObject *prototype = mal_value_is_object(proto_value) ? mal_value_to_object(proto_value) : nullptr;
     return mal_value_new_boolean(mal_object_set_prototype(mal_value_to_object(target), prototype));
 }
@@ -423,6 +568,14 @@ static MalValue mal_reflect_is_extensible(MalVm *vm, MalValue this_value, const 
         return mal_value_new_undefined();
     }
 
+    if (mal_value_is_proxy_object(target)) {
+        bool extensible;
+        if (!mal_proxy_is_extensible(vm, mal_value_to_proxy_object(target), &extensible)) {
+            return mal_value_new_undefined();
+        }
+        return mal_value_new_boolean(extensible);
+    }
+
     return mal_value_new_boolean(mal_object_is_extensible(mal_value_to_object(target)));
 }
 
@@ -433,6 +586,14 @@ static MalValue mal_reflect_prevent_extensions(MalVm *vm, MalValue this_value, c
     MalValue target = mal_reflect_arg(args, arg_count, 0);
     if (!mal_reflect_require_object(vm, target, "Reflect.preventExtensions")) {
         return mal_value_new_undefined();
+    }
+
+    if (mal_value_is_proxy_object(target)) {
+        bool success;
+        if (!mal_proxy_prevent_extensions(vm, mal_value_to_proxy_object(target), &success)) {
+            return mal_value_new_undefined();
+        }
+        return mal_value_new_boolean(success);
     }
 
     mal_object_set_extensible(mal_value_to_object(target), false);

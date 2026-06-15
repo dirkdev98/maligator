@@ -7,8 +7,11 @@
 #include <string.h>
 
 #include "heap_string.h"
+#include "primitive_wrapper_object.h"
 #include "value_ops.h"
 #include "vm.h"
+#include "vm_ops.h"
+#include "vm_ops.h"
 
 static bool mal_builtin_number_is_whitespace(c16 code_unit) {
     return (code_unit >= 0x09 && code_unit <= 0x0D) ||
@@ -116,19 +119,78 @@ static f64 mal_builtin_parse_float_units(const c16 *code_units, usize length) {
     return parsed ? value : NAN;
 }
 
+/**
+ * Resolve the prototype for a construct call (OrdinaryCreateFromConstructor
+ * flavored): new_target's prototype property when it is an object, the given
+ * intrinsic slot otherwise.
+ */
+static MalObject *mal_builtin_number_resolve_prototype(MalVm *vm, MalValue new_target, MalIntrinsic fallback) {
+    MalValue prototype;
+    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
+        return nullptr;
+    }
+    if (mal_value_is_object(prototype)) {
+        return mal_value_to_object(prototype);
+    }
+    return mal_value_to_object(vm->intrinsics[fallback]);
+}
+
+/**
+ * Number(value): ToNumeric the argument (BigInt folds to its numeric value,
+ * Symbol throws), boxing into a wrapper when constructed with new.
+ */
 static MalValue mal_builtin_number_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
+    (void) callee;
+    MalValue number;
     if (arg_count == 0) {
-        return mal_value_from_i32(0);
+        number = mal_value_from_i32(0);
+    } else if (mal_value_is_symbol(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value to a number");
+        return mal_value_new_undefined();
+    } else if (mal_value_is_object(args[0])) {
+        // ToNumber on an object first runs ToPrimitive(number) through the
+        // shared coercion path (valueOf/toString/@@toPrimitive), which may throw.
+        f64 primitive;
+        if (!mal_vm_to_number(vm, args[0], &primitive)) {
+            return mal_value_new_undefined();
+        }
+        number = mal_ops_number_value(primitive);
+    } else if (mal_value_is_int32(args[0])) {
+        number = args[0];
+    } else {
+        number = mal_ops_number_value(mal_ops_to_number(args[0]));
     }
 
-    if (mal_value_is_int32(args[0])) {
-        return args[0];
+    if (mal_value_is_undefined(new_target)) {
+        return number;
     }
 
-    // TODO(numbers): no wrapper objects, constructing also returns the primitive.
-    return mal_ops_number_value(mal_ops_to_number(args[0]));
+    MalObject *prototype = mal_builtin_number_resolve_prototype(vm, new_target, MAL_INTRINSIC_NUMBER_PROTOTYPE);
+    if (prototype == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    return mal_value_from_primitive_wrapper(mal_primitive_wrapper_object_new(
+        &vm->heap,
+        prototype,
+        MAL_PRIMITIVE_WRAPPER_NUMBER,
+        number
+    ));
+}
+
+/**
+ * Spec thisNumberValue: unwrap a Number primitive or Number wrapper receiver to
+ * its f64, throwing a TypeError on a foreign receiver.
+ */
+static bool mal_builtin_number_this(MalVm *vm, MalValue this_value, f64 *out) {
+    MalValue primitive;
+    if (!mal_value_this_number_value(this_value, &primitive)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Number.prototype method called on incompatible receiver");
+        return false;
+    }
+    *out = mal_ops_to_number(primitive);
+    return true;
 }
 
 static MalValue mal_builtin_number_is_nan(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -188,14 +250,25 @@ static MalValue mal_builtin_number_is_safe_integer(MalVm *vm, MalValue this_valu
 
 static MalValue mal_builtin_parse_int(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    MalString *string = mal_ops_to_string(&vm->heap, arg_count >= 1 ? args[0] : mal_value_new_undefined());
-    f64 radix = arg_count >= 2 ? mal_ops_to_number(args[1]) : 0;
+    // ToString(arg) and ToNumber(radix) run a user toString/valueOf (and unwrap
+    // a primitive wrapper), and propagate any abrupt completion.
+    MalString *string;
+    if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &string)) {
+        return mal_value_new_undefined();
+    }
+    f64 radix = 0;
+    if (arg_count >= 2 && !mal_vm_to_number(vm, args[1], &radix)) {
+        return mal_value_new_undefined();
+    }
     return mal_ops_number_value(mal_builtin_parse_int_units(mal_string_code_units(string), mal_string_length(string), radix));
 }
 
 static MalValue mal_builtin_parse_float(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    MalString *string = mal_ops_to_string(&vm->heap, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    MalString *string;
+    if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &string)) {
+        return mal_value_new_undefined();
+    }
     return mal_ops_number_value(mal_builtin_parse_float_units(mal_string_code_units(string), mal_string_length(string)));
 }
 
@@ -211,37 +284,298 @@ static MalValue mal_builtin_global_is_finite(MalVm *vm, MalValue this_value, con
     return mal_value_new_boolean(isfinite(mal_ops_to_number(arg_count >= 1 ? args[0] : mal_value_new_undefined())));
 }
 
+/**
+ * Number::toString in a radix 2..36 for a finite value. Renders the integer
+ * part by repeated division and up to ~1100 fractional digits by repeated
+ * multiplication (enough to round-trip any double in any radix).
+ */
+static MalString *mal_builtin_number_radix_string(MalHeap *heap, f64 number, i32 radix) {
+    static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+    bool negative = number < 0;
+    if (negative) {
+        number = -number;
+    }
+
+    f64 integer = floor(number);
+    f64 fraction = number - integer;
+
+    byte buffer[1200];
+    usize length = 0;
+    if (negative) {
+        buffer[length++] = '-';
+    }
+
+    // Integer part, produced least-significant first then reversed.
+    byte int_digits[64];
+    usize int_length = 0;
+    if (integer == 0) {
+        int_digits[int_length++] = '0';
+    } else {
+        while (integer >= 1 && int_length < sizeof(int_digits)) {
+            f64 quotient = floor(integer / radix);
+            i32 digit = (i32) (integer - quotient * radix);
+            int_digits[int_length++] = (byte) digits[digit];
+            integer = quotient;
+        }
+    }
+    for (usize i = 0; i < int_length; i++) {
+        buffer[length++] = int_digits[int_length - 1 - i];
+    }
+
+    if (fraction > 0) {
+        buffer[length++] = '.';
+        i32 max_fraction = 1100;
+        while (fraction > 0 && max_fraction-- > 0 && length < sizeof(buffer) - 1) {
+            fraction *= radix;
+            i32 digit = (i32) floor(fraction);
+            if (digit >= radix) {
+                digit = radix - 1;
+            }
+            buffer[length++] = (byte) digits[digit];
+            fraction -= digit;
+        }
+    }
+
+    return mal_string_new_ascii(heap, buffer, length);
+}
+
 static MalValue mal_builtin_number_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    // TODO(numbers): the radix argument is not supported yet.
+    (void) new_target;
+    (void) callee;
+    f64 number;
+    if (!mal_builtin_number_this(vm, this_value, &number)) {
+        return mal_value_new_undefined();
+    }
+
+    f64 radix = arg_count >= 1 && !mal_value_is_undefined(args[0]) ? mal_ops_to_number(args[0]) : 10;
+    if (radix < 2 || radix > 36 || isnan(radix)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toString() radix must be between 2 and 36");
+        return mal_value_new_undefined();
+    }
+
+    i32 int_radix = (i32) radix;
+    if (int_radix == 10 || !isfinite(number)) {
+        return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
+    }
+
+    return mal_value_from_string(mal_builtin_number_radix_string(&vm->heap, number, int_radix));
+}
+
+static MalValue mal_builtin_number_prototype_to_locale_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
-    return mal_value_from_string(mal_ops_to_string(&vm->heap, this_value));
+    (void) new_target;
+    (void) callee;
+    f64 number;
+    if (!mal_builtin_number_this(vm, this_value, &number)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
 }
 
 static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    f64 number;
+    if (!mal_builtin_number_this(vm, this_value, &number)) {
+        return mal_value_new_undefined();
+    }
+
     f64 digits = arg_count >= 1 ? mal_ops_to_number(args[0]) : 0;
     if (isnan(digits)) {
         digits = 0;
     }
+    digits = trunc(digits);
     if (digits < 0 || digits > 100) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toFixed() digits argument must be between 0 and 100");
         return mal_value_new_undefined();
     }
 
+    if (isnan(number)) {
+        return mal_value_from_string(mal_intrinsic_ascii(vm, "NaN"));
+    }
+    // For magnitudes >= 1e21 the spec falls back to ToString(number).
+    if (fabs(number) >= 1e21) {
+        return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
+    }
+
     byte buffer[160];
-    snprintf(buffer, sizeof(buffer), "%.*f", (i32) digits, mal_ops_to_number(this_value));
+    snprintf(buffer, sizeof(buffer), "%.*f", (i32) digits, number);
     return mal_value_from_string(mal_string_new_ascii(&vm->heap, buffer, strlen(buffer)));
 }
 
+/**
+ * Rewrite a C printf-formatted number (from "%g"/"%#g"/"%e") into the JS
+ * Number::toString shape: a "eXX" exponent becomes "e+X"/"e-X" with no leading
+ * zeros and a mandatory sign, and (when strip_trailing_zeros) trailing zeros in
+ * a fractional mantissa plus any dangling "." are removed. Returns the length
+ * written to out (which must hold at least sizeof(buffer) + a few bytes).
+ */
+static usize mal_builtin_number_normalize(const byte *buffer, byte *out, bool strip_trailing_zeros) {
+    usize mantissa_end = 0;
+    while (buffer[mantissa_end] != '\0' && buffer[mantissa_end] != 'e' && buffer[mantissa_end] != 'E') {
+        mantissa_end++;
+    }
+
+    usize end = mantissa_end;
+    bool has_dot = false;
+    for (usize j = 0; j < mantissa_end; j++) {
+        if (buffer[j] == '.') {
+            has_dot = true;
+        }
+    }
+    if (has_dot && strip_trailing_zeros) {
+        while (end > 0 && buffer[end - 1] == '0') {
+            end--;
+        }
+    }
+    // A trailing "." with no fractional digits ("3." -> "3") is never valid JS.
+    if (end > 0 && buffer[end - 1] == '.') {
+        end--;
+    }
+
+    usize w = 0;
+    for (usize j = 0; j < end; j++) {
+        out[w++] = buffer[j];
+    }
+
+    if (buffer[mantissa_end] == '\0') {
+        return w;
+    }
+
+    out[w++] = 'e';
+    usize i = mantissa_end + 1;
+    char sign = '+';
+    if (buffer[i] == '+' || buffer[i] == '-') {
+        sign = (char) buffer[i];
+        i++;
+    }
+    out[w++] = (byte) sign;
+    while (buffer[i] == '0' && buffer[i + 1] >= '0' && buffer[i + 1] <= '9') {
+        i++;
+    }
+    if (buffer[i] == '\0') {
+        out[w++] = '0';
+    }
+    while (buffer[i] != '\0') {
+        out[w++] = buffer[i++];
+    }
+
+    return w;
+}
+
+static MalValue mal_builtin_number_prototype_to_exponential(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    f64 number;
+    if (!mal_builtin_number_this(vm, this_value, &number)) {
+        return mal_value_new_undefined();
+    }
+
+    // ToIntegerOrInfinity(fractionDigits) precedes the finite short-circuit and
+    // the range check: a Symbol argument throws TypeError before any RangeError.
+    bool digits_undefined = arg_count < 1 || mal_value_is_undefined(args[0]);
+    f64 digits = 0;
+    if (!digits_undefined) {
+        f64 raw;
+        if (!mal_vm_to_number(vm, args[0], &raw)) {
+            return mal_value_new_undefined();
+        }
+        digits = trunc(raw);
+    }
+
+    if (!isfinite(number)) {
+        return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
+    }
+
+    if (!digits_undefined && (isnan(digits) || digits < 0 || digits > 100)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toExponential() argument must be between 0 and 100");
+        return mal_value_new_undefined();
+    }
+
+    // -0 has no sign in the exponential form (the spec only emits "-" when x<0).
+    if (number == 0.0) {
+        number = 0.0;
+    }
+
+    byte buffer[160];
+    if (digits_undefined) {
+        // Shortest exponential that round-trips; auto-precision strips trailing
+        // fractional zeros during normalization.
+        snprintf(buffer, sizeof(buffer), "%e", number);
+    } else {
+        snprintf(buffer, sizeof(buffer), "%.*e", (i32) digits, number);
+    }
+
+    byte normalized[176];
+    usize out = mal_builtin_number_normalize(buffer, normalized, digits_undefined);
+    return mal_value_from_string(mal_string_new_ascii(&vm->heap, normalized, out));
+}
+
+static MalValue mal_builtin_number_prototype_to_precision(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    f64 number;
+    if (!mal_builtin_number_this(vm, this_value, &number)) {
+        return mal_value_new_undefined();
+    }
+
+    // Undefined precision behaves exactly like Number.prototype.toString().
+    if (arg_count < 1 || mal_value_is_undefined(args[0])) {
+        return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
+    }
+
+    // ToIntegerOrInfinity(precision) precedes the finite short-circuit and the
+    // range check: a Symbol argument throws TypeError before any RangeError.
+    f64 raw;
+    if (!mal_vm_to_number(vm, args[0], &raw)) {
+        return mal_value_new_undefined();
+    }
+    f64 precision = trunc(raw);
+    if (!isfinite(number)) {
+        return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
+    }
+    if (isnan(precision) || precision < 1 || precision > 100) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toPrecision() argument must be between 1 and 100");
+        return mal_value_new_undefined();
+    }
+
+    // -0 renders without a sign (the spec only emits "-" for x<0).
+    if (number == 0.0) {
+        number = 0.0;
+    }
+
+    // "%#g" keeps the requested significant digits (no trailing-zero stripping);
+    // normalization then fixes the exponent shape and drops any dangling ".".
+    byte buffer[160];
+    snprintf(buffer, sizeof(buffer), "%#.*g", (i32) precision, number);
+    byte normalized[176];
+    usize out = mal_builtin_number_normalize(buffer, normalized, false);
+    return mal_value_from_string(mal_string_new_ascii(&vm->heap, normalized, out));
+}
+
 static MalValue mal_builtin_number_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) args;
     (void) arg_count;
-    return mal_ops_number_value(mal_ops_to_number(this_value));
+    (void) new_target;
+    (void) callee;
+    f64 number;
+    if (!mal_builtin_number_this(vm, this_value, &number)) {
+        return mal_value_new_undefined();
+    }
+    return mal_ops_number_value(number);
 }
 
 void mal_builtin_number_install(MalVm *vm) {
-    MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    // %Number.prototype% is itself a Number object with [[NumberData]] = +0, so
+    // Number.prototype.valueOf()/toString() and friends work on the prototype.
+    MalObject *prototype = (MalObject *) mal_primitive_wrapper_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]),
+        MAL_PRIMITIVE_WRAPPER_NUMBER,
+        mal_value_from_i32(0)
+    );
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
@@ -274,7 +608,10 @@ void mal_builtin_number_install(MalVm *vm) {
     vm->intrinsics[MAL_INTRINSIC_PARSE_FLOAT] = mal_intrinsic_define_method_n(vm, constructor_object, "parseFloat", 1, mal_builtin_parse_float);
 
     mal_intrinsic_define_method_n(vm, prototype, "toString", 1, mal_builtin_number_prototype_to_string);
+    mal_intrinsic_define_method_n(vm, prototype, "toLocaleString", 0, mal_builtin_number_prototype_to_locale_string);
     mal_intrinsic_define_method_n(vm, prototype, "toFixed", 1, mal_builtin_number_prototype_to_fixed);
+    mal_intrinsic_define_method_n(vm, prototype, "toExponential", 1, mal_builtin_number_prototype_to_exponential);
+    mal_intrinsic_define_method_n(vm, prototype, "toPrecision", 1, mal_builtin_number_prototype_to_precision);
     mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0, mal_builtin_number_prototype_value_of);
 
     // The global function flavors coerce their argument, unlike the statics.

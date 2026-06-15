@@ -996,9 +996,14 @@ type IRIntrinsic =
 	| "parseFloat"
 	| "isNaN"
 	| "isFinite"
+	| "decodeURI"
+	| "decodeURIComponent"
+	| "encodeURI"
+	| "encodeURIComponent"
 	| "Math"
 	| "JSON"
 	| "Reflect"
+	| "Proxy"
 	| "console"
 	| "globalThis"
 	| "NaN"
@@ -1049,9 +1054,14 @@ const irIntrinsics = new Set<string>([
 	"parseFloat",
 	"isNaN",
 	"isFinite",
+	"decodeURI",
+	"decodeURIComponent",
+	"encodeURI",
+	"encodeURIComponent",
 	"Math",
 	"JSON",
 	"Reflect",
+	"Proxy",
 	"console",
 	"globalThis",
 	"NaN",

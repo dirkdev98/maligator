@@ -7,7 +7,9 @@
 #include "heap_string.h"
 #include "heap_symbol.h"
 #include "module_namespace_object.h"
+#include "primitive_wrapper_object.h"
 #include "property_iter.h"
+#include "proxy_object.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -115,6 +117,35 @@ MalDefineOwnStatus mal_builtin_object_try_define(MalVm *vm, MalObject *target, M
         return MAL_DEFINE_OWN_REJECTED;
     }
 
+    // String exotic [[DefineOwnProperty]]: an index/length own property is not
+    // in the table. It is non-configurable (and non-writable), so the only
+    // permitted redefinition is one compatible with the current exotic
+    // descriptor (IsCompatiblePropertyDescriptor with extensible=false). A
+    // compatible request is a no-op; an incompatible one is rejected.
+    MalPropertyDesc string_exotic;
+    if (mal_primitive_wrapper_string_exotic_own(&vm->heap, target, key, &string_exotic)) {
+        bool current_enumerable = (string_exotic.flags & MAL_PROPERTY_ENUMERABLE) != 0;
+        if (parse.has_configurable && (parse.desc.flags & MAL_PROPERTY_CONFIGURABLE)) {
+            return MAL_DEFINE_OWN_REJECTED;
+        }
+        if (parse.has_enumerable && ((parse.desc.flags & MAL_PROPERTY_ENUMERABLE) != 0) != current_enumerable) {
+            return MAL_DEFINE_OWN_REJECTED;
+        }
+        // The current descriptor is a non-writable data property: an accessor
+        // request, a writable upgrade, or a different value is incompatible.
+        if (parse.has_get || parse.has_set) {
+            return MAL_DEFINE_OWN_REJECTED;
+        }
+        if (parse.has_writable && (parse.desc.flags & MAL_PROPERTY_WRITABLE)) {
+            return MAL_DEFINE_OWN_REJECTED;
+        }
+        if (parse.has_value &&
+            !mal_value_is_truthy(mal_ops_strict_equal(parse.desc.value, string_exotic.value))) {
+            return MAL_DEFINE_OWN_REJECTED;
+        }
+        return MAL_DEFINE_OWN_APPLIED;
+    }
+
     if (target->header.type == MAL_HEAP_ARRAY_OBJECT && mal_array_key_is_length(key)) {
         // ArraySetLength-lite: length lives in the array header, not the
         // property table. It is non-configurable, non-enumerable, and its
@@ -191,10 +222,54 @@ static void mal_builtin_object_define_from_value(MalVm *vm, MalObject *target, M
     }
 }
 
+/**
+ * ToObject for the primitive types: box into the matching primitive wrapper
+ * with the proper .prototype intrinsic. Returns undefined for non-primitives
+ * (caller handles object pass-through and null/undefined separately).
+ */
+static MalValue mal_builtin_object_box_primitive(MalVm *vm, MalValue value) {
+    MalPrimitiveWrapperKind kind;
+    MalIntrinsic prototype_slot;
+    if (mal_value_is_string(value)) {
+        kind = MAL_PRIMITIVE_WRAPPER_STRING;
+        prototype_slot = MAL_INTRINSIC_STRING_PROTOTYPE;
+    } else if (mal_value_is_boolean(value)) {
+        kind = MAL_PRIMITIVE_WRAPPER_BOOLEAN;
+        prototype_slot = MAL_INTRINSIC_BOOLEAN_PROTOTYPE;
+    } else if (mal_value_is_symbol(value)) {
+        kind = MAL_PRIMITIVE_WRAPPER_SYMBOL;
+        prototype_slot = MAL_INTRINSIC_SYMBOL_PROTOTYPE;
+    } else if (mal_value_is_bigint(value)) {
+        kind = MAL_PRIMITIVE_WRAPPER_BIGINT;
+        prototype_slot = MAL_INTRINSIC_BIGINT_PROTOTYPE;
+    } else if (mal_ops_is_number(value)) {
+        kind = MAL_PRIMITIVE_WRAPPER_NUMBER;
+        prototype_slot = MAL_INTRINSIC_NUMBER_PROTOTYPE;
+    } else {
+        return mal_value_new_undefined();
+    }
+
+    return mal_value_from_primitive_wrapper(mal_primitive_wrapper_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[prototype_slot]),
+        kind,
+        value
+    ));
+}
+
 static MalValue mal_builtin_object_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     if (arg_count > 0 && mal_value_is_object(args[0])) {
         return args[0];
+    }
+
+    // ToObject of a primitive produces the matching wrapper; null/undefined and
+    // a missing argument produce a fresh ordinary object.
+    if (arg_count > 0 && !mal_value_is_nil(args[0])) {
+        MalValue boxed = mal_builtin_object_box_primitive(vm, args[0]);
+        if (!mal_value_is_undefined(boxed)) {
+            return boxed;
+        }
     }
 
     return mal_value_from_object(mal_intrinsic_new_object(vm));
@@ -209,6 +284,18 @@ static MalValue mal_builtin_object_define_property(MalVm *vm, MalValue this_valu
 
     MalKey key;
     if (!mal_vm_value_to_property_key(vm, mal_builtin_object_arg(args, arg_count, 1), &key)) {
+        return args[0];
+    }
+
+    if (mal_value_is_proxy_object(args[0])) {
+        bool ok = mal_proxy_define_own_property(vm, mal_value_to_proxy_object(args[0]), key, mal_builtin_object_arg(args, arg_count, 2));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+        if (!ok) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
+            return mal_value_new_undefined();
+        }
         return args[0];
     }
 
@@ -271,6 +358,15 @@ static MalValue mal_builtin_object_get_own_property_descriptor(MalVm *vm, MalVal
         return mal_value_new_undefined();
     }
 
+    if (mal_value_is_proxy_object(args[0])) {
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_proxy_get_own_property_descriptor(vm, mal_value_to_proxy_object(args[0]), key, &present, &desc)) {
+            return mal_value_new_undefined();
+        }
+        return present ? mal_builtin_object_descriptor_object(vm, desc) : mal_value_new_undefined();
+    }
+
     // Module namespace descriptors: exports are { value: live, writable: true,
     // enumerable: true, configurable: false }; @@toStringTag is the non-writable,
     // non-enumerable, non-configurable "Module".
@@ -306,6 +402,12 @@ static MalValue mal_builtin_object_get_own_property_descriptor(MalVm *vm, MalVal
             }
         }
         return mal_value_new_undefined();
+    }
+
+    // String wrapper exotic index/length own properties are not in the table.
+    MalPropertyDesc string_exotic;
+    if (mal_primitive_wrapper_string_exotic_own(&vm->heap, mal_value_to_object(args[0]), key, &string_exotic)) {
+        return mal_builtin_object_descriptor_object(vm, string_exotic);
     }
 
     MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(args[0]), key);
@@ -370,6 +472,61 @@ static MalValue mal_builtin_object_key_to_string(MalVm *vm, MalKey key) {
 static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalPropertyIterKind iter_kind, MalBuiltinObjectCollect collect) {
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
 
+    // A proxy's keys come from its ownKeys trap; only string keys participate in
+    // these string-keyed collections, and for-key collections that filter to
+    // enumerable own properties (Object.keys/values/entries) re-check each key's
+    // descriptor through the getOwnPropertyDescriptor trap.
+    if (mal_value_is_proxy_object(target)) {
+        MalProxyObject *proxy = mal_value_to_proxy_object(target);
+        MalValue keys_value;
+        if (!mal_proxy_own_property_keys(vm, proxy, &keys_value)) {
+            return mal_value_new_undefined();
+        }
+        MalArrayObject *keys = mal_value_to_array_object(keys_value);
+        u32 key_count = mal_array_object_length(keys);
+        bool enumerable_only = iter_kind == MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER;
+        u32 out = 0;
+        for (u32 i = 0; i < key_count; i++) {
+            MalValue key_value;
+            if (!mal_vm_get_property(vm, keys_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &key_value)) {
+                return mal_value_new_undefined();
+            }
+            if (!mal_value_is_string(key_value)) {
+                continue;
+            }
+            MalKey key;
+            if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+                return mal_value_new_undefined();
+            }
+            bool present;
+            MalPropertyDesc desc;
+            if (enumerable_only || collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
+                if (!mal_proxy_get_own_property_descriptor(vm, proxy, key, &present, &desc)) {
+                    return mal_value_new_undefined();
+                }
+                if (enumerable_only && (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE))) {
+                    continue;
+                }
+            }
+            MalValue element = key_value;
+            if (collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
+                MalValue value;
+                if (!mal_vm_get_property(vm, target, key, &value)) {
+                    return mal_value_new_undefined();
+                }
+                element = value;
+                if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
+                    MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
+                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, key_value);
+                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, value);
+                    element = mal_value_from_array_object(entry);
+                }
+            }
+            mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) out++)}, element);
+        }
+        return mal_value_from_array_object(result);
+    }
+
     // A module namespace's own keys are its sorted string exports (all
     // enumerable); values/entries read each export live (which may throw on a
     // binding still in its TDZ).
@@ -410,10 +567,50 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
     usize key_count = 0;
     usize key_capacity = 0;
 
+    u32 count = 0;
+
+    // A String wrapper's exotic own keys are its indices, then the
+    // non-enumerable `length`; they precede the ordinary table keys and are
+    // never table-backed. Object.keys/values/entries see only the enumerable
+    // indices; Object.getOwnPropertyNames (the non-enumerable view) also lists
+    // `length`.
+    bool enumerable_only = iter_kind == MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER;
+    MalPropertyDesc string_exotic;
+    if (mal_primitive_wrapper_string_exotic_own(
+            &vm->heap, object, mal_intrinsic_string_key(vm, "length"), &string_exotic
+        )) {
+        u32 string_length = (u32) mal_value_to_i32(string_exotic.value);
+        for (u32 i = 0; i < string_length; i++) {
+            MalKey index_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+            MalValue index_string = mal_builtin_object_key_to_string(vm, index_key);
+            MalValue element = index_string;
+            if (reads_values) {
+                MalPropertyDesc index_desc;
+                mal_primitive_wrapper_string_exotic_own(&vm->heap, object, index_key, &index_desc);
+                element = index_desc.value;
+                if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
+                    MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
+                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, index_string);
+                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, index_desc.value);
+                    element = mal_value_from_array_object(entry);
+                }
+            }
+            mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)}, element);
+        }
+        // `length` is non-enumerable, so only the key-listing non-enumerable
+        // view (getOwnPropertyNames) reports it.
+        if (!enumerable_only && !reads_values) {
+            mal_array_object_store(
+                result,
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_value_from_string(mal_intrinsic_ascii(vm, "length"))
+            );
+        }
+    }
+
     MalPropertyIter iter;
     mal_property_iter_init(&iter, object, iter_kind);
 
-    u32 count = 0;
     MalKey key;
     MalPropertyDesc desc;
     while (mal_property_iter_next(&iter, &key, &desc)) {
@@ -563,10 +760,17 @@ static MalValue mal_builtin_object_create(MalVm *vm, MalValue this_value, const 
 }
 
 static MalValue mal_builtin_object_get_prototype_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
         return mal_value_new_undefined();
+    }
+
+    if (mal_value_is_proxy_object(args[0])) {
+        MalValue proto;
+        if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(args[0]), &proto)) {
+            return mal_value_new_undefined();
+        }
+        return proto;
     }
 
     MalObject *prototype = mal_object_get_prototype(mal_value_to_object(args[0]));
@@ -586,6 +790,17 @@ static MalValue mal_builtin_object_set_prototype_of(MalVm *vm, MalValue this_val
         return args[0];
     }
 
+    if (mal_value_is_proxy_object(args[0])) {
+        bool success;
+        if (!mal_proxy_set_prototype_of(vm, mal_value_to_proxy_object(args[0]), args[1], &success)) {
+            return mal_value_new_undefined();
+        }
+        if (!success) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set prototype of object");
+        }
+        return args[0];
+    }
+
     // A failed [[SetPrototypeOf]] (non-extensible target or a cycle) throws.
     if (!mal_object_set_prototype(mal_value_to_object(args[0]), prototype)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set prototype of non-extensible object");
@@ -595,10 +810,20 @@ static MalValue mal_builtin_object_set_prototype_of(MalVm *vm, MalValue this_val
 }
 
 static MalValue mal_builtin_object_prevent_extensions(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
         return arg_count > 0 ? args[0] : mal_value_new_undefined();
+    }
+
+    if (mal_value_is_proxy_object(args[0])) {
+        bool success;
+        if (!mal_proxy_prevent_extensions(vm, mal_value_to_proxy_object(args[0]), &success)) {
+            return mal_value_new_undefined();
+        }
+        if (!success) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object.preventExtensions on a proxy that returned false");
+        }
+        return args[0];
     }
 
     mal_object_set_extensible(mal_value_to_object(args[0]), false);
@@ -606,10 +831,17 @@ static MalValue mal_builtin_object_prevent_extensions(MalVm *vm, MalValue this_v
 }
 
 static MalValue mal_builtin_object_is_extensible(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
         return mal_value_new_boolean(false);
+    }
+
+    if (mal_value_is_proxy_object(args[0])) {
+        bool extensible;
+        if (!mal_proxy_is_extensible(vm, mal_value_to_proxy_object(args[0]), &extensible)) {
+            return mal_value_new_undefined();
+        }
+        return mal_value_new_boolean(extensible);
     }
 
     return mal_value_new_boolean(mal_object_is_extensible(mal_value_to_object(args[0])));
@@ -745,6 +977,12 @@ static MalValue mal_builtin_object_has_own_with_target(MalVm *vm, MalValue targe
         return mal_value_new_boolean(false);
     }
 
+    // A String wrapper's exotic index/length own properties are not table-backed.
+    MalPropertyDesc string_exotic;
+    if (mal_primitive_wrapper_string_exotic_own(&vm->heap, mal_value_to_object(target), key, &string_exotic)) {
+        return mal_value_new_boolean(true);
+    }
+
     return mal_value_new_boolean(mal_object_get_own(mal_value_to_object(target), key).present);
 }
 
@@ -786,6 +1024,12 @@ static MalValue mal_builtin_object_prototype_property_is_enumerable(MalVm *vm, M
         return mal_value_new_boolean(false);
     }
 
+    // A String wrapper's exotic indices are enumerable; its `length` is not.
+    MalPropertyDesc string_exotic;
+    if (mal_primitive_wrapper_string_exotic_own(&vm->heap, mal_value_to_object(this_value), key, &string_exotic)) {
+        return mal_value_new_boolean((string_exotic.flags & MAL_PROPERTY_ENUMERABLE) != 0);
+    }
+
     MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(this_value), key);
     return mal_value_new_boolean(lookup.present && (lookup.desc.flags & MAL_PROPERTY_ENUMERABLE));
 }
@@ -810,6 +1054,22 @@ MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, 
         tag = "[object Array]";
     } else if (mal_value_is_callable(this_value)) {
         tag = "[object Function]";
+    } else if (mal_value_is_primitive_wrapper(this_value)) {
+        // The builtin tag tracks the wrapper's [[PrimitiveData]] internal slot.
+        switch (mal_value_to_primitive_wrapper(this_value)->kind) {
+            case MAL_PRIMITIVE_WRAPPER_STRING:
+                tag = "[object String]";
+                break;
+            case MAL_PRIMITIVE_WRAPPER_NUMBER:
+                tag = "[object Number]";
+                break;
+            case MAL_PRIMITIVE_WRAPPER_BOOLEAN:
+                tag = "[object Boolean]";
+                break;
+            default:
+                tag = "[object Object]";
+                break;
+        }
     } else if (mal_value_is_string(this_value)) {
         tag = "[object String]";
     } else if (mal_value_is_boolean(this_value)) {

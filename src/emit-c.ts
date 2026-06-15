@@ -104,16 +104,22 @@ function producesNumberFromNumbers(operator: string): boolean {
 }
 
 /**
+ * Operators whose fully-general op never sets a THROW completion, so a boxed
+ * fallback can skip the check. Only the strict-equality operators qualify:
+ * they compare without any coercion. Every other operator can throw — `in`/
+ * `instanceof` directly, arithmetic/bitwise/shift on a BigInt domain error, and
+ * the relational/loose-equality comparisons whenever an object operand runs a
+ * throwing valueOf/toString (ToPrimitive) or a Symbol forces a TypeError.
+ */
+const NON_THROWING_BINARY = new Set<string>(["===", "!=="]);
+
+/**
  * Whether a binary operator can leave a THROW completion that a boxed fallback
- * must propagate. The comparison operators lower to a pure native compare and
- * never throw; every other operator can — `in`/`instanceof` directly, and
- * arithmetic/bitwise/shift whenever a BigInt operand forces the fully-general
- * path (BigInt/Number mixing → TypeError, BigInt `/0` → RangeError, `>>>` on a
- * BigInt → TypeError). The boxed (and mixed-rep fallback) paths reach that
- * general op, so they need the completion check.
+ * must propagate. The boxed (and mixed-rep fallback) paths reach the general op,
+ * so they need the completion check unless the operator can never throw.
  */
 function binaryOpCanThrow(operator: string): boolean {
-	return !(operator in NATIVE_COMPARE);
+	return !NON_THROWING_BINARY.has(operator);
 }
 
 /**
@@ -758,14 +764,17 @@ function emitInstruction(
 				reps[r] === "number" ? `r${r}` : `mal_ops_number_as_f64(${boxed(r)})`;
 			const guardIsNumber = (r: number): string => `mal_ops_is_number(${boxed(r)})`;
 
-			// Comparisons yield a boolean and never throw. Emit a native compare
-			// when both operands are numbers; speculate when one is a boxed number
-			// (well-predicted in a hot loop); else use the fully-general op, whose
-			// result is already a boxed boolean.
+			// Comparisons yield a boolean. The native compare over two numbers
+			// never throws; the fully-general op can, though — the relational and
+			// loose-equality operators run ToPrimitive (valueOf/toString) on an
+			// object operand and reject a Symbol — so any path that reaches `slow`
+			// propagates the completion. Strict equality never coerces, so
+			// binaryOpCanThrow leaves its check off.
 			if (compare !== undefined) {
 				if (leftIsNum && rightIsNum) {
 					return [storeBool(`${num(left)} ${compare} ${num(right)}`)];
 				}
+				const compareCheck = binaryOpCanThrow(operator) ? [completionCheck] : [];
 				if (leftIsNum !== rightIsNum) {
 					const guard = guardIsNumber(leftIsNum ? right : left);
 					const fastBool = `${numericOf(left)} ${compare} ${numericOf(right)}`;
@@ -773,10 +782,12 @@ function emitInstruction(
 						dstIsBool
 							? `r${dst} = ${guard} ? (${fastBool}) : mal_value_to_boolean(${slow});`
 							: `r${dst} = ${guard} ? mal_value_new_boolean(${fastBool}) : ${slow};`,
+						...compareCheck,
 					];
 				}
 				return [
 					dstIsBool ? `r${dst} = mal_value_to_boolean(${slow});` : `r${dst} = ${slow};`,
+					...compareCheck,
 				];
 			}
 

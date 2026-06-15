@@ -311,6 +311,35 @@ void mal_vm_iterator_close(MalVm *vm, const MalIteratorRecord *record) {
     vm->completion = pending;
 }
 
+bool mal_vm_iterator_close_normal(MalVm *vm, const MalIteratorRecord *record) {
+    MalValue return_method;
+    if (!mal_vm_get_property(vm, record->iterator, mal_intrinsic_string_key(vm, "return"), &return_method)) {
+        return false; // a throwing return getter propagates
+    }
+
+    // GetMethod: undefined/null means "no return", which is a no-op close.
+    if (mal_value_is_nil(return_method)) {
+        return true;
+    }
+
+    if (!mal_value_is_callable(return_method)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator return is not a function");
+        return false;
+    }
+
+    MalCompletion completion = mal_vm_call_value(vm, return_method, record->iterator, nullptr, 0);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        return false; // a throwing return propagates
+    }
+
+    if (!mal_value_is_object(completion.value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator return result is not an object");
+        return false;
+    }
+
+    return true;
+}
+
 static MalObject *mal_builtin_iterator_prototype_new(MalVm *vm, MalIntrinsic slot, MalObject *parent, const byte *tag) {
     MalObject *prototype = mal_object_new(&vm->heap, parent);
     vm->intrinsics[slot] = mal_value_from_object(prototype);

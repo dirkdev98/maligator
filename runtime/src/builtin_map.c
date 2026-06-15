@@ -258,6 +258,73 @@ static MalValue mal_builtin_map_prototype_size_getter(MalVm *vm, MalValue this_v
     return mal_value_from_i32((i32) mal_map_object_size(map));
 }
 
+/**
+ * Shared body for Map.prototype.getOrInsert / WeakMap.prototype.getOrInsert.
+ * Returns the existing value for key, or stores and returns `value`.
+ */
+static MalValue mal_builtin_map_get_or_insert(MalVm *vm, MalMapObject *map, MalValue key, MalValue value) {
+    if (mal_map_object_has(map, key)) {
+        return mal_map_object_get(map, key);
+    }
+
+    mal_map_object_set(map, key, value);
+    return value;
+}
+
+/**
+ * Shared body for getOrInsertComputed: when key is absent, call callbackfn
+ * with the canonicalized key, then upsert the computed value (overwriting any
+ * entry the callback itself inserted) and return it.
+ */
+static MalValue mal_builtin_map_get_or_insert_computed(MalVm *vm, MalMapObject *map, MalValue key, MalValue callback) {
+    if (!mal_value_is_callable(callback)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Callback is not a function");
+        return mal_value_new_undefined();
+    }
+
+    if (mal_map_object_has(map, key)) {
+        return mal_map_object_get(map, key);
+    }
+
+    MalValue canonical_key = mal_map_key_from_value(key).value;
+    MalCompletion completion = mal_vm_call_value(vm, callback, mal_value_new_undefined(), &canonical_key, 1);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        return mal_value_new_undefined();
+    }
+
+    // Overwrite any entry the callback inserted for this key, then append.
+    mal_map_object_set(map, key, completion.value);
+    return completion.value;
+}
+
+static MalValue mal_builtin_map_prototype_get_or_insert(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
+    if (map == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    return mal_builtin_map_get_or_insert(
+        vm,
+        map,
+        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
+        arg_count >= 2 ? args[1] : mal_value_new_undefined()
+    );
+}
+
+static MalValue mal_builtin_map_prototype_get_or_insert_computed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
+    if (map == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    return mal_builtin_map_get_or_insert_computed(
+        vm,
+        map,
+        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
+        arg_count >= 2 ? args[1] : mal_value_new_undefined()
+    );
+}
+
 static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalMapObject *map = mal_builtin_map_this(vm, this_value, false, "Receiver is not a Map");
     if (map == nullptr) {
@@ -363,6 +430,42 @@ static MalValue mal_builtin_weak_map_prototype_delete(MalVm *vm, MalValue this_v
     return mal_value_new_boolean(mal_map_object_delete(map, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
+static MalValue mal_builtin_weak_map_prototype_get_or_insert(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, true, "Receiver is not a WeakMap");
+    if (map == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue key = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_builtin_map_can_be_held_weakly(key)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid value used as weak map key");
+        return mal_value_new_undefined();
+    }
+
+    return mal_builtin_map_get_or_insert(vm, map, key, arg_count >= 2 ? args[1] : mal_value_new_undefined());
+}
+
+static MalValue mal_builtin_weak_map_prototype_get_or_insert_computed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalMapObject *map = mal_builtin_map_this(vm, this_value, true, "Receiver is not a WeakMap");
+    if (map == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue callback = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    if (!mal_value_is_callable(callback)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Callback is not a function");
+        return mal_value_new_undefined();
+    }
+
+    MalValue key = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_builtin_map_can_be_held_weakly(key)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid value used as weak map key");
+        return mal_value_new_undefined();
+    }
+
+    return mal_builtin_map_get_or_insert_computed(vm, map, key, callback);
+}
+
 /**
  * Define the shared constructor/prototype scaffolding for one collection.
  */
@@ -429,6 +532,8 @@ void mal_builtin_map_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_CONSTRUCTOR]), "groupBy", 2, mal_builtin_map_group_by);
 
     mal_intrinsic_define_method_n(vm, prototype, "get", 1, mal_builtin_map_prototype_get);
+    mal_intrinsic_define_method_n(vm, prototype, "getOrInsert", 2, mal_builtin_map_prototype_get_or_insert);
+    mal_intrinsic_define_method_n(vm, prototype, "getOrInsertComputed", 2, mal_builtin_map_prototype_get_or_insert_computed);
     mal_intrinsic_define_method_n(vm, prototype, "set", 2, mal_builtin_map_prototype_set);
     mal_intrinsic_define_method_n(vm, prototype, "has", 1, mal_builtin_map_prototype_has);
     mal_intrinsic_define_method_n(vm, prototype, "delete", 1, mal_builtin_map_prototype_delete);
@@ -455,6 +560,8 @@ void mal_builtin_map_install(MalVm *vm) {
     );
 
     mal_intrinsic_define_method_n(vm, weak_prototype, "get", 1, mal_builtin_weak_map_prototype_get);
+    mal_intrinsic_define_method_n(vm, weak_prototype, "getOrInsert", 2, mal_builtin_weak_map_prototype_get_or_insert);
+    mal_intrinsic_define_method_n(vm, weak_prototype, "getOrInsertComputed", 2, mal_builtin_weak_map_prototype_get_or_insert_computed);
     mal_intrinsic_define_method_n(vm, weak_prototype, "set", 2, mal_builtin_weak_map_prototype_set);
     mal_intrinsic_define_method_n(vm, weak_prototype, "has", 1, mal_builtin_weak_map_prototype_has);
     mal_intrinsic_define_method_n(vm, weak_prototype, "delete", 1, mal_builtin_weak_map_prototype_delete);

@@ -13,6 +13,7 @@
 #include "microtask.h"
 #include "object_ops.h"
 #include "promise_object.h"
+#include "proxy_object.h"
 #include "value_ops.h"
 #include "vm_ops.h"
 
@@ -1043,6 +1044,11 @@ MalCompletion mal_vm_call_value(
         return vm->completion;
     }
 
+    // A callable proxy routes [[Call]] through its apply trap.
+    if (mal_value_is_proxy_object(callee)) {
+        return mal_proxy_apply(vm, mal_value_to_proxy_object(callee), this_value, args, arg_count);
+    }
+
     MalBoundResolution resolution = mal_bound_function_object_resolve(callee, this_value, args, arg_count, true);
     MalCompletion completion = {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
@@ -1104,6 +1110,11 @@ MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue 
 MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count, MalValue new_target) {
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return vm->completion;
+    }
+
+    // A constructable proxy routes [[Construct]] through its construct trap.
+    if (mal_value_is_proxy_object(callee)) {
+        return mal_proxy_construct(vm, mal_value_to_proxy_object(callee), args, arg_count, new_target);
     }
 
     // [[Construct]] ignores the bound this.

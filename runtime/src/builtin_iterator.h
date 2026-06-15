@@ -50,3 +50,12 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
  * swallowing any secondary error so the original completion survives.
  */
 void mal_vm_iterator_close(MalVm *vm, const MalIteratorRecord *record);
+
+/**
+ * Spec IteratorClose for a NORMAL completion: read return(), call it, and let
+ * any error (from the getter, the call, or a non-object result) propagate as a
+ * throw completion. Returns false (with the throw left on the vm) when the
+ * close was abrupt; true otherwise. Used where the spec sequences a close ahead
+ * of a normal result (e.g. take exhaustion and %IteratorHelper%.return).
+ */
+bool mal_vm_iterator_close_normal(MalVm *vm, const MalIteratorRecord *record);

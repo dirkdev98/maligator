@@ -1,6 +1,7 @@
 #include "builtin_data_view.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "array_buffer_object.h"
@@ -28,6 +29,7 @@ typedef enum MalDataViewType {
     DV_UINT16,
     DV_INT32,
     DV_UINT32,
+    DV_FLOAT16,
     DV_FLOAT32,
     DV_FLOAT64,
     DV_BIGINT64,
@@ -41,6 +43,7 @@ static u32 mal_data_view_type_size(MalDataViewType type) {
             return 1;
         case DV_INT16:
         case DV_UINT16:
+        case DV_FLOAT16:
             return 2;
         case DV_INT32:
         case DV_UINT32:
@@ -49,6 +52,83 @@ static u32 mal_data_view_type_size(MalDataViewType type) {
         default:
             return 8;
     }
+}
+
+// IEEE-754 binary16 → f64. Handles subnormals, infinities, and NaN.
+static f64 mal_data_view_float16_to_f64(u16 bits) {
+    u32 sign = (u32) (bits >> 15) & 0x1;
+    u32 exponent = (u32) (bits >> 10) & 0x1F;
+    u32 mantissa = (u32) bits & 0x3FF;
+    f64 value;
+    if (exponent == 0) {
+        // Zero or subnormal: value = mantissa * 2^-24.
+        value = ldexp((f64) mantissa, -24);
+    } else if (exponent == 0x1F) {
+        value = mantissa != 0 ? NAN : INFINITY;
+    } else {
+        // Normalized: (1 + mantissa/1024) * 2^(exponent-15).
+        value = ldexp(1.0 + (f64) mantissa / 1024.0, (i32) exponent - 15);
+    }
+    return sign ? -value : value;
+}
+
+// f64 → IEEE-754 binary16 with round-half-to-even, matching the spec's
+// RoundMVResult / NumberToRawBytes for the Float16 type.
+static u16 mal_data_view_f64_to_float16(f64 value) {
+    if (isnan(value)) {
+        return 0x7E00;
+    }
+    u16 sign = signbit(value) ? 0x8000 : 0x0000;
+    f64 abs = fabs(value);
+    if (isinf(abs)) {
+        return sign | 0x7C00;
+    }
+    if (abs == 0.0) {
+        return sign;
+    }
+    int exp;
+    f64 frac = frexp(abs, &exp);  // abs = frac * 2^exp, frac in [0.5, 1).
+    // Convert to the binary16 unbiased exponent of the leading bit: abs in
+    // [2^(exp-1), 2^exp), so the leading-bit exponent e satisfies abs in
+    // [2^e, 2^(e+1)) with e = exp - 1.
+    int e = exp - 1;
+    if (e < -24) {
+        // Underflows below the smallest subnormal; rounds to (signed) zero,
+        // except values at least half of 2^-24 round up to the min subnormal.
+        f64 scaled = ldexp(abs, 24);  // count of 2^-24 units
+        f64 rounded = nearbyint(scaled);  // round-half-to-even (default mode)
+        return sign | (u16) (i64) rounded;
+    }
+    if (e < -14) {
+        // Subnormal: quantize mantissa in units of 2^-24.
+        f64 scaled = ldexp(abs, 24);
+        f64 rounded = nearbyint(scaled);
+        u32 m = (u32) (i64) rounded;
+        if (m >= 0x400) {
+            // Rounded up into the smallest normal.
+            return sign | 0x0400 | (m & 0x3FF);
+        }
+        return sign | (u16) m;
+    }
+    if (e > 15) {
+        // Overflow to infinity.
+        return sign | 0x7C00;
+    }
+    // Normalized: mantissa = round((frac*2 - 1) * 1024) with frac*2 in [1, 2).
+    f64 significand = ldexp(abs, -e);  // in [1, 2)
+    f64 mantissa_f = (significand - 1.0) * 1024.0;
+    f64 m = nearbyint(mantissa_f);
+    u32 mantissa = (u32) (i64) m;
+    u32 exponent = (u32) (e + 15);
+    if (mantissa >= 0x400) {
+        // Rounded up to next exponent.
+        mantissa = 0;
+        exponent += 1;
+        if (exponent >= 0x1F) {
+            return sign | 0x7C00;
+        }
+    }
+    return sign | (u16) (exponent << 10) | (u16) mantissa;
 }
 
 static u32 mal_data_view_current_length(const MalDataViewObject *view) {
@@ -65,6 +145,20 @@ static u32 mal_data_view_current_length(const MalDataViewObject *view) {
     return view->byte_length;
 }
 
+// Spec IsViewOutOfBounds: a detached buffer, a length-tracking view whose offset
+// now exceeds the (shrunk) buffer, or a fixed view whose offset+length no longer
+// fits the buffer. Used to raise TypeError (distinct from the in-bounds RangeError)
+// when a resizable buffer shrinks under the view.
+static bool mal_data_view_is_out_of_bounds(const MalDataViewObject *view) {
+    if (view->buffer->detached) {
+        return true;
+    }
+    if (view->length_tracking) {
+        return view->byte_offset > view->buffer->byte_length;
+    }
+    return (u64) view->byte_offset + view->byte_length > view->buffer->byte_length;
+}
+
 static MalDataViewObject *mal_data_view_this(MalVm *vm, MalValue this_value) {
     if (!mal_value_is_data_view_object(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Receiver is not a DataView");
@@ -73,16 +167,26 @@ static MalDataViewObject *mal_data_view_this(MalVm *vm, MalValue this_value) {
     return mal_value_to_data_view_object(this_value);
 }
 
-static bool mal_data_view_to_index(MalVm *vm, MalValue value, u32 *out) {
-    f64 number = mal_ops_to_number(value);
+// Spec ToIndex: ToNumber (running full ToPrimitive / @@toPrimitive / valueOf →
+// toString, and throwing TypeError on Symbol/BigInt) → ToIntegerOrInfinity →
+// RangeError when negative or above 2^53-1. `undefined` is treated as 0 by the
+// callers that pass it (matching the spec's optional-argument handling).
+static bool mal_data_view_to_index(MalVm *vm, MalValue value, u64 *out) {
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) {
+        return false;
+    }
+    // ToIntegerOrInfinity: NaN → 0, otherwise truncate toward zero.
     if (isnan(number)) {
         number = 0;
+    } else {
+        number = trunc(number);
     }
-    if (number < 0 || isinf(number) || trunc(number) != number || number > 4294967295.0) {
+    if (number < 0 || number > 9007199254740991.0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid DataView offset/length");
         return false;
     }
-    *out = (u32) number;
+    *out = (u64) number;
     return true;
 }
 
@@ -98,10 +202,45 @@ static MalValue mal_builtin_data_view_constructor(MalVm *vm, MalValue this_value
     }
 
     MalArrayBufferObject *buffer = mal_value_to_array_buffer_object(args[0]);
-    u32 byte_offset = 0;
+
+    // Spec order: ToIndex(byteOffset), then ToIndex(byteLength) if present, then
+    // the detached check, then the bounds checks. ToIndex runs user coercion, so
+    // both conversions must happen before any buffer state is inspected.
+    u64 byte_offset = 0;
     if (arg_count >= 2 && !mal_data_view_to_index(vm, args[1], &byte_offset)) {
         return mal_value_new_undefined();
     }
+    bool has_length = arg_count >= 3 && !mal_value_is_undefined(args[2]);
+    u64 requested_length = 0;
+    if (has_length && !mal_data_view_to_index(vm, args[2], &requested_length)) {
+        return mal_value_new_undefined();
+    }
+
+    if (buffer->detached) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot construct DataView over a detached ArrayBuffer");
+        return mal_value_new_undefined();
+    }
+    if (byte_offset > buffer->byte_length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Start offset is outside the bounds of the buffer");
+        return mal_value_new_undefined();
+    }
+    if (has_length && byte_offset + requested_length > buffer->byte_length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid DataView length");
+        return mal_value_new_undefined();
+    }
+
+    // OrdinaryCreateFromConstructor reads NewTarget.prototype, which can run a
+    // user getter that detaches or resizes the buffer. The spec re-validates the
+    // detached state and the offset/length bounds against the post-access buffer
+    // length before installing the view.
+    MalValue prototype_value;
+    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype_value)) {
+        return mal_value_new_undefined();
+    }
+    MalObject *prototype = mal_value_is_object(prototype_value)
+        ? mal_value_to_object(prototype_value)
+        : mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DATA_VIEW_PROTOTYPE]);
+
     if (buffer->detached) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot construct DataView over a detached ArrayBuffer");
         return mal_value_new_undefined();
@@ -113,37 +252,83 @@ static MalValue mal_builtin_data_view_constructor(MalVm *vm, MalValue this_value
 
     bool length_tracking = false;
     u32 byte_length = 0;
-    if (arg_count < 3 || mal_value_is_undefined(args[2])) {
+    if (!has_length) {
         if (buffer->resizable) {
             length_tracking = true;
         } else {
-            byte_length = buffer->byte_length - byte_offset;
+            byte_length = buffer->byte_length - (u32) byte_offset;
         }
     } else {
-        if (!mal_data_view_to_index(vm, args[2], &byte_length)) {
-            return mal_value_new_undefined();
-        }
-        if ((u64) byte_offset + byte_length > buffer->byte_length) {
+        if (byte_offset + requested_length > buffer->byte_length) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid DataView length");
             return mal_value_new_undefined();
         }
+        byte_length = (u32) requested_length;
     }
-
-    MalValue prototype_value;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype_value)) {
-        return mal_value_new_undefined();
-    }
-    MalObject *prototype = mal_value_is_object(prototype_value)
-        ? mal_value_to_object(prototype_value)
-        : mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DATA_VIEW_PROTOTYPE]);
 
     MalDataViewObject *view = mal_heap_alloc(&vm->heap, sizeof(MalDataViewObject), MAL_HEAP_DATA_VIEW_OBJECT);
     mal_object_init(&vm->heap, &view->object, MAL_HEAP_DATA_VIEW_OBJECT, prototype);
     view->buffer = buffer;
-    view->byte_offset = byte_offset;
+    view->byte_offset = (u32) byte_offset;
     view->byte_length = byte_length;
     view->length_tracking = length_tracking;
     return mal_value_from_data_view_object(view);
+}
+
+// Spec ToBigInt for the set* value: ToPrimitive(value, number) runs first (so a
+// user @@toPrimitive / valueOf → toString fires and can throw), then the
+// resulting primitive is converted. mal_bigint_to_bigint already handles every
+// primitive case (BigInt/boolean/string accepted; number/symbol/null/undefined
+// reject with TypeError), so we only need the ToPrimitive step in front of it.
+// (The shared mal_bigint_to_bigint in builtin_bigint.c is owned by another
+// worktree and does not run ToPrimitive, so we do it here.)
+static bool mal_data_view_to_bigint(MalVm *vm, MalValue value, i128 *out) {
+    if (mal_value_is_object(value)) {
+        MalValue exotic;
+        if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE), &exotic)) {
+            return false;
+        }
+        if (!mal_value_is_nil(exotic)) {
+            if (!mal_value_is_callable(exotic)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.toPrimitive is not a function");
+                return false;
+            }
+            MalValue hint = mal_value_from_string(mal_intrinsic_ascii(vm, "number"));
+            MalCompletion result = mal_vm_call_value(vm, exotic, value, &hint, 1);
+            if (result.kind != MAL_COMPLETION_NORMAL) {
+                return false;
+            }
+            if (mal_value_is_object(result.value)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
+                return false;
+            }
+            value = result.value;
+        } else {
+            const byte *methods[2] = {"valueOf", "toString"};
+            bool converted = false;
+            for (i32 i = 0; i < 2 && !converted; i++) {
+                MalValue method;
+                if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, methods[i]), &method)) {
+                    return false;
+                }
+                if (mal_value_is_callable(method)) {
+                    MalCompletion result = mal_vm_call_value(vm, method, value, nullptr, 0);
+                    if (result.kind != MAL_COMPLETION_NORMAL) {
+                        return false;
+                    }
+                    if (!mal_value_is_object(result.value)) {
+                        value = result.value;
+                        converted = true;
+                    }
+                }
+            }
+            if (!converted) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
+                return false;
+            }
+        }
+    }
+    return mal_bigint_to_bigint(vm, value, out);
 }
 
 // Reduce a Number to its low bits for an integer DataView store.
@@ -173,18 +358,18 @@ static MalValue mal_data_view_get(MalVm *vm, MalValue this_value, const MalValue
         return mal_value_new_undefined();
     }
 
-    u32 index;
+    u64 index;
     if (!mal_data_view_to_index(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &index)) {
         return mal_value_new_undefined();
     }
     bool little_endian = arg_count >= 2 && mal_value_is_truthy(args[1]);
     u32 size = mal_data_view_type_size(type);
 
-    if (view->buffer->detached) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot operate on a detached ArrayBuffer");
+    if (mal_data_view_is_out_of_bounds(view)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "DataView is out of bounds of its ArrayBuffer");
         return mal_value_new_undefined();
     }
-    if ((u64) index + size > mal_data_view_current_length(view)) {
+    if (index + size > mal_data_view_current_length(view)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Offset is outside the bounds of the DataView");
         return mal_value_new_undefined();
     }
@@ -224,6 +409,11 @@ static MalValue mal_data_view_get(MalVm *vm, MalValue this_value, const MalValue
             memcpy(&v, bytes, 4);
             return v <= INT32_MAX ? mal_value_from_i32((i32) v) : mal_ops_number_value((f64) v);
         }
+        case DV_FLOAT16: {
+            u16 v;
+            memcpy(&v, bytes, 2);
+            return mal_value_from_f64_convert_nan(mal_data_view_float16_to_f64(v));
+        }
         case DV_FLOAT32: {
             f32 v;
             memcpy(&v, bytes, 4);
@@ -254,7 +444,7 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
         return mal_value_new_undefined();
     }
 
-    u32 index;
+    u64 index;
     if (!mal_data_view_to_index(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &index)) {
         return mal_value_new_undefined();
     }
@@ -262,11 +452,12 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
     bool little_endian = arg_count >= 3 && mal_value_is_truthy(args[2]);
     u32 size = mal_data_view_type_size(type);
 
-    // Coercion happens before the bounds check (observable side effects).
+    // Value coercion (ToBigInt / ToNumber, both running user side effects) happens
+    // after ToIndex(byteOffset) but before the detached and bounds checks.
     byte bytes[8];
     if (type == DV_BIGINT64 || type == DV_BIGUINT64) {
         i128 big;
-        if (!mal_bigint_to_bigint(vm, value, &big)) {
+        if (!mal_data_view_to_bigint(vm, value, &big)) {
             return mal_value_new_undefined();
         }
         if (type == DV_BIGINT64) {
@@ -277,7 +468,10 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
             memcpy(bytes, &v, 8);
         }
     } else {
-        f64 number = mal_ops_to_number(value);
+        f64 number;
+        if (!mal_vm_to_number(vm, value, &number)) {
+            return mal_value_new_undefined();
+        }
         switch (type) {
             case DV_INT8:
             case DV_UINT8: {
@@ -297,6 +491,11 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
                 memcpy(bytes, &v, 4);
                 break;
             }
+            case DV_FLOAT16: {
+                u16 v = mal_data_view_f64_to_float16(number);
+                memcpy(bytes, &v, 2);
+                break;
+            }
             case DV_FLOAT32: {
                 f32 v = (f32) number;
                 memcpy(bytes, &v, 4);
@@ -310,11 +509,11 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
         }
     }
 
-    if (view->buffer->detached) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot operate on a detached ArrayBuffer");
+    if (mal_data_view_is_out_of_bounds(view)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "DataView is out of bounds of its ArrayBuffer");
         return mal_value_new_undefined();
     }
-    if ((u64) index + size > mal_data_view_current_length(view)) {
+    if (index + size > mal_data_view_current_length(view)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Offset is outside the bounds of the DataView");
         return mal_value_new_undefined();
     }
@@ -341,6 +540,7 @@ MAL_DV_GET(mal_dv_get_int16, DV_INT16)
 MAL_DV_GET(mal_dv_get_uint16, DV_UINT16)
 MAL_DV_GET(mal_dv_get_int32, DV_INT32)
 MAL_DV_GET(mal_dv_get_uint32, DV_UINT32)
+MAL_DV_GET(mal_dv_get_float16, DV_FLOAT16)
 MAL_DV_GET(mal_dv_get_float32, DV_FLOAT32)
 MAL_DV_GET(mal_dv_get_float64, DV_FLOAT64)
 MAL_DV_GET(mal_dv_get_bigint64, DV_BIGINT64)
@@ -351,6 +551,7 @@ MAL_DV_SET(mal_dv_set_int16, DV_INT16)
 MAL_DV_SET(mal_dv_set_uint16, DV_UINT16)
 MAL_DV_SET(mal_dv_set_int32, DV_INT32)
 MAL_DV_SET(mal_dv_set_uint32, DV_UINT32)
+MAL_DV_SET(mal_dv_set_float16, DV_FLOAT16)
 MAL_DV_SET(mal_dv_set_float32, DV_FLOAT32)
 MAL_DV_SET(mal_dv_set_float64, DV_FLOAT64)
 MAL_DV_SET(mal_dv_set_bigint64, DV_BIGINT64)
@@ -372,8 +573,8 @@ static MalValue mal_dv_get_byte_length(MalVm *vm, MalValue this_value, const Mal
     if (view == nullptr) {
         return mal_value_new_undefined();
     }
-    if (view->buffer->detached) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read byteLength of a detached view");
+    if (mal_data_view_is_out_of_bounds(view)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read byteLength of an out-of-bounds view");
         return mal_value_new_undefined();
     }
     return mal_value_from_i32((i32) mal_data_view_current_length(view));
@@ -387,19 +588,22 @@ static MalValue mal_dv_get_byte_offset(MalVm *vm, MalValue this_value, const Mal
     if (view == nullptr) {
         return mal_value_new_undefined();
     }
-    if (view->buffer->detached) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read byteOffset of a detached view");
+    if (mal_data_view_is_out_of_bounds(view)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read byteOffset of an out-of-bounds view");
         return mal_value_new_undefined();
     }
     return mal_value_from_i32((i32) view->byte_offset);
 }
 
 static void mal_dv_define_getter(MalVm *vm, MalObject *object, const byte *name, MalNativeFunctionCallback getter) {
+    // Built-in accessor functions get "get " prepended to the property name.
+    byte getter_name[64];
+    snprintf((char *) getter_name, sizeof getter_name, "get %s", (const char *) name);
     MalPropertyDesc desc = {
         .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
         .value = mal_value_new_undefined(),
         .getter = mal_value_from_native_function_object(mal_native_function_object_new(
-            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]), mal_intrinsic_ascii(vm, name), getter)),
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]), mal_intrinsic_ascii(vm, getter_name), getter)),
         .setter = mal_value_new_undefined(),
     };
     mal_object_define_own(object, mal_intrinsic_string_key(vm, name), &desc);
@@ -428,6 +632,7 @@ void mal_builtin_data_view_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "getUint16", 1, mal_dv_get_uint16);
     mal_intrinsic_define_method_n(vm, prototype, "getInt32", 1, mal_dv_get_int32);
     mal_intrinsic_define_method_n(vm, prototype, "getUint32", 1, mal_dv_get_uint32);
+    mal_intrinsic_define_method_n(vm, prototype, "getFloat16", 1, mal_dv_get_float16);
     mal_intrinsic_define_method_n(vm, prototype, "getFloat32", 1, mal_dv_get_float32);
     mal_intrinsic_define_method_n(vm, prototype, "getFloat64", 1, mal_dv_get_float64);
     mal_intrinsic_define_method_n(vm, prototype, "getBigInt64", 1, mal_dv_get_bigint64);
@@ -438,6 +643,7 @@ void mal_builtin_data_view_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "setUint16", 2, mal_dv_set_uint16);
     mal_intrinsic_define_method_n(vm, prototype, "setInt32", 2, mal_dv_set_int32);
     mal_intrinsic_define_method_n(vm, prototype, "setUint32", 2, mal_dv_set_uint32);
+    mal_intrinsic_define_method_n(vm, prototype, "setFloat16", 2, mal_dv_set_float16);
     mal_intrinsic_define_method_n(vm, prototype, "setFloat32", 2, mal_dv_set_float32);
     mal_intrinsic_define_method_n(vm, prototype, "setFloat64", 2, mal_dv_set_float64);
     mal_intrinsic_define_method_n(vm, prototype, "setBigInt64", 2, mal_dv_set_bigint64);

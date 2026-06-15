@@ -10,3 +10,4 @@ tsconfig.tsbuildinfo
 
 tests/local/tmp*.js
 test262-todo.md
+.claude

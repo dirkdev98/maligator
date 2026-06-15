@@ -16,6 +16,7 @@ typedef enum MalIteratorHelperKind {
     MAL_ITERATOR_HELPER_DROP,
     MAL_ITERATOR_HELPER_FLATMAP,
     MAL_ITERATOR_HELPER_WRAP,
+    MAL_ITERATOR_HELPER_CONCAT,
 } MalIteratorHelperKind;
 
 /**
@@ -35,11 +36,20 @@ typedef struct MalIteratorHelperObject {
     // take/drop remaining count.
     f64 counter;
     bool done;
+    // Guards against re-entrant next() (GeneratorState "executing"): a TypeError
+    // is thrown if next() is called while a previous next() is still on the stack.
+    bool running;
     i32 index;
 
     // flatMap: the inner iterator currently being drained.
+    // concat: the currently-open source iterator.
     MalValue inner_iterator;
     MalValue inner_next;
+
+    // concat: array of source iterables and their captured @@iterator methods.
+    // `index` doubles as the cursor into these arrays.
+    MalValue sources;
+    MalValue source_methods;
 } MalIteratorHelperObject;
 
 /**

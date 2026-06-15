@@ -1,5 +1,7 @@
 #include "builtin_set.h"
 
+#include <math.h>
+
 #include "builtin_iterator.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
@@ -260,6 +262,428 @@ static MalValue mal_builtin_weak_set_prototype_delete(MalVm *vm, MalValue this_v
     return mal_value_new_boolean(mal_map_object_delete(set, arg_count >= 1 ? args[0] : mal_value_new_undefined()));
 }
 
+/**
+ * Spec Set Record: the set-like object together with its coerced size and the
+ * has/keys methods captured by GetSetRecord (read once, eagerly).
+ */
+typedef struct MalSetRecord {
+    MalValue set_object;
+    f64 size;
+    MalValue has;
+    MalValue keys;
+} MalSetRecord;
+
+/**
+ * Spec GetSetRecord(obj): validate obj is a set-like object and capture its
+ * size (coerced through ToNumber, NaN -> TypeError), has, and keys. Reads
+ * happen in the spec order: size, has, keys. Returns false on a throw.
+ */
+static bool mal_builtin_set_get_set_record(MalVm *vm, MalValue obj, MalSetRecord *record_out) {
+    if (!mal_value_is_object(obj)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Set-like argument is not an object");
+        return false;
+    }
+
+    MalValue raw_size;
+    if (!mal_vm_get_property(vm, obj, mal_intrinsic_string_key(vm, "size"), &raw_size)) {
+        return false;
+    }
+
+    f64 num_size;
+    if (!mal_vm_to_number(vm, raw_size, &num_size)) {
+        return false;
+    }
+
+    if (isnan(num_size)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Set-like size is NaN");
+        return false;
+    }
+
+    // ToIntegerOrInfinity for the negativity check (NaN already excluded).
+    f64 int_size = trunc(num_size);
+    if (int_size < 0.0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Set-like size is negative");
+        return false;
+    }
+
+    MalValue has;
+    if (!mal_vm_get_property(vm, obj, mal_intrinsic_string_key(vm, "has"), &has)) {
+        return false;
+    }
+    if (!mal_value_is_callable(has)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Set-like 'has' is not callable");
+        return false;
+    }
+
+    MalValue keys;
+    if (!mal_vm_get_property(vm, obj, mal_intrinsic_string_key(vm, "keys"), &keys)) {
+        return false;
+    }
+    if (!mal_value_is_callable(keys)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Set-like 'keys' is not callable");
+        return false;
+    }
+
+    *record_out = (MalSetRecord) {.set_object = obj, .size = int_size, .has = has, .keys = keys};
+    return true;
+}
+
+/**
+ * Spec GetIteratorFromMethod over the set record's keys method: call keys()
+ * with the set object as receiver and build an iterator record from the
+ * result. Returns false on a throw.
+ */
+static bool mal_builtin_set_record_keys_iterator(MalVm *vm, const MalSetRecord *record, MalIteratorRecord *iter_out) {
+    MalCompletion completion = mal_vm_call_value(vm, record->keys, record->set_object, nullptr, 0);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        return false;
+    }
+
+    if (!mal_value_is_object(completion.value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Set-like keys() did not return an object");
+        return false;
+    }
+
+    MalValue next_method;
+    if (!mal_vm_get_property(vm, completion.value, mal_intrinsic_string_key(vm, "next"), &next_method)) {
+        return false;
+    }
+
+    iter_out->iterator = completion.value;
+    iter_out->next_method = next_method;
+    return true;
+}
+
+/**
+ * Invoke the set record's has(value) and coerce the result to a boolean.
+ * Returns false on a throw; otherwise *out carries the truthiness.
+ */
+static bool mal_builtin_set_record_has(MalVm *vm, const MalSetRecord *record, MalValue value, bool *out) {
+    MalCompletion completion = mal_vm_call_value(vm, record->has, record->set_object, &value, 1);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        return false;
+    }
+
+    *out = mal_value_is_truthy(completion.value);
+    return true;
+}
+
+/**
+ * Allocate the always-plain %Set% result the set-composition methods return
+ * (never the receiver's species or subclass), seeded with `seed`'s entries.
+ */
+static MalMapObject *mal_builtin_set_new_result(MalVm *vm, const MalMapObject *seed) {
+    MalMapObject *result = mal_map_object_new(
+        &vm->heap,
+        MAL_HEAP_SET_OBJECT,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE]),
+        false
+    );
+
+    if (seed != nullptr) {
+        MalTableIter iter;
+        mal_table_iter_init(&iter, ((MalMapObject *) seed)->entries, MAL_TABLE_ITER_STORAGE);
+        MalKey key;
+        void *entry;
+        while (mal_table_iter_next(&iter, &key, &entry)) {
+            mal_map_object_set(result, key.value, key.value);
+        }
+    }
+
+    return result;
+}
+
+static MalValue mal_builtin_set_prototype_union(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalMapObject *set = mal_builtin_set_this(vm, this_value, false, "Receiver is not a Set");
+    if (set == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    MalSetRecord record;
+    if (!mal_builtin_set_get_set_record(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &record)) {
+        return mal_value_new_undefined();
+    }
+
+    MalIteratorRecord iter;
+    if (!mal_builtin_set_record_keys_iterator(vm, &record, &iter)) {
+        return mal_value_new_undefined();
+    }
+
+    MalMapObject *result = mal_builtin_set_new_result(vm, set);
+
+    while (true) {
+        MalValue next_value;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &iter, &next_value, &done)) {
+            return mal_value_new_undefined();
+        }
+        if (done) {
+            return mal_value_from_map_object(result);
+        }
+
+        // mal_map_object_set canonicalizes (-0 -> +0) and dedups on insert.
+        mal_map_object_set(result, next_value, next_value);
+    }
+}
+
+static MalValue mal_builtin_set_prototype_intersection(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalMapObject *set = mal_builtin_set_this(vm, this_value, false, "Receiver is not a Set");
+    if (set == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    MalSetRecord record;
+    if (!mal_builtin_set_get_set_record(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &record)) {
+        return mal_value_new_undefined();
+    }
+
+    MalMapObject *result = mal_builtin_set_new_result(vm, nullptr);
+
+    if ((f64) mal_map_object_size(set) <= record.size) {
+        // Walk the receiver's live entries; keep those other.has() accepts.
+        MalTableIter iter;
+        mal_table_iter_init(&iter, set->entries, MAL_TABLE_ITER_STORAGE);
+        MalKey key;
+        void *entry;
+        while (mal_table_iter_next(&iter, &key, &entry)) {
+            bool in_other;
+            if (!mal_builtin_set_record_has(vm, &record, key.value, &in_other)) {
+                return mal_value_new_undefined();
+            }
+            // has() may have mutated the receiver; only keep still-live keys.
+            if (in_other && mal_map_object_has(set, key.value)) {
+                mal_map_object_set(result, key.value, key.value);
+            }
+        }
+    } else {
+        // Walk other's keys; keep those the receiver still contains, deduped.
+        MalIteratorRecord iter;
+        if (!mal_builtin_set_record_keys_iterator(vm, &record, &iter)) {
+            return mal_value_new_undefined();
+        }
+        while (true) {
+            MalValue next_value;
+            bool done;
+            if (!mal_vm_iterator_step(vm, &iter, &next_value, &done)) {
+                return mal_value_new_undefined();
+            }
+            if (done) {
+                break;
+            }
+            if (mal_map_object_has(set, next_value)) {
+                mal_map_object_set(result, next_value, next_value);
+            }
+        }
+    }
+
+    return mal_value_from_map_object(result);
+}
+
+static MalValue mal_builtin_set_prototype_difference(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalMapObject *set = mal_builtin_set_this(vm, this_value, false, "Receiver is not a Set");
+    if (set == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    MalSetRecord record;
+    if (!mal_builtin_set_get_set_record(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &record)) {
+        return mal_value_new_undefined();
+    }
+
+    MalMapObject *result = mal_builtin_set_new_result(vm, set);
+
+    if ((f64) mal_map_object_size(set) <= record.size) {
+        // Remove receiver elements that other.has() accepts.
+        MalTableIter iter;
+        mal_table_iter_init(&iter, set->entries, MAL_TABLE_ITER_STORAGE);
+        MalKey key;
+        void *entry;
+        while (mal_table_iter_next(&iter, &key, &entry)) {
+            bool in_other;
+            if (!mal_builtin_set_record_has(vm, &record, key.value, &in_other)) {
+                return mal_value_new_undefined();
+            }
+            if (in_other) {
+                mal_map_object_delete(result, key.value);
+            }
+        }
+    } else {
+        // Remove every key other yields from the receiver's copy.
+        MalIteratorRecord iter;
+        if (!mal_builtin_set_record_keys_iterator(vm, &record, &iter)) {
+            return mal_value_new_undefined();
+        }
+        while (true) {
+            MalValue next_value;
+            bool done;
+            if (!mal_vm_iterator_step(vm, &iter, &next_value, &done)) {
+                return mal_value_new_undefined();
+            }
+            if (done) {
+                break;
+            }
+            mal_map_object_delete(result, next_value);
+        }
+    }
+
+    return mal_value_from_map_object(result);
+}
+
+static MalValue mal_builtin_set_prototype_symmetric_difference(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalMapObject *set = mal_builtin_set_this(vm, this_value, false, "Receiver is not a Set");
+    if (set == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    MalSetRecord record;
+    if (!mal_builtin_set_get_set_record(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &record)) {
+        return mal_value_new_undefined();
+    }
+
+    MalIteratorRecord iter;
+    if (!mal_builtin_set_record_keys_iterator(vm, &record, &iter)) {
+        return mal_value_new_undefined();
+    }
+
+    MalMapObject *result = mal_builtin_set_new_result(vm, set);
+
+    while (true) {
+        MalValue next_value;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &iter, &next_value, &done)) {
+            return mal_value_new_undefined();
+        }
+        if (done) {
+            return mal_value_from_map_object(result);
+        }
+
+        // Membership is checked against the original receiver, not the result,
+        // so duplicates other yields cannot resurrect a removed element.
+        if (mal_map_object_has(set, next_value)) {
+            mal_map_object_delete(result, next_value);
+        } else {
+            mal_map_object_set(result, next_value, next_value);
+        }
+    }
+}
+
+static MalValue mal_builtin_set_prototype_is_subset_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalMapObject *set = mal_builtin_set_this(vm, this_value, false, "Receiver is not a Set");
+    if (set == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    MalSetRecord record;
+    if (!mal_builtin_set_get_set_record(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &record)) {
+        return mal_value_new_undefined();
+    }
+
+    if ((f64) mal_map_object_size(set) > record.size) {
+        return mal_value_new_boolean(false);
+    }
+
+    MalTableIter iter;
+    mal_table_iter_init(&iter, set->entries, MAL_TABLE_ITER_STORAGE);
+    MalKey key;
+    void *entry;
+    while (mal_table_iter_next(&iter, &key, &entry)) {
+        bool in_other;
+        if (!mal_builtin_set_record_has(vm, &record, key.value, &in_other)) {
+            return mal_value_new_undefined();
+        }
+        if (!in_other) {
+            return mal_value_new_boolean(false);
+        }
+    }
+
+    return mal_value_new_boolean(true);
+}
+
+static MalValue mal_builtin_set_prototype_is_superset_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalMapObject *set = mal_builtin_set_this(vm, this_value, false, "Receiver is not a Set");
+    if (set == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    MalSetRecord record;
+    if (!mal_builtin_set_get_set_record(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &record)) {
+        return mal_value_new_undefined();
+    }
+
+    if ((f64) mal_map_object_size(set) < record.size) {
+        return mal_value_new_boolean(false);
+    }
+
+    MalIteratorRecord iter;
+    if (!mal_builtin_set_record_keys_iterator(vm, &record, &iter)) {
+        return mal_value_new_undefined();
+    }
+
+    while (true) {
+        MalValue next_value;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &iter, &next_value, &done)) {
+            return mal_value_new_undefined();
+        }
+        if (done) {
+            return mal_value_new_boolean(true);
+        }
+        if (!mal_map_object_has(set, next_value)) {
+            mal_vm_iterator_close(vm, &iter);
+            return mal_value_new_boolean(false);
+        }
+    }
+}
+
+static MalValue mal_builtin_set_prototype_is_disjoint_from(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalMapObject *set = mal_builtin_set_this(vm, this_value, false, "Receiver is not a Set");
+    if (set == nullptr) {
+        return mal_value_new_undefined();
+    }
+
+    MalSetRecord record;
+    if (!mal_builtin_set_get_set_record(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &record)) {
+        return mal_value_new_undefined();
+    }
+
+    if ((f64) mal_map_object_size(set) <= record.size) {
+        MalTableIter iter;
+        mal_table_iter_init(&iter, set->entries, MAL_TABLE_ITER_STORAGE);
+        MalKey key;
+        void *entry;
+        while (mal_table_iter_next(&iter, &key, &entry)) {
+            bool in_other;
+            if (!mal_builtin_set_record_has(vm, &record, key.value, &in_other)) {
+                return mal_value_new_undefined();
+            }
+            if (in_other) {
+                return mal_value_new_boolean(false);
+            }
+        }
+    } else {
+        MalIteratorRecord iter;
+        if (!mal_builtin_set_record_keys_iterator(vm, &record, &iter)) {
+            return mal_value_new_undefined();
+        }
+        while (true) {
+            MalValue next_value;
+            bool done;
+            if (!mal_vm_iterator_step(vm, &iter, &next_value, &done)) {
+                return mal_value_new_undefined();
+            }
+            if (done) {
+                break;
+            }
+            if (mal_map_object_has(set, next_value)) {
+                mal_vm_iterator_close(vm, &iter);
+                return mal_value_new_boolean(false);
+            }
+        }
+    }
+
+    return mal_value_new_boolean(true);
+}
+
 static MalObject *mal_builtin_set_scaffold(
     MalVm *vm,
     const byte *name,
@@ -322,6 +746,13 @@ void mal_builtin_set_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "delete", 1, mal_builtin_set_prototype_delete);
     mal_intrinsic_define_method_n(vm, prototype, "clear", 0, mal_builtin_set_prototype_clear);
     mal_intrinsic_define_method_n(vm, prototype, "forEach", 1, mal_builtin_set_prototype_for_each);
+    mal_intrinsic_define_method_n(vm, prototype, "union", 1, mal_builtin_set_prototype_union);
+    mal_intrinsic_define_method_n(vm, prototype, "intersection", 1, mal_builtin_set_prototype_intersection);
+    mal_intrinsic_define_method_n(vm, prototype, "difference", 1, mal_builtin_set_prototype_difference);
+    mal_intrinsic_define_method_n(vm, prototype, "symmetricDifference", 1, mal_builtin_set_prototype_symmetric_difference);
+    mal_intrinsic_define_method_n(vm, prototype, "isSubsetOf", 1, mal_builtin_set_prototype_is_subset_of);
+    mal_intrinsic_define_method_n(vm, prototype, "isSupersetOf", 1, mal_builtin_set_prototype_is_superset_of);
+    mal_intrinsic_define_method_n(vm, prototype, "isDisjointFrom", 1, mal_builtin_set_prototype_is_disjoint_from);
     mal_intrinsic_define_method_n(vm, prototype, "entries", 0, mal_builtin_set_prototype_entries);
     MalValue values = mal_intrinsic_define_method_n(vm, prototype, "values", 0, mal_builtin_set_prototype_values);
 

@@ -74,8 +74,10 @@ void mal_native_function_object_init(
     function->is_constructor = false;
     function->slots = nullptr;
     function->slot_count = 0;
-    mal_native_function_define_name(heap, &function->object, name);
+    // Per spec (CreateBuiltinFunction / SetFunctionLength then SetFunctionName),
+    // `length` is the earlier own property and `name` follows it.
     mal_native_function_define_length(heap, &function->object, length);
+    mal_native_function_define_name(heap, &function->object, name);
 }
 
 MalNativeFunctionObject *mal_native_function_object_new(

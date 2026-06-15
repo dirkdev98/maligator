@@ -144,6 +144,14 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_TYPED_ARRAY_BIGUINT64_PROTOTYPE,
     MAL_INTRINSIC_PROMISE_CONSTRUCTOR,
     MAL_INTRINSIC_PROMISE_PROTOTYPE,
+    // The %Proxy% constructor. Proxy has no .prototype (it is an exotic, not a
+    // class), and its instances are MalProxyObject exotics.
+    MAL_INTRINSIC_PROXY_CONSTRUCTOR,
+    // The four global URI handling functions (sec-uri-handling-functions).
+    MAL_INTRINSIC_DECODE_URI,
+    MAL_INTRINSIC_DECODE_URI_COMPONENT,
+    MAL_INTRINSIC_ENCODE_URI,
+    MAL_INTRINSIC_ENCODE_URI_COMPONENT,
     /**
      * The CommonJS `require` native handed to module wrappers. Called with a
      * numeric module id (the compiler resolves `require("lit")` to its id) and

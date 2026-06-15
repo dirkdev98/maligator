@@ -6,6 +6,7 @@
 #include "builtin_iterator.h"
 #include "builtin_object.h"
 #include "heap_string.h"
+#include "primitive_wrapper_object.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -40,9 +41,17 @@ bool mal_builtin_array_try_get(MalVm *vm, MalValue this_value, u32 index, MalVal
         return false;
     }
 
+    MalKey index_key = mal_builtin_array_index_key(index);
+
+    // A String wrapper's exotic index own property is not in the table.
+    MalPropertyDesc string_exotic;
+    if (mal_primitive_wrapper_string_exotic_own(&vm->heap, mal_value_to_object(this_value), index_key, &string_exotic)) {
+        return mal_vm_desc_read(vm, string_exotic, this_value, out);
+    }
+
     MalPropertyResolution resolution = mal_object_resolve_property(
         mal_value_to_object(this_value),
-        mal_builtin_array_index_key(index)
+        index_key
     );
     if (!resolution.found) {
         return false;
@@ -155,6 +164,18 @@ bool mal_builtin_array_this_length(MalVm *vm, MalValue this_value, u32 *length_o
 
     if (!mal_value_is_object(this_value)) {
         *length_out = 0;
+        return true;
+    }
+
+    // A String wrapper's exotic `length` lives outside the property table.
+    MalPropertyDesc string_exotic;
+    if (mal_primitive_wrapper_string_exotic_own(
+            &vm->heap,
+            mal_value_to_object(this_value),
+            mal_intrinsic_string_key(vm, "length"),
+            &string_exotic
+        )) {
+        *length_out = (u32) mal_value_to_i32(string_exotic.value);
         return true;
     }
 

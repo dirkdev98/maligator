@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "heap_string.h"
+#include "primitive_wrapper_object.h"
 #include "property_iter.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -148,6 +149,32 @@ static bool mal_json_stringify_value(MalVm *vm, MalJsonBuilder *builder, MalValu
         }
         mal_json_builder_push(builder, ']');
         return true;
+    }
+
+    // SerializeJSONProperty unwraps a primitive wrapper to its [[PrimitiveData]]
+    // before serializing: a Number/String wrapper serializes as its number/
+    // string, a Boolean wrapper as its boolean, a BigInt wrapper throws like a
+    // primitive BigInt.
+    if (mal_value_is_primitive_wrapper(value)) {
+        MalValue primitive;
+        if (mal_value_this_number_value(value, &primitive)) {
+            return mal_json_stringify_value(vm, builder, primitive, depth);
+        }
+        if (mal_value_this_string_value(value, &primitive)) {
+            mal_json_builder_push_quoted(builder, mal_value_to_string(primitive));
+            return true;
+        }
+        if (mal_value_this_boolean_value(value, &primitive)) {
+            mal_json_builder_push_ascii(builder, mal_value_to_boolean(primitive) ? "true" : "false");
+            return true;
+        }
+        // A BigInt wrapper is rejected exactly like a primitive BigInt.
+        if (mal_value_to_primitive_wrapper(value)->kind == MAL_PRIMITIVE_WRAPPER_BIGINT) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Do not know how to serialize a BigInt");
+            return false;
+        }
+        // A Symbol wrapper has no JSON serialization (falls through to the
+        // generic object handling, which yields an empty object).
     }
 
     if (mal_value_is_object(value)) {

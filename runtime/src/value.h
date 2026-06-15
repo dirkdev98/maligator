@@ -19,6 +19,7 @@ typedef struct MalIteratorObject MalIteratorObject;
 typedef struct MalModuleNamespaceObject MalModuleNamespaceObject;
 typedef struct MalPromiseObject MalPromiseObject;
 typedef struct MalIteratorHelperObject MalIteratorHelperObject;
+typedef struct MalPrimitiveWrapperObject MalPrimitiveWrapperObject;
 
 /**
  * NaN-Boxed MalValue representation.
@@ -244,6 +245,7 @@ static inline bool mal_value_is_object(MalValue value) {
     }
     MalHeapType type = mal_value_heap_type(value);
     return type == MAL_HEAP_OBJECT ||
+        type == MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT ||
         type == MAL_HEAP_FUNCTION_OBJECT ||
         type == MAL_HEAP_NATIVE_FUNCTION_OBJECT ||
         type == MAL_HEAP_BOUND_FUNCTION_OBJECT ||
@@ -257,7 +259,8 @@ static inline bool mal_value_is_object(MalValue value) {
         type == MAL_HEAP_DATA_VIEW_OBJECT ||
         type == MAL_HEAP_PROMISE_OBJECT ||
         type == MAL_HEAP_ITERATOR_HELPER_OBJECT ||
-        type == MAL_HEAP_MODULE_NAMESPACE_OBJECT;
+        type == MAL_HEAP_MODULE_NAMESPACE_OBJECT ||
+        type == MAL_HEAP_PROXY_OBJECT;
 }
 
 /**
@@ -329,6 +332,28 @@ bool mal_value_is_promise_object(MalValue value);
  * Check if the value is an Iterator Helper instance.
  */
 bool mal_value_is_iterator_helper_object(MalValue value);
+
+/**
+ * Check if the value is a primitive wrapper exotic object (new String/Number/
+ * Boolean(...), Object(primitive)).
+ */
+bool mal_value_is_primitive_wrapper(MalValue value);
+
+/**
+ * Unbox / box a primitive wrapper object.
+ */
+MalPrimitiveWrapperObject *mal_value_to_primitive_wrapper(MalValue value);
+MalValue mal_value_from_primitive_wrapper(MalPrimitiveWrapperObject *wrapper);
+
+/**
+ * Spec thisStringValue / thisNumberValue / thisBooleanValue: a matching
+ * primitive passes through; a matching wrapper unwraps to its [[PrimitiveData]];
+ * anything else is a brand mismatch. Returns false on mismatch, leaving *out
+ * untouched, so callers throw a TypeError.
+ */
+bool mal_value_this_string_value(MalValue value, MalValue *out);
+bool mal_value_this_number_value(MalValue value, MalValue *out);
+bool mal_value_this_boolean_value(MalValue value, MalValue *out);
 
 /**
  * Check if the value is callable.

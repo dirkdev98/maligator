@@ -22,10 +22,12 @@
 #include "builtin_number.h"
 #include "builtin_object.h"
 #include "builtin_promise.h"
+#include "builtin_proxy.h"
 #include "builtin_reflect.h"
 #include "builtin_set.h"
 #include "builtin_string.h"
 #include "builtin_symbol.h"
+#include "builtin_uri.h"
 #include "heap_string.h"
 #include "table.h"
 #include "typed_array_object.h"
@@ -238,8 +240,10 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_math_install(vm);
     mal_builtin_json_install(vm);
     mal_builtin_reflect_install(vm);
+    mal_builtin_proxy_install(vm);
     mal_builtin_console_install(vm);
     mal_builtin_promise_install(vm);
+    mal_builtin_uri_install(vm);
 
     // Flag the built-in constructors as implementing [[Construct]]. Everything
     // else (prototype methods, accessors, plain functions like parseInt) is a
@@ -355,11 +359,16 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "Math", vm->intrinsics[MAL_INTRINSIC_MATH], flags);
     mal_intrinsic_define_data(vm, global_this, "JSON", vm->intrinsics[MAL_INTRINSIC_JSON], flags);
     mal_intrinsic_define_data(vm, global_this, "Reflect", vm->intrinsics[MAL_INTRINSIC_REFLECT], flags);
+    mal_intrinsic_define_data(vm, global_this, "Proxy", vm->intrinsics[MAL_INTRINSIC_PROXY_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "console", vm->intrinsics[MAL_INTRINSIC_CONSOLE], flags);
     mal_intrinsic_define_data(vm, global_this, "Promise", vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "AggregateError", vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Iterator", vm->intrinsics[MAL_INTRINSIC_ITERATOR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "AsyncIterator", vm->intrinsics[MAL_INTRINSIC_ASYNC_ITERATOR_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "decodeURI", vm->intrinsics[MAL_INTRINSIC_DECODE_URI], flags);
+    mal_intrinsic_define_data(vm, global_this, "decodeURIComponent", vm->intrinsics[MAL_INTRINSIC_DECODE_URI_COMPONENT], flags);
+    mal_intrinsic_define_data(vm, global_this, "encodeURI", vm->intrinsics[MAL_INTRINSIC_ENCODE_URI], flags);
+    mal_intrinsic_define_data(vm, global_this, "encodeURIComponent", vm->intrinsics[MAL_INTRINSIC_ENCODE_URI_COMPONENT], flags);
     mal_intrinsic_define_data(vm, global_this, "NaN", vm->intrinsics[MAL_INTRINSIC_NAN_VALUE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, global_this, "Infinity", vm->intrinsics[MAL_INTRINSIC_INFINITY_VALUE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, global_this, "undefined", mal_value_new_undefined(), MAL_PROPERTY_NONE);

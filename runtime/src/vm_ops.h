@@ -51,11 +51,45 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
 bool mal_vm_delete_property(MalVm *vm, MalValue object_value, MalKey key);
 
 /**
+ * Hint passed to ToPrimitive (spec OrdinaryToPrimitive): "default" and "number"
+ * try valueOf before toString, "string" tries toString first. A @@toPrimitive
+ * method receives the hint string.
+ */
+typedef enum MalToPrimitiveHint {
+    MAL_TO_PRIMITIVE_DEFAULT,
+    MAL_TO_PRIMITIVE_NUMBER,
+    MAL_TO_PRIMITIVE_STRING,
+} MalToPrimitiveHint;
+
+/**
+ * Spec ToPrimitive(input, hint). A non-object passes through unchanged. An
+ * object is converted via @@toPrimitive (given the hint string) else
+ * OrdinaryToPrimitive (valueOf/toString ordered by hint). Returns false and
+ * leaves a pending throw completion on a non-callable @@toPrimitive, a
+ * non-primitive result, a thrown method, or when no method yields a primitive.
+ */
+bool mal_vm_to_primitive(MalVm *vm, MalValue value, MalToPrimitiveHint hint, MalValue *out);
+
+/**
  * Spec ToNumber with full ToPrimitive(number) for objects (@@toPrimitive, else
  * valueOf → toString). Throws TypeError on BigInt/Symbol (or a non-primitive
  * ToPrimitive result) and returns false; otherwise writes the number.
  */
 bool mal_vm_to_number(MalVm *vm, MalValue value, f64 *out);
+
+/**
+ * Spec ToString with ToPrimitive(string) for objects. Throws TypeError on a
+ * Symbol (or a non-primitive ToPrimitive result) and returns false; otherwise
+ * writes the resulting string.
+ */
+bool mal_vm_to_string(MalVm *vm, MalValue value, MalString **out);
+
+/**
+ * Spec ToNumeric: ToPrimitive(number) then, if the primitive is a BigInt, keep
+ * it; else ToNumber. The result is either a Number value or a BigInt value.
+ * Throws (returns false) on a Symbol operand or a thrown coercion method.
+ */
+bool mal_vm_to_numeric(MalVm *vm, MalValue value, MalValue *out);
 
 /**
  * Spec OrdinaryHasInstance: non-callable targets answer false, bound

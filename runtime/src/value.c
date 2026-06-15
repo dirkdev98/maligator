@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include "heap_bigint.h"
 #include "heap_string.h"
+#include "proxy_object.h"
+#include "primitive_wrapper_object.h"
 #include "value.h"
 
 
@@ -68,7 +70,77 @@ bool mal_value_is_iterator_helper_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_ITERATOR_HELPER_OBJECT);
 }
 
+bool mal_value_is_primitive_wrapper(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT);
+}
+
+MalPrimitiveWrapperObject *mal_value_to_primitive_wrapper(MalValue value) {
+    return (MalPrimitiveWrapperObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_primitive_wrapper(MalPrimitiveWrapperObject *wrapper) {
+    return mal_value_from_heap((MalHeapHeader *) wrapper);
+}
+
+/** A JS Number in any of its NaN-boxing encodings. */
+static bool mal_value_is_number_value(MalValue value) {
+    return mal_value_is_int32(value) ||
+        mal_value_is_f64_or_nan(value) ||
+        value == MAL_VALUE_NEGATIVE_ZERO ||
+        value == MAL_VALUE_POSITIVE_INFINITY ||
+        value == MAL_VALUE_NEGATIVE_INFINITY;
+}
+
+bool mal_value_this_string_value(MalValue value, MalValue *out) {
+    if (mal_value_is_string(value)) {
+        *out = value;
+        return true;
+    }
+    if (mal_value_is_primitive_wrapper(value)) {
+        MalPrimitiveWrapperObject *wrapper = mal_value_to_primitive_wrapper(value);
+        if (wrapper->kind == MAL_PRIMITIVE_WRAPPER_STRING) {
+            *out = wrapper->primitive_data;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool mal_value_this_number_value(MalValue value, MalValue *out) {
+    if (mal_value_is_number_value(value)) {
+        *out = value;
+        return true;
+    }
+    if (mal_value_is_primitive_wrapper(value)) {
+        MalPrimitiveWrapperObject *wrapper = mal_value_to_primitive_wrapper(value);
+        if (wrapper->kind == MAL_PRIMITIVE_WRAPPER_NUMBER) {
+            *out = wrapper->primitive_data;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool mal_value_this_boolean_value(MalValue value, MalValue *out) {
+    if (mal_value_is_boolean(value)) {
+        *out = value;
+        return true;
+    }
+    if (mal_value_is_primitive_wrapper(value)) {
+        MalPrimitiveWrapperObject *wrapper = mal_value_to_primitive_wrapper(value);
+        if (wrapper->kind == MAL_PRIMITIVE_WRAPPER_BOOLEAN) {
+            *out = wrapper->primitive_data;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool mal_value_is_callable(MalValue value) {
+    // A proxy is callable iff its (non-revoked) target chain ends at a callable.
+    if (mal_value_is_proxy_object(value)) {
+        return mal_proxy_target_is_callable(value);
+    }
     return mal_value_is_function_object(value) ||
         mal_value_is_native_function_object(value) ||
         mal_value_is_bound_function_object(value);

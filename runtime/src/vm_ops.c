@@ -13,7 +13,9 @@
 #include "heap_symbol.h"
 #include "module_namespace_object.h"
 #include "object_ops.h"
+#include "primitive_wrapper_object.h"
 #include "property_iter.h"
+#include "proxy_object.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
 
@@ -76,6 +78,13 @@ bool mal_vm_value_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
         return true;
     }
 
+    // ToPropertyKey on an object would run a user valueOf/toString, but the
+    // read-modify-write member lowering (compound assignment, ++/--) converts the
+    // key once per access, so routing objects through the VM here makes those
+    // conversions observably double-fire (S11.13.2_A7.*_T4 / S11.3.*_A6_T3) and
+    // disagrees with String() on functions. Until ToPropertyKey is hoisted to a
+    // single conversion in the compiler, objects fall back to the VM-less
+    // stringify (consistent with String()). TODO(coercion): ToPropertyKey-once.
     return mal_vm_string_to_property_key(
         mal_value_from_string(mal_ops_to_string(&vm->heap, value)),
         key_out
@@ -515,6 +524,20 @@ static void mal_vm_remarshal_bound_args(MalVm *vm, i32 base, const MalBoundResol
  * when the dispatch started.
  */
 static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value, i32 base, i32 argument_count, i32 dst) {
+    // A callable proxy routes [[Call]] through its apply trap. Snapshot the
+    // caller frame by index — the trap may relocate the frame array.
+    if (mal_value_is_proxy_object(callee)) {
+        i32 caller_frame_index = vm->frame_count - 1;
+        MalCompletion completion = mal_proxy_apply(vm, mal_value_to_proxy_object(callee), this_value, &vm->value_stack[base], argument_count);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = completion;
+        } else {
+            vm->frames[caller_frame_index].registers[dst] = completion.value;
+        }
+        vm->value_stack_size = base;
+        return;
+    }
+
     MalBoundResolution resolution = mal_bound_function_object_resolve(callee, this_value, &vm->value_stack[base], argument_count, true);
 
     if (mal_value_is_function_object(resolution.callee)) {
@@ -565,6 +588,20 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
  * Shared construct dispatch, mirroring mal_vm_call_dispatch.
  */
 static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 argument_count, i32 dst) {
+    // A constructable proxy routes [[Construct]] through its construct trap, with
+    // newTarget = the proxy itself (the spec forwards the proxy as new.target).
+    if (mal_value_is_proxy_object(callee)) {
+        i32 caller_frame_index = vm->frame_count - 1;
+        MalCompletion completion = mal_proxy_construct(vm, mal_value_to_proxy_object(callee), &vm->value_stack[base], argument_count, callee);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = completion;
+        } else {
+            vm->frames[caller_frame_index].registers[dst] = completion.value;
+        }
+        vm->value_stack_size = base;
+        return;
+    }
+
     // The bound this is ignored when constructing.
     MalBoundResolution resolution = mal_bound_function_object_resolve(callee, mal_value_new_undefined(), &vm->value_stack[base], argument_count, false);
 
@@ -910,11 +947,102 @@ static MalValue mal_vm_bigint_arith(MalVm *vm, MalBinaryOp op, MalValue left, Ma
     return mal_value_from_bigint(mal_bigint_new(&vm->heap, result));
 }
 
+// Whether the operator's operands flow through ToNumeric (ToPrimitive(number)
+// then ToNumber/ToBigInt): all arithmetic except `+` (which is ToPrimitive with
+// no hint, handled separately), plus bitwise/shift. A Symbol operand therefore
+// throws, and an object is reduced via valueOf/toString.
+static bool mal_vm_op_is_numeric(MalBinaryOp op) {
+    switch (op) {
+        case MAL_BIN_SUB:
+        case MAL_BIN_MUL:
+        case MAL_BIN_DIV:
+        case MAL_BIN_REM:
+        case MAL_BIN_POW:
+        case MAL_BIN_BIT_AND:
+        case MAL_BIN_BIT_OR:
+        case MAL_BIN_BIT_XOR:
+        case MAL_BIN_SHL:
+        case MAL_BIN_SHR:
+        case MAL_BIN_USHR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Whether the operator is an abstract relational comparison (`<`/`<=`/`>`/`>=`),
+// which runs ToPrimitive(number) on both operands.
+static bool mal_vm_op_is_relational(MalBinaryOp op) {
+    return op == MAL_BIN_LT || op == MAL_BIN_LTE || op == MAL_BIN_GT || op == MAL_BIN_GTE;
+}
+
 // The value-returning core of a binary operator, shared by the interpreter op
 // (mal_op_binary) and the compiled-function backend. On a throwing operator
-// (`in`/`instanceof` on bad operands, BigInt domain errors) it sets the pending
-// completion and returns undefined; callers observe the throw via vm->completion.
+// (`in`/`instanceof` on bad operands, BigInt domain errors, a throwing valueOf/
+// toString) it sets the pending completion and returns undefined; callers
+// observe the throw via vm->completion.
 MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right) {
+    // Coerce operands to primitives per the operator's abstract operation. This
+    // is the VM-aware ToPrimitive (valueOf/toString/@@toPrimitive) the VM-less
+    // mal_ops_* helpers cannot perform; primitives pass through unchanged.
+    if (op == MAL_BIN_ADD) {
+        // Spec EvaluateStringOrNumericBinaryExpression: ToPrimitive(no hint) on
+        // both, in order. mal_ops_add / mal_vm_bigint_arith then decide string
+        // concat vs numeric add on the resulting primitives.
+        if (!mal_vm_to_primitive(vm, left, MAL_TO_PRIMITIVE_DEFAULT, &left) ||
+            !mal_vm_to_primitive(vm, right, MAL_TO_PRIMITIVE_DEFAULT, &right)) {
+            return mal_value_new_undefined();
+        }
+        // After ToPrimitive a String on either side means concatenation, even
+        // when the other side is a BigInt (mal_vm_bigint_arith allows it).
+    } else if (mal_vm_op_is_numeric(op)) {
+        // ToNumeric on both: a Symbol throws, an object runs through valueOf/
+        // toString, a BigInt stays a BigInt for the bigint dispatch below.
+        if (!mal_vm_to_numeric(vm, left, &left) || !mal_vm_to_numeric(vm, right, &right)) {
+            return mal_value_new_undefined();
+        }
+    } else if (mal_vm_op_is_relational(op)) {
+        // Abstract relational comparison reduces both operands via ToPrimitive
+        // (number hint). `>`/`>=` evaluate the right operand's ToPrimitive before
+        // the left (spec LeftFirst=false), so a throwing valueOf surfaces in
+        // source order; `<`/`<=` go left-to-right.
+        bool left_first = !(op == MAL_BIN_GT || op == MAL_BIN_GTE);
+        MalValue *first = left_first ? &left : &right;
+        MalValue *second = left_first ? &right : &left;
+        if (mal_value_is_object(*first) && !mal_vm_to_primitive(vm, *first, MAL_TO_PRIMITIVE_NUMBER, first)) {
+            return mal_value_new_undefined();
+        }
+        if (mal_value_is_object(*second) && !mal_vm_to_primitive(vm, *second, MAL_TO_PRIMITIVE_NUMBER, second)) {
+            return mal_value_new_undefined();
+        }
+        // Abstract relational comparison forbids Symbol operands (its ToNumeric
+        // throws).
+        if (mal_value_is_symbol(left) || mal_value_is_symbol(right)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value to a number");
+            return mal_value_new_undefined();
+        }
+    } else if (op == MAL_BIN_EQ || op == MAL_BIN_NEQ) {
+        // Abstract equality: an object operand is reduced via ToPrimitive ONLY
+        // when the other operand is a primitive other than null/undefined
+        // (Number/String/Boolean/BigInt/Symbol). An object-vs-null/undefined
+        // comparison short-circuits to "not equal" with no coercion (so a
+        // valueOf returning null does not make `obj == undefined` true), and an
+        // object-vs-object comparison is by reference. The number hint picks the
+        // valueOf-first order; a resulting Symbol stays a Symbol (identity-only).
+        bool left_object = mal_value_is_object(left);
+        bool right_object = mal_value_is_object(right);
+        bool left_coercible_primitive = !left_object && !mal_value_is_nil(left);
+        bool right_coercible_primitive = !right_object && !mal_value_is_nil(right);
+        if (left_object && right_coercible_primitive &&
+            !mal_vm_to_primitive(vm, left, MAL_TO_PRIMITIVE_NUMBER, &left)) {
+            return mal_value_new_undefined();
+        }
+        if (right_object && left_coercible_primitive &&
+            !mal_vm_to_primitive(vm, right, MAL_TO_PRIMITIVE_NUMBER, &right)) {
+            return mal_value_new_undefined();
+        }
+    }
+
     // BigInt arithmetic/bitwise/shift is a separate domain (equality and
     // relational comparison stay in the shared mal_ops_* path below).
     if ((mal_value_is_bigint(left) || mal_value_is_bigint(right)) && mal_vm_op_is_bigint_arith(op)) {
@@ -1046,8 +1174,22 @@ static const byte *mal_vm_typeof_tag(MalValue value) {
 }
 
 // Value-returning core of a unary operator, shared by mal_op_unary and the
-// compiled backend. Unary `+` on a BigInt throws (via vm->completion).
+// compiled backend. Unary `+` on a BigInt throws (via vm->completion); the
+// numeric unary ops (`-`/`+`/`~`) run their operand through ToNumeric (so an
+// object's valueOf/toString and a Symbol's TypeError are honored) before the
+// per-type arithmetic.
 MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
+    // `!`, typeof, and the unary numeric ops all need an object operand reduced
+    // to a primitive first; only the numeric ops require a *numeric* primitive,
+    // so route just those through ToNumeric (which also throws on a Symbol).
+    if (op == MAL_UNARY_NEGATE || op == MAL_UNARY_PLUS || op == MAL_UNARY_BIT_NOT) {
+        if (mal_value_is_object(value) || mal_value_is_symbol(value)) {
+            if (!mal_vm_to_numeric(vm, value, &value)) {
+                return mal_value_new_undefined();
+            }
+        }
+    }
+
     switch (op) {
         case MAL_UNARY_NOT:
             return mal_value_new_boolean(!mal_value_is_truthy(value));
@@ -1262,66 +1404,129 @@ static bool mal_vm_get_from_prototype_slot(MalVm *vm, MalIntrinsic prototype_slo
     return mal_vm_desc_read(vm, resolution.desc, receiver, out);
 }
 
-bool mal_vm_to_number(MalVm *vm, MalValue value, f64 *out) {
-    // Objects first go through ToPrimitive(number): @@toPrimitive, else the
-    // OrdinaryToPrimitive order valueOf → toString.
-    if (mal_value_is_object(value)) {
-        MalValue exotic;
-        if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE), &exotic)) {
+bool mal_vm_to_primitive(MalVm *vm, MalValue value, MalToPrimitiveHint hint, MalValue *out) {
+    // A non-object is already primitive.
+    if (!mal_value_is_object(value)) {
+        *out = value;
+        return true;
+    }
+
+    // A @@toPrimitive method, if present, takes precedence and is given the
+    // hint string ("default"/"number"/"string").
+    MalValue exotic;
+    if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE), &exotic)) {
+        return false;
+    }
+    if (!mal_value_is_nil(exotic)) {
+        if (!mal_value_is_callable(exotic)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.toPrimitive is not a function");
             return false;
         }
-        if (!mal_value_is_nil(exotic)) {
-            if (!mal_value_is_callable(exotic)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.toPrimitive is not a function");
-                return false;
-            }
-            MalValue hint = mal_value_from_string(mal_intrinsic_ascii(vm, "number"));
-            MalCompletion result = mal_vm_call_value(vm, exotic, value, &hint, 1);
+        const byte *hint_name = hint == MAL_TO_PRIMITIVE_STRING
+            ? "string"
+            : (hint == MAL_TO_PRIMITIVE_NUMBER ? "number" : "default");
+        MalValue hint_value = mal_value_from_string(mal_intrinsic_ascii(vm, hint_name));
+        MalCompletion result = mal_vm_call_value(vm, exotic, value, &hint_value, 1);
+        if (result.kind != MAL_COMPLETION_NORMAL) {
+            return false;
+        }
+        if (mal_value_is_object(result.value)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
+            return false;
+        }
+        *out = result.value;
+        return true;
+    }
+
+    // OrdinaryToPrimitive: a string hint tries toString first, otherwise
+    // valueOf leads (default and number hints share this order).
+    const byte *methods[2];
+    if (hint == MAL_TO_PRIMITIVE_STRING) {
+        methods[0] = "toString";
+        methods[1] = "valueOf";
+    } else {
+        methods[0] = "valueOf";
+        methods[1] = "toString";
+    }
+    for (i32 i = 0; i < 2; i++) {
+        MalValue method;
+        if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, methods[i]), &method)) {
+            return false;
+        }
+        if (mal_value_is_callable(method)) {
+            MalCompletion result = mal_vm_call_value(vm, method, value, nullptr, 0);
             if (result.kind != MAL_COMPLETION_NORMAL) {
                 return false;
             }
-            if (mal_value_is_object(result.value)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
-                return false;
-            }
-            value = result.value;
-        } else {
-            const byte *methods[2] = {"valueOf", "toString"};
-            bool converted = false;
-            for (i32 i = 0; i < 2 && !converted; i++) {
-                MalValue method;
-                if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, methods[i]), &method)) {
-                    return false;
-                }
-                if (mal_value_is_callable(method)) {
-                    MalCompletion result = mal_vm_call_value(vm, method, value, nullptr, 0);
-                    if (result.kind != MAL_COMPLETION_NORMAL) {
-                        return false;
-                    }
-                    if (!mal_value_is_object(result.value)) {
-                        value = result.value;
-                        converted = true;
-                    }
-                }
-            }
-            if (!converted) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
-                return false;
+            if (!mal_value_is_object(result.value)) {
+                *out = result.value;
+                return true;
             }
         }
     }
 
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
+    return false;
+}
+
+bool mal_vm_to_number(MalVm *vm, MalValue value, f64 *out) {
+    // Objects first go through ToPrimitive(number): @@toPrimitive, else the
+    // OrdinaryToPrimitive order valueOf → toString.
+    MalValue primitive;
+    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_NUMBER, &primitive)) {
+        return false;
+    }
+
     // ToNumber proper: BigInt and Symbol are not convertible.
-    if (mal_value_is_bigint(value)) {
+    if (mal_value_is_bigint(primitive)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a BigInt value to a number");
         return false;
     }
-    if (mal_value_is_symbol(value)) {
+    if (mal_value_is_symbol(primitive)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value to a number");
         return false;
     }
 
-    *out = mal_ops_to_number(value);
+    *out = mal_ops_to_number(primitive);
+    return true;
+}
+
+bool mal_vm_to_string(MalVm *vm, MalValue value, MalString **out) {
+    // ToString(object) is ToPrimitive(string) then ToString of the primitive.
+    MalValue primitive;
+    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_STRING, &primitive)) {
+        return false;
+    }
+
+    // A Symbol has no string coercion (only String(sym) / sym.toString()).
+    if (mal_value_is_symbol(primitive)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value to a string");
+        return false;
+    }
+
+    *out = mal_ops_to_string(&vm->heap, primitive);
+    return true;
+}
+
+bool mal_vm_to_numeric(MalVm *vm, MalValue value, MalValue *out) {
+    // ToNumeric: ToPrimitive(number); a BigInt primitive stays a BigInt, every
+    // other primitive goes through ToNumber.
+    MalValue primitive;
+    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_NUMBER, &primitive)) {
+        return false;
+    }
+
+    if (mal_value_is_bigint(primitive)) {
+        *out = primitive;
+        return true;
+    }
+
+    if (mal_value_is_symbol(primitive)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value to a number");
+        return false;
+    }
+
+    *out = mal_ops_number_value(mal_ops_to_number(primitive));
     return true;
 }
 
@@ -1331,6 +1536,11 @@ bool mal_vm_get_property(MalVm *vm, MalValue object_value, MalKey key, MalValue 
 
 bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey key, MalValue receiver, MalValue *out) {
     *out = mal_value_new_undefined();
+
+    // A proxy routes [[Get]] through its handler trap (or its target).
+    if (mal_value_is_proxy_object(object_value)) {
+        return mal_proxy_get(vm, mal_value_to_proxy_object(object_value), key, receiver, out);
+    }
 
     if (mal_value_is_nil(object_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read properties of null or undefined");
@@ -1396,6 +1606,16 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
         return true;
     }
 
+    // A String wrapper exposes its [[StringData]] code units as own integer-
+    // indexed single-char data properties plus a non-writable, non-configurable
+    // own `length`. Other wrapper kinds (Number/Boolean/Symbol/BigInt) are
+    // ordinary objects and fall through. An out-of-bounds index or any other key
+    // falls through to the ordinary table + prototype-chain resolution below.
+    MalPropertyDesc string_exotic;
+    if (mal_primitive_wrapper_string_exotic_own(&vm->heap, mal_value_to_object(object_value), key, &string_exotic)) {
+        return mal_vm_desc_read(vm, string_exotic, receiver, out);
+    }
+
     MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(object_value), key);
     if (!resolution.found) {
         return true;
@@ -1410,8 +1630,20 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
  * The caller has already verified O is an object.
  */
 bool mal_vm_has_property(MalVm *vm, MalValue object_value, MalKey key) {
+    // A proxy routes [[HasProperty]] through its handler trap (or its target).
+    if (mal_value_is_proxy_object(object_value)) {
+        return mal_proxy_has(vm, mal_value_to_proxy_object(object_value), key);
+    }
+
     MalValue synthetic;
     if (mal_vm_resolve_synthetic_property(vm, object_value, key, &synthetic)) {
+        return true;
+    }
+
+    // String wrapper exotic index/length own properties precede the prototype
+    // chain; forEach/indexOf and friends probe HasProperty per index.
+    MalPropertyDesc string_exotic;
+    if (mal_primitive_wrapper_string_exotic_own(&vm->heap, mal_value_to_object(object_value), key, &string_exotic)) {
         return true;
     }
 
@@ -1425,6 +1657,11 @@ bool mal_vm_has_property(MalVm *vm, MalValue object_value, MalKey key) {
  * the receiver. A throwing user setter propagates through vm->completion.
  */
 bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value, MalValue receiver) {
+    // A proxy routes [[Set]] through its handler trap (or its target).
+    if (mal_value_is_proxy_object(target)) {
+        return mal_proxy_set(vm, mal_value_to_proxy_object(target), key, value, receiver);
+    }
+
     MalObject *object = mal_value_to_object(target);
     MalPropertyResolution resolution = mal_object_resolve_property(object, key);
 
@@ -1458,6 +1695,36 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
     if (!mal_value_is_object(receiver)) {
         return false;
     }
+    // A proxy receiver routes the create/update of its own property through its
+    // [[DefineOwnProperty]] (the defineProperty trap → its target), per the spec
+    // OrdinarySetWithOwnDescriptor with Receiver being the proxy.
+    if (mal_value_is_proxy_object(receiver)) {
+        bool present;
+        MalPropertyDesc rdesc;
+        if (!mal_proxy_get_own_property_descriptor(vm, mal_value_to_proxy_object(receiver), key, &present, &rdesc)) {
+            return false;
+        }
+        MalObject *descriptor;
+        if (present) {
+            if ((rdesc.flags & MAL_PROPERTY_ACCESSOR) || !(rdesc.flags & MAL_PROPERTY_WRITABLE)) {
+                return false;
+            }
+            descriptor = mal_intrinsic_new_object(vm);
+            mal_intrinsic_define_data(vm, descriptor, "value", value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        } else {
+            descriptor = mal_intrinsic_new_object(vm);
+            MalPropertyFlags df = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+            mal_intrinsic_define_data(vm, descriptor, "value", value, df);
+            mal_intrinsic_define_data(vm, descriptor, "writable", mal_value_new_boolean(true), df);
+            mal_intrinsic_define_data(vm, descriptor, "enumerable", mal_value_new_boolean(true), df);
+            mal_intrinsic_define_data(vm, descriptor, "configurable", mal_value_new_boolean(true), df);
+        }
+        bool ok = mal_proxy_define_own_property(vm, mal_value_to_proxy_object(receiver), key, mal_value_from_object(descriptor));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return false;
+        }
+        return ok;
+    }
     MalObject *receiver_object = mal_value_to_object(receiver);
     MalPropertyLookup own = mal_object_get_own(receiver_object, key);
     if (own.present) {
@@ -1478,6 +1745,11 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
  * prototype) cannot be deleted. The caller has verified O is an object.
  */
 bool mal_vm_delete_property(MalVm *vm, MalValue object_value, MalKey key) {
+    // A proxy routes [[Delete]] through its handler trap (or its target).
+    if (mal_value_is_proxy_object(object_value)) {
+        return mal_proxy_delete(vm, mal_value_to_proxy_object(object_value), key);
+    }
+
     MalObject *object = mal_value_to_object(object_value);
 
     if (mal_object_get_own(object, key).present) {
@@ -1577,6 +1849,19 @@ void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_val
 
     MalKey key;
     if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+        return;
+    }
+
+    // A proxy routes the assignment through its [[Set]] (handler trap → target),
+    // with the proxy itself as the receiver.
+    if (mal_value_is_proxy_object(object_value)) {
+        bool ok = mal_proxy_set(vm, mal_value_to_proxy_object(object_value), key, value, object_value);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return;
+        }
+        if (!ok && strict) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
+        }
         return;
     }
 
@@ -1844,8 +2129,87 @@ void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
     MalObject *seen = mal_intrinsic_new_object(vm);
     MalPropertyDesc marker = mal_intrinsic_data_desc(mal_value_new_undefined(), 0);
 
+    // A proxy source enumerates through its ownKeys + getOwnPropertyDescriptor
+    // traps. The remaining-chain walk continues from the proxy's [[GetPrototypeOf]]
+    // (which may itself be a proxy, but the ordinary walk below handles only plain
+    // objects; a proxy-in-the-middle prototype is a pragmatic gap).
+    if (mal_value_is_proxy_object(source)) {
+        MalProxyObject *proxy = mal_value_to_proxy_object(source);
+        MalValue keys_value;
+        if (!mal_proxy_own_property_keys(vm, proxy, &keys_value)) {
+            return;
+        }
+        MalArrayObject *keys = mal_value_to_array_object(keys_value);
+        u32 key_count = mal_array_object_length(keys);
+        for (u32 i = 0; i < key_count; i++) {
+            MalValue key_value;
+            if (!mal_vm_get_property(vm, keys_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &key_value)) {
+                return;
+            }
+            if (!mal_value_is_string(key_value)) {
+                continue;
+            }
+            MalKey key;
+            if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+                return;
+            }
+            if (mal_object_get_own(seen, key).present) {
+                continue;
+            }
+            mal_object_define_own(seen, key, &marker);
+            bool present;
+            MalPropertyDesc desc;
+            if (!mal_proxy_get_own_property_descriptor(vm, proxy, key, &present, &desc)) {
+                return;
+            }
+            if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+                continue;
+            }
+            mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)}, key_value);
+            count++;
+        }
+        MalValue proto;
+        if (!mal_proxy_get_prototype_of(vm, proxy, &proto)) {
+            return;
+        }
+        callable->registers[instruction->as.for_in_keys.dst] = mal_value_from_array_object(result);
+        if (!mal_value_is_object(proto) || mal_value_is_proxy_object(proto)) {
+            return;
+        }
+        source = proto;
+        // fall through to walk the (plain-object) prototype chain
+    }
+
     for (MalObject *current = mal_value_to_object(source); current != nullptr;
          current = mal_object_get_prototype(current)) {
+        // A String wrapper's exotic own keys (enumerable indices, then the
+        // non-enumerable `length`) are not in the property table; surface them
+        // first so they enumerate (indices) and shadow (length) like own keys.
+        MalPropertyDesc string_exotic;
+        if (current->header.type == MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT &&
+            mal_primitive_wrapper_string_exotic_own(
+                &vm->heap, current, mal_intrinsic_string_key(vm, "length"), &string_exotic
+            )) {
+            u32 string_length = (u32) mal_value_to_i32(string_exotic.value);
+            for (u32 i = 0; i < string_length; i++) {
+                MalKey index_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+                if (mal_object_get_own(seen, index_key).present) {
+                    continue;
+                }
+                mal_object_define_own(seen, index_key, &marker);
+                mal_array_object_store(
+                    result,
+                    (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+                    mal_vm_for_in_key_string(vm, index_key)
+                );
+                count++;
+            }
+            MalKey length_key = mal_intrinsic_string_key(vm, "length");
+            if (!mal_object_get_own(seen, length_key).present) {
+                mal_object_define_own(seen, length_key, &marker);
+            }
+        }
+
         MalPropertyIter iter;
         mal_property_iter_init(&iter, current, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
 

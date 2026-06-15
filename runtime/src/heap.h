@@ -40,6 +40,12 @@ typedef struct MalHeap {
  * Runtime heap allocation kinds that may be boxed into a MalValue.
  */
 typedef enum MalHeapType {
+    /**
+     * Primitive wrapper exotic objects (new String/Number/Boolean(...),
+     * Object(primitive)) holding a [[PrimitiveData]] slot. See
+     * primitive_wrapper_object.h.
+     */
+    MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT,
     MAL_HEAP_STRING,
     MAL_HEAP_SYMBOL,
     /**
@@ -98,6 +104,12 @@ typedef enum MalHeapType {
      * plus a @@toStringTag of "Module". See module_namespace_object.h.
      */
     MAL_HEAP_MODULE_NAMESPACE_OBJECT,
+    /**
+     * Proxy exotic objects (MalProxyObject): a [[ProxyTarget]] + [[ProxyHandler]]
+     * pair whose meta-object-protocol operations are routed through handler traps.
+     * Revoking sets both to null. See proxy_object.h.
+     */
+    MAL_HEAP_PROXY_OBJECT,
 } MalHeapType;
 
 /**
