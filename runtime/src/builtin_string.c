@@ -12,8 +12,21 @@
 #include "vm.h"
 #include "vm_ops.h"
 
+// ToString of a String argument (the constructor's input and the search/replace/
+// separator arguments of the prototype methods): full ToString, so an object's
+// @@toPrimitive / toString / valueOf runs and a Symbol throws a TypeError. On an
+// abrupt completion (or one already pending — e.g. a sibling argument threw)
+// returns the empty string; the throw is detected at the native-call boundary
+// and the harmless computed result discarded, matching the spec's ReturnIfAbrupt.
 static MalString *mal_builtin_string_coerce(MalVm *vm, MalValue value) {
-    return mal_ops_to_string(&vm->heap, value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_intrinsic_ascii(vm, "");
+    }
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) {
+        return mal_intrinsic_ascii(vm, "");
+    }
+    return string;
 }
 
 /**
@@ -314,8 +327,10 @@ static MalValue mal_builtin_string_prototype_code_point_at(MalVm *vm, MalValue t
     }
 
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
-    f64 position = arg_count >= 1 ? mal_ops_to_number(args[0]) : 0;
-    if (isnan(position) || position < 0 || position >= (f64) mal_string_length(string)) {
+    // ToIntegerOrInfinity(pos): NaN → 0, else truncate (runs a user valueOf).
+    f64 position = arg_count >= 1 ? mal_builtin_string_arg_to_number(vm, args[0]) : 0;
+    position = isnan(position) ? 0 : trunc(position);
+    if (position < 0 || position >= (f64) mal_string_length(string)) {
         return mal_value_new_undefined();
     }
 
@@ -334,8 +349,11 @@ static MalValue mal_builtin_string_prototype_code_point_at(MalVm *vm, MalValue t
 
 static MalValue mal_builtin_string_prototype_char_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
+    // ToIntegerOrInfinity(pos): NaN → 0, else truncate (a Symbol throws via the
+    // VM ToNumber, surfaced at the call boundary).
     f64 position = arg_count >= 1 ? mal_builtin_string_arg_to_number(vm, args[0]) : 0;
-    if (isnan(position) || position < 0 || position >= (f64) mal_string_length(string)) {
+    position = isnan(position) ? 0 : trunc(position);
+    if (position < 0 || position >= (f64) mal_string_length(string)) {
         return mal_builtin_string_empty(vm);
     }
 
@@ -344,8 +362,10 @@ static MalValue mal_builtin_string_prototype_char_at(MalVm *vm, MalValue this_va
 
 static MalValue mal_builtin_string_prototype_char_code_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
+    // ToIntegerOrInfinity(pos): NaN → 0, else truncate.
     f64 position = arg_count >= 1 ? mal_builtin_string_arg_to_number(vm, args[0]) : 0;
-    if (isnan(position) || position < 0 || position >= (f64) mal_string_length(string)) {
+    position = isnan(position) ? 0 : trunc(position);
+    if (position < 0 || position >= (f64) mal_string_length(string)) {
         return mal_value_new_nan();
     }
 
@@ -405,7 +425,21 @@ static MalValue mal_builtin_string_prototype_last_index_of(MalVm *vm, MalValue t
 static MalValue mal_builtin_string_prototype_includes(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     MalString *search = mal_builtin_string_coerce(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
-    return mal_value_new_boolean(mal_builtin_string_find(string, search, 0) >= 0);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    // ToIntegerOrInfinity(position) clamped to [0, len] (no count-from-end).
+    usize start = 0;
+    if (arg_count >= 2 && !mal_value_is_undefined(args[1])) {
+        f64 pos = mal_builtin_string_arg_to_number(vm, args[1]);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+        u32 length = mal_string_length(string);
+        pos = isnan(pos) ? 0 : trunc(pos);
+        start = pos < 0 ? 0 : (pos > (f64) length ? length : (usize) pos);
+    }
+    return mal_value_new_boolean(mal_builtin_string_find(string, search, start) >= 0);
 }
 
 static MalValue mal_builtin_string_prototype_starts_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -661,6 +695,69 @@ static MalValue mal_builtin_string_prototype_to_lower_case(MalVm *vm, MalValue t
     return mal_builtin_string_case_impl(vm, this_value, false);
 }
 
+// A code unit is a surrogate paired with its neighbour, a lone surrogate, or an
+// ordinary unit. isWellFormed is false when any lone surrogate is present.
+static MalValue mal_builtin_string_prototype_is_well_formed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    usize length = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < length; i++) {
+        c16 cu = units[i];
+        if (cu >= 0xD800 && cu <= 0xDBFF) {
+            if (i + 1 < length && units[i + 1] >= 0xDC00 && units[i + 1] <= 0xDFFF) {
+                i++;
+            } else {
+                return mal_value_new_boolean(false);
+            }
+        } else if (cu >= 0xDC00 && cu <= 0xDFFF) {
+            return mal_value_new_boolean(false);
+        }
+    }
+    return mal_value_new_boolean(true);
+}
+
+// Replace each lone surrogate with U+FFFD (the replacement character), leaving
+// valid surrogate pairs and ordinary units intact.
+static MalValue mal_builtin_string_prototype_to_well_formed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalString *string = mal_builtin_string_this_to_string(vm, this_value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    usize length = mal_string_length(string);
+    const c16 *source = mal_string_code_units(string);
+    c16 *code_units = malloc(sizeof(c16) * (length == 0 ? 1 : length));
+    for (usize i = 0; i < length; i++) {
+        c16 cu = source[i];
+        if (cu >= 0xD800 && cu <= 0xDBFF) {
+            if (i + 1 < length && source[i + 1] >= 0xDC00 && source[i + 1] <= 0xDFFF) {
+                code_units[i] = cu;
+                code_units[i + 1] = source[i + 1];
+                i++;
+            } else {
+                code_units[i] = 0xFFFD;
+            }
+        } else if (cu >= 0xDC00 && cu <= 0xDFFF) {
+            code_units[i] = 0xFFFD;
+        } else {
+            code_units[i] = cu;
+        }
+    }
+    MalValue result = mal_builtin_string_from_units(vm, code_units, length);
+    free(code_units);
+    return result;
+}
+
 static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
@@ -898,6 +995,12 @@ void mal_builtin_string_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "trimEnd", 0, mal_builtin_string_prototype_trim_end);
     mal_intrinsic_define_method_n(vm, prototype, "toUpperCase", 0, mal_builtin_string_prototype_to_upper_case);
     mal_intrinsic_define_method_n(vm, prototype, "toLowerCase", 0, mal_builtin_string_prototype_to_lower_case);
+    // Without ICU the locale-aware case methods behave as the default-locale ones
+    // (extra locale arguments are ignored); each gets its own name.
+    mal_intrinsic_define_method_n(vm, prototype, "toLocaleUpperCase", 0, mal_builtin_string_prototype_to_upper_case);
+    mal_intrinsic_define_method_n(vm, prototype, "toLocaleLowerCase", 0, mal_builtin_string_prototype_to_lower_case);
+    mal_intrinsic_define_method_n(vm, prototype, "isWellFormed", 0, mal_builtin_string_prototype_is_well_formed);
+    mal_intrinsic_define_method_n(vm, prototype, "toWellFormed", 0, mal_builtin_string_prototype_to_well_formed);
     mal_intrinsic_define_method_n(vm, prototype, "split", 2, mal_builtin_string_prototype_split);
     mal_intrinsic_define_method_n(vm, prototype, "replace", 2, mal_builtin_string_prototype_replace);
     mal_intrinsic_define_method_n(vm, prototype, "replaceAll", 2, mal_builtin_string_prototype_replace_all);

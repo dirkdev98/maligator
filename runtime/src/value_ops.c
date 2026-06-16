@@ -28,6 +28,26 @@ static MalString *mal_ops_string_from_ascii(MalHeap *heap, const byte *bytes) {
     return mal_string_new_ascii(heap, bytes, strlen(bytes));
 }
 
+// StrWhiteSpace (the ASCII subset); a non-ASCII string is rejected wholesale below.
+static bool mal_ops_string_number_is_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+}
+
+static int mal_ops_string_number_digit(char c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+// StringToNumber (7.1.4.1) over the StrNumericLiteral grammar — deliberately NOT
+// strtod, which would wrongly accept "inf"/"nan" and reject 0b/0o literals.
 static MalValue mal_ops_string_to_number(MalValue value) {
     MalString *string = mal_value_to_string(value);
     usize length = mal_string_length(string);
@@ -39,34 +59,174 @@ static MalValue mal_ops_string_to_number(MalValue value) {
             free(bytes);
             return mal_value_new_nan();
         }
-
         bytes[i] = (byte) code_units[i];
     }
     bytes[length] = '\0';
 
     char *start = bytes;
-    while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r') {
+    while (mal_ops_string_number_is_space(*start)) {
         start++;
     }
+    char *end = bytes + length;
+    while (end > start && mal_ops_string_number_is_space(end[-1])) {
+        end--;
+    }
+    *end = '\0';
+    usize token_length = (usize) (end - start);
 
-    if (*start == '\0') {
+    // Empty (or all-whitespace) string is +0.
+    if (token_length == 0) {
         free(bytes);
         return mal_value_from_i32(0);
     }
 
-    char *end = start;
-    f64 number = strtod(start, &end);
-    while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r') {
-        end++;
+    // Infinity literals (signed); the bare tokens only — no "inf"/"infinity".
+    if (strcmp(start, "Infinity") == 0 || strcmp(start, "+Infinity") == 0) {
+        free(bytes);
+        return mal_ops_number_value((f64) INFINITY);
+    }
+    if (strcmp(start, "-Infinity") == 0) {
+        free(bytes);
+        return mal_ops_number_value((f64) -INFINITY);
     }
 
-    if (end == start || *end != '\0') {
+    // NonDecimalIntegerLiteral: 0x/0X (hex), 0o/0O (octal), 0b/0B (binary), no sign.
+    if (token_length > 2 && start[0] == '0') {
+        int base = 0;
+        if (start[1] == 'x' || start[1] == 'X') {
+            base = 16;
+        } else if (start[1] == 'o' || start[1] == 'O') {
+            base = 8;
+        } else if (start[1] == 'b' || start[1] == 'B') {
+            base = 2;
+        }
+        if (base != 0) {
+            f64 number = 0;
+            for (char *p = start + 2; p < end; p++) {
+                int digit = mal_ops_string_number_digit(*p);
+                if (digit < 0 || digit >= base) {
+                    free(bytes);
+                    return mal_value_new_nan();
+                }
+                number = number * (f64) base + (f64) digit;
+            }
+            free(bytes);
+            return mal_ops_number_value(number);
+        }
+    }
+
+    // StrDecimalLiteral: restrict to its character set so strtod cannot fall back
+    // to recognizing "inf"/"nan" (a genuine overflow like "1e400" stays Infinity).
+    for (char *p = start; p < end; p++) {
+        char c = *p;
+        if (!((c >= '0' && c <= '9') || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-')) {
+            free(bytes);
+            return mal_value_new_nan();
+        }
+    }
+
+    char *parsed_end = start;
+    f64 number = strtod(start, &parsed_end);
+    if (parsed_end != end) {
         free(bytes);
         return mal_value_new_nan();
     }
 
     free(bytes);
     return mal_ops_number_value(number);
+}
+
+// Render a finite, non-zero f64 per ECMAScript Number::toString (7.1.12.1) into
+// `out`, which must hold at least 32 bytes. Produces the shortest decimal digit
+// string that round-trips to the same double (found by trying increasing
+// precision against a correctly-rounded strtod), then places the decimal point
+// / exponent exactly as the spec's cases 5-10 require.
+static void mal_ops_f64_to_ecma_string(f64 value, byte *out) {
+    byte *p = out;
+    if (signbit(value)) {
+        *p++ = '-';
+        value = -value;
+    }
+
+    // Shortest significant digits: the smallest precision whose decimal rounds
+    // back to `value`. 17 significant digits always suffice for a double.
+    char formatted[40];
+    for (int prec = 1; prec <= 17; prec++) {
+        snprintf(formatted, sizeof(formatted), "%.*e", prec - 1, value);
+        if (strtod(formatted, nullptr) == value) {
+            break;
+        }
+    }
+
+    // formatted is "d.ddde±XX" (or "de±XX" at precision 1); split it into the
+    // significant digit run and the base-10 exponent of the leading digit.
+    char digits[20];
+    int k = 0;
+    char *cursor = formatted;
+    digits[k++] = *cursor++;
+    if (*cursor == '.') {
+        cursor++;
+        while (*cursor != 'e' && *cursor != 'E') {
+            digits[k++] = *cursor++;
+        }
+    }
+    int exponent = (int) strtol(cursor + 1, nullptr, 10);
+
+    // Trailing zeros are never significant for round-tripping (defensive).
+    while (k > 1 && digits[k - 1] == '0') {
+        k--;
+    }
+
+    // n is the position of the decimal point counted from before the first
+    // significant digit (value == digits × 10^(n-k)).
+    int n = exponent + 1;
+
+    if (k <= n && n <= 21) {
+        for (int i = 0; i < k; i++) {
+            *p++ = (byte) digits[i];
+        }
+        for (int i = 0; i < n - k; i++) {
+            *p++ = '0';
+        }
+    } else if (0 < n && n <= 21) {
+        for (int i = 0; i < n; i++) {
+            *p++ = (byte) digits[i];
+        }
+        *p++ = '.';
+        for (int i = n; i < k; i++) {
+            *p++ = (byte) digits[i];
+        }
+    } else if (-6 < n && n <= 0) {
+        *p++ = '0';
+        *p++ = '.';
+        for (int i = 0; i < -n; i++) {
+            *p++ = '0';
+        }
+        for (int i = 0; i < k; i++) {
+            *p++ = (byte) digits[i];
+        }
+    } else {
+        *p++ = (byte) digits[0];
+        if (k > 1) {
+            *p++ = '.';
+            for (int i = 1; i < k; i++) {
+                *p++ = (byte) digits[i];
+            }
+        }
+        *p++ = 'e';
+        int e = n - 1;
+        *p++ = e >= 0 ? '+' : '-';
+        if (e < 0) {
+            e = -e;
+        }
+        char exp_digits[8];
+        snprintf(exp_digits, sizeof(exp_digits), "%d", e);
+        for (int i = 0; exp_digits[i] != '\0'; i++) {
+            *p++ = (byte) exp_digits[i];
+        }
+    }
+
+    *p = '\0';
 }
 
 MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
@@ -110,12 +270,12 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
 
     if (mal_value_is_f64(value)) {
         f64 number = mal_value_to_f64(value);
-        // Number::toString(±0) is "0"; "%.15g" would render -0.0 as "-0".
+        // Number::toString(±0) is "0".
         if (number == 0.0) {
             return mal_ops_string_from_ascii(heap, "0");
         }
         byte buffer[32];
-        snprintf(buffer, sizeof(buffer), "%.15g", number);
+        mal_ops_f64_to_ecma_string(number, buffer);
         return mal_ops_string_from_ascii(heap, buffer);
     }
 

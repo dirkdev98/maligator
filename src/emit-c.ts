@@ -238,6 +238,11 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 				disqualUse.add(instruction.key);
 				// value is a neutral boundary read
 				break;
+			case "TO_PROPERTY_KEY":
+				// object and key are read as boxed values, never numerically.
+				disqualUse.add(instruction.object);
+				disqualUse.add(instruction.key);
+				break;
 			case "CALL":
 				disqualUse.add(instruction.callee);
 				disqualUse.add(instruction.thisValue);
@@ -693,6 +698,11 @@ function emitInstruction(
 		case "STORE_PROPERTY":
 			return [
 				`mal_vm_op_store_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict});`,
+				`if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
+			];
+		case "TO_PROPERTY_KEY":
+			return [
+				`r${instruction.dst} = mal_vm_op_to_property_key(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
 				`if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
 			];
 		case "LOAD_GLOBAL":

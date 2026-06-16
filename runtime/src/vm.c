@@ -513,6 +513,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_STORE_PROPERTY:
                 mal_op_store_property(frame, &instruction);
                 break;
+            case MAL_OP_TO_PROPERTY_KEY:
+                mal_op_to_property_key(frame, &instruction);
+                break;
             case MAL_OP_CALL_SPREAD:
                 mal_op_call_spread(frame, &instruction);
                 break;

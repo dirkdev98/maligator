@@ -52,6 +52,19 @@ static bool mal_vm_string_to_array_index(MalString *string, i32 *index_out) {
     return true;
 }
 
+bool mal_vm_string_is_canonical_numeric_index(MalVm *vm, MalString *string) {
+    // CanonicalNumericIndexString (7.1.21): "-0" is canonical by fiat; otherwise
+    // a string is canonical iff ToString(ToNumber(string)) reproduces it exactly.
+    usize length = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    if (length == 2 && units[0] == '-' && units[1] == '0') {
+        return true;
+    }
+    f64 number = mal_ops_to_number(mal_value_from_string(string));
+    MalString *round_trip = mal_ops_to_string(&vm->heap, mal_value_from_f64(number));
+    return mal_string_equals(string, round_trip);
+}
+
 static bool mal_vm_string_to_property_key(MalValue value, MalKey *key_out) {
     i32 index = 0;
     if (mal_vm_string_to_array_index(mal_value_to_string(value), &index)) {
@@ -64,31 +77,45 @@ static bool mal_vm_string_to_property_key(MalValue value, MalKey *key_out) {
 }
 
 bool mal_vm_value_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
+    // Spec ToPropertyKey, running an object's @@toPrimitive / valueOf / toString.
+    // The read-modify-write member lowering (compound assignment, ++/--) used to
+    // double-fire this conversion; the compiler now hoists it to a single
+    // toPropertyKey op whose string/symbol result re-keys here as a fast path, so
+    // the bytecode access path can run the full conversion safely.
+    return mal_vm_to_property_key(vm, value, key_out);
+}
+
+// Spec ToPropertyKey (7.1.19): key = ? ToPrimitive(value, string); if it is a
+// Symbol return it, else return ? ToString(key). Unlike the bytecode shortcut
+// above this runs the object's @@toPrimitive / valueOf / toString exactly once,
+// so callers that convert a key a single time (the reflective Object/Reflect
+// builtins) observe correct coercion. Returns false on an abrupt completion.
+bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
     if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
         *key_out = (MalKey) {.kind = MAL_KEY_INDEX, .value = value};
         return true;
     }
-
     if (mal_value_is_string(value)) {
         return mal_vm_string_to_property_key(value, key_out);
     }
-
     if (mal_value_is_symbol(value)) {
         *key_out = (MalKey) {.kind = MAL_KEY_SYMBOL, .value = value};
         return true;
     }
 
-    // ToPropertyKey on an object would run a user valueOf/toString, but the
-    // read-modify-write member lowering (compound assignment, ++/--) converts the
-    // key once per access, so routing objects through the VM here makes those
-    // conversions observably double-fire (S11.13.2_A7.*_T4 / S11.3.*_A6_T3) and
-    // disagrees with String() on functions. Until ToPropertyKey is hoisted to a
-    // single conversion in the compiler, objects fall back to the VM-less
-    // stringify (consistent with String()). TODO(coercion): ToPropertyKey-once.
-    return mal_vm_string_to_property_key(
-        mal_value_from_string(mal_ops_to_string(&vm->heap, value)),
-        key_out
-    );
+    MalValue primitive;
+    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_STRING, &primitive)) {
+        return false;
+    }
+    if (mal_value_is_symbol(primitive)) {
+        *key_out = (MalKey) {.kind = MAL_KEY_SYMBOL, .value = primitive};
+        return true;
+    }
+    MalString *string;
+    if (!mal_vm_to_string(vm, primitive, &string)) {
+        return false;
+    }
+    return mal_vm_string_to_property_key(mal_value_from_string(string), key_out);
 }
 
 bool mal_vm_desc_read(MalVm *vm, MalPropertyDesc desc, MalValue receiver, MalValue *out) {
@@ -1671,6 +1698,29 @@ bool mal_vm_has_property(MalVm *vm, MalValue object_value, MalKey key) {
     return mal_object_resolve_property(mal_value_to_object(object_value), key).found;
 }
 
+// ArraySetLength value handling (10.4.2.4 steps 3-15): ToUint32 must round-trip
+// ToNumber (a fractional/negative/NaN/>= 2^32 length is a RangeError; ToNumber
+// runs user coercion and may throw). A non-writable length only accepts its
+// current value. Returns false (and on RangeError/abrupt, sets vm->completion)
+// when the length is not fully set; a non-configurable element can block the
+// shrink, leaving length at that element + 1.
+static bool mal_vm_array_set_length(MalVm *vm, MalArrayObject *array, MalValue value) {
+    f64 number_length;
+    if (!mal_vm_to_number(vm, value, &number_length)) {
+        return false;
+    }
+    u32 new_length = (u32) number_length;
+    if ((f64) new_length != number_length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
+        return false;
+    }
+    if (!array->length_writable && new_length != mal_array_object_length(array)) {
+        return false;
+    }
+    mal_array_object_set_length(array, new_length);
+    return mal_array_object_length(array) == new_length;
+}
+
 /**
  * Spec [[Set]] returning the boolean success (never throwing on a plain
  * rejection) used by Reflect.set: an accessor invokes its setter with the
@@ -1681,6 +1731,25 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
     // A proxy routes [[Set]] through its handler trap (or its target).
     if (mal_value_is_proxy_object(target)) {
         return mal_proxy_set(vm, mal_value_to_proxy_object(target), key, value, receiver);
+    }
+
+    // A TypedArray integer-indexed [[Set]] writes the element (a no-op when the
+    // index is out of bounds / the buffer detached) and never creates a table
+    // property, but only when the receiver is the TypedArray itself — a distinct
+    // receiver takes OrdinarySetWithOwnDescriptor below (writing to the receiver).
+    if (mal_value_is_typed_array_object(target) && target == receiver) {
+        if (key.kind == MAL_KEY_INDEX) {
+            i32 index = mal_value_to_i32(key.value);
+            if (index >= 0) {
+                mal_typed_array_object_set(vm, mal_value_to_typed_array_object(target), (u32) index, value);
+                return true;
+            }
+        } else if (key.kind == MAL_KEY_STRING &&
+                   mal_vm_string_is_canonical_numeric_index(vm, mal_value_to_string(key.value))) {
+            // An invalid integer-index key: [[Set]] is a no-op but returns true,
+            // never creating an ordinary property.
+            return true;
+        }
     }
 
     MalObject *object = mal_value_to_object(target);
@@ -1703,7 +1772,11 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
     // non-writable / non-extensible checks).
     if (target == receiver) {
         if (mal_value_is_array_object(target)) {
-            return mal_array_object_store(mal_value_to_array_object(target), key, value);
+            MalArrayObject *array = mal_value_to_array_object(target);
+            if (mal_array_key_is_length(key)) {
+                return mal_vm_array_set_length(vm, array, value);
+            }
+            return mal_array_object_store(array, key, value);
         }
         return mal_object_set(object, key, value);
     }
@@ -1878,6 +1951,37 @@ void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
     );
 }
 
+// ToPropertyKey applied once and returned as a re-keyable value, so a
+// read-modify-write member access (compound assignment, ++/--) converts the key
+// (running its @@toPrimitive / valueOf / toString) exactly once and feeds the
+// resulting string / symbol / index back into the load and the store. The base's
+// object-coercibility is checked first (matching the spec: a null/undefined base
+// throws before ToPropertyKey runs the key's user coercion). Already-key values
+// pass through untouched. Signals a throw via vm->completion.
+MalValue mal_vm_op_to_property_key(MalVm *vm, MalValue object_value, MalValue key_value) {
+    if (mal_value_is_nil(object_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot read properties of null or undefined");
+        return mal_value_new_undefined();
+    }
+    if ((mal_value_is_int32(key_value) && mal_value_to_i32(key_value) >= 0) ||
+        mal_value_is_string(key_value) || mal_value_is_symbol(key_value)) {
+        return key_value;
+    }
+    MalKey key;
+    if (!mal_vm_to_property_key(vm, key_value, &key)) {
+        return mal_value_new_undefined();
+    }
+    return key.value;
+}
+
+void mal_op_to_property_key(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.to_property_key.dst] = mal_vm_op_to_property_key(
+        callable->vm,
+        callable->registers[instruction->as.to_property_key.object],
+        callable->registers[instruction->as.to_property_key.key]
+    );
+}
+
 // Spec Set over a value with an already-evaluated key value, signalling a throw
 // through vm->completion. Shared by the interpreter op and the native-C backend
 // (which passes its statically-known strictness).
@@ -1916,10 +2020,17 @@ void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_val
     // Integer-indexed TypedArray writes go through IntegerIndexedElementSet
     // (coerce, then write in-bounds; out-of-bounds is silently dropped) and
     // never define an ordinary property.
-    if (mal_value_is_typed_array_object(object_value) && key.kind == MAL_KEY_INDEX) {
-        i32 index = mal_value_to_i32(key.value);
-        if (index >= 0) {
-            mal_typed_array_object_set(vm, mal_value_to_typed_array_object(object_value), (u32) index, value);
+    if (mal_value_is_typed_array_object(object_value)) {
+        if (key.kind == MAL_KEY_INDEX) {
+            i32 index = mal_value_to_i32(key.value);
+            if (index >= 0) {
+                mal_typed_array_object_set(vm, mal_value_to_typed_array_object(object_value), (u32) index, value);
+                return;
+            }
+        } else if (key.kind == MAL_KEY_STRING &&
+                   mal_vm_string_is_canonical_numeric_index(vm, mal_value_to_string(key.value))) {
+            // An invalid integer-index key (e.g. "-1"/"1.5"/"-0"): the write is a
+            // silently-dropped no-op, never an ordinary property.
             return;
         }
     }
@@ -1943,7 +2054,17 @@ void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_val
 
     bool stored;
     if (mal_value_is_array_object(object_value)) {
-        stored = mal_array_object_store(mal_value_to_array_object(object_value), key, value);
+        MalArrayObject *array = mal_value_to_array_object(object_value);
+        if (mal_array_key_is_length(key)) {
+            // ArraySetLength validates the value (ToNumber/ToUint32, RangeError on
+            // a bad length) before applying; a RangeError/abrupt is already pending.
+            stored = mal_vm_array_set_length(vm, array, value);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return;
+            }
+        } else {
+            stored = mal_array_object_store(array, key, value);
+        }
     } else {
         stored = mal_object_set(mal_value_to_object(object_value), key, value);
     }
@@ -2247,6 +2368,25 @@ void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
             MalKey length_key = mal_intrinsic_string_key(vm, "length");
             if (!mal_object_get_own(seen, length_key).present) {
                 mal_object_define_own(seen, length_key, &marker);
+            }
+        }
+
+        // A TypedArray's exotic own keys are its enumerable integer indices,
+        // also not table-backed; enumerate them ahead of the ordinary keys.
+        if (current->header.type == MAL_HEAP_TYPED_ARRAY_OBJECT) {
+            u32 typed_length = mal_typed_array_object_length((MalTypedArrayObject *) current);
+            for (u32 i = 0; i < typed_length; i++) {
+                MalKey index_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+                if (mal_object_get_own(seen, index_key).present) {
+                    continue;
+                }
+                mal_object_define_own(seen, index_key, &marker);
+                mal_array_object_store(
+                    result,
+                    (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+                    mal_vm_for_in_key_string(vm, index_key)
+                );
+                count++;
             }
         }
 

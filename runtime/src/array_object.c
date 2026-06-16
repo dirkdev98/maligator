@@ -130,6 +130,9 @@ bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
                 return false;
             }
             mal_array_object_set_length(array, new_length);
+            // ArraySetLength returns false when a non-configurable element blocks
+            // the shrink (set_length then leaves length at that element + 1).
+            return array->length == new_length;
         }
         return true;
     }

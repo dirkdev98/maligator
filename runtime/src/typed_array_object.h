@@ -62,6 +62,14 @@ const byte *mal_typed_array_name(MalTypedArrayKind kind);
  */
 u32 mal_typed_array_object_length(const MalTypedArrayObject *array);
 
+/**
+ * IsTypedArrayOutOfBounds: true when the view's buffer is detached, or a
+ * resizable buffer shrank below a length-tracking view's offset or a fixed-length
+ * view's extent. (Distinct from a length-0 but in-bounds view.) Used by
+ * ValidateTypedArray to throw from prototype methods.
+ */
+bool mal_typed_array_object_is_out_of_bounds(const MalTypedArrayObject *array);
+
 /** The view's current byte length (length * element size). */
 u32 mal_typed_array_object_byte_length(const MalTypedArrayObject *array);
 

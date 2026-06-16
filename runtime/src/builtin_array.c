@@ -12,16 +12,13 @@
 #include "heap_string.h"
 #include "primitive_wrapper_object.h"
 #include "proxy_object.h"
+#include "typed_array_object.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
 
 static MalKey mal_builtin_array_index_key(u32 index) {
     return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
-}
-
-static u32 mal_builtin_array_length(MalValue this_value) {
-    return mal_array_object_length(mal_value_to_array_object(this_value));
 }
 
 /**
@@ -77,6 +74,14 @@ static bool mal_builtin_array_set_or_throw(MalVm *vm, MalValue receiver, MalKey 
     if (!mal_value_is_object(receiver)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot create property on a primitive");
         return false;
+    }
+
+    // A TypedArray index is an integer-indexed exotic slot, not an ordinary
+    // property: route it through the element setter (ToNumber-coerces, then
+    // writes or silently drops when out of bounds) per IntegerIndexedElementSet.
+    if (mal_value_is_typed_array_object(receiver) && key.kind == MAL_KEY_INDEX) {
+        mal_typed_array_object_set(vm, mal_value_to_typed_array_object(receiver), (u32) mal_value_to_i32(key.value), value);
+        return vm->completion.kind != MAL_COMPLETION_THROW;
     }
 
     MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(receiver), key);
@@ -858,96 +863,178 @@ static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const
 }
 
 static MalValue mal_builtin_array_push(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
-    if (!mal_value_is_array_object(this_value)) {
+    // Intentionally generic: Set each new index then Set("length", new length) —
+    // a non-writable length (e.g. on a TypedArray) makes the final Set throw.
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
-
-    MalArrayObject *array = mal_value_to_array_object(this_value);
-    u32 length = mal_array_object_length(array);
-    for (i32 i = 0; i < arg_count; i++) {
-        mal_builtin_array_store_index(array, length + (u32) i, args[i]);
+    // A primitive receiver ToObjects to a throwaway wrapper. A String wrapper's
+    // `length` is non-writable, so the mandatory Set("length", ...) always fails
+    // → TypeError; other primitive wrappers (Boolean/Number/Symbol/BigInt) have no
+    // own length/index props, so the writes target a discarded wrapper (no-op).
+    if (!mal_value_is_object(this_value)) {
+        if (mal_value_is_string(this_value)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property 'length'");
+            return mal_value_new_undefined();
+        }
+        return mal_value_from_f64((f64) length + (f64) arg_count);
     }
-
-    return mal_value_from_i32((i32) mal_array_object_length(array));
+    for (i32 i = 0; i < arg_count; i++) {
+        if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(length + (u32) i), args[i])) {
+            return mal_value_new_undefined();
+        }
+    }
+    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_value_from_f64((f64) length + (f64) arg_count))) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_f64((f64) length + (f64) arg_count);
 }
 
 static MalValue mal_builtin_array_pop(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) args;
     (void) arg_count;
-    if (!mal_value_is_array_object(this_value)) {
+    // Intentionally generic: read the last element, delete it, shrink length.
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
-
-    MalArrayObject *array = mal_value_to_array_object(this_value);
-    u32 length = mal_array_object_length(array);
+    // A primitive receiver ToObjects to a throwaway wrapper. A String wrapper's
+    // `length` is non-writable (and its index props non-configurable), so the
+    // mandatory length write / index delete always fails → TypeError; other
+    // primitive wrappers have length 0 with no own props, so the writes are no-ops.
+    if (!mal_value_is_object(this_value)) {
+        if (mal_value_is_string(this_value)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property 'length'");
+        }
+        return mal_value_new_undefined();
+    }
     if (length == 0) {
+        if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_value_from_i32(0))) {
+            return mal_value_new_undefined();
+        }
         return mal_value_new_undefined();
     }
 
     MalValue element = mal_builtin_array_get(vm, this_value, length - 1);
-    mal_object_delete_own((MalObject *) array, mal_builtin_array_index_key(length - 1));
-    mal_array_object_set_length(array, length - 1);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    if (!mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(length - 1))) {
+        return mal_value_new_undefined();
+    }
+    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_value_from_i32((i32) (length - 1)))) {
+        return mal_value_new_undefined();
+    }
     return element;
 }
 
 static MalValue mal_builtin_array_shift(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) args;
     (void) arg_count;
-    if (!mal_value_is_array_object(this_value)) {
+    (void) new_target;
+    (void) callee;
+    // Intentionally generic (ArrayShift): O = ToObject(this), len =
+    // LengthOfArrayLike(O), shift elements down by one via Has/Get/Set/Delete.
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
-
-    MalArrayObject *array = mal_value_to_array_object(this_value);
-    u32 length = mal_array_object_length(array);
+    // A primitive receiver ToObjects to a throwaway wrapper. A String wrapper's
+    // non-writable length / non-configurable indices make the mandatory writes
+    // throw; other primitive wrappers (len 0) shift nothing → undefined.
+    if (!mal_value_is_object(this_value)) {
+        if (mal_value_is_string(this_value)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property 'length'");
+        }
+        return mal_value_new_undefined();
+    }
     if (length == 0) {
+        if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_value_from_i32(0))) {
+            return mal_value_new_undefined();
+        }
         return mal_value_new_undefined();
     }
 
     MalValue first = mal_builtin_array_get(vm, this_value, 0);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
     for (u32 index = 1; index < length; index++) {
         MalValue element;
-        if (mal_builtin_array_try_get(vm, this_value, index, &element)) {
-            mal_object_set((MalObject *) array, mal_builtin_array_index_key(index - 1), element);
+        bool present = mal_builtin_array_try_get(vm, this_value, index, &element);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+        if (present) {
+            if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(index - 1), element)) {
+                return mal_value_new_undefined();
+            }
         } else {
-            mal_object_delete_own((MalObject *) array, mal_builtin_array_index_key(index - 1));
+            if (!mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(index - 1))) {
+                return mal_value_new_undefined();
+            }
         }
     }
 
-    mal_object_delete_own((MalObject *) array, mal_builtin_array_index_key(length - 1));
-    mal_array_object_set_length(array, length - 1);
+    if (!mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(length - 1))) {
+        return mal_value_new_undefined();
+    }
+    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_value_from_i32((i32) (length - 1)))) {
+        return mal_value_new_undefined();
+    }
     return first;
 }
 
 static MalValue mal_builtin_array_unshift(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
-    if (!mal_value_is_array_object(this_value)) {
+    (void) new_target;
+    (void) callee;
+    // Intentionally generic (ArrayUnshift): O = ToObject(this), len =
+    // LengthOfArrayLike(O), shift elements up by argCount then prepend the args.
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
+    if (!mal_value_is_object(this_value)) {
+        if (mal_value_is_string(this_value)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property 'length'");
+            return mal_value_new_undefined();
+        }
+        return mal_value_from_f64((f64) length + (f64) arg_count);
+    }
 
-    MalArrayObject *array = mal_value_to_array_object(this_value);
-    u32 length = mal_array_object_length(array);
+    if (arg_count > 0) {
+        for (u32 moved = length; moved > 0; moved--) {
+            u32 from = moved - 1;
+            u32 to = from + (u32) arg_count;
 
-    for (u32 moved = length; moved > 0; moved--) {
-        u32 from = moved - 1;
-        u32 to = from + (u32) arg_count;
+            MalValue element;
+            bool present = mal_builtin_array_try_get(vm, this_value, from, &element);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return mal_value_new_undefined();
+            }
+            if (present) {
+                if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(to), element)) {
+                    return mal_value_new_undefined();
+                }
+            } else {
+                if (!mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(to))) {
+                    return mal_value_new_undefined();
+                }
+            }
+        }
 
-        MalValue element;
-        if (mal_builtin_array_try_get(vm, this_value, from, &element)) {
-            mal_object_set((MalObject *) array, mal_builtin_array_index_key(to), element);
-        } else {
-            mal_object_delete_own((MalObject *) array, mal_builtin_array_index_key(to));
+        for (i32 i = 0; i < arg_count; i++) {
+            if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key((u32) i), args[i])) {
+                return mal_value_new_undefined();
+            }
         }
     }
 
-    for (i32 i = 0; i < arg_count; i++) {
-        mal_object_set((MalObject *) array, mal_builtin_array_index_key((u32) i), args[i]);
+    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_value_from_f64((f64) length + (f64) arg_count))) {
+        return mal_value_new_undefined();
     }
-
-    mal_array_object_set_length(array, length + (u32) arg_count);
-    return mal_value_from_i32((i32) (length + (u32) arg_count));
+    return mal_value_from_f64((f64) length + (f64) arg_count);
 }
 
 static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1105,35 +1192,56 @@ static MalValue mal_builtin_array_join(MalVm *vm, MalValue this_value, const Mal
 }
 
 static MalValue mal_builtin_array_reverse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) args;
     (void) arg_count;
-    if (!mal_value_is_array_object(this_value)) {
+    (void) new_target;
+    (void) callee;
+    // Intentionally generic (ArrayReverse): O = ToObject(this), len =
+    // LengthOfArrayLike(O), then swap mirrored slots via Has/Get/Set/Delete so a
+    // TypedArray's exotic indices, inherited accessors, holes, and Proxies are
+    // all observed.
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
 
-    MalArrayObject *array = mal_value_to_array_object(this_value);
-    MalObject *object = (MalObject *) array;
-    u32 length = mal_array_object_length(array);
+    for (u32 lower = 0; length > 1 && lower < length - 1 - lower; lower++) {
+        u32 upper = length - 1 - lower;
 
-    for (u32 low = 0; length > 1 && low < length - 1 - low; low++) {
-        u32 high = length - 1 - low;
-        MalKey low_key = mal_builtin_array_index_key(low);
-        MalKey high_key = mal_builtin_array_index_key(high);
-
-        MalPropertyLookup low_lookup = mal_object_get_own(object, low_key);
-        MalPropertyLookup high_lookup = mal_object_get_own(object, high_key);
-
-        if (high_lookup.present) {
-            mal_object_set(object, low_key, high_lookup.desc.value);
-        } else {
-            mal_object_delete_own(object, low_key);
+        MalValue lower_value;
+        bool lower_exists = mal_builtin_array_try_get(vm, this_value, lower, &lower_value);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+        MalValue upper_value;
+        bool upper_exists = mal_builtin_array_try_get(vm, this_value, upper, &upper_value);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
         }
 
-        if (low_lookup.present) {
-            mal_object_set(object, high_key, low_lookup.desc.value);
-        } else {
-            mal_object_delete_own(object, high_key);
+        MalKey lower_key = mal_builtin_array_index_key(lower);
+        MalKey upper_key = mal_builtin_array_index_key(upper);
+
+        // Lower slot receives the upper value (or is deleted when upper is a hole).
+        if (upper_exists) {
+            if (!mal_builtin_array_set_or_throw(vm, this_value, lower_key, upper_value)) {
+                return mal_value_new_undefined();
+            }
+        } else if (lower_exists) {
+            if (!mal_builtin_array_delete_or_throw(vm, this_value, lower_key)) {
+                return mal_value_new_undefined();
+            }
+        }
+
+        // Upper slot receives the lower value (or is deleted when lower is a hole).
+        if (lower_exists) {
+            if (!mal_builtin_array_set_or_throw(vm, this_value, upper_key, lower_value)) {
+                return mal_value_new_undefined();
+            }
+        } else if (upper_exists) {
+            if (!mal_builtin_array_delete_or_throw(vm, this_value, upper_key)) {
+                return mal_value_new_undefined();
+            }
         }
     }
 
@@ -1166,11 +1274,14 @@ static MalValue mal_builtin_array_fill(MalVm *vm, MalValue this_value, const Mal
 }
 
 static MalValue mal_builtin_array_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    if (!mal_value_is_array_object(this_value)) {
+    (void) new_target;
+    (void) callee;
+    // Intentionally generic: O = ToObject(this), len = LengthOfArrayLike(O) read
+    // before ToIntegerOrInfinity(index).
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
-
-    u32 length = mal_builtin_array_length(this_value);
     f64 relative = 0;
     if (arg_count >= 1) {
         f64 number;
@@ -1484,13 +1595,13 @@ static MalValue mal_builtin_array_sort(MalVm *vm, MalValue this_value, const Mal
     if (!mal_builtin_array_comparator_arg(vm, args, arg_count, &comparator)) {
         return mal_value_new_undefined();
     }
-    if (!mal_value_is_array_object(this_value)) {
+    // Intentionally generic: O = ToObject(this), len = LengthOfArrayLike(O). The
+    // sorted-list build already reads through Has/Get; the write-back goes through
+    // Set/Delete so array-likes and TypedArrays are handled.
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
-
-    MalArrayObject *array = mal_value_to_array_object(this_value);
-    MalObject *object = (MalObject *) array;
-    u32 length = mal_array_object_length(array);
     MalBuiltinArraySorted sorted = mal_builtin_array_sorted_elements(vm, this_value, length, comparator);
     if (!sorted.ok) {
         return mal_value_new_undefined();
@@ -1498,13 +1609,22 @@ static MalValue mal_builtin_array_sort(MalVm *vm, MalValue this_value, const Mal
 
     // Sorted values first, then undefined values; what remains were holes.
     for (u32 index = 0; index < sorted.defined_count; index++) {
-        mal_object_set(object, mal_builtin_array_index_key(index), sorted.values[index]);
+        if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(index), sorted.values[index])) {
+            free(sorted.values);
+            return mal_value_new_undefined();
+        }
     }
     for (u32 index = sorted.defined_count; index < sorted.defined_count + sorted.undefined_count; index++) {
-        mal_object_set(object, mal_builtin_array_index_key(index), mal_value_new_undefined());
+        if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(index), mal_value_new_undefined())) {
+            free(sorted.values);
+            return mal_value_new_undefined();
+        }
     }
     for (u32 index = sorted.defined_count + sorted.undefined_count; index < length; index++) {
-        mal_object_delete_own(object, mal_builtin_array_index_key(index));
+        if (!mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(index))) {
+            free(sorted.values);
+            return mal_value_new_undefined();
+        }
     }
 
     free(sorted.values);
@@ -1806,9 +1926,74 @@ static MalValue mal_builtin_array_to_string(MalVm *vm, MalValue this_value, cons
 static MalValue mal_builtin_array_to_locale_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
-    // Pragmatic: elements format through ToString rather than their own
-    // toLocaleString methods.
-    return mal_builtin_array_join(vm, this_value, nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined());
+    (void) new_target;
+    (void) callee;
+    // Intentionally generic (Array.prototype.toLocaleString): O = ToObject(this),
+    // len = LengthOfArrayLike(O); each non-nullish element formats through
+    // ? ToString(? Invoke(element, "toLocaleString")) joined with ",".
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+        return mal_value_new_undefined();
+    }
+
+    MalString *separator = mal_intrinsic_ascii(vm, ",");
+    if (length == 0) {
+        return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+    }
+
+    MalKey to_locale_key = mal_intrinsic_string_key(vm, "toLocaleString");
+    MalString **parts = malloc(sizeof(MalString *) * length);
+    usize total_length = mal_string_length(separator) * (length - 1);
+
+    for (u32 index = 0; index < length; index++) {
+        MalValue element = mal_builtin_array_get(vm, this_value, index);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            free(parts);
+            return mal_value_new_undefined();
+        }
+        if (mal_value_is_nil(element)) {
+            parts[index] = nullptr;
+            continue;
+        }
+
+        // ? ToString(? Invoke(element, "toLocaleString")).
+        MalValue method;
+        if (!mal_vm_get_property(vm, element, to_locale_key, &method)) {
+            free(parts);
+            return mal_value_new_undefined();
+        }
+        MalCompletion completion = mal_vm_call_value(vm, method, element, nullptr, 0);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = completion;
+            free(parts);
+            return mal_value_new_undefined();
+        }
+        MalString *part;
+        if (!mal_vm_to_string(vm, completion.value, &part)) {
+            free(parts);
+            return mal_value_new_undefined();
+        }
+        parts[index] = part;
+        total_length += mal_string_length(part);
+    }
+
+    c16 *code_units = malloc(sizeof(c16) * total_length);
+    usize offset = 0;
+    for (u32 index = 0; index < length; index++) {
+        if (index > 0 && mal_string_length(separator) > 0) {
+            memcpy(code_units + offset, mal_string_code_units(separator), (usize) sizeof(c16) * mal_string_length(separator));
+            offset += mal_string_length(separator);
+        }
+        if (parts[index] != nullptr && mal_string_length(parts[index]) > 0) {
+            memcpy(code_units + offset, mal_string_code_units(parts[index]), (usize) sizeof(c16) * mal_string_length(parts[index]));
+            offset += mal_string_length(parts[index]);
+        }
+    }
+
+    MalString *result = mal_string_new_copy(&vm->heap, code_units, total_length);
+    free(code_units);
+    free(parts);
+    return mal_value_from_string(result);
 }
 
 static MalValue mal_builtin_array_prototype_iterator(MalVm *vm, MalValue this_value, MalIteratorKind kind) {

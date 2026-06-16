@@ -240,6 +240,12 @@ export type VmInstruction =
 			value: number;
 	  }
 	| {
+			opcode: "TO_PROPERTY_KEY";
+			dst: number;
+			object: number;
+			key: number;
+	  }
+	| {
 			opcode: "STORE_SUPER_PROPERTY";
 			object: number;
 			key: number;
@@ -802,6 +808,13 @@ function lowerInstructionToVmInstruction(
 				object: instruction.registers[0],
 				key: instruction.registers[1],
 				value: instruction.registers[2],
+			};
+		case "toPropertyKey":
+			return {
+				opcode: "TO_PROPERTY_KEY",
+				dst: instruction.registers[0],
+				object: instruction.registers[1],
+				key: instruction.registers[2],
 			};
 		case "storeSuperProperty":
 			return {

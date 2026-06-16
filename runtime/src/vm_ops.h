@@ -11,6 +11,15 @@
 bool mal_vm_value_to_property_key(MalVm *vm, MalValue value, MalKey *key_out);
 
 /**
+ * Spec ToPropertyKey (7.1.19): ToPrimitive(value, string) — running the object's
+ * @@toPrimitive / valueOf / toString exactly once — then ToString unless the
+ * result is a Symbol. For reflective builtins that convert a key a single time;
+ * the bytecode access path keeps mal_vm_value_to_property_key. Returns false on
+ * an abrupt completion.
+ */
+bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out);
+
+/**
  * Read a resolved descriptor's value, invoking accessor getters with the
  * original receiver. Returns false when the getter threw; the throw
  * completion is left on the vm for the caller to propagate.
@@ -25,6 +34,12 @@ bool mal_vm_desc_read(MalVm *vm, MalPropertyDesc desc, MalValue receiver, MalVal
  * property reads as undefined.
  */
 bool mal_vm_get_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *out);
+
+/**
+ * CanonicalNumericIndexString (7.1.21): whether a string key is the canonical
+ * string form of a Number (so a TypedArray treats it as an integer-index key).
+ */
+bool mal_vm_string_is_canonical_numeric_index(MalVm *vm, MalString *string);
 
 /**
  * mal_vm_get_property with an explicit receiver passed to accessor getters,
@@ -211,6 +226,16 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction);
 MalValue mal_vm_op_load_property(MalVm *vm, MalValue object_value, MalValue key_value);
 
 void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict);
+
+void mal_op_to_property_key(MalCallable *callable, MalInstruction *instruction);
+
+/**
+ * Object-coercibility-check the base (nil throws first, per spec) then run
+ * ToPropertyKey once, returning a re-keyable value (index/string/symbol) so a
+ * read-modify-write member access converts a computed key a single time.
+ * Signals a throw via vm->completion. See mal_vm_op_to_property_key in vm_ops.c.
+ */
+MalValue mal_vm_op_to_property_key(MalVm *vm, MalValue object_value, MalValue key_value);
 
 /**
  * Value-returning object/array/closure construction, shared by the create ops

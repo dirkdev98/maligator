@@ -28,12 +28,103 @@ static MalValue mal_ta_create(MalVm *vm, MalTypedArrayKind kind, u32 length) {
     return mal_value_from_typed_array_object(array);
 }
 
-static MalTypedArrayObject *mal_ta_this(MalVm *vm, MalValue this_value) {
+// TypedArraySpeciesCreate(exemplar, «length»): construct via the exemplar's
+// constructor's @@species (defaulting to the matching %TypedArray% intrinsic),
+// then require the result to be a non-out-of-bounds TypedArray at least `length`
+// long. Returns false with a pending throw on any abrupt step (used by the
+// methods that build a new same-kind array: slice/map/filter/with/toReversed/
+// toSorted).
+// SpeciesConstructor(exemplar, defaultCtor): exemplar.constructor, then its
+// @@species (defaulting to the matching %TypedArray% intrinsic when either is
+// undefined/null; a non-object constructor or non-constructor @@species throws).
+static bool mal_ta_species_constructor(MalVm *vm, MalTypedArrayObject *exemplar, MalValue *out) {
+    MalValue species = vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_CONSTRUCTOR_BASE + exemplar->kind];
+
+    MalValue constructor;
+    if (!mal_vm_get_property(vm, mal_value_from_typed_array_object(exemplar), mal_intrinsic_string_key(vm, "constructor"), &constructor)) {
+        return false;
+    }
+    if (!mal_value_is_undefined(constructor)) {
+        if (!mal_value_is_object(constructor)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "constructor is not an object");
+            return false;
+        }
+        MalValue species_value;
+        if (!mal_vm_get_property(vm, constructor, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_SPECIES), &species_value)) {
+            return false;
+        }
+        if (!mal_value_is_nil(species_value)) {
+            if (!mal_vm_is_constructor(vm, species_value)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol(Symbol.species) is not a constructor");
+                return false;
+            }
+            species = species_value;
+        }
+    }
+    *out = species;
+    return true;
+}
+
+// Construct via the species constructor and require the result to be a
+// non-out-of-bounds TypedArray (TypedArrayCreate's ValidateTypedArray). When a
+// minimum length is given (>= 0; pass -1 to skip, as subarray does), the result
+// must be at least that long.
+static bool mal_ta_species_construct(MalVm *vm, MalValue species, const MalValue *args, i32 arg_count, i64 min_length, MalValue *out) {
+    MalCompletion completion = mal_vm_construct_value(vm, species, args, arg_count);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        vm->completion = completion;
+        return false;
+    }
+    if (!mal_value_is_typed_array_object(completion.value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "TypedArray species constructor did not return a TypedArray");
+        return false;
+    }
+    MalTypedArrayObject *result = mal_value_to_typed_array_object(completion.value);
+    if (mal_typed_array_object_is_out_of_bounds(result)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "TypedArray is out of bounds");
+        return false;
+    }
+    if (min_length >= 0 && (i64) mal_typed_array_object_length(result) < min_length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Derived TypedArray is too small");
+        return false;
+    }
+    *out = completion.value;
+    return true;
+}
+
+// TypedArraySpeciesCreate(exemplar, «length»).
+static bool mal_ta_species_create(MalVm *vm, MalTypedArrayObject *exemplar, u32 length, MalValue *out) {
+    MalValue species;
+    if (!mal_ta_species_constructor(vm, exemplar, &species)) {
+        return false;
+    }
+    MalValue length_arg = mal_value_from_f64((f64) length);
+    return mal_ta_species_construct(vm, species, &length_arg, 1, (i64) length, out);
+}
+
+// RequireInternalSlot([[TypedArrayName]]) only — used by the getters and by
+// `subarray`/`set`, which tolerate an out-of-bounds view.
+static MalTypedArrayObject *mal_ta_this_raw(MalVm *vm, MalValue this_value) {
     if (!mal_value_is_typed_array_object(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Receiver is not a TypedArray");
         return nullptr;
     }
     return mal_value_to_typed_array_object(this_value);
+}
+
+// ValidateTypedArray: RequireInternalSlot, then throw if the view is out of
+// bounds (detached buffer, or a resizable buffer shrunk past its extent). Most
+// prototype methods begin with this.
+static MalTypedArrayObject *mal_ta_this(MalVm *vm, MalValue this_value) {
+    MalTypedArrayObject *array = mal_ta_this_raw(vm, this_value);
+    if (array == nullptr) {
+        return nullptr;
+    }
+    if (mal_typed_array_object_is_out_of_bounds(array)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "TypedArray is out of bounds");
+        return nullptr;
+    }
+    return array;
 }
 
 // ToIndex: ToIntegerOrInfinity, then require an integer in [0, 2^53-1] (we cap
@@ -332,7 +423,7 @@ static MalValue mal_ta_get_length(MalVm *vm, MalValue this_value, const MalValue
     (void) args;
     (void) arg_count;
     (void) new_target;
-    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    MalTypedArrayObject *array = mal_ta_this_raw(vm, this_value);
     return array == nullptr ? mal_value_new_undefined() : mal_value_from_i32((i32) mal_typed_array_object_length(array));
 }
 
@@ -340,7 +431,7 @@ static MalValue mal_ta_get_byte_length(MalVm *vm, MalValue this_value, const Mal
     (void) args;
     (void) arg_count;
     (void) new_target;
-    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    MalTypedArrayObject *array = mal_ta_this_raw(vm, this_value);
     return array == nullptr ? mal_value_new_undefined() : mal_value_from_i32((i32) mal_typed_array_object_byte_length(array));
 }
 
@@ -348,7 +439,7 @@ static MalValue mal_ta_get_byte_offset(MalVm *vm, MalValue this_value, const Mal
     (void) args;
     (void) arg_count;
     (void) new_target;
-    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    MalTypedArrayObject *array = mal_ta_this_raw(vm, this_value);
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
@@ -361,7 +452,7 @@ static MalValue mal_ta_get_buffer(MalVm *vm, MalValue this_value, const MalValue
     (void) args;
     (void) arg_count;
     (void) new_target;
-    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    MalTypedArrayObject *array = mal_ta_this_raw(vm, this_value);
     return array == nullptr ? mal_value_new_undefined() : mal_value_from_array_buffer_object(array->buffer);
 }
 
@@ -451,7 +542,7 @@ static MalValue mal_ta_fill(MalVm *vm, MalValue this_value, const MalValue *args
 
 static MalValue mal_ta_set(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
-    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    MalTypedArrayObject *array = mal_ta_this_raw(vm, this_value);
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
@@ -516,7 +607,7 @@ static MalValue mal_ta_set(MalVm *vm, MalValue this_value, const MalValue *args,
 
 static MalValue mal_ta_subarray(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
-    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    MalTypedArrayObject *array = mal_ta_this_raw(vm, this_value);
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
@@ -529,14 +620,28 @@ static MalValue mal_ta_subarray(MalVm *vm, MalValue this_value, const MalValue *
     if (!mal_ta_relative(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), length, length, &end)) {
         return mal_value_new_undefined();
     }
-    u32 new_length = end > start ? end - start : 0;
     u32 element_size = mal_typed_array_element_size(array->kind);
+    // A length-tracking view re-derives its length from the buffer, so subarray
+    // over one without an explicit end passes undefined (no count) to species.
+    bool length_tracking_to_end = array->length_tracking && (arg_count < 2 || mal_value_is_undefined(args[1]));
+    u32 new_length = end > start ? end - start : 0;
 
-    // subarray shares the same buffer (no copy).
-    MalTypedArrayObject *result = mal_typed_array_object_new(
-        &vm->heap, mal_ta_kind_prototype(vm, array->kind), array->buffer, array->kind,
-        array->byte_offset + start * element_size, new_length, false);
-    return mal_value_from_typed_array_object(result);
+    // subarray builds a new view over the SAME buffer via TypedArraySpeciesCreate
+    // with «buffer, beginByteOffset[, newLength]».
+    MalValue species;
+    if (!mal_ta_species_constructor(vm, array, &species)) {
+        return mal_value_new_undefined();
+    }
+    MalValue ctor_args[3] = {
+        mal_value_from_array_buffer_object(array->buffer),
+        mal_value_from_f64((f64) (array->byte_offset + start * element_size)),
+        mal_value_from_f64((f64) new_length),
+    };
+    MalValue result;
+    if (!mal_ta_species_construct(vm, species, ctor_args, length_tracking_to_end ? 2 : 3, -1, &result)) {
+        return mal_value_new_undefined();
+    }
+    return result;
 }
 
 static MalValue mal_ta_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -556,7 +661,10 @@ static MalValue mal_ta_slice(MalVm *vm, MalValue this_value, const MalValue *arg
     }
     u32 new_length = end > start ? end - start : 0;
 
-    MalValue result = mal_ta_create(vm, array->kind, new_length);
+    MalValue result;
+    if (!mal_ta_species_create(vm, array, new_length, &result)) {
+        return mal_value_new_undefined();
+    }
     mal_ta_copy_elements(vm, mal_value_to_typed_array_object(result), 0, array, start, new_length);
     return result;
 }
@@ -695,6 +803,45 @@ static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args
 
 static MalValue mal_ta_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     return mal_ta_join(vm, this_value, args, arg_count, new_target, callee);
+}
+
+// %TypedArray%.prototype.toLocaleString: each element formats through
+// ? ToString(? Invoke(element, "toLocaleString")), joined with ",".
+static MalValue mal_ta_to_locale_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    if (array == nullptr) {
+        return mal_value_new_undefined();
+    }
+    u32 length = mal_typed_array_object_length(array);
+    MalKey to_locale_key = mal_intrinsic_string_key(vm, "toLocaleString");
+    MalString *separator = mal_intrinsic_ascii(vm, ",");
+
+    MalValue result = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+    for (u32 i = 0; i < length; i++) {
+        if (i > 0) {
+            result = mal_ops_add(&vm->heap, result, mal_value_from_string(separator));
+        }
+        MalValue element = mal_typed_array_object_get(vm, array, i);
+        MalValue method;
+        if (!mal_vm_get_property(vm, element, to_locale_key, &method)) {
+            return mal_value_new_undefined();
+        }
+        MalCompletion completion = mal_vm_call_value(vm, method, element, nullptr, 0);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = completion;
+            return mal_value_new_undefined();
+        }
+        MalString *part;
+        if (!mal_vm_to_string(vm, completion.value, &part)) {
+            return mal_value_new_undefined();
+        }
+        result = mal_ops_add(&vm->heap, result, mal_value_from_string(part));
+    }
+    return result;
 }
 
 static MalValue mal_ta_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -844,7 +991,10 @@ static MalValue mal_ta_iterate(MalVm *vm, MalValue this_value, const MalValue *a
     MalValue mapped = mal_value_new_undefined();
     MalTypedArrayObject *map_result = nullptr;
     if (op == MAL_TA_MAP) {
-        mapped = mal_ta_create(vm, array->kind, length);
+        // TypedArraySpeciesCreate(O, «len») runs before the callbacks.
+        if (!mal_ta_species_create(vm, array, length, &mapped)) {
+            return mal_value_new_undefined();
+        }
         map_result = mal_value_to_typed_array_object(mapped);
     }
     // filter collects matching elements first, then builds the result.
@@ -911,7 +1061,11 @@ static MalValue mal_ta_iterate(MalVm *vm, MalValue this_value, const MalValue *a
         case MAL_TA_MAP:
             return mapped;
         case MAL_TA_FILTER: {
-            MalValue result = mal_ta_create(vm, array->kind, (u32) kept_count);
+            MalValue result;
+            if (!mal_ta_species_create(vm, array, (u32) kept_count, &result)) {
+                free(kept);
+                return mal_value_new_undefined();
+            }
             MalTypedArrayObject *out = mal_value_to_typed_array_object(result);
             for (usize i = 0; i < kept_count; i++) {
                 mal_typed_array_object_set(vm, out, (u32) i, kept[i]);
@@ -1305,7 +1459,7 @@ void mal_builtin_typed_array_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, ta_prototype, "copyWithin", 2, mal_ta_copy_within);
     mal_intrinsic_define_method_n(vm, ta_prototype, "join", 1, mal_ta_join);
     mal_intrinsic_define_method_n(vm, ta_prototype, "toString", 0, mal_ta_to_string);
-    mal_intrinsic_define_method_n(vm, ta_prototype, "toLocaleString", 0, mal_ta_to_string);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "toLocaleString", 0, mal_ta_to_locale_string);
     mal_intrinsic_define_method_n(vm, ta_prototype, "indexOf", 1, mal_ta_index_of);
     mal_intrinsic_define_method_n(vm, ta_prototype, "lastIndexOf", 1, mal_ta_last_index_of);
     mal_intrinsic_define_method_n(vm, ta_prototype, "includes", 1, mal_ta_includes);

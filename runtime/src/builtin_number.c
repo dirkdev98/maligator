@@ -382,11 +382,16 @@ static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_v
         return mal_value_new_undefined();
     }
 
-    f64 digits = arg_count >= 1 ? mal_ops_to_number(args[0]) : 0;
-    if (isnan(digits)) {
-        digits = 0;
+    // ToIntegerOrInfinity(fractionDigits) via the VM ToNumber, so a Symbol/BigInt
+    // throws TypeError (and a user valueOf runs) before the range check.
+    f64 digits = 0;
+    if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
+        f64 raw;
+        if (!mal_vm_to_number(vm, args[0], &raw)) {
+            return mal_value_new_undefined();
+        }
+        digits = isnan(raw) ? 0 : trunc(raw);
     }
-    digits = trunc(digits);
     if (digits < 0 || digits > 100) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toFixed() digits argument must be between 0 and 100");
         return mal_value_new_undefined();

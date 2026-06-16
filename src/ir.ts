@@ -619,6 +619,14 @@ export type IRInstruction =
 			registers: [number, number, number];
 	  }
 	| {
+			type: "toPropertyKey";
+
+			// [destination, object, key] — object-coercibility-check the base (a nil
+			// base throws first) then ToPropertyKey(key) once, so a read-modify-write
+			// member access converts a computed key a single time in the right order.
+			registers: [number, number, number];
+	  }
+	| {
 			type: "storeSuperProperty";
 
 			// [object, key, value, receiver] — the lookup walks object (the
@@ -5779,6 +5787,18 @@ function compileExpression(
 		case "ThisExpression": {
 			// TODO(functions): arrow functions should capture the lexical this.
 			const destination = nextRegisterDestination(fn);
+			// Top-level `this` in a global *script* is globalThis in BOTH strict
+			// and sloppy mode (ScriptEvaluation binds globalThis regardless of
+			// strictness); only a module's top-level `this` is undefined.
+			const scope = fn.semanticFile.nodeToScope.get(expression);
+			if (scope?.node.type === "Program" && fn.semanticFile.type === "script") {
+				cursor.block.instructions.push({
+					type: "loadIntrinsic",
+					registers: [destination],
+					intrinsic: "globalThis",
+				});
+				return destination;
+			}
 			cursor.block.instructions.push({
 				type: "loadThis",
 				registers: [destination],
@@ -6143,6 +6163,23 @@ function compileAssignment(
 		assignmentExpression.left,
 	);
 
+	// A compound assignment to a computed member both loads and stores at the
+	// same key, so convert the key to a property key once (running its
+	// @@toPrimitive / valueOf / toString a single time, after the base's
+	// object-coercibility check) and reuse it.
+	let effectiveKey = key;
+	if (
+		assignmentExpression.operator !== "=" &&
+		assignmentExpression.left.computed &&
+		key >= 0
+	) {
+		effectiveKey = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "toPropertyKey",
+			registers: [effectiveKey, object, key],
+		});
+	}
+
 	let value: number;
 	if (assignmentExpression.operator === "=") {
 		value = compileExpression(program, fn, cursor, assignmentExpression.right);
@@ -6153,7 +6190,7 @@ function compileAssignment(
 		const current = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
 			type: "loadProperty",
-			registers: [current, object, key],
+			registers: [current, object, effectiveKey],
 		});
 
 		const right = compileExpression(program, fn, cursor, assignmentExpression.right);
@@ -6175,7 +6212,7 @@ function compileAssignment(
 		});
 		cursor.block.instructions.push({
 			type: "storeSuperProperty",
-			registers: [object, key, value, receiver],
+			registers: [object, effectiveKey, value, receiver],
 		});
 
 		return value;
@@ -6183,7 +6220,7 @@ function compileAssignment(
 
 	cursor.block.instructions.push({
 		type: "storeProperty",
-		registers: [object, key, value],
+		registers: [object, effectiveKey, value],
 	});
 
 	return value;
@@ -6886,13 +6923,27 @@ function compileUpdateExpression(
 			? { object, key: -1 }
 			: compileMemberObjectAndKey(program, fn, cursor, member);
 
+		// ++/-- loads then stores at the same key, so a computed key is converted
+		// to a property key once (running its coercion a single time) and reused.
+		const effectiveKey =
+			!isPrivate && member.computed && resolved.key >= 0
+				? (() => {
+						const pk = nextRegisterDestination(fn);
+						cursor.block.instructions.push({
+							type: "toPropertyKey",
+							registers: [pk, resolved.object, resolved.key],
+						});
+						return pk;
+					})()
+				: resolved.key;
+
 		const current = isPrivate
 			? compilePrivateMemberLoad(program, fn, cursor, object, privateName)
 			: (() => {
 					const reg = nextRegisterDestination(fn);
 					cursor.block.instructions.push({
 						type: "loadProperty",
-						registers: [reg, resolved.object, resolved.key],
+						registers: [reg, resolved.object, effectiveKey],
 					});
 					return reg;
 				})();
@@ -6917,7 +6968,7 @@ function compileUpdateExpression(
 		} else {
 			cursor.block.instructions.push({
 				type: "storeProperty",
-				registers: [resolved.object, resolved.key, newValue],
+				registers: [resolved.object, effectiveKey, newValue],
 			});
 		}
 

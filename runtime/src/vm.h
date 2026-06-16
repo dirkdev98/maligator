@@ -38,6 +38,7 @@ typedef enum MalOpcode {
     MAL_OP_STORE_GLOBAL,
     MAL_OP_LOAD_PROPERTY,
     MAL_OP_STORE_PROPERTY,
+    MAL_OP_TO_PROPERTY_KEY,
     MAL_OP_STORE_SUPER_PROPERTY,
     MAL_OP_LOAD_PROTOTYPE,
     MAL_OP_GET_ITERATOR,
@@ -286,6 +287,10 @@ typedef struct MalInstruction {
         struct {
             i32 object, key, value;
         } store_property;
+
+        struct {
+            i32 dst, object, key;
+        } to_property_key;
 
         /**
          * super.x = v: the property lookup walks object (the super base)

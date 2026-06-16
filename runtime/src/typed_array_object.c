@@ -93,6 +93,20 @@ u32 mal_typed_array_object_length(const MalTypedArrayObject *array) {
     return array->length;
 }
 
+bool mal_typed_array_object_is_out_of_bounds(const MalTypedArrayObject *array) {
+    MalArrayBufferObject *buffer = array->buffer;
+    if (buffer == nullptr || buffer->detached) {
+        return true;
+    }
+    if (array->length_tracking) {
+        // A length-tracking view is out of bounds only once its offset passes the
+        // (possibly shrunk) buffer end; otherwise it tracks the remaining bytes.
+        return array->byte_offset > buffer->byte_length;
+    }
+    u64 end = (u64) array->byte_offset + (u64) array->length * mal_typed_array_sizes[array->kind];
+    return end > buffer->byte_length;
+}
+
 u32 mal_typed_array_object_byte_length(const MalTypedArrayObject *array) {
     return mal_typed_array_object_length(array) * mal_typed_array_sizes[array->kind];
 }
