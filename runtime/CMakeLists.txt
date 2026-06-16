@@ -15,7 +15,19 @@ file(GLOB_RECURSE SOURCE_FILES "src/*.c")
 
 
 add_library(LibMaligator STATIC ${SOURCE_FILES})
-target_include_directories(LibMaligator PUBLIC "src")
+# src/*.c includes "mal_i18n.h" (Date timezone offsets + Intl). The Rust shim
+# itself is built by cargo via src/i18n-build.ts and linked at the final cc; the
+# static archive just needs the header on its include path.
+target_include_directories(LibMaligator PUBLIC "src" "i18n/include")
 
-add_executable(MaligatorTest test.c)
-target_link_libraries(MaligatorTest LibMaligator)
+# The cargo-built Rust staticlib, referenced by name so the dev MaligatorTest
+# executable can link. Built out-of-band (src/i18n-build.ts) into .cache.
+add_library(mal_i18n STATIC IMPORTED)
+set_target_properties(mal_i18n PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/../.cache/cargo-target/release/libmal_i18n.a")
+
+# Dev-only harness (AGENTS.md local-verification flow). EXCLUDE_FROM_ALL so a
+# plain `cmake --build` (used by the test262 runner) builds only the library and
+# never fails on the Rust symbols before the shim has been built.
+add_executable(MaligatorTest EXCLUDE_FROM_ALL test.c)
+target_link_libraries(MaligatorTest LibMaligator mal_i18n)

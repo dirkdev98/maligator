@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
+import { ensureI18nLibrary, i18nLinkArgs } from "../i18n-build.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
 import { compileSemanticProgramToIr } from "../ir.ts";
 import { lowerIrProgramToVmDefinition } from "../lower-vm.ts";
@@ -209,6 +210,9 @@ export function test262PrepareBuild() {
 
 	test262Log("Building LibMaligator...");
 	execSync(`cmake --build runtime/build`, { stdio: "ignore" });
+
+	// Build the Rust i18n shim (Date tz + Intl) once per pass; cheap when cached.
+	ensureI18nLibrary();
 
 	test262Log("Compiling harness mains...");
 	execSync(
@@ -579,6 +583,7 @@ async function linkBatch(objectPath: string, binPath: string) {
 			objectPath,
 			`${TEST262_METADATA.buildPath}/test262_batch.o`,
 			"runtime/build/libLibMaligator.a",
+			...i18nLinkArgs(),
 			"-o",
 			binPath,
 		],
@@ -801,6 +806,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 					`${baseName}.c`,
 					`${TEST262_METADATA.buildPath}/test262_batch.o`,
 					"runtime/build/libLibMaligator.a",
+					...i18nLinkArgs(),
 					"-o",
 					`${baseName}.bin`,
 				],
@@ -939,6 +945,7 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 				`${baseName}.c`,
 				`${TEST262_METADATA.buildPath}/test262_main.o`,
 				"runtime/build/libLibMaligator.a",
+				...i18nLinkArgs(),
 				"-o",
 				`${baseName}.bin`,
 			],

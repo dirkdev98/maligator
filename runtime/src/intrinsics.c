@@ -10,6 +10,8 @@
 #include "builtin_boolean.h"
 #include "builtin_console.h"
 #include "builtin_data_view.h"
+#include "builtin_date.h"
+#include "builtin_intl.h"
 #include "builtin_typed_array.h"
 #include "builtin_error.h"
 #include "builtin_function.h"
@@ -243,6 +245,8 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_proxy_install(vm);
     mal_builtin_console_install(vm);
     mal_builtin_promise_install(vm);
+    mal_builtin_date_install(vm);
+    mal_builtin_intl_install(vm);
     mal_builtin_uri_install(vm);
 
     // Flag the built-in constructors as implementing [[Construct]]. Everything
@@ -274,6 +278,16 @@ void mal_intrinsics_init(MalVm *vm) {
         MAL_INTRINSIC_DATA_VIEW_CONSTRUCTOR,
         MAL_INTRINSIC_TYPED_ARRAY_CONSTRUCTOR,
         MAL_INTRINSIC_PROMISE_CONSTRUCTOR,
+        MAL_INTRINSIC_DATE_CONSTRUCTOR,
+        MAL_INTRINSIC_INTL_LOCALE_CONSTRUCTOR,
+        MAL_INTRINSIC_INTL_COLLATOR_CONSTRUCTOR,
+        MAL_INTRINSIC_INTL_NUMBER_FORMAT_CONSTRUCTOR,
+        MAL_INTRINSIC_INTL_DATE_TIME_FORMAT_CONSTRUCTOR,
+        MAL_INTRINSIC_INTL_PLURAL_RULES_CONSTRUCTOR,
+        MAL_INTRINSIC_INTL_LIST_FORMAT_CONSTRUCTOR,
+        MAL_INTRINSIC_INTL_DISPLAY_NAMES_CONSTRUCTOR,
+        MAL_INTRINSIC_INTL_RELATIVE_TIME_FORMAT_CONSTRUCTOR,
+        MAL_INTRINSIC_INTL_SEGMENTER_CONSTRUCTOR,
         MAL_INTRINSIC_ITERATOR_CONSTRUCTOR,
         MAL_INTRINSIC_ASYNC_ITERATOR_CONSTRUCTOR,
         MAL_INTRINSIC_GENERATOR_FUNCTION_CONSTRUCTOR,
@@ -362,6 +376,8 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "Proxy", vm->intrinsics[MAL_INTRINSIC_PROXY_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "console", vm->intrinsics[MAL_INTRINSIC_CONSOLE], flags);
     mal_intrinsic_define_data(vm, global_this, "Promise", vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Date", vm->intrinsics[MAL_INTRINSIC_DATE_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "Intl", vm->intrinsics[MAL_INTRINSIC_INTL], flags);
     mal_intrinsic_define_data(vm, global_this, "AggregateError", vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Iterator", vm->intrinsics[MAL_INTRINSIC_ITERATOR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "AsyncIterator", vm->intrinsics[MAL_INTRINSIC_ASYNC_ITERATOR_CONSTRUCTOR], flags);

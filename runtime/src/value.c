@@ -42,6 +42,30 @@ bool mal_value_is_set_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_SET_OBJECT);
 }
 
+bool mal_value_is_date_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_DATE_OBJECT);
+}
+
+MalDateObject *mal_value_to_date_object(MalValue value) {
+    return (MalDateObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_date_object(MalDateObject *date) {
+    return mal_value_from_heap((MalHeapHeader *) date);
+}
+
+bool mal_value_is_intl_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_INTL_OBJECT);
+}
+
+MalIntlObject *mal_value_to_intl_object(MalValue value) {
+    return (MalIntlObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_intl_object(MalIntlObject *intl) {
+    return mal_value_from_heap((MalHeapHeader *) intl);
+}
+
 bool mal_value_is_iterator_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_ITERATOR_OBJECT);
 }

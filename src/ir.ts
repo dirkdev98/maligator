@@ -998,6 +998,8 @@ type IRIntrinsic =
 	| "WeakMap"
 	| "WeakSet"
 	| "Promise"
+	| "Date"
+	| "Intl"
 	| "Iterator"
 	| "AsyncIterator"
 	| "parseInt"
@@ -1056,6 +1058,8 @@ const irIntrinsics = new Set<string>([
 	"WeakMap",
 	"WeakSet",
 	"Promise",
+	"Date",
+	"Intl",
 	"Iterator",
 	"AsyncIterator",
 	"parseInt",

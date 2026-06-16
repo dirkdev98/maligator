@@ -110,6 +110,18 @@ typedef enum MalHeapType {
      * Revoking sets both to null. See proxy_object.h.
      */
     MAL_HEAP_PROXY_OBJECT,
+    /**
+     * Date instances (MalDateObject): an ordinary object plus the [[DateValue]]
+     * internal slot (a time value in ms since the epoch, or NaN). See
+     * date_object.h.
+     */
+    MAL_HEAP_DATE_OBJECT,
+    /**
+     * Intl service instances (MalIntlObject): Intl.Locale and the formatter
+     * objects, holding an (optional) Rust-owned ICU4X handle + per-kind data.
+     * See intl_object.h.
+     */
+    MAL_HEAP_INTL_OBJECT,
 } MalHeapType;
 
 /**

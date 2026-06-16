@@ -377,7 +377,7 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 
 if (onlyVariant) {
 	// Single-pass debug run: report only, never touch the committed results.
-	await runVariant(onlyVariant as "strict" | "sloppy");
+	await runVariant(onlyVariant);
 } else {
 	const strict = await runVariant("strict");
 	const sloppy = await runVariant("sloppy");

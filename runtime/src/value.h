@@ -20,6 +20,8 @@ typedef struct MalModuleNamespaceObject MalModuleNamespaceObject;
 typedef struct MalPromiseObject MalPromiseObject;
 typedef struct MalIteratorHelperObject MalIteratorHelperObject;
 typedef struct MalPrimitiveWrapperObject MalPrimitiveWrapperObject;
+typedef struct MalDateObject MalDateObject;
+typedef struct MalIntlObject MalIntlObject;
 
 /**
  * NaN-Boxed MalValue representation.
@@ -260,7 +262,9 @@ static inline bool mal_value_is_object(MalValue value) {
         type == MAL_HEAP_PROMISE_OBJECT ||
         type == MAL_HEAP_ITERATOR_HELPER_OBJECT ||
         type == MAL_HEAP_MODULE_NAMESPACE_OBJECT ||
-        type == MAL_HEAP_PROXY_OBJECT;
+        type == MAL_HEAP_PROXY_OBJECT ||
+        type == MAL_HEAP_DATE_OBJECT ||
+        type == MAL_HEAP_INTL_OBJECT;
 }
 
 /**
@@ -344,6 +348,20 @@ bool mal_value_is_primitive_wrapper(MalValue value);
  */
 MalPrimitiveWrapperObject *mal_value_to_primitive_wrapper(MalValue value);
 MalValue mal_value_from_primitive_wrapper(MalPrimitiveWrapperObject *wrapper);
+
+/**
+ * Date exotic object predicate + box/unbox (holds the [[DateValue]] slot).
+ */
+bool mal_value_is_date_object(MalValue value);
+MalDateObject *mal_value_to_date_object(MalValue value);
+MalValue mal_value_from_date_object(MalDateObject *date);
+
+/**
+ * Intl service instance predicate + box/unbox (Locale + the formatters).
+ */
+bool mal_value_is_intl_object(MalValue value);
+MalIntlObject *mal_value_to_intl_object(MalValue value);
+MalValue mal_value_from_intl_object(MalIntlObject *intl);
 
 /**
  * Spec thisStringValue / thisNumberValue / thisBooleanValue: a matching

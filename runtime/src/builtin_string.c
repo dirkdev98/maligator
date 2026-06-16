@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "builtin_intl.h"
 #include "builtin_iterator.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
@@ -536,14 +537,20 @@ static MalValue mal_builtin_string_prototype_substr(MalVm *vm, MalValue this_val
 }
 
 /**
- * Basic String.prototype.localeCompare: code-unit lexicographic order (no
- * locale-sensitive collation), returning -1 / 0 / +1.
+ * String.prototype.localeCompare(that, locales, options): RequireObjectCoercible
+ * + ToString the receiver, then defer to Intl.Collator-backed collation.
  */
 static MalValue mal_builtin_string_prototype_locale_compare(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
-    MalString *that = mal_builtin_string_coerce(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
-    i32 order = mal_string_compare(string, that);
-    return mal_value_from_i32(order < 0 ? -1 : (order > 0 ? 1 : 0));
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    MalValue that = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue locales = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    MalValue options = arg_count >= 3 ? args[2] : mal_value_new_undefined();
+    return mal_intl_locale_compare(vm, mal_value_from_string(string), that, locales, options);
 }
 
 /**

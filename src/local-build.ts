@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { ensureI18nLibrary, I18N_INCLUDE_DIR, i18nLinkArgs } from "./i18n-build.ts";
 
 const LOCAL_DIR = ".cache/local";
 const BUILD_DIR = path.join(LOCAL_DIR, "lib");
@@ -39,6 +40,9 @@ function ensureRuntimeLibrary(verbose: boolean): string {
 
 	execFileSync("cmake", ["--build", BUILD_DIR, "--target", "LibMaligator"], { stdio });
 
+	// Build the Rust i18n shim (Date tz + Intl) the runtime links against.
+	ensureI18nLibrary(verbose);
+
 	return path.join(BUILD_DIR, "libLibMaligator.a");
 }
 
@@ -61,9 +65,12 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 			OPT,
 			"-I",
 			"runtime/src",
+			"-I",
+			I18N_INCLUDE_DIR,
 			cPath,
 			"runtime/test262_main.c",
 			lib,
+			...i18nLinkArgs(),
 			"-o",
 			binPath,
 		],

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "builtin_intl.h"
 #include "heap_string.h"
 #include "primitive_wrapper_object.h"
 #include "value_ops.h"
@@ -363,15 +364,15 @@ static MalValue mal_builtin_number_prototype_to_string(MalVm *vm, MalValue this_
 }
 
 static MalValue mal_builtin_number_prototype_to_locale_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) args;
-    (void) arg_count;
     (void) new_target;
     (void) callee;
     f64 number;
     if (!mal_builtin_number_this(vm, this_value, &number)) {
         return mal_value_new_undefined();
     }
-    return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
+    MalValue locales = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    return mal_intl_number_to_locale_string(vm, number, locales, options);
 }
 
 static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

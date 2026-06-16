@@ -1,0 +1,29 @@
+[package]
+name = "mal_i18n"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Thin FFI shim over ICU4X (and later temporal_rs) for the Maligator runtime."
+
+# A C-linkable static archive. The Maligator C runtime owns all JS-spec glue
+# (option-bag parsing, ToXxx coercions, abstract operations); this crate only
+# exposes flat i18n primitives over the C ABI. See docs/decisions/05-date-intl.md.
+[lib]
+name = "mal_i18n"
+crate-type = ["staticlib"]
+
+[dependencies]
+# Bundled IANA tzdb for Date's LocalTZA (deterministic offsets, not the host's
+# /usr/share/zoneinfo). The system zone *identity* still comes from TZ / the
+# /etc/localtime symlink via TimeZone::system().
+jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
+# ICU4X for the Intl surface. compiled_data (default) bundles CLDR data for all
+# locales; the curated-subset / consumer-selectable-locales build is a TODO.
+icu = "2"
+# temporal_rs joins here for the Temporal global.
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
