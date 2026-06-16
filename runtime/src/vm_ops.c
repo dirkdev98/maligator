@@ -2636,7 +2636,18 @@ void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_va
     }
 
     MalPropertyDesc desc = mal_intrinsic_data_desc(value, flags);
-    mal_object_define_own(mal_value_to_object(object_value), key, &desc);
+    if (mal_object_define_own(mal_value_to_object(object_value), key, &desc) != MAL_DEFINE_OWN_APPLIED) {
+        return;
+    }
+    // Array exotic [[DefineOwnProperty]]: defining an index at or past length
+    // grows length (CreateDataProperty on a fresh array must keep length in step).
+    if (mal_value_is_array_object(object_value) && key.kind == MAL_KEY_INDEX) {
+        MalArrayObject *array = mal_value_to_array_object(object_value);
+        i32 index = mal_value_to_i32(key.value);
+        if (index >= 0 && (u32) index >= mal_array_object_length(array)) {
+            mal_array_object_set_length(array, (u32) index + 1);
+        }
+    }
 }
 
 void mal_op_define_property(MalCallable *callable, MalInstruction *instruction) {

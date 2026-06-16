@@ -119,8 +119,13 @@ bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
     }
 
     if (mal_array_key_is_length(key)) {
-        if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
-            u32 new_length = (u32) mal_value_to_i32(value);
+        // Accept an int32 or an f64 that is a valid array length (some callers
+        // pass 𝔽(len) as a double); other numbers are left for [[Set]] to ignore.
+        f64 number = mal_value_is_int32(value)
+            ? (f64) mal_value_to_i32(value)
+            : (mal_value_is_f64(value) ? mal_value_to_f64(value) : -1.0);
+        if (number >= 0 && (f64) (u32) number == number) {
+            u32 new_length = (u32) number;
             if (!array->length_writable && new_length != array->length) {
                 return false;
             }

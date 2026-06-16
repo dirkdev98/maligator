@@ -392,6 +392,24 @@ MalValue mal_ops_strict_equal(MalValue left, MalValue right) {
     return mal_value_new_boolean(mal_ops_strict_equal_bool(left, right));
 }
 
+bool mal_ops_same_value(MalValue left, MalValue right) {
+    // SameValue (7.2.10) differs from === only for Numbers: NaN equals NaN, and
+    // +0 does not equal -0. Everything else (strings/BigInts by content, objects
+    // by identity) matches strict equality.
+    if (mal_ops_is_number(left) && mal_ops_is_number(right)) {
+        f64 x = mal_ops_number_as_f64(left);
+        f64 y = mal_ops_number_as_f64(right);
+        if (x != x || y != y) {
+            return (x != x) && (y != y);
+        }
+        if (x == 0.0 && y == 0.0) {
+            return signbit(x) == signbit(y);
+        }
+        return x == y;
+    }
+    return mal_ops_strict_equal_bool(left, right);
+}
+
 MalValue mal_ops_strict_not_equal(MalValue left, MalValue right) {
     return mal_value_new_boolean(!mal_ops_strict_equal_bool(left, right));
 }

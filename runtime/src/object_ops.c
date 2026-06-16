@@ -1,5 +1,7 @@
 #include "object_ops.h"
 
+#include "value_ops.h"
+
 static bool mal_object_desc_is_accessor(MalPropertyDesc desc) {
     return (desc.flags & MAL_PROPERTY_ACCESSOR) != 0;
 }
@@ -42,7 +44,9 @@ static bool mal_object_define_is_compatible(MalPropertyDesc current, MalProperty
             return false;
         }
 
-        if (current.value != next.value) {
+        // SameValue, not bitwise: equal-but-distinct strings/BigInts (which are
+        // not interned) must compare equal so a no-op redefinition is allowed.
+        if (!mal_ops_same_value(current.value, next.value)) {
             return false;
         }
     }

@@ -69,21 +69,29 @@ static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_va
         return mal_builtin_function_forward_completion(vm, mal_vm_call_value(vm, this_value, this_arg, nullptr, 0));
     }
 
-    if (!mal_value_is_array_object(arguments_value)) {
-        // TODO(functions): general array-likes need a length + indexed read path.
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Function.prototype.apply expects an array of arguments");
+    // CreateListFromArrayLike(argArray): any object with length + indices, not
+    // only real arrays (so `fn.apply(t, arguments)` / a {length, 0, 1} work).
+    if (!mal_value_is_object(arguments_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Function.prototype.apply expects an array-like arguments object");
         return mal_value_new_undefined();
     }
 
-    u32 length = mal_array_object_length(mal_value_to_array_object(arguments_value));
+    MalValue length_value;
+    if (!mal_vm_get_property(vm, arguments_value, mal_intrinsic_string_key(vm, "length"), &length_value)) {
+        return mal_value_new_undefined();
+    }
+    f64 length_number;
+    if (!mal_vm_to_number(vm, length_value, &length_number)) {
+        return mal_value_new_undefined();
+    }
+    // ToLength clamp (capped at u32 for our calling convention).
+    u32 length = (length_number != length_number || length_number <= 0)
+        ? 0
+        : (length_number >= (f64) UINT32_MAX ? UINT32_MAX : (u32) length_number);
+
     MalValue *call_args = length > 0 ? malloc(sizeof(MalValue) * length) : nullptr;
     for (u32 index = 0; index < length; index++) {
-        MalPropertyResolution resolution = mal_object_resolve_property(
-            mal_value_to_object(arguments_value),
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)}
-        );
-        call_args[index] = mal_value_new_undefined();
-        if (resolution.found && !mal_vm_desc_read(vm, resolution.desc, arguments_value, &call_args[index])) {
+        if (!mal_vm_get_property(vm, arguments_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)}, &call_args[index])) {
             free(call_args);
             return mal_value_new_undefined();
         }
@@ -101,9 +109,15 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     }
 
     i32 bound_count = arg_count > 1 ? arg_count - 1 : 0;
+    // BoundFunctionCreate (10.4.1.3): the bound function's [[Prototype]] is the
+    // target's [[GetPrototypeOf]](), not unconditionally %Function.prototype%.
+    MalObject *bound_prototype = mal_object_get_prototype(mal_value_to_object(this_value));
+    if (bound_prototype == nullptr) {
+        bound_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    }
     MalBoundFunctionObject *bound = mal_bound_function_object_new(
         &vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        bound_prototype,
         this_value,
         arg_count >= 1 ? args[0] : mal_value_new_undefined(),
         arg_count > 1 ? args + 1 : nullptr,

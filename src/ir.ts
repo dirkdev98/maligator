@@ -7126,9 +7126,13 @@ function compileArrayExpression(
 
 			const key = compileNumberLiteral(fn, cursor, index);
 			const value = compileExpression(program, fn, cursor, element);
+			// Array-literal elements are CreateDataPropertyOrThrow (own data
+			// property), not [[Set]] — so a poisoned Array.prototype index
+			// accessor is not consulted.
 			cursor.block.instructions.push({
-				type: "storeProperty",
+				type: "defineProperty",
 				registers: [array, key, value],
+				enumerable: true,
 			});
 		}
 
@@ -7180,8 +7184,9 @@ function compileArrayExpression(
 
 		const value = compileExpression(program, fn, cursor, element);
 		cursor.block.instructions.push({
-			type: "storeProperty",
+			type: "defineProperty",
 			registers: [array, index, value],
+			enumerable: true,
 		});
 		cursor.block.instructions.push({
 			type: "binary",

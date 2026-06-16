@@ -116,4 +116,7 @@ MalValue mal_ops_not_equal(MalValue left, MalValue right);
 
 MalValue mal_ops_strict_equal(MalValue left, MalValue right);
 
+/** Spec SameValue (7.2.10): like ===, but NaN equals NaN and +0 differs from -0. */
+bool mal_ops_same_value(MalValue left, MalValue right);
+
 MalValue mal_ops_strict_not_equal(MalValue left, MalValue right);

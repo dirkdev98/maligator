@@ -708,29 +708,41 @@ static MalValue mal_builtin_object_get_own_property_names(MalVm *vm, MalValue th
 }
 
 static MalValue mal_builtin_object_assign(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
         return arg_count > 0 ? args[0] : mal_value_new_undefined();
     }
 
-    MalObject *target = mal_value_to_object(args[0]);
+    MalValue target_value = args[0];
     for (i32 i = 1; i < arg_count; i++) {
         if (!mal_value_is_object(args[i])) {
             continue;
         }
+        MalValue source_value = args[i];
 
         MalPropertyIter iter;
-        mal_property_iter_init(&iter, mal_value_to_object(args[i]), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
+        mal_property_iter_init(&iter, mal_value_to_object(source_value), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
 
         MalKey key;
         MalPropertyDesc desc;
         while (mal_property_iter_next(&iter, &key, &desc)) {
-            mal_object_set(target, key, desc.value);
+            // Spec reads each value with Get (invoking a getter) and writes with
+            // Set(to, key, value, true) — invoking a target setter and throwing
+            // on a failed write.
+            MalValue value;
+            if (!mal_vm_get_property(vm, source_value, key, &value)) {
+                return mal_value_new_undefined();
+            }
+            if (!mal_vm_set_property(vm, target_value, key, value, target_value)) {
+                if (vm->completion.kind != MAL_COMPLETION_THROW) {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
+                }
+                return mal_value_new_undefined();
+            }
         }
     }
 
-    return args[0];
+    return target_value;
 }
 
 static MalValue mal_builtin_object_create(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

@@ -57,10 +57,12 @@ bool mal_proxy_target_is_callable(MalValue value) {
 
 // ---- shared helpers -------------------------------------------------------
 
-// Pragmatic SameValue over NaN-boxed values: bit equality already distinguishes
-// +0/-0 and canonicalizes NaN, which is what the proxy invariant checks need.
+// SameValue for the proxy invariant checks. Bit equality is not enough: equal
+// strings/BigInts are not interned, so a trap returning an equal-but-distinct
+// string/BigInt for a non-configurable non-writable property must not falsely
+// trip the invariant.
 static bool mal_proxy_same_value(MalValue a, MalValue b) {
-    return a == b;
+    return mal_ops_same_value(a, b);
 }
 
 // A revoked proxy throws on every operation. Returns true (and sets the throw)

@@ -1,6 +1,7 @@
 #include "builtin_symbol.h"
 
 #include "heap_string.h"
+#include "primitive_wrapper_object.h"
 #include "heap_symbol.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -95,16 +96,23 @@ static MalValue mal_builtin_symbol_constructor(MalVm *vm, MalValue this_value, c
 }
 
 /**
- * Unwrap the symbol receiver shared by the prototype methods. There are no
- * wrapper objects, so only symbol primitives are accepted.
+ * thisSymbolValue (20.4.3): a Symbol primitive, or a Symbol wrapper object whose
+ * [[SymbolData]] is unwrapped. Anything else is a TypeError.
  */
 static MalSymbol *mal_builtin_symbol_this(MalVm *vm, MalValue this_value) {
-    if (!mal_value_is_symbol(this_value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Receiver is not a symbol");
-        return nullptr;
+    if (mal_value_is_symbol(this_value)) {
+        return mal_value_to_symbol(this_value);
     }
 
-    return mal_value_to_symbol(this_value);
+    if (mal_value_is_primitive_wrapper(this_value)) {
+        MalPrimitiveWrapperObject *wrapper = mal_value_to_primitive_wrapper(this_value);
+        if (wrapper->kind == MAL_PRIMITIVE_WRAPPER_SYMBOL) {
+            return mal_value_to_symbol(wrapper->primitive_data);
+        }
+    }
+
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Receiver is not a symbol");
+    return nullptr;
 }
 
 static MalValue mal_builtin_symbol_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

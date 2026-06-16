@@ -11,6 +11,7 @@
 #include "function_object.h"
 #include "heap_string.h"
 #include "primitive_wrapper_object.h"
+#include "proxy_object.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -45,23 +46,16 @@ bool mal_builtin_array_try_get(MalVm *vm, MalValue this_value, u32 index, MalVal
         return false;
     }
 
+    // Spec-shaped read: if HasProperty(O, Pk) then Get(O, Pk); otherwise a hole.
+    // Going through Has/Get (not the raw property table) observes a TypedArray's
+    // exotic indices, a Proxy's traps, a String wrapper's chars, and inherited
+    // index accessors — none of which live in O's own table.
     MalKey index_key = mal_builtin_array_index_key(index);
-
-    // A String wrapper's exotic index own property is not in the table.
-    MalPropertyDesc string_exotic;
-    if (mal_primitive_wrapper_string_exotic_own(&vm->heap, mal_value_to_object(this_value), index_key, &string_exotic)) {
-        return mal_vm_desc_read(vm, string_exotic, this_value, out);
-    }
-
-    MalPropertyResolution resolution = mal_object_resolve_property(
-        mal_value_to_object(this_value),
-        index_key
-    );
-    if (!resolution.found) {
+    if (!mal_vm_has_property(vm, this_value, index_key)) {
         return false;
     }
 
-    return mal_vm_desc_read(vm, resolution.desc, this_value, out);
+    return mal_vm_get_property(vm, this_value, index_key, out);
 }
 
 static MalValue mal_builtin_array_get(MalVm *vm, MalValue this_value, u32 index) {
@@ -183,21 +177,19 @@ bool mal_builtin_array_this_length(MalVm *vm, MalValue this_value, u32 *length_o
         return true;
     }
 
-    MalPropertyResolution resolution = mal_object_resolve_property(
-        mal_value_to_object(this_value),
-        mal_intrinsic_string_key(vm, "length")
-    );
-    if (!resolution.found) {
-        *length_out = 0;
-        return true;
-    }
-
+    // Full Get(O, "length") so a TypedArray's exotic length, an inherited
+    // accessor, or a Proxy trap is observed (not just own table entries).
     MalValue length_value;
-    if (!mal_vm_desc_read(vm, resolution.desc, this_value, &length_value)) {
+    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, "length"), &length_value)) {
         return false;
     }
 
-    f64 raw = mal_ops_to_number(length_value);
+    // ToLength: ToNumber (full ToPrimitive for objects, throwing on a Symbol or
+    // BigInt length) then clamp to [0, 2^32-1] for our u32 length model.
+    f64 raw;
+    if (!mal_vm_to_number(vm, length_value, &raw)) {
+        return false;
+    }
     if (!(raw > 0)) {
         // NaN and negative lengths clamp to zero.
         *length_out = 0;
@@ -294,9 +286,17 @@ static MalValue mal_builtin_array_constructor(MalVm *vm, MalValue this_value, co
 }
 
 static MalValue mal_builtin_array_is_array(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
-    return mal_value_new_boolean(arg_count >= 1 && mal_value_is_array_object(args[0]));
+    MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    // IsArray (7.2.2): a Proxy answers for its target chain; a revoked Proxy throws.
+    if (mal_value_is_proxy_object(value)) {
+        value = mal_proxy_unwrap_target(value);
+        if (mal_value_is_proxy_object(value)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot perform IsArray on a revoked Proxy");
+            return mal_value_new_undefined();
+        }
+    }
+    return mal_value_new_boolean(mal_value_is_array_object(value));
 }
 
 static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -415,34 +415,83 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
 }
 
 /**
- * ArraySpeciesCreate approximation (9.4.2.3): a non-object, non-undefined
- * `constructor` is rejected with a TypeError; object constructors fall back to a
- * default array since Symbol.species construction is not yet modeled. Reads
- * `constructor` (which may run a getter), so it can leave a pending throw —
- * returns false in that case. On success writes a fresh plain array of `length`
- * into *out.
+ * CreateDataPropertyOrThrow(target, index, value). A fresh Array takes the
+ * indexed-element fast path (keeping `length` in step); any other receiver (a
+ * species-constructed object) goes through [[DefineOwnProperty]], throwing
+ * (returns false with a pending TypeError) when it refuses the property.
  */
-static bool mal_builtin_array_species_create(MalVm *vm, MalValue original, u32 length, MalArrayObject **out) {
-    // ArraySpeciesCreate steps 3-4: a non-Array original returns a default array
-    // without ever reading `constructor` (so its getter is not observed).
+static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u32 index, MalValue value) {
+    // [[DefineOwnProperty]] (not [[Set]]): overwrites a configurable property and
+    // ignores the prototype chain, but rejects an incompatible (e.g. non-writable
+    // non-configurable) existing one.
+    MalPropertyDesc desc = {
+        .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+        .value = value,
+        .getter = mal_value_new_undefined(),
+        .setter = mal_value_new_undefined(),
+    };
+    MalKey key = mal_builtin_array_index_key(index);
+    if (mal_object_define_own(mal_value_to_object(target), key, &desc) != MAL_DEFINE_OWN_APPLIED) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot define array index property");
+        return false;
+    }
+    // Array exotic [[DefineOwnProperty]]: an index at or past length grows length.
+    if (mal_value_is_array_object(target)) {
+        MalArrayObject *array = mal_value_to_array_object(target);
+        if (index >= mal_array_object_length(array)) {
+            mal_array_object_set_length(array, index + 1);
+        }
+    }
+    return true;
+}
+
+/**
+ * ArraySpeciesCreate(originalArray, length) (9.4.2.3): a non-Array original
+ * returns a default array without reading `constructor`. Otherwise read
+ * `constructor`, then its @@species; undefined/null species defaults to a plain
+ * array (ArrayCreate, RangeError on length >= 2^32), a non-constructor species
+ * throws TypeError, and any other species is Constructed with the length. The
+ * result (a plain array or a species instance) is written into *out; returns
+ * false with a pending throw on any abrupt step.
+ */
+static bool mal_builtin_array_species_create(MalVm *vm, MalValue original, f64 length, MalValue *out) {
+    MalValue constructor = mal_value_new_undefined();
     if (mal_value_is_array_object(original)) {
-        MalPropertyResolution ctor = mal_object_resolve_property(
-            mal_value_to_object(original),
-            mal_intrinsic_string_key(vm, "constructor")
-        );
-        if (ctor.found) {
-            MalValue ctor_value;
-            if (!mal_vm_desc_read(vm, ctor.desc, original, &ctor_value)) {
+        if (!mal_vm_get_property(vm, original, mal_intrinsic_string_key(vm, "constructor"), &constructor)) {
+            return false;
+        }
+        if (mal_value_is_object(constructor)) {
+            if (!mal_vm_get_property(vm, constructor, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_SPECIES), &constructor)) {
                 return false;
             }
-            if (!mal_value_is_undefined(ctor_value) && !mal_value_is_object(ctor_value)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Array species constructor is not an object");
-                return false;
+            // A null @@species defaults to ArrayCreate (a null `constructor`
+            // itself is left to fail the IsConstructor check below).
+            if (mal_value_is_null(constructor)) {
+                constructor = mal_value_new_undefined();
             }
         }
     }
 
-    *out = mal_intrinsic_new_array(vm, length);
+    if (mal_value_is_undefined(constructor)) {
+        if (length > 4294967295.0) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
+            return false;
+        }
+        *out = mal_value_from_array_object(mal_intrinsic_new_array(vm, (u32) length));
+        return true;
+    }
+
+    if (!mal_vm_is_constructor(vm, constructor)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Array species is not a constructor");
+        return false;
+    }
+
+    MalValue length_arg = mal_value_from_f64(length);
+    MalCompletion constructed = mal_vm_construct_value(vm, constructor, &length_arg, 1);
+    if (constructed.kind != MAL_COMPLETION_NORMAL) {
+        return false;
+    }
+    *out = constructed.value;
     return true;
 }
 
@@ -451,7 +500,7 @@ static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalV
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
     }
-    MalArrayObject *result;
+    MalValue result;
     if (!mal_builtin_array_species_create(vm, this_value, length, &result)) {
         return mal_value_new_undefined();
     }
@@ -467,10 +516,12 @@ static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalV
             return mal_value_new_undefined();
         }
 
-        mal_object_set((MalObject *) result, mal_builtin_array_index_key(index), mapped);
+        if (!mal_builtin_array_create_data_property(vm, result, index, mapped)) {
+            return mal_value_new_undefined();
+        }
     }
 
-    return mal_value_from_array_object(result);
+    return result;
 }
 
 static MalValue mal_builtin_array_for_each(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -498,7 +549,7 @@ static MalValue mal_builtin_array_filter(MalVm *vm, MalValue this_value, const M
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
     }
-    MalArrayObject *result;
+    MalValue result;
     if (!mal_builtin_array_species_create(vm, this_value, 0, &result)) {
         return mal_value_new_undefined();
     }
@@ -516,11 +567,13 @@ static MalValue mal_builtin_array_filter(MalVm *vm, MalValue this_value, const M
         }
 
         if (mal_value_is_truthy(selected)) {
-            mal_builtin_array_store_index(result, result_length++, element);
+            if (!mal_builtin_array_create_data_property(vm, result, result_length++, element)) {
+                return mal_value_new_undefined();
+            }
         }
     }
 
-    return mal_value_from_array_object(result);
+    return result;
 }
 
 static MalValue mal_builtin_array_reduce(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -898,11 +951,11 @@ static MalValue mal_builtin_array_unshift(MalVm *vm, MalValue this_value, const 
 }
 
 static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    if (!mal_value_is_array_object(this_value)) {
+    // Intentionally generic: O = ToObject(this), len = LengthOfArrayLike(O).
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
-
-    u32 length = mal_builtin_array_length(this_value);
     u32 start = arg_count >= 1 ? mal_builtin_array_clamp_relative(vm, args[0], 0, length) : 0;
     u32 end = arg_count >= 2 && !mal_value_is_undefined(args[1])
         ? mal_builtin_array_clamp_relative(vm, args[1], (f64) length, length)
@@ -912,7 +965,7 @@ static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const Ma
     }
 
     u32 result_length = end > start ? end - start : 0;
-    MalArrayObject *result;
+    MalValue result;
     if (!mal_builtin_array_species_create(vm, this_value, result_length, &result)) {
         return mal_value_new_undefined();
     }
@@ -920,19 +973,18 @@ static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const Ma
     for (u32 index = 0; index < result_length; index++) {
         MalValue element;
         if (mal_builtin_array_try_get(vm, this_value, start + index, &element)) {
-            mal_object_set((MalObject *) result, mal_builtin_array_index_key(index), element);
+            if (!mal_builtin_array_create_data_property(vm, result, index, element)) {
+                return mal_value_new_undefined();
+            }
         }
     }
 
-    return mal_value_from_array_object(result);
+    return result;
 }
 
 static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    if (!mal_value_is_array_object(this_value)) {
-        return mal_value_new_undefined();
-    }
-
-    MalArrayObject *result;
+    // Intentionally generic: `this` is just the first concat source (i == -1).
+    MalValue result;
     if (!mal_builtin_array_species_create(vm, this_value, 0, &result)) {
         return mal_value_new_undefined();
     }
@@ -966,43 +1018,70 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
             for (u32 index = 0; index < source_length; index++) {
                 MalValue element;
                 if (mal_builtin_array_try_get(vm, source, index, &element)) {
-                    mal_object_set((MalObject *) result, mal_builtin_array_index_key(result_length + index), element);
+                    if (!mal_builtin_array_create_data_property(vm, result, result_length + index, element)) {
+                        return mal_value_new_undefined();
+                    }
                 }
             }
 
             result_length += source_length;
         } else {
-            mal_object_set((MalObject *) result, mal_builtin_array_index_key(result_length), source);
+            if (!mal_builtin_array_create_data_property(vm, result, result_length, source)) {
+                return mal_value_new_undefined();
+            }
             result_length++;
         }
     }
 
-    mal_array_object_set_length(result, result_length);
-    return mal_value_from_array_object(result);
+    if (!mal_builtin_array_set_or_throw(vm, result, mal_intrinsic_string_key(vm, "length"), mal_value_from_f64(result_length))) {
+        return mal_value_new_undefined();
+    }
+    return result;
 }
 
 static MalValue mal_builtin_array_join(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    if (!mal_value_is_array_object(this_value)) {
+    // Intentionally generic: O = ToObject(this), len = LengthOfArrayLike(O).
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
 
-    u32 length = mal_builtin_array_length(this_value);
+    // ToString(separator) (throwing on a Symbol/abrupt toString), default ",".
+    MalString *separator;
+    if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
+        if (!mal_vm_to_string(vm, args[0], &separator)) {
+            return mal_value_new_undefined();
+        }
+    } else {
+        separator = mal_intrinsic_ascii(vm, ",");
+    }
+
     if (length == 0) {
         return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
     }
-
-    MalString *separator = arg_count >= 1 && !mal_value_is_undefined(args[0])
-        ? mal_ops_to_string(&vm->heap, args[0])
-        : mal_intrinsic_ascii(vm, ",");
 
     MalString **parts = malloc(sizeof(MalString *) * length);
     usize total_length = mal_string_length(separator) * (length - 1);
 
     for (u32 index = 0; index < length; index++) {
+        // Holes, undefined and null join as empty strings; other elements go
+        // through ToString, whose user code may throw.
         MalValue element = mal_builtin_array_get(vm, this_value, index);
-        // Holes, undefined and null join as empty strings.
-        parts[index] = mal_value_is_nil(element) ? nullptr : mal_ops_to_string(&vm->heap, element);
-        total_length += parts[index] != nullptr ? mal_string_length(parts[index]) : 0;
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            free(parts);
+            return mal_value_new_undefined();
+        }
+        if (mal_value_is_nil(element)) {
+            parts[index] = nullptr;
+            continue;
+        }
+        MalString *part;
+        if (!mal_vm_to_string(vm, element, &part)) {
+            free(parts);
+            return mal_value_new_undefined();
+        }
+        parts[index] = part;
+        total_length += mal_string_length(part);
     }
 
     c16 *code_units = malloc(sizeof(c16) * total_length);
@@ -1062,12 +1141,12 @@ static MalValue mal_builtin_array_reverse(MalVm *vm, MalValue this_value, const 
 }
 
 static MalValue mal_builtin_array_fill(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    if (!mal_value_is_array_object(this_value)) {
+    // Intentionally generic: O = ToObject(this), len = LengthOfArrayLike(O), then
+    // Set each index. A Symbol/abrupt length or a read-only target index throws.
+    u32 length;
+    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
-
-    MalArrayObject *array = mal_value_to_array_object(this_value);
-    u32 length = mal_array_object_length(array);
     MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(vm, args[1], 0, length) : 0;
     u32 end = arg_count >= 3 && !mal_value_is_undefined(args[2])
@@ -1078,7 +1157,9 @@ static MalValue mal_builtin_array_fill(MalVm *vm, MalValue this_value, const Mal
     }
 
     for (u32 index = start; index < end; index++) {
-        mal_object_set((MalObject *) array, mal_builtin_array_index_key(index), value);
+        if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(index), value)) {
+            return mal_value_new_undefined();
+        }
     }
 
     return this_value;
@@ -1186,7 +1267,7 @@ static f64 mal_builtin_array_number_arg(MalVm *vm, const MalValue *args, i32 arg
  * depth levels deep. Holes are dropped, matching FlattenIntoArray. Leaves any
  * getter throw completion on the vm for the caller to check.
  */
-static void mal_builtin_array_flatten_into(MalVm *vm, MalArrayObject *result, u32 *count, MalValue source, f64 depth) {
+static void mal_builtin_array_flatten_into(MalVm *vm, MalValue result, u32 *count, MalValue source, f64 depth) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, source, &length)) {
         return;
@@ -1206,8 +1287,8 @@ static void mal_builtin_array_flatten_into(MalVm *vm, MalArrayObject *result, u3
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
                 return;
             }
-        } else {
-            mal_builtin_array_store_index(result, (*count)++, element);
+        } else if (!mal_builtin_array_create_data_property(vm, result, (*count)++, element)) {
+            return;
         }
     }
 }
@@ -1218,7 +1299,7 @@ static MalValue mal_builtin_array_flat(MalVm *vm, MalValue this_value, const Mal
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
-    MalArrayObject *result;
+    MalValue result;
     if (!mal_builtin_array_species_create(vm, this_value, 0, &result)) {
         return mal_value_new_undefined();
     }
@@ -1228,7 +1309,7 @@ static MalValue mal_builtin_array_flat(MalVm *vm, MalValue this_value, const Mal
         return mal_value_new_undefined();
     }
 
-    return mal_value_from_array_object(result);
+    return result;
 }
 
 static MalValue mal_builtin_array_flat_map(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1236,7 +1317,7 @@ static MalValue mal_builtin_array_flat_map(MalVm *vm, MalValue this_value, const
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
     }
-    MalArrayObject *result;
+    MalValue result;
     if (!mal_builtin_array_species_create(vm, this_value, 0, &result)) {
         return mal_value_new_undefined();
     }
@@ -1258,15 +1339,17 @@ static MalValue mal_builtin_array_flat_map(MalVm *vm, MalValue this_value, const
             for (u32 inner = 0; inner < mapped_length; inner++) {
                 MalValue inner_element;
                 if (mal_builtin_array_try_get(vm, mapped, inner, &inner_element)) {
-                    mal_builtin_array_store_index(result, count++, inner_element);
+                    if (!mal_builtin_array_create_data_property(vm, result, count++, inner_element)) {
+                        return mal_value_new_undefined();
+                    }
                 }
             }
-        } else {
-            mal_builtin_array_store_index(result, count++, mapped);
+        } else if (!mal_builtin_array_create_data_property(vm, result, count++, mapped)) {
+            return mal_value_new_undefined();
         }
     }
 
-    return mal_value_from_array_object(result);
+    return result;
 }
 
 /**
@@ -1495,14 +1578,16 @@ static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const M
     u32 new_length = length - delete_count + insert_count;
 
     // ArraySpeciesCreate(O, deleteCount) for the removed-elements array.
-    MalArrayObject *removed;
+    MalValue removed;
     if (!mal_builtin_array_species_create(vm, this_value, delete_count, &removed)) {
         return mal_value_new_undefined();
     }
     for (u32 index = 0; index < delete_count; index++) {
         MalValue element;
         if (mal_builtin_array_try_get(vm, this_value, start + index, &element)) {
-            mal_object_set((MalObject *) removed, mal_builtin_array_index_key(index), element);
+            if (!mal_builtin_array_create_data_property(vm, removed, index, element)) {
+                return mal_value_new_undefined();
+            }
         } else if (vm->completion.kind == MAL_COMPLETION_THROW) {
             return mal_value_new_undefined();
         }
@@ -1557,7 +1642,11 @@ static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const M
         return mal_value_new_undefined();
     }
 
-    return mal_value_from_array_object(removed);
+    // Set the removed array's length (matters for a species-constructed receiver).
+    if (!mal_builtin_array_set_or_throw(vm, removed, mal_intrinsic_string_key(vm, "length"), mal_value_from_f64(delete_count))) {
+        return mal_value_new_undefined();
+    }
+    return removed;
 }
 
 static MalValue mal_builtin_array_to_spliced(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
