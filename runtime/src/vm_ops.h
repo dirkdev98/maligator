@@ -99,6 +99,14 @@ bool mal_vm_to_numeric(MalVm *vm, MalValue value, MalValue *out);
  */
 bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value);
 
+/**
+ * Spec IsConstructor: bound functions defer to their target, a proxy to its
+ * target chain, native functions consult their [[Construct]] flag, ordinary
+ * script functions are constructors iff non-generator/non-async. Mirrors the
+ * pragmatic check Reflect.construct uses.
+ */
+bool mal_vm_is_constructor(MalVm *vm, MalValue value);
+
 void mal_op_move(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_number(MalCallable *callable, MalInstruction *instruction);

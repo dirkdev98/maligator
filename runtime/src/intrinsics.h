@@ -159,6 +159,12 @@ typedef enum MalIntrinsic {
      * "dynamic require is not supported" TypeError. Not exposed on globalThis.
      */
     MAL_INTRINSIC_CJS_REQUIRE,
+    /**
+     * %ThrowTypeError%: the unique, frozen, anonymous function that throws a
+     * TypeError on call. Backs the poisoned `caller`/`arguments` accessors on
+     * %Function.prototype% (and strict mapped-arguments `callee`).
+     */
+    MAL_INTRINSIC_THROW_TYPE_ERROR,
     MAL_INTRINSIC_COUNT,
 } MalIntrinsic;
 

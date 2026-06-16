@@ -1275,7 +1275,7 @@ function compileMergedModuleInit(
 		emitModulePrologue(program, fn, prologue, file);
 		// Initialize CommonJS imports (require + property reads) before the body.
 		emitCjsImportInits(program, fn, { block: prologue }, file);
-		const bodyEntry = compileStatementsToBlock(program, fn, file.ast.body);
+		const bodyEntry = compileStatementsToBlock(program, fn, file.ast.body, true);
 		prologue.instructions.push({ type: "jump", blocks: [bodyEntry] });
 
 		tail = fn.blocks[fn.blocks.length - 1]!;
@@ -1322,10 +1322,10 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 		const prologue: IRBlock = { instructions: [] };
 		fn.blocks.push(prologue);
 		emitModulePrologue(program, fn, prologue, initFile);
-		const bodyEntry = compileStatementsToBlock(program, fn, initFile.ast.body);
+		const bodyEntry = compileStatementsToBlock(program, fn, initFile.ast.body, true);
 		prologue.instructions.push({ type: "jump", blocks: [bodyEntry] });
 	} else {
-		compileStatementsToBlock(program, fn, initFile.ast.body);
+		compileStatementsToBlock(program, fn, initFile.ast.body, true);
 	}
 
 	makeInitAsyncIfTopLevelAwait(fn, [initFile]);
@@ -1582,7 +1582,7 @@ function compileCjsModuleWrapper(
 	if (programScope) {
 		emitTdzHoleInits(program, fn, paramsBlock, programScope.bindings);
 	}
-	const bodyEntry = compileStatementsToBlock(program, fn, file.ast.body);
+	const bodyEntry = compileStatementsToBlock(program, fn, file.ast.body, true);
 	paramsBlock.instructions.push({ type: "jump", blocks: [bodyEntry] });
 
 	endFunction(fn);
@@ -1872,6 +1872,7 @@ function compileNewFunction(
 						argument: functionNode.body,
 					})
 				: [],
+		true,
 	);
 	emitFunctionBodyTdz(program, fn, paramsCursor.block, functionNode);
 	paramsCursor.block.instructions.push({
@@ -1951,6 +1952,7 @@ function compileNewFunctionExpression(
 						argument: functionNode.body,
 					})
 				: [],
+		true,
 	);
 	emitFunctionBodyTdz(program, compiledFn, paramsCursor.block, functionNode);
 	paramsCursor.block.instructions.push({
@@ -2192,7 +2194,7 @@ function buildStaticInitializer(
 			continue;
 		}
 
-		const entryBlock = compileStatementsToBlock(program, initFn, element.body);
+		const entryBlock = compileStatementsToBlock(program, initFn, element.body, true);
 		cursor.block.instructions.push({ type: "jump", blocks: [entryBlock] });
 		cursor.block = initFn.blocks.at(-1)!;
 	}
@@ -2909,17 +2911,16 @@ function isSloppyFunction(fn: IRFunction): boolean {
 }
 
 /**
- * A sloppy-script top-level `var`/`function` binds a property of the global
+ * A global *script* top-level `var`/`function` binds a property of the global
  * object (spec: CreateGlobalVarBinding/CreateGlobalFunctionBinding) — observable
- * as `globalThis.x`. `let`/`const`/`class` go to the global declarative record
- * (our flat slots), and modules / strict scripts keep slots too (we don't yet
- * model strict-script var-as-global-property — a deliberate, low-risk scope:
- * the strict default bucket stays on the fast slot path, unchanged).
+ * as `globalThis.x` — in BOTH strict and sloppy mode (GlobalDeclarationInstantiation
+ * does not consult strictness here). `let`/`const`/`class` go to the global
+ * declarative record (our flat slots), and a module's top-level bindings are
+ * module-scoped (also flat slots), so both are excluded.
  */
-function isSloppyScriptGlobalProperty(file: SemanticFile, binding: Binding): boolean {
+function isScriptGlobalProperty(file: SemanticFile, binding: Binding): boolean {
 	return (
 		file.type === "script" &&
-		!file.strict &&
 		(binding.kind === "var" || binding.declarationNode?.type === "FunctionDeclaration")
 	);
 }
@@ -3468,12 +3469,67 @@ function compileStatementsToBlock(
 	program: IntermediateProgram,
 	fn: IRFunction,
 	statements: Array<ESTree.Statement>,
+	/**
+	 * Hoist top-level function declarations in this list to the start of the
+	 * block, matching FunctionDeclarationInstantiation / GlobalDeclarationInstantiation:
+	 * the function object is created and bound before any other statement runs, so
+	 * code may call (or otherwise reference) the function before its textual position.
+	 *
+	 * Only set for function bodies, program/module bodies and class static blocks -
+	 * the lists where a function declaration is function/global-scoped in both strict
+	 * and sloppy mode. Nested blocks keep textual-position emission: there a sloppy
+	 * declaration's binding is hoisted to the enclosing function scope (Annex B) and
+	 * must not be assigned at block entry.
+	 */
+	hoistFunctions = false,
 ): number {
 	let block: IRBlock = {
 		instructions: [],
 	};
 	// Store the first block index so we can return that to allow jumping to that block.
 	const blockIdx = fn.blocks.push(block) - 1;
+
+	// Hoisting pre-pass: bind every top-level function declaration up front so the
+	// loop below can skip re-emitting them at their textual position.
+	const hoistedDeclarations = new Set<ESTree.Node>();
+	if (hoistFunctions) {
+		// Reserve this function's own captured-binding slots before compiling any
+		// hoisted function body. getOrCreateBindingLocation charges a captured slot
+		// to whichever IR function first *requests* it; hoisting lets a nested
+		// closure's body run before the owning declaration, so without this the
+		// closure would wrongly claim ownership (wrong owner functionIndex + slot)
+		// of a binding that actually lives in this activation. Touching them here
+		// makes `fn` the owner, and the nested closure then resolves to that slot.
+		for (const statement of statements) {
+			const scope = fn.semanticFile.nodeToScope.get(statement);
+			if (!scope) {
+				continue;
+			}
+			// A FunctionDeclaration/ClassDeclaration node maps to its *own* scope,
+			// so step up to the containing scope to reach this function's bindings.
+			const ownerScope = scope.node === statement ? scope.parent : scope;
+			for (const binding of ownerScope?.bindings ?? []) {
+				if (binding.scopedTo === "captured") {
+					getOrCreateBindingLocation(program, fn, binding);
+				}
+			}
+			break;
+		}
+
+		for (const statement of statements) {
+			const declaration =
+				statement.type === "FunctionDeclaration"
+					? statement
+					: statement.type === "ExportNamedDeclaration" &&
+						  statement.declaration?.type === "FunctionDeclaration"
+						? statement.declaration
+						: undefined;
+			if (declaration) {
+				compileFunctionDeclaration(program, fn, block, declaration);
+				hoistedDeclarations.add(declaration);
+			}
+		}
+	}
 
 	for (const statement of statements) {
 		const lastBlock = fn.blocks.at(-1);
@@ -3518,7 +3574,9 @@ function compileStatementsToBlock(
 				break;
 			}
 			case "FunctionDeclaration": {
-				compileFunctionDeclaration(program, fn, block, statement);
+				if (!hoistedDeclarations.has(statement)) {
+					compileFunctionDeclaration(program, fn, block, statement);
+				}
 				break;
 			}
 			case "IfStatement": {
@@ -3603,7 +3661,9 @@ function compileStatementsToBlock(
 				if (declaration?.type === "VariableDeclaration") {
 					compileVariableDeclaration(program, fn, block, declaration);
 				} else if (declaration?.type === "FunctionDeclaration") {
-					compileFunctionDeclaration(program, fn, block, declaration);
+					if (!hoistedDeclarations.has(declaration)) {
+						compileFunctionDeclaration(program, fn, block, declaration);
+					}
 				} else if (declaration?.type === "ClassDeclaration") {
 					compileClassDeclaration(program, fn, block, declaration);
 				}
@@ -8031,7 +8091,7 @@ function getOrCreateBindingLocation(
 				break;
 			}
 			case "global": {
-				if (isSloppyScriptGlobalProperty(fn.semanticFile, binding)) {
+				if (isScriptGlobalProperty(fn.semanticFile, binding)) {
 					location = {
 						type: "globalProperty",
 						nameStringIndex: getOrCreateStringConstant(program, binding.name),

@@ -483,6 +483,27 @@ void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instr
         mal_object_define_own((MalObject *) arguments, iterator_key, &iterator_desc);
     }
 
+    // `callee`: an unmapped (strict) arguments object poisons it with
+    // %ThrowTypeError% (non-enumerable, non-configurable); a mapped (sloppy)
+    // one exposes the function as a writable, configurable data property.
+    MalKey callee_key = mal_intrinsic_string_key(vm, "callee");
+    if (callable->function->strict) {
+        MalValue thrower = vm->intrinsics[MAL_INTRINSIC_THROW_TYPE_ERROR];
+        MalPropertyDesc callee_desc = {
+            .flags = MAL_PROPERTY_ACCESSOR,
+            .value = mal_value_new_undefined(),
+            .getter = thrower,
+            .setter = thrower,
+        };
+        mal_object_define_own((MalObject *) arguments, callee_key, &callee_desc);
+    } else if (mal_value_is_callable(callable->callee)) {
+        MalPropertyDesc callee_desc = {
+            .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE,
+            .value = callable->callee,
+        };
+        mal_object_define_own((MalObject *) arguments, callee_key, &callee_desc);
+    }
+
     callable->arguments_object = mal_value_from_array_object(arguments);
     callable->registers[instruction->as.create_arguments_object.dst] = callable->arguments_object;
 }
@@ -1805,6 +1826,25 @@ bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
         }
     }
 
+    return false;
+}
+
+bool mal_vm_is_constructor(MalVm *vm, MalValue value) {
+    value = mal_proxy_unwrap_target(value);
+    if (mal_value_is_proxy_object(value)) {
+        // A revoked proxy unwraps to itself; it is not a constructor.
+        return false;
+    }
+    while (mal_value_is_bound_function_object(value)) {
+        value = mal_value_to_bound_function_object(value)->target;
+    }
+    if (mal_value_is_native_function_object(value)) {
+        return mal_native_function_object_is_constructor(mal_value_to_native_function_object(value));
+    }
+    if (mal_value_is_function_object(value)) {
+        i32 index = mal_function_object_function_index(mal_value_to_function_object(value));
+        return vm->definition->functions[index].kind == MAL_FUNCTION_KIND_NORMAL;
+    }
     return false;
 }
 

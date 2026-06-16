@@ -1014,6 +1014,16 @@ MalValue mal_vm_interpret_function(
     }
     vm->value_stack_size = base + arg_count;
 
+    // An async function's result is the promise its ASYNC_START prologue builds,
+    // not its body completion. With no caller frame to receive it (this is a
+    // native -> JS call), the prologue stashes that promise in entry_async_promise
+    // (the same slot a top-level-await entry uses). Capture and restore it so the
+    // promise — not the body's undefined — is returned, and the real entry promise
+    // is preserved across the call.
+    const MalFunction *function = &vm->definition->functions[function_index];
+    bool returns_promise = function->kind == MAL_FUNCTION_KIND_ASYNC;
+    MalValue saved_entry_async_promise = vm->entry_async_promise;
+
     i32 target_frame_count = vm->frame_count;
     if (mal_vm_push_function_frame(vm, function_index, env, this_value, arg_count, -1, -1)) {
         MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
@@ -1027,6 +1037,18 @@ MalValue mal_vm_interpret_function(
         mal_vm_run_until_frame_count(vm, target_frame_count);
     } else {
         vm->value_stack_size = base;
+    }
+
+    if (returns_promise) {
+        MalValue result_promise = vm->entry_async_promise;
+        vm->entry_async_promise = saved_entry_async_promise;
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            // Callers read the result through vm->completion (mal_vm_call_value's
+            // interpreted branch ignores this function's return value), so the
+            // promise must land there too — the async body left it undefined.
+            vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = result_promise};
+            return result_promise;
+        }
     }
     return vm->completion.value;
 }

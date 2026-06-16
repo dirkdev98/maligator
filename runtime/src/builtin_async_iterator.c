@@ -94,38 +94,11 @@ static MalValue mal_async_from_sync_next(MalVm *vm, MalValue this_value, const M
     return cap_promise;
 }
 
-bool mal_vm_get_async_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_out) {
-    MalValue method;
-    if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR), &method)) {
-        return false;
-    }
-
-    if (mal_value_is_callable(method)) {
-        MalCompletion completion = mal_vm_call_value(vm, method, value, nullptr, 0);
-        if (completion.kind != MAL_COMPLETION_NORMAL) {
-            return false;
-        }
-        if (!mal_value_is_object(completion.value)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Async iterator is not an object");
-            return false;
-        }
-        MalValue next;
-        if (!mal_vm_get_property(vm, completion.value, mal_intrinsic_string_key(vm, "next"), &next)) {
-            return false;
-        }
-        record_out->iterator = completion.value;
-        record_out->next_method = next;
-        return true;
-    }
-
-    // No @@asyncIterator: wrap the sync iterator. The record's iterator is the
-    // sync one (so IteratorClose calls its return), and next is a closure that
-    // awaits each value before repackaging.
-    MalIteratorRecord sync_record;
-    if (!mal_vm_get_iterator(vm, value, &sync_record)) {
-        return false;
-    }
-    MalValue slots[2] = {sync_record.iterator, sync_record.next_method};
+// Wrap an already-acquired sync iterator record so each next() returns a
+// promise of an awaited { value, done } (AsyncFromSyncIterator). The record's
+// iterator stays the sync one so IteratorClose calls its return.
+static void mal_async_from_sync_wrap(MalVm *vm, const MalIteratorRecord *sync_record, MalIteratorRecord *record_out) {
+    MalValue slots[2] = {sync_record->iterator, sync_record->next_method};
     MalValue wrapped_next = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
@@ -134,7 +107,56 @@ bool mal_vm_get_async_iterator(MalVm *vm, MalValue value, MalIteratorRecord *rec
         slots,
         2
     ));
-    record_out->iterator = sync_record.iterator;
+    record_out->iterator = sync_record->iterator;
     record_out->next_method = wrapped_next;
+}
+
+bool mal_vm_async_iterator_from_method(
+    MalVm *vm,
+    MalValue value,
+    MalValue method,
+    bool method_is_async,
+    MalIteratorRecord *record_out
+) {
+    MalCompletion completion = mal_vm_call_value(vm, method, value, nullptr, 0);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        return false;
+    }
+    if (!mal_value_is_object(completion.value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            method_is_async ? "Async iterator is not an object" : "Iterator is not an object");
+        return false;
+    }
+    MalValue next;
+    if (!mal_vm_get_property(vm, completion.value, mal_intrinsic_string_key(vm, "next"), &next)) {
+        return false;
+    }
+    if (method_is_async) {
+        record_out->iterator = completion.value;
+        record_out->next_method = next;
+        return true;
+    }
+
+    MalIteratorRecord sync_record = {.iterator = completion.value, .next_method = next};
+    mal_async_from_sync_wrap(vm, &sync_record, record_out);
+    return true;
+}
+
+bool mal_vm_get_async_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_out) {
+    MalValue method;
+    if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR), &method)) {
+        return false;
+    }
+
+    if (mal_value_is_callable(method)) {
+        return mal_vm_async_iterator_from_method(vm, value, method, true, record_out);
+    }
+
+    // No @@asyncIterator: wrap the sync iterator.
+    MalIteratorRecord sync_record;
+    if (!mal_vm_get_iterator(vm, value, &sync_record)) {
+        return false;
+    }
+    mal_async_from_sync_wrap(vm, &sync_record, record_out);
     return true;
 }

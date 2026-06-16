@@ -1,10 +1,14 @@
 #include "builtin_array.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "builtin_async_iterator.h"
 #include "builtin_iterator.h"
 #include "builtin_object.h"
+#include "builtin_promise.h"
+#include "function_object.h"
 #include "heap_string.h"
 #include "primitive_wrapper_object.h"
 #include "value_ops.h"
@@ -226,13 +230,23 @@ static MalValue mal_builtin_array_this_arg(const MalValue *args, i32 arg_count) 
  * ToIntegerOrInfinity-flavored relative index handling: negative values count
  * back from length, the result is clamped to [0, length].
  */
-static u32 mal_builtin_array_clamp_relative(MalValue value, f64 fallback, u32 length) {
+static u32 mal_builtin_array_clamp_relative(MalVm *vm, MalValue value, f64 fallback, u32 length) {
+    // A pending throw from an earlier argument's coercion short-circuits the
+    // rest: spec ToIntegerOrInfinity on later arguments never runs once one
+    // throws, so callers can compute every index and check the completion once.
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return 0;
+    }
     // A present argument goes through ToIntegerOrInfinity (NaN -> 0,
     // truncated toward zero); undefined keeps the caller's fallback so
-    // omitted end arguments still mean "to the end".
+    // omitted end arguments still mean "to the end". ToNumber throws on a
+    // Symbol or BigInt argument (leaving the throw for the caller to detect).
     f64 relative = fallback;
     if (!mal_value_is_undefined(value)) {
-        f64 number = mal_ops_to_number(value);
+        f64 number;
+        if (!mal_vm_to_number(vm, value, &number)) {
+            return 0;
+        }
         relative = number != number ? 0 : (f64) (i64) number;
     }
 
@@ -259,8 +273,16 @@ static bool mal_builtin_array_same_value_zero(MalValue left, MalValue right) {
 
 static MalValue mal_builtin_array_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    if (arg_count == 1 && mal_value_is_int32(args[0]) && mal_value_to_i32(args[0]) >= 0) {
-        return mal_value_from_array_object(mal_intrinsic_new_array(vm, (u32) mal_value_to_i32(args[0])));
+    // A single Number argument is the new array's length: ToUint32(len) must
+    // round-trip (a fractional, negative or >= 2^32 length is a RangeError).
+    if (arg_count == 1 && (mal_value_is_int32(args[0]) || mal_value_is_f64(args[0]))) {
+        f64 number = mal_value_is_int32(args[0]) ? (f64) mal_value_to_i32(args[0]) : mal_value_to_f64(args[0]);
+        u32 length = (u32) number;
+        if ((f64) length != number) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
+            return mal_value_new_undefined();
+        }
+        return mal_value_from_array_object(mal_intrinsic_new_array(vm, length));
     }
 
     MalArrayObject *array = mal_intrinsic_new_array(vm, (u32) arg_count);
@@ -392,12 +414,47 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
     return mal_value_from_array_object(result);
 }
 
+/**
+ * ArraySpeciesCreate approximation (9.4.2.3): a non-object, non-undefined
+ * `constructor` is rejected with a TypeError; object constructors fall back to a
+ * default array since Symbol.species construction is not yet modeled. Reads
+ * `constructor` (which may run a getter), so it can leave a pending throw —
+ * returns false in that case. On success writes a fresh plain array of `length`
+ * into *out.
+ */
+static bool mal_builtin_array_species_create(MalVm *vm, MalValue original, u32 length, MalArrayObject **out) {
+    // ArraySpeciesCreate steps 3-4: a non-Array original returns a default array
+    // without ever reading `constructor` (so its getter is not observed).
+    if (mal_value_is_array_object(original)) {
+        MalPropertyResolution ctor = mal_object_resolve_property(
+            mal_value_to_object(original),
+            mal_intrinsic_string_key(vm, "constructor")
+        );
+        if (ctor.found) {
+            MalValue ctor_value;
+            if (!mal_vm_desc_read(vm, ctor.desc, original, &ctor_value)) {
+                return false;
+            }
+            if (!mal_value_is_undefined(ctor_value) && !mal_value_is_object(ctor_value)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Array species constructor is not an object");
+                return false;
+            }
+        }
+    }
+
+    *out = mal_intrinsic_new_array(vm, length);
+    return true;
+}
+
 static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
     }
-    MalArrayObject *result = mal_intrinsic_new_array(vm, length);
+    MalArrayObject *result;
+    if (!mal_builtin_array_species_create(vm, this_value, length, &result)) {
+        return mal_value_new_undefined();
+    }
 
     for (u32 index = 0; index < length; index++) {
         MalValue element;
@@ -441,7 +498,10 @@ static MalValue mal_builtin_array_filter(MalVm *vm, MalValue this_value, const M
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
     }
-    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    MalArrayObject *result;
+    if (!mal_builtin_array_species_create(vm, this_value, 0, &result)) {
+        return mal_value_new_undefined();
+    }
     u32 result_length = 0;
 
     for (u32 index = 0; index < length; index++) {
@@ -648,8 +708,16 @@ static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const
     if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
+    // Spec returns -1 for an empty array *before* ToIntegerOrInfinity(fromIndex),
+    // so a side-effecting or throwing fromIndex is never coerced here.
+    if (length == 0) {
+        return mal_value_from_i32(-1);
+    }
     MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(args[1], 0, length) : 0;
+    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(vm, args[1], 0, length) : 0;
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
 
     for (u32 index = start; index < length; index++) {
         MalValue element;
@@ -677,9 +745,14 @@ static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, 
     MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     u32 start = length - 1;
     if (arg_count >= 2) {
-        f64 relative = mal_value_is_int32(args[1]) ? (f64) mal_value_to_i32(args[1])
-            : mal_value_is_f64(args[1])           ? mal_value_to_f64(args[1])
-                                                  : (f64) (length - 1);
+        // fromIndex present (even as undefined) goes through ToIntegerOrInfinity;
+        // ToNumber throws on a Symbol/BigInt. A present-but-undefined fromIndex
+        // coerces to 0, not len-1 (that default only applies when it is absent).
+        f64 number;
+        if (!mal_vm_to_number(vm, args[1], &number)) {
+            return mal_value_new_undefined();
+        }
+        f64 relative = number != number ? 0 : trunc(number);
         if (relative < 0) {
             relative += (f64) length;
         }
@@ -710,8 +783,16 @@ static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const
     if (!mal_builtin_array_this_length(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
+    // Spec returns false for an empty array *before* ToIntegerOrInfinity(fromIndex),
+    // so a side-effecting or throwing fromIndex is never coerced here.
+    if (length == 0) {
+        return mal_value_new_boolean(false);
+    }
     MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(args[1], 0, length) : 0;
+    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(vm, args[1], 0, length) : 0;
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
 
     for (u32 index = start; index < length; index++) {
         // Holes compare as undefined for includes.
@@ -822,13 +903,19 @@ static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const Ma
     }
 
     u32 length = mal_builtin_array_length(this_value);
-    u32 start = arg_count >= 1 ? mal_builtin_array_clamp_relative(args[0], 0, length) : 0;
+    u32 start = arg_count >= 1 ? mal_builtin_array_clamp_relative(vm, args[0], 0, length) : 0;
     u32 end = arg_count >= 2 && !mal_value_is_undefined(args[1])
-        ? mal_builtin_array_clamp_relative(args[1], (f64) length, length)
+        ? mal_builtin_array_clamp_relative(vm, args[1], (f64) length, length)
         : length;
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
 
     u32 result_length = end > start ? end - start : 0;
-    MalArrayObject *result = mal_intrinsic_new_array(vm, result_length);
+    MalArrayObject *result;
+    if (!mal_builtin_array_species_create(vm, this_value, result_length, &result)) {
+        return mal_value_new_undefined();
+    }
 
     for (u32 index = 0; index < result_length; index++) {
         MalValue element;
@@ -845,7 +932,10 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
         return mal_value_new_undefined();
     }
 
-    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    MalArrayObject *result;
+    if (!mal_builtin_array_species_create(vm, this_value, 0, &result)) {
+        return mal_value_new_undefined();
+    }
     u32 result_length = 0;
 
     for (i32 i = -1; i < arg_count; i++) {
@@ -972,7 +1062,6 @@ static MalValue mal_builtin_array_reverse(MalVm *vm, MalValue this_value, const 
 }
 
 static MalValue mal_builtin_array_fill(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     if (!mal_value_is_array_object(this_value)) {
         return mal_value_new_undefined();
     }
@@ -980,10 +1069,13 @@ static MalValue mal_builtin_array_fill(MalVm *vm, MalValue this_value, const Mal
     MalArrayObject *array = mal_value_to_array_object(this_value);
     u32 length = mal_array_object_length(array);
     MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(args[1], 0, length) : 0;
+    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(vm, args[1], 0, length) : 0;
     u32 end = arg_count >= 3 && !mal_value_is_undefined(args[2])
-        ? mal_builtin_array_clamp_relative(args[2], (f64) length, length)
+        ? mal_builtin_array_clamp_relative(vm, args[2], (f64) length, length)
         : length;
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
 
     for (u32 index = start; index < end; index++) {
         mal_object_set((MalObject *) array, mal_builtin_array_index_key(index), value);
@@ -993,15 +1085,21 @@ static MalValue mal_builtin_array_fill(MalVm *vm, MalValue this_value, const Mal
 }
 
 static MalValue mal_builtin_array_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     if (!mal_value_is_array_object(this_value)) {
         return mal_value_new_undefined();
     }
 
     u32 length = mal_builtin_array_length(this_value);
-    f64 relative = arg_count >= 1 && mal_value_is_int32(args[0]) ? (f64) mal_value_to_i32(args[0])
-        : arg_count >= 1 && mal_value_is_f64(args[0])            ? mal_value_to_f64(args[0])
-                                                                 : 0;
+    f64 relative = 0;
+    if (arg_count >= 1) {
+        f64 number;
+        if (!mal_vm_to_number(vm, args[0], &number)) {
+            return mal_value_new_undefined();
+        }
+        // ToIntegerOrInfinity: NaN -> 0, else truncate toward zero (trunc keeps
+        // infinities intact, which the range check below rejects).
+        relative = number != number ? 0 : trunc(number);
+    }
     if (relative < 0) {
         relative += (f64) length;
     }
@@ -1058,14 +1156,21 @@ static MalValue mal_builtin_array_find_last_index(MalVm *vm, MalValue this_value
  * Read a numeric argument as a raw f64, mirroring the pragmatic numeric
  * handling of mal_builtin_array_clamp_relative for non-number values.
  */
-static f64 mal_builtin_array_number_arg(const MalValue *args, i32 arg_count, i32 index, f64 fallback) {
+static f64 mal_builtin_array_number_arg(MalVm *vm, const MalValue *args, i32 arg_count, i32 index, f64 fallback) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return 0;
+    }
     if (index >= arg_count || mal_value_is_undefined(args[index])) {
         return fallback;
     }
 
     // ToIntegerOrInfinity: NaN -> 0, infinities and out-of-range magnitudes
-    // preserved (callers clamp), else truncate toward zero.
-    f64 number = mal_ops_to_number(args[index]);
+    // preserved (callers clamp), else truncate toward zero. ToNumber throws on
+    // a Symbol or BigInt argument (leaving the throw for the caller to detect).
+    f64 number;
+    if (!mal_vm_to_number(vm, args[index], &number)) {
+        return 0;
+    }
     if (number != number) {
         return 0;
     }
@@ -1108,9 +1213,17 @@ static void mal_builtin_array_flatten_into(MalVm *vm, MalArrayObject *result, u3
 }
 
 static MalValue mal_builtin_array_flat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    // ToIntegerOrInfinity(depth) runs before ArraySpeciesCreate per spec.
+    f64 depth = mal_builtin_array_number_arg(vm, args, arg_count, 0, 1);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    MalArrayObject *result;
+    if (!mal_builtin_array_species_create(vm, this_value, 0, &result)) {
+        return mal_value_new_undefined();
+    }
     u32 count = 0;
-    mal_builtin_array_flatten_into(vm, result, &count, this_value, mal_builtin_array_number_arg(args, arg_count, 0, 1));
+    mal_builtin_array_flatten_into(vm, result, &count, this_value, depth);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
@@ -1123,7 +1236,10 @@ static MalValue mal_builtin_array_flat_map(MalVm *vm, MalValue this_value, const
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
     }
-    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    MalArrayObject *result;
+    if (!mal_builtin_array_species_create(vm, this_value, 0, &result)) {
+        return mal_value_new_undefined();
+    }
     u32 count = 0;
 
     for (u32 index = 0; index < length; index++) {
@@ -1340,7 +1456,7 @@ static MalValue mal_builtin_array_to_sorted(MalVm *vm, MalValue this_value, cons
  * Shared splice/toSpliced delete-count handling: absent means "to the end",
  * otherwise the count clamps to [0, length - start].
  */
-static u32 mal_builtin_array_delete_count(const MalValue *args, i32 arg_count, u32 start, u32 length) {
+static u32 mal_builtin_array_delete_count(MalVm *vm, const MalValue *args, i32 arg_count, u32 start, u32 length) {
     if (arg_count == 0) {
         return 0;
     }
@@ -1348,7 +1464,7 @@ static u32 mal_builtin_array_delete_count(const MalValue *args, i32 arg_count, u
         return length - start;
     }
 
-    f64 raw = mal_builtin_array_number_arg(args, arg_count, 1, 0);
+    f64 raw = mal_builtin_array_number_arg(vm, args, arg_count, 1, 0);
     if (!(raw > 0)) {
         return 0;
     }
@@ -1370,30 +1486,19 @@ static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const M
         return mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
     }
 
-    // ArraySpeciesCreate approximation: a non-object, non-undefined
-    // constructor is rejected; object constructors fall back to the default
-    // array since Symbol.species is unsupported.
-    MalPropertyResolution ctor = mal_object_resolve_property(
-        mal_value_to_object(this_value),
-        mal_intrinsic_string_key(vm, "constructor")
-    );
-    if (ctor.found) {
-        MalValue ctor_value;
-        if (!mal_vm_desc_read(vm, ctor.desc, this_value, &ctor_value)) {
-            return mal_value_new_undefined();
-        }
-        if (!mal_value_is_undefined(ctor_value) && !mal_value_is_object(ctor_value)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Species constructor is not an object");
-            return mal_value_new_undefined();
-        }
+    u32 start = arg_count >= 1 ? mal_builtin_array_clamp_relative(vm, args[0], 0, length) : 0;
+    u32 delete_count = mal_builtin_array_delete_count(vm, args, arg_count, start, length);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
     }
-
-    u32 start = arg_count >= 1 ? mal_builtin_array_clamp_relative(args[0], 0, length) : 0;
-    u32 delete_count = mal_builtin_array_delete_count(args, arg_count, start, length);
     u32 insert_count = arg_count > 2 ? (u32) (arg_count - 2) : 0;
     u32 new_length = length - delete_count + insert_count;
 
-    MalArrayObject *removed = mal_intrinsic_new_array(vm, delete_count);
+    // ArraySpeciesCreate(O, deleteCount) for the removed-elements array.
+    MalArrayObject *removed;
+    if (!mal_builtin_array_species_create(vm, this_value, delete_count, &removed)) {
+        return mal_value_new_undefined();
+    }
     for (u32 index = 0; index < delete_count; index++) {
         MalValue element;
         if (mal_builtin_array_try_get(vm, this_value, start + index, &element)) {
@@ -1461,8 +1566,11 @@ static MalValue mal_builtin_array_to_spliced(MalVm *vm, MalValue this_value, con
         return mal_value_new_undefined();
     }
 
-    u32 start = arg_count >= 1 ? mal_builtin_array_clamp_relative(args[0], 0, length) : 0;
-    u32 skip_count = mal_builtin_array_delete_count(args, arg_count, start, length);
+    u32 start = arg_count >= 1 ? mal_builtin_array_clamp_relative(vm, args[0], 0, length) : 0;
+    u32 skip_count = mal_builtin_array_delete_count(vm, args, arg_count, start, length);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
     u32 insert_count = arg_count > 2 ? (u32) (arg_count - 2) : 0;
 
     MalArrayObject *result = mal_intrinsic_new_array(vm, length - skip_count + insert_count);
@@ -1492,11 +1600,14 @@ static MalValue mal_builtin_array_copy_within(MalVm *vm, MalValue this_value, co
         return this_value;
     }
 
-    u32 target = arg_count >= 1 ? mal_builtin_array_clamp_relative(args[0], 0, length) : 0;
-    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(args[1], 0, length) : 0;
+    u32 target = arg_count >= 1 ? mal_builtin_array_clamp_relative(vm, args[0], 0, length) : 0;
+    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(vm, args[1], 0, length) : 0;
     u32 end = arg_count >= 3 && !mal_value_is_undefined(args[2])
-        ? mal_builtin_array_clamp_relative(args[2], (f64) length, length)
+        ? mal_builtin_array_clamp_relative(vm, args[2], (f64) length, length)
         : length;
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
 
     u32 count = end > start ? end - start : 0;
     if (count > length - target) {
@@ -1529,7 +1640,10 @@ static MalValue mal_builtin_array_with(MalVm *vm, MalValue this_value, const Mal
         return mal_value_new_undefined();
     }
 
-    f64 relative = mal_builtin_array_number_arg(args, arg_count, 0, 0);
+    f64 relative = mal_builtin_array_number_arg(vm, args, arg_count, 0, 0);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
     if (relative < 0) {
         relative += (f64) length;
     }
@@ -1635,6 +1749,433 @@ static MalValue mal_builtin_array_entries(MalVm *vm, MalValue this_value, const 
     return mal_builtin_array_prototype_iterator(vm, this_value, MAL_ITERATOR_ARRAY_ENTRIES);
 }
 
+// --- Array.fromAsync ---------------------------------------------------------
+//
+// fromAsync is an async function (sec-array.fromasync): it returns a promise and
+// awaits each produced value (and each mapped value). With no async-function
+// frame to suspend, it runs as an explicit CPS state machine. A single `step`
+// closure (the onFulfilled reaction of every Await) carries all mutable state in
+// its slots and re-enters the loop keyed by SLOT_PHASE; a `fail` closure is the
+// shared onRejected. Every internal abrupt completion is caught here and turned
+// into a capability reject, so the closures never leave a pending throw.
+
+enum {
+    MAL_FROM_ASYNC_SLOT_RESULT = 0, // A, the array being built
+    MAL_FROM_ASYNC_SLOT_K,          // current index (number)
+    MAL_FROM_ASYNC_SLOT_ITERATOR,   // iterator object (undefined on the array-like path)
+    MAL_FROM_ASYNC_SLOT_NEXT,       // iterator next method
+    MAL_FROM_ASYNC_SLOT_MAPFN,      // mapfn (undefined when not mapping)
+    MAL_FROM_ASYNC_SLOT_THIS_ARG,   // mapfn this argument
+    MAL_FROM_ASYNC_SLOT_RESOLVE,    // result capability resolve
+    MAL_FROM_ASYNC_SLOT_REJECT,     // result capability reject
+    MAL_FROM_ASYNC_SLOT_LEN,        // array-like length (number)
+    MAL_FROM_ASYNC_SLOT_ARRAY_LIKE, // array-like source object
+    MAL_FROM_ASYNC_SLOT_MAPPING,    // boolean
+    MAL_FROM_ASYNC_SLOT_PHASE,      // which Await we are resuming from (number)
+    MAL_FROM_ASYNC_SLOT_FAIL,       // the onRejected closure
+    MAL_FROM_ASYNC_SLOT_COUNT,
+};
+
+enum {
+    MAL_FROM_ASYNC_PHASE_ITER_NEXT = 0, // awaiting iterator.next()'s result
+    MAL_FROM_ASYNC_PHASE_ITER_MAP,      // awaiting a mapped value (iterator path)
+    MAL_FROM_ASYNC_PHASE_AL_GET,        // awaiting arrayLike[k]
+    MAL_FROM_ASYNC_PHASE_AL_MAP,        // awaiting a mapped value (array-like path)
+};
+
+static MalCompletion mal_array_normal(void) {
+    return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+}
+
+static u32 mal_from_async_slot_u32(MalNativeFunctionObject *self, i32 slot) {
+    return (u32) mal_ops_to_number(mal_native_function_object_get_slot(self, slot));
+}
+
+// Call a one-argument capability function (resolve/reject), clearing completion.
+static void mal_from_async_call1(MalVm *vm, MalValue fn, MalValue arg) {
+    vm->completion = mal_array_normal();
+    mal_vm_call_value(vm, fn, mal_value_new_undefined(), &arg, 1);
+    vm->completion = mal_array_normal();
+}
+
+// Best-effort AsyncIteratorClose for an abrupt completion: call the iterator's
+// return() and swallow the result (the original rejection is what propagates).
+static void mal_from_async_close(MalVm *vm, MalValue iterator) {
+    if (mal_value_is_object(iterator)) {
+        MalIteratorRecord record = {.iterator = iterator, .next_method = mal_value_new_undefined()};
+        mal_vm_iterator_close(vm, &record);
+    }
+}
+
+// CreateDataPropertyOrThrow(target, index, value): leaves a pending TypeError
+// (returns false) when the define is rejected (e.g. a non-extensible receiver).
+static bool mal_from_async_create_data_property(MalVm *vm, MalValue target, u32 index, MalValue value) {
+    // A fresh Array result takes the indexed-element fast path (which keeps
+    // `length` in step); a custom `this`-constructed receiver goes through the
+    // generic [[DefineOwnProperty]], throwing when it refuses the property.
+    if (mal_value_is_array_object(target)) {
+        mal_builtin_array_store_index(mal_value_to_array_object(target), index, value);
+        return true;
+    }
+    MalPropertyDesc desc = {
+        .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+        .value = value,
+        .getter = mal_value_new_undefined(),
+        .setter = mal_value_new_undefined(),
+    };
+    if (mal_object_define_own(mal_value_to_object(target), mal_builtin_array_index_key(index), &desc) != MAL_DEFINE_OWN_APPLIED) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot define array index property");
+        return false;
+    }
+    return true;
+}
+
+// Await(value): PromiseResolve(value) then attach step/fail as its reactions. A
+// PromiseResolve throw rejects the capability immediately.
+static void mal_from_async_await(MalVm *vm, MalValue value, MalValue step, MalValue fail, MalValue reject) {
+    MalValue promise;
+    if (!mal_promise_resolve_value(vm, value, &promise)) {
+        MalValue error = vm->completion.value;
+        mal_from_async_call1(vm, reject, error);
+        return;
+    }
+    mal_promise_perform_then(vm, promise, step, fail, mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+// Iterator path: Call(next, iterator) then Await the result at PHASE_ITER_NEXT.
+static void mal_from_async_iter_next(MalVm *vm, MalNativeFunctionObject *self, MalValue step, MalValue fail) {
+    MalValue iterator = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_ITERATOR);
+    MalValue next = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_NEXT);
+    MalValue reject = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_REJECT);
+    MalCompletion completion = mal_vm_call_value(vm, next, iterator, nullptr, 0);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        mal_from_async_call1(vm, reject, completion.value);
+        return;
+    }
+    mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_PHASE, mal_value_from_f64(MAL_FROM_ASYNC_PHASE_ITER_NEXT));
+    mal_from_async_await(vm, completion.value, step, fail, reject);
+}
+
+// Array-like path: Get(arrayLike, k) then Await it at PHASE_AL_GET; if the index
+// is past the end, finalize the length and resolve.
+static void mal_from_async_al_get(MalVm *vm, MalNativeFunctionObject *self, MalValue step, MalValue fail) {
+    MalValue reject = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_REJECT);
+    MalValue resolve = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_RESOLVE);
+    MalValue result = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_RESULT);
+    u32 k = mal_from_async_slot_u32(self, MAL_FROM_ASYNC_SLOT_K);
+    f64 len = mal_ops_to_number(mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_LEN));
+    if ((f64) k >= len) {
+        if (!mal_builtin_array_set_or_throw(vm, result, mal_intrinsic_string_key(vm, "length"), mal_value_from_f64(len))) {
+            mal_from_async_call1(vm, reject, vm->completion.value);
+            return;
+        }
+        mal_from_async_call1(vm, resolve, result);
+        return;
+    }
+    MalValue array_like = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_ARRAY_LIKE);
+    MalValue k_value;
+    if (!mal_vm_get_property(vm, array_like, mal_builtin_array_index_key(k), &k_value)) {
+        mal_from_async_call1(vm, reject, vm->completion.value);
+        return;
+    }
+    mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_PHASE, mal_value_from_f64(MAL_FROM_ASYNC_PHASE_AL_GET));
+    mal_from_async_await(vm, k_value, step, fail, reject);
+}
+
+// onRejected: a rejected Await of a mapped value (PHASE_ITER_MAP) closes the
+// async iterator first (IfAbruptCloseAsyncIterator); every other rejection just
+// settles the capability.
+static MalValue mal_array_from_async_fail(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    MalNativeFunctionObject *fail_self = mal_value_to_native_function_object(callee);
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(
+        mal_native_function_object_get_slot(fail_self, 0));
+    MalValue error = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    i32 phase = (i32) mal_from_async_slot_u32(self, MAL_FROM_ASYNC_SLOT_PHASE);
+    if (phase == MAL_FROM_ASYNC_PHASE_ITER_MAP) {
+        mal_from_async_close(vm, mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_ITERATOR));
+    }
+    mal_from_async_call1(vm, mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_REJECT), error);
+    return mal_value_new_undefined();
+}
+
+// onFulfilled: resume the loop from the phase recorded before the Await.
+static MalValue mal_array_from_async_step(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    MalValue step = callee;
+    MalValue fail = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_FAIL);
+    MalValue reject = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_REJECT);
+    MalValue resolve = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_RESOLVE);
+    MalValue result = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_RESULT);
+    MalValue iterator = mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_ITERATOR);
+    bool mapping = mal_value_is_truthy(mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_MAPPING));
+    u32 k = mal_from_async_slot_u32(self, MAL_FROM_ASYNC_SLOT_K);
+    i32 phase = (i32) mal_from_async_slot_u32(self, MAL_FROM_ASYNC_SLOT_PHASE);
+    MalValue resumed = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+
+    switch (phase) {
+        case MAL_FROM_ASYNC_PHASE_ITER_NEXT: {
+            // `resumed` is the awaited iterator result object.
+            if (!mal_value_is_object(resumed)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator result is not an object");
+                mal_from_async_call1(vm, reject, vm->completion.value);
+                return mal_value_new_undefined();
+            }
+            MalValue done_value;
+            if (!mal_vm_get_property(vm, resumed, mal_intrinsic_string_key(vm, "done"), &done_value)) {
+                mal_from_async_call1(vm, reject, vm->completion.value);
+                return mal_value_new_undefined();
+            }
+            if (mal_value_is_truthy(done_value)) {
+                if (!mal_builtin_array_set_or_throw(vm, result, mal_intrinsic_string_key(vm, "length"), mal_value_from_f64(k))) {
+                    mal_from_async_call1(vm, reject, vm->completion.value);
+                    return mal_value_new_undefined();
+                }
+                mal_from_async_call1(vm, resolve, result);
+                return mal_value_new_undefined();
+            }
+            MalValue next_value;
+            if (!mal_vm_get_property(vm, resumed, mal_intrinsic_string_key(vm, "value"), &next_value)) {
+                mal_from_async_call1(vm, reject, vm->completion.value);
+                return mal_value_new_undefined();
+            }
+            if (mapping) {
+                MalValue map_args[2] = {next_value, mal_value_from_f64(k)};
+                MalCompletion mapped = mal_vm_call_value(
+                    vm,
+                    mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_MAPFN),
+                    mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_THIS_ARG),
+                    map_args, 2);
+                if (mapped.kind != MAL_COMPLETION_NORMAL) {
+                    mal_from_async_close(vm, iterator);
+                    mal_from_async_call1(vm, reject, mapped.value);
+                    return mal_value_new_undefined();
+                }
+                mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_PHASE, mal_value_from_f64(MAL_FROM_ASYNC_PHASE_ITER_MAP));
+                mal_from_async_await(vm, mapped.value, step, fail, reject);
+                return mal_value_new_undefined();
+            }
+            if (!mal_from_async_create_data_property(vm, result, k, next_value)) {
+                MalValue error = vm->completion.value;
+                vm->completion = mal_array_normal();
+                mal_from_async_close(vm, iterator);
+                mal_from_async_call1(vm, reject, error);
+                return mal_value_new_undefined();
+            }
+            mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_K, mal_value_from_f64(k + 1));
+            mal_from_async_iter_next(vm, self, step, fail);
+            return mal_value_new_undefined();
+        }
+        case MAL_FROM_ASYNC_PHASE_ITER_MAP: {
+            if (!mal_from_async_create_data_property(vm, result, k, resumed)) {
+                MalValue error = vm->completion.value;
+                vm->completion = mal_array_normal();
+                mal_from_async_close(vm, iterator);
+                mal_from_async_call1(vm, reject, error);
+                return mal_value_new_undefined();
+            }
+            mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_K, mal_value_from_f64(k + 1));
+            mal_from_async_iter_next(vm, self, step, fail);
+            return mal_value_new_undefined();
+        }
+        case MAL_FROM_ASYNC_PHASE_AL_GET: {
+            if (mapping) {
+                MalValue map_args[2] = {resumed, mal_value_from_f64(k)};
+                MalCompletion mapped = mal_vm_call_value(
+                    vm,
+                    mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_MAPFN),
+                    mal_native_function_object_get_slot(self, MAL_FROM_ASYNC_SLOT_THIS_ARG),
+                    map_args, 2);
+                if (mapped.kind != MAL_COMPLETION_NORMAL) {
+                    mal_from_async_call1(vm, reject, mapped.value);
+                    return mal_value_new_undefined();
+                }
+                mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_PHASE, mal_value_from_f64(MAL_FROM_ASYNC_PHASE_AL_MAP));
+                mal_from_async_await(vm, mapped.value, step, fail, reject);
+                return mal_value_new_undefined();
+            }
+            if (!mal_from_async_create_data_property(vm, result, k, resumed)) {
+                mal_from_async_call1(vm, reject, vm->completion.value);
+                return mal_value_new_undefined();
+            }
+            mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_K, mal_value_from_f64(k + 1));
+            mal_from_async_al_get(vm, self, step, fail);
+            return mal_value_new_undefined();
+        }
+        case MAL_FROM_ASYNC_PHASE_AL_MAP: {
+            if (!mal_from_async_create_data_property(vm, result, k, resumed)) {
+                mal_from_async_call1(vm, reject, vm->completion.value);
+                return mal_value_new_undefined();
+            }
+            mal_native_function_object_set_slot(self, MAL_FROM_ASYNC_SLOT_K, mal_value_from_f64(k + 1));
+            mal_from_async_al_get(vm, self, step, fail);
+            return mal_value_new_undefined();
+        }
+        default:
+            return mal_value_new_undefined();
+    }
+}
+
+static MalValue mal_builtin_array_from_async(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalValue constructor = this_value;
+    MalValue async_items = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue mapfn = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    MalValue this_arg = arg_count >= 3 ? args[2] : mal_value_new_undefined();
+
+    MalValue promise;
+    MalValue resolve;
+    MalValue reject;
+    if (!mal_promise_new_capability(vm, vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], &promise, &resolve, &reject)) {
+        return mal_value_new_undefined();
+    }
+
+    // Everything past here is the async closure body: a throw rejects `promise`
+    // rather than escaping to the caller.
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalValue empty_slots[MAL_FROM_ASYNC_SLOT_COUNT];
+    for (i32 i = 0; i < MAL_FROM_ASYNC_SLOT_COUNT; i++) {
+        empty_slots[i] = mal_value_new_undefined();
+    }
+    MalNativeFunctionObject *step = mal_native_function_object_new_with_slots(
+        &vm->heap, function_prototype, nullptr, mal_array_from_async_step, empty_slots, MAL_FROM_ASYNC_SLOT_COUNT);
+    MalValue step_value = mal_value_from_native_function_object(step);
+    MalValue fail_slot[1] = {step_value};
+    MalValue fail_value = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
+        &vm->heap, function_prototype, nullptr, mal_array_from_async_fail, fail_slot, 1));
+
+    mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_FAIL, fail_value);
+    mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_MAPFN, mapfn);
+    mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_THIS_ARG, this_arg);
+    mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_RESOLVE, resolve);
+    mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_REJECT, reject);
+    mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_K, mal_value_from_f64(0));
+
+    bool mapping = false;
+    if (!mal_value_is_undefined(mapfn)) {
+        if (!mal_value_is_callable(mapfn)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Array.fromAsync mapper is not a function");
+            mal_from_async_call1(vm, reject, vm->completion.value);
+            return promise;
+        }
+        mapping = true;
+    }
+    mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_MAPPING, mal_value_new_boolean(mapping));
+
+    // GetMethod(@@asyncIterator); on undefined, GetMethod(@@iterator); each at
+    // most once, then dispatch to the iterator or array-like path.
+    MalIteratorRecord record;
+    bool have_iterator = false;
+    if (!mal_value_is_nil(async_items)) {
+        MalValue async_method;
+        if (!mal_vm_get_property(vm, async_items, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR), &async_method)) {
+            mal_from_async_call1(vm, reject, vm->completion.value);
+            return promise;
+        }
+        if (mal_value_is_callable(async_method)) {
+            if (!mal_vm_async_iterator_from_method(vm, async_items, async_method, true, &record)) {
+                mal_from_async_call1(vm, reject, vm->completion.value);
+                return promise;
+            }
+            have_iterator = true;
+        } else if (!mal_value_is_undefined(async_method) && !mal_value_is_nil(async_method)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.asyncIterator is not callable");
+            mal_from_async_call1(vm, reject, vm->completion.value);
+            return promise;
+        } else {
+            MalValue sync_method;
+            if (!mal_vm_get_property(vm, async_items, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &sync_method)) {
+                mal_from_async_call1(vm, reject, vm->completion.value);
+                return promise;
+            }
+            if (mal_value_is_callable(sync_method)) {
+                if (!mal_vm_async_iterator_from_method(vm, async_items, sync_method, false, &record)) {
+                    mal_from_async_call1(vm, reject, vm->completion.value);
+                    return promise;
+                }
+                have_iterator = true;
+            } else if (!mal_value_is_undefined(sync_method) && !mal_value_is_nil(sync_method)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.iterator is not callable");
+                mal_from_async_call1(vm, reject, vm->completion.value);
+                return promise;
+            }
+        }
+    }
+
+    bool is_constructor = mal_vm_is_constructor(vm, constructor);
+
+    if (have_iterator) {
+        MalValue result;
+        if (is_constructor) {
+            MalCompletion constructed = mal_vm_construct_value(vm, constructor, nullptr, 0);
+            if (constructed.kind != MAL_COMPLETION_NORMAL) {
+                mal_from_async_call1(vm, reject, constructed.value);
+                return promise;
+            }
+            result = constructed.value;
+        } else {
+            result = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+        }
+        mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_RESULT, result);
+        mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_ITERATOR, record.iterator);
+        mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_NEXT, record.next_method);
+        mal_from_async_iter_next(vm, step, step_value, fail_value);
+        return promise;
+    }
+
+    // Array-like path. ToObject(asyncItems): null/undefined reject; other
+    // primitives are read through auto-boxing Get (so an inherited `length` and
+    // indexed properties on, e.g., Number.prototype are honored).
+    if (mal_value_is_nil(async_items)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Array.fromAsync called on null or undefined");
+        mal_from_async_call1(vm, reject, vm->completion.value);
+        return promise;
+    }
+    // LengthOfArrayLike = ToLength(Get(O, "length")): clamp to [0, 2^53-1].
+    MalValue length_value;
+    if (!mal_vm_get_property(vm, async_items, mal_intrinsic_string_key(vm, "length"), &length_value)) {
+        mal_from_async_call1(vm, reject, vm->completion.value);
+        return promise;
+    }
+    f64 length_number;
+    if (!mal_vm_to_number(vm, length_value, &length_number)) {
+        mal_from_async_call1(vm, reject, vm->completion.value);
+        return promise;
+    }
+    f64 len = (length_number != length_number || length_number <= 0)
+        ? 0
+        : (length_number >= 9007199254740991.0 ? 9007199254740991.0 : floor(length_number));
+
+    MalValue result;
+    if (is_constructor) {
+        MalValue len_arg = mal_value_from_f64(len);
+        MalCompletion constructed = mal_vm_construct_value(vm, constructor, &len_arg, 1);
+        if (constructed.kind != MAL_COMPLETION_NORMAL) {
+            mal_from_async_call1(vm, reject, constructed.value);
+            return promise;
+        }
+        result = constructed.value;
+    } else {
+        // ArrayCreate(len): an array length must fit in a u32 (< 2^32).
+        if (len > 4294967295.0) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
+            mal_from_async_call1(vm, reject, vm->completion.value);
+            return promise;
+        }
+        result = mal_value_from_array_object(mal_intrinsic_new_array(vm, (u32) len));
+    }
+    mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_RESULT, result);
+    mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_LEN, mal_value_from_f64(len));
+    mal_native_function_object_set_slot(step, MAL_FROM_ASYNC_SLOT_ARRAY_LIKE, async_items);
+    // mal_from_async_al_get finalizes (Set length + resolve) when len == 0.
+    mal_from_async_al_get(vm, step, step_value, fail_value);
+    return promise;
+}
+
 void mal_builtin_array_install(MalVm *vm) {
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]);
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
@@ -1653,6 +2194,7 @@ void mal_builtin_array_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, constructor_object, "isArray", 1, mal_builtin_array_is_array);
     mal_intrinsic_define_method_n(vm, constructor_object, "of", 0, mal_builtin_array_of);
     mal_intrinsic_define_method_n(vm, constructor_object, "from", 1, mal_builtin_array_from);
+    mal_intrinsic_define_method_n(vm, constructor_object, "fromAsync", 1, mal_builtin_array_from_async);
 
     vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_MAP] =
         mal_intrinsic_define_method_n(vm, prototype, "map", 1, mal_builtin_array_map);

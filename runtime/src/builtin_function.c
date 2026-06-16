@@ -27,6 +27,19 @@ static MalValue mal_builtin_function_constructor(MalVm *vm, MalValue this_value,
     return mal_value_new_undefined();
 }
 
+// %ThrowTypeError%: rejects any get/set of the poisoned `caller`/`arguments`
+// accessors (and strict mapped-arguments `callee`).
+static MalValue mal_builtin_throw_type_error(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "'caller', 'callee' and 'arguments' may not be accessed on strict mode functions");
+    return mal_value_new_undefined();
+}
+
 static MalValue mal_builtin_function_prototype_call(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     if (!mal_value_is_callable(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Function.prototype.call called on a non-callable");
@@ -205,4 +218,36 @@ void mal_builtin_function_install(MalVm *vm) {
         MAL_PROPERTY_NONE
     );
     mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_HAS_INSTANCE), &has_instance_desc);
+
+    // %ThrowTypeError%: the shared poison function. Anonymous (name ""), length 0
+    // — both non-writable/non-enumerable/non-configurable — and frozen (the
+    // object is non-extensible).
+    MalNativeFunctionObject *thrower = mal_native_function_object_new_arity(
+        &vm->heap,
+        prototype,
+        mal_intrinsic_ascii(vm, ""),
+        0,
+        mal_builtin_throw_type_error
+    );
+    MalObject *thrower_object = (MalObject *) thrower;
+    MalPropertyDesc thrower_length = mal_intrinsic_data_desc(mal_value_from_i32(0), MAL_PROPERTY_NONE);
+    mal_object_define_own(thrower_object, mal_intrinsic_string_key(vm, "length"), &thrower_length);
+    MalPropertyDesc thrower_name = mal_intrinsic_data_desc(mal_value_from_string(mal_intrinsic_ascii(vm, "")), MAL_PROPERTY_NONE);
+    mal_object_define_own(thrower_object, mal_intrinsic_string_key(vm, "name"), &thrower_name);
+    mal_object_set_extensible(thrower_object, false);
+    MalValue thrower_value = mal_value_from_native_function_object(thrower);
+    vm->intrinsics[MAL_INTRINSIC_THROW_TYPE_ERROR] = thrower_value;
+
+    // AddRestrictedFunctionProperties: poison `caller`/`arguments` on
+    // %Function.prototype% as accessors { get/set: %ThrowTypeError%,
+    // enumerable: false, configurable: true }. Every function inherits these, so
+    // reading or writing `.caller`/`.arguments` on any function throws.
+    MalPropertyDesc poison = {
+        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
+        .value = mal_value_new_undefined(),
+        .getter = thrower_value,
+        .setter = thrower_value,
+    };
+    mal_object_define_own(prototype, mal_intrinsic_string_key(vm, "caller"), &poison);
+    mal_object_define_own(prototype, mal_intrinsic_string_key(vm, "arguments"), &poison);
 }
