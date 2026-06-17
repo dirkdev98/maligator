@@ -524,6 +524,23 @@ typedef struct MalExceptionHandler {
 } MalExceptionHandler;
 
 /**
+ * Debug-info: one run in a function's position table. Instructions in
+ * [start_ip, next entry's start_ip) map to source position `pos_id` (an index
+ * into MalVmDefinition.source_positions). Sorted ascending by start_ip; a frame's
+ * position is the last entry with start_ip <= its instruction pointer.
+ */
+typedef struct MalLineEntry {
+    i32 start_ip;
+    i32 pos_id;
+} MalLineEntry;
+
+/** Debug-info: a decoded source position (1-based line, 0-based column). */
+typedef struct MalSourcePos {
+    i32 line;
+    i32 column;
+} MalSourcePos;
+
+/**
  * Calling a generator function runs its parameter prologue eagerly, then the
  * MAL_OP_GENERATOR_START prologue instruction suspends and returns a generator
  * object instead of running the body.
@@ -588,6 +605,16 @@ typedef struct MalFunction {
      * Native-backend entry point, or nullptr when the function is interpreted.
      */
     MalCompiledFunction compiled;
+
+    /**
+     * Debug-info (stack traces). file_index points into MalVmDefinition.files;
+     * positions is a run-length position table (position_count entries) mapping
+     * instruction pointers to source positions. position_count is 0 / positions
+     * is nullptr for stripped builds.
+     */
+    i32 file_index;
+    i32 position_count;
+    const MalLineEntry *positions;
 } MalFunction;
 
 typedef struct MalVmDefinition {
@@ -621,6 +648,18 @@ typedef struct MalVmDefinition {
      */
     i32 cjs_module_count;
     const i32 *cjs_module_function_indices;
+
+    /**
+     * Debug-info tables for stack traces. files[function->file_index] is a source
+     * path already prefixed `compiled://` (rendered verbatim into trace frames);
+     * source_positions[pos_id] decodes a function position-table entry to a
+     * line/column. Both are zero/null for stripped builds (e.g. the test262
+     * batch), in which case traces carry function names only.
+     */
+    i32 file_count;
+    const char *const *files;
+    i32 source_position_count;
+    const MalSourcePos *source_positions;
 } MalVmDefinition;
 
 /**
@@ -645,6 +684,42 @@ typedef struct MalEnv {
     i32 function_index;
     MalValue slots[];
 } MalEnv;
+
+/**
+ * A native-backend (compiled) call frame, tracked only for stack traces. The
+ * interpreter's frames live in MalVm.frames; compiled functions run on the C
+ * stack and are not there, so each compiled invocation records a lightweight
+ * frame here (pushed in mal_vm_enter_compiled, popped in mal_vm_leave_compiled).
+ * The compiled function writes its current source position into `pos_id` as it
+ * runs (statement-granular). `hidden` is set when the function bailed to the
+ * interpreter — its interpreted frame then represents it, so a capture skips the
+ * duplicate. A capture orders this stack against the interpreted frames by
+ * `enter_seq`.
+ */
+typedef struct MalNativeFrame {
+    i32 function_index;
+    i32 pos_id;
+    u64 enter_seq;
+    bool hidden;
+} MalNativeFrame;
+
+/** One captured frame: the function and its source position (pos_id, -1 = none). */
+typedef struct MalStackFrameRecord {
+    i32 function_index;
+    i32 pos_id;
+} MalStackFrameRecord;
+
+/**
+ * A captured stack trace: a flat list of frames (top first), plus — for async
+ * stitching — the parent async trace (the awaiting context, null when none). An
+ * Error stores one at construction (looked up by id), formatted lazily by the
+ * .stack getter; console.trace formats one immediately.
+ */
+typedef struct MalStackTrace {
+    i32 frame_count;
+    MalStackFrameRecord *frames;
+    struct MalStackTrace *async_parent;
+} MalStackTrace;
 
 typedef struct MalVm {
     const MalVmDefinition *definition;
@@ -721,6 +796,33 @@ typedef struct MalVm {
     i32 native_call_depth;
 
     /**
+     * Native (compiled-backend) call frames, for stack traces — see
+     * MalNativeFrame. Pushed/popped around every compiled invocation. A growable
+     * array; capacity persists across the VM lifetime.
+     */
+    MalNativeFrame *native_frames;
+    i32 native_frame_count;
+    i32 native_frame_capacity;
+
+    /**
+     * Monotonic frame-entry counter. Each interpreted frame (push / generator
+     * resume) and native frame records the value at entry, giving a total order
+     * a stack-trace capture uses to interleave the two frame stacks.
+     */
+    u64 frame_seq;
+
+    /**
+     * Captured stack traces, indexed by id. An Error stores its capture's id (an
+     * i32) under a private property; the .stack getter looks the trace up here
+     * and formats it lazily. Growable, never compacted — like the symbol-registry
+     * and unhandled-rejection roots it leaks until VM teardown (a GC root once
+     * tracing exists). Freed in mal_vm_free.
+     */
+    MalStackTrace **captured_traces;
+    i32 captured_trace_count;
+    i32 captured_trace_capacity;
+
+    /**
      * CommonJS module registry, sized to definition->cjs_module_count (null when
      * the program has none). Each slot caches a module's `module` object after
      * (and during) its first require, so require() returns `module.exports` live.
@@ -742,10 +844,45 @@ typedef struct MalVm {
  * when the native call depth limit would be exceeded, otherwise increments the
  * depth and returns true. Each successful enter must be paired with a leave.
  */
-bool mal_vm_enter_compiled(MalVm *vm);
+bool mal_vm_enter_compiled(MalVm *vm, i32 function_index);
 
 /** Leave a compiled-function invocation, balancing a prior enter. */
 void mal_vm_leave_compiled(MalVm *vm);
+
+/**
+ * Mark the top native frame hidden because the compiled function is bailing to
+ * the interpreter (the interpreted frame represents it). Keeps a capture from
+ * showing the frame twice. Emitted by the native backend at its unbox bail.
+ */
+void mal_vm_compiled_bailed(MalVm *vm);
+
+/**
+ * Capture the current synchronous call stack (top frame first), merging the
+ * interpreted frames with the native compiled frames in call order. The caller
+ * owns the returned trace and must free it with mal_vm_free_stack_trace — except
+ * that captures stored on an Error are owned by the VM's captured_traces table.
+ */
+MalStackTrace *mal_vm_capture_stack(MalVm *vm);
+
+/** Free a captured trace and its async-parent chain. */
+void mal_vm_free_stack_trace(MalStackTrace *trace);
+
+/**
+ * Store a captured trace in the VM's table and return its id (for stashing on an
+ * Error). The VM owns it thereafter.
+ */
+i32 mal_vm_store_stack_trace(MalVm *vm, MalStackTrace *trace);
+
+/** Look up a stored trace by id, or nullptr if out of range. */
+MalStackTrace *mal_vm_stored_stack_trace(MalVm *vm, i32 id);
+
+/**
+ * Format a captured trace as the lines following an Error header — each frame as
+ * "\n    at <name> (<file>:<line>:<column>)" (column 1-based), including any
+ * async-parent frames. Returns a heap MalString the caller concatenates after
+ * the "Name: message" header.
+ */
+MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace);
 
 typedef struct MalGeneratorObject MalGeneratorObject;
 
@@ -801,6 +938,13 @@ typedef struct MalVmFrame {
     i32 instruction_pointer;
     i32 return_register;
     i32 caller_frame_index;
+
+    /**
+     * Monotonic sequence number assigned when this frame was pushed (or a
+     * generator/async frame resumed). Stack-trace capture merges interpreted
+     * frames with native compiled frames by this order. See mal_vm_capture_stack.
+     */
+    u64 enter_seq;
 
     /**
      * Stack of active `with` objects for this frame (innermost last), grown

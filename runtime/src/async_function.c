@@ -52,6 +52,10 @@ void mal_async_function_start(MalVm *vm, MalVmFrame *frame) {
     state->state = MAL_GENERATOR_EXECUTING;
     frame->generator = state;
 
+    // Link the result promise back to this async state so an awaiting function
+    // can record itself as our `awaited_by` (async stack stitching).
+    promise->async_owner = state;
+
     // Hand the result promise to the caller now (the body keeps running in this
     // frame until its first await/return/throw). Clearing the caller link makes
     // RETURN and an uncaught throw settle the promise instead of writing a
@@ -75,6 +79,18 @@ void mal_async_function_await(MalVm *vm, MalGeneratorObject *state, MalValue awa
         vm->completion = mal_async_normal();
         mal_vm_resume_generator(vm, state, error, MAL_GENERATOR_RESUME_THROW);
         return;
+    }
+
+    // Async stack stitching: if we are awaiting another async function's result
+    // promise, record this state as that function's awaiter, so a capture taken
+    // while it runs can splice in our frame (and our awaiters) as the async
+    // ancestors. Only native promises with a known async owner stitch; arbitrary
+    // thenables do not.
+    if (mal_value_is_promise_object(promise)) {
+        MalGeneratorObject *owner = mal_value_to_promise_object(promise)->async_owner;
+        if (owner != nullptr) {
+            owner->awaited_by = state;
+        }
     }
 
     MalValue state_value = mal_value_from_object((MalObject *) state);

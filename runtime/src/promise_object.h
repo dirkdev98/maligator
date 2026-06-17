@@ -5,6 +5,7 @@
 #include "value.h"
 
 typedef struct MalVm MalVm;
+typedef struct MalGeneratorObject MalGeneratorObject;
 
 /**
  * [[PromiseState]]. A promise is settled at most once: the state transitions
@@ -45,6 +46,14 @@ typedef struct MalPromiseObject {
     /** Reactions awaiting settlement; both are consumed and freed on settle. */
     MalPromiseReaction *fulfill_reactions;
     MalPromiseReaction *reject_reactions;
+
+    /**
+     * Async stack stitching: the async function state whose result this promise
+     * is (set at ASYNC_START), or null for an ordinary promise. mal_async_function_await
+     * uses it to record an `awaited_by` back-link so a capture can reconstruct the
+     * await chain.
+     */
+    MalGeneratorObject *async_owner;
 } MalPromiseObject;
 
 /** Allocate a pending promise with the given [[Prototype]]. */

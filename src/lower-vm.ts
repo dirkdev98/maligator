@@ -15,6 +15,20 @@ export interface VmDefinition {
 	globalCount: number;
 
 	/**
+	 * Debug-info file table: file id -> source path (relative to the compiler's
+	 * working directory). A function's `fileIndex` points here; the runtime
+	 * prefixes each with `compiled://` for stack-trace frames.
+	 */
+	files: Array<string>;
+
+	/**
+	 * Debug-info position table: pos id -> (line, column), shared by all
+	 * functions (the file is resolved per-function). A function's per-instruction
+	 * `positions` index into this.
+	 */
+	sourcePositions: Array<{ line: number; column: number }>;
+
+	/**
 	 * CommonJS module table: index (module id) -> wrapper function index. Empty
 	 * for programs with no CommonJS modules.
 	 */
@@ -52,6 +66,20 @@ export interface VmFunction {
 
 	instructions: Array<VmInstruction>;
 	handlers: Array<VmExceptionHandler>;
+
+	/**
+	 * Debug-info: index into VmDefinition.files for this function's source file.
+	 */
+	fileIndex: number;
+
+	/**
+	 * Debug-info: parallel to `instructions` — positions[i] is the source-position
+	 * id (index into VmDefinition.sourcePositions) of instruction i, or -1 when
+	 * unknown (e.g. prologue code before the first statement marker). Built from
+	 * the stripped `sourcePos` markers. The VM resolves a frame's position by its
+	 * instruction pointer; the native backend emits coalesced `pos` writes from it.
+	 */
+	positions: Array<number>;
 }
 
 /**
@@ -471,13 +499,30 @@ export function vmDefinitionStats(definition: VmDefinition): VmDefinitionStats {
 }
 
 export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDefinition {
+	// Build the debug-info file table: distinct source paths in first-seen order.
+	const files: Array<string> = [];
+	const fileToIndex = new Map<string, number>();
+	const fileIndexFor = (path: string): number => {
+		const existing = fileToIndex.get(path);
+		if (existing !== undefined) {
+			return existing;
+		}
+		const index = files.push(path) - 1;
+		fileToIndex.set(path, index);
+		return index;
+	};
+
 	return {
 		functionCount: program.functions.length,
-		functions: program.functions.map(lowerFunctionToVmFunction),
+		functions: program.functions.map((fn) =>
+			lowerFunctionToVmFunction(fn, fileIndexFor(fn.semanticFile.path)),
+		),
 		stringConstants: program.stringConstants,
 		bigintConstants: program.bigintConstants,
 		globalCount: program.nextGlobalIndex,
 		cjsModuleFunctionIndices: program.cjsWrapperFunctionIndex,
+		files,
+		sourcePositions: program.sourcePositions,
 	};
 }
 
@@ -485,19 +530,32 @@ export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDe
  * Lower a function to a VM function. Note that we drop blocks and instead move to jumps to
  * absolute instructions.
  */
-function lowerFunctionToVmFunction(fn: IRFunction): VmFunction {
+function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunction {
+	// sourcePos markers carry no opcode and are stripped here, so block start IPs
+	// must count only the real (non-marker) instructions that survive.
 	const blockStartIps = new Map<number, number>();
 	let nextInstructionPointer = 0;
 
 	for (let i = 0; i < fn.blocks.length; ++i) {
 		blockStartIps.set(i, nextInstructionPointer);
-		nextInstructionPointer += fn.blocks[i]!.instructions.length;
+		for (const instruction of fn.blocks[i]!.instructions) {
+			if (instruction.type !== "sourcePos") {
+				nextInstructionPointer += 1;
+			}
+		}
 	}
 
 	const instructions: Array<VmInstruction> = [];
+	const positions: Array<number> = [];
+	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
+			if (instruction.type === "sourcePos") {
+				currentPos = instruction.pos;
+				continue;
+			}
 			instructions.push(lowerInstructionToVmInstruction(blockStartIps, instruction));
+			positions.push(currentPos);
 		}
 	}
 
@@ -522,6 +580,8 @@ function lowerFunctionToVmFunction(fn: IRFunction): VmFunction {
 		needsArguments,
 		instructions,
 		handlers: collectExceptionHandlers(instructions),
+		fileIndex,
+		positions,
 	};
 }
 
@@ -567,6 +627,9 @@ function lowerInstructionToVmInstruction(
 	instruction: IRInstruction,
 ): VmInstruction {
 	switch (instruction.type) {
+		case "sourcePos":
+			// Markers are consumed into `positions` and stripped before this point.
+			throw new Error("sourcePos marker must be stripped before lowering");
 		case "move":
 			return {
 				opcode: "MOVE",

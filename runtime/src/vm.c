@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "async_function.h"
 #include "builtin_async_generator.h"
@@ -35,6 +36,14 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->value_stack = malloc(sizeof(MalValue) * (usize) vm->value_stack_capacity);
     vm->value_stack_size = 0;
     vm->native_call_depth = 0;
+
+    vm->native_frames = nullptr;
+    vm->native_frame_count = 0;
+    vm->native_frame_capacity = 0;
+    vm->frame_seq = 0;
+    vm->captured_traces = nullptr;
+    vm->captured_trace_count = 0;
+    vm->captured_trace_capacity = 0;
 
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
@@ -161,6 +170,19 @@ void mal_vm_free(MalVm *vm) {
     vm->unhandled_rejections = nullptr;
     vm->unhandled_count = 0;
     vm->unhandled_capacity = 0;
+
+    free(vm->native_frames);
+    vm->native_frames = nullptr;
+    vm->native_frame_count = 0;
+    vm->native_frame_capacity = 0;
+
+    for (i32 i = 0; i < vm->captured_trace_count; i++) {
+        mal_vm_free_stack_trace(vm->captured_traces[i]);
+    }
+    free(vm->captured_traces);
+    vm->captured_traces = nullptr;
+    vm->captured_trace_count = 0;
+    vm->captured_trace_capacity = 0;
 
     mal_table_free(vm->symbol_registry);
     mal_table_free(vm->atoms);
@@ -367,6 +389,7 @@ bool mal_vm_push_function_frame(
     frame->instruction_pointer = 0;
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;
+    frame->enter_seq = vm->frame_seq++;
     frame->with_objects = nullptr;
     frame->with_count = 0;
     frame->with_capacity = 0;
@@ -956,6 +979,9 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
     frame->generator = generator;
     frame->return_register = -1;
     frame->caller_frame_index = -1;
+    // A resumption is a fresh entry on the logical call stack, so it sorts above
+    // whatever drove the resume (a microtask, .next() caller) in a capture.
+    frame->enter_seq = vm->frame_seq++;
 
     // Deliver the sent value and resume mode to the suspended yield expression,
     // which the compiler-emitted dispatch following the yield consults. (A
@@ -979,17 +1005,265 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
     }
 }
 
-bool mal_vm_enter_compiled(MalVm *vm) {
+bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
     if (vm->native_call_depth >= MAL_NATIVE_CALL_DEPTH_LIMIT) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
         return false;
     }
     vm->native_call_depth++;
+
+    // Record a native frame for stack traces. The compiled function writes its
+    // current source position into pos_id as it runs. Skipped when debug info is
+    // stripped (no file table) — keeping the compiled call path overhead-free, in
+    // lockstep with the backend, which emits no pos writes in that mode.
+    if (vm->definition->file_count == 0) {
+        return true;
+    }
+    if (vm->native_frame_count == vm->native_frame_capacity) {
+        vm->native_frame_capacity = vm->native_frame_capacity == 0 ? 16 : vm->native_frame_capacity * 2;
+        vm->native_frames = realloc(vm->native_frames, sizeof(MalNativeFrame) * (usize) vm->native_frame_capacity);
+    }
+    vm->native_frames[vm->native_frame_count++] = (MalNativeFrame) {
+        .function_index = function_index,
+        .pos_id = -1,
+        .enter_seq = vm->frame_seq++,
+        .hidden = false,
+    };
     return true;
 }
 
 void mal_vm_leave_compiled(MalVm *vm) {
     vm->native_call_depth--;
+    if (vm->native_frame_count > 0) {
+        vm->native_frame_count--;
+    }
+}
+
+/**
+ * Mark the top native frame hidden: the compiled function is bailing to the
+ * interpreter, whose pushed frame will represent it instead, so a capture must
+ * not show it twice. Called from compiled code at the speculative-unbox bail.
+ */
+void mal_vm_compiled_bailed(MalVm *vm) {
+    if (vm->native_frame_count > 0) {
+        vm->native_frames[vm->native_frame_count - 1].hidden = true;
+    }
+}
+
+/** Source position id for an instruction pointer in a function, or -1. */
+static i32 mal_vm_position_for(const MalFunction *function, i32 instruction_pointer) {
+    i32 found = -1;
+    for (i32 i = 0; i < function->position_count; i++) {
+        if (function->positions[i].start_ip <= instruction_pointer) {
+            found = function->positions[i].pos_id;
+        } else {
+            break;
+        }
+    }
+    return found;
+}
+
+MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
+    // Collect every live frame — interpreted (vm->frames, source of truth: a
+    // suspended generator/async frame is naturally absent) and native (skipping
+    // bailed duplicates) — then order by enter_seq descending (top first).
+    i32 max = vm->frame_count + vm->native_frame_count;
+    MalStackFrameRecord *records = malloc(sizeof(MalStackFrameRecord) * (usize) (max > 0 ? max : 1));
+    u64 *seqs = malloc(sizeof(u64) * (usize) (max > 0 ? max : 1));
+    i32 count = 0;
+
+    for (i32 i = 0; i < vm->frame_count; i++) {
+        MalVmFrame *frame = &vm->frames[i];
+        // The instruction pointer was advanced past the executing/call
+        // instruction, so ip - 1 is the responsible site (as in unwinding).
+        i32 ip = frame->instruction_pointer - 1;
+        i32 function_index = (i32) (frame->function - vm->definition->functions);
+        records[count] = (MalStackFrameRecord) {
+            .function_index = function_index,
+            .pos_id = mal_vm_position_for(frame->function, ip),
+        };
+        seqs[count] = frame->enter_seq;
+        count++;
+    }
+    for (i32 i = 0; i < vm->native_frame_count; i++) {
+        MalNativeFrame *native = &vm->native_frames[i];
+        if (native->hidden) {
+            continue;
+        }
+        records[count] = (MalStackFrameRecord) {
+            .function_index = native->function_index,
+            .pos_id = native->pos_id,
+        };
+        seqs[count] = native->enter_seq;
+        count++;
+    }
+
+    // Insertion sort by seq descending (small, slow-path only).
+    for (i32 i = 1; i < count; i++) {
+        MalStackFrameRecord record = records[i];
+        u64 seq = seqs[i];
+        i32 j = i - 1;
+        while (j >= 0 && seqs[j] < seq) {
+            records[j + 1] = records[j];
+            seqs[j + 1] = seqs[j];
+            j--;
+        }
+        records[j + 1] = record;
+        seqs[j + 1] = seq;
+    }
+    free(seqs);
+
+    MalStackTrace *trace = malloc(sizeof(MalStackTrace));
+    trace->frame_count = count;
+    trace->frames = records;
+    trace->async_parent = nullptr;
+
+    // Async stack stitching (v2): if execution is inside a resumed async
+    // function, follow the awaited_by chain to splice the awaiting ancestors'
+    // suspended frames in as async-parent segments. The running async function
+    // is the first async frame on the live stack; its awaiter (and theirs) is
+    // suspended and so absent from vm->frames — reconstructed here from the
+    // links recorded at await time. Near-zero cost: it only walks pointers that
+    // already exist, and only on this slow capture path.
+    MalGeneratorObject *async_state = nullptr;
+    for (i32 i = 0; i < vm->frame_count; i++) {
+        if (vm->frames[i].generator != nullptr && vm->frames[i].generator->is_async) {
+            async_state = vm->frames[i].generator;
+            break;
+        }
+    }
+    MalStackTrace **link = &trace->async_parent;
+    i32 guard = 0;
+    while (async_state != nullptr && async_state->awaited_by != nullptr && guard++ < 100000) {
+        MalGeneratorObject *parent = async_state->awaited_by;
+        const MalFunction *function = parent->frame.function;
+        MalStackTrace *segment = malloc(sizeof(MalStackTrace));
+        segment->frame_count = 1;
+        segment->frames = malloc(sizeof(MalStackFrameRecord));
+        // The awaiter is suspended at its `await`; ip - 1 is that await's site.
+        segment->frames[0] = (MalStackFrameRecord) {
+            .function_index = (i32) (function - vm->definition->functions),
+            .pos_id = mal_vm_position_for(function, parent->frame.instruction_pointer - 1),
+        };
+        segment->async_parent = nullptr;
+        *link = segment;
+        link = &segment->async_parent;
+        async_state = parent;
+    }
+
+    return trace;
+}
+
+void mal_vm_free_stack_trace(MalStackTrace *trace) {
+    while (trace != nullptr) {
+        MalStackTrace *parent = trace->async_parent;
+        free(trace->frames);
+        free(trace);
+        trace = parent;
+    }
+}
+
+i32 mal_vm_store_stack_trace(MalVm *vm, MalStackTrace *trace) {
+    if (vm->captured_trace_count == vm->captured_trace_capacity) {
+        vm->captured_trace_capacity = vm->captured_trace_capacity == 0 ? 16 : vm->captured_trace_capacity * 2;
+        vm->captured_traces = realloc(vm->captured_traces, sizeof(MalStackTrace *) * (usize) vm->captured_trace_capacity);
+    }
+    i32 id = vm->captured_trace_count++;
+    vm->captured_traces[id] = trace;
+    return id;
+}
+
+MalStackTrace *mal_vm_stored_stack_trace(MalVm *vm, i32 id) {
+    if (id < 0 || id >= vm->captured_trace_count) {
+        return nullptr;
+    }
+    return vm->captured_traces[id];
+}
+
+// Growable UTF-16 buffer for assembling a stack-trace string.
+typedef struct MalStackBuf {
+    c16 *units;
+    usize length;
+    usize capacity;
+} MalStackBuf;
+
+static void mal_stack_buf_reserve(MalStackBuf *buf, usize extra) {
+    if (buf->length + extra <= buf->capacity) {
+        return;
+    }
+    usize capacity = buf->capacity == 0 ? 64 : buf->capacity;
+    while (buf->length + extra > capacity) {
+        capacity *= 2;
+    }
+    buf->units = realloc(buf->units, sizeof(c16) * capacity);
+    buf->capacity = capacity;
+}
+
+static void mal_stack_buf_push_ascii(MalStackBuf *buf, const char *text) {
+    usize length = strlen(text);
+    mal_stack_buf_reserve(buf, length);
+    for (usize i = 0; i < length; i++) {
+        buf->units[buf->length++] = (c16) (byte) text[i];
+    }
+}
+
+static void mal_stack_buf_push_string(MalStackBuf *buf, const MalString *string) {
+    usize length = mal_string_length(string);
+    mal_stack_buf_reserve(buf, length);
+    memcpy(buf->units + buf->length, mal_string_code_units(string), sizeof(c16) * length);
+    buf->length += length;
+}
+
+static void mal_stack_buf_push_i32(MalStackBuf *buf, i32 value) {
+    char digits[16];
+    snprintf(digits, sizeof(digits), "%d", value);
+    mal_stack_buf_push_ascii(buf, digits);
+}
+
+MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
+    MalStackBuf buf = {0};
+
+    for (const MalStackTrace *segment = trace; segment != nullptr; segment = segment->async_parent) {
+        if (segment != trace) {
+            // Async-boundary separator (v2): frames below were the awaiting context.
+            mal_stack_buf_push_ascii(&buf, "\n    --- await ---");
+        }
+        for (i32 i = 0; i < segment->frame_count; i++) {
+            const MalStackFrameRecord *record = &segment->frames[i];
+            const MalFunction *function = &vm->definition->functions[record->function_index];
+
+            mal_stack_buf_push_ascii(&buf, "\n    at ");
+
+            const MalString *name = &vm->definition->string_constants[function->name_string_index];
+            if (mal_string_length(name) > 0) {
+                mal_stack_buf_push_string(&buf, name);
+            } else {
+                mal_stack_buf_push_ascii(&buf, "<anonymous>");
+            }
+
+            bool have_file = function->file_index >= 0 && function->file_index < vm->definition->file_count;
+            bool have_pos = record->pos_id >= 0 && record->pos_id < vm->definition->source_position_count;
+            if (have_file || have_pos) {
+                mal_stack_buf_push_ascii(&buf, " (");
+                if (have_file) {
+                    mal_stack_buf_push_ascii(&buf, vm->definition->files[function->file_index]);
+                }
+                if (have_pos) {
+                    const MalSourcePos *pos = &vm->definition->source_positions[record->pos_id];
+                    mal_stack_buf_push_ascii(&buf, ":");
+                    mal_stack_buf_push_i32(&buf, pos->line);
+                    mal_stack_buf_push_ascii(&buf, ":");
+                    // Meriyah columns are 0-based; stack traces report 1-based.
+                    mal_stack_buf_push_i32(&buf, pos->column + 1);
+                }
+                mal_stack_buf_push_ascii(&buf, ")");
+            }
+        }
+    }
+
+    MalString *result = mal_string_new_copy(&vm->heap, buf.units, buf.length);
+    free(buf.units);
+    return result;
 }
 
 MalValue mal_vm_interpret_function(
@@ -1091,7 +1365,7 @@ MalCompletion mal_vm_call_value(
         if (function->compiled != nullptr) {
             // Native-backend function: invoke directly (no stack marshaling). The
             // C stack, not the value stack, bounds this recursion.
-            if (!mal_vm_enter_compiled(vm)) {
+            if (!mal_vm_enter_compiled(vm, function_index)) {
                 completion = vm->completion;
             } else {
                 MalValue this_value = mal_vm_callee_this(vm, function, resolution.this_value);
@@ -1210,7 +1484,7 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
             if (function->compiled != nullptr) {
                 // Native-backend constructor: the compiled body applies the
                 // non-object→this substitution at its RETURN, so use the result.
-                if (!mal_vm_enter_compiled(vm)) {
+                if (!mal_vm_enter_compiled(vm, function_index)) {
                     completion = vm->completion;
                 } else {
                     MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, effective_new_target, env);

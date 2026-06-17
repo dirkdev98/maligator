@@ -13,6 +13,7 @@ MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype
     generator->is_async = false;
     generator->async_resolve = mal_value_new_undefined();
     generator->async_reject = mal_value_new_undefined();
+    generator->awaited_by = nullptr;
     generator->is_async_generator = false;
     generator->agen_running = false;
     generator->agen_queue_head = nullptr;

@@ -317,6 +317,7 @@ export function emitCompiledFunction(
 	fn: VmFunction,
 	index: number,
 	suffix: string,
+	debug: boolean,
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body; they are not straight-line
 	// C functions (the resumable-compiled-function backend is a later milestone).
@@ -339,7 +340,7 @@ export function emitCompiledFunction(
 	const promotableParams = numericParamCandidates(fn);
 	const reps = inferReps(fn, promotableParams);
 
-	const body = emitBody(fn, suffix, reps);
+	const body = emitBody(fn, suffix, reps, debug);
 	if (body === null) {
 		return null;
 	}
@@ -389,6 +390,11 @@ export function emitCompiledFunction(
 		}
 		const guard = promotedParams.map((i) => `!mal_ops_is_number(p${i})`).join(" || ");
 		lines.push(`    if (${guard}) {`);
+		if (debug) {
+			// The interpreter's pushed frame represents this function from here;
+			// hide the native frame so a capture does not show it twice.
+			lines.push(`        mal_vm_compiled_bailed(vm);`);
+		}
 		lines.push(
 			`        return mal_vm_interpret_function(vm, ${index}, MAL_VALUE_UNDEFINED, this_value, args, arg_count, new_target, env);`,
 		);
@@ -557,6 +563,7 @@ function emitBody(
 	fn: VmFunction,
 	suffix: string,
 	reps: Array<RegisterRep>,
+	debug: boolean,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
@@ -566,9 +573,25 @@ function emitBody(
 	}
 
 	const lines: Array<string> = [];
+	// Statement-granular source position for this compiled frame: write it into
+	// the native frame whenever it changes, so a stack capture taken anywhere in
+	// this function (or in a callee/throw) reads the right line. The native frame
+	// is guaranteed present (enter_compiled pushed it before this function ran).
+	let lastPos = -1;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
+			// Control can arrive from a jump with a different last-written
+			// position, so force the next change to re-emit.
+			lastPos = -1;
+		}
+
+		if (debug) {
+			const pos = fn.positions[ip] ?? -1;
+			if (pos !== -1 && pos !== lastPos) {
+				lines.push(`    vm->native_frames[vm->native_frame_count - 1].pos_id = ${pos};`);
+				lastPos = pos;
+			}
 		}
 
 		const emitted = emitInstruction(fn.instructions[ip]!, ip, suffix, reps, fn.strict);

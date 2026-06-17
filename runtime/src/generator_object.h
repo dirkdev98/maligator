@@ -62,6 +62,16 @@ typedef struct MalGeneratorObject {
     MalValue async_reject;
 
     /**
+     * Async stack stitching: for a suspended async function, the async state
+     * that is `await`ing this one's result promise (set by mal_async_function_await
+     * when the awaited value is another async function's result promise). A stack
+     * capture taken inside this function follows the chain to splice in the
+     * awaiting ancestors' frames. Null when nothing awaits it (or the awaiter is
+     * not an async function — e.g. a plain `.then`, which is not stitched).
+     */
+    struct MalGeneratorObject *awaited_by;
+
+    /**
      * Async generators (`async function*`) set is_async_generator (and is_async,
      * so await works). Each next/throw/return call enqueues a request here and
      * gets a promise back; the driver (builtin_async_generator.c) resolves the

@@ -21,6 +21,16 @@ export interface IntermediateProgram {
 	stringConstantToIndex: Map<string, number>;
 
 	/**
+	 * Interned source positions for debug info / stack traces. Each entry is a
+	 * (line, column) pair (1-based line, 0-based column, as Meriyah reports). The
+	 * index is the `pos` carried by `sourcePos` markers. The file is resolved
+	 * per-function (a function body lives in one file), so only line/column are
+	 * interned here and shared across every function.
+	 */
+	sourcePositions: Array<{ line: number; column: number }>;
+	sourcePositionToIndex: Map<string, number>;
+
+	/**
 	 * Immortal bigint constant pool, deduplicated by value. Each entry is baked
 	 * into the program image as a static MalBigInt with its value emitted at
 	 * compile time, so CREATE_BIGINT never parses or allocates at runtime.
@@ -383,6 +393,20 @@ interface IRCursor {
 }
 
 export type IRInstruction =
+	| {
+			/**
+			 * Source-position marker — carries no runtime opcode. Records the
+			 * interned source position (an index into program.sourcePositions) of
+			 * the statement that follows. lowerFunctionToVmFunction consumes these
+			 * into the per-function position table (which drives VM stack traces and
+			 * the native backend's `pos` writes) and strips them from the bytecode,
+			 * so the VM never dispatches one. Modeled on the tryBegin/tryEnd markers;
+			 * register-allocation and the optimizer skip it since it has no
+			 * `registers` and is not a jump/return type.
+			 */
+			type: "sourcePos";
+			pos: number;
+	  }
 	| {
 			type: "move";
 
@@ -1150,6 +1174,9 @@ export function compileSemanticProgramToIr(semantic: SemanticProgram) {
 		functions: [],
 		stringConstants: [],
 		stringConstantToIndex: new Map(),
+
+		sourcePositions: [],
+		sourcePositionToIndex: new Map(),
 
 		bigintConstants: [],
 		bigintConstantToIndex: new Map(),
@@ -3579,6 +3606,11 @@ function compileStatementsToBlock(
 				});
 			}
 		}
+
+		// Statement-granularity debug position: every following instruction (until
+		// the next statement's marker) is attributed to this statement's line for
+		// stack traces. Lowering strips these markers from the bytecode.
+		emitSourcePos(program, block, statement);
 
 		switch (statement.type) {
 			case "ExpressionStatement": {
@@ -8099,6 +8131,43 @@ function getOrCreateStringConstant(program: IntermediateProgram, value: string) 
 	const index = program.stringConstants.push(codeUnits) - 1;
 	program.stringConstantToIndex.set(value, index);
 	return index;
+}
+
+function getOrCreateSourcePosition(
+	program: IntermediateProgram,
+	line: number,
+	column: number,
+): number {
+	const key = `${line}:${column}`;
+	const existing = program.sourcePositionToIndex.get(key);
+	if (existing !== undefined) {
+		return existing;
+	}
+
+	const index = program.sourcePositions.push({ line, column }) - 1;
+	program.sourcePositionToIndex.set(key, index);
+	return index;
+}
+
+/**
+ * Emit a source-position marker for `node` into `block`. A no-op when the node
+ * carries no location (synthesized nodes). The marker sets the source position
+ * inherited by every following instruction until the next marker.
+ */
+function emitSourcePos(
+	program: IntermediateProgram,
+	block: IRBlock,
+	node: ESTree.Node,
+): void {
+	const loc = node.loc;
+	if (!loc) {
+		return;
+	}
+
+	block.instructions.push({
+		type: "sourcePos",
+		pos: getOrCreateSourcePosition(program, loc.start.line, loc.start.column),
+	});
 }
 
 function getOrCreateBigintConstant(program: IntermediateProgram, value: bigint) {

@@ -26,6 +26,17 @@ static MalKey mal_error_data_key(void) {
     return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = mal_error_data_marker};
 }
 
+/**
+ * A second private-symbol marker: the property on each error that holds the id
+ * (an i32 into the VM's captured_traces) of its captured stack trace. Minted in
+ * mal_builtin_error_install alongside the [[ErrorData]] marker.
+ */
+static MalValue mal_error_stack_marker = MAL_VALUE_UNDEFINED;
+
+static MalKey mal_error_stack_key(void) {
+    return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = mal_error_stack_marker};
+}
+
 static void mal_error_mark_error_data(MalVm *vm, MalObject *error) {
     (void) vm;
     MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_new_boolean(true), MAL_PROPERTY_NONE);
@@ -38,6 +49,23 @@ static bool mal_error_has_error_data(MalObject *object) {
     }
     MalPropertyLookup lookup = mal_object_get_own(object, mal_error_data_key());
     return lookup.present;
+}
+
+/**
+ * Capture the current call stack at construction and stash its id on the error
+ * under the private stack key; the .stack getter formats it lazily. Skipped when
+ * debug info is stripped (no file table) — that is the --strip-debug behavior,
+ * and keeps the throw-heavy test262 batch at zero capture cost — and before the
+ * marker is minted (errors created during early intrinsics init).
+ */
+static void mal_error_capture_stack(MalVm *vm, MalObject *error) {
+    if (mal_value_is_undefined(mal_error_stack_marker) || vm->definition->file_count == 0) {
+        return;
+    }
+    MalStackTrace *trace = mal_vm_capture_stack(vm);
+    i32 id = mal_vm_store_stack_trace(vm, trace);
+    MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_from_i32(id), MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(error, mal_error_stack_key(), &desc);
 }
 
 /**
@@ -141,6 +169,7 @@ static bool mal_error_install_cause(MalVm *vm, MalObject *error, MalValue option
 static MalValue mal_builtin_error_make(MalVm *vm, MalIntrinsic prototype_slot, const MalValue *args, i32 arg_count) {
     MalObject *error = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[prototype_slot]));
     mal_error_mark_error_data(vm, error);
+    mal_error_capture_stack(vm, error);
 
     if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
         MalString *message_string;
@@ -219,6 +248,7 @@ static MalValue mal_builtin_eval_error_constructor(MalVm *vm, MalValue this_valu
 static MalValue mal_builtin_aggregate_error_make(MalVm *vm, MalValue errors_value, MalValue message_value, MalValue options_value) {
     MalObject *error = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_PROTOTYPE]));
     mal_error_mark_error_data(vm, error);
+    mal_error_capture_stack(vm, error);
 
     if (!mal_value_is_undefined(message_value)) {
         MalString *message_string;
@@ -372,12 +402,37 @@ static MalValue mal_builtin_error_stack_getter(MalVm *vm, MalValue this_value, c
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Error.prototype.stack getter called on non-object");
         return mal_value_new_undefined();
     }
-    if (!mal_error_has_error_data(mal_value_to_object(this_value))) {
+    MalObject *error = mal_value_to_object(this_value);
+    if (!mal_error_has_error_data(error)) {
         return mal_value_new_undefined();
     }
-    // No real stack capture; an empty string still satisfies the contract that
-    // the getter returns a String for error instances.
-    return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+
+    // The trace id stashed at construction (absent when debug info was stripped,
+    // or for errors created before the marker was minted).
+    MalPropertyLookup lookup = mal_object_get_own(error, mal_error_stack_key());
+    MalStackTrace *trace =
+        lookup.present ? mal_vm_stored_stack_trace(vm, mal_value_to_i32(lookup.desc.value)) : nullptr;
+
+    // Header line: the error's "Name: message" (Error.prototype.toString).
+    MalValue header = mal_builtin_error_prototype_to_string(
+        vm, this_value, nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined()
+    );
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue result = header;
+    if (trace != nullptr) {
+        MalString *frames = mal_vm_format_stack_frames(vm, trace);
+        result = mal_ops_add(&vm->heap, header, mal_value_from_string(frames));
+    }
+
+    // The getter has no observable side effect (it does not install an own
+    // "stack" property): the spec getter just returns a string, and a test
+    // relies on a foreign-new-target error's property access still finding no
+    // accessor. The caller can memoize via `.stack =` (the setter) if desired.
+    // Reformatting per read is acceptable — .stack is a slow path by design.
+    return result;
 }
 
 /**
@@ -422,6 +477,7 @@ void mal_vm_throw_error_value(MalVm *vm, MalIntrinsic prototype_slot, MalValue m
     // observable ToString/cause machinery (the message is already a string).
     MalObject *error = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[prototype_slot]));
     mal_error_mark_error_data(vm, error);
+    mal_error_capture_stack(vm, error);
     if (!mal_value_is_undefined(message)) {
         mal_intrinsic_define_data(vm, error, "message", message, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     }
@@ -463,8 +519,10 @@ static MalObject *mal_builtin_error_install_kind(
 }
 
 void mal_builtin_error_install(MalVm *vm) {
-    // Mint the [[ErrorData]] marker before any error object is created.
+    // Mint the [[ErrorData]] and captured-stack markers before any error object
+    // is created.
     mal_error_data_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    mal_error_stack_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
 
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
 

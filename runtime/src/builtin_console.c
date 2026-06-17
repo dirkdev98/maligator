@@ -116,6 +116,33 @@ static MalValue mal_builtin_console_error(MalVm *vm, MalValue this_value, const 
     return mal_builtin_console_write(vm, stderr, args, arg_count);
 }
 
+// console.trace(...data): a "Trace" label with the formatted data, followed by
+// the current call stack (Console Standard "Printer" with a stack appended).
+// Written to stderr.
+static MalValue mal_builtin_console_trace(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    fputs("Trace", stderr);
+    if (arg_count > 0) {
+        fputs(": ", stderr);
+        for (i32 i = 0; i < arg_count; i++) {
+            if (i > 0) {
+                fputc(' ', stderr);
+            }
+            mal_builtin_console_print_value(vm, stderr, args[i], false);
+        }
+    }
+
+    MalStackTrace *trace = mal_vm_capture_stack(vm);
+    MalString *frames = mal_vm_format_stack_frames(vm, trace);
+    mal_builtin_console_print_string(stderr, frames);
+    mal_vm_free_stack_trace(trace);
+
+    fputc('\n', stderr);
+    return mal_value_new_undefined();
+}
+
 void mal_builtin_console_install(MalVm *vm) {
     MalObject *console = mal_intrinsic_new_object(vm);
     vm->intrinsics[MAL_INTRINSIC_CONSOLE] = mal_value_from_object(console);
@@ -124,4 +151,5 @@ void mal_builtin_console_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, console, "info", 0, mal_builtin_console_log);
     mal_intrinsic_define_method_n(vm, console, "warn", 0, mal_builtin_console_error);
     mal_intrinsic_define_method_n(vm, console, "error", 0, mal_builtin_console_error);
+    mal_intrinsic_define_method_n(vm, console, "trace", 0, mal_builtin_console_trace);
 }

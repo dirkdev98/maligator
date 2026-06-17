@@ -13,6 +13,7 @@ MalPromiseObject *mal_promise_object_new(MalHeap *heap, MalObject *prototype) {
     promise->result = mal_value_new_undefined();
     promise->fulfill_reactions = nullptr;
     promise->reject_reactions = nullptr;
+    promise->async_owner = nullptr;
 
     return promise;
 }

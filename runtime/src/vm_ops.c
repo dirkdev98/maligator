@@ -600,7 +600,7 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
                 // The C stack, not the value stack, bounds this recursion.
                 i32 caller_frame_index = vm->frame_count - 1;
                 MalValue result = mal_value_new_undefined();
-                if (mal_vm_enter_compiled(vm)) {
+                if (mal_vm_enter_compiled(vm, function_index)) {
                     MalValue this_value = mal_vm_callee_this(vm, function, resolution.this_value);
                     result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, mal_value_new_undefined(), env);
                     mal_vm_leave_compiled(vm);
@@ -689,7 +689,7 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
             // which re-runs as a construct because new_target is an object.
             i32 caller_frame_index = vm->frame_count - 1;
             MalValue result = mal_value_new_undefined();
-            if (mal_vm_enter_compiled(vm)) {
+            if (mal_vm_enter_compiled(vm, callee_index)) {
                 result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, resolution.callee, env);
                 mal_vm_leave_compiled(vm);
             }
