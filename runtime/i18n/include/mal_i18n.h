@@ -82,6 +82,42 @@ int32_t mal_i18n_number_format(const uint8_t *locale, size_t locale_len, double 
  * date_style / time_style: -1 none, 0 full, 1 long, 2 medium, 3 short. */
 int32_t mal_i18n_datetime_format(const uint8_t *locale, size_t locale_len, int32_t year, int32_t month, int32_t day, int32_t hour, int32_t minute, int32_t second, int32_t date_style, int32_t time_style, uint8_t *out, int32_t out_cap);
 
+/* ---- Intl.ListFormat ----
+ * A borrowed UTF-16 string (mirrors Rust MalU16Str). */
+typedef struct MalU16Str {
+    const uint16_t *ptr;
+    size_t len;
+} MalU16Str;
+
+/* list_type: 0 conjunction(and), 1 disjunction(or), 2 unit; length: 0 long, 1
+ * short, 2 narrow. Writes UTF-8 into out; returns the full length, or -1. */
+int32_t mal_i18n_list_format(const uint8_t *locale, size_t locale_len, int32_t list_type, int32_t length, const MalU16Str *items, size_t items_count, uint8_t *out, int32_t out_cap);
+
+/* ---- Intl.Segmenter ----
+ * granularity: 0 grapheme, 1 word, 2 sentence. Writes segment boundary positions
+ * (UTF-16 indices, including 0 and the end) into bounds_out, and a per-segment
+ * isWordLike flag into wordlike_out. cap is bounds_out's element capacity.
+ * Returns the number of boundaries (segment count + 1). */
+int32_t mal_i18n_segment(int32_t granularity, const uint16_t *text, size_t text_len, int32_t *bounds_out, uint8_t *wordlike_out, int32_t cap);
+
+/* ---- Intl.DisplayNames ----
+ * kind: 0 region, 1 script, 2 language; style: 0 long, 1 short, 2 narrow. Writes
+ * UTF-8 into out; returns the length, -1 when no name exists (caller applies the
+ * Fallback option), or -2 when the code is structurally invalid. */
+int32_t mal_i18n_display_name(const uint8_t *locale, size_t locale_len, int32_t kind, int32_t style, const uint8_t *code, size_t code_len, uint8_t *out, int32_t out_cap);
+
+/* ---- Intl.DurationFormat ----
+ * base_style: 0 long, 1 short, 2 narrow, 3 digital. fractional_digits: -1 for
+ * "show all", else a fixed count. units is 10 u64s: years, months, weeks, days,
+ * hours, minutes, seconds, milliseconds, microseconds, nanoseconds. Writes UTF-8
+ * into out; returns the full length, or -1. */
+int32_t mal_i18n_duration_format(const uint8_t *locale, size_t locale_len, int32_t base_style, int32_t fractional_digits, int32_t sign_negative, const uint64_t *units, uint8_t *out, int32_t out_cap);
+
+/* ---- Intl.RelativeTimeFormat ----
+ * length: 0 long, 1 short, 2 narrow; unit: 0 second .. 7 year; numeric_auto != 0
+ * selects Numeric "auto". Writes UTF-8 into out; returns the length, or -1. */
+int32_t mal_i18n_relative_time(const uint8_t *locale, size_t locale_len, int32_t length, int32_t unit, int32_t numeric_auto, double value, uint8_t *out, int32_t out_cap);
+
 #ifdef __cplusplus
 }
 #endif

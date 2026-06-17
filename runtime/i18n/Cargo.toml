@@ -20,6 +20,11 @@ jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
 # ICU4X for the Intl surface. compiled_data (default) bundles CLDR data for all
 # locales; the curated-subset / consumer-selectable-locales build is a TODO.
 icu = "2"
+# Experimental ICU services (icu::experimental re-exports this): DisplayNames,
+# RelativeTimeFormat, Duration. compiled_data bundles their CLDR data.
+icu_experimental = { version = "0.5", features = ["compiled_data"] }
+# Writeable: stringify ICU "formatted" results that expose Writeable (not Display).
+writeable = "0.6"
 # temporal_rs joins here for the Temporal global.
 
 [profile.release]

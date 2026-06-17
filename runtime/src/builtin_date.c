@@ -74,7 +74,10 @@ static f64 date_pmod(f64 a, f64 n) {
 /** Days since 1970-01-01 for the given proleptic-Gregorian date (m in 1..12). */
 static f64 date_days_from_civil(f64 y, i32 m, f64 d) {
     y -= (m <= 2) ? 1.0 : 0.0;
-    f64 era = floor((y >= 0.0 ? y : y - 399.0) / 400.0);
+    // Floor-division of y by 400. (Hinnant's reference uses (y<0?y-399:y)/400 to
+    // get floor from C's truncating integer division; with floor() in f64 we take
+    // the floor directly - applying both double-corrects and breaks negative years.)
+    f64 era = floor(y / 400.0);
     f64 yoe = y - era * 400.0;                                                       // [0, 399]
     f64 doy = floor((153.0 * (f64) ((m > 2) ? (m - 3) : (m + 9)) + 2.0) / 5.0) + (d - 1.0); // [0, 365]
     f64 doe = yoe * 365.0 + floor(yoe / 4.0) - floor(yoe / 100.0) + doy;              // [0, 146096]
@@ -84,7 +87,9 @@ static f64 date_days_from_civil(f64 y, i32 m, f64 d) {
 /** Decompose a day number (days since the epoch, finite) into year, 0-based month, and day. */
 static void date_civil_from_days(f64 z, f64 *year_out, f64 *month_out, f64 *day_out) {
     z += 719468.0;
-    f64 era = floor((z >= 0.0 ? z : z - 146096.0) / 146097.0);
+    // Floor-division of z by 146097 (see date_days_from_civil for why floor()
+    // directly, without the truncating-division -146096 adjustment).
+    f64 era = floor(z / 146097.0);
     f64 doe = z - era * 146097.0;                                                    // [0, 146096]
     f64 yoe = floor((doe - floor(doe / 1460.0) + floor(doe / 36524.0) - floor(doe / 146096.0)) / 365.0); // [0, 399]
     f64 y = yoe + era * 400.0;
@@ -292,8 +297,8 @@ static bool date_read_digits(DateCursor *c, i32 count, i32 *out) {
     return true;
 }
 
-/** Parse a Date Time String. Returns the (un-clipped) time value, or NaN. */
-static f64 date_parse_units(const c16 *u, usize len) {
+/** Parse the ISO 8601 Date Time String Format. Returns the time value, or NaN. */
+static f64 date_parse_iso(const c16 *u, usize len) {
     DateCursor c = {u, len, 0};
 
     f64 year;
@@ -401,6 +406,276 @@ static f64 date_parse_units(const c16 *u, usize len) {
         t = date_utc_from_local(t);
     }
     return t;
+}
+
+// ---------------------------------------------------------------------------
+// Legacy (non-ISO) parsing. The spec leaves these forms implementation-defined
+// but requires Date.parse to round-trip Date.prototype.toString and
+// toUTCString. We accept those (and tolerant variants): month names, a day, a
+// year (optionally signed), an HH:mm[:ss[.sss]] time, and a GMT/UTC[±HHMM] (or
+// 'Z') zone, in any order; weekday names and a trailing "(...)" comment are
+// ignored.
+// ---------------------------------------------------------------------------
+
+static bool date_is_alpha(c16 ch) {
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+}
+
+static c16 date_lower(c16 ch) {
+    return (ch >= 'A' && ch <= 'Z') ? (c16) (ch + 32) : ch;
+}
+
+static bool date_token_eq_ci(const c16 *tok, usize len, const char *ascii) {
+    if (len != strlen(ascii)) {
+        return false;
+    }
+    for (usize i = 0; i < len; i++) {
+        if (date_lower(tok[i]) != (c16) ascii[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** 0-based month for a token whose first three letters name a month, else -1. */
+static i32 date_month_from_name(const c16 *tok, usize len) {
+    static const char *names[12] = {
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"
+    };
+    if (len < 3) {
+        return -1;
+    }
+    for (i32 i = 0; i < 12; i++) {
+        if (date_lower(tok[0]) == names[i][0] && date_lower(tok[1]) == names[i][1]
+            && date_lower(tok[2]) == names[i][2]) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static bool date_is_weekday_name(const c16 *tok, usize len) {
+    static const char *names[7] = {"sun", "mon", "tue", "wed", "thu", "fri", "sat"};
+    if (len < 3) {
+        return false;
+    }
+    for (i32 i = 0; i < 7; i++) {
+        if (date_lower(tok[0]) == names[i][0] && date_lower(tok[1]) == names[i][1]
+            && date_lower(tok[2]) == names[i][2]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static f64 date_parse_legacy(const c16 *u, usize len) {
+    f64 year = NAN;
+    i32 month = -1, day = -1;
+    i32 hour = 0, minute = 0, second = 0, ms = 0;
+    bool has_time = false, has_tz = false;
+    f64 tz_offset_ms = 0.0;
+
+    usize i = 0;
+    while (i < len) {
+        c16 ch = u[i];
+        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == ',') {
+            i++;
+            continue;
+        }
+        // A parenthesized comment (e.g. the time-zone name) is ignored.
+        if (ch == '(') {
+            i32 depth = 0;
+            while (i < len) {
+                if (u[i] == '(') {
+                    depth++;
+                } else if (u[i] == ')') {
+                    depth--;
+                    if (depth == 0) {
+                        i++;
+                        break;
+                    }
+                }
+                i++;
+            }
+            continue;
+        }
+        if (date_is_alpha(ch)) {
+            usize start = i;
+            while (i < len && date_is_alpha(u[i])) {
+                i++;
+            }
+            const c16 *tok = u + start;
+            usize tlen = i - start;
+            i32 mi = date_month_from_name(tok, tlen);
+            if (mi >= 0 && month < 0) {
+                month = mi;
+                continue;
+            }
+            if (date_token_eq_ci(tok, tlen, "gmt") || date_token_eq_ci(tok, tlen, "utc")
+                || date_token_eq_ci(tok, tlen, "ut") || date_token_eq_ci(tok, tlen, "z")) {
+                has_tz = true;
+                tz_offset_ms = 0.0;
+                continue;
+            }
+            if (date_is_weekday_name(tok, tlen)) {
+                continue;
+            }
+            return NAN;
+        }
+        // A sign introduces either a tz offset (after the date/time and zone are
+        // established) or a negative year.
+        if (ch == '+' || ch == '-') {
+            i32 sign = ch == '-' ? -1 : 1;
+            usize p = i + 1;
+            usize dstart = p;
+            while (p < len && u[p] >= '0' && u[p] <= '9') {
+                p++;
+            }
+            usize digits = p - dstart;
+            if (digits == 0) {
+                return NAN;
+            }
+            bool offset_context = has_tz || (!isnan(year) && month >= 0 && day >= 0);
+            if (offset_context) {
+                // ±HH:MM or ±HHMM or ±HH offset.
+                i32 oh = 0, om = 0;
+                if (digits >= 3) {
+                    // HHMM packed (read first len-2 as hours).
+                    i32 hv = 0;
+                    for (usize k = dstart; k < p - 2; k++) {
+                        hv = hv * 10 + (u[k] - '0');
+                    }
+                    oh = hv;
+                    om = (u[p - 2] - '0') * 10 + (u[p - 1] - '0');
+                } else {
+                    for (usize k = dstart; k < p; k++) {
+                        oh = oh * 10 + (u[k] - '0');
+                    }
+                    if (p < len && u[p] == ':') {
+                        p++;
+                        usize mstart = p;
+                        while (p < len && u[p] >= '0' && u[p] <= '9') {
+                            p++;
+                        }
+                        for (usize k = mstart; k < p; k++) {
+                            om = om * 10 + (u[k] - '0');
+                        }
+                    }
+                }
+                if (oh > 23 || om > 59) {
+                    return NAN;
+                }
+                has_tz = true;
+                tz_offset_ms = (f64) sign * ((f64) oh * MS_PER_HOUR + (f64) om * MS_PER_MINUTE);
+                i = p;
+                continue;
+            }
+            // Signed year.
+            if (!isnan(year)) {
+                return NAN;
+            }
+            i32 yv = 0;
+            for (usize k = dstart; k < p; k++) {
+                yv = yv * 10 + (u[k] - '0');
+            }
+            year = (f64) (sign * yv);
+            i = p;
+            continue;
+        }
+        if (ch >= '0' && ch <= '9') {
+            usize start = i;
+            while (i < len && u[i] >= '0' && u[i] <= '9') {
+                i++;
+            }
+            usize digits = i - start;
+            i32 value = 0;
+            for (usize k = start; k < i; k++) {
+                value = value * 10 + (u[k] - '0');
+            }
+            // A ':' marks this as the hour of an HH:mm[:ss[.sss]] time.
+            if (i < len && u[i] == ':') {
+                has_time = true;
+                hour = value;
+                i++;
+                if (i >= len || u[i] < '0' || u[i] > '9') {
+                    return NAN;
+                }
+                minute = 0;
+                while (i < len && u[i] >= '0' && u[i] <= '9') {
+                    minute = minute * 10 + (u[i] - '0');
+                    i++;
+                }
+                if (i < len && u[i] == ':') {
+                    i++;
+                    second = 0;
+                    while (i < len && u[i] >= '0' && u[i] <= '9') {
+                        second = second * 10 + (u[i] - '0');
+                        i++;
+                    }
+                    if (i < len && u[i] == '.') {
+                        i++;
+                        i32 frac = 0, fdigits = 0;
+                        while (i < len && u[i] >= '0' && u[i] <= '9') {
+                            if (fdigits < 3) {
+                                frac = frac * 10 + (u[i] - '0');
+                                fdigits++;
+                            }
+                            i++;
+                        }
+                        while (fdigits < 3) {
+                            frac *= 10;
+                            fdigits++;
+                        }
+                        ms = frac;
+                    }
+                }
+                continue;
+            }
+            // A 4+-digit run, or a value too large to be a day, is the year.
+            if (isnan(year) && (digits >= 4 || value > 31)) {
+                year = (f64) value;
+            } else if (day < 0) {
+                day = value;
+            } else if (isnan(year)) {
+                year = (f64) value;
+            } else {
+                return NAN;
+            }
+            continue;
+        }
+        return NAN;
+    }
+
+    if (isnan(year) || month < 0 || day < 0) {
+        return NAN;
+    }
+    if (month > 11 || day < 1 || day > 31 || minute > 59 || second > 59) {
+        return NAN;
+    }
+    if (hour > 24 || (hour == 24 && (minute != 0 || second != 0 || ms != 0))) {
+        return NAN;
+    }
+
+    f64 t = date_make_date(
+        date_make_day(year, (f64) month, (f64) day),
+        date_make_time((f64) hour, (f64) minute, (f64) second, (f64) ms)
+    );
+    if (has_tz) {
+        t = t - tz_offset_ms;
+    } else {
+        t = date_utc_from_local(t);
+    }
+    return t;
+}
+
+/** Parse a date string: ISO 8601 first, then the legacy toString/toUTCString
+ * forms. Returns the (un-clipped) time value, or NaN. */
+static f64 date_parse_units(const c16 *u, usize len) {
+    f64 t = date_parse_iso(u, len);
+    if (!isnan(t)) {
+        return t;
+    }
+    return date_parse_legacy(u, len);
 }
 
 // ---------------------------------------------------------------------------
@@ -751,6 +1026,10 @@ static MalValue date_set_time_fields(MalVm *vm, MalValue this_value, bool utc, c
     if (!date_this(vm, this_value, &date)) {
         return mal_value_new_undefined();
     }
+    // Spec reads [[DateValue]] BEFORE coercing the arguments, so a valueOf hook
+    // mutating this Date during ToNumber does not change the value the result is
+    // computed from (Date.prototype.setHours et al., steps "Let t be ...").
+    f64 tv = date->date_value;
     f64 vals[4] = {0, 0, 0, 0};
     bool present[4] = {false, false, false, false};
 
@@ -768,7 +1047,11 @@ static MalValue date_set_time_fields(MalVm *vm, MalValue this_value, bool utc, c
         }
     }
 
-    f64 tv = date->date_value;
+    // "If t is NaN, return NaN." - return without writing [[DateValue]] (which a
+    // valueOf hook may already have changed).
+    if (isnan(tv)) {
+        return mal_ops_number_value(NAN);
+    }
     f64 t = utc ? tv : date_local_time(tv);
     f64 h = present[0] ? vals[0] : date_hour_from_time(t);
     f64 m = present[1] ? vals[1] : date_min_from_time(t);
@@ -788,6 +1071,8 @@ static MalValue date_set_date_fields(MalVm *vm, MalValue this_value, bool utc, c
     if (!date_this(vm, this_value, &date)) {
         return mal_value_new_undefined();
     }
+    // Read [[DateValue]] before coercing arguments (see date_set_time_fields).
+    f64 tv = date->date_value;
     f64 vals[3] = {0, 0, 0};
     bool present[3] = {false, false, false};
 
@@ -805,11 +1090,16 @@ static MalValue date_set_date_fields(MalVm *vm, MalValue this_value, bool utc, c
         }
     }
 
-    f64 tv = date->date_value;
     f64 t;
     if (reset_nan) {
+        // setFullYear/setUTCFullYear: an invalid receiver resets t to +0 instead
+        // of returning NaN, so they always produce a valid date.
         t = isnan(tv) ? 0.0 : (utc ? tv : date_local_time(tv));
     } else {
+        // "If t is NaN, return NaN." - without writing [[DateValue]].
+        if (isnan(tv)) {
+            return mal_ops_number_value(NAN);
+        }
         t = utc ? tv : date_local_time(tv);
     }
     f64 year = present[0] ? vals[0] : date_year_from_time(t);

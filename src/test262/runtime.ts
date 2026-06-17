@@ -72,7 +72,7 @@ const SKIPPED_FEATURES = [
 	"explicit-resource-management",
 	"Temporal",
 ];
-const SKIPPED_PATHS = ["annexB", "intl402"];
+const SKIPPED_PATHS = ["annexB"];
 
 /**
  * Tests quarantined purely for suite speed: each is already failing AND pays a

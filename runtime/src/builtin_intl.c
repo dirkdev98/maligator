@@ -6,6 +6,7 @@
 
 #include "array_object.h"
 #include "builtin_date.h"
+#include "builtin_iterator.h"
 #include "heap_string.h"
 #include "intl_object.h"
 #include "intrinsics.h"
@@ -58,12 +59,17 @@ static bool intl_string_eq_ascii(const MalString *s, const char *ascii) {
 }
 
 /** Decode a UTF-8 byte buffer (ICU4X formatter output) into a JS UTF-16 string. */
-static MalValue intl_string_from_utf8(MalVm *vm, const byte *bytes, usize len) {
-    c16 *units = malloc(sizeof(c16) * (len + 1));
+static MalValue intl_string_from_utf8(MalVm *vm, const byte *raw, usize len) {
+    // `byte` is signed char: read each octet unsigned so the lead-byte
+    // classification (b < 0x80 / b & 0xE0 / ...) is correct for >= 0x80 bytes.
+    // A malformed octet can expand to a surrogate pair, so the buffer is sized
+    // for the 2-units-per-byte worst case.
+    const unsigned char *bytes = (const unsigned char *) raw;
+    c16 *units = malloc(sizeof(c16) * (2 * len + 1));
     usize n = 0;
     usize i = 0;
     while (i < len) {
-        byte b = bytes[i];
+        unsigned char b = bytes[i];
         u32 cp;
         if (b < 0x80) {
             cp = b;
@@ -641,10 +647,12 @@ static void intl_install_locale(MalVm *vm, MalObject *intl_object) {
 // Shared option + locale-resolution helpers (used by the formatter services)
 // ---------------------------------------------------------------------------
 
-/** GetOption(options, name, "string"): false on a pending throw. */
+/** GetOption(options, name, "string"): false on a pending throw. Reads through a
+ * primitive's prototype chain too (CoerceOptionsToObject semantics); only a
+ * null/undefined options bag is treated as "no options present". */
 static bool intl_option_string(MalVm *vm, MalValue options, const char *name, MalString **out, bool *present) {
     *present = false;
-    if (!mal_value_is_object(options)) {
+    if (mal_value_is_undefined(options) || mal_value_is_null(options)) {
         return true;
     }
     MalValue value;
@@ -661,11 +669,12 @@ static bool intl_option_string(MalVm *vm, MalValue options, const char *name, Ma
     return true;
 }
 
-/** GetOption(options, name, "boolean"). */
+/** GetOption(options, name, "boolean"). Reads through a primitive's prototype
+ * chain too; only a null/undefined options bag is "no options present". */
 static bool intl_option_bool(MalVm *vm, MalValue options, const char *name, bool *out, bool *present) {
     *present = false;
     *out = false;
-    if (!mal_value_is_object(options)) {
+    if (mal_value_is_undefined(options) || mal_value_is_null(options)) {
         return true;
     }
     MalValue value;
@@ -678,6 +687,114 @@ static bool intl_option_bool(MalVm *vm, MalValue options, const char *name, bool
     *out = mal_value_is_truthy(value);
     *present = true;
     return true;
+}
+
+/**
+ * GetOption(options, name, "string", values, fallback): returns the matched
+ * value (interned), validating membership in `values` and throwing RangeError
+ * otherwise. `fallback` (may be null) is returned when the option is absent.
+ * Sets *ok=false on a pending throw.
+ */
+static MalString *intl_option_enum(
+    MalVm *vm, MalValue options, const char *name, const char *const *values, usize value_count, const char *fallback, bool *ok
+) {
+    *ok = true;
+    bool present;
+    MalString *value = nullptr;
+    if (!intl_option_string(vm, options, name, &value, &present)) {
+        *ok = false;
+        return nullptr;
+    }
+    if (!present || value == nullptr) {
+        return fallback != nullptr ? mal_intrinsic_ascii(vm, (const byte *) fallback) : nullptr;
+    }
+    for (usize i = 0; i < value_count; i++) {
+        if (intl_string_eq_ascii(value, values[i])) {
+            return mal_intrinsic_ascii(vm, (const byte *) values[i]);
+        }
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid option value");
+    *ok = false;
+    return nullptr;
+}
+
+/**
+ * IsWellFormedUnicodeBcp47TypeNonterminal: one or more "-"-separated segments of
+ * 3..8 alphanumerics (the `type` production used for numberingSystem/calendar/
+ * collation options).
+ */
+static bool intl_is_valid_numbering_system(const MalString *s) {
+    usize n = mal_string_length(s);
+    const c16 *u = mal_string_code_units(s);
+    usize seg = 0;
+    usize i = 0;
+    while (i <= n) {
+        if (i == n || u[i] == '-') {
+            if (seg < 3 || seg > 8) {
+                return false;
+            }
+            seg = 0;
+            i++;
+            continue;
+        }
+        c16 c = u[i];
+        bool alnum = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+        if (!alnum) {
+            return false;
+        }
+        seg++;
+        i++;
+    }
+    return n > 0;
+}
+
+/**
+ * GetOptionsObject(options): undefined -> a fresh options object; an Object ->
+ * itself; any other value -> TypeError. Returns false with a pending throw.
+ */
+static bool intl_get_options_object(MalVm *vm, MalValue options, MalValue *out) {
+    if (mal_value_is_undefined(options)) {
+        // OrdinaryObjectCreate(null): a null-prototype bag so option reads do not
+        // observe getters installed on Object.prototype.
+        *out = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+        return true;
+    }
+    if (mal_value_is_object(options)) {
+        *out = options;
+        return true;
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "options must be an object");
+    return false;
+}
+
+/** GetOption(options, "localeMatcher", «"lookup","best fit"», "best fit"); value ignored. */
+static bool intl_check_locale_matcher(MalVm *vm, MalValue options) {
+    static const char *const values[] = {"lookup", "best fit"};
+    bool ok;
+    intl_option_enum(vm, options, "localeMatcher", values, countof(values), "best fit", &ok);
+    return ok;
+}
+
+/**
+ * Shared `<Service>.supportedLocalesOf(locales, options)`: CanonicalizeLocaleList
+ * then validate the options bag (null -> TypeError; localeMatcher validated).
+ * With all-locales compiled data we "support" every requested locale, so the
+ * canonical list is returned as-is.
+ */
+static MalValue intl_supported_locales_of_impl(MalVm *vm, const MalValue *args, i32 arg_count) {
+    MalArrayObject *result = intl_canonicalize_locale_list(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    if (result == nullptr) {
+        return mal_value_new_undefined();
+    }
+    MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    if (mal_value_is_null(options)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "options must be an object");
+        return mal_value_new_undefined();
+    }
+    if (!intl_check_locale_matcher(vm, options)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_array_object(result);
 }
 
 /** ResolveLocale (simplified): the first canonical requested locale, else "en-US". */
@@ -874,11 +991,7 @@ static MalValue intl_collator_supported_locales_of(MalVm *vm, MalValue this_valu
     (void) this_value;
     (void) nt;
     (void) cl;
-    MalArrayObject *result = intl_canonicalize_locale_list(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
-    if (result == nullptr) {
-        return mal_value_new_undefined();
-    }
-    return mal_value_from_array_object(result);
+    return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
 /**
@@ -1019,11 +1132,7 @@ static MalValue intl_plural_rules_supported_locales_of(MalVm *vm, MalValue this_
     (void) this_value;
     (void) nt;
     (void) cl;
-    MalArrayObject *result = intl_canonicalize_locale_list(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
-    if (result == nullptr) {
-        return mal_value_new_undefined();
-    }
-    return mal_value_from_array_object(result);
+    return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
 static void intl_install_plural_rules(MalVm *vm, MalObject *intl_object) {
@@ -1257,11 +1366,7 @@ static MalValue intl_number_format_supported_locales_of(MalVm *vm, MalValue this
     (void) this_value;
     (void) nt;
     (void) cl;
-    MalArrayObject *result = intl_canonicalize_locale_list(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
-    if (result == nullptr) {
-        return mal_value_new_undefined();
-    }
-    return mal_value_from_array_object(result);
+    return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
 MalValue mal_intl_number_to_locale_string(MalVm *vm, f64 number, MalValue locales, MalValue options) {
@@ -1451,15 +1556,104 @@ static MalValue intl_date_time_format_resolved_options(MalVm *vm, MalValue this_
     return intl_resolved_copy(vm, dtf->data, keys, countof(keys));
 }
 
+/** A date-range endpoint: ToNumber, then RangeError on a non-finite value. The
+ * caller has already rejected undefined endpoints. false on a pending throw. */
+static bool intl_date_range_arg(MalVm *vm, MalValue arg, f64 *out) {
+    if (!mal_vm_to_number(vm, arg, out)) {
+        return false;
+    }
+    if (!isfinite(*out)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid time value");
+        return false;
+    }
+    return true;
+}
+
+/** PartitionDateTimeRangePattern (approximate): format both endpoints and join
+ * them. ICU's smart interval collapsing is a TODO; this produces a correct,
+ * readable range string and the right argument-validation behavior. */
+static MalValue intl_date_time_format_range_string(MalVm *vm, MalIntlObject *dtf, MalValue start_arg, MalValue end_arg) {
+    if (mal_value_is_undefined(start_arg) || mal_value_is_undefined(end_arg)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "formatRange requires two arguments");
+        return mal_value_new_undefined();
+    }
+    f64 start;
+    f64 end;
+    if (!intl_date_range_arg(vm, start_arg, &start) || !intl_date_range_arg(vm, end_arg, &end)) {
+        return mal_value_new_undefined();
+    }
+    MalString *locale = intl_data_string(vm, dtf->data, "locale");
+    i32 date_code = intl_data_int(vm, dtf->data, "dateStyleCode", 2);
+    i32 time_code = intl_data_int(vm, dtf->data, "timeStyleCode", -1);
+    MalValue start_str = intl_datetime_format_epoch(vm, locale, start, date_code, time_code);
+    if (!mal_value_is_string(start_str)) {
+        return mal_value_new_undefined();
+    }
+    if (start == end) {
+        return start_str;
+    }
+    MalValue end_str = intl_datetime_format_epoch(vm, locale, end, date_code, time_code);
+    if (!mal_value_is_string(end_str)) {
+        return mal_value_new_undefined();
+    }
+    // Join with " – " (spaced en dash), the common interval separator.
+    MalString *a = mal_value_to_string(start_str);
+    MalString *b = mal_value_to_string(end_str);
+    usize an = mal_string_length(a);
+    usize bn = mal_string_length(b);
+    usize total = an + 3 + bn;
+    c16 *buf = malloc(sizeof(c16) * total);
+    memcpy(buf, mal_string_code_units(a), an * sizeof(c16));
+    buf[an] = ' ';
+    buf[an + 1] = 0x2013;
+    buf[an + 2] = ' ';
+    memcpy(buf + an + 3, mal_string_code_units(b), bn * sizeof(c16));
+    MalValue result = mal_value_from_string(mal_string_new_copy(&vm->heap, buf, total));
+    free(buf);
+    return result;
+}
+
+static MalValue intl_date_time_format_range(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) nt;
+    (void) cl;
+    MalIntlObject *dtf;
+    if (!intl_this(vm, this_value, MAL_INTL_DATE_TIME_FORMAT, &dtf, "Intl.DateTimeFormat.prototype.formatRange called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    return intl_date_time_format_range_string(
+        vm, dtf, arg_count >= 1 ? args[0] : mal_value_new_undefined(), arg_count >= 2 ? args[1] : mal_value_new_undefined()
+    );
+}
+
+static MalValue intl_date_time_format_range_to_parts(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) nt;
+    (void) cl;
+    MalIntlObject *dtf;
+    if (!intl_this(vm, this_value, MAL_INTL_DATE_TIME_FORMAT, &dtf, "Intl.DateTimeFormat.prototype.formatRangeToParts called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    MalValue formatted = intl_date_time_format_range_string(
+        vm, dtf, arg_count >= 1 ? args[0] : mal_value_new_undefined(), arg_count >= 2 ? args[1] : mal_value_new_undefined()
+    );
+    if (!mal_value_is_string(formatted)) {
+        return mal_value_new_undefined();
+    }
+    // Best-effort: a single literal part (exact field decomposition + source
+    // tagging need ICU field positions, which the shim does not yet expose).
+    MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
+    MalObject *part = mal_intrinsic_new_object(vm);
+    intl_resolved_set(vm, part, "type", mal_value_from_string(mal_intrinsic_ascii(vm, "literal")));
+    intl_resolved_set(vm, part, "value", formatted);
+    intl_resolved_set(vm, part, "source", mal_value_from_string(mal_intrinsic_ascii(vm, "shared")));
+    intl_array_push(vm, parts, 0, mal_value_from_object(part));
+    return mal_value_from_array_object(parts);
+}
+
 static MalValue intl_date_time_format_supported_locales_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
     (void) this_value;
     (void) nt;
     (void) cl;
-    MalArrayObject *result = intl_canonicalize_locale_list(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
-    if (result == nullptr) {
-        return mal_value_new_undefined();
-    }
-    return mal_value_from_array_object(result);
+    return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
 MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue locales, MalValue options, i32 which) {
@@ -1516,9 +1710,1374 @@ static void intl_install_date_time_format(MalVm *vm, MalObject *intl_object) {
 
     mal_intrinsic_define_method_n(vm, constructor_object, "supportedLocalesOf", 1, intl_date_time_format_supported_locales_of);
     intl_define_getter(vm, prototype, "format", intl_date_time_format_get_format);
+    mal_intrinsic_define_method_n(vm, prototype, "formatRange", 2, intl_date_time_format_range);
+    mal_intrinsic_define_method_n(vm, prototype, "formatRangeToParts", 2, intl_date_time_format_range_to_parts);
     mal_intrinsic_define_method_n(vm, prototype, "resolvedOptions", 0, intl_date_time_format_resolved_options);
 
     mal_intrinsic_define_data(vm, intl_object, "DateTimeFormat", vm->intrinsics[MAL_INTRINSIC_INTL_DATE_TIME_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+}
+
+// ---------------------------------------------------------------------------
+// Intl.ListFormat — icu::list (conjunction/disjunction/unit; long/short/narrow).
+// ---------------------------------------------------------------------------
+
+static i32 intl_list_type_code(const MalString *type) {
+    if (type != nullptr && intl_string_eq_ascii(type, "disjunction")) {
+        return 1;
+    }
+    if (type != nullptr && intl_string_eq_ascii(type, "unit")) {
+        return 2;
+    }
+    return 0; // conjunction
+}
+
+static i32 intl_list_length_code(const MalString *style) {
+    if (style != nullptr && intl_string_eq_ascii(style, "short")) {
+        return 1;
+    }
+    if (style != nullptr && intl_string_eq_ascii(style, "narrow")) {
+        return 2;
+    }
+    return 0; // long
+}
+
+static MalValue intl_list_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) callee;
+    if (mal_value_is_undefined(new_target)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Intl.ListFormat must be called with new");
+        return mal_value_new_undefined();
+    }
+    MalValue locales = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+
+    MalString *locale = intl_resolve_locale(vm, locales);
+    if (locale == nullptr) {
+        return mal_value_new_undefined();
+    }
+    if (!intl_get_options_object(vm, options, &options)) {
+        return mal_value_new_undefined();
+    }
+    if (!intl_check_locale_matcher(vm, options)) {
+        return mal_value_new_undefined();
+    }
+    static const char *const TYPES[] = {"conjunction", "disjunction", "unit"};
+    static const char *const STYLES[] = {"long", "short", "narrow"};
+    bool ok;
+    MalString *type = intl_option_enum(vm, options, "type", TYPES, countof(TYPES), "conjunction", &ok);
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
+    MalString *style = intl_option_enum(vm, options, "style", STYLES, countof(STYLES), "long", &ok);
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
+
+    MalObject *resolved = mal_intrinsic_new_object(vm);
+    intl_resolved_set(vm, resolved, "locale", mal_value_from_string(locale));
+    intl_resolved_set(vm, resolved, "type", mal_value_from_string(type));
+    intl_resolved_set(vm, resolved, "style", mal_value_from_string(style));
+
+    MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_LIST_FORMAT_PROTOTYPE);
+    if (prototype == nullptr) {
+        return mal_value_new_undefined();
+    }
+    MalIntlObject *lf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_LIST_FORMAT, nullptr, mal_value_from_object(resolved));
+    return mal_value_from_intl_object(lf);
+}
+
+/**
+ * StringListFromIterable: drain `iterable` into a fresh array of String values,
+ * throwing TypeError if any element is not a String. Returns the array (length
+ * in *count_out), or null with a pending throw.
+ */
+static MalArrayObject *intl_string_list_from_iterable(MalVm *vm, MalValue iterable, u32 *count_out) {
+    MalArrayObject *list = mal_intrinsic_new_array(vm, 0);
+    *count_out = 0;
+    if (mal_value_is_undefined(iterable)) {
+        return list;
+    }
+    MalIteratorRecord record;
+    if (!mal_vm_get_iterator(vm, iterable, &record)) {
+        return nullptr;
+    }
+    u32 count = 0;
+    while (true) {
+        MalValue item;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &item, &done)) {
+            return nullptr;
+        }
+        if (done) {
+            break;
+        }
+        if (!mal_value_is_string(item)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Intl.ListFormat list element must be a String");
+            mal_vm_iterator_close(vm, &record);
+            return nullptr;
+        }
+        intl_array_push(vm, list, count++, item);
+    }
+    *count_out = count;
+    return list;
+}
+
+/** Read a String array of `count` elements into a freshly-malloc'd MalU16Str[]. */
+static MalU16Str *intl_collect_u16(MalVm *vm, MalArrayObject *list, u32 count) {
+    if (count == 0) {
+        return nullptr;
+    }
+    MalU16Str *items = malloc(sizeof(MalU16Str) * count);
+    for (u32 i = 0; i < count; i++) {
+        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+        MalValue element;
+        mal_vm_get_property(vm, mal_value_from_array_object(list), key, &element);
+        MalString *s = mal_value_to_string(element);
+        items[i].ptr = (const uint16_t *) mal_string_code_units(s);
+        items[i].len = mal_string_length(s);
+    }
+    return items;
+}
+
+static MalValue intl_list_format_do(MalVm *vm, MalIntlObject *lf, MalArrayObject *list, u32 count) {
+    MalString *locale = intl_data_string(vm, lf->data, "locale");
+    i32 type_code = intl_list_type_code(intl_data_string(vm, lf->data, "type"));
+    i32 length_code = intl_list_length_code(intl_data_string(vm, lf->data, "style"));
+    MalU16Str *items = intl_collect_u16(vm, list, count);
+    byte locale_buf[160];
+    usize locale_len = 0;
+    if (locale != nullptr) {
+        intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len);
+    }
+    byte out[512];
+    i32 n = mal_i18n_list_format(locale_buf, locale_len, type_code, length_code, items, count, out, (i32) sizeof(out));
+    MalValue result;
+    if (n < 0) {
+        free(items);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format list");
+        return mal_value_new_undefined();
+    }
+    if (n <= (i32) sizeof(out)) {
+        result = intl_string_from_utf8(vm, out, (usize) n);
+    } else {
+        byte *big = malloc((usize) n);
+        mal_i18n_list_format(locale_buf, locale_len, type_code, length_code, items, count, big, n);
+        result = intl_string_from_utf8(vm, big, (usize) n);
+        free(big);
+    }
+    free(items);
+    return result;
+}
+
+static MalValue intl_list_format_format(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) nt;
+    (void) cl;
+    MalIntlObject *lf;
+    if (!intl_this(vm, this_value, MAL_INTL_LIST_FORMAT, &lf, "Intl.ListFormat.prototype.format called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    u32 count;
+    MalArrayObject *list = intl_string_list_from_iterable(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &count);
+    if (list == nullptr) {
+        return mal_value_new_undefined();
+    }
+    return intl_list_format_do(vm, lf, list, count);
+}
+
+/** Find `needle` in `hay` at/after `from` (UTF-16). Returns index, or -1. */
+static i64 intl_string_index_of(const MalString *hay, const MalString *needle, usize from) {
+    usize hn = mal_string_length(hay);
+    usize nn = mal_string_length(needle);
+    const c16 *h = mal_string_code_units(hay);
+    const c16 *p = mal_string_code_units(needle);
+    if (nn == 0) {
+        return (i64) from;
+    }
+    if (nn > hn) {
+        return -1;
+    }
+    for (usize i = from; i + nn <= hn; i++) {
+        bool eq = true;
+        for (usize j = 0; j < nn; j++) {
+            if (h[i + j] != p[j]) {
+                eq = false;
+                break;
+            }
+        }
+        if (eq) {
+            return (i64) i;
+        }
+    }
+    return -1;
+}
+
+static void intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, const char *type, MalValue value) {
+    MalObject *part = mal_intrinsic_new_object(vm);
+    intl_resolved_set(vm, part, "type", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) type)));
+    intl_resolved_set(vm, part, "value", value);
+    intl_array_push(vm, parts, (*index)++, mal_value_from_object(part));
+}
+
+static MalValue intl_substring(MalVm *vm, const MalString *s, usize start, usize end) {
+    return mal_value_from_string(mal_string_new_copy(&vm->heap, mal_string_code_units(s) + start, end - start));
+}
+
+static MalValue intl_list_format_format_to_parts(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) nt;
+    (void) cl;
+    MalIntlObject *lf;
+    if (!intl_this(vm, this_value, MAL_INTL_LIST_FORMAT, &lf, "Intl.ListFormat.prototype.formatToParts called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    u32 count;
+    MalArrayObject *list = intl_string_list_from_iterable(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &count);
+    if (list == nullptr) {
+        return mal_value_new_undefined();
+    }
+    MalValue formatted_value = intl_list_format_do(vm, lf, list, count);
+    if (!mal_value_is_string(formatted_value)) {
+        return mal_value_new_undefined();
+    }
+    MalString *formatted = mal_value_to_string(formatted_value);
+
+    // Reconstruct parts by matching each element left-to-right; the text between
+    // matches is the locale's "literal" separator.
+    MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
+    u32 part_index = 0;
+    usize cursor = 0;
+    for (u32 i = 0; i < count; i++) {
+        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+        MalValue element;
+        mal_vm_get_property(vm, mal_value_from_array_object(list), key, &element);
+        MalString *el = mal_value_to_string(element);
+        i64 pos = intl_string_index_of(formatted, el, cursor);
+        if (pos < 0) {
+            pos = (i64) cursor;
+        }
+        if ((usize) pos > cursor) {
+            intl_parts_push(vm, parts, &part_index, "literal", intl_substring(vm, formatted, cursor, (usize) pos));
+        }
+        intl_parts_push(vm, parts, &part_index, "element", mal_value_from_string(el));
+        cursor = (usize) pos + mal_string_length(el);
+    }
+    if (cursor < mal_string_length(formatted)) {
+        intl_parts_push(vm, parts, &part_index, "literal", intl_substring(vm, formatted, cursor, mal_string_length(formatted)));
+    }
+    return mal_value_from_array_object(parts);
+}
+
+static MalValue intl_list_format_resolved_options(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) args;
+    (void) arg_count;
+    (void) nt;
+    (void) cl;
+    MalIntlObject *lf;
+    if (!intl_this(vm, this_value, MAL_INTL_LIST_FORMAT, &lf, "Intl.ListFormat.prototype.resolvedOptions called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    static const char *const keys[] = {"locale", "type", "style"};
+    return intl_resolved_copy(vm, lf->data, keys, countof(keys));
+}
+
+static MalValue intl_list_format_supported_locales_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) this_value;
+    (void) nt;
+    (void) cl;
+    return intl_supported_locales_of_impl(vm, args, arg_count);
+}
+
+static void intl_install_list_format(MalVm *vm, MalObject *intl_object) {
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "ListFormat"), 0, intl_list_format_constructor
+    );
+    MalObject *constructor_object = (MalObject *) constructor;
+
+    vm->intrinsics[MAL_INTRINSIC_INTL_LIST_FORMAT_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
+    vm->intrinsics[MAL_INTRINSIC_INTL_LIST_FORMAT_PROTOTYPE] = mal_value_from_object(prototype);
+
+    mal_intrinsic_define_data(vm, constructor_object, "prototype", vm->intrinsics[MAL_INTRINSIC_INTL_LIST_FORMAT_PROTOTYPE], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_INTL_LIST_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    intl_set_to_string_tag(vm, prototype, "Intl.ListFormat");
+
+    mal_intrinsic_define_method_n(vm, constructor_object, "supportedLocalesOf", 1, intl_list_format_supported_locales_of);
+    mal_intrinsic_define_method_n(vm, prototype, "format", 1, intl_list_format_format);
+    mal_intrinsic_define_method_n(vm, prototype, "formatToParts", 1, intl_list_format_format_to_parts);
+    mal_intrinsic_define_method_n(vm, prototype, "resolvedOptions", 0, intl_list_format_resolved_options);
+
+    mal_intrinsic_define_data(vm, intl_object, "ListFormat", vm->intrinsics[MAL_INTRINSIC_INTL_LIST_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+}
+
+// ---------------------------------------------------------------------------
+// Intl.DisplayNames — icu::experimental::displaynames (region/script/language).
+// ---------------------------------------------------------------------------
+
+static MalValue intl_display_names_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) callee;
+    if (mal_value_is_undefined(new_target)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Intl.DisplayNames must be called with new");
+        return mal_value_new_undefined();
+    }
+    MalValue locales = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+
+    MalString *locale = intl_resolve_locale(vm, locales);
+    if (locale == nullptr) {
+        return mal_value_new_undefined();
+    }
+    // DisplayNames uses GetOptionsObject (options is required).
+    if (!intl_get_options_object(vm, options, &options)) {
+        return mal_value_new_undefined();
+    }
+    if (!intl_check_locale_matcher(vm, options)) {
+        return mal_value_new_undefined();
+    }
+
+    static const char *const STYLES[] = {"narrow", "short", "long"};
+    static const char *const TYPES[] = {"language", "region", "script", "currency", "calendar", "dateTimeField"};
+    static const char *const FALLBACKS[] = {"code", "none"};
+    static const char *const LANG_DISPLAY[] = {"dialect", "standard"};
+    bool ok;
+    MalString *style = intl_option_enum(vm, options, "style", STYLES, countof(STYLES), "long", &ok);
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
+    // `type` is required (no fallback) -> RangeError("undefined ... type").
+    MalString *type = intl_option_enum(vm, options, "type", TYPES, countof(TYPES), nullptr, &ok);
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
+    if (type == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Intl.DisplayNames type option is required");
+        return mal_value_new_undefined();
+    }
+    MalString *fallback = intl_option_enum(vm, options, "fallback", FALLBACKS, countof(FALLBACKS), "code", &ok);
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
+    MalString *language_display = intl_option_enum(vm, options, "languageDisplay", LANG_DISPLAY, countof(LANG_DISPLAY), "dialect", &ok);
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
+
+    MalObject *resolved = mal_intrinsic_new_object(vm);
+    intl_resolved_set(vm, resolved, "locale", mal_value_from_string(locale));
+    intl_resolved_set(vm, resolved, "style", mal_value_from_string(style));
+    intl_resolved_set(vm, resolved, "type", mal_value_from_string(type));
+    intl_resolved_set(vm, resolved, "fallback", mal_value_from_string(fallback));
+    // languageDisplay is only present in resolvedOptions when type is "language".
+    if (intl_string_eq_ascii(type, "language")) {
+        intl_resolved_set(vm, resolved, "languageDisplay", mal_value_from_string(language_display));
+    }
+
+    MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_DISPLAY_NAMES_PROTOTYPE);
+    if (prototype == nullptr) {
+        return mal_value_new_undefined();
+    }
+    MalIntlObject *dn = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_DISPLAY_NAMES, nullptr, mal_value_from_object(resolved));
+    return mal_value_from_intl_object(dn);
+}
+
+static MalValue intl_display_names_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) nt;
+    (void) cl;
+    MalIntlObject *dn;
+    if (!intl_this(vm, this_value, MAL_INTL_DISPLAY_NAMES, &dn, "Intl.DisplayNames.prototype.of called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    MalString *code;
+    if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &code)) {
+        return mal_value_new_undefined();
+    }
+    MalString *type = intl_data_string(vm, dn->data, "type");
+    MalString *style = intl_data_string(vm, dn->data, "style");
+    MalString *fallback = intl_data_string(vm, dn->data, "fallback");
+    MalString *locale = intl_data_string(vm, dn->data, "locale");
+
+    i32 kind;
+    if (type != nullptr && intl_string_eq_ascii(type, "region")) {
+        kind = 0;
+    } else if (type != nullptr && intl_string_eq_ascii(type, "script")) {
+        kind = 1;
+    } else if (type != nullptr && intl_string_eq_ascii(type, "language")) {
+        kind = 2;
+    } else {
+        // currency/calendar/dateTimeField: not backed by ICU here -> Fallback.
+        kind = -1;
+    }
+    i32 style_code = 0;
+    if (style != nullptr && intl_string_eq_ascii(style, "short")) {
+        style_code = 1;
+    } else if (style != nullptr && intl_string_eq_ascii(style, "narrow")) {
+        style_code = 2;
+    }
+
+    byte locale_buf[160];
+    usize locale_len = 0;
+    if (locale != nullptr) {
+        intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len);
+    }
+    byte code_buf[128];
+    usize code_len;
+    if (!intl_tag_utf8(code, code_buf, sizeof(code_buf), &code_len)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid code");
+        return mal_value_new_undefined();
+    }
+    byte out[256];
+    i32 n = kind >= 0 ? mal_i18n_display_name(locale_buf, locale_len, kind, style_code, code_buf, code_len, out, (i32) sizeof(out)) : -1;
+    if (n == -2) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid code for Intl.DisplayNames");
+        return mal_value_new_undefined();
+    }
+    if (n >= 0) {
+        if (n <= (i32) sizeof(out)) {
+            return intl_string_from_utf8(vm, out, (usize) n);
+        }
+        byte *big = malloc((usize) n);
+        mal_i18n_display_name(locale_buf, locale_len, kind, style_code, code_buf, code_len, big, n);
+        MalValue result = intl_string_from_utf8(vm, big, (usize) n);
+        free(big);
+        return result;
+    }
+    // No name found: "code" fallback returns the (canonicalized) code; "none"
+    // returns undefined.
+    if (fallback != nullptr && intl_string_eq_ascii(fallback, "none")) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(code);
+}
+
+static MalValue intl_display_names_resolved_options(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) args;
+    (void) arg_count;
+    (void) nt;
+    (void) cl;
+    MalIntlObject *dn;
+    if (!intl_this(vm, this_value, MAL_INTL_DISPLAY_NAMES, &dn, "Intl.DisplayNames.prototype.resolvedOptions called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    static const char *const keys[] = {"locale", "style", "type", "fallback", "languageDisplay"};
+    return intl_resolved_copy(vm, dn->data, keys, countof(keys));
+}
+
+static MalValue intl_display_names_supported_locales_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) this_value;
+    (void) nt;
+    (void) cl;
+    return intl_supported_locales_of_impl(vm, args, arg_count);
+}
+
+static void intl_install_display_names(MalVm *vm, MalObject *intl_object) {
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "DisplayNames"), 2, intl_display_names_constructor
+    );
+    MalObject *constructor_object = (MalObject *) constructor;
+
+    vm->intrinsics[MAL_INTRINSIC_INTL_DISPLAY_NAMES_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
+    vm->intrinsics[MAL_INTRINSIC_INTL_DISPLAY_NAMES_PROTOTYPE] = mal_value_from_object(prototype);
+
+    mal_intrinsic_define_data(vm, constructor_object, "prototype", vm->intrinsics[MAL_INTRINSIC_INTL_DISPLAY_NAMES_PROTOTYPE], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_INTL_DISPLAY_NAMES_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    intl_set_to_string_tag(vm, prototype, "Intl.DisplayNames");
+
+    mal_intrinsic_define_method_n(vm, constructor_object, "supportedLocalesOf", 1, intl_display_names_supported_locales_of);
+    mal_intrinsic_define_method_n(vm, prototype, "of", 1, intl_display_names_of);
+    mal_intrinsic_define_method_n(vm, prototype, "resolvedOptions", 0, intl_display_names_resolved_options);
+
+    mal_intrinsic_define_data(vm, intl_object, "DisplayNames", vm->intrinsics[MAL_INTRINSIC_INTL_DISPLAY_NAMES_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+}
+
+// ---------------------------------------------------------------------------
+// Intl.RelativeTimeFormat — icu::experimental::relativetime.
+// ---------------------------------------------------------------------------
+
+/** SingularRelativeTimeUnit: map a unit string (singular or plural) to 0..7, or -1. */
+static i32 intl_relative_unit_code(const MalString *unit) {
+    static const char *const SINGULAR[8] = {"second", "minute", "hour", "day", "week", "month", "quarter", "year"};
+    static const char *const PLURAL[8] = {"seconds", "minutes", "hours", "days", "weeks", "months", "quarters", "years"};
+    for (i32 i = 0; i < 8; i++) {
+        if (intl_string_eq_ascii(unit, SINGULAR[i]) || intl_string_eq_ascii(unit, PLURAL[i])) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static MalValue intl_relative_time_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) callee;
+    if (mal_value_is_undefined(new_target)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Intl.RelativeTimeFormat must be called with new");
+        return mal_value_new_undefined();
+    }
+    MalValue locales = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+
+    MalString *locale = intl_resolve_locale(vm, locales);
+    if (locale == nullptr) {
+        return mal_value_new_undefined();
+    }
+    // RelativeTimeFormat uses CoerceOptionsToObject: a primitive options bag is
+    // read through its prototype chain (the option readers handle that); only
+    // null throws.
+    if (mal_value_is_null(options)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "options must be an object");
+        return mal_value_new_undefined();
+    }
+    if (!intl_check_locale_matcher(vm, options)) {
+        return mal_value_new_undefined();
+    }
+
+    // GetOption order (per options-order): localeMatcher, numeric, style, then
+    // the numberingSystem option (which we validate but do not yet apply).
+    static const char *const NUMERICS[] = {"always", "auto"};
+    static const char *const STYLES[] = {"long", "short", "narrow"};
+    bool ok;
+    MalString *numeric = intl_option_enum(vm, options, "numeric", NUMERICS, countof(NUMERICS), "always", &ok);
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
+    MalString *style = intl_option_enum(vm, options, "style", STYLES, countof(STYLES), "long", &ok);
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
+    bool ns_present;
+    MalString *numbering_system = nullptr;
+    if (!intl_option_string(vm, options, "numberingSystem", &numbering_system, &ns_present)) {
+        return mal_value_new_undefined();
+    }
+    if (ns_present && !intl_is_valid_numbering_system(numbering_system)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid numberingSystem");
+        return mal_value_new_undefined();
+    }
+
+    MalObject *resolved = mal_intrinsic_new_object(vm);
+    intl_resolved_set(vm, resolved, "locale", mal_value_from_string(locale));
+    intl_resolved_set(vm, resolved, "style", mal_value_from_string(style));
+    intl_resolved_set(vm, resolved, "numeric", mal_value_from_string(numeric));
+    intl_resolved_set(vm, resolved, "numberingSystem", mal_value_from_string(mal_intrinsic_ascii(vm, "latn")));
+
+    MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_RELATIVE_TIME_FORMAT_PROTOTYPE);
+    if (prototype == nullptr) {
+        return mal_value_new_undefined();
+    }
+    MalIntlObject *rtf = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_RELATIVE_TIME_FORMAT, nullptr, mal_value_from_object(resolved));
+    return mal_value_from_intl_object(rtf);
+}
+
+/** Shared format core: returns the formatted string, or undefined + pending throw. */
+static MalValue intl_relative_time_do(MalVm *vm, MalIntlObject *rtf, MalValue value_arg, MalValue unit_arg) {
+    f64 value;
+    if (!mal_vm_to_number(vm, value_arg, &value)) {
+        return mal_value_new_undefined();
+    }
+    if (!isfinite(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Intl.RelativeTimeFormat value must be finite");
+        return mal_value_new_undefined();
+    }
+    MalString *unit;
+    if (!mal_vm_to_string(vm, unit_arg, &unit)) {
+        return mal_value_new_undefined();
+    }
+    i32 unit_code = intl_relative_unit_code(unit);
+    if (unit_code < 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid unit for Intl.RelativeTimeFormat");
+        return mal_value_new_undefined();
+    }
+    MalString *locale = intl_data_string(vm, rtf->data, "locale");
+    MalString *style = intl_data_string(vm, rtf->data, "style");
+    MalString *numeric = intl_data_string(vm, rtf->data, "numeric");
+    i32 length_code = 0;
+    if (style != nullptr && intl_string_eq_ascii(style, "short")) {
+        length_code = 1;
+    } else if (style != nullptr && intl_string_eq_ascii(style, "narrow")) {
+        length_code = 2;
+    }
+    i32 numeric_auto = numeric != nullptr && intl_string_eq_ascii(numeric, "auto") ? 1 : 0;
+
+    byte locale_buf[160];
+    usize locale_len = 0;
+    if (locale != nullptr) {
+        intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len);
+    }
+    byte out[256];
+    i32 n = mal_i18n_relative_time(locale_buf, locale_len, length_code, unit_code, numeric_auto, value, out, (i32) sizeof(out));
+    if (n < 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format relative time");
+        return mal_value_new_undefined();
+    }
+    if (n <= (i32) sizeof(out)) {
+        return intl_string_from_utf8(vm, out, (usize) n);
+    }
+    byte *big = malloc((usize) n);
+    mal_i18n_relative_time(locale_buf, locale_len, length_code, unit_code, numeric_auto, value, big, n);
+    MalValue result = intl_string_from_utf8(vm, big, (usize) n);
+    free(big);
+    return result;
+}
+
+static MalValue intl_relative_time_format_format(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) nt;
+    (void) cl;
+    MalIntlObject *rtf;
+    if (!intl_this(vm, this_value, MAL_INTL_RELATIVE_TIME_FORMAT, &rtf, "Intl.RelativeTimeFormat.prototype.format called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    return intl_relative_time_do(
+        vm, rtf, arg_count >= 1 ? args[0] : mal_value_new_undefined(), arg_count >= 2 ? args[1] : mal_value_new_undefined()
+    );
+}
+
+static MalValue intl_relative_time_format_format_to_parts(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) nt;
+    (void) cl;
+    MalIntlObject *rtf;
+    if (!intl_this(vm, this_value, MAL_INTL_RELATIVE_TIME_FORMAT, &rtf, "Intl.RelativeTimeFormat.prototype.formatToParts called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    // Coerce value first (to surface the integer substring we split out).
+    f64 value;
+    if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &value)) {
+        return mal_value_new_undefined();
+    }
+    MalValue formatted_value = intl_relative_time_do(
+        vm, rtf, arg_count >= 1 ? args[0] : mal_value_new_undefined(), arg_count >= 2 ? args[1] : mal_value_new_undefined()
+    );
+    if (!mal_value_is_string(formatted_value)) {
+        return mal_value_new_undefined();
+    }
+    MalString *formatted = mal_value_to_string(formatted_value);
+    MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
+    u32 part_index = 0;
+
+    // Locate the integer rendering of |value| and split it out as an "integer"
+    // part (with `unit`); the rest is "literal". Auto numeric ("yesterday") has
+    // no number, yielding a single literal part.
+    byte numbuf[32];
+    i32 nb = snprintf((char *) numbuf, sizeof(numbuf), "%.0f", value < 0 ? -value : value);
+    MalString *num = mal_string_new_ascii(&vm->heap, numbuf, (usize) (nb < 0 ? 0 : nb));
+    i64 pos = intl_string_index_of(formatted, num, 0);
+    if (pos < 0 || mal_string_length(num) == 0) {
+        if (mal_string_length(formatted) > 0) {
+            intl_parts_push(vm, parts, &part_index, "literal", formatted_value);
+        }
+        return mal_value_from_array_object(parts);
+    }
+    MalString *unit;
+    if (!mal_vm_to_string(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), &unit)) {
+        return mal_value_new_undefined();
+    }
+    if ((usize) pos > 0) {
+        intl_parts_push(vm, parts, &part_index, "literal", intl_substring(vm, formatted, 0, (usize) pos));
+    }
+    // The "integer" part carries a `unit` field (singular unit name).
+    {
+        MalObject *part = mal_intrinsic_new_object(vm);
+        intl_resolved_set(vm, part, "type", mal_value_from_string(mal_intrinsic_ascii(vm, "integer")));
+        intl_resolved_set(vm, part, "value", mal_value_from_string(num));
+        intl_resolved_set(vm, part, "unit", mal_value_from_string(unit));
+        intl_array_push(vm, parts, part_index++, mal_value_from_object(part));
+    }
+    usize after = (usize) pos + mal_string_length(num);
+    if (after < mal_string_length(formatted)) {
+        intl_parts_push(vm, parts, &part_index, "literal", intl_substring(vm, formatted, after, mal_string_length(formatted)));
+    }
+    return mal_value_from_array_object(parts);
+}
+
+static MalValue intl_relative_time_format_resolved_options(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) args;
+    (void) arg_count;
+    (void) nt;
+    (void) cl;
+    MalIntlObject *rtf;
+    if (!intl_this(vm, this_value, MAL_INTL_RELATIVE_TIME_FORMAT, &rtf, "Intl.RelativeTimeFormat.prototype.resolvedOptions called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    static const char *const keys[] = {"locale", "style", "numeric", "numberingSystem"};
+    return intl_resolved_copy(vm, rtf->data, keys, countof(keys));
+}
+
+static MalValue intl_relative_time_format_supported_locales_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) this_value;
+    (void) nt;
+    (void) cl;
+    return intl_supported_locales_of_impl(vm, args, arg_count);
+}
+
+static void intl_install_relative_time_format(MalVm *vm, MalObject *intl_object) {
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "RelativeTimeFormat"), 0, intl_relative_time_format_constructor
+    );
+    MalObject *constructor_object = (MalObject *) constructor;
+
+    vm->intrinsics[MAL_INTRINSIC_INTL_RELATIVE_TIME_FORMAT_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
+    vm->intrinsics[MAL_INTRINSIC_INTL_RELATIVE_TIME_FORMAT_PROTOTYPE] = mal_value_from_object(prototype);
+
+    mal_intrinsic_define_data(vm, constructor_object, "prototype", vm->intrinsics[MAL_INTRINSIC_INTL_RELATIVE_TIME_FORMAT_PROTOTYPE], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_INTL_RELATIVE_TIME_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    intl_set_to_string_tag(vm, prototype, "Intl.RelativeTimeFormat");
+
+    mal_intrinsic_define_method_n(vm, constructor_object, "supportedLocalesOf", 1, intl_relative_time_format_supported_locales_of);
+    mal_intrinsic_define_method_n(vm, prototype, "format", 2, intl_relative_time_format_format);
+    mal_intrinsic_define_method_n(vm, prototype, "formatToParts", 2, intl_relative_time_format_format_to_parts);
+    mal_intrinsic_define_method_n(vm, prototype, "resolvedOptions", 0, intl_relative_time_format_resolved_options);
+
+    mal_intrinsic_define_data(vm, intl_object, "RelativeTimeFormat", vm->intrinsics[MAL_INTRINSIC_INTL_RELATIVE_TIME_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+}
+
+// ---------------------------------------------------------------------------
+// Intl.Segmenter — icu::segmenter (grapheme / word / sentence). The segment()
+// result is a Segments object (kind MAL_INTL_SEGMENTS) that is iterable and has
+// containing(); iteration yields Segment Iterators (kind MAL_INTL_SEGMENT_ITERATOR).
+// ---------------------------------------------------------------------------
+
+static i32 intl_segment_granularity_code(const MalString *g) {
+    if (g != nullptr && intl_string_eq_ascii(g, "word")) {
+        return 1;
+    }
+    if (g != nullptr && intl_string_eq_ascii(g, "sentence")) {
+        return 2;
+    }
+    return 0; // grapheme
+}
+
+/** Compute segment boundaries (UTF-16 indices) for `input`. Caller frees *bounds
+ * and *wordlike. Returns the boundary count (segments + 1). */
+static i32 intl_segment_bounds(MalString *input, i32 gran, i32 **bounds_out, u8 **wordlike_out) {
+    usize len = mal_string_length(input);
+    i32 cap = (i32) len + 1;
+    i32 *bounds = malloc(sizeof(i32) * (usize) cap);
+    u8 *wordlike = malloc((usize) cap);
+    memset(wordlike, 0, (usize) cap);
+    i32 n = mal_i18n_segment(gran, (const uint16_t *) mal_string_code_units(input), len, bounds, wordlike, cap);
+    if (n < 0) {
+        n = 0;
+    }
+    *bounds_out = bounds;
+    *wordlike_out = wordlike;
+    return n;
+}
+
+/** Build a segment data object: { segment, index, input, [isWordLike] }. */
+static MalValue intl_make_segment_data(MalVm *vm, MalString *input, i32 start, i32 end, i32 gran, bool word_like) {
+    MalObject *data = mal_intrinsic_new_object(vm);
+    MalValue segment = mal_value_from_string(mal_string_new_copy(&vm->heap, mal_string_code_units(input) + start, (usize) (end - start)));
+    intl_resolved_set(vm, data, "segment", segment);
+    intl_resolved_set(vm, data, "index", mal_value_from_i32(start));
+    intl_resolved_set(vm, data, "input", mal_value_from_string(input));
+    if (gran == 1) {
+        intl_resolved_set(vm, data, "isWordLike", mal_value_new_boolean(word_like));
+    }
+    return mal_value_from_object(data);
+}
+
+static MalValue intl_segmenter_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) callee;
+    if (mal_value_is_undefined(new_target)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Intl.Segmenter must be called with new");
+        return mal_value_new_undefined();
+    }
+    MalValue locales = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+
+    MalString *locale = intl_resolve_locale(vm, locales);
+    if (locale == nullptr) {
+        return mal_value_new_undefined();
+    }
+    if (!intl_get_options_object(vm, options, &options)) {
+        return mal_value_new_undefined();
+    }
+    if (!intl_check_locale_matcher(vm, options)) {
+        return mal_value_new_undefined();
+    }
+    static const char *const GRANULARITIES[] = {"grapheme", "word", "sentence"};
+    bool ok;
+    MalString *granularity = intl_option_enum(vm, options, "granularity", GRANULARITIES, countof(GRANULARITIES), "grapheme", &ok);
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
+
+    MalObject *resolved = mal_intrinsic_new_object(vm);
+    intl_resolved_set(vm, resolved, "locale", mal_value_from_string(locale));
+    intl_resolved_set(vm, resolved, "granularity", mal_value_from_string(granularity));
+
+    MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_SEGMENTER_PROTOTYPE);
+    if (prototype == nullptr) {
+        return mal_value_new_undefined();
+    }
+    MalIntlObject *seg = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_SEGMENTER, nullptr, mal_value_from_object(resolved));
+    return mal_value_from_intl_object(seg);
+}
+
+static MalValue intl_segmenter_segment(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) nt;
+    (void) cl;
+    MalIntlObject *seg;
+    if (!intl_this(vm, this_value, MAL_INTL_SEGMENTER, &seg, "Intl.Segmenter.prototype.segment called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    MalString *input;
+    if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &input)) {
+        return mal_value_new_undefined();
+    }
+    // A Segments object stores the input + the resolved granularity/locale.
+    MalObject *segments_data = mal_intrinsic_new_object(vm);
+    intl_resolved_set(vm, segments_data, "input", mal_value_from_string(input));
+    intl_resolved_set(vm, segments_data, "granularity", mal_value_from_string(intl_data_string(vm, seg->data, "granularity")));
+    MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_INTL_SEGMENTS_PROTOTYPE]);
+    MalIntlObject *segments = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_SEGMENTS, nullptr, mal_value_from_object(segments_data));
+    return mal_value_from_intl_object(segments);
+}
+
+static MalValue intl_segmenter_resolved_options(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) args;
+    (void) arg_count;
+    (void) nt;
+    (void) cl;
+    MalIntlObject *seg;
+    if (!intl_this(vm, this_value, MAL_INTL_SEGMENTER, &seg, "Intl.Segmenter.prototype.resolvedOptions called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    static const char *const keys[] = {"locale", "granularity"};
+    return intl_resolved_copy(vm, seg->data, keys, countof(keys));
+}
+
+static MalValue intl_segmenter_supported_locales_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) this_value;
+    (void) nt;
+    (void) cl;
+    return intl_supported_locales_of_impl(vm, args, arg_count);
+}
+
+// ---- %Segments.prototype% ----
+
+static MalValue intl_segments_containing(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) nt;
+    (void) cl;
+    MalIntlObject *segments;
+    if (!intl_this(vm, this_value, MAL_INTL_SEGMENTS, &segments, "Intl.Segments.prototype.containing called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    MalString *input = intl_data_string(vm, segments->data, "input");
+    i32 gran = intl_segment_granularity_code(intl_data_string(vm, segments->data, "granularity"));
+    f64 index_f;
+    if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &index_f)) {
+        return mal_value_new_undefined();
+    }
+    index_f = isnan(index_f) ? 0.0 : trunc(index_f);
+    i32 len = (i32) mal_string_length(input);
+    if (index_f < 0.0 || index_f >= (f64) len) {
+        return mal_value_new_undefined();
+    }
+    i32 index = (i32) index_f;
+    i32 *bounds;
+    u8 *wordlike;
+    i32 count = intl_segment_bounds(input, gran, &bounds, &wordlike);
+    MalValue result = mal_value_new_undefined();
+    for (i32 i = 0; i + 1 < count; i++) {
+        if (index >= bounds[i] && index < bounds[i + 1]) {
+            result = intl_make_segment_data(vm, input, bounds[i], bounds[i + 1], gran, wordlike[i] != 0);
+            break;
+        }
+    }
+    free(bounds);
+    free(wordlike);
+    return result;
+}
+
+static MalValue intl_segments_iterator(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) args;
+    (void) arg_count;
+    (void) nt;
+    (void) cl;
+    MalIntlObject *segments;
+    if (!intl_this(vm, this_value, MAL_INTL_SEGMENTS, &segments, "Intl.Segments.prototype[@@iterator] called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    MalString *input = intl_data_string(vm, segments->data, "input");
+    i32 gran = intl_segment_granularity_code(intl_data_string(vm, segments->data, "granularity"));
+    i32 *bounds;
+    u8 *wordlike;
+    i32 count = intl_segment_bounds(input, gran, &bounds, &wordlike);
+
+    // Snapshot the boundaries + word-like flags as JS arrays on the iterator.
+    MalArrayObject *bounds_array = mal_intrinsic_new_array(vm, 0);
+    MalArrayObject *wl_array = mal_intrinsic_new_array(vm, 0);
+    for (i32 i = 0; i < count; i++) {
+        intl_array_push(vm, bounds_array, (u32) i, mal_value_from_i32(bounds[i]));
+    }
+    for (i32 i = 0; i + 1 < count; i++) {
+        intl_array_push(vm, wl_array, (u32) i, mal_value_new_boolean(wordlike[i] != 0));
+    }
+    free(bounds);
+    free(wordlike);
+
+    MalObject *iter_data = mal_intrinsic_new_object(vm);
+    intl_resolved_set(vm, iter_data, "input", mal_value_from_string(input));
+    intl_resolved_set(vm, iter_data, "granularity", intl_data_string(vm, segments->data, "granularity") != nullptr ? mal_value_from_string(intl_data_string(vm, segments->data, "granularity")) : mal_value_new_undefined());
+    intl_resolved_set(vm, iter_data, "bounds", mal_value_from_array_object(bounds_array));
+    intl_resolved_set(vm, iter_data, "wordlike", mal_value_from_array_object(wl_array));
+    intl_resolved_set(vm, iter_data, "pos", mal_value_from_i32(0));
+
+    MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_INTL_SEGMENT_ITERATOR_PROTOTYPE]);
+    MalIntlObject *iter = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_SEGMENT_ITERATOR, nullptr, mal_value_from_object(iter_data));
+    return mal_value_from_intl_object(iter);
+}
+
+static MalValue intl_segment_iterator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) args;
+    (void) arg_count;
+    (void) nt;
+    (void) cl;
+    MalIntlObject *iter;
+    if (!intl_this(vm, this_value, MAL_INTL_SEGMENT_ITERATOR, &iter, "Segment Iterator.prototype.next called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    MalString *input = intl_data_string(vm, iter->data, "input");
+    i32 gran = intl_segment_granularity_code(intl_data_string(vm, iter->data, "granularity"));
+    i32 pos = intl_data_int(vm, iter->data, "pos", 0);
+
+    MalValue bounds_value;
+    mal_vm_get_property(vm, iter->data, mal_intrinsic_string_key(vm, "bounds"), &bounds_value);
+    MalValue wl_value;
+    mal_vm_get_property(vm, iter->data, mal_intrinsic_string_key(vm, "wordlike"), &wl_value);
+
+    MalValue length_value;
+    mal_vm_get_property(vm, bounds_value, mal_intrinsic_string_key(vm, "length"), &length_value);
+    i32 count = mal_ops_is_number(length_value) ? (i32) mal_ops_number_as_f64(length_value) : 0;
+    if (pos + 1 >= count) {
+        return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
+    }
+
+    MalKey start_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(pos)};
+    MalKey end_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(pos + 1)};
+    MalValue start_v, end_v;
+    mal_vm_get_property(vm, bounds_value, start_key, &start_v);
+    mal_vm_get_property(vm, bounds_value, end_key, &end_v);
+    i32 start = (i32) mal_ops_number_as_f64(start_v);
+    i32 end = (i32) mal_ops_number_as_f64(end_v);
+    bool word_like = false;
+    MalValue wl_elem;
+    if (mal_vm_get_property(vm, wl_value, start_key, &wl_elem)) {
+        word_like = mal_value_is_truthy(wl_elem);
+    }
+
+    MalValue data = intl_make_segment_data(vm, input, start, end, gran, word_like);
+    intl_resolved_set(vm, mal_value_to_object(iter->data), "pos", mal_value_from_i32(pos + 1));
+    return mal_vm_create_iter_result(vm, data, false);
+}
+
+static void intl_install_segmenter(MalVm *vm, MalObject *intl_object) {
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "Segmenter"), 0, intl_segmenter_constructor
+    );
+    MalObject *constructor_object = (MalObject *) constructor;
+
+    vm->intrinsics[MAL_INTRINSIC_INTL_SEGMENTER_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
+    vm->intrinsics[MAL_INTRINSIC_INTL_SEGMENTER_PROTOTYPE] = mal_value_from_object(prototype);
+
+    mal_intrinsic_define_data(vm, constructor_object, "prototype", vm->intrinsics[MAL_INTRINSIC_INTL_SEGMENTER_PROTOTYPE], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_INTL_SEGMENTER_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    intl_set_to_string_tag(vm, prototype, "Intl.Segmenter");
+
+    mal_intrinsic_define_method_n(vm, constructor_object, "supportedLocalesOf", 1, intl_segmenter_supported_locales_of);
+    mal_intrinsic_define_method_n(vm, prototype, "segment", 1, intl_segmenter_segment);
+    mal_intrinsic_define_method_n(vm, prototype, "resolvedOptions", 0, intl_segmenter_resolved_options);
+
+    // %Segments.prototype%: ordinary object (no constructor, no @@toStringTag).
+    MalObject *segments_proto = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    vm->intrinsics[MAL_INTRINSIC_INTL_SEGMENTS_PROTOTYPE] = mal_value_from_object(segments_proto);
+    mal_intrinsic_define_method_n(vm, segments_proto, "containing", 1, intl_segments_containing);
+    {
+        MalNativeFunctionObject *iter_fn = mal_native_function_object_new_arity(
+            &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "[Symbol.iterator]"), 0, intl_segments_iterator
+        );
+        MalPropertyDesc desc = mal_intrinsic_data_desc(
+            mal_value_from_native_function_object(iter_fn), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE
+        );
+        mal_object_define_own(segments_proto, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &desc);
+    }
+
+    // %SegmentIterator.prototype% inherits %IteratorPrototype%.
+    MalObject *iter_proto = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE]));
+    vm->intrinsics[MAL_INTRINSIC_INTL_SEGMENT_ITERATOR_PROTOTYPE] = mal_value_from_object(iter_proto);
+    mal_intrinsic_define_method_n(vm, iter_proto, "next", 0, intl_segment_iterator_next);
+    intl_set_to_string_tag(vm, iter_proto, "Segmenter String Iterator");
+
+    mal_intrinsic_define_data(vm, intl_object, "Segmenter", vm->intrinsics[MAL_INTRINSIC_INTL_SEGMENTER_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+}
+
+// ---------------------------------------------------------------------------
+// Intl.DurationFormat — icu_experimental::duration. The constructor implements
+// the (correct) GetDurationUnitOptions defaults in C so resolvedOptions matches
+// the spec; ICU formats the output string.
+// ---------------------------------------------------------------------------
+
+// The 10 duration units, their resolvedOptions "<unit>" / "<unit>Display" keys,
+// allowed-style group (0 date {long,short,narrow}; 1 time adds numeric,2-digit;
+// 2 sub-second adds numeric), and the "digital" base default style.
+static const struct {
+    const char *unit;
+    const char *display;
+    i32 group;
+    const char *digital_default;
+} DURATION_UNITS[10] = {
+    {"years", "yearsDisplay", 0, "short"},
+    {"months", "monthsDisplay", 0, "short"},
+    {"weeks", "weeksDisplay", 0, "short"},
+    {"days", "daysDisplay", 0, "short"},
+    {"hours", "hoursDisplay", 1, "numeric"},
+    {"minutes", "minutesDisplay", 1, "numeric"},
+    {"seconds", "secondsDisplay", 1, "numeric"},
+    {"milliseconds", "millisecondsDisplay", 2, "numeric"},
+    {"microseconds", "microsecondsDisplay", 2, "numeric"},
+    {"nanoseconds", "nanosecondsDisplay", 2, "numeric"},
+};
+
+static const char *const DUR_STYLES_DATE[] = {"long", "short", "narrow"};
+static const char *const DUR_STYLES_TIME[] = {"long", "short", "narrow", "numeric", "2-digit"};
+static const char *const DUR_STYLES_SUBSEC[] = {"long", "short", "narrow", "numeric"};
+
+/** GetOption(options, name, "string", allowed): the matched static string, or
+ * null when absent; *ok=false (throw) on an out-of-list value. */
+static const char *dur_get_style(MalVm *vm, MalValue options, const char *name, const char *const *allowed, usize count, bool *ok) {
+    *ok = true;
+    bool present;
+    MalString *s = nullptr;
+    if (!intl_option_string(vm, options, name, &s, &present)) {
+        *ok = false;
+        return nullptr;
+    }
+    if (!present || s == nullptr) {
+        return nullptr;
+    }
+    for (usize i = 0; i < count; i++) {
+        if (intl_string_eq_ascii(s, allowed[i])) {
+            return allowed[i];
+        }
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid duration unit style");
+    *ok = false;
+    return nullptr;
+}
+
+static bool dur_str_eq(const char *a, const char *b) {
+    return a != nullptr && strcmp(a, b) == 0;
+}
+
+static MalValue intl_duration_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) callee;
+    if (mal_value_is_undefined(new_target)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Intl.DurationFormat must be called with new");
+        return mal_value_new_undefined();
+    }
+    MalValue locales = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+
+    MalString *locale = intl_resolve_locale(vm, locales);
+    if (locale == nullptr) {
+        return mal_value_new_undefined();
+    }
+    if (!intl_get_options_object(vm, options, &options)) {
+        return mal_value_new_undefined();
+    }
+    if (!intl_check_locale_matcher(vm, options)) {
+        return mal_value_new_undefined();
+    }
+
+    bool present;
+    MalString *numbering_system = nullptr;
+    if (!intl_option_string(vm, options, "numberingSystem", &numbering_system, &present)) {
+        return mal_value_new_undefined();
+    }
+    if (present && !intl_is_valid_numbering_system(numbering_system)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid numberingSystem");
+        return mal_value_new_undefined();
+    }
+
+    static const char *const BASE_STYLES[] = {"long", "short", "narrow", "digital"};
+    bool ok;
+    MalString *base = intl_option_enum(vm, options, "style", BASE_STYLES, countof(BASE_STYLES), "short", &ok);
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
+    bool digital = intl_string_eq_ascii(base, "digital");
+    const char *base_cstr = digital ? "digital" : (intl_string_eq_ascii(base, "long") ? "long" : (intl_string_eq_ascii(base, "narrow") ? "narrow" : "short"));
+
+    MalObject *resolved = mal_intrinsic_new_object(vm);
+    intl_resolved_set(vm, resolved, "locale", mal_value_from_string(locale));
+    intl_resolved_set(vm, resolved, "numberingSystem", mal_value_from_string(numbering_system != nullptr ? numbering_system : mal_intrinsic_ascii(vm, "latn")));
+    intl_resolved_set(vm, resolved, "style", mal_value_from_string(base));
+
+    // GetDurationUnitOptions per unit, applying the spec defaults + validation.
+    const char *prev_style = nullptr;
+    for (i32 i = 0; i < 10; i++) {
+        const char *const *allowed = DURATION_UNITS[i].group == 0 ? DUR_STYLES_DATE : (DURATION_UNITS[i].group == 1 ? DUR_STYLES_TIME : DUR_STYLES_SUBSEC);
+        usize allowed_n = DURATION_UNITS[i].group == 0 ? countof(DUR_STYLES_DATE) : (DURATION_UNITS[i].group == 1 ? countof(DUR_STYLES_TIME) : countof(DUR_STYLES_SUBSEC));
+        const char *style = dur_get_style(vm, options, DURATION_UNITS[i].unit, allowed, allowed_n, &ok);
+        if (!ok) {
+            return mal_value_new_undefined();
+        }
+        const char *display_default = "always";
+        if (style == nullptr) {
+            if (digital) {
+                bool is_hms = DURATION_UNITS[i].group == 1;
+                if (!is_hms) {
+                    display_default = "auto";
+                }
+                style = DURATION_UNITS[i].digital_default;
+            } else {
+                display_default = "auto";
+                if (dur_str_eq(prev_style, "fractional") || dur_str_eq(prev_style, "numeric") || dur_str_eq(prev_style, "2-digit")) {
+                    style = "numeric";
+                } else {
+                    style = base_cstr;
+                }
+            }
+        }
+        if (dur_str_eq(style, "numeric") && DURATION_UNITS[i].group == 2) {
+            style = "fractional";
+            display_default = "auto";
+        }
+        // GetOption(options, "<unit>Display", «auto, always», display_default).
+        static const char *const DISPLAYS[] = {"auto", "always"};
+        const char *display = dur_get_style(vm, options, DURATION_UNITS[i].display, DISPLAYS, countof(DISPLAYS), &ok);
+        if (!ok) {
+            return mal_value_new_undefined();
+        }
+        if (display == nullptr) {
+            display = display_default;
+        }
+        if (dur_str_eq(display, "always") && dur_str_eq(style, "fractional")) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "fractional unit cannot be displayed always");
+            return mal_value_new_undefined();
+        }
+        if (dur_str_eq(prev_style, "fractional") && !dur_str_eq(style, "fractional")) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "a unit after a fractional unit must be fractional");
+            return mal_value_new_undefined();
+        }
+        if (dur_str_eq(prev_style, "numeric") || dur_str_eq(prev_style, "2-digit")) {
+            if (!dur_str_eq(style, "fractional") && !dur_str_eq(style, "numeric") && !dur_str_eq(style, "2-digit")) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid unit style after numeric");
+                return mal_value_new_undefined();
+            }
+            if (i == 5 || i == 6) { // minutes, seconds
+                style = "2-digit";
+            }
+        }
+        intl_resolved_set(vm, resolved, DURATION_UNITS[i].unit, mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) style)));
+        intl_resolved_set(vm, resolved, DURATION_UNITS[i].display, mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) display)));
+        prev_style = style;
+    }
+
+    // GetNumberOption(options, "fractionalDigits", 0, 9, undefined).
+    i32 fractional_digits = -1;
+    MalValue fd_value;
+    if (mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "fractionalDigits"), &fd_value) && !mal_value_is_undefined(fd_value)) {
+        f64 fd;
+        if (!mal_vm_to_number(vm, fd_value, &fd)) {
+            return mal_value_new_undefined();
+        }
+        if (isnan(fd) || fd < 0.0 || fd > 9.0) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "fractionalDigits out of range");
+            return mal_value_new_undefined();
+        }
+        fractional_digits = (i32) floor(fd);
+        intl_resolved_set(vm, resolved, "fractionalDigits", mal_value_from_i32(fractional_digits));
+    }
+
+    MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_DURATION_FORMAT_PROTOTYPE);
+    if (prototype == nullptr) {
+        return mal_value_new_undefined();
+    }
+    MalIntlObject *df = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_DURATION_FORMAT, nullptr, mal_value_from_object(resolved));
+    return mal_value_from_intl_object(df);
+}
+
+/**
+ * ToDurationRecord(input): read the 10 duration fields off `input` (which must be
+ * an object), each via ToIntegerIfIntegral, enforcing a single sign. Fills
+ * units[10] (magnitudes) + *sign_negative. Returns false with a pending throw.
+ */
+static bool intl_to_duration_record(MalVm *vm, MalValue input, u64 *units, bool *sign_negative) {
+    if (!mal_value_is_object(input)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "duration must be an object");
+        return false;
+    }
+    bool any = false;
+    i32 sign = 0;
+    for (i32 i = 0; i < 10; i++) {
+        units[i] = 0;
+        MalValue v;
+        if (!mal_vm_get_property(vm, input, mal_intrinsic_string_key(vm, DURATION_UNITS[i].unit), &v)) {
+            return false;
+        }
+        if (mal_value_is_undefined(v)) {
+            continue;
+        }
+        any = true;
+        f64 d;
+        if (!mal_vm_to_number(vm, v, &d)) {
+            return false;
+        }
+        if (!isfinite(d) || floor(d) != d) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "duration field must be an integer");
+            return false;
+        }
+        if (d < 0.0) {
+            if (sign > 0) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "duration fields must have a consistent sign");
+                return false;
+            }
+            sign = -1;
+        } else if (d > 0.0) {
+            if (sign < 0) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "duration fields must have a consistent sign");
+                return false;
+            }
+            sign = 1;
+        }
+        units[i] = (u64) fabs(d);
+    }
+    if (!any) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "duration must have at least one field");
+        return false;
+    }
+    *sign_negative = sign < 0;
+    return true;
+}
+
+static MalValue intl_duration_format_do(MalVm *vm, MalIntlObject *df, MalValue duration_arg) {
+    u64 units[10];
+    bool sign_negative;
+    if (!intl_to_duration_record(vm, duration_arg, units, &sign_negative)) {
+        return mal_value_new_undefined();
+    }
+    MalString *locale = intl_data_string(vm, df->data, "locale");
+    MalString *style = intl_data_string(vm, df->data, "style");
+    i32 base_style = 1; // short
+    if (style != nullptr) {
+        if (intl_string_eq_ascii(style, "long")) {
+            base_style = 0;
+        } else if (intl_string_eq_ascii(style, "narrow")) {
+            base_style = 2;
+        } else if (intl_string_eq_ascii(style, "digital")) {
+            base_style = 3;
+        }
+    }
+    i32 fractional_digits = intl_data_int(vm, df->data, "fractionalDigits", -1);
+
+    byte locale_buf[160];
+    usize locale_len = 0;
+    if (locale != nullptr) {
+        intl_tag_utf8(locale, locale_buf, sizeof(locale_buf), &locale_len);
+    }
+    byte out[512];
+    i32 n = mal_i18n_duration_format(locale_buf, locale_len, base_style, fractional_digits, sign_negative ? 1 : 0, units, out, (i32) sizeof(out));
+    if (n < 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format duration");
+        return mal_value_new_undefined();
+    }
+    if (n <= (i32) sizeof(out)) {
+        return intl_string_from_utf8(vm, out, (usize) n);
+    }
+    byte *big = malloc((usize) n);
+    mal_i18n_duration_format(locale_buf, locale_len, base_style, fractional_digits, sign_negative ? 1 : 0, units, big, n);
+    MalValue result = intl_string_from_utf8(vm, big, (usize) n);
+    free(big);
+    return result;
+}
+
+static MalValue intl_duration_format_format(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) nt;
+    (void) cl;
+    MalIntlObject *df;
+    if (!intl_this(vm, this_value, MAL_INTL_DURATION_FORMAT, &df, "Intl.DurationFormat.prototype.format called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    return intl_duration_format_do(vm, df, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+}
+
+static MalValue intl_duration_format_format_to_parts(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) nt;
+    (void) cl;
+    MalIntlObject *df;
+    if (!intl_this(vm, this_value, MAL_INTL_DURATION_FORMAT, &df, "Intl.DurationFormat.prototype.formatToParts called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    MalValue formatted = intl_duration_format_do(vm, df, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    if (!mal_value_is_string(formatted)) {
+        return mal_value_new_undefined();
+    }
+    // Best-effort: a single literal part (exact part decomposition needs ICU
+    // field positions, which the shim does not yet expose).
+    MalArrayObject *parts = mal_intrinsic_new_array(vm, 0);
+    u32 idx = 0;
+    if (mal_string_length(mal_value_to_string(formatted)) > 0) {
+        intl_parts_push(vm, parts, &idx, "literal", formatted);
+    }
+    return mal_value_from_array_object(parts);
+}
+
+static MalValue intl_duration_format_resolved_options(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) args;
+    (void) arg_count;
+    (void) nt;
+    (void) cl;
+    MalIntlObject *df;
+    if (!intl_this(vm, this_value, MAL_INTL_DURATION_FORMAT, &df, "Intl.DurationFormat.prototype.resolvedOptions called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    static const char *const keys[] = {
+        "locale", "numberingSystem", "style",
+        "years", "yearsDisplay", "months", "monthsDisplay", "weeks", "weeksDisplay",
+        "days", "daysDisplay", "hours", "hoursDisplay", "minutes", "minutesDisplay",
+        "seconds", "secondsDisplay", "milliseconds", "millisecondsDisplay",
+        "microseconds", "microsecondsDisplay", "nanoseconds", "nanosecondsDisplay",
+        "fractionalDigits",
+    };
+    return intl_resolved_copy(vm, df->data, keys, countof(keys));
+}
+
+static MalValue intl_duration_format_supported_locales_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) this_value;
+    (void) nt;
+    (void) cl;
+    return intl_supported_locales_of_impl(vm, args, arg_count);
+}
+
+static void intl_install_duration_format(MalVm *vm, MalObject *intl_object) {
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "DurationFormat"), 0, intl_duration_format_constructor
+    );
+    MalObject *constructor_object = (MalObject *) constructor;
+
+    vm->intrinsics[MAL_INTRINSIC_INTL_DURATION_FORMAT_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
+    vm->intrinsics[MAL_INTRINSIC_INTL_DURATION_FORMAT_PROTOTYPE] = mal_value_from_object(prototype);
+
+    mal_intrinsic_define_data(vm, constructor_object, "prototype", vm->intrinsics[MAL_INTRINSIC_INTL_DURATION_FORMAT_PROTOTYPE], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_INTL_DURATION_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    intl_set_to_string_tag(vm, prototype, "Intl.DurationFormat");
+
+    mal_intrinsic_define_method_n(vm, constructor_object, "supportedLocalesOf", 1, intl_duration_format_supported_locales_of);
+    mal_intrinsic_define_method_n(vm, prototype, "format", 1, intl_duration_format_format);
+    mal_intrinsic_define_method_n(vm, prototype, "formatToParts", 1, intl_duration_format_format_to_parts);
+    mal_intrinsic_define_method_n(vm, prototype, "resolvedOptions", 0, intl_duration_format_resolved_options);
+
+    mal_intrinsic_define_data(vm, intl_object, "DurationFormat", vm->intrinsics[MAL_INTRINSIC_INTL_DURATION_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
 // ---------------------------------------------------------------------------
@@ -1538,4 +3097,9 @@ void mal_builtin_intl_install(MalVm *vm) {
     intl_install_plural_rules(vm, intl);
     intl_install_number_format(vm, intl);
     intl_install_date_time_format(vm, intl);
+    intl_install_list_format(vm, intl);
+    intl_install_display_names(vm, intl);
+    intl_install_relative_time_format(vm, intl);
+    intl_install_segmenter(vm, intl);
+    intl_install_duration_format(vm, intl);
 }

@@ -359,6 +359,344 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
     write_str(&text, out, out_cap)
 }
 
+// ---------------------------------------------------------------------------
+// Intl.ListFormat — icu::list::ListFormatter (and/or/unit, wide/short/narrow).
+// ---------------------------------------------------------------------------
+
+/// A borrowed UTF-16 string, matching the C-side `MalU16Str`. Used to pass a JS
+/// String array across the ABI without a UTF-8 round-trip in C.
+#[repr(C)]
+pub struct MalU16Str {
+    pub ptr: *const u16,
+    pub len: usize,
+}
+
+/// Format a list of strings for `locale`. list_type: 0 conjunction(and), 1
+/// disjunction(or), 2 unit; length: 0 long, 1 short, 2 narrow. Writes UTF-8 into
+/// `out`; returns the full length, or -1 on failure.
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_list_format(
+    locale_ptr: *const u8,
+    locale_len: usize,
+    list_type: i32,
+    length: i32,
+    items: *const MalU16Str,
+    items_count: usize,
+    out: *mut u8,
+    out_cap: i32,
+) -> i32 {
+    use icu::list::options::{ListFormatterOptions, ListLength};
+    use icu::list::ListFormatter;
+
+    let Some(locale) = parse_locale(locale_ptr, locale_len) else {
+        return -1;
+    };
+    let prefs = (&locale).into();
+    let options = ListFormatterOptions::default().with_length(match length {
+        1 => ListLength::Short,
+        2 => ListLength::Narrow,
+        _ => ListLength::Wide,
+    });
+    let formatter = match list_type {
+        1 => ListFormatter::try_new_or(prefs, options),
+        2 => ListFormatter::try_new_unit(prefs, options),
+        _ => ListFormatter::try_new_and(prefs, options),
+    };
+    let Ok(formatter) = formatter else {
+        return -1;
+    };
+    let slice = unsafe { core::slice::from_raw_parts(items, items_count) };
+    let strings: Vec<String> = slice
+        .iter()
+        .map(|s| {
+            let u = unsafe { core::slice::from_raw_parts(s.ptr, s.len) };
+            String::from_utf16_lossy(u)
+        })
+        .collect();
+    let text = formatter.format_to_string(strings.iter());
+    write_str(&text, out, out_cap)
+}
+
+// ---------------------------------------------------------------------------
+// Intl.Segmenter — icu::segmenter (grapheme / word / sentence).
+// ---------------------------------------------------------------------------
+
+/// Segment `text` (UTF-16) at the given granularity (0 grapheme, 1 word, 2
+/// sentence). Writes the segment boundary positions as UTF-16 indices into
+/// `bounds_out` (including 0 and the end, so segment count = returned-1), and a
+/// per-segment isWordLike flag (0/1) into `wordlike_out` (meaningful only for
+/// word granularity). `cap` is the capacity of `bounds_out` in i32 elements.
+/// Returns the number of boundaries written.
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_segment(
+    granularity: i32,
+    text_ptr: *const u16,
+    text_len: usize,
+    bounds_out: *mut i32,
+    wordlike_out: *mut u8,
+    cap: i32,
+) -> i32 {
+    use icu::segmenter::options::{SentenceBreakInvariantOptions, WordBreakInvariantOptions};
+    use icu::segmenter::{GraphemeClusterSegmenter, SentenceSegmenter, WordSegmenter};
+
+    let u = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
+    let s = String::from_utf16_lossy(u);
+
+    // Map each UTF-8 byte offset (on a char boundary) to a UTF-16 index in `s`.
+    let mut byte_to_utf16: std::collections::HashMap<usize, i32> = std::collections::HashMap::new();
+    let mut utf16: i32 = 0;
+    for (b, c) in s.char_indices() {
+        byte_to_utf16.insert(b, utf16);
+        utf16 += c.len_utf16() as i32;
+    }
+    byte_to_utf16.insert(s.len(), utf16);
+
+    let map = |b: usize| -> i32 { *byte_to_utf16.get(&b).unwrap_or(&0) };
+
+    let mut bounds: Vec<i32> = Vec::new();
+    let mut word_like: Vec<u8> = Vec::new();
+
+    if granularity == 1 {
+        let segmenter = WordSegmenter::new_auto(WordBreakInvariantOptions::default());
+        let mut it = segmenter.segment_str(&s);
+        let mut prev = it.next();
+        if let Some(p) = prev {
+            bounds.push(map(p));
+        }
+        while let Some(b) = it.next() {
+            bounds.push(map(b));
+            word_like.push(if it.is_word_like() { 1 } else { 0 });
+            prev = Some(b);
+        }
+        let _ = prev;
+    } else if granularity == 2 {
+        let segmenter = SentenceSegmenter::new(SentenceBreakInvariantOptions::default());
+        for b in segmenter.segment_str(&s) {
+            bounds.push(map(b));
+        }
+    } else {
+        let segmenter = GraphemeClusterSegmenter::new();
+        for b in segmenter.segment_str(&s) {
+            bounds.push(map(b));
+        }
+    }
+
+    let n = bounds.len().min(cap.max(0) as usize);
+    if !bounds_out.is_null() {
+        for (i, v) in bounds.iter().take(n).enumerate() {
+            unsafe { *bounds_out.add(i) = *v };
+        }
+    }
+    if !wordlike_out.is_null() {
+        for (i, v) in word_like.iter().take(n.saturating_sub(1)).enumerate() {
+            unsafe { *wordlike_out.add(i) = *v };
+        }
+    }
+    bounds.len() as i32
+}
+
+// ---------------------------------------------------------------------------
+// Intl.DisplayNames — icu_experimental::displaynames (region/script/language).
+// ---------------------------------------------------------------------------
+
+/// Display name for a code. kind: 0 region, 1 script, 2 language. style: 0 long,
+/// 1 short, 2 narrow. Writes UTF-8 into `out`; returns the length, -1 when there
+/// is no name (C decides Fallback), or -2 when the code is structurally invalid.
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_display_name(
+    locale_ptr: *const u8,
+    locale_len: usize,
+    kind: i32,
+    style: i32,
+    code_ptr: *const u8,
+    code_len: usize,
+    out: *mut u8,
+    out_cap: i32,
+) -> i32 {
+    use icu_experimental::displaynames::multi::{
+        LanguageDisplayNames, RegionDisplayNames, ScriptDisplayNames,
+    };
+    use icu_experimental::displaynames::{DisplayNamesOptions, Style};
+    use icu::locale::subtags::{Language, Region, Script};
+
+    let Some(locale) = parse_locale(locale_ptr, locale_len) else {
+        return -1;
+    };
+    let code_bytes = unsafe { core::slice::from_raw_parts(code_ptr, code_len) };
+    let Ok(code) = core::str::from_utf8(code_bytes) else {
+        return -2;
+    };
+    let prefs = (&locale).into();
+    let mut options = DisplayNamesOptions::default();
+    options.style = Some(match style {
+        1 => Style::Short,
+        2 => Style::Narrow,
+        _ => Style::Long,
+    });
+
+    let name: Option<String> = match kind {
+        0 => {
+            let Ok(region) = code.parse::<Region>() else {
+                return -2;
+            };
+            RegionDisplayNames::try_new(prefs, options)
+                .ok()
+                .and_then(|d| d.of(region).map(|s| s.to_string()))
+        }
+        1 => {
+            let Ok(script) = code.parse::<Script>() else {
+                return -2;
+            };
+            ScriptDisplayNames::try_new(prefs, options)
+                .ok()
+                .and_then(|d| d.of(script).map(|s| s.to_string()))
+        }
+        2 => {
+            let Ok(language) = code.parse::<Language>() else {
+                return -2;
+            };
+            LanguageDisplayNames::try_new(prefs, options)
+                .ok()
+                .and_then(|d| d.of(language).map(|s| s.to_string()))
+        }
+        _ => return -1,
+    };
+    match name {
+        Some(text) => write_str(&text, out, out_cap),
+        None => -1,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Intl.RelativeTimeFormat — icu_experimental::relativetime.
+// ---------------------------------------------------------------------------
+
+/// Format `value` of `unit` relative to now. length: 0 long, 1 short, 2 narrow.
+/// unit: 0 second, 1 minute, 2 hour, 3 day, 4 week, 5 month, 6 quarter, 7 year.
+/// numeric_auto != 0 selects Numeric::Auto ("yesterday"), else Always ("1 day
+/// ago"). Writes UTF-8 into `out`; returns the length, or -1 on failure.
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_relative_time(
+    locale_ptr: *const u8,
+    locale_len: usize,
+    length: i32,
+    unit: i32,
+    numeric_auto: i32,
+    value: f64,
+    out: *mut u8,
+    out_cap: i32,
+) -> i32 {
+    use icu::decimal::input::Decimal;
+    use icu_experimental::relativetime::options::Numeric;
+    use icu_experimental::relativetime::{RelativeTimeFormatter, RelativeTimeFormatterOptions};
+    use writeable::Writeable;
+
+    let Some(locale) = parse_locale(locale_ptr, locale_len) else {
+        return -1;
+    };
+    let prefs = (&locale).into();
+    let mut options = RelativeTimeFormatterOptions::default();
+    options.numeric = if numeric_auto != 0 { Numeric::Auto } else { Numeric::Always };
+
+    let formatter = match (length, unit) {
+        (0, 0) => RelativeTimeFormatter::try_new_long_second(prefs, options),
+        (0, 1) => RelativeTimeFormatter::try_new_long_minute(prefs, options),
+        (0, 2) => RelativeTimeFormatter::try_new_long_hour(prefs, options),
+        (0, 3) => RelativeTimeFormatter::try_new_long_day(prefs, options),
+        (0, 4) => RelativeTimeFormatter::try_new_long_week(prefs, options),
+        (0, 5) => RelativeTimeFormatter::try_new_long_month(prefs, options),
+        (0, 6) => RelativeTimeFormatter::try_new_long_quarter(prefs, options),
+        (0, 7) => RelativeTimeFormatter::try_new_long_year(prefs, options),
+        (1, 0) => RelativeTimeFormatter::try_new_short_second(prefs, options),
+        (1, 1) => RelativeTimeFormatter::try_new_short_minute(prefs, options),
+        (1, 2) => RelativeTimeFormatter::try_new_short_hour(prefs, options),
+        (1, 3) => RelativeTimeFormatter::try_new_short_day(prefs, options),
+        (1, 4) => RelativeTimeFormatter::try_new_short_week(prefs, options),
+        (1, 5) => RelativeTimeFormatter::try_new_short_month(prefs, options),
+        (1, 6) => RelativeTimeFormatter::try_new_short_quarter(prefs, options),
+        (1, 7) => RelativeTimeFormatter::try_new_short_year(prefs, options),
+        (2, 0) => RelativeTimeFormatter::try_new_narrow_second(prefs, options),
+        (2, 1) => RelativeTimeFormatter::try_new_narrow_minute(prefs, options),
+        (2, 2) => RelativeTimeFormatter::try_new_narrow_hour(prefs, options),
+        (2, 3) => RelativeTimeFormatter::try_new_narrow_day(prefs, options),
+        (2, 4) => RelativeTimeFormatter::try_new_narrow_week(prefs, options),
+        (2, 5) => RelativeTimeFormatter::try_new_narrow_month(prefs, options),
+        (2, 6) => RelativeTimeFormatter::try_new_narrow_quarter(prefs, options),
+        (2, 7) => RelativeTimeFormatter::try_new_narrow_year(prefs, options),
+        _ => return -1,
+    };
+    let Ok(formatter) = formatter else {
+        return -1;
+    };
+    let rendered = format!("{}", value);
+    let Ok(decimal) = Decimal::try_from_str(&rendered) else {
+        return -1;
+    };
+    let text = formatter.format(decimal).write_to_string().into_owned();
+    write_str(&text, out, out_cap)
+}
+
+// ---------------------------------------------------------------------------
+// Intl.DurationFormat — icu_experimental::duration.
+// ---------------------------------------------------------------------------
+
+/// Format a duration for `locale`. base_style: 0 long, 1 short, 2 narrow, 3
+/// digital. fractional_digits: -1 for "show all", else a fixed count.
+/// sign_negative != 0 marks the whole duration negative. `units` is 10 u64s in
+/// the order years, months, weeks, days, hours, minutes, seconds, milliseconds,
+/// microseconds, nanoseconds. Writes UTF-8 into `out`; returns the length, or -1.
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_duration_format(
+    locale_ptr: *const u8,
+    locale_len: usize,
+    base_style: i32,
+    fractional_digits: i32,
+    sign_negative: i32,
+    units: *const u64,
+    out: *mut u8,
+    out_cap: i32,
+) -> i32 {
+    use icu_experimental::duration::options::{BaseStyle, DurationFormatterOptions, FractionalDigits};
+    use icu_experimental::duration::{Duration, DurationFormatter, DurationSign, ValidatedDurationFormatterOptions};
+    use writeable::Writeable;
+
+    let Some(locale) = parse_locale(locale_ptr, locale_len) else {
+        return -1;
+    };
+    let u = unsafe { core::slice::from_raw_parts(units, 10) };
+    let duration = Duration {
+        sign: if sign_negative != 0 { DurationSign::Negative } else { DurationSign::Positive },
+        years: u[0],
+        months: u[1],
+        weeks: u[2],
+        days: u[3],
+        hours: u[4],
+        minutes: u[5],
+        seconds: u[6],
+        milliseconds: u[7],
+        microseconds: u[8],
+        nanoseconds: u[9],
+    };
+    let mut options = DurationFormatterOptions::default();
+    options.base = match base_style {
+        1 => BaseStyle::Short,
+        2 => BaseStyle::Narrow,
+        3 => BaseStyle::Digital,
+        _ => BaseStyle::Long,
+    };
+    if fractional_digits >= 0 {
+        options.fractional_digits = FractionalDigits::Fixed(fractional_digits as u8);
+    }
+    let Ok(validated) = ValidatedDurationFormatterOptions::validate(options) else {
+        return -1;
+    };
+    let Ok(formatter) = DurationFormatter::try_new((&locale).into(), validated) else {
+        return -1;
+    };
+    let text = formatter.format(&duration).write_to_string().into_owned();
+    write_str(&text, out, out_cap)
+}
+
 /// Status codes returned by fallible FFI entry points. The C side maps these to
 /// the appropriate JS exception (e.g. `Range` -> RangeError).
 #[repr(C)]
