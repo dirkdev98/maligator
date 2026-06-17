@@ -776,6 +776,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		'#include "vm.h"',
 		'#include "vm_ops.h"',
 		'#include "value_ops.h"',
+		'#include "builtin_iterator.h"',
 		"",
 		body,
 		"",
@@ -933,7 +934,7 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 	try {
 		writeFileSync(
 			`${baseName}.c`,
-			`#include "vm.h"\n#include "vm_ops.h"\n#include "value_ops.h"\n\n${cSource}`,
+			`#include "vm.h"\n#include "vm_ops.h"\n#include "value_ops.h"\n#include "builtin_iterator.h"\n\n${cSource}`,
 		);
 		await execFileAsync(
 			"cc",

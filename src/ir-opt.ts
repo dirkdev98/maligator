@@ -3,6 +3,32 @@ import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
 import { isNil } from "./utils.ts";
 
 /**
+ * IR instruction kinds with no side effects beyond writing their destination
+ * register: they read operands and globals/slots, never run user code, never
+ * throw, and never mutate observable state. One whose destination is never read
+ * is dead and can be dropped. Deliberately conservative — `binary`/`unary` can
+ * run a `valueOf`/`toString` or throw, property/call/store ops have effects, so
+ * none of those appear here.
+ */
+const SIDE_EFFECT_FREE_OPS = new Set<IRInstruction["type"]>([
+	"createNumber",
+	"createF64",
+	"createBoolean",
+	"createString",
+	"createBigint",
+	"createUndefined",
+	"createNull",
+	"createEmpty",
+	"move",
+	"loadLocal",
+	"loadGlobal",
+	"loadCaptured",
+	"loadIntrinsic",
+	"loadThis",
+	"loadNewTarget",
+]);
+
+/**
  * Naively execute a few IR optimizations.
  *
  * TODO: We should probably do better optimizations ;)
@@ -21,6 +47,8 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		optDropInstructionsAfterJumpsOrReturns,
 		optDropUnreferencedBlocks,
 		optLocalsToRegister,
+		optCopyPropagation,
+		optDeadInstructionElimination,
 		optCombineLinearBlocks,
 		optPatchJumpsToDirectJumpBlocks,
 	];
@@ -485,6 +513,211 @@ function eliminateRedundantTdzChecksInFunction(fn: IRFunction) {
 		}
 		block.instructions = next;
 	}
+}
+
+/**
+ * IR instruction kinds whose `registers[0]` is a SOURCE (read), not a freshly
+ * written destination, and which write no register at all (they target a slot,
+ * global, property, or control flow). For these every register operand is a use
+ * and copy propagation may rewrite all of them. Anything not listed is assumed
+ * to write `registers[0]` (so it is left untouched and invalidated), the safe
+ * direction. Kept to clearly source-only ops.
+ */
+const WRITES_NO_REGISTER = new Set<IRInstruction["type"]>([
+	"return",
+	"throw",
+	"jump",
+	"jumpIf",
+	"storeLocal",
+	"storeGlobal",
+	"storeCaptured",
+	"storeGlobalProperty",
+	"storeProperty",
+	"storeSuperProperty",
+	"setPrototype",
+	"requireCoercible",
+	"throwIfTdz",
+	"defineProperty",
+	"defineAccessor",
+	"mergeDataProperties",
+	"withEnter",
+]);
+
+/** IR kinds that write two leading destination registers (the iterator pairs). */
+const TWO_DESTINATIONS = new Set<IRInstruction["type"]>([
+	"getIterator",
+	"getAsyncIterator",
+	"iteratorStep",
+]);
+
+/** Whether a function contains any `with`-statement op (dynamic scoping). */
+function functionUsesWith(fn: IRFunction): boolean {
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (
+				instruction.type === "withEnter" ||
+				instruction.type === "withExit" ||
+				instruction.type === "withGet" ||
+				instruction.type === "withSet"
+			) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+/** The number of leading `registers` entries an instruction writes (defines). */
+function destinationCount(instruction: IRInstruction): number {
+	if (!("registers" in instruction) || WRITES_NO_REGISTER.has(instruction.type)) {
+		return 0;
+	}
+	return TWO_DESTINATIONS.has(instruction.type) ? 2 : 1;
+}
+
+/**
+ * Local (intra-block) copy propagation: after `move [dst, src]`, rewrite later
+ * reads of `dst` in the same block to `src`, until either is reassigned. The
+ * `move` is left in place; once all its in-block readers point at `src` and
+ * `dst` has no other use, optDeadInstructionElimination removes it. MOVE is the
+ * most common opcode (the front end copies a value into a working register
+ * before almost every use), so this shrinks both backends' output broadly.
+ *
+ * Safety: only operands past an instruction's destination registers are
+ * rewritten (a destination is never altered), and a register is dropped from the
+ * active copies the moment it — or the value it copies — is written. Copies do
+ * not cross block boundaries.
+ */
+function optCopyPropagation(program: IntermediateProgram): boolean {
+	let changed = false;
+
+	for (const fn of program.functions) {
+		// `with` makes variable resolution dynamic and lowers to a withGet →
+		// fallback shape that writes one result register across several blocks; its
+		// register liveness does not fit the simple intra-block model here, so skip
+		// such functions entirely (they are rare, sloppy-mode-only).
+		if (functionUsesWith(fn)) {
+			continue;
+		}
+
+		for (const block of fn.blocks) {
+			// copyOf.get(d) === s means register d currently holds the same value as
+			// register s (read s instead of d).
+			const copyOf = new Map<number, number>();
+
+			const invalidate = (register: number) => {
+				copyOf.delete(register);
+				for (const [dst, src] of copyOf) {
+					if (src === register) {
+						copyOf.delete(dst);
+					}
+				}
+			};
+
+			for (const instruction of block.instructions) {
+				if (!("registers" in instruction)) {
+					continue;
+				}
+				const defs = destinationCount(instruction);
+
+				// Rewrite use operands (those past the destinations) to their source.
+				for (let i = defs; i < instruction.registers.length; i++) {
+					const register = instruction.registers[i]!;
+					const source = copyOf.get(register);
+					if (source !== undefined && source !== register) {
+						instruction.registers[i] = source;
+						changed = true;
+					}
+				}
+
+				// A reassigned register (and any copy of it) is no longer current.
+				for (let i = 0; i < defs; i++) {
+					invalidate(instruction.registers[i]!);
+				}
+
+				// Record the new copy. The source was already rewritten above, so this
+				// collapses chains (a = b; c = a → c copies b).
+				if (instruction.type === "move" && defs === 1) {
+					const dst = instruction.registers[0];
+					const src = instruction.registers[1];
+					if (dst >= 0 && src >= 0 && dst !== src) {
+						copyOf.set(dst, src);
+					}
+				}
+			}
+		}
+	}
+
+	return changed;
+}
+
+/**
+ * Remove side-effect-free instructions whose destination register is never read
+ * anywhere in the function. Iterated to a fixpoint per function, so dropping one
+ * dead value can expose the instructions that fed it. This cleans up values the
+ * front end produced but never consumed (e.g. loads left orphaned once their
+ * only reader — a redundant TDZ check — was eliminated) and shrinks both
+ * backends' output.
+ *
+ * A register is "read" wherever it appears as a use. Only a SIDE_EFFECT_FREE op
+ * has a known single destination — its `registers[0]` — so only there is the
+ * first register excluded from the read set; for every other instruction all
+ * registers are treated as uses. That asymmetry is the safety margin: a use is
+ * never misclassified as a definition (which would wrongly drop its producer),
+ * while at worst a real definition is treated as a use (merely keeping a dead
+ * instruction). A side-effect-free instruction whose `registers[0]` is never
+ * read is then dead.
+ */
+function optDeadInstructionElimination(program: IntermediateProgram): boolean {
+	let changed = false;
+
+	for (const fn of program.functions) {
+		let localChanged = true;
+		while (localChanged) {
+			localChanged = false;
+
+			const read = new Set<number>();
+			for (const block of fn.blocks) {
+				for (const instruction of block.instructions) {
+					if (!("registers" in instruction)) {
+						continue;
+					}
+					// Skip registers[0] only for a side-effect-free op, where it is
+					// definitely the (sole) destination; otherwise count every register.
+					const firstIsUse = !SIDE_EFFECT_FREE_OPS.has(instruction.type);
+					for (let i = 0; i < instruction.registers.length; i++) {
+						const register = instruction.registers[i]!;
+						if (register >= 0 && (firstIsUse || i > 0)) {
+							read.add(register);
+						}
+					}
+				}
+			}
+
+			for (const block of fn.blocks) {
+				const kept = block.instructions.filter((instruction) => {
+					if (
+						!SIDE_EFFECT_FREE_OPS.has(instruction.type) ||
+						!("registers" in instruction)
+					) {
+						return true;
+					}
+					const dst = instruction.registers[0];
+					if (dst === undefined || dst < 0 || read.has(dst)) {
+						return true;
+					}
+					localChanged = true;
+					changed = true;
+					return false;
+				});
+				if (kept.length !== block.instructions.length) {
+					block.instructions = kept;
+				}
+			}
+		}
+	}
+
+	return changed;
 }
 
 /**

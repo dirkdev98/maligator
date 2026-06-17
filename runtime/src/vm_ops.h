@@ -269,6 +269,27 @@ void mal_vm_op_load_undeclared(MalVm *vm, i32 name_string_index);
 void mal_vm_op_throw_if_tdz(MalVm *vm, MalValue value, i32 name_string_index);
 
 /**
+ * Throw "Cannot destructure null or undefined" (TypeError) when `value` is null
+ * or undefined (RequireObjectCoercible). Shared by MAL_OP_REQUIRE_COERCIBLE and
+ * the compiled backend; sets vm->completion to THROW.
+ */
+void mal_vm_op_require_coercible(MalVm *vm, MalValue value);
+
+/** `delete object[key]`; returns the boolean result, strict failure throws. */
+MalValue mal_vm_op_delete_property(MalVm *vm, MalValue object_value, MalValue key_value, bool strict);
+
+/** Define a getter/setter on an object literal or class (no user code run). */
+void mal_vm_op_define_accessor(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalValue accessor, bool enumerable, bool is_setter
+);
+
+/** Object spread `{...source}` into target; a throwing getter sets completion. */
+void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue source);
+
+/** Set [[Prototype]] for an object-literal `__proto__:` member or class heritage. */
+void mal_vm_op_set_prototype(MalVm *vm, MalValue object_value, MalValue prototype_value, bool literal);
+
+/**
  * Sloppy-mode read of an unresolved name: return the global object's property
  * `name_string_index`, or throw ReferenceError if it is absent.
  */

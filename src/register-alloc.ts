@@ -69,7 +69,7 @@ function producesNumber(
 }
 
 /** The virtual register an instruction defines (writes), or null. */
-function definedRegister(instruction: IRInstruction): number | null {
+export function definedRegister(instruction: IRInstruction): number | null {
 	if (!("registers" in instruction) || USE_ONLY_FIRST_REGISTER.has(instruction.type)) {
 		return null;
 	}

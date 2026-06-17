@@ -7658,7 +7658,17 @@ function compileNewExpression(
 		return -1;
 	}
 
-	const callee = compileExpression(program, fn, cursor, calleeNode as ESTree.Expression);
+	let callee = compileExpression(program, fn, cursor, calleeNode as ESTree.Expression);
+
+	// An unsupported callee expression (e.g. dynamic `import()`) compiles to the
+	// "no value" sentinel register -1. Constructing it must throw a TypeError, not
+	// read an out-of-range register, so materialize an explicit `undefined`:
+	// `new undefined` is a non-constructor and throws deterministically on both
+	// backends (and keeps the function out of the native backend's r-1 bail).
+	if (callee < 0) {
+		callee = nextRegisterDestination(fn);
+		cursor.block.instructions.push({ type: "createUndefined", registers: [callee] });
+	}
 
 	if (expression.arguments.some((arg) => arg.type === "SpreadElement")) {
 		const argumentsArray = compileSpreadArgumentsArray(

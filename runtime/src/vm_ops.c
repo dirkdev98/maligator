@@ -2478,35 +2478,25 @@ void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction) {
 /**
  * Store a delete result, upgrading failures to the strict-mode TypeError.
  */
-static void mal_vm_finish_delete(MalCallable *callable, i32 dst, bool deleted) {
-    if (!deleted && callable->function->strict) {
-        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot delete property");
-        return;
-    }
-
-    callable->registers[dst] = mal_value_new_boolean(deleted);
-}
-
-void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction) {
-    MalValue object_value = callable->registers[instruction->as.delete_property.object];
-    MalValue key_value = callable->registers[instruction->as.delete_property.key];
-    i32 dst = instruction->as.delete_property.dst;
-
+// Shared by the interpreter op and the native backend: `delete object[key]`,
+// returning the boolean result. A strict-mode failed delete throws TypeError
+// (sets vm->completion); callers check completion.
+MalValue mal_vm_op_delete_property(MalVm *vm, MalValue object_value, MalValue key_value, bool strict) {
     if (mal_value_is_nil(object_value)) {
-        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
-        return;
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
+        return mal_value_new_undefined();
     }
 
     MalKey key;
-    if (!mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
-        callable->registers[dst] = mal_value_new_boolean(true);
-        return;
+    if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+        return mal_value_new_boolean(true);
     }
 
+    bool deleted;
     if (!mal_value_is_object(object_value)) {
         // The only own properties a primitive can carry live on strings:
         // length and the in-range indices, all non-configurable.
-        bool deleted = true;
+        deleted = true;
         if (mal_value_is_string(object_value)) {
             MalString *string = mal_value_to_string(object_value);
             if (mal_array_key_is_length(key) ||
@@ -2514,12 +2504,25 @@ void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction) 
                 deleted = false;
             }
         }
-
-        mal_vm_finish_delete(callable, dst, deleted);
-        return;
+    } else {
+        deleted = mal_vm_delete_property(vm, object_value, key);
     }
 
-    mal_vm_finish_delete(callable, dst, mal_vm_delete_property(callable->vm, object_value, key));
+    if (!deleted && strict) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot delete property");
+        return mal_value_new_undefined();
+    }
+
+    return mal_value_new_boolean(deleted);
+}
+
+void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.delete_property.dst] = mal_vm_op_delete_property(
+        callable->vm,
+        callable->registers[instruction->as.delete_property.object],
+        callable->registers[instruction->as.delete_property.key],
+        callable->function->strict
+    );
 }
 
 void mal_vm_op_load_undeclared(MalVm *vm, i32 name_string_index) {
@@ -2579,10 +2582,19 @@ void mal_op_store_global_property(MalCallable *callable, MalInstruction *instruc
     );
 }
 
-void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction) {
-    if (mal_value_is_nil(callable->registers[instruction->as.require_coercible.src])) {
-        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot destructure null or undefined");
+// Shared by the interpreter op and the native backend: throw a TypeError when
+// `value` is null or undefined (RequireObjectCoercible). Sets vm->completion.
+void mal_vm_op_require_coercible(MalVm *vm, MalValue value) {
+    if (mal_value_is_nil(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot destructure null or undefined");
     }
+}
+
+void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_require_coercible(
+        callable->vm,
+        callable->registers[instruction->as.require_coercible.src]
+    );
 }
 
 void mal_op_create_rest_arguments(MalCallable *callable, MalInstruction *instruction) {
@@ -2721,11 +2733,10 @@ void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruct
     callable->registers[instruction->as.copy_data_properties.dst] = mal_value_from_object(copy);
 }
 
-void mal_op_merge_data_properties(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    MalValue target_value = callable->registers[instruction->as.merge_data_properties.target];
-    MalValue source = callable->registers[instruction->as.merge_data_properties.src];
-
+// Shared by the interpreter op and the native backend: object spread
+// (`{...source}`) — copy source's own enumerable properties onto target with
+// CreateDataProperty semantics. A throwing getter sets vm->completion.
+void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue source) {
     // Spreading null/undefined contributes nothing.
     if (mal_value_is_nil(source)) {
         return;
@@ -2769,13 +2780,21 @@ void mal_op_merge_data_properties(MalCallable *callable, MalInstruction *instruc
     }
 }
 
-void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction) {
-    MalValue object_value = callable->registers[instruction->as.define_accessor.object];
-    MalValue key_value = callable->registers[instruction->as.define_accessor.key];
-    MalValue accessor = callable->registers[instruction->as.define_accessor.accessor];
+void mal_op_merge_data_properties(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_merge_data_properties(
+        callable->vm,
+        callable->registers[instruction->as.merge_data_properties.target],
+        callable->registers[instruction->as.merge_data_properties.src]
+    );
+}
 
+// Shared by the interpreter op and the native backend: define a getter or setter
+// on an object literal / class. Cannot run user code, so no completion to check.
+void mal_vm_op_define_accessor(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalValue accessor, bool enumerable, bool is_setter
+) {
     MalKey key;
-    if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
+    if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(vm, key_value, &key)) {
         return;
     }
 
@@ -2784,7 +2803,7 @@ void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction) 
     // Merge into an existing own accessor so get/set pairs land in a single
     // descriptor; literal definitions are enumerable, class ones are not.
     MalPropertyFlags flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE;
-    if (instruction->as.define_accessor.enumerable) {
+    if (enumerable) {
         flags |= MAL_PROPERTY_ENUMERABLE;
     }
 
@@ -2794,13 +2813,24 @@ void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction) 
         desc = existing.desc;
     }
 
-    if (instruction->as.define_accessor.is_setter) {
+    if (is_setter) {
         desc.setter = accessor;
     } else {
         desc.getter = accessor;
     }
 
     mal_object_define_own(object, key, &desc);
+}
+
+void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_define_accessor(
+        callable->vm,
+        callable->registers[instruction->as.define_accessor.object],
+        callable->registers[instruction->as.define_accessor.key],
+        callable->registers[instruction->as.define_accessor.accessor],
+        instruction->as.define_accessor.enumerable,
+        instruction->as.define_accessor.is_setter
+    );
 }
 
 void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool enumerable) {
@@ -2942,22 +2972,30 @@ void mal_op_has_private(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[dst] = mal_value_new_boolean(present);
 }
 
-void mal_op_set_prototype(MalCallable *callable, MalInstruction *instruction) {
-    MalValue object_value = callable->registers[instruction->as.set_prototype.object];
-    MalValue prototype_value = callable->registers[instruction->as.set_prototype.prototype];
-
+// Shared by the interpreter op and the native backend: set [[Prototype]] for an
+// object literal `__proto__:` member or class heritage wiring.
+void mal_vm_op_set_prototype(MalVm *vm, MalValue object_value, MalValue prototype_value, bool literal) {
+    (void) vm;
     if (!mal_value_is_object(object_value)) {
         return;
     }
 
-    if (instruction->as.set_prototype.literal &&
-        !mal_value_is_object(prototype_value) && !mal_value_is_null(prototype_value)) {
+    if (literal && !mal_value_is_object(prototype_value) && !mal_value_is_null(prototype_value)) {
         // B.3.1: object literal `__proto__:` members ignore other values.
         return;
     }
 
     MalObject *prototype = mal_value_is_object(prototype_value) ? mal_value_to_object(prototype_value) : nullptr;
     mal_object_set_prototype(mal_value_to_object(object_value), prototype);
+}
+
+void mal_op_set_prototype(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_set_prototype(
+        callable->vm,
+        callable->registers[instruction->as.set_prototype.object],
+        callable->registers[instruction->as.set_prototype.prototype],
+        instruction->as.set_prototype.literal
+    );
 }
 
 void mal_op_jump(MalCallable *callable, MalInstruction *instruction) {

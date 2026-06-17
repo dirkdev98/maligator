@@ -94,6 +94,8 @@ const C_HEADER_LINES = [
 	'#include "vm.h"',
 	'#include "vm_ops.h"',
 	'#include "value_ops.h"',
+	// The compiled (emit-c) for-of lowering uses the iterator-record helpers.
+	'#include "builtin_iterator.h"',
 	"",
 ];
 
@@ -124,6 +126,7 @@ function malFunctionRow(
 	handlersSymbol: string,
 	compiledSymbol: string,
 	debug: { positionsSymbol: string; positionCount: number; fileIndex: number },
+	omitBytecode = false,
 ): Array<string> {
 	return [
 		"    {",
@@ -135,10 +138,10 @@ function malFunctionRow(
 		`        .captured_count = ${fn.capturedCount},`,
 		`        .strict = ${fn.strict},`,
 		`        .needs_arguments = ${fn.needsArguments},`,
-		`        .instruction_count = ${fn.instructions.length},`,
-		`        .instructions = ${instructionsSymbol},`,
-		`        .handler_count = ${fn.handlers.length},`,
-		`        .handlers = ${handlersSymbol},`,
+		`        .instruction_count = ${omitBytecode ? 0 : fn.instructions.length},`,
+		`        .instructions = ${omitBytecode ? "nullptr" : instructionsSymbol},`,
+		`        .handler_count = ${omitBytecode ? 0 : fn.handlers.length},`,
+		`        .handlers = ${omitBytecode ? "nullptr" : handlersSymbol},`,
 		`        .compiled = ${compiledSymbol},`,
 		`        .file_index = ${debug.fileIndex},`,
 		`        .position_count = ${debug.positionCount},`,
@@ -216,22 +219,29 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 		}
 	}
 
+	// A function that always runs its compiled body (compiled, with no
+	// param-unboxing guard that could bail) never reaches the interpreter, so its
+	// bytecode and handler tables are dead weight — skip emitting them entirely.
+	const omitBytecode = compiled.map((c) => c !== null && !c.bailsToInterpreter);
+
 	const positionInfo: Array<{ symbol: string; count: number }> = [];
 
 	for (let i = 0; i < definition.functions.length; ++i) {
 		const fn = definition.functions[i]!;
-		lines.push(
-			`static const MalInstruction mal_function_${i}_instructions${suffix}[] = {`,
-		);
-		lines.push(instructionArrayBody(fn));
-		lines.push("};", "");
-
-		if (fn.handlers.length > 0) {
+		if (!omitBytecode[i]) {
 			lines.push(
-				`static const MalExceptionHandler mal_function_${i}_handlers${suffix}[] = {`,
+				`static const MalInstruction mal_function_${i}_instructions${suffix}[] = {`,
 			);
-			lines.push(handlerArrayBody(fn));
+			lines.push(instructionArrayBody(fn));
 			lines.push("};", "");
+
+			if (fn.handlers.length > 0) {
+				lines.push(
+					`static const MalExceptionHandler mal_function_${i}_handlers${suffix}[] = {`,
+				);
+				lines.push(handlerArrayBody(fn));
+				lines.push("};", "");
+			}
 		}
 
 		const runs = debug ? compressPositions(fn.positions) : [];
@@ -262,6 +272,7 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 					positionCount: positionInfo[i]!.count,
 					fileIndex: debug ? fn.fileIndex : 0,
 				},
+				omitBytecode[i],
 			),
 		);
 	}
@@ -397,9 +408,18 @@ export function emitBatch(definitions: Array<VmDefinition>): string {
 			}
 		}
 
+		// Always-compiled functions (no interpreter bail) need no bytecode tables.
+		const omitBytecode = compiled.map((c) => c !== null && !c.bailsToInterpreter);
+
 		const instructionSymbols: Array<string> = [];
 		const handlerSymbols: Array<string> = [];
-		for (const fn of definition.functions) {
+		for (let i = 0; i < definition.functions.length; ++i) {
+			const fn = definition.functions[i]!;
+			if (omitBytecode[i]) {
+				instructionSymbols.push("nullptr");
+				handlerSymbols.push("nullptr");
+				continue;
+			}
 			instructionSymbols.push(
 				intern("insns", "MalInstruction", instructionArrayBody(fn)),
 			);
@@ -420,6 +440,7 @@ export function emitBatch(definitions: Array<VmDefinition>): string {
 					compiled[i] !== null ? compiled[i]!.symbol : "nullptr",
 					// The batch path strips debug info (test262 does not use it).
 					{ positionsSymbol: "nullptr", positionCount: 0, fileIndex: 0 },
+					omitBytecode[i],
 				),
 			);
 		}

@@ -1,5 +1,5 @@
 import { emitBinaryOperator, emitIntrinsic, emitUnaryOperator } from "./emit-vm.ts";
-import type { VmFunction, VmInstruction } from "./lower-vm.ts";
+import type { VmExceptionHandler, VmFunction, VmInstruction } from "./lower-vm.ts";
 
 /**
  * The native-C backend: lower an eligible function straight to a C function
@@ -50,6 +50,13 @@ export interface CompiledFunction {
 	symbol: string;
 	/** The full `static MalValue ...(...) { ... }` definition. */
 	source: string;
+	/**
+	 * Whether the compiled body can fall back to the bytecode interpreter at
+	 * runtime. Only the speculative param-unboxing guard does so (via
+	 * mal_vm_interpret_function); a function with no promoted params never bails,
+	 * so its bytecode is dead and can be omitted from the emitted module.
+	 */
+	bailsToInterpreter: boolean;
 }
 
 /** Unary `+` on a BigInt throws, so it needs a completion check after. */
@@ -425,7 +432,11 @@ export function emitCompiledFunction(
 	);
 	lines.push("}");
 
-	return { symbol, source: lines.join("\n") };
+	return {
+		symbol,
+		source: lines.join("\n"),
+		bailsToInterpreter: promotedParams.length > 0,
+	};
 }
 
 /** The C type a register of the given rep is held in. */
@@ -475,20 +486,21 @@ function inferReps(fn: VmFunction, promotableParams: Set<number>): Array<Registe
 	while (changed) {
 		changed = false;
 		for (const instruction of fn.instructions) {
-			const dst = writeRegister(instruction);
-			if (dst === null || dst < 0) {
-				continue;
-			}
 			const produced = producedRep(instruction, reps);
 			// A definition whose rep can't be determined yet (an operand is still
 			// unknown) is left for a later iteration rather than forced to boxed.
 			if (produced === null) {
 				continue;
 			}
-			const joined = joinReps(reps[dst] ?? null, produced);
-			if (joined !== reps[dst]) {
-				reps[dst] = joined;
-				changed = true;
+			for (const dst of writeRegisters(instruction)) {
+				if (dst < 0) {
+					continue;
+				}
+				const joined = joinReps(reps[dst] ?? null, produced);
+				if (joined !== reps[dst]) {
+					reps[dst] = joined;
+					changed = true;
+				}
 			}
 		}
 	}
@@ -498,10 +510,24 @@ function inferReps(fn: VmFunction, promotableParams: Set<number>): Array<Registe
 	return reps.map((rep) => rep ?? "boxed");
 }
 
-/** The register an instruction writes (its dst), or null. */
-function writeRegister(instruction: VmInstruction): number | null {
-	const dst = (instruction as { dst?: number }).dst;
-	return typeof dst === "number" ? dst : null;
+/**
+ * Every register an instruction writes. Most ops write a single `dst`; the
+ * iterator ops write two (the GET_ITERATOR iterator/next pair, the ITERATOR_STEP
+ * value/done pair), both boxed. Reporting all of them keeps inferReps from
+ * mis-typing a register that the allocator also reused for a numeric value.
+ */
+function writeRegisters(instruction: VmInstruction): Array<number> {
+	switch (instruction.opcode) {
+		case "GET_ITERATOR":
+		case "GET_ASYNC_ITERATOR":
+			return [instruction.iteratorDst, instruction.nextDst];
+		case "ITERATOR_STEP":
+			return [instruction.valueDst, instruction.doneDst];
+		default: {
+			const dst = (instruction as { dst?: number }).dst;
+			return typeof dst === "number" ? [dst] : [];
+		}
+	}
 }
 
 /**
@@ -571,6 +597,28 @@ function emitBody(
 			jumpTargets.add(instruction.targetIp);
 		}
 	}
+	// Exception handlers are reached only via the on-throw goto, so their entry
+	// instructions also need labels. The active handler for an instruction is the
+	// innermost range covering it (smallest end-start), matching the interpreter's
+	// mal_vm_unwind_to_handler.
+	for (const handler of fn.handlers) {
+		jumpTargets.add(handler.handlerIp);
+	}
+	const handlerForIp = (ip: number): number | undefined => {
+		let best: VmExceptionHandler | undefined;
+		for (const handler of fn.handlers) {
+			if (ip < handler.startIp || ip >= handler.endIp) {
+				continue;
+			}
+			if (
+				best === undefined ||
+				handler.endIp - handler.startIp < best.endIp - best.startIp
+			) {
+				best = handler;
+			}
+		}
+		return best?.handlerIp;
+	};
 
 	const lines: Array<string> = [];
 	// Statement-granular source position for this compiled frame: write it into
@@ -594,7 +642,14 @@ function emitBody(
 			}
 		}
 
-		const emitted = emitInstruction(fn.instructions[ip]!, ip, suffix, reps, fn.strict);
+		const emitted = emitInstruction(
+			fn.instructions[ip]!,
+			ip,
+			suffix,
+			reps,
+			fn.strict,
+			handlerForIp(ip),
+		);
 		if (emitted === null) {
 			return null;
 		}
@@ -618,6 +673,7 @@ function emitInstruction(
 	suffix: string,
 	reps: Array<RegisterRep>,
 	strict: boolean,
+	handlerIp: number | undefined,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -638,6 +694,14 @@ function emitInstruction(
 			: reps[r] === "number"
 				? `(r${r} != 0.0 && r${r} == r${r})`
 				: `mal_value_is_truthy(r${r})`;
+
+	// Where control goes on a pending throw: into the innermost enclosing
+	// try/catch handler when this instruction is inside one (CATCH there reads
+	// vm->completion.value), otherwise out of the compiled frame (the dispatch
+	// caller observes vm->completion). Mirrors the interpreter's unwinder.
+	const onThrow =
+		handlerIp !== undefined ? `goto L${handlerIp};` : `return MAL_VALUE_UNDEFINED;`;
+	const throwCheck = `if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`;
 
 	switch (instruction.opcode) {
 		case "MOVE": {
@@ -666,7 +730,7 @@ function emitInstruction(
 			// throw propagates out, exactly like the interpreter op.
 			return [
 				`mal_vm_op_throw_if_tdz(vm, ${boxed(instruction.src)}, ${instruction.nameStringIndex});`,
-				`if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
+				throwCheck,
 			];
 		case "IS_EMPTY":
 			// Tests for the TDZ sentinel (used by default-value / with fallbacks).
@@ -720,6 +784,28 @@ function emitInstruction(
 			return [
 				`mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable});`,
 			];
+		case "DEFINE_ACCESSOR":
+			// Object-literal / class getter or setter; no user code run.
+			return [
+				`mal_vm_op_define_accessor(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.accessor)}, ${instruction.enumerable}, ${instruction.isSetter});`,
+			];
+		case "SET_PROTOTYPE":
+			// Object-literal `__proto__:` member / class heritage; no user code run.
+			return [
+				`mal_vm_op_set_prototype(vm, ${boxed(instruction.object)}, ${boxed(instruction.prototype)}, ${instruction.literal});`,
+			];
+		case "MERGE_DATA_PROPERTIES":
+			// Object spread `{...src}`: a source getter can throw, so propagate.
+			return [
+				`mal_vm_op_merge_data_properties(vm, ${boxed(instruction.target)}, ${boxed(instruction.src)});`,
+				throwCheck,
+			];
+		case "DELETE_PROPERTY":
+			// `delete object[key]`; a strict-mode failed delete throws.
+			return [
+				`r${instruction.dst} = mal_vm_op_delete_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${strict});`,
+				throwCheck,
+			];
 		case "LOAD_THIS":
 			return [`r${instruction.dst} = this_value;`];
 		case "LOAD_NEW_TARGET":
@@ -735,17 +821,17 @@ function emitInstruction(
 		case "LOAD_PROPERTY":
 			return [
 				`r${instruction.dst} = mal_vm_op_load_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
-				`if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
+				throwCheck,
 			];
 		case "STORE_PROPERTY":
 			return [
 				`mal_vm_op_store_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict});`,
-				`if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
+				throwCheck,
 			];
 		case "TO_PROPERTY_KEY":
 			return [
 				`r${instruction.dst} = mal_vm_op_to_property_key(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
-				`if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
+				throwCheck,
 			];
 		case "LOAD_GLOBAL":
 			return [`r${instruction.dst} = vm->globals[${instruction.index}];`];
@@ -802,7 +888,7 @@ function emitInstruction(
 			}
 
 			const slow = `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`;
-			const completionCheck = `if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`;
+			const completionCheck = throwCheck;
 			// Store a C bool into the dst: raw for a boolean-rep register, boxed
 			// otherwise. Comparisons (and the boolean cases below) flow through here.
 			const storeBool = (boolExpr: string): string =>
@@ -909,9 +995,7 @@ function emitInstruction(
 				`r${dst} = mal_vm_unary_op(vm, ${emitUnaryOperator(operator)}, ${boxed(src)});`,
 			];
 			if (THROWING_UNARY_OPERATORS.has(operator)) {
-				lowered.push(
-					`if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
-				);
+				lowered.push(throwCheck);
 			}
 			return lowered;
 		}
@@ -928,7 +1012,7 @@ function emitInstruction(
 			const tmp = `call_result_${ip}`;
 			return [
 				`MalCompletion ${tmp} = mal_vm_call_value(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-				`if (${tmp}.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 			];
 		}
@@ -944,26 +1028,68 @@ function emitInstruction(
 			const tmp = `construct_result_${ip}`;
 			return [
 				`MalCompletion ${tmp} = mal_vm_construct_value(vm, ${boxed(instruction.callee)}, ${argsExpr}, ${args.length});`,
-				`if (${tmp}.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 			];
 		}
 		case "THROW":
-			// Set the throw completion and return; the caller (call/construct
-			// dispatch or the run loop) unwinds, exactly as MAL_OP_THROW does. A
-			// function with its own try/catch is ineligible (no handler table), so
-			// the throw always propagates out of this compiled frame.
+			// Set the throw completion, then route to the enclosing handler (a
+			// try/catch in this same function) or out of the frame, exactly as
+			// MAL_OP_THROW + the interpreter's unwinder do.
 			return [
 				`vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_THROW, .value = ${boxed(instruction.value)} };`,
-				`return MAL_VALUE_UNDEFINED;`,
+				onThrow,
 			];
 		case "LOAD_UNDECLARED":
 			// An undeclared reference always throws ReferenceError; the helper sets
-			// the throw completion, so propagate it (the dst is never read).
+			// the throw completion, so route it to the handler / out of the frame.
+			return [`mal_vm_op_load_undeclared(vm, ${instruction.nameStringIndex});`, onThrow];
+		case "TRY_BEGIN":
+		case "TRY_END":
+			// Markers only: the protected range becomes the per-instruction handler
+			// target computed in emitBody (the `onThrow` goto), so no code is needed.
+			return [];
+		case "CATCH":
+			// Handler entry: bind the pending thrown value and clear the completion,
+			// exactly as mal_op_catch does. The dst is boxed (any value can be caught).
 			return [
-				`mal_vm_op_load_undeclared(vm, ${instruction.nameStringIndex});`,
-				`return MAL_VALUE_UNDEFINED;`,
+				`r${instruction.dst} = vm->completion.value;`,
+				`vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED };`,
 			];
+		case "REQUIRE_COERCIBLE":
+			// Destructuring / member-base coercibility: null or undefined throws.
+			return [`mal_vm_op_require_coercible(vm, ${boxed(instruction.src)});`, throwCheck];
+		case "GET_ITERATOR": {
+			const rec = `iter_rec_${ip}`;
+			return [
+				`MalIteratorRecord ${rec};`,
+				`if (!mal_vm_get_iterator(vm, ${boxed(instruction.source)}, &${rec})) ${onThrow}`,
+				`r${instruction.iteratorDst} = ${rec}.iterator;`,
+				`r${instruction.nextDst} = ${rec}.next_method;`,
+			];
+		}
+		case "ITERATOR_STEP": {
+			const rec = `iter_rec_${ip}`;
+			const val = `iter_val_${ip}`;
+			const done = `iter_done_${ip}`;
+			return [
+				`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
+				`MalValue ${val}; bool ${done};`,
+				`if (!mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})) ${onThrow}`,
+				`r${instruction.valueDst} = ${val};`,
+				reps[instruction.doneDst] === "boolean"
+					? `r${instruction.doneDst} = ${done};`
+					: `r${instruction.doneDst} = mal_value_new_boolean(${done});`,
+			];
+		}
+		case "ITERATOR_CLOSE": {
+			const rec = `iter_rec_${ip}`;
+			return [
+				`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = MAL_VALUE_UNDEFINED };`,
+				`mal_vm_iterator_close(vm, &${rec});`,
+				throwCheck,
+			];
+		}
 		case "JUMP":
 			return [`goto L${instruction.targetIp};`];
 		case "JUMP_IF":
