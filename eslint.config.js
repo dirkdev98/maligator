@@ -6,6 +6,6 @@ export default defineConfig(
 		disableImportOrdering: true,
 	},
 	{
-		ignores: ["tests/local"],
+		ignores: ["tests/local", "bench"],
 	},
 );

@@ -1,5 +1,5 @@
 import { debugIntermediateProgram } from "./ir.ts";
-import type { IntermediateProgram } from "./ir.ts";
+import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
 import { isNil } from "./utils.ts";
 
 /**
@@ -11,6 +11,12 @@ import { isNil } from "./utils.ts";
  * behave the same?
  */
 export function executeIROptimizations(program: IntermediateProgram) {
+	// Eliminate provably-redundant temporal-dead-zone checks before the main
+	// fixpoint. It needs to see the original `loadLocal`/`storeLocal` form
+	// (optLocalsToRegister below rewrites those into `move`s), so it runs once
+	// up front against the pristine IR.
+	optEliminateRedundantTdzChecks(program);
+
 	const passes = [
 		optDropInstructionsAfterJumpsOrReturns,
 		optDropUnreferencedBlocks,
@@ -288,6 +294,197 @@ function optCombineLinearBlocks(program: IntermediateProgram): boolean {
 	}
 
 	return changed;
+}
+
+/**
+ * Eliminate temporal-dead-zone checks that are provably redundant.
+ *
+ * Every read of a `let`/`const`/class binding emits a `throwIfTdz` against the
+ * uninitialized ("empty") sentinel, and every block scope seeds its bindings
+ * with a `createEmpty` hole-init. For the overwhelmingly common case — a binding
+ * declared-with-initializer (or a loop variable) read only after that store —
+ * the check can never fire. Removing it both drops a per-read instruction from
+ * the interpreter's hot loop and, crucially, removes the only constructs
+ * (`createEmpty` / `throwIfTdz`) the native (emit-c) backend cannot lower, so the
+ * whole function becomes eligible and its loop counters can stay unboxed.
+ *
+ * Soundness: a `throwIfTdz` is dropped only where a forward must-analysis proves
+ * the slot is definitely initialized (a non-empty store dominates the read on
+ * every path). The analysis is restricted to function-local slots
+ * (`loadLocal`/`storeLocal`); captured and global bindings can be initialized by
+ * another function, so their checks are left alone. Exception-handler edges are
+ * treated conservatively (the handler entry sees nothing as initialized).
+ */
+function optEliminateRedundantTdzChecks(program: IntermediateProgram) {
+	for (const fn of program.functions) {
+		eliminateRedundantTdzChecksInFunction(fn);
+	}
+}
+
+function eliminateRedundantTdzChecksInFunction(fn: IRFunction) {
+	const blocks = fn.blocks;
+	if (blocks.length === 0) {
+		return;
+	}
+
+	// `with` (sloppy mode) introduces the empty sentinel through `withGet`, which
+	// would defeat the empty-value tracking below. Such functions are never
+	// native-backend eligible anyway, so skip them outright.
+	for (const block of blocks) {
+		for (const instr of block.instructions) {
+			if (instr.type === "withGet" || instr.type === "withEnter") {
+				return;
+			}
+		}
+	}
+
+	// Blocks reached by a non-local edge (exception handler / tryEnd marker) are
+	// pinned to "nothing initialized": a throw can arrive before any store ran.
+	const pinnedEmpty = new Set<number>();
+	const allSlots = new Set<number>();
+	for (const block of blocks) {
+		for (const instr of block.instructions) {
+			if (instr.type === "tryBegin") {
+				for (const target of instr.blocks) {
+					pinnedEmpty.add(target);
+				}
+			} else if (instr.type === "storeLocal" || instr.type === "loadLocal") {
+				allSlots.add(instr.index);
+			}
+		}
+	}
+	if (allSlots.size === 0) {
+		return;
+	}
+
+	// Forward must-analysis: inSets[b] = local slots definitely initialized on
+	// entry to b. Entry/exception blocks start empty; the rest start at top (all
+	// slots) and are intersected down to a fixpoint. A `jumpIf` continues in-block
+	// when not taken, so it is a branch — not a terminator.
+	const inSets: Array<Set<number>> = blocks.map((_, b) =>
+		b === 0 || pinnedEmpty.has(b) ? new Set<number>() : new Set(allSlots),
+	);
+
+	const startSet = (b: number): Set<number> =>
+		b === 0 || pinnedEmpty.has(b) ? new Set<number>() : inSets[b]!;
+
+	const propagate = (target: number, set: Set<number>): boolean => {
+		if (pinnedEmpty.has(target)) {
+			return false;
+		}
+		const current = inSets[target]!;
+		let shrank = false;
+		for (const slot of current) {
+			if (!set.has(slot)) {
+				current.delete(slot);
+				shrank = true;
+			}
+		}
+		return shrank;
+	};
+
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (let b = 0; b < blocks.length; b++) {
+			const cur = new Set(startSet(b));
+			const empties = new Set<number>();
+			let terminated = false;
+			for (const instr of blocks[b]!.instructions) {
+				if (instr.type === "createEmpty") {
+					empties.add(instr.registers[0]);
+				} else if (instr.type === "storeLocal") {
+					if (empties.has(instr.registers[0])) {
+						cur.delete(instr.index);
+					} else {
+						cur.add(instr.index);
+					}
+				} else if (instr.type === "jumpIf") {
+					changed = propagate(instr.blocks[0], cur) || changed;
+				} else if (instr.type === "jump") {
+					changed = propagate(instr.blocks[0], cur) || changed;
+					terminated = true;
+					break;
+				} else if (instr.type === "return" || instr.type === "throw") {
+					terminated = true;
+					break;
+				}
+			}
+			if (!terminated && b + 1 < blocks.length) {
+				changed = propagate(b + 1, cur) || changed;
+			}
+		}
+	}
+
+	// Removal pass: drop each throwIfTdz whose local slot is definitely
+	// initialized at that point. A throwIfTdz always immediately follows the load
+	// that produced its register, so the register→slot map is fresh.
+	const stillChecked = new Set<number>();
+	const removable = new Set<IRInstruction>();
+	for (let b = 0; b < blocks.length; b++) {
+		const cur = new Set(startSet(b));
+		const empties = new Set<number>();
+		const regToSlot = new Map<number, number>();
+		for (const instr of blocks[b]!.instructions) {
+			switch (instr.type) {
+				case "createEmpty":
+					empties.add(instr.registers[0]);
+					break;
+				case "storeLocal":
+					if (empties.has(instr.registers[0])) {
+						cur.delete(instr.index);
+					} else {
+						cur.add(instr.index);
+					}
+					break;
+				case "loadLocal":
+					regToSlot.set(instr.registers[0], instr.index);
+					break;
+				case "throwIfTdz": {
+					const slot = regToSlot.get(instr.registers[0]);
+					if (slot === undefined) {
+						// A global/captured read — not analyzed here.
+					} else if (cur.has(slot)) {
+						removable.add(instr);
+					} else {
+						stillChecked.add(slot);
+					}
+					break;
+				}
+			}
+		}
+	}
+
+	if (removable.size === 0) {
+		return;
+	}
+
+	// Drop the proven-redundant checks, plus any hole-init whose slot has no
+	// surviving check (its empty value can never be observed). The hole-init is
+	// always `createEmpty [r]` immediately followed by `storeLocal [r]`.
+	for (const block of blocks) {
+		const instrs = block.instructions;
+		const next: Array<IRInstruction> = [];
+		for (let i = 0; i < instrs.length; i++) {
+			const instr = instrs[i]!;
+			if (instr.type === "throwIfTdz" && removable.has(instr)) {
+				continue;
+			}
+			if (instr.type === "createEmpty") {
+				const store = instrs[i + 1];
+				if (
+					store?.type === "storeLocal" &&
+					store.registers[0] === instr.registers[0] &&
+					!stillChecked.has(store.index)
+				) {
+					i++;
+					continue;
+				}
+			}
+			next.push(instr);
+		}
+		block.instructions = next;
+	}
 }
 
 /**

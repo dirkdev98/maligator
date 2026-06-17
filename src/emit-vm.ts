@@ -24,6 +24,14 @@ export interface EmitOptions {
 	 * the code-size baseline stable).
 	 */
 	debugInfo?: boolean;
+
+	/**
+	 * Emit the native-backend (emit-c) compiled function bodies and wire them
+	 * into `MalFunction.compiled`. Defaults to true. Set false to force every
+	 * function through the bytecode interpreter — used for profiling the pure
+	 * interpreter path against the native overlay.
+	 */
+	compiled?: boolean;
 }
 
 /**
@@ -164,6 +172,7 @@ function handlerArrayBody(fn: VmDefinition["functions"][number]): string {
 export function emitVmDefinition(definition: VmDefinition, options: EmitOptions = {}) {
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
+	const useCompiled = options.compiled !== false;
 	// Compiled functions call mal_vm_binary_op (vm_ops.h) and box unboxed doubles
 	// via mal_ops_number_value (value_ops.h); include both alongside vm.h.
 	const lines = options.includeHeader === false ? [] : [...C_HEADER_LINES];
@@ -199,7 +208,7 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 	// references their symbols) and after the constant pools (which they may
 	// reference). The bytecode is still emitted below as a fallback / for `new`.
 	const compiled: Array<CompiledFunction | null> = definition.functions.map((fn, i) =>
-		emitCompiledFunction(fn, i, suffix, debug),
+		useCompiled ? emitCompiledFunction(fn, i, suffix, debug) : null,
 	);
 	for (const fn of compiled) {
 		if (fn !== null) {

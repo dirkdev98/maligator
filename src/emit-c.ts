@@ -656,6 +656,25 @@ function emitInstruction(
 			return [`r${instruction.dst} = MAL_VALUE_UNDEFINED;`];
 		case "CREATE_NULL":
 			return [`r${instruction.dst} = MAL_VALUE_NULL;`];
+		case "CREATE_EMPTY":
+			// The TDZ hole sentinel. The dst is always boxed-rep (producedRep
+			// defaults it to boxed), so a number/boolean register never holds it.
+			return [`r${instruction.dst} = MAL_VALUE_EMPTY;`];
+		case "THROW_IF_TDZ":
+			// Read-before-initialization check on a let/const/class binding. The
+			// helper throws (setting the completion) only on the empty sentinel; a
+			// throw propagates out, exactly like the interpreter op.
+			return [
+				`mal_vm_op_throw_if_tdz(vm, ${boxed(instruction.src)}, ${instruction.nameStringIndex});`,
+				`if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;`,
+			];
+		case "IS_EMPTY":
+			// Tests for the TDZ sentinel (used by default-value / with fallbacks).
+			return [
+				reps[instruction.dst] === "boolean"
+					? `r${instruction.dst} = mal_value_is_empty(${boxed(instruction.src)});`
+					: `r${instruction.dst} = mal_value_new_boolean(mal_value_is_empty(${boxed(instruction.src)}));`,
+			];
 		case "CREATE_BOOLEAN":
 			return [
 				reps[instruction.dst] === "boolean"

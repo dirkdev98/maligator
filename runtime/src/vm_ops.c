@@ -368,11 +368,12 @@ void mal_op_create_empty(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_empty.dst] = mal_value_new_empty();
 }
 
-void mal_op_throw_if_tdz(MalCallable *callable, MalInstruction *instruction) {
-    if (mal_value_is_empty(callable->registers[instruction->as.throw_if_tdz.src])) {
-        MalVm *vm = callable->vm;
-        MalString *constant =
-            &vm->definition->string_constants[instruction->as.throw_if_tdz.name_string_index];
+// Shared by the interpreter op and the native (emit-c) backend: throw a
+// ReferenceError naming the binding when `value` is the uninitialized sentinel.
+// A no-op (no completion change) otherwise; callers check vm->completion.
+void mal_vm_op_throw_if_tdz(MalVm *vm, MalValue value, i32 name_string_index) {
+    if (mal_value_is_empty(value)) {
+        MalString *constant = &vm->definition->string_constants[name_string_index];
         MalValue message = mal_ops_add(
             &vm->heap,
             mal_value_from_string(mal_intrinsic_ascii(vm, "Cannot access '")),
@@ -384,6 +385,14 @@ void mal_op_throw_if_tdz(MalCallable *callable, MalInstruction *instruction) {
         );
         mal_vm_throw_error_value(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, message);
     }
+}
+
+void mal_op_throw_if_tdz(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_throw_if_tdz(
+        callable->vm,
+        callable->registers[instruction->as.throw_if_tdz.src],
+        instruction->as.throw_if_tdz.name_string_index
+    );
 }
 
 void mal_op_create_null(MalCallable *callable, MalInstruction *instruction) {
@@ -1030,10 +1039,20 @@ static bool mal_vm_op_is_relational(MalBinaryOp op) {
 // toString) it sets the pending completion and returns undefined; callers
 // observe the throw via vm->completion.
 MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right) {
+    // Fast path: when both operands are already numbers, ToPrimitive/ToNumeric
+    // are no-ops that cannot throw (numbers are primitive, never Symbol/BigInt/
+    // object), so skip the entire coercion preamble and dispatch straight to the
+    // numeric mal_ops_* below. This is the dominant case in arithmetic-heavy
+    // loops running on the interpreter and removes two non-inlined coercion calls
+    // per operation.
+    const bool both_numbers = mal_ops_is_number(left) && mal_ops_is_number(right);
+
     // Coerce operands to primitives per the operator's abstract operation. This
     // is the VM-aware ToPrimitive (valueOf/toString/@@toPrimitive) the VM-less
     // mal_ops_* helpers cannot perform; primitives pass through unchanged.
-    if (op == MAL_BIN_ADD) {
+    if (both_numbers) {
+        // No coercion needed; fall through to the dispatch switch below.
+    } else if (op == MAL_BIN_ADD) {
         // Spec EvaluateStringOrNumericBinaryExpression: ToPrimitive(no hint) on
         // both, in order. mal_ops_add / mal_vm_bigint_arith then decide string
         // concat vs numeric add on the resulting primitives.
@@ -1638,6 +1657,20 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
         return true;
     }
 
+    // Fast path for an ordinary object: it has no synthetic properties (those
+    // belong to arrays / typed arrays / functions / module namespaces) and is
+    // not a string-wrapper exotic, so skip both of those probes and go straight
+    // to the prototype-chain table lookup. This is the overwhelmingly common
+    // shape (object literals, class instances) and the property-access hot path.
+    if (mal_value_heap_type(object_value) == MAL_HEAP_OBJECT) {
+        MalPropertyResolution resolution =
+            mal_object_resolve_property(mal_value_to_object(object_value), key);
+        if (!resolution.found) {
+            return true;
+        }
+        return mal_vm_desc_read(vm, resolution.desc, receiver, out);
+    }
+
     MalValue synthetic;
     if (mal_vm_resolve_synthetic_property(vm, object_value, key, &synthetic)) {
         if (mal_value_is_empty(synthetic)) {
@@ -1681,6 +1714,12 @@ bool mal_vm_has_property(MalVm *vm, MalValue object_value, MalKey key) {
     // A proxy routes [[HasProperty]] through its handler trap (or its target).
     if (mal_value_is_proxy_object(object_value)) {
         return mal_proxy_has(vm, mal_value_to_proxy_object(object_value), key);
+    }
+
+    // Ordinary objects have no synthetic or string-wrapper-exotic properties
+    // (see mal_vm_get_property_with_receiver): go straight to the table lookup.
+    if (mal_value_heap_type(object_value) == MAL_HEAP_OBJECT) {
+        return mal_object_resolve_property(mal_value_to_object(object_value), key).found;
     }
 
     MalValue synthetic;

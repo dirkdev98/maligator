@@ -926,23 +926,40 @@ void mal_vm_report_unhandled_rejections(MalVm *vm) {
 }
 
 void mal_vm_run(MalVm *vm, MalCallable *callable) {
-    // The entry function takes no arguments, so the marshaling region is empty.
-    mal_vm_push_function_frame(
-        vm,
-        (i32) (callable->function - vm->definition->functions),
-        nullptr,
-        mal_value_new_undefined(),
-        0,
-        -1,
-        -1
-    );
-    mal_vm_run_until_frame_count(vm, 0);
+    i32 entry_index = (i32) (callable->function - vm->definition->functions);
+    const MalFunction *entry = &vm->definition->functions[entry_index];
+    MalCompletion script_completion;
+
+    if (entry->compiled != nullptr) {
+        // Native-backend entry: invoke directly (no interpreter frame). It returns
+        // the module completion value; a throw surfaces via vm->completion. Calls
+        // it makes to interpreted functions push their own frames, so the value
+        // stack needs no entry activation. The entry takes no args and runs with
+        // `this` undefined and no creation environment (matching the frame below).
+        vm->completion =
+            (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+        if (!mal_vm_enter_compiled(vm, entry_index)) {
+            script_completion = vm->completion;
+        } else {
+            MalValue value = entry->compiled(
+                vm, mal_value_new_undefined(), nullptr, 0, mal_value_new_undefined(), nullptr
+            );
+            mal_vm_leave_compiled(vm);
+            script_completion = vm->completion.kind == MAL_COMPLETION_THROW
+                ? vm->completion
+                : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+        }
+    } else {
+        // The entry function takes no arguments, so the marshaling region is empty.
+        mal_vm_push_function_frame(vm, entry_index, nullptr, mal_value_new_undefined(), 0, -1, -1);
+        mal_vm_run_until_frame_count(vm, 0);
+        script_completion = vm->completion;
+    }
 
     // The top-level script has run to completion; capture its result, then run
     // the microtask queue to empty (promise reactions, await resumptions). The
     // drain happens at a baseline frame count so reaction handlers re-enter the
     // interpreter without nesting on a partial activation.
-    MalCompletion script_completion = vm->completion;
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
     mal_vm_drain_microtasks(vm);
 

@@ -262,6 +262,13 @@ void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_va
 void mal_vm_op_load_undeclared(MalVm *vm, i32 name_string_index);
 
 /**
+ * Throw "Cannot access '<name>' before initialization" (ReferenceError) when
+ * `value` is the uninitialized (TDZ) sentinel; otherwise a no-op. Shared by
+ * MAL_OP_THROW_IF_TDZ and the compiled backend; sets vm->completion to THROW.
+ */
+void mal_vm_op_throw_if_tdz(MalVm *vm, MalValue value, i32 name_string_index);
+
+/**
  * Sloppy-mode read of an unresolved name: return the global object's property
  * `name_string_index`, or throw ReferenceError if it is absent.
  */

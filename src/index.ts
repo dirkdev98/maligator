@@ -69,7 +69,9 @@ lowerTiming();
 const stats = vmDefinitionStats(vmDefinition);
 log.info(`Functions: ${stats.functionCount}, instructions: ${stats.instructionCount}`);
 
-const output = emitVmDefinition(vmDefinition);
+const output = emitVmDefinition(vmDefinition, {
+	compiled: !argFlag("--no-compiled"),
+});
 if (argFlag("--emit-c") || argFlag("--print")) {
 	log.info(output);
 }
