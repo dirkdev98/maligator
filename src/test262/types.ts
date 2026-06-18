@@ -15,7 +15,6 @@ export interface Test262Frontmatter {
 export type Test262Result =
 	| "UNKNOWN"
 	| "SKIPPED"
-	| "UNSUPPORTED"
 	| "COMPILE_FAILED"
 	| "PASSED"
 	| "FAILED"

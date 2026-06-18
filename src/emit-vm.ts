@@ -703,6 +703,8 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_PROMISE_CONSTRUCTOR";
 		case "Date":
 			return "MAL_INTRINSIC_DATE_CONSTRUCTOR";
+		case "RegExp":
+			return "MAL_INTRINSIC_REGEXP_CONSTRUCTOR";
 		case "Intl":
 			return "MAL_INTRINSIC_INTL";
 		case "Iterator":

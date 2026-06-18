@@ -58,6 +58,30 @@ bool mal_value_is_intl_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_INTL_OBJECT);
 }
 
+bool mal_value_is_regexp_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_REGEXP_OBJECT);
+}
+
+MalRegExpObject *mal_value_to_regexp_object(MalValue value) {
+    return (MalRegExpObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_regexp_object(MalRegExpObject *regexp) {
+    return mal_value_from_heap((MalHeapHeader *) regexp);
+}
+
+bool mal_value_is_regexp_string_iterator_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT);
+}
+
+MalRegExpStringIteratorObject *mal_value_to_regexp_string_iterator_object(MalValue value) {
+    return (MalRegExpStringIteratorObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_regexp_string_iterator_object(MalRegExpStringIteratorObject *iterator) {
+    return mal_value_from_heap((MalHeapHeader *) iterator);
+}
+
 MalIntlObject *mal_value_to_intl_object(MalValue value) {
     return (MalIntlObject *) mal_value_to_heap(value);
 }

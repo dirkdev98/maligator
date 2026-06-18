@@ -25,6 +25,7 @@
 #include "builtin_object.h"
 #include "builtin_promise.h"
 #include "builtin_proxy.h"
+#include "builtin_regexp.h"
 #include "builtin_reflect.h"
 #include "builtin_set.h"
 #include "builtin_string.h"
@@ -246,6 +247,7 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_console_install(vm);
     mal_builtin_promise_install(vm);
     mal_builtin_date_install(vm);
+    mal_builtin_regexp_install(vm);
     mal_builtin_intl_install(vm);
     mal_builtin_uri_install(vm);
 
@@ -279,6 +281,7 @@ void mal_intrinsics_init(MalVm *vm) {
         MAL_INTRINSIC_TYPED_ARRAY_CONSTRUCTOR,
         MAL_INTRINSIC_PROMISE_CONSTRUCTOR,
         MAL_INTRINSIC_DATE_CONSTRUCTOR,
+        MAL_INTRINSIC_REGEXP_CONSTRUCTOR,
         MAL_INTRINSIC_INTL_LOCALE_CONSTRUCTOR,
         MAL_INTRINSIC_INTL_COLLATOR_CONSTRUCTOR,
         MAL_INTRINSIC_INTL_NUMBER_FORMAT_CONSTRUCTOR,
@@ -378,6 +381,7 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "console", vm->intrinsics[MAL_INTRINSIC_CONSOLE], flags);
     mal_intrinsic_define_data(vm, global_this, "Promise", vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Date", vm->intrinsics[MAL_INTRINSIC_DATE_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "RegExp", vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Intl", vm->intrinsics[MAL_INTRINSIC_INTL], flags);
     mal_intrinsic_define_data(vm, global_this, "AggregateError", vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Iterator", vm->intrinsics[MAL_INTRINSIC_ITERATOR_CONSTRUCTOR], flags);

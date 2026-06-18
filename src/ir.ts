@@ -1023,6 +1023,7 @@ type IRIntrinsic =
 	| "WeakSet"
 	| "Promise"
 	| "Date"
+	| "RegExp"
 	| "Intl"
 	| "Iterator"
 	| "AsyncIterator"
@@ -1083,6 +1084,7 @@ const irIntrinsics = new Set<string>([
 	"WeakSet",
 	"Promise",
 	"Date",
+	"RegExp",
 	"Intl",
 	"Iterator",
 	"AsyncIterator",
@@ -8097,6 +8099,29 @@ function compileLiteral(
 		cursor.block.instructions.push({
 			type: "createNull",
 			registers: [destination],
+		});
+
+		return destination;
+	}
+
+	// A regex literal `/pattern/flags` lowers to `new %RegExp%(pattern, flags)`.
+	// Using the RegExp intrinsic (not a global lookup) matches the spec: a literal
+	// always uses the original %RegExp%, immune to reassigning the global binding.
+	// (The compiled matcher is rebuilt per evaluation; a per-site cache is a
+	// possible later optimization.)
+	if ("regex" in literal && literal.regex) {
+		const constructor = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadIntrinsic",
+			registers: [constructor],
+			intrinsic: "RegExp",
+		});
+		const patternReg = compileStaticString(program, fn, cursor, literal.regex.pattern);
+		const flagsReg = compileStaticString(program, fn, cursor, literal.regex.flags);
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "construct",
+			registers: [destination, constructor, patternReg, flagsReg],
 		});
 
 		return destination;

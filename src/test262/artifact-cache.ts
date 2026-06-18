@@ -46,11 +46,10 @@ export interface BatchManifest {
 	hasBinary: boolean;
 	/** Tests that produced C, in driver index order. */
 	entries: Array<{ path: string; index: number }>;
-	/** Tests resolved during compile (skipped / unsupported / compile-failed). */
+	/** Tests resolved during compile (skipped / compile-failed). */
 	resolved: Array<{
 		path: string;
 		result: string;
-		unsupported?: Array<string>;
 		failure?: string;
 	}>;
 	stats: {

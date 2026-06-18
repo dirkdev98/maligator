@@ -149,6 +149,11 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_PROXY_CONSTRUCTOR,
     MAL_INTRINSIC_DATE_CONSTRUCTOR,
     MAL_INTRINSIC_DATE_PROTOTYPE,
+    MAL_INTRINSIC_REGEXP_CONSTRUCTOR,
+    MAL_INTRINSIC_REGEXP_PROTOTYPE,
+    // %RegExpStringIteratorPrototype%: the prototype of the iterator returned by
+    // RegExp.prototype[@@matchAll] / String.prototype.matchAll.
+    MAL_INTRINSIC_REGEXP_STRING_ITERATOR_PROTOTYPE,
     // The Intl namespace object + each service's constructor/prototype pair.
     MAL_INTRINSIC_INTL,
     MAL_INTRINSIC_INTL_LOCALE_CONSTRUCTOR,

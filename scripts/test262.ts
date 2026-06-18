@@ -181,7 +181,7 @@ function foldResult(file: Test262File): "PASSED" | "SKIPPED" | "FAILED" {
 	if (file.result === "PASSED") {
 		return "PASSED";
 	}
-	if (file.result === "SKIPPED" || file.result === "UNSUPPORTED") {
+	if (file.result === "SKIPPED") {
 		return "SKIPPED";
 	}
 	return "FAILED";

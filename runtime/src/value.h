@@ -22,6 +22,8 @@ typedef struct MalIteratorHelperObject MalIteratorHelperObject;
 typedef struct MalPrimitiveWrapperObject MalPrimitiveWrapperObject;
 typedef struct MalDateObject MalDateObject;
 typedef struct MalIntlObject MalIntlObject;
+typedef struct MalRegExpObject MalRegExpObject;
+typedef struct MalRegExpStringIteratorObject MalRegExpStringIteratorObject;
 
 /**
  * NaN-Boxed MalValue representation.
@@ -264,7 +266,9 @@ static inline bool mal_value_is_object(MalValue value) {
         type == MAL_HEAP_MODULE_NAMESPACE_OBJECT ||
         type == MAL_HEAP_PROXY_OBJECT ||
         type == MAL_HEAP_DATE_OBJECT ||
-        type == MAL_HEAP_INTL_OBJECT;
+        type == MAL_HEAP_INTL_OBJECT ||
+        type == MAL_HEAP_REGEXP_OBJECT ||
+        type == MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT;
 }
 
 /**
@@ -362,6 +366,21 @@ MalValue mal_value_from_date_object(MalDateObject *date);
 bool mal_value_is_intl_object(MalValue value);
 MalIntlObject *mal_value_to_intl_object(MalValue value);
 MalValue mal_value_from_intl_object(MalIntlObject *intl);
+
+/**
+ * RegExp object predicate + box/unbox (holds the [[RegExpMatcher]] slot). The
+ * predicate is the spec's "has [[RegExpMatcher]]" brand test.
+ */
+bool mal_value_is_regexp_object(MalValue value);
+MalRegExpObject *mal_value_to_regexp_object(MalValue value);
+MalValue mal_value_from_regexp_object(MalRegExpObject *regexp);
+
+/**
+ * RegExp String Iterator predicate + box/unbox (matchAll's iterator).
+ */
+bool mal_value_is_regexp_string_iterator_object(MalValue value);
+MalRegExpStringIteratorObject *mal_value_to_regexp_string_iterator_object(MalValue value);
+MalValue mal_value_from_regexp_string_iterator_object(MalRegExpStringIteratorObject *iterator);
 
 /**
  * Spec thisStringValue / thisNumberValue / thisBooleanValue: a matching

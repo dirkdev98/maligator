@@ -1,14 +1,20 @@
-//! `mal_i18n` — thin FFI shim over ICU4X (and later temporal_rs) for Maligator.
+//! `mal_rust` — the Maligator runtime's Rust FFI shim. One staticlib for all the
+//! runtime's Rust-backed primitives: ICU4X (Intl) below, regress (RegExp) in
+//! `regexp`, and later temporal_rs (Temporal). It is a single crate because two
+//! Rust staticlibs cannot link into one binary (duplicate std panic-runtime
+//! symbols); each domain gets its own C header (mal_i18n.h, mal_regexp.h).
 //!
-//! Design contract:
+//! Design contract (per domain):
 //!   * The C runtime owns ALL JavaScript-spec glue: option-bag parsing, ToXxx
-//!     coercions, and the ECMA-402 / Date abstract operations.
-//!   * This crate exposes only flat, pure i18n primitives over the C ABI.
-//!   * Strings cross the boundary as UTF-8 via a length-probe-then-fill
-//!     protocol; fallible calls return a `MalI18nStatus` and write outputs
-//!     through out-pointers.
+//!     coercions, and the ECMA-402 / Date / RegExp abstract operations.
+//!   * This crate exposes only flat, pure primitives over the C ABI.
+//!   * i18n strings cross as UTF-8 via length-probe-then-fill; regexp patterns/
+//!     subjects cross as UTF-16 (see src/regexp.rs).
 
 #![deny(unsafe_op_in_unsafe_fn)]
+
+// The RegExp FFI (regress engine). See src/regexp.rs.
+pub mod regexp;
 
 /// ABI version. Bump on any breaking change to the C header so the C side can
 /// assert the linked archive matches `mal_i18n.h`.

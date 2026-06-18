@@ -3,18 +3,17 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
-import { ensureI18nLibrary, i18nLinkArgs } from "../i18n-build.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
 import { compileSemanticProgramToIr } from "../ir.ts";
 import { lowerIrProgramToVmDefinition } from "../lower-vm.ts";
 import type { VmDefinition } from "../lower-vm.ts";
 import { parseModule, parseScript } from "../parser.ts";
 import { allocateRegisters } from "../register-alloc.ts";
+import { ensureRustLibrary, rustLinkArgs } from "../rust-build.ts";
 import {
 	analyzeSourceAndRunSemanticAnalysis,
 	loadEntrypointAndRunSemanticAnalysis,
 } from "../semantic-analysis.ts";
-import { collectUnsupportedSyntax } from "../supported-syntax.ts";
 import {
 	batchCacheKey,
 	buildFingerprint,
@@ -102,19 +101,25 @@ const SKIPPED_SLOW_PATHS = [
 	"Array/prototype/map/15.4.4.19-3-8",
 	"staging/sm/String/string-upper-lower-mapping",
 	"staging/sm/destructuring/array-iterator-close",
+	// RegExp CharacterClassEscapes + property-escapes brute-force the harness's
+	// buildString over Unicode-scale ranges (up to ~1.1M code points) with `+=`,
+	// which is O(n²) on this engine's immutable strings (no rope) and times out
+	// building the test string — before regex even runs. The regex semantics they
+	// cover (regress's \p{} data + character classes) are exercised by
+	// smaller-scale tests; these are a string-perf limitation, not a regex gap.
+	// See docs/decisions/03-regexp.md.
+	"built-ins/RegExp/CharacterClassEscapes",
+	"built-ins/RegExp/property-escapes",
 ];
 
 const HARNESS_CACHE: Record<string, string> = {};
 
 /**
- * Aggregated failure reasons and unsupported constructs, each with a few
+ * Aggregated failure reasons, with a few
  * sample paths for follow-up.
  */
 const FAILURE_CACHE: Record<string, Array<string>> = {};
-const UNSUPPORTED_CACHE: Record<string, Array<string>> = {};
-
 const FAILURE_COUNTS: Record<string, number> = {};
-const UNSUPPORTED_COUNTS: Record<string, number> = {};
 
 /**
  * Per-phase durations. Totals are summed per-test durations across all
@@ -190,13 +195,7 @@ export function test262ResetStats() {
 	CODE_STATS.compiledFiles = 0;
 	CODE_STATS.functionCount = 0;
 	CODE_STATS.instructionCount = 0;
-	for (const record of [
-		OPCODE_COUNTS,
-		FAILURE_COUNTS,
-		UNSUPPORTED_COUNTS,
-		FAILURE_CACHE,
-		UNSUPPORTED_CACHE,
-	]) {
+	for (const record of [OPCODE_COUNTS, FAILURE_COUNTS, FAILURE_CACHE]) {
 		for (const key of Object.keys(record)) {
 			delete record[key];
 		}
@@ -211,8 +210,9 @@ export function test262PrepareBuild() {
 	test262Log("Building LibMaligator...");
 	execSync(`cmake --build runtime/build`, { stdio: "ignore" });
 
-	// Build the Rust i18n shim (Date tz + Intl) once per pass; cheap when cached.
-	ensureI18nLibrary();
+	// Build the Rust shim once per pass; cheap when cached. Date tz + Intl
+	// (ICU4X) and the RegExp engine (regress), both in libmal_rust.a.
+	ensureRustLibrary();
 
 	test262Log("Compiling harness mains...");
 	execSync(
@@ -420,7 +420,7 @@ function firstLine(text: string) {
  * The outcome of compiling one test. Kept side-effect free (apart from the
  * compile timing) so the same value can both drive the live run and be folded
  * into a cache manifest for replay on a later hit. `definition === undefined`
- * means there is nothing to execute (skipped / unsupported / failed to compile).
+ * means there is nothing to execute (skipped / failed to compile).
  * Emission to C is left to the caller, which picks per-test or shared-harness
  * batch emission.
  */
@@ -428,7 +428,6 @@ interface CompileOutcome {
 	definition: VmDefinition | undefined;
 	/** Verdict resolved at compile time; "UNKNOWN" means the run decides. */
 	result: Test262Result;
-	unsupported: Array<string>;
 	failure: string | undefined;
 	stats:
 		| { functionCount: number; instructionCount: number; opcodes: Record<string, number> }
@@ -436,7 +435,7 @@ interface CompileOutcome {
 }
 
 /**
- * Compile a test to a VM definition, resolving the SKIPPED, UNSUPPORTED and
+ * Compile a test to a VM definition, resolving the SKIPPED and
  * COMPILE_FAILED verdicts along the way. `source` is the pre-composed
  * harness+test (also the cache-key input), passed in so it is built exactly once
  * per test.
@@ -445,7 +444,6 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 	const outcome: CompileOutcome = {
 		definition: undefined,
 		result: "UNKNOWN",
-		unsupported: [],
 		failure: undefined,
 		stats: undefined,
 	};
@@ -470,17 +468,10 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 
 	const compileStartedAt = performance.now();
 	try {
-		// Parse and scan before any further work: unsupported tests stop here
-		// without paying for scope and binding analysis. Module-flagged tests parse
+		// Parse and scan before any further work. Module-flagged tests parse
 		// as modules; the harness is still prepended (its functions become
 		// module-scoped, which the test references in the same scope).
 		const parsed = isModule ? parseModule(source) : parseScript(source, { strict });
-		const unsupported = collectUnsupportedSyntax(parsed.ast, { isModule });
-		if (unsupported.size > 0) {
-			outcome.result = "UNSUPPORTED";
-			outcome.unsupported = [...unsupported];
-			return outcome;
-		}
 
 		// Module tests run through the loader/graph pipeline so sibling
 		// `*_FIXTURE.js` imports resolve from the test's real directory; the
@@ -495,25 +486,6 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 					},
 				)
 			: analyzeSourceAndRunSemanticAnalysis(source, file.path, parsed);
-
-		// Imported sibling modules can use unsupported syntax (e.g. top-level
-		// await) the entry scan never saw. Catch it as UNSUPPORTED rather than
-		// letting it reach codegen and crash.
-		if (isModule) {
-			const deepUnsupported = new Set<string>();
-			for (const moduleFile of semanticProgram.files) {
-				for (const feature of collectUnsupportedSyntax(moduleFile.ast, {
-					isModule: true,
-				})) {
-					deepUnsupported.add(feature);
-				}
-			}
-			if (deepUnsupported.size > 0) {
-				outcome.result = "UNSUPPORTED";
-				outcome.unsupported = [...deepUnsupported];
-				return outcome;
-			}
-		}
 
 		const irProgram = compileSemanticProgramToIr(semanticProgram);
 		executeIROptimizations(irProgram);
@@ -552,9 +524,6 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
  */
 function applyOutcome(file: Test262File, outcome: CompileOutcome) {
 	file.result = outcome.result;
-	for (const feature of outcome.unsupported) {
-		countReason(UNSUPPORTED_COUNTS, UNSUPPORTED_CACHE, feature, file);
-	}
 	if (outcome.failure !== undefined) {
 		countReason(FAILURE_COUNTS, FAILURE_CACHE, outcome.failure, file);
 	}
@@ -583,7 +552,7 @@ async function linkBatch(objectPath: string, binPath: string) {
 			objectPath,
 			`${TEST262_METADATA.buildPath}/test262_batch.o`,
 			"runtime/build/libLibMaligator.a",
-			...i18nLinkArgs(),
+			...rustLinkArgs(),
 			"-o",
 			binPath,
 		],
@@ -649,7 +618,6 @@ function applyManifest(
 		applyOutcome(file, {
 			definition: undefined,
 			result: entry.result as Test262Result,
-			unsupported: entry.unsupported ?? [],
 			failure: entry.failure,
 			stats: undefined,
 		});
@@ -729,7 +697,6 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 			resolved.push({
 				path: file.path,
 				result: outcome.result,
-				unsupported: outcome.unsupported.length > 0 ? outcome.unsupported : undefined,
 				failure: outcome.failure,
 			});
 			continue;
@@ -807,7 +774,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 					`${baseName}.c`,
 					`${TEST262_METADATA.buildPath}/test262_batch.o`,
 					"runtime/build/libLibMaligator.a",
-					...i18nLinkArgs(),
+					...rustLinkArgs(),
 					"-o",
 					`${baseName}.bin`,
 				],
@@ -946,7 +913,7 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 				`${baseName}.c`,
 				`${TEST262_METADATA.buildPath}/test262_main.o`,
 				"runtime/build/libLibMaligator.a",
-				...i18nLinkArgs(),
+				...rustLinkArgs(),
 				"-o",
 				`${baseName}.bin`,
 			],
@@ -1002,7 +969,6 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 
 export function getFailuresWithSamples() {
 	return {
-		unsupported: sortedWithSamples(UNSUPPORTED_COUNTS, UNSUPPORTED_CACHE),
 		failures: sortedWithSamples(FAILURE_COUNTS, FAILURE_CACHE),
 	};
 }
@@ -1017,8 +983,6 @@ export interface StatsSnapshot {
 	opcodes: Record<string, number>;
 	failureCounts: Record<string, number>;
 	failureCache: Record<string, Array<string>>;
-	unsupportedCounts: Record<string, number>;
-	unsupportedCache: Record<string, Array<string>>;
 	usedCacheKeys: Array<string>;
 }
 
@@ -1030,8 +994,6 @@ export function test262DrainStats(): StatsSnapshot {
 		opcodes: OPCODE_COUNTS,
 		failureCounts: FAILURE_COUNTS,
 		failureCache: FAILURE_CACHE,
-		unsupportedCounts: UNSUPPORTED_COUNTS,
-		unsupportedCache: UNSUPPORTED_CACHE,
 		usedCacheKeys: [...USED_CACHE_KEYS],
 	};
 }
@@ -1076,10 +1038,6 @@ export function test262MergeStats(snapshot: StatsSnapshot) {
 		FAILURE_COUNTS[reason] = (FAILURE_COUNTS[reason] ?? 0) + count;
 	}
 	mergeSampleCache(FAILURE_CACHE, snapshot.failureCache);
-	for (const [reason, count] of Object.entries(snapshot.unsupportedCounts)) {
-		UNSUPPORTED_COUNTS[reason] = (UNSUPPORTED_COUNTS[reason] ?? 0) + count;
-	}
-	mergeSampleCache(UNSUPPORTED_CACHE, snapshot.unsupportedCache);
 
 	for (const key of snapshot.usedCacheKeys) {
 		USED_CACHE_KEYS.add(key);

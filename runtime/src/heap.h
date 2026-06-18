@@ -122,6 +122,17 @@ typedef enum MalHeapType {
      * See intl_object.h.
      */
     MAL_HEAP_INTL_OBJECT,
+    /**
+     * RegExp instances (MalRegExpObject): an ordinary object plus the compiled
+     * regress matcher handle + [[OriginalSource]]/[[OriginalFlags]]. See
+     * regexp_object.h.
+     */
+    MAL_HEAP_REGEXP_OBJECT,
+    /**
+     * RegExp String Iterator instances (MalRegExpStringIteratorObject): the
+     * iterator returned by RegExp.prototype[@@matchAll] / String.prototype.matchAll.
+     */
+    MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT,
 } MalHeapType;
 
 /**

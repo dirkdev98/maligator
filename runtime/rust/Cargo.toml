@@ -1,0 +1,42 @@
+[package]
+name = "mal_rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The Maligator runtime's Rust FFI shim: ICU4X (Intl), regress (RegExp), and later temporal_rs (Temporal)."
+
+# A single C-linkable static archive for ALL the runtime's Rust-backed
+# primitives. It is one crate (not several) because two Rust staticlibs cannot be
+# linked into one binary — each bundles its own std panic runtime (duplicate
+# rust_eh_personality / EMPTY_PANIC symbols). The Maligator C runtime owns all
+# JS-spec glue; this crate exposes only flat primitives over the C ABI, with one
+# header per domain (mal_i18n.h, mal_regexp.h). See docs/decisions/{03-regexp,05-date-intl}.md.
+[lib]
+name = "mal_rust"
+crate-type = ["staticlib"]
+
+[dependencies]
+# Bundled IANA tzdb for Date's LocalTZA (deterministic offsets, not the host's
+# /usr/share/zoneinfo). The system zone *identity* still comes from TZ / the
+# /etc/localtime symlink via TimeZone::system().
+jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
+# ICU4X for the Intl surface. compiled_data (default) bundles CLDR data for all
+# locales; the curated-subset / consumer-selectable-locales build is a TODO.
+icu = "2"
+# Experimental ICU services (icu::experimental re-exports this): DisplayNames,
+# RelativeTimeFormat, Duration. compiled_data bundles their CLDR data.
+icu_experimental = { version = "0.5", features = ["compiled_data"] }
+# Writeable: stringify ICU "formatted" results that expose Writeable (not Display).
+writeable = "0.6"
+# temporal_rs joins here for the Temporal global.
+# regress: the ECMAScript RegExp engine (the one Boa uses). Lives in this crate
+# rather than its own because two Rust staticlibs can't co-link (duplicate std
+# panic-runtime symbols). The `utf16` feature matches over &[u16] with no UTF-8
+# conversion. See src/regexp.rs + docs/decisions/03-regexp.md.
+regress = { version = "0.11", features = ["utf16"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

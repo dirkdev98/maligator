@@ -6,6 +6,7 @@
 
 #include "builtin_intl.h"
 #include "builtin_iterator.h"
+#include "builtin_regexp.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
 #include "primitive_wrapper_object.h"
@@ -423,7 +424,33 @@ static MalValue mal_builtin_string_prototype_last_index_of(MalVm *vm, MalValue t
     return mal_value_from_i32(-1);
 }
 
+// Defined later (near the @@-protocol dispatch); forward-declared so the
+// regexp-rejecting methods below can use it.
+static bool mal_builtin_string_is_regexp(MalVm *vm, MalValue arg);
+
+// Spec guard shared by includes/startsWith/endsWith: RequireObjectCoercible(this)
+// then reject a RegExp first argument with a TypeError (so these can't be misused
+// as matchers). Returns true if it set a pending throw.
+static bool mal_builtin_string_reject_regexp(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count) {
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "String.prototype method called on null or undefined");
+        return true;
+    }
+    bool is_regexp = mal_builtin_string_is_regexp(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return true;
+    }
+    if (is_regexp) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "First argument must not be a regular expression");
+        return true;
+    }
+    return false;
+}
+
 static MalValue mal_builtin_string_prototype_includes(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    if (mal_builtin_string_reject_regexp(vm, this_value, args, arg_count)) {
+        return mal_value_new_undefined();
+    }
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     MalString *search = mal_builtin_string_coerce(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -444,6 +471,9 @@ static MalValue mal_builtin_string_prototype_includes(MalVm *vm, MalValue this_v
 }
 
 static MalValue mal_builtin_string_prototype_starts_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    if (mal_builtin_string_reject_regexp(vm, this_value, args, arg_count)) {
+        return mal_value_new_undefined();
+    }
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     MalString *search = mal_builtin_string_coerce(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
     usize position = arg_count >= 2 ? mal_builtin_string_clamp_relative(vm, args[1], 0, mal_string_length(string)) : 0;
@@ -451,6 +481,9 @@ static MalValue mal_builtin_string_prototype_starts_with(MalVm *vm, MalValue thi
 }
 
 static MalValue mal_builtin_string_prototype_ends_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    if (mal_builtin_string_reject_regexp(vm, this_value, args, arg_count)) {
+        return mal_value_new_undefined();
+    }
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     MalString *search = mal_builtin_string_coerce(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
     usize end = arg_count >= 2 && !mal_value_is_undefined(args[1])
@@ -765,7 +798,183 @@ static MalValue mal_builtin_string_prototype_to_well_formed(MalVm *vm, MalValue 
     return result;
 }
 
+// GetMethod(arg, @@symbol) and, if callable, Call(method, arg, [this, ...extra]).
+// Returns 1 when dispatched (result in *out; a throw is left on the completion),
+// 0 when there is no method (caller runs the string fallback), -1 on a throw
+// while reading the method.
+static int mal_builtin_string_regex_dispatch(
+    MalVm *vm, MalValue this_value, MalValue arg, MalIntrinsic symbol_slot, const MalValue *extra, i32 extra_count, MalValue *out
+) {
+    if (mal_value_is_nil(arg)) {
+        return 0;
+    }
+    MalValue method;
+    if (!mal_vm_get_property(vm, arg, mal_intrinsic_symbol_key(vm, symbol_slot), &method)) {
+        *out = mal_value_new_undefined();
+        return -1;
+    }
+    if (!mal_value_is_callable(method)) {
+        return 0;
+    }
+    MalValue call_args[3];
+    i32 n = 0;
+    call_args[n++] = this_value;
+    for (i32 i = 0; i < extra_count && n < 3; i++) {
+        call_args[n++] = extra[i];
+    }
+    MalCompletion completion = mal_vm_call_value(vm, method, arg, call_args, n);
+    *out = completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
+    return 1;
+}
+
+// IsRegExp(arg): @@match overrides the [[RegExpMatcher]] brand. Returns false on
+// a pending throw (which the caller propagates).
+static bool mal_builtin_string_is_regexp(MalVm *vm, MalValue arg) {
+    if (!mal_value_is_object(arg)) {
+        return false;
+    }
+    MalValue matcher;
+    if (!mal_vm_get_property(vm, arg, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_MATCH), &matcher)) {
+        return false;
+    }
+    if (!mal_value_is_undefined(matcher)) {
+        return mal_value_is_truthy(matcher);
+    }
+    return mal_value_is_regexp_object(arg);
+}
+
+// String.prototype.match / .search: dispatch to the argument's @@match/@@search;
+// otherwise coerce the argument to a fresh RegExp and invoke that.
+static MalValue mal_builtin_string_match_like(MalVm *vm, MalValue this_value, MalValue regexp, MalIntrinsic symbol_slot) {
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "String.prototype method called on null or undefined");
+        return mal_value_new_undefined();
+    }
+    MalValue out;
+    int dispatched = mal_builtin_string_regex_dispatch(vm, this_value, regexp, symbol_slot, nullptr, 0, &out);
+    if (dispatched != 0) {
+        return out;
+    }
+    MalString *s = mal_builtin_string_this_to_string(vm, this_value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    MalString *pattern;
+    if (mal_value_is_undefined(regexp)) {
+        pattern = mal_intrinsic_ascii(vm, "");
+    } else if (!mal_vm_to_string(vm, regexp, &pattern)) {
+        return mal_value_new_undefined();
+    }
+    MalValue rx = mal_regexp_create(vm, pattern, mal_intrinsic_ascii(vm, ""));
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    MalValue method;
+    if (!mal_vm_get_property(vm, rx, mal_intrinsic_symbol_key(vm, symbol_slot), &method)) {
+        return mal_value_new_undefined();
+    }
+    MalValue s_value = mal_value_from_string(s);
+    MalCompletion completion = mal_vm_call_value(vm, method, rx, &s_value, 1);
+    return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
+}
+
+static MalValue mal_builtin_string_prototype_match(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    return mal_builtin_string_match_like(vm, this_value, arg_count >= 1 ? args[0] : mal_value_new_undefined(), MAL_INTRINSIC_SYMBOL_MATCH);
+}
+
+static MalValue mal_builtin_string_prototype_search(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    return mal_builtin_string_match_like(vm, this_value, arg_count >= 1 ? args[0] : mal_value_new_undefined(), MAL_INTRINSIC_SYMBOL_SEARCH);
+}
+
+static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "String.prototype.matchAll called on null or undefined");
+        return mal_value_new_undefined();
+    }
+    MalValue regexp = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_nil(regexp)) {
+        // A non-global RegExp argument is a TypeError (matchAll iterates globally).
+        bool is_regexp = mal_builtin_string_is_regexp(vm, regexp);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+        if (is_regexp) {
+            MalValue flags_value;
+            if (!mal_vm_get_property(vm, regexp, mal_intrinsic_string_key(vm, "flags"), &flags_value)) {
+                return mal_value_new_undefined();
+            }
+            if (mal_value_is_nil(flags_value)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "RegExp flags is null or undefined");
+                return mal_value_new_undefined();
+            }
+            MalString *flags_string;
+            if (!mal_vm_to_string(vm, flags_value, &flags_string)) {
+                return mal_value_new_undefined();
+            }
+            bool has_global = false;
+            for (usize i = 0; i < mal_string_length(flags_string); i++) {
+                if (mal_string_code_units(flags_string)[i] == 'g') {
+                    has_global = true;
+                    break;
+                }
+            }
+            if (!has_global) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "matchAll must be called with a global RegExp");
+                return mal_value_new_undefined();
+            }
+        }
+        MalValue out;
+        int dispatched = mal_builtin_string_regex_dispatch(vm, this_value, regexp, MAL_INTRINSIC_SYMBOL_MATCH_ALL, nullptr, 0, &out);
+        if (dispatched != 0) {
+            return out;
+        }
+    }
+    MalString *s = mal_builtin_string_this_to_string(vm, this_value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    MalString *pattern;
+    if (mal_value_is_undefined(regexp)) {
+        pattern = mal_intrinsic_ascii(vm, "");
+    } else if (!mal_vm_to_string(vm, regexp, &pattern)) {
+        return mal_value_new_undefined();
+    }
+    MalValue rx = mal_regexp_create(vm, pattern, mal_intrinsic_ascii(vm, "g"));
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    MalValue method;
+    if (!mal_vm_get_property(vm, rx, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_MATCH_ALL), &method)) {
+        return mal_value_new_undefined();
+    }
+    MalValue s_value = mal_value_from_string(s);
+    MalCompletion completion = mal_vm_call_value(vm, method, rx, &s_value, 1);
+    return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
+}
+
 static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    // @@split dispatch — only when the separator is an Object (the spec accesses
+    // @@split solely "if separator is an Object", never on a string primitive).
+    // RequireObjectCoercible(this) first, before any property access.
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "String.prototype.split called on null or undefined");
+        return mal_value_new_undefined();
+    }
+    MalValue separator_value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (mal_value_is_object(separator_value)) {
+        MalValue extra[1] = {arg_count >= 2 ? args[1] : mal_value_new_undefined()};
+        MalValue out;
+        int dispatched = mal_builtin_string_regex_dispatch(vm, this_value, separator_value, MAL_INTRINSIC_SYMBOL_SPLIT, extra, 1, &out);
+        if (dispatched != 0) {
+            return out;
+        }
+    }
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
     u32 result_length = 0;
@@ -816,66 +1025,224 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
     return mal_value_from_array_object(result);
 }
 
+// A growable UTF-16 buffer for the string replace path.
+typedef struct {
+    c16 *data;
+    usize len;
+    usize cap;
+} StrBuf;
+
+static void strbuf_append(StrBuf *b, const c16 *units, usize n) {
+    if (n == 0) {
+        return;
+    }
+    if (b->len + n > b->cap) {
+        usize cap = b->cap == 0 ? 16 : b->cap;
+        while (b->len + n > cap) {
+            cap *= 2;
+        }
+        b->data = realloc(b->data, sizeof(c16) * cap);
+        b->cap = cap;
+    }
+    memcpy(b->data + b->len, units, n * sizeof(c16));
+    b->len += n;
+}
+
+// GetSubstitution for a string searchValue (no capture groups, no named groups):
+// expands $$, $&, $`, $' in `replacement`; $n and $<name> stay literal (there are
+// no captures to reference). matched is the search string; [match_start,match_end)
+// is its span in `string`.
+static void mal_builtin_string_append_substitution(
+    StrBuf *out, MalString *replacement, MalString *matched, MalString *string, usize match_start, usize match_end
+) {
+    const c16 *r = mal_string_code_units(replacement);
+    usize rn = mal_string_length(replacement);
+    const c16 *su = mal_string_code_units(string);
+    usize sn = mal_string_length(string);
+    usize i = 0;
+    while (i < rn) {
+        c16 c = r[i];
+        if (c != '$' || i + 1 >= rn) {
+            strbuf_append(out, &c, 1);
+            i++;
+            continue;
+        }
+        c16 next = r[i + 1];
+        if (next == '$') {
+            c16 dollar = '$';
+            strbuf_append(out, &dollar, 1);
+            i += 2;
+        } else if (next == '&') {
+            strbuf_append(out, mal_string_code_units(matched), mal_string_length(matched));
+            i += 2;
+        } else if (next == '`') {
+            strbuf_append(out, su, match_start);
+            i += 2;
+        } else if (next == '\'') {
+            if (match_end < sn) {
+                strbuf_append(out, su + match_end, sn - match_end);
+            }
+            i += 2;
+        } else {
+            // $n / $<name> with no captures or named groups: kept literal.
+            strbuf_append(out, &c, 1);
+            i++;
+        }
+    }
+}
+
 static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool all) {
-    // TODO(strings): literal replacement only, no $-patterns or regex.
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     MalString *search = mal_builtin_string_coerce(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
-    MalString *replacement = mal_builtin_string_coerce(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined());
+    MalValue replace_value = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+
+    // A callable replaceValue is invoked with (matched, position, string); else
+    // it is ToString'd and used as a $-substitution template.
+    bool functional = mal_value_is_callable(replace_value);
+    MalString *replacement = nullptr;
+    if (!functional) {
+        replacement = mal_builtin_string_coerce(vm, replace_value);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+    }
 
     usize length = mal_string_length(string);
     usize search_length = mal_string_length(search);
-    usize replacement_length = mal_string_length(replacement);
+    const c16 *su = mal_string_code_units(string);
 
-    // Worst case bound: replacing an empty search inserts at every boundary.
-    usize max_length = search_length == 0
-        ? length + (all ? length + 1 : 1) * replacement_length
-        : (replacement_length > search_length
-               ? (length / search_length + 1) * replacement_length + length
-               : length + replacement_length);
-    c16 *code_units = malloc(sizeof(c16) * max_length);
-
-    usize offset = 0;
+    StrBuf out = {0};
+    usize seg_start = 0;
     usize position = 0;
-    bool replaced = false;
-    while (position < length) {
-        bool matches = (all || !replaced) &&
-            (search_length == 0 || mal_builtin_string_matches_at(string, search, position));
-
-        if (matches && search_length == 0) {
-            memcpy(code_units + offset, mal_string_code_units(replacement), (usize) sizeof(c16) * replacement_length);
-            offset += replacement_length;
-            replaced = true;
-            code_units[offset++] = mal_string_code_units(string)[position++];
+    bool done = false;
+    while (position <= length && !done) {
+        bool match = search_length == 0
+            ? true // an empty search matches at every position, including the end
+            : (position + search_length <= length && mal_builtin_string_matches_at(string, search, position));
+        if (!match) {
+            position++;
             continue;
         }
 
-        if (matches) {
-            memcpy(code_units + offset, mal_string_code_units(replacement), (usize) sizeof(c16) * replacement_length);
-            offset += replacement_length;
+        // Gap before the match, then the (substituted or functional) replacement.
+        strbuf_append(&out, su + seg_start, position - seg_start);
+        if (functional) {
+            MalValue call_args[3] = {
+                mal_value_from_string(search), mal_value_from_f64((f64) position), mal_value_from_string(string)
+            };
+            MalCompletion completion = mal_vm_call_value(vm, replace_value, mal_value_new_undefined(), call_args, 3);
+            if (completion.kind == MAL_COMPLETION_THROW) {
+                free(out.data);
+                return mal_value_new_undefined();
+            }
+            MalString *rep;
+            if (!mal_vm_to_string(vm, completion.value, &rep)) {
+                free(out.data);
+                return mal_value_new_undefined();
+            }
+            strbuf_append(&out, mal_string_code_units(rep), mal_string_length(rep));
+        } else {
+            mal_builtin_string_append_substitution(&out, replacement, search, string, position, position + search_length);
+        }
+
+        if (search_length == 0) {
+            // Empty match: copy the straddled code unit and advance one, or we'd
+            // loop forever.
+            if (position < length) {
+                strbuf_append(&out, su + position, 1);
+            }
+            position += 1;
+        } else {
             position += search_length;
-            replaced = true;
-            continue;
         }
-
-        code_units[offset++] = mal_string_code_units(string)[position++];
+        seg_start = position;
+        if (!all) {
+            done = true;
+        }
     }
 
-    if (search_length == 0 && (all || !replaced)) {
-        // The empty search also matches at the very end.
-        memcpy(code_units + offset, mal_string_code_units(replacement), (usize) sizeof(c16) * replacement_length);
-        offset += replacement_length;
+    // Trailing segment after the last match.
+    if (seg_start < length) {
+        strbuf_append(&out, su + seg_start, length - seg_start);
     }
 
-    MalValue result = mal_builtin_string_from_units(vm, code_units, offset);
-    free(code_units);
+    MalValue result = mal_builtin_string_from_units(vm, out.len > 0 ? out.data : su, out.len);
+    free(out.data);
     return result;
 }
 
 static MalValue mal_builtin_string_prototype_replace(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "String.prototype.replace called on null or undefined");
+        return mal_value_new_undefined();
+    }
+    // The spec accesses @@replace only "if searchValue is an Object" — never on a
+    // string (or other primitive) searchValue.
+    MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (mal_value_is_object(search)) {
+        MalValue extra[1] = {arg_count >= 2 ? args[1] : mal_value_new_undefined()};
+        MalValue out;
+        int dispatched = mal_builtin_string_regex_dispatch(vm, this_value, search, MAL_INTRINSIC_SYMBOL_REPLACE, extra, 1, &out);
+        if (dispatched != 0) {
+            return out;
+        }
+    }
     return mal_builtin_string_replace_impl(vm, this_value, args, arg_count, false);
 }
 
 static MalValue mal_builtin_string_prototype_replace_all(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "String.prototype.replaceAll called on null or undefined");
+        return mal_value_new_undefined();
+    }
+    // The IsRegExp/global check and @@replace dispatch happen only "if searchValue
+    // is an Object" — never on a string (or other primitive) searchValue.
+    MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (mal_value_is_object(search)) {
+        // A non-global RegExp searchValue is a TypeError.
+        bool is_regexp = mal_builtin_string_is_regexp(vm, search);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+        if (is_regexp) {
+            MalValue flags_value;
+            if (!mal_vm_get_property(vm, search, mal_intrinsic_string_key(vm, "flags"), &flags_value)) {
+                return mal_value_new_undefined();
+            }
+            if (mal_value_is_nil(flags_value)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "RegExp flags is null or undefined");
+                return mal_value_new_undefined();
+            }
+            MalString *flags_string;
+            if (!mal_vm_to_string(vm, flags_value, &flags_string)) {
+                return mal_value_new_undefined();
+            }
+            bool has_global = false;
+            for (usize i = 0; i < mal_string_length(flags_string); i++) {
+                if (mal_string_code_units(flags_string)[i] == 'g') {
+                    has_global = true;
+                    break;
+                }
+            }
+            if (!has_global) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "replaceAll must be called with a global RegExp");
+                return mal_value_new_undefined();
+            }
+        }
+        MalValue extra[1] = {arg_count >= 2 ? args[1] : mal_value_new_undefined()};
+        MalValue out;
+        int dispatched = mal_builtin_string_regex_dispatch(vm, this_value, search, MAL_INTRINSIC_SYMBOL_REPLACE, extra, 1, &out);
+        if (dispatched != 0) {
+            return out;
+        }
+    }
     return mal_builtin_string_replace_impl(vm, this_value, args, arg_count, true);
 }
 
@@ -1008,6 +1375,9 @@ void mal_builtin_string_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "toLocaleLowerCase", 0, mal_builtin_string_prototype_to_lower_case);
     mal_intrinsic_define_method_n(vm, prototype, "isWellFormed", 0, mal_builtin_string_prototype_is_well_formed);
     mal_intrinsic_define_method_n(vm, prototype, "toWellFormed", 0, mal_builtin_string_prototype_to_well_formed);
+    mal_intrinsic_define_method_n(vm, prototype, "match", 1, mal_builtin_string_prototype_match);
+    mal_intrinsic_define_method_n(vm, prototype, "matchAll", 1, mal_builtin_string_prototype_match_all);
+    mal_intrinsic_define_method_n(vm, prototype, "search", 1, mal_builtin_string_prototype_search);
     mal_intrinsic_define_method_n(vm, prototype, "split", 2, mal_builtin_string_prototype_split);
     mal_intrinsic_define_method_n(vm, prototype, "replace", 2, mal_builtin_string_prototype_replace);
     mal_intrinsic_define_method_n(vm, prototype, "replaceAll", 2, mal_builtin_string_prototype_replace_all);
