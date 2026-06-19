@@ -2200,7 +2200,11 @@ void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruct
     }
 
     // CreateDataProperty on the receiver, ignoring its inherited properties.
-    mal_property_set_value(mal_object_properties(receiver_object), key, value);
+    // Routed through define_own (not a direct table write) so it honors the shape
+    // representation instead of forcing the receiver to dictionary mode.
+    MalPropertyDesc desc = mal_intrinsic_data_desc(
+        value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(receiver_object, key, &desc);
 }
 
 void mal_op_get_iterator(MalCallable *callable, MalInstruction *instruction) {

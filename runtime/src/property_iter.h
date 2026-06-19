@@ -19,6 +19,8 @@ typedef struct MalPropertyIter {
     u32 phase;
     u32 last_index;
     bool has_last_index;
+    /** Next shaped (inline) property to emit; shaped props are all string keys. */
+    u32 shape_index;
 } MalPropertyIter;
 
 /**

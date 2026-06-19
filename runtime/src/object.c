@@ -4,7 +4,11 @@ void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObje
     (void) heap;
 
     mal_heap_header_init(&object->header, type);
-    object->properties = mal_table_new(MAL_TABLE_MODE_OBJECT);
+    object->shape = mal_shape_empty();
+    object->slots = nullptr;
+    // Overflow/dictionary table is allocated lazily: a fresh object is empty
+    // (shaped), and only index/symbol keys or dictionary transitions create it.
+    object->overflow = nullptr;
     object->prototype = prototype;
     object->extensible = true;
 }
