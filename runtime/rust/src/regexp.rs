@@ -20,7 +20,8 @@
 use regress::{Flags, Match, Regex};
 
 /// ABI version, mirrored by MAL_REGEXP_ABI_VERSION in mal_regexp.h.
-pub const MAL_REGEXP_ABI_VERSION: u32 = 1;
+/// v2: added `mal_regexp_free` (GC finalization, gc_todo.md D2).
+pub const MAL_REGEXP_ABI_VERSION: u32 = 2;
 
 // Flag bits, mirrored by MAL_REGEXP_FLAG_* in mal_regexp.h. g/y/d are
 // engine-external and deliberately absent.
@@ -114,6 +115,16 @@ pub unsafe extern "C" fn mal_regexp_compile(
         }
         Err(_) => core::ptr::null_mut(),
     }
+}
+
+/// Free a compiled-pattern handle from `mal_regexp_compile`. Null-tolerant, so
+/// the GC finalizer (which nulls the field after the call) is idempotent.
+#[no_mangle]
+pub unsafe extern "C" fn mal_regexp_free(handle: *mut core::ffi::c_void) {
+    if handle.is_null() {
+        return;
+    }
+    drop(unsafe { Box::from_raw(handle as *mut CompiledPattern) });
 }
 
 /// Write a match's group ranges into `out` as (start, end) i32 pairs (pair 0 is

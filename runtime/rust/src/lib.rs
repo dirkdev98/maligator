@@ -18,7 +18,8 @@ pub mod regexp;
 
 /// ABI version. Bump on any breaking change to the C header so the C side can
 /// assert the linked archive matches `mal_i18n.h`.
-pub const MAL_I18N_ABI_VERSION: u32 = 1;
+/// v2: added `mal_i18n_collator_free` / `mal_i18n_plural_rules_free` (gc_todo.md D2).
+pub const MAL_I18N_ABI_VERSION: u32 = 2;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]
@@ -199,6 +200,17 @@ pub unsafe extern "C" fn mal_i18n_collator_compare_utf16(
     }
 }
 
+/// Free a collator handle from `mal_i18n_collator_new`. Null-tolerant (idempotent
+/// GC finalizer). Must box-drop the exact `CollatorBorrowed<'static>` that
+/// `mal_i18n_collator_new` leaked.
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_collator_free(handle: *mut core::ffi::c_void) {
+    if handle.is_null() {
+        return;
+    }
+    drop(unsafe { Box::from_raw(handle as *mut icu::collator::CollatorBorrowed<'static>) });
+}
+
 // ---------------------------------------------------------------------------
 // Intl.PluralRules
 // ---------------------------------------------------------------------------
@@ -233,6 +245,15 @@ pub unsafe extern "C" fn mal_i18n_plural_category(handle: *mut core::ffi::c_void
         PluralCategory::Many => 4,
         PluralCategory::Other => 5,
     }
+}
+
+/// Free a plural-rules handle from `mal_i18n_plural_rules_new`. Null-tolerant.
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_plural_rules_free(handle: *mut core::ffi::c_void) {
+    if handle.is_null() {
+        return;
+    }
+    drop(unsafe { Box::from_raw(handle as *mut icu::plurals::PluralRules) });
 }
 
 // ---------------------------------------------------------------------------

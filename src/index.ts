@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
+import { debugProgramLiveness } from "./liveness.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { lowerIrProgramToVmDefinition, vmDefinitionStats } from "./lower-vm.ts";
 import { allocateRegisters } from "./register-alloc.ts";
@@ -57,6 +58,13 @@ irTiming();
 const irOptTiming = log.time("ir optimizations");
 executeIROptimizations(irProgram);
 irOptTiming();
+
+// GC liveness/safepoint analysis (T0.4). Runs on virtual registers, before
+// register allocation. No consumer yet (the C1 root-frame builder is Phase 2);
+// `--dump-liveness` exercises it on real programs and prints the safepoint map.
+if (argFlag("--dump-liveness")) {
+	log.info(debugProgramLiveness(irProgram));
+}
 
 const registerAllocTiming = log.time("register allocation");
 allocateRegisters(irProgram);

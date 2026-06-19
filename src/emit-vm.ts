@@ -1,5 +1,5 @@
 import path from "node:path";
-import { emitCompiledFunction } from "./emit-c.ts";
+import { cF64Literal, emitCompiledFunction } from "./emit-c.ts";
 import type { CompiledFunction } from "./emit-c.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 
@@ -466,10 +466,12 @@ function emitInstruction(instruction: VmInstruction) {
 		case "CREATE_NUMBER":
 			return `{ .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = ${instruction.dst}, .value = ${instruction.value} } }`;
 		case "CREATE_F64":
-			// Exponential notation always parses as a C double literal; plain
-			// stringification of large integral values would overflow as an
-			// integer literal.
-			return `{ .opcode = MAL_OP_CREATE_F64, .as.create_f64 = { .dst = ${instruction.dst}, .value = ${instruction.value.toExponential()} } }`;
+			// cF64Literal renders finite values in exponential notation (always a
+			// valid C double literal; plain stringification of large integral values
+			// would overflow as an integer literal) and non-finite values
+			// (Infinity/NaN, e.g. from an overflowing literal like `1e309`) as
+			// compiler builtins, since the bare words are not C constants.
+			return `{ .opcode = MAL_OP_CREATE_F64, .as.create_f64 = { .dst = ${instruction.dst}, .value = ${cF64Literal(instruction.value)} } }`;
 		case "CREATE_BOOLEAN":
 			return `{ .opcode = MAL_OP_CREATE_BOOLEAN, .as.create_boolean = { .dst = ${instruction.dst}, .value = ${instruction.value ? 1 : 0} } }`;
 		case "CREATE_STRING":

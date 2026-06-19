@@ -13,27 +13,39 @@
 typedef struct MalHeap MalHeap;
 
 /**
- * A linked list of memory pools to use.
+ * Number of segregated size classes for in-block (CELL/RAW) allocation. Must
+ * match the `g_class_cell_size` table in heap.c (a static_assert enforces it).
+ * Objects larger than the largest class go to the large-object space (LOS).
+ */
+#define MAL_GC_NUM_SIZE_CLASSES 32
+
+/* Block allocator internals (gc_todo.md Step 7). Defined in heap.c; the heap
+ * only holds pointers to them, so forward declarations suffice here. */
+typedef struct MalGcChunk MalGcChunk;
+typedef struct MalGcBlock MalGcBlock;
+typedef struct MalGcLarge MalGcLarge;
+
+/**
+ * Block-based, segregated-size-class, non-moving allocator (gc_todo.md Step 7).
  *
- * At some point we have to implement a GC. Just not today.
+ * Chunk (~2 MB mmap, BLOCK_SIZE-aligned) -> Block (~32 KB, one size class + one
+ * kind) -> Cell. Allocation bump-points within the current block per size class;
+ * a fresh block is claimed when the current one fills. Large objects bypass
+ * blocks into the LOS list. Nothing is reclaimed yet — the mark/sweep collector
+ * (Phase 3) returns cells to per-block free lists and empty blocks to the OS;
+ * for now `mal_heap_free` releases everything at shutdown, as before.
  */
 typedef struct MalHeap {
-    void *ptr;
-    void *next_ptr;
-
-    /**
-     * Total heap capacity in bytes
-     */
-    usize capacity;
-
-    MalHeap *next_heap;
-
-    /**
-     * Root pool only: the last pool in the chain, i.e. the one with free space.
-     * Allocation goes straight here (O(1)) instead of re-walking the chain from
-     * the head on every call. Sub-pools leave this pointing at themselves.
-     */
-    MalHeap *tail;
+    /** All chunks, newest first (allocation source + shutdown release). */
+    MalGcChunk *chunks;
+    /** Large-object records (size > largest size class), singly linked. */
+    MalGcLarge *large;
+    /** Current bump block per size class for managed cells. */
+    MalGcBlock *cell_blocks[MAL_GC_NUM_SIZE_CLASSES];
+    /** Current bump block per size class for owner-held raw buffers. */
+    MalGcBlock *raw_blocks[MAL_GC_NUM_SIZE_CLASSES];
+    /** Rough live-bytes accounting (handed-out cell sizes). */
+    usize bytes_allocated;
 } MalHeap;
 
 /**
@@ -133,6 +145,39 @@ typedef enum MalHeapType {
      * iterator returned by RegExp.prototype[@@matchAll] / String.prototype.matchAll.
      */
     MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT,
+
+    /*
+     * GC reservations (Phase 0). No structs/handling yet; the discriminators
+     * exist so the future per-type metadata table (trace/finalize dispatch) can
+     * be keyed on a complete MalHeapType space. See gc_todo.md Step 11.1.
+     */
+
+    /**
+     * Closure environment (MalEnv). A first-class GC cell once the collector
+     * exists; today MalEnv embeds no header (vm.h). See gc_todo.md B4 / Step 11.2.
+     */
+    MAL_HEAP_ENV,
+    /**
+     * Hidden-class shape descriptor (MalShape): the interned key->slot layout
+     * shared by objects with the same structure. See gc_todo.md Step 8 B3.
+     */
+    MAL_HEAP_SHAPE,
+    /**
+     * WeakRef instances (target held weakly, nulled when the target dies). Not
+     * built yet. See gc_todo.md D3.
+     */
+    MAL_HEAP_WEAK_REF_OBJECT,
+    /**
+     * FinalizationRegistry instances (weak targets, strong held values + cleanup
+     * callback). Not built yet. See gc_todo.md D3.
+     */
+    MAL_HEAP_FINALIZATION_REGISTRY_OBJECT,
+
+    /**
+     * Sentinel: number of distinct heap types. Must stay last. Sizes the baked
+     * per-type GC metadata table (gc_todo.md Step 8). Not a usable type tag.
+     */
+    MAL_HEAP_TYPE_COUNT,
 } MalHeapType;
 
 /**
@@ -192,6 +237,14 @@ MalHeapType mal_heap_header_type(const MalHeapHeader *header);
 void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type);
 
 /**
- * Allocate raw heap storage without initializing a heap header.
+ * Allocate raw heap storage without initializing a heap header. Returns an
+ * owner-held buffer (a RAW cell, or LOS for large buffers); see gc_todo.md A4.
  */
 void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size);
+
+/**
+ * Free a raw buffer previously returned by mal_heap_alloc_raw. Returns an
+ * in-block cell to its block's free list, or releases its LOS record. Used by
+ * the GC's owner finalizers (Phase 3, gc_todo.md D1); no callers in Phase 1.
+ */
+void gc_free_raw(MalHeap *heap, void *ptr);

@@ -59,6 +59,26 @@ export interface CompiledFunction {
 	bailsToInterpreter: boolean;
 }
 
+/**
+ * Render an f64 value as a valid C double expression. `toExponential()` is fine
+ * for finite values but yields the bare words `Infinity`/`NaN` for non-finite
+ * ones, which are not C constants — emit compiler builtins instead (no <math.h>
+ * dependency). NaN cannot appear in a source literal, but a folded computation
+ * could, so it is handled defensively.
+ */
+export function cF64Literal(value: number): string {
+	if (Number.isNaN(value)) {
+		return '__builtin_nan("")';
+	}
+	if (value === Infinity) {
+		return "__builtin_inf()";
+	}
+	if (value === -Infinity) {
+		return "-__builtin_inf()";
+	}
+	return value.toExponential();
+}
+
 /** Unary `+` on a BigInt throws, so it needs a completion check after. */
 const THROWING_UNARY_OPERATORS = new Set(["+"]);
 
@@ -754,8 +774,8 @@ function emitInstruction(
 		case "CREATE_F64":
 			return [
 				reps[instruction.dst] === "number"
-					? `r${instruction.dst} = ${instruction.value.toExponential()};`
-					: `r${instruction.dst} = mal_value_from_f64_convert_nan(${instruction.value.toExponential()});`,
+					? `r${instruction.dst} = ${cF64Literal(instruction.value)};`
+					: `r${instruction.dst} = mal_value_from_f64_convert_nan(${cF64Literal(instruction.value)});`,
 			];
 		case "CREATE_STRING":
 			return [

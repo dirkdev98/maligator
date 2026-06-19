@@ -47,6 +47,19 @@ export interface SemanticFile {
 	 * strict-mode SyntaxError, so these only occur in sloppy code.
 	 */
 	withDynamicNodes: Set<ESTree.Node>;
+
+	/**
+	 * Function-defining nodes (and the top-level Program) poisoned by a *direct*
+	 * eval — `eval(...)` resolving to the global eval, not a shadowing local —
+	 * anywhere in their lexical region. Direct eval can read and mutate every
+	 * binding in scope, so it makes that function's locals dynamically
+	 * addressable. The C3 rule (gc_todo.md) disables escape / scalar-replacement /
+	 * region analysis for any function in this set. A nested direct eval also
+	 * poisons every enclosing function (it can reach their locals via the scope
+	 * chain). Indirect eval — `(0, eval)(...)`, `globalThis.eval(...)` — cannot see
+	 * locals and is deliberately NOT flagged. Query via `functionHasDirectEval`.
+	 */
+	hasDirectEval: Set<ESTree.Node>;
 }
 
 interface Scope {
@@ -163,6 +176,7 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		nodeToScope: new Map(),
 		nodeToBinding: new Map(),
 		withDynamicNodes: new Set(),
+		hasDirectEval: new Set(),
 	};
 
 	program.files.push(file);
@@ -189,6 +203,7 @@ function analyzeModuleRecord(record: ModuleRecord): SemanticFile {
 		nodeToScope: new Map(),
 		nodeToBinding: new Map(),
 		withDynamicNodes: new Set(),
+		hasDirectEval: new Set(),
 	};
 
 	analyzeFile(file);
@@ -238,7 +253,63 @@ function analyzeFile(file: SemanticFile) {
 		injectCommonJsBindings(file);
 	}
 	registerBindingUsage(file.ast, file);
+	detectDirectEval(file.ast, file);
 	calculateBindingScopedTo(file);
+}
+
+/**
+ * Scope-node types that compile to their own function unit (a separate IR
+ * function / capture boundary), and so are the granularity of the C3 direct-eval
+ * poison. The Program is included: a top-level direct eval poisons top-level
+ * bindings the same way.
+ */
+const FUNCTION_UNIT_NODE_TYPES = new Set<ESTree.Node["type"]>([
+	"Program",
+	"FunctionDeclaration",
+	"FunctionExpression",
+	"ArrowFunctionExpression",
+	"StaticBlock",
+	"PropertyDefinition",
+]);
+
+/**
+ * Flag every function (and the Program) whose lexical region contains a direct
+ * eval, populating `file.hasDirectEval`. See the `hasDirectEval` field doc for
+ * the rationale; relies on `registerBindingUsage` having resolved the callee
+ * binding first (a global `eval` resolves to an `undeclared` binding).
+ */
+function detectDirectEval(node: ESTree.Node, file: SemanticFile) {
+	if (node.type === "CallExpression") {
+		// meriyah types `callee` loosely; cast as the rest of the compiler does.
+		const callee = node.callee as unknown as ESTree.Node;
+		if (callee.type === "Identifier" && callee.name === "eval") {
+			const binding = file.nodeToBinding.get(callee);
+			// `undeclared` == resolves to the global eval, not a shadowing local. A
+			// local `eval` (or an imported one) is a normal call, not direct eval.
+			if (binding?.undeclared) {
+				// Mark this call's enclosing function and every function above it: a
+				// nested direct eval can still address an outer function's locals.
+				let scope: Scope | null | undefined = file.nodeToScope.get(node);
+				while (scope) {
+					if (FUNCTION_UNIT_NODE_TYPES.has(scope.node.type)) {
+						file.hasDirectEval.add(scope.node);
+					}
+					scope = scope.parent;
+				}
+			}
+		}
+	}
+
+	recurseAst(node, detectDirectEval, file);
+}
+
+/**
+ * Whether a function-defining node (or the Program) is poisoned by a direct eval
+ * in its lexical region — escape / scalar-replacement / region analysis must be
+ * disabled for it (C3, gc_todo.md).
+ */
+export function functionHasDirectEval(file: SemanticFile, node: ESTree.Node): boolean {
+	return file.hasDirectEval.has(node);
 }
 
 /**

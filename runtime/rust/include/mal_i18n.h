@@ -14,8 +14,9 @@
 extern "C" {
 #endif
 
-/* Bump alongside MAL_I18N_ABI_VERSION in lib.rs on breaking changes. */
-#define MAL_I18N_ABI_VERSION 1u
+/* Bump alongside MAL_I18N_ABI_VERSION in lib.rs on breaking changes.
+ * v2: added mal_i18n_collator_free / mal_i18n_plural_rules_free (GC finalization). */
+#define MAL_I18N_ABI_VERSION 2u
 
 /* Status codes for fallible entry points; mapped to JS exceptions by the C side. */
 typedef enum MalI18nStatus {
@@ -69,11 +70,13 @@ int32_t mal_i18n_locale_field(const uint8_t *tag, size_t tag_len, int32_t field,
  * strength: 0 primary, 1 secondary, 2 tertiary; case_first: 0 off, 1 upper, 2 lower. */
 void *mal_i18n_collator_new(const uint8_t *locale, size_t locale_len, int32_t strength, int32_t case_level, int32_t numeric, int32_t case_first);
 int32_t mal_i18n_collator_compare_utf16(void *handle, const uint16_t *a, size_t a_len, const uint16_t *b, size_t b_len);
+void mal_i18n_collator_free(void *handle); /* null-tolerant; ABI v2+ */
 
 /* ---- Intl.PluralRules ----
  * category: 0 zero, 1 one, 2 two, 3 few, 4 many, 5 other. */
 void *mal_i18n_plural_rules_new(const uint8_t *locale, size_t locale_len, int32_t ordinal);
 int32_t mal_i18n_plural_category(void *handle, double number);
+void mal_i18n_plural_rules_free(void *handle); /* null-tolerant; ABI v2+ */
 
 /* ---- Intl.NumberFormat (decimal + percent) ---- */
 int32_t mal_i18n_number_format(const uint8_t *locale, size_t locale_len, double number, int32_t percent, int32_t min_integer, int32_t min_fraction, int32_t max_fraction, int32_t grouping, uint8_t *out, int32_t out_cap);

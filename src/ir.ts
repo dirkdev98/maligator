@@ -8050,7 +8050,12 @@ function compileLiteral(
 		return compileNumberLiteral(fn, cursor, literal.value);
 	}
 
-	if (typeof literal.value === "number" && Number.isFinite(literal.value)) {
+	if (typeof literal.value === "number") {
+		// Every remaining number — finite non-integers, integers outside the i32
+		// range, AND non-finite values like Infinity from an overflowing literal
+		// (e.g. `1e309`) — materializes as an f64. Previously non-finite literals
+		// fell through to `return -1` and were silently dropped (the store/call
+		// read register -1), corrupting the value.
 		const destination = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
 			type: "createF64",

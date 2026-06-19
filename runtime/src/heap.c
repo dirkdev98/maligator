@@ -1,91 +1,302 @@
 #include "./heap.h"
 
 #include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+
+/*
+ * Block-based, segregated-size-class, non-moving allocator (gc_todo.md Step 7).
+ *
+ * Layout:  Chunk (CHUNK_SIZE mmap, BLOCK_SIZE-aligned)
+ *            -> Block (BLOCK_SIZE, address-aligned: block = ptr & ~(BLOCK_SIZE-1))
+ *              -> Cell (header + payload, rounded to a size class)
+ *
+ * Each block carries one size class and one kind (CELL / RAW). Cells are
+ * bump-allocated within the current block per (kind, size class); a fresh block
+ * is claimed from the newest chunk when the current block fills, and a new chunk
+ * is mmap'd when the newest is exhausted. Objects larger than the largest size
+ * class go to the large-object space (LOS) as individually-malloc'd records.
+ *
+ * Phase 1 has no collector: nothing is reclaimed mid-run (cells are never freed,
+ * matching the previous bump heap), and everything is released at shutdown by
+ * mal_heap_free. The structure (per-block free lists, BLOCK_SIZE-aligned blocks,
+ * chunk enumeration) is laid out so the Phase 3 mark/sweep collector can sweep
+ * the bitmap, return cells to free lists, and madvise empty blocks to the OS
+ * without touching the mutator-facing API.
+ */
+
+#define MAL_GC_BLOCK_SIZE (32u * 1024u)
+#define MAL_GC_CHUNK_SIZE (2u * 1024u * 1024u)
+/* Cells of this size or smaller are size-classed in blocks; larger -> LOS. */
+#define MAL_GC_LARGE_THRESHOLD (MAL_GC_BLOCK_SIZE / 4u)
+/* Every cell is 16-byte aligned: covers void*, f64, and MalBigInt's i128. */
+#define MAL_GC_CELL_ALIGN 16u
+
+typedef enum MalGcBlockKind {
+    MAL_GC_BLOCK_CELL,
+    MAL_GC_BLOCK_RAW,
+} MalGcBlockKind;
+
+/* Block header, stored inline at the (BLOCK_SIZE-aligned) block base so a cell's
+ * block is recovered with a single mask. Cells follow the header. */
+struct MalGcBlock {
+    u8 kind;        /* MalGcBlockKind */
+    u8 age;         /* generational age (Phase 5); 0 for now */
+    u16 size_class; /* index into g_class_cell_size */
+    u32 cell_size;  /* bytes per cell in this block */
+    u8 *bump;       /* next unallocated byte */
+    u8 *limit;      /* one past the last usable byte (block_base + BLOCK_SIZE) */
+    void *free_list; /* reclaimed cells (Phase 3 sweep / gc_free_raw); intrusive */
+};
+
+struct MalGcChunk {
+    void *base;          /* BLOCK_SIZE-aligned, CHUNK_SIZE usable bytes */
+    void *mmap_base;     /* original mmap address (for munmap) */
+    usize mmap_size;     /* original mmap length */
+    usize next_block;    /* index of the next unused block in this chunk */
+    usize block_count;   /* CHUNK_SIZE / BLOCK_SIZE */
+    struct MalGcChunk *next;
+};
+
+struct MalGcLarge {
+    struct MalGcLarge *next;
+    usize size; /* payload bytes */
+    u8 kind;    /* MalGcBlockKind */
+};
+
+static inline usize mal_gc_align_up(usize value) {
+    return (value + (MAL_GC_CELL_ALIGN - 1)) & ~(usize) (MAL_GC_CELL_ALIGN - 1);
+}
+
+/* Cell payload offset within a block (block header rounded up to cell align). */
+static inline usize mal_gc_cell_data_offset(void) {
+    return mal_gc_align_up(sizeof(struct MalGcBlock));
+}
+
+/* Payload offset within a LOS record (record header rounded up to cell align). */
+static inline usize mal_gc_large_data_offset(void) {
+    return mal_gc_align_up(sizeof(struct MalGcLarge));
+}
+
+/*
+ * Size classes (cell sizes in bytes), 16-aligned with jemalloc-style spacing
+ * (four classes per power-of-two band) so internal fragmentation stays under
+ * ~15%. The last entry is the in-block ceiling; requests above MAL_GC_LARGE_
+ * THRESHOLD never reach this table. Keep MAL_GC_NUM_SIZE_CLASSES in sync.
+ */
+static const u32 g_class_cell_size[MAL_GC_NUM_SIZE_CLASSES] = {
+    16, 32, 48, 64, 80, 96, 112, 128,         //
+    160, 192, 224, 256,                        //
+    320, 384, 448, 512,                        //
+    640, 768, 896, 1024,                       //
+    1280, 1536, 1792, 2048,                    //
+    2560, 3072, 3584, 4096,                    //
+    5120, 6144, 7168, 8192,                    //
+};
+
+static_assert(
+    sizeof(g_class_cell_size) / sizeof(g_class_cell_size[0]) == MAL_GC_NUM_SIZE_CLASSES,
+    "size class table length must equal MAL_GC_NUM_SIZE_CLASSES");
+static_assert(MAL_GC_BLOCK_SIZE != 0 && (MAL_GC_BLOCK_SIZE & (MAL_GC_BLOCK_SIZE - 1)) == 0,
+    "block size must be a power of two for the masking trick");
+
+/* size -> size-class index, O(1). Slot s covers requests in (16*(s-1), 16*s]. */
+#define MAL_GC_MAX_SLOT (MAL_GC_LARGE_THRESHOLD / MAL_GC_CELL_ALIGN)
+static u8 g_size_to_class[MAL_GC_MAX_SLOT + 1];
+static bool g_tables_ready = false;
+
+static void mal_gc_ensure_tables(void) {
+    if (g_tables_ready) {
+        return;
+    }
+    usize ci = 0;
+    for (usize slot = 0; slot <= MAL_GC_MAX_SLOT; ++slot) {
+        usize needed = slot * MAL_GC_CELL_ALIGN;
+        if (needed < g_class_cell_size[0]) {
+            needed = g_class_cell_size[0];
+        }
+        while (ci < MAL_GC_NUM_SIZE_CLASSES - 1 && g_class_cell_size[ci] < needed) {
+            ++ci;
+        }
+        g_size_to_class[slot] = (u8) ci;
+    }
+    g_tables_ready = true;
+}
+
+/* mmap a region of `size` bytes aligned to `align` (a power of two). Records the
+ * raw mapping in *mmap_base_out / *mmap_size_out for later munmap. */
+static void *mal_gc_aligned_mmap(usize size, usize align, void **mmap_base_out, usize *mmap_size_out) {
+    usize total = size + align;
+    void *raw = mmap(nullptr, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (raw == MAP_FAILED) {
+        return nullptr;
+    }
+    uptr aligned = ((uptr) raw + (align - 1)) & ~(uptr) (align - 1);
+    *mmap_base_out = raw;
+    *mmap_size_out = total;
+    return (void *) aligned;
+}
+
+static MalGcChunk *mal_gc_new_chunk(MalHeap *heap) {
+    void *mmap_base;
+    usize mmap_size;
+    void *base = mal_gc_aligned_mmap(MAL_GC_CHUNK_SIZE, MAL_GC_BLOCK_SIZE, &mmap_base, &mmap_size);
+    if (base == nullptr) {
+        abort(); // out of address space; the runtime has no OOM recovery path
+    }
+    MalGcChunk *chunk = malloc(sizeof(MalGcChunk));
+    if (chunk == nullptr) {
+        abort();
+    }
+    chunk->base = base;
+    chunk->mmap_base = mmap_base;
+    chunk->mmap_size = mmap_size;
+    chunk->block_count = MAL_GC_CHUNK_SIZE / MAL_GC_BLOCK_SIZE;
+    chunk->next_block = 0;
+    chunk->next = heap->chunks;
+    heap->chunks = chunk;
+    return chunk;
+}
+
+static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
+    MalGcChunk *chunk = heap->chunks;
+    if (chunk == nullptr || chunk->next_block >= chunk->block_count) {
+        chunk = mal_gc_new_chunk(heap);
+    }
+    u8 *block_base = (u8 *) chunk->base + chunk->next_block * MAL_GC_BLOCK_SIZE;
+    chunk->next_block++;
+
+    MalGcBlock *block = (MalGcBlock *) block_base;
+    block->kind = kind;
+    block->age = 0;
+    block->size_class = size_class;
+    block->cell_size = g_class_cell_size[size_class];
+    block->free_list = nullptr;
+    block->bump = block_base + mal_gc_cell_data_offset();
+    block->limit = block_base + MAL_GC_BLOCK_SIZE;
+    return block;
+}
+
+static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
+    MalGcLarge *rec = malloc(mal_gc_large_data_offset() + size);
+    if (rec == nullptr) {
+        abort();
+    }
+    rec->size = size;
+    rec->kind = kind;
+    rec->next = heap->large;
+    heap->large = rec;
+    heap->bytes_allocated += size;
+    return (u8 *) rec + mal_gc_large_data_offset();
+}
+
+static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
+    if (size == 0) {
+        size = 1;
+    }
+    if (size > MAL_GC_LARGE_THRESHOLD) {
+        return mal_gc_alloc_large(heap, size, kind);
+    }
+
+    usize slot = (size + MAL_GC_CELL_ALIGN - 1) / MAL_GC_CELL_ALIGN;
+    u16 size_class = g_size_to_class[slot];
+    MalGcBlock **current = (kind == MAL_GC_BLOCK_CELL)
+        ? &heap->cell_blocks[size_class]
+        : &heap->raw_blocks[size_class];
+
+    MalGcBlock *block = *current;
+    if (block == nullptr || block->bump + block->cell_size > block->limit) {
+        block = mal_gc_new_block(heap, size_class, kind);
+        *current = block;
+    }
+
+    void *cell = block->bump;
+    block->bump += block->cell_size;
+    heap->bytes_allocated += block->cell_size;
+    return cell;
+}
 
 void mal_heap_init(MalHeap *heap, usize capacity) {
-    if (capacity == 0) {
-        capacity = MAL_DEFAULT_HEAP_SIZE;
-    }
-    heap->ptr = malloc(capacity);
-    heap->next_ptr = heap->ptr;
-    heap->capacity = capacity;
-    heap->next_heap = nullptr;
-    heap->tail = heap;
+    (void) capacity; // the block allocator sizes itself; capacity is now advisory
+    mal_gc_ensure_tables();
+    heap->chunks = nullptr;
+    heap->large = nullptr;
+    memset(heap->cell_blocks, 0, sizeof(heap->cell_blocks));
+    memset(heap->raw_blocks, 0, sizeof(heap->raw_blocks));
+    heap->bytes_allocated = 0;
 }
 
 void mal_heap_free(MalHeap *heap) {
-    // Each next-pool MalHeap node is embedded in this pool's buffer, so free the
-    // rest of the chain (which reads those nodes) before releasing the buffer
-    // that hosts them.
-    if (heap->next_heap != nullptr) {
-        mal_heap_free(heap->next_heap);
-        heap->next_heap = nullptr;
+    MalGcChunk *chunk = heap->chunks;
+    while (chunk != nullptr) {
+        MalGcChunk *next = chunk->next;
+        munmap(chunk->mmap_base, chunk->mmap_size);
+        free(chunk);
+        chunk = next;
     }
-
-    free(heap->ptr);
-    heap->ptr = nullptr;
-    heap->capacity = 0;
-    heap->next_ptr = nullptr;
-    heap->tail = nullptr;
-}
-
-/**
- * Append a fresh pool after the current tail and make it the new tail. The new
- * pool's MalHeap node is embedded at the old tail's bump pointer (room is always
- * kept in reserve for it); its data buffer is a separate allocation.
- */
-static void mal_heap_grow(MalHeap *root, usize capacity) {
-    if (capacity == 0) {
-        capacity = MAL_DEFAULT_HEAP_SIZE;
+    MalGcLarge *large = heap->large;
+    while (large != nullptr) {
+        MalGcLarge *next = large->next;
+        free(large);
+        large = next;
     }
-
-    MalHeap *tail = root->tail;
-    tail->next_heap = tail->next_ptr;
-    tail->next_ptr += MAL_HEAP_ALIGN(MalHeap);
-
-    mal_heap_init(tail->next_heap, capacity);
-    root->tail = tail->next_heap;
-}
-
-/**
- * O(1) bump allocation: serve from the tail pool, growing the chain only when
- * the tail is full. The tail always keeps MAL_HEAP_ALIGN(MalHeap) bytes in
- * reserve to host the next pool's embedded node.
- */
-static void *mal_heap_alloc_aligned(MalHeap *root, usize alloc_size) {
-    size aligned_alloc_size = MAL_HEAP_ALIGN_SIZE(alloc_size, void*);
-    MalHeap *tail = root->tail;
-
-    size available_capacity =
-        tail->capacity - (tail->next_ptr - tail->ptr) - MAL_HEAP_ALIGN(MalHeap);
-
-    if (available_capacity < aligned_alloc_size) {
-        // Size the new pool to fit this allocation plus the embedded-node
-        // reserve, so the retry below always succeeds without growing again.
-        usize needed = aligned_alloc_size + MAL_HEAP_ALIGN(MalHeap);
-        mal_heap_grow(root, needed > MAL_DEFAULT_HEAP_SIZE ? needed : MAL_DEFAULT_HEAP_SIZE);
-        tail = root->tail;
-    }
-
-    void *ptr = tail->next_ptr;
-    tail->next_ptr += aligned_alloc_size;
-
-    return ptr;
+    heap->chunks = nullptr;
+    heap->large = nullptr;
+    memset(heap->cell_blocks, 0, sizeof(heap->cell_blocks));
+    memset(heap->raw_blocks, 0, sizeof(heap->raw_blocks));
+    heap->bytes_allocated = 0;
 }
 
 void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
-    // TODO: at some point we can add GC tracking here.
     header->type = type;
     header->storage = MAL_HEAP_STORAGE_DYNAMIC;
 }
 
-void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
-    void *ptr = mal_heap_alloc_aligned(heap, alloc_size);
-    mal_heap_header_init(ptr, type);
+MalHeapType mal_heap_header_type(const MalHeapHeader *header) {
+    return header->type;
+}
 
+void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
+    void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_CELL);
+    mal_heap_header_init(ptr, type);
     return ptr;
 }
 
 void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size) {
-    return mal_heap_alloc_aligned(heap, alloc_size);
+    return mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_RAW);
+}
+
+static bool mal_gc_ptr_in_chunks(const MalHeap *heap, const void *ptr) {
+    for (const MalGcChunk *chunk = heap->chunks; chunk != nullptr; chunk = chunk->next) {
+        const u8 *base = (const u8 *) chunk->base;
+        if ((const u8 *) ptr >= base && (const u8 *) ptr < base + MAL_GC_CHUNK_SIZE) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void gc_free_raw(MalHeap *heap, void *ptr) {
+    if (ptr == nullptr) {
+        return;
+    }
+    if (mal_gc_ptr_in_chunks(heap, ptr)) {
+        // In-block cell: push onto its block's free list (recovered by masking).
+        // Reuse on the allocation path lands with the Phase 3 sweep wiring.
+        MalGcBlock *block = (MalGcBlock *) ((uptr) ptr & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
+        *(void **) ptr = block->free_list;
+        block->free_list = ptr;
+        return;
+    }
+    // Large-object buffer: unlink its record from the LOS list and free it.
+    MalGcLarge *target = (MalGcLarge *) ((u8 *) ptr - mal_gc_large_data_offset());
+    MalGcLarge **link = &heap->large;
+    while (*link != nullptr) {
+        if (*link == target) {
+            *link = target->next;
+            free(target);
+            return;
+        }
+        link = &(*link)->next;
+    }
 }

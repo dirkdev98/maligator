@@ -20,8 +20,9 @@
 extern "C" {
 #endif
 
-/* Bump alongside MAL_REGEXP_ABI_VERSION in lib.rs on breaking changes. */
-#define MAL_REGEXP_ABI_VERSION 1u
+/* Bump alongside MAL_REGEXP_ABI_VERSION in regexp.rs on breaking changes.
+ * v2: added mal_regexp_free (GC finalization). */
+#define MAL_REGEXP_ABI_VERSION 2u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);
@@ -38,6 +39,10 @@ uint32_t mal_regexp_abi_version(void);
  * NULL when the pattern is invalid (the C side throws SyntaxError). The handle
  * lives as long as the owning RegExp object and is never freed (no GC). */
 void *mal_regexp_compile(const uint16_t *pattern, size_t pattern_len, uint32_t flags);
+
+/* Free a handle from mal_regexp_compile (null-tolerant, so the GC finalizer is
+ * idempotent after nulling the field). ABI v2+. */
+void mal_regexp_free(void *handle);
 
 /* Execute `handle` against `subject` (UTF-16) starting at code-unit index
  * `start`. Returns the capture-group count (>= 1, including group 0) on a match,
