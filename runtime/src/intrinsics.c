@@ -27,7 +27,9 @@
 #include "builtin_proxy.h"
 #include "builtin_regexp.h"
 #include "builtin_reflect.h"
+#include "builtin_finalization_registry.h"
 #include "builtin_set.h"
+#include "builtin_weak_ref.h"
 #include "builtin_string.h"
 #include "builtin_symbol.h"
 #include "builtin_uri.h"
@@ -233,6 +235,8 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_array_install(vm);
     mal_builtin_map_install(vm);
     mal_builtin_set_install(vm);
+    mal_builtin_weak_ref_install(vm);
+    mal_builtin_finalization_registry_install(vm);
     mal_builtin_array_buffer_install(vm);
     mal_builtin_typed_array_install(vm);
     mal_builtin_data_view_install(vm);
@@ -275,6 +279,8 @@ void mal_intrinsics_init(MalVm *vm) {
         MAL_INTRINSIC_SET_CONSTRUCTOR,
         MAL_INTRINSIC_WEAK_MAP_CONSTRUCTOR,
         MAL_INTRINSIC_WEAK_SET_CONSTRUCTOR,
+        MAL_INTRINSIC_WEAK_REF_CONSTRUCTOR,
+        MAL_INTRINSIC_FINALIZATION_REGISTRY_CONSTRUCTOR,
         MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR,
         MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR,
         MAL_INTRINSIC_DATA_VIEW_CONSTRUCTOR,
@@ -356,6 +362,8 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "Set", vm->intrinsics[MAL_INTRINSIC_SET_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "WeakMap", vm->intrinsics[MAL_INTRINSIC_WEAK_MAP_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "WeakSet", vm->intrinsics[MAL_INTRINSIC_WEAK_SET_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "WeakRef", vm->intrinsics[MAL_INTRINSIC_WEAK_REF_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "FinalizationRegistry", vm->intrinsics[MAL_INTRINSIC_FINALIZATION_REGISTRY_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "ArrayBuffer", vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "SharedArrayBuffer", vm->intrinsics[MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Int8Array", vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_INT8_CONSTRUCTOR], flags);

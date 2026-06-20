@@ -8,7 +8,7 @@
 
 /**
  * Ordinary object (and the base of every exotic subtype). Named properties live
- * in one of two states (gc_todo.md Step 8 / shape.h):
+ * in one of two states:
  *   - shaped: `shape` (non-empty) describes the layout; the values are in
  *     `slots[0 .. shape->inline_count)`; `overflow` is null.
  *   - dictionary: `shape` is the empty shape and all properties live in the

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "./defaults.h"
+#include "gc.h"
 #include "heap.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
@@ -738,6 +739,24 @@ typedef struct MalVm {
     struct MalJob *job_tail;
 
     /**
+     * The job currently being run by the microtask drain, unlinked from the queue
+     * but still holding live MalValues (its handler, argument, and capabilities)
+     * that the handler may settle after a collection. Traced as a root so those
+     * values survive a GC triggered while the handler runs. Null when idle.
+     */
+    struct MalJob *active_job;
+
+    /**
+     * [[KeptObjects]]: WeakRef targets observed (constructed or deref'd) since the
+     * last microtask checkpoint, held strongly so a target cannot be reclaimed
+     * partway through a synchronous turn (deref must stay stable within a job).
+     * Traced as a root; emptied at each checkpoint (ClearKeptObjects).
+     */
+    MalValue *kept_objects;
+    i32 kept_count;
+    i32 kept_capacity;
+
+    /**
      * Promises that rejected while unhandled (no reject handler attached at
      * rejection time). Reported at the microtask checkpoint unless a handler was
      * attached before then (re-checked via [[PromiseIsHandled]]). A growable
@@ -794,6 +813,15 @@ typedef struct MalVm {
      * rather than overflowing the C stack.
      */
     i32 native_call_depth;
+
+    /**
+     * Count of native builtin invocations live on the C stack. A builtin holds
+     * MalValue scratch in C locals the root scan cannot enumerate, so the collector
+     * must not run while any are active — the safepoint poll is gated on this being
+     * zero. Compiled-backend frames are NOT counted here: each publishes a
+     * MalRootFrame, so the collector can scan their registers and run inside them.
+     */
+    i32 gc_native_frames;
 
     /**
      * Native (compiled-backend) call frames, for stack traces — see
@@ -961,6 +989,12 @@ typedef MalVmFrame MalCallable;
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition);
 
 void mal_vm_free(MalVm *vm);
+
+/** AddToKeptObjects: pin a WeakRef target for the rest of the current turn. */
+void mal_vm_add_kept_object(MalVm *vm, MalValue value);
+
+/** ClearKeptObjects: release the kept set at a microtask checkpoint. */
+void mal_vm_clear_kept_objects(MalVm *vm);
 
 /** Record a promise that rejected while unhandled (for the microtask checkpoint). */
 void mal_vm_note_unhandled_rejection(MalVm *vm, MalValue promise);

@@ -2,6 +2,8 @@
 
 #include <stdlib.h>
 
+#include "./gc.h"
+
 static MalPropertyDesc *mal_property_entry_data(MalTable *table, void *entry) {
     MalPropertyDesc *desc = mal_table_entry_data(table, entry);
 
@@ -45,7 +47,13 @@ void *mal_property_set_value(MalTable *table, MalKey key, MalValue value) {
 }
 
 void mal_property_write_entry(MalTable *table, void *entry, const MalPropertyDesc *desc) {
-    *mal_property_entry_data(table, entry) = *desc;
+    MalPropertyDesc *current = mal_property_entry_data(table, entry);
+    // SATB: shade the descriptor refs being overwritten. write_entry is only
+    // called on an already-present property, so `current` holds valid old values.
+    mal_gc_write_barrier(current->value);
+    mal_gc_write_barrier(current->getter);
+    mal_gc_write_barrier(current->setter);
+    *current = *desc;
 }
 
 MalKey mal_property_entry_key(const MalTable *table, void *entry) {

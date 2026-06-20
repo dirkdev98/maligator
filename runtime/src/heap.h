@@ -19,21 +19,20 @@ typedef struct MalHeap MalHeap;
  */
 #define MAL_GC_NUM_SIZE_CLASSES 32
 
-/* Block allocator internals (gc_todo.md Step 7). Defined in heap.c; the heap
+/* Block allocator internals. Defined in heap.c; the heap
  * only holds pointers to them, so forward declarations suffice here. */
 typedef struct MalGcChunk MalGcChunk;
 typedef struct MalGcBlock MalGcBlock;
 typedef struct MalGcLarge MalGcLarge;
 
 /**
- * Block-based, segregated-size-class, non-moving allocator (gc_todo.md Step 7).
+ * Block-based, segregated-size-class, non-moving allocator.
  *
  * Chunk (~2 MB mmap, BLOCK_SIZE-aligned) -> Block (~32 KB, one size class + one
- * kind) -> Cell. Allocation bump-points within the current block per size class;
- * a fresh block is claimed when the current one fills. Large objects bypass
- * blocks into the LOS list. Nothing is reclaimed yet — the mark/sweep collector
- * (Phase 3) returns cells to per-block free lists and empty blocks to the OS;
- * for now `mal_heap_free` releases everything at shutdown, as before.
+ * kind) -> Cell. Allocation pops a reclaimed cell from the size class's free list
+ * (populated by the sweep) and otherwise bump-points within the current block; a
+ * fresh block is claimed when the current one fills. Large objects bypass blocks
+ * into the LOS list. `mal_heap_free` releases everything at shutdown.
  */
 typedef struct MalHeap {
     /** All chunks, newest first (allocation source + shutdown release). */
@@ -44,8 +43,16 @@ typedef struct MalHeap {
     MalGcBlock *cell_blocks[MAL_GC_NUM_SIZE_CLASSES];
     /** Current bump block per size class for owner-held raw buffers. */
     MalGcBlock *raw_blocks[MAL_GC_NUM_SIZE_CLASSES];
-    /** Rough live-bytes accounting (handed-out cell sizes). */
+    /** Reclaimed managed cells per size class, rebuilt by the sweep; the
+     * allocator reuses these before bumping. Empty between (and without) any
+     * collection, so an uncollected run is pure bump allocation as before. */
+    void *cell_free[MAL_GC_NUM_SIZE_CLASSES];
+    /** Monotonic total of handed-out cell sizes (never decremented); the
+     * auto-collection trigger compares it against mal_gc_next_at. */
     usize bytes_allocated;
+    /** Bytes of managed cells that survived the last sweep; sizes the next
+     * auto-collection trigger. Zero until the first collection. */
+    usize live_bytes;
 } MalHeap;
 
 /**
@@ -149,33 +156,33 @@ typedef enum MalHeapType {
     /*
      * GC reservations (Phase 0). No structs/handling yet; the discriminators
      * exist so the future per-type metadata table (trace/finalize dispatch) can
-     * be keyed on a complete MalHeapType space. See gc_todo.md Step 11.1.
+     * be keyed on a complete MalHeapType space.
      */
 
     /**
      * Closure environment (MalEnv). A first-class GC cell once the collector
-     * exists; today MalEnv embeds no header (vm.h). See gc_todo.md B4 / Step 11.2.
+     * exists; today MalEnv embeds no header (vm.h).
      */
     MAL_HEAP_ENV,
     /**
      * Hidden-class shape descriptor (MalShape): the interned key->slot layout
-     * shared by objects with the same structure. See gc_todo.md Step 8 B3.
+     * shared by objects with the same structure.
      */
     MAL_HEAP_SHAPE,
     /**
      * WeakRef instances (target held weakly, nulled when the target dies). Not
-     * built yet. See gc_todo.md D3.
+     * built yet.
      */
     MAL_HEAP_WEAK_REF_OBJECT,
     /**
      * FinalizationRegistry instances (weak targets, strong held values + cleanup
-     * callback). Not built yet. See gc_todo.md D3.
+     * callback). Not built yet.
      */
     MAL_HEAP_FINALIZATION_REGISTRY_OBJECT,
 
     /**
      * Sentinel: number of distinct heap types. Must stay last. Sizes the baked
-     * per-type GC metadata table (gc_todo.md Step 8). Not a usable type tag.
+     * per-type GC metadata table. Not a usable type tag.
      */
     MAL_HEAP_TYPE_COUNT,
 } MalHeapType;
@@ -195,11 +202,25 @@ typedef enum MalHeapStorage {
 } MalHeapStorage;
 
 /**
+ * Mark state of a managed cell, tracked in its header for the stop-the-world
+ * mark/sweep collector. WHITE is the default (unmarked / live-but-unreached);
+ * BLACK is set when the cell is reached during marking; FREE marks a reclaimed
+ * cell on its block's free list, so the sweep never finalizes it twice. (A side
+ * mark bitmap replaces this header field when marking goes concurrent.)
+ */
+typedef enum MalHeapMark {
+    MAL_MARK_WHITE = 0,
+    MAL_MARK_BLACK = 1,
+    MAL_MARK_FREE = 2,
+} MalHeapMark;
+
+/**
  * Common header stored at the start of every pointer-boxed heap allocation.
  */
 typedef struct MalHeapHeader {
     MalHeapType type;
     MalHeapStorage storage;
+    u8 mark;
 } MalHeapHeader;
 
 /**
@@ -238,13 +259,28 @@ void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type);
 
 /**
  * Allocate raw heap storage without initializing a heap header. Returns an
- * owner-held buffer (a RAW cell, or LOS for large buffers); see gc_todo.md A4.
+ * owner-held buffer (a RAW cell, or LOS for large buffers).
  */
 void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size);
 
 /**
  * Free a raw buffer previously returned by mal_heap_alloc_raw. Returns an
  * in-block cell to its block's free list, or releases its LOS record. Used by
- * the GC's owner finalizers (Phase 3, gc_todo.md D1); no callers in Phase 1.
+ * the GC's owner finalizers.
  */
 void gc_free_raw(MalHeap *heap, void *ptr);
+
+/** Finalizer applied to a dead cell during the sweep (frees owned buffers). */
+typedef void (*MalHeapFinalizeFn)(MalHeapHeader *cell);
+
+/**
+ * Reclaim every unmarked (WHITE) managed cell: run `finalize` on it, mark it
+ * FREE, and return it to its block's free list for reuse. Marked (BLACK) cells
+ * are kept and reset to WHITE for the next cycle. Caller must have completed the
+ * mark phase first. Large-object cells are not yet swept.
+ */
+void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize);
+
+/** Call `visit` on every managed (CELL) cell, in any state. Used by the heap
+ * verifier to re-examine each cell's edges after marking. */
+void mal_heap_walk_cells(MalHeap *heap, MalHeapFinalizeFn visit);

@@ -53,7 +53,7 @@ export interface SemanticFile {
 	 * eval — `eval(...)` resolving to the global eval, not a shadowing local —
 	 * anywhere in their lexical region. Direct eval can read and mutate every
 	 * binding in scope, so it makes that function's locals dynamically
-	 * addressable. The C3 rule (gc_todo.md) disables escape / scalar-replacement /
+	 * addressable. The C3 rule disables escape / scalar-replacement /
 	 * region analysis for any function in this set. A nested direct eval also
 	 * poisons every enclosing function (it can reach their locals via the scope
 	 * chain). Indirect eval — `(0, eval)(...)`, `globalThis.eval(...)` — cannot see
@@ -306,7 +306,7 @@ function detectDirectEval(node: ESTree.Node, file: SemanticFile) {
 /**
  * Whether a function-defining node (or the Program) is poisoned by a direct eval
  * in its lexical region — escape / scalar-replacement / region analysis must be
- * disabled for it (C3, gc_todo.md).
+ * disabled for it (C3).
  */
 export function functionHasDirectEval(file: SemanticFile, node: ESTree.Node): boolean {
 	return file.hasDirectEval.has(node);

@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 
+#include "gc.h"
 #include "value_ops.h"
 
 static bool mal_object_desc_is_accessor(MalPropertyDesc desc) {
@@ -61,7 +62,7 @@ static const MalPropertyFlags MAL_DEFAULT_DATA_FLAGS =
     MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
 
 /**
- * Cap on inline shape slots (gc_todo.md Step 11.4). Beyond this an object drops
+ * Cap on inline shape slots. Beyond this an object drops
  * to dictionary mode: shape lookup is a linear scan, so large objects (e.g.
  * Array.prototype) are faster as a hash table, and the cap also bounds shape-tree
  * growth under churn.
@@ -195,7 +196,9 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
         if (idx >= 0) {
             // Existing shaped data property (always writable+configurable): a
             // default-data redefine is compatible, so just update the value.
-            object->slots[object->shape->props[idx].slot] = desc->value;
+            u32 slot = object->shape->props[idx].slot;
+            mal_gc_write_barrier(object->slots[slot]); // SATB: shade overwritten ref
+            object->slots[slot] = desc->value;
             return MAL_DEFINE_OWN_APPLIED;
         }
         if (object->overflow == nullptr
@@ -250,6 +253,13 @@ bool mal_object_delete_own(MalObject *object, MalKey key) {
         return false;
     }
 
+    // SATB: shade the deleted property's descriptor refs. mal_table_delete shades
+    // the key + inline value generically, but a property's value/getter/setter
+    // live in the descriptor, so shade them here where the descriptor is known.
+    mal_gc_write_barrier(lookup.desc.value);
+    mal_gc_write_barrier(lookup.desc.getter);
+    mal_gc_write_barrier(lookup.desc.setter);
+
     // A shape is a fixed layout, so removing a shaped property drops the object
     // to dictionary mode first, then deletes from the table.
     if (key.kind == MAL_KEY_STRING && mal_shape_find(object->shape, key) >= 0) {
@@ -296,7 +306,9 @@ bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
     if (key.kind == MAL_KEY_STRING) {
         i32 idx = mal_shape_find(object->shape, key);
         if (idx >= 0) {
-            object->slots[object->shape->props[idx].slot] = value;
+            u32 slot = object->shape->props[idx].slot;
+            mal_gc_write_barrier(object->slots[slot]); // SATB: shade overwritten ref
+            object->slots[slot] = value;
             return true;
         }
     }

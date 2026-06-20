@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 
+#include "./gc.h"
 #include "./heap_string.h"
 
 #define MAL_TABLE_MIN_CAPACITY 16
@@ -199,6 +200,13 @@ bool mal_table_delete(MalTable *table, MalKey key) {
         return false;
     }
 
+    // SATB obligation: a RAW table is traced via its
+    // owner but mutated independently, so a key/value dropped mid-cycle must be
+    // shaded or it could be lost. Generic here (key + inline value); the property
+    // MOP shades a deleted descriptor's value/getter/setter. Folds out off-cycle.
+    mal_gc_write_barrier(entry->key.value);
+    mal_gc_write_barrier(entry->value);
+
     entry->live = false;
     table->slots[index] = nullptr;
     table->size--;
@@ -215,6 +223,9 @@ void mal_table_clear(MalTable *table) {
         MalTableEntry *entry = table->order[i];
 
         if (entry != nullptr && entry->live) {
+            // SATB: shade each dropped key/value (see mal_table_delete).
+            mal_gc_write_barrier(entry->key.value);
+            mal_gc_write_barrier(entry->value);
             entry->live = false;
             table->tombstone_count++;
         }

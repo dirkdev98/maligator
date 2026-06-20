@@ -46,6 +46,30 @@ bool mal_value_is_date_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_DATE_OBJECT);
 }
 
+bool mal_value_is_weak_ref_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_WEAK_REF_OBJECT);
+}
+
+MalWeakRefObject *mal_value_to_weak_ref_object(MalValue value) {
+    return (MalWeakRefObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_weak_ref_object(MalWeakRefObject *ref) {
+    return mal_value_from_heap((MalHeapHeader *) ref);
+}
+
+bool mal_value_is_finalization_registry_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_FINALIZATION_REGISTRY_OBJECT);
+}
+
+MalFinalizationRegistryObject *mal_value_to_finalization_registry_object(MalValue value) {
+    return (MalFinalizationRegistryObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_finalization_registry_object(MalFinalizationRegistryObject *reg) {
+    return mal_value_from_heap((MalHeapHeader *) reg);
+}
+
 MalDateObject *mal_value_to_date_object(MalValue value) {
     return (MalDateObject *) mal_value_to_heap(value);
 }

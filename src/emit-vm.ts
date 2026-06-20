@@ -350,7 +350,11 @@ function malVmDefinitionStruct(
  * definitions are named `mal_vm_definition_<index>` to match the batch footer.
  * The caller prepends the shared `#include` header (as for the per-test path).
  */
-export function emitBatch(definitions: Array<VmDefinition>): string {
+export function emitBatch(
+	definitions: Array<VmDefinition>,
+	options: Pick<EmitOptions, "compiled"> = {},
+): string {
+	const useCompiled = options.compiled !== false;
 	const lines: Array<string> = [];
 
 	// content -> shared symbol, for each kind of array. `body` is the element
@@ -400,7 +404,7 @@ export function emitBatch(definitions: Array<VmDefinition>): string {
 
 		const compiled = definition.functions.map((fn, i) =>
 			// The batch path strips debug info, so compiled bodies emit no pos writes.
-			emitCompiledFunction(fn, i, suffix, false),
+			useCompiled ? emitCompiledFunction(fn, i, suffix, false) : null,
 		);
 		for (const fn of compiled) {
 			if (fn !== null) {
@@ -701,6 +705,10 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_WEAK_MAP_CONSTRUCTOR";
 		case "WeakSet":
 			return "MAL_INTRINSIC_WEAK_SET_CONSTRUCTOR";
+		case "WeakRef":
+			return "MAL_INTRINSIC_WEAK_REF_CONSTRUCTOR";
+		case "FinalizationRegistry":
+			return "MAL_INTRINSIC_FINALIZATION_REGISTRY_CONSTRUCTOR";
 		case "Promise":
 			return "MAL_INTRINSIC_PROMISE_CONSTRUCTOR";
 		case "Date":

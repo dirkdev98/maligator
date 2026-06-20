@@ -1021,6 +1021,8 @@ type IRIntrinsic =
 	| "Set"
 	| "WeakMap"
 	| "WeakSet"
+	| "WeakRef"
+	| "FinalizationRegistry"
 	| "Promise"
 	| "Date"
 	| "RegExp"
@@ -1082,6 +1084,8 @@ const irIntrinsics = new Set<string>([
 	"Set",
 	"WeakMap",
 	"WeakSet",
+	"WeakRef",
+	"FinalizationRegistry",
 	"Promise",
 	"Date",
 	"RegExp",

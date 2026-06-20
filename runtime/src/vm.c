@@ -8,6 +8,7 @@
 #include "builtin_async_generator.h"
 #include "bound_function_object.h"
 #include "function_object.h"
+#include "gc.h"
 #include "generator_object.h"
 #include "heap_string.h"
 #include "intrinsics.h"
@@ -26,6 +27,7 @@
 #define MAL_VALUE_STACK_CAPACITY (256 * 1024)
 
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
+    mal_gc_init();
     vm->definition = definition;
     vm->globals = malloc(sizeof(MalValue) * definition->global_count);
     vm->frames = nullptr;
@@ -36,6 +38,11 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->value_stack = malloc(sizeof(MalValue) * (usize) vm->value_stack_capacity);
     vm->value_stack_size = 0;
     vm->native_call_depth = 0;
+    vm->gc_native_frames = 0;
+    vm->active_job = nullptr;
+    vm->kept_objects = nullptr;
+    vm->kept_count = 0;
+    vm->kept_capacity = 0;
 
     vm->native_frames = nullptr;
     vm->native_frame_count = 0;
@@ -140,7 +147,20 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
     return exports;
 }
 
+void mal_vm_add_kept_object(MalVm *vm, MalValue value) {
+    if (vm->kept_count == vm->kept_capacity) {
+        vm->kept_capacity = vm->kept_capacity == 0 ? 8 : vm->kept_capacity * 2;
+        vm->kept_objects = realloc(vm->kept_objects, sizeof(MalValue) * (usize) vm->kept_capacity);
+    }
+    vm->kept_objects[vm->kept_count++] = value;
+}
+
+void mal_vm_clear_kept_objects(MalVm *vm) {
+    vm->kept_count = 0;
+}
+
 void mal_vm_free(MalVm *vm) {
+    free(vm->kept_objects);
     // Only heap-resident (generator/async) leftover frames own their buffers;
     // value-stack frames live in vm->value_stack, freed below.
     for (i32 i = 0; i < vm->frame_count; i++) {
@@ -443,6 +463,13 @@ static bool mal_vm_unwind_to_handler(MalVm *vm, i32 target_frame_count) {
 
 static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
     while (vm->frame_count > target_frame_count) {
+        // GC safepoint poll. Polling once per dispatched
+        // instruction covers both loop back-edges and call returns. Near-free
+        // until the collector raises mal_gc_poll (always false in Phase 2).
+        if (mal_gc_poll) {
+            mal_gc_safepoint(vm);
+        }
+
         MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
         auto instruction = frame->function->instructions[frame->instruction_pointer++];
 
@@ -1370,7 +1397,13 @@ MalCompletion mal_vm_call_value(
 
     if (mal_value_is_native_function_object(resolution.callee)) {
         MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
+        // A native builtin holds its MalValue scratch (receiver, partial results)
+        // in C locals the root scan cannot see, and many re-enter JS for callbacks
+        // (where a safepoint could otherwise collect). Count it as a live C frame
+        // so the collector stays off until it returns.
+        vm->gc_native_frames++;
         MalValue value = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), resolution.callee);
+        vm->gc_native_frames--;
         completion = vm->completion.kind == MAL_COMPLETION_THROW
             ? vm->completion
             : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
@@ -1451,7 +1484,9 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
         }
         // Native constructors allocate their own this; new_target signals construct.
         MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
+        vm->gc_native_frames++;
         MalValue value = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, effective_new_target, resolution.callee);
+        vm->gc_native_frames--;
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             free(resolution.owned_args);
             return vm->completion;

@@ -630,7 +630,12 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
         // invalidates any frame pointers. Snapshot what we need and
         // re-resolve the frame afterwards.
         i32 caller_frame_index = vm->frame_count - 1;
+        // A native builtin holds MalValue scratch in C locals the root scan
+        // cannot see, and many re-enter JS for callbacks; count it as a live C
+        // frame so a safepoint inside it does not collect (see gc_native_frames).
+        vm->gc_native_frames++;
         MalValue result = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), resolution.callee);
+        vm->gc_native_frames--;
         vm->frames[caller_frame_index].registers[dst] = result;
         vm->value_stack_size = base;
     } else {
@@ -725,7 +730,9 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
             mal_value_to_native_function_object(resolution.callee)
         );
         i32 caller_frame_index = vm->frame_count - 1;
+        vm->gc_native_frames++;
         MalValue result = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, resolution.callee, resolution.callee);
+        vm->gc_native_frames--;
         vm->frames[caller_frame_index].registers[dst] = result;
         vm->value_stack_size = base;
     } else {

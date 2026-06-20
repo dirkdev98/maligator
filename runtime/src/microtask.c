@@ -120,11 +120,15 @@ void mal_vm_drain_microtasks(MalVm *vm) {
             vm->job_tail = nullptr;
         }
 
+        // Keep the dequeued job's MalValues reachable: the handler can trigger a
+        // collection, and its capabilities are settled afterwards.
+        vm->active_job = job;
         if (job->kind == MAL_JOB_PROMISE_REACTION) {
             mal_vm_run_reaction_job(vm, job);
         } else {
             mal_vm_run_thenable_job(vm, job);
         }
+        vm->active_job = nullptr;
 
         free(job);
 
@@ -134,6 +138,8 @@ void mal_vm_drain_microtasks(MalVm *vm) {
         vm->completion = mal_completion_normal();
     }
 
-    // Microtask checkpoint: report promises that rejected and were never handled.
+    // Microtask checkpoint: report promises that rejected and were never handled,
+    // and release WeakRef targets pinned during this turn (ClearKeptObjects).
     mal_vm_report_unhandled_rejections(vm);
+    mal_vm_clear_kept_objects(vm);
 }

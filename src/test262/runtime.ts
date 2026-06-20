@@ -51,8 +51,20 @@ function sharedHarnessEnabled(): boolean {
 	return process.env.T262_SHARED_HARNESS !== "0";
 }
 
+/**
+ * Force every test function through the bytecode interpreter (no emit-c bodies).
+ * Used to stress the GC: collection is only safe with no compiled frame on the C
+ * stack, so an all-interpreter build lets a safepoint collect at every poll. Set
+ * T262_NO_COMPILED=1. Folded into the cache key so it cannot reuse compiled
+ * artifacts.
+ */
+function interpreterOnly(): boolean {
+	return process.env.T262_NO_COMPILED === "1";
+}
+
 function emitMode(): string {
-	return sharedHarnessEnabled() ? "shared-harness" : "per-test";
+	const base = sharedHarnessEnabled() ? "shared-harness" : "per-test";
+	return interpreterOnly() ? `${base}-nocompiled` : base;
 }
 
 /** Keys touched this run, so stale cache entries can be pruned at the end. */
@@ -731,11 +743,16 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 
 	// Emit the batch's C: one shared translation unit (deduping the harness) or
 	// each definition self-contained, headers prepended once either way.
+	const compiled = !interpreterOnly();
 	const body = sharedHarnessEnabled()
-		? emitBatch(definitions)
+		? emitBatch(definitions, { compiled })
 		: definitions
 				.map((definition, i) =>
-					emitVmDefinition(definition, { symbolSuffix: `_${i}`, includeHeader: false }),
+					emitVmDefinition(definition, {
+						symbolSuffix: `_${i}`,
+						includeHeader: false,
+						compiled,
+					}),
 				)
 				.join("\n");
 

@@ -367,7 +367,30 @@ export function emitCompiledFunction(
 	const promotableParams = numericParamCandidates(fn);
 	const reps = inferReps(fn, promotableParams);
 
-	const body = emitBody(fn, suffix, reps, debug);
+	// MalValue-typed registers can hold heap pointers, so they are GC roots: back
+	// them with a contiguous `__gc_slots` array published as a MalRootFrame, so a
+	// collection at a call/back-edge safepoint inside this function can mark them.
+	// (number/boolean-rep registers hold unboxed scalars — never heap pointers.)
+	// The registers ARE the slots (via `#define r<i> (__gc_slots[<slot>])`), so no
+	// spilling is needed; every exit must unlink the frame (gcUnlink).
+	//
+	// The frame is emitted whenever there is any MalValue register, not only when
+	// the body emits an explicit safepoint poll: ops like property access, binary
+	// operators, and iterator steps can re-enter JS (a getter, valueOf, or next())
+	// whose own safepoints may collect, with no poll at the calling op. Keeping the
+	// frame unconditional is what makes those implicit collection points safe.
+	const valueRegs: Array<number> = [];
+	for (let i = 0; i < fn.registerCount; i++) {
+		if (reps[i] !== "number" && reps[i] !== "boolean") {
+			valueRegs.push(i);
+		}
+	}
+	const slotOf = new Map<number, number>();
+	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
+	const slotCount = valueRegs.length;
+	const gcUnlink = slotCount > 0 ? "mal_root_frame_head = __gc_frame.prev; " : "";
+
+	const body = emitBody(fn, suffix, reps, debug, gcUnlink);
 	if (body === null) {
 		return null;
 	}
@@ -398,9 +421,20 @@ export function emitCompiledFunction(
 	lines.push(`    (void) env;`);
 
 	// Registers are plain C locals: `number`-rep ones as doubles, `boolean`-rep
-	// as bool (both unboxed), the rest as MalValue.
+	// as bool (both unboxed). MalValue-rep registers instead alias slots of the
+	// root-frame array so the collector can scan them; the `#define` keeps the
+	// `r<i>` spelling used throughout the body. The macros are #undef'd at the end
+	// of the function (the batch path emits many functions into one unit).
+	if (slotCount > 0) {
+		lines.push(`    MalValue __gc_slots[${slotCount}];`);
+	}
 	for (let i = 0; i < fn.registerCount; i++) {
-		lines.push(`    ${cTypeOf(reps[i]!)} r${i};`);
+		const slot = slotOf.get(i);
+		if (slot !== undefined) {
+			lines.push(`#define r${i} (__gc_slots[${slot}])`);
+		} else {
+			lines.push(`    ${cTypeOf(reps[i]!)} r${i};`);
+		}
 	}
 
 	// Promoted parameters: load each boxed, guard that every one is a number,
@@ -443,14 +477,27 @@ export function emitCompiledFunction(
 		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
 	}
 
+	// Publish the root frame now that every slot is initialized, before any body
+	// safepoint. The bail above returns before this point, so it needs no unlink.
+	if (slotCount > 0) {
+		lines.push(
+			`    static const MalFrameDescriptor __gc_desc = { .function_index = ${index}, .slot_count = ${slotCount} };`,
+			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots };`,
+			`    mal_root_frame_head = &__gc_frame;`,
+		);
+	}
+
 	lines.push(...body);
 
 	// Falling off the end returns undefined — or `this` for a constructor with no
 	// explicit object return (mal_ops_construct_result with new_target set).
 	lines.push(
-		`    return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`,
+		`    ${gcUnlink}return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`,
 	);
 	lines.push("}");
+	for (const i of valueRegs) {
+		lines.push(`#undef r${i}`);
+	}
 
 	return {
 		symbol,
@@ -610,6 +657,7 @@ function emitBody(
 	suffix: string,
 	reps: Array<RegisterRep>,
 	debug: boolean,
+	gcUnlink: string,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
@@ -669,6 +717,7 @@ function emitBody(
 			reps,
 			fn.strict,
 			handlerForIp(ip),
+			gcUnlink,
 		);
 		if (emitted === null) {
 			return null;
@@ -694,6 +743,7 @@ function emitInstruction(
 	reps: Array<RegisterRep>,
 	strict: boolean,
 	handlerIp: number | undefined,
+	gcUnlink: string,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -719,9 +769,19 @@ function emitInstruction(
 	// try/catch handler when this instruction is inside one (CATCH there reads
 	// vm->completion.value), otherwise out of the compiled frame (the dispatch
 	// caller observes vm->completion). Mirrors the interpreter's unwinder.
+	// On a pending throw with no in-function handler we leave the compiled frame,
+	// so unlink its root frame first; a goto to an in-function handler keeps the
+	// frame live (no unlink).
 	const onThrow =
-		handlerIp !== undefined ? `goto L${handlerIp};` : `return MAL_VALUE_UNDEFINED;`;
+		handlerIp !== undefined
+			? `goto L${handlerIp};`
+			: `{ ${gcUnlink}return MAL_VALUE_UNDEFINED; }`;
 	const throwCheck = `if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`;
+
+	// GC safepoint poll. Emitted at call returns and loop
+	// back-edges so a compiled function is interruptible for collection. Near-free
+	// until the collector raises mal_gc_poll (always false until Phase 3).
+	const poll = "if (mal_gc_poll) mal_gc_safepoint(vm);";
 
 	switch (instruction.opcode) {
 		case "MOVE": {
@@ -1034,6 +1094,7 @@ function emitInstruction(
 				`MalCompletion ${tmp} = mal_vm_call_value(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 				`r${instruction.dst} = ${tmp}.value;`,
+				poll, // call-return safepoint
 			];
 		}
 		case "CONSTRUCT": {
@@ -1050,6 +1111,7 @@ function emitInstruction(
 				`MalCompletion ${tmp} = mal_vm_construct_value(vm, ${boxed(instruction.callee)}, ${argsExpr}, ${args.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 				`r${instruction.dst} = ${tmp}.value;`,
+				poll, // call-return safepoint
 			];
 		}
 		case "THROW":
@@ -1111,11 +1173,18 @@ function emitInstruction(
 			];
 		}
 		case "JUMP":
-			return [`goto L${instruction.targetIp};`];
+			// A back-edge (target <= current ip) is a loop edge: poll there so an
+			// allocation-free loop is still interruptible for collection.
+			return instruction.targetIp <= ip
+				? [poll, `goto L${instruction.targetIp};`]
+				: [`goto L${instruction.targetIp};`];
 		case "JUMP_IF":
 			// Branch on a raw bool / native truthiness test — no boxing when the
 			// condition is already a boolean-rep (typically a comparison result).
-			return [`if (${truthy(instruction.cond)}) goto L${instruction.targetIp};`];
+			// Poll on a taken back-edge only.
+			return instruction.targetIp <= ip
+				? [`if (${truthy(instruction.cond)}) { ${poll} goto L${instruction.targetIp}; }`]
+				: [`if (${truthy(instruction.cond)}) goto L${instruction.targetIp};`];
 		case "RETURN":
 			// Register -1 is the "no value" sentinel (a synthesized empty return).
 			// Route through mal_ops_construct_result so a [[Construct]] invocation
@@ -1123,8 +1192,8 @@ function emitInstruction(
 			// plain call passes the value through unchanged.
 			return [
 				instruction.value < 0
-					? "return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);"
-					: `return mal_ops_construct_result(${boxed(instruction.value)}, this_value, new_target);`,
+					? `${gcUnlink}return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`
+					: `${gcUnlink}return mal_ops_construct_result(${boxed(instruction.value)}, this_value, new_target);`,
 			];
 		default:
 			// Not lowered yet — the function stays on the interpreter. This is the

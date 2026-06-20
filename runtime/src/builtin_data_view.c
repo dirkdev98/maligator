@@ -22,6 +22,10 @@ typedef struct MalDataViewObject {
     bool length_tracking;
 } MalDataViewObject;
 
+MalArrayBufferObject *mal_data_view_object_buffer(const MalDataViewObject *view) {
+    return view->buffer;
+}
+
 typedef enum MalDataViewType {
     DV_INT8,
     DV_UINT8,

@@ -9,6 +9,8 @@ typedef struct MalBigInt MalBigInt;
 typedef struct MalArrayBufferObject MalArrayBufferObject;
 typedef struct MalTypedArrayObject MalTypedArrayObject;
 typedef struct MalDataViewObject MalDataViewObject;
+typedef struct MalWeakRefObject MalWeakRefObject;
+typedef struct MalFinalizationRegistryObject MalFinalizationRegistryObject;
 typedef struct MalObject MalObject;
 typedef struct MalFunctionObject MalFunctionObject;
 typedef struct MalNativeFunctionObject MalNativeFunctionObject;
@@ -268,7 +270,9 @@ static inline bool mal_value_is_object(MalValue value) {
         type == MAL_HEAP_DATE_OBJECT ||
         type == MAL_HEAP_INTL_OBJECT ||
         type == MAL_HEAP_REGEXP_OBJECT ||
-        type == MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT;
+        type == MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT ||
+        type == MAL_HEAP_WEAK_REF_OBJECT ||
+        type == MAL_HEAP_FINALIZATION_REGISTRY_OBJECT;
 }
 
 /**
@@ -330,6 +334,10 @@ bool mal_value_is_typed_array_object(MalValue value);
  * Check if the value is a DataView.
  */
 bool mal_value_is_data_view_object(MalValue value);
+
+bool mal_value_is_weak_ref_object(MalValue value);
+
+bool mal_value_is_finalization_registry_object(MalValue value);
 
 /**
  * Check if the value is a Promise instance.
@@ -453,6 +461,8 @@ MalIteratorObject *mal_value_to_iterator_object(MalValue value);
 MalArrayBufferObject *mal_value_to_array_buffer_object(MalValue value);
 MalTypedArrayObject *mal_value_to_typed_array_object(MalValue value);
 MalDataViewObject *mal_value_to_data_view_object(MalValue value);
+MalWeakRefObject *mal_value_to_weak_ref_object(MalValue value);
+MalFinalizationRegistryObject *mal_value_to_finalization_registry_object(MalValue value);
 
 /**
  * Unbox a Promise instance.
@@ -520,6 +530,8 @@ MalValue mal_value_from_iterator_object(MalIteratorObject *iterator);
 MalValue mal_value_from_array_buffer_object(MalArrayBufferObject *buffer);
 MalValue mal_value_from_typed_array_object(MalTypedArrayObject *array);
 MalValue mal_value_from_data_view_object(MalDataViewObject *view);
+MalValue mal_value_from_weak_ref_object(MalWeakRefObject *ref);
+MalValue mal_value_from_finalization_registry_object(MalFinalizationRegistryObject *reg);
 
 /**
  * Box a Promise instance.

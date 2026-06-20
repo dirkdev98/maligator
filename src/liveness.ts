@@ -122,7 +122,7 @@ export interface BackEdge {
 
 /**
  * Loop back-edges: a jump/jumpIf whose target block index is <= the index of the
- * block it lives in (gc_todo.md C2 / Step 11.7). `headerBlocks` collects the
+ * block it lives in. `headerBlocks` collects the
  * targets (loop headers) — the natural places to emit a safepoint poll.
  */
 export function findBackEdges(fn: IRFunction): {
@@ -230,7 +230,7 @@ function setsEqual(a: Set<number>, b: Set<number>): boolean {
  *   - `alloc-call`: an instruction that can allocate or call into JS (`isSafepoint`).
  *   - `loop-poll`: a back-edge branch (`jump`/`jumpIf` to an index <= its block).
  *     The mutator contract polls here so an allocation-free loop cannot starve a
- *     concurrent collection (gc_todo.md 5.5). It is a collection point even though
+ *     concurrent collection. It is a collection point even though
  *     the branch itself allocates nothing.
  */
 export interface Safepoint {
@@ -240,7 +240,7 @@ export interface Safepoint {
 	/**
 	 * Registers live across this point: `liveOut \ def`. These are the values that
 	 * must be reachable (rooted) through a collection here — the exact per-safepoint
-	 * root set a compiled frame populates (gc_todo.md Step 9 C1).
+	 * root set a compiled frame populates.
 	 */
 	live: Set<number>;
 }
