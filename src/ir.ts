@@ -483,6 +483,18 @@ export type IRInstruction =
 			registers: [number];
 	  }
 	| {
+			// A fully static data-property object literal: all keys are known
+			// non-index strings, so the final shape is built once and the slots are
+			// filled directly, skipping per-property defineProperty transitions.
+			type: "createObjectShaped";
+
+			// [destination, ...valueRegisters] — one value register per key, in order
+			registers: [number, ...Array<number>];
+
+			// String-constant index of each key, parallel to the value registers.
+			keyStringIndices: Array<number>;
+	  }
+	| {
 			type: "createArray";
 
 			// [destination]
@@ -3051,6 +3063,19 @@ function compileFunctionParams(
 			type: "createArgumentsObject",
 			registers: [destination],
 		});
+	}
+
+	// When a nested arrow captures this function's `this` lexically, semantic
+	// analysis put an implicit `this` binding on this (non-arrow) function's scope.
+	// Snapshot `this` into its captured slot at entry — before the body (and any
+	// nested arrow) is compiled — so the slot's owner is this function and the
+	// arrow's `loadCaptured` walks to it. (Arrows never own such a binding.)
+	const thisBinding = getLexicalThisBinding(fn, node);
+	if (thisBinding && thisBinding.scopedTo === "captured") {
+		const thisRegister = nextRegisterDestination(fn);
+		block.instructions.push({ type: "loadThis", registers: [thisRegister] });
+		const location = getOrCreateBindingLocation(program, fn, thisBinding);
+		storeRegisterAtLocation(block, location, thisRegister);
 	}
 
 	for (let i = 0; i < node.params.length; i++) {
@@ -5827,7 +5852,15 @@ function compileExpression(
 			return compileIdentifier(program, fn, cursor, expression);
 		}
 		case "ThisExpression": {
-			// TODO(functions): arrow functions should capture the lexical this.
+			// An arrow inherits `this` lexically: semantic analysis bound this node to
+			// an implicit `this` binding on the enclosing non-arrow function, captured
+			// through the closure env. Read it like any captured binding. (Unbound
+			// `this` — directly in a non-arrow function, or top-level — falls through.)
+			const thisBinding = fn.semanticFile.nodeToBinding.get(expression);
+			if (thisBinding?.implicit === "this") {
+				const location = getOrCreateBindingLocation(program, fn, thisBinding);
+				return loadRegisterFromLocation(fn, cursor.block, location);
+			}
 			const destination = nextRegisterDestination(fn);
 			// Top-level `this` in a global *script* is globalThis in BOTH strict
 			// and sloppy mode (ScriptEvaluation binds globalThis regardless of
@@ -7102,12 +7135,66 @@ function staticPropertyName(property: ESTree.Property): string | undefined {
 	return undefined;
 }
 
+/**
+ * If every member is a static, non-index data property (no spread, computed key,
+ * accessor, method, __proto__, duplicate, or index-like name, and at most
+ * MAL_SHAPE_MAX_INLINE_SLOTS of them), return the ordered key names and value
+ * expressions so the literal can be built in one shape; otherwise null.
+ */
+function staticObjectShape(
+	objectExpression: ESTree.ObjectExpression,
+): { names: Array<string>; values: Array<ESTree.Expression> } | null {
+	const properties = objectExpression.properties;
+	if (properties.length < 1 || properties.length > 32) {
+		return null;
+	}
+	const names: Array<string> = [];
+	const values: Array<ESTree.Expression> = [];
+	const seen = new Set<string>();
+	for (const property of properties) {
+		if (property.type !== "Property" || property.method || property.kind !== "init") {
+			return null;
+		}
+		const name = staticPropertyName(property);
+		if (name === undefined || name === "__proto__" || seen.has(name)) {
+			return null;
+		}
+		// Exclude any index-like name (a canonical numeric string is an integer-
+		// indexed key, which lives in the overflow table, not a shape slot).
+		if (!Number.isNaN(Number(name))) {
+			return null;
+		}
+		seen.add(name);
+		names.push(name);
+		values.push(property.value as ESTree.Expression);
+	}
+	return { names, values };
+}
+
 function compileObjectExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
 	cursor: IRCursor,
 	objectExpression: ESTree.ObjectExpression,
 ): number {
+	const staticShape = staticObjectShape(objectExpression);
+	if (staticShape !== null) {
+		// Evaluate the values left-to-right (keys are constants, so no key
+		// evaluation), then build the object directly in its final shape.
+		const valueRegisters = staticShape.values.map((value, i) =>
+			compileExpression(program, fn, cursor, value, staticShape.names[i]),
+		);
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createObjectShaped",
+			registers: [destination, ...valueRegisters],
+			keyStringIndices: staticShape.names.map((name) =>
+				getOrCreateStringConstant(program, name),
+			),
+		});
+		return destination;
+	}
+
 	const object = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "createObject",
@@ -8037,6 +8124,25 @@ function getArgumentsBinding(
 
 	const scope = fn.semanticFile.nodeToScope.get(node);
 	return scope?.bindings.find((binding) => binding.implicit === "arguments");
+}
+
+/**
+ * The implicit lexical-`this` binding a non-arrow function exposes for nested
+ * arrows to capture, or undefined. Arrows never own one (they inherit `this`).
+ */
+function getLexicalThisBinding(
+	fn: IRFunction,
+	node:
+		| ESTree.FunctionDeclaration
+		| ESTree.FunctionExpression
+		| ESTree.ArrowFunctionExpression,
+) {
+	if (node.type === "ArrowFunctionExpression") {
+		return undefined;
+	}
+
+	const scope = fn.semanticFile.nodeToScope.get(node);
+	return scope?.bindings.find((binding) => binding.implicit === "this");
 }
 
 function compileLiteral(

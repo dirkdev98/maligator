@@ -6,6 +6,14 @@
 #include "table.h"
 
 /**
+ * Cap on inline shape slots. Beyond this an object drops to dictionary mode:
+ * shape lookup is a linear scan, so large objects are faster as a hash table,
+ * and the cap also bounds shape-tree growth under churn. The static
+ * object-literal optimization only applies at or below this count.
+ */
+#define MAL_SHAPE_MAX_INLINE_SLOTS 32
+
+/**
  * Hidden-class shape support. A MalShape is the
  * interned description of an object's named-property layout: an ordered
  * key -> slot map shared by every object with the same structure. An object in
@@ -71,3 +79,10 @@ MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs);
 
 /** True for a default data-property attribute set (writable+enumerable+configurable). */
 bool mal_shape_attrs_are_default(u8 attrs);
+
+/**
+ * Build (interning) the shape of an object whose `count` string keys are added,
+ * in order, as default data properties. Materializes a static object literal's
+ * final shape in one step so the literal need not transition property-by-property.
+ */
+MalShape *mal_shape_from_string_keys(struct MalString **keys, u32 count);

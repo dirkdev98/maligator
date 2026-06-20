@@ -136,6 +136,8 @@ void mal_op_create_bigint(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_object(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_create_object_shaped(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_create_array(MalCallable *callable, MalInstruction *instruction);
 void mal_op_create_module_namespace(MalCallable *callable, MalInstruction *instruction);
 void mal_op_create_template_object(MalCallable *callable, MalInstruction *instruction);
@@ -154,6 +156,12 @@ void mal_op_create_null(MalCallable *callable, MalInstruction *instruction);
 void mal_op_create_function(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instruction);
+
+// Build an unmapped arguments object over `args`; shared by the interpreter op
+// and compiled code. `callee` is exposed only in sloppy mode (strict poisons it).
+MalValue mal_create_arguments_object(
+    MalVm *vm, const MalValue *args, i32 arg_count, MalValue callee, bool strict
+);
 
 void mal_op_load_this(MalCallable *callable, MalInstruction *instruction);
 
@@ -227,6 +235,30 @@ MalValue mal_vm_op_load_property(MalVm *vm, MalValue object_value, MalValue key_
 
 void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict);
 
+/**
+ * Monomorphic inline cache for a single property-access site: the shape last seen
+ * there and the slot the property occupied in it. A shape is immutable and never
+ * freed, so on a later access whose object has the same shape the slot is still
+ * valid — the property read/write is then a direct slot access with no key
+ * conversion or shape search. Zero-initialized (shape == nullptr) means empty.
+ */
+typedef struct MalInlineCache {
+    const struct MalShape *shape;
+    MalValue key; // the exact key value cached — a computed-key site (o[k]) varies
+    u32 slot;
+} MalInlineCache;
+
+/**
+ * Inline-cached property load/store for the compiled backend. The fast path
+ * applies only to a plain object (MAL_HEAP_OBJECT) whose own property is a
+ * shaped data slot; everything else (arrays, proxies, typed arrays, prototype
+ * lookups, accessors, index/symbol keys) falls through to the generic op, which
+ * also refills the cache when it resolves an ownable shaped data property.
+ */
+MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic);
+
+void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic);
+
 void mal_op_to_property_key(MalCallable *callable, MalInstruction *instruction);
 
 /**
@@ -243,6 +275,14 @@ MalValue mal_vm_op_to_property_key(MalVm *vm, MalValue object_value, MalValue ke
  * creating frame's environment) so the closure resolves captured bindings.
  */
 MalValue mal_vm_op_create_object(MalVm *vm);
+
+/**
+ * Create a plain object directly in `shape` (built from the literal's static
+ * keys) with `count` inline slots filled from `values` in key order. The
+ * compiled backend caches the shape per literal site; the interpreter rebuilds
+ * it (interned, so cheap) each time. See mal_vm_create_object_shaped in vm_ops.c.
+ */
+MalValue mal_vm_create_object_shaped(MalVm *vm, struct MalShape *shape, const MalValue *values, u32 count);
 
 MalValue mal_vm_op_create_array(MalVm *vm, i32 length);
 
@@ -320,6 +360,10 @@ void mal_op_iterator_close(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction);
 
+// for-in enumeration key array for `source`; shared by the interpreter op and
+// compiled code. On a proxy-trap exception sets vm->completion (caller checks).
+MalValue mal_for_in_keys(MalVm *vm, MalValue source);
+
 void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction);
@@ -348,7 +392,16 @@ void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction
 
 void mal_op_create_rest_arguments(MalCallable *callable, MalInstruction *instruction);
 
+// Rest-parameter array from `args[start..]`; shared by the interpreter op and
+// compiled code.
+MalValue mal_create_rest_arguments(MalVm *vm, const MalValue *args, i32 arg_count, i32 start);
+
 void mal_op_array_rest(MalCallable *callable, MalInstruction *instruction);
+
+// Array-destructuring rest from `source[start..]`; shared by the interpreter op
+// and compiled code. On null/undefined source or a throwing read sets
+// vm->completion (caller checks).
+MalValue mal_array_rest(MalVm *vm, MalValue source, u32 start);
 
 void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruction);
 

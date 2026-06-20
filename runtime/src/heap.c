@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include "./gc.h"
 
@@ -53,11 +54,15 @@ typedef enum MalGcBlockKind {
 struct MalGcBlock {
     u8 kind;        /* MalGcBlockKind */
     u8 age;         /* generational age (Phase 5); 0 for now */
+    u8 recycled;    /* on the heap free-block list: fully swept, pages madvised away,
+                     * bump reset. The sweep skips it (so it is not re-recycled) until
+                     * mal_gc_new_block reclaims it. */
     u16 size_class; /* index into g_class_cell_size */
     u32 cell_size;  /* bytes per cell in this block */
     u8 *bump;       /* next unallocated byte */
     u8 *limit;      /* one past the last usable byte (block_base + BLOCK_SIZE) */
     void *free_list; /* reclaimed cells (Phase 3 sweep / gc_free_raw); intrusive */
+    struct MalGcBlock *next_free; /* next block on heap->free_blocks (recycled only) */
 };
 
 struct MalGcChunk {
@@ -183,19 +188,31 @@ static MalGcChunk *mal_gc_new_chunk(MalHeap *heap) {
 }
 
 static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
-    MalGcChunk *chunk = heap->chunks;
-    if (chunk == nullptr || chunk->next_block >= chunk->block_count) {
-        chunk = mal_gc_new_chunk(heap);
+    // Reclaim a fully-empty block the sweep returned to the OS before carving a
+    // fresh one. A blank block can serve any size class / kind after re-init; its
+    // madvised pages refault on first write.
+    MalGcBlock *recycled = heap->free_blocks;
+    u8 *block_base;
+    if (recycled != nullptr) {
+        heap->free_blocks = recycled->next_free;
+        block_base = (u8 *) recycled;
+    } else {
+        MalGcChunk *chunk = heap->chunks;
+        if (chunk == nullptr || chunk->next_block >= chunk->block_count) {
+            chunk = mal_gc_new_chunk(heap);
+        }
+        block_base = (u8 *) chunk->base + chunk->next_block * MAL_GC_BLOCK_SIZE;
+        chunk->next_block++;
     }
-    u8 *block_base = (u8 *) chunk->base + chunk->next_block * MAL_GC_BLOCK_SIZE;
-    chunk->next_block++;
 
     MalGcBlock *block = (MalGcBlock *) block_base;
     block->kind = kind;
     block->age = 0;
+    block->recycled = 0;
     block->size_class = size_class;
     block->cell_size = g_class_cell_size[size_class];
     block->free_list = nullptr;
+    block->next_free = nullptr;
     block->bump = block_base + mal_gc_cell_data_offset();
     block->limit = block_base + MAL_GC_BLOCK_SIZE;
     return block;
@@ -261,6 +278,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     memset(heap->cell_blocks, 0, sizeof(heap->cell_blocks));
     memset(heap->raw_blocks, 0, sizeof(heap->raw_blocks));
     memset(heap->cell_free, 0, sizeof(heap->cell_free));
+    heap->free_blocks = nullptr;
     heap->bytes_allocated = 0;
     heap->live_bytes = 0;
 }
@@ -284,6 +302,7 @@ void mal_heap_free(MalHeap *heap) {
     memset(heap->cell_blocks, 0, sizeof(heap->cell_blocks));
     memset(heap->raw_blocks, 0, sizeof(heap->raw_blocks));
     memset(heap->cell_free, 0, sizeof(heap->cell_free));
+    heap->free_blocks = nullptr; // the blocks themselves are freed via the chunks above
     heap->bytes_allocated = 0;
     heap->live_bytes = 0;
 }
@@ -318,6 +337,45 @@ static bool mal_gc_ptr_in_chunks(const MalHeap *heap, const void *ptr) {
     return false;
 }
 
+/* OS page size, cached. madvise ranges must be page-aligned. */
+static usize mal_gc_page_size(void) {
+    static usize cached = 0;
+    if (cached == 0) {
+        long ps = sysconf(_SC_PAGESIZE);
+        cached = ps > 0 ? (usize) ps : 4096u;
+    }
+    return cached;
+}
+
+/* "Reclaim these pages" hint: MADV_FREE where available (Darwin/BSD; lazy, no
+ * immediate zero) else MADV_DONTNEED (Linux). Either drops RSS; page contents
+ * become undefined, fine for a block that is reset and rewritten on reuse. */
+#ifdef MADV_FREE
+#define MAL_GC_MADV_REUSE MADV_FREE
+#else
+#define MAL_GC_MADV_REUSE MADV_DONTNEED
+#endif
+
+/* Return a fully-empty block's cell pages to the OS and push it onto the heap's
+ * free-block list: reset to pristine and flagged `recycled` so the sweep skips
+ * it until mal_gc_new_block reclaims it. The header lives in the first page and
+ * is preserved; whole pages strictly inside the cell region are madvised away. */
+static void mal_gc_recycle_block(MalHeap *heap, MalGcBlock *block) {
+    u8 *block_base = (u8 *) block;
+    usize page = mal_gc_page_size();
+    uptr madv_start =
+        ((uptr) block_base + mal_gc_cell_data_offset() + (page - 1)) & ~(uptr) (page - 1);
+    uptr madv_end = (uptr) block_base + MAL_GC_BLOCK_SIZE;
+    if (madv_end > madv_start) {
+        madvise((void *) madv_start, (usize) (madv_end - madv_start), MAL_GC_MADV_REUSE);
+    }
+    block->bump = block_base + mal_gc_cell_data_offset(); // pristine: no live cells
+    block->free_list = nullptr;
+    block->recycled = 1;
+    block->next_free = heap->free_blocks;
+    heap->free_blocks = block;
+}
+
 void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
     usize data_offset = mal_gc_cell_data_offset();
     usize free_offset = mal_gc_free_next_offset();
@@ -331,15 +389,22 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
     for (MalGcChunk *chunk = heap->chunks; chunk != nullptr; chunk = chunk->next) {
         for (usize block_index = 0; block_index < chunk->next_block; ++block_index) {
             MalGcBlock *block = (MalGcBlock *) ((u8 *) chunk->base + block_index * MAL_GC_BLOCK_SIZE);
-            if (block->kind != MAL_GC_BLOCK_CELL) {
+            if (block->kind != MAL_GC_BLOCK_CELL || block->recycled) {
                 continue;
             }
+            // Sweep the block's cells into a per-block free chain while counting
+            // survivors. Publishing the chain is deferred so a block with no live
+            // cell can be handed back to the OS instead of pooling dead cells.
+            void *local_head = nullptr;
+            void *local_tail = nullptr;
+            usize block_live = 0;
             for (u8 *cell = (u8 *) block + data_offset; cell + block->cell_size <= block->bump;
                 cell += block->cell_size) {
                 MalHeapHeader *header = (MalHeapHeader *) cell;
                 if (header->mark == MAL_MARK_BLACK) {
                     header->mark = MAL_MARK_WHITE; // survived; reset for the next cycle
                     live_bytes += block->cell_size;
+                    block_live++;
                     continue;
                 }
                 if (header->mark == MAL_MARK_WHITE) {
@@ -348,12 +413,30 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
                     finalize(header);
                     header->mark = MAL_MARK_FREE;
                 }
-                // FREE (incl. just-finalized): return it to its size class's free
-                // list for reuse, preserving the header so the next sweep skips it.
+                // FREE (incl. just-finalized): thread onto this block's local chain
+                // (head-prepend; tail is the first cell linked).
                 if (mal_gc_cell_reclaimable(block->cell_size)) {
-                    *(void **) (cell + free_offset) = heap->cell_free[block->size_class];
-                    heap->cell_free[block->size_class] = cell;
+                    if (local_tail == nullptr) {
+                        local_tail = cell;
+                    }
+                    *(void **) (cell + free_offset) = local_head;
+                    local_head = cell;
                 }
+            }
+
+            if (block_live == 0) {
+                // Whole block dead: its owned side-allocations were freed above;
+                // return its pages to the OS and recycle the block rather than
+                // pooling the dead cells.
+                mal_gc_recycle_block(heap, block);
+                if (heap->cell_blocks[block->size_class] == block) {
+                    heap->cell_blocks[block->size_class] = nullptr;
+                }
+            } else if (local_head != nullptr) {
+                // Survivors remain: splice this block's reclaimed cells onto the
+                // size class's free list for reuse.
+                *(void **) ((u8 *) local_tail + free_offset) = heap->cell_free[block->size_class];
+                heap->cell_free[block->size_class] = local_head;
             }
         }
     }

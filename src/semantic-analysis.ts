@@ -81,7 +81,7 @@ type BindingKind = "var" | "let" | "const";
 export interface Binding {
 	kind: BindingKind;
 	name: string;
-	implicit?: "arguments";
+	implicit?: "arguments" | "this";
 
 	declarationNode?: ESTree.Node;
 	usageNodes: Array<ESTree.Node>;
@@ -731,7 +731,82 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 		}
 	}
 
+	if (node.type === "ThisExpression") {
+		// Arrow functions inherit `this` lexically — they have no own `this`
+		// binding. When a `this` is lexically inside an arrow, resolve it to an
+		// implicit `this` binding on the nearest enclosing non-arrow `this`-provider
+		// (a function/method, class field initializer, or static block) so it is
+		// captured through the closure env like any other captured local. A `this`
+		// directly in a non-arrow function — or whose owner is the program scope
+		// (top-level `this` is globalThis/undefined, handled in IR) — keeps its
+		// own-frame `loadThis` path and is left unbound here.
+		const owner = resolveLexicalThisOwner(scope);
+		if (owner) {
+			let binding = owner.bindings.find((b) => b.implicit === "this");
+			if (!binding) {
+				binding = {
+					kind: "const",
+					name: "this",
+					implicit: "this",
+					declarationNode: owner.node,
+					usageNodes: [],
+				};
+				owner.bindings.push(binding);
+			}
+			binding.usageNodes.push(node);
+			file.nodeToBinding.set(node, binding);
+		}
+	}
+
 	recurseAst(node, registerBindingUsage, file);
+}
+
+/**
+ * For a `this` whose lexical scope is `scope`, return the scope of the nearest
+ * enclosing non-arrow `this`-provider IF the `this` is inside an arrow (so it
+ * must capture that provider's `this`); otherwise null. Walks up to the innermost
+ * `this`-context: if that is an arrow, `this` is lexical and the owner is the next
+ * non-arrow provider; a program-scope owner returns null (top-level `this` is not
+ * captured — IR resolves it directly).
+ */
+function resolveLexicalThisOwner(scope: Scope): Scope | null {
+	const providesThis = (type: string) =>
+		type === "ArrowFunctionExpression" ||
+		type === "FunctionDeclaration" ||
+		type === "FunctionExpression" ||
+		type === "PropertyDefinition" ||
+		type === "StaticBlock" ||
+		type === "Program";
+
+	let current: Scope | null = scope;
+	while (current && !providesThis(current.node.type)) {
+		current = current.parent;
+	}
+	if (!current || current.node.type !== "ArrowFunctionExpression") {
+		// `this` is owned by the innermost context directly (or no context found).
+		return null;
+	}
+
+	// `this` is lexical: find the nearest enclosing non-arrow provider.
+	let owner: Scope | null = current.parent;
+	while (owner && (owner.node.type === "ArrowFunctionExpression" || !providesThis(owner.node.type))) {
+		owner = owner.parent;
+	}
+	if (
+		!owner ||
+		owner.node.type === "Program" ||
+		// A class field initializer / static block runs inside the constructor or
+		// static initializer (it has no own prologue to snapshot `this` into), so
+		// capturing its `this` lexically for a nested arrow is not handled yet.
+		// Such arrows keep the own-frame loadThis path — correct when invoked with
+		// the field's `this` as receiver (e.g. `C.f()`); a follow-up will snapshot
+		// `this` in the initializer so detached calls also see the lexical `this`.
+		owner.node.type === "PropertyDefinition" ||
+		owner.node.type === "StaticBlock"
+	) {
+		return null;
+	}
+	return owner;
 }
 
 /**

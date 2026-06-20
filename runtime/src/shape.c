@@ -57,6 +57,17 @@ i32 mal_shape_find(const MalShape *shape, MalKey key) {
     return -1;
 }
 
+MalShape *mal_shape_from_string_keys(struct MalString **keys, u32 count) {
+    MalShape *shape = mal_shape_empty();
+    for (u32 i = 0; i < count; ++i) {
+        MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(keys[i])};
+        shape = mal_shape_add_property(
+            shape, key,
+            (u8) (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE));
+    }
+    return shape;
+}
+
 MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
     // Reuse an existing transition so all objects that add the same property in
     // the same order share one child shape (the interning that makes shapes pay).

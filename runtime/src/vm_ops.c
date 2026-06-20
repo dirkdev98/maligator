@@ -8,6 +8,7 @@
 #include "builtin_async_iterator.h"
 #include "builtin_iterator.h"
 #include "function_object.h"
+#include "gc.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
@@ -16,6 +17,7 @@
 #include "primitive_wrapper_object.h"
 #include "property_iter.h"
 #include "proxy_object.h"
+#include "shape.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
 
@@ -178,8 +180,40 @@ MalValue mal_vm_op_create_object(MalVm *vm) {
     return mal_value_from_object(object);
 }
 
+MalValue mal_vm_create_object_shaped(MalVm *vm, MalShape *shape, const MalValue *values, u32 count) {
+    // A static object literal: the final shape is known, so create the object
+    // directly in that shape and bulk-fill its inline slots in key order, instead
+    // of transitioning the shape property-by-property. No safepoint runs between
+    // the allocation and the fill, so the half-initialized object is never visible
+    // to the collector. `values` are already rooted in the caller's frame.
+    MalObject *object = mal_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    object->shape = shape;
+    object->slots = malloc(sizeof(MalValue) * count);
+    for (u32 i = 0; i < count; ++i) {
+        object->slots[i] = values[i];
+    }
+    return mal_value_from_object(object);
+}
+
 void mal_op_create_object(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_object.dst] = mal_vm_op_create_object(callable->vm);
+}
+
+void mal_op_create_object_shaped(MalCallable *callable, MalInstruction *instruction) {
+    u32 count = (u32) instruction->as.create_object_shaped.count;
+    MalString *keys[MAL_SHAPE_MAX_INLINE_SLOTS];
+    MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
+    const MalString *string_constants = callable->vm->definition->string_constants;
+    for (u32 i = 0; i < count; ++i) {
+        keys[i] = (MalString *) &string_constants[instruction->as.create_object_shaped.key_indices[i]];
+        values[i] = callable->registers[instruction->as.create_object_shaped.value_registers[i]];
+    }
+    // The interpreter has no per-site cache (the bytecode is const), so it rebuilds
+    // the shape each time; transitions are interned, so this is the same shape.
+    MalShape *shape = mal_shape_from_string_keys(keys, count);
+    callable->registers[instruction->as.create_object_shaped.dst] =
+        mal_vm_create_object_shaped(callable->vm, shape, values, count);
 }
 
 MalValue mal_vm_op_create_array(MalVm *vm, i32 length) {
@@ -489,21 +523,21 @@ void mal_op_store_captured(MalCallable *callable, MalInstruction *instruction) {
     );
 }
 
-void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instruction) {
-    if (!mal_value_is_undefined(callable->arguments_object)) {
-        callable->registers[instruction->as.create_arguments_object.dst] = callable->arguments_object;
-        return;
-    }
-
-    MalVm *vm = callable->vm;
+// Build an arguments object (CreateUnmappedArgumentsObject) over `args`: an array
+// of the call arguments plus an own @@iterator (%Array.prototype.values%) and a
+// `callee` slot — poisoned with %ThrowTypeError% when strict, otherwise exposing
+// the function. Shared by the interpreter op and compiled code.
+MalValue mal_create_arguments_object(
+    MalVm *vm, const MalValue *args, i32 arg_count, MalValue callee, bool strict
+) {
     MalArrayObject *arguments = mal_array_object_new(&vm->heap, nullptr);
-    mal_array_object_set_length(arguments, callable->argument_count);
+    mal_array_object_set_length(arguments, arg_count);
 
-    for (i32 i = 0; i < callable->argument_count; i++) {
+    for (i32 i = 0; i < arg_count; i++) {
         mal_object_set(
             (MalObject *) arguments,
             (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)},
-            callable->arguments[i]
+            args[i]
         );
     }
 
@@ -523,7 +557,7 @@ void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instr
     // %ThrowTypeError% (non-enumerable, non-configurable); a mapped (sloppy)
     // one exposes the function as a writable, configurable data property.
     MalKey callee_key = mal_intrinsic_string_key(vm, "callee");
-    if (callable->function->strict) {
+    if (strict) {
         MalValue thrower = vm->intrinsics[MAL_INTRINSIC_THROW_TYPE_ERROR];
         MalPropertyDesc callee_desc = {
             .flags = MAL_PROPERTY_ACCESSOR,
@@ -532,15 +566,27 @@ void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instr
             .setter = thrower,
         };
         mal_object_define_own((MalObject *) arguments, callee_key, &callee_desc);
-    } else if (mal_value_is_callable(callable->callee)) {
+    } else if (mal_value_is_callable(callee)) {
         MalPropertyDesc callee_desc = {
             .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE,
-            .value = callable->callee,
+            .value = callee,
         };
         mal_object_define_own((MalObject *) arguments, callee_key, &callee_desc);
     }
 
-    callable->arguments_object = mal_value_from_array_object(arguments);
+    return mal_value_from_array_object(arguments);
+}
+
+void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instruction) {
+    if (!mal_value_is_undefined(callable->arguments_object)) {
+        callable->registers[instruction->as.create_arguments_object.dst] = callable->arguments_object;
+        return;
+    }
+
+    callable->arguments_object = mal_create_arguments_object(
+        callable->vm, callable->arguments, callable->argument_count,
+        callable->callee, callable->function->strict
+    );
     callable->registers[instruction->as.create_arguments_object.dst] = callable->arguments_object;
 }
 
@@ -1967,6 +2013,21 @@ bool mal_vm_is_constructor(MalVm *vm, MalValue value) {
     return false;
 }
 
+// Spec Set with an already-converted key (defined below); the store inline cache
+// converts once and reuses it on the slow path to avoid a second ToPropertyKey.
+static void mal_vm_op_store_property_keyed(
+    MalVm *vm, MalValue object_value, MalKey key, MalValue value, bool strict);
+
+// Spec Get with an already-converted property key — no further ToPropertyKey, so
+// the inline cache can convert the key once and reuse it on the slow path.
+static MalValue mal_vm_op_load_property_keyed(MalVm *vm, MalValue object_value, MalKey key) {
+    MalValue value;
+    if (mal_vm_get_property(vm, object_value, key, &value)) {
+        return value;
+    }
+    return mal_value_new_undefined();
+}
+
 // Spec Get over a value with an already-evaluated key value, returning the
 // result (undefined on a non-coercible key or a throw — the caller propagates
 // vm->completion). Shared by the interpreter op and the native-C backend.
@@ -1980,20 +2041,115 @@ MalValue mal_vm_op_load_property(MalVm *vm, MalValue object_value, MalValue key_
     if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
         return mal_value_new_undefined();
     }
+    return mal_vm_op_load_property_keyed(vm, object_value, key);
+}
 
-    MalValue value;
-    if (mal_vm_get_property(vm, object_value, key, &value)) {
-        return value;
+MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
+    if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
+        MalObject *object = (MalObject *) mal_value_to_heap(object_value);
+        // Hit needs the same shape AND the same key: a computed-key site (o[k])
+        // reuses one cache entry across different keys, so the key must match too.
+        if (object->shape == ic->shape && key_value == ic->key) {
+            return object->slots[ic->slot]; // same layout + key: slot still valid
+        }
+        // Miss on a plain object. Convert the key ONCE (running any user
+        // toString/valueOf exactly once) and reuse it for both the cache fill and
+        // the slow path — never fall through to a re-converting generic op.
+        MalKey key;
+        if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+            return mal_value_new_undefined();
+        }
+        if (key.kind == MAL_KEY_STRING) {
+            i32 idx = mal_shape_find(object->shape, key);
+            if (idx >= 0) {
+                const MalShapeProp *prop = &object->shape->props[idx];
+                // Only cache when the key can be compared by value across accesses
+                // without an ABA hazard: a heap key (string/symbol) must be immortal
+                // (a collectable one could be freed and its address reused — a later
+                // same-address key would false-hit), and ic->key is not a GC root.
+                // A non-heap key here is ToPropertyKey of a number (e.g. o[1.1] →
+                // "1.1"); key_value is still the number, so it must NOT be derefed —
+                // such keys are simply left uncached.
+                if (mal_value_is_heap(key_value)
+                    && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
+                    ic->shape = object->shape;
+                    ic->key = key_value;
+                    ic->slot = prop->slot;
+                }
+                return object->slots[prop->slot];
+            }
+        }
+        // Prototype / overflow / index / symbol key: resolve with the converted key.
+        return mal_vm_op_load_property_keyed(vm, object_value, key);
     }
+    return mal_vm_op_load_property(vm, object_value, key_value);
+}
 
-    return mal_value_new_undefined();
+void mal_vm_op_store_property_ic(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic
+) {
+    if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
+        MalObject *object = (MalObject *) mal_value_to_heap(object_value);
+        if (object->shape == ic->shape && key_value == ic->key) {
+            // hit: overwrite an existing shaped data slot (shape + key unchanged).
+            mal_gc_write_barrier(object->slots[ic->slot]);
+            object->slots[ic->slot] = value;
+            return;
+        }
+        // Convert the key ONCE (running any user toString/valueOf once) and reuse
+        // it for the cache fill and the slow path — never re-convert via the
+        // generic op (that would fire the key's side effect a second time).
+        MalKey key;
+        if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+            return;
+        }
+        if (key.kind == MAL_KEY_STRING) {
+            i32 idx = mal_shape_find(object->shape, key);
+            // Cache only a default (writable, enumerable, configurable) data slot;
+            // a store to such a property cannot run a setter or change the shape.
+            if (idx >= 0 && mal_shape_attrs_are_default(object->shape->props[idx].attrs)) {
+                const MalShapeProp *prop = &object->shape->props[idx];
+                // Cache only a heap immortal key (see the load path's ABA note); a
+                // non-heap key (ToPropertyKey of a number) must not be derefed.
+                if (mal_value_is_heap(key_value)
+                    && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
+                    ic->shape = object->shape;
+                    ic->key = key_value;
+                    ic->slot = prop->slot;
+                }
+                mal_gc_write_barrier(object->slots[prop->slot]);
+                object->slots[prop->slot] = value;
+                return;
+            }
+        }
+        // Prototype setter / overflow / index / symbol key: store with the
+        // converted key (no re-conversion).
+        mal_vm_op_store_property_keyed(vm, object_value, key, value, strict);
+        return;
+    }
+    mal_vm_op_store_property(vm, object_value, key_value, value, strict);
+}
+
+/** The inline cache for the property op currently executing in `callable`. The
+ * dispatch has already advanced instruction_pointer, so the op's index is one
+ * back. The function's cache array is allocated on first use. */
+static MalInlineCache *mal_interp_ic(MalCallable *callable) {
+    MalVm *vm = callable->vm;
+    i32 function_index = (i32) (callable->function - vm->definition->functions);
+    MalInlineCache *caches = vm->interp_ic[function_index];
+    if (caches == nullptr) {
+        caches = calloc((usize) callable->function->instruction_count, sizeof(MalInlineCache));
+        vm->interp_ic[function_index] = caches;
+    }
+    return &caches[callable->instruction_pointer - 1];
 }
 
 void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
-    callable->registers[instruction->as.load_property.dst] = mal_vm_op_load_property(
+    callable->registers[instruction->as.load_property.dst] = mal_vm_op_load_property_ic(
         callable->vm,
         callable->registers[instruction->as.load_property.object],
-        callable->registers[instruction->as.load_property.key]
+        callable->registers[instruction->as.load_property.key],
+        mal_interp_ic(callable)
     );
 }
 
@@ -2028,20 +2184,11 @@ void mal_op_to_property_key(MalCallable *callable, MalInstruction *instruction) 
     );
 }
 
-// Spec Set over a value with an already-evaluated key value, signalling a throw
-// through vm->completion. Shared by the interpreter op and the native-C backend
-// (which passes its statically-known strictness).
-void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict) {
-    if (mal_value_is_nil(object_value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set properties of null or undefined");
-        return;
-    }
-
-    MalKey key;
-    if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
-        return;
-    }
-
+// Spec Set with an already-converted key — no further ToPropertyKey, so the
+// store inline cache converts the key once and reuses it on the slow path.
+static void mal_vm_op_store_property_keyed(
+    MalVm *vm, MalValue object_value, MalKey key, MalValue value, bool strict
+) {
     // A proxy routes the assignment through its [[Set]] (handler trap → target),
     // with the proxy itself as the receiver.
     if (mal_value_is_proxy_object(object_value)) {
@@ -2120,13 +2267,29 @@ void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_val
     }
 }
 
+// Spec Set over a value with an already-evaluated key value, signalling a throw
+// through vm->completion. Shared by the interpreter op and the native-C backend
+// (which passes its statically-known strictness).
+void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict) {
+    if (mal_value_is_nil(object_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set properties of null or undefined");
+        return;
+    }
+    MalKey key;
+    if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+        return;
+    }
+    mal_vm_op_store_property_keyed(vm, object_value, key, value, strict);
+}
+
 void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
-    mal_vm_op_store_property(
+    mal_vm_op_store_property_ic(
         callable->vm,
         callable->registers[instruction->as.store_property.object],
         callable->registers[instruction->as.store_property.key],
         callable->registers[instruction->as.store_property.value],
-        callable->function->strict
+        callable->function->strict,
+        mal_interp_ic(callable)
     );
 }
 
@@ -2282,17 +2445,18 @@ static MalValue mal_vm_for_in_key_string(MalVm *vm, MalKey key) {
     return key.value;
 }
 
-void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    MalValue source = callable->registers[instruction->as.for_in_keys.source];
-
+// Build the for-in enumeration key array for `source` (EnumerateObjectProperties):
+// the enumerable string keys reachable on the prototype chain, each visited once
+// with nearer keys shadowing farther ones. Returns the result array. On a
+// proxy-trap exception vm->completion is set to THROW and the partially-built
+// array is returned; callers must check the completion before using the result.
+MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
     u32 count = 0;
 
     // for-in over null/undefined performs no iteration.
     if (mal_value_is_nil(source)) {
-        callable->registers[instruction->as.for_in_keys.dst] = mal_value_from_array_object(result);
-        return;
+        return mal_value_from_array_object(result);
     }
 
     // Strings expose their characters as enumerable index properties; without a
@@ -2307,8 +2471,7 @@ void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
             );
             count++;
         }
-        callable->registers[instruction->as.for_in_keys.dst] = mal_value_from_array_object(result);
-        return;
+        return mal_value_from_array_object(result);
     }
 
     // A module namespace enumerates its sorted string exports (all enumerable).
@@ -2322,14 +2485,12 @@ void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
             );
             count++;
         }
-        callable->registers[instruction->as.for_in_keys.dst] = mal_value_from_array_object(result);
-        return;
+        return mal_value_from_array_object(result);
     }
 
     // Numbers, booleans, and symbols have no enumerable own properties.
     if (!mal_value_is_object(source)) {
-        callable->registers[instruction->as.for_in_keys.dst] = mal_value_from_array_object(result);
-        return;
+        return mal_value_from_array_object(result);
     }
 
     // EnumerateObjectProperties: walk the prototype chain visiting each string
@@ -2348,21 +2509,21 @@ void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
         MalProxyObject *proxy = mal_value_to_proxy_object(source);
         MalValue keys_value;
         if (!mal_proxy_own_property_keys(vm, proxy, &keys_value)) {
-            return;
+            return mal_value_from_array_object(result);
         }
         MalArrayObject *keys = mal_value_to_array_object(keys_value);
         u32 key_count = mal_array_object_length(keys);
         for (u32 i = 0; i < key_count; i++) {
             MalValue key_value;
             if (!mal_vm_get_property(vm, keys_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &key_value)) {
-                return;
+                return mal_value_from_array_object(result);
             }
             if (!mal_value_is_string(key_value)) {
                 continue;
             }
             MalKey key;
             if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
-                return;
+                return mal_value_from_array_object(result);
             }
             if (mal_object_get_own(seen, key).present) {
                 continue;
@@ -2371,7 +2532,7 @@ void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
             bool present;
             MalPropertyDesc desc;
             if (!mal_proxy_get_own_property_descriptor(vm, proxy, key, &present, &desc)) {
-                return;
+                return mal_value_from_array_object(result);
             }
             if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
                 continue;
@@ -2381,11 +2542,10 @@ void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
         }
         MalValue proto;
         if (!mal_proxy_get_prototype_of(vm, proxy, &proto)) {
-            return;
+            return mal_value_from_array_object(result);
         }
-        callable->registers[instruction->as.for_in_keys.dst] = mal_value_from_array_object(result);
         if (!mal_value_is_object(proto) || mal_value_is_proxy_object(proto)) {
-            return;
+            return mal_value_from_array_object(result);
         }
         source = proto;
         // fall through to walk the (plain-object) prototype chain
@@ -2469,7 +2629,12 @@ void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
         }
     }
 
-    callable->registers[instruction->as.for_in_keys.dst] = mal_value_from_array_object(result);
+    return mal_value_from_array_object(result);
+}
+
+void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.for_in_keys.dst] =
+        mal_for_in_keys(callable->vm, callable->registers[instruction->as.for_in_keys.source]);
 }
 
 void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction) {
@@ -2608,13 +2773,14 @@ void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction
     );
 }
 
-void mal_op_create_rest_arguments(MalCallable *callable, MalInstruction *instruction) {
-    i32 start = instruction->as.create_rest_arguments.start_index;
-    i32 count = callable->argument_count > start ? callable->argument_count - start : 0;
+// Build a rest-parameter array (`function f(...rest)`): the call arguments from
+// `start` onward as a fresh Array. Shared by the interpreter op and compiled code.
+MalValue mal_create_rest_arguments(MalVm *vm, const MalValue *args, i32 arg_count, i32 start) {
+    i32 count = arg_count > start ? arg_count - start : 0;
 
     MalArrayObject *rest = mal_array_object_new(
-        &callable->vm->heap,
-        mal_value_to_object(callable->vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])
     );
     mal_array_object_set_length(rest, (u32) count);
 
@@ -2622,28 +2788,35 @@ void mal_op_create_rest_arguments(MalCallable *callable, MalInstruction *instruc
         mal_object_set(
             (MalObject *) rest,
             (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)},
-            callable->arguments[start + i]
+            args[start + i]
         );
     }
 
-    callable->registers[instruction->as.create_rest_arguments.dst] = mal_value_from_array_object(rest);
+    return mal_value_from_array_object(rest);
 }
 
-void mal_op_array_rest(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    MalValue source = callable->registers[instruction->as.array_rest.src];
-    u32 start = (u32) instruction->as.array_rest.start_index;
+void mal_op_create_rest_arguments(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.create_rest_arguments.dst] = mal_create_rest_arguments(
+        callable->vm, callable->arguments, callable->argument_count,
+        instruction->as.create_rest_arguments.start_index
+    );
+}
 
+// Build the array-destructuring rest (`[a, ...rest] = source`): the source's
+// elements from `start` onward as a fresh Array. Shared by the interpreter op and
+// compiled code. On a null/undefined source or a throwing element read, sets
+// vm->completion to THROW and returns undefined; callers must check.
+MalValue mal_array_rest(MalVm *vm, MalValue source, u32 start) {
     if (mal_value_is_nil(source)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot destructure null or undefined");
-        return;
+        return mal_value_new_undefined();
     }
 
     // Index-read approximation of the spec's iterator protocol, mirroring the
     // pattern's positional element reads (TODO(iterators)).
     u32 length;
     if (!mal_builtin_array_this_length(vm, source, &length)) {
-        return;
+        return mal_value_new_undefined();
     }
 
     u32 count = length > start ? length - start : 0;
@@ -2659,7 +2832,7 @@ void mal_op_array_rest(MalCallable *callable, MalInstruction *instruction) {
         MalValue element = mal_value_new_undefined();
         if (!mal_builtin_array_try_get(vm, source, start + i, &element) &&
             vm->completion.kind == MAL_COMPLETION_THROW) {
-            return;
+            return mal_value_new_undefined();
         }
 
         mal_object_set(
@@ -2669,7 +2842,15 @@ void mal_op_array_rest(MalCallable *callable, MalInstruction *instruction) {
         );
     }
 
-    callable->registers[instruction->as.array_rest.dst] = mal_value_from_array_object(rest);
+    return mal_value_from_array_object(rest);
+}
+
+void mal_op_array_rest(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.array_rest.dst] = mal_array_rest(
+        callable->vm,
+        callable->registers[instruction->as.array_rest.src],
+        (u32) instruction->as.array_rest.start_index
+    );
 }
 
 void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruction) {

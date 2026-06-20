@@ -88,11 +88,18 @@ typedef struct MalFrameDescriptor {
     i32 slot_count;
 } MalFrameDescriptor;
 
+typedef struct MalEnv MalEnv;
+
 typedef struct MalRootFrame {
     struct MalRootFrame *prev;
     const MalFrameDescriptor *desc;
     /* slot_count MalValues, owned by the compiled frame (a stack local there). */
     MalValue *slots;
+    /* This activation's own captured-slot env (the compiled analogue of the
+     * interpreter frame's env), or null when the function captures nothing. Its
+     * slots hold values not yet reachable through any live closure, so the
+     * collector must trace it while the function runs. */
+    MalEnv *env;
 } MalRootFrame;
 
 extern MalRootFrame *mal_root_frame_head;

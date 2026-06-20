@@ -43,6 +43,10 @@ typedef struct MalHeap {
     MalGcBlock *cell_blocks[MAL_GC_NUM_SIZE_CLASSES];
     /** Current bump block per size class for owner-held raw buffers. */
     MalGcBlock *raw_blocks[MAL_GC_NUM_SIZE_CLASSES];
+    /** Fully-empty blocks reclaimed by the sweep (pages madvised to the OS),
+     * recycled by mal_gc_new_block before carving a fresh block from a chunk.
+     * A blank block can serve any size class / kind after re-init. */
+    MalGcBlock *free_blocks;
     /** Reclaimed managed cells per size class, rebuilt by the sweep; the
      * allocator reuses these before bumping. Empty between (and without) any
      * collection, so an uncollected run is pure bump allocation as before. */

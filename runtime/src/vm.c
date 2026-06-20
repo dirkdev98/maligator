@@ -26,9 +26,22 @@
  */
 #define MAL_VALUE_STACK_CAPACITY (256 * 1024)
 
+MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
+    MalEnv *env = mal_heap_alloc(
+        &vm->heap, sizeof(MalEnv) + sizeof(MalValue) * (usize) count, MAL_HEAP_ENV
+    );
+    env->parent = parent;
+    env->function_index = function_index;
+    for (i32 i = 0; i < count; i++) {
+        env->slots[i] = mal_value_new_undefined();
+    }
+    return env;
+}
+
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     mal_gc_init();
     vm->definition = definition;
+    vm->interp_ic = calloc((usize) definition->function_count, sizeof(struct MalInlineCache *));
     vm->globals = malloc(sizeof(MalValue) * definition->global_count);
     vm->frames = nullptr;
     vm->frame_count = 0;
@@ -161,6 +174,12 @@ void mal_vm_clear_kept_objects(MalVm *vm) {
 
 void mal_vm_free(MalVm *vm) {
     free(vm->kept_objects);
+    if (vm->interp_ic != nullptr) {
+        for (i32 i = 0; i < vm->definition->function_count; i++) {
+            free(vm->interp_ic[i]);
+        }
+        free(vm->interp_ic);
+    }
     // Only heap-resident (generator/async) leftover frames own their buffers;
     // value-stack frames live in vm->value_stack, freed below.
     for (i32 i = 0; i < vm->frame_count; i++) {
@@ -318,6 +337,17 @@ bool mal_vm_push_function_frame(
     // carves a window from the value stack.
     bool heap_resident = function->kind != MAL_FUNCTION_KIND_NORMAL;
 
+    // Allocate the captured-slot env now, while the incoming arguments are still
+    // on the value stack (so a collection mal_env_new may trigger finds them as
+    // roots). The heap-resident path below releases that marshaling area before
+    // the frame is published, so the env must be built first. Functions without
+    // captured slots pass the creation chain through so grandchild closures still
+    // find their owners. (creation_env is rooted via the callee function object.)
+    MalEnv *env = creation_env;
+    if (function->captured_count > 0) {
+        env = mal_env_new(vm, creation_env, function_index, function->captured_count);
+    }
+
     MalValue *registers;
     MalValue *arguments;
     i32 stack_base;
@@ -378,18 +408,6 @@ bool mal_vm_push_function_frame(
     if (vm->frame_count == vm->frame_capacity) {
         vm->frame_capacity = vm->frame_capacity == 0 ? 8 : vm->frame_capacity * 2;
         vm->frames = realloc(vm->frames, sizeof(MalVmFrame) * vm->frame_capacity);
-    }
-
-    // Functions without captured slots pass the creation chain through, so
-    // grandchild closures still find their owners.
-    MalEnv *env = creation_env;
-    if (function->captured_count > 0) {
-        env = malloc(sizeof(MalEnv) + sizeof(MalValue) * (usize) function->captured_count);
-        env->parent = creation_env;
-        env->function_index = function_index;
-        for (i32 i = 0; i < function->captured_count; i++) {
-            env->slots[i] = mal_value_new_undefined();
-        }
     }
 
     MalVmFrame *frame = &vm->frames[vm->frame_count++];
@@ -495,6 +513,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 break;
             case MAL_OP_CREATE_OBJECT:
                 mal_op_create_object(frame, &instruction);
+                break;
+            case MAL_OP_CREATE_OBJECT_SHAPED:
+                mal_op_create_object_shaped(frame, &instruction);
                 break;
             case MAL_OP_CREATE_ARRAY:
                 mal_op_create_array(frame, &instruction);

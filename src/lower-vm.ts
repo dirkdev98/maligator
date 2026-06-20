@@ -134,6 +134,13 @@ export type VmInstruction =
 			dst: number;
 	  }
 	| {
+			opcode: "CREATE_OBJECT_SHAPED";
+			dst: number;
+			count: number;
+			keyStringIndices: Array<number>;
+			valueRegisters: Array<number>;
+	  }
+	| {
 			opcode: "CREATE_ARRAY";
 			dst: number;
 			length: number;
@@ -698,6 +705,14 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "CREATE_OBJECT",
 				dst: instruction.registers[0],
+			};
+		case "createObjectShaped":
+			return {
+				opcode: "CREATE_OBJECT_SHAPED",
+				dst: instruction.registers[0],
+				count: instruction.registers.length - 1,
+				keyStringIndices: instruction.keyStringIndices,
+				valueRegisters: instruction.registers.slice(1),
 			};
 		case "createArray":
 			return {

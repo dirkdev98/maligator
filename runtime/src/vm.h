@@ -23,6 +23,7 @@ typedef enum MalOpcode {
     MAL_OP_CREATE_STRING,
     MAL_OP_CREATE_BIGINT,
     MAL_OP_CREATE_OBJECT,
+    MAL_OP_CREATE_OBJECT_SHAPED,
     MAL_OP_CREATE_ARRAY,
     MAL_OP_CREATE_MODULE_NAMESPACE,
     MAL_OP_CREATE_UNDEFINED,
@@ -181,6 +182,12 @@ typedef struct MalInstruction {
         struct {
             i32 dst;
         } create_object;
+
+        struct {
+            i32 dst, count;
+            const i32 *key_indices;      // string-constant indices, in key order
+            const i32 *value_registers;  // value source registers, in key order
+        } create_object_shaped;
 
         struct {
             i32 dst, length;
@@ -677,10 +684,12 @@ typedef struct MalCjsModuleSlot {
 /**
  * Heap-allocated captured-variable storage. One node per activation of a
  * function with captured slots; closures keep their defining chain reachable
- * through MalFunctionObject.creation_env. There is no GC yet, so nodes leak
- * with the rest of the heap.
+ * through MalFunctionObject.creation_env. A GC cell (MAL_HEAP_ENV): the
+ * collector marks envs reachable via creation_env, interpreter/compiled frame
+ * envs, and parent chains, and sweeps the rest. The header must stay first.
  */
 typedef struct MalEnv {
+    MalHeapHeader header;
     struct MalEnv *parent;
     i32 function_index;
     MalValue slots[];
@@ -724,6 +733,15 @@ typedef struct MalStackTrace {
 
 typedef struct MalVm {
     const MalVmDefinition *definition;
+
+    /**
+     * Per-function inline caches for the interpreter's property load/store ops,
+     * indexed [function_index][instruction_pointer]. Each function's array is
+     * allocated lazily on first property access in it. The compiled backend uses
+     * function-static caches instead; this gives the same monomorphic fast path
+     * to interpreted code (the top level, bailed functions, --no-compiled).
+     */
+    struct MalInlineCache **interp_ic;
 
     MalHeap heap;
     MalValue *globals;
@@ -989,6 +1007,13 @@ typedef MalVmFrame MalCallable;
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition);
 
 void mal_vm_free(MalVm *vm);
+
+/** Allocate a captured-slot environment node (parent chain + `count` slots
+ * initialized to undefined) as a GC cell. Used by both the interpreter and
+ * compiled code to build a function's per-activation env. May trigger a
+ * collection: the caller must have rooted `parent` and any live frame slots
+ * before calling (the compiled prologue publishes its root frame first). */
+MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count);
 
 /** AddToKeptObjects: pin a WeakRef target for the rest of the current turn. */
 void mal_vm_add_kept_object(MalVm *vm, MalValue value);

@@ -238,6 +238,8 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 			case "CREATE_OBJECT":
 			case "CREATE_ARRAY":
 			case "CREATE_FUNCTION":
+			case "CREATE_ARGUMENTS_OBJECT": // reads the raw args, no register operand
+			case "CREATE_REST_ARGUMENTS": // reads the raw args, no register operand
 			case "DEFINE_PROPERTY": // object is the literal; key/value boxed boundary reads
 			case "LOAD_THIS":
 			case "LOAD_NEW_TARGET":
@@ -269,6 +271,14 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 				// object and key are read as boxed values, never numerically.
 				disqualUse.add(instruction.object);
 				disqualUse.add(instruction.key);
+				break;
+			case "FOR_IN_KEYS":
+				// source is enumerated as an object, never read numerically.
+				disqualUse.add(instruction.source);
+				break;
+			case "ARRAY_REST":
+				// src is read as an array-like, never numerically.
+				disqualUse.add(instruction.src);
 				break;
 			case "CALL":
 				disqualUse.add(instruction.callee);
@@ -353,16 +363,12 @@ export function emitCompiledFunction(
 	}
 
 	// A function with its own captured slots needs a per-activation MalEnv node
-	// (function_index == this function) for LOAD/STORE_CAPTURED(owner == self)
-	// and for closures it creates to capture. The interpreter's
-	// push_function_frame allocates that node; the compiled dispatch invokes the
-	// function with its creation_env directly and never does, so such a function
-	// must stay interpreted. (Functions with captured_count == 0 are unaffected:
-	// they create only non-capturing closures, and inner closures read outer
-	// scopes through their creation_env, which is set correctly either way.)
-	if (fn.capturedCount > 0) {
-		return null;
-	}
+	// (function_index == this function) for LOAD/STORE_CAPTURED(owner == self) and
+	// for the closures it creates to capture. The interpreter's
+	// push_function_frame allocates it; the compiled function allocates the same
+	// node at entry (below) and reassigns `env` to it, so the body's captured
+	// access and CREATE_FUNCTION see this activation's slots.
+	const capturesEnv = fn.capturedCount > 0;
 
 	const promotableParams = numericParamCandidates(fn);
 	const reps = inferReps(fn, promotableParams);
@@ -388,7 +394,10 @@ export function emitCompiledFunction(
 	const slotOf = new Map<number, number>();
 	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
 	const slotCount = valueRegs.length;
-	const gcUnlink = slotCount > 0 ? "mal_root_frame_head = __gc_frame.prev; " : "";
+	// A root frame is needed to scan MalValue registers and/or this activation's
+	// captured env; every exit past its link must unlink it.
+	const needsRootFrame = slotCount > 0 || capturesEnv;
+	const gcUnlink = needsRootFrame ? "mal_root_frame_head = __gc_frame.prev; " : "";
 
 	const body = emitBody(fn, suffix, reps, debug, gcUnlink);
 	if (body === null) {
@@ -477,13 +486,26 @@ export function emitCompiledFunction(
 		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
 	}
 
-	// Publish the root frame now that every slot is initialized, before any body
-	// safepoint. The bail above returns before this point, so it needs no unlink.
-	if (slotCount > 0) {
+	// Publish the root frame first, with every register slot already initialized,
+	// so the collector can scan them before any allocation. mal_env_new is now a GC
+	// allocation (MalEnv is a cell), so the env is built and linked into the
+	// already-published frame afterwards — never held unrooted across a safepoint.
+	// The promoted-param bail above returns before this point (no unlink).
+	if (needsRootFrame) {
 		lines.push(
 			`    static const MalFrameDescriptor __gc_desc = { .function_index = ${index}, .slot_count = ${slotCount} };`,
-			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots };`,
+			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${slotCount > 0 ? "__gc_slots" : "nullptr"}, .env = nullptr };`,
 			`    mal_root_frame_head = &__gc_frame;`,
+		);
+	}
+
+	// Allocate this activation's captured-slot env (mirroring the interpreter) and
+	// reassign `env` so the body's LOAD/STORE_CAPTURED(self) and CREATE_FUNCTION use
+	// it, then root it in the published frame. capturesEnv implies needsRootFrame.
+	if (capturesEnv) {
+		lines.push(
+			`    env = mal_env_new(vm, env, ${index}, ${fn.capturedCount});`,
+			`    __gc_frame.env = env;`,
 		);
 	}
 
@@ -847,6 +869,19 @@ function emitInstruction(
 			];
 		case "CREATE_OBJECT":
 			return [`r${instruction.dst} = mal_vm_op_create_object(vm);`];
+		case "CREATE_OBJECT_SHAPED": {
+			// Build the literal's shape once (static per-site cache) and create the
+			// object directly in it, bulk-filling slots — no per-property defines.
+			const keys = instruction.keyStringIndices
+				.map((ki) => `&mal_strings${suffix}[${ki}]`)
+				.join(", ");
+			const values = instruction.valueRegisters.map((r) => boxed(r)).join(", ");
+			return [
+				`static MalShape *__oshape_${ip} = nullptr;`,
+				`if (__oshape_${ip} == nullptr) __oshape_${ip} = mal_shape_from_string_keys((MalString *[]){ ${keys} }, ${instruction.count});`,
+				`r${instruction.dst} = mal_vm_create_object_shaped(vm, __oshape_${ip}, (MalValue[]){ ${values} }, ${instruction.count});`,
+			];
+		}
 		case "CREATE_ARRAY":
 			return [`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`];
 		case "CREATE_FUNCTION":
@@ -899,13 +934,18 @@ function emitInstruction(
 				`mal_vm_store_captured(env, ${instruction.ownerFunctionIndex}, ${instruction.index}, ${boxed(instruction.src)});`,
 			];
 		case "LOAD_PROPERTY":
+			// A per-site monomorphic inline cache: a static persists across calls and
+			// (zero-initialized) starts empty. On a repeat access to the same shape it
+			// is a direct slot read with no key conversion or shape search.
 			return [
-				`r${instruction.dst} = mal_vm_op_load_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
+				`static MalInlineCache __ic_${ip};`,
+				`r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
 				throwCheck,
 			];
 		case "STORE_PROPERTY":
 			return [
-				`mal_vm_op_store_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict});`,
+				`static MalInlineCache __ic_${ip};`,
+				`mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
 				throwCheck,
 			];
 		case "TO_PROPERTY_KEY":
@@ -917,6 +957,43 @@ function emitInstruction(
 			return [`r${instruction.dst} = vm->globals[${instruction.index}];`];
 		case "STORE_GLOBAL":
 			return [`vm->globals[${instruction.index}] = ${boxed(instruction.src)};`];
+		case "STORE_GLOBAL_PROPERTY":
+			// A var/function declaration that becomes a property of globalThis.
+			return [
+				`mal_vm_op_store_global_property(vm, ${instruction.nameStringIndex}, ${boxed(instruction.src)});`,
+				throwCheck,
+			];
+		case "CREATE_ARGUMENTS_OBJECT":
+			// The unmapped `arguments` object. A compiled frame does not carry its
+			// callee, so only strict functions — whose `callee` is poisoned with
+			// %ThrowTypeError% rather than exposing the function — lower here; sloppy
+			// functions stay on the interpreter, which has the callee.
+			if (!strict) {
+				return null;
+			}
+			return [
+				`r${instruction.dst} = mal_create_arguments_object(vm, args, arg_count, MAL_VALUE_UNDEFINED, true);`,
+			];
+		case "CREATE_REST_ARGUMENTS":
+			// A rest parameter `function f(...rest)`: the call arguments from
+			// startIndex onward. Reads the raw args, never throws.
+			return [
+				`r${instruction.dst} = mal_create_rest_arguments(vm, args, arg_count, ${instruction.startIndex});`,
+			];
+		case "ARRAY_REST":
+			// Array-destructuring rest `[a, ...rest] = src`: a null/undefined source
+			// or a throwing element read propagates.
+			return [
+				`r${instruction.dst} = mal_array_rest(vm, ${boxed(instruction.src)}, ${instruction.startIndex});`,
+				throwCheck,
+			];
+		case "FOR_IN_KEYS":
+			// `for (k in source)`: build the enumeration key array; a proxy trap on
+			// the source can throw, so propagate.
+			return [
+				`r${instruction.dst} = mal_for_in_keys(vm, ${boxed(instruction.source)});`,
+				throwCheck,
+			];
 		case "LOAD_INTRINSIC":
 			return [
 				`r${instruction.dst} = vm->intrinsics[${emitIntrinsic(instruction.intrinsic)}];`,

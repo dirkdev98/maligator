@@ -274,14 +274,12 @@ static void mal_gc_trace_table(MalTable *table) {
     }
 }
 
-/** Trace a closure environment chain (not a GC cell; only its slot edges). */
+/** Shade a closure environment cell. Its captured slots and parent chain are
+ * traced when the cell is drained from the grey worklist (mal_gc_trace_cell,
+ * MAL_HEAP_ENV) — keeping reachable envs (and only those) alive through a sweep. */
 static void mal_gc_trace_env(MalEnv *env) {
-    for (; env != nullptr; env = env->parent) {
-        if (env->function_index < 0 || env->function_index >= g_gc_vm->definition->function_count) {
-            continue;
-        }
-        i32 count = g_gc_vm->definition->functions[env->function_index].captured_count;
-        mal_gc_mark_values(env->slots, count);
+    if (env != nullptr) {
+        mal_gc_shade(&env->header);
     }
 }
 
@@ -323,6 +321,19 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
         case MAL_HEAP_SYMBOL:
             mal_gc_mark_string(((MalSymbol *) cell)->description);
             return;
+        case MAL_HEAP_ENV: {
+            // Not a MalObject: trace the parent env and this activation's captured
+            // slots (their count comes from the owning function's metadata).
+            MalEnv *env = (MalEnv *) cell;
+            if (env->parent != nullptr) {
+                mal_gc_shade(&env->parent->header);
+            }
+            if (env->function_index >= 0 && env->function_index < g_gc_vm->definition->function_count) {
+                i32 count = g_gc_vm->definition->functions[env->function_index].captured_count;
+                mal_gc_mark_values(env->slots, count);
+            }
+            return;
+        }
         default:
             break;
     }
@@ -523,6 +534,7 @@ static void mal_gc_scan_roots(MalVm *vm) {
     // builtin rooted with a root span.
     for (MalRootFrame *frame = mal_root_frame_head; frame != nullptr; frame = frame->prev) {
         mal_gc_mark_values(frame->slots, frame->desc->slot_count);
+        mal_gc_trace_env(frame->env);
     }
     for (MalRootSpan *span = mal_root_span_head; span != nullptr; span = span->prev) {
         mal_gc_mark_values(span->slots, span->count);
@@ -543,7 +555,8 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         }
         case MAL_HEAP_SYMBOL:
         case MAL_HEAP_BIGINT:
-            return; // no owned side allocations
+        case MAL_HEAP_ENV:
+            return; // no owned side allocations (env slots are inline, not a MalObject)
         default:
             break;
     }

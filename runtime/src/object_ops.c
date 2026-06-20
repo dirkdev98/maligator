@@ -61,13 +61,8 @@ static bool mal_object_define_is_compatible(MalPropertyDesc current, MalProperty
 static const MalPropertyFlags MAL_DEFAULT_DATA_FLAGS =
     MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
 
-/**
- * Cap on inline shape slots. Beyond this an object drops
- * to dictionary mode: shape lookup is a linear scan, so large objects (e.g.
- * Array.prototype) are faster as a hash table, and the cap also bounds shape-tree
- * growth under churn.
- */
-#define MAL_SHAPE_MAX_INLINE_SLOTS 32
+/* MAL_SHAPE_MAX_INLINE_SLOTS is defined in shape.h (shared with the static
+ * object-literal shape builder). */
 
 static MalPropertyDesc mal_object_data_desc(MalValue value, MalPropertyFlags flags) {
     return (MalPropertyDesc){
