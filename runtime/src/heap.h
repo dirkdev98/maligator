@@ -278,6 +278,14 @@ void gc_free_raw(MalHeap *heap, void *ptr);
 typedef void (*MalHeapFinalizeFn)(MalHeapHeader *cell);
 
 /**
+ * When set, the sweep stomps every reclaimed cell's payload (past the intrusive
+ * free-list link) with a poison pattern, so a use-after-free of a cell that was
+ * dropped because a root was missed reads obviously-wrong data — turning silent
+ * heap corruption into a loud crash. Debug aid; enabled by MAL_GC_VERIFY. Only
+ * touches dead cells, so a correctly-rooted program is unaffected. */
+extern bool mal_heap_poison_on_free;
+
+/**
  * Reclaim every unmarked (WHITE) managed cell: run `finalize` on it, mark it
  * FREE, and return it to its block's free list for reuse. Marked (BLACK) cells
  * are kept and reset to WHITE for the next cycle. Caller must have completed the

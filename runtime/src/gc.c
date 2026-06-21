@@ -88,6 +88,9 @@ void mal_gc_init(void) {
         }
     }
     g_gc_verify_enabled = getenv("MAL_GC_VERIFY") != nullptr;
+    // Poisoning dead cells makes a use-after-free of a missed root crash loudly
+    // rather than silently alias a recycled cell; pair it with verification.
+    mal_heap_poison_on_free = g_gc_verify_enabled;
 }
 
 void mal_gc_safepoint(MalVm *vm) {

@@ -376,6 +376,19 @@ static void mal_gc_recycle_block(MalHeap *heap, MalGcBlock *block) {
     heap->free_blocks = block;
 }
 
+bool mal_heap_poison_on_free = false;
+
+/* Stomp a reclaimed cell's payload past the free-list link with a recognizable
+ * pattern (debug aid; see mal_heap_poison_on_free). 0xDF bytes decode, as a
+ * NaN-boxed MalValue, to a non-finite double far from any valid pointer or int,
+ * so a use-after-free read fails loudly instead of silently aliasing. */
+static inline void mal_gc_poison_cell(u8 *cell, u32 cell_size, usize free_offset) {
+    usize start = free_offset + sizeof(void *);
+    if (cell_size > start) {
+        memset(cell + start, 0xDF, cell_size - start);
+    }
+}
+
 void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
     usize data_offset = mal_gc_cell_data_offset();
     usize free_offset = mal_gc_free_next_offset();
@@ -412,6 +425,9 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
                     // then tombstone so a later sweep does not finalize it again.
                     finalize(header);
                     header->mark = MAL_MARK_FREE;
+                    if (mal_heap_poison_on_free) {
+                        mal_gc_poison_cell(cell, block->cell_size, free_offset);
+                    }
                 }
                 // FREE (incl. just-finalized): thread onto this block's local chain
                 // (head-prepend; tail is the first cell linked).

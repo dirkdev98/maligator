@@ -90,16 +90,31 @@ static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_va
         : (length_number >= (f64) UINT32_MAX ? UINT32_MAX : (u32) length_number);
 
     MalValue *call_args = length > 0 ? malloc(sizeof(MalValue) * length) : nullptr;
+    // Each index Get can invoke a getter that collects; root the already-fetched
+    // arguments (scanning only filled entries) and lift GC suppression. The final
+    // call's args reach the callee's own roots, but keep the span up for it too.
+    MalRootSpan args_span;
+    mal_gc_root(&args_span, call_args, 0);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
     for (u32 index = 0; index < length; index++) {
+        args_span.count = (i32) index;
         if (!mal_vm_get_property(vm, arguments_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)}, &call_args[index])) {
-            free(call_args);
-            return mal_value_new_undefined();
+            goto done;
         }
     }
+    args_span.count = (i32) length;
 
-    MalCompletion completion = mal_vm_call_value(vm, this_value, this_arg, call_args, (i32) length);
+    {
+        MalCompletion completion = mal_vm_call_value(vm, this_value, this_arg, call_args, (i32) length);
+        ret = mal_builtin_function_forward_completion(vm, completion);
+    }
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&args_span);
     free(call_args);
-    return mal_builtin_function_forward_completion(vm, completion);
+    return ret;
 }
 
 static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

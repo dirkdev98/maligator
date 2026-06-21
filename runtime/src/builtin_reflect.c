@@ -102,12 +102,26 @@ static bool mal_reflect_create_list(MalVm *vm, MalValue list, MalValue **out, i3
     }
 
     MalValue *items = malloc(sizeof(MalValue) * (usize) length);
+    // Each index Get can invoke a getter that collects; root the already-fetched
+    // items (scanning only filled entries) and lift GC suppression for the loop.
+    // The caller's subsequent call/construct reaches the callee's own roots.
+    MalRootSpan items_span;
+    mal_gc_root(&items_span, items, 0);
+    mal_gc_native_rooted_begin(vm);
+    bool ok = true;
     for (i64 index = 0; index < length; index++) {
+        items_span.count = (i32) index;
         MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
         if (!mal_vm_get_property(vm, list, key, &items[index])) {
-            free(items);
-            return false;
+            ok = false;
+            break;
         }
+    }
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&items_span);
+    if (!ok) {
+        free(items);
+        return false;
     }
 
     *out = items;

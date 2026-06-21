@@ -343,6 +343,11 @@ static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_valu
     MalTableIter iter;
     mal_table_iter_init(&iter, map->entries, MAL_TABLE_ITER_STORAGE);
 
+    // The callback can collect; lift this builtin's GC suppression for the loop.
+    // No explicit roots are needed: the receiver Map is rooted by the call seam,
+    // its entries table is traced through it, and every callback argument
+    // (entry value, key, this) is therefore reachable from a root.
+    mal_gc_native_rooted_begin(vm);
     MalKey key;
     void *entry;
     while (mal_table_iter_next(&iter, &key, &entry)) {
@@ -353,9 +358,10 @@ static MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_valu
         };
         MalCompletion completion = mal_vm_call_value(vm, args[0], this_arg, callback_args, 3);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
-            return mal_value_new_undefined();
+            break;
         }
     }
+    mal_gc_native_rooted_end(vm);
 
     return mal_value_new_undefined();
 }

@@ -193,6 +193,10 @@ static MalValue mal_builtin_set_prototype_for_each(MalVm *vm, MalValue this_valu
     MalTableIter iter;
     mal_table_iter_init(&iter, set->entries, MAL_TABLE_ITER_STORAGE);
 
+    // The callback can collect; lift this builtin's GC suppression for the loop.
+    // No explicit roots needed: the receiver Set is rooted by the call seam, its
+    // entries table is traced through it, so each callback argument is reachable.
+    mal_gc_native_rooted_begin(vm);
     MalKey key;
     void *entry;
     while (mal_table_iter_next(&iter, &key, &entry)) {
@@ -200,9 +204,10 @@ static MalValue mal_builtin_set_prototype_for_each(MalVm *vm, MalValue this_valu
         MalValue callback_args[3] = {key.value, key.value, this_value};
         MalCompletion completion = mal_vm_call_value(vm, args[0], this_arg, callback_args, 3);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
-            return mal_value_new_undefined();
+            break;
         }
     }
+    mal_gc_native_rooted_end(vm);
 
     return mal_value_new_undefined();
 }

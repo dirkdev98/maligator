@@ -1421,10 +1421,15 @@ MalCompletion mal_vm_call_value(
         // A native builtin holds its MalValue scratch (receiver, partial results)
         // in C locals the root scan cannot see, and many re-enter JS for callbacks
         // (where a safepoint could otherwise collect). Count it as a live C frame
-        // so the collector stays off until it returns.
+        // so the collector stays off until it returns. A builtin that has rooted
+        // its scratch lifts that suppression itself; the receiver/args/new.target
+        // are rooted here so they survive such a collection.
+        MalCalleeRoots ncr;
+        mal_gc_callee_roots_begin(&ncr, resolution.this_value, mal_value_new_undefined(), resolution.args, resolution.arg_count);
         vm->gc_native_frames++;
         MalValue value = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), resolution.callee);
         vm->gc_native_frames--;
+        mal_gc_callee_roots_end(&ncr);
         completion = vm->completion.kind == MAL_COMPLETION_THROW
             ? vm->completion
             : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
@@ -1505,9 +1510,12 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
         }
         // Native constructors allocate their own this; new_target signals construct.
         MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
+        MalCalleeRoots ncr;
+        mal_gc_callee_roots_begin(&ncr, mal_value_new_undefined(), effective_new_target, resolution.args, resolution.arg_count);
         vm->gc_native_frames++;
         MalValue value = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, effective_new_target, resolution.callee);
         vm->gc_native_frames--;
+        mal_gc_callee_roots_end(&ncr);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             free(resolution.owned_args);
             return vm->completion;
@@ -1560,7 +1568,13 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                 if (!mal_vm_enter_compiled(vm, function_index)) {
                     completion = vm->completion;
                 } else {
+                    // The instance exists only as this_value until the body stores
+                    // it, so root it (plus new.target/args) for the call: a
+                    // collection inside the constructor would otherwise sweep it.
+                    MalCalleeRoots ncr;
+                    mal_gc_callee_roots_begin(&ncr, this_value, effective_new_target, resolution.args, resolution.arg_count);
                     MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, effective_new_target, env);
+                    mal_gc_callee_roots_end(&ncr);
                     mal_vm_leave_compiled(vm);
                     completion = vm->completion.kind == MAL_COMPLETION_THROW
                         ? vm->completion

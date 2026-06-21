@@ -679,9 +679,14 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
         // A native builtin holds MalValue scratch in C locals the root scan
         // cannot see, and many re-enter JS for callbacks; count it as a live C
         // frame so a safepoint inside it does not collect (see gc_native_frames).
+        // The receiver/args/new.target are rooted so a builtin that lifts that
+        // suppression itself cannot lose them to a collection.
+        MalCalleeRoots ncr;
+        mal_gc_callee_roots_begin(&ncr, resolution.this_value, mal_value_new_undefined(), resolution.args, resolution.arg_count);
         vm->gc_native_frames++;
         MalValue result = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), resolution.callee);
         vm->gc_native_frames--;
+        mal_gc_callee_roots_end(&ncr);
         vm->frames[caller_frame_index].registers[dst] = result;
         vm->value_stack_size = base;
     } else {
@@ -750,7 +755,13 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
             i32 caller_frame_index = vm->frame_count - 1;
             MalValue result = mal_value_new_undefined();
             if (mal_vm_enter_compiled(vm, callee_index)) {
+                // The instance exists only as this_value until the body stores it,
+                // so root it (plus new.target/args) for the call: a collection
+                // inside the constructor would otherwise sweep it.
+                MalCalleeRoots ncr;
+                mal_gc_callee_roots_begin(&ncr, this_value, resolution.callee, &vm->value_stack[base], resolution.arg_count);
                 result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, resolution.callee, env);
+                mal_gc_callee_roots_end(&ncr);
                 mal_vm_leave_compiled(vm);
             }
             vm->frames[caller_frame_index].registers[dst] = result;
@@ -776,9 +787,12 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
             mal_value_to_native_function_object(resolution.callee)
         );
         i32 caller_frame_index = vm->frame_count - 1;
+        MalCalleeRoots ncr;
+        mal_gc_callee_roots_begin(&ncr, mal_value_new_undefined(), resolution.callee, resolution.args, resolution.arg_count);
         vm->gc_native_frames++;
         MalValue result = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, resolution.callee, resolution.callee);
         vm->gc_native_frames--;
+        mal_gc_callee_roots_end(&ncr);
         vm->frames[caller_frame_index].registers[dst] = result;
         vm->value_stack_size = base;
     } else {

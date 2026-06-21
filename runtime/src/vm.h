@@ -833,10 +833,13 @@ typedef struct MalVm {
     i32 native_call_depth;
 
     /**
-     * Count of native builtin invocations live on the C stack. A builtin holds
-     * MalValue scratch in C locals the root scan cannot enumerate, so the collector
-     * must not run while any are active — the safepoint poll is gated on this being
-     * zero. Compiled-backend frames are NOT counted here: each publishes a
+     * Count of active *un-rooted* native builtin invocations on the C stack. A
+     * builtin holds MalValue scratch in C locals the root scan cannot enumerate, so
+     * the collector must not run while any are active — the safepoint poll is gated
+     * on this being zero. A builtin that has rooted all such scratch lifts its own
+     * contribution for the rooted region via mal_gc_native_rooted_begin/end, so the
+     * collector can run inside it (preventing unbounded heap growth in long callback
+     * loops). Compiled-backend frames are NOT counted here: each publishes a
      * MalRootFrame, so the collector can scan their registers and run inside them.
      */
     i32 gc_native_frames;
@@ -875,6 +878,69 @@ typedef struct MalVm {
      */
     MalCjsModuleSlot *cjs_registry;
 } MalVm;
+
+/**
+ * Lift this native builtin's GC suppression once it has made every MalValue it
+ * holds live across an allocation reachable from a root (a MalRootSpan, the value
+ * stack, or a live managed object). Between begin/end the collector may run — so a
+ * long allocating callback loop (map/filter/reduce/...) can reclaim instead of
+ * growing the heap without bound.
+ *
+ * Mechanism: gc_native_frames counts active *un-rooted* native frames; the
+ * safepoint poll collects only when it is zero. A builtin is always entered
+ * through a call seam that incremented the counter, so on entry it is >= 1.
+ * `begin` removes this frame's contribution; if no other un-rooted native is
+ * active the counter reaches zero and collection is enabled. If an outer un-rooted
+ * native is still on the stack the counter stays >= 1 and collection remains
+ * suppressed (that outer frame's scratch is not safe) — correct, just no relief in
+ * that nested case. Must be balanced (route every exit, including throw, through
+ * `end`); the worst case of an imbalance is extra suppression, never an unsafe
+ * collection.
+ */
+static inline void mal_gc_native_rooted_begin(MalVm *vm) {
+    vm->gc_native_frames--;
+}
+
+static inline void mal_gc_native_rooted_end(MalVm *vm) {
+    vm->gc_native_frames++;
+}
+
+/**
+ * Roots the receiver, new.target, and argument buffer handed to a callee across a
+ * GC-able call so a collection inside it cannot reclaim them. Two cases need this:
+ *
+ *  - native builtins: the receiver and new.target arrive as plain C locals (the
+ *    caller keeps only the value-stack args live, not the receiver), and a bound
+ *    call's args live in a malloc'd buffer off the value stack;
+ *  - compiled constructors: the instance is freshly allocated *in the dispatcher*
+ *    (mal_object_new) and exists only as `this_value` until the body stores it
+ *    somewhere — no other root holds it, so a collection inside the body would
+ *    sweep it. (Interpreted constructors are safe: the instance lives in the
+ *    pushed frame's this_value, which the root scan covers.)
+ *
+ * Declare on the dispatcher's C stack so the spans outlive the call; balance
+ * begin/end across every exit.
+ */
+typedef struct MalCalleeRoots {
+    MalRootSpan receiver_span;
+    MalRootSpan args_span;
+    MalValue receiver_slots[2];
+} MalCalleeRoots;
+
+static inline void mal_gc_callee_roots_begin(
+    MalCalleeRoots *roots, MalValue this_value, MalValue new_target, const MalValue *args, i32 arg_count
+) {
+    roots->receiver_slots[0] = this_value;
+    roots->receiver_slots[1] = new_target;
+    mal_gc_root(&roots->receiver_span, roots->receiver_slots, 2);
+    // Cast away const: the collector only reads (shades) these slots.
+    mal_gc_root(&roots->args_span, (MalValue *) args, arg_count);
+}
+
+static inline void mal_gc_callee_roots_end(MalCalleeRoots *roots) {
+    mal_gc_unroot(&roots->args_span);
+    mal_gc_unroot(&roots->receiver_span);
+}
 
 /**
  * Cap on nested compiled-function calls. Each level holds a real C frame (the

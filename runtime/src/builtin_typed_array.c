@@ -296,12 +296,20 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
             if (!mal_vm_get_iterator(vm, arg, &record)) {
                 return mal_value_new_undefined();
             }
+            // Each step re-enters JS (iterator.next) and can collect; the items
+            // collected so far are arbitrary heap values, so root the buffer (its
+            // pointer is refreshed after each realloc) and lift GC suppression.
+            MalValue result = mal_value_new_undefined();
+            MalRootSpan values_span, result_span;
+            mal_gc_root(&values_span, values, 0);
+            mal_gc_root(&result_span, &result, 1);
+            mal_gc_native_rooted_begin(vm);
             while (true) {
                 MalValue item;
                 bool done;
                 if (!mal_vm_iterator_step(vm, &record, &item, &done)) {
-                    free(values);
-                    return mal_value_new_undefined();
+                    result = mal_value_new_undefined();
+                    goto iter_done;
                 }
                 if (done) {
                     break;
@@ -309,20 +317,27 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
                 if (count == capacity) {
                     capacity = capacity == 0 ? 8 : capacity * 2;
                     values = realloc(values, sizeof(MalValue) * capacity);
+                    values_span.slots = values;
                 }
                 values[count++] = item;
+                values_span.count = (i32) count;
             }
 
-            MalValue result = mal_ta_create(vm, kind, (u32) count);
+            result = mal_ta_create(vm, kind, (u32) count);
             MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
             mal_object_set_prototype(&array->object, prototype);
             for (usize i = 0; i < count; i++) {
                 mal_typed_array_object_set(vm, array, (u32) i, values[i]);
                 if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
-                    free(values);
-                    return mal_value_new_undefined();
+                    result = mal_value_new_undefined();
+                    goto iter_done;
                 }
             }
+
+        iter_done:
+            mal_gc_native_rooted_end(vm);
+            mal_gc_unroot(&result_span);
+            mal_gc_unroot(&values_span);
             free(values);
             return result;
         }
@@ -1004,17 +1019,34 @@ static MalValue mal_ta_iterate(MalVm *vm, MalValue this_value, const MalValue *a
         kept = malloc(sizeof(MalValue) * (length == 0 ? 1 : length));
     }
 
+    // Lift GC suppression so a long allocating callback cannot grow the heap
+    // without bound. Heap scratch that must survive a collection inside a callback
+    // is rooted: obj_roots[0] = MAP result; obj_roots[1] = the in-flight callback
+    // return (held across the element store, whose ToNumber/ToBigInt may re-enter
+    // JS) and later the FILTER result; the `kept` span = collected elements; and
+    // call_args per call. Numeric elements are non-heap and ignored by the scan,
+    // but a BigInt typed array yields heap values, so root uniformly.
+    MalValue obj_roots[2] = {mapped, mal_value_new_undefined()};
+    MalRootSpan obj_span, kept_span;
+    mal_gc_root(&obj_span, obj_roots, 2);
+    mal_gc_root(&kept_span, kept, 0);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
+
     bool last = op == MAL_TA_FIND_LAST || op == MAL_TA_FIND_LAST_INDEX;
     for (u32 step = 0; step < length; step++) {
         u32 i = last ? length - 1 - step : step;
         MalValue element = mal_typed_array_object_get(vm, array, i);
         MalValue call_args[3] = {element, mal_value_from_i32((i32) i), this_value};
+        MalRootSpan call_span;
+        mal_gc_root(&call_span, call_args, 3);
         MalCompletion completion = mal_vm_call_value(vm, callback, this_arg, call_args, 3);
+        mal_gc_unroot(&call_span);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
-            free(kept);
-            return mal_value_new_undefined();
+            goto done;
         }
+        obj_roots[1] = completion.value; // held across the MAP element store
         bool truthy = mal_value_is_truthy(completion.value);
 
         switch (op) {
@@ -1024,32 +1056,33 @@ static MalValue mal_ta_iterate(MalVm *vm, MalValue this_value, const MalValue *a
             case MAL_TA_FILTER:
                 if (truthy) {
                     kept[kept_count++] = element;
+                    kept_span.count = (i32) kept_count;
                 }
                 break;
             case MAL_TA_FIND:
-                if (truthy) {
-                    return element;
-                }
-                break;
             case MAL_TA_FIND_LAST:
                 if (truthy) {
-                    return element;
+                    ret = element;
+                    goto done;
                 }
                 break;
             case MAL_TA_FIND_INDEX:
             case MAL_TA_FIND_LAST_INDEX:
                 if (truthy) {
-                    return mal_value_from_i32((i32) i);
+                    ret = mal_value_from_i32((i32) i);
+                    goto done;
                 }
                 break;
             case MAL_TA_SOME:
                 if (truthy) {
-                    return mal_value_new_boolean(true);
+                    ret = mal_value_new_boolean(true);
+                    goto done;
                 }
                 break;
             case MAL_TA_EVERY:
                 if (!truthy) {
-                    return mal_value_new_boolean(false);
+                    ret = mal_value_new_boolean(false);
+                    goto done;
                 }
                 break;
             case MAL_TA_FOR_EACH:
@@ -1059,34 +1092,46 @@ static MalValue mal_ta_iterate(MalVm *vm, MalValue this_value, const MalValue *a
 
     switch (op) {
         case MAL_TA_MAP:
-            return mapped;
+            ret = mapped;
+            break;
         case MAL_TA_FILTER: {
             MalValue result;
             if (!mal_ta_species_create(vm, array, (u32) kept_count, &result)) {
-                free(kept);
-                return mal_value_new_undefined();
+                break; // ret stays undefined; throw pending
             }
+            obj_roots[1] = result;
             MalTypedArrayObject *out = mal_value_to_typed_array_object(result);
             for (usize i = 0; i < kept_count; i++) {
                 mal_typed_array_object_set(vm, out, (u32) i, kept[i]);
             }
-            free(kept);
-            return result;
+            ret = result;
+            break;
         }
         case MAL_TA_FIND:
         case MAL_TA_FIND_LAST:
-            return mal_value_new_undefined();
+            ret = mal_value_new_undefined();
+            break;
         case MAL_TA_FIND_INDEX:
         case MAL_TA_FIND_LAST_INDEX:
-            return mal_value_from_i32(-1);
+            ret = mal_value_from_i32(-1);
+            break;
         case MAL_TA_SOME:
-            return mal_value_new_boolean(false);
+            ret = mal_value_new_boolean(false);
+            break;
         case MAL_TA_EVERY:
-            return mal_value_new_boolean(true);
+            ret = mal_value_new_boolean(true);
+            break;
         case MAL_TA_FOR_EACH:
-            return mal_value_new_undefined();
+            ret = mal_value_new_undefined();
+            break;
     }
-    return mal_value_new_undefined();
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&kept_span);
+    mal_gc_unroot(&obj_span);
+    free(kept);
+    return ret;
 }
 
 #define MAL_TA_ITER_METHOD(fn_name, op_value) \
@@ -1119,28 +1164,47 @@ static MalValue mal_ta_reduce_impl(MalVm *vm, MalValue this_value, const MalValu
     bool has_accumulator = arg_count >= 2;
     MalValue accumulator = has_accumulator ? args[1] : mal_value_new_undefined();
 
+    // The accumulator (an arbitrary callback return) is carried across every
+    // callback and must survive a collection inside one; root it (and the call
+    // arguments, which also hold a BigInt element). Numeric elements are non-heap.
+    MalValue acc_root[1] = {accumulator};
+    MalRootSpan acc_span;
+    mal_gc_root(&acc_span, acc_root, 1);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
+
     for (u32 step = 0; step < length; step++) {
         u32 i = from_right ? length - 1 - step : step;
         MalValue element = mal_typed_array_object_get(vm, array, i);
         if (!has_accumulator) {
             accumulator = element;
+            acc_root[0] = accumulator;
             has_accumulator = true;
             continue;
         }
         MalValue call_args[4] = {accumulator, element, mal_value_from_i32((i32) i), this_value};
+        MalRootSpan call_span;
+        mal_gc_root(&call_span, call_args, 4);
         MalCompletion completion = mal_vm_call_value(vm, callback, mal_value_new_undefined(), call_args, 4);
+        mal_gc_unroot(&call_span);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
-            return mal_value_new_undefined();
+            goto done;
         }
         accumulator = completion.value;
+        acc_root[0] = accumulator;
     }
 
     if (!has_accumulator) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Reduce of empty array with no initial value");
-        return mal_value_new_undefined();
+        goto done;
     }
-    return accumulator;
+    ret = accumulator;
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&acc_span);
+    return ret;
 }
 
 static MalValue mal_ta_reduce(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1198,6 +1262,15 @@ static MalValue mal_ta_sort(MalVm *vm, MalValue this_value, const MalValue *args
         values[i] = mal_typed_array_object_get(vm, array, i);
     }
 
+    // A user comparator can collect; root the snapshot (BigInt arrays hold heap
+    // elements) and lift GC suppression. `current` is extracted from the snapshot
+    // during an insertion but is rooted by the call span across each comparator
+    // call; between calls only non-allocating shifts run.
+    MalRootSpan values_span;
+    mal_gc_root(&values_span, values, (i32) length);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = this_value;
+
     // Insertion sort keeps it stable and lets the comparator call into the VM.
     for (u32 i = 1; i < length; i++) {
         MalValue current = values[i];
@@ -1206,11 +1279,14 @@ static MalValue mal_ta_sort(MalVm *vm, MalValue this_value, const MalValue *args
             i32 order;
             if (mal_value_is_callable(compare)) {
                 MalValue call_args[2] = {values[j], current};
+                MalRootSpan call_span;
+                mal_gc_root(&call_span, call_args, 2);
                 MalCompletion completion = mal_vm_call_value(vm, compare, mal_value_new_undefined(), call_args, 2);
+                mal_gc_unroot(&call_span);
                 if (completion.kind != MAL_COMPLETION_NORMAL) {
                     vm->completion = completion;
-                    free(values);
-                    return mal_value_new_undefined();
+                    ret = mal_value_new_undefined();
+                    goto done;
                 }
                 f64 result = mal_ops_to_number(completion.value);
                 order = isnan(result) ? 0 : (result < 0 ? -1 : result > 0 ? 1 : 0);
@@ -1229,8 +1305,12 @@ static MalValue mal_ta_sort(MalVm *vm, MalValue this_value, const MalValue *args
     for (u32 i = 0; i < length; i++) {
         mal_typed_array_object_set(vm, array, i, values[i]);
     }
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&values_span);
     free(values);
-    return this_value;
+    return ret;
 }
 
 static MalValue mal_ta_keys(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1301,13 +1381,22 @@ static MalValue mal_ta_of(MalVm *vm, MalValue this_value, const MalValue *args, 
         return mal_value_new_undefined();
     }
     MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
+    // The result is held across the element stores, whose ToNumber/ToBigInt may
+    // re-enter JS (valueOf) and collect; root it. The args are value-stack rooted.
+    MalRootSpan result_span;
+    mal_gc_root(&result_span, &result, 1);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = result;
     for (i32 i = 0; i < arg_count; i++) {
         mal_typed_array_object_set(vm, array, (u32) i, args[i]);
         if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
-            return mal_value_new_undefined();
+            ret = mal_value_new_undefined();
+            break;
         }
     }
-    return result;
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&result_span);
+    return ret;
 }
 
 static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1337,76 +1426,100 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.iterator is not a function");
         return mal_value_new_undefined();
     }
+    // Every phase below re-enters JS and can collect: iterator.next / array-like
+    // index gets during collection, Construct during creation, and the mapfn +
+    // element store during the build. Root the growing snapshot (refreshing its
+    // pointer after each realloc, and only scanning filled entries) plus the
+    // result and in-flight mapped element, and lift GC suppression.
+    MalValue extra[2] = {mal_value_new_undefined(), mal_value_new_undefined()}; // [0]=result, [1]=mapped element
+    MalRootSpan values_span, extra_span;
+    mal_gc_root(&values_span, values, 0);
+    mal_gc_root(&extra_span, extra, 2);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
+
     if (mal_value_is_callable(iterator_method)) {
         MalIteratorRecord record;
         if (!mal_vm_get_iterator(vm, source, &record)) {
-            return mal_value_new_undefined();
+            goto done;
         }
         while (true) {
             MalValue item;
-            bool done;
-            if (!mal_vm_iterator_step(vm, &record, &item, &done)) {
-                free(values);
-                return mal_value_new_undefined();
+            bool done_flag;
+            if (!mal_vm_iterator_step(vm, &record, &item, &done_flag)) {
+                goto done;
             }
-            if (done) {
+            if (done_flag) {
                 break;
             }
             if (count == capacity) {
                 capacity = capacity == 0 ? 8 : capacity * 2;
                 values = realloc(values, sizeof(MalValue) * capacity);
+                values_span.slots = values;
             }
             values[count++] = item;
+            values_span.count = (i32) count;
         }
     } else {
         MalValue length_value;
         if (!mal_vm_get_property(vm, source, mal_intrinsic_string_key(vm, "length"), &length_value)) {
-            return mal_value_new_undefined();
+            goto done;
         }
         f64 length_number;
         if (!mal_vm_to_number(vm, length_value, &length_number)) {
-            return mal_value_new_undefined();
+            goto done;
         }
         length_number = isnan(length_number) ? 0 : trunc(length_number);
         u32 length = (length_number > 0)
             ? (length_number > 4294967295.0 ? UINT32_MAX : (u32) length_number)
             : 0;
         values = length > 0 ? malloc(sizeof(MalValue) * length) : nullptr;
+        values_span.slots = values;
         for (u32 i = 0; i < length; i++) {
+            // Scan only already-filled entries while this get may collect.
+            values_span.count = (i32) i;
             if (!mal_vm_get_property(vm, source, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &values[i])) {
-                free(values);
-                return mal_value_new_undefined();
+                goto done;
             }
         }
         count = length;
+        values_span.count = (i32) count;
     }
 
     MalValue result;
     if (!mal_ta_create_from_constructor(vm, this_value, (u32) count, &result)) {
-        free(values);
-        return mal_value_new_undefined();
+        goto done;
     }
+    extra[0] = result;
     MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
     for (usize i = 0; i < count; i++) {
         MalValue element = values[i];
         if (mal_value_is_callable(map_fn)) {
             MalValue call_args[2] = {element, mal_value_from_i32((i32) i)};
+            MalRootSpan call_span;
+            mal_gc_root(&call_span, call_args, 2);
             MalCompletion completion = mal_vm_call_value(vm, map_fn, this_arg, call_args, 2);
+            mal_gc_unroot(&call_span);
             if (completion.kind != MAL_COMPLETION_NORMAL) {
                 vm->completion = completion;
-                free(values);
-                return mal_value_new_undefined();
+                goto done;
             }
             element = completion.value;
         }
+        extra[1] = element; // held across the element store (ToNumber may re-enter)
         mal_typed_array_object_set(vm, array, (u32) i, element);
         if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
-            free(values);
-            return mal_value_new_undefined();
+            goto done;
         }
     }
+    ret = result;
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&extra_span);
+    mal_gc_unroot(&values_span);
     free(values);
-    return result;
+    return ret;
 }
 
 // ---- install -------------------------------------------------------------
