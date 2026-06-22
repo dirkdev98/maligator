@@ -558,10 +558,21 @@ typedef struct MalLineEntry {
     i32 pos_id;
 } MalLineEntry;
 
-/** Debug-info: a decoded source position (1-based line, 0-based column). */
+/**
+ * Debug-info: a decoded source position (1-based line, 0-based column).
+ *
+ * When the position is code the inliner copied from another function, the chain
+ * fields describe the inline frame it stands for: `inlined_function_index` is
+ * the function the code came from (>= 0), and `caller_pos_id` is the position in
+ * the caller where it was inlined (itself possibly another inline node). A
+ * physical position leaves both at -1. The stack formatter walks this chain so a
+ * single physical frame prints as one logical frame per inline level.
+ */
 typedef struct MalSourcePos {
     i32 line;
     i32 column;
+    i32 inlined_function_index;
+    i32 caller_pos_id;
 } MalSourcePos;
 
 /**

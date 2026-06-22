@@ -27,7 +27,12 @@ export interface VmDefinition {
 	 * functions (the file is resolved per-function). A function's per-instruction
 	 * `positions` index into this.
 	 */
-	sourcePositions: Array<{ line: number; column: number }>;
+	sourcePositions: Array<{
+		line: number;
+		column: number;
+		inlinedFunctionIndex?: number;
+		callerPosId?: number;
+	}>;
 
 	/**
 	 * CommonJS module table: index (module id) -> wrapper function index. Empty

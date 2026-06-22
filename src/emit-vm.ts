@@ -311,7 +311,9 @@ function malVmDefinitionStruct(
 	if (hasPositions) {
 		lines.push(`static const MalSourcePos mal_source_positions${suffix}[] = {`);
 		for (const pos of definition.sourcePositions) {
-			lines.push(`    { .line = ${pos.line}, .column = ${pos.column} },`);
+			lines.push(
+				`    { .line = ${pos.line}, .column = ${pos.column}, .inlined_function_index = ${pos.inlinedFunctionIndex ?? -1}, .caller_pos_id = ${pos.callerPosId ?? -1} },`,
+			);
 		}
 		lines.push("};", "");
 	}

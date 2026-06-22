@@ -1,6 +1,5 @@
 import { expect, test } from "vitest";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
-import type { IRFunction } from "../src/ir.ts";
 import { executeIROptimizations } from "../src/ir-opt.ts";
 import { parseScript } from "../src/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
@@ -17,15 +16,19 @@ function optimizedIr(source: string) {
 	return ir;
 }
 
-/** Count instructions of a given type in a function. */
-function countOp(fn: IRFunction, type: string): number {
-	return fn.blocks.flatMap((b) => b.instructions).filter((i) => i.type === type).length;
+/** Count instructions of a given type across the whole optimized program. Counting
+ * program-wide (not just the IIFE) is robust to the inliner relocating the IIFE body
+ * into the entry — the scalar-replace pass still keeps/removes the record there. */
+function countOp(program: ReturnType<typeof optimizedIr>, type: string): number {
+	return program.functions
+		.flatMap((fn) => fn.blocks.flatMap((b) => b.instructions))
+		.filter((i) => i.type === type).length;
 }
 
-// Function bodies compile lazily, so each function under test is written as an
-// IIFE to force compilation; it is then function index 1.
-function nested(source: string): IRFunction {
-	return optimizedIr(source).functions.find((fn) => fn.functionIndex === 1)!;
+// Each function under test is written as an IIFE to force compilation. The result
+// is the whole optimized program (the record may live in the entry after inlining).
+function nested(source: string): ReturnType<typeof optimizedIr> {
+	return optimizedIr(source);
 }
 
 test("a record read only by static own keys is scalar-replaced (allocation removed)", () => {
@@ -48,7 +51,9 @@ test("a per-iteration loop record is removed (snapshot handles the loop variable
 });
 
 test("a record that escapes via return is NOT replaced", () => {
-	const fn = nested(`(function (a){ const p = { x: a }; return p; })(0);`);
+	// The returned record must genuinely escape (stored to a global) — otherwise, once
+	// the IIFE inlines and its result is discarded, the record is correctly dead.
+	const fn = nested(`globalThis.r = (function (a){ const p = { x: a }; return p; })(0);`);
 	expect(countOp(fn, "createObjectShaped")).toBe(1);
 });
 
@@ -99,7 +104,7 @@ test("a record copied to another local then read is scalar-replaced", () => {
 });
 
 test("a record escaping through an alias copy is NOT replaced", () => {
-	const fn = nested(`(function (a){ const p = { x: a }; const q = p; return q; })(0);`);
+	const fn = nested(`globalThis.r = (function (a){ const p = { x: a }; const q = p; return q; })(0);`);
 	expect(countOp(fn, "createObjectShaped")).toBe(1);
 });
 

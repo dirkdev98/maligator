@@ -27,7 +27,19 @@ export interface IntermediateProgram {
 	 * per-function (a function body lives in one file), so only line/column are
 	 * interned here and shared across every function.
 	 */
-	sourcePositions: Array<{ line: number; column: number }>;
+	/**
+	 * A leaf entry has just line/column. An *inline* entry (added by the inliner)
+	 * additionally carries `inlinedFunctionIndex` (the function whose body this
+	 * position is in) and `callerPosId` (the position one level out, where it was
+	 * inlined) — a chain the trace formatter expands into one frame per inline
+	 * level, so inlined code still shows its own frame.
+	 */
+	sourcePositions: Array<{
+		line: number;
+		column: number;
+		inlinedFunctionIndex?: number;
+		callerPosId?: number;
+	}>;
 	sourcePositionToIndex: Map<string, number>;
 
 	/**
@@ -8474,6 +8486,22 @@ function getOrCreateSourcePosition(
 	const index = program.sourcePositions.push({ line, column }) - 1;
 	program.sourcePositionToIndex.set(key, index);
 	return index;
+}
+
+/**
+ * Append an *inline* source position: code from `inlinedFunctionIndex` at
+ * (line, column) that was inlined at `callerPosId` (a position one level out).
+ * Not interned (each inline site is distinct). The trace formatter walks the
+ * `callerPosId` chain, emitting one frame per inline level. Used by the inliner.
+ */
+export function addInlineSourcePosition(
+	program: IntermediateProgram,
+	line: number,
+	column: number,
+	inlinedFunctionIndex: number,
+	callerPosId: number,
+): number {
+	return program.sourcePositions.push({ line, column, inlinedFunctionIndex, callerPosId }) - 1;
 }
 
 /**

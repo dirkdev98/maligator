@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
+import { debugInlinableCalls } from "./inline.ts";
 import { debugProgramLiveness } from "./liveness.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { lowerIrProgramToVmDefinition, vmDefinitionStats } from "./lower-vm.ts";
@@ -67,6 +68,13 @@ irOptTiming();
 // actually roots.
 if (argFlag("--dump-liveness")) {
 	log.info(debugProgramLiveness(irProgram));
+}
+
+// Inliner eligibility analysis (task #6, foundation). Detection only — no
+// transformation yet. `--dump-inline` lists the statically-known, inlinable direct
+// `call` sites the substitution pass will consume.
+if (argFlag("--dump-inline")) {
+	debugInlinableCalls(irProgram);
 }
 
 const registerAllocTiming = log.time("register allocation");

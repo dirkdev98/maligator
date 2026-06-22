@@ -1305,33 +1305,51 @@ MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
         }
         for (i32 i = 0; i < segment->frame_count; i++) {
             const MalStackFrameRecord *record = &segment->frames[i];
-            const MalFunction *function = &vm->definition->functions[record->function_index];
 
-            mal_stack_buf_push_ascii(&buf, "\n    at ");
+            // Expand the inline chain: a position copied in by the inliner carries
+            // the inlined function's identity and the caller position where it was
+            // inlined, so one physical frame prints as several logical frames
+            // (innermost inlined function first, physical function last). A
+            // physical position (inlined_function_index < 0) prints exactly one.
+            i32 pos_id = record->pos_id;
+            i32 guard = 0;
+            while (guard++ < 100000) {
+                bool have_pos = pos_id >= 0 && pos_id < vm->definition->source_position_count;
+                const MalSourcePos *pos = have_pos ? &vm->definition->source_positions[pos_id] : nullptr;
+                bool inlined = pos != nullptr && pos->inlined_function_index >= 0 &&
+                    pos->inlined_function_index < vm->definition->function_count;
+                i32 function_index = inlined ? pos->inlined_function_index : record->function_index;
+                const MalFunction *function = &vm->definition->functions[function_index];
 
-            const MalString *name = &vm->definition->string_constants[function->name_string_index];
-            if (mal_string_length(name) > 0) {
-                mal_stack_buf_push_string(&buf, name);
-            } else {
-                mal_stack_buf_push_ascii(&buf, "<anonymous>");
-            }
+                mal_stack_buf_push_ascii(&buf, "\n    at ");
 
-            bool have_file = function->file_index >= 0 && function->file_index < vm->definition->file_count;
-            bool have_pos = record->pos_id >= 0 && record->pos_id < vm->definition->source_position_count;
-            if (have_file || have_pos) {
-                mal_stack_buf_push_ascii(&buf, " (");
-                if (have_file) {
-                    mal_stack_buf_push_ascii(&buf, vm->definition->files[function->file_index]);
+                const MalString *name = &vm->definition->string_constants[function->name_string_index];
+                if (mal_string_length(name) > 0) {
+                    mal_stack_buf_push_string(&buf, name);
+                } else {
+                    mal_stack_buf_push_ascii(&buf, "<anonymous>");
                 }
-                if (have_pos) {
-                    const MalSourcePos *pos = &vm->definition->source_positions[record->pos_id];
-                    mal_stack_buf_push_ascii(&buf, ":");
-                    mal_stack_buf_push_i32(&buf, pos->line);
-                    mal_stack_buf_push_ascii(&buf, ":");
-                    // Meriyah columns are 0-based; stack traces report 1-based.
-                    mal_stack_buf_push_i32(&buf, pos->column + 1);
+
+                bool have_file = function->file_index >= 0 && function->file_index < vm->definition->file_count;
+                if (have_file || have_pos) {
+                    mal_stack_buf_push_ascii(&buf, " (");
+                    if (have_file) {
+                        mal_stack_buf_push_ascii(&buf, vm->definition->files[function->file_index]);
+                    }
+                    if (have_pos) {
+                        mal_stack_buf_push_ascii(&buf, ":");
+                        mal_stack_buf_push_i32(&buf, pos->line);
+                        mal_stack_buf_push_ascii(&buf, ":");
+                        // Meriyah columns are 0-based; stack traces report 1-based.
+                        mal_stack_buf_push_i32(&buf, pos->column + 1);
+                    }
+                    mal_stack_buf_push_ascii(&buf, ")");
                 }
-                mal_stack_buf_push_ascii(&buf, ")");
+
+                if (!inlined) {
+                    break;
+                }
+                pos_id = pos->caller_pos_id;
             }
         }
     }

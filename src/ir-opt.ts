@@ -1,3 +1,4 @@
+import { optEliminateCapturedSlots, optEmptyDeadFunctions, optInlineCalls } from "./inline.ts";
 import { debugIntermediateProgram } from "./ir.ts";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
 import { isNil } from "./utils.ts";
@@ -19,6 +20,11 @@ const SIDE_EFFECT_FREE_OPS = new Set<IRInstruction["type"]>([
 	"createUndefined",
 	"createNull",
 	"createEmpty",
+	// Allocates a closure object but has no other observable effect, so an unused
+	// one (e.g. a closure all of whose calls were inlined) is dead and removable —
+	// this is what lets inlining eliminate the closure allocation. Capturing
+	// declarations keep it alive through their storeCaptured (a non-listed effect).
+	"createFunction",
 	"move",
 	"loadLocal",
 	"loadGlobal",
@@ -48,10 +54,23 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		optDropUnreferencedBlocks,
 		optLocalsToRegister,
 		optCopyPropagation,
+		// Runs after copy propagation so a call's callee resolves to its function
+		// value through the move chain; before scalar replacement (inlining exposes
+		// cross-call object flow) and DCE (which drops the now-unused closure's
+		// createFunction → no closure/env allocation).
+		optInlineCalls,
 		// Runs after copy propagation so a record's reads reference its allocation
 		// register directly (not a local copy), and before DCE so the freed key
 		// constants and unread values are cleaned up the same round.
 		optScalarReplaceObjectLiterals,
+		// Empty functions made unreachable by inlining (their createFunction was
+		// DCE'd) — reclaims dead bodies and unblocks env elimination below.
+		optEmptyDeadFunctions,
+		// After inlining consolidates a closure's captured reads into its definer,
+		// internalize single-store immutable slots to direct register access and drop
+		// the now-unused env — completing closure+env elimination for capturing
+		// closures. Before DCE so the dropped stores / freed closures are cleaned up.
+		optEliminateCapturedSlots,
 		optDeadInstructionElimination,
 		optCombineLinearBlocks,
 		optPatchJumpsToDirectJumpBlocks,
