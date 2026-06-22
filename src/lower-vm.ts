@@ -1,4 +1,5 @@
 import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
+import { computeFunctionLiveness } from "./liveness.ts";
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
 type IRUnaryOperator = Extract<IRInstruction, { type: "unary" }>["operator"];
@@ -80,6 +81,18 @@ export interface VmFunction {
 	 * instruction pointer; the native backend emits coalesced `pos` writes from it.
 	 */
 	positions: Array<number>;
+
+	/**
+	 * COMPILE-ONLY (not part of the C `MalFunction` struct): the registers the
+	 * native backend must spill into this function's GC root frame — those live at
+	 * or used by a GC safepoint (`FunctionLiveness.liveOrUsedAtSafepoint`), already
+	 * in this function's post-allocation register numbering. emit-c roots exactly
+	 * the boxed registers in this set; a register absent from it never holds a live
+	 * value at a collection point. Undefined for generator/async functions (the
+	 * native backend bails on those) — emit-c then falls back to rooting every
+	 * boxed register.
+	 */
+	gcRootRegisters?: ReadonlyArray<number>;
 }
 
 /**
@@ -583,6 +596,16 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 			instruction.opcode === "CREATE_REST_ARGUMENTS",
 	);
 
+	// GC root-frame minimization (C1): the native backend spills only registers
+	// live at a safepoint, not every boxed register. Computed on the
+	// post-allocation IR (this runs after `allocateRegisters`), so the indices match
+	// the backend's `r<i>`. Skipped for generator/async functions, which the native
+	// backend does not compile.
+	const isResumable = (fn.isGenerator ?? false) || (fn.isAsync ?? false);
+	const gcRootRegisters = isResumable
+		? undefined
+		: [...computeFunctionLiveness(fn).liveOrUsedAtSafepoint];
+
 	return {
 		nameStringIndex: fn.nameStringIndex,
 		isGenerator: fn.isGenerator ?? false,
@@ -597,6 +620,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		handlers: collectExceptionHandlers(instructions),
 		fileIndex,
 		positions,
+		gcRootRegisters,
 	};
 }
 

@@ -201,3 +201,44 @@ test("safepoints list: union of per-safepoint live sets equals liveAcrossSafepoi
 	}
 	expect([...union].sort()).toEqual([...liveness.liveAcrossSafepoint].sort());
 });
+
+test("liveOrUsedAtSafepoint adds a safepoint's operands that are dead immediately after", () => {
+	// b0: r5 = g ; r6 = undefined ; r7 = call(r5, r6) ; r8 = undefined ; return r8
+	// r5 (callee) and r6 (arg) are operands of the call but never read again, so
+	// liveAcrossSafepoint (live-OUT) omits them. They are still handed to the callee
+	// (which can collect before re-rooting them), so liveOrUsedAtSafepoint — the set
+	// emit-c spills into the GC root frame — must include them. This is what
+	// preserves the invariant that a caller keeps an in-flight call's receiver/args
+	// reachable for the callee's `this`/args.
+	const fn = fakeFn([
+		[
+			{ type: "loadUndeclared", registers: [5] },
+			{ type: "createUndefined", registers: [6] },
+			{ type: "call", registers: [7, 5, 6] },
+			{ type: "createUndefined", registers: [8] },
+			{ type: "return", registers: [8] },
+		],
+	]);
+	const liveness = computeFunctionLiveness(fn);
+
+	expect(liveness.liveAcrossSafepoint.has(5)).toBe(false);
+	expect(liveness.liveAcrossSafepoint.has(6)).toBe(false);
+	expect(liveness.liveOrUsedAtSafepoint.has(5)).toBe(true);
+	expect(liveness.liveOrUsedAtSafepoint.has(6)).toBe(true);
+});
+
+test("liveOrUsedAtSafepoint is always a superset of liveAcrossSafepoint", () => {
+	for (const source of [
+		`(function (a, b) { return a() + b(); })(x, y);`,
+		`(function f(g) { let keep = {}; g(); return keep.v; })(h);`,
+		`(function (o) { for (let i = 0; i < 3; i++) o.f(i); })(p);`,
+	]) {
+		const program = buildIr(source);
+		for (const fn of program.functions) {
+			const { liveAcrossSafepoint, liveOrUsedAtSafepoint } = computeFunctionLiveness(fn);
+			for (const register of liveAcrossSafepoint) {
+				expect(liveOrUsedAtSafepoint.has(register)).toBe(true);
+			}
+		}
+	}
+});

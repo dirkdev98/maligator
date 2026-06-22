@@ -380,14 +380,24 @@ export function emitCompiledFunction(
 	// The registers ARE the slots (via `#define r<i> (__gc_slots[<slot>])`), so no
 	// spilling is needed; every exit must unlink the frame (gcUnlink).
 	//
-	// The frame is emitted whenever there is any MalValue register, not only when
-	// the body emits an explicit safepoint poll: ops like property access, binary
-	// operators, and iterator steps can re-enter JS (a getter, valueOf, or next())
-	// whose own safepoints may collect, with no poll at the calling op. Keeping the
-	// frame unconditional is what makes those implicit collection points safe.
+	// Only registers LIVE AT A SAFEPOINT need rooting (C1 liveness minimization):
+	// `gcRootRegisters` (from the liveness pass, attached in lower-vm) is the set of
+	// registers live at or used by a point where GC can run — every property access,
+	// binary op, iterator step, call, and back-edge, since each can re-enter JS or
+	// allocate. A boxed register absent from this set is dead at every collection
+	// point, so it stays a plain C local the compiler can keep in a register rather
+	// than an address-taken root slot. Rooting a safepoint's *operands* (not just
+	// values live across it) preserves the invariant the runtime relies on: the
+	// caller keeps an in-flight call's receiver/args reachable for the callee. When
+	// the set is absent (generator/async, which this backend does not compile, or a
+	// future op the liveness pass cannot see), fall back to rooting every boxed
+	// register.
+	const rootRegisters =
+		fn.gcRootRegisters !== undefined ? new Set(fn.gcRootRegisters) : null;
 	const valueRegs: Array<number> = [];
 	for (let i = 0; i < fn.registerCount; i++) {
-		if (reps[i] !== "number" && reps[i] !== "boolean") {
+		const isBoxed = reps[i] !== "number" && reps[i] !== "boolean";
+		if (isBoxed && (rootRegisters === null || rootRegisters.has(i))) {
 			valueRegs.push(i);
 		}
 	}

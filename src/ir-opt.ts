@@ -48,6 +48,10 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		optDropUnreferencedBlocks,
 		optLocalsToRegister,
 		optCopyPropagation,
+		// Runs after copy propagation so a record's reads reference its allocation
+		// register directly (not a local copy), and before DCE so the freed key
+		// constants and unread values are cleaned up the same round.
+		optScalarReplaceObjectLiterals,
 		optDeadInstructionElimination,
 		optCombineLinearBlocks,
 		optPatchJumpsToDirectJumpBlocks,
@@ -645,6 +649,237 @@ function optCopyPropagation(program: IntermediateProgram): boolean {
 					}
 				}
 			}
+		}
+	}
+
+	return changed;
+}
+
+/**
+ * Scalar-replace non-escaping object literals — the first slice of escape
+ * analysis (gc_todo.md §N.7 / Phase 7 T7.1).
+ *
+ * A `createObjectShaped` builds an immutable record with statically-known, unique,
+ * non-index string keys (`staticObjectShape` already excludes spread, computed
+ * keys, accessors, methods, `__proto__`, duplicates and index-like names). When
+ * such a record never escapes — its destination register is used ONLY as the
+ * object operand of `loadProperty` reads, each with a constant key that is an own
+ * key of the record — the object is unobservable: its identity is never taken and
+ * every read resolves to a known slot. We then delete the allocation and rewrite
+ * each read `loadProperty [d, obj, keyᵢ]` into `move [d, valueᵢ]`, where `valueᵢ`
+ * is the register the literal stored for that key. The now-dead key constants and
+ * any unread values are removed by the following DCE pass.
+ *
+ * This removes the allocation entirely — the GC never sees the object — which is
+ * the Phase-7 lever that beats merely shrinking root frames. It is conservative by
+ * construction: any use we do not recognise (escaping into a call/return/store,
+ * mutation via `storeProperty`, a computed or foreign key, `delete`, an identity
+ * compare, …) leaves the site untouched.
+ *
+ * Gating: skipped for functions that can observe locals dynamically — `with`
+ * (sloppy scope) and direct `eval` (C3) — and for generator/async bodies, where a
+ * value live across a suspension has a subtler lifetime (C5, deferred).
+ *
+ * Soundness conditions, all required:
+ *  - the record register is single-assignment (exactly one defining instruction);
+ *  - every key register is a single `createString` whose index is an own key of
+ *    the record (a read of any other key would resolve up the prototype chain).
+ *
+ * Value freshness is handled by *snapshotting*: at the (deleted) allocation site we
+ * emit `move [snapᵢ, valueᵢ]` into a fresh single-assignment register, and rewrite
+ * each read to `move [d, snapᵢ]`. The snapshot captures the value at construction
+ * time, so the result is correct even when the source is reassigned afterwards —
+ * crucially inside loops, where the per-iteration object is the prize. Copy
+ * propagation collapses the snapshot back to a direct move (and DCE drops it) wherever
+ * the source is provably unchanged, so the common case costs nothing.
+ */
+function optScalarReplaceObjectLiterals(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		// C5: a value live across a yield/await is frame-resident; skip for now.
+		if (fn.isGenerator || fn.isAsync) {
+			continue;
+		}
+		// C3: `with` / direct `eval` can reach a local without an explicit IR use,
+		// so the use scan below would be unsound. `hasDirectEval` is file-scoped, so
+		// this conservatively disables the pass for every function in a file that
+		// contains a direct eval — acceptable, as direct eval is rare.
+		if (functionUsesWith(fn) || fn.semanticFile.hasDirectEval.size > 0) {
+			continue;
+		}
+		changed = scalarReplaceObjectLiteralsInFunction(fn) || changed;
+	}
+	return changed;
+}
+
+function scalarReplaceObjectLiteralsInFunction(fn: IRFunction): boolean {
+	// Per-register count of defining instructions, and the string index of every
+	// register whose sole definition is a `createString` (a usable constant key).
+	const defCount = new Map<number, number>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!("registers" in instruction)) {
+				continue;
+			}
+			const defs = destinationCount(instruction);
+			for (let i = 0; i < defs; i++) {
+				const register = instruction.registers[i]!;
+				defCount.set(register, (defCount.get(register) ?? 0) + 1);
+			}
+		}
+	}
+
+	const constStringIndex = new Map<number, number>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.type === "createString" && defCount.get(instruction.registers[0]) === 1) {
+				constStringIndex.set(instruction.registers[0], instruction.stringIndex);
+			}
+		}
+	}
+
+	// Every USE of each register: the instruction plus the operand position. A
+	// position below the instruction's destination count is a definition, not a use.
+	const usesOf = new Map<number, Array<{ instruction: IRInstruction; position: number }>>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!("registers" in instruction)) {
+				continue;
+			}
+			const defs = destinationCount(instruction);
+			for (let position = defs; position < instruction.registers.length; position++) {
+				const register = instruction.registers[position]!;
+				if (register < 0) {
+					continue;
+				}
+				const list = usesOf.get(register) ?? usesOf.set(register, []).get(register)!;
+				list.push({ instruction, position });
+			}
+		}
+	}
+
+	// Each firing record maps to the snapshot moves that replace its allocation;
+	// its alias-copy moves become dead and are dropped.
+	const snapshotsFor = new Map<IRInstruction, Array<{ snapshot: number; value: number }>>();
+	const aliasMovesToDrop = new Set<IRInstruction>();
+	let changed = false;
+
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.type !== "createObjectShaped") {
+				continue;
+			}
+			const objectRegister = instruction.registers[0]!;
+			if (defCount.get(objectRegister) !== 1) {
+				continue; // not single-assignment — can't reason about its contents
+			}
+			const keys = instruction.keyStringIndices;
+			// registers = [destination, ...valueRegisters], parallel to keys.
+			const valueRegisters = instruction.registers.slice(1);
+
+			// The record may be read directly OR after being copied (once) into a
+			// single-assignment register — a move-alias closure. This is what makes the
+			// pass work across blocks: copy propagation is intra-block, so a record read
+			// in a later block reaches its reads through a `move` (the local slot) rather
+			// than the allocation register. Every use across the closure must be a
+			// static-own-key `loadProperty` read or a `move` into another
+			// single-assignment register (extending the alias set); any other use escapes
+			// and leaves the site alone.
+			const reads: Array<{ load: IRInstruction; keyIndex: number }> = [];
+			const aliasMoves: Array<IRInstruction> = [];
+			const aliasSet = new Set<number>([objectRegister]);
+			const worklist = [objectRegister];
+			let safe = true;
+			while (safe && worklist.length > 0) {
+				const aliasRegister = worklist.pop()!;
+				for (const { instruction: use, position } of usesOf.get(aliasRegister) ?? []) {
+					if (use.type === "loadProperty" && position === 1) {
+						const stringIndex = constStringIndex.get(use.registers[2]!);
+						if (stringIndex === undefined) {
+							safe = false; // non-constant or multiply-defined key
+							break;
+						}
+						const keyIndex = keys.indexOf(stringIndex);
+						if (keyIndex < 0) {
+							safe = false; // a key not on the record → would hit the prototype
+							break;
+						}
+						reads.push({ load: use, keyIndex });
+					} else if (use.type === "move" && position === 1) {
+						// `move [target, alias]` copies the record into `target`. Following it
+						// is sound only if `target` is single-assignment (so it always holds
+						// the record); its uses are then checked transitively.
+						const target = use.registers[0]!;
+						if (defCount.get(target) !== 1) {
+							safe = false;
+							break;
+						}
+						if (!aliasSet.has(target)) {
+							aliasSet.add(target);
+							worklist.push(target);
+						}
+						aliasMoves.push(use);
+					} else {
+						safe = false; // escapes / mutated / used as a key — leave the site alone
+						break;
+					}
+				}
+			}
+			if (!safe) {
+				continue;
+			}
+
+			// Allocate one snapshot register per distinct read key, rewrite each read
+			// into a move from it, and record the snapshot moves that take the
+			// allocation's place. Keys never read need no snapshot (their value, if
+			// otherwise unused, is dropped by the following DCE pass).
+			const snapshotForKey = new Map<number, number>();
+			for (const { load, keyIndex } of reads) {
+				let snapshot = snapshotForKey.get(keyIndex);
+				if (snapshot === undefined) {
+					snapshot = fn.nextRegisterDestination++;
+					snapshotForKey.set(keyIndex, snapshot);
+				}
+				// `load` was validated as a `loadProperty`; retype it in place to the
+				// structurally-identical `move [destination, snapshot]`.
+				const mutable = load as { type: string; registers: Array<number> };
+				mutable.registers = [mutable.registers[0]!, snapshot];
+				mutable.type = "move";
+			}
+			snapshotsFor.set(
+				instruction,
+				[...snapshotForKey].map(([keyIndex, snapshot]) => ({
+					snapshot,
+					value: valueRegisters[keyIndex]!,
+				})),
+			);
+			// The alias-copy moves now feed only rewritten reads, so they are dead.
+			for (const move of aliasMoves) {
+				aliasMovesToDrop.add(move);
+			}
+			changed = true;
+		}
+	}
+
+	// Replace each firing allocation with its snapshot moves (capturing the values
+	// at the construction point) and drop the now-dead alias-copy moves, in place.
+	if (snapshotsFor.size > 0) {
+		for (const block of fn.blocks) {
+			const next: Array<IRInstruction> = [];
+			for (const instruction of block.instructions) {
+				const snapshots = snapshotsFor.get(instruction);
+				if (snapshots !== undefined) {
+					for (const { snapshot, value } of snapshots) {
+						next.push({ type: "move", registers: [snapshot, value] });
+					}
+					continue;
+				}
+				if (aliasMovesToDrop.has(instruction)) {
+					continue;
+				}
+				next.push(instruction);
+			}
+			block.instructions = next;
 		}
 	}
 

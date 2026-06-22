@@ -59,9 +59,12 @@ const irOptTiming = log.time("ir optimizations");
 executeIROptimizations(irProgram);
 irOptTiming();
 
-// GC liveness/safepoint analysis (T0.4). Runs on virtual registers, before
-// register allocation. No consumer yet (the C1 root-frame builder is Phase 2);
-// `--dump-liveness` exercises it on real programs and prints the safepoint map.
+// GC liveness/safepoint analysis (T0.4). The real consumer runs inside
+// `lowerIrProgramToVmDefinition` (below, post-allocation) to minimize each
+// compiled function's GC root frame (C1). This `--dump-liveness` dump runs on the
+// pre-allocation virtual registers — handy for inspecting the safepoint map at the
+// IR level, though the numbering differs from the post-allocation set the backend
+// actually roots.
 if (argFlag("--dump-liveness")) {
 	log.info(debugProgramLiveness(irProgram));
 }

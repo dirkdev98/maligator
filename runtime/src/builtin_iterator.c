@@ -1,6 +1,7 @@
 #include "builtin_iterator.h"
 
 #include "builtin_array.h"
+#include "function_object.h"
 #include "heap_string.h"
 #include "map_object.h"
 #include "value_ops.h"
@@ -55,7 +56,18 @@ static MalValue mal_builtin_iterator_pair(MalVm *vm, MalValue first, MalValue se
     return mal_value_from_array_object(pair);
 }
 
-static MalValue mal_builtin_iterator_map_next(MalVm *vm, MalIteratorObject *iterator) {
+// The builtin iterator `next` functions are factored into an "advance" core that
+// writes (value, done) directly into out-params instead of allocating a
+// {value,done} result object. The public `next` methods wrap the result
+// (CreateIterResultObject), while `mal_vm_iterator_step`'s fast path consumes the
+// (value, done) pair directly — skipping the per-step result-object allocation.
+// Each returns false (with vm->completion set THROW) on a throwing element/length
+// access. The full advance runs with collection suppressed (see iterator_step), so
+// values held across an internal allocation (an entries pair) are not swept.
+
+static bool mal_builtin_iterator_map_advance(
+    MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
+) {
     MalMapObject *map = mal_value_to_map_object(iterator->target);
 
     MalTableIter table_iter;
@@ -66,35 +78,43 @@ static MalValue mal_builtin_iterator_map_next(MalVm *vm, MalIteratorObject *iter
     void *entry;
     if (!mal_table_iter_next(&table_iter, &key, &entry)) {
         iterator->done = true;
-        return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
+        *value_out = mal_value_new_undefined();
+        *done_out = true;
+        return true;
     }
 
     iterator->index = (u64) table_iter.index;
+    *done_out = false;
 
     switch (iterator->kind) {
         case MAL_ITERATOR_MAP_KEYS:
         case MAL_ITERATOR_SET_VALUES:
-            return mal_vm_create_iter_result(vm, key.value, false);
+            *value_out = key.value;
+            return true;
         case MAL_ITERATOR_MAP_VALUES:
-            return mal_vm_create_iter_result(vm, mal_table_entry_value(map->entries, entry), false);
+            *value_out = mal_table_entry_value(map->entries, entry);
+            return true;
         case MAL_ITERATOR_MAP_ENTRIES:
-            return mal_vm_create_iter_result(
-                vm,
-                mal_builtin_iterator_pair(vm, key.value, mal_table_entry_value(map->entries, entry)),
-                false
-            );
+            *value_out =
+                mal_builtin_iterator_pair(vm, key.value, mal_table_entry_value(map->entries, entry));
+            return true;
         case MAL_ITERATOR_SET_ENTRIES:
-            return mal_vm_create_iter_result(vm, mal_builtin_iterator_pair(vm, key.value, key.value), false);
+            *value_out = mal_builtin_iterator_pair(vm, key.value, key.value);
+            return true;
         default:
-            return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
+            *value_out = mal_value_new_undefined();
+            *done_out = true;
+            return true;
     }
 }
 
-static MalValue mal_builtin_iterator_array_next(MalVm *vm, MalIteratorObject *iterator) {
+static bool mal_builtin_iterator_array_advance(
+    MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
+) {
     // Length reads live each step, so growth during iteration is visited.
     MalValue length_value;
     if (!mal_vm_get_property(vm, iterator->target, mal_intrinsic_string_key(vm, "length"), &length_value)) {
-        return mal_value_new_undefined();
+        return false;
     }
 
     f64 length = mal_ops_to_number(length_value);
@@ -104,14 +124,18 @@ static MalValue mal_builtin_iterator_array_next(MalVm *vm, MalIteratorObject *it
 
     if ((f64) iterator->index >= length) {
         iterator->done = true;
-        return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
+        *value_out = mal_value_new_undefined();
+        *done_out = true;
+        return true;
     }
 
     u64 index = iterator->index;
     iterator->index++;
+    *done_out = false;
 
     if (iterator->kind == MAL_ITERATOR_ARRAY_KEYS) {
-        return mal_vm_create_iter_result(vm, mal_value_from_i32((i32) index), false);
+        *value_out = mal_value_from_i32((i32) index);
+        return true;
     }
 
     MalValue element;
@@ -121,24 +145,30 @@ static MalValue mal_builtin_iterator_array_next(MalVm *vm, MalIteratorObject *it
         (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)},
         &element
     )) {
-        return mal_value_new_undefined();
+        return false;
     }
 
     if (iterator->kind == MAL_ITERATOR_ARRAY_ENTRIES) {
-        return mal_vm_create_iter_result(vm, mal_builtin_iterator_pair(vm, mal_value_from_i32((i32) index), element), false);
+        *value_out = mal_builtin_iterator_pair(vm, mal_value_from_i32((i32) index), element);
+        return true;
     }
 
-    return mal_vm_create_iter_result(vm, element, false);
+    *value_out = element;
+    return true;
 }
 
-static MalValue mal_builtin_iterator_string_next(MalVm *vm, MalIteratorObject *iterator) {
+static bool mal_builtin_iterator_string_advance(
+    MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
+) {
     MalString *string = mal_value_to_string(iterator->target);
     usize length = mal_string_length(string);
     usize index = (usize) iterator->index;
 
     if (index >= length) {
         iterator->done = true;
-        return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
+        *value_out = mal_value_new_undefined();
+        *done_out = true;
+        return true;
     }
 
     const c16 *code_units = mal_string_code_units(string);
@@ -151,19 +181,52 @@ static MalValue mal_builtin_iterator_string_next(MalVm *vm, MalIteratorObject *i
     }
 
     iterator->index += count;
-
+    *done_out = false;
     // The borrowed code units stay alive with the source string.
-    return mal_vm_create_iter_result(
-        vm,
-        mal_value_from_string(mal_string_new_external(&vm->heap, code_units + index, count)),
-        false
-    );
+    *value_out = mal_value_from_string(mal_string_new_external(&vm->heap, code_units + index, count));
+    return true;
+}
+
+/**
+ * Advance a builtin iterator one step, writing (value, done) without allocating a
+ * result object. Dispatches on the iterator's own kind (no family check — callers
+ * have already established the receiver matches). Returns false with
+ * vm->completion set on a throwing access.
+ */
+static bool mal_builtin_iterator_object_advance(
+    MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
+) {
+    if (iterator->done) {
+        *value_out = mal_value_new_undefined();
+        *done_out = true;
+        return true;
+    }
+
+    switch (iterator->kind) {
+        case MAL_ITERATOR_MAP_KEYS:
+        case MAL_ITERATOR_MAP_VALUES:
+        case MAL_ITERATOR_MAP_ENTRIES:
+        case MAL_ITERATOR_SET_VALUES:
+        case MAL_ITERATOR_SET_ENTRIES:
+            return mal_builtin_iterator_map_advance(vm, iterator, value_out, done_out);
+        case MAL_ITERATOR_ARRAY_KEYS:
+        case MAL_ITERATOR_ARRAY_VALUES:
+        case MAL_ITERATOR_ARRAY_ENTRIES:
+            return mal_builtin_iterator_array_advance(vm, iterator, value_out, done_out);
+        case MAL_ITERATOR_STRING_VALUES:
+            return mal_builtin_iterator_string_advance(vm, iterator, value_out, done_out);
+    }
+
+    *value_out = mal_value_new_undefined();
+    *done_out = true;
+    return true;
 }
 
 /**
  * Shared next() implementation. family_first/family_last bound the iterator
  * kinds each prototype's next accepts, so e.g. %MapIteratorPrototype%.next
- * rejects a Set iterator receiver.
+ * rejects a Set iterator receiver. Wraps the (value, done) advance core in a
+ * result object.
  */
 static MalValue mal_builtin_iterator_next(
     MalVm *vm,
@@ -183,26 +246,12 @@ static MalValue mal_builtin_iterator_next(
         return mal_value_new_undefined();
     }
 
-    if (iterator->done) {
-        return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
+    MalValue value;
+    bool done;
+    if (!mal_builtin_iterator_object_advance(vm, iterator, &value, &done)) {
+        return mal_value_new_undefined();
     }
-
-    switch (iterator->kind) {
-        case MAL_ITERATOR_MAP_KEYS:
-        case MAL_ITERATOR_MAP_VALUES:
-        case MAL_ITERATOR_MAP_ENTRIES:
-        case MAL_ITERATOR_SET_VALUES:
-        case MAL_ITERATOR_SET_ENTRIES:
-            return mal_builtin_iterator_map_next(vm, iterator);
-        case MAL_ITERATOR_ARRAY_KEYS:
-        case MAL_ITERATOR_ARRAY_VALUES:
-        case MAL_ITERATOR_ARRAY_ENTRIES:
-            return mal_builtin_iterator_array_next(vm, iterator);
-        case MAL_ITERATOR_STRING_VALUES:
-            return mal_builtin_iterator_string_next(vm, iterator);
-    }
-
-    return mal_value_new_undefined();
+    return mal_vm_create_iter_result(vm, value, done);
 }
 
 static MalValue mal_builtin_map_iterator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -227,6 +276,33 @@ static MalValue mal_builtin_string_iterator_next(MalVm *vm, MalValue this_value,
     (void) args;
     (void) arg_count;
     return mal_builtin_iterator_next(vm, this_value, MAL_ITERATOR_STRING_VALUES, MAL_ITERATOR_STRING_VALUES, "Receiver is not a String iterator");
+}
+
+/**
+ * The builtin `next` callback installed on the prototype of an iterator of the
+ * given kind. `mal_vm_iterator_step` compares an iterator's captured next method
+ * against this to decide whether it may advance the iterator directly (bypassing
+ * the result-object allocation) — sound only when the method is that exact
+ * builtin. Returning the callback keyed on the iterator's OWN kind means a
+ * matching pointer also implies the right family, so calling it would not throw.
+ */
+static MalNativeFunctionCallback mal_builtin_iterator_expected_next(MalIteratorKind kind) {
+    switch (kind) {
+        case MAL_ITERATOR_MAP_KEYS:
+        case MAL_ITERATOR_MAP_VALUES:
+        case MAL_ITERATOR_MAP_ENTRIES:
+            return mal_builtin_map_iterator_next;
+        case MAL_ITERATOR_SET_VALUES:
+        case MAL_ITERATOR_SET_ENTRIES:
+            return mal_builtin_set_iterator_next;
+        case MAL_ITERATOR_ARRAY_KEYS:
+        case MAL_ITERATOR_ARRAY_VALUES:
+        case MAL_ITERATOR_ARRAY_ENTRIES:
+            return mal_builtin_array_iterator_next;
+        case MAL_ITERATOR_STRING_VALUES:
+            return mal_builtin_string_iterator_next;
+    }
+    return nullptr;
 }
 
 static MalValue mal_builtin_iterator_prototype_iterator(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -271,6 +347,28 @@ bool mal_vm_get_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_ou
 bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out) {
     *value_out = mal_value_new_undefined();
     *done_out = false;
+
+    // Fast path: a builtin iterator whose captured `next` is still its own builtin
+    // method. Advancing it directly is observably identical to calling next() — the
+    // method's only effect is producing the {value,done} — but skips that per-step
+    // result-object allocation and the call dispatch. The callback-identity check
+    // makes it robust: an overridden next, a cross-wired receiver, or any
+    // non-builtin iterator fails it and falls through to the generic protocol.
+    // Collection is suppressed across the advance exactly as across the equivalent
+    // native next() call (the iterator internals — e.g. building an entries pair —
+    // assume that), so a value held mid-step cannot be swept.
+    if (mal_value_is_iterator_object(record->iterator) &&
+        mal_value_is_native_function_object(record->next_method)) {
+        MalIteratorObject *iterator = mal_value_to_iterator_object(record->iterator);
+        MalNativeFunctionCallback next_callback =
+            mal_native_function_object_callback(mal_value_to_native_function_object(record->next_method));
+        if (next_callback == mal_builtin_iterator_expected_next(iterator->kind)) {
+            vm->gc_native_frames++;
+            bool ok = mal_builtin_iterator_object_advance(vm, iterator, value_out, done_out);
+            vm->gc_native_frames--;
+            return ok;
+        }
+    }
 
     MalCompletion completion = mal_vm_call_value(vm, record->next_method, record->iterator, nullptr, 0);
     if (completion.kind != MAL_COMPLETION_NORMAL) {

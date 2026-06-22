@@ -252,10 +252,24 @@ export interface FunctionLiveness {
 	liveOutByBlock: Array<Set<number>>;
 	/**
 	 * Union of every safepoint's `live` set: the registers live across AT LEAST one
-	 * safepoint. This is the set a compiled function must spill into its GC root
-	 * frame (the conservative fallback is "every register live anywhere").
+	 * safepoint (i.e. live-OUT of it — values a later instruction in THIS function
+	 * still consumes). The minimal sound root set *if* every safepoint operation
+	 * roots its own operands runtime-side; absent that audit, prefer
+	 * `liveOrUsedAtSafepoint`.
 	 */
 	liveAcrossSafepoint: Set<number>;
+	/**
+	 * `liveAcrossSafepoint` PLUS the operand registers of each safepoint
+	 * instruction. A safepoint's operands (a call's receiver/args, a property
+	 * base/key/value, a binary op's operands) are handed to an operation that can
+	 * collect, so they must survive that collection even when this function makes
+	 * no later use of them. Rooting them in the caller's frame preserves the
+	 * invariant the runtime already depends on (the caller keeps an in-flight
+	 * call's operands reachable for the callee's `this`/args), so this is the set a
+	 * compiled root frame uses today — no runtime-side operand-rooting audit
+	 * required. The conservative fallback is "every boxed register".
+	 */
+	liveOrUsedAtSafepoint: Set<number>;
 	/** Every safepoint in the function, in block then instruction order. */
 	safepoints: Array<Safepoint>;
 	backEdges: Array<BackEdge>;
@@ -306,6 +320,7 @@ export function computeFunctionLiveness(fn: IRFunction): FunctionLiveness {
 	// Re-walk each block backward, seeded by its live-out, to record every
 	// safepoint and the registers live across it.
 	const liveAcrossSafepoint = new Set<number>();
+	const liveOrUsedAtSafepoint = new Set<number>();
 	const safepoints: Array<Safepoint> = [];
 	for (let index = 0; index < blockCount; ++index) {
 		const live = new Set(liveOutByBlock[index]);
@@ -322,7 +337,15 @@ export function computeFunctionLiveness(fn: IRFunction): FunctionLiveness {
 					if (register !== def) {
 						across.add(register);
 						liveAcrossSafepoint.add(register);
+						liveOrUsedAtSafepoint.add(register);
 					}
+				}
+				// The safepoint's own operands are consumed by an operation that can
+				// collect, so they must survive it even when dead immediately after
+				// (`across`, being live-out, omits them). A loop-poll branch has no
+				// such operand obligation, but its uses are harmless to include.
+				for (const use of usedRegisters(instruction)) {
+					liveOrUsedAtSafepoint.add(use);
 				}
 				safepoints.push({
 					blockIndex: index,
@@ -355,6 +378,7 @@ export function computeFunctionLiveness(fn: IRFunction): FunctionLiveness {
 		liveInByBlock,
 		liveOutByBlock,
 		liveAcrossSafepoint,
+		liveOrUsedAtSafepoint,
 		safepoints,
 		backEdges,
 		headerBlocks,
@@ -389,7 +413,8 @@ export function debugProgramLiveness(program: IntermediateProgram): string {
 	for (const fn of program.functions) {
 		const fl = liveness.byFunction.get(fn.functionIndex)!;
 		output += `fn#${fn.functionIndex} (${fn.blocks.length} blocks)\n`;
-		output += `  liveAcrossSafepoint: ${formatSet(fl.liveAcrossSafepoint)}\n`;
+		output += `  liveAcrossSafepoint:   ${formatSet(fl.liveAcrossSafepoint)}\n`;
+		output += `  liveOrUsedAtSafepoint: ${formatSet(fl.liveOrUsedAtSafepoint)}\n`;
 		output += `  backEdges: ${fl.backEdges.map((e) => `${e.from}->${e.to}`).join(", ") || "none"}\n`;
 		for (const sp of fl.safepoints) {
 			output += `  safepoint b${sp.blockIndex}:${sp.instructionIndex} [${sp.kind}] live=${formatSet(sp.live)}\n`;
