@@ -1101,7 +1101,11 @@ type IRIntrinsic =
 	| "Infinity"
 	// The CommonJS require native. Not a user-visible global: the compiler emits
 	// it for the synthetic CJS entry and for resolved `require("specifier")` calls.
-	| "__cjs_require";
+	| "__cjs_require"
+	// Internal helper for guarded array-iteration inlining (the inliner emits
+	// LOAD_INTRINSIC + call to test a receiver before the inlined loop). Not a
+	// user-visible global.
+	| "__arrayIterationEligible";
 
 const irIntrinsics = new Set<string>([
 	"Object",
@@ -8456,7 +8460,7 @@ function compileNumberLiteral(fn: IRFunction, cursor: IRCursor, value: number) {
 	return destination;
 }
 
-function getOrCreateStringConstant(program: IntermediateProgram, value: string) {
+export function getOrCreateStringConstant(program: IntermediateProgram, value: string) {
 	const existing = program.stringConstantToIndex.get(value);
 	if (existing !== undefined) {
 		return existing;

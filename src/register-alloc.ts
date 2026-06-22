@@ -16,6 +16,68 @@ export function allocateRegisters(program: IntermediateProgram) {
 type RegisterRep = "boxed" | "number";
 
 /**
+ * Blocks in reverse postorder — a valid execution linearization in which every
+ * block precedes the blocks reachable only through it (so a register's definition
+ * is iterated before its uses, except across loop back-edges). The allocator's
+ * last-use/free model assumes exactly that ordering; block-appending IR transforms
+ * (inlining, HOF substitution) can place a definition block *after* a use block in
+ * array order, which made the allocator assign a still-live result register to a
+ * just-freed operand. Iterating in RPO restores the invariant. Sound because the IR
+ * has no positional fall-through — control flow is entirely explicit jump/jumpIf/
+ * tryBegin edges. Unreachable blocks are appended in array order.
+ */
+function reversePostorderBlocks(fn: IRFunction): Array<IRBlock> {
+	const successorsOf = (block: IRBlock): Array<number> => {
+		const targets: Array<number> = [];
+		for (const instruction of block.instructions) {
+			if (
+				instruction.type === "jump" ||
+				instruction.type === "jumpIf" ||
+				instruction.type === "tryBegin"
+			) {
+				for (const target of instruction.blocks) {
+					targets.push(target);
+				}
+			}
+		}
+		return targets;
+	};
+
+	const visited = new Array<boolean>(fn.blocks.length).fill(false);
+	const postorder: Array<number> = [];
+	if (fn.blocks.length > 0) {
+		// Iterative DFS (a deep function body could overflow a recursive walk).
+		const stack: Array<{ index: number; next: number }> = [{ index: 0, next: 0 }];
+		visited[0] = true;
+		while (stack.length > 0) {
+			const top = stack[stack.length - 1]!;
+			const succ = successorsOf(fn.blocks[top.index]!);
+			if (top.next < succ.length) {
+				const target = succ[top.next++]!;
+				if (target >= 0 && target < fn.blocks.length && !visited[target]) {
+					visited[target] = true;
+					stack.push({ index: target, next: 0 });
+				}
+			} else {
+				postorder.push(top.index);
+				stack.pop();
+			}
+		}
+	}
+
+	const ordered: Array<IRBlock> = [];
+	for (let i = postorder.length - 1; i >= 0; --i) {
+		ordered.push(fn.blocks[postorder[i]!]!);
+	}
+	for (let i = 0; i < fn.blocks.length; ++i) {
+		if (!visited[i]) {
+			ordered.push(fn.blocks[i]!);
+		}
+	}
+	return ordered;
+}
+
+/**
  * IR instructions whose registers[0] is a *source*, not a freshly written
  * destination. Everything else that writes registers[0] is treated as a
  * definition; conservatively over-treating a source as a definition only costs
@@ -128,11 +190,15 @@ function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
  * boolean/object/argument poison a register it shares.
  */
 function allocateRegistersForFunction(fn: IRFunction) {
+	// Iterate in reverse postorder so a register's definition is seen before its
+	// uses (see reversePostorderBlocks); the last-use/free model below depends on it.
+	const orderedBlocks = reversePostorderBlocks(fn);
+
 	// Use referential equality to track last use of virtual registers
 	const registerLastUsedIn = new Map<number, IRInstruction>();
 	const registerUsedInMultipleBlocks = new Map<number, Set<IRBlock>>();
 
-	for (const block of fn.blocks) {
+	for (const block of orderedBlocks) {
 		for (const instruction of block.instructions) {
 			if (!("registers" in instruction)) {
 				continue;
@@ -173,7 +239,7 @@ function allocateRegistersForFunction(fn: IRFunction) {
 		highestUsedRegister = i;
 	}
 
-	for (const block of fn.blocks) {
+	for (const block of orderedBlocks) {
 		for (const instruction of block.instructions) {
 			if (!("registers" in instruction)) {
 				continue;

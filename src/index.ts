@@ -2,9 +2,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { emitVmDefinition } from "./emit-vm.ts";
+import { debugHofInlineSites, debugInlinableCalls } from "./inline.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
-import { debugInlinableCalls } from "./inline.ts";
 import { debugProgramLiveness } from "./liveness.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { lowerIrProgramToVmDefinition, vmDefinitionStats } from "./lower-vm.ts";
@@ -75,6 +75,14 @@ if (argFlag("--dump-liveness")) {
 // `call` sites the substitution pass will consume.
 if (argFlag("--dump-inline")) {
 	debugInlinableCalls(irProgram);
+}
+
+// HOF callback inlining eligibility (task #6, remaining). Detection only — no
+// transformation yet. `--dump-hof` lists `arr.forEach(cb)`-style array-iteration
+// sites whose callback resolves to an inlinable local function (the guarded
+// substitution pass will consume these).
+if (argFlag("--dump-hof")) {
+	debugHofInlineSites(irProgram);
 }
 
 const registerAllocTiming = log.time("register allocation");

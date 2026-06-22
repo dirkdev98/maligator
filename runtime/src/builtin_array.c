@@ -608,6 +608,48 @@ static MalValue mal_builtin_array_for_each(MalVm *vm, MalValue this_value, const
     return mal_value_new_undefined();
 }
 
+/**
+ * Structural check backing the compiler's guarded array-iteration inlining. True iff
+ * `recv.<method>` is provably the original builtin (callback `expected`), so a
+ * compiler-inlined loop is observably identical to calling it. Side-effect-free (no
+ * getters run): (1) recv is an Array object, (2) its [[Prototype]] is the intrinsic
+ * %Array.prototype%, (3) it has no own `<method>` shadowing it, and (4)
+ * %Array.prototype%'s own `<method>` is a data property holding the native function
+ * whose callback is `expected`. Any monkey-patch of the method/prototype/an own
+ * override breaks one of these → false → slow path.
+ */
+static bool mal_array_method_is_default_builtin(
+    MalVm *vm,
+    MalValue recv,
+    const byte *method,
+    MalNativeFunctionCallback expected
+) {
+    if (!mal_value_is_array_object(recv)) {
+        return false;
+    }
+    MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+    if (!mal_value_is_object(prototype_value)) {
+        return false;
+    }
+    MalObject *receiver = mal_value_to_object(recv);
+    MalObject *array_prototype = mal_value_to_object(prototype_value);
+    if (receiver->prototype != array_prototype) {
+        return false;
+    }
+    MalKey key = mal_intrinsic_string_key(vm, method);
+    if (mal_object_get_own(receiver, key).present) {
+        return false; // own method shadows the builtin
+    }
+    MalPropertyLookup proto_lookup = mal_object_get_own(array_prototype, key);
+    if (!proto_lookup.present || (proto_lookup.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+        return false;
+    }
+    if (!mal_value_is_native_function_object(proto_lookup.desc.value)) {
+        return false;
+    }
+    return mal_native_function_object_callback(mal_value_to_native_function_object(proto_lookup.desc.value)) == expected;
+}
+
 static MalValue mal_builtin_array_filter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
@@ -2585,6 +2627,75 @@ static MalValue mal_builtin_array_from_async(MalVm *vm, MalValue this_value, con
     return promise;
 }
 
+/**
+ * Whether `recv`'s ArraySpeciesCreate would yield a plain Array — i.e. its species is
+ * the default. Side-effect-free structural check (assumes the caller already verified
+ * recv's [[Prototype]] is %Array.prototype%): recv has no own "constructor",
+ * %Array.prototype%.constructor is the intrinsic Array constructor, and that
+ * constructor's own @@species is the default getter. Used by guarded map/filter
+ * inlining, whose fast path creates a plain result array.
+ */
+static bool mal_array_default_species(MalVm *vm, MalValue recv) {
+    MalValue array_proto_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
+    MalValue array_ctor_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_CONSTRUCTOR];
+    if (!mal_value_is_object(array_proto_value) || !mal_value_is_object(array_ctor_value)) {
+        return false;
+    }
+    MalObject *receiver = mal_value_to_object(recv);
+    MalObject *array_prototype = mal_value_to_object(array_proto_value);
+    MalObject *array_constructor = mal_value_to_object(array_ctor_value);
+
+    MalKey ctor_key = mal_intrinsic_string_key(vm, (const byte *) "constructor");
+    if (mal_object_get_own(receiver, ctor_key).present) {
+        return false; // own constructor could redirect species
+    }
+    MalPropertyLookup ctor_lookup = mal_object_get_own(array_prototype, ctor_key);
+    if (!ctor_lookup.present || (ctor_lookup.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+        !mal_value_is_object(ctor_lookup.desc.value) ||
+        mal_value_to_object(ctor_lookup.desc.value) != array_constructor) {
+        return false;
+    }
+    MalKey species_key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_SPECIES);
+    MalPropertyLookup species_lookup = mal_object_get_own(array_constructor, species_key);
+    if (!species_lookup.present || !(species_lookup.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+        !mal_value_is_native_function_object(species_lookup.desc.getter)) {
+        return false;
+    }
+    return mal_native_function_object_callback(mal_value_to_native_function_object(species_lookup.desc.getter)) ==
+           mal_intrinsic_species_getter;
+}
+
+/**
+ * Eligibility predicate for the compiler's guarded array-iteration inlining
+ * (intrinsic slot MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE, invoked via
+ * LOAD_INTRINSIC + call). args[0] = receiver, args[1] = a method id (a Number the
+ * compiler bakes in). Returns a boolean: whether `recv.<method>` is the original
+ * builtin (so the inlined loop is observably identical). map/filter additionally
+ * require a default @@species (their fast path builds a plain Array). Side-effect-free.
+ */
+static MalValue mal_builtin_array_iteration_eligible(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    if (arg_count < 2) {
+        return mal_value_new_boolean(false);
+    }
+    MalValue recv = args[0];
+    i32 method_id = (i32) mal_value_to_f64(args[1]);
+    bool eligible = false;
+    switch (method_id) {
+        case 0: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "forEach", mal_builtin_array_for_each); break;
+        case 1: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "some", mal_builtin_array_some); break;
+        case 2: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "every", mal_builtin_array_every); break;
+        case 3: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "find", mal_builtin_array_find); break;
+        case 4: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "findIndex", mal_builtin_array_find_index); break;
+        case 5: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "map", mal_builtin_array_map) && mal_array_default_species(vm, recv); break;
+        case 6: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "filter", mal_builtin_array_filter) && mal_array_default_species(vm, recv); break;
+        default: eligible = false; break;
+    }
+    return mal_value_new_boolean(eligible);
+}
+
 void mal_builtin_array_install(MalVm *vm) {
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]);
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
@@ -2608,6 +2719,16 @@ void mal_builtin_array_install(MalVm *vm) {
     vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE_MAP] =
         mal_intrinsic_define_method_n(vm, prototype, "map", 1, mal_builtin_array_map);
     mal_intrinsic_define_method_n(vm, prototype, "forEach", 1, mal_builtin_array_for_each);
+    // Internal helper for guarded array-iteration inlining (not attached to any object).
+    vm->intrinsics[MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE] = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, "__arrayIterationEligible"),
+            2,
+            mal_builtin_array_iteration_eligible
+        )
+    );
     mal_intrinsic_define_method_n(vm, prototype, "filter", 1, mal_builtin_array_filter);
     mal_intrinsic_define_method_n(vm, prototype, "reduce", 1, mal_builtin_array_reduce);
     mal_intrinsic_define_method_n(vm, prototype, "reduceRight", 1, mal_builtin_array_reduce_right);

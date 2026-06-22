@@ -200,6 +200,13 @@ typedef enum MalIntrinsic {
      * %Function.prototype% (and strict mapped-arguments `callee`).
      */
     MAL_INTRINSIC_THROW_TYPE_ERROR,
+    /**
+     * Internal helper backing the compiler's guarded array-iteration inlining. Not
+     * exposed as a global. `__arrayIterationEligible(arr, methodId)` returns a
+     * boolean: true iff `arr.<method>` is provably the original builtin (so an
+     * inlined loop is semantically identical). Loaded via LOAD_INTRINSIC.
+     */
+    MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE,
     MAL_INTRINSIC_COUNT,
 } MalIntrinsic;
 
@@ -241,6 +248,13 @@ MalValue mal_intrinsic_define_symbol_method(
  * receiver) on a constructor.
  */
 void mal_intrinsic_define_species(MalVm *vm, MalObject *constructor);
+
+/**
+ * The default `@@species` getter (returns its `this`). Exposed so the compiler's
+ * guarded map/filter inlining can confirm a constructor's `@@species` is unmodified
+ * (callback-pointer compare) before assuming ArraySpeciesCreate yields a plain Array.
+ */
+MalValue mal_intrinsic_species_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee);
 
 /**
  * Build a data property descriptor with the given flags.

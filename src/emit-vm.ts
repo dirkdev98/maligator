@@ -765,6 +765,8 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_INFINITY_VALUE";
 		case "__cjs_require":
 			return "MAL_INTRINSIC_CJS_REQUIRE";
+		case "__arrayIterationEligible":
+			return "MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE";
 	}
 }
 

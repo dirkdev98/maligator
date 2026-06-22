@@ -1,4 +1,9 @@
-import { optEliminateCapturedSlots, optEmptyDeadFunctions, optInlineCalls } from "./inline.ts";
+import {
+	optEliminateCapturedSlots,
+	optEmptyDeadFunctions,
+	optInlineCalls,
+	optInlineHofCallbacks,
+} from "./inline.ts";
 import { debugIntermediateProgram } from "./ir.ts";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
 import { isNil } from "./utils.ts";
@@ -54,6 +59,10 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		optDropUnreferencedBlocks,
 		optLocalsToRegister,
 		optCopyPropagation,
+		// Rewrite `arr.forEach(cb)` into a guarded inlined loop whose `cb(...)` is a
+		// direct call. Runs before optInlineCalls so that direct call is folded in the
+		// same fixpoint round → the per-call closure + its captured env are eliminated.
+		optInlineHofCallbacks,
 		// Runs after copy propagation so a call's callee resolves to its function
 		// value through the move chain; before scalar replacement (inlining exposes
 		// cross-call object flow) and DCE (which drops the now-unused closure's

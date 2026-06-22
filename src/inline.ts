@@ -23,7 +23,7 @@
  * instructions.
  */
 
-import { addInlineSourcePosition } from "./ir.ts";
+import { addInlineSourcePosition, getOrCreateStringConstant } from "./ir.ts";
 import type { IntermediateProgram, IRBlock, IRFunction, IRInstruction } from "./ir.ts";
 import { definedRegister } from "./register-alloc.ts";
 import { log } from "./utils.ts";
@@ -262,6 +262,178 @@ export function findInlinableCalls(
 }
 
 // ---------------------------------------------------------------------------
+// HOF callback inlining — ELIGIBILITY ANALYSIS ONLY (no transformation yet).
+//
+// `arr.forEach(cb)` / `map` / `filter` … allocate a fresh closure (+ captured
+// `MalEnv`) per call and dispatch the callback dynamically inside the builtin, so
+// neither escape analysis nor the direct-call inliner can eliminate them (the
+// callback is a parameter of the native, not a known callee at the call site). The
+// eventual fix is *guarded* inlining: at the call site, runtime-check that `recv`
+// is an Array and the resolved method is the intact builtin, then run an inlined
+// loop calling `cb` directly (so the direct-call inliner folds `cb`'s body in and
+// DCE drops the closure); else fall back to the normal call. This pass only
+// *detects* such sites — zero miscompile risk — to validate the premise and feed
+// the substitution. See gc_todo.md task #6.
+// ---------------------------------------------------------------------------
+
+/**
+ * Array iteration methods that take a callback as their first argument and invoke
+ * it per element. Restricted to the `(callback[, thisArg])` arg shape — `reduce`/
+ * `reduceRight` (accumulator-first) are intentionally excluded for now.
+ */
+const HOF_CALLBACK_METHODS = new Set([
+	"forEach",
+	"map",
+	"filter",
+	"some",
+	"every",
+	"find",
+	"findIndex",
+	"findLast",
+	"findLastIndex",
+	"flatMap",
+]);
+
+export interface HofInlineSite {
+	/** The `call` instruction (`[dst, callee, recv, callback, ...]`). */
+	call: IRInstruction;
+	/** The method name (e.g. "forEach"). */
+	method: string;
+	/** Register holding the receiver (also the call's `this`). */
+	receiverRegister: number;
+	/** functionIndex of the resolved, inlinable callback. */
+	callbackTarget: number;
+}
+
+export interface ProgramHofSites {
+	/** Keyed by caller `IRFunction.functionIndex`. */
+	byCaller: Map<number, Array<HofInlineSite>>;
+}
+
+/**
+ * Calls the HOF substitution has already wrapped (the original call is preserved on
+ * the slow path). Re-detecting them would re-wrap on the next fixpoint round, so they
+ * are excluded from `findHofInlineSites`. Program-lifetime (a wrapped call stays
+ * wrapped); keyed on the instruction object, which the substitution reuses verbatim.
+ */
+const hofSubstitutedCalls = new WeakSet<IRInstruction>();
+
+/**
+ * Decode a string-constant index to a JS string (constants are UTF-16 code-unit
+ * arrays; method names are ASCII).
+ */
+function decodeStringConstant(program: IntermediateProgram, index: number): string {
+	return String.fromCharCode(...program.stringConstants[index]!);
+}
+
+/** Registers defined exactly once in `fn`, mapped to their defining instruction. */
+function singleDefinitions(fn: IRFunction): Map<number, IRInstruction> {
+	const count = new Map<number, number>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!("registers" in instruction)) {
+				continue;
+			}
+			const def = definedRegister(instruction);
+			if (def !== null) {
+				count.set(def, (count.get(def) ?? 0) + 1);
+			}
+		}
+	}
+	const defs = new Map<number, IRInstruction>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!("registers" in instruction)) {
+				continue;
+			}
+			const def = definedRegister(instruction);
+			if (def !== null && count.get(def) === 1) {
+				defs.set(def, instruction);
+			}
+		}
+	}
+	return defs;
+}
+
+/**
+ * Find `recv.method(callback[, …])` sites whose method is a known array iteration
+ * method and whose callback resolves to an inlinable local function. Detection
+ * only — no transformation.
+ */
+export function findHofInlineSites(program: IntermediateProgram): ProgramHofSites {
+	const eligibleCache = new Map<number, boolean>();
+	const isEligible = (index: number): boolean => {
+		const cached = eligibleCache.get(index);
+		if (cached !== undefined) {
+			return cached;
+		}
+		const target = program.functions.find((fn) => fn.functionIndex === index);
+		const ok = target !== undefined && isInlinableTarget(target);
+		eligibleCache.set(index, ok);
+		return ok;
+	};
+
+	const capturedSlots = capturedSlotFunctions(program);
+	const byCaller = new Map<number, Array<HofInlineSite>>();
+	for (const fn of program.functions) {
+		const funcOf = functionValuedRegisters(fn, capturedSlots);
+		const defs = singleDefinitions(fn);
+		const sites: Array<HofInlineSite> = [];
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "call" || hofSubstitutedCalls.has(instruction)) {
+					continue;
+				}
+				// call.registers = [destination, callee, this, ...arguments]
+				const calleeRegister = instruction.registers[1]!;
+				const thisRegister = instruction.registers[2]!;
+				const callbackRegister = instruction.registers[3];
+				if (callbackRegister === undefined) {
+					continue; // no callback argument
+				}
+
+				// callee must be `loadProperty(recv, key)` with recv === this (method call).
+				const calleeDef = defs.get(calleeRegister);
+				if (calleeDef === undefined || calleeDef.type !== "loadProperty") {
+					continue;
+				}
+				const receiverRegister = calleeDef.registers[1];
+				const keyRegister = calleeDef.registers[2];
+				if (receiverRegister !== thisRegister) {
+					continue;
+				}
+
+				// key must be a string constant naming a known iteration method.
+				const keyDef = defs.get(keyRegister);
+				if (keyDef === undefined || keyDef.type !== "createString") {
+					continue;
+				}
+				const method = decodeStringConstant(program, keyDef.stringIndex);
+				if (!HOF_CALLBACK_METHODS.has(method)) {
+					continue;
+				}
+
+				// callback must resolve to an inlinable local function.
+				const callbackTarget = funcOf.get(callbackRegister);
+				if (
+					callbackTarget === undefined ||
+					callbackTarget === fn.functionIndex ||
+					!isEligible(callbackTarget)
+				) {
+					continue;
+				}
+
+				sites.push({ call: instruction, method, receiverRegister, callbackTarget });
+			}
+		}
+		if (sites.length > 0) {
+			byCaller.set(fn.functionIndex, sites);
+		}
+	}
+	return { byCaller };
+}
+
+// ---------------------------------------------------------------------------
 // Substitution (transformation). Two shapes: a straight-line single-`return`
 // target is spliced in place (no control-flow surgery); a branching/multi-`return`
 // target is spliced block-wise (host split + appended blocks + return-join). Both
@@ -362,6 +534,20 @@ function isCallInTry(fn: IRFunction, host: IRBlock, index: number): boolean {
 		}
 	}
 	return false; // call not found (shouldn't happen): treat as unprotected
+}
+
+/**
+ * Whether an instruction slice carries a try marker. The block-splicing inliners
+ * (multi-block + HOF) relocate the host block's tail after the call to a join block
+ * appended at the end of the function. Exception handler ranges are derived from the
+ * *flattened* (block-array order) position of tryBegin/tryEnd, so relocating a marker
+ * whose pair stays put reorders them → unbalanced ranges (a hard lowering error). We
+ * therefore refuse to relocate a tail that contains any try marker.
+ */
+function containsTryMarker(instructions: ReadonlyArray<IRInstruction>): boolean {
+	return instructions.some(
+		(instruction) => instruction.type === "tryBegin" || instruction.type === "tryEnd",
+	);
 }
 
 /** Clone an instruction with every register operand shifted by `offset` (negative
@@ -568,8 +754,11 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 			const base = fn.blocks.length;
 			const joinIndex = base + blocks.length;
 			const post = host.instructions.slice(index + 1);
-			if (post.length === 0) {
-				continue; // call at block end (no terminator follows) — shouldn't happen
+			if (post.length === 0 || containsTryMarker(post)) {
+				// Empty post shouldn't happen; a try marker in the relocated tail would be
+				// reordered relative to its pair in the flattened stream → unbalanced
+				// handler ranges (see containsTryMarker).
+				continue;
 			}
 			// Host: pre + param binding + jump to the inlined entry (the target's block 0).
 			host.instructions = [
@@ -622,6 +811,433 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 			}
 			// Join: the host's tail after the call (already ends in the host's terminator).
 			fn.blocks.push({ instructions: post });
+			changed = true;
+		}
+	}
+	return changed;
+}
+
+// ---------------------------------------------------------------------------
+// HOF callback inlining — SUBSTITUTION. Replace `arr.method(cb)` (forEach / some /
+// every / find / findIndex) with a runtime-guarded inlined loop so the callback
+// becomes a *direct* call that the direct-call inliner folds in — eliminating the
+// per-call closure + its captured `MalEnv` + the per-element dispatch. The guard
+// (`__arrayIterationEligible(arr, methodId)`) proves at runtime that `arr.method`
+// is the original builtin; if not, the slow path runs the original call unchanged.
+// The loop matches each method's observable semantics: length read once; the
+// hole-skipping methods (forEach/some/every) do a `HasProperty` (`in`) check before
+// the live `Get`, the find family visits every index (holes → undefined) — so it is
+// correct on sparse/mutated arrays without any dense-array assumption.
+// ---------------------------------------------------------------------------
+
+/** How a method turns the per-element callback result into control flow + a value. */
+interface HofMethodSpec {
+	/** Method id passed to `__arrayIterationEligible` (matches the runtime switch). */
+	methodId: number;
+	/** forEach/some/every skip holes (HasProperty); the find family does not. */
+	skipHoles: boolean;
+	/** some/every/find/findIndex break out of the loop; forEach runs to completion. */
+	earlyExit: boolean;
+	/** When earlyExit: true ⟹ exit on a truthy result (some/find/findIndex); false ⟹
+	 * exit on a falsy result (every). */
+	exitOnTruthy?: boolean;
+	/** Destination value written when the loop exits early. */
+	exitValue?: "true" | "false" | "element" | "index";
+	/** Destination value after the loop completes without an early exit (ignored when
+	 * buildsResult is set — those return the result array). */
+	defaultValue: "undefined" | "true" | "false" | "neg1";
+	/** map/filter construct a result array: map stores cb(elem) at every present
+	 * index (length preset to len, holes preserved); filter appends the element when
+	 * cb is truthy. Requires a default @@species (checked by the runtime guard). */
+	buildsResult?: "map" | "filter";
+}
+
+const HOF_METHOD_SPECS: ReadonlyMap<string, HofMethodSpec> = new Map([
+	[
+		"forEach",
+		{ methodId: 0, skipHoles: true, earlyExit: false, defaultValue: "undefined" },
+	],
+	[
+		"some",
+		{
+			methodId: 1,
+			skipHoles: true,
+			earlyExit: true,
+			exitOnTruthy: true,
+			exitValue: "true",
+			defaultValue: "false",
+		},
+	],
+	[
+		"every",
+		{
+			methodId: 2,
+			skipHoles: true,
+			earlyExit: true,
+			exitOnTruthy: false,
+			exitValue: "false",
+			defaultValue: "true",
+		},
+	],
+	[
+		"find",
+		{
+			methodId: 3,
+			skipHoles: false,
+			earlyExit: true,
+			exitOnTruthy: true,
+			exitValue: "element",
+			defaultValue: "undefined",
+		},
+	],
+	[
+		"findIndex",
+		{
+			methodId: 4,
+			skipHoles: false,
+			earlyExit: true,
+			exitOnTruthy: true,
+			exitValue: "index",
+			defaultValue: "neg1",
+		},
+	],
+	[
+		"map",
+		{
+			methodId: 5,
+			skipHoles: true,
+			earlyExit: false,
+			defaultValue: "undefined",
+			buildsResult: "map",
+		},
+	],
+	[
+		"filter",
+		{
+			methodId: 6,
+			skipHoles: true,
+			earlyExit: false,
+			defaultValue: "undefined",
+			buildsResult: "filter",
+		},
+	],
+]);
+
+/**
+ * Inline `arr.method(cb)` array-iteration sites behind a runtime guard, for the
+ * methods in HOF_METHOD_SPECS. Skips calls inside a try region and calls whose tail
+ * carries a try marker (the appended blocks would land outside / reorder the enclosing
+ * handler — same reasons as multi-block inlining).
+ */
+export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
+	let changed = false;
+	const { byCaller } = findHofInlineSites(program);
+
+	for (const fn of program.functions) {
+		const sites = byCaller.get(fn.functionIndex);
+		if (sites === undefined) {
+			continue;
+		}
+		for (const site of sites) {
+			const spec = HOF_METHOD_SPECS.get(site.method);
+			if (spec === undefined) {
+				continue; // method has no inlined loop shape yet (map/filter/…)
+			}
+
+			// Locate the call by reference (earlier substitutions shift blocks).
+			let host: IRBlock | undefined;
+			let index = -1;
+			for (const block of fn.blocks) {
+				const at = block.instructions.indexOf(site.call);
+				if (at >= 0) {
+					host = block;
+					index = at;
+					break;
+				}
+			}
+			if (host === undefined) {
+				continue;
+			}
+			if (isCallInTry(fn, host, index)) {
+				continue; // relocated throw would escape the enclosing try
+			}
+
+			const callRegisters = (site.call as { registers: ReadonlyArray<number> }).registers;
+			const destination = callRegisters[0]!;
+			const receiver = callRegisters[2]!; // === site.receiverRegister (call's `this`)
+			const callback = callRegisters[3]!;
+
+			const post = host.instructions.slice(index + 1);
+			if (post.length === 0 || containsTryMarker(post)) {
+				continue; // see containsTryMarker; empty post shouldn't happen
+			}
+
+			// To let the fast path allocate nothing, the slow path re-creates the
+			// closure rather than sharing the one defined before the call: once the
+			// fast `cb(...)` is inlined, the original `createFunction` is used only by
+			// that (now folded) call, so DCE drops it. Sound only when the callback is
+			// *directly* a `createFunction` here (no move/captured-slot chain) so
+			// duplicating it captures the same activation env.
+			let callbackDefinition:
+				| Extract<IRInstruction, { type: "createFunction" }>
+				| undefined;
+			for (const block of fn.blocks) {
+				for (const candidate of block.instructions) {
+					if (
+						candidate.type === "createFunction" &&
+						candidate.registers[0] === callback
+					) {
+						callbackDefinition = candidate;
+					}
+				}
+			}
+
+			// Fresh registers for the guard + loop scaffolding.
+			const r = fn.nextRegisterDestination;
+			fn.nextRegisterDestination += 14;
+			const eligibleFn = r;
+			const eligible = r + 1;
+			const methodIdReg = r + 2;
+			const lengthKeyReg = r + 3;
+			const lengthReg = r + 4;
+			const indexReg = r + 5;
+			const oneReg = r + 6;
+			const condReg = r + 7;
+			const hasReg = r + 8;
+			const elementReg = r + 9;
+			const callbackResult = r + 10;
+			const undefinedReg = r + 11;
+			const resultReg = r + 12; // map/filter result array
+			const resultLenReg = r + 13; // filter: next append index
+
+			// Block indices (some are conditional on the method shape).
+			const base = fn.blocks.length;
+			let next = base;
+			const fastInit = next++;
+			const loopCond = next++;
+			const holeCheck = spec.skipHoles ? next++ : -1;
+			const callBlock = next++;
+			const appendBlock = spec.buildsResult === "filter" ? next++ : -1;
+			const loopIncr = next++;
+			const exitBlock = spec.earlyExit ? next++ : -1;
+			const afterLoop = next++;
+			const slowPath = next++;
+			const join = next++;
+
+			const lengthString = getOrCreateStringConstant(program, "length");
+
+			const valueInstruction = (
+				kind: "undefined" | "true" | "false" | "neg1" | "element" | "index",
+				dst: number,
+			): IRInstruction => {
+				switch (kind) {
+					case "undefined":
+						return { type: "createUndefined", registers: [dst] };
+					case "true":
+						return { type: "createBoolean", registers: [dst], value: true };
+					case "false":
+						return { type: "createBoolean", registers: [dst], value: false };
+					case "neg1":
+						return { type: "createNumber", registers: [dst], value: -1 };
+					case "element":
+						return { type: "move", registers: [dst, elementReg] };
+					case "index":
+						return { type: "move", registers: [dst, indexReg] };
+				}
+			};
+
+			// Host: pre + the guard (compute eligibility, branch to fast or slow).
+			host.instructions = [
+				...host.instructions.slice(0, index),
+				{
+					type: "loadIntrinsic",
+					registers: [eligibleFn],
+					intrinsic: "__arrayIterationEligible",
+				},
+				{ type: "createNumber", registers: [methodIdReg], value: spec.methodId },
+				{ type: "createUndefined", registers: [undefinedReg] },
+				{
+					type: "call",
+					registers: [eligible, eligibleFn, undefinedReg, receiver, methodIdReg],
+				},
+				{ type: "jumpIf", registers: [eligible], blocks: [fastInit] },
+				{ type: "jump", blocks: [slowPath] },
+			];
+
+			// fastInit: len = arr.length; i = 0; one = 1; plus result-array setup.
+			const fastInitInstructions: Array<IRInstruction> = [
+				{ type: "createString", registers: [lengthKeyReg], stringIndex: lengthString },
+				{ type: "loadProperty", registers: [lengthReg, receiver, lengthKeyReg] },
+				{ type: "createNumber", registers: [indexReg], value: 0 },
+				{ type: "createNumber", registers: [oneReg], value: 1 },
+			];
+			if (spec.buildsResult !== undefined) {
+				fastInitInstructions.push({
+					type: "createArray",
+					registers: [resultReg],
+					length: 0,
+				});
+			}
+			if (spec.buildsResult === "map") {
+				// map result has the source length (holes preserved); set it once so
+				// index stores fill in place rather than growing past it.
+				fastInitInstructions.push({
+					type: "storeProperty",
+					registers: [resultReg, lengthKeyReg, lengthReg],
+				});
+			} else if (spec.buildsResult === "filter") {
+				fastInitInstructions.push({
+					type: "createNumber",
+					registers: [resultLenReg],
+					value: 0,
+				});
+			}
+			fastInitInstructions.push({ type: "jump", blocks: [loopCond] });
+			fn.blocks.push({ instructions: fastInitInstructions });
+			// loopCond: while (i < len) → (hole check | call block), else afterLoop.
+			fn.blocks.push({
+				instructions: [
+					{ type: "binary", operator: "<", registers: [condReg, indexReg, lengthReg] },
+					{
+						type: "jumpIf",
+						registers: [condReg],
+						blocks: [spec.skipHoles ? holeCheck : callBlock],
+					},
+					{ type: "jump", blocks: [afterLoop] },
+				],
+			});
+			// holeCheck (hole-skipping methods): if (i in arr) call, else skip.
+			if (spec.skipHoles) {
+				fn.blocks.push({
+					instructions: [
+						{ type: "binary", operator: "in", registers: [hasReg, indexReg, receiver] },
+						{ type: "jumpIf", registers: [hasReg], blocks: [callBlock] },
+						{ type: "jump", blocks: [loopIncr] },
+					],
+				});
+			}
+			// callBlock: elem = arr[i]; r = cb(elem, i, arr); then per-method control.
+			const callTail: Array<IRInstruction> = [
+				{ type: "loadProperty", registers: [elementReg, receiver, indexReg] },
+				{
+					type: "call",
+					registers: [
+						callbackResult,
+						callback,
+						undefinedReg,
+						elementReg,
+						indexReg,
+						receiver,
+					],
+				},
+			];
+			if (spec.buildsResult === "map") {
+				// result[i] = cb(elem, i, arr) (index < preset length → fills in place).
+				callTail.push({
+					type: "storeProperty",
+					registers: [resultReg, indexReg, callbackResult],
+				});
+				callTail.push({ type: "jump", blocks: [loopIncr] });
+			} else if (spec.buildsResult === "filter") {
+				callTail.push({
+					type: "jumpIf",
+					registers: [callbackResult],
+					blocks: [appendBlock],
+				});
+				callTail.push({ type: "jump", blocks: [loopIncr] });
+			} else if (!spec.earlyExit) {
+				callTail.push({ type: "jump", blocks: [loopIncr] });
+			} else if (spec.exitOnTruthy) {
+				callTail.push({
+					type: "jumpIf",
+					registers: [callbackResult],
+					blocks: [exitBlock],
+				});
+				callTail.push({ type: "jump", blocks: [loopIncr] });
+			} else {
+				// every: continue while truthy, exit on the first falsy result.
+				callTail.push({
+					type: "jumpIf",
+					registers: [callbackResult],
+					blocks: [loopIncr],
+				});
+				callTail.push({ type: "jump", blocks: [exitBlock] });
+			}
+			fn.blocks.push({ instructions: callTail });
+			// appendBlock (filter): result[resultLen++] = element (cb was truthy).
+			if (spec.buildsResult === "filter") {
+				fn.blocks.push({
+					instructions: [
+						{ type: "storeProperty", registers: [resultReg, resultLenReg, elementReg] },
+						{
+							type: "binary",
+							operator: "+",
+							registers: [resultLenReg, resultLenReg, oneReg],
+						},
+						{ type: "jump", blocks: [loopIncr] },
+					],
+				});
+			}
+			// loopIncr: i++.
+			fn.blocks.push({
+				instructions: [
+					{ type: "binary", operator: "+", registers: [indexReg, indexReg, oneReg] },
+					{ type: "jump", blocks: [loopCond] },
+				],
+			});
+			// exitBlock (early-exit methods): dst = exit value; jump join.
+			if (spec.earlyExit) {
+				fn.blocks.push({
+					instructions: [
+						valueInstruction(spec.exitValue!, destination),
+						{ type: "jump", blocks: [join] },
+					],
+				});
+			}
+			// afterLoop: dst = result array (map/filter) or the method's default value.
+			fn.blocks.push({
+				instructions: [
+					spec.buildsResult !== undefined
+						? { type: "move", registers: [destination, resultReg] }
+						: valueInstruction(spec.defaultValue, destination),
+					{ type: "jump", blocks: [join] },
+				],
+			});
+			// slowPath: run the original method. When the callback is a direct
+			// createFunction, re-create it here so the fast path's closure becomes dead
+			// (DCE'd → no allocation on the common path); else use the original call.
+			if (callbackDefinition !== undefined) {
+				const freshCallback = fn.nextRegisterDestination;
+				fn.nextRegisterDestination += 1;
+				const slowCall: IRInstruction = {
+					type: "call",
+					registers: [
+						destination,
+						callRegisters[1]!,
+						receiver,
+						freshCallback,
+						...callRegisters.slice(4),
+					],
+				};
+				hofSubstitutedCalls.add(slowCall);
+				fn.blocks.push({
+					instructions: [
+						{
+							type: "createFunction",
+							registers: [freshCallback],
+							functionIndex: callbackDefinition.functionIndex,
+						},
+						slowCall,
+						{ type: "jump", blocks: [join] },
+					],
+				});
+			} else {
+				hofSubstitutedCalls.add(site.call);
+				fn.blocks.push({ instructions: [site.call, { type: "jump", blocks: [join] }] });
+			}
+			// join: the host's tail after the call.
+			fn.blocks.push({ instructions: post });
+
 			changed = true;
 		}
 	}
@@ -860,5 +1476,22 @@ export function debugInlinableCalls(program: IntermediateProgram): string {
 			.join(", ")}\n`;
 	}
 	log.info(output || "(no inlinable calls)\n");
+	return output;
+}
+
+/** Human-readable dump of the HOF (array-iteration) inline sites (`--dump-hof`). */
+export function debugHofInlineSites(program: IntermediateProgram): string {
+	const { byCaller } = findHofInlineSites(program);
+	let output = "";
+	for (const fn of program.functions) {
+		const sites = byCaller.get(fn.functionIndex);
+		if (sites === undefined || sites.length === 0) {
+			continue;
+		}
+		output += `fn#${fn.functionIndex}: ${sites.length} HOF site(s) → ${sites
+			.map((site) => `${site.method}(callback #${site.callbackTarget})`)
+			.join(", ")}\n`;
+	}
+	log.info(output || "(no HOF inline sites)\n");
 	return output;
 }
