@@ -258,6 +258,14 @@ export type VmInstruction =
 			index: number;
 	  }
 	| {
+			opcode: "ENV_PUSH" | "ENV_COPY";
+			scopeId: number;
+			slotCount: number;
+	  }
+	| {
+			opcode: "ENV_POP";
+	  }
+	| {
 			opcode: "STORE_GLOBAL";
 			src: number;
 			index: number;
@@ -861,6 +869,20 @@ function lowerInstructionToVmInstruction(
 				}),
 				index: instruction.index,
 			};
+		case "envPush":
+			return {
+				opcode: "ENV_PUSH",
+				scopeId: instruction.scopeId,
+				slotCount: instruction.slotCount,
+			};
+		case "envCopy":
+			return {
+				opcode: "ENV_COPY",
+				scopeId: instruction.scopeId,
+				slotCount: instruction.slotCount,
+			};
+		case "envPop":
+			return { opcode: "ENV_POP" };
 		case "loadGlobal":
 			return {
 				opcode: "LOAD_GLOBAL",

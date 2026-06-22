@@ -364,26 +364,44 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
             }
 
             MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+            // Each step (iterator.next) and the mapfn re-enter JS and can collect;
+            // root the record, the result array, and the in-flight element, and
+            // lift GC suppression for the loop.
+            MalValue roots[2] = {mal_value_from_array_object(result), mal_value_new_undefined()};
+            MalRootSpan rec_span, span;
+            mal_gc_root(&rec_span, &record.iterator, 2);
+            mal_gc_root(&span, roots, 2);
+            mal_gc_native_rooted_begin(vm);
+            MalValue ret = mal_value_new_undefined();
             u32 index = 0;
             while (true) {
                 MalValue element;
                 bool done;
                 if (!mal_vm_iterator_step(vm, &record, &element, &done)) {
-                    return mal_value_new_undefined();
+                    goto iter_done;
                 }
 
                 if (done) {
-                    return mal_value_from_array_object(result);
+                    ret = mal_value_from_array_object(result);
+                    goto iter_done;
                 }
 
+                roots[1] = element;
                 if (!mal_builtin_array_from_map(vm, map_fn, index, &element)) {
                     mal_vm_iterator_close(vm, &record);
-                    return mal_value_new_undefined();
+                    goto iter_done;
                 }
+                roots[1] = element;
 
                 mal_array_object_store(result, mal_builtin_array_index_key(index), element);
                 index++;
             }
+
+        iter_done:
+            mal_gc_native_rooted_end(vm);
+            mal_gc_unroot(&span);
+            mal_gc_unroot(&rec_span);
+            return ret;
         }
     }
 
@@ -405,24 +423,38 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
     }
 
     MalArrayObject *result = mal_intrinsic_new_array(vm, length);
+    // The array-like index Get may invoke a getter and the mapfn re-enters JS;
+    // both can collect. Root the result array + the in-flight element and lift GC
+    // suppression. (mapped_args[0]=element is rooted via roots[1].)
+    MalValue roots[2] = {mal_value_from_array_object(result), mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
     for (u32 index = 0; index < length; index++) {
         MalValue element = mal_builtin_array_get(vm, source, index);
+        roots[1] = element;
 
         if (!mal_value_is_undefined(map_fn)) {
             MalValue mapped_args[] = {element, mal_value_from_i32((i32) index)};
             MalCompletion completion = mal_vm_call_value(vm, map_fn, mal_value_new_undefined(), mapped_args, 2);
             if (completion.kind != MAL_COMPLETION_NORMAL) {
                 vm->completion = completion;
-                return mal_value_new_undefined();
+                goto done;
             }
 
             element = completion.value;
+            roots[1] = element;
         }
 
         mal_object_set((MalObject *) result, mal_builtin_array_index_key(index), element);
     }
+    ret = mal_value_from_array_object(result);
 
-    return mal_value_from_array_object(result);
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
+    return ret;
 }
 
 /**

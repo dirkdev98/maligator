@@ -295,11 +295,20 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
     return mal_vm_get_property(vm, completion.value, mal_intrinsic_string_key(vm, "value"), value_out);
 }
 
+static bool mal_vm_iterator_close_normal_impl(MalVm *vm, const MalIteratorRecord *record);
+
 void mal_vm_iterator_close(MalVm *vm, const MalIteratorRecord *record) {
     // The pending completion (usually a throw) must survive the return()
     // call, and the sticky-throw guard would refuse calls while it is set.
     MalCompletion pending = vm->completion;
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+
+    // Clearing vm->completion drops the only root for the pending throw value, and
+    // return() re-enters JS (which can collect), so root it (and the record's
+    // iterator/next_method) across the call. Cast away const: the scan only reads.
+    MalRootSpan pending_span, record_span;
+    mal_gc_root(&pending_span, &pending.value, 1);
+    mal_gc_root(&record_span, (MalValue *) &record->iterator, 2);
 
     MalValue return_method;
     if (mal_vm_get_property(vm, record->iterator, mal_intrinsic_string_key(vm, "return"), &return_method) &&
@@ -307,11 +316,25 @@ void mal_vm_iterator_close(MalVm *vm, const MalIteratorRecord *record) {
         mal_vm_call_value(vm, return_method, record->iterator, nullptr, 0);
     }
 
+    mal_gc_unroot(&record_span);
+    mal_gc_unroot(&pending_span);
+
     // Secondary errors from return() are swallowed in favor of the original.
     vm->completion = pending;
 }
 
 bool mal_vm_iterator_close_normal(MalVm *vm, const MalIteratorRecord *record) {
+    // return() re-enters JS and can collect; root the record's iterator/next_method
+    // so the caller's record stays valid across the call (the caller roots any
+    // value it carries past the close itself).
+    MalRootSpan record_span;
+    mal_gc_root(&record_span, (MalValue *) &record->iterator, 2);
+    bool result = mal_vm_iterator_close_normal_impl(vm, record);
+    mal_gc_unroot(&record_span);
+    return result;
+}
+
+static bool mal_vm_iterator_close_normal_impl(MalVm *vm, const MalIteratorRecord *record) {
     MalValue return_method;
     if (!mal_vm_get_property(vm, record->iterator, mal_intrinsic_string_key(vm, "return"), &return_method)) {
         return false; // a throwing return getter propagates

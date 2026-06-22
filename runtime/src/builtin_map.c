@@ -95,36 +95,55 @@ static MalValue mal_builtin_map_construct(
         return mal_value_new_undefined();
     }
 
+    // Each step, the entry index Gets, and the adder all re-enter JS and can
+    // collect; root the record, the map being built, the adder, and the current
+    // entry across the loop, and lift GC suppression. (The extracted key/value are
+    // the adder's args → rooted by the call seam during that call.)
+    MalValue roots[3] = {map_value, adder, mal_value_new_undefined()};
+    MalRootSpan rec_span, span;
+    mal_gc_root(&rec_span, &record.iterator, 2);
+    mal_gc_root(&span, roots, 3);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
+
     while (true) {
         MalValue item;
         bool done;
         if (!mal_vm_iterator_step(vm, &record, &item, &done)) {
-            return mal_value_new_undefined();
+            goto done;
         }
 
         if (done) {
-            return map_value;
+            ret = map_value;
+            goto done;
         }
+        roots[2] = item;
 
         if (!mal_value_is_object(item)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator entry is not an object");
             mal_vm_iterator_close(vm, &record);
-            return mal_value_new_undefined();
+            goto done;
         }
 
         MalValue entry_args[2];
         if (!mal_vm_get_property(vm, item, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, &entry_args[0]) ||
             !mal_vm_get_property(vm, item, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, &entry_args[1])) {
             mal_vm_iterator_close(vm, &record);
-            return mal_value_new_undefined();
+            goto done;
         }
 
         MalCompletion completion = mal_vm_call_value(vm, adder, map_value, entry_args, 2);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             mal_vm_iterator_close(vm, &record);
-            return mal_value_new_undefined();
+            goto done;
         }
     }
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
+    mal_gc_unroot(&rec_span);
+    return ret;
 }
 
 static MalValue mal_builtin_map_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

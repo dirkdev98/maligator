@@ -213,6 +213,10 @@ void mal_op_load_captured(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_store_captured(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_env_push(MalCallable *callable, MalInstruction *instruction);
+void mal_op_env_copy(MalCallable *callable, MalInstruction *instruction);
+void mal_op_env_pop(MalCallable *callable);
+
 /**
  * Read/write a captured binding by walking the environment chain to the owning
  * activation. Shared by the load/store-captured ops and the compiled backend.

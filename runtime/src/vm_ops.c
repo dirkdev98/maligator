@@ -523,6 +523,32 @@ void mal_op_store_captured(MalCallable *callable, MalInstruction *instruction) {
     );
 }
 
+// Enter a per-iteration loop scope: a fresh env whose parent is the current env,
+// tagged with the synthetic scope id, becomes the activation's capture env.
+void mal_op_env_push(MalCallable *callable, MalInstruction *instruction) {
+    callable->env = mal_env_new(
+        callable->vm, callable->env, instruction->as.env_scope.scope_id, instruction->as.env_scope.slot_count
+    );
+}
+
+// Copy the loop bindings forward into a fresh sibling env (same parent as the
+// current scope env), per CreatePerIterationEnvironment. The old env stays alive
+// for any closures that captured it this iteration.
+void mal_op_env_copy(MalCallable *callable, MalInstruction *instruction) {
+    MalEnv *old = callable->env;
+    i32 slot_count = instruction->as.env_scope.slot_count;
+    MalEnv *fresh = mal_env_new(callable->vm, old->parent, instruction->as.env_scope.scope_id, slot_count);
+    for (i32 i = 0; i < slot_count; i++) {
+        fresh->slots[i] = old->slots[i];
+    }
+    callable->env = fresh;
+}
+
+// Leave the loop scope: restore the enclosing env.
+void mal_op_env_pop(MalCallable *callable) {
+    callable->env = callable->env->parent;
+}
+
 // Build an arguments object (CreateUnmappedArgumentsObject) over `args`: an array
 // of the call arguments plus an own @@iterator (%Array.prototype.values%) and a
 // `callee` slot — poisoned with %ThrowTypeError% when strict, otherwise exposing
@@ -2882,22 +2908,33 @@ void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruct
     i32 excluded_count = instruction->as.copy_data_properties.excluded_count;
     if (excluded_count > 0) {
         excluded = mal_object_new(&vm->heap, nullptr);
-        for (i32 i = 0; i < excluded_count; i++) {
-            MalValue key_value = callable->registers[instruction->as.copy_data_properties.excluded[i]];
-
-            MalKey key;
-            if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
-                return;
-            }
-
-            mal_object_set(excluded, key, mal_value_new_boolean(true));
-        }
     }
 
     MalObject *copy = mal_object_new(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])
     );
+
+    // Neither `copy` (being built) nor `excluded` is held in a register until the
+    // final store, yet a source getter (mal_vm_desc_read) or an excluded-key
+    // ToPropertyKey re-enters JS and can collect — root them across the loops.
+    MalValue roots[2] = {
+        excluded != nullptr ? mal_value_from_object(excluded) : mal_value_new_undefined(),
+        mal_value_from_object(copy),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    bool ok = true;
+
+    for (i32 i = 0; i < excluded_count; i++) {
+        MalValue key_value = callable->registers[instruction->as.copy_data_properties.excluded[i]];
+        MalKey key;
+        if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+            ok = false;
+            goto done;
+        }
+        mal_object_set(excluded, key, mal_value_new_boolean(true));
+    }
 
     if (mal_value_is_string(source)) {
         // String sources expose their code units as own enumerable index
@@ -2928,7 +2965,8 @@ void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruct
 
             MalValue value;
             if (!mal_vm_desc_read(vm, desc, source, &value)) {
-                return;
+                ok = false;
+                goto done;
             }
 
             mal_object_set(copy, key, value);
@@ -2936,7 +2974,11 @@ void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruct
     }
     // Other primitives carry no own enumerable properties.
 
-    callable->registers[instruction->as.copy_data_properties.dst] = mal_value_from_object(copy);
+done:
+    mal_gc_unroot(&span);
+    if (ok) {
+        callable->registers[instruction->as.copy_data_properties.dst] = mal_value_from_object(copy);
+    }
 }
 
 // Shared by the interpreter op and the native backend: object spread

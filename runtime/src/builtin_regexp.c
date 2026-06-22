@@ -1204,16 +1204,35 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         }
     }
 
-    // Collect all match results.
+    // Collect all match results, then build the replacement string. Both phases
+    // re-enter JS (exec, capture ToString, the replacer callback, ToString of its
+    // result) and so can collect; lift GC suppression and root every heap value
+    // held across a re-entry. Function-level spans (LIFO): the subject + literal
+    // replacement template; the growing result array (pointer refreshed on
+    // realloc, count tracked); the per-result scratch (matched / named groups /
+    // replacement); and the per-result capture buffer (count grows as filled).
+    // The replacer arguments get their own span across that one call.
     MalValue *results = nullptr;
     usize results_len = 0;
     usize results_cap = 0;
+    RegexpBuilder accumulated = {0};
+    MalValue *captures = nullptr;
+    MalValue ret = mal_value_new_undefined();
+
+    MalValue s_roots[2] = {mal_value_from_string(s), functional ? mal_value_new_undefined() : mal_value_from_string(replace_string)};
+    MalValue pr_roots[3] = {mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan s_span, results_span, pr_span, caps_span;
+    mal_gc_root(&s_span, s_roots, 2);
+    mal_gc_root(&results_span, results, 0);
+    mal_gc_root(&pr_span, pr_roots, 3);
+    mal_gc_root(&caps_span, captures, 0);
+    mal_gc_native_rooted_begin(vm);
+
     while (true) {
         bool ok;
         MalValue result = regexp_exec_abstract(vm, this_value, s, false, &ok);
         if (!ok) {
-            free(results);
-            return mal_value_new_undefined();
+            goto done;
         }
         if (mal_value_is_null(result)) {
             break;
@@ -1221,39 +1240,35 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         if (results_len == results_cap) {
             results_cap = results_cap == 0 ? 8 : results_cap * 2;
             results = realloc(results, sizeof(MalValue) * results_cap);
+            results_span.slots = results;
         }
         results[results_len++] = result;
+        results_span.count = (i32) results_len;
         if (!global) {
             break;
         }
         MalString *match_str;
         if (!regexp_get_index_string(vm, result, 0, &match_str)) {
-            free(results);
-            return mal_value_new_undefined();
+            goto done;
         }
         if (mal_string_length(match_str) == 0) {
             i64 this_index;
             if (!regexp_get_last_index(vm, this_value, &this_index)) {
-                free(results);
-                return mal_value_new_undefined();
+                goto done;
             }
             i64 next_index = regexp_advance_string_index(s, this_index, full_unicode);
             if (!regexp_set_last_index(vm, this_value, next_index)) {
-                free(results);
-                return mal_value_new_undefined();
+                goto done;
             }
         }
     }
 
-    RegexpBuilder accumulated = {0};
     i64 next_source_position = 0;
     for (usize ri = 0; ri < results_len; ri++) {
         MalValue result = results[ri];
         i64 result_length;
         if (!regexp_get_length_prop(vm, result, (const byte *) "length", &result_length)) {
-            free(results);
-            free(accumulated.data);
-            return mal_value_new_undefined();
+            goto done;
         }
         i64 n_captures = result_length - 1;
         if (n_captures < 0) {
@@ -1261,23 +1276,18 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         }
         MalString *matched;
         if (!regexp_get_index_string(vm, result, 0, &matched)) {
-            free(results);
-            free(accumulated.data);
-            return mal_value_new_undefined();
+            goto done;
         }
+        pr_roots[0] = mal_value_from_string(matched);
         usize matched_len = mal_string_length(matched);
 
         MalValue index_value;
         if (!mal_vm_get_property(vm, result, mal_intrinsic_string_key(vm, (const byte *) "index"), &index_value)) {
-            free(results);
-            free(accumulated.data);
-            return mal_value_new_undefined();
+            goto done;
         }
         f64 index_num;
         if (!mal_vm_to_number(vm, index_value, &index_num)) {
-            free(results);
-            free(accumulated.data);
-            return mal_value_new_undefined();
+            goto done;
         }
         i64 position = isnan(index_num) ? 0 : (i64) trunc(index_num);
         if (position < 0) {
@@ -1288,7 +1298,9 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         }
 
         // Captures 1..n_captures, each ToString'd or undefined.
-        MalValue *captures = n_captures > 0 ? malloc(sizeof(MalValue) * (usize) n_captures) : nullptr;
+        captures = n_captures > 0 ? malloc(sizeof(MalValue) * (usize) n_captures) : nullptr;
+        caps_span.slots = captures;
+        caps_span.count = 0;
         bool capture_error = false;
         for (i64 ci = 1; ci <= n_captures; ci++) {
             MalValue cap_value;
@@ -1307,21 +1319,17 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
                 }
                 captures[ci - 1] = mal_value_from_string(cap_str);
             }
+            caps_span.count = (i32) ci;
         }
         if (capture_error) {
-            free(captures);
-            free(results);
-            free(accumulated.data);
-            return mal_value_new_undefined();
+            goto done;
         }
 
         MalValue named_captures;
         if (!mal_vm_get_property(vm, result, mal_intrinsic_string_key(vm, (const byte *) "groups"), &named_captures)) {
-            free(captures);
-            free(results);
-            free(accumulated.data);
-            return mal_value_new_undefined();
+            goto done;
         }
+        pr_roots[1] = named_captures;
 
         MalString *replacement_str = nullptr;
         if (functional) {
@@ -1338,20 +1346,18 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
             if (!mal_value_is_undefined(named_captures)) {
                 call_args[ai++] = named_captures;
             }
+            MalRootSpan call_span;
+            mal_gc_root(&call_span, call_args, (i32) argc);
             MalCompletion completion = mal_vm_call_value(vm, replace_value, mal_value_new_undefined(), call_args, (i32) argc);
+            mal_gc_unroot(&call_span);
             free(call_args);
             if (completion.kind == MAL_COMPLETION_THROW) {
-                free(captures);
-                free(results);
-                free(accumulated.data);
-                return mal_value_new_undefined();
+                goto done;
             }
             if (!mal_vm_to_string(vm, completion.value, &replacement_str)) {
-                free(captures);
-                free(results);
-                free(accumulated.data);
-                return mal_value_new_undefined();
+                goto done;
             }
+            pr_roots[2] = mal_value_from_string(replacement_str);
         }
 
         if (position >= next_source_position) {
@@ -1360,22 +1366,34 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
                 regexp_builder_append_string(&accumulated, replacement_str);
             } else {
                 if (!regexp_get_substitution(vm, matched, s, position, captures, n_captures, named_captures, replace_string, &accumulated)) {
-                    free(captures);
-                    free(results);
-                    free(accumulated.data);
-                    return mal_value_new_undefined();
+                    goto done;
                 }
             }
             next_source_position = position + (i64) matched_len;
         }
         free(captures);
+        captures = nullptr;
+        caps_span.slots = nullptr;
+        caps_span.count = 0;
+        pr_roots[0] = pr_roots[1] = pr_roots[2] = mal_value_new_undefined();
     }
-    free(results);
 
     if (next_source_position < (i64) length_s) {
         regexp_builder_append_units(&accumulated, mal_string_code_units(s) + next_source_position, length_s - (usize) next_source_position);
     }
-    return regexp_builder_finish(vm, &accumulated);
+    ret = regexp_builder_finish(vm, &accumulated);
+    accumulated.data = nullptr; // ownership transferred into the result string
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&caps_span);
+    mal_gc_unroot(&pr_span);
+    mal_gc_unroot(&results_span);
+    mal_gc_unroot(&s_span);
+    free(captures);
+    free(results);
+    free(accumulated.data);
+    return ret;
 }
 
 // ---------------------------------------------------------------------------

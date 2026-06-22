@@ -84,6 +84,16 @@ typedef enum MalOpcode {
     MAL_OP_CONSTRUCT_SUPER,
     MAL_OP_BINARY,
     MAL_OP_UNARY,
+    // Per-iteration loop environments (CreatePerIterationEnvironment). A loop whose
+    // lexical head bindings are captured by closures gets a fresh env per iteration
+    // so each closure sees its own binding. ENV_PUSH enters the scope (new env,
+    // parent = current); ENV_COPY replaces the current env with a sibling (parent =
+    // current->parent) copying the bindings forward for the next iteration; ENV_POP
+    // restores the enclosing env on loop exit. All mutate the activation's current
+    // capture env (callable->env / the compiled `env` local).
+    MAL_OP_ENV_PUSH,
+    MAL_OP_ENV_COPY,
+    MAL_OP_ENV_POP,
 } MalOpcode;
 
 typedef enum MalBinaryOp {
@@ -283,6 +293,12 @@ typedef struct MalInstruction {
         struct {
             i32 src, owner_function_index, index;
         } store_captured;
+
+        // ENV_PUSH / ENV_COPY (scope_id = the synthetic per-iteration loop-scope id;
+        // slot_count = number of captured loop-head bindings). ENV_POP needs neither.
+        struct {
+            i32 scope_id, slot_count;
+        } env_scope;
 
         struct {
             i32 src, index;
@@ -691,7 +707,14 @@ typedef struct MalCjsModuleSlot {
 typedef struct MalEnv {
     MalHeapHeader header;
     struct MalEnv *parent;
+    // Capture-scope id this env satisfies for LOAD/STORE_CAPTURED matching. >= 0
+    // is a function index (the activation's own captured slots); < 0 is a synthetic
+    // per-iteration loop-scope id (see the ENV_PUSH/COPY/POP ops) that never
+    // collides with a function index.
     i32 function_index;
+    // Number of MalValue slots; self-describing so the GC can trace any env
+    // (including synthetic-id per-iteration envs) without a function lookup.
+    i32 slot_count;
     MalValue slots[];
 } MalEnv;
 

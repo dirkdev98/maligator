@@ -933,6 +933,28 @@ function emitInstruction(
 			return [
 				`mal_vm_store_captured(env, ${instruction.ownerFunctionIndex}, ${instruction.index}, ${boxed(instruction.src)});`,
 			];
+		case "ENV_PUSH":
+		case "ENV_COPY":
+		case "ENV_POP": {
+			// Per-iteration loop env: reassign the `env` local (the body's
+			// LOAD/STORE_CAPTURED + CREATE_FUNCTION read it) and keep the root frame's
+			// env pointer current so the GC roots the live env chain. A capturing loop
+			// always has a root frame (it creates a closure → a MalValue register).
+			const frameUpdate = gcUnlink !== "" ? " __gc_frame.env = env;" : "";
+			if (instruction.opcode === "ENV_POP") {
+				return [`env = env->parent;${frameUpdate}`];
+			}
+			if (instruction.opcode === "ENV_PUSH") {
+				return [
+					`env = mal_env_new(vm, env, ${instruction.scopeId}, ${instruction.slotCount});${frameUpdate}`,
+				];
+			}
+			// ENV_COPY: fresh sibling env (same parent), bindings copied forward. The
+			// old env stays rooted via __gc_frame.env until the reassignment below.
+			return [
+				`{ MalEnv *__old_env = env; env = mal_env_new(vm, __old_env->parent, ${instruction.scopeId}, ${instruction.slotCount}); for (i32 __i = 0; __i < ${instruction.slotCount}; __i++) env->slots[__i] = __old_env->slots[__i]; }${frameUpdate}`,
+			];
+		}
 		case "LOAD_PROPERTY":
 			// A per-site monomorphic inline cache: a static persists across calls and
 			// (zero-initialized) starts empty. On a repeat access to the same shape it

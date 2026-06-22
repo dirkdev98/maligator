@@ -502,6 +502,10 @@ static MalValue mal_proxy_target_own_keys(MalVm *vm, MalValue target) {
     return mal_value_from_array_object(result);
 }
 
+static bool mal_proxy_own_keys_build(
+    MalVm *vm, MalProxyObject *proxy, MalValue result, MalObject *seen, MalPropertyDesc marker, MalArrayObject *keys
+);
+
 bool mal_proxy_own_property_keys(MalVm *vm, MalProxyObject *proxy, MalValue *out_array) {
     *out_array = mal_value_new_undefined();
     if (mal_proxy_check_revoked(vm, proxy)) {
@@ -528,9 +532,30 @@ bool mal_proxy_own_property_keys(MalVm *vm, MalProxyObject *proxy, MalValue *out
         return false;
     }
 
-    // CreateListFromArrayLike with the spec's String|Symbol element-type check,
-    // building the result array. (Full duplicate/non-configurable invariants are
-    // not enforced here; the common element-type one is.)
+    // The trap result, the "seen keys" set, and the keys array being built are all
+    // held across the array-like getter / ToPropertyKey re-entry in the build +
+    // invariant loops; root them, then delegate the building.
+    MalObject *seen = mal_intrinsic_new_object(vm);
+    MalPropertyDesc marker = mal_intrinsic_data_desc(mal_value_new_undefined(), 0);
+    MalArrayObject *keys = mal_intrinsic_new_array(vm, 0);
+    MalValue roots[3] = {result, mal_value_from_object(seen), mal_value_from_array_object(keys)};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+    bool ok = mal_proxy_own_keys_build(vm, proxy, result, seen, marker, keys);
+    mal_gc_unroot(&span);
+    if (ok) {
+        *out_array = mal_value_from_array_object(keys);
+    }
+    return ok;
+}
+
+// CreateListFromArrayLike with the spec's String|Symbol element-type check,
+// building the result array. (Full duplicate/non-configurable invariants are
+// not enforced here; the common element-type one is.) The caller roots
+// result/seen/keys across the re-entry below.
+static bool mal_proxy_own_keys_build(
+    MalVm *vm, MalProxyObject *proxy, MalValue result, MalObject *seen, MalPropertyDesc marker, MalArrayObject *keys
+) {
     MalValue length_value;
     if (!mal_vm_get_property(vm, result, mal_intrinsic_string_key(vm, "length"), &length_value)) {
         return false;
@@ -544,13 +569,8 @@ bool mal_proxy_own_property_keys(MalVm *vm, MalProxyObject *proxy, MalValue *out
         length = length_number > 4294967295.0 ? 4294967295 : (i64) length_number;
     }
 
-    // A throwaway object acts as the "seen keys" set: its key equality matches
-    // property-key SameValue, so a duplicate trap result is detected by an
-    // already-present marker, and target-key coverage can be checked by lookup.
-    MalObject *seen = mal_intrinsic_new_object(vm);
-    MalPropertyDesc marker = mal_intrinsic_data_desc(mal_value_new_undefined(), 0);
-
-    MalArrayObject *keys = mal_intrinsic_new_array(vm, 0);
+    // `seen` is the duplicate/coverage set; `keys` is the result being built (both
+    // created and rooted by the caller).
     for (i64 index = 0; index < length; index++) {
         MalKey idx_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
         MalValue element;
@@ -623,7 +643,6 @@ bool mal_proxy_own_property_keys(MalVm *vm, MalProxyObject *proxy, MalValue *out
         }
     }
 
-    *out_array = mal_value_from_array_object(keys);
     return true;
 }
 

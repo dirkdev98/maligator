@@ -685,9 +685,10 @@ static MalValue mal_builtin_object_key_to_string(MalVm *vm, MalKey key) {
     return key.value;
 }
 
-static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalPropertyIterKind iter_kind, MalBuiltinObjectCollect collect) {
-    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
-
+// Fills `result` with the collected keys/values/entries; returns false with a
+// pending throw on an abrupt step. `result` is rooted by the caller wrapper
+// (mal_builtin_object_collect) across the getter/trap re-entry below.
+static bool mal_builtin_object_collect_impl(MalVm *vm, MalValue target, MalPropertyIterKind iter_kind, MalBuiltinObjectCollect collect, MalArrayObject *result) {
     // A proxy's keys come from its ownKeys trap; only string keys participate in
     // these string-keyed collections, and for-key collections that filter to
     // enumerable own properties (Object.keys/values/entries) re-check each key's
@@ -701,24 +702,32 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
         MalArrayObject *keys = mal_value_to_array_object(keys_value);
         u32 key_count = mal_array_object_length(keys);
         bool enumerable_only = iter_kind == MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER;
+        // keys_value (the ownKeys array) is held across the trap/getter re-entry
+        // below; root it (result is rooted by the wrapper).
+        MalRootSpan keys_span;
+        mal_gc_root(&keys_span, &keys_value, 1);
         u32 out = 0;
+        bool ok = true;
         for (u32 i = 0; i < key_count; i++) {
             MalValue key_value;
             if (!mal_vm_get_property(vm, keys_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &key_value)) {
-                return mal_value_new_undefined();
+                ok = false;
+                break;
             }
             if (!mal_value_is_string(key_value)) {
                 continue;
             }
             MalKey key;
             if (!mal_vm_to_property_key(vm, key_value, &key)) {
-                return mal_value_new_undefined();
+                ok = false;
+                break;
             }
             bool present;
             MalPropertyDesc desc;
             if (enumerable_only || collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
                 if (!mal_proxy_get_own_property_descriptor(vm, proxy, key, &present, &desc)) {
-                    return mal_value_new_undefined();
+                    ok = false;
+                    break;
                 }
                 if (enumerable_only && (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE))) {
                     continue;
@@ -728,7 +737,8 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
             if (collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
                 MalValue value;
                 if (!mal_vm_get_property(vm, target, key, &value)) {
-                    return mal_value_new_undefined();
+                    ok = false;
+                    break;
                 }
                 element = value;
                 if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
@@ -740,7 +750,8 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
             }
             mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) out++)}, element);
         }
-        return mal_value_from_array_object(result);
+        mal_gc_unroot(&keys_span);
+        return ok;
     }
 
     // A module namespace's own keys are its sorted string exports (all
@@ -754,7 +765,7 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
             if (collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
                 MalValue value;
                 if (!mal_vm_get_property(vm, target, (MalKey) {.kind = MAL_KEY_STRING, .value = name}, &value)) {
-                    return mal_value_new_undefined();
+                    return false;
                 }
                 element = value;
                 if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
@@ -766,7 +777,7 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
             }
             mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)}, element);
         }
-        return mal_value_from_array_object(result);
+        return true;
     }
 
     if (!mal_value_is_object(target)) {
@@ -774,11 +785,11 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
         // contributes its index chars + length via the exotic path below).
         if (mal_value_is_nil(target)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
-            return mal_value_new_undefined();
+            return false;
         }
         MalValue boxed = mal_builtin_object_box_primitive(vm, target);
         if (mal_value_is_undefined(boxed)) {
-            return mal_value_from_array_object(result);
+            return true;
         }
         target = boxed;
     }
@@ -888,6 +899,18 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
         count++;
     }
 
+    // A getter during the value reads can delete a sibling key, dropping it from
+    // the object's table — its only other root. MalKey isn't a MalValue, so mirror
+    // the snapshotted key values into a parallel array and root that across the
+    // loop. (Symbol keys were skipped above; remaining keys are STRING/INDEX.)
+    MalValue *key_values = key_count > 0 ? malloc(sizeof(MalValue) * key_count) : nullptr;
+    for (usize i = 0; i < key_count; i++) {
+        key_values[i] = keys[i].value;
+    }
+    MalRootSpan keys_span;
+    mal_gc_root(&keys_span, key_values, (i32) key_count);
+    bool ok = true;
+
     for (usize i = 0; i < key_count; i++) {
         // Re-resolve: a property deleted or made non-enumerable mid-read is
         // skipped, matching the spec's "still has the key" check.
@@ -898,8 +921,8 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
 
         MalValue value;
         if (!mal_vm_desc_read(vm, lookup.desc, target, &value)) {
-            free(keys);
-            return mal_value_new_undefined();
+            ok = false;
+            break;
         }
 
         MalValue element = value;
@@ -914,8 +937,25 @@ static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalProper
         count++;
     }
 
+    mal_gc_unroot(&keys_span);
+    free(key_values);
     free(keys);
-    return mal_value_from_array_object(result);
+    return ok;
+}
+
+// Object.keys/values/entries (+ getOwnPropertyNames) collector. The result array
+// is held across getter / proxy-trap re-entry that the body performs, so root it
+// and lift this builtin's GC suppression around the collection.
+static MalValue mal_builtin_object_collect(MalVm *vm, MalValue target, MalPropertyIterKind iter_kind, MalBuiltinObjectCollect collect) {
+    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    MalValue result_box = mal_value_from_array_object(result);
+    MalRootSpan result_span;
+    mal_gc_root(&result_span, &result_box, 1);
+    mal_gc_native_rooted_begin(vm);
+    bool ok = mal_builtin_object_collect_impl(vm, target, iter_kind, collect, result);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&result_span);
+    return ok ? result_box : mal_value_new_undefined();
 }
 
 static MalValue mal_builtin_object_keys(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -986,29 +1026,39 @@ static bool mal_builtin_object_assign_from(MalVm *vm, MalValue target, MalValue 
         if (!mal_proxy_own_property_keys(vm, proxy, &keys_value)) {
             return false;
         }
+        // keys_value (the ownKeys array) is held across the trap/getter re-entry of
+        // the copy loop; root it. (target/source are rooted by the assign wrapper.)
+        MalRootSpan keys_span;
+        mal_gc_root(&keys_span, &keys_value, 1);
         u32 key_count = mal_array_object_length(mal_value_to_array_object(keys_value));
+        bool ok = true;
         for (u32 i = 0; i < key_count; i++) {
             MalValue key_value;
             if (!mal_vm_get_property(vm, keys_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &key_value)) {
-                return false;
+                ok = false;
+                break;
             }
             MalKey key;
             if (!mal_vm_to_property_key(vm, key_value, &key)) {
-                return false;
+                ok = false;
+                break;
             }
             bool present;
             MalPropertyDesc desc;
             if (!mal_proxy_get_own_property_descriptor(vm, proxy, key, &present, &desc)) {
-                return false;
+                ok = false;
+                break;
             }
             if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
                 continue;
             }
             if (!mal_builtin_object_assign_copy(vm, target, key, source)) {
-                return false;
+                ok = false;
+                break;
             }
         }
-        return true;
+        mal_gc_unroot(&keys_span);
+        return ok;
     }
 
     MalObject *object = mal_value_to_object(source);
@@ -1051,14 +1101,26 @@ static bool mal_builtin_object_assign_from(MalVm *vm, MalValue target, MalValue 
         }
         keys[key_count++] = key;
     }
+    // A target setter (or source getter) during the copy can collect; root the
+    // snapshotted keys (parallel MalValue array — these may be string or symbol)
+    // across the loop so a deleted key's name cannot dangle.
+    MalValue *key_values = key_count > 0 ? malloc(sizeof(MalValue) * key_count) : nullptr;
+    for (usize i = 0; i < key_count; i++) {
+        key_values[i] = keys[i].value;
+    }
+    MalRootSpan keys_span;
+    mal_gc_root(&keys_span, key_values, (i32) key_count);
+    bool ok = true;
     for (usize i = 0; i < key_count; i++) {
         if (!mal_builtin_object_assign_copy(vm, target, keys[i], source)) {
-            free(keys);
-            return false;
+            ok = false;
+            break;
         }
     }
+    mal_gc_unroot(&keys_span);
+    free(key_values);
     free(keys);
-    return true;
+    return ok;
 }
 
 static MalValue mal_builtin_object_assign(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1076,6 +1138,16 @@ static MalValue mal_builtin_object_assign(MalVm *vm, MalValue this_value, const 
         target_value = mal_builtin_object_box_primitive(vm, target_value);
     }
 
+    // The target is held across every source's copy (getters/setters re-enter and
+    // can collect); a boxed primitive source is a fresh object not on the value
+    // stack. Root both and lift GC suppression for the loop.
+    MalValue roots[2] = {target_value, mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
+    bool ok = true;
+
     for (i32 i = 1; i < arg_count; i++) {
         // Only undefined and null sources are skipped; other primitives ToObject.
         if (mal_value_is_nil(args[i])) {
@@ -1085,12 +1157,19 @@ static MalValue mal_builtin_object_assign(MalVm *vm, MalValue this_value, const 
         if (!mal_value_is_object(source_value)) {
             source_value = mal_builtin_object_box_primitive(vm, source_value);
         }
+        roots[1] = source_value;
         if (!mal_builtin_object_assign_from(vm, target_value, source_value)) {
-            return mal_value_new_undefined();
+            ok = false;
+            break;
         }
     }
+    if (ok) {
+        ret = target_value;
+    }
 
-    return target_value;
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
+    return ret;
 }
 
 static MalValue mal_builtin_object_create(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

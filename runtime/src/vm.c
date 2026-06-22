@@ -32,6 +32,7 @@ MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
     );
     env->parent = parent;
     env->function_index = function_index;
+    env->slot_count = count;
     for (i32 i = 0; i < count; i++) {
         env->slots[i] = mal_value_new_undefined();
     }
@@ -779,6 +780,15 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 break;
             case MAL_OP_STORE_CAPTURED:
                 mal_op_store_captured(frame, &instruction);
+                break;
+            case MAL_OP_ENV_PUSH:
+                mal_op_env_push(frame, &instruction);
+                break;
+            case MAL_OP_ENV_COPY:
+                mal_op_env_copy(frame, &instruction);
+                break;
+            case MAL_OP_ENV_POP:
+                mal_op_env_pop(frame);
                 break;
 
             case MAL_OP_CALL:

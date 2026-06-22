@@ -619,10 +619,23 @@ static MalValue mal_builtin_string_prototype_normalize(MalVm *vm, MalValue this_
 
 static MalValue mal_builtin_string_prototype_concat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalString **parts = malloc(sizeof(MalString *) * (arg_count + 1));
+    // Coercing an object argument runs its toString/valueOf, which re-enters JS
+    // and can collect; the already-coerced parts (raw MalString*) aren't scannable
+    // as roots, so mirror them into a MalValue[] span (count grown as filled) and
+    // lift GC suppression for the loop.
+    MalValue *part_vals = malloc(sizeof(MalValue) * (arg_count + 1));
+    MalRootSpan span;
+    mal_gc_root(&span, part_vals, 0);
+    mal_gc_native_rooted_begin(vm);
+
     parts[0] = mal_builtin_string_this_to_string(vm, this_value);
+    part_vals[0] = mal_value_from_string(parts[0]);
+    span.count = 1;
     usize total_length = mal_string_length(parts[0]);
     for (i32 i = 0; i < arg_count; i++) {
         parts[i + 1] = mal_builtin_string_coerce(vm, args[i]);
+        part_vals[i + 1] = mal_value_from_string(parts[i + 1]);
+        span.count = i + 2;
         total_length += mal_string_length(parts[i + 1]);
     }
 
@@ -634,7 +647,11 @@ static MalValue mal_builtin_string_prototype_concat(MalVm *vm, MalValue this_val
     }
 
     MalValue result = mal_builtin_string_from_units(vm, code_units, total_length);
+
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
     free(code_units);
+    free(part_vals);
     free(parts);
     return result;
 }

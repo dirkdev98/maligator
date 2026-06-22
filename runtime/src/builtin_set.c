@@ -92,23 +92,40 @@ static MalValue mal_builtin_set_construct(
         return mal_value_new_undefined();
     }
 
+    // Each step and the adder re-enter JS and can collect; root the record, the
+    // set being built, and the adder across the loop, and lift GC suppression.
+    // (The item is the adder's argument → rooted by the call seam during the call.)
+    MalValue roots[2] = {set_value, adder};
+    MalRootSpan rec_span, span;
+    mal_gc_root(&rec_span, &record.iterator, 2);
+    mal_gc_root(&span, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
+
     while (true) {
         MalValue item;
         bool done;
         if (!mal_vm_iterator_step(vm, &record, &item, &done)) {
-            return mal_value_new_undefined();
+            goto done;
         }
 
         if (done) {
-            return set_value;
+            ret = set_value;
+            goto done;
         }
 
         MalCompletion completion = mal_vm_call_value(vm, adder, set_value, &item, 1);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             mal_vm_iterator_close(vm, &record);
-            return mal_value_new_undefined();
+            goto done;
         }
     }
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
+    mal_gc_unroot(&rec_span);
+    return ret;
 }
 
 static MalValue mal_builtin_set_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

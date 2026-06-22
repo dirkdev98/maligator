@@ -541,18 +541,33 @@ static MalValue mal_ih_method_to_array(MalVm *vm, MalValue this_value, const Mal
         return mal_value_new_undefined();
     }
     MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
+    // Each step re-enters JS (iterator.next) and can collect; root the record's
+    // iterator/next_method (two contiguous MalValues) + the result array + the
+    // in-flight value, and lift GC suppression for the loop.
+    MalValue roots[2] = {mal_value_from_array_object(array), mal_value_new_undefined()};
+    MalRootSpan rec_span, span;
+    mal_gc_root(&rec_span, &record.iterator, 2);
+    mal_gc_root(&span, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
     i32 index = 0;
     while (true) {
         MalValue value;
         bool done;
         if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
-            return mal_value_new_undefined();
+            break;
         }
         if (done) {
-            return mal_value_from_array_object(array);
+            ret = mal_value_from_array_object(array);
+            break;
         }
+        roots[1] = value;
         mal_array_object_store(array, mal_ih_idx(index++), value);
     }
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
+    mal_gc_unroot(&rec_span);
+    return ret;
 }
 
 static MalValue mal_ih_method_for_each(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -563,23 +578,35 @@ static MalValue mal_ih_method_for_each(MalVm *vm, MalValue this_value, const Mal
     if (!mal_ih_get_direct_with_callback(vm, this_value, callback, "Iterator.prototype.forEach callback is not a function", &record)) {
         return mal_value_new_undefined();
     }
+    // Each step and the callback re-enter JS and can collect; root the record +
+    // the in-flight value (which is callback_args[0]) and lift GC suppression.
+    MalValue roots[1] = {mal_value_new_undefined()};
+    MalRootSpan rec_span, span;
+    mal_gc_root(&rec_span, &record.iterator, 2);
+    mal_gc_root(&span, roots, 1);
+    mal_gc_native_rooted_begin(vm);
     i32 index = 0;
     while (true) {
         MalValue value;
         bool done;
         if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
-            return mal_value_new_undefined();
+            break;
         }
         if (done) {
-            return mal_value_new_undefined();
+            break;
         }
+        roots[0] = value;
         MalValue callback_args[2] = {value, mal_value_from_i32(index++)};
         MalCompletion result = mal_vm_call_value(vm, callback, mal_value_new_undefined(), callback_args, 2);
         if (result.kind == MAL_COMPLETION_THROW) {
             mal_vm_iterator_close(vm, &record);
-            return mal_value_new_undefined();
+            break;
         }
     }
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
+    mal_gc_unroot(&rec_span);
+    return mal_value_new_undefined();
 }
 
 static MalValue mal_ih_method_reduce(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -591,6 +618,16 @@ static MalValue mal_ih_method_reduce(MalVm *vm, MalValue this_value, const MalVa
         return mal_value_new_undefined();
     }
 
+    // The accumulator is carried across every callback, the in-flight value is
+    // callback_args[1], and each step + callback can collect; root the record +
+    // {accumulator, value} and lift GC suppression.
+    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan rec_span, span;
+    mal_gc_root(&rec_span, &record.iterator, 2);
+    mal_gc_root(&span, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
+
     MalValue accumulator;
     i32 index = 0;
     if (arg_count >= 2) {
@@ -598,32 +635,42 @@ static MalValue mal_ih_method_reduce(MalVm *vm, MalValue this_value, const MalVa
     } else {
         bool done;
         if (!mal_vm_iterator_step(vm, &record, &accumulator, &done)) {
-            return mal_value_new_undefined();
+            goto done;
         }
         if (done) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Reduce of empty iterator with no initial value");
-            return mal_value_new_undefined();
+            goto done;
         }
         index = 1;
     }
+    roots[0] = accumulator;
 
     while (true) {
         MalValue value;
         bool done;
         if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
-            return mal_value_new_undefined();
+            goto done;
         }
         if (done) {
-            return accumulator;
+            ret = accumulator;
+            goto done;
         }
+        roots[1] = value;
         MalValue callback_args[3] = {accumulator, value, mal_value_from_i32(index++)};
         MalCompletion result = mal_vm_call_value(vm, callback, mal_value_new_undefined(), callback_args, 3);
         if (result.kind == MAL_COMPLETION_THROW) {
             mal_vm_iterator_close(vm, &record);
-            return mal_value_new_undefined();
+            goto done;
         }
         accumulator = result.value;
+        roots[0] = accumulator;
     }
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
+    mal_gc_unroot(&rec_span);
+    return ret;
 }
 
 enum { MAL_IH_SOME, MAL_IH_EVERY, MAL_IH_FIND };
@@ -634,37 +681,57 @@ static MalValue mal_ih_predicate(MalVm *vm, MalValue this_value, const MalValue 
     if (!mal_ih_get_direct_with_callback(vm, this_value, callback, "Iterator helper predicate is not a function", &record)) {
         return mal_value_new_undefined();
     }
+    // Each step, the callback, and IteratorClose's return() all re-enter JS and
+    // can collect; root the record + the in-flight value (held across the callback
+    // and, for find, across the closing return()) and lift GC suppression.
+    MalValue roots[1] = {mal_value_new_undefined()};
+    MalRootSpan rec_span, span;
+    mal_gc_root(&rec_span, &record.iterator, 2);
+    mal_gc_root(&span, roots, 1);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = mal_value_new_undefined();
     i32 index = 0;
     while (true) {
         MalValue value;
         bool done;
         if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
-            return mal_value_new_undefined();
+            goto done;
         }
         if (done) {
-            return kind == MAL_IH_EVERY ? mal_value_new_boolean(true)
+            ret = kind == MAL_IH_EVERY ? mal_value_new_boolean(true)
                 : kind == MAL_IH_SOME  ? mal_value_new_boolean(false)
                                        : mal_value_new_undefined();
+            goto done;
         }
+        roots[0] = value;
         MalValue callback_args[2] = {value, mal_value_from_i32(index++)};
         MalCompletion result = mal_vm_call_value(vm, callback, mal_value_new_undefined(), callback_args, 2);
         if (result.kind == MAL_COMPLETION_THROW) {
             mal_vm_iterator_close(vm, &record);
-            return mal_value_new_undefined();
+            goto done;
         }
         // Early exit is a NORMAL completion: IteratorClose runs and a throwing
         // return() must surface to the caller (not be swallowed).
         bool truthy = mal_value_is_truthy(result.value);
         if (kind == MAL_IH_SOME && truthy) {
-            return mal_vm_iterator_close_normal(vm, &record) ? mal_value_new_boolean(true) : mal_value_new_undefined();
+            ret = mal_vm_iterator_close_normal(vm, &record) ? mal_value_new_boolean(true) : mal_value_new_undefined();
+            goto done;
         }
         if (kind == MAL_IH_EVERY && !truthy) {
-            return mal_vm_iterator_close_normal(vm, &record) ? mal_value_new_boolean(false) : mal_value_new_undefined();
+            ret = mal_vm_iterator_close_normal(vm, &record) ? mal_value_new_boolean(false) : mal_value_new_undefined();
+            goto done;
         }
         if (kind == MAL_IH_FIND && truthy) {
-            return mal_vm_iterator_close_normal(vm, &record) ? value : mal_value_new_undefined();
+            ret = mal_vm_iterator_close_normal(vm, &record) ? value : mal_value_new_undefined();
+            goto done;
         }
     }
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
+    mal_gc_unroot(&rec_span);
+    return ret;
 }
 
 static MalValue mal_ih_method_some(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

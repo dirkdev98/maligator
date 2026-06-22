@@ -169,8 +169,14 @@ void mal_promise_create_resolving(MalVm *vm, MalValue promise, MalValue *out_res
     MalNativeFunctionObject *resolve = mal_promise_new_resolving_fn(vm, mal_promise_resolve_function, resolve_slots, 2);
     MalValue resolve_value = mal_value_from_native_function_object(resolve);
 
+    // The reject closure's allocation can collect; the just-built resolve function
+    // (and the promise) live only in C locals here, so root them across it.
+    MalValue roots[2] = {resolve_value, promise};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
     MalValue reject_slots[2] = {promise, resolve_value};
     MalNativeFunctionObject *reject = mal_promise_new_resolving_fn(vm, mal_promise_reject_function, reject_slots, 2);
+    mal_gc_unroot(&span);
 
     *out_resolve = resolve_value;
     *out_reject = mal_value_from_native_function_object(reject);
@@ -579,28 +585,38 @@ static MalPromiseCombinator mal_promise_combinator_begin(MalVm *vm, MalValue con
     MalPromiseCombinator ctx = {0};
     ctx.result_promise = mal_value_new_undefined();
 
+    // Capability creation (its executor), the `resolve` get, reject_abrupt, and
+    // GetIterator all re-enter JS and can collect; root ctx's capability fields
+    // (the 4 contiguous MalValues from result_promise) across them. The zero-init
+    // leaves not-yet-set fields as +0.0 (non-heap), which the scan safely skips.
+    MalRootSpan span;
+    mal_gc_root(&span, &ctx.result_promise, 4);
+
     if (!mal_value_is_object(constructor)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise combinator called on non-object");
-        return ctx;
+        goto done;
     }
     if (!mal_promise_new_capability(vm, constructor, &ctx.result_promise, &ctx.cap_resolve, &ctx.cap_reject)) {
-        return ctx; // pending throw, no promise to reject
+        goto done; // pending throw, no promise to reject
     }
     if (!mal_vm_get_property(vm, constructor, mal_intrinsic_string_key(vm, "resolve"), &ctx.promise_resolve)) {
         mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
-        return ctx;
+        goto done;
     }
     if (!mal_value_is_callable(ctx.promise_resolve)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise.resolve is not callable");
         mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
-        return ctx;
+        goto done;
     }
     MalValue iterable = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     if (!mal_vm_get_iterator(vm, iterable, &ctx.iterator)) {
         mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
-        return ctx;
+        goto done;
     }
     ctx.ok = true;
+
+done:
+    mal_gc_unroot(&span);
     return ctx;
 }
 
@@ -661,11 +677,22 @@ static MalValue mal_promise_all(MalVm *vm, MalValue this_value, const MalValue *
     MalValue counter = mal_promise_counter_new(vm, 1);
     i32 index = 0;
 
+    // The iterator step, promiseResolve, and .then all re-enter JS and can collect;
+    // root ctx (its 6 contiguous MalValues: caps + iterator record) + the values
+    // array + counter, and lift GC suppression for the drain loop.
+    MalValue vc[2] = {values, counter};
+    MalRootSpan ctx_span, vc_span;
+    mal_gc_root(&ctx_span, &ctx.result_promise, 6);
+    mal_gc_root(&vc_span, vc, 2);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = ctx.result_promise;
+
     while (true) {
         MalValue next_value;
         bool done;
         if (!mal_vm_iterator_step(vm, &ctx.iterator, &next_value, &done)) {
-            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            goto done;
         }
         if (done) {
             i32 remaining = mal_promise_counter_get(vm, counter) - 1;
@@ -674,16 +701,19 @@ static MalValue mal_promise_all(MalVm *vm, MalValue this_value, const MalValue *
                 mal_vm_call_value(vm, ctx.cap_resolve, mal_value_new_undefined(), &values, 1);
                 // Call(resolve) abrupt → IfAbruptRejectPromise.
                 if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                    return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+                    ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+                    goto done;
                 }
             }
-            return ctx.result_promise;
+            ret = ctx.result_promise;
+            goto done;
         }
 
         MalValue next_promise;
         if (!mal_promise_resolve_element(vm, &ctx, this_value, next_value, &next_promise)) {
             mal_vm_iterator_close(vm, &ctx.iterator);
-            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            goto done;
         }
 
         mal_promise_array_create_data(values, index, mal_value_new_undefined());
@@ -694,10 +724,17 @@ static MalValue mal_promise_all(MalVm *vm, MalValue this_value, const MalValue *
 
         if (!mal_promise_invoke_then(vm, next_promise, on_fulfilled, ctx.cap_reject)) {
             mal_vm_iterator_close(vm, &ctx.iterator);
-            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            goto done;
         }
         index++;
     }
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&vc_span);
+    mal_gc_unroot(&ctx_span);
+    return ret;
 }
 
 static MalValue mal_promise_race(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -709,28 +746,44 @@ static MalValue mal_promise_race(MalVm *vm, MalValue this_value, const MalValue 
         return ctx.result_promise;
     }
 
+    // ctx (caps + iterator record) is held across the step / promiseResolve / .then
+    // re-entry; root its 6 contiguous MalValues and lift GC suppression.
+    MalRootSpan ctx_span;
+    mal_gc_root(&ctx_span, &ctx.result_promise, 6);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = ctx.result_promise;
+
     while (true) {
         MalValue next_value;
         bool done;
         if (!mal_vm_iterator_step(vm, &ctx.iterator, &next_value, &done)) {
-            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            goto done;
         }
         if (done) {
-            return ctx.result_promise;
+            ret = ctx.result_promise;
+            goto done;
         }
 
         MalValue next_promise;
         if (!mal_promise_resolve_element(vm, &ctx, this_value, next_value, &next_promise)) {
             mal_vm_iterator_close(vm, &ctx.iterator);
-            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            goto done;
         }
 
         // First settlement of any element wins; capability ignores the rest.
         if (!mal_promise_invoke_then(vm, next_promise, ctx.cap_resolve, ctx.cap_reject)) {
             mal_vm_iterator_close(vm, &ctx.iterator);
-            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            goto done;
         }
     }
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&ctx_span);
+    return ret;
 }
 
 /** Build a {status, value|reason} record for allSettled. */
@@ -793,11 +846,19 @@ static MalValue mal_promise_all_settled(MalVm *vm, MalValue this_value, const Ma
     MalValue counter = mal_promise_counter_new(vm, 1);
     i32 index = 0;
 
+    MalValue vc[2] = {values, counter};
+    MalRootSpan ctx_span, vc_span;
+    mal_gc_root(&ctx_span, &ctx.result_promise, 6);
+    mal_gc_root(&vc_span, vc, 2);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = ctx.result_promise;
+
     while (true) {
         MalValue next_value;
         bool done;
         if (!mal_vm_iterator_step(vm, &ctx.iterator, &next_value, &done)) {
-            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            goto done;
         }
         if (done) {
             i32 remaining = mal_promise_counter_get(vm, counter) - 1;
@@ -805,16 +866,19 @@ static MalValue mal_promise_all_settled(MalVm *vm, MalValue this_value, const Ma
             if (remaining == 0) {
                 mal_vm_call_value(vm, ctx.cap_resolve, mal_value_new_undefined(), &values, 1);
                 if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                    return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+                    ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+                    goto done;
                 }
             }
-            return ctx.result_promise;
+            ret = ctx.result_promise;
+            goto done;
         }
 
         MalValue next_promise;
         if (!mal_promise_resolve_element(vm, &ctx, this_value, next_value, &next_promise)) {
             mal_vm_iterator_close(vm, &ctx.iterator);
-            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            goto done;
         }
 
         mal_promise_array_create_data(values, index, mal_value_new_undefined());
@@ -828,10 +892,17 @@ static MalValue mal_promise_all_settled(MalVm *vm, MalValue this_value, const Ma
 
         if (!mal_promise_invoke_then(vm, next_promise, on_fulfilled, on_rejected)) {
             mal_vm_iterator_close(vm, &ctx.iterator);
-            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            goto done;
         }
         index++;
     }
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&vc_span);
+    mal_gc_unroot(&ctx_span);
+    return ret;
 }
 
 // --- any ---------------------------------------------------------------------
@@ -878,11 +949,19 @@ static MalValue mal_promise_any(MalVm *vm, MalValue this_value, const MalValue *
     MalValue counter = mal_promise_counter_new(vm, 1);
     i32 index = 0;
 
+    MalValue ec[2] = {errors, counter};
+    MalRootSpan ctx_span, ec_span;
+    mal_gc_root(&ctx_span, &ctx.result_promise, 6);
+    mal_gc_root(&ec_span, ec, 2);
+    mal_gc_native_rooted_begin(vm);
+    MalValue ret = ctx.result_promise;
+
     while (true) {
         MalValue next_value;
         bool done;
         if (!mal_vm_iterator_step(vm, &ctx.iterator, &next_value, &done)) {
-            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            goto done;
         }
         if (done) {
             i32 remaining = mal_promise_counter_get(vm, counter) - 1;
@@ -890,20 +969,24 @@ static MalValue mal_promise_any(MalVm *vm, MalValue this_value, const MalValue *
             if (remaining == 0) {
                 MalValue aggregate = mal_builtin_new_aggregate_error(vm, errors);
                 if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                    return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+                    ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+                    goto done;
                 }
                 mal_vm_call_value(vm, ctx.cap_reject, mal_value_new_undefined(), &aggregate, 1);
                 if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                    return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+                    ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+                    goto done;
                 }
             }
-            return ctx.result_promise;
+            ret = ctx.result_promise;
+            goto done;
         }
 
         MalValue next_promise;
         if (!mal_promise_resolve_element(vm, &ctx, this_value, next_value, &next_promise)) {
             mal_vm_iterator_close(vm, &ctx.iterator);
-            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            goto done;
         }
 
         mal_promise_array_create_data(errors, index, mal_value_new_undefined());
@@ -915,10 +998,17 @@ static MalValue mal_promise_any(MalVm *vm, MalValue this_value, const MalValue *
         // First fulfillment wins (cap.resolve directly); rejections collect.
         if (!mal_promise_invoke_then(vm, next_promise, ctx.cap_resolve, on_rejected)) {
             mal_vm_iterator_close(vm, &ctx.iterator);
-            return mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
+            goto done;
         }
         index++;
     }
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&ec_span);
+    mal_gc_unroot(&ctx_span);
+    return ret;
 }
 
 // --- finally -----------------------------------------------------------------

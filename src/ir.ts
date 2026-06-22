@@ -90,6 +90,13 @@ export interface IntermediateProgram {
 	nextGlobalIndex: number;
 
 	/**
+	 * Next synthetic per-iteration loop-scope env id. Negative so it never collides
+	 * with a function index (env capture resolution matches on this id); decremented
+	 * per capturing loop. See compileForStatement / setupPerIterationScope.
+	 */
+	nextLoopScopeId: number;
+
+	/**
 	 * ES module linkage. Synthetic bindings holding each module's anonymous
 	 * `export default` value, keyed by module path (see src/linker.ts).
 	 */
@@ -360,6 +367,16 @@ interface IRLoopContext {
 	iteratorRegister?: number;
 
 	/**
+	 * For a loop whose lexical head bindings are captured by a closure: the
+	 * synthetic per-iteration env scope id and slot count (CreatePerIterationEnv).
+	 * The loop's own exit block emits ENV_POP for its normal exit + direct breaks;
+	 * a break/continue that CROSSES this loop to an outer target emits ENV_POP here.
+	 * undefined when the loop needs no per-iteration env.
+	 */
+	perIterationScopeId?: number;
+	perIterationSlotCount?: number;
+
+	/**
 	 * For kind === "finally": jumps from each exit edge into the finalizer
 	 * entry block (patched once it exists), plus the registers carrying the
 	 * pending completion kind and value across the finalizer.
@@ -568,6 +585,19 @@ export type IRInstruction =
 
 			// [destination]
 			registers: [number];
+	  }
+	| {
+			// Per-iteration loop environment (CreatePerIterationEnvironment). envPush
+			// enters a loop scope (fresh env, parent = current); envCopy replaces the
+			// current scope env with a sibling that copies the bindings forward; envPop
+			// restores the enclosing env. scopeId is a synthetic negative capture-scope
+			// id; slotCount = number of captured loop-head bindings.
+			type: "envPush" | "envCopy";
+			scopeId: number;
+			slotCount: number;
+	  }
+	| {
+			type: "envPop";
 	  }
 	| {
 			type: "call";
@@ -1203,6 +1233,7 @@ export function compileSemanticProgramToIr(semantic: SemanticProgram) {
 
 		compiledModuleInitForPaths: new Set(),
 		bindingToStorage: new Map(),
+		nextLoopScopeId: -1,
 		bindingToFunctionCache: new Map(),
 		nodeToFunctionCache: new Map(),
 
@@ -4105,6 +4136,38 @@ function compileDoWhileStatement(
 }
 
 /**
+ * If a loop's lexical head bindings (its for-head `let`/`const`) are captured by a
+ * closure, they need a fresh per-iteration environment (CreatePerIterationEnvironment)
+ * so each closure observes its own binding. Move those bindings into a synthetic
+ * capture scope (a negative env id that never collides with a function index) and
+ * return its id + slot count; the loop lowering emits the ENV_PUSH/COPY/POP ops.
+ * Returns null when no head binding is captured (the common case — zero overhead).
+ */
+function setupPerIterationScope(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	loopNode: ESTree.Node,
+): { scopeId: number; slotCount: number } | null {
+	const scope = fn.semanticFile.nodeToScope.get(loopNode);
+	if (!scope) {
+		return null;
+	}
+	const captured = scope.bindings.filter((binding) => binding.scopedTo === "captured");
+	if (captured.length === 0) {
+		return null;
+	}
+	const scopeId = program.nextLoopScopeId--;
+	captured.forEach((binding, index) => {
+		program.bindingToStorage.set(binding, {
+			type: "captured",
+			functionIndex: scopeId,
+			index,
+		});
+	});
+	return { scopeId, slotCount: captured.length };
+}
+
+/**
  * Compile a classic for loop: init runs once, then it behaves like a while
  * loop with the update block as the continue target.
  */
@@ -4114,6 +4177,20 @@ function compileForStatement(
 	block: IRBlock,
 	statement: ESTree.ForStatement,
 ) {
+	// Per-iteration env, if the head bindings are captured. ENV_PUSH enters scope
+	// L0 (so the init stores into it), ENV_COPY before the first test copies L0→L1,
+	// each update copies Li→Li+1 (the increment runs in the new env), and ENV_POP
+	// restores the enclosing env on exit. Set up before the init compiles so the
+	// head bindings resolve to the scope env.
+	const perIter = setupPerIterationScope(program, fn, statement);
+	if (perIter) {
+		block.instructions.push({
+			type: "envPush",
+			scopeId: perIter.scopeId,
+			slotCount: perIter.slotCount,
+		});
+	}
+
 	const initCursor: IRCursor = { block };
 	if (statement.init?.type === "VariableDeclaration") {
 		compileVariableDeclaration(program, fn, block, statement.init);
@@ -4121,6 +4198,14 @@ function compileForStatement(
 		initCursor.block = fn.blocks.at(-1) === block ? block : fn.blocks.at(-1)!;
 	} else if (statement.init) {
 		compileExpression(program, fn, initCursor, statement.init);
+	}
+
+	if (perIter) {
+		initCursor.block.instructions.push({
+			type: "envCopy",
+			scopeId: perIter.scopeId,
+			slotCount: perIter.slotCount,
+		});
 	}
 
 	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
@@ -4134,6 +4219,8 @@ function compileForStatement(
 		breakJumps: [],
 		continueJumps: [],
 		labels: takePendingLabels(fn),
+		perIterationScopeId: perIter?.scopeId,
+		perIterationSlotCount: perIter?.slotCount,
 	};
 	(fn.loops ??= []).push(loop);
 
@@ -4175,6 +4262,15 @@ function compileForStatement(
 	});
 
 	const updateCursor: IRCursor = { block: fn.blocks[updateIdx]! };
+	// CreatePerIterationEnvironment: copy the bindings forward (Li→Li+1) before the
+	// increment, so the increment and next test/body run in the fresh env.
+	if (perIter) {
+		updateCursor.block.instructions.push({
+			type: "envCopy",
+			scopeId: perIter.scopeId,
+			slotCount: perIter.slotCount,
+		});
+	}
 	if (statement.update) {
 		compileExpression(program, fn, updateCursor, statement.update);
 	}
@@ -4184,6 +4280,12 @@ function compileForStatement(
 	});
 
 	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	// The exit block runs ENV_POP for the normal (test-false) exit and for any break
+	// targeting this loop (both jump here). A break/continue crossing this loop to an
+	// outer target instead pops via emitBreak/emitContinue.
+	if (perIter) {
+		fn.blocks[exitIdx]!.instructions.push({ type: "envPop" });
+	}
 	exitJump.blocks[0] = exitIdx;
 	for (const jump of loop.breakJumps) {
 		jump.blocks[0] = exitIdx;
@@ -4212,6 +4314,7 @@ function compileForOfStatement(
 		return;
 	}
 
+	const perIter = setupPerIterationScope(program, fn, statement);
 	if (statement.await) {
 		compileForAwaitOfLoop(
 			program,
@@ -4220,6 +4323,7 @@ function compileForOfStatement(
 			iterable,
 			statement.left,
 			statement.body,
+			perIter,
 		);
 	} else {
 		compileForInOfLoop(
@@ -4229,6 +4333,7 @@ function compileForOfStatement(
 			iterable,
 			statement.left,
 			statement.body,
+			perIter,
 		);
 	}
 }
@@ -4257,7 +4362,16 @@ function compileForInStatement(
 		registers: [keys, source],
 	});
 
-	compileForInOfLoop(program, fn, entryCursor, keys, statement.left, statement.body);
+	const perIter = setupPerIterationScope(program, fn, statement);
+	compileForInOfLoop(
+		program,
+		fn,
+		entryCursor,
+		keys,
+		statement.left,
+		statement.body,
+		perIter,
+	);
 }
 
 /**
@@ -4272,6 +4386,7 @@ function compileForInOfLoop(
 	iterable: number,
 	left: ESTree.ForOfStatement["left"],
 	body: ESTree.Statement,
+	perIter: { scopeId: number; slotCount: number } | null,
 ) {
 	const labels = takePendingLabels(fn);
 	const iteratorRegister = nextRegisterDestination(fn);
@@ -4280,6 +4395,16 @@ function compileForInOfLoop(
 		type: "getIterator",
 		registers: [iteratorRegister, nextRegister, iterable],
 	});
+
+	// Enter the per-iteration scope (each iteration rebinds the loop variable into
+	// a fresh env via the ENV_COPY in the bind block below).
+	if (perIter) {
+		entryCursor.block.instructions.push({
+			type: "envPush",
+			scopeId: perIter.scopeId,
+			slotCount: perIter.slotCount,
+		});
+	}
 
 	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
 	entryCursor.block.instructions.push({
@@ -4293,6 +4418,8 @@ function compileForInOfLoop(
 		continueJumps: [],
 		iteratorRegister,
 		labels,
+		perIterationScopeId: perIter?.scopeId,
+		perIterationSlotCount: perIter?.slotCount,
 	};
 	(fn.loops ??= []).push(loop);
 
@@ -4319,6 +4446,17 @@ function compileForInOfLoop(
 		type: "jump",
 		blocks: [bindIdx],
 	});
+
+	// A fresh per-iteration env (each iteration rebinds the loop variable into it);
+	// continue re-enters via the header, so this re-runs each iteration. The copy
+	// carries nothing meaningful forward — the pattern bind below overwrites it.
+	if (perIter) {
+		bindBlock.instructions.push({
+			type: "envCopy",
+			scopeId: perIter.scopeId,
+			slotCount: perIter.slotCount,
+		});
+	}
 
 	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
@@ -4373,6 +4511,13 @@ function compileForInOfLoop(
 	});
 
 	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	// Restore the enclosing env on the normal (done) exit and on any break targeting
+	// this loop (both jump here). The throw handler above does not pop: a rethrow
+	// unwinds the frame (or is caught in an outer scope, where the per-iteration
+	// env's parent chain still resolves correctly).
+	if (perIter) {
+		fn.blocks[exitIdx]!.instructions.push({ type: "envPop" });
+	}
 	exitJump.blocks[0] = exitIdx;
 	for (const jump of loop.breakJumps) {
 		jump.blocks[0] = exitIdx;
@@ -4397,6 +4542,7 @@ function compileForAwaitOfLoop(
 	iterable: number,
 	left: ESTree.ForOfStatement["left"],
 	body: ESTree.Statement,
+	perIter: { scopeId: number; slotCount: number } | null,
 ) {
 	const labels = takePendingLabels(fn);
 	const iteratorRegister = nextRegisterDestination(fn);
@@ -4405,6 +4551,14 @@ function compileForAwaitOfLoop(
 		type: "getAsyncIterator",
 		registers: [iteratorRegister, nextRegister, iterable],
 	});
+
+	if (perIter) {
+		entryCursor.block.instructions.push({
+			type: "envPush",
+			scopeId: perIter.scopeId,
+			slotCount: perIter.slotCount,
+		});
+	}
 
 	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
 	entryCursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
@@ -4415,6 +4569,8 @@ function compileForAwaitOfLoop(
 		continueJumps: [],
 		iteratorRegister,
 		labels,
+		perIterationScopeId: perIter?.scopeId,
+		perIterationSlotCount: perIter?.slotCount,
 	};
 	(fn.loops ??= []).push(loop);
 
@@ -4464,6 +4620,14 @@ function compileForAwaitOfLoop(
 	const bindIdx = fn.blocks.push(bindBlock) - 1;
 	headerCursor.block.instructions.push({ type: "jump", blocks: [bindIdx] });
 
+	if (perIter) {
+		bindBlock.instructions.push({
+			type: "envCopy",
+			scopeId: perIter.scopeId,
+			slotCount: perIter.slotCount,
+		});
+	}
+
 	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		blocks: [-1, -1],
@@ -4504,6 +4668,9 @@ function compileForAwaitOfLoop(
 	handlerBlock.instructions.push({ type: "throw", registers: [caughtRegister] });
 
 	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
+	if (perIter) {
+		fn.blocks[exitIdx]!.instructions.push({ type: "envPop" });
+	}
 	exitJump.blocks[0] = exitIdx;
 	for (const jump of loop.breakJumps) {
 		jump.blocks[0] = exitIdx;
@@ -5148,6 +5315,13 @@ function emitBreak(fn: IRFunction, block: IRBlock, label?: string) {
 			label === undefined
 				? scope.kind === "loop" || scope.kind === "switch"
 				: scope.labels?.has(label) === true;
+
+		// Restore the enclosing env when crossing a per-iteration loop to an outer
+		// target; the target loop's own exit block pops for a direct break.
+		if (scope.perIterationScopeId !== undefined && !isTarget) {
+			block.instructions.push({ type: "envPop" });
+		}
+
 		if (isTarget) {
 			const jump: Extract<IRInstruction, { type: "jump" }> = {
 				type: "jump",
@@ -5195,12 +5369,15 @@ function emitContinue(fn: IRFunction, block: IRBlock, label?: string) {
 		const isTarget = label === undefined ? true : scope.labels?.has(label) === true;
 		if (!isTarget) {
 			// An inner loop being left to reach a labeled outer loop closes its
-			// for-of iterator.
+			// for-of iterator and restores the enclosing env (per-iteration scope).
 			if (scope.iteratorRegister !== undefined) {
 				block.instructions.push({
 					type: "iteratorClose",
 					registers: [scope.iteratorRegister],
 				});
+			}
+			if (scope.perIterationScopeId !== undefined) {
+				block.instructions.push({ type: "envPop" });
 			}
 			continue;
 		}

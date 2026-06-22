@@ -325,16 +325,14 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             mal_gc_mark_string(((MalSymbol *) cell)->description);
             return;
         case MAL_HEAP_ENV: {
-            // Not a MalObject: trace the parent env and this activation's captured
-            // slots (their count comes from the owning function's metadata).
+            // Not a MalObject: trace the parent env and this env's captured slots
+            // (the count is stored on the env, so synthetic per-iteration envs trace
+            // too).
             MalEnv *env = (MalEnv *) cell;
             if (env->parent != nullptr) {
                 mal_gc_shade(&env->parent->header);
             }
-            if (env->function_index >= 0 && env->function_index < g_gc_vm->definition->function_count) {
-                i32 count = g_gc_vm->definition->functions[env->function_index].captured_count;
-                mal_gc_mark_values(env->slots, count);
-            }
+            mal_gc_mark_values(env->slots, env->slot_count);
             return;
         }
         default:
@@ -464,6 +462,15 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             mal_gc_mark_value(gen->async_reject);
             if (gen->awaited_by != nullptr) {
                 mal_gc_shade(&gen->awaited_by->object.header);
+            }
+            // Pending async-generator requests (malloc'd nodes, traced via the
+            // owner): each holds a settle capability + the resume value, live until
+            // the driver dequeues it. Missing this swept queued resolve/reject
+            // functions out from under a pending next/throw/return.
+            for (MalAsyncGeneratorRequest *req = gen->agen_queue_head; req != nullptr; req = req->next) {
+                mal_gc_mark_value(req->resolve);
+                mal_gc_mark_value(req->reject);
+                mal_gc_mark_value(req->value);
             }
             break;
         }
