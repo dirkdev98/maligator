@@ -1600,6 +1600,30 @@ static MalValue mal_builtin_array_flat(MalVm *vm, MalValue this_value, const Mal
     return result;
 }
 
+/**
+ * flatMap's per-element flatten-append: spread `mapped` into `result` at `*count`
+ * (depth-1 flatten). If `mapped` is an array, its present elements are appended one
+ * by one (holes skipped, no further recursion — flatMap is FlattenIntoArray depth 1);
+ * otherwise `mapped` itself is appended. `*count` is advanced past the new elements.
+ * Returns false (leaving the throw completion on the vm) if a property op aborts.
+ * Shared by `mal_builtin_array_flat_map` and the guarded-inlining append intrinsic.
+ */
+static bool mal_array_flat_map_append(MalVm *vm, MalValue result, u32 *count, MalValue mapped) {
+    if (mal_value_is_array_object(mapped)) {
+        u32 mapped_length = mal_array_object_length(mal_value_to_array_object(mapped));
+        for (u32 inner = 0; inner < mapped_length; inner++) {
+            MalValue inner_element;
+            if (mal_builtin_array_try_get(vm, mapped, inner, &inner_element)) {
+                if (!mal_builtin_array_create_data_property(vm, result, (*count)++, inner_element)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    return mal_builtin_array_create_data_property(vm, result, (*count)++, mapped);
+}
+
 static MalValue mal_builtin_array_flat_map(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     u32 length;
     if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
@@ -1622,17 +1646,7 @@ static MalValue mal_builtin_array_flat_map(MalVm *vm, MalValue this_value, const
             return mal_value_new_undefined();
         }
 
-        if (mal_value_is_array_object(mapped)) {
-            u32 mapped_length = mal_array_object_length(mal_value_to_array_object(mapped));
-            for (u32 inner = 0; inner < mapped_length; inner++) {
-                MalValue inner_element;
-                if (mal_builtin_array_try_get(vm, mapped, inner, &inner_element)) {
-                    if (!mal_builtin_array_create_data_property(vm, result, count++, inner_element)) {
-                        return mal_value_new_undefined();
-                    }
-                }
-            }
-        } else if (!mal_builtin_array_create_data_property(vm, result, count++, mapped)) {
+        if (!mal_array_flat_map_append(vm, result, &count, mapped)) {
             return mal_value_new_undefined();
         }
     }
@@ -2681,7 +2695,7 @@ static MalValue mal_builtin_array_iteration_eligible(MalVm *vm, MalValue this_va
         return mal_value_new_boolean(false);
     }
     MalValue recv = args[0];
-    i32 method_id = (i32) mal_value_to_f64(args[1]);
+    i32 method_id = (i32) mal_ops_number_as_f64(args[1]);
     bool eligible = false;
     switch (method_id) {
         case 0: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "forEach", mal_builtin_array_for_each); break;
@@ -2691,9 +2705,34 @@ static MalValue mal_builtin_array_iteration_eligible(MalVm *vm, MalValue this_va
         case 4: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "findIndex", mal_builtin_array_find_index); break;
         case 5: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "map", mal_builtin_array_map) && mal_array_default_species(vm, recv); break;
         case 6: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "filter", mal_builtin_array_filter) && mal_array_default_species(vm, recv); break;
+        case 7: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "reduce", mal_builtin_array_reduce); break;
+        case 8: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "reduceRight", mal_builtin_array_reduce_right); break;
+        case 9: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "findLast", mal_builtin_array_find_last); break;
+        case 10: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "findLastIndex", mal_builtin_array_find_last_index); break;
+        case 11: eligible = mal_array_method_is_default_builtin(vm, recv, (const byte *) "flatMap", mal_builtin_array_flat_map) && mal_array_default_species(vm, recv); break;
         default: eligible = false; break;
     }
     return mal_value_new_boolean(eligible);
+}
+
+/**
+ * flatMap append helper for the compiler's guarded inlining (intrinsic slot
+ * MAL_INTRINSIC_ARRAY_FLAT_MAP_APPEND, invoked via LOAD_INTRINSIC + call once per
+ * source element). args[0] = the result array being built, args[1] = the mapped
+ * value. Flattens `mapped` into `result` one level deep (see mal_array_flat_map_append)
+ * starting at the result's current length (flatMap never leaves holes, so length is
+ * the append cursor). Returns undefined; a property-op throw is left on the vm.
+ */
+static MalValue mal_builtin_array_flat_map_append_intrinsic(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    if (arg_count < 2 || !mal_value_is_array_object(args[0])) {
+        return mal_value_new_undefined();
+    }
+    u32 count = mal_array_object_length(mal_value_to_array_object(args[0]));
+    mal_array_flat_map_append(vm, args[0], &count, args[1]);
+    return mal_value_new_undefined();
 }
 
 void mal_builtin_array_install(MalVm *vm) {
@@ -2727,6 +2766,16 @@ void mal_builtin_array_install(MalVm *vm) {
             mal_intrinsic_ascii(vm, "__arrayIterationEligible"),
             2,
             mal_builtin_array_iteration_eligible
+        )
+    );
+    // Internal flatMap append helper for guarded inlining (not attached to any object).
+    vm->intrinsics[MAL_INTRINSIC_ARRAY_FLAT_MAP_APPEND] = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, "__arrayFlatMapAppend"),
+            2,
+            mal_builtin_array_flat_map_append_intrinsic
         )
     );
     mal_intrinsic_define_method_n(vm, prototype, "filter", 1, mal_builtin_array_filter);

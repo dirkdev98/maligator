@@ -278,8 +278,11 @@ export function findInlinableCalls(
 
 /**
  * Array iteration methods that take a callback as their first argument and invoke
- * it per element. Restricted to the `(callback[, thisArg])` arg shape — `reduce`/
- * `reduceRight` (accumulator-first) are intentionally excluded for now.
+ * it per element. `reduce`/`reduceRight` are included (their callback is still the
+ * first argument; the substitution handles the accumulator shape and only fires with
+ * an explicit initial value). All entries here have an inlined loop shape in
+ * HOF_METHOD_SPECS — forEach/some/every/find/findIndex/findLast/findLastIndex/map/
+ * filter/reduce/reduceRight/flatMap.
  */
 const HOF_CALLBACK_METHODS = new Set([
 	"forEach",
@@ -292,6 +295,8 @@ const HOF_CALLBACK_METHODS = new Set([
 	"findLast",
 	"findLastIndex",
 	"flatMap",
+	"reduce",
+	"reduceRight",
 ]);
 
 export interface HofInlineSite {
@@ -846,10 +851,17 @@ interface HofMethodSpec {
 	/** Destination value after the loop completes without an early exit (ignored when
 	 * buildsResult is set — those return the result array). */
 	defaultValue: "undefined" | "true" | "false" | "neg1";
-	/** map/filter construct a result array: map stores cb(elem) at every present
-	 * index (length preset to len, holes preserved); filter appends the element when
-	 * cb is truthy. Requires a default @@species (checked by the runtime guard). */
-	buildsResult?: "map" | "filter";
+	/** map/filter/flatMap construct a result array: map stores cb(elem) at every
+	 * present index (length preset to len, holes preserved); filter appends the
+	 * element when cb is truthy; flatMap appends cb(elem) flattened one level (via the
+	 * __arrayFlatMapAppend intrinsic). Requires a default @@species (runtime guard). */
+	buildsResult?: "map" | "filter" | "flatMap";
+	/** reduce threads an accumulator: `acc = cb(acc, elem, i, arr)` per present element,
+	 * returning the accumulator. Only fires with an explicit initial value (the
+	 * no-initial/empty-throw case stays on the slow path). */
+	accumulator?: boolean;
+	/** reduceRight/findLast/findLastIndex iterate from len-1 down to 0. */
+	backward?: boolean;
 }
 
 const HOF_METHOD_SPECS: ReadonlyMap<string, HofMethodSpec> = new Map([
@@ -921,6 +933,61 @@ const HOF_METHOD_SPECS: ReadonlyMap<string, HofMethodSpec> = new Map([
 			buildsResult: "filter",
 		},
 	],
+	[
+		"reduce",
+		{
+			methodId: 7,
+			skipHoles: true,
+			earlyExit: false,
+			defaultValue: "undefined",
+			accumulator: true,
+		},
+	],
+	[
+		"reduceRight",
+		{
+			methodId: 8,
+			skipHoles: true,
+			earlyExit: false,
+			defaultValue: "undefined",
+			accumulator: true,
+			backward: true,
+		},
+	],
+	[
+		"findLast",
+		{
+			methodId: 9,
+			skipHoles: false,
+			earlyExit: true,
+			exitOnTruthy: true,
+			exitValue: "element",
+			defaultValue: "undefined",
+			backward: true,
+		},
+	],
+	[
+		"findLastIndex",
+		{
+			methodId: 10,
+			skipHoles: false,
+			earlyExit: true,
+			exitOnTruthy: true,
+			exitValue: "index",
+			defaultValue: "neg1",
+			backward: true,
+		},
+	],
+	[
+		"flatMap",
+		{
+			methodId: 11,
+			skipHoles: true,
+			earlyExit: false,
+			defaultValue: "undefined",
+			buildsResult: "flatMap",
+		},
+	],
 ]);
 
 /**
@@ -972,6 +1039,14 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				continue; // see containsTryMarker; empty post shouldn't happen
 			}
 
+			// reduce only inlines with an explicit initial value (call arg after the
+			// callback): the no-initial case needs first-element selection + an
+			// empty-array TypeError, left to the slow path.
+			const initialValue = spec.accumulator ? callRegisters[4] : undefined;
+			if (spec.accumulator && initialValue === undefined) {
+				continue;
+			}
+
 			// To let the fast path allocate nothing, the slow path re-creates the
 			// closure rather than sharing the one defined before the call: once the
 			// fast `cb(...)` is inlined, the original `createFunction` is used only by
@@ -994,7 +1069,7 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 
 			// Fresh registers for the guard + loop scaffolding.
 			const r = fn.nextRegisterDestination;
-			fn.nextRegisterDestination += 14;
+			fn.nextRegisterDestination += 17;
 			const eligibleFn = r;
 			const eligible = r + 1;
 			const methodIdReg = r + 2;
@@ -1007,8 +1082,11 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			const elementReg = r + 9;
 			const callbackResult = r + 10;
 			const undefinedReg = r + 11;
-			const resultReg = r + 12; // map/filter result array
-			const resultLenReg = r + 13; // filter: next append index
+			const resultReg = r + 12; // map/filter/flatMap result array
+			const resultLenReg = r + 13; // filter: next append index; flatMap: append-call sink
+			const accumulatorReg = r + 14; // reduce accumulator
+			const zeroReg = r + 15; // backward loop bound (i >= 0)
+			const flatMapAppendFn = r + 16; // flatMap: the __arrayFlatMapAppend intrinsic
 
 			// Block indices (some are conditional on the method shape).
 			const base = fn.blocks.length;
@@ -1064,13 +1142,31 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				{ type: "jump", blocks: [slowPath] },
 			];
 
-			// fastInit: len = arr.length; i = 0; one = 1; plus result-array setup.
+			// fastInit: len = arr.length; one = 1; i = 0 (forward) or len-1 (backward,
+			// with a zero bound for the `i >= 0` test); plus result-array setup.
 			const fastInitInstructions: Array<IRInstruction> = [
 				{ type: "createString", registers: [lengthKeyReg], stringIndex: lengthString },
 				{ type: "loadProperty", registers: [lengthReg, receiver, lengthKeyReg] },
-				{ type: "createNumber", registers: [indexReg], value: 0 },
 				{ type: "createNumber", registers: [oneReg], value: 1 },
 			];
+			if (spec.backward) {
+				fastInitInstructions.push({
+					type: "createNumber",
+					registers: [zeroReg],
+					value: 0,
+				});
+				fastInitInstructions.push({
+					type: "binary",
+					operator: "-",
+					registers: [indexReg, lengthReg, oneReg],
+				});
+			} else {
+				fastInitInstructions.push({
+					type: "createNumber",
+					registers: [indexReg],
+					value: 0,
+				});
+			}
 			if (spec.buildsResult !== undefined) {
 				fastInitInstructions.push({
 					type: "createArray",
@@ -1091,13 +1187,34 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 					registers: [resultLenReg],
 					value: 0,
 				});
+			} else if (spec.buildsResult === "flatMap") {
+				// Load the flatten-append helper once; the loop calls it per element.
+				fastInitInstructions.push({
+					type: "loadIntrinsic",
+					registers: [flatMapAppendFn],
+					intrinsic: "__arrayFlatMapAppend",
+				});
+			}
+			if (spec.accumulator) {
+				// acc = initial value (guaranteed present: checked above).
+				fastInitInstructions.push({
+					type: "move",
+					registers: [accumulatorReg, initialValue!],
+				});
 			}
 			fastInitInstructions.push({ type: "jump", blocks: [loopCond] });
 			fn.blocks.push({ instructions: fastInitInstructions });
-			// loopCond: while (i < len) → (hole check | call block), else afterLoop.
+			// loopCond: forward `i < len` / backward `i >= 0` → (hole check | call
+			// block), else afterLoop.
 			fn.blocks.push({
 				instructions: [
-					{ type: "binary", operator: "<", registers: [condReg, indexReg, lengthReg] },
+					spec.backward
+						? { type: "binary", operator: ">=", registers: [condReg, indexReg, zeroReg] }
+						: {
+								type: "binary",
+								operator: "<",
+								registers: [condReg, indexReg, lengthReg],
+							},
 					{
 						type: "jumpIf",
 						registers: [condReg],
@@ -1116,26 +1233,48 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 					],
 				});
 			}
-			// callBlock: elem = arr[i]; r = cb(elem, i, arr); then per-method control.
+			// callBlock: elem = arr[i]; then call the callback. reduce threads the
+			// accumulator: `acc = cb(acc, elem, i, arr)`; the others: `r = cb(elem, i, arr)`.
 			const callTail: Array<IRInstruction> = [
 				{ type: "loadProperty", registers: [elementReg, receiver, indexReg] },
-				{
-					type: "call",
-					registers: [
-						callbackResult,
-						callback,
-						undefinedReg,
-						elementReg,
-						indexReg,
-						receiver,
-					],
-				},
+				spec.accumulator
+					? {
+							type: "call",
+							registers: [
+								accumulatorReg,
+								callback,
+								undefinedReg,
+								accumulatorReg,
+								elementReg,
+								indexReg,
+								receiver,
+							],
+						}
+					: {
+							type: "call",
+							registers: [
+								callbackResult,
+								callback,
+								undefinedReg,
+								elementReg,
+								indexReg,
+								receiver,
+							],
+						},
 			];
 			if (spec.buildsResult === "map") {
 				// result[i] = cb(elem, i, arr) (index < preset length → fills in place).
 				callTail.push({
 					type: "storeProperty",
 					registers: [resultReg, indexReg, callbackResult],
+				});
+				callTail.push({ type: "jump", blocks: [loopIncr] });
+			} else if (spec.buildsResult === "flatMap") {
+				// __arrayFlatMapAppend(result, cb(elem, i, arr)) — flatten one level into
+				// result (the sink register is unused). Append cursor = result.length.
+				callTail.push({
+					type: "call",
+					registers: [resultLenReg, flatMapAppendFn, undefinedReg, resultReg, callbackResult],
 				});
 				callTail.push({ type: "jump", blocks: [loopIncr] });
 			} else if (spec.buildsResult === "filter") {
@@ -1178,10 +1317,14 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 					],
 				});
 			}
-			// loopIncr: i++.
+			// loopIncr: forward i++ / backward i--.
 			fn.blocks.push({
 				instructions: [
-					{ type: "binary", operator: "+", registers: [indexReg, indexReg, oneReg] },
+					{
+						type: "binary",
+						operator: spec.backward ? "-" : "+",
+						registers: [indexReg, indexReg, oneReg],
+					},
 					{ type: "jump", blocks: [loopCond] },
 				],
 			});
@@ -1194,14 +1337,16 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 					],
 				});
 			}
-			// afterLoop: dst = result array (map/filter) or the method's default value.
+			// afterLoop: dst = result array (map/filter) / accumulator (reduce) / the
+			// method's default value.
+			const afterLoopValue: IRInstruction =
+				spec.buildsResult !== undefined
+					? { type: "move", registers: [destination, resultReg] }
+					: spec.accumulator
+						? { type: "move", registers: [destination, accumulatorReg] }
+						: valueInstruction(spec.defaultValue, destination);
 			fn.blocks.push({
-				instructions: [
-					spec.buildsResult !== undefined
-						? { type: "move", registers: [destination, resultReg] }
-						: valueInstruction(spec.defaultValue, destination),
-					{ type: "jump", blocks: [join] },
-				],
+				instructions: [afterLoopValue, { type: "jump", blocks: [join] }],
 			});
 			// slowPath: run the original method. When the callback is a direct
 			// createFunction, re-create it here so the fast path's closure becomes dead

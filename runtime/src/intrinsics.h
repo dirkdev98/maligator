@@ -207,6 +207,12 @@ typedef enum MalIntrinsic {
      * inlined loop is semantically identical). Loaded via LOAD_INTRINSIC.
      */
     MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE,
+    /*
+     * Hidden flatMap append helper for the compiler's guarded inlining:
+     * __arrayFlatMapAppend(result, mapped) flattens `mapped` one level into the
+     * result array being built. Loaded via LOAD_INTRINSIC.
+     */
+    MAL_INTRINSIC_ARRAY_FLAT_MAP_APPEND,
     MAL_INTRINSIC_COUNT,
 } MalIntrinsic;
 

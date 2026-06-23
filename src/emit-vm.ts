@@ -767,6 +767,8 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_CJS_REQUIRE";
 		case "__arrayIterationEligible":
 			return "MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE";
+		case "__arrayFlatMapAppend":
+			return "MAL_INTRINSIC_ARRAY_FLAT_MAP_APPEND";
 	}
 }
 

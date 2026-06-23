@@ -1105,7 +1105,10 @@ type IRIntrinsic =
 	// Internal helper for guarded array-iteration inlining (the inliner emits
 	// LOAD_INTRINSIC + call to test a receiver before the inlined loop). Not a
 	// user-visible global.
-	| "__arrayIterationEligible";
+	| "__arrayIterationEligible"
+	// Internal flatMap append helper for guarded inlining: flattens a mapped value
+	// one level into the result array being built. Not a user-visible global.
+	| "__arrayFlatMapAppend";
 
 const irIntrinsics = new Set<string>([
 	"Object",

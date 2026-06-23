@@ -237,12 +237,11 @@ test("arr.map / arr.filter with inlinable callbacks are HOF sites", () => {
 	).toEqual(["filter"]);
 });
 
-test("reduce (accumulator-first arg shape) is not a HOF callback site", () => {
-	expect(
-		hofSites(
-			`(function (){ const a = [1,2]; return a.reduce((acc, x) => acc + x, 0); })();`,
-		),
-	).toEqual([]);
+test("reduce IS a HOF callback site (the callback is still the first argument)", () => {
+	const sites = hofSites(
+		`(function (){ const a = [1,2]; return a.reduce((acc, x) => acc + x, 0); })();`,
+	);
+	expect(sites.map((s) => s.method)).toEqual(["reduce"]);
 });
 
 test("a HOF callback that uses `this` is not an inlinable site", () => {
@@ -313,14 +312,37 @@ test("some/every/find/findIndex are each replaced by a guarded inlined loop", ()
 	}
 });
 
-test("flatMap is detected but NOT yet substituted (no inlined guard)", () => {
-	// flatMap is recognized by the analysis but has no inlined loop shape yet.
+test("flatMap is replaced by a guarded inlined loop using the flatten-append helper", () => {
 	const source = `(function (){ const a = [1,2,3]; return a.flatMap(x => [x, x]); })();`;
-	const guards = programInstrCount(
-		source,
-		(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
-	);
-	expect(guards).toBe(0);
+	expect(
+		programInstrCount(
+			source,
+			(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+		),
+		"flatMap should be guard-inlined",
+	).toBeGreaterThan(0);
+	// The per-element spread goes through the __arrayFlatMapAppend intrinsic.
+	expect(
+		programInstrCount(
+			source,
+			(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayFlatMapAppend",
+		),
+		"flatMap should load the flatten-append helper",
+	).toBeGreaterThan(0);
+});
+
+test("the flatMap callback closure is sunk to the slow path", () => {
+	const source = `(function (){ const a = [1,2,3]; return a.flatMap(x => [x, x]); })();`;
+	const ir = optimizedProgram(source);
+	const owner = ir.functions.find((fn) =>
+		fn.blocks.some((b) =>
+			b.instructions.some(
+				(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+			),
+		),
+	)!;
+	const blocksWithClosure = owner.blocks.filter((b) => b.instructions.some((i) => i.type === "createFunction")).length;
+	expect(blocksWithClosure).toBe(1); // only the slow path creates the closure
 });
 
 test("map/filter are now replaced by a guarded inlined loop", () => {
@@ -346,4 +368,40 @@ test("the map callback closure is sunk to the slow path", () => {
 	)!;
 	const blocksWithClosure = owner.blocks.filter((b) => b.instructions.some((i) => i.type === "createFunction")).length;
 	expect(blocksWithClosure).toBe(1); // only the slow path creates the closure
+});
+
+test("reduce(cb, init) is replaced by a guarded inlined loop; reduce(cb) is not", () => {
+	const withInit = `(function (){ const a = [1,2,3]; return a.reduce((acc, x) => acc + x, 0); })();`;
+	expect(
+		programInstrCount(
+			withInit,
+			(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+		),
+	).toBeGreaterThan(0);
+	// No initial value → not inlined (first-element/empty-throw stays on the slow path).
+	const noInit = `(function (){ const a = [1,2,3]; return a.reduce((acc, x) => acc + x); })();`;
+	expect(
+		programInstrCount(
+			noInit,
+			(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+		),
+	).toBe(0);
+});
+
+test("backward HOF methods (reduceRight/findLast/findLastIndex) are guard-inlined", () => {
+	const cases: Array<[string, string]> = [
+		["reduceRight", `(function (){ const a=[1,2,3]; return a.reduceRight((acc,x)=>acc+x, 0); })();`],
+		["findLast", `(function (){ const a=[1,2,3]; return a.findLast(x=>x<2); })();`],
+		["findLastIndex", `(function (){ const a=[1,2,3]; return a.findLastIndex(x=>x<2); })();`],
+	];
+	for (const [name, source] of cases) {
+		expect(
+			programInstrCount(
+				source,
+				(i) =>
+					i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+			),
+			`${name} should be guard-inlined`,
+		).toBeGreaterThan(0);
+	}
 });
