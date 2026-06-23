@@ -1,5 +1,7 @@
 #include "property_iter.h"
 
+#include "array_object.h"
+
 #define MAL_PROPERTY_ITER_PHASE_INDEX 0
 #define MAL_PROPERTY_ITER_PHASE_STRING 1
 #define MAL_PROPERTY_ITER_PHASE_SYMBOL 2
@@ -53,7 +55,47 @@ static bool mal_property_iter_next_shape(MalPropertyIter *iter, MalKey *key_out,
     return false;
 }
 
+/**
+ * Emit the next present (non-hole) dense array element in ascending index order,
+ * advancing the monotonic `last_index` cursor (so the whole scan is O(dense_count)).
+ * Each element is a default-data property. Returns false for a non-dense object or
+ * once the dense region is exhausted. In dense mode no index keys live in the table,
+ * so callers fall through to shaped/dictionary (string/symbol) keys afterwards.
+ */
+static bool mal_property_iter_next_dense(MalPropertyIter *iter, MalKey *key_out, MalPropertyDesc *desc_out) {
+    if (iter->object->header.type != MAL_HEAP_ARRAY_OBJECT) {
+        return false;
+    }
+    const MalArrayObject *array = (const MalArrayObject *) iter->object;
+    if (!mal_array_object_is_dense(array)) {
+        return false;
+    }
+    u32 start = iter->has_last_index ? iter->last_index + 1 : 0;
+    for (u32 i = start; i < array->dense_count; i++) {
+        MalValue value;
+        if (!mal_array_object_dense_get(array, i, &value)) {
+            continue; // hole
+        }
+        iter->last_index = i;
+        iter->has_last_index = true;
+        *key_out = (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+        *desc_out = (MalPropertyDesc){
+            .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+            .value = value,
+            .getter = mal_value_new_undefined(),
+            .setter = mal_value_new_undefined(),
+        };
+        return true;
+    }
+    return false;
+}
+
 static bool mal_property_iter_next_storage(MalPropertyIter *iter, MalKey *key_out, MalPropertyDesc *desc_out) {
+    // Dense array elements first (ascending), then shaped/dictionary string keys.
+    if (mal_property_iter_next_dense(iter, key_out, desc_out)) {
+        return true;
+    }
+
     // Inline (shaped) string properties first, in slot order.
     if (mal_property_iter_next_shape(iter, key_out, desc_out)) {
         return true;
@@ -90,6 +132,15 @@ static u32 mal_property_iter_index_value(MalKey key) {
 }
 
 static bool mal_property_iter_next_index(MalPropertyIter *iter, MalKey *key_out, MalPropertyDesc *desc_out) {
+    // Dense array: index elements live in the vector (ascending, no table entries).
+    if (mal_property_iter_next_dense(iter, key_out, desc_out)) {
+        return true;
+    }
+    if (iter->object->header.type == MAL_HEAP_ARRAY_OBJECT &&
+        mal_array_object_is_dense((const MalArrayObject *) iter->object)) {
+        return false; // dense array: index keys are never in the table
+    }
+
     // Index (integer) keys never enter a shape — they only live in the overflow.
     if (!mal_property_iter_has_overflow(iter)) {
         return false;

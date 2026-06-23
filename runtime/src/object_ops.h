@@ -71,3 +71,24 @@ bool mal_object_delete_own(MalObject *object, MalKey key);
  * Perform a pragmatic ordinary set operation.
  */
 bool mal_object_set(MalObject *object, MalKey key, MalValue value);
+
+/**
+ * Deoptimize a dense array to legacy table storage (no-op if already table-mode or
+ * not dense). Used by operations that need per-element attributes the dense vector
+ * cannot represent (e.g. Object.freeze/seal demoting elements to real table entries).
+ */
+void mal_object_array_deoptimize(struct MalArrayObject *array);
+
+/**
+ * Array fast-elements protector (see object_ops.c). True while a default-prototype
+ * array's inherited chain has no integer-index property, so a fresh-index store
+ * cannot hit an inherited setter and may skip the prototype-chain resolve.
+ */
+extern bool mal_array_elements_protector;
+
+/**
+ * The %Array.prototype% object (set at intrinsics init). Cached as a bare pointer so
+ * the inline array index store fast path can confirm an array is on the default
+ * prototype without a vm handle.
+ */
+extern MalObject *mal_array_prototype_object;

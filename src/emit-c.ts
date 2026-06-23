@@ -969,15 +969,18 @@ function emitInstruction(
 			// A per-site monomorphic inline cache: a static persists across calls and
 			// (zero-initialized) starts empty. On a repeat access to the same shape it
 			// is a direct slot read with no key conversion or shape search.
+			// mal_vm_array_fast_load inlines a dense-array index read ahead of the IC
+			// (a non-array / non-index key falls straight through at no real cost).
 			return [
 				`static MalInlineCache __ic_${ip};`,
-				`r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
+				`r${instruction.dst} = mal_vm_array_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
 				throwCheck,
 			];
 		case "STORE_PROPERTY":
+			// mal_vm_array_fast_store inlines a dense-array index store ahead of the IC.
 			return [
 				`static MalInlineCache __ic_${ip};`,
-				`mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
+				`mal_vm_array_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
 				throwCheck,
 			];
 		case "TO_PROPERTY_KEY":
@@ -1266,7 +1269,7 @@ function emitInstruction(
 			return [
 				`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
 				`MalValue ${val}; bool ${done};`,
-				`if (!mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})) ${onThrow}`,
+				`if (!mal_vm_iterator_step_fast(vm, &${rec}, &${val}, &${done})) ${onThrow}`,
 				`r${instruction.valueDst} = ${val};`,
 				reps[instruction.doneDst] === "boolean"
 					? `r${instruction.doneDst} = ${done};`

@@ -68,6 +68,11 @@ typedef u64 MalValue;
 // The "empty"/uninitialized sentinel: a let/const/class binding in its temporal
 // dead zone. Never a real JS value; reading one throws ReferenceError.
 #define MAL_VALUE_EMPTY (MAL_VALUE_STATIC | 0x09)
+// The array-hole sentinel: marks an absent index inside an array's dense element
+// vector (distinct from a present `undefined`). Never escapes to JS — a read of a
+// hole resolves like a missing own property (proto lookup; HasProperty is false).
+// A static (non-pointer) value, so GC tracing skips it.
+#define MAL_VALUE_ARRAY_HOLE (MAL_VALUE_STATIC | 0x0A)
 
 
 // Inline dynamic values. We have room for 7 items (3 bits).
@@ -167,6 +172,16 @@ static inline MalValue mal_value_new_empty() {
 /** Check if the value is the uninitialized ("empty") sentinel. */
 static inline bool mal_value_is_empty(MalValue value) {
     return value == MAL_VALUE_EMPTY;
+}
+
+/** Create the array-hole sentinel (an absent slot in a dense element vector). */
+static inline MalValue mal_value_new_array_hole() {
+    return MAL_VALUE_ARRAY_HOLE;
+}
+
+/** Check if the value is the array-hole sentinel. */
+static inline bool mal_value_is_array_hole(MalValue value) {
+    return value == MAL_VALUE_ARRAY_HOLE;
 }
 
 /** Create a new MalValue from a boolean. */

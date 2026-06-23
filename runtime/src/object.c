@@ -11,6 +11,7 @@ void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObje
     object->overflow = nullptr;
     object->prototype = prototype;
     object->extensible = true;
+    object->fast_elements_proto = false;
 }
 
 MalObject *mal_object_new(MalHeap *heap, MalObject *prototype) {

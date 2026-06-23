@@ -1750,6 +1750,18 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
         return true;
     }
 
+    // Fast path: a present dense array element is an own writable data property,
+    // so return it directly — skipping the synthetic/string-exotic/resolve machinery
+    // and the prototype walk. A miss (hole or out-of-range) falls through to the full
+    // path, which consults the prototype chain. This is the arr[i] read hot path.
+    if (key.kind == MAL_KEY_INDEX && mal_value_heap_type(object_value) == MAL_HEAP_ARRAY_OBJECT) {
+        const MalArrayObject *array = (const MalArrayObject *) mal_value_to_object(object_value);
+        i32 index = mal_value_to_i32(key.value);
+        if (index >= 0 && mal_array_object_dense_get(array, (u32) index, out)) {
+            return true;
+        }
+    }
+
     // Fast path for an ordinary object: it has no synthetic properties (those
     // belong to arrays / typed arrays / functions / module namespaces) and is
     // not a string-wrapper exotic, so skip both of those probes and go straight
@@ -1881,6 +1893,40 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
             // An invalid integer-index key: [[Set]] is a no-op but returns true,
             // never creating an ordinary property.
             return true;
+        }
+    }
+
+    // Fast paths for an integer-index [[Set]] of a dense array (target is receiver),
+    // skipping the prototype-chain resolve(s) the slow path performs.
+    if (target == receiver && key.kind == MAL_KEY_INDEX &&
+        mal_value_heap_type(target) == MAL_HEAP_ARRAY_OBJECT) {
+        MalArrayObject *array = (MalArrayObject *) mal_value_to_object(target);
+        i32 index = mal_value_to_i32(key.value);
+        if (index >= 0) {
+            // (a) Overwrite of a present element: an own writable data property shadows
+            // any inherited accessor, so this is sound regardless of the prototype
+            // chain or the protector.
+            if (mal_array_object_dense_has(array, (u32) index)) {
+                mal_array_object_dense_store(array, (u32) index, value);
+                return true;
+            }
+            // (b) Fresh-index store (append / hole-fill): sound to store directly only
+            // when no inherited indexed setter can intercept — the array keeps the
+            // default %Array.prototype% and the fast-elements protector holds — and it
+            // is extensible with a writable length (else the slow path must reject or
+            // handle length specially). A too-sparse index (NEEDS_TABLE) falls through.
+            if (!array->dense_deopted && mal_array_elements_protector &&
+                array->object.extensible && array->length_writable &&
+                array->object.prototype ==
+                    mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])) {
+                if (mal_array_object_dense_store(array, (u32) index, value) ==
+                    MAL_ARRAY_DENSE_APPLIED) {
+                    if ((u32) index >= array->length) {
+                        array->length = (u32) index + 1;
+                    }
+                    return true;
+                }
+            }
         }
     }
 
@@ -2265,6 +2311,37 @@ static void mal_vm_op_store_property_keyed(
             // An invalid integer-index key (e.g. "-1"/"1.5"/"-0"): the write is a
             // silently-dropped no-op, never an ordinary property.
             return;
+        }
+    }
+
+    // Fast paths for an integer-index store of a dense array — the arr[i]=v hot path —
+    // skipping the prototype-chain resolve(s) the slow path below performs.
+    if (key.kind == MAL_KEY_INDEX && mal_value_heap_type(object_value) == MAL_HEAP_ARRAY_OBJECT) {
+        MalArrayObject *array = (MalArrayObject *) mal_value_to_object(object_value);
+        i32 index = mal_value_to_i32(key.value);
+        if (index >= 0) {
+            // Overwrite of a present element: an own writable data property shadows
+            // any inherited accessor — sound regardless of the prototype / protector.
+            if (mal_array_object_dense_has(array, (u32) index)) {
+                mal_array_object_dense_store(array, (u32) index, value);
+                return;
+            }
+            // Fresh-index store (append / hole-fill): sound to store directly only when
+            // no inherited indexed setter can intercept (default %Array.prototype% +
+            // the fast-elements protector) and the array is extensible with a writable
+            // length. A too-sparse index (NEEDS_TABLE) falls through to the slow path.
+            if (!array->dense_deopted && mal_array_elements_protector &&
+                array->object.extensible && array->length_writable &&
+                array->object.prototype ==
+                    mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])) {
+                if (mal_array_object_dense_store(array, (u32) index, value) ==
+                    MAL_ARRAY_DENSE_APPLIED) {
+                    if ((u32) index >= array->length) {
+                        array->length = (u32) index + 1;
+                    }
+                    return;
+                }
+            }
         }
     }
 

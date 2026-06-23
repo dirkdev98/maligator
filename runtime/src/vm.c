@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__APPLE__) || defined(__linux__)
+#include <pthread.h>
+#endif
 
 #include "async_function.h"
 #include "builtin_async_generator.h"
@@ -39,6 +42,45 @@ MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
     return env;
 }
 
+// Bytes of C stack kept in reserve below the limit: a single compiled frame (its
+// MalValue registers) plus the runtime helpers it may call before the next
+// compiled-entry check. Generous — the stack is megabytes, so reserving this much
+// costs nothing but prevents the deepest single level from overrunning.
+#define MAL_NATIVE_STACK_MARGIN (512u * 1024u)
+
+/**
+ * The lowest C-stack address a compiled-function entry may sit at before recursion is
+ * refused (see MalVm.stack_limit). Queries the current thread's stack bounds; returns
+ * 0 (check disabled, the depth counter is the only guard) if they are unavailable.
+ * The stack grows down, so the limit is the stack's low end plus the safety margin.
+ */
+static uptr mal_vm_compute_stack_limit(void) {
+#if defined(__APPLE__)
+    pthread_t self = pthread_self();
+    void *top = pthread_get_stackaddr_np(self); // highest address (stack base)
+    size_t size = pthread_get_stacksize_np(self);
+    if (top == nullptr || size == 0) {
+        return 0;
+    }
+    return (uptr) top - (uptr) size + MAL_NATIVE_STACK_MARGIN;
+#elif defined(__linux__)
+    pthread_attr_t attr;
+    if (pthread_getattr_np(pthread_self(), &attr) != 0) {
+        return 0;
+    }
+    void *low = nullptr;
+    size_t size = 0;
+    int ok = pthread_attr_getstack(&attr, &low, &size);
+    pthread_attr_destroy(&attr);
+    if (ok != 0 || low == nullptr || size == 0) {
+        return 0;
+    }
+    return (uptr) low + MAL_NATIVE_STACK_MARGIN; // getstack returns the low end
+#else
+    return 0;
+#endif
+}
+
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     mal_gc_init();
     vm->definition = definition;
@@ -52,6 +94,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->value_stack = malloc(sizeof(MalValue) * (usize) vm->value_stack_capacity);
     vm->value_stack_size = 0;
     vm->native_call_depth = 0;
+    vm->stack_limit = mal_vm_compute_stack_limit();
     vm->gc_native_frames = 0;
     vm->active_job = nullptr;
     vm->kept_objects = nullptr;
@@ -1081,7 +1124,12 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
 }
 
 bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
-    if (vm->native_call_depth >= MAL_NATIVE_CALL_DEPTH_LIMIT) {
+    // Real C-stack guard (robust to per-frame size): refuse when this entry's frame
+    // has descended past the reserved margin. Falls back to the fixed depth counter
+    // (also a backstop when stack bounds are unavailable). Both throw the same
+    // RangeError, so deep compiled recursion unwinds cleanly instead of segfaulting.
+    if ((vm->stack_limit != 0 && (uptr) __builtin_frame_address(0) < vm->stack_limit) ||
+        vm->native_call_depth >= MAL_NATIVE_CALL_DEPTH_LIMIT) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
         return false;
     }

@@ -1,10 +1,13 @@
 #include "builtin_iterator.h"
 
+#include "array_object.h"
 #include "builtin_array.h"
 #include "function_object.h"
 #include "heap_string.h"
 #include "map_object.h"
 #include "value_ops.h"
+
+MalNativeFunctionCallback mal_array_iterator_next_callback = nullptr;
 #include "vm.h"
 #include "vm_ops.h"
 
@@ -111,6 +114,37 @@ static bool mal_builtin_iterator_map_advance(
 static bool mal_builtin_iterator_array_advance(
     MalVm *vm, MalIteratorObject *iterator, MalValue *value_out, bool *done_out
 ) {
+    // Fast path: a real array (not an array-like the iterator was .call'd on) reads
+    // its live length from the header and a present element straight from the dense
+    // vector — no Get calls. A KEYS or VALUES step needs no allocation; ENTRIES (a
+    // pair), a hole, or an out-of-dense index falls through to the Get-based path.
+    if (mal_value_is_heap_type(iterator->target, MAL_HEAP_ARRAY_OBJECT) &&
+        iterator->kind != MAL_ITERATOR_ARRAY_ENTRIES) {
+        MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(iterator->target);
+        u64 index = iterator->index;
+        if (index >= array->length) {
+            iterator->done = true;
+            *value_out = mal_value_new_undefined();
+            *done_out = true;
+            return true;
+        }
+        if (iterator->kind == MAL_ITERATOR_ARRAY_KEYS) {
+            iterator->index++;
+            *value_out = mal_value_from_i32((i32) index);
+            *done_out = false;
+            return true;
+        }
+        MalValue element;
+        if (mal_array_object_dense_get(array, (u32) index, &element)) {
+            iterator->index++;
+            *value_out = element; // MAL_ITERATOR_ARRAY_VALUES
+            *done_out = false;
+            return true;
+        }
+        // Hole / beyond the dense region (still < length): fall through so the
+        // Get-based path reads it (prototype-aware → undefined for a clean hole).
+    }
+
     // Length reads live each step, so growth during iteration is visited.
     MalValue length_value;
     if (!mal_vm_get_property(vm, iterator->target, mal_intrinsic_string_key(vm, "length"), &length_value)) {
@@ -487,6 +521,9 @@ void mal_builtin_iterator_install(MalVm *vm) {
 
     MalObject *array_iterator = mal_builtin_iterator_prototype_new(vm, MAL_INTRINSIC_ARRAY_ITERATOR_PROTOTYPE, iterator_prototype, "Array Iterator");
     mal_intrinsic_define_method_n(vm, array_iterator, "next", 0, mal_builtin_array_iterator_next);
+    // Cache the array-iterator next for the inline iterator-step fast path's
+    // protocol-intact check (mal_vm_iterator_step_fast).
+    mal_array_iterator_next_callback = mal_builtin_array_iterator_next;
 
     MalObject *string_iterator = mal_builtin_iterator_prototype_new(vm, MAL_INTRINSIC_STRING_ITERATOR_PROTOTYPE, iterator_prototype, "String Iterator");
     mal_intrinsic_define_method_n(vm, string_iterator, "next", 0, mal_builtin_string_iterator_next);

@@ -1,9 +1,18 @@
 #pragma once
 
 #include "./defaults.h"
+#include "function_object.h"
 #include "iterator_object.h"
 
 typedef struct MalVm MalVm;
+
+/**
+ * The builtin Array iterator `next` callback (mal_builtin_array_iterator_next), cached
+ * at install. The inline iterator-step fast path (mal_vm_iterator_step_fast) compares
+ * a captured next against it to confirm the array-iterator protocol is unpatched
+ * before advancing a dense array directly.
+ */
+extern MalNativeFunctionCallback mal_array_iterator_next_callback;
 
 /**
  * Spec IteratorRecord: the iterator object together with its cached next

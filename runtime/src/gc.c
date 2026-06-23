@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "./array_buffer_object.h"
+#include "./array_object.h"
 #include "./bound_function_object.h"
 #include "./builtin_data_view.h"
 #include "./builtin_finalization_registry.h"
@@ -343,6 +344,15 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
     mal_gc_trace_object_common(object);
 
     switch (cell->type) {
+        case MAL_HEAP_ARRAY_OBJECT: {
+            // Dense element vector: trace the live region [0, dense_count). Hole
+            // sentinels are static (non-pointer) values, so marking them is a no-op.
+            MalArrayObject *array = (MalArrayObject *) cell;
+            if (array->elements != nullptr) {
+                mal_gc_mark_values(array->elements, (i32) array->dense_count);
+            }
+            break;
+        }
         case MAL_HEAP_FUNCTION_OBJECT:
             mal_gc_trace_env(((MalFunctionObject *) cell)->creation_env);
             break;
@@ -574,6 +584,16 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
     // MalObject-based cell: free its type-specific owned memory, then the common
     // overflow table and inline-slots buffer. Idempotent (null after free).
     switch (cell->type) {
+        case MAL_HEAP_ARRAY_OBJECT: {
+            MalArrayObject *array = (MalArrayObject *) cell;
+            if (array->elements != nullptr) {
+                free(array->elements);
+                array->elements = nullptr;
+                array->capacity = 0;
+                array->dense_count = 0;
+            }
+            break;
+        }
         case MAL_HEAP_MAP_OBJECT:
         case MAL_HEAP_SET_OBJECT: {
             MalMapObject *map = (MalMapObject *) cell;

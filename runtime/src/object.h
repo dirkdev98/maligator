@@ -21,6 +21,14 @@ typedef struct MalObject {
     MalShape *shape;
     struct MalObject *prototype;
     bool extensible;
+    /**
+     * Set only on %Array.prototype% and %Object.prototype% (at intrinsics init).
+     * Lets the low-level MOP invalidate the array fast-elements protector
+     * (mal_array_elements_protector) when an integer-index property is defined on,
+     * or the prototype changed of, one of those objects — without a vm handle. Free:
+     * fits the padding after `extensible`.
+     */
+    bool fast_elements_proto;
     /** Inline named-property values for the shape; null in dictionary mode. */
     MalValue *slots;
     /** Dictionary/overflow table (named + index props); null until needed. */

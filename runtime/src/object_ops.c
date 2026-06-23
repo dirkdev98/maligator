@@ -2,8 +2,23 @@
 
 #include <stdlib.h>
 
+#include "array_object.h"
 #include "gc.h"
 #include "value_ops.h"
+
+/**
+ * Array fast-elements protector. True while neither %Array.prototype% nor
+ * %Object.prototype% has an integer-index own property and neither has been
+ * reparented — i.e. an array whose [[Prototype]] is the default %Array.prototype%
+ * has a fully index-clean prototype chain, so a fresh-index store cannot be
+ * intercepted by an inherited indexed setter and can skip the prototype-chain
+ * resolve. Invalidated permanently (conservative) the first time that stops holding.
+ * Read on the array index [[Set]] hot path (mal_vm_set_property).
+ */
+bool mal_array_elements_protector = true;
+
+/** %Array.prototype% (set at intrinsics init); see object_ops.h. */
+MalObject *mal_array_prototype_object = nullptr;
 
 static bool mal_object_desc_is_accessor(MalPropertyDesc desc) {
     return (desc.flags & MAL_PROPERTY_ACCESSOR) != 0;
@@ -143,11 +158,74 @@ bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
         }
     }
 
+    // Reparenting a watched prototype changes every default-proto array's inherited
+    // chain, so the fast-elements protector no longer holds.
+    if (object->fast_elements_proto) {
+        mal_array_elements_protector = false;
+    }
+
     object->prototype = prototype;
     return true;
 }
 
+/**
+ * Deoptimize an array from the dense element vector to legacy table storage: move
+ * every present dense element into the property table under its index key, free the
+ * vector, and mark the array table-mode forever. Called when an index needs an
+ * attribute the dense vector cannot express (non-default-data, accessor) or is too
+ * sparse to store densely. Safe on an already-table-mode array (no-op).
+ */
+void mal_object_array_deoptimize(MalArrayObject *array) {
+    if (array->dense_deopted) {
+        return;
+    }
+    MalValue *buffer = array->elements;
+    u32 count = array->dense_count;
+    // Switch to table mode FIRST so the mal_object_define_own calls below take the
+    // ordinary table path instead of recursing into the dense path.
+    array->elements = nullptr;
+    array->capacity = 0;
+    array->dense_count = 0;
+    array->dense_deopted = true;
+    if (buffer == nullptr) {
+        return; // lazy-empty array: nothing to migrate
+    }
+    // The detached buffer is otherwise unreachable; a table insert below can trigger
+    // GC, so root the not-yet-migrated values across the migration.
+    MalRootSpan span;
+    mal_gc_root(&span, buffer, (i32) count);
+    for (u32 i = 0; i < count; i++) {
+        if (mal_value_is_array_hole(buffer[i])) {
+            continue;
+        }
+        MalPropertyDesc desc = mal_object_data_desc(buffer[i], MAL_DEFAULT_DATA_FLAGS);
+        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+        mal_object_define_own(&array->object, key, &desc);
+    }
+    mal_gc_unroot(&span);
+    free(buffer);
+}
+
 MalPropertyLookup mal_object_get_own(const MalObject *object, MalKey key) {
+    // Dense array element: an in-range, non-hole index reads straight from the
+    // vector (a synthesized default-data descriptor). In dense mode no index keys
+    // live in the table, so a dense miss is absent — do not consult the overflow.
+    if (key.kind == MAL_KEY_INDEX && object->header.type == MAL_HEAP_ARRAY_OBJECT) {
+        const MalArrayObject *array = (const MalArrayObject *) object;
+        if (mal_array_object_is_dense(array)) {
+            i32 index = mal_value_to_i32(key.value);
+            MalValue value;
+            if (index >= 0 && mal_array_object_dense_get(array, (u32) index, &value)) {
+                return (MalPropertyLookup){
+                    .present = true,
+                    .entry = nullptr,
+                    .desc = mal_object_data_desc(value, MAL_DEFAULT_DATA_FLAGS),
+                };
+            }
+            return (MalPropertyLookup){.present = false, .entry = nullptr};
+        }
+        // Table-mode array (deopted or lazy-empty): fall through to the table lookup.
+    }
     // Shaped string property: synthesize a data descriptor from the inline slot.
     if (key.kind == MAL_KEY_STRING) {
         i32 idx = mal_shape_find(object->shape, key);
@@ -185,6 +263,37 @@ MalPropertyResolution mal_object_resolve_property(const MalObject *object, MalKe
 }
 
 MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const MalPropertyDesc *desc) {
+    // Defining an integer-index property on a watched prototype (%Array.prototype% or
+    // %Object.prototype%) dirties the fast-elements protector — an inherited indexed
+    // property could now intercept an array's fresh-index store.
+    if (key.kind == MAL_KEY_INDEX && object->fast_elements_proto) {
+        mal_array_elements_protector = false;
+    }
+
+    // Dense array element fast path. A default-data store at an integer index goes
+    // straight into the vector; anything the vector cannot represent (non-default
+    // attributes, an accessor, or a too-sparse index) deoptimizes the array to table
+    // storage, then falls through to the ordinary define below.
+    if (key.kind == MAL_KEY_INDEX && object->header.type == MAL_HEAP_ARRAY_OBJECT) {
+        MalArrayObject *array = (MalArrayObject *) object;
+        if (!array->dense_deopted) {
+            i32 index = mal_value_to_i32(key.value);
+            if (index >= 0 && mal_object_desc_is_default_data(desc)) {
+                // Defining a NEW index on a non-extensible array is rejected;
+                // overwriting an existing element is allowed.
+                if (!object->extensible && !mal_array_object_dense_has(array, (u32) index)) {
+                    return MAL_DEFINE_OWN_REJECTED;
+                }
+                if (mal_array_object_dense_store(array, (u32) index, desc->value) ==
+                    MAL_ARRAY_DENSE_APPLIED) {
+                    return MAL_DEFINE_OWN_APPLIED;
+                }
+            }
+            // Not dense-storable: deopt, then continue to the table path below.
+            mal_object_array_deoptimize(array);
+        }
+    }
+
     // Shape fast path: a default data property under a string key.
     if (key.kind == MAL_KEY_STRING && mal_object_desc_is_default_data(desc)) {
         i32 idx = mal_shape_find(object->shape, key);
@@ -238,6 +347,21 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
 }
 
 bool mal_object_delete_own(MalObject *object, MalKey key) {
+    // Dense array element: a present index becomes a hole (dense_delete shades the
+    // dropped reference); dense elements are always configurable, so delete always
+    // succeeds. In dense mode no index keys live in the table, so this is the whole
+    // operation for an in-range index.
+    if (key.kind == MAL_KEY_INDEX && object->header.type == MAL_HEAP_ARRAY_OBJECT) {
+        MalArrayObject *array = (MalArrayObject *) object;
+        if (mal_array_object_is_dense(array)) {
+            i32 index = mal_value_to_i32(key.value);
+            if (index >= 0) {
+                mal_array_object_dense_delete(array, (u32) index);
+            }
+            return true;
+        }
+    }
+
     MalPropertyLookup lookup = mal_object_get_own(object, key);
 
     if (!lookup.present) {

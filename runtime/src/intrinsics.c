@@ -220,6 +220,15 @@ void mal_intrinsics_init(MalVm *vm) {
     vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE] = mal_value_from_object(function_prototype);
     vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE] = mal_value_from_object(array_prototype);
 
+    // Watch %Array.prototype% and %Object.prototype% for the array fast-elements
+    // protector: an integer-index define on, or reparenting of, either invalidates it
+    // (see mal_array_elements_protector). Their builtin methods are string-keyed, so
+    // installing them below does not trip the protector.
+    object_prototype->fast_elements_proto = true;
+    array_prototype->fast_elements_proto = true;
+    // Cache %Array.prototype% for the inline array store fast path (default-proto check).
+    mal_array_prototype_object = array_prototype;
+
     mal_builtin_object_install(vm);
     // Well-known symbols install before any pass that defines symbol-keyed
     // properties (Function.prototype[@@hasInstance], iterator wiring,

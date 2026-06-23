@@ -2,13 +2,95 @@
 
 #include <stdlib.h>
 
+#include "gc.h"
 #include "heap_string.h"
 #include "object_ops.h"
+
+// Largest gap (new index minus the current dense_count) the dense vector will span
+// with holes. A store beyond this is treated as sparse: the array deoptimizes to
+// table storage rather than allocate a mostly-hole vector.
+#define MAL_ARRAY_DENSE_MAX_GAP 1024u
 
 void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prototype) {
     mal_object_init(heap, &array->object, MAL_HEAP_ARRAY_OBJECT, prototype);
     array->length = 0;
     array->length_writable = true;
+    array->elements = nullptr;
+    array->capacity = 0;
+    array->dense_count = 0;
+    array->dense_deopted = false;
+}
+
+bool mal_array_object_is_dense(const MalArrayObject *array) {
+    return array->elements != nullptr;
+}
+
+bool mal_array_object_dense_get(const MalArrayObject *array, u32 index, MalValue *out) {
+    if (array->elements == nullptr || index >= array->dense_count) {
+        return false;
+    }
+    MalValue value = array->elements[index];
+    if (mal_value_is_array_hole(value)) {
+        return false;
+    }
+    *out = value;
+    return true;
+}
+
+bool mal_array_object_dense_has(const MalArrayObject *array, u32 index) {
+    MalValue ignored;
+    return mal_array_object_dense_get(array, index, &ignored);
+}
+
+/** Ensure `elements` has room for at least `needed` slots (geometric growth). */
+static bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed) {
+    if (needed <= array->capacity) {
+        return true;
+    }
+    u32 capacity = array->capacity == 0 ? 4 : array->capacity;
+    while (capacity < needed) {
+        capacity *= 2;
+    }
+    MalValue *grown = realloc(array->elements, sizeof(MalValue) * capacity);
+    if (grown == nullptr) {
+        return false;
+    }
+    array->elements = grown;
+    array->capacity = capacity;
+    return true;
+}
+
+MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index, MalValue value) {
+    // Overwrite within the existing dense region (shade the replaced reference).
+    if (array->elements != nullptr && index < array->dense_count) {
+        mal_gc_write_barrier(array->elements[index]);
+        array->elements[index] = value;
+        return MAL_ARRAY_DENSE_APPLIED;
+    }
+
+    // Extending (or lazily creating) the vector: reject a gap large enough that the
+    // hole fill would waste memory — the caller deoptimizes to table storage.
+    if (index >= array->dense_count + MAL_ARRAY_DENSE_MAX_GAP) {
+        return MAL_ARRAY_DENSE_NEEDS_TABLE;
+    }
+    if (!mal_array_object_dense_reserve(array, index + 1)) {
+        return MAL_ARRAY_DENSE_NEEDS_TABLE;
+    }
+    // Fill the gap [dense_count, index) with holes, then place the value.
+    for (u32 i = array->dense_count; i < index; i++) {
+        array->elements[i] = mal_value_new_array_hole();
+    }
+    array->elements[index] = value;
+    array->dense_count = index + 1;
+    return MAL_ARRAY_DENSE_APPLIED;
+}
+
+void mal_array_object_dense_delete(MalArrayObject *array, u32 index) {
+    if (array->elements == nullptr || index >= array->dense_count) {
+        return;
+    }
+    mal_gc_write_barrier(array->elements[index]);
+    array->elements[index] = mal_value_new_array_hole();
 }
 
 MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
@@ -82,7 +164,13 @@ static u32 mal_array_object_shrink(MalArrayObject *array, u32 new_length) {
 
 void mal_array_object_set_length(MalArrayObject *array, u32 length) {
     if (length < array->length) {
+        // Table sparse indices (only present on deopted arrays) may block the shrink
+        // at a non-configurable element; dense elements are always configurable, so
+        // they never block — just truncate the dense region to the achieved length.
         length = mal_array_object_shrink(array, length);
+        if (array->elements != nullptr && array->dense_count > length) {
+            array->dense_count = length;
+        }
     }
 
     array->length = length;

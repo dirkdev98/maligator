@@ -1326,6 +1326,12 @@ static MalValue mal_builtin_object_set_integrity(const MalValue *args, i32 arg_c
     }
 
     MalObject *object = mal_value_to_object(args[0]);
+    // Seal/freeze clears configurable (and writable) per element — attributes the
+    // dense vector cannot express. Demote a dense array's elements into the table
+    // first so the loop below can rewrite their descriptors.
+    if (mal_value_is_array_object(args[0])) {
+        mal_object_array_deoptimize(mal_value_to_array_object(args[0]));
+    }
     MalTable *table = mal_object_properties(object);
     usize count = mal_table_size(table);
     MalKey *keys = malloc(sizeof(MalKey) * count);

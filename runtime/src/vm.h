@@ -867,6 +867,16 @@ typedef struct MalVm {
     i32 native_call_depth;
 
     /**
+     * Lowest safe C-stack address (the real stack bottom plus a safety margin), or 0
+     * when the platform stack bounds could not be queried. A compiled-function entry
+     * whose frame is below this throws a RangeError before the C stack is actually
+     * exhausted — robust to per-frame size, unlike the fixed depth counter alone
+     * (which stays as a backstop). The stack grows down, so "below" means a smaller
+     * address.
+     */
+    uptr stack_limit;
+
+    /**
      * Count of active *un-rooted* native builtin invocations on the C stack. A
      * builtin holds MalValue scratch in C locals the root scan cannot enumerate, so
      * the collector must not run while any are active — the safepoint poll is gated

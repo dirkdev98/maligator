@@ -1,6 +1,9 @@
 #pragma once
 
 #include "./defaults.h"
+#include "array_object.h"
+#include "builtin_iterator.h"
+#include "object_ops.h"
 #include "table.h"
 #include "vm.h"
 
@@ -262,6 +265,94 @@ typedef struct MalInlineCache {
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic);
 
 void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic);
+
+/**
+ * Inline dense-array index access for the native backend (emit-c), so a `obj[i]`
+ * read/write of a dense array is a direct vector load/store rather than a nested
+ * runtime call. A non-array object, a non-int32 key, or a dense miss falls back to
+ * the inline-cached op (which handles every other case identically). At -O2 the
+ * C compiler inlines the dense check into the caller; the fallback call survives only
+ * on the slow path. These mirror the runtime fast paths in mal_vm_op_store_property_keyed
+ * / mal_vm_get_property_with_receiver, so the interpreter and native backends agree.
+ */
+static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
+    if (mal_value_is_int32(key_value) && mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
+        i32 index = mal_value_to_i32(key_value);
+        MalValue out;
+        if (index >= 0 &&
+            mal_array_object_dense_get((const MalArrayObject *) mal_value_to_heap(object_value), (u32) index, &out)) {
+            return out;
+        }
+    }
+    return mal_vm_op_load_property_ic(vm, object_value, key_value, ic);
+}
+
+static inline void mal_vm_array_fast_store(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic) {
+    if (mal_value_is_int32(key_value) && mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
+        i32 index = mal_value_to_i32(key_value);
+        if (index >= 0) {
+            MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(object_value);
+            // Overwrite of a present element — own data shadows any inherited accessor.
+            if (mal_array_object_dense_has(array, (u32) index)) {
+                mal_array_object_dense_store(array, (u32) index, value);
+                return;
+            }
+            // Fresh-index store — sound only on the default %Array.prototype% with the
+            // fast-elements protector up, extensible, and a writable length.
+            if (!array->dense_deopted && mal_array_elements_protector &&
+                array->object.extensible && array->length_writable &&
+                array->object.prototype == mal_array_prototype_object) {
+                if (mal_array_object_dense_store(array, (u32) index, value) == MAL_ARRAY_DENSE_APPLIED) {
+                    if ((u32) index >= array->length) {
+                        array->length = (u32) index + 1;
+                    }
+                    return;
+                }
+            }
+        }
+    }
+    mal_vm_op_store_property_ic(vm, object_value, key_value, value, strict, ic);
+}
+
+/**
+ * Inline iterator step for the native backend: a built-in Array-values iterator whose
+ * `next` is still the original, over a real dense array, yields the next element
+ * straight from the vector with no call — eliminating the iteratorStep + advance
+ * dispatch the general path performs per element (the for-of / spread hot path). A
+ * done state, a hole / out-of-dense index, a patched next, or any other iterator falls
+ * back to the general step (observably identical). Mirrors the runtime fast path in
+ * mal_builtin_iterator_array_advance. The extra C frame this adds on the slow path is
+ * bounded by the native stack-overflow guard (mal_vm_enter_compiled), so deep
+ * recursion through a for-of unwinds with a clean RangeError.
+ */
+static inline bool mal_vm_iterator_step_fast(MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out) {
+    if (mal_value_is_iterator_object(record->iterator) &&
+        mal_value_is_native_function_object(record->next_method) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(record->next_method)) ==
+            mal_array_iterator_next_callback) {
+        MalIteratorObject *iterator = mal_value_to_iterator_object(record->iterator);
+        if (iterator->kind == MAL_ITERATOR_ARRAY_VALUES &&
+            mal_value_is_heap_type(iterator->target, MAL_HEAP_ARRAY_OBJECT)) {
+            MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(iterator->target);
+            u64 index = iterator->index;
+            if (index >= array->length) {
+                iterator->done = true;
+                *value_out = mal_value_new_undefined();
+                *done_out = true;
+                return true;
+            }
+            MalValue element;
+            if (mal_array_object_dense_get(array, (u32) index, &element)) {
+                iterator->index = index + 1;
+                *value_out = element;
+                *done_out = false;
+                return true;
+            }
+            // Hole / beyond the dense region (still < length): fall back for the Get.
+        }
+    }
+    return mal_vm_iterator_step(vm, record, value_out, done_out);
+}
 
 void mal_op_to_property_key(MalCallable *callable, MalInstruction *instruction);
 
