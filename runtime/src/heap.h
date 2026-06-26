@@ -220,11 +220,22 @@ typedef enum MalHeapMark {
 
 /**
  * Common header stored at the start of every pointer-boxed heap allocation.
+ *
+ * Under MAL_GC_GENERATIONAL the `dirty` byte records remembered-set membership:
+ * the generational write barrier sets it (and links the cell on the remembered
+ * set) when an old (survived-a-collection, sticky-BLACK) cell is written with a
+ * young pointer, so the minor collector traces that cell without re-marking the
+ * whole old generation. The field is gated so a non-generational build's header
+ * is byte-identical to before (and `dirty` falls in existing padding regardless,
+ * so even when present it does not grow the cell or shift the free-list link).
  */
 typedef struct MalHeapHeader {
     MalHeapType type;
     MalHeapStorage storage;
     u8 mark;
+#if MAL_GC_GENERATIONAL
+    u8 dirty;
+#endif
 } MalHeapHeader;
 
 /**
@@ -284,6 +295,14 @@ typedef void (*MalHeapFinalizeFn)(MalHeapHeader *cell);
  * heap corruption into a loud crash. Debug aid; enabled by MAL_GC_VERIFY. Only
  * touches dead cells, so a correctly-rooted program is unaffected. */
 extern bool mal_heap_poison_on_free;
+
+/**
+ * When set, the sweep does NOT reset surviving (BLACK) cells back to WHITE — they
+ * stay marked so the generational collector treats them as old (sticky mark-bit).
+ * The generational minor and major collectors set it around their sweep; a normal
+ * full collection leaves it false and resets marks as before. No effect unless
+ * MAL_GC_GENERATIONAL is built. */
+extern bool mal_heap_sweep_sticky;
 
 /**
  * Reclaim every unmarked (WHITE) managed cell: run `finalize` on it, mark it

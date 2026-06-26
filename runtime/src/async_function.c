@@ -90,6 +90,9 @@ void mal_async_function_await(MalVm *vm, MalGeneratorObject *state, MalValue awa
         MalGeneratorObject *owner = mal_value_to_promise_object(promise)->async_owner;
         if (owner != nullptr) {
             owner->awaited_by = state;
+            // An old awaitee gaining a young awaiter: remember it (trace shades
+            // awaited_by) so the minor keeps the awaiter's async chain alive.
+            mal_gc_remember_if_old(&owner->object.header);
         }
     }
 

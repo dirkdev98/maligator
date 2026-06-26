@@ -705,6 +705,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 generator->frame.return_register = -1;
                 generator->frame.caller_frame_index = -1;
                 generator->state = MAL_GENERATOR_SUSPENDED_START;
+                // The generator now owns a frame of (possibly young) register values;
+                // if it is old, remember it so a minor collection traces that frame.
+                mal_gc_remember_if_old(&generator->object.header);
 
                 // Pop without freeing: the storage now belongs to the generator.
                 vm->frame_count--;
@@ -729,6 +732,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 generator->state = MAL_GENERATOR_SUSPENDED_YIELD;
 
                 generator->frame = *frame;
+                // Re-suspend: an old generator re-acquires its frame + yielded value,
+                // both potentially holding young objects produced since it last ran.
+                mal_gc_remember_if_old(&generator->object.header);
 
                 // Pop without freeing: the storage belongs to the generator.
                 vm->frame_count--;
@@ -764,6 +770,8 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 state->state = MAL_GENERATOR_SUSPENDED_YIELD;
 
                 state->frame = *frame;
+                // Re-suspend at await: old async state re-acquires its frame.
+                mal_gc_remember_if_old(&state->object.header);
 
                 vm->frame_count--;
                 vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};

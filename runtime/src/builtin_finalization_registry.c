@@ -112,6 +112,10 @@ static MalValue mal_builtin_fin_reg_register(
     cell->has_token = has_token;
     cell->next = reg->cells;
     reg->cells = cell;
+    // An old registry gaining a cell with a young held value (strong) / target /
+    // token: remember it so the minor traces its cell list (keeping the held value
+    // and enqueuing a cleanup if the young target dies this cycle).
+    mal_gc_remember_if_old(&reg->object.header);
     return mal_value_new_undefined();
 }
 

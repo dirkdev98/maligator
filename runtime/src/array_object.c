@@ -65,6 +65,7 @@ MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index
     if (array->elements != nullptr && index < array->dense_count) {
         mal_gc_write_barrier(array->elements[index]);
         array->elements[index] = value;
+        mal_gc_card(&array->object.header, value); // old array -> young element
         return MAL_ARRAY_DENSE_APPLIED;
     }
 
@@ -82,6 +83,7 @@ MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index
     }
     array->elements[index] = value;
     array->dense_count = index + 1;
+    mal_gc_card(&array->object.header, value); // old array -> young element
     return MAL_ARRAY_DENSE_APPLIED;
 }
 

@@ -200,15 +200,20 @@ static void mal_gc_dead_key_push(MalKey key) {
 /** Shade a cell grey: a managed, non-immortal cell reached for the first time.
  * In verify mode it instead asserts the cell is already marked — a reachable but
  * unmarked cell means a trace edge was missed. */
+/* Type of the cell currently being re-traced by the verifier (diagnostic only):
+ * lets a freed-target abort name the OWNER whose edge was missed, not just the
+ * swept target. -1 while scanning roots (no owning cell). */
+static i32 g_gc_verify_source = -1;
+
 static void mal_gc_shade(MalHeapHeader *cell) {
     if (cell == nullptr || cell->storage == MAL_HEAP_STORAGE_IMMORTAL) {
         return;
     }
     if (g_gc_verifying) {
         if (cell->mark == MAL_MARK_FREE) {
-            fprintf(stderr, "[gc verify] live cell points to a freed cell type=%d: "
-                "a root or trace edge was missed, the target was swept while still "
-                "reachable\n", cell->type);
+            fprintf(stderr, "[gc verify] live cell (source type=%d) points to a freed "
+                "cell type=%d: a root or trace edge was missed, the target was swept "
+                "while still reachable\n", g_gc_verify_source, cell->type);
             abort();
         }
         return;
@@ -718,7 +723,9 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
  * a freed target). FREE cells are dead this cycle and are skipped. */
 static void mal_gc_verify_cell(MalHeapHeader *cell) {
     if (cell->mark != MAL_MARK_FREE) {
+        g_gc_verify_source = (i32) cell->type;
         mal_gc_trace_cell(cell);
+        g_gc_verify_source = -1;
     }
 }
 
@@ -830,6 +837,54 @@ static void mal_gc_weak_pass(void) {
     }
 }
 
+#if MAL_GC_GENERATIONAL
+// --- Generational (sticky mark-bit) state -----------------------------------
+//
+// Remembered set: old (survived-a-collection, sticky-BLACK) cells written with a
+// young (WHITE) pointer since the last collection, recorded by the card barrier
+// (gc.h). A minor collection scans roots + traces each remembered cell to reach
+// its young children, WITHOUT re-marking the old generation — that is the work it
+// saves over a full mark. The set is rebuilt every collection.
+
+static MalHeapHeader **g_remembered = nullptr;
+static usize g_remembered_count = 0;
+static usize g_remembered_capacity = 0;
+
+void mal_gc_remember(MalHeapHeader *owner) {
+    owner->dirty = 1;
+    if (g_remembered_count == g_remembered_capacity) {
+        g_remembered_capacity = g_remembered_capacity == 0 ? 256 : g_remembered_capacity * 2;
+        g_remembered = realloc(g_remembered, g_remembered_capacity * sizeof(MalHeapHeader *));
+    }
+    g_remembered[g_remembered_count++] = owner;
+}
+
+// Clear the remembered set after a collection: drop the dirty flag on each member
+// (a later write re-records it) and empty the list.
+static void mal_gc_clear_remembered(void) {
+    for (usize i = 0; i < g_remembered_count; ++i) {
+        g_remembered[i]->dirty = 0;
+    }
+    g_remembered_count = 0;
+}
+
+// Major-collection pre-pass visitor: demote every live cell to WHITE so the
+// following full mark reclaims old garbage and cross-generation cycles, and drop
+// any stale dirty flag (the remembered set is emptied alongside).
+static void mal_gc_reset_marks_cell(MalHeapHeader *cell) {
+    if (cell->mark == MAL_MARK_BLACK) {
+        cell->mark = MAL_MARK_WHITE;
+    }
+    cell->dirty = 0;
+}
+
+// One in every MAL_GC_MAJOR_EVERY collections (and the first) is a full major
+// collection that reclaims the old generation; the rest are minors that only
+// touch roots + the remembered set + young cells.
+#define MAL_GC_MAJOR_EVERY 8u
+static u32 g_gc_collection_index = 0;
+#endif
+
 void mal_gc_collect(MalVm *vm) {
     g_gc_vm = vm;
     g_grey_count = 0;
@@ -837,14 +892,48 @@ void mal_gc_collect(MalVm *vm) {
     g_weak_refs_count = 0;
     g_fin_regs_count = 0;
 
+#if MAL_GC_GENERATIONAL
+    // A major collection demotes the whole heap to WHITE and forgets the
+    // remembered set, so the full mark below collects old garbage too. A minor
+    // leaves old cells BLACK and finds young survivors via roots + remembered set.
+    bool major = (g_gc_collection_index++ % MAL_GC_MAJOR_EVERY) == 0;
+    if (major) {
+        mal_heap_walk_cells(&vm->heap, mal_gc_reset_marks_cell);
+        g_remembered_count = 0; // dirty flags cleared by the reset walk above
+    }
+    // Survivors of BOTH minor and (gen) major stay BLACK = old (sticky promotion).
+    mal_heap_sweep_sticky = true;
+#endif
+
     mal_gc_scan_roots(vm);
+#if MAL_GC_GENERATIONAL
+    if (!major) {
+        // Trace each remembered old cell's edges to reach (and mark) its young
+        // children; the old cell itself is left BLACK (not re-shaded), so the old
+        // generation is not re-marked. mal_gc_trace_cell also (re-)registers weak
+        // collections it reaches, so a dirtied old WeakMap's dead young keys are
+        // still cleaned this cycle.
+        for (usize i = 0; i < g_remembered_count; ++i) {
+            mal_gc_trace_cell(g_remembered[i]);
+        }
+    }
+#endif
     mal_gc_drain();
 
     mal_gc_weak_pass();
 
     mal_heap_sweep(&vm->heap, mal_gc_finalize_cell);
 
+#if MAL_GC_GENERATIONAL
+    mal_heap_sweep_sticky = false;
+    mal_gc_clear_remembered();
+#endif
+
     if (g_gc_verify_enabled) {
+        // Re-scans roots and walks every survivor's edges, aborting if any points
+        // at a just-freed cell. Under a minor this also validates remembered-set
+        // completeness: a missed old->young edge swept the young target, so the
+        // old cell now points at a FREE cell and the walk catches it.
         mal_gc_verify(vm);
     }
 

@@ -310,7 +310,10 @@ void mal_heap_free(MalHeap *heap) {
 void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
     header->type = type;
     header->storage = MAL_HEAP_STORAGE_DYNAMIC;
-    header->mark = MAL_MARK_WHITE;
+    header->mark = MAL_MARK_WHITE; // a fresh cell is young (unmarked)
+#if MAL_GC_GENERATIONAL
+    header->dirty = 0; // not on the remembered set
+#endif
 }
 
 MalHeapType mal_heap_header_type(const MalHeapHeader *header) {
@@ -378,6 +381,8 @@ static void mal_gc_recycle_block(MalHeap *heap, MalGcBlock *block) {
 
 bool mal_heap_poison_on_free = false;
 
+bool mal_heap_sweep_sticky = false;
+
 /* Stomp a reclaimed cell's payload past the free-list link with a recognizable
  * pattern (debug aid; see mal_heap_poison_on_free). 0xDF bytes decode, as a
  * NaN-boxed MalValue, to a non-finite double far from any valid pointer or int,
@@ -415,7 +420,13 @@ void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
                 cell += block->cell_size) {
                 MalHeapHeader *header = (MalHeapHeader *) cell;
                 if (header->mark == MAL_MARK_BLACK) {
-                    header->mark = MAL_MARK_WHITE; // survived; reset for the next cycle
+                    // Survived. A normal (full) sweep resets it to WHITE for the
+                    // next cycle; a sticky sweep (generational minor, or a gen
+                    // major after its WHITE pre-pass) leaves it BLACK so it counts
+                    // as old next cycle and the minor mark skips re-tracing it.
+                    if (!mal_heap_sweep_sticky) {
+                        header->mark = MAL_MARK_WHITE;
+                    }
                     live_bytes += block->cell_size;
                     block_live++;
                     continue;

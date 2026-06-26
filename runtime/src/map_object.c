@@ -2,6 +2,8 @@
 
 #include <math.h>
 
+#include "./gc.h"
+
 void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalHeapType type, MalObject *prototype, bool weak) {
     mal_object_init(heap, &map->object, type, prototype);
     map->entries = mal_table_new(MAL_TABLE_MODE_GENERAL);
@@ -61,6 +63,12 @@ MalKey mal_map_key_from_value(MalValue value) {
 void mal_map_object_set(MalMapObject *map, MalValue key, MalValue value) {
     void *entry = mal_table_upsert_entry(map->entries, mal_map_key_from_value(key));
     mal_table_entry_set_value(map->entries, entry, value);
+    // Old map gaining a young key/value: remember it so the minor collector traces
+    // its entries table. For a WeakMap this also re-registers it for the weak pass
+    // (its young keys are weak), so a dead young key's entry is still cleaned and the
+    // key reclaimed without dangling — tracing reaches both through `map`.
+    mal_gc_card(&map->object.header, key);
+    mal_gc_card(&map->object.header, value);
 }
 
 bool mal_map_object_has(const MalMapObject *map, MalValue key) {

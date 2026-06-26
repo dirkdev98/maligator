@@ -7,6 +7,7 @@
 #include "array_object.h"
 #include "builtin_date.h"
 #include "builtin_iterator.h"
+#include "gc.h"
 #include "heap_string.h"
 #include "intl_object.h"
 #include "intrinsics.h"
@@ -970,6 +971,8 @@ static MalValue intl_collator_get_compare(MalVm *vm, MalValue this_value, const 
             mal_intrinsic_ascii(vm, ""), intl_collator_compare_callback, slots, 1
         );
         collator->bound = mal_value_from_native_function_object(fn);
+        // Lazily cached bound compare fn on a possibly-old Intl object -> young fn.
+        mal_gc_card(&collator->object.header, collator->bound);
     }
     return collator->bound;
 }
@@ -1343,6 +1346,8 @@ static MalValue intl_number_format_get_format(MalVm *vm, MalValue this_value, co
             mal_intrinsic_ascii(vm, ""), intl_number_format_callback, slots, 1
         );
         nf->bound = mal_value_from_native_function_object(fn);
+        // Lazily cached bound format fn on a possibly-old Intl object -> young fn.
+        mal_gc_card(&nf->object.header, nf->bound);
     }
     return nf->bound;
 }
@@ -1539,6 +1544,8 @@ static MalValue intl_date_time_format_get_format(MalVm *vm, MalValue this_value,
             mal_intrinsic_ascii(vm, ""), intl_date_time_format_callback, slots, 1
         );
         dtf->bound = mal_value_from_native_function_object(fn);
+        // Lazily cached bound format fn on a possibly-old Intl object -> young fn.
+        mal_gc_card(&dtf->object.header, dtf->bound);
     }
     return dtf->bound;
 }

@@ -163,6 +163,9 @@ static MalValue mal_agen_enqueue_and_drive(MalVm *vm, MalValue this_value, const
         agen->agen_queue_tail->next = request;
     }
     agen->agen_queue_tail = request;
+    // An old async generator gaining a queued request with young capability/value
+    // refs: remember it so the minor traces its request queue (trace walks it).
+    mal_gc_remember_if_old(&agen->object.header);
 
     mal_async_generator_resume_next(vm, agen);
     return cap_promise;

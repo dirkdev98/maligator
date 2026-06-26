@@ -17,6 +17,15 @@
  */
 bool mal_array_elements_protector = true;
 
+/* Generational card barrier for a property descriptor stored into `owner`'s
+ * dictionary table: any of value/getter/setter may be a young heap pointer. No-op
+ * unless MAL_GC_GENERATIONAL is built (mal_gc_card folds out). */
+static inline void mal_gc_card_desc(MalHeapHeader *owner, const MalPropertyDesc *desc) {
+    mal_gc_card(owner, desc->value);
+    mal_gc_card(owner, desc->getter);
+    mal_gc_card(owner, desc->setter);
+}
+
 /** %Array.prototype% (set at intrinsics init); see object_ops.h. */
 MalObject *mal_array_prototype_object = nullptr;
 
@@ -170,6 +179,11 @@ bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
     }
 
     object->prototype = prototype;
+    // Old object reparented onto a young prototype: remember it (the prototype is a
+    // MalObject*, not a MalValue, so card on its boxed form).
+    if (prototype != nullptr) {
+        mal_gc_card(&object->header, mal_value_from_heap(&prototype->header));
+    }
     return true;
 }
 
@@ -308,6 +322,7 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             u32 slot = object->shape->props[idx].slot;
             mal_gc_write_barrier(object->slots[slot]); // SATB: shade overwritten ref
             object->slots[slot] = desc->value;
+            mal_gc_card(&object->header, desc->value); // old object -> young value
             return MAL_DEFINE_OWN_APPLIED;
         }
         if (object->overflow == nullptr
@@ -324,6 +339,12 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             object->slots = realloc(object->slots, sizeof(MalValue) * count);
             object->slots[count - 1] = desc->value;
             object->shape = child;
+            // Old object gains a new shaped property: both the value and the (string)
+            // key live through this object — the shape is not a GC cell, so the key is
+            // traced via mal_gc_trace_object_common. A young non-interned computed key
+            // would otherwise be swept.
+            mal_gc_card(&object->header, desc->value);
+            mal_gc_card(&object->header, key.value);
             return MAL_DEFINE_OWN_APPLIED;
         }
         // Object already carries dictionary props: fall through to the table path.
@@ -340,6 +361,8 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             return MAL_DEFINE_OWN_REJECTED;
         }
         mal_property_define(table, key, desc);
+        mal_gc_card_desc(&object->header, desc); // old object -> young desc refs
+        mal_gc_card(&object->header, key.value); // ... and the (string/symbol) key
         return MAL_DEFINE_OWN_APPLIED;
     }
 
@@ -348,6 +371,7 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
     }
 
     mal_property_write_entry(table, lookup.entry, desc);
+    mal_gc_card_desc(&object->header, desc); // old object -> young desc refs
     return MAL_DEFINE_OWN_APPLIED;
 }
 
@@ -433,6 +457,7 @@ bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
             u32 slot = object->shape->props[idx].slot;
             mal_gc_write_barrier(object->slots[slot]); // SATB: shade overwritten ref
             object->slots[slot] = value;
+            mal_gc_card(&object->header, value); // old object -> young value
             return true;
         }
     }

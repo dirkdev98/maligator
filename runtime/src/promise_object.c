@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 
+#include "gc.h"
 #include "microtask.h"
 #include "vm.h"
 
@@ -37,6 +38,12 @@ void mal_promise_append_reaction(
         list = &(*list)->next;
     }
     *list = reaction;
+
+    // Old promise gaining a reaction with young handler/capability refs: remember
+    // it so the minor collector traces its reaction lists (trace_cell walks them).
+    mal_gc_card(&promise->object.header, handler);
+    mal_gc_card(&promise->object.header, cap_resolve);
+    mal_gc_card(&promise->object.header, cap_reject);
 }
 
 /** Free a reaction list without scheduling it (the discarded-on-settle list). */
@@ -64,6 +71,7 @@ void mal_promise_fulfill(MalVm *vm, MalPromiseObject *promise, MalValue value) {
     }
 
     promise->result = value;
+    mal_gc_card(&promise->object.header, value); // old promise -> young result
     promise->state = MAL_PROMISE_FULFILLED;
 
     MalPromiseReaction *fulfill = promise->fulfill_reactions;
@@ -80,6 +88,7 @@ void mal_promise_reject(MalVm *vm, MalPromiseObject *promise, MalValue reason) {
     }
 
     promise->result = reason;
+    mal_gc_card(&promise->object.header, reason); // old promise -> young result
     promise->state = MAL_PROMISE_REJECTED;
 
     MalPromiseReaction *reject = promise->reject_reactions;

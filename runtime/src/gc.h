@@ -84,6 +84,50 @@ static inline void mal_gc_write_barrier(MalValue old_value) {
 }
 
 /*
+ * Generational card / remembered-set barrier (the "card half" of 5.4), present
+ * only under MAL_GC_GENERATIONAL. The collector is a non-moving sticky-mark-bit
+ * generational design: a cell that survives a collection keeps its BLACK mark
+ * ("old"); fresh allocations are WHITE ("young"). A minor collection scans roots
+ * plus the remembered set (it does NOT reset or re-scan the old generation), so
+ * any old->young pointer MUST be recorded here or the young target is swept while
+ * still reachable. `mal_gc_remember` links an old cell on the remembered set
+ * (idempotent via the `dirty` flag); the inline helpers below are the call sites'
+ * fast path. When MAL_GC_GENERATIONAL is off the whole thing compiles to nothing,
+ * so a non-generational build pays zero per-store cost (the day-one barrier-site
+ * contract is preserved; the binary is unchanged).
+ */
+#if MAL_GC_GENERATIONAL
+void mal_gc_remember(MalHeapHeader *owner);
+
+/* Remember `owner` if it is old (sticky-BLACK) and not already on the set. Used
+ * for aggregate payloads (a generator frame, a promise's reaction list) where the
+ * young target is not a single inspectable value — the minor collector traces the
+ * whole cell, so unconditional remembering of an old owner is correct. */
+static inline void mal_gc_remember_if_old(MalHeapHeader *owner) {
+    if (owner != nullptr && owner->mark == MAL_MARK_BLACK && !owner->dirty) {
+        mal_gc_remember(owner);
+    }
+}
+
+/* The precise card barrier: remember `owner` only when it is old and the value
+ * being stored into it is a young heap cell (an old->young edge). Cheapest common
+ * case — a non-heap or already-old value never dirties the owner. Call AT or just
+ * after the store of `new_value` into a pointer field of `owner`. */
+static inline void mal_gc_card(MalHeapHeader *owner, MalValue new_value) {
+    if (owner == nullptr || owner->mark != MAL_MARK_BLACK || owner->dirty) {
+        return;
+    }
+    if (mal_value_is_heap(new_value) &&
+        mal_value_to_heap(new_value)->mark == MAL_MARK_WHITE) {
+        mal_gc_remember(owner);
+    }
+}
+#else
+#define mal_gc_remember_if_old(owner) ((void) 0)
+#define mal_gc_card(owner, new_value) ((void) 0)
+#endif
+
+/*
  * Compiled root frame: a shadow-stack node holding the
  * GC-live MalValues of a compiled function that are live across a safepoint.
  * emit-c declares one per such function, links it on entry, unlinks on every

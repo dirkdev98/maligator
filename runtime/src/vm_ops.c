@@ -501,6 +501,7 @@ void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, Mal
     for (; env != nullptr; env = env->parent) {
         if (env->function_index == owner_function_index) {
             env->slots[index] = value;
+            mal_gc_card(&env->header, value); // old closure env -> young capture
             return;
         }
     }
@@ -2180,6 +2181,7 @@ void mal_vm_op_store_property_ic(
             // hit: overwrite an existing shaped data slot (shape + key unchanged).
             mal_gc_write_barrier(object->slots[ic->slot]);
             object->slots[ic->slot] = value;
+            mal_gc_card(&object->header, value); // old object -> young value
             return;
         }
         // Convert the key ONCE (running any user toString/valueOf once) and reuse
@@ -2205,6 +2207,7 @@ void mal_vm_op_store_property_ic(
                 }
                 mal_gc_write_barrier(object->slots[prop->slot]);
                 object->slots[prop->slot] = value;
+                mal_gc_card(&object->header, value); // old object -> young value
                 return;
             }
         }
@@ -3276,6 +3279,7 @@ void mal_op_store_private(MalCallable *callable, MalInstruction *instruction) {
     }
 
     mal_property_set_value(mal_object_properties(object), key, value);
+    mal_gc_card(&object->header, value); // old instance -> young private field value
 }
 
 void mal_op_has_private(MalCallable *callable, MalInstruction *instruction) {

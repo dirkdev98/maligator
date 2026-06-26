@@ -61,13 +61,33 @@ const SANITIZER_FLAGS: Record<SanitizerMode, Array<string>> = {
 };
 
 /**
- * Build-directory / binary suffix for the current mode, so toggling a sanitizer
- * does not thrash the normal -O2 archive (CMAKE_C_FLAGS is cached per build dir).
- * Empty for the normal build.
+ * Whether to build the generational collector (`MAL_GC_GENERATIONAL=1`): a
+ * non-moving sticky-mark-bit minor collector layered on the STW mark-sweep. Off by
+ * default — the inliner already removes most young garbage, so it stays an opt-in
+ * build dimension (the day-one barrier sites compile to nothing when off, §5.4a).
+ */
+export function gcGenerational(): boolean {
+	return envOn("MAL_GC_GENERATIONAL");
+}
+
+/** Preprocessor defines selecting GC build dimensions. */
+function gcDefines(): Array<string> {
+	return gcGenerational() ? ["-DMAL_GC_GENERATIONAL=1"] : [];
+}
+
+/**
+ * Build-directory / binary suffix for the current mode, so toggling a sanitizer or
+ * the generational collector does not thrash the normal -O2 archive (CMAKE_C_FLAGS
+ * is cached per build dir, and the header layout / barrier code differs). Empty for
+ * the normal build.
  */
 export function buildSuffix(): string {
 	const mode = sanitizerMode();
-	return mode === "none" ? "" : `-${mode}`;
+	let suffix = mode === "none" ? "" : `-${mode}`;
+	if (gcGenerational()) {
+		suffix += "-gen";
+	}
+	return suffix;
 }
 
 /**
@@ -80,12 +100,12 @@ export function optFlags(): Array<string> {
 
 /** The single `-DCMAKE_C_FLAGS=...` value for configuring LibMaligator. */
 export function cmakeCFlags(): string {
-	return [...optFlags(), ...SANITIZER_FLAGS[sanitizerMode()]].join(" ");
+	return [...optFlags(), ...SANITIZER_FLAGS[sanitizerMode()], ...gcDefines()].join(" ");
 }
 
 /** Extra cc flags (compile + link) for an emitted translation unit. */
 export function ccExtraFlags(): Array<string> {
-	return [...optFlags(), ...SANITIZER_FLAGS[sanitizerMode()]];
+	return [...optFlags(), ...SANITIZER_FLAGS[sanitizerMode()], ...gcDefines()];
 }
 
 const GMALLOC_PATH = "/usr/lib/libgmalloc.dylib";
