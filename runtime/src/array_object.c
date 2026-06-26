@@ -195,15 +195,22 @@ bool mal_array_key_is_length(MalKey key) {
 bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
     if (key.kind == MAL_KEY_INDEX) {
         i32 index = mal_value_to_i32(key.value);
-        if (index >= 0 && (u32) index >= array->length) {
-            // Growing an index past length also writes length.
-            if (!array->length_writable) {
-                return false;
-            }
+        bool grows = index >= 0 && (u32) index >= array->length;
+        // Growing an index past length also writes length, which is refused when
+        // length is non-writable.
+        if (grows && !array->length_writable) {
+            return false;
+        }
+        // Store the element FIRST and commit the length grow only if it succeeded:
+        // a non-extensible array rejects a fresh index, and a rejected store must
+        // not bump length (ArrayDefineOwnProperty 10.4.2.1 steps 3-4).
+        if (!mal_object_set(&array->object, key, value)) {
+            return false;
+        }
+        if (grows) {
             array->length = (u32) index + 1;
         }
-
-        return mal_object_set(&array->object, key, value);
+        return true;
     }
 
     if (mal_array_key_is_length(key)) {

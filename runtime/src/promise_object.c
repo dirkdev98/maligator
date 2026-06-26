@@ -40,7 +40,7 @@ void mal_promise_append_reaction(
 }
 
 /** Free a reaction list without scheduling it (the discarded-on-settle list). */
-static void mal_promise_free_reactions(MalPromiseReaction *list) {
+void mal_promise_free_reactions(MalPromiseReaction *list) {
     while (list != nullptr) {
         MalPromiseReaction *next = list->next;
         free(list);

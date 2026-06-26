@@ -28,6 +28,11 @@ function argValue(name: string) {
 }
 
 const random = process.argv.includes("--random");
+// Gate mode: never rewrite the committed results, and exit non-zero if any test
+// regressed (PASSED -> FAILED) against them. Used by scripts/gate.ts to run the
+// suite in several modes (compiled / --no-compiled / STRESS) without one mode's
+// flaky verdicts clobbering the committed baseline.
+const checkMode = process.argv.includes("--check");
 const filter = argValue("--filter");
 const jobs = Number(argValue("--jobs") ?? Math.max(1, os.cpus().length - 1));
 
@@ -351,7 +356,18 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 			for (const path of regressions.slice(0, 50)) {
 				test262Log(`  ${path}`);
 			}
+			// Gate mode surfaces a regression as a non-zero exit so a wrapper can
+			// fail the build. (Mind the known async/dynamic-import flakiness floor —
+			// see scripts/gate.ts.)
+			if (checkMode) {
+				process.exitCode = 1;
+			}
 		}
+	}
+
+	if (checkMode) {
+		test262Log("Check mode: not updating the committed results.");
+		return;
 	}
 
 	if (!isFullRun) {

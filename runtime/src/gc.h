@@ -63,6 +63,13 @@ void mal_gc_collect(MalVm *vm);
 /* Read GC environment configuration (MAL_GC_STRESS). Call once at VM startup. */
 void mal_gc_init(void);
 
+/* Free every cell's owned side allocations regardless of liveness, for a clean
+ * VM teardown (no shutdown leak of overflow tables, Map entries, ArrayBuffer
+ * data, Rust handles, ...). Call once immediately before mal_heap_free; the
+ * collector must not run afterwards. Used by mal_vm_free and the leak-audit
+ * exit path (MAL_GC_AT_EXIT). */
+void mal_gc_finalize_all(MalVm *vm);
+
 /*
  * SATB deletion write barrier: call BEFORE overwriting a heap cell's MalValue
  * field, passing the field's current contents. (The generational card half,

@@ -667,6 +667,36 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
             reg->cells = nullptr;
             break;
         }
+        case MAL_HEAP_PROMISE_OBJECT: {
+            // A promise collected while still pending owns its fulfill/reject
+            // reaction nodes (settling frees + nulls them). Release any that
+            // remain; a settled promise's lists are already null (free no-op).
+            MalPromiseObject *promise = (MalPromiseObject *) cell;
+            mal_promise_free_reactions(promise->fulfill_reactions);
+            mal_promise_free_reactions(promise->reject_reactions);
+            promise->fulfill_reactions = nullptr;
+            promise->reject_reactions = nullptr;
+            break;
+        }
+        case MAL_HEAP_GENERATOR_OBJECT: {
+            // A suspended (abandoned) generator/async activation still owns its
+            // frame's malloc'd register + argument + with-object buffers
+            // (transferred off the VM frame stack on suspend). A COMPLETED
+            // generator already freed them via the run loop's frame teardown
+            // (leaving these pointers dangling), so release ONLY while suspended
+            // to avoid a double free.
+            MalGeneratorObject *gen = (MalGeneratorObject *) cell;
+            if (gen->state == MAL_GENERATOR_SUSPENDED_START ||
+                gen->state == MAL_GENERATOR_SUSPENDED_YIELD) {
+                free(gen->frame.registers);
+                free(gen->frame.arguments);
+                free(gen->frame.with_objects);
+                gen->frame.registers = nullptr;
+                gen->frame.arguments = nullptr;
+                gen->frame.with_objects = nullptr;
+            }
+            break;
+        }
         default:
             break;
     }
@@ -828,5 +858,31 @@ void mal_gc_collect(MalVm *vm) {
         mal_gc_next_at = vm->heap.bytes_allocated + grow;
     }
 
+    g_gc_vm = nullptr;
+}
+
+/** Finalize-all visitor: free a live cell's owned side allocations regardless of
+ * reachability. FREE cells (already finalized this run) are skipped, and the
+ * cell is marked FREE so a second pass is a no-op. */
+static void mal_gc_finalize_live_cell(MalHeapHeader *cell) {
+    if (cell->mark != MAL_MARK_FREE) {
+        mal_gc_finalize_cell(cell);
+        cell->mark = MAL_MARK_FREE;
+    }
+}
+
+/* Teardown helper: free EVERY cell's owned side allocations (overflow tables,
+ * Map/Set entries, ArrayBuffer data, array elements, Rust regexp/Intl handles,
+ * slots buffers) regardless of liveness, so a process that tears its VM down
+ * leaves no shutdown leak for `leaks` / Guard Malloc to report. The per-cell
+ * finalizer is idempotent (nulls each field), and gc_free_raw'd buffers that
+ * live in the heap's RAW blocks / LOS are reclaimed by the following
+ * mal_heap_free; this only covers the plain-malloc'd and Rust-owned memory that
+ * mal_heap_free does not. LOS-resident cells (large MalObjects — effectively
+ * none) are not walked; that gap matches the tracked LOS-sweep limitation. Call
+ * once, immediately before mal_heap_free. */
+void mal_gc_finalize_all(MalVm *vm) {
+    g_gc_vm = vm; // mal_gc_finalize_cell reaches the heap through g_gc_vm
+    mal_heap_walk_cells(&vm->heap, mal_gc_finalize_live_cell);
     g_gc_vm = nullptr;
 }

@@ -7,6 +7,7 @@ import { executeIROptimizations } from "../ir-opt.ts";
 import { compileSemanticProgramToIr } from "../ir.ts";
 import { lowerIrProgramToVmDefinition } from "../lower-vm.ts";
 import type { VmDefinition } from "../lower-vm.ts";
+import { gmallocEnabled, runEnv } from "../build-flags.ts";
 import { parseModule, parseScript } from "../parser.ts";
 import { allocateRegisters } from "../register-alloc.ts";
 import { ensureRustLibrary, rustLinkArgs } from "../rust-build.ts";
@@ -294,14 +295,24 @@ function loadHarnessFile(file: string) {
 
 /**
  * The host-provided `$262` object (test262's realm/agent hook). We implement
- * what the runtime can already back: `global`, a no-op `gc` (no collector yet),
- * and `detachArrayBuffer` via ArrayBuffer.prototype.transfer (which detaches the
- * original). evalScript/createRealm require eval/realms we do not have, so they
- * are present (so `typeof` checks pass) but throw when invoked.
+ * what the runtime can already back: `global`, a real `gc` (forces a full
+ * collection — the runtime installs a `__mal_collect_garbage` hook on globalThis
+ * under MAL_HOST_GC, which we capture into the `gc` closure and then delete so it
+ * never pollutes a test body's global), and `detachArrayBuffer` via
+ * ArrayBuffer.prototype.transfer (which detaches the original). evalScript/
+ * createRealm require eval/realms we do not have, so they are present (so
+ * `typeof` checks pass) but throw when invoked.
  */
 const TEST262_HOST_PRELUDE = `var $262 = {
   global: globalThis,
-  gc: function gc() {},
+  gc: (function () {
+    var collect = typeof globalThis.__mal_collect_garbage === "function"
+      ? globalThis.__mal_collect_garbage
+      : function () {};
+    try { delete globalThis.__mal_collect_garbage; } catch (e) {}
+    try { delete globalThis.__mal_gc_live_bytes; } catch (e) {}
+    return function gc() { collect(); };
+  })(),
   detachArrayBuffer: function detachArrayBuffer(buffer) {
     if (buffer !== null && buffer !== undefined && typeof buffer.transfer === "function") {
       buffer.transfer();
@@ -580,15 +591,18 @@ async function runBatchBinary(
 	workerId: number,
 ) {
 	let stdout = "";
+	// Guard Malloc is far slower per test, so scale the per-test and overall
+	// timeouts to avoid spurious TIMEOUTs in that (deliberately slow) mode.
+	const runTimeoutMs = TEST262_METADATA.runTimeoutMs * (gmallocEnabled() ? 12 : 1);
 	try {
-		const result = await execFileAsync(
-			binPath,
-			["--all", String(TEST262_METADATA.runTimeoutMs)],
-			{
-				timeout: entries.length * TEST262_METADATA.runTimeoutMs + 15_000,
-				maxBuffer: 64 * 1024 * 1024,
-			},
-		);
+		const result = await execFileAsync(binPath, ["--all", String(runTimeoutMs)], {
+			timeout: entries.length * runTimeoutMs + 15_000,
+			maxBuffer: 64 * 1024 * 1024,
+			// MAL_HOST_GC backs the host `$262.gc()`. MAL_GMALLOC=1 (folded in by
+			// runEnv) runs every forked test under Guard Malloc (a broad
+			// use-after-free / overflow net across the suite); a no-op otherwise.
+			env: { ...runEnv(), MAL_HOST_GC: "1" },
+		});
 		stdout = result.stdout;
 	} catch (e) {
 		stdout = (e as { stdout?: string }).stdout ?? "";
@@ -950,6 +964,7 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 		const { stdout } = await execFileAsync(`${baseName}.bin`, [], {
 			timeout: TEST262_METADATA.runTimeoutMs,
 			maxBuffer: 1024 * 1024,
+			env: { ...runEnv(), MAL_HOST_GC: "1" },
 		});
 		if (isAsyncTest(file)) {
 			applyAsyncVerdict(file, stdout);

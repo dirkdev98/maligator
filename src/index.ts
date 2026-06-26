@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
+import { gmallocEnabled, runEnv } from "./build-flags.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { debugHofInlineSites, debugInlinableCalls } from "./inline.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
@@ -112,8 +113,11 @@ buildTiming();
 log.info(`Binary: ${binaryPath}`);
 
 if (argFlag("--run")) {
+	if (gmallocEnabled()) {
+		log.info("Running under Guard Malloc (MAL_GMALLOC).");
+	}
 	try {
-		execFileSync(binaryPath, { stdio: "inherit" });
+		execFileSync(binaryPath, { stdio: "inherit", env: runEnv() });
 		log.info("Exit: 0");
 	} catch (error) {
 		const status = (error as { status?: number; signal?: string }).status;

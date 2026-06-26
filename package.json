@@ -18,6 +18,9 @@
 		"lint:ci": "eslint . --concurrency=auto && oxfmt --check",
 		"test": "vitest",
 		"test262": "node ./scripts/test262.ts",
+		"gate": "node ./scripts/gate.ts",
+		"gctest": "node ./scripts/gctest.ts",
+		"leakcheck": "node ./scripts/leakcheck.ts",
 		"type-check": "tsc",
 		"update": "npx npm-check --update --save-exact"
 	},

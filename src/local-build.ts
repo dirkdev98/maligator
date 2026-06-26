@@ -1,11 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { buildSuffix, ccExtraFlags, cmakeCFlags } from "./build-flags.ts";
 import { ensureRustLibrary, RUST_INCLUDE_DIR, rustLinkArgs } from "./rust-build.ts";
 
 const LOCAL_DIR = ".cache/local";
-const BUILD_DIR = path.join(LOCAL_DIR, "lib");
-const OPT = "-O2";
+// A sanitizer build gets its own build dir + binaries so toggling MAL_ASAN /
+// MAL_UBSAN does not force a full reconfigure/rebuild of the normal -O2 archive
+// (CMAKE_C_FLAGS is cached per build dir). Empty suffix == the normal build.
+const BUILD_DIR = path.join(LOCAL_DIR, `lib${buildSuffix()}`);
 
 export interface LocalBuildOptions {
 	/**
@@ -34,7 +37,7 @@ function ensureRuntimeLibrary(verbose: boolean): string {
 	mkdirSync(LOCAL_DIR, { recursive: true });
 
 	// Re-running configure with unchanged cache variables is cheap.
-	execFileSync("cmake", ["-S", "runtime", "-B", BUILD_DIR, `-DCMAKE_C_FLAGS=${OPT}`], {
+	execFileSync("cmake", ["-S", "runtime", "-B", BUILD_DIR, `-DCMAKE_C_FLAGS=${cmakeCFlags()}`], {
 		stdio,
 	});
 
@@ -55,15 +58,18 @@ function ensureRuntimeLibrary(verbose: boolean): string {
 export function buildLocalBinary(options: LocalBuildOptions): string {
 	const lib = ensureRuntimeLibrary(options.verbose);
 
-	const cPath = path.join(LOCAL_DIR, `${options.name}.c`);
-	const binPath = path.join(LOCAL_DIR, options.name);
+	// Suffix the artifacts under a sanitizer build so they do not clobber the
+	// normal binary (and vice-versa).
+	const artifactName = `${options.name}${buildSuffix()}`;
+	const cPath = path.join(LOCAL_DIR, `${artifactName}.c`);
+	const binPath = path.join(LOCAL_DIR, artifactName);
 	writeFileSync(cPath, options.cSource);
 
 	execFileSync(
 		"cc",
 		[
 			"-std=c2x",
-			OPT,
+			...ccExtraFlags(),
 			"-I",
 			"runtime/src",
 			"-I",

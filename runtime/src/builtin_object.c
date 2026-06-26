@@ -653,6 +653,10 @@ static MalValue mal_builtin_object_get_own_property_descriptors(MalVm *vm, MalVa
         }
     }
 
+    // An Array's exotic `length` is an own (non-enumerable) string key right after
+    // the integer indices; getOwnPropertyDescriptors must report its descriptor.
+    bool length_pending = mal_value_is_array_object(target);
+
     // Ordinary table keys (string and symbol, including non-enumerable).
     MalPropertyIter iter;
     mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
@@ -663,7 +667,19 @@ static MalValue mal_builtin_object_get_own_property_descriptors(MalVm *vm, MalVa
         if (key.kind == MAL_KEY_SYMBOL && mal_symbol_is_private(mal_value_to_symbol(key.value))) {
             continue;
         }
+        if (length_pending && key.kind != MAL_KEY_INDEX) {
+            if (!mal_builtin_object_descriptors_put(vm, result, target, mal_intrinsic_string_key(vm, "length"))) {
+                return mal_value_new_undefined();
+            }
+            length_pending = false;
+        }
         if (!mal_builtin_object_descriptors_put(vm, result, target, key)) {
+            return mal_value_new_undefined();
+        }
+    }
+
+    if (length_pending) {
+        if (!mal_builtin_object_descriptors_put(vm, result, target, mal_intrinsic_string_key(vm, "length"))) {
             return mal_value_new_undefined();
         }
     }
@@ -870,6 +886,12 @@ static bool mal_builtin_object_collect_impl(MalVm *vm, MalValue target, MalPrope
         }
     }
 
+    // An Array's exotic `length` is a non-enumerable own string key that sits
+    // right after the integer-index keys in own-key order, so only the key-listing
+    // non-enumerable view (getOwnPropertyNames) reports it — emit it before the
+    // first non-index table key (or after the indices if there are none).
+    bool length_pending = mal_value_is_array_object(target) && !enumerable_only && !reads_values;
+
     MalPropertyIter iter;
     mal_property_iter_init(&iter, object, iter_kind);
 
@@ -891,12 +913,31 @@ static bool mal_builtin_object_collect_impl(MalVm *vm, MalValue target, MalPrope
             continue;
         }
 
+        if (length_pending && key.kind != MAL_KEY_INDEX) {
+            mal_array_object_store(
+                result,
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_value_from_string(mal_intrinsic_ascii(vm, "length"))
+            );
+            length_pending = false;
+        }
+
         mal_array_object_store(
             result,
             (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
             mal_builtin_object_key_to_string(vm, key)
         );
         count++;
+    }
+
+    // An array with only integer-index keys still lists `length` after them.
+    if (length_pending) {
+        mal_array_object_store(
+            result,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+            mal_value_from_string(mal_intrinsic_ascii(vm, "length"))
+        );
+        length_pending = false;
     }
 
     // A getter during the value reads can delete a sibling key, dropping it from

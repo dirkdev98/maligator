@@ -82,3 +82,10 @@ void mal_promise_fulfill(MalVm *vm, MalPromiseObject *promise, MalValue value);
  * the reject list. A no-op when already settled.
  */
 void mal_promise_reject(MalVm *vm, MalPromiseObject *promise, MalValue reason);
+
+/**
+ * Free a fulfill/reject reaction linked list. Settling frees + nulls a promise's
+ * lists; the GC finalizer uses this to release the reactions of a promise that
+ * is collected while still pending.
+ */
+void mal_promise_free_reactions(MalPromiseReaction *list);

@@ -269,6 +269,10 @@ void mal_vm_free(MalVm *vm) {
 
     mal_table_free(vm->symbol_registry);
     mal_table_free(vm->atoms);
+    // Free every live cell's owned side allocations before releasing the heap,
+    // so a teardown leaves no shutdown leak (mal_heap_free only munmaps the
+    // chunks + frees LOS records; it does not run per-cell finalizers).
+    mal_gc_finalize_all(vm);
     mal_heap_free(&vm->heap);
 
     vm->definition = nullptr;

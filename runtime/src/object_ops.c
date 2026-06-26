@@ -120,7 +120,12 @@ static void mal_object_dictionarize(MalObject *object) {
         mal_property_define(table, prop->key, &desc);
     }
     object->shape = mal_shape_empty();
-    object->slots = nullptr; // leaked until the GC exists (Phase 3); no free path yet
+    // The inline-slot values are now all migrated into the overflow table, so the
+    // slots buffer (a plain realloc'd MalValue array) is dead — free it. Leaving
+    // it here was a real runtime leak: a dictionarized object's slots buffer was
+    // orphaned for the program's lifetime, and the finalizer then freed nullptr.
+    free(object->slots);
+    object->slots = nullptr;
 }
 
 MalTable *mal_object_properties(MalObject *object) {

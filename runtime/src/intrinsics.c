@@ -346,6 +346,51 @@ void mal_intrinsics_init(MalVm *vm) {
 }
 
 /**
+ * Host-provided forced-collection hook for the test262 harness's `$262.gc()`.
+ * Installed on globalThis only under MAL_HOST_GC (see
+ * mal_intrinsics_init_global_this); the harness prelude captures it into the
+ * `$262.gc` closure and then deletes the global, so test bodies see a clean
+ * global object.
+ */
+static MalValue mal_intrinsic_host_gc(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    mal_gc_collect(vm);
+    return mal_value_new_undefined();
+}
+
+/**
+ * Diagnostic: the heap's surviving-byte count from the last collection (updated
+ * by the sweep). Lets GC unit tests assert reclamation quantitatively. Installed
+ * alongside the gc hook under MAL_HOST_GC; the harness prelude deletes it.
+ */
+static MalValue mal_intrinsic_gc_live_bytes(
+    MalVm *vm,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count,
+    MalValue new_target,
+    MalValue callee
+) {
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    return mal_value_from_f64((f64) vm->heap.live_bytes);
+}
+
+/**
  * Expose the intrinsics as properties of a globalThis namespace object.
  */
 static void mal_intrinsics_init_global_this(MalVm *vm) {
@@ -410,4 +455,12 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "NaN", vm->intrinsics[MAL_INTRINSIC_NAN_VALUE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, global_this, "Infinity", vm->intrinsics[MAL_INTRINSIC_INFINITY_VALUE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, global_this, "undefined", mal_value_new_undefined(), MAL_PROPERTY_NONE);
+
+    // Host forced-collection hook for the test262 `$262.gc()`. Only present when
+    // the harness asks (MAL_HOST_GC); the prelude captures it then deletes the
+    // global, so it never pollutes a test body's global object.
+    if (getenv("MAL_HOST_GC") != nullptr) {
+        mal_intrinsic_define_method(vm, global_this, "__mal_collect_garbage", mal_intrinsic_host_gc);
+        mal_intrinsic_define_method(vm, global_this, "__mal_gc_live_bytes", mal_intrinsic_gc_live_bytes);
+    }
 }
