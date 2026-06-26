@@ -92,13 +92,18 @@ function capturedSlotKey(owner: number, index: number): string {
 /**
  * Per-function map: register → the functionIndex it provably holds. A register holds
  * a known function when its sole definition is a `createFunction`, a single-assignment
- * `move` chain from one (`const f = () => …`), or a `loadCaptured` of a captured slot
+ * `move` chain from one (`const f = () => …`), a `loadCaptured` of a captured slot
  * that `capturedSlots` proves holds one (function declarations + captured local
- * closures bind through the captured env). Used to resolve a call's callee.
+ * closures bind through the captured env), or a `loadGlobal` of a module/lexical
+ * global slot that `globalSlots` proves holds one (top-level functions in module mode
+ * — and top-level `let`/`const` closures in script mode — bind through global slots,
+ * NOT the dynamic `globalProperty` path, which is reassignable and never resolved).
+ * Used to resolve a call's callee.
  */
 function functionValuedRegisters(
 	fn: IRFunction,
 	capturedSlots: ReadonlyMap<string, number>,
+	globalSlots: ReadonlyMap<number, number>,
 ): Map<number, number> {
 	const defCount = new Map<number, number>();
 	for (const block of fn.blocks) {
@@ -160,6 +165,17 @@ function functionValuedRegisters(
 						funcOf.set(destination, slot);
 						changed = true;
 					}
+				} else if (instruction.type === "loadGlobal") {
+					const destination = instruction.registers[0];
+					const slot = globalSlots.get(instruction.index);
+					if (
+						slot !== undefined &&
+						defCount.get(destination) === 1 &&
+						!funcOf.has(destination)
+					) {
+						funcOf.set(destination, slot);
+						changed = true;
+					}
 				}
 			}
 		}
@@ -175,9 +191,10 @@ function functionValuedRegisters(
  */
 function capturedSlotFunctions(program: IntermediateProgram): Map<string, number> {
 	const empty = new Map<string, number>();
+	const emptyGlobals = new Map<number, number>();
 	const stores = new Map<string, { func: number | undefined; count: number }>();
 	for (const fn of program.functions) {
-		const localFuncOf = functionValuedRegisters(fn, empty);
+		const localFuncOf = functionValuedRegisters(fn, empty, emptyGlobals);
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				if (
@@ -202,6 +219,98 @@ function capturedSlotFunctions(program: IntermediateProgram): Map<string, number
 	for (const [key, { func, count }] of stores) {
 		if (count === 1 && func !== undefined) {
 			resolved.set(key, func);
+		}
+	}
+	return resolved;
+}
+
+/** Registers whose sole definition is a `createEmpty` (the TDZ sentinel a
+ * `let`/`const`/class slot is pre-initialized with before its declaration runs).
+ * A `storeGlobal` of one is the binding's hoist-time TDZ init, not a value write,
+ * so the global-slot resolver ignores it (a real read is still guarded by the
+ * `throwIfTdz` the front end emits — kept by DCE — so resolving the callee never
+ * skips a temporal-dead-zone throw). */
+function createEmptyRegisters(fn: IRFunction): Set<number> {
+	const defCount = new Map<number, number>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			const def = "registers" in instruction ? definedRegister(instruction) : null;
+			if (def !== null) {
+				defCount.set(def, (defCount.get(def) ?? 0) + 1);
+			}
+		}
+	}
+	const set = new Set<number>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (
+				instruction.type === "createEmpty" &&
+				defCount.get(instruction.registers[0]) === 1
+			) {
+				set.add(instruction.registers[0]);
+			}
+		}
+	}
+	return set;
+}
+
+/**
+ * Program-wide: module/lexical **global slots** (`storeGlobal`/`loadGlobal`, NOT the
+ * reassignable `globalProperty` path) that provably hold a single known function.
+ *
+ * A slot resolves to function F iff, across the whole program, exactly one store to
+ * it writes a known function (F) and every other store writes only the TDZ sentinel
+ * (`createEmpty`). Any store of a different function, or of a non-function/non-sentinel
+ * value (a reassignment — `function f(){}; f = 5` or `let g = a; g = b`), excludes the
+ * slot. This is what makes a top-level function declaration in module mode (and a
+ * top-level `const f = () => …` in either mode) an inlinable callee: it binds through a
+ * closed lexical/module environment that outside code cannot mutate, so a single
+ * function store is genuinely single-assignment. (Resolving each store's source uses
+ * only createFunction+move chains — no captured/global loads — to avoid circularity.)
+ */
+function globalSlotFunctions(program: IntermediateProgram): Map<number, number> {
+	const empty = new Map<string, number>();
+	const emptyGlobals = new Map<number, number>();
+	interface SlotAcc {
+		func: number | undefined;
+		funcStores: number;
+		otherStores: number;
+		conflict: boolean;
+	}
+	const slots = new Map<number, SlotAcc>();
+	for (const fn of program.functions) {
+		const localFuncOf = functionValuedRegisters(fn, empty, emptyGlobals);
+		const emptyRegs = createEmptyRegisters(fn);
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "storeGlobal") {
+					continue;
+				}
+				const slot = instruction.index;
+				const source = instruction.registers[0];
+				let acc = slots.get(slot);
+				if (acc === undefined) {
+					acc = { func: undefined, funcStores: 0, otherStores: 0, conflict: false };
+					slots.set(slot, acc);
+				}
+				const func = localFuncOf.get(source);
+				if (func !== undefined) {
+					acc.funcStores += 1;
+					if (acc.func === undefined) {
+						acc.func = func;
+					} else if (acc.func !== func) {
+						acc.conflict = true;
+					}
+				} else if (!emptyRegs.has(source)) {
+					acc.otherStores += 1;
+				}
+			}
+		}
+	}
+	const resolved = new Map<number, number>();
+	for (const [slot, acc] of slots) {
+		if (acc.func !== undefined && acc.funcStores === 1 && acc.otherStores === 0 && !acc.conflict) {
+			resolved.set(slot, acc.func);
 		}
 	}
 	return resolved;
@@ -237,9 +346,10 @@ export function findInlinableCalls(
 	};
 
 	const capturedSlots = capturedSlotFunctions(program);
+	const globalSlots = globalSlotFunctions(program);
 	const byCaller = new Map<number, Array<InlineCandidate>>();
 	for (const fn of program.functions) {
-		const funcOf = functionValuedRegisters(fn, capturedSlots);
+		const funcOf = functionValuedRegisters(fn, capturedSlots, globalSlots);
 		const candidates: Array<InlineCandidate> = [];
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
@@ -379,9 +489,10 @@ export function findHofInlineSites(program: IntermediateProgram): ProgramHofSite
 	};
 
 	const capturedSlots = capturedSlotFunctions(program);
+	const globalSlots = globalSlotFunctions(program);
 	const byCaller = new Map<number, Array<HofInlineSite>>();
 	for (const fn of program.functions) {
-		const funcOf = functionValuedRegisters(fn, capturedSlots);
+		const funcOf = functionValuedRegisters(fn, capturedSlots, globalSlots);
 		const defs = singleDefinitions(fn);
 		const sites: Array<HofInlineSite> = [];
 		for (const block of fn.blocks) {
