@@ -52,6 +52,20 @@ MalString *mal_string_new_external(MalHeap *heap, const c16 *code_units, usize l
     return string;
 }
 
+MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize length) {
+    // Takes ownership of `code_units` (a mal_heap_alloc_raw buffer) — no copy. The
+    // cell allocation may run a GC, but an unowned RAW buffer is never swept (the
+    // sweep only walks CELL blocks), so `code_units` survives until we adopt it.
+    MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
+    mal_heap_header_init(&string->header, MAL_HEAP_STRING);
+    string->storage = MAL_STRING_STORAGE_OWNED;
+    string->hash = mal_string_hash_code_units(code_units, length);
+    string->length = length;
+    string->code_units = code_units;
+
+    return string;
+}
+
 MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length) {
     c16 *code_units = mal_heap_alloc_raw(heap, sizeof(c16) * length);
 

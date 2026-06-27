@@ -374,7 +374,10 @@ MalValue mal_ops_add(MalHeap *heap, MalValue left, MalValue right) {
         memcpy(code_units, mal_string_code_units(left_string), sizeof(c16) * left_length);
         memcpy(code_units + left_length, mal_string_code_units(right_string), sizeof(c16) * right_length);
 
-        MalString *result = mal_string_new_copy(heap, code_units, length);
+        // Adopt the buffer we just built (no redundant alloc+copy). Previously this
+        // called mal_string_new_copy, which allocated a SECOND buffer and copied
+        // into it, leaking this `code_units` temporary on every concatenation.
+        MalString *result = mal_string_new_owned(heap, code_units, length);
         return mal_value_from_string(result);
     }
 

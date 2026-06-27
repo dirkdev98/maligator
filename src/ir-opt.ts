@@ -1,4 +1,5 @@
 import {
+	decodeStringConstant,
 	optEliminateCapturedSlots,
 	optEmptyDeadFunctions,
 	optInlineCalls,
@@ -72,6 +73,10 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		// register directly (not a local copy), and before DCE so the freed key
 		// constants and unread values are cleaned up the same round.
 		optScalarReplaceObjectLiterals,
+		// The mutable generalization: a non-escaping object that IS written
+		// (storeProperty) becomes per-key registers (T7.4). Handled separately from
+		// the immutable pass above, which only fires on never-written records.
+		optScalarReplaceMutableObjects,
 		// Empty functions made unreachable by inlining (their createFunction was
 		// DCE'd) — reclaims dead bodies and unblocks env elimination below.
 		optEmptyDeadFunctions,
@@ -600,7 +605,7 @@ function functionUsesWith(fn: IRFunction): boolean {
 }
 
 /** The number of leading `registers` entries an instruction writes (defines). */
-function destinationCount(instruction: IRInstruction): number {
+export function destinationCount(instruction: IRInstruction): number {
 	if (!("registers" in instruction) || WRITES_NO_REGISTER.has(instruction.type)) {
 		return 0;
 	}
@@ -797,7 +802,7 @@ function scalarReplaceObjectLiteralsInFunction(fn: IRFunction): boolean {
 			if (instruction.type !== "createObjectShaped") {
 				continue;
 			}
-			const objectRegister = instruction.registers[0]!;
+			const objectRegister = instruction.registers[0];
 			if (defCount.get(objectRegister) !== 1) {
 				continue; // not single-assignment — can't reason about its contents
 			}
@@ -822,7 +827,7 @@ function scalarReplaceObjectLiteralsInFunction(fn: IRFunction): boolean {
 				const aliasRegister = worklist.pop()!;
 				for (const { instruction: use, position } of usesOf.get(aliasRegister) ?? []) {
 					if (use.type === "loadProperty" && position === 1) {
-						const stringIndex = constStringIndex.get(use.registers[2]!);
+						const stringIndex = constStringIndex.get(use.registers[2]);
 						if (stringIndex === undefined) {
 							safe = false; // non-constant or multiply-defined key
 							break;
@@ -837,7 +842,7 @@ function scalarReplaceObjectLiteralsInFunction(fn: IRFunction): boolean {
 						// `move [target, alias]` copies the record into `target`. Following it
 						// is sound only if `target` is single-assignment (so it always holds
 						// the record); its uses are then checked transitively.
-						const target = use.registers[0]!;
+						const target = use.registers[0];
 						if (defCount.get(target) !== 1) {
 							safe = false;
 							break;
@@ -912,6 +917,302 @@ function scalarReplaceObjectLiteralsInFunction(fn: IRFunction): boolean {
 	}
 
 	return changed;
+}
+
+/**
+ * Property names that exist on `Object.prototype` (and `Array.prototype` shares the
+ * data-vs-accessor concern via `__proto__`). A property read of one of these on a
+ * fresh object can resolve up the prototype chain (e.g. `o.toString`), and a write
+ * to `__proto__` invokes the prototype's setter — so a key NOT present in an
+ * object's own literal that names one of these cannot be modelled as a plain own
+ * slot. Used to keep the mutable scalar-replacement sound when a store introduces a
+ * key the literal did not declare. Keys that ARE in the literal are own data
+ * properties (shadowing the prototype) and need no check.
+ */
+const PROTOTYPE_POLLUTING_KEYS = new Set<string>([
+	"constructor",
+	"hasOwnProperty",
+	"isPrototypeOf",
+	"propertyIsEnumerable",
+	"toLocaleString",
+	"toString",
+	"valueOf",
+	"__proto__",
+	"__defineGetter__",
+	"__defineSetter__",
+	"__lookupGetter__",
+	"__lookupSetter__",
+]);
+
+/**
+ * Scalar-replace a non-escaping object that IS mutated — the general (mutable)
+ * extension of `optScalarReplaceObjectLiterals` (gc_todo.md §N.7 / Phase 7 T7.4).
+ *
+ * The immutable pass above eliminates records that are only ever read. This pass
+ * handles records that are also *written* (`storeProperty`), the builder /
+ * accumulator idiom (`const o = {…}; o.k = …; … o.k …`). The model: give each
+ * own key its own **mutable register** ("field register"). A store `o.k = v`
+ * becomes `move [fieldₖ, v]`; a read `r = o.k` becomes `move [r, fieldₖ]`; the
+ * allocation is deleted and each field register is initialised at the (former)
+ * construction site (the literal value, or `undefined` for a key the literal did
+ * not declare).
+ *
+ * Why no phi / merge machinery is needed: the rewrites happen *in place*, so the
+ * field register is read and written in exactly the original program order along
+ * every path. A control-flow merge leaves the field register holding whatever the
+ * last dynamically-executed store wrote — identical to the object's field. This
+ * makes the transform correct for arbitrary control flow (branches AND loops: a
+ * loop-carried `o.sum += x` becomes a loop-carried `fieldₛᵤₘ = fieldₛᵤₘ + x`).
+ *
+ * Soundness conditions (any violation ⇒ the object is left as a real allocation):
+ *  - the object register is single-assignment (one `createObject`/`createObjectShaped`);
+ *  - it has at least one store (else the immutable pass owns it);
+ *  - EVERY use, across its single-assignment `move`-alias closure, is a constant
+ *    own-key `loadProperty` read (object operand), a constant-key `storeProperty`
+ *    write (object operand), or such an alias `move`. Anything else — a dynamic
+ *    key, the object as a stored value / call arg / return / `===` operand, a
+ *    `delete`, an enumeration — means the identity or full contents escape;
+ *  - every key is either declared by the literal (an own data slot, always safe)
+ *    or a non-`Object.prototype` name (safe to model as `undefined`-until-written,
+ *    because a missing own read returns `undefined` and a write creates an own
+ *    data property — neither touches the prototype). A `__proto__`/`toString`/…
+ *    key the literal did not declare bails.
+ *
+ * Gating mirrors the immutable pass: skipped under generator/async (a value live
+ * across a suspension is frame-resident, C5) and `with`/direct-`eval` (C3).
+ */
+function optScalarReplaceMutableObjects(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		if (fn.isGenerator || fn.isAsync) {
+			continue;
+		}
+		if (functionUsesWith(fn) || fn.semanticFile.hasDirectEval.size > 0) {
+			continue;
+		}
+		changed = scalarReplaceMutableObjectsInFunction(program, fn) || changed;
+	}
+	return changed;
+}
+
+function scalarReplaceMutableObjectsInFunction(
+	program: IntermediateProgram,
+	fn: IRFunction,
+): boolean {
+	const defCount = new Map<number, number>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!("registers" in instruction)) {
+				continue;
+			}
+			const defs = destinationCount(instruction);
+			for (let i = 0; i < defs; i++) {
+				const register = instruction.registers[i]!;
+				if (register >= 0) {
+					defCount.set(register, (defCount.get(register) ?? 0) + 1);
+				}
+			}
+		}
+	}
+
+	// Registers whose sole definition is a `createString` → its string index (a
+	// usable constant property key).
+	const constStringIndex = new Map<number, number>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.type === "createString" && defCount.get(instruction.registers[0]) === 1) {
+				constStringIndex.set(instruction.registers[0], instruction.stringIndex);
+			}
+		}
+	}
+
+	// Every use of each register: instruction + operand position (positions below
+	// the destination count are definitions, not uses).
+	const usesOf = new Map<number, Array<{ instruction: IRInstruction; position: number }>>();
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!("registers" in instruction)) {
+				continue;
+			}
+			const defs = destinationCount(instruction);
+			for (let position = defs; position < instruction.registers.length; position++) {
+				const register = instruction.registers[position]!;
+				if (register < 0) {
+					continue;
+				}
+				const list = usesOf.get(register) ?? usesOf.set(register, []).get(register)!;
+				list.push({ instruction, position });
+			}
+		}
+	}
+
+	// In-place rewrites recorded across all objects in this function, applied once
+	// at the end. `claimed` prevents two objects from rewriting the same instruction
+	// (which would be unsound); the second object to touch it simply bails.
+	const replaceAlloc = new Map<IRInstruction, Array<IRInstruction>>();
+	const dropInstruction = new Set<IRInstruction>();
+	const claimed = new Set<IRInstruction>();
+	let changed = false;
+
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.type !== "createObject" && instruction.type !== "createObjectShaped") {
+				continue;
+			}
+			const objectRegister = instruction.registers[0]!;
+			if (defCount.get(objectRegister) !== 1) {
+				continue;
+			}
+
+			// Literal keys → the value register that initialises each (shaped only).
+			const literalKeys =
+				instruction.type === "createObjectShaped" ? instruction.keyStringIndices : [];
+			const literalValueRegister = new Map<number, number>();
+			if (instruction.type === "createObjectShaped") {
+				const valueRegisters = instruction.registers.slice(1);
+				for (let i = 0; i < literalKeys.length; i++) {
+					literalValueRegister.set(literalKeys[i]!, valueRegisters[i]!);
+				}
+			}
+			const literalKeySet = new Set(literalKeys);
+
+			// Walk the object's single-assignment alias closure, classifying every use.
+			const reads: Array<{ load: IRInstruction; keyStringIndex: number }> = [];
+			const stores: Array<{ store: IRInstruction; keyStringIndex: number }> = [];
+			const aliasMoves: Array<IRInstruction> = [];
+			const touched: Array<IRInstruction> = [instruction];
+			const aliasSet = new Set<number>([objectRegister]);
+			const worklist = [objectRegister];
+			let safe = true;
+			let hasStore = false;
+
+			while (safe && worklist.length > 0) {
+				const aliasRegister = worklist.pop()!;
+				for (const { instruction: use, position } of usesOf.get(aliasRegister) ?? []) {
+					if (use.type === "loadProperty" && position === 1) {
+						const keyStringIndex = constStringIndex.get(use.registers[2]!);
+						if (keyStringIndex === undefined) {
+							safe = false;
+							break;
+						}
+						reads.push({ load: use, keyStringIndex });
+						touched.push(use);
+					} else if (use.type === "storeProperty" && position === 0) {
+						const keyStringIndex = constStringIndex.get(use.registers[1]!);
+						if (keyStringIndex === undefined) {
+							safe = false;
+							break;
+						}
+						stores.push({ store: use, keyStringIndex });
+						touched.push(use);
+						hasStore = true;
+					} else if (use.type === "move" && position === 1) {
+						const target = use.registers[0]!;
+						if (defCount.get(target) !== 1) {
+							safe = false;
+							break;
+						}
+						if (!aliasSet.has(target)) {
+							aliasSet.add(target);
+							worklist.push(target);
+						}
+						aliasMoves.push(use);
+						touched.push(use);
+					} else {
+						safe = false; // escapes / mutated via accessor / dynamic key / identity
+						break;
+					}
+				}
+			}
+
+			// Only objects that are written; pure-read records are the immutable pass's.
+			if (!safe || !hasStore) {
+				continue;
+			}
+
+			// Every key must be a literal own slot or a prototype-safe new key.
+			let keysSafe = true;
+			for (const { keyStringIndex } of [...reads, ...stores]) {
+				if (literalKeySet.has(keyStringIndex)) {
+					continue;
+				}
+				if (PROTOTYPE_POLLUTING_KEYS.has(decodeStringConstant(program, keyStringIndex))) {
+					keysSafe = false;
+					break;
+				}
+			}
+			if (!keysSafe) {
+				continue;
+			}
+
+			// Don't let two objects rewrite the same instruction.
+			if (touched.some((i) => claimed.has(i))) {
+				continue;
+			}
+
+			// A field register per key that is READ (a key only ever written produces a
+			// dead store we simply drop). Initialised at the construction site.
+			const readKeys = new Set(reads.map((r) => r.keyStringIndex));
+			const fieldRegister = new Map<number, number>();
+			const init: Array<IRInstruction> = [];
+			for (const key of readKeys) {
+				const register = fn.nextRegisterDestination++;
+				fieldRegister.set(key, register);
+				const literalValue = literalValueRegister.get(key);
+				if (literalValue !== undefined) {
+					init.push({ type: "move", registers: [register, literalValue] });
+				} else {
+					init.push({ type: "createUndefined", registers: [register] });
+				}
+			}
+
+			// Rewrite reads → move-from-field, live stores → move-to-field, drop dead
+			// stores (a key never read) and the alias copies (now dead).
+			for (const { load, keyStringIndex } of reads) {
+				const mutable = load as { type: string; registers: Array<number> };
+				mutable.registers = [mutable.registers[0]!, fieldRegister.get(keyStringIndex)!];
+				mutable.type = "move";
+			}
+			for (const { store, keyStringIndex } of stores) {
+				const register = fieldRegister.get(keyStringIndex);
+				if (register === undefined) {
+					dropInstruction.add(store); // dead write to a never-read field
+					continue;
+				}
+				const mutable = store as { type: string; registers: Array<number> };
+				mutable.registers = [register, mutable.registers[2]!];
+				mutable.type = "move";
+			}
+			for (const move of aliasMoves) {
+				dropInstruction.add(move);
+			}
+			replaceAlloc.set(instruction, init);
+			for (const i of touched) {
+				claimed.add(i);
+			}
+			changed = true;
+		}
+	}
+
+	if (!changed) {
+		return false;
+	}
+	for (const block of fn.blocks) {
+		const next: Array<IRInstruction> = [];
+		for (const instruction of block.instructions) {
+			const init = replaceAlloc.get(instruction);
+			if (init !== undefined) {
+				next.push(...init);
+				continue;
+			}
+			if (dropInstruction.has(instruction)) {
+				continue;
+			}
+			next.push(instruction);
+		}
+		block.instructions = next;
+	}
+	return true;
 }
 
 /**

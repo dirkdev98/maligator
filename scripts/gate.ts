@@ -46,6 +46,16 @@ const modes: Array<Mode> = [
 		env: { MAL_GC_STRESS: stressN },
 		enabled: process.env.GATE_SKIP_STRESS !== "1",
 	},
+	// Generational collector (opt-in via GATE_GEN=1 — it builds a separate
+	// runtime/build-gen archive and is slow, so it is not part of the default
+	// gate). Runs compiled + STRESS so the generational card barrier's
+	// remembered-set completeness is exercised (a missed old→young edge surfaces
+	// as a regression here or a MAL_GC_VERIFY abort).
+	{
+		name: `generational (MAL_GC_GENERATIONAL=1) + STRESS=${stressN}`,
+		env: { MAL_GC_GENERATIONAL: "1", MAL_GC_STRESS: stressN, MAL_GC_VERIFY: "1" },
+		enabled: process.env.GATE_GEN === "1",
+	},
 ];
 
 const results: Array<{ name: string; ok: boolean }> = [];

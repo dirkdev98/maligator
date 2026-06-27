@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "./array_buffer_object.h"
 #include "./array_object.h"
@@ -62,6 +63,41 @@ static i32 g_gc_stress_counter = 0;
 static bool g_gc_verify_enabled = false;
 static bool g_gc_verifying = false;
 
+/* Per-collection statistics (MAL_GC_STATS=1): accumulated each collection and
+ * printed to stderr at process exit. Drives the GC tuning harness (bench/gc +
+ * scripts/gcbench.ts). Collected for both collectors; the minor/major split is
+ * only meaningful under the generational build (a non-gen collection is always a
+ * full mark-sweep, counted as a major). */
+static bool g_gc_stats_enabled = false;
+static u64 g_gc_collections = 0;
+static u64 g_gc_minor_count = 0;
+static u64 g_gc_major_count = 0;
+static u64 g_gc_total_ns = 0;
+static u64 g_gc_max_pause_ns = 0;
+static usize g_gc_peak_live_bytes = 0;
+
+#if MAL_GC_GENERATIONAL
+/* Major-collection cadence: one in every g_gc_major_every collections (and the
+ * first) is a full major that reclaims the old generation; the rest are minors.
+ * Default 8, overridable at runtime via MAL_GC_MAJOR_EVERY for tuning. */
+static u32 g_gc_major_every = 8;
+#endif
+
+static u64 mal_gc_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (u64) ts.tv_sec * 1000000000ull + (u64) ts.tv_nsec;
+}
+
+static void mal_gc_print_stats(void) {
+    fprintf(stderr,
+            "[gc-stats] collections=%llu minor=%llu major=%llu total_ms=%.3f "
+            "max_pause_ms=%.3f peak_live_bytes=%llu\n",
+            (unsigned long long) g_gc_collections, (unsigned long long) g_gc_minor_count,
+            (unsigned long long) g_gc_major_count, (double) g_gc_total_ns / 1.0e6,
+            (double) g_gc_max_pause_ns / 1.0e6, (unsigned long long) g_gc_peak_live_bytes);
+}
+
 /* Auto-collection heap-growth policy: the first collection fires once this many
  * bytes have been allocated; after each one the next trigger is set past the
  * surviving set by at least this floor (so a small live set cannot thrash). */
@@ -92,6 +128,21 @@ void mal_gc_init(void) {
     // Poisoning dead cells makes a use-after-free of a missed root crash loudly
     // rather than silently alias a recycled cell; pair it with verification.
     mal_heap_poison_on_free = g_gc_verify_enabled;
+
+    if (getenv("MAL_GC_STATS") != nullptr) {
+        g_gc_stats_enabled = true;
+        atexit(mal_gc_print_stats);
+    }
+
+#if MAL_GC_GENERATIONAL
+    const char *major_every = getenv("MAL_GC_MAJOR_EVERY");
+    if (major_every != nullptr) {
+        unsigned long v = strtoul(major_every, nullptr, 10);
+        if (v >= 1) {
+            g_gc_major_every = (u32) v;
+        }
+    }
+#endif
 }
 
 void mal_gc_safepoint(MalVm *vm) {
@@ -878,14 +929,15 @@ static void mal_gc_reset_marks_cell(MalHeapHeader *cell) {
     cell->dirty = 0;
 }
 
-// One in every MAL_GC_MAJOR_EVERY collections (and the first) is a full major
+// One in every g_gc_major_every collections (and the first) is a full major
 // collection that reclaims the old generation; the rest are minors that only
-// touch roots + the remembered set + young cells.
-#define MAL_GC_MAJOR_EVERY 8u
+// touch roots + the remembered set + young cells. (g_gc_major_every is declared
+// up top so mal_gc_init can read MAL_GC_MAJOR_EVERY into it.)
 static u32 g_gc_collection_index = 0;
 #endif
 
 void mal_gc_collect(MalVm *vm) {
+    u64 start_ns = g_gc_stats_enabled ? mal_gc_now_ns() : 0;
     g_gc_vm = vm;
     g_grey_count = 0;
     g_weak_maps_count = 0;
@@ -896,7 +948,7 @@ void mal_gc_collect(MalVm *vm) {
     // A major collection demotes the whole heap to WHITE and forgets the
     // remembered set, so the full mark below collects old garbage too. A minor
     // leaves old cells BLACK and finds young survivors via roots + remembered set.
-    bool major = (g_gc_collection_index++ % MAL_GC_MAJOR_EVERY) == 0;
+    bool major = (g_gc_collection_index++ % g_gc_major_every) == 0;
     if (major) {
         mal_heap_walk_cells(&vm->heap, mal_gc_reset_marks_cell);
         g_remembered_count = 0; // dirty flags cleared by the reset walk above
@@ -945,6 +997,27 @@ void mal_gc_collect(MalVm *vm) {
             grow = MAL_GC_MIN_INCREMENT;
         }
         mal_gc_next_at = vm->heap.bytes_allocated + grow;
+    }
+
+    if (g_gc_stats_enabled) {
+        u64 elapsed = mal_gc_now_ns() - start_ns;
+        g_gc_collections++;
+        g_gc_total_ns += elapsed;
+        if (elapsed > g_gc_max_pause_ns) {
+            g_gc_max_pause_ns = elapsed;
+        }
+        if (vm->heap.live_bytes > g_gc_peak_live_bytes) {
+            g_gc_peak_live_bytes = vm->heap.live_bytes;
+        }
+#if MAL_GC_GENERATIONAL
+        if (major) {
+            g_gc_major_count++;
+        } else {
+            g_gc_minor_count++;
+        }
+#else
+        g_gc_major_count++; // a non-generational collection is always a full mark-sweep
+#endif
     }
 
     g_gc_vm = nullptr;

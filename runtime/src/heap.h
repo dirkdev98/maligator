@@ -51,6 +51,15 @@ typedef struct MalHeap {
      * allocator reuses these before bumping. Empty between (and without) any
      * collection, so an uncollected run is pure bump allocation as before. */
     void *cell_free[MAL_GC_NUM_SIZE_CLASSES];
+    /** Reclaimed owner-held RAW buffers (string code units, function slots,
+     * bound args, BigInt digits) per size class. Unlike cell_free, this is NOT
+     * rebuilt by the sweep — RAW buffers have no per-cell mark; they are freed
+     * EXPLICITLY by owner finalizers (gc_free_raw), so the list persists across
+     * collections like a malloc free list. The allocator reuses it before
+     * bumping a fresh RAW cell, which is what bounds RAW footprint (without it,
+     * RAW allocation only ever bumped forward → a permanent leak of every freed
+     * buffer). */
+    void *raw_free[MAL_GC_NUM_SIZE_CLASSES];
     /** Monotonic total of handed-out cell sizes (never decremented); the
      * auto-collection trigger compares it against mal_gc_next_at. */
     usize bytes_allocated;

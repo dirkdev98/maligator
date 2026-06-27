@@ -100,7 +100,7 @@ function capturedSlotKey(owner: number, index: number): string {
  * NOT the dynamic `globalProperty` path, which is reassignable and never resolved).
  * Used to resolve a call's callee.
  */
-function functionValuedRegisters(
+export function functionValuedRegisters(
 	fn: IRFunction,
 	capturedSlots: ReadonlyMap<string, number>,
 	globalSlots: ReadonlyMap<number, number>,
@@ -189,7 +189,7 @@ function functionValuedRegisters(
  * written more than once, or from a non-function, is excluded. (Resolving the store
  * source uses only createFunction+move, no captured loads, to avoid circularity.)
  */
-function capturedSlotFunctions(program: IntermediateProgram): Map<string, number> {
+export function capturedSlotFunctions(program: IntermediateProgram): Map<string, number> {
 	const empty = new Map<string, number>();
 	const emptyGlobals = new Map<number, number>();
 	const stores = new Map<string, { func: number | undefined; count: number }>();
@@ -268,7 +268,7 @@ function createEmptyRegisters(fn: IRFunction): Set<number> {
  * function store is genuinely single-assignment. (Resolving each store's source uses
  * only createFunction+move chains — no captured/global loads — to avoid circularity.)
  */
-function globalSlotFunctions(program: IntermediateProgram): Map<number, number> {
+export function globalSlotFunctions(program: IntermediateProgram): Map<number, number> {
 	const empty = new Map<string, number>();
 	const emptyGlobals = new Map<number, number>();
 	interface SlotAcc {
@@ -437,12 +437,12 @@ const hofSubstitutedCalls = new WeakSet<IRInstruction>();
  * Decode a string-constant index to a JS string (constants are UTF-16 code-unit
  * arrays; method names are ASCII).
  */
-function decodeStringConstant(program: IntermediateProgram, index: number): string {
+export function decodeStringConstant(program: IntermediateProgram, index: number): string {
 	return String.fromCharCode(...program.stringConstants[index]!);
 }
 
 /** Registers defined exactly once in `fn`, mapped to their defining instruction. */
-function singleDefinitions(fn: IRFunction): Map<number, IRInstruction> {
+export function singleDefinitions(fn: IRFunction): Map<number, IRInstruction> {
 	const count = new Map<number, number>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -501,8 +501,8 @@ export function findHofInlineSites(program: IntermediateProgram): ProgramHofSite
 					continue;
 				}
 				// call.registers = [destination, callee, this, ...arguments]
-				const calleeRegister = instruction.registers[1]!;
-				const thisRegister = instruction.registers[2]!;
+				const calleeRegister = instruction.registers[1];
+				const thisRegister = instruction.registers[2];
 				const callbackRegister = instruction.registers[3];
 				if (callbackRegister === undefined) {
 					continue; // no callback argument
@@ -891,7 +891,7 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 						continue;
 					}
 					if (instruction.type === "return") {
-						const returnRegister = instruction.registers[0]!;
+						const returnRegister = instruction.registers[0];
 						if (destination >= 0) {
 							out.push({
 								type: "move",
@@ -913,7 +913,7 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 						break;
 					}
 					if (instruction.type === "jumpIf") {
-						const condition = instruction.registers[0]!;
+						const condition = instruction.registers[0];
 						out.push({
 							type: "jumpIf",
 							registers: [condition >= 0 ? condition + offset : condition],
@@ -1631,7 +1631,7 @@ export function optEliminateCapturedSlots(program: IntermediateProgram): boolean
 					} else {
 						(storesBySlot.get(key) ?? storesBySlot.set(key, []).get(key)!).push({
 							use: { fn, instruction },
-							source: instruction.registers[0]!,
+							source: instruction.registers[0],
 						});
 					}
 				}

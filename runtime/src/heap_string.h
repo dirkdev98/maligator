@@ -45,6 +45,14 @@ MalString *mal_string_new_copy(MalHeap *heap, const c16 *code_units, usize lengt
 MalString *mal_string_new_external(MalHeap *heap, const c16 *code_units, usize length);
 
 /**
+ * Allocate a string that TAKES OWNERSHIP of an existing heap-raw buffer (one
+ * returned by `mal_heap_alloc_raw`), freeing it on finalization — no copy. Use
+ * when the caller has already built the exact code-unit buffer (e.g. string
+ * concatenation), to avoid a redundant alloc+copy (and the leak of the temporary).
+ */
+MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize length);
+
+/**
  * Allocate and initialize a string from ASCII bytes.
  */
 MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length);

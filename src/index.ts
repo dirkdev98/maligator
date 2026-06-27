@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { gmallocEnabled, runEnv } from "./build-flags.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
+import { dumpProgramEscape } from "./escape.ts";
 import { debugHofInlineSites, debugInlinableCalls } from "./inline.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
@@ -84,6 +85,14 @@ if (argFlag("--dump-inline")) {
 // substitution pass will consume these).
 if (argFlag("--dump-hof")) {
 	debugHofInlineSites(irProgram);
+}
+
+// Escape / effect summary analysis (task #3 / §N.7). Detection only — no
+// transformation. `--dump-escape` lists each function's parameter/receiver escape
+// lattice, return provenance, effect flags, and the per-allocation escape kind the
+// scalar-replacement (T7.4) and write-barrier-elision (T2.6) passes consume.
+if (argFlag("--dump-escape")) {
+	dumpProgramEscape(irProgram);
 }
 
 const registerAllocTiming = log.time("register allocation");

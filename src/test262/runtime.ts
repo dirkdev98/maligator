@@ -2,12 +2,19 @@ import { execFile, execSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import {
+	buildSuffix,
+	cmakeCFlags,
+	gcDefines,
+	gcGenerational,
+	gmallocEnabled,
+	runEnv,
+} from "../build-flags.ts";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
 import { compileSemanticProgramToIr } from "../ir.ts";
 import { lowerIrProgramToVmDefinition } from "../lower-vm.ts";
 import type { VmDefinition } from "../lower-vm.ts";
-import { gmallocEnabled, runEnv } from "../build-flags.ts";
 import { parseModule, parseScript } from "../parser.ts";
 import { allocateRegisters } from "../register-alloc.ts";
 import { ensureRustLibrary, rustLinkArgs } from "../rust-build.ts";
@@ -38,8 +45,20 @@ const execFileAsync = promisify(execFile);
  * split lets the artifact cache reuse the compiled object across runs whenever
  * only the runtime implementation changed.
  */
-const CC_COMPILE_FLAGS = ["-std=c2x", "-O0", "-I", "runtime/src"];
+const CC_COMPILE_FLAGS = ["-std=c2x", "-O0", "-I", "runtime/src", ...gcDefines()];
 const CC_LINK_FLAGS = ["-std=c2x", "-O0"];
+
+/**
+ * The runtime build dir + library, and the harness-main object dir, all suffixed
+ * per GC/sanitizer build dimension (`buildSuffix()`), so the generational build
+ * (`MAL_GC_GENERATIONAL=1` → `runtime/build-gen`, `.cache/test262-build-gen`) gets
+ * its own archive + mains and never clobbers the default non-gen artifacts. The
+ * generated-C TU + the mains all see the same `gcDefines()` (folded into
+ * CC_COMPILE_FLAGS, so the artifact-cache fingerprint separates gen/non-gen too).
+ */
+const RUNTIME_BUILD_DIR = `runtime/build${buildSuffix()}`;
+const LIB_ARCHIVE = `${RUNTIME_BUILD_DIR}/libLibMaligator.a`;
+const BUILD_PATH = `${TEST262_METADATA.buildPath}${buildSuffix()}`;
 
 /**
  * Share byte-identical static arrays (the harness's instructions and string
@@ -217,23 +236,36 @@ export function test262ResetStats() {
 }
 
 export function test262PrepareBuild() {
-	rmSync(TEST262_METADATA.buildPath, { recursive: true, force: true });
-	mkdirSync(TEST262_METADATA.buildPath, { recursive: true });
+	rmSync(BUILD_PATH, { recursive: true, force: true });
+	mkdirSync(BUILD_PATH, { recursive: true });
 
-	test262Log("Building LibMaligator...");
-	execSync(`cmake --build runtime/build`, { stdio: "ignore" });
+	test262Log(`Building LibMaligator${gcGenerational() ? " (generational)" : ""}...`);
+	// The default non-gen build dir (runtime/build) is configured out-of-band; a
+	// suffixed dimension (gen / sanitizer) is configured here with its defines.
+	if (buildSuffix() !== "") {
+		execSync(
+			`cmake -S runtime -B ${RUNTIME_BUILD_DIR} -DCMAKE_C_FLAGS=${JSON.stringify(cmakeCFlags())}`,
+			{
+				stdio: "ignore",
+			},
+		);
+	}
+	execSync(`cmake --build ${RUNTIME_BUILD_DIR}`, { stdio: "ignore" });
 
 	// Build the Rust shim once per pass; cheap when cached. Date tz + Intl
 	// (ICU4X) and the RegExp engine (regress), both in libmal_rust.a.
 	ensureRustLibrary();
 
+	// The mains include gc.h, whose header layout + barrier code differ under
+	// MAL_GC_GENERATIONAL, so they must compile with the same defines as the lib.
+	const defines = gcDefines().join(" ");
 	test262Log("Compiling harness mains...");
 	execSync(
-		`cc -std=c2x -O1 -I runtime/src -c runtime/test262_main.c -o ${TEST262_METADATA.buildPath}/test262_main.o`,
+		`cc -std=c2x -O1 -I runtime/src ${defines} -c runtime/test262_main.c -o ${BUILD_PATH}/test262_main.o`,
 		{ stdio: "inherit" },
 	);
 	execSync(
-		`cc -std=c2x -O1 -I runtime/src -c runtime/test262_batch.c -o ${TEST262_METADATA.buildPath}/test262_batch.o`,
+		`cc -std=c2x -O1 -I runtime/src ${defines} -c runtime/test262_batch.c -o ${BUILD_PATH}/test262_batch.o`,
 		{ stdio: "inherit" },
 	);
 }
@@ -573,8 +605,8 @@ async function linkBatch(objectPath: string, binPath: string) {
 		[
 			...CC_LINK_FLAGS,
 			objectPath,
-			`${TEST262_METADATA.buildPath}/test262_batch.o`,
-			"runtime/build/libLibMaligator.a",
+			`${BUILD_PATH}/test262_batch.o`,
+			LIB_ARCHIVE,
 			...rustLinkArgs(),
 			"-o",
 			binPath,
@@ -679,7 +711,7 @@ function applyManifest(
  */
 export async function test262RunBatch(files: Array<Test262File>, workerId: number) {
 	const useCache = cacheEnabled();
-	const baseName = path.join(TEST262_METADATA.buildPath, `batch${workerId}`);
+	const baseName = path.join(BUILD_PATH, `batch${workerId}`);
 
 	// Compose every test once: it feeds both the cache key and the compiler.
 	const composed = files.map((file) => composeSource(file));
@@ -803,8 +835,8 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 				[
 					...CC_COMPILE_FLAGS,
 					`${baseName}.c`,
-					`${TEST262_METADATA.buildPath}/test262_batch.o`,
-					"runtime/build/libLibMaligator.a",
+					`${BUILD_PATH}/test262_batch.o`,
+					LIB_ARCHIVE,
 					...rustLinkArgs(),
 					"-o",
 					`${baseName}.bin`,
@@ -926,7 +958,7 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 	}
 	const cSource = emitVmDefinition(outcome.definition, { includeHeader: false });
 
-	const baseName = path.join(TEST262_METADATA.buildPath, `t${workerId}`);
+	const baseName = path.join(BUILD_PATH, `t${workerId}`);
 
 	const ccStartedAt = performance.now();
 	try {
@@ -942,8 +974,8 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 				"-I",
 				"runtime/src",
 				`${baseName}.c`,
-				`${TEST262_METADATA.buildPath}/test262_main.o`,
-				"runtime/build/libLibMaligator.a",
+				`${BUILD_PATH}/test262_main.o`,
+				LIB_ARCHIVE,
 				...rustLinkArgs(),
 				"-o",
 				`${baseName}.bin`,

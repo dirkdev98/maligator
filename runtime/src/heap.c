@@ -243,11 +243,21 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
     usize slot = (size + MAL_GC_CELL_ALIGN - 1) / MAL_GC_CELL_ALIGN;
     u16 size_class = g_size_to_class[slot];
 
-    // Reuse a cell reclaimed by the sweep before bumping. Only managed (CELL)
-    // cells are pooled this way; the list is empty until a collection runs.
+    // Reuse a cell reclaimed by the sweep (CELL) or freed by an owner finalizer
+    // (RAW) before bumping. CELL cells thread the free link past their header
+    // (mal_gc_free_next_offset); RAW cells have no header, so the link sits at
+    // offset 0. Both lists are empty until something is reclaimed, so an
+    // uncollected run is still pure bump allocation.
     if (kind == MAL_GC_BLOCK_CELL && heap->cell_free[size_class] != nullptr) {
         void *cell = heap->cell_free[size_class];
         heap->cell_free[size_class] = *(void **) ((u8 *) cell + mal_gc_free_next_offset());
+        heap->bytes_allocated += g_class_cell_size[size_class];
+        mal_heap_maybe_trigger_gc(heap);
+        return cell;
+    }
+    if (kind == MAL_GC_BLOCK_RAW && heap->raw_free[size_class] != nullptr) {
+        void *cell = heap->raw_free[size_class];
+        heap->raw_free[size_class] = *(void **) cell;
         heap->bytes_allocated += g_class_cell_size[size_class];
         mal_heap_maybe_trigger_gc(heap);
         return cell;
@@ -278,6 +288,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     memset(heap->cell_blocks, 0, sizeof(heap->cell_blocks));
     memset(heap->raw_blocks, 0, sizeof(heap->raw_blocks));
     memset(heap->cell_free, 0, sizeof(heap->cell_free));
+    memset(heap->raw_free, 0, sizeof(heap->raw_free));
     heap->free_blocks = nullptr;
     heap->bytes_allocated = 0;
     heap->live_bytes = 0;
@@ -302,6 +313,7 @@ void mal_heap_free(MalHeap *heap) {
     memset(heap->cell_blocks, 0, sizeof(heap->cell_blocks));
     memset(heap->raw_blocks, 0, sizeof(heap->raw_blocks));
     memset(heap->cell_free, 0, sizeof(heap->cell_free));
+    memset(heap->raw_free, 0, sizeof(heap->raw_free));
     heap->free_blocks = nullptr; // the blocks themselves are freed via the chunks above
     heap->bytes_allocated = 0;
     heap->live_bytes = 0;
@@ -492,11 +504,13 @@ void gc_free_raw(MalHeap *heap, void *ptr) {
         return;
     }
     if (mal_gc_ptr_in_chunks(heap, ptr)) {
-        // In-block cell: push onto its block's free list (recovered by masking).
-        // Reuse on the allocation path lands with the Phase 3 sweep wiring.
+        // In-block RAW cell: push onto its size class's reuse list (the block is
+        // recovered by masking to BLOCK_SIZE alignment). The allocator pops this
+        // before bumping a fresh RAW cell, so a freed buffer is reused rather than
+        // leaked. The free link sits at offset 0 (RAW cells carry no header).
         MalGcBlock *block = (MalGcBlock *) ((uptr) ptr & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
-        *(void **) ptr = block->free_list;
-        block->free_list = ptr;
+        *(void **) ptr = heap->raw_free[block->size_class];
+        heap->raw_free[block->size_class] = ptr;
         return;
     }
     // Large-object buffer: unlink its record from the LOS list and free it.

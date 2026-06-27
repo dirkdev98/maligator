@@ -73,8 +73,43 @@ test("a computed (non-constant) key read keeps the allocation", () => {
 	expect(countOp(fn, "createObjectShaped")).toBe(1);
 });
 
-test("a mutated record keeps the allocation", () => {
+test("a mutated record is scalar-replaced into per-key registers (T7.4)", () => {
 	const fn = nested(`(function (){ const p = { x: 1 }; p.x = 9; return p.x; })();`);
+	expect(countOp(fn, "createObjectShaped")).toBe(0);
+});
+
+test("a mutated record adding a prototype-safe new key is scalar-replaced", () => {
+	const fn = nested(`(function (){ const p = { x: 1 }; p.y = 9; return p.x + p.y; })();`);
+	expect(countOp(fn, "createObjectShaped")).toBe(0);
+});
+
+test("a mutated empty object built up with safe keys is scalar-replaced", () => {
+	const fn = nested(`(function (a){ const o = {}; o.x = a; o.y = a + 1; return o.x + o.y; })(0);`);
+	expect(countOp(fn, "createObject")).toBe(0);
+	expect(countOp(fn, "createObjectShaped")).toBe(0);
+});
+
+test("a loop-accumulator object is scalar-replaced (register carries the value)", () => {
+	const fn = nested(
+		`(function (n){ const acc = { sum: 0 }; for (let i = 0; i < n; i++) { acc.sum += i; } return acc.sum; })(0);`,
+	);
+	expect(countOp(fn, "createObjectShaped")).toBe(0);
+});
+
+test("a mutated record that escapes via return is NOT replaced", () => {
+	const fn = nested(`globalThis.r = (function (){ const p = { x: 1 }; p.x = 9; return p; })();`);
+	expect(countOp(fn, "createObjectShaped")).toBe(1);
+});
+
+test("a store to a prototype-polluting new key keeps the allocation", () => {
+	// `p.toString = …` on a key the literal did not declare must go through [[Set]]
+	// (a prototype accessor could exist), so the object must remain.
+	const fn = nested(`(function (){ const p = { x: 1 }; p.toString = 9; return p.x; })();`);
+	expect(countOp(fn, "createObjectShaped")).toBe(1);
+});
+
+test("a mutated record with a dynamic-key store keeps the allocation", () => {
+	const fn = nested(`(function (k){ const p = { x: 1 }; p[k] = 9; return p.x; })(0);`);
 	expect(countOp(fn, "createObjectShaped")).toBe(1);
 });
 

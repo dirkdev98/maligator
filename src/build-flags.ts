@@ -71,7 +71,7 @@ export function gcGenerational(): boolean {
 }
 
 /** Preprocessor defines selecting GC build dimensions. */
-function gcDefines(): Array<string> {
+export function gcDefines(): Array<string> {
 	return gcGenerational() ? ["-DMAL_GC_GENERATIONAL=1"] : [];
 }
 
