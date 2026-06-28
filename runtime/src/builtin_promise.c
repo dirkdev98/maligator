@@ -1,5 +1,7 @@
 #include "builtin_promise.h"
 
+#include <stdlib.h>
+
 #include "array_object.h"
 #include "builtin_array.h"
 #include "builtin_error.h"
@@ -8,8 +10,12 @@
 #include "heap_string.h"
 #include "intrinsics.h"
 #include "microtask.h"
+#include "object.h"
 #include "object_ops.h"
 #include "promise_object.h"
+#include "property_iter.h"
+#include "proxy_object.h"
+#include "value_ops.h"
 #include "value.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -1195,6 +1201,256 @@ static MalValue mal_promise_try(MalVm *vm, MalValue this_value, const MalValue *
     return cap_promise;
 }
 
+// --- allKeyed / allSettledKeyed (await-dictionary proposal) ------------------
+
+// The keyed element closures reuse the all/allSettled slot layout plus a KEYS
+// slot holding the parallel array of (string/symbol) property keys.
+enum { MAL_PROMISE_KEYED_SLOT_KEYS = 5 };
+
+/** CreateKeyedPromiseCombinatorResultObject: a null-prototype object mapping
+ * each collected key to its settled value via CreateDataPropertyOrThrow. */
+static MalValue mal_promise_create_keyed_result(MalVm *vm, MalValue keys, MalValue values) {
+    MalObject *result = mal_object_new(&vm->heap, nullptr);
+    u32 count = mal_array_object_length(mal_value_to_array_object(keys));
+    for (u32 i = 0; i < count; i++) {
+        MalValue key_value;
+        MalValue value;
+        mal_builtin_array_try_get(vm, keys, i, &key_value);
+        mal_builtin_array_try_get(vm, values, i, &value);
+        MalKey key;
+        mal_vm_value_to_property_key(vm, key_value, &key);
+        MalPropertyDesc desc = mal_intrinsic_data_desc(
+            value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        mal_object_define_own(result, key, &desc);
+    }
+    return mal_value_from_object(result);
+}
+
+/** Shared tail for a keyed element settle: store into values[index], decrement
+ * the remaining counter, and resolve with the keyed result object at zero. */
+static void mal_promise_keyed_finish(MalVm *vm, MalNativeFunctionObject *self, MalValue record) {
+    i32 index = mal_value_to_i32(mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_INDEX));
+    MalValue values = mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_VALUES);
+    MalValue counter = mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_COUNTER);
+    MalValue cap_resolve = mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_RESOLVE);
+    MalValue keys = mal_native_function_object_get_slot(self, MAL_PROMISE_KEYED_SLOT_KEYS);
+
+    mal_promise_array_create_data(values, index, record);
+    i32 remaining = mal_promise_counter_get(vm, counter) - 1;
+    mal_promise_counter_set(counter, remaining);
+    if (remaining == 0) {
+        MalValue result = mal_promise_create_keyed_result(vm, keys, values);
+        mal_vm_call_value(vm, cap_resolve, mal_value_new_undefined(), &result, 1);
+    }
+}
+
+static MalValue mal_promise_keyed_all_element(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    if (mal_value_is_truthy(mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_FLAG))) {
+        return mal_value_new_undefined();
+    }
+    mal_native_function_object_set_slot(self, MAL_PROMISE_ELEMENT_SLOT_FLAG, mal_value_new_boolean(true));
+    mal_promise_keyed_finish(vm, self, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_promise_keyed_settled_fulfill(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    if (mal_promise_flag_test_set(vm, mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_FLAG))) {
+        return mal_value_new_undefined();
+    }
+    MalValue record = mal_promise_settled_record(vm, "fulfilled", "value", arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    mal_promise_keyed_finish(vm, self, record);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_promise_keyed_settled_reject(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    if (mal_promise_flag_test_set(vm, mal_native_function_object_get_slot(self, MAL_PROMISE_ELEMENT_SLOT_FLAG))) {
+        return mal_value_new_undefined();
+    }
+    MalValue record = mal_promise_settled_record(vm, "rejected", "reason", arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    mal_promise_keyed_finish(vm, self, record);
+    return mal_value_new_undefined();
+}
+
+/** Collect [[OwnPropertyKeys]] of `promises` into a malloc'd MalKey list
+ * (proxy-aware). Returns false with a pending throw on an abrupt completion. */
+static bool mal_promise_keyed_own_keys(MalVm *vm, MalValue promises, MalKey **out_keys, usize *out_count) {
+    if (mal_value_is_proxy_object(promises)) {
+        MalValue keys_array;
+        if (!mal_proxy_own_property_keys(vm, mal_value_to_proxy_object(promises), &keys_array)) {
+            return false;
+        }
+        u32 length = mal_array_object_length(mal_value_to_array_object(keys_array));
+        MalKey *keys = length > 0 ? malloc(sizeof(MalKey) * length) : nullptr;
+        for (u32 i = 0; i < length; i++) {
+            MalValue key_value;
+            mal_builtin_array_try_get(vm, keys_array, i, &key_value);
+            mal_vm_value_to_property_key(vm, key_value, &keys[i]);
+        }
+        *out_keys = keys;
+        *out_count = length;
+        return true;
+    }
+
+    MalKey *keys = nullptr;
+    usize count = 0;
+    usize capacity = 0;
+    MalPropertyIter iter;
+    mal_property_iter_init(&iter, mal_value_to_object(promises), MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+    MalKey key;
+    MalPropertyDesc desc;
+    while (mal_property_iter_next(&iter, &key, &desc)) {
+        if (count == capacity) {
+            capacity = capacity == 0 ? 16 : capacity * 2;
+            keys = realloc(keys, sizeof(MalKey) * capacity);
+        }
+        keys[count++] = key;
+    }
+    *out_keys = keys;
+    *out_count = count;
+    return true;
+}
+
+/** [[GetOwnProperty]](promises, key) -> present + enumerable (proxy-aware). */
+static bool mal_promise_keyed_enumerable(MalVm *vm, MalValue promises, MalKey key, bool *present, bool *enumerable) {
+    if (mal_value_is_proxy_object(promises)) {
+        MalPropertyDesc desc;
+        if (!mal_proxy_get_own_property_descriptor(vm, mal_value_to_proxy_object(promises), key, present, &desc)) {
+            return false;
+        }
+        *enumerable = *present && (desc.flags & MAL_PROPERTY_ENUMERABLE) != 0;
+        return true;
+    }
+    MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(promises), key);
+    *present = lookup.present;
+    *enumerable = lookup.present && (lookup.desc.flags & MAL_PROPERTY_ENUMERABLE) != 0;
+    return true;
+}
+
+/** Promise.allKeyed / Promise.allSettledKeyed shared body. */
+static MalValue mal_promise_all_keyed_impl(MalVm *vm, bool settled, MalValue this_value, const MalValue *args, i32 arg_count) {
+    if (!mal_value_is_object(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise combinator called on non-object");
+        return mal_value_new_undefined();
+    }
+
+    MalValue cap_promise;
+    MalValue cap_resolve;
+    MalValue cap_reject;
+    if (!mal_promise_new_capability(vm, this_value, &cap_promise, &cap_resolve, &cap_reject)) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue promise_resolve;
+    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, "resolve"), &promise_resolve)) {
+        return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
+    }
+    if (!mal_value_is_callable(promise_resolve)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise.resolve is not callable");
+        return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
+    }
+
+    MalValue promises = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(promises)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise.allKeyed argument is not an object");
+        return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
+    }
+
+    MalKey *own_keys;
+    usize own_count;
+    if (!mal_promise_keyed_own_keys(vm, promises, &own_keys, &own_count)) {
+        return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
+    }
+
+    MalValue values = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue keys = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue counter = mal_promise_counter_new(vm, 1);
+    i32 index = 0;
+
+    for (usize i = 0; i < own_count; i++) {
+        MalKey key = own_keys[i];
+        bool present;
+        bool enumerable;
+        if (!mal_promise_keyed_enumerable(vm, promises, key, &present, &enumerable)) {
+            free(own_keys);
+            return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
+        }
+        if (!enumerable) {
+            continue;
+        }
+
+        MalValue next_value;
+        if (!mal_vm_get_property(vm, promises, key, &next_value)) {
+            free(own_keys);
+            return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
+        }
+
+        // Record the key as a value (an integer index becomes its string form).
+        MalValue key_value = key.kind == MAL_KEY_INDEX
+            ? mal_value_from_string(mal_ops_to_string(&vm->heap, key.value))
+            : key.value;
+        mal_promise_array_create_data(keys, index, key_value);
+        mal_promise_array_create_data(values, index, mal_value_new_undefined());
+
+        MalCompletion resolved = mal_vm_call_value(vm, promise_resolve, this_value, &next_value, 1);
+        if (resolved.kind == MAL_COMPLETION_THROW) {
+            free(own_keys);
+            return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
+        }
+
+        mal_promise_counter_set(counter, mal_promise_counter_get(vm, counter) + 1);
+
+        MalValue flag = settled ? mal_promise_flag_new(vm) : mal_value_new_boolean(false);
+        MalValue element_slots[6] = {flag, mal_value_from_i32(index), values, counter, cap_resolve, keys};
+        bool ok;
+        if (settled) {
+            MalValue on_fulfilled = mal_promise_new_closure(vm, mal_promise_keyed_settled_fulfill, element_slots, 6, 1);
+            MalValue on_rejected = mal_promise_new_closure(vm, mal_promise_keyed_settled_reject, element_slots, 6, 1);
+            ok = mal_promise_invoke_then(vm, resolved.value, on_fulfilled, on_rejected);
+        } else {
+            MalValue on_fulfilled = mal_promise_new_closure(vm, mal_promise_keyed_all_element, element_slots, 6, 1);
+            ok = mal_promise_invoke_then(vm, resolved.value, on_fulfilled, cap_reject);
+        }
+        if (!ok) {
+            free(own_keys);
+            return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
+        }
+        index++;
+    }
+    free(own_keys);
+
+    i32 remaining = mal_promise_counter_get(vm, counter) - 1;
+    mal_promise_counter_set(counter, remaining);
+    if (remaining == 0) {
+        MalValue result = mal_promise_create_keyed_result(vm, keys, values);
+        mal_vm_call_value(vm, cap_resolve, mal_value_new_undefined(), &result, 1);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
+        }
+    }
+    return cap_promise;
+}
+
+static MalValue mal_promise_all_keyed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    return mal_promise_all_keyed_impl(vm, false, this_value, args, arg_count);
+}
+
+static MalValue mal_promise_all_settled_keyed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    return mal_promise_all_keyed_impl(vm, true, this_value, args, arg_count);
+}
+
 // --- Install -----------------------------------------------------------------
 
 void mal_builtin_promise_install(MalVm *vm) {
@@ -1232,6 +1488,8 @@ void mal_builtin_promise_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "all", 1, mal_promise_all);
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "race", 1, mal_promise_race);
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "allSettled", 1, mal_promise_all_settled);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "allKeyed", 1, mal_promise_all_keyed);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "allSettledKeyed", 1, mal_promise_all_settled_keyed);
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "any", 1, mal_promise_any);
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "withResolvers", 0, mal_promise_with_resolvers);
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "try", 1, mal_promise_try);

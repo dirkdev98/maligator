@@ -1522,6 +1522,590 @@ done:
     return ret;
 }
 
+// ---- Uint8Array base64/hex (Uint8Array-to/from-base64 proposal) ----------
+
+typedef enum { MAL_B64_LOOSE, MAL_B64_STRICT, MAL_B64_STOP } MalB64LastChunk;
+
+static const byte mal_b64_alphabet_std[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static const byte mal_b64_alphabet_url[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+static bool mal_b64_is_whitespace(c16 c) {
+    return c == 0x09 || c == 0x0A || c == 0x0C || c == 0x0D || c == 0x20;
+}
+
+static i32 mal_b64_decode_char(c16 c, bool url) {
+    if (c >= 'A' && c <= 'Z') {
+        return c - 'A';
+    }
+    if (c >= 'a' && c <= 'z') {
+        return c - 'a' + 26;
+    }
+    if (c >= '0' && c <= '9') {
+        return c - '0' + 52;
+    }
+    if (c == '+') {
+        return url ? -1 : 62;
+    }
+    if (c == '/') {
+        return url ? -1 : 63;
+    }
+    if (c == '-') {
+        return url ? 62 : -1;
+    }
+    if (c == '_') {
+        return url ? 63 : -1;
+    }
+    return -1;
+}
+
+static i32 mal_hex_decode_char(c16 c) {
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+/** ValidateUint8Array: receiver must be a (non-out-of-bounds) Uint8Array. */
+static MalTypedArrayObject *mal_ta_uint8_this(MalVm *vm, MalValue this_value) {
+    if (!mal_value_is_typed_array_object(this_value) ||
+        mal_value_to_typed_array_object(this_value)->kind != MAL_TA_UINT8) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Receiver is not a Uint8Array");
+        return nullptr;
+    }
+    return mal_value_to_typed_array_object(this_value);
+}
+
+/** GetOptionsObject: undefined -> a fresh null-proto object, an object passes
+ * through, anything else throws a TypeError. */
+static bool mal_b64_get_options(MalVm *vm, MalValue value, MalValue *out) {
+    if (mal_value_is_undefined(value)) {
+        *out = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+        return true;
+    }
+    if (mal_value_is_object(value)) {
+        *out = value;
+        return true;
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "options is not an object");
+    return false;
+}
+
+/** Read the "alphabet" option: "base64" (default) or "base64url". */
+static bool mal_b64_read_alphabet(MalVm *vm, MalValue options, bool *url) {
+    MalValue value;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "alphabet"), &value)) {
+        return false;
+    }
+    if (mal_value_is_undefined(value)) {
+        *url = false;
+        return true;
+    }
+    if (mal_value_is_string(value)) {
+        MalString *string = mal_value_to_string(value);
+        if (mal_string_equals(string, mal_intrinsic_ascii(vm, "base64"))) {
+            *url = false;
+            return true;
+        }
+        if (mal_string_equals(string, mal_intrinsic_ascii(vm, "base64url"))) {
+            *url = true;
+            return true;
+        }
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "alphabet must be 'base64' or 'base64url'");
+    return false;
+}
+
+/** Read the "lastChunkHandling" option: loose (default) / strict / stop-before-partial. */
+static bool mal_b64_read_last_chunk(MalVm *vm, MalValue options, MalB64LastChunk *mode) {
+    MalValue value;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "lastChunkHandling"), &value)) {
+        return false;
+    }
+    if (mal_value_is_undefined(value)) {
+        *mode = MAL_B64_LOOSE;
+        return true;
+    }
+    if (mal_value_is_string(value)) {
+        MalString *string = mal_value_to_string(value);
+        if (mal_string_equals(string, mal_intrinsic_ascii(vm, "loose"))) {
+            *mode = MAL_B64_LOOSE;
+            return true;
+        }
+        if (mal_string_equals(string, mal_intrinsic_ascii(vm, "strict"))) {
+            *mode = MAL_B64_STRICT;
+            return true;
+        }
+        if (mal_string_equals(string, mal_intrinsic_ascii(vm, "stop-before-partial"))) {
+            *mode = MAL_B64_STOP;
+            return true;
+        }
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "lastChunkHandling must be 'loose', 'strict', or 'stop-before-partial'");
+    return false;
+}
+
+/**
+ * Decode base64 `s` into `out` (cap `max_out` bytes). Sets *read (code units
+ * consumed yielding committed output) and *written. Throws SyntaxError on an
+ * illegal character / bad padding / extra bits (strict). When max_out is reached
+ * mid-stream, decoding stops cleanly (for setFromBase64).
+ */
+static bool mal_b64_decode(MalVm *vm, const c16 *s, usize len, bool url, MalB64LastChunk last_chunk, byte *out, usize max_out, usize *read_out, usize *written_out) {
+    usize i = 0;
+    usize written = 0;
+    usize read = 0;
+    u32 acc = 0;
+    i32 nsext = 0;
+
+    // maxLength reached up front (empty target): read nothing, ignore the input.
+    if (max_out == 0) {
+        *read_out = 0;
+        *written_out = 0;
+        return true;
+    }
+
+    while (i < len) {
+        c16 c = s[i];
+        if (mal_b64_is_whitespace(c)) {
+            i++;
+            continue;
+        }
+        if (c == '=') {
+            break;
+        }
+        i32 v = mal_b64_decode_char(c, url);
+        if (v < 0) {
+            // Commit the bytes decoded so far (setFromBase64 writes up to the error).
+            *read_out = read;
+            *written_out = written;
+            mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Invalid base64 character");
+            return false;
+        }
+        acc = (acc << 6) | (u32) v;
+        nsext++;
+        i++;
+        if (nsext == 4) {
+            if (written + 3 > max_out) {
+                // The next 3-byte chunk won't fit: stop before it (unread).
+                *read_out = read;
+                *written_out = written;
+                return true;
+            }
+            out[written++] = (byte) ((acc >> 16) & 0xFF);
+            out[written++] = (byte) ((acc >> 8) & 0xFF);
+            out[written++] = (byte) (acc & 0xFF);
+            acc = 0;
+            nsext = 0;
+            read = i;
+            // Target full after this chunk: stop, ignoring any trailing input.
+            if (written == max_out) {
+                *read_out = read;
+                *written_out = written;
+                return true;
+            }
+        }
+    }
+
+    // Tail: pending sextets and/or '=' padding.
+    if (nsext == 0) {
+        // Only whitespace may remain (stray '=' is malformed).
+        while (i < len) {
+            if (!mal_b64_is_whitespace(s[i])) {
+                *read_out = read;
+                *written_out = written;
+                mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Unexpected base64 padding");
+                return false;
+            }
+            i++;
+        }
+        *read_out = len;
+        *written_out = written;
+        return true;
+    }
+
+    bool has_padding = i < len && s[i] == '=';
+    i32 produced = nsext == 2 ? 1 : 2;  // bytes a 2/3-sextet partial chunk yields
+    i32 used_bits = produced * 8;
+    u32 extra_mask = nsext == 1 ? 0 : (1u << (nsext * 6 - used_bits)) - 1;
+
+    // If the partial chunk's bytes cannot fit the output, stop before it (the
+    // chunk and any padding stay unread) — matching the maxLength early-out.
+    if (nsext >= 2 && written + (usize) produced > max_out) {
+        *read_out = read;
+        *written_out = written;
+        return true;
+    }
+
+    if (!has_padding) {
+        // No padding follows the partial chunk.
+        if (last_chunk == MAL_B64_STOP) {
+            // Leave the partial chunk unread.
+            *read_out = read;
+            *written_out = written;
+            return true;
+        }
+        if (nsext == 1) {
+            *read_out = read;
+            *written_out = written;
+            mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Invalid base64 length");
+            return false;
+        }
+        if (last_chunk == MAL_B64_STRICT) {
+            *read_out = read;
+            *written_out = written;
+            mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Missing base64 padding");
+            return false;
+        }
+        // loose: decode the partial chunk, ignoring any extra low bits.
+    } else {
+        if (nsext == 1) {
+            *read_out = read;
+            *written_out = written;
+            mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Invalid base64 length");
+            return false;
+        }
+        i32 needed_padding = 4 - nsext;
+        i32 seen = 0;
+        while (i < len && s[i] == '=' && seen < needed_padding) {
+            i++;
+            seen++;
+        }
+        if (seen < needed_padding) {
+            // Incomplete padding: stop-before-partial stops here; others error.
+            if (last_chunk == MAL_B64_STOP) {
+                *read_out = read;
+                *written_out = written;
+                return true;
+            }
+            *read_out = read;
+            *written_out = written;
+            mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Malformed base64 padding");
+            return false;
+        }
+        // Exactly the needed padding: only whitespace may follow.
+        while (i < len) {
+            if (!mal_b64_is_whitespace(s[i])) {
+                *read_out = read;
+                *written_out = written;
+                mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Unexpected character after base64 padding");
+                return false;
+            }
+            i++;
+        }
+        if (last_chunk == MAL_B64_STRICT && (acc & extra_mask) != 0) {
+            *read_out = read;
+            *written_out = written;
+            mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Extra bits in base64 chunk");
+            return false;
+        }
+    }
+
+    u32 value = acc >> (nsext * 6 - used_bits);
+    if (written + (usize) produced <= max_out) {
+        for (i32 b = produced - 1; b >= 0; b--) {
+            out[written++] = (byte) ((value >> (b * 8)) & 0xFF);
+        }
+    }
+
+    *read_out = len;
+    *written_out = written;
+    return true;
+}
+
+/** Decode hex `s` into `out` (cap max_out). Throws SyntaxError on a non-hex
+ * character or odd length. */
+static bool mal_hex_decode(MalVm *vm, const c16 *s, usize len, byte *out, usize max_out, usize *read_out, usize *written_out) {
+    if (len % 2 != 0) {
+        *read_out = 0;
+        *written_out = 0;
+        mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Hex string length must be even");
+        return false;
+    }
+    usize written = 0;
+    usize i = 0;
+    while (i + 2 <= len) {
+        if (written + 1 > max_out) {
+            break;
+        }
+        i32 hi = mal_hex_decode_char(s[i]);
+        i32 lo = mal_hex_decode_char(s[i + 1]);
+        if (hi < 0 || lo < 0) {
+            // Commit the bytes decoded so far (setFromHex writes up to the error).
+            *read_out = i;
+            *written_out = written;
+            mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Invalid hex character");
+            return false;
+        }
+        out[written++] = (byte) ((hi << 4) | lo);
+        i += 2;
+    }
+    *read_out = i;
+    *written_out = written;
+    return true;
+}
+
+/** Encode `bytes` as base64 into a fresh String. */
+static MalValue mal_b64_encode(MalVm *vm, const byte *bytes, usize length, bool url, bool omit_padding) {
+    const byte *alphabet = url ? mal_b64_alphabet_url : mal_b64_alphabet_std;
+    usize cap = (length + 2) / 3 * 4 + 1;
+    byte *out = malloc(cap);
+    usize w = 0;
+    usize i = 0;
+    while (i + 3 <= length) {
+        u32 all = (((u32) bytes[i] & 0xFF) << 16) | (((u32) bytes[i + 1] & 0xFF) << 8) | ((u32) bytes[i + 2] & 0xFF);
+        out[w++] = alphabet[(all >> 18) & 0x3F];
+        out[w++] = alphabet[(all >> 12) & 0x3F];
+        out[w++] = alphabet[(all >> 6) & 0x3F];
+        out[w++] = alphabet[all & 0x3F];
+        i += 3;
+    }
+    usize remaining = length - i;
+    if (remaining == 1) {
+        u32 all = ((u32) bytes[i] & 0xFF) << 16;
+        out[w++] = alphabet[(all >> 18) & 0x3F];
+        out[w++] = alphabet[(all >> 12) & 0x3F];
+        if (!omit_padding) {
+            out[w++] = '=';
+            out[w++] = '=';
+        }
+    } else if (remaining == 2) {
+        u32 all = (((u32) bytes[i] & 0xFF) << 16) | (((u32) bytes[i + 1] & 0xFF) << 8);
+        out[w++] = alphabet[(all >> 18) & 0x3F];
+        out[w++] = alphabet[(all >> 12) & 0x3F];
+        out[w++] = alphabet[(all >> 6) & 0x3F];
+        if (!omit_padding) {
+            out[w++] = '=';
+        }
+    }
+    MalValue result = mal_value_from_string(mal_string_new_ascii(&vm->heap, out, w));
+    free(out);
+    return result;
+}
+
+/** Encode `bytes` as lowercase hex into a fresh String. */
+static MalValue mal_hex_encode(MalVm *vm, const byte *bytes, usize length) {
+    static const byte digits[] = "0123456789abcdef";
+    byte *out = malloc(length * 2 + 1);
+    for (usize i = 0; i < length; i++) {
+        u32 b = (u32) bytes[i] & 0xFF;
+        out[i * 2] = digits[b >> 4];
+        out[i * 2 + 1] = digits[b & 0x0F];
+    }
+    MalValue result = mal_value_from_string(mal_string_new_ascii(&vm->heap, out, length * 2));
+    free(out);
+    return result;
+}
+
+// Require a String argument (these methods never coerce).
+static bool mal_b64_require_string(MalVm *vm, MalValue value, MalString **out) {
+    if (!mal_value_is_string(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "argument must be a string");
+        return false;
+    }
+    *out = mal_value_to_string(value);
+    return true;
+}
+
+static MalValue mal_ta_from_base64(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    MalString *string;
+    if (!mal_b64_require_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &string)) {
+        return mal_value_new_undefined();
+    }
+    MalValue options;
+    if (!mal_b64_get_options(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), &options)) {
+        return mal_value_new_undefined();
+    }
+    bool url;
+    MalB64LastChunk last_chunk;
+    if (!mal_b64_read_alphabet(vm, options, &url) || !mal_b64_read_last_chunk(vm, options, &last_chunk)) {
+        return mal_value_new_undefined();
+    }
+
+    usize len = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    usize cap = len / 4 * 3 + 3;
+    byte *bytes = malloc(cap);
+    usize read;
+    usize written;
+    if (!mal_b64_decode(vm, units, len, url, last_chunk, bytes, cap, &read, &written)) {
+        free(bytes);
+        return mal_value_new_undefined();
+    }
+    MalValue result = mal_ta_create(vm, MAL_TA_UINT8, (u32) written);
+    MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
+    memcpy(array->buffer->data, bytes, written);
+    free(bytes);
+    return result;
+}
+
+static MalValue mal_ta_from_hex(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    MalString *string;
+    if (!mal_b64_require_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &string)) {
+        return mal_value_new_undefined();
+    }
+    usize len = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    byte *bytes = malloc(len / 2 + 1);
+    usize read;
+    usize written;
+    if (!mal_hex_decode(vm, units, len, bytes, len / 2 + 1, &read, &written)) {
+        free(bytes);
+        return mal_value_new_undefined();
+    }
+    MalValue result = mal_ta_create(vm, MAL_TA_UINT8, (u32) written);
+    MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
+    memcpy(array->buffer->data, bytes, written);
+    free(bytes);
+    return result;
+}
+
+static MalValue mal_ta_to_base64(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalTypedArrayObject *array = mal_ta_uint8_this(vm, this_value);
+    if (array == nullptr) {
+        return mal_value_new_undefined();
+    }
+    MalValue options;
+    if (!mal_b64_get_options(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &options)) {
+        return mal_value_new_undefined();
+    }
+    bool url;
+    if (!mal_b64_read_alphabet(vm, options, &url)) {
+        return mal_value_new_undefined();
+    }
+    MalValue omit_value;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "omitPadding"), &omit_value)) {
+        return mal_value_new_undefined();
+    }
+    bool omit_padding = mal_value_is_truthy(omit_value);
+    if (array->buffer->detached) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot encode a detached buffer");
+        return mal_value_new_undefined();
+    }
+    u32 length = mal_typed_array_object_length(array);
+    return mal_b64_encode(vm, array->buffer->data + array->byte_offset, length, url, omit_padding);
+}
+
+static MalValue mal_ta_to_hex(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalTypedArrayObject *array = mal_ta_uint8_this(vm, this_value);
+    if (array == nullptr) {
+        return mal_value_new_undefined();
+    }
+    if (array->buffer->detached) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot encode a detached buffer");
+        return mal_value_new_undefined();
+    }
+    u32 length = mal_typed_array_object_length(array);
+    return mal_hex_encode(vm, array->buffer->data + array->byte_offset, length);
+}
+
+/** Build the { read, written } result record for setFromBase64/setFromHex. */
+static MalValue mal_b64_set_result(MalVm *vm, usize read, usize written) {
+    MalObject *object = mal_intrinsic_new_object(vm);
+    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+    mal_intrinsic_define_data(vm, object, "read", mal_value_from_f64((f64) read), flags);
+    mal_intrinsic_define_data(vm, object, "written", mal_value_from_f64((f64) written), flags);
+    return mal_value_from_object(object);
+}
+
+static MalValue mal_ta_set_from_base64(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalTypedArrayObject *array = mal_ta_uint8_this(vm, this_value);
+    if (array == nullptr) {
+        return mal_value_new_undefined();
+    }
+    // Mutability is verified before any argument coercion (string/options).
+    if (array->buffer->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to an immutable buffer");
+        return mal_value_new_undefined();
+    }
+    MalString *string;
+    if (!mal_b64_require_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &string)) {
+        return mal_value_new_undefined();
+    }
+    MalValue options;
+    if (!mal_b64_get_options(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), &options)) {
+        return mal_value_new_undefined();
+    }
+    bool url;
+    MalB64LastChunk last_chunk;
+    if (!mal_b64_read_alphabet(vm, options, &url) || !mal_b64_read_last_chunk(vm, options, &last_chunk)) {
+        return mal_value_new_undefined();
+    }
+    if (array->buffer->detached) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to a detached buffer");
+        return mal_value_new_undefined();
+    }
+
+    u32 target_length = mal_typed_array_object_length(array);
+    usize len = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    usize cap = len / 4 * 3 + 3;
+    byte *bytes = malloc(cap);
+    usize read;
+    usize written;
+    bool ok = mal_b64_decode(vm, units, len, url, last_chunk, bytes, target_length, &read, &written);
+    // Commit the successfully-decoded bytes even when a later chunk errors.
+    memcpy(array->buffer->data + array->byte_offset, bytes, written);
+    free(bytes);
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
+    return mal_b64_set_result(vm, read, written);
+}
+
+static MalValue mal_ta_set_from_hex(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalTypedArrayObject *array = mal_ta_uint8_this(vm, this_value);
+    if (array == nullptr) {
+        return mal_value_new_undefined();
+    }
+    if (array->buffer->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to an immutable buffer");
+        return mal_value_new_undefined();
+    }
+    MalString *string;
+    if (!mal_b64_require_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &string)) {
+        return mal_value_new_undefined();
+    }
+    if (array->buffer->detached) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to a detached buffer");
+        return mal_value_new_undefined();
+    }
+    u32 target_length = mal_typed_array_object_length(array);
+    usize len = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    byte *bytes = malloc(len / 2 + 1);
+    usize read;
+    usize written;
+    bool ok = mal_hex_decode(vm, units, len, bytes, target_length, &read, &written);
+    memcpy(array->buffer->data + array->byte_offset, bytes, written);
+    free(bytes);
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
+    return mal_b64_set_result(vm, read, written);
+}
+
 // ---- install -------------------------------------------------------------
 
 static void mal_ta_define_getter(MalVm *vm, MalObject *object, MalKey key, const byte *name, MalNativeFunctionCallback getter) {
@@ -1630,4 +2214,15 @@ void mal_builtin_typed_array_install(MalVm *vm) {
         // Each concrete constructor inherits from %TypedArray%.
         mal_object_set_prototype((MalObject *) constructor, (MalObject *) ta_constructor);
     }
+
+    // Uint8Array base64/hex (Uint8Array-to/from-base64 proposal): statics on the
+    // Uint8Array constructor and methods on Uint8Array.prototype.
+    MalObject *u8_constructor = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_CONSTRUCTOR_BASE + MAL_TA_UINT8]);
+    MalObject *u8_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + MAL_TA_UINT8]);
+    mal_intrinsic_define_method_n(vm, u8_constructor, "fromBase64", 1, mal_ta_from_base64);
+    mal_intrinsic_define_method_n(vm, u8_constructor, "fromHex", 1, mal_ta_from_hex);
+    mal_intrinsic_define_method_n(vm, u8_prototype, "toBase64", 0, mal_ta_to_base64);
+    mal_intrinsic_define_method_n(vm, u8_prototype, "toHex", 0, mal_ta_to_hex);
+    mal_intrinsic_define_method_n(vm, u8_prototype, "setFromBase64", 1, mal_ta_set_from_base64);
+    mal_intrinsic_define_method_n(vm, u8_prototype, "setFromHex", 1, mal_ta_set_from_hex);
 }

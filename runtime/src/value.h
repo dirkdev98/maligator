@@ -204,6 +204,19 @@ static inline MalValue mal_value_from_i32(i32 value) {
     return MAL_VALUE_INT32 | (u32) value;
 }
 
+/**
+ * Box a u32 as a Number: an int32 when it fits the signed range, otherwise an
+ * f64. Array lengths and other u32 quantities exceed INT32_MAX, where a plain
+ * mal_value_from_i32 cast would wrap to a negative value.
+ */
+static inline MalValue mal_value_from_u32(u32 value) {
+    if (value <= (u32) INT32_MAX) {
+        return MAL_VALUE_INT32 | value;
+    }
+    f64 as_f64 = (f64) value;
+    return *(MalValue *) &as_f64;
+}
+
 /** Extract the i32 from a MalValue. */
 static inline i32 mal_value_to_i32(MalValue value) {
     return (i32) (value & MASK_INT32);

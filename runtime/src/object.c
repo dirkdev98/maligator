@@ -12,6 +12,7 @@ void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObje
     object->prototype = prototype;
     object->extensible = true;
     object->fast_elements_proto = false;
+    object->is_raw_json = false;
 }
 
 MalObject *mal_object_new(MalHeap *heap, MalObject *prototype) {

@@ -392,7 +392,7 @@ static MalValue mal_reflect_get_own_property_descriptor(MalVm *vm, MalValue this
         MalArrayObject *array = mal_value_to_array_object(target);
         MalPropertyDesc desc = {
             .flags = array->length_writable ? MAL_PROPERTY_WRITABLE : MAL_PROPERTY_NONE,
-            .value = mal_value_from_i32((i32) mal_array_object_length(array)),
+            .value = mal_value_from_u32(mal_array_object_length(array)),
             .getter = mal_value_new_undefined(),
             .setter = mal_value_new_undefined(),
         };

@@ -9,7 +9,9 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
+#include "property_iter.h"
 #include "value.h"
+#include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
 
@@ -304,6 +306,156 @@ static MalValue mal_ih_step_concat(MalVm *vm, MalIteratorHelperObject *self) {
     }
 }
 
+// --- Iterator.zip / Iterator.zipKeyed ---------------------------------------
+
+static i32 mal_ih_zip_count(MalIteratorHelperObject *self) {
+    return (i32) mal_array_object_length(mal_value_to_array_object(self->sources));
+}
+
+static MalValue mal_ih_zip_get(MalVm *vm, MalValue array, i32 index) {
+    MalValue out;
+    mal_vm_get_property(vm, array, mal_ih_idx(index), &out);
+    return out;
+}
+
+static void mal_ih_zip_set(MalVm *vm, MalValue array, i32 index, MalValue value) {
+    (void) vm;
+    mal_array_object_store(mal_value_to_array_object(array), mal_ih_idx(index), value);
+}
+
+/**
+ * IteratorClose every still-open source (a null entry is already exhausted),
+ * except index `skip`. mal_vm_iterator_close keeps any already-pending throw, so
+ * call this after setting the abrupt completion to propagate it.
+ */
+static void mal_ih_zip_close_all(MalVm *vm, MalIteratorHelperObject *self, i32 skip) {
+    i32 count = mal_ih_zip_count(self);
+    // IfAbruptCloseIterators / CloseAllIterators close in reverse List order.
+    for (i32 i = count - 1; i >= 0; i--) {
+        if (i == skip) {
+            continue;
+        }
+        MalValue iter = mal_ih_zip_get(vm, self->sources, i);
+        if (mal_value_is_null(iter) || !mal_value_is_object(iter)) {
+            continue;
+        }
+        MalValue next_method = mal_ih_zip_get(vm, self->source_methods, i);
+        MalIteratorRecord record = {.iterator = iter, .next_method = next_method};
+        // With a throw already pending, preserve it (swallow secondary close
+        // errors); otherwise a throwing return() is the result and propagates.
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_vm_iterator_close(vm, &record);
+        } else {
+            mal_vm_iterator_close_normal(vm, &record);
+        }
+    }
+}
+
+/** finishResults: a fresh array for zip, a fresh object keyed by zip_keys for zipKeyed. */
+static MalValue mal_ih_zip_finish_results(MalVm *vm, MalIteratorHelperObject *self, MalValue results, i32 count) {
+    if (mal_value_is_undefined(self->zip_keys)) {
+        return results;
+    }
+    // zipKeyed builds a null-prototype object.
+    MalObject *object = mal_object_new(&vm->heap, nullptr);
+    for (i32 i = 0; i < count; i++) {
+        MalValue key_value = mal_ih_zip_get(vm, self->zip_keys, i);
+        MalValue value = mal_ih_zip_get(vm, results, i);
+        MalKey key;
+        mal_vm_value_to_property_key(vm, key_value, &key);
+        MalPropertyDesc desc = mal_intrinsic_data_desc(
+            value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        mal_object_define_own(object, key, &desc);
+    }
+    return mal_value_from_object(object);
+}
+
+static MalValue mal_ih_step_zip(MalVm *vm, MalIteratorHelperObject *self) {
+    i32 count = mal_ih_zip_count(self);
+    if (count == 0) {
+        return mal_ih_finish(self, vm);
+    }
+
+    MalValue results = mal_value_from_array_object(mal_intrinsic_new_array(vm, (u32) count));
+    i32 open = 0;
+
+    for (i32 i = 0; i < count; i++) {
+        MalValue iter = mal_ih_zip_get(vm, self->sources, i);
+        MalValue result;
+
+        if (mal_value_is_null(iter)) {
+            result = mal_ih_zip_get(vm, self->zip_padding, i);
+        } else {
+            open++;
+            MalValue next_method = mal_ih_zip_get(vm, self->source_methods, i);
+            MalIteratorRecord record = {.iterator = iter, .next_method = next_method};
+            MalValue value;
+            bool done;
+            if (!mal_vm_iterator_step(vm, &record, &value, &done)) {
+                // Abrupt step: close the rest, propagate the pending throw.
+                self->done = true;
+                mal_ih_zip_close_all(vm, self, i);
+                return mal_value_new_undefined();
+            }
+
+            if (!done) {
+                result = value;
+            } else if (self->zip_mode == MAL_ITERATOR_ZIP_SHORTEST) {
+                // Any input finishing ends iteration; close the others.
+                self->done = true;
+                mal_ih_zip_set(vm, self->sources, i, mal_value_new_null());
+                mal_ih_zip_close_all(vm, self, -1);
+                if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                    return mal_value_new_undefined();
+                }
+                return mal_ih_finish(self, vm);
+            } else if (self->zip_mode == MAL_ITERATOR_ZIP_LONGEST) {
+                mal_ih_zip_set(vm, self->sources, i, mal_value_new_null());
+                open--;
+                result = mal_ih_zip_get(vm, self->zip_padding, i);
+            } else {
+                // strict: all inputs must have the same length.
+                self->done = true;
+                mal_ih_zip_set(vm, self->sources, i, mal_value_new_null());
+                if (i == 0) {
+                    // The first input ended; every other input must also be done.
+                    for (i32 k = 1; k < count; k++) {
+                        MalValue k_iter = mal_ih_zip_get(vm, self->sources, k);
+                        MalValue k_next = mal_ih_zip_get(vm, self->source_methods, k);
+                        MalIteratorRecord k_record = {.iterator = k_iter, .next_method = k_next};
+                        MalValue k_value;
+                        bool k_done;
+                        if (!mal_vm_iterator_step(vm, &k_record, &k_value, &k_done)) {
+                            mal_ih_zip_close_all(vm, self, -1);
+                            return mal_value_new_undefined();
+                        }
+                        if (!k_done) {
+                            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator.zip strict mode: iterators have different lengths");
+                            mal_ih_zip_close_all(vm, self, -1);
+                            return mal_value_new_undefined();
+                        }
+                        mal_ih_zip_set(vm, self->sources, k, mal_value_new_null());
+                    }
+                    return mal_ih_finish(self, vm);
+                }
+                // A later input ended while earlier ones produced values.
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator.zip strict mode: iterators have different lengths");
+                mal_ih_zip_close_all(vm, self, -1);
+                return mal_value_new_undefined();
+            }
+        }
+
+        mal_ih_zip_set(vm, results, i, result);
+    }
+
+    // longest: a round with no real value means every input is exhausted.
+    if (self->zip_mode == MAL_ITERATOR_ZIP_LONGEST && open == 0) {
+        return mal_ih_finish(self, vm);
+    }
+
+    return mal_vm_create_iter_result(vm, mal_ih_zip_finish_results(vm, self, results, count), false);
+}
+
 // --- Shared %IteratorHelperPrototype% next / return -------------------------
 
 static MalValue mal_ih_proto_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -348,6 +500,9 @@ static MalValue mal_ih_proto_next(MalVm *vm, MalValue this_value, const MalValue
             break;
         case MAL_ITERATOR_HELPER_CONCAT:
             result = mal_ih_step_concat(vm, self);
+            break;
+        case MAL_ITERATOR_HELPER_ZIP:
+            result = mal_ih_step_zip(vm, self);
             break;
         default:
             result = mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
@@ -399,6 +554,16 @@ static MalValue mal_ih_proto_return(MalVm *vm, MalValue this_value, const MalVal
     // helper (e.g. underlying return() calls iterator.return()) is rejected.
     self->running = true;
 
+    // zip closes every still-open input iterator.
+    if (self->kind == MAL_ITERATOR_HELPER_ZIP) {
+        mal_ih_zip_close_all(vm, self, -1);
+        self->running = false;
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+        return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
+    }
+
     // Normal-completion close: a throwing return() on the underlying iterator
     // must surface to the caller of %IteratorHelper%.return. concat has no
     // single underlying iterator; only its currently-open inner one is closed.
@@ -437,6 +602,9 @@ static MalValue mal_ih_new(MalVm *vm, MalIteratorHelperKind kind, const MalItera
     helper->inner_next = mal_value_new_undefined();
     helper->sources = mal_value_new_undefined();
     helper->source_methods = mal_value_new_undefined();
+    helper->zip_padding = mal_value_new_undefined();
+    helper->zip_keys = mal_value_new_undefined();
+    helper->zip_mode = MAL_ITERATOR_ZIP_SHORTEST;
     return mal_value_from_iterator_helper_object(helper);
 }
 
@@ -929,17 +1097,260 @@ static MalValue mal_iterator_concat(MalVm *vm, MalValue this_value, const MalVal
     return helper_value;
 }
 
-// Iterator.zip / Iterator.zipKeyed are not yet implemented; the function
-// objects exist so static-shape tests (typeof/name/length/descriptor/proto)
-// pass, while behavioral calls report the unimplemented status.
-static MalValue mal_iterator_zip_unimplemented(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+/** Close every iterator collected so far (during input/padding setup). */
+static void mal_ih_zip_close_collected(MalVm *vm, MalValue sources, MalValue methods, i32 count) {
+    for (i32 i = count - 1; i >= 0; i--) {
+        MalValue iter = mal_ih_zip_get(vm, sources, i);
+        if (!mal_value_is_object(iter)) {
+            continue;
+        }
+        MalIteratorRecord record = {.iterator = iter, .next_method = mal_ih_zip_get(vm, methods, i)};
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_vm_iterator_close(vm, &record);
+        } else {
+            mal_vm_iterator_close_normal(vm, &record);
+        }
+    }
+}
+
+/** GetOptionsObject + read "mode" and (for longest) "padding". */
+static bool mal_ih_zip_read_options(MalVm *vm, MalValue options_arg, MalIteratorZipMode *mode_out, MalValue *padding_out) {
+    MalValue options;
+    if (mal_value_is_undefined(options_arg)) {
+        options = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    } else if (mal_value_is_object(options_arg)) {
+        options = options_arg;
+    } else {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator.zip options is not an object");
+        return false;
+    }
+
+    MalValue mode_value;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "mode"), &mode_value)) {
+        return false;
+    }
+    MalIteratorZipMode mode = MAL_ITERATOR_ZIP_SHORTEST;
+    if (mal_value_is_undefined(mode_value)) {
+        mode = MAL_ITERATOR_ZIP_SHORTEST;
+    } else if (mal_value_is_string(mode_value)) {
+        MalString *string = mal_value_to_string(mode_value);
+        if (mal_string_equals(string, mal_intrinsic_ascii(vm, "shortest"))) {
+            mode = MAL_ITERATOR_ZIP_SHORTEST;
+        } else if (mal_string_equals(string, mal_intrinsic_ascii(vm, "longest"))) {
+            mode = MAL_ITERATOR_ZIP_LONGEST;
+        } else if (mal_string_equals(string, mal_intrinsic_ascii(vm, "strict"))) {
+            mode = MAL_ITERATOR_ZIP_STRICT;
+        } else {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator.zip mode must be 'shortest', 'longest', or 'strict'");
+            return false;
+        }
+    } else {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator.zip mode must be a string");
+        return false;
+    }
+
+    MalValue padding = mal_value_new_undefined();
+    if (mode == MAL_ITERATOR_ZIP_LONGEST) {
+        if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "padding"), &padding)) {
+            return false;
+        }
+        if (!mal_value_is_undefined(padding) && !mal_value_is_object(padding)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator.zip padding is not an object");
+            return false;
+        }
+    }
+
+    *mode_out = mode;
+    *padding_out = padding;
+    return true;
+}
+
+/**
+ * Build the helper from collected input iterators (`sources`/`methods`, length
+ * `count`) and the padding configuration. `padding_values` (length `count`, or
+ * undefined) is the already-resolved padding for zipKeyed; for plain zip pass
+ * undefined and the padding iterable is drained here. `keys` is undefined for
+ * zip or the key array for zipKeyed. Closes the collected iterators on abrupt.
+ */
+static MalValue mal_ih_zip_assemble(MalVm *vm, MalValue sources, MalValue methods, i32 count, MalIteratorZipMode mode, MalValue padding_option, MalValue padding_values, MalValue keys) {
+    MalValue padding = mal_value_new_undefined();
+    if (mode == MAL_ITERATOR_ZIP_LONGEST) {
+        MalArrayObject *padding_array = mal_intrinsic_new_array(vm, (u32) count);
+        padding = mal_value_from_array_object(padding_array);
+        if (!mal_value_is_undefined(padding_values)) {
+            // zipKeyed: padding already resolved per key.
+            for (i32 i = 0; i < count; i++) {
+                mal_array_object_store(padding_array, mal_ih_idx(i), mal_ih_zip_get(vm, padding_values, i));
+            }
+        } else if (mal_value_is_undefined(padding_option)) {
+            for (i32 i = 0; i < count; i++) {
+                mal_array_object_store(padding_array, mal_ih_idx(i), mal_value_new_undefined());
+            }
+        } else {
+            MalIteratorRecord pad_iter;
+            if (!mal_vm_get_iterator(vm, padding_option, &pad_iter)) {
+                mal_ih_zip_close_collected(vm, sources, methods, count);
+                return mal_value_new_undefined();
+            }
+            i32 i = 0;
+            bool exhausted = false;
+            while (i < count) {
+                MalValue value;
+                bool done;
+                if (!mal_vm_iterator_step(vm, &pad_iter, &value, &done)) {
+                    mal_ih_zip_close_collected(vm, sources, methods, count);
+                    return mal_value_new_undefined();
+                }
+                if (done) {
+                    exhausted = true;
+                    break;
+                }
+                mal_array_object_store(padding_array, mal_ih_idx(i++), value);
+            }
+            for (; i < count; i++) {
+                mal_array_object_store(padding_array, mal_ih_idx(i), mal_value_new_undefined());
+            }
+            if (!exhausted) {
+                mal_vm_iterator_close(vm, &pad_iter);
+                if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                    mal_ih_zip_close_collected(vm, sources, methods, count);
+                    return mal_value_new_undefined();
+                }
+            }
+        }
+    }
+
+    MalIteratorRecord empty = {.iterator = mal_value_new_undefined(), .next_method = mal_value_new_undefined()};
+    MalValue helper_value = mal_ih_new(vm, MAL_ITERATOR_HELPER_ZIP, &empty, mal_value_new_undefined(), 0.0);
+    MalIteratorHelperObject *helper = mal_value_to_iterator_helper_object(helper_value);
+    helper->sources = sources;
+    helper->source_methods = methods;
+    helper->zip_padding = padding;
+    helper->zip_keys = keys;
+    helper->zip_mode = mode;
+    return helper_value;
+}
+
+static MalValue mal_iterator_zip(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    (void) args;
-    (void) arg_count;
     (void) new_target;
     (void) callee;
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator.zip is not implemented");
-    return mal_value_new_undefined();
+
+    MalValue iterables = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(iterables)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator.zip called on a non-object");
+        return mal_value_new_undefined();
+    }
+
+    MalIteratorZipMode mode;
+    MalValue padding_option;
+    if (!mal_ih_zip_read_options(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), &mode, &padding_option)) {
+        return mal_value_new_undefined();
+    }
+
+    MalIteratorRecord input_iter;
+    if (!mal_vm_get_iterator(vm, iterables, &input_iter)) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue sources = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue methods = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    i32 count = 0;
+    while (true) {
+        MalValue value;
+        bool done;
+        if (!mal_vm_iterator_step(vm, &input_iter, &value, &done)) {
+            mal_ih_zip_close_collected(vm, sources, methods, count);
+            return mal_value_new_undefined();
+        }
+        if (done) {
+            break;
+        }
+        MalIteratorRecord record;
+        if (!mal_ih_get_flattenable(vm, value, &record)) {
+            mal_ih_zip_close_collected(vm, sources, methods, count);
+            return mal_value_new_undefined();
+        }
+        mal_ih_zip_set(vm, sources, count, record.iterator);
+        mal_ih_zip_set(vm, methods, count, record.next_method);
+        count++;
+    }
+
+    return mal_ih_zip_assemble(vm, sources, methods, count, mode, padding_option, mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+static MalValue mal_iterator_zip_keyed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+
+    MalValue iterables = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(iterables)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator.zipKeyed called on a non-object");
+        return mal_value_new_undefined();
+    }
+
+    MalIteratorZipMode mode;
+    MalValue padding_option;
+    if (!mal_ih_zip_read_options(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), &mode, &padding_option)) {
+        return mal_value_new_undefined();
+    }
+
+    // Snapshot the enumerable own keys (string + symbol) in property order.
+    MalKey collected[256];
+    i32 key_count = 0;
+    MalPropertyIter iter;
+    mal_property_iter_init(&iter, mal_value_to_object(iterables), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
+    MalKey iter_key;
+    MalPropertyDesc desc;
+    while (key_count < 256 && mal_property_iter_next(&iter, &iter_key, &desc)) {
+        collected[key_count++] = iter_key;
+    }
+
+    MalValue sources = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue methods = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue keys = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue padding_values = mode == MAL_ITERATOR_ZIP_LONGEST
+        ? mal_value_from_array_object(mal_intrinsic_new_array(vm, 0))
+        : mal_value_new_undefined();
+
+    i32 stored = 0;
+    for (i32 i = 0; i < key_count; i++) {
+        MalKey key = collected[i];
+        MalValue value;
+        if (!mal_vm_get_property(vm, iterables, key, &value)) {
+            mal_ih_zip_close_collected(vm, sources, methods, stored);
+            return mal_value_new_undefined();
+        }
+        // A key whose value is undefined is omitted from the result entirely.
+        if (mal_value_is_undefined(value)) {
+            continue;
+        }
+        MalIteratorRecord record;
+        if (!mal_ih_get_flattenable(vm, value, &record)) {
+            mal_ih_zip_close_collected(vm, sources, methods, stored);
+            return mal_value_new_undefined();
+        }
+        mal_ih_zip_set(vm, sources, stored, record.iterator);
+        mal_ih_zip_set(vm, methods, stored, record.next_method);
+        MalValue key_value = key.kind == MAL_KEY_INDEX
+            ? mal_value_from_string(mal_ops_to_string(&vm->heap, key.value))
+            : key.value;
+        mal_ih_zip_set(vm, keys, stored, key_value);
+
+        if (mode == MAL_ITERATOR_ZIP_LONGEST) {
+            MalValue pad = mal_value_new_undefined();
+            if (mal_value_is_object(padding_option) && !mal_vm_get_property(vm, padding_option, key, &pad)) {
+                mal_ih_zip_set(vm, sources, stored, record.iterator);
+                mal_ih_zip_close_collected(vm, sources, methods, stored + 1);
+                return mal_value_new_undefined();
+            }
+            mal_ih_zip_set(vm, padding_values, stored, pad);
+        }
+        stored++;
+    }
+
+    return mal_ih_zip_assemble(vm, sources, methods, stored, mode, padding_option, padding_values, keys);
 }
 
 static void mal_iterator_define_accessor(MalVm *vm, MalObject *object, MalKey key, MalNativeFunctionCallback getter, MalNativeFunctionCallback setter, const byte *get_name, const byte *set_name) {
@@ -993,6 +1404,6 @@ void mal_builtin_iterator_helpers_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "from", 1, mal_iterator_from);
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "concat", 0, mal_iterator_concat);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "zip", 1, mal_iterator_zip_unimplemented);
-    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "zipKeyed", 1, mal_iterator_zip_unimplemented);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "zip", 1, mal_iterator_zip);
+    mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "zipKeyed", 1, mal_iterator_zip_keyed);
 }

@@ -51,6 +51,10 @@ static bool mal_error_has_error_data(MalObject *object) {
     return lookup.present;
 }
 
+bool mal_builtin_value_has_error_data(MalValue value) {
+    return mal_value_is_object(value) && mal_error_has_error_data(mal_value_to_object(value));
+}
+
 /**
  * Capture the current call stack at construction and stash its id on the error
  * under the private stack key; the .stack getter formats it lazily. Skipped when

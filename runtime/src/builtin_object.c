@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include "builtin_error.h"
 #include "builtin_iterator.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
@@ -1553,22 +1554,39 @@ static MalValue mal_builtin_object_prototype_has_own_property(MalVm *vm, MalValu
 }
 
 static MalValue mal_builtin_object_prototype_is_prototype_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
-    if (!mal_value_is_object(this_value) || arg_count < 1 || !mal_value_is_object(args[0])) {
+    (void) new_target;
+    (void) callee;
+    // 1. If V is not an Object, return false (before any this coercion).
+    MalValue v = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(v)) {
         return mal_value_new_boolean(false);
     }
+    // 2. Let O be ? ToObject(this value): null/undefined throw, a primitive boxes.
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object.prototype.isPrototypeOf called on null or undefined");
+        return mal_value_new_undefined();
+    }
+    MalValue o = mal_value_is_object(this_value) ? this_value : mal_builtin_object_box_primitive(vm, this_value);
 
-    MalObject *target = mal_value_to_object(this_value);
-    MalObject *prototype = mal_object_get_prototype(mal_value_to_object(args[0]));
-    while (prototype != nullptr) {
-        if (prototype == target) {
+    // 3. Walk V's prototype chain via [[GetPrototypeOf]] (proxy-aware).
+    while (true) {
+        MalValue prototype;
+        if (mal_value_is_proxy_object(v)) {
+            if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(v), &prototype)) {
+                return mal_value_new_undefined();
+            }
+        } else {
+            MalObject *p = mal_object_get_prototype(mal_value_to_object(v));
+            prototype = p == nullptr ? mal_value_new_null() : mal_value_from_object(p);
+        }
+        if (mal_value_is_null(prototype)) {
+            return mal_value_new_boolean(false);
+        }
+        if (mal_ops_same_value(prototype, o)) {
             return mal_value_new_boolean(true);
         }
-
-        prototype = mal_object_get_prototype(prototype);
+        v = prototype;
     }
-
-    return mal_value_new_boolean(false);
 }
 
 static MalValue mal_builtin_object_prototype_property_is_enumerable(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1604,10 +1622,20 @@ static MalValue mal_builtin_object_prototype_property_is_enumerable(MalVm *vm, M
 }
 
 static MalValue mal_builtin_object_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) args;
     (void) arg_count;
-    return this_value;
+    (void) new_target;
+    (void) callee;
+    // Returns ? ToObject(this value): null/undefined throw, a primitive boxes
+    // into its wrapper, an object passes through.
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object.prototype.valueOf called on null or undefined");
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_object(this_value)) {
+        return this_value;
+    }
+    return mal_builtin_object_box_primitive(vm, this_value);
 }
 
 MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1615,11 +1643,27 @@ MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, 
     (void) arg_count;
 
     const byte *tag = "[object Object]";
+    // IsArray (step 4) is proxy-aware and runs before the @@toStringTag Get; a
+    // revoked Proxy throws a TypeError here.
+    bool proxy_is_array = false;
+    if (mal_value_is_proxy_object(this_value)) {
+        MalValue unwrapped = this_value;
+        while (mal_value_is_proxy_object(unwrapped)) {
+            MalValue inner = mal_proxy_unwrap_target(unwrapped);
+            if (mal_value_is_proxy_object(inner) && inner == unwrapped) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot perform IsArray on a revoked Proxy");
+                return mal_value_new_undefined();
+            }
+            unwrapped = inner;
+        }
+        proxy_is_array = mal_value_is_array_object(unwrapped);
+    }
+
     if (mal_value_is_undefined(this_value)) {
         tag = "[object Undefined]";
     } else if (mal_value_is_null(this_value)) {
         tag = "[object Null]";
-    } else if (mal_value_is_array_object(this_value)) {
+    } else if (mal_value_is_array_object(this_value) || proxy_is_array) {
         tag = "[object Array]";
     } else if (mal_value_is_callable(this_value)) {
         tag = "[object Function]";
@@ -1629,6 +1673,9 @@ MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, 
     } else if (mal_value_is_regexp_object(this_value)) {
         // The builtin tag tracks the [[RegExpMatcher]] internal slot.
         tag = "[object RegExp]";
+    } else if (mal_builtin_value_has_error_data(this_value)) {
+        // The builtin tag tracks the [[ErrorData]] internal slot.
+        tag = "[object Error]";
     } else if (mal_value_is_primitive_wrapper(this_value)) {
         // The builtin tag tracks the wrapper's [[PrimitiveData]] internal slot.
         switch (mal_value_to_primitive_wrapper(this_value)->kind) {
@@ -1966,17 +2013,37 @@ static MalValue mal_builtin_object_proto_setter(MalVm *vm, MalValue this_value, 
  * keeping the other slot when redefining over an existing accessor.
  */
 static MalValue mal_builtin_object_prototype_define_accessor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool is_setter) {
+    // 1. Let O be ? ToObject(this value): null/undefined throw, primitives box.
+    if (mal_value_is_nil(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Object.prototype.__defineGetter__/__defineSetter__ called on null or undefined");
+        return mal_value_new_undefined();
+    }
+    MalValue object_value = mal_value_is_object(this_value) ? this_value : mal_builtin_object_box_primitive(vm, this_value);
+
+    // 2. If the getter/setter is not callable, throw.
     if (arg_count < 2 || !mal_value_is_callable(args[1])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, is_setter ? "Setter must be a function" : "Getter must be a function");
         return mal_value_new_undefined();
     }
 
+    // 3. key = ? ToPropertyKey(P).
     MalKey key;
-    if (!mal_value_is_object(this_value) || !mal_vm_to_property_key(vm, args[0], &key)) {
+    if (!mal_vm_to_property_key(vm, args[0], &key)) {
         return mal_value_new_undefined();
     }
 
-    MalObject *object = mal_value_to_object(this_value);
+    // 4. DefinePropertyOrThrow on a Proxy routes through its defineProperty trap.
+    if (mal_value_is_proxy_object(object_value)) {
+        MalObject *descriptor = mal_intrinsic_new_object(vm);
+        MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+        mal_intrinsic_define_data(vm, descriptor, is_setter ? "set" : "get", args[1], flags);
+        mal_intrinsic_define_data(vm, descriptor, "enumerable", mal_value_new_boolean(true), flags);
+        mal_intrinsic_define_data(vm, descriptor, "configurable", mal_value_new_boolean(true), flags);
+        mal_proxy_define_own_property(vm, mal_value_to_proxy_object(object_value), key, mal_value_from_object(descriptor));
+        return mal_value_new_undefined();
+    }
+
+    MalObject *object = mal_value_to_object(object_value);
     MalPropertyDesc desc = {
         .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
         .value = mal_value_new_undefined(),
@@ -2021,18 +2088,47 @@ static MalValue mal_builtin_object_prototype_lookup_accessor(MalVm *vm, MalValue
         return mal_value_new_undefined();
     }
 
-    MalObject *holder = mal_builtin_object_receiver_holder(vm, this_value);
+    MalValue object = mal_value_is_object(this_value) ? this_value : mal_builtin_object_box_primitive(vm, this_value);
     MalKey key;
-    if (holder == nullptr || !mal_vm_to_property_key(vm, mal_builtin_object_arg(args, arg_count, 0), &key)) {
+    if (!mal_vm_to_property_key(vm, mal_builtin_object_arg(args, arg_count, 0), &key)) {
         return mal_value_new_undefined();
     }
 
-    MalPropertyResolution resolution = mal_object_resolve_property(holder, key);
-    if (!resolution.found || !(resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-        return mal_value_new_undefined();
-    }
+    // Walk the prototype chain via [[GetOwnProperty]]/[[GetPrototypeOf]]
+    // (proxy-aware): an abrupt completion from a trap propagates.
+    while (true) {
+        bool present;
+        MalPropertyDesc desc;
+        if (mal_value_is_proxy_object(object)) {
+            if (!mal_proxy_get_own_property_descriptor(vm, mal_value_to_proxy_object(object), key, &present, &desc)) {
+                return mal_value_new_undefined();
+            }
+        } else {
+            MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(object), key);
+            present = lookup.present;
+            desc = lookup.desc;
+        }
+        if (present) {
+            if (!(desc.flags & MAL_PROPERTY_ACCESSOR)) {
+                return mal_value_new_undefined();
+            }
+            return is_setter ? desc.setter : desc.getter;
+        }
 
-    return is_setter ? resolution.desc.setter : resolution.desc.getter;
+        MalValue prototype;
+        if (mal_value_is_proxy_object(object)) {
+            if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(object), &prototype)) {
+                return mal_value_new_undefined();
+            }
+        } else {
+            MalObject *p = mal_object_get_prototype(mal_value_to_object(object));
+            prototype = p == nullptr ? mal_value_new_null() : mal_value_from_object(p);
+        }
+        if (mal_value_is_null(prototype)) {
+            return mal_value_new_undefined();
+        }
+        object = prototype;
+    }
 }
 
 static MalValue mal_builtin_object_prototype_lookup_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2055,7 +2151,7 @@ void mal_builtin_object_install(MalVm *vm) {
     MalObject *constructor_object = (MalObject *) constructor;
     vm->intrinsics[MAL_INTRINSIC_OBJECT_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
 
-    mal_intrinsic_define_data(vm, constructor_object, "prototype", vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE], MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, constructor_object, "prototype", vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_OBJECT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
     vm->intrinsics[MAL_INTRINSIC_OBJECT_DEFINE_PROPERTY] =

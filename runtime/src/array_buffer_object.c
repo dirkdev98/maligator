@@ -24,6 +24,7 @@ MalArrayBufferObject *mal_array_buffer_object_new(
     buffer->resizable = resizable;
     buffer->detached = false;
     buffer->shared = shared;
+    buffer->immutable = false;
 
     return buffer;
 }

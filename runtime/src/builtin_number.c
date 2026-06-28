@@ -349,8 +349,17 @@ static MalValue mal_builtin_number_prototype_to_string(MalVm *vm, MalValue this_
         return mal_value_new_undefined();
     }
 
-    f64 radix = arg_count >= 1 && !mal_value_is_undefined(args[0]) ? mal_ops_to_number(args[0]) : 10;
-    if (radix < 2 || radix > 36 || isnan(radix)) {
+    // ToIntegerOrInfinity(radix) via the VM ToNumber, so a poisoned valueOf runs
+    // (and a Symbol/BigInt throws TypeError) before the range check. NaN -> 0.
+    f64 radix = 10;
+    if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
+        f64 raw;
+        if (!mal_vm_to_number(vm, args[0], &raw)) {
+            return mal_value_new_undefined();
+        }
+        radix = isnan(raw) ? 0 : trunc(raw);
+    }
+    if (radix < 2 || radix > 36) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toString() radix must be between 2 and 36");
         return mal_value_new_undefined();
     }
@@ -471,6 +480,66 @@ static usize mal_builtin_number_normalize(const byte *buffer, byte *out, bool st
     return w;
 }
 
+/**
+ * Exact significant digits of a positive, finite, nonzero double. macOS/glibc
+ * printf is correctly rounded, and 767 significant digits exceed the longest
+ * exact decimal expansion of any double, so "%.766e" yields the EXACT digits
+ * with no rounding. Fills `sig` with the leading-nonzero digit string and sets
+ * *exp10 so that value == sig[0].sig[1]sig[2]... * 10^(*exp10).
+ */
+static void mal_number_exact_digits(f64 x, byte *sig, i32 *exp10) {
+    byte buffer[800];
+    snprintf(buffer, sizeof(buffer), "%.766e", x);
+    usize w = 0;
+    usize i = 0;
+    sig[w++] = buffer[i++];
+    if (buffer[i] == '.') {
+        i++;
+        while (buffer[i] >= '0' && buffer[i] <= '9') {
+            sig[w++] = buffer[i++];
+        }
+    }
+    sig[w] = '\0';
+    *exp10 = (i32) strtol((char *) buffer + i + 1, nullptr, 10);
+}
+
+/**
+ * Round the significant-digit string `sig` to `keep` digits using
+ * round-half-away-from-zero. For a positive magnitude this is round-half-up:
+ * round up iff the first discarded digit is >= '5' (an exact .5 tie picks the
+ * larger value per the spec's "pick the larger n"). A carry out of the leading
+ * digit (999..9 -> 1000..0) bumps *exp10. Leaves exactly `keep` digits.
+ */
+static void mal_number_round_sig(byte *sig, i32 keep, i32 *exp10) {
+    i32 len = (i32) strlen((char *) sig);
+    if (keep >= len) {
+        for (i32 j = len; j < keep; j++) {
+            sig[j] = '0';
+        }
+        sig[keep] = '\0';
+        return;
+    }
+    bool round_up = sig[keep] >= '5';
+    sig[keep] = '\0';
+    if (!round_up) {
+        return;
+    }
+    i32 j = keep - 1;
+    while (j >= 0) {
+        if (sig[j] != '9') {
+            sig[j]++;
+            return;
+        }
+        sig[j] = '0';
+        j--;
+    }
+    // Carried out of the leading digit: keep "1" + (keep-1) zeros, bump exponent.
+    memmove(sig + 1, sig, (usize) (keep - 1));
+    sig[0] = '1';
+    sig[keep] = '\0';
+    (*exp10)++;
+}
+
 static MalValue mal_builtin_number_prototype_to_exponential(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -488,35 +557,59 @@ static MalValue mal_builtin_number_prototype_to_exponential(MalVm *vm, MalValue 
         if (!mal_vm_to_number(vm, args[0], &raw)) {
             return mal_value_new_undefined();
         }
-        digits = trunc(raw);
+        digits = isnan(raw) ? 0 : trunc(raw);
     }
 
     if (!isfinite(number)) {
         return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
     }
 
-    if (!digits_undefined && (isnan(digits) || digits < 0 || digits > 100)) {
+    if (!digits_undefined && (digits < 0 || digits > 100)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toExponential() argument must be between 0 and 100");
         return mal_value_new_undefined();
     }
 
-    // -0 has no sign in the exponential form (the spec only emits "-" when x<0).
-    if (number == 0.0) {
-        number = 0.0;
-    }
-
-    byte buffer[160];
     if (digits_undefined) {
         // Shortest exponential that round-trips; auto-precision strips trailing
         // fractional zeros during normalization.
+        byte buffer[160];
         snprintf(buffer, sizeof(buffer), "%e", number);
-    } else {
-        snprintf(buffer, sizeof(buffer), "%.*e", (i32) digits, number);
+        byte normalized[176];
+        usize out = mal_builtin_number_normalize(buffer, normalized, true);
+        return mal_value_from_string(mal_string_new_ascii(&vm->heap, normalized, out));
     }
 
-    byte normalized[176];
-    usize out = mal_builtin_number_normalize(buffer, normalized, digits_undefined);
-    return mal_value_from_string(mal_string_new_ascii(&vm->heap, normalized, out));
+    // Explicit fractionDigits: produce f+1 significant digits with the spec's
+    // round-half-away-from-zero (printf's %e rounds half-to-even, which disagrees
+    // at exact ties such as (25).toExponential(0) == "3e+1").
+    i32 f = (i32) digits;
+    bool neg = number < 0.0;
+    f64 ax = fabs(number);
+
+    byte out[256];
+    usize w = 0;
+    if (neg) {
+        out[w++] = '-';
+    }
+    byte sig[820];
+    i32 e10 = 0;
+    if (ax == 0.0) {
+        sig[0] = '0';
+        sig[1] = '\0';
+        mal_number_round_sig(sig, f + 1, &e10);
+    } else {
+        mal_number_exact_digits(ax, sig, &e10);
+        mal_number_round_sig(sig, f + 1, &e10);
+    }
+    out[w++] = sig[0];
+    if (f > 0) {
+        out[w++] = '.';
+        for (i32 j = 1; j <= f; j++) {
+            out[w++] = sig[j];
+        }
+    }
+    w += (usize) snprintf((char *) out + w, sizeof(out) - w, "e%+d", e10);
+    return mal_value_from_string(mal_string_new_ascii(&vm->heap, out, w));
 }
 
 static MalValue mal_builtin_number_prototype_to_precision(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -538,27 +631,72 @@ static MalValue mal_builtin_number_prototype_to_precision(MalVm *vm, MalValue th
     if (!mal_vm_to_number(vm, args[0], &raw)) {
         return mal_value_new_undefined();
     }
-    f64 precision = trunc(raw);
+    f64 precision = isnan(raw) ? 0 : trunc(raw);
     if (!isfinite(number)) {
         return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
     }
-    if (isnan(precision) || precision < 1 || precision > 100) {
+    if (precision < 1 || precision > 100) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toPrecision() argument must be between 1 and 100");
         return mal_value_new_undefined();
     }
 
-    // -0 renders without a sign (the spec only emits "-" for x<0).
-    if (number == 0.0) {
-        number = 0.0;
+    // Round to p significant digits half-away-from-zero (exact-expansion based),
+    // then choose exponential vs fixed exactly as the spec does. -0 renders with
+    // no sign (number < 0 is false for -0).
+    i32 p = (i32) precision;
+    bool neg = number < 0.0;
+    f64 ax = fabs(number);
+
+    byte sig[820];
+    i32 e = 0;
+    if (ax == 0.0) {
+        for (i32 j = 0; j < p; j++) {
+            sig[j] = '0';
+        }
+        sig[p] = '\0';
+    } else {
+        mal_number_exact_digits(ax, sig, &e);
+        mal_number_round_sig(sig, p, &e);
     }
 
-    // "%#g" keeps the requested significant digits (no trailing-zero stripping);
-    // normalization then fixes the exponent shape and drops any dangling ".".
-    byte buffer[160];
-    snprintf(buffer, sizeof(buffer), "%#.*g", (i32) precision, number);
-    byte normalized[176];
-    usize out = mal_builtin_number_normalize(buffer, normalized, false);
-    return mal_value_from_string(mal_string_new_ascii(&vm->heap, normalized, out));
+    byte out[256];
+    usize w = 0;
+    if (neg) {
+        out[w++] = '-';
+    }
+    if (e < -6 || e >= p) {
+        // Exponential form: one digit, optional fraction, signed exponent.
+        out[w++] = sig[0];
+        if (p > 1) {
+            out[w++] = '.';
+            for (i32 j = 1; j < p; j++) {
+                out[w++] = sig[j];
+            }
+        }
+        w += (usize) snprintf((char *) out + w, sizeof(out) - w, "e%+d", e);
+    } else if (e >= 0) {
+        // Fixed form, e+1 integer digits then any remaining as fraction.
+        for (i32 j = 0; j <= e; j++) {
+            out[w++] = sig[j];
+        }
+        if (p > e + 1) {
+            out[w++] = '.';
+            for (i32 j = e + 1; j < p; j++) {
+                out[w++] = sig[j];
+            }
+        }
+    } else {
+        // -6 <= e < 0: "0." then -e-1 leading zeros then all p digits.
+        out[w++] = '0';
+        out[w++] = '.';
+        for (i32 j = 0; j < -e - 1; j++) {
+            out[w++] = '0';
+        }
+        for (i32 j = 0; j < p; j++) {
+            out[w++] = sig[j];
+        }
+    }
+    return mal_value_from_string(mal_string_new_ascii(&vm->heap, out, w));
 }
 
 static MalValue mal_builtin_number_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -594,7 +732,7 @@ void mal_builtin_number_install(MalVm *vm) {
     vm->intrinsics[MAL_INTRINSIC_NUMBER_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
     vm->intrinsics[MAL_INTRINSIC_NUMBER_PROTOTYPE] = mal_value_from_object(prototype);
 
-    mal_intrinsic_define_data(vm, constructor_object, "prototype", vm->intrinsics[MAL_INTRINSIC_NUMBER_PROTOTYPE], MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, constructor_object, "prototype", vm->intrinsics[MAL_INTRINSIC_NUMBER_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_NUMBER_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
     mal_intrinsic_define_data(vm, constructor_object, "MAX_SAFE_INTEGER", mal_value_from_f64(9007199254740991.0), MAL_PROPERTY_NONE);

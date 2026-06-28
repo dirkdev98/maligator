@@ -122,7 +122,7 @@ static bool mal_proxy_target_get_own(MalVm *vm, MalValue target, MalKey key, boo
     if (mal_value_is_array_object(target) && mal_array_key_is_length(key)) {
         MalArrayObject *array = mal_value_to_array_object(target);
         desc->flags = array->length_writable ? MAL_PROPERTY_WRITABLE : MAL_PROPERTY_NONE;
-        desc->value = mal_value_from_i32((i32) mal_array_object_length(array));
+        desc->value = mal_value_from_u32(mal_array_object_length(array));
         desc->getter = mal_value_new_undefined();
         desc->setter = mal_value_new_undefined();
         *present = true;
@@ -144,15 +144,18 @@ bool mal_proxy_get(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue receiv
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
     }
+    // Capture target/handler before the trap: a trap that revokes the proxy
+    // nulls proxy->target, but the invariant check must still use the original.
+    MalValue target = proxy->target;
     MalValue trap;
     if (!mal_proxy_get_trap(vm, proxy, "get", &trap)) {
         return false;
     }
     if (mal_value_is_undefined(trap)) {
-        return mal_vm_get_property_with_receiver(vm, proxy->target, key, receiver, out);
+        return mal_vm_get_property_with_receiver(vm, target, key, receiver, out);
     }
 
-    MalValue args[3] = {proxy->target, mal_proxy_key_to_value(vm, key), receiver};
+    MalValue args[3] = {target, mal_proxy_key_to_value(vm, key), receiver};
     MalCompletion completion = mal_vm_call_value(vm, trap, proxy->handler, args, 3);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
@@ -165,7 +168,7 @@ bool mal_proxy_get(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue receiv
     // undefined.
     bool present;
     MalPropertyDesc desc;
-    if (mal_proxy_target_get_own(vm, proxy->target, key, &present, &desc) && present) {
+    if (mal_proxy_target_get_own(vm, target, key, &present, &desc) && present) {
         if (!(desc.flags & MAL_PROPERTY_CONFIGURABLE)) {
             if (!(desc.flags & MAL_PROPERTY_ACCESSOR) && !(desc.flags & MAL_PROPERTY_WRITABLE)) {
                 if (!mal_proxy_same_value(trap_result, desc.value)) {
@@ -192,15 +195,18 @@ bool mal_proxy_set(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue value,
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
     }
+    // Capture target before the trap, which may revoke the proxy (nulling
+    // proxy->target) before the invariant check runs.
+    MalValue target = proxy->target;
     MalValue trap;
     if (!mal_proxy_get_trap(vm, proxy, "set", &trap)) {
         return false;
     }
     if (mal_value_is_undefined(trap)) {
-        return mal_vm_set_property(vm, proxy->target, key, value, receiver);
+        return mal_vm_set_property(vm, target, key, value, receiver);
     }
 
-    MalValue args[4] = {proxy->target, mal_proxy_key_to_value(vm, key), value, receiver};
+    MalValue args[4] = {target, mal_proxy_key_to_value(vm, key), value, receiver};
     MalCompletion completion = mal_vm_call_value(vm, trap, proxy->handler, args, 4);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
@@ -215,7 +221,7 @@ bool mal_proxy_set(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue value,
     // accessor with no setter.
     bool present;
     MalPropertyDesc desc;
-    if (mal_proxy_target_get_own(vm, proxy->target, key, &present, &desc) && present) {
+    if (mal_proxy_target_get_own(vm, target, key, &present, &desc) && present) {
         if (!(desc.flags & MAL_PROPERTY_CONFIGURABLE)) {
             if (!(desc.flags & MAL_PROPERTY_ACCESSOR) && !(desc.flags & MAL_PROPERTY_WRITABLE)) {
                 if (!mal_proxy_same_value(value, desc.value)) {

@@ -1502,7 +1502,7 @@ static bool mal_vm_value_is_number(MalValue value) {
  */
 static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *value_out) {
     if (mal_value_is_array_object(object_value) && mal_array_key_is_length(key)) {
-        *value_out = mal_value_from_i32((i32) mal_array_object_length(mal_value_to_array_object(object_value)));
+        *value_out = mal_value_from_u32(mal_array_object_length(mal_value_to_array_object(object_value)));
         return true;
     }
 

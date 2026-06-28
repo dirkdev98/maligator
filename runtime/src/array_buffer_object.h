@@ -18,6 +18,9 @@ typedef struct MalArrayBufferObject {
     bool detached;
     // SharedArrayBuffer (growable, never detached).
     bool shared;
+    // Immutable ArrayBuffer (transferToImmutable/sliceToImmutable result): fixed
+    // length, contents never change. Stands in for [[ArrayBufferIsImmutable]].
+    bool immutable;
 } MalArrayBufferObject;
 
 /**

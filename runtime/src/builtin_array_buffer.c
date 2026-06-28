@@ -321,6 +321,10 @@ static MalValue mal_builtin_array_buffer_slice(MalVm *vm, MalValue this_value, c
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Species constructor returned a detached ArrayBuffer");
         return mal_value_new_undefined();
     }
+    if (result->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Species constructor returned an immutable ArrayBuffer");
+        return mal_value_new_undefined();
+    }
     if (result->byte_length < new_length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Species constructor returned a too-small ArrayBuffer");
         return mal_value_new_undefined();
@@ -383,7 +387,8 @@ static MalValue mal_builtin_array_buffer_transfer_impl(MalVm *vm, MalValue this_
     }
 
     // newLength: undefined keeps the current byte length; otherwise ToIndex (may
-    // run user code that detaches the source).
+    // run user code that detaches the source). The detached/immutable checks
+    // follow the coercion per ArrayBufferCopyAndDetach.
     u32 new_length = buffer->byte_length;
     if (arg_count >= 1 && !mal_value_is_undefined(args[0]) &&
         !mal_array_buffer_to_index_u32(vm, args[0], &new_length)) {
@@ -391,6 +396,10 @@ static MalValue mal_builtin_array_buffer_transfer_impl(MalVm *vm, MalValue this_
     }
     if (buffer->detached) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot transfer a detached ArrayBuffer");
+        return mal_value_new_undefined();
+    }
+    if (buffer->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot transfer an immutable ArrayBuffer");
         return mal_value_new_undefined();
     }
 
@@ -425,6 +434,118 @@ static MalValue mal_builtin_array_buffer_transfer_to_fixed(MalVm *vm, MalValue t
     (void) new_target;
     (void) callee;
     return mal_builtin_array_buffer_transfer_impl(vm, this_value, args, arg_count, false);
+}
+
+// get ArrayBuffer.prototype.immutable: requires [[ArrayBufferData]] and a
+// non-shared buffer; reports the [[ArrayBufferIsImmutable]] marker.
+static MalValue mal_builtin_array_buffer_immutable_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalArrayBufferObject *buffer = mal_builtin_array_buffer_this(vm, this_value, false);
+    if (buffer == nullptr) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(buffer->immutable);
+}
+
+// ArrayBuffer.prototype.transferToImmutable([newLength]): copy (and optionally
+// resize) the bytes into a fresh immutable, fixed-length buffer and detach the
+// source.
+static MalValue mal_builtin_array_buffer_transfer_to_immutable(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalArrayBufferObject *buffer = mal_builtin_array_buffer_this(vm, this_value, false);
+    if (buffer == nullptr) {
+        return mal_value_new_undefined();
+    }
+    if (buffer->detached) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot transfer a detached ArrayBuffer");
+        return mal_value_new_undefined();
+    }
+    u32 new_length = buffer->byte_length;
+    if (arg_count >= 1 && !mal_value_is_undefined(args[0]) &&
+        !mal_array_buffer_to_index_u32(vm, args[0], &new_length)) {
+        return mal_value_new_undefined();
+    }
+    if (buffer->detached) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot transfer a detached ArrayBuffer");
+        return mal_value_new_undefined();
+    }
+    if (buffer->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot transfer an immutable ArrayBuffer");
+        return mal_value_new_undefined();
+    }
+
+    MalArrayBufferObject *result = mal_array_buffer_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+        new_length,
+        new_length,
+        false,
+        false
+    );
+    result->immutable = true;
+    u32 copy = new_length < buffer->byte_length ? new_length : buffer->byte_length;
+    if (copy > 0) {
+        memcpy(result->data, buffer->data, copy);
+    }
+    mal_array_buffer_object_detach(buffer);
+    return mal_value_from_array_buffer_object(result);
+}
+
+// ArrayBuffer.prototype.sliceToImmutable([start, end]): copy the [start, end)
+// byte range into a fresh immutable buffer; the source is left intact.
+static MalValue mal_builtin_array_buffer_slice_to_immutable(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalArrayBufferObject *buffer = mal_builtin_array_buffer_this(vm, this_value, false);
+    if (buffer == nullptr) {
+        return mal_value_new_undefined();
+    }
+    if (buffer->detached) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot slice a detached ArrayBuffer");
+        return mal_value_new_undefined();
+    }
+
+    u32 length = buffer->byte_length;
+    u32 first;
+    u32 final;
+    if (!mal_array_buffer_clamp(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), length, 0, &first)) {
+        return mal_value_new_undefined();
+    }
+    if (!mal_array_buffer_clamp(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), length, length, &final)) {
+        return mal_value_new_undefined();
+    }
+
+    // Argument coercion may have detached or shrunk the source.
+    if (buffer->detached) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Source ArrayBuffer was detached during slice");
+        return mal_value_new_undefined();
+    }
+    u32 current = buffer->byte_length;
+    if (first > current) {
+        first = current;
+    }
+    if (final > current) {
+        final = current;
+    }
+    u32 new_length = final > first ? final - first : 0;
+
+    MalArrayBufferObject *result = mal_array_buffer_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+        new_length,
+        new_length,
+        false,
+        false
+    );
+    result->immutable = true;
+    if (new_length > 0) {
+        memcpy(result->data, buffer->data + first, new_length);
+    }
+    return mal_value_from_array_buffer_object(result);
 }
 
 // @@species getter returns the receiver (the default behavior).
@@ -489,10 +610,13 @@ void mal_builtin_array_buffer_install(MalVm *vm) {
     mal_builtin_array_buffer_define_getter(vm, prototype, "maxByteLength", mal_builtin_array_buffer_max_byte_length_getter);
     mal_builtin_array_buffer_define_getter(vm, prototype, "resizable", mal_builtin_array_buffer_resizable_getter);
     mal_builtin_array_buffer_define_getter(vm, prototype, "detached", mal_builtin_array_buffer_detached_getter);
+    mal_builtin_array_buffer_define_getter(vm, prototype, "immutable", mal_builtin_array_buffer_immutable_getter);
     mal_intrinsic_define_method_n(vm, prototype, "slice", 2, mal_builtin_array_buffer_slice);
+    mal_intrinsic_define_method_n(vm, prototype, "sliceToImmutable", 2, mal_builtin_array_buffer_slice_to_immutable);
     mal_intrinsic_define_method_n(vm, prototype, "resize", 1, mal_builtin_array_buffer_resize);
     mal_intrinsic_define_method_n(vm, prototype, "transfer", 0, mal_builtin_array_buffer_transfer);
     mal_intrinsic_define_method_n(vm, prototype, "transferToFixedLength", 0, mal_builtin_array_buffer_transfer_to_fixed);
+    mal_intrinsic_define_method_n(vm, prototype, "transferToImmutable", 0, mal_builtin_array_buffer_transfer_to_immutable);
 
     MalPropertyDesc tag = mal_intrinsic_data_desc(mal_value_from_string(mal_intrinsic_ascii(vm, "ArrayBuffer")), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag);

@@ -17,7 +17,15 @@ typedef enum MalIteratorHelperKind {
     MAL_ITERATOR_HELPER_FLATMAP,
     MAL_ITERATOR_HELPER_WRAP,
     MAL_ITERATOR_HELPER_CONCAT,
+    MAL_ITERATOR_HELPER_ZIP,
 } MalIteratorHelperKind;
+
+/** Iterator.zip / Iterator.zipKeyed iteration mode. */
+typedef enum MalIteratorZipMode {
+    MAL_ITERATOR_ZIP_SHORTEST,
+    MAL_ITERATOR_ZIP_LONGEST,
+    MAL_ITERATOR_ZIP_STRICT,
+} MalIteratorZipMode;
 
 /**
  * An Iterator Helper instance: holds the lazy transform state so next/return
@@ -48,8 +56,15 @@ typedef struct MalIteratorHelperObject {
 
     // concat: array of source iterables and their captured @@iterator methods.
     // `index` doubles as the cursor into these arrays.
+    // zip: `sources` holds the open iterator objects (a null entry marks an
+    // exhausted input in "longest" mode) and `source_methods` their cached next
+    // methods; `zip_padding` holds the per-input padding values (longest mode)
+    // and `zip_keys` the property keys for zipKeyed (undefined for plain zip).
     MalValue sources;
     MalValue source_methods;
+    MalValue zip_padding;
+    MalValue zip_keys;
+    MalIteratorZipMode zip_mode;
 } MalIteratorHelperObject;
 
 /**

@@ -98,7 +98,7 @@ void mal_builtin_boolean_install(MalVm *vm) {
     vm->intrinsics[MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
     vm->intrinsics[MAL_INTRINSIC_BOOLEAN_PROTOTYPE] = mal_value_from_object(prototype);
 
-    mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_BOOLEAN_PROTOTYPE], MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_BOOLEAN_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
     mal_intrinsic_define_method_n(vm, prototype, "toString", 0, mal_builtin_boolean_prototype_to_string);

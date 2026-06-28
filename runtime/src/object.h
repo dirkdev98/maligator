@@ -29,6 +29,12 @@ typedef struct MalObject {
      * fits the padding after `extensible`.
      */
     bool fast_elements_proto;
+    /**
+     * [[IsRawJSON]] marker for JSON.rawJSON results. An internal slot (not a
+     * property), so it stays invisible to getOwnPropertyNames/Symbols. Free: fits
+     * the padding after the preceding bools.
+     */
+    bool is_raw_json;
     /** Inline named-property values for the shape; null in dictionary mode. */
     MalValue *slots;
     /** Dictionary/overflow table (named + index props); null until needed. */
