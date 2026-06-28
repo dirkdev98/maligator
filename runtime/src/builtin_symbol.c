@@ -137,11 +137,16 @@ static MalValue mal_builtin_symbol_prototype_value_of(MalVm *vm, MalValue this_v
     (void) args;
     (void) arg_count;
 
-    if (mal_builtin_symbol_this(vm, this_value) == nullptr) {
+    // thisSymbolValue: step 5 returns the [[SymbolData]] itself — the UNWRAPPED
+    // symbol — not the receiver. For a Symbol-wrapper object `this_value` is the
+    // wrapper, so returning it (instead of the symbol) made valueOf/@@toPrimitive
+    // hand back the object. (Shared by Symbol.prototype[@@toPrimitive].)
+    MalSymbol *symbol = mal_builtin_symbol_this(vm, this_value);
+    if (symbol == nullptr) {
         return mal_value_new_undefined();
     }
 
-    return this_value;
+    return mal_value_from_symbol(symbol);
 }
 
 static MalValue mal_builtin_symbol_for(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

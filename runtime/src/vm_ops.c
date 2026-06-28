@@ -1277,6 +1277,14 @@ MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue rig
                 return mal_value_new_undefined();
             }
 
+            // GetMethod: a @@hasInstance that is present (not undefined/null) but
+            // NOT callable is a TypeError — it does NOT silently fall through to
+            // OrdinaryHasInstance.
+            if (!mal_value_is_nil(method) && !mal_value_is_callable(method)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.hasInstance method is not callable");
+                return mal_value_new_undefined();
+            }
+
             if (mal_value_is_callable(method)) {
                 MalCompletion completion = mal_vm_call_value(vm, method, right, &left, 1);
                 return completion.kind == MAL_COMPLETION_NORMAL
@@ -1478,7 +1486,12 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
 }
 
 static bool mal_vm_value_is_number(MalValue value) {
-    return mal_value_is_int32(value) || mal_value_is_f64_or_nan(value) || value == MAL_VALUE_NEGATIVE_ZERO;
+    // ±Infinity and -0 are canonicalised to dedicated static tags (value.h), so
+    // they are NOT is_f64 — enumerate them explicitly or a property access on
+    // Infinity (e.g. `Infinity.toString()`) fails to route to %Number.prototype%.
+    return mal_value_is_int32(value) || mal_value_is_f64_or_nan(value)
+        || value == MAL_VALUE_NEGATIVE_ZERO || value == MAL_VALUE_POSITIVE_INFINITY
+        || value == MAL_VALUE_NEGATIVE_INFINITY;
 }
 
 /**
@@ -2058,9 +2071,12 @@ bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
     if (mal_vm_resolve_synthetic_property(vm, target, key, &synthetic)) {
         prototype_value = synthetic;
     } else if (mal_value_is_object(target)) {
-        MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(target), key);
-        if (resolution.found) {
-            prototype_value = resolution.desc.value;
+        // Spec OrdinaryHasInstance step 4: P = Get(C, "prototype"), a full [[Get]]
+        // that INVOKES a getter-defined `.prototype` and (step 5, ReturnIfAbrupt)
+        // propagates a throw. Reading the descriptor's value directly skipped the
+        // getter (returning undefined → a spurious TypeError) and swallowed throws.
+        if (!mal_vm_get_property(vm, target, key, &prototype_value)) {
+            return false;
         }
     }
 

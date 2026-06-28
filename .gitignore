@@ -2,7 +2,7 @@
 .idea
 coverage
 node_modules
-runtime/build
+runtime/build*
 
 local*.js
 

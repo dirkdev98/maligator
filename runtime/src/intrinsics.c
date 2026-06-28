@@ -407,6 +407,8 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "RangeError", vm->intrinsics[MAL_INTRINSIC_RANGE_ERROR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "ReferenceError", vm->intrinsics[MAL_INTRINSIC_REFERENCE_ERROR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "SyntaxError", vm->intrinsics[MAL_INTRINSIC_SYNTAX_ERROR_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "EvalError", vm->intrinsics[MAL_INTRINSIC_EVAL_ERROR_CONSTRUCTOR], flags);
+    mal_intrinsic_define_data(vm, global_this, "URIError", vm->intrinsics[MAL_INTRINSIC_URI_ERROR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "String", vm->intrinsics[MAL_INTRINSIC_STRING_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Number", vm->intrinsics[MAL_INTRINSIC_NUMBER_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Boolean", vm->intrinsics[MAL_INTRINSIC_BOOLEAN_CONSTRUCTOR], flags);
