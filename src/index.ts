@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { gmallocEnabled, runEnv } from "./build-flags.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
@@ -11,10 +11,11 @@ import { debugProgramLiveness } from "./liveness.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { lowerIrProgramToVmDefinition, vmDefinitionStats } from "./lower-vm.ts";
 import { allocateRegisters } from "./register-alloc.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-analysis.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
+import { serializeVmDefinition } from "./serialize-vm.ts";
 import { log } from "./utils.ts";
 
-const FLAGS_WITH_VALUES = new Set(["--name"]);
+const FLAGS_WITH_VALUES = new Set(["--name", "--serialize"]);
 
 function argValue(name: string) {
 	const index = process.argv.indexOf(name);
@@ -105,6 +106,16 @@ lowerTiming();
 
 const stats = vmDefinitionStats(vmDefinition);
 log.info(`Functions: ${stats.functionCount}, instructions: ${stats.instructionCount}`);
+
+// Emit the binary wire format (consumed by mal_vm_load_definition / runtime
+// eval) instead of building a C binary. Interpreter-only — no compiled bodies.
+const serializePath = argValue("--serialize");
+if (serializePath !== undefined) {
+	const buffer = serializeVmDefinition(vmDefinition);
+	writeFileSync(serializePath, buffer);
+	log.info(`Serialized: ${serializePath} (${buffer.length} bytes)`);
+	process.exit(0);
+}
 
 const output = emitVmDefinition(vmDefinition, {
 	compiled: !argFlag("--no-compiled"),

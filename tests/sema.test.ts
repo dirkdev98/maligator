@@ -1,9 +1,7 @@
 import * as path from "node:path";
 import { expect, test } from "vitest";
-import {
-	debugSemanticProgram,
-	loadEntrypointAndRunSemanticAnalysis,
-} from "../src/semantic-analysis.ts";
+import { debugSemanticProgram } from "../src/semantic-analysis.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
 
 test("snapshot sema changes", () => {
 	const semantic = loadEntrypointAndRunSemanticAnalysis(

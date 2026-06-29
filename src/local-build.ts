@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { buildSuffix, ccExtraFlags, cmakeCFlags } from "./build-flags.ts";
+import { ensureCompilerWire } from "./compiler-bake.ts";
 import { ensureRustLibrary, RUST_INCLUDE_DIR, rustLinkArgs } from "./rust-build.ts";
 
 const LOCAL_DIR = ".cache/local";
@@ -36,10 +37,18 @@ function ensureRuntimeLibrary(verbose: boolean): string {
 
 	mkdirSync(LOCAL_DIR, { recursive: true });
 
+	// Generate the baked compiler wire (runtime/src/compiler.malw) before cmake:
+	// the GLOB pulls in compiler_wire.c, whose `#embed` needs the file to exist.
+	ensureCompilerWire(verbose);
+
 	// Re-running configure with unchanged cache variables is cheap.
-	execFileSync("cmake", ["-S", "runtime", "-B", BUILD_DIR, `-DCMAKE_C_FLAGS=${cmakeCFlags()}`], {
-		stdio,
-	});
+	execFileSync(
+		"cmake",
+		["-S", "runtime", "-B", BUILD_DIR, `-DCMAKE_C_FLAGS=${cmakeCFlags()}`],
+		{
+			stdio,
+		},
+	);
 
 	execFileSync("cmake", ["--build", BUILD_DIR, "--target", "LibMaligator"], { stdio });
 
@@ -48,6 +57,37 @@ function ensureRuntimeLibrary(verbose: boolean): string {
 	ensureRustLibrary(verbose);
 
 	return path.join(BUILD_DIR, "libLibMaligator.a");
+}
+
+/**
+ * Build the `MaligatorLoad` dev driver: it loads a serialized definition (.malw,
+ * the serialize-vm.ts wire format) into a fresh VM and runs it. Used to validate
+ * the C loader (mal_vm_load_definition) against the C-baked path. Returns the
+ * binary path.
+ */
+export function buildLoadDriver(verbose: boolean): string {
+	const lib = ensureRuntimeLibrary(verbose);
+	const binPath = path.join(LOCAL_DIR, `MaligatorLoad${buildSuffix()}`);
+
+	execFileSync(
+		"cc",
+		[
+			"-std=c2x",
+			...ccExtraFlags(),
+			"-I",
+			"runtime/src",
+			"-I",
+			RUST_INCLUDE_DIR,
+			"runtime/load_main.c",
+			lib,
+			...rustLinkArgs(),
+			"-o",
+			binPath,
+		],
+		{ stdio: verbose ? "inherit" : "ignore" },
+	);
+
+	return binPath;
 }
 
 /**

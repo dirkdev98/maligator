@@ -213,6 +213,18 @@ typedef enum MalIntrinsic {
      * result array being built. Loaded via LOAD_INTRINSIC.
      */
     MAL_INTRINSIC_ARRAY_FLAT_MAP_APPEND,
+    /*
+     * The global `eval` function (builtin_eval.c). Resolved by LOAD_INTRINSIC for
+     * the bare `eval` identifier and exposed as a global property; on first call
+     * it splices the baked self-hosted compiler into the running VM.
+     */
+    MAL_INTRINSIC_EVAL,
+    /*
+     * The direct-eval intrinsic (builtin_eval.c). Not exposed on globalThis;
+     * the compiler emits it as the callee of a direct `eval(...)` call, passing
+     * the source and a scope object marshaled from the caller's visible bindings.
+     */
+    MAL_INTRINSIC_DIRECT_EVAL,
     MAL_INTRINSIC_COUNT,
 } MalIntrinsic;
 

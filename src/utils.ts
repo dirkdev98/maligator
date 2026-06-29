@@ -2,7 +2,9 @@ export function isNil(value: unknown): value is null | undefined {
 	return value === null || value === undefined;
 }
 
-const debug = process.env.MAL_DEBUG === "true";
+// `typeof` guard so this module loads on MalVm too (the self-hosted compiler),
+// where there is no `process` global — `typeof process` is then "undefined".
+const debug = typeof process !== "undefined" && process.env.MAL_DEBUG === "true";
 
 export const log = {
 	debug(args: unknown, depth: number | null = null) {

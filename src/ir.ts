@@ -2,7 +2,8 @@ import type { ESTree } from "meriyah";
 import { isPureDataCjsModule } from "./cjs-exports.ts";
 import { linkModules } from "./linker.ts";
 import { COMMONJS_BINDINGS } from "./semantic-analysis.ts";
-import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
+import { FUNCTION_UNIT_NODE_TYPES } from "./semantic-analysis.ts";
+import type { Binding, Scope, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 import { log } from "./utils.ts";
 
 export interface IntermediateProgram {
@@ -10,6 +11,24 @@ export interface IntermediateProgram {
 	 * The semantic program that we are compiling.
 	 */
 	semantic: SemanticProgram;
+
+	/**
+	 * Eval-completion mode: compile the entry (Script) so it returns its
+	 * completion value — the value of the last script-level ExpressionStatement
+	 * that executed — instead of undefined. Set only when compiling source for
+	 * runtime `eval`; off for ordinary programs and for nested function bodies
+	 * (which keep their own `return` semantics).
+	 */
+	evalCompletion: boolean;
+
+	/**
+	 * Direct-eval mode: compiling source for a *direct* eval, where free
+	 * (undeclared) identifiers must resolve against the caller's scope. They are
+	 * routed through the `with`-dynamic path (withGet/withSet) so they probe the
+	 * caller scope object the runtime pushes, falling back to the global. Off for
+	 * indirect eval and ordinary programs.
+	 */
+	evalDirect: boolean;
 
 	/**
 	 * The functions that we have compiled.
@@ -265,6 +284,24 @@ interface IRClassContext {
 export interface IRFunction {
 	semanticFile: SemanticFile;
 	functionIndex: number;
+
+	/**
+	 * Eval-completion register (see IntermediateProgram.evalCompletion). When set,
+	 * this is the Script entry function: each script-level ExpressionStatement
+	 * moves its value here, the function returns it, and it is initialized to
+	 * undefined at entry. Undefined on every other function.
+	 */
+	completionRegister?: number;
+
+	/**
+	 * Set while compiling this function's parameter expressions (defaults / rest /
+	 * destructuring). A direct eval encountered here is in a parameter-expression
+	 * context: its declarations target the parameter environment, where declaring
+	 * `arguments` always conflicts (the param env carries an `arguments` binding),
+	 * so such an eval is treated as strict — which forbids declaring `arguments` /
+	 * `eval`, yielding the spec's SyntaxError without modeling the param env.
+	 */
+	inParameterExpression?: boolean;
 
 	/**
 	 * String constant index of the function name, empty string for anonymous
@@ -1102,6 +1139,7 @@ type IRIntrinsic =
 	| "Proxy"
 	| "console"
 	| "globalThis"
+	| "eval"
 	| "NaN"
 	| "Infinity"
 	// The CommonJS require native. Not a user-visible global: the compiler emits
@@ -1113,7 +1151,11 @@ type IRIntrinsic =
 	| "__arrayIterationEligible"
 	// Internal flatMap append helper for guarded inlining: flattens a mapped value
 	// one level into the result array being built. Not a user-visible global.
-	| "__arrayFlatMapAppend";
+	| "__arrayFlatMapAppend"
+	// The direct-eval intrinsic (builtin_eval.c). Emitted as the callee of a
+	// direct `eval(...)` call; receives the source + a marshaled scope object.
+	// Not a user-visible global.
+	| "__directEval";
 
 const irIntrinsics = new Set<string>([
 	"Object",
@@ -1172,9 +1214,11 @@ const irIntrinsics = new Set<string>([
 	"Proxy",
 	"console",
 	"globalThis",
+	"eval",
 	"NaN",
 	"Infinity",
 	"__cjs_require",
+	"__directEval",
 ]);
 
 function isIRIntrinsic(name: string): name is IRIntrinsic {
@@ -1239,9 +1283,15 @@ export function debugIntermediateProgram(program: IntermediateProgram) {
  *
  * We might never support dynamic eval tho, so in that case we are all setup ;)
  */
-export function compileSemanticProgramToIr(semantic: SemanticProgram) {
+export function compileSemanticProgramToIr(
+	semantic: SemanticProgram,
+	options: { evalCompletion?: boolean; evalDirect?: boolean } = {},
+) {
 	const program: IntermediateProgram = {
 		semantic,
+
+		evalCompletion: options.evalCompletion ?? false,
+		evalDirect: options.evalDirect ?? false,
 
 		functions: [],
 		stringConstants: [],
@@ -1428,6 +1478,12 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 
 	program.functions.push(fn);
 
+	// Eval entry: reserve the completion register up front so body
+	// ExpressionStatements can move into it; endFunction returns it.
+	if (program.evalCompletion) {
+		fn.completionRegister = nextRegisterDestination(fn);
+	}
+
 	// A prologue block (TDZ inits + namespace objects) only when needed, so a
 	// module with only var/function top-levels compiles exactly as before.
 	if (moduleNeedsPrologue(program, initFile)) {
@@ -1438,6 +1494,16 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 		prologue.instructions.push({ type: "jump", blocks: [bodyEntry] });
 	} else {
 		compileStatementsToBlock(program, fn, initFile.ast.body, true);
+	}
+
+	// Initialize the completion to undefined before any body runs (so a script
+	// with no value-producing statement — e.g. `var x = 1` — evaluates to
+	// undefined). blocks[0] is the entry; prepend ahead of everything.
+	if (fn.completionRegister !== undefined && fn.blocks.length > 0) {
+		fn.blocks[0]!.instructions.unshift({
+			type: "createUndefined",
+			registers: [fn.completionRegister],
+		});
 	}
 
 	makeInitAsyncIfTopLevelAwait(fn, [initFile]);
@@ -1992,14 +2058,16 @@ function compileNewFunction(
 		blocks: [bodyBlock],
 	});
 
-	// The prologue runs after parameter setup (so defaults eval eagerly at call
-	// time) and suspends, returning the generator object.
+	// A generator suspends and returns the generator object after parameter setup,
+	// so generatorStart goes at the body (defaults still eval eagerly at call).
 	if (fn.isGenerator) {
 		fn.blocks[bodyBlock]!.instructions.unshift({ type: "generatorStart" });
 	} else if (fn.isAsync) {
-		// Same placement: create the result promise after params evaluate, then
-		// run the body until the first await.
-		fn.blocks[bodyBlock]!.instructions.unshift({ type: "asyncStart" });
+		// An async function's result promise must wrap parameter instantiation: a
+		// throw while evaluating a default parameter rejects the promise (it does
+		// not propagate synchronously). So asyncStart goes at the very entry
+		// (block 0), before the parameter prologue.
+		fn.blocks[0]!.instructions.unshift({ type: "asyncStart" });
 	}
 
 	endFunction(fn);
@@ -2075,7 +2143,9 @@ function compileNewFunctionExpression(
 	if (compiledFn.isGenerator) {
 		compiledFn.blocks[bodyBlock]!.instructions.unshift({ type: "generatorStart" });
 	} else if (compiledFn.isAsync) {
-		compiledFn.blocks[bodyBlock]!.instructions.unshift({ type: "asyncStart" });
+		// asyncStart wraps parameter instantiation (block 0) so a default-parameter
+		// throw rejects the result promise instead of propagating synchronously.
+		compiledFn.blocks[0]!.instructions.unshift({ type: "asyncStart" });
 	}
 
 	endFunction(compiledFn);
@@ -2980,6 +3050,16 @@ function endFunction(fn: IRFunction) {
 			continue;
 		}
 
+		// The eval entry returns its completion value; every other function's
+		// implicit return is undefined.
+		if (fn.completionRegister !== undefined) {
+			block.instructions.push({
+				type: "return",
+				registers: [fn.completionRegister],
+			});
+			continue;
+		}
+
 		const destinationRegister = nextRegisterDestination(fn);
 		block.instructions.push(
 			{
@@ -3133,6 +3213,12 @@ function compileFunctionParams(
 		storeRegisterAtLocation(block, location, thisRegister);
 	}
 
+	// A direct eval anywhere in these parameter expressions is in a
+	// parameter-expression context (see IRFunction.inParameterExpression). Nested
+	// function/arrow bodies get their own IRFunction, so the flag does not leak
+	// into them.
+	const savedInParams = fn.inParameterExpression;
+	fn.inParameterExpression = true;
 	for (let i = 0; i < node.params.length; i++) {
 		const param = node.params[i]!;
 
@@ -3151,6 +3237,7 @@ function compileFunctionParams(
 
 		compilePatternTarget(program, fn, cursor, param, parameterRegisters[i]!);
 	}
+	fn.inParameterExpression = savedInParams;
 
 	return cursor;
 }
@@ -3940,7 +4027,18 @@ function compileExpressionStatement(
 	block: IRBlock,
 	statement: ESTree.ExpressionStatement,
 ) {
-	compileExpression(program, fn, { block }, statement.expression);
+	const cursor: IRCursor = { block };
+	const result = compileExpression(program, fn, cursor, statement.expression);
+	// Eval completion: record this statement's value as the running completion.
+	// Use cursor.block (the expression's final block after any control flow), so
+	// the move lands where the result is live; an unexecuted branch never reaches
+	// here, giving the correct last-executed-value semantics.
+	if (fn.completionRegister !== undefined && result !== undefined) {
+		cursor.block.instructions.push({
+			type: "move",
+			registers: [fn.completionRegister, result],
+		});
+	}
 }
 
 function compileFunctionDeclaration(
@@ -6531,7 +6629,12 @@ function compileIdentifierAssignment(
 	cursor: IRCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
-	if (fn.semanticFile.withDynamicNodes.has(assignmentExpression.left)) {
+	if (
+		fn.semanticFile.withDynamicNodes.has(assignmentExpression.left) ||
+		(program.evalDirect &&
+			assignmentExpression.left.type === "Identifier" &&
+			identifierIsFree(fn, assignmentExpression.left))
+	) {
 		const left = assignmentExpression.left as ESTree.Identifier;
 		let value: number;
 		if (assignmentExpression.operator === "=") {
@@ -7064,9 +7167,14 @@ function compileUnaryExpression(
 		const argument = expression.argument;
 		const binding = fn.semanticFile.nodeToBinding.get(argument);
 		if (binding?.undeclared && !isIRIntrinsic(argument.name)) {
-			if (fn.semanticFile.withDynamicNodes.has(argument)) {
-				// With-intercepted but otherwise unresolvable: consult the active
-				// with-object(s); only if none provide it is the result "undefined".
+			if (
+				fn.semanticFile.withDynamicNodes.has(argument) ||
+				(program.evalDirect && identifierIsFree(fn, argument))
+			) {
+				// With-intercepted (or a direct-eval free identifier): consult the
+				// active with-object(s)/caller scope; only if none provide it is the
+				// result "undefined". (A global existing only on the global object is
+				// still reported "undefined" here — a known gap.)
 				return compileWithDynamicTypeof(program, fn, cursor, argument);
 			}
 			// typeof is the one reference read that resolves unresolvable
@@ -7187,6 +7295,23 @@ function compileUpdateExpression(
 		if (binding.kind === "const") {
 			// `x++` / `--x` on a const or imported binding is a TypeError.
 			return emitThrowTypeError(program, fn, cursor, "Assignment to constant variable.");
+		}
+
+		// Direct-eval free identifier: read and write through the with-dynamic path
+		// so the update lands on the caller scope object (then global).
+		if (program.evalDirect && identifierIsFree(fn, expression.argument)) {
+			const current = compileWithDynamicRead(program, fn, cursor, expression.argument);
+			const oldValue = nextRegisterDestination(fn);
+			cursor.block.instructions.push({ type: "unary", registers: [oldValue, current], operator: "+" });
+			const one = compileNumberLiteral(fn, cursor, 1);
+			const newValue = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "binary",
+				registers: [newValue, oldValue, one],
+				operator,
+			});
+			compileWithDynamicWrite(program, fn, cursor, expression.argument, newValue, true);
+			return expression.prefix ? newValue : oldValue;
 		}
 
 		const location = getOrCreateBindingLocation(program, fn, binding);
@@ -7818,6 +7943,118 @@ function compileSpreadArgumentsArray(
 	return array;
 }
 
+/**
+ * The bindings a direct eval can see in the caller — the current function's
+ * params/locals and the block bindings in scope at the call site (nearest
+ * shadows outer). Globals and undeclared names are excluded: the eval'd code
+ * reaches those through the global fallback. Enclosing-function bindings are not
+ * marshaled yet (they would need promotion to captured slots).
+ */
+function visibleBindingsForDirectEval(
+	fn: IRFunction,
+	callNode: ESTree.Node,
+): Map<string, Binding> {
+	const result = new Map<string, Binding>();
+	let scope: Scope | null | undefined = fn.semanticFile.nodeToScope.get(callNode);
+	while (scope) {
+		for (const binding of scope.bindings) {
+			if (!result.has(binding.name) && !binding.undeclared && binding.scopedTo !== "global") {
+				result.set(binding.name, binding);
+			}
+		}
+		if (FUNCTION_UNIT_NODE_TYPES.has(scope.node.type)) {
+			break; // stop at the current function; enclosing scopes are not marshaled yet
+		}
+		scope = scope.parent;
+	}
+	return result;
+}
+
+/**
+ * Compile a direct `eval(arg, ...)`: snapshot the caller's visible bindings into
+ * a scope object, invoke the direct-eval intrinsic (which pushes the object as a
+ * with-scope and compiles the source so free identifiers resolve against it),
+ * then write the (possibly mutated) bindings back. Reuses the with machinery and
+ * ordinary binding loads/stores — no new opcodes, no caller-env plumbing.
+ */
+function compileDirectEval(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	callExpression: ESTree.CallExpression,
+): number {
+	const bindings = visibleBindingsForDirectEval(fn, callExpression);
+
+	const scopeObject = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "createObject", registers: [scopeObject] });
+
+	// Marshal each visible binding's current value onto the scope object by name.
+	for (const [name, binding] of bindings) {
+		const location = getOrCreateBindingLocation(program, fn, binding);
+		const value = loadRegisterFromLocation(fn, cursor.block, location);
+		const key = compileStaticString(program, fn, cursor, name);
+		cursor.block.instructions.push({
+			type: "storeProperty",
+			registers: [scopeObject, key, value],
+		});
+	}
+
+	const callee = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadIntrinsic",
+		registers: [callee],
+		intrinsic: "__directEval",
+	});
+	const thisRegister = compileUndefined(fn, cursor);
+	const source = compileExpression(
+		program,
+		fn,
+		cursor,
+		callExpression.arguments[0] as ESTree.Expression,
+	);
+	// Direct eval inherits the caller's strictness — pass it so the eval'd code's
+	// strict/sloppy semantics are correct (a "use strict" prologue still promotes).
+	const callerStrict = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createBoolean",
+		registers: [callerStrict],
+		value: !isSloppyFunction(fn),
+	});
+	// Parameter-expression context: an eval here that DECLARES `arguments` is a
+	// SyntaxError (it would target the parameter environment, where `arguments` is
+	// already bound). Other sloppy behavior in a param eval stays sloppy.
+	const inParamExpr = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createBoolean",
+		registers: [inParamExpr],
+		value: fn.inParameterExpression ?? false,
+	});
+
+	const result = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "call",
+		registers: [result, callee, thisRegister, source, scopeObject, callerStrict, inParamExpr],
+	});
+
+	// Write mutated bindings back (const can't be reassigned; the eval throws if
+	// it tries, so there is nothing to write back).
+	for (const [name, binding] of bindings) {
+		if (binding.kind === "const") {
+			continue;
+		}
+		const location = getOrCreateBindingLocation(program, fn, binding);
+		const key = compileStaticString(program, fn, cursor, name);
+		const value = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadProperty",
+			registers: [value, scopeObject, key],
+		});
+		storeRegisterAtLocation(cursor.block, location, value);
+	}
+
+	return result;
+}
+
 function compileCall(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -7831,6 +8068,21 @@ function compileCall(
 
 	if (calleeNode.type === "Super") {
 		return compileSuperCall(program, fn, cursor, callExpression);
+	}
+
+	// Direct eval — `eval(...)` where `eval` is the global (undeclared) binding.
+	// The eval'd code must resolve free identifiers against the caller's scope, so
+	// we marshal the visible bindings into a scope object and route through the
+	// direct-eval intrinsic (which exposes the object as a with-scope). A spread
+	// argument falls through to the ordinary (indirect-style) call.
+	if (
+		calleeNode.type === "Identifier" &&
+		calleeNode.name === "eval" &&
+		(fn.semanticFile.nodeToBinding.get(calleeNode)?.undeclared ?? false) &&
+		callExpression.arguments.length > 0 &&
+		!callExpression.arguments.some((arg) => arg.type === "SpreadElement")
+	) {
+		return compileDirectEval(program, fn, cursor, callExpression);
 	}
 
 	if (fn.semanticFile.commonjs) {
@@ -8031,10 +8283,22 @@ function compileIdentifier(
 	cursor: IRCursor,
 	identifier: ESTree.Identifier,
 ): number {
-	if (fn.semanticFile.withDynamicNodes.has(identifier)) {
+	if (
+		fn.semanticFile.withDynamicNodes.has(identifier) ||
+		(program.evalDirect && identifierIsFree(fn, identifier))
+	) {
 		return compileWithDynamicRead(program, fn, cursor, identifier);
 	}
 	return compileStaticIdentifier(program, fn, cursor, identifier);
+}
+
+/**
+ * A free (undeclared) identifier — one that resolves outside the unit being
+ * compiled. In direct-eval mode these are routed through the with-dynamic path
+ * so they probe the caller scope object before the global.
+ */
+function identifierIsFree(fn: IRFunction, identifier: ESTree.Identifier): boolean {
+	return fn.semanticFile.nodeToBinding.get(identifier)?.undeclared ?? true;
 }
 
 /**
@@ -8197,10 +8461,14 @@ function compileStaticIdentifier(
 
 	if (binding.undeclared) {
 		// Strict: an unresolvable read throws ReferenceError. Sloppy: it resolves
-		// against the global object (still ReferenceError if absent there).
+		// against the global object (still ReferenceError if absent there). Eval'd
+		// code also resolves against the global object regardless of strictness —
+		// its free identifiers may be host-declared globals, which the compiler
+		// can't see, so it can't assume the reference is unresolvable.
 		const destination = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
-			type: isSloppyFunction(fn) ? "loadGlobalProperty" : "loadUndeclared",
+			type:
+				isSloppyFunction(fn) || program.evalCompletion ? "loadGlobalProperty" : "loadUndeclared",
 			registers: [destination],
 			nameStringIndex: getOrCreateStringConstant(program, identifier.name),
 		});

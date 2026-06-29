@@ -10,5 +10,6 @@ tsconfig.tsbuildinfo
 
 tests/local/tmp*.js
 test262-todo.md
-gc_todo.md
+*_todo.md
+runtime/src/compiler.malw
 .claude

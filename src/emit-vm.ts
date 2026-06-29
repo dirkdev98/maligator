@@ -1,6 +1,7 @@
 import path from "node:path";
 import { cF64Literal, emitCompiledFunction } from "./emit-c.ts";
 import type { CompiledFunction } from "./emit-c.ts";
+import { compressPositions } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 
 type VmBinaryOperator = Extract<VmInstruction, { opcode: "BINARY" }>["operator"];
@@ -32,26 +33,6 @@ export interface EmitOptions {
 	 * interpreter path against the native overlay.
 	 */
 	compiled?: boolean;
-}
-
-/**
- * Run-length compress a function's per-instruction position ids into
- * (start_ip, pos_id) entries: a new entry only where the position changes. The
- * runtime resolves a frame's position by finding the last entry with
- * start_ip <= instruction_pointer. Markers are statement-granular, so this is
- * compact (roughly one entry per source line).
- */
-function compressPositions(
-	positions: Array<number>,
-): Array<{ startIp: number; posId: number }> {
-	const runs: Array<{ startIp: number; posId: number }> = [];
-	for (let ip = 0; ip < positions.length; ++ip) {
-		const posId = positions[ip]!;
-		if (runs.length === 0 || runs[runs.length - 1]!.posId !== posId) {
-			runs.push({ startIp: ip, posId });
-		}
-	}
-	return runs;
 }
 
 /** Escape a string for a C string literal. */
@@ -759,6 +740,10 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_CONSOLE";
 		case "globalThis":
 			return "MAL_INTRINSIC_GLOBAL_THIS";
+		case "eval":
+			return "MAL_INTRINSIC_EVAL";
+		case "__directEval":
+			return "MAL_INTRINSIC_DIRECT_EVAL";
 		case "NaN":
 			return "MAL_INTRINSIC_NAN_VALUE";
 		case "Infinity":

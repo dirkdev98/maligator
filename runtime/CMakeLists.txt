@@ -11,7 +11,10 @@ set(CMAKE_C_EXTENSIONS OFF)
 #    target_compile_options(LibMaligator PRIVATE -Wall -Wextra -Werror -Wpedantic -Wshadow)
 #endif()
 
-file(GLOB_RECURSE SOURCE_FILES "src/*.c")
+# CONFIGURE_DEPENDS so a plain `cmake --build` re-globs and picks up newly added
+# translation units (e.g. builtin_eval.c / compiler_wire.c) without a manual
+# reconfigure of an already-configured build dir.
+file(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS "src/*.c")
 
 
 add_library(LibMaligator STATIC ${SOURCE_FILES})

@@ -599,6 +599,10 @@ static void mal_gc_scan_roots(MalVm *vm) {
     }
     mal_gc_mark_values(vm->kept_objects, vm->kept_count);
 
+    // The baked compiler's `__compile` closure (eval), captured off globalThis;
+    // closes over the whole compiler environment, kept alive by tracing it here.
+    mal_gc_mark_value(vm->compiler_fn);
+
     if (vm->cjs_registry != nullptr) {
         for (i32 i = 0; i < vm->definition->cjs_module_count; ++i) {
             mal_gc_mark_value(vm->cjs_registry[i].module_object);

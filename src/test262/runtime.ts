@@ -10,6 +10,7 @@ import {
 	gmallocEnabled,
 	runEnv,
 } from "../build-flags.ts";
+import { ensureCompilerWire } from "../compiler-bake.ts";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
 import { compileSemanticProgramToIr } from "../ir.ts";
@@ -18,10 +19,8 @@ import type { VmDefinition } from "../lower-vm.ts";
 import { parseModule, parseScript } from "../parser.ts";
 import { allocateRegisters } from "../register-alloc.ts";
 import { ensureRustLibrary, rustLinkArgs } from "../rust-build.ts";
-import {
-	analyzeSourceAndRunSemanticAnalysis,
-	loadEntrypointAndRunSemanticAnalysis,
-} from "../semantic-analysis.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../semantic-analysis.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../semantic-program.ts";
 import {
 	batchCacheKey,
 	buildFingerprint,
@@ -240,6 +239,9 @@ export function test262PrepareBuild() {
 	mkdirSync(BUILD_PATH, { recursive: true });
 
 	test262Log(`Building LibMaligator${gcGenerational() ? " (generational)" : ""}...`);
+	// Generate the baked compiler wire (runtime/src/compiler.malw) before cmake:
+	// the GLOB pulls in compiler_wire.c, whose `#embed` needs the file present.
+	ensureCompilerWire(false);
 	// The default non-gen build dir (runtime/build) is configured out-of-band; a
 	// suffixed dimension (gen / sanitizer) is configured here with its defines.
 	if (buildSuffix() !== "") {

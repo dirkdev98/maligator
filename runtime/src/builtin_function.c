@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "bound_function_object.h"
+#include "builtin_eval.h"
 #include "heap_string.h"
 #include "object_ops.h"
 #include "proxy_object.h"
@@ -23,10 +24,11 @@ static MalValue mal_builtin_function_forward_completion(MalVm *vm, MalCompletion
 
 static MalValue mal_builtin_function_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    (void) args;
-    (void) arg_count;
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "The Function constructor is not supported");
-    return mal_value_new_undefined();
+    (void) new_target;
+    (void) callee;
+    // `Function(...)` and `new Function(...)` both produce the dynamically
+    // compiled function (the result is the function, not an instance).
+    return mal_vm_construct_function(vm, args, arg_count, MAL_DYNAMIC_FUNCTION_NORMAL);
 }
 
 // %ThrowTypeError%: rejects any get/set of the poisoned `caller`/`arguments`

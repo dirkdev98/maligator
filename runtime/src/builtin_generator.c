@@ -1,5 +1,6 @@
 #include "./builtin_generator.h"
 
+#include "builtin_eval.h"
 #include "builtin_iterator.h"
 #include "generator_object.h"
 #include "intrinsics.h"
@@ -115,17 +116,16 @@ static MalValue mal_builtin_generator_return(MalVm *vm, MalValue this_value, con
 }
 
 /**
- * The GeneratorFunction constructor would dynamically compile source, which is
- * unsupported; it exists for the intrinsic hierarchy but throws when invoked.
+ * The GeneratorFunction constructor: assembles `(function* anonymous(...){...})`
+ * from its arguments and compiles it through the dynamic-function path, which
+ * produces a generator function with the proper %GeneratorFunction.prototype%
+ * wiring. `GeneratorFunction(...)` and `new GeneratorFunction(...)` behave alike.
  */
 static MalValue mal_builtin_generator_function_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    (void) args;
-    (void) arg_count;
     (void) new_target;
-
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "GeneratorFunction does not support dynamic compilation");
-    return mal_value_new_undefined();
+    (void) callee;
+    return mal_vm_construct_function(vm, args, arg_count, MAL_DYNAMIC_FUNCTION_GENERATOR);
 }
 
 static void mal_generator_define_string_tag(MalVm *vm, MalObject *object, const byte *tag) {
@@ -161,14 +161,16 @@ void mal_builtin_generator_install(MalVm *vm) {
     // %GeneratorPrototype%.constructor === %Generator%.
     mal_intrinsic_define_data(vm, prototype, "constructor", mal_value_from_object(generator), MAL_PROPERTY_CONFIGURABLE);
 
-    // GeneratorFunction constructor: inherits %Function%, throws when invoked.
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    // GeneratorFunction constructor: inherits %Function%, length 1. Its
+    // `prototype` (%GeneratorFunction.prototype%) is non-configurable per spec.
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_CONSTRUCTOR]),
         mal_intrinsic_ascii(vm, "GeneratorFunction"),
+        1,
         mal_builtin_generator_function_constructor
     );
     vm->intrinsics[MAL_INTRINSIC_GENERATOR_FUNCTION_CONSTRUCTOR] = mal_value_from_object((MalObject *) constructor);
-    mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", mal_value_from_object(generator), MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", mal_value_from_object(generator), MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, generator, "constructor", mal_value_from_object((MalObject *) constructor), MAL_PROPERTY_CONFIGURABLE);
 }

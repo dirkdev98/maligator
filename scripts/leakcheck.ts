@@ -22,7 +22,7 @@ import { executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
 import { allocateRegisters } from "../src/register-alloc.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
 
 const DEFAULT_EXERCISERS = ["tests/local/leakaudit.js"];
 

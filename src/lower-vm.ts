@@ -520,6 +520,28 @@ export interface VmDefinitionStats {
 }
 
 /**
+ * Run-length compress a function's per-instruction position ids into
+ * (start_ip, pos_id) entries: a new entry only where the position changes. The
+ * runtime resolves a frame's position by finding the last entry with
+ * start_ip <= instruction_pointer. Shared by the C-literal emitter (emit-vm)
+ * and the wire serializer (serialize-vm); it lives here, alongside the VM
+ * definition types, so the self-hostable serializer cone never imports emit-vm
+ * (which pulls node:path + the emit-c native backend).
+ */
+export function compressPositions(
+	positions: Array<number>,
+): Array<{ startIp: number; posId: number }> {
+	const runs: Array<{ startIp: number; posId: number }> = [];
+	for (let ip = 0; ip < positions.length; ++ip) {
+		const posId = positions[ip]!;
+		if (runs.length === 0 || runs[runs.length - 1]!.posId !== posId) {
+			runs.push({ startIp: ip, posId });
+		}
+	}
+	return runs;
+}
+
+/**
  * Aggregate code-size metrics for a compiled definition: how many functions
  * were emitted and the total instruction count across all of them.
  */

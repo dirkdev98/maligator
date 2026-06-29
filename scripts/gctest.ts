@@ -15,7 +15,7 @@ import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { buildLocalBinary } from "../src/local-build.ts";
 import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
 import { allocateRegisters } from "../src/register-alloc.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
 
 function buildBinary(file: string, name: string, compiled: boolean): string {
 	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(path.resolve(file));

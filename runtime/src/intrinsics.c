@@ -6,6 +6,7 @@
 #include "builtin_array.h"
 #include "builtin_array_buffer.h"
 #include "builtin_async_generator.h"
+#include "builtin_eval.h"
 #include "builtin_bigint.h"
 #include "builtin_boolean.h"
 #include "builtin_console.h"
@@ -457,6 +458,10 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "NaN", vm->intrinsics[MAL_INTRINSIC_NAN_VALUE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, global_this, "Infinity", vm->intrinsics[MAL_INTRINSIC_INFINITY_VALUE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, global_this, "undefined", mal_value_new_undefined(), MAL_PROPERTY_NONE);
+
+    // Runtime eval / new Function: a baked self-hosted compiler spliced on first
+    // use (builtin_eval.c).
+    mal_intrinsics_init_eval(vm, global_this);
 
     // Host forced-collection hook for the test262 `$262.gc()`. Only present when
     // the harness asks (MAL_HOST_GC); the prelude captures it then deletes the

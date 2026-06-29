@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { linkModules } from "../src/linker.ts";
-import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
 import type { Binding, SemanticFile, SemanticProgram } from "../src/semantic-analysis.ts";
 
 const roots: Array<string> = [];

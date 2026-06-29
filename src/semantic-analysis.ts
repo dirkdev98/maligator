@@ -1,10 +1,9 @@
 import type { ESTree } from "meriyah";
-import { buildModuleGraph } from "./module-graph.ts";
-import type {
-	BuildModuleGraphOptions,
-	ModuleGraph,
-	ModuleRecord,
-} from "./module-graph.ts";
+// Type-only: ts-blank-space strips this, so the module-graph (and its
+// ts-blank-space → typescript chain) is NOT pulled into the self-hostable
+// compiler cone. The buildModuleGraph value-using entry lives in
+// semantic-program.ts so this file stays runnable on MalVm.
+import type { ModuleGraph } from "./module-graph.ts";
 import { parseScript } from "./parser.ts";
 import { log } from "./utils.ts";
 
@@ -62,7 +61,7 @@ export interface SemanticFile {
 	hasDirectEval: Set<ESTree.Node>;
 }
 
-interface Scope {
+export interface Scope {
 	parent: Scope | null;
 	node: ESTree.Node;
 
@@ -132,45 +131,61 @@ export function debugSemanticProgram(program: SemanticProgram) {
  * (dependencies before dependents). A program with no imports is a single-node
  * graph, so this is behaviorally identical to analyzing the one file.
  */
-export function loadEntrypointAndRunSemanticAnalysis(
-	entrypointPath: string,
-	options: BuildModuleGraphOptions = {},
-): SemanticProgram {
-	const graph = buildModuleGraph(entrypointPath, options);
-
-	const program: SemanticProgram = {
-		entrypointPath: graph.entry,
-		files: [],
-		graph,
-	};
-
-	for (const modulePath of graph.evaluationOrder) {
-		program.files.push(analyzeModuleRecord(graph.modules.get(modulePath)!));
-	}
-
-	debugSemanticProgram(program);
-
-	return program;
-}
-
 /**
  * Run semantic analysis over in-memory source, optionally reusing an
  * existing parse. Used by tooling that composes sources without disk files.
  */
+/** Whether a Program begins with a "use strict" Directive Prologue. */
+function hasUseStrictDirective(ast: ESTree.Program): boolean {
+	for (const statement of ast.body) {
+		if (
+			statement.type !== "ExpressionStatement" ||
+			statement.expression.type !== "Literal" ||
+			typeof statement.expression.value !== "string"
+		) {
+			return false; // first non-string-literal statement ends the prologue
+		}
+		if (statement.expression.value === "use strict") {
+			return true;
+		}
+	}
+	return false;
+}
+
 export function analyzeSourceAndRunSemanticAnalysis(
 	contents: string,
 	virtualPath: string,
 	parsed?: Pick<SemanticFile, "type" | "strict" | "ast">,
+	options: { eval?: { callerStrict: boolean } } = {},
 ): SemanticProgram {
 	const program: SemanticProgram = {
 		entrypointPath: virtualPath,
 		files: [],
 	};
 
+	// Eval source strictness: strict iff the call is contained in strict code
+	// (direct eval; indirect passes callerStrict=false) OR the source has a
+	// "use strict" prologue. Otherwise sloppy (so `with`, sloppy global creation,
+	// and the var/function-hoisting semantics come out right). meriyah parses a
+	// directive'd scope strict regardless of impliedStrict; parseScript only
+	// echoes the option, so detect the prologue and correct the flag. Non-eval
+	// callers stay implied-strict.
+	let parseResult: Pick<SemanticFile, "type" | "strict" | "ast">;
+	if (parsed) {
+		parseResult = parsed;
+	} else if (options.eval) {
+		const strict = options.eval.callerStrict;
+		const result = parseScript(contents, { strict });
+		parseResult =
+			!strict && hasUseStrictDirective(result.ast) ? { ...result, strict: true } : result;
+	} else {
+		parseResult = parseScript(contents, { strict: true });
+	}
+
 	const file: SemanticFile = {
 		path: virtualPath,
 		contents,
-		...(parsed ?? parseScript(contents, { strict: true })),
+		...parseResult,
 
 		scopes: [],
 		nodeToScope: new Map(),
@@ -184,31 +199,6 @@ export function analyzeSourceAndRunSemanticAnalysis(
 	debugSemanticProgram(program);
 
 	return program;
-}
-
-/**
- * Build and analyze a SemanticFile from a module-graph record, reusing the
- * record's goal-correct parse.
- */
-function analyzeModuleRecord(record: ModuleRecord): SemanticFile {
-	const file: SemanticFile = {
-		path: record.path,
-		contents: record.source,
-		type: record.parsed.type,
-		strict: record.parsed.strict,
-		ast: record.parsed.ast,
-		commonjs: record.goal === "cjs",
-
-		scopes: [],
-		nodeToScope: new Map(),
-		nodeToBinding: new Map(),
-		withDynamicNodes: new Set(),
-		hasDirectEval: new Set(),
-	};
-
-	analyzeFile(file);
-
-	return file;
 }
 
 /** The wrapper parameters injected into every CommonJS module's program scope. */
@@ -246,7 +236,7 @@ function injectCommonJsBindings(file: SemanticFile) {
 /**
  * Exec all analyze steps for a file.
  */
-function analyzeFile(file: SemanticFile) {
+export function analyzeFile(file: SemanticFile) {
 	createScopesFromNode(file.ast, file);
 	collectBindingsForNode(file.ast, file);
 	if (file.commonjs) {
@@ -263,7 +253,7 @@ function analyzeFile(file: SemanticFile) {
  * poison. The Program is included: a top-level direct eval poisons top-level
  * bindings the same way.
  */
-const FUNCTION_UNIT_NODE_TYPES = new Set<ESTree.Node["type"]>([
+export const FUNCTION_UNIT_NODE_TYPES = new Set<ESTree.Node["type"]>([
 	"Program",
 	"FunctionDeclaration",
 	"FunctionExpression",

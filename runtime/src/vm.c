@@ -21,6 +21,7 @@
 #include "promise_object.h"
 #include "proxy_object.h"
 #include "value_ops.h"
+#include "vm_load.h"
 #include "vm_ops.h"
 
 /**
@@ -29,6 +30,35 @@
  * frame consumes register_count + arg_count slots, so this bounds call depth.
  */
 #define MAL_VALUE_STACK_CAPACITY (256 * 1024)
+
+/*
+ * The interpreter's frame array is allocated once at this fixed capacity and
+ * never reallocated, so a frame pointer (`callable` in the op handlers) stays
+ * valid across a re-entrant call that pushes more frames — e.g. a property
+ * getter or `valueOf` invoked mid-instruction, which would otherwise move the
+ * array out from under the handler's pending register write-back. Call depth is
+ * already bounded by the value stack (a RangeError on overflow); this is a
+ * second, higher backstop (deep recursion overflows the value stack first for
+ * any function with a non-trivial register window). Lazily committed, so the
+ * resident cost tracks actual depth, not the reservation.
+ */
+#define MAL_MAX_CALL_FRAMES (64 * 1024)
+
+/*
+ * String and BigInt constant cells live in these arrays, and runtime values
+ * point AT the cells (mal_value_from_string/bigint take a cell address; property
+ * keys and stored string values hold that pointer). So the cells must never move
+ * — a realloc that relocated them would dangle every outstanding reference (and
+ * silently drop global properties whose key string moved). Functions and globals
+ * are referenced by index, not address, so they stay growable; only these two
+ * tables are fixed-capacity. A runtime-eval splice appends here without moving,
+ * and overflows cleanly (RangeError) instead of relocating. Lazily committed, so
+ * the resident cost tracks the constants actually materialized. The compiler
+ * baked for eval alone contributes ~6k strings, so the ceilings sit well above
+ * it while leaving generous headroom for eval'd code.
+ */
+#define MAL_MAX_STRING_CONSTANTS (128 * 1024)
+#define MAL_MAX_BIGINT_CONSTANTS (16 * 1024)
 
 MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
     MalEnv *env = mal_heap_alloc(
@@ -84,12 +114,62 @@ static uptr mal_vm_compute_stack_limit(void) {
 
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     mal_gc_init();
-    vm->definition = definition;
-    vm->interp_ic = calloc((usize) definition->function_count, sizeof(struct MalInlineCache *));
-    vm->globals = malloc(sizeof(MalValue) * definition->global_count);
-    vm->frames = nullptr;
+
+    // Relocate the program's function / string / bigint constant tables into
+    // VM-owned growable storage behind a mutable `live_definition` (see vm.h), so
+    // runtime eval can splice more in later while the const access paths keep
+    // working. The instruction/handler/code-unit data the rows point at is left
+    // in place (static, or the loader arena). Counts of 0 use a capacity of 1 so
+    // a later splice always has a real array to grow.
+    vm->live_definition = *definition;
+    vm->definition = &vm->live_definition;
+
+    i32 function_count = definition->function_count;
+    vm->function_capacity = function_count > 0 ? function_count : 1;
+    MalFunction *functions = malloc(sizeof(MalFunction) * (usize) vm->function_capacity);
+    if (function_count > 0) {
+        memcpy(functions, definition->functions, sizeof(MalFunction) * (usize) function_count);
+    }
+    vm->live_definition.functions = functions;
+
+    i32 string_count = definition->string_constant_count;
+    // Baked string constants ship with a zero hash (a static initializer cannot
+    // run the hash function); fill them on the SOURCE rows before relocating.
+    // The compiled backend (emit-c) references the static mal_strings[] array
+    // directly while the interpreter uses the copy below, so the source must be
+    // hashed too — and filling it first means the memcpy carries the hashes into
+    // the copy. Idempotent across re-inits.
+    for (i32 i = 0; i < string_count; i++) {
+        MalString *string = &definition->string_constants[i];
+        string->hash = mal_string_hash_code_units(mal_string_code_units(string), mal_string_length(string));
+    }
+    // Fixed capacity, never reallocated (see MAL_MAX_STRING_CONSTANTS): string
+    // cells must keep stable addresses because values point at them.
+    vm->string_capacity = string_count > MAL_MAX_STRING_CONSTANTS ? string_count : MAL_MAX_STRING_CONSTANTS;
+    MalString *strings = malloc(sizeof(MalString) * (usize) vm->string_capacity);
+    if (string_count > 0) {
+        memcpy(strings, definition->string_constants, sizeof(MalString) * (usize) string_count);
+    }
+    vm->live_definition.string_constants = strings;
+
+    // Fixed capacity, never reallocated (see MAL_MAX_BIGINT_CONSTANTS): like
+    // strings, BigInt values point at their cells.
+    i32 bigint_count = definition->bigint_constant_count;
+    vm->bigint_capacity = bigint_count > MAL_MAX_BIGINT_CONSTANTS ? bigint_count : MAL_MAX_BIGINT_CONSTANTS;
+    MalBigInt *bigints = malloc(sizeof(MalBigInt) * (usize) vm->bigint_capacity);
+    if (bigint_count > 0) {
+        memcpy(bigints, definition->bigint_constants, sizeof(MalBigInt) * (usize) bigint_count);
+    }
+    vm->live_definition.bigint_constants = bigints;
+
+    vm->interp_ic = calloc((usize) vm->function_capacity, sizeof(struct MalInlineCache *));
+    vm->global_capacity = definition->global_count > 0 ? definition->global_count : 1;
+    vm->globals = malloc(sizeof(MalValue) * (usize) vm->global_capacity);
+    // Fixed-capacity, never reallocated (see MAL_MAX_CALL_FRAMES): keeps every
+    // live frame pointer stable across re-entrant calls.
+    vm->frame_capacity = MAL_MAX_CALL_FRAMES;
+    vm->frames = malloc(sizeof(MalVmFrame) * (usize) vm->frame_capacity);
     vm->frame_count = 0;
-    vm->frame_capacity = 0;
 
     vm->value_stack_capacity = MAL_VALUE_STACK_CAPACITY;
     vm->value_stack = malloc(sizeof(MalValue) * (usize) vm->value_stack_capacity);
@@ -101,6 +181,12 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->kept_objects = nullptr;
     vm->kept_count = 0;
     vm->kept_capacity = 0;
+
+    vm->compiler_fn = mal_value_new_undefined();
+    vm->compiler_installed = false;
+    vm->loaded_defs = nullptr;
+    vm->loaded_def_count = 0;
+    vm->loaded_def_capacity = 0;
 
     vm->native_frames = nullptr;
     vm->native_frame_count = 0;
@@ -129,14 +215,6 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->symbol_registry = mal_table_new(MAL_TABLE_MODE_GENERAL);
     // Must exist before mal_intrinsics_init, which interns keys through it.
     vm->atoms = mal_table_new(MAL_TABLE_MODE_GENERAL);
-
-    // Baked string constants ship with a zero hash (a static initializer cannot
-    // run the hash function); fill them once here so every later use compares
-    // and hashes without recomputing. Idempotent across re-inits.
-    for (i32 i = 0; i < definition->string_constant_count; i++) {
-        MalString *string = &definition->string_constants[i];
-        string->hash = mal_string_hash_code_units(mal_string_code_units(string), mal_string_length(string));
-    }
 
     mal_intrinsics_init(vm);
 
@@ -219,6 +297,13 @@ void mal_vm_clear_kept_objects(MalVm *vm) {
 
 void mal_vm_free(MalVm *vm) {
     free(vm->kept_objects);
+
+    // Definitions spliced at runtime for eval: their arenas back the spliced
+    // functions' instruction data, so they are released only now, at teardown.
+    for (i32 i = 0; i < vm->loaded_def_count; i++) {
+        mal_vm_loaded_definition_free(vm->loaded_defs[i]);
+    }
+    free(vm->loaded_defs);
     if (vm->interp_ic != nullptr) {
         for (i32 i = 0; i < vm->definition->function_count; i++) {
             free(vm->interp_ic[i]);
@@ -238,6 +323,12 @@ void mal_vm_free(MalVm *vm) {
     free(vm->value_stack);
     free(vm->globals);
     free(vm->cjs_registry);
+
+    // The VM-owned constant tables (the rows; the instruction/code-unit data they
+    // point at is owned elsewhere — static, or the caller's loaded definition).
+    free((MalFunction *) vm->live_definition.functions);
+    free((MalString *) vm->live_definition.string_constants);
+    free((MalBigInt *) vm->live_definition.bigint_constants);
 
     // Free any microtasks left queued (e.g. the program exited with pending
     // jobs). The MalValues they hold live in the heap, freed below.
@@ -286,11 +377,195 @@ void mal_vm_free(MalVm *vm) {
     vm->frame_capacity = 0;
 }
 
+// Rebase a spliced instruction's references into the merged tables. Function
+// indices, global slots, and string/bigint constant indices shift by the base
+// table sizes; register operands and IP-relative fields are function-local and
+// untouched. Operand arrays live in the loaded arena (mutable); cast away const
+// to rewrite them in place. Mirrors the reference list in src/serialize-vm.ts.
+static void mal_vm_rebase_instruction(
+    MalInstruction *in, i32 fn_base, i32 global_base, i32 string_base, i32 bigint_base
+) {
+    switch (in->opcode) {
+        case MAL_OP_CREATE_FUNCTION:
+            in->as.create_function.function_index += fn_base;
+            break;
+        // owner_function_index is either a real function index (>= 0, rebased
+        // like every other) or a synthetic per-iteration loop-scope id (< 0,
+        // assigned by nextLoopScopeId--). The negative ids are matched within a
+        // single module's env chain (closures never cross module boundaries), so
+        // they are stable across a splice and must NOT be shifted — adding
+        // fn_base would desync them from their ENV_PUSH/COPY envs (whose scopeId
+        // is likewise left untouched).
+        case MAL_OP_LOAD_CAPTURED:
+            if (in->as.load_captured.owner_function_index >= 0) {
+                in->as.load_captured.owner_function_index += fn_base;
+            }
+            break;
+        case MAL_OP_STORE_CAPTURED:
+            if (in->as.store_captured.owner_function_index >= 0) {
+                in->as.store_captured.owner_function_index += fn_base;
+            }
+            break;
+        case MAL_OP_LOAD_GLOBAL:
+            in->as.load_global.index += global_base;
+            break;
+        case MAL_OP_STORE_GLOBAL:
+            in->as.store_global.index += global_base;
+            break;
+        case MAL_OP_CREATE_STRING:
+            in->as.create_string.string_index += string_base;
+            break;
+        case MAL_OP_CREATE_BIGINT:
+            in->as.create_bigint.bigint_index += bigint_base;
+            break;
+        case MAL_OP_LOAD_UNDECLARED:
+            in->as.load_undeclared.name_string_index += string_base;
+            break;
+        case MAL_OP_LOAD_GLOBAL_PROPERTY:
+            in->as.load_global_property.name_string_index += string_base;
+            break;
+        case MAL_OP_STORE_GLOBAL_PROPERTY:
+            in->as.store_global_property.name_string_index += string_base;
+            break;
+        case MAL_OP_THROW_IF_TDZ:
+            in->as.throw_if_tdz.name_string_index += string_base;
+            break;
+        case MAL_OP_WITH_GET:
+            in->as.with_get.name_string_index += string_base;
+            break;
+        case MAL_OP_WITH_SET:
+            in->as.with_set.name_string_index += string_base;
+            break;
+        case MAL_OP_CREATE_OBJECT_SHAPED: {
+            i32 *keys = (i32 *) in->as.create_object_shaped.key_indices;
+            for (i32 i = 0; i < in->as.create_object_shaped.count; i++) {
+                keys[i] += string_base; // value_registers are registers — untouched
+            }
+            break;
+        }
+        case MAL_OP_CREATE_TEMPLATE_OBJECT: {
+            in->as.create_template_object.cache_slot += global_base;
+            i32 *cooked = (i32 *) in->as.create_template_object.cooked_indices;
+            i32 *raw = (i32 *) in->as.create_template_object.raw_indices;
+            for (i32 i = 0; i < in->as.create_template_object.count; i++) {
+                if (cooked[i] >= 0) { // -1 = undefined cooked (invalid escape)
+                    cooked[i] += string_base;
+                }
+                raw[i] += string_base;
+            }
+            break;
+        }
+        case MAL_OP_CREATE_MODULE_NAMESPACE: {
+            i32 *names = (i32 *) in->as.create_module_namespace.name_indices;
+            i32 *slots = (i32 *) in->as.create_module_namespace.slots;
+            for (i32 i = 0; i < in->as.create_module_namespace.count; i++) {
+                names[i] += string_base;
+                slots[i] += global_base;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
+    MalVmDefinition *live = &vm->live_definition;
+    i32 fn_base = live->function_count;
+    i32 global_base = live->global_count;
+    i32 string_base = live->string_constant_count;
+    i32 bigint_base = live->bigint_constant_count;
+
+    // String/BigInt constant cells must not move (values point at them), so their
+    // arrays are fixed-capacity and never reallocated. Refuse a splice that would
+    // overflow them up front — before mutating anything — so the failure is clean
+    // (the caller sees -1 with a pending RangeError). Functions/globals below are
+    // index-referenced and may still grow.
+    i32 new_strings = string_base + loaded->string_constant_count;
+    i32 new_bigints = bigint_base + loaded->bigint_constant_count;
+    if (new_strings > vm->string_capacity || new_bigints > vm->bigint_capacity) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "eval: too many string/BigInt constants");
+        return -1;
+    }
+
+    // String constants: append the loaded cells (immortal, code units in the
+    // loader arena). Constants, so no rebase.
+    if (loaded->string_constant_count > 0) {
+        memcpy((MalString *) live->string_constants + string_base, loaded->string_constants,
+               sizeof(MalString) * (usize) loaded->string_constant_count);
+    }
+    live->string_constant_count = new_strings;
+
+    // BigInt constants: append (self-contained — the value is inline).
+    if (loaded->bigint_constant_count > 0) {
+        memcpy((MalBigInt *) live->bigint_constants + bigint_base, loaded->bigint_constants,
+               sizeof(MalBigInt) * (usize) loaded->bigint_constant_count);
+    }
+    live->bigint_constant_count = new_bigints;
+
+    // Globals: grow and undefined-initialize the spliced range.
+    i32 new_globals = global_base + loaded->global_count;
+    if (new_globals > vm->global_capacity) {
+        vm->global_capacity = new_globals;
+        vm->globals = realloc(vm->globals, sizeof(MalValue) * (usize) new_globals);
+    }
+    for (i32 i = global_base; i < new_globals; i++) {
+        vm->globals[i] = mal_value_new_undefined();
+    }
+    live->global_count = new_globals;
+
+    // Functions: append rebased copies. The instruction/handler data is referenced
+    // in place (rebased) in the loaded arena; spliced debug info is dropped (its
+    // file/pos ids index the loaded def's tables, not the merged ones).
+    i32 new_functions = fn_base + loaded->function_count;
+    if (new_functions > vm->function_capacity) {
+        vm->function_capacity = new_functions;
+        live->functions =
+            realloc((MalFunction *) live->functions, sizeof(MalFunction) * (usize) new_functions);
+    }
+    MalFunction *functions = (MalFunction *) live->functions;
+    for (i32 f = 0; f < loaded->function_count; f++) {
+        MalFunction fn = loaded->functions[f];
+        fn.compiled = nullptr;
+        fn.file_index = 0;
+        fn.position_count = 0;
+        fn.positions = nullptr;
+        if (fn.name_string_index >= 0) {
+            fn.name_string_index += string_base;
+        }
+        for (i32 k = 0; k < fn.instruction_count; k++) {
+            mal_vm_rebase_instruction((MalInstruction *) &fn.instructions[k], fn_base, global_base,
+                                      string_base, bigint_base);
+        }
+        functions[fn_base + f] = fn;
+    }
+    live->function_count = new_functions;
+
+    // The realloc above may have moved the function table out from under any
+    // frame that is live across this splice (the eval'ing frame itself, plus
+    // its callers). Re-resolve each from its `function_index` source of truth so
+    // the hot loop's cached `function` pointer stays valid. Suspended frames
+    // (generators / async awaiters) re-resolve on resume, not here.
+    for (i32 i = 0; i < vm->frame_count; i++) {
+        vm->frames[i].function = &functions[vm->frames[i].function_index];
+    }
+
+    // Per-function inline caches grow with the function table (lazily filled).
+    vm->interp_ic = realloc(vm->interp_ic, sizeof(struct MalInlineCache *) * (usize) new_functions);
+    for (i32 i = fn_base; i < new_functions; i++) {
+        vm->interp_ic[i] = nullptr;
+    }
+
+    return fn_base;
+}
+
 MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index) {
     MalCallable *callable = malloc(sizeof(MalCallable));
 
     callable->vm = vm;
     callable->function = &vm->definition->functions[function_index];
+    callable->function_index = function_index;
     // mal_vm_run pushes a fresh activation; this handle only carries the
     // function pointer, so it needs no register/argument storage of its own.
     callable->registers = nullptr;
@@ -379,6 +654,14 @@ bool mal_vm_push_function_frame(
     i32 param_count = function->parameter_count;
     bool wants_args = function->needs_arguments;
 
+    // The frame array is fixed-capacity (never moves); refuse to overflow it
+    // before mutating any value-stack state, so the bail is clean. In practice
+    // the value-stack window check below trips first for any real call depth.
+    if (vm->frame_count >= vm->frame_capacity) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+        return false;
+    }
+
     // Calling convention: the caller has placed the arguments in the top
     // arg_count slots of the value stack, so the callee can adopt that region
     // as the base of its register window — parameters need no copy in the
@@ -457,16 +740,12 @@ bool mal_vm_push_function_frame(
         stack_base = base;
     }
 
-    // The frame metadata array may reallocate here; registers/arguments point
-    // into the (non-reallocating) value stack or the heap, so they stay valid.
-    if (vm->frame_count == vm->frame_capacity) {
-        vm->frame_capacity = vm->frame_capacity == 0 ? 8 : vm->frame_capacity * 2;
-        vm->frames = realloc(vm->frames, sizeof(MalVmFrame) * vm->frame_capacity);
-    }
-
+    // Capacity was checked up front; the frame array never moves, so existing
+    // frame pointers held by re-entrant op handlers stay valid.
     MalVmFrame *frame = &vm->frames[vm->frame_count++];
     frame->vm = vm;
     frame->function = function;
+    frame->function_index = function_index;
     frame->env = env;
     frame->registers = registers;
     frame->arguments = arguments;
@@ -1045,7 +1324,7 @@ void mal_vm_report_unhandled_rejections(MalVm *vm) {
 }
 
 void mal_vm_run(MalVm *vm, MalCallable *callable) {
-    i32 entry_index = (i32) (callable->function - vm->definition->functions);
+    i32 entry_index = callable->function_index;
     const MalFunction *entry = &vm->definition->functions[entry_index];
     MalCompletion script_completion;
 
@@ -1103,15 +1382,18 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
 }
 
 void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue sent_value, i32 resume_mode) {
-    if (vm->frame_count == vm->frame_capacity) {
-        vm->frame_capacity = vm->frame_capacity == 0 ? 8 : vm->frame_capacity * 2;
-        vm->frames = realloc(vm->frames, sizeof(MalVmFrame) * vm->frame_capacity);
+    if (vm->frame_count >= vm->frame_capacity) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+        return;
     }
 
     i32 target_frame_count = vm->frame_count;
     MalVmFrame *frame = &vm->frames[vm->frame_count++];
     *frame = generator->frame;
     frame->vm = vm;
+    // Re-resolve in case a runtime-eval splice moved the function table while
+    // this generator was suspended (function_index is the source of truth).
+    frame->function = &vm->live_definition.functions[frame->function_index];
     frame->generator = generator;
     frame->return_register = -1;
     frame->caller_frame_index = -1;
@@ -1218,7 +1500,7 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
         // The instruction pointer was advanced past the executing/call
         // instruction, so ip - 1 is the responsible site (as in unwinding).
         i32 ip = frame->instruction_pointer - 1;
-        i32 function_index = (i32) (frame->function - vm->definition->functions);
+        i32 function_index = frame->function_index;
         records[count] = (MalStackFrameRecord) {
             .function_index = function_index,
             .pos_id = mal_vm_position_for(frame->function, ip),
@@ -1283,7 +1565,7 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
         segment->frames = malloc(sizeof(MalStackFrameRecord));
         // The awaiter is suspended at its `await`; ip - 1 is that await's site.
         segment->frames[0] = (MalStackFrameRecord) {
-            .function_index = (i32) (function - vm->definition->functions),
+            .function_index = parent->frame.function_index,
             .pos_id = mal_vm_position_for(function, parent->frame.instruction_pointer - 1),
         };
         segment->async_parent = nullptr;
@@ -1487,6 +1769,27 @@ MalValue mal_vm_interpret_function(
         }
     }
     return vm->completion.value;
+}
+
+MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue scope_object) {
+    // Push the (spliced) eval entry, then inject the caller scope object into the
+    // fresh frame's with-stack BEFORE running its body, so direct-eval free
+    // identifiers (compiled as with-dynamic reads) resolve against it. Mirrors
+    // mal_vm_interpret_function's push + run, but with the injection in between —
+    // hence not routed through mal_vm_call_value.
+    i32 baseline = vm->frame_count;
+    if (!mal_vm_push_function_frame(vm, function_index, nullptr, mal_value_new_undefined(), 0, -1, -1)) {
+        return mal_value_new_undefined(); // pending RangeError (call stack)
+    }
+    MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
+    frame->with_objects = malloc(sizeof(MalValue));
+    frame->with_objects[0] = scope_object;
+    frame->with_count = 1;
+    frame->with_capacity = 1;
+
+    mal_vm_run_until_frame_count(vm, baseline);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
+                                                       : vm->completion.value;
 }
 
 MalCompletion mal_vm_call_value(

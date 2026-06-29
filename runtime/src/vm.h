@@ -771,8 +771,27 @@ typedef struct MalStackTrace {
     struct MalStackTrace *async_parent;
 } MalStackTrace;
 
+// Opaque loaded definition (vm_load.h); the VM retains the ones it splices at
+// runtime for `eval` so their arenas outlive the spliced functions.
+typedef struct MalLoadedDefinition MalLoadedDefinition;
+
 typedef struct MalVm {
     const MalVmDefinition *definition;
+
+    /**
+     * VM-owned, mutable definition that `definition` points at. Initialized as a
+     * shallow copy of the program definition with its function / string-constant /
+     * bigint-constant tables relocated into growable VM-owned storage (the
+     * instruction, handler, and code-unit data the rows point at stays in place —
+     * static, or a loader arena). Runtime eval splices more functions, globals,
+     * and constants in via mal_vm_splice_definition without disturbing the const
+     * `vm->definition->...` access paths. The *_capacity fields size that growth.
+     */
+    MalVmDefinition live_definition;
+    i32 function_capacity;
+    i32 string_capacity;
+    i32 bigint_capacity;
+    i32 global_capacity;
 
     /**
      * Per-function inline caches for the interpreter's property load/store ops,
@@ -813,6 +832,21 @@ typedef struct MalVm {
     MalValue *kept_objects;
     i32 kept_count;
     i32 kept_capacity;
+
+    /**
+     * Runtime `eval` / `new Function` (eval Phase 4). `compiler_fn` is the baked
+     * compiler's published `__compile(source) -> Uint8Array`, captured into this
+     * rooted slot on first eval (then deleted off globalThis). It closes over the
+     * whole baked compiler environment, so tracing it as a root keeps that alive.
+     * `loaded_defs` retains every definition spliced at runtime (the baked
+     * compiler plus each eval'd snippet): the spliced functions reference their
+     * instruction data in-place in these arenas, freed as a unit at teardown.
+     */
+    MalValue compiler_fn;
+    bool compiler_installed;
+    MalLoadedDefinition **loaded_defs;
+    i32 loaded_def_count;
+    i32 loaded_def_capacity;
 
     /**
      * Promises that rejected while unhandled (no reject handler attached at
@@ -1050,7 +1084,15 @@ typedef struct MalGeneratorObject MalGeneratorObject;
 
 typedef struct MalVmFrame {
     MalVm *vm;
+    /**
+     * Resolved (cached) pointer into vm->live_definition.functions, used by the
+     * hot loop. `function_index` is the source of truth: a runtime-eval splice
+     * may realloc the function table and move it, so the splice re-resolves
+     * `function` for every live frame from its index (and a generator resume
+     * re-resolves too, in case a splice moved the table while it was suspended).
+     */
     const MalFunction *function;
+    i32 function_index;
     MalValue *registers;
     MalValue *arguments;
     i32 argument_count;
@@ -1123,6 +1165,23 @@ typedef MalVmFrame MalCallable;
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition);
 
 void mal_vm_free(MalVm *vm);
+
+/**
+ * Append a loaded definition's functions, globals, and string/bigint constants
+ * to the running VM, rebasing every internal reference (function indices, global
+ * slots, string/bigint constant indices) by the current table sizes, and return
+ * the function-index base the spliced functions start at — so the caller can
+ * invoke the spliced entry via mal_vm_create_callable(vm, base). The base
+ * program's existing state (globals, constants) is untouched. Backs runtime
+ * eval / the Function constructor.
+ *
+ * Consumes `loaded`: the spliced functions reference its instruction/constant
+ * data in place (rebased), so the caller must keep `loaded` alive for the VM's
+ * lifetime and must not splice or run it again. Must be called at a baseline
+ * (no live frames) — it may realloc the function table, which would dangle a
+ * running frame's function pointer.
+ */
+i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded);
 
 /** Allocate a captured-slot environment node (parent chain + `count` slots
  * initialized to undefined) as a GC cell. Used by both the interpreter and
@@ -1205,6 +1264,15 @@ MalValue mal_vm_interpret_function(
     MalValue new_target,
     MalEnv *env
 );
+
+/**
+ * Run a spliced direct-eval entry function (no args, global creation env) with
+ * `scope_object` injected into the fresh frame's with-stack, so the eval'd code's
+ * free identifiers resolve against the caller's marshaled scope. Returns the
+ * script completion value; a throw is left in vm->completion. Pass undefined for
+ * scope_object to run with no injected scope.
+ */
+MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue scope_object);
 
 /**
  * `new callee(args)` as a value: allocate the instance, run the constructor

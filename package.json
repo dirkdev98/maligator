@@ -25,7 +25,8 @@
 		"update": "npx npm-check --update --save-exact"
 	},
 	"dependencies": {
-		"meriyah": "7.1.0"
+		"meriyah": "7.1.0",
+		"ts-blank-space": "0.9.0"
 	},
 	"devDependencies": {
 		"@lightbase/eslint-config": "4.3.2",

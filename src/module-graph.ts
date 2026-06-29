@@ -1,8 +1,28 @@
 import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
+import tsBlankSpace from "ts-blank-space";
 import { parseModule, parseScript } from "./parser.ts";
 import type { SemanticFile } from "./semantic-analysis.ts";
+
+/** TypeScript source extensions stripped to JS before parsing. */
+const TS_EXTENSIONS = new Set([".ts", ".mts", ".cts"]);
+
+/**
+ * Erase TypeScript type syntax from a `.ts`/`.mts`/`.cts` source, leaving
+ * runnable JavaScript for Meriyah. ts-blank-space replaces type spans with
+ * whitespace IN PLACE — every other byte and all newlines keep their original
+ * offset — so the AST's positions are identical to the original source and
+ * stack traces point at the real `.ts` line/column (no source map needed).
+ * Non-TS files pass through untouched. (Runtime eval-of-TS will use a native
+ * stripper instead, since ts-blank-space needs the Node `typescript` package.)
+ */
+function stripTypeAnnotations(source: string, filePath: string): string {
+	if (!TS_EXTENSIONS.has(path.extname(filePath))) {
+		return source;
+	}
+	return tsBlankSpace(source);
+}
 
 /**
  * The loader/graph phase: the bundler front-end that sits *above* semantic
@@ -92,7 +112,7 @@ export interface BuildModuleGraphOptions {
 const EXPORT_CONDITIONS = ["maligator", "import", "node", "default"];
 
 /** Extensions probed when a specifier omits one. */
-const RESOLVE_EXTENSIONS = [".js", ".mjs", ".cjs", ".json"];
+const RESOLVE_EXTENSIONS = [".js", ".ts", ".mjs", ".mts", ".cjs", ".cts", ".json"];
 
 /**
  * Build the module graph reachable from an entrypoint.
@@ -111,7 +131,10 @@ export function buildModuleGraph(
 		}
 
 		const source = sourceOverride ?? readFileSync(filePath, "utf-8");
-		const parsed = parseWithGoal(blankHashbang(source), goal);
+		const parsed = parseWithGoal(
+			stripTypeAnnotations(blankHashbang(source), filePath),
+			goal,
+		);
 
 		const dependencies = extractDependencies(parsed.ast, goal).map(
 			(dependency): ModuleDependency => {
@@ -194,10 +217,13 @@ function detectEntryGoal(filePath: string, explicit?: ModuleGoal): ModuleGoal {
 
 	switch (path.extname(filePath)) {
 		case ".mjs":
+		case ".mts":
 			return "module";
 		case ".cjs":
+		case ".cts":
 			return "cjs";
 		default:
+			// `.ts` follows `.js`: a `script` default for the entry.
 			return "script";
 	}
 }
@@ -213,12 +239,15 @@ function detectDependencyGoal(
 ): ModuleGoal {
 	switch (path.extname(filePath)) {
 		case ".mjs":
+		case ".mts":
 			return "module";
 		case ".cjs":
+		case ".cts":
 			return "cjs";
 		case ".json":
 			throw new Error(`JSON imports are not supported yet: ${filePath}`);
 		default:
+			// `.ts` follows `.js`: nearest package.json "type" decides.
 			break;
 	}
 

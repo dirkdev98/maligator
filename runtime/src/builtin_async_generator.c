@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 
+#include "builtin_eval.h"
 #include "builtin_iterator.h"
 #include "builtin_promise.h"
 #include "function_object.h"
@@ -198,14 +199,15 @@ static MalValue mal_agen_async_iterator(MalVm *vm, MalValue this_value, const Ma
     return this_value;
 }
 
+// The AsyncGeneratorFunction constructor: assembles
+// `(async function* anonymous(...){...})` and compiles it through the
+// dynamic-function path, producing an async generator function with the proper
+// %AsyncGeneratorFunction.prototype% wiring.
 static MalValue mal_agen_function_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    (void) args;
-    (void) arg_count;
     (void) new_target;
     (void) callee;
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "AsyncGeneratorFunction is not supported");
-    return mal_value_new_undefined();
+    return mal_vm_construct_function(vm, args, arg_count, MAL_DYNAMIC_FUNCTION_ASYNC_GENERATOR);
 }
 
 static MalValue mal_async_iterator_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -227,14 +229,14 @@ static MalValue mal_async_iterator_constructor(MalVm *vm, MalValue this_value, c
     return mal_value_from_object(mal_object_new(&vm->heap, prototype));
 }
 
+// The AsyncFunction constructor: assembles `(async function anonymous(...){...})`
+// and compiles it through the dynamic-function path, producing an async function
+// with the proper %AsyncFunction.prototype% wiring.
 static MalValue mal_async_function_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    (void) args;
-    (void) arg_count;
     (void) new_target;
     (void) callee;
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "AsyncFunction is not supported");
-    return mal_value_new_undefined();
+    return mal_vm_construct_function(vm, args, arg_count, MAL_DYNAMIC_FUNCTION_ASYNC);
 }
 
 static void mal_agen_define_tag(MalVm *vm, MalObject *object, const byte *tag) {
@@ -279,15 +281,17 @@ void mal_builtin_async_generator_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, async_generator, "prototype", mal_value_from_object(prototype), MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, prototype, "constructor", mal_value_from_object(async_generator), MAL_PROPERTY_CONFIGURABLE);
 
-    // %AsyncGeneratorFunction% constructor (throwing stub, inheriting %Function%).
-    MalNativeFunctionObject *constructor = mal_native_function_object_new(
+    // %AsyncGeneratorFunction% constructor (inherits %Function%, length 1). Its
+    // `prototype` (%AsyncGeneratorFunction.prototype%) is non-configurable.
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_CONSTRUCTOR]),
         mal_intrinsic_ascii(vm, "AsyncGeneratorFunction"),
+        1,
         mal_agen_function_constructor
     );
     vm->intrinsics[MAL_INTRINSIC_ASYNC_GENERATOR_FUNCTION_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
-    mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", mal_value_from_object(async_generator), MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", mal_value_from_object(async_generator), MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, async_generator, "constructor", mal_value_from_native_function_object(constructor), MAL_PROPERTY_CONFIGURABLE);
 
     // %AsyncFunction.prototype% / %AsyncFunction%: the [[Prototype]] of ordinary
@@ -296,13 +300,16 @@ void mal_builtin_async_generator_install(MalVm *vm) {
     vm->intrinsics[MAL_INTRINSIC_ASYNC_FUNCTION_PROTOTYPE] = mal_value_from_object(async_function_prototype);
     mal_agen_define_tag(vm, async_function_prototype, "AsyncFunction");
 
-    MalNativeFunctionObject *async_function = mal_native_function_object_new(
+    // %AsyncFunction% constructor (inherits %Function%, length 1). Its
+    // `prototype` (%AsyncFunction.prototype%) is non-configurable.
+    MalNativeFunctionObject *async_function = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_CONSTRUCTOR]),
         mal_intrinsic_ascii(vm, "AsyncFunction"),
+        1,
         mal_async_function_constructor
     );
     vm->intrinsics[MAL_INTRINSIC_ASYNC_FUNCTION_CONSTRUCTOR] = mal_value_from_native_function_object(async_function);
-    mal_intrinsic_define_data(vm, (MalObject *) async_function, "prototype", mal_value_from_object(async_function_prototype), MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, (MalObject *) async_function, "prototype", mal_value_from_object(async_function_prototype), MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, async_function_prototype, "constructor", mal_value_from_native_function_object(async_function), MAL_PROPERTY_CONFIGURABLE);
 }
