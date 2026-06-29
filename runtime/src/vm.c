@@ -10,6 +10,7 @@
 #include "async_function.h"
 #include "builtin_async_generator.h"
 #include "bound_function_object.h"
+#include "builtin_object.h"
 #include "function_object.h"
 #include "gc.h"
 #include "generator_object.h"
@@ -350,11 +351,16 @@ static void mal_vm_pop_frame_storage(MalVm *vm, MalVmFrame *frame) {
  * Primitive-this boxing (ToObject) is not done yet — there are no wrapper objects.
  */
 MalValue mal_vm_callee_this(MalVm *vm, const MalFunction *function, MalValue this_value) {
-    if (
-        !function->strict &&
-        (mal_value_is_undefined(this_value) || mal_value_is_null(this_value))
-    ) {
+    if (function->strict) {
+        return this_value;
+    }
+    // OrdinaryCallBindThis (sloppy): undefined/null this becomes globalThis; a
+    // primitive this is boxed via ToObject; an object this is used as-is.
+    if (mal_value_is_undefined(this_value) || mal_value_is_null(this_value)) {
         return vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+    }
+    if (!mal_value_is_object(this_value)) {
+        return mal_builtin_object_box_primitive(vm, this_value);
     }
     return this_value;
 }

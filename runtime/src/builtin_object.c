@@ -312,7 +312,7 @@ static void mal_builtin_object_define_from_value(MalVm *vm, MalObject *target, M
  * with the proper .prototype intrinsic. Returns undefined for non-primitives
  * (caller handles object pass-through and null/undefined separately).
  */
-static MalValue mal_builtin_object_box_primitive(MalVm *vm, MalValue value) {
+MalValue mal_builtin_object_box_primitive(MalVm *vm, MalValue value) {
     MalPrimitiveWrapperKind kind;
     MalIntrinsic prototype_slot;
     if (mal_value_is_string(value)) {
@@ -1973,6 +1973,15 @@ static MalValue mal_builtin_object_proto_getter(MalVm *vm, MalValue this_value, 
     }
 
     if (mal_value_is_object(this_value)) {
+        // get __proto__ is O.[[GetPrototypeOf]](): a proxy runs its trap (which
+        // may throw — propagate it).
+        if (mal_value_is_proxy_object(this_value)) {
+            MalValue prototype;
+            if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(this_value), &prototype)) {
+                return mal_value_new_undefined();
+            }
+            return prototype;
+        }
         MalObject *prototype = mal_object_get_prototype(mal_value_to_object(this_value));
         return prototype != nullptr ? mal_value_from_object(prototype) : mal_value_new_null();
     }
@@ -1992,15 +2001,25 @@ static MalValue mal_builtin_object_proto_setter(MalVm *vm, MalValue this_value, 
         return mal_value_new_undefined();
     }
 
-    MalObject *prototype = nullptr;
-    if (mal_value_is_object(args[0])) {
-        prototype = mal_value_to_object(args[0]);
-    } else if (!mal_value_is_null(args[0])) {
+    if (!mal_value_is_object(args[0]) && !mal_value_is_null(args[0])) {
         return mal_value_new_undefined();
     }
 
-    // B.2.2.1.2: a failed [[SetPrototypeOf]] (non-extensible target or a
-    // cycle) throws.
+    // B.2.2.1.2: O.[[SetPrototypeOf]](V). A proxy runs its trap (which may throw,
+    // and reports success/failure); a failed set (non-extensible target, a cycle,
+    // or a refusing trap) throws.
+    if (mal_value_is_proxy_object(this_value)) {
+        bool success;
+        if (!mal_proxy_set_prototype_of(vm, mal_value_to_proxy_object(this_value), args[0], &success)) {
+            return mal_value_new_undefined();
+        }
+        if (!success) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set prototype of object");
+        }
+        return mal_value_new_undefined();
+    }
+
+    MalObject *prototype = mal_value_is_object(args[0]) ? mal_value_to_object(args[0]) : nullptr;
     if (!mal_object_set_prototype(mal_value_to_object(this_value), prototype)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set prototype of non-extensible object");
     }
@@ -2141,6 +2160,9 @@ static MalValue mal_builtin_object_prototype_lookup_setter(MalVm *vm, MalValue t
 
 void mal_builtin_object_install(MalVm *vm) {
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    // %Object.prototype% is an immutable-prototype exotic object: its [[Prototype]]
+    // (null) can never be reassigned.
+    prototype->immutable_prototype = true;
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),

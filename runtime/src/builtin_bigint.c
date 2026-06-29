@@ -4,6 +4,7 @@
 
 #include "heap_bigint.h"
 #include "heap_string.h"
+#include "primitive_wrapper_object.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -153,17 +154,27 @@ static MalValue mal_builtin_bigint_constructor(MalVm *vm, MalValue this_value, c
 }
 
 /**
- * Unwrap the BigInt receiver shared by the prototype methods. With no wrapper
- * objects only BigInt primitives are accepted.
+ * thisBigIntValue(value): the BigInt receiver shared by the prototype methods.
+ * A BigInt primitive answers directly; a BigInt wrapper object answers with its
+ * [[BigIntData]] (e.g. Object(1n), or a sloppy method whose primitive `this` was
+ * boxed by OrdinaryCallBindThis). Anything else is a TypeError.
  */
 static bool mal_builtin_bigint_this(MalVm *vm, MalValue this_value, i128 *out) {
-    if (!mal_value_is_bigint(this_value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Receiver is not a BigInt");
-        return false;
+    if (mal_value_is_bigint(this_value)) {
+        *out = mal_bigint_value(mal_value_to_bigint(this_value));
+        return true;
     }
 
-    *out = mal_bigint_value(mal_value_to_bigint(this_value));
-    return true;
+    if (mal_value_is_primitive_wrapper(this_value)) {
+        MalPrimitiveWrapperObject *wrapper = mal_value_to_primitive_wrapper(this_value);
+        if (wrapper->kind == MAL_PRIMITIVE_WRAPPER_BIGINT) {
+            *out = mal_bigint_value(mal_value_to_bigint(wrapper->primitive_data));
+            return true;
+        }
+    }
+
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Receiver is not a BigInt");
+    return false;
 }
 
 static MalValue mal_builtin_bigint_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -207,7 +218,9 @@ static MalValue mal_builtin_bigint_prototype_value_of(MalVm *vm, MalValue this_v
         return mal_value_new_undefined();
     }
 
-    return this_value;
+    // Return the [[BigIntData]] as a BigInt primitive — re-box rather than return
+    // this_value, which is the wrapper object when called on Object(1n).
+    return mal_value_from_bigint(mal_bigint_new(&vm->heap, value));
 }
 
 /**

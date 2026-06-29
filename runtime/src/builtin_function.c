@@ -6,6 +6,8 @@
 
 #include "bound_function_object.h"
 #include "heap_string.h"
+#include "object_ops.h"
+#include "proxy_object.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -140,26 +142,46 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     );
     MalValue bound_value = mal_value_from_bound_function_object(bound);
 
-    // SetFunctionLength: max(0, ToIntegerOrInfinity(target.length) - bound args)
-    // when target.length is a Number, else 0. Materialized as a real
-    // { writable: false, enumerable: false, configurable: true } own property.
-    MalValue target_length;
-    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, "length"), &target_length)) {
-        return mal_value_new_undefined();
+    // SetFunctionLength: L = max(0, ToIntegerOrInfinity(target.length) - bound
+    // args), but ONLY when target HAS AN OWN "length" property that is a Number
+    // (spec step: targetHasLength = HasOwnProperty(Target, "length")); otherwise
+    // L is 0. Infinity and values beyond int32 are preserved. Materialized as a
+    // real { writable: false, enumerable: false, configurable: true } own property.
+    MalKey length_key = mal_intrinsic_string_key(vm, "length");
+    bool has_own_length;
+    if (mal_value_is_proxy_object(this_value)) {
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_proxy_get_own_property_descriptor(vm, mal_value_to_proxy_object(this_value), length_key, &present, &desc)) {
+            return mal_value_new_undefined();
+        }
+        has_own_length = present;
+    } else {
+        has_own_length = mal_object_get_own(mal_value_to_object(this_value), length_key).present;
     }
-    i32 length = 0;
-    bool target_length_is_number = mal_value_is_int32(target_length) ||
-        mal_value_is_f64_or_nan(target_length) ||
-        target_length == MAL_VALUE_NEGATIVE_ZERO;
-    if (target_length_is_number) {
-        f64 numeric = mal_ops_to_number(target_length);
-        if (isfinite(numeric)) {
-            i32 truncated = (i32) numeric - bound_count;
-            length = truncated > 0 ? truncated : 0;
+
+    f64 length_num = 0;
+    if (has_own_length) {
+        MalValue target_length;
+        if (!mal_vm_get_property(vm, this_value, length_key, &target_length)) {
+            return mal_value_new_undefined();
+        }
+        // mal_ops_is_number covers int32, f64, NaN, ±0 and the ±Infinity statics.
+        if (mal_ops_is_number(target_length)) {
+            f64 numeric = mal_ops_to_number(target_length);
+            // ToIntegerOrInfinity: NaN/±0 -> +0, ±Infinity preserved, else trunc.
+            f64 integer = (numeric != numeric || numeric == 0.0)
+                ? 0.0
+                : (isinf(numeric) ? numeric : trunc(numeric));
+            length_num = integer - (f64) bound_count;
+            // max(0, ·); also normalizes a -0 (e.g. trunc(-0.5)) to +0.
+            if (!(length_num > 0)) {
+                length_num = 0.0;
+            }
         }
     }
-    MalPropertyDesc length_desc = mal_intrinsic_data_desc(mal_value_from_i32(length), MAL_PROPERTY_CONFIGURABLE);
-    mal_object_define_own((MalObject *) bound, mal_intrinsic_string_key(vm, "length"), &length_desc);
+    MalPropertyDesc length_desc = mal_intrinsic_data_desc(mal_ops_number_value(length_num), MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own((MalObject *) bound, length_key, &length_desc);
 
     // SetFunctionName: "bound " ++ (target.name if a string, else "").
     MalValue target_name;
@@ -238,10 +260,11 @@ void mal_builtin_function_install(MalVm *vm) {
     // The default @@hasInstance every callable inherits; instanceof
     // dispatches through it. Non-writable non-configurable per spec.
     MalPropertyDesc has_instance_desc = mal_intrinsic_data_desc(
-        mal_value_from_native_function_object(mal_native_function_object_new(
+        mal_value_from_native_function_object(mal_native_function_object_new_arity(
             &vm->heap,
             prototype,
             mal_intrinsic_ascii(vm, "[Symbol.hasInstance]"),
+            1,
             mal_builtin_function_prototype_has_instance
         )),
         MAL_PROPERTY_NONE

@@ -323,13 +323,15 @@ static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalVa
 /**
  * Apply the Array.from mapFn when present; returns false when it threw.
  */
-static bool mal_builtin_array_from_map(MalVm *vm, MalValue map_fn, u32 index, MalValue *element) {
+static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u32 index, MalValue value);
+
+static bool mal_builtin_array_from_map(MalVm *vm, MalValue map_fn, MalValue this_arg, u32 index, MalValue *element) {
     if (mal_value_is_undefined(map_fn)) {
         return true;
     }
 
     MalValue mapped_args[] = {*element, mal_value_from_i32((i32) index)};
-    MalCompletion completion = mal_vm_call_value(vm, map_fn, mal_value_new_undefined(), mapped_args, 2);
+    MalCompletion completion = mal_vm_call_value(vm, map_fn, this_arg, mapped_args, 2);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
         return false;
@@ -339,35 +341,86 @@ static bool mal_builtin_array_from_map(MalVm *vm, MalValue map_fn, u32 index, Ma
     return true;
 }
 
-static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    MalValue source = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+/**
+ * Set(A, "length", n, true). Propagates an abrupt setter; a refused ordinary
+ * [[Set]] (no pending throw) becomes a TypeError, per the Throw=true argument.
+ */
+static bool mal_builtin_array_from_set_length(MalVm *vm, MalValue a, u32 length) {
+    MalValue len_val = mal_value_from_u32(length);
+    if (!mal_vm_set_property(vm, a, mal_intrinsic_string_key(vm, "length"), len_val, a)) {
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set array length");
+        }
+        return false;
+    }
+    return true;
+}
 
+static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalValue source = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     MalValue map_fn = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    MalValue this_arg = arg_count >= 3 ? args[2] : mal_value_new_undefined();
+
     if (!mal_value_is_undefined(map_fn) && !mal_value_is_callable(map_fn)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Array.from mapper is not a function");
         return mal_value_new_undefined();
     }
 
-    // Iterables win over array-likes, per spec (arrays still take the fast
-    // indexed path below).
-    if (!mal_value_is_array_object(source) && !mal_value_is_nil(source)) {
+    // C is the receiver. When it is a constructor (other than %Array% itself),
+    // the result A is built with Construct(C) and elements go through
+    // CreateDataPropertyOrThrow + a final Set("length"). "plain_mode" is the
+    // common case (this=undefined/null or exactly %Array%): A is a fresh plain
+    // array, and Construct(%Array%) is observably identical to ArrayCreate.
+    MalValue ctor = this_value;
+    bool is_ctor = mal_vm_is_constructor(vm, ctor);
+    bool plain_mode = !is_ctor || ctor == vm->intrinsics[MAL_INTRINSIC_ARRAY_CONSTRUCTOR];
+
+    // GetMethod(items, @@iterator) does GetV → ToObject(items); a null/undefined
+    // source therefore throws a TypeError before anything else.
+    if (mal_value_is_nil(source)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Array.from called on null or undefined");
+        return mal_value_new_undefined();
+    }
+
+    // Arrays are iterable, but in plain_mode the array-like indexed path produces
+    // an identical plain-array result faster, so keep that shortcut — but only with
+    // no mapfn: a mapfn runs user code that can mutate the array's length, and the
+    // Array iterator re-reads length each step (so the shortcut, which snapshots
+    // length once, would diverge). With a custom constructor the iterator path is
+    // also observable (Construct(C) takes no length argument there).
+    bool consider_iterator =
+        !(mal_value_is_array_object(source) && plain_mode && mal_value_is_undefined(map_fn));
+
+    if (consider_iterator) {
         MalValue method;
         if (!mal_vm_get_property(vm, source, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &method)) {
             return mal_value_new_undefined();
         }
 
         if (mal_value_is_callable(method)) {
+            MalValue a;
+            if (plain_mode) {
+                a = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+            } else {
+                MalCompletion c = mal_vm_construct_value(vm, ctor, nullptr, 0);
+                if (c.kind != MAL_COMPLETION_NORMAL) {
+                    vm->completion = c;
+                    return mal_value_new_undefined();
+                }
+                a = c.value;
+            }
+
             MalIteratorRecord record;
             if (!mal_vm_get_iterator(vm, source, &record)) {
                 return mal_value_new_undefined();
             }
 
-            MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
             // Each step (iterator.next) and the mapfn re-enter JS and can collect;
-            // root the record, the result array, and the in-flight element, and
-            // lift GC suppression for the loop.
-            MalValue roots[2] = {mal_value_from_array_object(result), mal_value_new_undefined()};
+            // root the record, the result A, and the in-flight element, and lift GC
+            // suppression for the loop.
+            MalValue roots[2] = {a, mal_value_new_undefined()};
             MalRootSpan rec_span, span;
             mal_gc_root(&rec_span, &record.iterator, 2);
             mal_gc_root(&span, roots, 2);
@@ -382,18 +435,34 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
                 }
 
                 if (done) {
-                    ret = mal_value_from_array_object(result);
+                    // Set(A, "length", index, true) — required for a constructed A
+                    // (a plain array already tracks length, so skip it there).
+                    if (!plain_mode && !mal_builtin_array_from_set_length(vm, roots[0], index)) {
+                        goto iter_done;
+                    }
+                    ret = roots[0];
                     goto iter_done;
                 }
 
                 roots[1] = element;
-                if (!mal_builtin_array_from_map(vm, map_fn, index, &element)) {
+                if (!mal_builtin_array_from_map(vm, map_fn, this_arg, index, &element)) {
                     mal_vm_iterator_close(vm, &record);
                     goto iter_done;
                 }
                 roots[1] = element;
 
-                mal_array_object_store(result, mal_builtin_array_index_key(index), element);
+                bool ok;
+                if (plain_mode) {
+                    // mal_array_object_store grows the array's length to cover the
+                    // index (a fresh plain array starts at length 0 here).
+                    ok = mal_array_object_store(mal_value_to_array_object(roots[0]), mal_builtin_array_index_key(index), element);
+                } else {
+                    ok = mal_builtin_array_create_data_property(vm, roots[0], index, element);
+                }
+                if (!ok) {
+                    mal_vm_iterator_close(vm, &record);
+                    goto iter_done;
+                }
                 index++;
             }
 
@@ -422,11 +491,22 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
         }
     }
 
-    MalArrayObject *result = mal_intrinsic_new_array(vm, length);
+    MalValue a;
+    if (plain_mode) {
+        a = mal_value_from_array_object(mal_intrinsic_new_array(vm, length));
+    } else {
+        MalValue len_arg = mal_value_from_u32(length);
+        MalCompletion c = mal_vm_construct_value(vm, ctor, &len_arg, 1);
+        if (c.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = c;
+            return mal_value_new_undefined();
+        }
+        a = c.value;
+    }
+
     // The array-like index Get may invoke a getter and the mapfn re-enters JS;
-    // both can collect. Root the result array + the in-flight element and lift GC
-    // suppression. (mapped_args[0]=element is rooted via roots[1].)
-    MalValue roots[2] = {mal_value_from_array_object(result), mal_value_new_undefined()};
+    // both can collect. Root A + the in-flight element and lift GC suppression.
+    MalValue roots[2] = {a, mal_value_new_undefined()};
     MalRootSpan span;
     mal_gc_root(&span, roots, 2);
     mal_gc_native_rooted_begin(vm);
@@ -435,21 +515,26 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
         MalValue element = mal_builtin_array_get(vm, source, index);
         roots[1] = element;
 
-        if (!mal_value_is_undefined(map_fn)) {
-            MalValue mapped_args[] = {element, mal_value_from_i32((i32) index)};
-            MalCompletion completion = mal_vm_call_value(vm, map_fn, mal_value_new_undefined(), mapped_args, 2);
-            if (completion.kind != MAL_COMPLETION_NORMAL) {
-                vm->completion = completion;
-                goto done;
-            }
-
-            element = completion.value;
-            roots[1] = element;
+        if (!mal_builtin_array_from_map(vm, map_fn, this_arg, index, &element)) {
+            goto done;
         }
+        roots[1] = element;
 
-        mal_object_set((MalObject *) result, mal_builtin_array_index_key(index), element);
+        bool ok;
+        if (plain_mode) {
+            ok = mal_object_set(mal_value_to_object(roots[0]), mal_builtin_array_index_key(index), element);
+        } else {
+            ok = mal_builtin_array_create_data_property(vm, roots[0], index, element);
+        }
+        if (!ok) {
+            goto done;
+        }
     }
-    ret = mal_value_from_array_object(result);
+    // Set(A, "length", length, true) — see the iterator path.
+    if (!plain_mode && !mal_builtin_array_from_set_length(vm, roots[0], length)) {
+        goto done;
+    }
+    ret = roots[0];
 
 done:
     mal_gc_native_rooted_end(vm);

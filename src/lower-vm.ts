@@ -346,6 +346,7 @@ export type VmInstruction =
 	| {
 			opcode: "ITERATOR_CLOSE";
 			iterator: number;
+			normal: boolean;
 	  }
 	| {
 			opcode: "FOR_IN_KEYS";
@@ -992,6 +993,7 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "ITERATOR_CLOSE",
 				iterator: instruction.registers[0],
+				normal: instruction.normal === true,
 			};
 		case "forInKeys":
 			return {

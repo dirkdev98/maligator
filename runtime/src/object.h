@@ -35,6 +35,12 @@ typedef struct MalObject {
      * the padding after the preceding bools.
      */
     bool is_raw_json;
+    /**
+     * Immutable-prototype exotic object (e.g. %Object.prototype%): [[SetPrototypeOf]]
+     * rejects any change to a different prototype (SetImmutablePrototype). Free:
+     * fits the padding after the preceding bools.
+     */
+    bool immutable_prototype;
     /** Inline named-property values for the shape; null in dictionary mode. */
     MalValue *slots;
     /** Dictionary/overflow table (named + index props); null until needed. */

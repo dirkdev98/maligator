@@ -749,8 +749,13 @@ export type IRInstruction =
 	| {
 			type: "iteratorClose";
 
-			// [iterator] — spec IteratorClose for abrupt loop exits.
+			// [iterator] — spec IteratorClose. `normal` selects the
+			// normal-completion variant (propagates return()'s throw, TypeError on a
+			// non-object result), used after a destructuring pattern finishes without
+			// exhausting the iterator. The default (omitted/false) is the
+			// abrupt-completion variant for break/return/throw loop exits.
 			registers: [number];
+			normal?: boolean;
 	  }
 	| {
 			type: "forInKeys";
@@ -3161,10 +3166,14 @@ function compilePatternTarget(
 	cursor: IRCursor,
 	target: ESTree.Node,
 	value: number,
+	// Forwarded to the leaf: true for a destructuring *assignment* target (so a
+	// const leaf throws), false for a binding initializer. See
+	// compileStaticIdentifierTarget.
+	isAssign = false,
 ) {
 	switch (target.type) {
 		case "Identifier": {
-			compileIdentifierTarget(program, fn, cursor, target, value);
+			compileIdentifierTarget(program, fn, cursor, target, value, isAssign);
 			break;
 		}
 		case "MemberExpression": {
@@ -3190,15 +3199,15 @@ function compilePatternTarget(
 						target.left.type === "Identifier" ? target.left.name : undefined,
 					)
 				: value;
-			compilePatternTarget(program, fn, cursor, target.left, resolved);
+			compilePatternTarget(program, fn, cursor, target.left, resolved, isAssign);
 			break;
 		}
 		case "ObjectPattern": {
-			compileObjectPatternTarget(program, fn, cursor, target, value);
+			compileObjectPatternTarget(program, fn, cursor, target, value, isAssign);
 			break;
 		}
 		case "ArrayPattern": {
-			compileArrayPatternTarget(program, fn, cursor, target, value);
+			compileArrayPatternTarget(program, fn, cursor, target, value, isAssign);
 			break;
 		}
 		default:
@@ -3216,12 +3225,13 @@ function compileIdentifierTarget(
 	cursor: IRCursor,
 	identifier: ESTree.Identifier,
 	value: number,
+	isAssign = false,
 ) {
 	if (fn.semanticFile.withDynamicNodes.has(identifier)) {
-		compileWithDynamicWrite(program, fn, cursor, identifier, value);
+		compileWithDynamicWrite(program, fn, cursor, identifier, value, isAssign);
 		return;
 	}
-	compileStaticIdentifierTarget(program, fn, cursor, identifier, value);
+	compileStaticIdentifierTarget(program, fn, cursor, identifier, value, isAssign);
 }
 
 /**
@@ -3235,6 +3245,7 @@ function compileWithDynamicWrite(
 	cursor: IRCursor,
 	identifier: ESTree.Identifier,
 	value: number,
+	isAssign = false,
 ) {
 	const found = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
@@ -3256,7 +3267,7 @@ function compileWithDynamicWrite(
 
 	const fallbackIdx = fn.blocks.push({ instructions: [] }) - 1;
 	cursor.block = fn.blocks[fallbackIdx]!;
-	compileStaticIdentifierTarget(program, fn, cursor, identifier, value);
+	compileStaticIdentifierTarget(program, fn, cursor, identifier, value, isAssign);
 	const fallbackJoin: Extract<IRInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
@@ -3276,10 +3287,23 @@ function compileStaticIdentifierTarget(
 	cursor: IRCursor,
 	identifier: ESTree.Identifier,
 	value: number,
+	// True when this identifier is an assignment target (a destructuring
+	// *assignment*), false when it is a binding initializer (a declaration or
+	// parameter pattern). Only an assignment to a const is a TypeError; the
+	// initializer store that sets a const's value is legal.
+	isAssign = false,
 ) {
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
 	if (!binding) {
 		throw new Error(`No binding found for pattern target ${identifier.name}`);
+	}
+
+	if (isAssign && binding.kind === "const" && !binding.undeclared) {
+		// Destructuring assignment to a const binding is a TypeError, matching the
+		// plain-assignment path (PutValue → SetMutableBinding on an immutable
+		// binding). The right-hand side / iterator steps have already run.
+		emitThrowTypeError(program, fn, cursor, "Assignment to constant variable.");
+		return;
 	}
 
 	if (binding.undeclared && !isIRIntrinsic(binding.name)) {
@@ -3373,6 +3397,7 @@ function compileObjectPatternTarget(
 	cursor: IRCursor,
 	pattern: ESTree.ObjectPattern,
 	value: number,
+	isAssign = false,
 ) {
 	// Nil sources throw even when the pattern reads no properties.
 	cursor.block.instructions.push({
@@ -3392,7 +3417,7 @@ function compileObjectPatternTarget(
 				type: "copyDataProperties",
 				registers: [rest, value, ...consumedKeys],
 			});
-			compilePatternTarget(program, fn, cursor, property.argument, rest);
+			compilePatternTarget(program, fn, cursor, property.argument, rest, isAssign);
 			continue;
 		}
 
@@ -3411,7 +3436,7 @@ function compileObjectPatternTarget(
 			type: "loadProperty",
 			registers: [propertyValue, value, key],
 		});
-		compilePatternTarget(program, fn, cursor, property.value, propertyValue);
+		compilePatternTarget(program, fn, cursor, property.value, propertyValue, isAssign);
 	}
 }
 
@@ -3503,6 +3528,7 @@ function compileArrayPatternTarget(
 	cursor: IRCursor,
 	pattern: ESTree.ArrayPattern,
 	value: number,
+	isAssign = false,
 ) {
 	// Spec-shaped: the source goes through GetIterator (nil and non-iterable
 	// values throw TypeError), elements consume steps in order.
@@ -3518,7 +3544,7 @@ function compileArrayPatternTarget(
 		if (element?.type === "RestElement") {
 			// Rest is last by grammar and exhausts the iterator: no close.
 			const rest = compileIteratorRest(fn, cursor, iteratorRegister, nextRegister);
-			compilePatternTarget(program, fn, cursor, element.argument, rest);
+			compilePatternTarget(program, fn, cursor, element.argument, rest, isAssign);
 			return;
 		}
 
@@ -3534,7 +3560,7 @@ function compileArrayPatternTarget(
 		lastDoneRegister = doneRegister;
 
 		if (element) {
-			compilePatternTarget(program, fn, cursor, element, elementValue);
+			compilePatternTarget(program, fn, cursor, element, elementValue, isAssign);
 		}
 	}
 
@@ -3546,6 +3572,7 @@ function compileArrayPatternTarget(
 		cursor.block.instructions.push({
 			type: "iteratorClose",
 			registers: [iteratorRegister],
+			normal: true,
 		});
 		return;
 	}
@@ -3570,6 +3597,7 @@ function compileArrayPatternTarget(
 		{
 			type: "iteratorClose",
 			registers: [iteratorRegister],
+			normal: true,
 		},
 		joinJump,
 	);
@@ -4491,7 +4519,7 @@ function compileForInOfLoop(
 			compilePatternTarget(program, fn, bindCursor, declaration.id, valueRegister);
 		}
 	} else {
-		compilePatternTarget(program, fn, bindCursor, left, valueRegister);
+		compilePatternTarget(program, fn, bindCursor, left, valueRegister, true);
 	}
 
 	const bodyIdx = compileStatementsToBlock(program, fn, normalizeStatementOrBlock(body));
@@ -4660,7 +4688,7 @@ function compileForAwaitOfLoop(
 			compilePatternTarget(program, fn, bindCursor, declaration.id, valueRegister);
 		}
 	} else {
-		compilePatternTarget(program, fn, bindCursor, left, valueRegister);
+		compilePatternTarget(program, fn, bindCursor, left, valueRegister, true);
 	}
 
 	const bodyIdx = compileStatementsToBlock(program, fn, normalizeStatementOrBlock(body));
@@ -6392,7 +6420,7 @@ function compileAssignment(
 		// Destructuring assignment is only valid with the plain = operator. The
 		// expression evaluates to the right hand side value.
 		const value = compileExpression(program, fn, cursor, assignmentExpression.right);
-		compilePatternTarget(program, fn, cursor, assignmentExpression.left, value);
+		compilePatternTarget(program, fn, cursor, assignmentExpression.left, value, true);
 		return value;
 	}
 
@@ -6525,7 +6553,7 @@ function compileIdentifierAssignment(
 				operator: assignmentOperatorToBinaryOperator(assignmentExpression.operator),
 			});
 		}
-		compileWithDynamicWrite(program, fn, cursor, left, value);
+		compileWithDynamicWrite(program, fn, cursor, left, value, true);
 		return value;
 	}
 

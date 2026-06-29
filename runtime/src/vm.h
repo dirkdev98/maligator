@@ -366,10 +366,16 @@ typedef struct MalInstruction {
         } iterator_step;
 
         /**
-         * Spec IteratorClose for abrupt loop exits (break/return/throw).
+         * Spec IteratorClose. `normal` selects the normal-completion variant
+         * (mal_vm_iterator_close_normal: propagates return()'s throw and throws
+         * TypeError on a non-object result) used after a destructuring pattern
+         * finishes without exhausting the iterator. The default (false) is the
+         * abrupt-completion variant for break/return/throw loop exits, which
+         * preserves any pending throw and swallows return()'s own errors.
          */
         struct {
             i32 iterator;
+            bool normal;
         } iterator_close;
 
         /**

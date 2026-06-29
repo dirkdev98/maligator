@@ -30,3 +30,10 @@ MalValue mal_builtin_object_descriptor_object(MalVm *vm, MalPropertyDesc desc);
  * Object.defineProperty turns a plain REJECTED into a thrown TypeError.
  */
 MalDefineOwnStatus mal_builtin_object_try_define(MalVm *vm, MalObject *target, MalKey key, MalValue descriptor_value);
+
+/**
+ * ToObject for a primitive: wrap a string/number/boolean/symbol/bigint in its
+ * matching wrapper object (undefined/null/object return undefined). Used by the
+ * sloppy-mode this-binding (OrdinaryCallBindThis) and Object.prototype methods.
+ */
+MalValue mal_builtin_object_box_primitive(MalVm *vm, MalValue value);

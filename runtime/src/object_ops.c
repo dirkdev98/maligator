@@ -162,6 +162,13 @@ bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
         return true;
     }
 
+    // SetImmutablePrototype: an immutable-prototype exotic object (e.g.
+    // %Object.prototype%) only accepts its current prototype (handled above);
+    // any other value fails.
+    if (object->immutable_prototype) {
+        return false;
+    }
+
     if (!object->extensible) {
         return false;
     }

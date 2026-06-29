@@ -1278,6 +1278,14 @@ function emitInstruction(
 		}
 		case "ITERATOR_CLOSE": {
 			const rec = `iter_rec_${ip}`;
+			if (instruction.normal) {
+				// Normal-completion close: propagate return()'s throw and TypeError
+				// on a non-object result.
+				return [
+					`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = MAL_VALUE_UNDEFINED };`,
+					`if (!mal_vm_iterator_close_normal(vm, &${rec})) ${onThrow}`,
+				];
+			}
 			return [
 				`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = MAL_VALUE_UNDEFINED };`,
 				`mal_vm_iterator_close(vm, &${rec});`,

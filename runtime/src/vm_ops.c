@@ -1525,6 +1525,13 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
         // Function.prototype.bind), so the reflective machinery and delete see
         // them; they are deliberately NOT resolved synthetically here.
         if (mal_value_is_function_object(object_value) && mal_vm_key_is_prototype(key)) {
+            // A user-defined own `prototype` (a data value or accessor installed
+            // via defineProperty/assignment) overrides the synthetic default:
+            // defer to the ordinary [[Get]] so an accessor's getter actually runs
+            // and a replaced data value is read.
+            if (mal_object_get_own(mal_value_to_object(object_value), key).present) {
+                return false;
+            }
             // Async (non-generator) functions have no `prototype` property; fall
             // through to the empty lookup (undefined value, false `in`).
             i32 function_index = mal_function_object_function_index(mal_value_to_function_object(object_value));
@@ -1704,6 +1711,31 @@ bool mal_vm_to_numeric(MalVm *vm, MalValue value, MalValue *out) {
     return true;
 }
 
+/**
+ * OrdinaryGet with a proxy-aware prototype chain. Walks ordinary prototype links
+ * (own table lookup at each, like mal_object_resolve_property); on reaching a
+ * proxy link it delegates the remainder of the lookup to the proxy's [[Get]]
+ * (its trap or forwarding), passing the original receiver. A plain
+ * mal_object_resolve_property treats a proxy as an ordinary (empty) object, so an
+ * object inheriting from a proxy would never see the proxy's exposed properties.
+ * Returns false with a pending throw on an abrupt trap; on a clean miss returns
+ * true with *out left as the caller's undefined.
+ */
+static bool mal_vm_ordinary_get(MalVm *vm, MalObject *start, MalKey key, MalValue receiver, MalValue *out) {
+    for (MalObject *cursor = start; cursor != nullptr;) {
+        MalPropertyLookup lookup = mal_object_get_own(cursor, key);
+        if (lookup.present) {
+            return mal_vm_desc_read(vm, lookup.desc, receiver, out);
+        }
+        MalObject *proto = cursor->prototype;
+        if (proto != nullptr && mal_value_is_proxy_object(mal_value_from_object(proto))) {
+            return mal_proxy_get(vm, mal_value_to_proxy_object(mal_value_from_object(proto)), key, receiver, out);
+        }
+        cursor = proto;
+    }
+    return true;
+}
+
 bool mal_vm_get_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *out) {
     return mal_vm_get_property_with_receiver(vm, object_value, key, object_value, out);
 }
@@ -1782,12 +1814,7 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
     // to the prototype-chain table lookup. This is the overwhelmingly common
     // shape (object literals, class instances) and the property-access hot path.
     if (mal_value_heap_type(object_value) == MAL_HEAP_OBJECT) {
-        MalPropertyResolution resolution =
-            mal_object_resolve_property(mal_value_to_object(object_value), key);
-        if (!resolution.found) {
-            return true;
-        }
-        return mal_vm_desc_read(vm, resolution.desc, receiver, out);
+        return mal_vm_ordinary_get(vm, mal_value_to_object(object_value), key, receiver, out);
     }
 
     MalValue synthetic;
@@ -1816,12 +1843,7 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
         return mal_vm_desc_read(vm, string_exotic, receiver, out);
     }
 
-    MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(object_value), key);
-    if (!resolution.found) {
-        return true;
-    }
-
-    return mal_vm_desc_read(vm, resolution.desc, receiver, out);
+    return mal_vm_ordinary_get(vm, mal_value_to_object(object_value), key, receiver, out);
 }
 
 /**
@@ -2085,16 +2107,30 @@ bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
         return false;
     }
 
+    // Walk value's prototype chain via [[GetPrototypeOf]] (proxy-aware): a proxy
+    // link runs the getPrototypeOf trap, whose abrupt completion must propagate
+    // (the caller observes vm->completion). value is already an object here.
     MalObject *prototype = mal_value_to_object(prototype_value);
-    for (MalObject *walk = mal_object_get_prototype(mal_value_to_object(value));
-         walk != nullptr;
-         walk = mal_object_get_prototype(walk)) {
-        if (walk == prototype) {
+    MalValue walk = value;
+    while (true) {
+        MalValue proto;
+        if (mal_value_is_proxy_object(walk)) {
+            if (!mal_proxy_get_prototype_of(vm, mal_value_to_proxy_object(walk), &proto)) {
+                return false; // trap threw — leave the throw pending
+            }
+        } else {
+            MalObject *next = mal_object_get_prototype(mal_value_to_object(walk));
+            proto = next != nullptr ? mal_value_from_object(next) : mal_value_new_null();
+        }
+
+        if (!mal_value_is_object(proto)) {
+            return false;
+        }
+        if (mal_value_to_object(proto) == prototype) {
             return true;
         }
+        walk = proto;
     }
-
-    return false;
 }
 
 bool mal_vm_is_constructor(MalVm *vm, MalValue value) {
@@ -2570,7 +2606,13 @@ void mal_op_iterator_close(MalCallable *callable, MalInstruction *instruction) {
         .next_method = mal_value_new_undefined(),
     };
 
-    mal_vm_iterator_close(callable->vm, &record);
+    if (instruction->as.iterator_close.normal) {
+        // A normal-completion close: any throw it raises is left pending and the
+        // interpreter's post-op unwinder propagates it.
+        mal_vm_iterator_close_normal(callable->vm, &record);
+    } else {
+        mal_vm_iterator_close(callable->vm, &record);
+    }
 }
 
 static MalValue mal_vm_for_in_key_string(MalVm *vm, MalKey key) {
