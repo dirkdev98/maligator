@@ -223,7 +223,12 @@ bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
             : (mal_value_is_f64(value) ? mal_value_to_f64(value) : -1.0);
         if (number >= 0 && (f64) (u32) number == number) {
             u32 new_length = (u32) number;
-            if (!array->length_writable && new_length != array->length) {
+            // This is the array [[Set]] path (arrays don't override [[Set]], so a
+            // write delegates here). OrdinarySetWithOwnDescriptor rejects any write
+            // to a non-writable data property regardless of whether the new value
+            // equals the current one, so `Set(frozenArray, "length", len)` fails and
+            // the caller throws (e.g. `Object.freeze([]).push()` must throw).
+            if (!array->length_writable) {
                 return false;
             }
             mal_array_object_set_length(array, new_length);

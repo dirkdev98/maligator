@@ -94,6 +94,7 @@ const USE_ONLY_FIRST_REGISTER = new Set([
 	"storeProperty",
 	"storeSuperProperty",
 	"setPrototype",
+	"setFunctionName",
 	"requireCoercible",
 ]);
 

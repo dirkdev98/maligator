@@ -56,6 +56,7 @@ typedef enum MalOpcode {
     MAL_OP_DELETE_PROPERTY,
     MAL_OP_DEFINE_ACCESSOR,
     MAL_OP_DEFINE_PROPERTY,
+    MAL_OP_SET_FUNCTION_NAME,
     MAL_OP_CREATE_PRIVATE_NAME,
     MAL_OP_DEFINE_PRIVATE,
     MAL_OP_LOAD_PRIVATE,
@@ -69,6 +70,7 @@ typedef enum MalOpcode {
     MAL_OP_WITH_ENTER,
     MAL_OP_WITH_EXIT,
     MAL_OP_WITH_GET,
+    MAL_OP_WITH_RESOLVE_BASE,
     MAL_OP_WITH_SET,
     MAL_OP_IS_EMPTY,
     MAL_OP_THROW_IF_TDZ,
@@ -238,6 +240,13 @@ typedef struct MalInstruction {
             // miss (so the compiler falls back to the static binding).
             i32 dst, name_string_index;
         } with_get;
+
+        struct {
+            // [dst] = the with-object that provides the name (the reference base),
+            // or the EMPTY sentinel on a miss. Captures the base without reading the
+            // value so an assignment resolves the reference before evaluating the RHS.
+            i32 dst, name_string_index;
+        } with_resolve_base;
 
         struct {
             // [found] = whether a with-object provided the name (and was written
@@ -422,6 +431,12 @@ typedef struct MalInstruction {
             i32 object, key, value;
             bool enumerable;
         } define_property;
+
+        struct {
+            // SetFunctionName([func], [key]): name an anonymous function/class value
+            // from a computed property key (string → the key, symbol → "[desc]"/"").
+            i32 func, key;
+        } set_function_name;
 
         /**
          * Private class members are keyed by per-class-evaluation hidden

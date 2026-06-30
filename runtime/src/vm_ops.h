@@ -147,6 +147,7 @@ void mal_op_create_template_object(MalCallable *callable, MalInstruction *instru
 void mal_op_with_enter(MalCallable *callable, MalInstruction *instruction);
 void mal_op_with_exit(MalCallable *callable, MalInstruction *instruction);
 void mal_op_with_get(MalCallable *callable, MalInstruction *instruction);
+void mal_op_with_resolve_base(MalCallable *callable, MalInstruction *instruction);
 void mal_op_with_set(MalCallable *callable, MalInstruction *instruction);
 void mal_op_is_empty(MalCallable *callable, MalInstruction *instruction);
 
@@ -464,6 +465,7 @@ void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction);
 void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_define_property(MalCallable *callable, MalInstruction *instruction);
+void mal_op_set_function_name(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_private_name(MalCallable *callable, MalInstruction *instruction);
 

@@ -274,15 +274,28 @@ static MalValue mal_builtin_parse_float(MalVm *vm, MalValue this_value, const Ma
 }
 
 static MalValue mal_builtin_global_is_nan(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
-    return mal_value_new_boolean(isnan(mal_ops_to_number(arg_count >= 1 ? args[0] : mal_value_new_undefined())));
+    (void) new_target;
+    (void) callee;
+    // isNaN(number): num = ? ToNumber(number). ToNumber invokes @@toPrimitive /
+    // valueOf / toString, whose abrupt completions must propagate (VM-aware).
+    f64 number;
+    if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &number)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(isnan(number));
 }
 
 static MalValue mal_builtin_global_is_finite(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
-    return mal_value_new_boolean(isfinite(mal_ops_to_number(arg_count >= 1 ? args[0] : mal_value_new_undefined())));
+    (void) new_target;
+    (void) callee;
+    // isFinite(number): num = ? ToNumber(number) — same abrupt-propagation rule.
+    f64 number;
+    if (!mal_vm_to_number(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &number)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(isfinite(number));
 }
 
 /**

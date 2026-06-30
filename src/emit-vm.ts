@@ -577,6 +577,8 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_DEFINE_ACCESSOR, .as.define_accessor = { .object = ${instruction.object}, .key = ${instruction.key}, .accessor = ${instruction.accessor}, .is_setter = ${instruction.isSetter}, .enumerable = ${instruction.enumerable} } }`;
 		case "DEFINE_PROPERTY":
 			return `{ .opcode = MAL_OP_DEFINE_PROPERTY, .as.define_property = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value}, .enumerable = ${instruction.enumerable} } }`;
+		case "SET_FUNCTION_NAME":
+			return `{ .opcode = MAL_OP_SET_FUNCTION_NAME, .as.set_function_name = { .func = ${instruction.func}, .key = ${instruction.key} } }`;
 		case "CREATE_PRIVATE_NAME":
 			return `{ .opcode = MAL_OP_CREATE_PRIVATE_NAME, .as.create_private_name = { .dst = ${instruction.dst} } }`;
 		case "DEFINE_PRIVATE":
@@ -603,6 +605,8 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_WITH_EXIT, .as.with_exit = {} }`;
 		case "WITH_GET":
 			return `{ .opcode = MAL_OP_WITH_GET, .as.with_get = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex} } }`;
+		case "WITH_RESOLVE_BASE":
+			return `{ .opcode = MAL_OP_WITH_RESOLVE_BASE, .as.with_resolve_base = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex} } }`;
 		case "WITH_SET":
 			return `{ .opcode = MAL_OP_WITH_SET, .as.with_set = { .found = ${instruction.found}, .value = ${instruction.value}, .name_string_index = ${instruction.nameStringIndex} } }`;
 		case "IS_EMPTY":
@@ -732,6 +736,8 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_MATH";
 		case "JSON":
 			return "MAL_INTRINSIC_JSON";
+		case "Atomics":
+			return "MAL_INTRINSIC_ATOMICS";
 		case "Reflect":
 			return "MAL_INTRINSIC_REFLECT";
 		case "Proxy":

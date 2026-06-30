@@ -96,6 +96,10 @@ typedef enum WireOp {
     WIRE_COPY_DATA_PROPERTIES,
     WIRE_BINARY,
     WIRE_UNARY,
+    /* Appended last; mirrors the trailing WITH_RESOLVE_BASE / SET_FUNCTION_NAME in
+     * WIRE_OPCODES (serialize-vm.ts). APPEND-ONLY. */
+    WIRE_WITH_RESOLVE_BASE,
+    WIRE_SET_FUNCTION_NAME,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -178,6 +182,7 @@ static const i32 wire_intrinsics[] = {
     /* Appended last; mirrors the trailing "eval" / "__directEval" in WIRE_INTRINSICS. */
     MAL_INTRINSIC_EVAL,
     MAL_INTRINSIC_DIRECT_EVAL,
+    MAL_INTRINSIC_ATOMICS,
 };
 
 // ---- owned arena (chained calloc'd blocks; pointers stay stable, one free) ----
@@ -680,6 +685,11 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
             o->as.define_property.value = rd_i32(r);
             o->as.define_property.enumerable = rd_u8(r) != 0;
             return;
+        case WIRE_SET_FUNCTION_NAME:
+            o->opcode = MAL_OP_SET_FUNCTION_NAME;
+            o->as.set_function_name.func = rd_i32(r);
+            o->as.set_function_name.key = rd_i32(r);
+            return;
         case WIRE_CREATE_PRIVATE_NAME:
             o->opcode = MAL_OP_CREATE_PRIVATE_NAME;
             o->as.create_private_name.dst = rd_i32(r);
@@ -704,6 +714,11 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
             o->opcode = MAL_OP_WITH_GET;
             o->as.with_get.dst = rd_i32(r);
             o->as.with_get.name_string_index = rd_i32(r);
+            return;
+        case WIRE_WITH_RESOLVE_BASE:
+            o->opcode = MAL_OP_WITH_RESOLVE_BASE;
+            o->as.with_resolve_base.dst = rd_i32(r);
+            o->as.with_resolve_base.name_string_index = rd_i32(r);
             return;
         case WIRE_STORE_GLOBAL_PROPERTY:
             o->opcode = MAL_OP_STORE_GLOBAL_PROPERTY;

@@ -433,6 +433,9 @@ static void mal_vm_rebase_instruction(
         case MAL_OP_WITH_GET:
             in->as.with_get.name_string_index += string_base;
             break;
+        case MAL_OP_WITH_RESOLVE_BASE:
+            in->as.with_resolve_base.name_string_index += string_base;
+            break;
         case MAL_OP_WITH_SET:
             in->as.with_set.name_string_index += string_base;
             break;
@@ -868,6 +871,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_WITH_GET:
                 mal_op_with_get(frame, &instruction);
                 break;
+            case MAL_OP_WITH_RESOLVE_BASE:
+                mal_op_with_resolve_base(frame, &instruction);
+                break;
             case MAL_OP_WITH_SET:
                 mal_op_with_set(frame, &instruction);
                 break;
@@ -1071,6 +1077,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 break;
             case MAL_OP_DEFINE_PROPERTY:
                 mal_op_define_property(frame, &instruction);
+                break;
+            case MAL_OP_SET_FUNCTION_NAME:
+                mal_op_set_function_name(frame, &instruction);
                 break;
             case MAL_OP_CREATE_PRIVATE_NAME:
                 mal_op_create_private_name(frame, &instruction);

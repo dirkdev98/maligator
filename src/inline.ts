@@ -48,6 +48,7 @@ function disqualifies(instruction: IRInstruction): boolean {
 		case "withEnter":
 		case "withExit":
 		case "withGet":
+		case "withResolveBase":
 		case "withSet":
 			return true;
 		default:

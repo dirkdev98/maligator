@@ -603,6 +603,7 @@ function analyzable(fn: IRFunction): boolean {
 			if (
 				instruction.type === "withEnter" ||
 				instruction.type === "withGet" ||
+				instruction.type === "withResolveBase" ||
 				instruction.type === "withSet"
 			) {
 				return false; // C3: dynamic scope

@@ -63,7 +63,10 @@ bool mal_vm_string_is_canonical_numeric_index(MalVm *vm, MalString *string) {
         return true;
     }
     f64 number = mal_ops_to_number(mal_value_from_string(string));
-    MalString *round_trip = mal_ops_to_string(&vm->heap, mal_value_from_f64(number));
+    // Canonicalize NaN before boxing: a raw NaN f64 aliases the NaN-boxed object
+    // tag, so mal_value_from_f64(NaN) would produce a garbage value (stringifying to
+    // "[object Object]") and wrongly reject "NaN" (a canonical numeric index string).
+    MalString *round_trip = mal_ops_to_string(&vm->heap, mal_value_from_f64_convert_nan(number));
     return mal_string_equals(string, round_trip);
 }
 
@@ -369,6 +372,26 @@ void mal_op_with_get(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.with_get.dst] = mal_value_new_empty();
 }
 
+void mal_op_with_resolve_base(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue name =
+        mal_value_from_string(&vm->definition->string_constants[instruction->as.with_resolve_base.name_string_index]);
+    MalKey key;
+    if (mal_vm_value_to_property_key(vm, name, &key)) {
+        for (i32 i = callable->with_count - 1; i >= 0; i--) {
+            MalValue object = callable->with_objects[i];
+            if (mal_vm_with_has_binding(vm, object, key)) {
+                // Return the with-object itself (the reference base), NOT its value:
+                // the caller reads/writes the property through this captured base.
+                callable->registers[instruction->as.with_resolve_base.dst] = object;
+                return;
+            }
+        }
+    }
+    // Miss: the EMPTY sentinel tells the compiled fallback to use the static binding.
+    callable->registers[instruction->as.with_resolve_base.dst] = mal_value_new_empty();
+}
+
 void mal_op_with_set(MalCallable *callable, MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     MalValue name =
@@ -485,6 +508,42 @@ void mal_op_create_function(MalCallable *callable, MalInstruction *instruction) 
     );
 }
 
+// SetFunctionName(func, key): give an anonymous function/class value a `name` own
+// data property derived from a computed property key (spec NamedEvaluation): a
+// String key names it directly, a Symbol key names it "[description]" (or "" when
+// the symbol has no description). Redefines the "" name set at CREATE_FUNCTION
+// (configurable), matching { writable:false, enumerable:false, configurable:true }.
+void mal_op_set_function_name(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    MalValue func = callable->registers[instruction->as.set_function_name.func];
+    MalValue key = callable->registers[instruction->as.set_function_name.key];
+    if (!mal_value_is_object(func)) {
+        return;
+    }
+
+    MalValue name_value;
+    if (mal_value_is_symbol(key)) {
+        MalString *description = mal_symbol_description(mal_value_to_symbol(key));
+        if (description == nullptr) {
+            name_value = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+        } else {
+            name_value = mal_ops_add(
+                &vm->heap,
+                mal_value_from_string(mal_intrinsic_ascii(vm, "[")),
+                mal_ops_add(&vm->heap, mal_value_from_string(description),
+                    mal_value_from_string(mal_intrinsic_ascii(vm, "]")))
+            );
+        }
+    } else {
+        // String / numeric-index key: its string form (the key is already an
+        // evaluated primitive property key, so no @@toPrimitive re-entry).
+        name_value = mal_value_from_string(mal_ops_to_string(&vm->heap, key));
+    }
+
+    MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(mal_value_to_object(func), mal_intrinsic_string_key(vm, "name"), &name_desc);
+}
+
 // Walk the environment chain to the activation that owns the captured binding
 // and read its slot. Shared by the interpreter op and the native-C backend.
 MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index) {
@@ -557,7 +616,14 @@ void mal_op_env_pop(MalCallable *callable) {
 MalValue mal_create_arguments_object(
     MalVm *vm, const MalValue *args, i32 arg_count, MalValue callee, bool strict
 ) {
-    MalArrayObject *arguments = mal_array_object_new(&vm->heap, nullptr);
+    // The arguments object is an ordinary object whose [[Prototype]] is
+    // %Object.prototype% (CreateUnmappedArgumentsObject step 2 / mapped step 8) —
+    // not %Array.prototype% and not null. It is backed by MalArrayObject only for
+    // its indexed-element storage; the prototype must still be Object.prototype so
+    // it inherits hasOwnProperty/etc.
+    MalArrayObject *arguments = mal_array_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])
+    );
     mal_array_object_set_length(arguments, arg_count);
 
     for (i32 i = 0; i < arg_count; i++) {
@@ -1857,10 +1923,22 @@ bool mal_vm_has_property(MalVm *vm, MalValue object_value, MalKey key) {
         return mal_proxy_has(vm, mal_value_to_proxy_object(object_value), key);
     }
 
-    // Ordinary objects have no synthetic or string-wrapper-exotic properties
-    // (see mal_vm_get_property_with_receiver): go straight to the table lookup.
+    // Ordinary objects have no synthetic or string-wrapper-exotic own properties
+    // (see mal_vm_get_property_with_receiver). OrdinaryHasProperty walks the
+    // prototype chain, but a Proxy reached in that chain must dispatch to its own
+    // [[HasProperty]] (trap or target) — resolve_property's table-only walk would
+    // wrongly treat it as an ordinary object (e.g. `"x" in Object.create(proxy)`).
     if (mal_value_heap_type(object_value) == MAL_HEAP_OBJECT) {
-        return mal_object_resolve_property(mal_value_to_object(object_value), key).found;
+        for (MalObject *cursor = mal_value_to_object(object_value); cursor != nullptr;
+             cursor = mal_object_get_prototype(cursor)) {
+            if (cursor->header.type == MAL_HEAP_PROXY_OBJECT) {
+                return mal_proxy_has(vm, (MalProxyObject *) cursor, key);
+            }
+            if (mal_object_get_own(cursor, key).present) {
+                return true;
+            }
+        }
+        return false;
     }
 
     MalValue synthetic;
@@ -1991,6 +2069,27 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
                 return mal_vm_array_set_length(vm, array, value);
             }
             return mal_array_object_store(array, key, value);
+        }
+        // OrdinarySet recurses into the prototype's [[Set]] when the receiver has
+        // no own binding. A TypedArray in the prototype chain absorbs a write to a
+        // canonical-numeric-index string (NaN/Infinity/fractional/-0/…) — never a
+        // valid integer index — as a no-op that returns true, rather than letting a
+        // plain own property be created on the receiver (TypedArray [[Set]] step 1
+        // with SameValue(O, Receiver) false and IsValidIntegerIndex false). Only
+        // when there is no own property to update (an own property is set directly).
+        if (!resolution.own && key.kind == MAL_KEY_STRING &&
+            mal_vm_string_is_canonical_numeric_index(vm, mal_value_to_string(key.value))) {
+            for (MalObject *proto = mal_object_get_prototype(object); proto != nullptr;
+                 proto = mal_object_get_prototype(proto)) {
+                if (proto->header.type == MAL_HEAP_TYPED_ARRAY_OBJECT) {
+                    return true;
+                }
+                // A proxy has its own [[Set]] trap; don't shortcut it — fall back to
+                // the ordinary set (matching prior behavior, no new divergence).
+                if (proto->header.type == MAL_HEAP_PROXY_OBJECT) {
+                    break;
+                }
+            }
         }
         return mal_object_set(object, key, value);
     }
@@ -2431,6 +2530,24 @@ static void mal_vm_op_store_property_keyed(
             stored = mal_array_object_store(array, key, value);
         }
     } else {
+        // OrdinarySet recurses into the prototype's [[Set]] when the receiver has no
+        // own binding. A TypedArray in the prototype chain absorbs a write to a
+        // canonical-numeric-index string (NaN/Infinity/fractional/-0/…, never a valid
+        // integer index) as a no-op that returns true, rather than creating a plain
+        // own property on the receiver (TypedArray [[Set]] with SameValue(O,Receiver)
+        // false and IsValidIntegerIndex false).
+        if (!resolution.own && key.kind == MAL_KEY_STRING &&
+            mal_vm_string_is_canonical_numeric_index(vm, mal_value_to_string(key.value))) {
+            for (MalObject *proto = mal_object_get_prototype(mal_value_to_object(object_value));
+                 proto != nullptr; proto = mal_object_get_prototype(proto)) {
+                if (proto->header.type == MAL_HEAP_TYPED_ARRAY_OBJECT) {
+                    return; // absorbed, no property created, no strict throw
+                }
+                if (proto->header.type == MAL_HEAP_PROXY_OBJECT) {
+                    break; // a proxy proto has its own [[Set]]; don't shortcut it
+                }
+            }
+        }
         stored = mal_object_set(mal_value_to_object(object_value), key, value);
     }
 

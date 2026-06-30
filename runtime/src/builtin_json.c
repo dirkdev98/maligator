@@ -899,8 +899,17 @@ static bool mal_json_internalize_set(MalVm *vm, MalValue holder, MalKey key, Mal
  * Returns false with a pending throw on any abrupt completion.
  */
 static bool mal_json_internalize(MalVm *vm, MalValue reviver, MalValue holder, MalValue name, MalValue *out) {
+    // Get(holder, name): `name` is a String (ToString of the array index or the
+    // object key). Canonicalize it to a property key so a numeric index string
+    // ("0","1",…) resolves to the dense array element — a raw MAL_KEY_STRING never
+    // reaches the dense-element vector and would read undefined. `name` itself stays
+    // the String for the reviver's key argument below.
     MalValue value;
-    if (!mal_vm_get_property(vm, holder, (MalKey) {.kind = MAL_KEY_STRING, .value = name}, &value)) {
+    MalKey get_key;
+    if (!mal_vm_value_to_property_key(vm, name, &get_key)) {
+        return false;
+    }
+    if (!mal_vm_get_property(vm, holder, get_key, &value)) {
         return false;
     }
 

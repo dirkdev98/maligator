@@ -651,7 +651,13 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 			// No binding found, so we create an undeclared binding.
 			//
 			// These can be globals, like 'undefined' or intrinsics like 'Object'.
-
+			//
+			// Cache it on the ROOT scope (where an undeclared global effectively
+			// lives), not on the usage's own scope: caching it in the usage scope
+			// makes a later resolution of the same name find it immediately, without
+			// walking up past any enclosing `with` — so the later usage would not be
+			// flagged `crossedDynamic` and would miss the with-object interception
+			// (e.g. `with(o){ r = x; x = 1; }` — the second `x` must still be dynamic).
 			const binding: Binding = {
 				kind: "var",
 				name,
@@ -661,7 +667,7 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 
 				undeclared: true,
 			};
-			scope.bindings.push(binding);
+			recurseScope.bindings.push(binding);
 			return binding;
 		}
 

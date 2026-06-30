@@ -14,6 +14,7 @@
 #include "builtin_date.h"
 #include "builtin_intl.h"
 #include "builtin_typed_array.h"
+#include "builtin_atomics.h"
 #include "builtin_error.h"
 #include "builtin_function.h"
 #include "builtin_generator.h"
@@ -256,6 +257,7 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_boolean_install(vm);
     mal_builtin_math_install(vm);
     mal_builtin_json_install(vm);
+    mal_builtin_atomics_install(vm);
     mal_builtin_reflect_install(vm);
     mal_builtin_proxy_install(vm);
     mal_builtin_console_install(vm);
@@ -441,6 +443,7 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "isFinite", vm->intrinsics[MAL_INTRINSIC_IS_FINITE], flags);
     mal_intrinsic_define_data(vm, global_this, "Math", vm->intrinsics[MAL_INTRINSIC_MATH], flags);
     mal_intrinsic_define_data(vm, global_this, "JSON", vm->intrinsics[MAL_INTRINSIC_JSON], flags);
+    mal_intrinsic_define_data(vm, global_this, "Atomics", vm->intrinsics[MAL_INTRINSIC_ATOMICS], flags);
     mal_intrinsic_define_data(vm, global_this, "Reflect", vm->intrinsics[MAL_INTRINSIC_REFLECT], flags);
     mal_intrinsic_define_data(vm, global_this, "Proxy", vm->intrinsics[MAL_INTRINSIC_PROXY_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "console", vm->intrinsics[MAL_INTRINSIC_CONSOLE], flags);

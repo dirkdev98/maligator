@@ -879,6 +879,18 @@ export type IRInstruction =
 			enumerable: boolean;
 	  }
 	| {
+			// SetFunctionName([func], [key]): set an anonymous function/class value's
+			// `name` own property from a *computed* property key (spec
+			// NamedEvaluation / PropertyDefinitionEvaluation) — a string key names it
+			// directly, a symbol key names it `[description]` (or "" if the symbol has
+			// none). Emitted for a computed-key literal member whose value is an
+			// anonymous function definition (static keys use the compile-time nameHint).
+			type: "setFunctionName";
+
+			// [func, key] — both uses (no destination).
+			registers: [number, number];
+	  }
+	| {
 			// [destination]; mints a fresh hidden symbol that keys a private
 			// class member for this class evaluation.
 			type: "createPrivateName";
@@ -977,6 +989,21 @@ export type IRInstruction =
 			// `Symbol.unscopables`, innermost first), else the EMPTY sentinel so the
 			// compiler can fall back to the static binding.
 			type: "withGet";
+
+			// [destination]
+			registers: [number];
+
+			nameStringIndex: number;
+	  }
+	| {
+			// Dynamic `with`-scope reference base: [destination] gets the with-object
+			// that provides the named binding (HasProperty honoring `Symbol.unscopables`,
+			// innermost first), else the EMPTY sentinel. Unlike withGet this returns the
+			// *object* (not its value) so an assignment can capture the reference base
+			// BEFORE evaluating the right-hand side — PutValue uses the initially-created
+			// Reference (spec 11.13.1 / with S12.10). The compiler then reads/stores the
+			// property on that captured base, or falls back to the static binding on EMPTY.
+			type: "withResolveBase";
 
 			// [destination]
 			registers: [number];
@@ -1135,6 +1162,7 @@ type IRIntrinsic =
 	| "encodeURIComponent"
 	| "Math"
 	| "JSON"
+	| "Atomics"
 	| "Reflect"
 	| "Proxy"
 	| "console"
@@ -1210,6 +1238,7 @@ const irIntrinsics = new Set<string>([
 	"encodeURIComponent",
 	"Math",
 	"JSON",
+	"Atomics",
 	"Reflect",
 	"Proxy",
 	"console",
@@ -3198,6 +3227,16 @@ function compileFunctionParams(
 			type: "createArgumentsObject",
 			registers: [destination],
 		});
+
+		// When a nested arrow reads this function's `arguments` lexically, the
+		// implicit `arguments` binding is marked captured. Snapshot the object into
+		// its captured slot at entry (owner is this function) so the arrow's
+		// `loadCaptured` walks to it — mirroring the lexical-`this` capture above.
+		// Direct reads in this function still use `argumentsObjectRegister`.
+		if (argumentsBinding.scopedTo === "captured") {
+			const location = getOrCreateBindingLocation(program, fn, argumentsBinding);
+			storeRegisterAtLocation(block, location, destination);
+		}
 	}
 
 	// When a nested arrow captures this function's `this` lexically, semantic
@@ -3365,6 +3404,154 @@ function compileWithDynamicWrite(
 	skipJump.blocks[0] = joinIdx;
 	fallbackJump.blocks[0] = fallbackIdx;
 	fallbackJoin.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+}
+
+/**
+ * A `with`-intercepted identifier assignment with spec-correct reference
+ * ordering: the reference base (the with-object providing the name, or none) is
+ * resolved BEFORE the right-hand side, then GetValue/PutValue operate on that
+ * captured base. This matters when the RHS deletes or replaces the binding
+ * (`with(scope){ x = (delete scope.x, 2) }` must still write `scope.x`), which
+ * the withSet-after-RHS path in `compileWithDynamicWrite` gets wrong.
+ */
+function compileWithDynamicAssignment(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	assignmentExpression: ESTree.AssignmentExpression,
+	left: ESTree.Identifier,
+): number {
+	const nameStringIndex = getOrCreateStringConstant(program, left.name);
+
+	// Capture the reference base now (EMPTY when no active with-object provides
+	// the name → the static binding), plus the property key once.
+	const base = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "withResolveBase",
+		registers: [base],
+		nameStringIndex,
+	});
+	const key = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createString",
+		registers: [key],
+		stringIndex: nameStringIndex,
+	});
+
+	let value: number;
+	if (assignmentExpression.operator === "=") {
+		value = compileExpression(program, fn, cursor, assignmentExpression.right, left.name);
+	} else {
+		// Compound: read the current value from the captured base (or the static
+		// binding on a miss), then evaluate the RHS, then combine.
+		const current = compileWithBaseRead(program, fn, cursor, base, key, left);
+		const right = compileExpression(program, fn, cursor, assignmentExpression.right);
+		value = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "binary",
+			registers: [value, current, right],
+			operator: assignmentOperatorToBinaryOperator(assignmentExpression.operator),
+		});
+	}
+
+	compileWithBaseStore(program, fn, cursor, base, key, left, value);
+	return value;
+}
+
+/**
+ * Read `name` from a captured with-base: if `base` is a real object (not the
+ * EMPTY sentinel) read the property off it (running any getter); otherwise
+ * resolve the static binding. Both paths join into one result register.
+ */
+function compileWithBaseRead(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	base: number,
+	key: number,
+	identifier: ESTree.Identifier,
+): number {
+	const result = nextRegisterDestination(fn);
+	const emptyFlag = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, base] });
+
+	const missJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [emptyFlag],
+		blocks: [-1],
+	};
+	const foundJump: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	cursor.block.instructions.push(missJump, foundJump);
+
+	// Found: [[Get]] the property off the captured base object.
+	const foundIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[foundIdx]!;
+	cursor.block.instructions.push({ type: "loadProperty", registers: [result, base, key] });
+	const foundJoin: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	cursor.block.instructions.push(foundJoin);
+
+	// Miss: resolve the static binding into the same result register.
+	const missIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[missIdx]!;
+	const staticValue = compileStaticIdentifier(program, fn, cursor, identifier);
+	cursor.block.instructions.push({ type: "move", registers: [result, staticValue] });
+	const missJoin: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	cursor.block.instructions.push(missJoin);
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	foundJump.blocks[0] = foundIdx;
+	missJump.blocks[0] = missIdx;
+	foundJoin.blocks[0] = joinIdx;
+	missJoin.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+	return result;
+}
+
+/**
+ * Store `value` to a captured with-base: if `base` is a real object (not EMPTY)
+ * [[Set]] the property on it (sloppy, so a rejected set silently no-ops — `with`
+ * is sloppy-only); otherwise fall back to the static store.
+ */
+function compileWithBaseStore(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	base: number,
+	key: number,
+	identifier: ESTree.Identifier,
+	value: number,
+) {
+	const emptyFlag = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, base] });
+
+	const missJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [emptyFlag],
+		blocks: [-1],
+	};
+	const foundJump: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	cursor.block.instructions.push(missJump, foundJump);
+
+	// Found: [[Set]] on the captured base object.
+	const foundIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[foundIdx]!;
+	cursor.block.instructions.push({ type: "storeProperty", registers: [base, key, value] });
+	const foundJoin: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	cursor.block.instructions.push(foundJoin);
+
+	// Miss: static store.
+	const missIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[missIdx]!;
+	compileStaticIdentifierTarget(program, fn, cursor, identifier, value, true);
+	const missJoin: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	cursor.block.instructions.push(missJoin);
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	foundJump.blocks[0] = foundIdx;
+	missJump.blocks[0] = missIdx;
+	foundJoin.blocks[0] = joinIdx;
+	missJoin.blocks[0] = joinIdx;
 	cursor.block = fn.blocks[joinIdx]!;
 }
 
@@ -5766,6 +5953,30 @@ function compileVariableDeclaration(
 			continue;
 		}
 
+		// A `var x = init` whose `x` is intercepted by an active `with`-object runs
+		// its initializer as an assignment (PutValue), so it must set the with-object
+		// property when one provides `x` — only the hoisted binding declaration is
+		// unconditionally function-scoped, not the initializer store. (`decl.init`
+		// only: a bare `var x;` performs no assignment.) The miss branch stores the
+		// hoisted local like the normal path below.
+		if (decl.init && decl.id.type === "Identifier" && fn.semanticFile.withDynamicNodes.has(decl.id)) {
+			const nameStringIndex = getOrCreateStringConstant(program, binding.name);
+			const base = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "withResolveBase",
+				registers: [base],
+				nameStringIndex,
+			});
+			const key = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "createString",
+				registers: [key],
+				stringIndex: nameStringIndex,
+			});
+			compileWithBaseStore(program, fn, cursor, base, key, decl.id, source);
+			continue;
+		}
+
 		const location = getOrCreateBindingLocation(program, fn, binding);
 		storeRegisterAtLocation(cursor.block, location, source);
 	}
@@ -6629,13 +6840,27 @@ function compileIdentifierAssignment(
 	cursor: IRCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
+	if (fn.semanticFile.withDynamicNodes.has(assignmentExpression.left)) {
+		// A `with`-intercepted assignment must capture the reference base (which
+		// with-object, if any, provides the name) BEFORE evaluating the right-hand
+		// side, then PutValue through that captured base (spec 11.13.1 / with
+		// S12.10) — so a RHS that deletes/mutates the binding still writes to the
+		// originally-resolved object.
+		return compileWithDynamicAssignment(
+			program,
+			fn,
+			cursor,
+			assignmentExpression,
+			assignmentExpression.left as ESTree.Identifier,
+		);
+	}
+
 	if (
-		fn.semanticFile.withDynamicNodes.has(assignmentExpression.left) ||
-		(program.evalDirect &&
-			assignmentExpression.left.type === "Identifier" &&
-			identifierIsFree(fn, assignmentExpression.left))
+		program.evalDirect &&
+		assignmentExpression.left.type === "Identifier" &&
+		identifierIsFree(fn, assignmentExpression.left)
 	) {
-		const left = assignmentExpression.left as ESTree.Identifier;
+		const left = assignmentExpression.left;
 		let value: number;
 		if (assignmentExpression.operator === "=") {
 			value = compileExpression(
@@ -7177,9 +7402,25 @@ function compileUnaryExpression(
 				// still reported "undefined" here — a known gap.)
 				return compileWithDynamicTypeof(program, fn, cursor, argument);
 			}
-			// typeof is the one reference read that resolves unresolvable
-			// identifiers to "undefined" instead of throwing.
-			return compileStaticString(program, fn, cursor, "undefined");
+			// typeof never throws on an unresolvable reference. Resolve the name
+			// against the global object at runtime: `typeof globalThis[name]` — an
+			// ordinary [[Get]] yields undefined for an absent property (so the result
+			// is "undefined"), the real type when the global exists (incl. ones added
+			// at runtime), and propagates a throwing getter, matching GetValue.
+			const global = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "loadIntrinsic",
+				registers: [global],
+				intrinsic: "globalThis",
+			});
+			const value = emitLoadProperty(program, fn, cursor, global, argument.name);
+			const destination = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "unary",
+				registers: [destination, value],
+				operator: "typeof",
+			});
+			return destination;
 		}
 	}
 
@@ -7233,33 +7474,13 @@ function compileDeleteExpression(
 
 	// `delete <identifier>` is only reachable in sloppy mode (strict rejects it).
 	if (expression.argument.type === "Identifier") {
-		const binding = fn.semanticFile.nodeToBinding.get(expression.argument);
-		// An unresolved name OR an intrinsic (both are global-object properties):
-		// delete the property. A declared binding cannot be deleted (false below).
-		if (binding?.undeclared) {
-			// Delete the global object property (true when already absent / configurable).
-			const global = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
-				type: "loadIntrinsic",
-				registers: [global],
-				intrinsic: "globalThis",
-			});
-			const key = compileStaticString(program, fn, cursor, binding.name);
-			const destination = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
-				type: "deleteProperty",
-				registers: [destination, global, key],
-			});
-			return destination;
+		// A `with`-intercepted name deletes the property off the active with-object
+		// that provides it (spec DeleteBinding on the object environment record),
+		// falling back to the static delete when no with-object has it.
+		if (fn.semanticFile.withDynamicNodes.has(expression.argument)) {
+			return compileWithDynamicDelete(program, fn, cursor, expression.argument);
 		}
-		// A resolvable binding cannot be deleted: `delete x` is false.
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "createBoolean",
-			registers: [destination],
-			value: false,
-		});
-		return destination;
+		return compileStaticIdentifierDelete(program, fn, cursor, expression.argument);
 	}
 
 	compileExpression(program, fn, cursor, expression.argument);
@@ -7272,6 +7493,103 @@ function compileDeleteExpression(
 	});
 
 	return destination;
+}
+
+/**
+ * `delete <identifier>` without dynamic (`with`) interception: an unresolved name
+ * or intrinsic is a global-object property (delete it — true when absent /
+ * configurable); a resolvable binding cannot be deleted (`delete x` is false).
+ */
+function compileStaticIdentifierDelete(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	identifier: ESTree.Identifier,
+): number {
+	const binding = fn.semanticFile.nodeToBinding.get(identifier);
+	if (binding?.undeclared) {
+		const global = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadIntrinsic",
+			registers: [global],
+			intrinsic: "globalThis",
+		});
+		const key = compileStaticString(program, fn, cursor, binding.name);
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "deleteProperty",
+			registers: [destination, global, key],
+		});
+		return destination;
+	}
+	const destination = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createBoolean",
+		registers: [destination],
+		value: false,
+	});
+	return destination;
+}
+
+/**
+ * `delete <identifier>` inside a `with`: probe the active with-object(s) for the
+ * name (innermost first, honoring `Symbol.unscopables`); if one provides it, delete
+ * the property off that object; otherwise fall back to the static delete. The two
+ * paths join with the boolean result in one register.
+ */
+function compileWithDynamicDelete(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	identifier: ESTree.Identifier,
+): number {
+	const nameStringIndex = getOrCreateStringConstant(program, identifier.name);
+	const base = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "withResolveBase",
+		registers: [base],
+		nameStringIndex,
+	});
+	const result = nextRegisterDestination(fn);
+	const emptyFlag = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "isEmpty", registers: [emptyFlag, base] });
+
+	const missJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [emptyFlag],
+		blocks: [-1],
+	};
+	const foundJump: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	cursor.block.instructions.push(missJump, foundJump);
+
+	// Found: delete the property off the captured with-object.
+	const foundIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[foundIdx]!;
+	const key = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createString",
+		registers: [key],
+		stringIndex: nameStringIndex,
+	});
+	cursor.block.instructions.push({ type: "deleteProperty", registers: [result, base, key] });
+	const foundJoin: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	cursor.block.instructions.push(foundJoin);
+
+	// Miss: static delete into the same result register.
+	const missIdx = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[missIdx]!;
+	const staticResult = compileStaticIdentifierDelete(program, fn, cursor, identifier);
+	cursor.block.instructions.push({ type: "move", registers: [result, staticResult] });
+	const missJoin: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	cursor.block.instructions.push(missJoin);
+
+	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
+	foundJump.blocks[0] = foundIdx;
+	missJump.blocks[0] = missIdx;
+	foundJoin.blocks[0] = joinIdx;
+	missJoin.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+	return result;
 }
 
 /**
@@ -7520,6 +7838,23 @@ function staticObjectShape(
 	return { names, values };
 }
 
+/**
+ * IsAnonymousFunctionDefinition: a function/arrow/class expression with no name of
+ * its own, which NamedEvaluation may name from the binding/property it flows into.
+ */
+function isAnonymousFunctionDefinition(node: ESTree.Node | null | undefined): boolean {
+	if (!node) {
+		return false;
+	}
+	if (node.type === "ArrowFunctionExpression") {
+		return true;
+	}
+	if (node.type === "FunctionExpression" || node.type === "ClassExpression") {
+		return !node.id;
+	}
+	return false;
+}
+
 function compileObjectExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -7619,6 +7954,15 @@ function compileObjectExpression(
 			property.value as ESTree.Expression,
 			name,
 		);
+		// A computed key (no compile-time `name`) whose value is an anonymous
+		// function definition takes its name from the key at runtime (a static key
+		// was already handled by the `name` nameHint passed above).
+		if (name === undefined && isAnonymousFunctionDefinition(property.value)) {
+			cursor.block.instructions.push({
+				type: "setFunctionName",
+				registers: [value, key],
+			});
+		}
 		cursor.block.instructions.push({
 			type: "defineProperty",
 			registers: [object, key, value],
@@ -8446,6 +8790,15 @@ function compileStaticIdentifier(
 	}
 
 	if (binding.implicit === "arguments") {
+		// An arrow reads its enclosing function's `arguments` lexically: the binding
+		// lives on that function's scope (never the arrow's) and is marked captured,
+		// so read it through the closure env. Arrows never reserve their own
+		// arguments object, so `argumentsObjectRegister` is undefined here.
+		if (fn.argumentsObjectRegister === undefined && binding.scopedTo === "captured") {
+			const location = getOrCreateBindingLocation(program, fn, binding);
+			return loadRegisterFromLocation(fn, cursor.block, location);
+		}
+
 		if (fn.argumentsObjectRegister === undefined) {
 			throw new Error("Missing reserved arguments object register");
 		}
@@ -8460,15 +8813,15 @@ function compileStaticIdentifier(
 	}
 
 	if (binding.undeclared) {
-		// Strict: an unresolvable read throws ReferenceError. Sloppy: it resolves
-		// against the global object (still ReferenceError if absent there). Eval'd
-		// code also resolves against the global object regardless of strictness —
-		// its free identifiers may be host-declared globals, which the compiler
-		// can't see, so it can't assume the reference is unresolvable.
+		// A bare read of a statically-unresolved name resolves against the global
+		// object's property table in BOTH modes — GetValue on a global reference
+		// reads the property, throwing ReferenceError only if it is absent there.
+		// (Reading an undeclared name is a ReferenceError in strict AND sloppy; only
+		// assignment differs.) The compiler can't see runtime-added or host-declared
+		// globals, so a statically-undeclared name is not necessarily unresolvable.
 		const destination = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
-			type:
-				isSloppyFunction(fn) || program.evalCompletion ? "loadGlobalProperty" : "loadUndeclared",
+			type: "loadGlobalProperty",
 			registers: [destination],
 			nameStringIndex: getOrCreateStringConstant(program, identifier.name),
 		});

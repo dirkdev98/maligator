@@ -34,7 +34,9 @@ const random = process.argv.includes("--random");
 // flaky verdicts clobbering the committed baseline.
 const checkMode = process.argv.includes("--check");
 const filter = argValue("--filter");
-const jobs = Number(argValue("--jobs") ?? Math.max(1, os.cpus().length - 1));
+// Default to roughly half the cores (battery-friendly); was cpus-1 (near-full
+// utilization). Override with --jobs for a faster plugged-in run.
+const jobs = Number(argValue("--jobs") ?? Math.max(1, Math.floor(os.cpus().length / 2)));
 
 /**
  * Run mode. By default a run executes the full test262 spec as two passes: a

@@ -1313,6 +1313,106 @@ done:
     return ret;
 }
 
+// %TypedArray%.prototype.toReversed(): a new array of the SAME type (not via
+// @@species) holding this array's elements in reverse. The receiver is left
+// unchanged. Elements are already numeric, so no user coercion runs.
+static MalValue mal_ta_to_reversed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    if (array == nullptr) {
+        return mal_value_new_undefined();
+    }
+    u32 length = mal_typed_array_object_length(array);
+    MalValue result = mal_ta_create(vm, array->kind, length);
+    MalTypedArrayObject *out = mal_value_to_typed_array_object(result);
+    for (u32 i = 0; i < length; i++) {
+        mal_typed_array_object_set(vm, out, i, mal_typed_array_object_get(vm, array, length - 1 - i));
+    }
+    return result;
+}
+
+// %TypedArray%.prototype.toSorted(comparefn): a new same-type array holding this
+// array's elements sorted. Validates the comparator first, copies into a fresh
+// array, then sorts that copy in place (so the comparator can never observe or
+// mutate the original through the sort). Same-type, not @@species.
+static MalValue mal_ta_to_sorted(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    MalValue compare = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_undefined(compare) && !mal_value_is_callable(compare)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Comparator is not a function");
+        return mal_value_new_undefined();
+    }
+    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    if (array == nullptr) {
+        return mal_value_new_undefined();
+    }
+    u32 length = mal_typed_array_object_length(array);
+    MalValue result = mal_ta_create(vm, array->kind, length);
+    if (!mal_ta_copy_elements(vm, mal_value_to_typed_array_object(result), 0, array, 0, length)) {
+        return mal_value_new_undefined();
+    }
+    // Sort the fresh copy in place; on a comparator throw this forwards the
+    // completion and returns undefined.
+    MalValue sorted = mal_ta_sort(vm, result, args, arg_count, new_target, callee);
+    if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
+        return mal_value_new_undefined();
+    }
+    return sorted;
+}
+
+// %TypedArray%.prototype.with(index, value): a new same-type array equal to this
+// one but with element `index` replaced by `value`. ToIntegerOrInfinity(index)
+// and the value coercion (ToBigInt/ToNumber) run before the bounds check, which
+// throws RangeError for an out-of-range index. Same-type, not @@species.
+static MalValue mal_ta_with(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    if (array == nullptr) {
+        return mal_value_new_undefined();
+    }
+    u32 length = mal_typed_array_object_length(array);
+
+    f64 relative;
+    if (!mal_ta_to_integer(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &relative)) {
+        return mal_value_new_undefined();
+    }
+    f64 actual = relative >= 0 ? relative : (f64) length + relative;
+
+    MalValue value = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    if (mal_typed_array_is_bigint(array->kind)) {
+        i128 big;
+        if (!mal_bigint_to_bigint(vm, value, &big)) {
+            return mal_value_new_undefined();
+        }
+        value = mal_value_from_bigint(mal_bigint_new(&vm->heap, big));
+    } else {
+        f64 number;
+        if (!mal_vm_to_number(vm, value, &number)) {
+            return mal_value_new_undefined();
+        }
+        value = mal_ops_number_value(number);
+    }
+
+    // IsValidIntegerIndex: an out-of-range (or, after coercion, out-of-bounds)
+    // index is a RangeError.
+    if (mal_typed_array_object_is_out_of_bounds(array) || actual < 0 || actual >= (f64) length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid typed array index");
+        return mal_value_new_undefined();
+    }
+    u32 actual_index = (u32) actual;
+
+    MalValue result = mal_ta_create(vm, array->kind, length);
+    MalTypedArrayObject *out = mal_value_to_typed_array_object(result);
+    for (u32 i = 0; i < length; i++) {
+        mal_typed_array_object_set(vm, out, i,
+            i == actual_index ? value : mal_typed_array_object_get(vm, array, i));
+    }
+    return result;
+}
+
 static MalValue mal_ta_keys(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
@@ -2162,6 +2262,9 @@ void mal_builtin_typed_array_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, ta_prototype, "includes", 1, mal_ta_includes);
     mal_intrinsic_define_method_n(vm, ta_prototype, "reverse", 0, mal_ta_reverse);
     mal_intrinsic_define_method_n(vm, ta_prototype, "sort", 1, mal_ta_sort);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "toReversed", 0, mal_ta_to_reversed);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "toSorted", 1, mal_ta_to_sorted);
+    mal_intrinsic_define_method_n(vm, ta_prototype, "with", 2, mal_ta_with);
     mal_intrinsic_define_method_n(vm, ta_prototype, "forEach", 1, mal_ta_for_each);
     mal_intrinsic_define_method_n(vm, ta_prototype, "map", 1, mal_ta_map);
     mal_intrinsic_define_method_n(vm, ta_prototype, "filter", 1, mal_ta_filter);

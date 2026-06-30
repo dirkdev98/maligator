@@ -590,6 +590,129 @@ static void mal_builtin_array_buffer_define_species(MalVm *vm, MalObject *constr
     mal_object_define_own(constructor, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_SPECIES), &desc);
 }
 
+// ---- SharedArrayBuffer.prototype accessors/methods (shared brand) ----
+
+static MalValue mal_shared_array_buffer_byte_length_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalArrayBufferObject *buffer = mal_builtin_array_buffer_this(vm, this_value, true);
+    if (buffer == nullptr) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_i32((i32) buffer->byte_length);
+}
+
+static MalValue mal_shared_array_buffer_max_byte_length_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalArrayBufferObject *buffer = mal_builtin_array_buffer_this(vm, this_value, true);
+    if (buffer == nullptr) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_i32((i32) buffer->max_byte_length);
+}
+
+static MalValue mal_shared_array_buffer_growable_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    MalArrayBufferObject *buffer = mal_builtin_array_buffer_this(vm, this_value, true);
+    if (buffer == nullptr) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(buffer->resizable);
+}
+
+// SharedArrayBuffer.prototype.grow(newLength): grow-only (never shrinks, never
+// detaches). A non-growable buffer is a TypeError; a length below the current
+// size or above maxByteLength is a RangeError.
+static MalValue mal_shared_array_buffer_grow(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalArrayBufferObject *buffer = mal_builtin_array_buffer_this(vm, this_value, true);
+    if (buffer == nullptr) {
+        return mal_value_new_undefined();
+    }
+    if (!buffer->resizable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "SharedArrayBuffer is not growable");
+        return mal_value_new_undefined();
+    }
+    u32 new_length;
+    if (!mal_array_buffer_to_index_u32(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &new_length)) {
+        return mal_value_new_undefined();
+    }
+    if (new_length < buffer->byte_length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "SharedArrayBuffer cannot shrink");
+        return mal_value_new_undefined();
+    }
+    if (!mal_array_buffer_object_resize(buffer, new_length)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Grow length exceeds maxByteLength");
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_undefined();
+}
+
+// SharedArrayBuffer.prototype.slice(start, end): like ArrayBuffer.prototype.slice
+// but the species default is %SharedArrayBuffer% and the result must be a
+// distinct SharedArrayBuffer.
+static MalValue mal_shared_array_buffer_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalArrayBufferObject *buffer = mal_builtin_array_buffer_this(vm, this_value, true);
+    if (buffer == nullptr) {
+        return mal_value_new_undefined();
+    }
+    u32 length = buffer->byte_length;
+    u32 start;
+    if (!mal_array_buffer_clamp(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), length, 0, &start)) {
+        return mal_value_new_undefined();
+    }
+    u32 end;
+    if (!mal_array_buffer_clamp(vm, arg_count >= 2 ? args[1] : mal_value_new_undefined(), length, length, &end)) {
+        return mal_value_new_undefined();
+    }
+    u32 new_length = end > start ? end - start : 0;
+
+    MalValue ctor;
+    if (!mal_array_buffer_species_constructor(vm, this_value, MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR, &ctor)) {
+        return mal_value_new_undefined();
+    }
+    MalValue len_arg = mal_value_from_i32((i32) new_length);
+    MalCompletion completion = mal_vm_construct_value(vm, ctor, &len_arg, 1);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        vm->completion = completion;
+        return mal_value_new_undefined();
+    }
+    MalValue result_value = completion.value;
+    if (!mal_value_is_array_buffer_object(result_value) || !mal_value_to_array_buffer_object(result_value)->shared) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Species constructor did not return a SharedArrayBuffer");
+        return mal_value_new_undefined();
+    }
+    MalArrayBufferObject *result = mal_value_to_array_buffer_object(result_value);
+    if (result == buffer) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Species constructor returned the source buffer");
+        return mal_value_new_undefined();
+    }
+    if (result->byte_length < new_length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Species constructor returned a too-small buffer");
+        return mal_value_new_undefined();
+    }
+    if (new_length > 0) {
+        u32 available = buffer->byte_length > start ? buffer->byte_length - start : 0;
+        u32 copy = new_length < available ? new_length : available;
+        if (copy > 0) {
+            memcpy(result->data, buffer->data + start, copy);
+        }
+    }
+    return result_value;
+}
+
 void mal_builtin_array_buffer_install(MalVm *vm) {
     MalObject *object_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
@@ -630,6 +753,13 @@ void mal_builtin_array_buffer_install(MalVm *vm) {
 
     mal_intrinsic_define_data(vm, (MalObject *) shared_constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_SHARED_ARRAY_BUFFER_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, shared_prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_builtin_array_buffer_define_species(vm, (MalObject *) shared_constructor);
+
+    mal_builtin_array_buffer_define_getter(vm, shared_prototype, "byteLength", mal_shared_array_buffer_byte_length_getter);
+    mal_builtin_array_buffer_define_getter(vm, shared_prototype, "maxByteLength", mal_shared_array_buffer_max_byte_length_getter);
+    mal_builtin_array_buffer_define_getter(vm, shared_prototype, "growable", mal_shared_array_buffer_growable_getter);
+    mal_intrinsic_define_method_n(vm, shared_prototype, "grow", 1, mal_shared_array_buffer_grow);
+    mal_intrinsic_define_method_n(vm, shared_prototype, "slice", 2, mal_shared_array_buffer_slice);
 
     MalPropertyDesc shared_tag = mal_intrinsic_data_desc(mal_value_from_string(mal_intrinsic_ascii(vm, "SharedArrayBuffer")), MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(shared_prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &shared_tag);

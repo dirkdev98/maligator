@@ -397,7 +397,11 @@ function eliminateRedundantTdzChecksInFunction(fn: IRFunction) {
 	// native-backend eligible anyway, so skip them outright.
 	for (const block of blocks) {
 		for (const instr of block.instructions) {
-			if (instr.type === "withGet" || instr.type === "withEnter") {
+			if (
+				instr.type === "withGet" ||
+				instr.type === "withResolveBase" ||
+				instr.type === "withEnter"
+			) {
 				return;
 			}
 		}
@@ -577,6 +581,7 @@ const WRITES_NO_REGISTER = new Set<IRInstruction["type"]>([
 	"defineProperty",
 	"defineAccessor",
 	"mergeDataProperties",
+	"setFunctionName",
 	"withEnter",
 ]);
 
@@ -595,6 +600,7 @@ function functionUsesWith(fn: IRFunction): boolean {
 				instruction.type === "withEnter" ||
 				instruction.type === "withExit" ||
 				instruction.type === "withGet" ||
+				instruction.type === "withResolveBase" ||
 				instruction.type === "withSet"
 			) {
 				return true;

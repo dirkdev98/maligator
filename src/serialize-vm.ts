@@ -101,6 +101,11 @@ export const WIRE_OPCODES = [
 	"COPY_DATA_PROPERTIES",
 	"BINARY",
 	"UNARY",
+	// Appended last to preserve existing wire tags; mirrored by the trailing
+	// WIRE_WITH_RESOLVE_BASE / WIRE_SET_FUNCTION_NAME in the C wire_opcodes enum
+	// (vm_load.c). APPEND-ONLY.
+	"WITH_RESOLVE_BASE",
+	"SET_FUNCTION_NAME",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -206,6 +211,7 @@ export const WIRE_INTRINSICS = [
 	// Appended last so existing wire tags keep their indices.
 	"eval",
 	"__directEval",
+	"Atomics",
 ] as const;
 const INTRINSIC_TAG = new Map<string, number>(
 	WIRE_INTRINSICS.map((name, i) => [name, i]),
@@ -716,6 +722,10 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.value);
 			w.u8(i.enumerable ? 1 : 0);
 			return;
+		case "SET_FUNCTION_NAME":
+			w.i32(i.func);
+			w.i32(i.key);
+			return;
 		case "SET_PROTOTYPE":
 			w.i32(i.object);
 			w.i32(i.prototype);
@@ -724,6 +734,7 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 		case "LOAD_UNDECLARED":
 		case "LOAD_GLOBAL_PROPERTY":
 		case "WITH_GET":
+		case "WITH_RESOLVE_BASE":
 			w.i32(i.dst);
 			w.i32(i.nameStringIndex);
 			return;

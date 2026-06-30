@@ -2904,5 +2904,24 @@ void mal_builtin_array_install(MalVm *vm) {
     MalPropertyDesc iterator_desc = mal_intrinsic_data_desc(values, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &iterator_desc);
 
+    // Array.prototype[Symbol.unscopables]: a null-prototype object listing the
+    // post-ES5 method names (each value `true`) so a sloppy `with (array)` block
+    // does not shadow those identifiers via the array. The property itself is
+    // { writable: false, enumerable: false, configurable: true }.
+    MalObject *unscopables = mal_object_new(&vm->heap, nullptr);
+    static const char *const unscopable_names[] = {
+        "at", "copyWithin", "entries", "fill", "find", "findIndex", "findLast",
+        "findLastIndex", "flat", "flatMap", "includes", "keys", "toReversed",
+        "toSorted", "toSpliced", "values",
+    };
+    for (usize i = 0; i < sizeof(unscopable_names) / sizeof(unscopable_names[0]); i++) {
+        MalPropertyDesc name_desc = mal_intrinsic_data_desc(mal_value_new_boolean(true),
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        mal_object_define_own(unscopables, mal_intrinsic_string_key(vm, unscopable_names[i]), &name_desc);
+    }
+    MalPropertyDesc unscopables_desc =
+        mal_intrinsic_data_desc(mal_value_from_object(unscopables), MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_UNSCOPABLES), &unscopables_desc);
+
     mal_intrinsic_define_species(vm, constructor_object);
 }

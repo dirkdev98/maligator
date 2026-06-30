@@ -399,6 +399,11 @@ export type VmInstruction =
 			enumerable: boolean;
 	  }
 	| {
+			opcode: "SET_FUNCTION_NAME";
+			func: number;
+			key: number;
+	  }
+	| {
 			opcode: "CREATE_PRIVATE_NAME";
 			dst: number;
 	  }
@@ -461,6 +466,11 @@ export type VmInstruction =
 	  }
 	| {
 			opcode: "WITH_GET";
+			dst: number;
+			nameStringIndex: number;
+	  }
+	| {
+			opcode: "WITH_RESOLVE_BASE";
 			dst: number;
 			nameStringIndex: number;
 	  }
@@ -1075,6 +1085,12 @@ function lowerInstructionToVmInstruction(
 				value: instruction.registers[2],
 				enumerable: instruction.enumerable,
 			};
+		case "setFunctionName":
+			return {
+				opcode: "SET_FUNCTION_NAME",
+				func: instruction.registers[0],
+				key: instruction.registers[1],
+			};
 		case "createPrivateName":
 			return {
 				opcode: "CREATE_PRIVATE_NAME",
@@ -1149,6 +1165,12 @@ function lowerInstructionToVmInstruction(
 		case "withGet":
 			return {
 				opcode: "WITH_GET",
+				dst: instruction.registers[0],
+				nameStringIndex: instruction.nameStringIndex,
+			};
+		case "withResolveBase":
+			return {
+				opcode: "WITH_RESOLVE_BASE",
 				dst: instruction.registers[0],
 				nameStringIndex: instruction.nameStringIndex,
 			};
