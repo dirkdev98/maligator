@@ -44,6 +44,9 @@ export interface ModuleLinkage {
 		Array<{ binding: Binding; exports: Array<{ name: string; exporter: Binding }> }>
 	>;
 
+	/** Export tables for module namespace objects keyed by exported module path. */
+	moduleNamespaces: Map<string, Array<{ name: string; exporter: Binding }>>;
+
 	/**
 	 * ESM → CommonJS interop. An `import` whose specifier resolves to a CommonJS
 	 * module cannot alias an exporter binding (the CJS module has none); instead
@@ -85,6 +88,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 	const linkage: ModuleLinkage = {
 		moduleDefaultBinding: new Map(),
 		namespaceImports: new Map(),
+		moduleNamespaces: new Map(),
 		cjsImports: new Map(),
 	};
 
@@ -433,6 +437,21 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 	};
 
 	// --- Phase C: resolve `import * as ns` namespaces ---
+	for (const file of program.files) {
+		if (goalOf(file.path) === "cjs") {
+			continue;
+		}
+		const nsExports: Array<{ name: string; exporter: Binding }> = [];
+		for (const name of exportNamesOf(file.path)) {
+			const exporter = resolveExport(file.path, name);
+			if (exporter) {
+				nsExports.push({ name, exporter });
+				exporter.usageNodes.push(file.ast);
+			}
+		}
+		linkage.moduleNamespaces.set(file.path, nsExports);
+	}
+
 	for (const { file, binding, module } of namespaceToResolve) {
 		const nsExports: Array<{ name: string; exporter: Binding }> = [];
 		for (const name of exportNamesOf(module)) {

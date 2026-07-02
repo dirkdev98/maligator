@@ -14,6 +14,7 @@ void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObje
     object->fast_elements_proto = false;
     object->is_raw_json = false;
     object->immutable_prototype = false;
+    object->watched_method_proto = false;
 }
 
 MalObject *mal_object_new(MalHeap *heap, MalObject *prototype) {

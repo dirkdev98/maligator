@@ -106,6 +106,13 @@ export interface BuildModuleGraphOptions {
 	 * tests, where `.js` fixtures are modules despite the extension).
 	 */
 	goalOverride?: ModuleGoal;
+
+	/**
+	 * Force non-entry dependencies to this goal while preserving the entry goal.
+	 * Used by Test262 dynamic-import script tests: the test body is a Script, but
+	 * sibling `*_FIXTURE.js` dynamic-import targets are Module Records.
+	 */
+	dependencyGoalOverride?: ModuleGoal;
 }
 
 /** Conditions used when resolving a package's `exports` field. ESM-preferring. */
@@ -165,6 +172,7 @@ export function buildModuleGraph(
 				load(
 					dependency.resolvedPath,
 					options.goalOverride ??
+						options.dependencyGoalOverride ??
 						detectDependencyGoal(dependency.resolvedPath, packageTypeCache),
 				);
 			}

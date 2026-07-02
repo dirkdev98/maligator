@@ -1,5 +1,5 @@
 import { executeIROptimizations } from "./ir-opt.ts";
-import { compileSemanticProgramToIr } from "./ir.ts";
+import { compileSemanticProgramToIr, referencesArguments } from "./ir.ts";
 import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";
 import { allocateRegisters } from "./register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "./semantic-analysis.ts";
@@ -51,6 +51,12 @@ export function compileSourceToBuffer(
 		 * binds `arguments`) — a SyntaxError. Other behavior is unaffected.
 		 */
 		inParamExpr?: boolean;
+		/**
+		 * The direct eval is inside a class field initializer, which runs with no
+		 * `arguments` binding — so `arguments` in the eval'd code (outside a nested
+		 * non-arrow function) is a SyntaxError (ContainsArguments early error).
+		 */
+		inFieldInitializer?: boolean;
 	} = {},
 ): Uint8Array {
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
@@ -63,6 +69,9 @@ export function compileSourceToBuffer(
 		throw new SyntaxError(
 			"Declaring 'arguments' in a parameter-expression eval is not allowed",
 		);
+	}
+	if (options.inFieldInitializer && referencesArguments(semantic.files[0]?.ast.body)) {
+		throw new SyntaxError("'arguments' is not allowed in a class field initializer");
 	}
 	const ir = compileSemanticProgramToIr(semantic, {
 		evalCompletion: options.completionValue,

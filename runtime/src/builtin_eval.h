@@ -27,7 +27,8 @@ MalValue mal_vm_eval_source(MalVm *vm, MalValue source);
  * and returns undefined.
  */
 MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, bool caller_strict,
-                            bool in_param_expr);
+                            bool in_param_expr, bool in_field_initializer, MalValue caller_this,
+                            MalValue caller_new_target);
 
 /**
  * Which dynamic-function constructor is assembling source — selects the wrapper

@@ -142,6 +142,8 @@ export interface IntermediateProgram {
 		string,
 		Array<{ binding: Binding; exports: Array<{ name: string; exporter: Binding }> }>
 	>;
+	moduleNamespaces: Map<string, Array<{ name: string; exporter: Binding }>>;
+	dynamicModuleStatusSlot: Map<string, number>;
 
 	/**
 	 * CommonJS modules, keyed by path to their integer module id. The id indexes
@@ -304,6 +306,14 @@ export interface IRFunction {
 	inParameterExpression?: boolean;
 
 	/**
+	 * Set while compiling a public/private field initializer (woven into the
+	 * constructor frame). A field initializer runs via [[Call]], so new.target is
+	 * undefined even though the constructor's frame carries the class as
+	 * new.target — MetaProperty compiles to undefined in this context.
+	 */
+	inFieldInitializer?: boolean;
+
+	/**
 	 * String constant index of the function name, empty string for anonymous
 	 * functions.
 	 */
@@ -312,6 +322,22 @@ export interface IRFunction {
 	blocks: Array<IRBlock>;
 	argumentsObjectRegister?: number;
 	classContext?: IRClassContext;
+
+	/**
+	 * Whether this function owns a `prototype` property. Constructors (normal
+	 * function declarations/expressions, class constructors) and generators /
+	 * async generators do; methods, getters, setters, arrows and async
+	 * (non-generator) functions do not. Undefined defaults to true; the method /
+	 * accessor / arrow sites set it false.
+	 */
+	hasPrototype?: boolean;
+
+	/**
+	 * For a derived constructor whose `this` is captured by a nested arrow: the
+	 * implicit lexical-`this` binding (a captured cell). super() refreshes the
+	 * cell with the bound `this` so the arrow observes it. Undefined otherwise.
+	 */
+	lexicalThisBinding?: Binding;
 
 	/**
 	 * Whether this function runs in strict mode — its own body scope's strictness
@@ -887,6 +913,10 @@ export type IRInstruction =
 			// anonymous function definition (static keys use the compile-time nameHint).
 			type: "setFunctionName";
 
+			// A getter/setter prefixes the computed name with "get "/"set "
+			// (SetFunctionName's prefix argument). Undefined for plain members.
+			namePrefix?: "get" | "set";
+
 			// [func, key] — both uses (no destination).
 			registers: [number, number];
 	  }
@@ -1040,6 +1070,15 @@ export type IRInstruction =
 			registers: [number];
 	  }
 	| {
+			// ClassDefinitionEvaluation heritage check: throws a TypeError unless
+			// the superclass is a constructor whose `prototype` is an object or
+			// null. Emitted before a class uses its (non-null) superclass.
+			type: "checkSuperClass";
+
+			// [parent]
+			registers: [number];
+	  }
+	| {
 			// Collect the frame arguments from startIndex onward into a fresh
 			// array, for rest parameters.
 			type: "createRestArguments";
@@ -1183,7 +1222,10 @@ type IRIntrinsic =
 	// The direct-eval intrinsic (builtin_eval.c). Emitted as the callee of a
 	// direct `eval(...)` call; receives the source + a marshaled scope object.
 	// Not a user-visible global.
-	| "__directEval";
+	| "__directEval"
+	// HostImportModuleDynamically entry point. Not a user-visible global; emitted
+	// for the syntactic ImportCall form `import(specifier)`.
+	| "__dynamicImport";
 
 const irIntrinsics = new Set<string>([
 	"Object",
@@ -1248,6 +1290,7 @@ const irIntrinsics = new Set<string>([
 	"Infinity",
 	"__cjs_require",
 	"__directEval",
+	"__dynamicImport",
 ]);
 
 function isIRIntrinsic(name: string): name is IRIntrinsic {
@@ -1344,6 +1387,8 @@ export function compileSemanticProgramToIr(
 
 		moduleDefaultBinding: new Map(),
 		namespaceImports: new Map(),
+		moduleNamespaces: new Map(),
+		dynamicModuleStatusSlot: new Map(),
 
 		cjsModuleId: new Map(),
 		cjsWrapperFunctionIndex: [],
@@ -1360,6 +1405,9 @@ export function compileSemanticProgramToIr(
 	}
 	for (const [path, imports] of linkage.namespaceImports) {
 		program.namespaceImports.set(path, imports);
+	}
+	for (const [path, exports] of linkage.moduleNamespaces) {
+		program.moduleNamespaces.set(path, exports);
 	}
 	for (const [path, imports] of linkage.cjsImports) {
 		program.cjsImports.set(path, imports);
@@ -2014,10 +2062,105 @@ function hasTopLevelAwait(ast: ESTree.Program): boolean {
 	return found;
 }
 
+/**
+ * ContainsArguments (static semantics): whether `node` references the identifier
+ * `arguments` outside a nested non-arrow function. A non-arrow function has its
+ * own `arguments` binding (stop there); an arrow inherits it (descend). Used for
+ * the class field-initializer early error — a field runs with no `arguments`, so
+ * `x = arguments` (or `() => arguments`) is a SyntaxError.
+ */
+export function referencesArguments(node: unknown): boolean {
+	if (!node || typeof node !== "object") {
+		return false;
+	}
+	if (Array.isArray(node)) {
+		return node.some((item) => referencesArguments(item));
+	}
+	if (!("type" in node)) {
+		return false;
+	}
+	const typed = node as ESTree.Node;
+	if (typed.type === "Identifier") {
+		return typed.name === "arguments";
+	}
+	// A non-arrow function has its own `arguments`; do not descend.
+	if (typed.type === "FunctionDeclaration" || typed.type === "FunctionExpression") {
+		return false;
+	}
+	// Identifier positions that are NOT references: a non-computed member property
+	// (`x.arguments`) and a non-computed property/member key (`{arguments: 1}`).
+	if (typed.type === "MemberExpression") {
+		return (
+			referencesArguments(typed.object) ||
+			(typed.computed && referencesArguments(typed.property))
+		);
+	}
+	if (
+		typed.type === "Property" ||
+		typed.type === "MethodDefinition" ||
+		typed.type === "PropertyDefinition"
+	) {
+		const member = typed as unknown as {
+			computed?: boolean;
+			key?: unknown;
+			value?: unknown;
+		};
+		return (
+			(member.computed === true && referencesArguments(member.key)) ||
+			referencesArguments(member.value)
+		);
+	}
+	for (const key of Object.keys(typed)) {
+		if (referencesArguments((typed as unknown as Record<string, unknown>)[key])) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * The lexical class environment a nested function inherits from its enclosing
+ * class. PrivateEnvironment and super binding are lexical (ECMA-262): any code
+ * textually inside a class member — nested functions, arrows, functions in field
+ * initializers — resolves the class's `#x` names, and an *arrow* additionally
+ * inherits `super` (it has no own super). The private-name map and the super /
+ * home-object bindings are carried forward; the constructor / field-plan parts
+ * are per-function and must not leak (a nested function is not the constructor
+ * and, unless an arrow, has its own this/super).
+ */
+function inheritedPrivateEnvironment(
+	fn: IRFunction,
+	isArrow: boolean,
+): IRClassContext | undefined {
+	const context = fn.classContext;
+	if (!context) {
+		return undefined;
+	}
+	const hasPrivateNames = context.privateNames && context.privateNames.size > 0;
+	// A non-arrow nested function only needs the private environment; an arrow
+	// also inherits super/home-object bindings (super is lexical in arrows).
+	const superBinding = isArrow ? context.superBinding : undefined;
+	const classBinding = isArrow ? context.classBinding : undefined;
+	const instanceBrandBinding = isArrow ? context.instanceBrandBinding : undefined;
+	const staticBrandBinding = isArrow ? context.staticBrandBinding : undefined;
+	if (!hasPrivateNames && !superBinding && !classBinding) {
+		return undefined;
+	}
+	return {
+		isStatic: context.isStatic,
+		privateNames: context.privateNames,
+		superBinding,
+		classBinding,
+		instanceBrandBinding,
+		staticBrandBinding,
+	};
+}
+
 function compileNewFunction(
 	program: IntermediateProgram,
 	binding: Binding,
 	functionNode: ESTree.Node,
+	classContext?: IRClassContext,
 ) {
 	if (
 		functionNode.type !== "FunctionDeclaration" &&
@@ -2051,6 +2194,7 @@ function compileNewFunction(
 			("id" in functionNode ? functionNode.id?.name : undefined) ?? binding.name,
 		),
 		blocks: [],
+		classContext,
 		strict: functionStrict(fnFile, functionNode),
 		isGenerator:
 			functionNode.type !== "ArrowFunctionExpression" && functionNode.generator,
@@ -2110,11 +2254,19 @@ function compileNewFunctionExpression(
 	functionNode: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
 	classContext?: IRClassContext,
 	nameOverride?: string,
+	isMethod?: boolean,
 ) {
 	const cached = program.nodeToFunctionCache.get(functionNode);
 	if (cached) {
 		return cached.fnIndex;
 	}
+
+	const isArrow = functionNode.type === "ArrowFunctionExpression";
+	const isGenerator = !isArrow && functionNode.generator;
+	// Only constructors and generators own a `prototype`: an arrow or a
+	// (non-generator) method/getter/setter does not. Plain function expressions
+	// and class constructors keep it (default true); async is excluded at runtime.
+	const hasPrototype = isGenerator ? true : !(isArrow || isMethod);
 
 	const compiledFn: IRFunction = {
 		semanticFile: fn.semanticFile,
@@ -2126,9 +2278,9 @@ function compileNewFunctionExpression(
 		),
 		blocks: [],
 		classContext,
+		hasPrototype,
 		strict: functionStrict(fn.semanticFile, functionNode),
-		isGenerator:
-			functionNode.type !== "ArrowFunctionExpression" && functionNode.generator,
+		isGenerator,
 		isAsync: functionNode.async === true,
 
 		parameterCount: functionNode.params.length,
@@ -2256,7 +2408,13 @@ function emitFieldInstall(
 
 	let value: number;
 	if (entry.valueNode) {
+		// A field initializer runs via [[Call]], so its new.target is undefined —
+		// even though it is woven into the constructor's frame (whose new.target is
+		// the class). Flag the context so MetaProperty compiles to undefined.
+		const savedInFieldInitializer = fn.inFieldInitializer;
+		fn.inFieldInitializer = true;
 		value = compileExpression(program, fn, cursor, entry.valueNode, nameHint);
+		fn.inFieldInitializer = savedInFieldInitializer;
 		if (value === -1) {
 			value = compileUndefined(fn, cursor);
 		}
@@ -2442,6 +2600,13 @@ function compileClass(
 			return -1;
 		}
 
+		// ClassDefinitionEvaluation: the superclass must be a constructor whose
+		// `prototype` is an object or null (or the null literal, handled below).
+		// `extends 42`, `extends Math.abs`, `extends boundFn` (no prototype) throw.
+		if (!(classNode.superClass.type === "Literal" && classNode.superClass.value === null)) {
+			cursor.block.instructions.push({ type: "checkSuperClass", registers: [parent] });
+		}
+
 		superBinding = createCapturedBinding(program, fn, `__super_${classId}`);
 		storeRegisterAtLocation(
 			cursor.block,
@@ -2491,6 +2656,11 @@ function compileClass(
 		}
 
 		if (member.type === "PropertyDefinition") {
+			// Static Semantics early error: a class field initializer may not
+			// reference `arguments` (a field runs with no `arguments` binding).
+			if (referencesArguments(member.value ?? undefined)) {
+				throw new SyntaxError("'arguments' is not allowed in a class field initializer");
+			}
 			const valueNode = (member.value ?? null) as ESTree.Expression | null;
 			let entry: IRInstanceFieldPlanEntry;
 			if (member.key.type === "PrivateIdentifier") {
@@ -2666,15 +2836,23 @@ function compileClass(
 		);
 	}
 
-	// Wire the prototype chains.
+	// Wire the prototype chains. `extends null` is a heritage class whose
+	// protoParent is null and whose constructorParent is %Function.prototype%
+	// (ClassDefinitionEvaluation), rather than reading the superclass's prototype.
+	const extendsNull =
+		classNode.superClass?.type === "Literal" && classNode.superClass.value === null;
 	const prototypeKey = compileStaticString(program, fn, cursor, "prototype");
 	let prototype: number;
 	if (parent !== -1) {
 		const parentPrototype = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "loadProperty",
-			registers: [parentPrototype, parent, prototypeKey],
-		});
+		if (extendsNull) {
+			cursor.block.instructions.push({ type: "createNull", registers: [parentPrototype] });
+		} else {
+			cursor.block.instructions.push({
+				type: "loadProperty",
+				registers: [parentPrototype, parent, prototypeKey],
+			});
+		}
 
 		prototype = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
@@ -2697,9 +2875,24 @@ function compileClass(
 			type: "storeProperty",
 			registers: [ctor, prototypeKey, prototype],
 		});
+		// constructorParent: the superclass, or %Function.prototype% for extends null.
+		let constructorParent = parent;
+		if (extendsNull) {
+			const functionCtor = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "loadIntrinsic",
+				registers: [functionCtor],
+				intrinsic: "Function",
+			});
+			constructorParent = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "loadProperty",
+				registers: [constructorParent, functionCtor, prototypeKey],
+			});
+		}
 		cursor.block.instructions.push({
 			type: "setPrototype",
-			registers: [ctor, parent],
+			registers: [ctor, constructorParent],
 			literal: false,
 		});
 	} else {
@@ -2725,16 +2918,28 @@ function compileClass(
 		const privateName = isPrivate
 			? `#${(member.key as ESTree.PrivateIdentifier).name}`
 			: "";
+		// The method's own function name: a getter/setter is prefixed "get "/"set "
+		// (SetFunctionName with a prefix); a static string/number key uses its
+		// string form. A computed key ("") gets its name at runtime below.
+		const memberStaticName = isPrivate
+			? privateName
+			: member.computed
+				? ""
+				: member.key.type === "Identifier"
+					? member.key.name
+					: member.key.type === "Literal"
+						? String(member.key.value)
+						: "";
+		const accessorPrefix =
+			member.kind === "get" ? "get " : member.kind === "set" ? "set " : "";
+		const methodName = memberStaticName === "" ? "" : accessorPrefix + memberStaticName;
 		const methodIndex = compileNewFunctionExpression(
 			program,
 			fn,
 			member.value,
 			{ ...sharedContext, isStatic: member.static },
-			isPrivate
-				? privateName
-				: !member.computed && member.key.type === "Identifier"
-					? member.key.name
-					: "",
+			methodName,
+			true,
 		);
 		const method = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
@@ -2763,6 +2968,17 @@ function compileClass(
 
 		const target = member.static ? ctor : prototype;
 		const key = compileClassMemberKey(program, fn, cursor, member);
+		// A computed-key method/accessor is an anonymous function definition; its
+		// name comes from the (already-evaluated) key at runtime, prefixed
+		// "get "/"set " for accessors. Static keys were named at creation.
+		if (member.computed) {
+			cursor.block.instructions.push({
+				type: "setFunctionName",
+				registers: [method, key],
+				namePrefix:
+					member.kind === "get" ? "get" : member.kind === "set" ? "set" : undefined,
+			});
+		}
 		if (member.kind === "get" || member.kind === "set") {
 			cursor.block.instructions.push({
 				type: "defineAccessor",
@@ -3246,10 +3462,67 @@ function compileFunctionParams(
 	// arrow's `loadCaptured` walks to it. (Arrows never own such a binding.)
 	const thisBinding = getLexicalThisBinding(fn, node);
 	if (thisBinding && thisBinding.scopedTo === "captured") {
-		const thisRegister = nextRegisterDestination(fn);
-		block.instructions.push({ type: "loadThis", registers: [thisRegister] });
 		const location = getOrCreateBindingLocation(program, fn, thisBinding);
-		storeRegisterAtLocation(block, location, thisRegister);
+		if (fn.classContext?.isConstructor && fn.classContext.isDerivedConstructor) {
+			// A derived constructor's `this` is uninitialized until super() (which
+			// stores the cell — see compileSuperCall). loadThis would throw here, so
+			// seed the cell with the EMPTY sentinel; a nested arrow reading `this`
+			// before super() then throws via the cell, matching direct access.
+			const emptyRegister = nextRegisterDestination(fn);
+			block.instructions.push({ type: "createEmpty", registers: [emptyRegister] });
+			storeRegisterAtLocation(block, location, emptyRegister);
+			// Stash so compileSuperCall can refresh the cell once super() binds this.
+			fn.lexicalThisBinding = thisBinding;
+		} else {
+			const thisRegister = nextRegisterDestination(fn);
+			block.instructions.push({ type: "loadThis", registers: [thisRegister] });
+			storeRegisterAtLocation(block, location, thisRegister);
+		}
+	}
+
+	// When a nested arrow captures this function's `new.target` lexically, snapshot
+	// it into its captured slot at entry. new.target is fixed for the activation
+	// (set at [[Construct]], undefined otherwise), so the entry snapshot is valid
+	// even for a derived constructor.
+	const newTargetBinding = getLexicalNewTargetBinding(fn, node);
+	if (newTargetBinding && newTargetBinding.scopedTo === "captured") {
+		const newTargetRegister = nextRegisterDestination(fn);
+		block.instructions.push({ type: "loadNewTarget", registers: [newTargetRegister] });
+		storeRegisterAtLocation(
+			block,
+			getOrCreateBindingLocation(program, fn, newTargetBinding),
+			newTargetRegister,
+		);
+	}
+
+	// Parameter TDZ: parameters initialize left to right, so a default that reads
+	// a not-yet-initialized (or its own) parameter is a ReferenceError. Seed
+	// simple identifier parameter slots with EMPTY before processing so such a
+	// read hits the dead zone; the guard is emitted in compileIdentifier while
+	// inParameterExpression. Only needed when a parameter has a default.
+	if (node.params.some((param) => param.type === "AssignmentPattern")) {
+		for (const param of node.params) {
+			const id =
+				param.type === "Identifier"
+					? param
+					: param.type === "AssignmentPattern" && param.left.type === "Identifier"
+						? param.left
+						: undefined;
+			if (!id) {
+				continue;
+			}
+			const binding = fn.semanticFile.nodeToBinding.get(id);
+			if (!binding || binding.undeclared) {
+				continue;
+			}
+			const empty = nextRegisterDestination(fn);
+			cursor.block.instructions.push({ type: "createEmpty", registers: [empty] });
+			storeRegisterAtLocation(
+				cursor.block,
+				getOrCreateBindingLocation(program, fn, binding),
+				empty,
+			);
+		}
 	}
 
 	// A direct eval anywhere in these parameter expressions is in a
@@ -3334,6 +3607,16 @@ function compilePatternTarget(
 		}
 		case "ArrayPattern": {
 			compileArrayPatternTarget(program, fn, cursor, target, value, isAssign);
+			break;
+		}
+		case "CallExpression": {
+			// A CallExpression is not a valid assignment target (AssignmentTargetType
+			// is invalid, 13.15.1), so `[f() = 1] = x` / `[(f()), b] = y` are early
+			// SyntaxErrors. meriyah in webcompat mode fails to reject these, so
+			// enforce the early error here (only in a destructuring *assignment*).
+			if (isAssign) {
+				throw new SyntaxError("Invalid destructuring assignment target");
+			}
 			break;
 		}
 		default:
@@ -4248,7 +4531,12 @@ function compileFunctionDeclaration(
 		return;
 	}
 
-	const fnIndex = compileNewFunction(program, binding, statement);
+	const fnIndex = compileNewFunction(
+		program,
+		binding,
+		statement,
+		inheritedPrivateEnvironment(fn, false),
+	);
 	const location = getOrCreateBindingLocation(program, fn, binding);
 
 	const destination = nextRegisterDestination(fn);
@@ -6168,35 +6456,108 @@ function compileYieldStarExpression(
 		});
 		stepAndContinue(returnMode);
 	}
-	emitReturn(fn, noReturn, sentValue);
+	// No inner `return` method: return the received value directly. An async
+	// delegation awaits it first (spec: "If generatorKind is async, set value to
+	// ? Await(value)"), so a returned promise resolves before it leaves yield*.
+	if (isAsync) {
+		const noReturnCursor: IRCursor = { block: noReturn };
+		const awaited = compileAwaitRegister(fn, noReturnCursor, sentValue);
+		emitReturn(fn, noReturnCursor.block, awaited);
+	} else {
+		emitReturn(fn, noReturn, sentValue);
+	}
 
-	// check: a done result ends the delegation; otherwise yield the value out
+	// check: FIRST validate the (already-awaited, for async) inner result is an
+	// Object — the spec's "If Type(innerResult) is not Object, throw a TypeError"
+	// step, which runs AFTER the Await so a thenable value is still awaited
+	// without inspecting it. A next/throw/return method that returns a primitive
+	// (e.g. `next()` returning 42) is a TypeError, not a silently-swallowed
+	// `{ done: undefined }`. All three resume modes reach here, so this covers
+	// them for both sync and async delegation.
+	const checkBody: IRBlock = { instructions: [] };
+	const checkBodyIdx = fn.blocks.push(checkBody) - 1;
+	const notObject: IRBlock = { instructions: [] };
+	const notObjectIdx = fn.blocks.push(notObject) - 1;
+	{
+		const typeName = nextRegisterDestination(fn);
+		check.instructions.push({ type: "unary", registers: [typeName, result], operator: "typeof" });
+		// typeof "function" → a callable object: always valid.
+		const isFunc = nextRegisterDestination(fn);
+		check.instructions.push({
+			type: "binary",
+			registers: [isFunc, typeName, stringRegister(check, "function")],
+			operator: "===",
+		});
+		check.instructions.push({ type: "jumpIf", registers: [isFunc], blocks: [checkBodyIdx] });
+		// Otherwise it must be typeof "object" AND not null (typeof null is
+		// "object"); anything else (number/string/boolean/undefined/symbol/bigint)
+		// is a non-object result.
+		const isObjType = nextRegisterDestination(fn);
+		check.instructions.push({
+			type: "binary",
+			registers: [isObjType, typeName, stringRegister(check, "object")],
+			operator: "===",
+		});
+		const notObjType = nextRegisterDestination(fn);
+		check.instructions.push({ type: "unary", registers: [notObjType, isObjType], operator: "!" });
+		check.instructions.push({ type: "jumpIf", registers: [notObjType], blocks: [notObjectIdx] });
+		nullishGuard(check, result, notObjectIdx);
+		check.instructions.push({ type: "jump", blocks: [checkBodyIdx] });
+	}
+	{
+		const te = nextRegisterDestination(fn);
+		notObject.instructions.push({ type: "loadIntrinsic", registers: [te], intrinsic: "TypeError" });
+		const err = nextRegisterDestination(fn);
+		notObject.instructions.push({
+			type: "construct",
+			registers: [err, te, stringRegister(notObject, "Iterator result is not an object")],
+		});
+		notObject.instructions.push({ type: "throw", registers: [err] });
+	}
+
+	// checkBody: a done result ends the delegation; otherwise yield the value out
 	// and loop back to advance the inner iterator on the next resume.
 	{
 		const doneReg = nextRegisterDestination(fn);
-		check.instructions.push({
+		checkBody.instructions.push({
 			type: "loadProperty",
-			registers: [doneReg, result, stringRegister(check, "done")],
+			registers: [doneReg, result, stringRegister(checkBody, "done")],
 		});
-		check.instructions.push({ type: "jumpIf", registers: [doneReg], blocks: [doneIdx] });
+		checkBody.instructions.push({ type: "jumpIf", registers: [doneReg], blocks: [doneIdx] });
 		const valueReg = nextRegisterDestination(fn);
-		check.instructions.push({
+		checkBody.instructions.push({
 			type: "loadProperty",
-			registers: [valueReg, result, stringRegister(check, "value")],
+			registers: [valueReg, result, stringRegister(checkBody, "value")],
 		});
 		// The inner yield: suspend the outer generator. On resume the sent value
 		// and resume mode drive the next loop iteration (no throw/return dispatch
-		// here — the mode is forwarded into the delegation above). Async
-		// delegation awaits the value first (AsyncGeneratorYield).
-		const checkCursor: IRCursor = { block: check };
-		const yieldedReg = isAsync
-			? compileAwaitRegister(fn, checkCursor, valueReg)
-			: valueReg;
-		checkCursor.block.instructions.push({
+		// here — the mode is forwarded into the delegation above). The delegated
+		// value is NOT awaited: the spec's async delegate path is
+		// AsyncGeneratorYield(? IteratorValue(innerResult)) with no Await around
+		// it (only a plain `yield x` awaits x). Awaiting here would wrongly unwrap
+		// a promise yielded by a hand-written async iterator. For a sync operand
+		// the value is already awaited inside the AsyncFromSyncIterator wrapper.
+		checkBody.instructions.push({
 			type: "yield",
-			registers: [sentValue, mode, yieldedReg],
+			registers: [sentValue, mode, valueReg],
 		});
-		checkCursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
+		// AsyncGeneratorUnwrapYieldResumption: after AsyncGeneratorYield resumes,
+		// a return() resumption awaits its value before the loop dispatches it to
+		// the inner iterator's return (or, absent one, re-awaits + returns it). A
+		// next()/throw() resumption is used as-is (not awaited). The awaited value
+		// replaces `sentValue` so returnMode forwards the unwrapped value.
+		if (isAsync) {
+			const unwrapAwait: IRBlock = { instructions: [] };
+			const unwrapAwaitIdx = fn.blocks.push(unwrapAwait) - 1;
+			modeEquals(checkBody, RESUME_MODE_RETURN, unwrapAwaitIdx);
+			checkBody.instructions.push({ type: "jump", blocks: [headerIdx] });
+			const unwrapCursor: IRCursor = { block: unwrapAwait };
+			const awaited = compileAwaitRegister(fn, unwrapCursor, sentValue);
+			unwrapCursor.block.instructions.push({ type: "move", registers: [sentValue, awaited] });
+			unwrapCursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
+		} else {
+			checkBody.instructions.push({ type: "jump", blocks: [headerIdx] });
+		}
 	}
 
 	// doneBlock: extract the final value. A return() resumption that finishes
@@ -6252,7 +6613,7 @@ function compileYieldExpression(
 		registers: [valueDst, modeDst, yieldedSrc],
 	});
 
-	return emitResumeDispatch(fn, cursor, valueDst, modeDst);
+	return emitResumeDispatch(fn, cursor, valueDst, modeDst, fn.isAsync && fn.isGenerator);
 }
 
 /**
@@ -6268,6 +6629,10 @@ function emitResumeDispatch(
 	cursor: IRCursor,
 	valueDst: number,
 	modeDst: number,
+	// AsyncGeneratorUnwrapYieldResumption: an async generator's `yield` awaits a
+	// return() resumption value before unwinding (only yield, not await, and not
+	// sync generators). yield* handles its inner yield's resumption separately.
+	awaitReturnValue = false,
 ): number {
 	// throw() resumption: throw the sent value at the suspend point.
 	const throwBlock: IRBlock = { instructions: [] };
@@ -6277,7 +6642,13 @@ function emitResumeDispatch(
 	// return() resumption: return the sent value, through enclosing finalizers.
 	const returnBlock: IRBlock = { instructions: [] };
 	const returnIdx = fn.blocks.push(returnBlock) - 1;
-	emitReturn(fn, returnBlock, valueDst);
+	if (awaitReturnValue) {
+		const returnCursor: IRCursor = { block: returnBlock };
+		const awaited = compileAwaitRegister(fn, returnCursor, valueDst);
+		emitReturn(fn, returnCursor.block, awaited);
+	} else {
+		emitReturn(fn, returnBlock, valueDst);
+	}
 
 	const continuation: IRBlock = { instructions: [] };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
@@ -6371,6 +6742,15 @@ function compileExpression(
 		case "CallExpression": {
 			return compileCall(program, fn, cursor, expression);
 		}
+		case "ImportExpression": {
+			return compileImportExpression(
+				program,
+				fn,
+				cursor,
+				expression.source,
+				expression.options,
+			);
+		}
 		case "NewExpression": {
 			return compileNewExpression(program, fn, cursor, expression);
 		}
@@ -6397,9 +6777,15 @@ function compileExpression(
 			const destination = nextRegisterDestination(fn);
 			// Top-level `this` in a global *script* is globalThis in BOTH strict
 			// and sloppy mode (ScriptEvaluation binds globalThis regardless of
-			// strictness); only a module's top-level `this` is undefined.
+			// strictness); only a module's top-level `this` is undefined. A DIRECT
+			// eval instead inherits the caller's `this` (threaded onto the eval
+			// entry frame), so its top-level `this` is a plain loadThis.
 			const scope = fn.semanticFile.nodeToScope.get(expression);
-			if (scope?.node.type === "Program" && fn.semanticFile.type === "script") {
+			if (
+				scope?.node.type === "Program" &&
+				fn.semanticFile.type === "script" &&
+				!program.evalDirect
+			) {
 				cursor.block.instructions.push({
 					type: "loadIntrinsic",
 					registers: [destination],
@@ -6415,7 +6801,19 @@ function compileExpression(
 		}
 		case "MetaProperty": {
 			// new.target: the active frame's new.target. import.meta is gated by
-			// the syntax scan and never reaches here.
+			// the syntax scan and never reaches here. An arrow inherits new.target
+			// lexically — sema bound it to an implicit "new.target" binding on the
+			// enclosing non-arrow function, captured through the closure env.
+			const newTargetBinding = fn.semanticFile.nodeToBinding.get(expression);
+			if (newTargetBinding?.implicit === "new.target") {
+				const location = getOrCreateBindingLocation(program, fn, newTargetBinding);
+				return loadRegisterFromLocation(fn, cursor.block, location);
+			}
+			// A field initializer runs via [[Call]]: new.target is undefined, not the
+			// constructor's new.target (whose frame the initializer is woven into).
+			if (fn.inFieldInitializer) {
+				return compileUndefined(fn, cursor);
+			}
 			const destination = nextRegisterDestination(fn);
 			cursor.block.instructions.push({
 				type: "loadNewTarget",
@@ -6584,6 +6982,18 @@ function compileChainElement(
 			emitOptionalGuard(fn, cursor, object, shortCircuits);
 		}
 
+		// `obj?.#x` / `(chain).#x`: OptionalChain . PrivateIdentifier resolves the
+		// private slot/method rather than a named own property.
+		if (node.property.type === "PrivateIdentifier") {
+			return compilePrivateMemberLoad(
+				program,
+				fn,
+				cursor,
+				object,
+				`#${node.property.name}`,
+			);
+		}
+
 		const key = node.computed
 			? compileExpression(program, fn, cursor, node.property)
 			: node.property.type === "Identifier"
@@ -6599,6 +7009,12 @@ function compileChainElement(
 
 	if (node.type === "CallExpression") {
 		const calleeNode = node.callee as unknown as ESTree.Node;
+		// A super() call inside an optional chain (`super()?.a`) is still a
+		// SuperCall — route it through compileSuperCall (which binds `this`), not
+		// the ordinary callee path, then let the chain continue on its result.
+		if (calleeNode.type === "Super") {
+			return compileSuperCall(program, fn, cursor, node);
+		}
 		let callee: number;
 		let thisRegister: number;
 		if (calleeNode.type === "MemberExpression") {
@@ -6617,17 +7033,28 @@ function compileChainElement(
 				emitOptionalGuard(fn, cursor, object, shortCircuits);
 			}
 
-			const key = calleeNode.computed
-				? compileExpression(program, fn, cursor, calleeNode.property)
-				: calleeNode.property.type === "Identifier"
-					? compileStaticString(program, fn, cursor, calleeNode.property.name)
-					: -1;
 			thisRegister = object;
-			callee = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
-				type: "loadProperty",
-				registers: [callee, object, key],
-			});
+			if (calleeNode.property.type === "PrivateIdentifier") {
+				// `obj?.#m()` / `(chain).#m()`: brand-checked private method/getter.
+				callee = compilePrivateMemberLoad(
+					program,
+					fn,
+					cursor,
+					object,
+					`#${calleeNode.property.name}`,
+				);
+			} else {
+				const key = calleeNode.computed
+					? compileExpression(program, fn, cursor, calleeNode.property)
+					: calleeNode.property.type === "Identifier"
+						? compileStaticString(program, fn, cursor, calleeNode.property.name)
+						: -1;
+				callee = nextRegisterDestination(fn);
+				cursor.block.instructions.push({
+					type: "loadProperty",
+					registers: [callee, object, key],
+				});
+			}
 		} else {
 			callee = compileChainElement(
 				program,
@@ -6696,7 +7123,7 @@ function compileFunctionExpression(
 			program,
 			fn,
 			expression,
-			undefined,
+			inheritedPrivateEnvironment(fn, expression.type === "ArrowFunctionExpression"),
 			anonymous ? nameHint : undefined,
 		),
 	});
@@ -6915,6 +7342,33 @@ function compileIdentifierAssignment(
 		});
 
 		return destination;
+	}
+
+	if (binding.immutableSelfReference) {
+		// A named function expression's own-name binding is immutable
+		// (CreateImmutableBinding, N-strict = false): reassigning it is a no-op in
+		// sloppy code and a TypeError in strict code — mode-dependent, unlike
+		// const. The right-hand side (or compound read+op) is still evaluated for
+		// its side effects; the assignment expression yields that value.
+		let value: number;
+		if (assignmentExpression.operator === "=") {
+			value = compileExpression(program, fn, cursor, assignmentExpression.right);
+		} else {
+			const location = getOrCreateBindingLocation(program, fn, binding);
+			const current = loadRegisterFromLocation(fn, cursor.block, location);
+			const right = compileExpression(program, fn, cursor, assignmentExpression.right);
+			value = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "binary",
+				registers: [value, current, right],
+				operator: assignmentOperatorToBinaryOperator(assignmentExpression.operator),
+			});
+		}
+		if (!isSloppyFunction(fn)) {
+			return emitThrowTypeError(program, fn, cursor, "Assignment to constant variable.");
+		}
+		// Sloppy: the store is silently skipped; the expression value is the RHS.
+		return value;
 	}
 
 	if (binding.kind === "const") {
@@ -8374,10 +8828,60 @@ function compileDirectEval(
 		value: fn.inParameterExpression ?? false,
 	});
 
+	// Direct eval inherits the caller's this/new.target (GetThisEnvironment /
+	// GetNewTarget resolve against the calling context). Pass them explicitly so
+	// a compiled caller — which has no interpreter frame to read — threads them.
+	// Match ThisExpression: top-level `this` in a script is globalThis; inside any
+	// function it is the frame's `this`.
+	const callerThis = nextRegisterDestination(fn);
+	const providesThis = (type: string) =>
+		type === "ArrowFunctionExpression" ||
+		type === "FunctionDeclaration" ||
+		type === "FunctionExpression" ||
+		type === "PropertyDefinition" ||
+		type === "StaticBlock" ||
+		type === "Program";
+	let owner: Scope | null | undefined = fn.semanticFile.nodeToScope.get(callExpression);
+	while (owner && !providesThis(owner.node.type)) {
+		owner = owner.parent;
+	}
+	if (owner?.node.type === "Program" && fn.semanticFile.type === "script") {
+		cursor.block.instructions.push({
+			type: "loadIntrinsic",
+			registers: [callerThis],
+			intrinsic: "globalThis",
+		});
+	} else {
+		cursor.block.instructions.push({ type: "loadThis", registers: [callerThis] });
+	}
+	const callerNewTarget = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "loadNewTarget", registers: [callerNewTarget] });
+
+	// A field-initializer eval inherits the "no arguments" context: `arguments`
+	// in the eval'd code is a SyntaxError. Pass the flag so the eval compile
+	// applies the early error.
+	const inFieldInitializer = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createBoolean",
+		registers: [inFieldInitializer],
+		value: fn.inFieldInitializer ?? false,
+	});
+
 	const result = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "call",
-		registers: [result, callee, thisRegister, source, scopeObject, callerStrict, inParamExpr],
+		registers: [
+			result,
+			callee,
+			thisRegister,
+			source,
+			scopeObject,
+			callerStrict,
+			inParamExpr,
+			callerThis,
+			callerNewTarget,
+			inFieldInitializer,
+		],
 	});
 
 	// Write mutated bindings back (const can't be reassigned; the eval throws if
@@ -8399,6 +8903,91 @@ function compileDirectEval(
 	return result;
 }
 
+function compileImportExpression(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	source: ESTree.Expression,
+	options?: ESTree.Expression | null,
+): number {
+	const targetPath = dynamicImportTargetPath(program, fn, source);
+	const targetFile = targetPath
+		? program.semantic.files.find((file) => file.path === targetPath)
+		: undefined;
+	const targetInitIndex = targetFile?.commonjs ? -1 : targetFile ? compileFileInit(program, targetFile) : -1;
+	const namespaceExports = targetPath ? program.moduleNamespaces.get(targetPath) : undefined;
+
+	const callee = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadIntrinsic",
+		registers: [callee],
+		intrinsic: "__dynamicImport",
+	});
+	const thisRegister = compileUndefined(fn, cursor);
+	const specifier = compileExpression(program, fn, cursor, source);
+	if (options) {
+		compileExpression(program, fn, cursor, options);
+	}
+	const initFn = targetInitIndex >= 0 ? nextRegisterDestination(fn) : compileUndefined(fn, cursor);
+	if (targetInitIndex >= 0) {
+		cursor.block.instructions.push({
+			type: "createFunction",
+			registers: [initFn],
+			functionIndex: targetInitIndex,
+		});
+	}
+	const namespace = namespaceExports
+		? emitNamespaceObjectRegister(program, fn, cursor.block, namespaceExports)
+		: compileUndefined(fn, cursor);
+	const statusSlot = targetPath ? getDynamicModuleStatusSlot(program, targetPath) : -1;
+	const statusSlotRegister = compileNumberLiteral(fn, cursor, statusSlot);
+	const destination = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "call",
+		registers: [destination, callee, thisRegister, specifier, initFn, namespace, statusSlotRegister],
+	});
+	return destination;
+}
+
+function dynamicImportTargetPath(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	source: ESTree.Expression,
+): string | undefined {
+	if (source.type !== "Literal" || typeof source.value !== "string") {
+		return undefined;
+	}
+	const record = program.semantic.graph?.modules.get(fn.semanticFile.path);
+	return record?.dependencies.find(
+		(dependency) =>
+			dependency.kind === "dynamic" && dependency.specifier === source.value,
+	)?.resolvedPath ?? undefined;
+}
+
+function getDynamicModuleStatusSlot(program: IntermediateProgram, modulePath: string): number {
+	let slot = program.dynamicModuleStatusSlot.get(modulePath);
+	if (slot === undefined) {
+		slot = program.nextGlobalIndex++;
+		program.dynamicModuleStatusSlot.set(modulePath, slot);
+	}
+	return slot;
+}
+
+function compileDynamicImport(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	callExpression: ESTree.CallExpression,
+): number {
+	const source = callExpression.arguments[0];
+	return source
+		? compileImportExpression(program, fn, cursor, source)
+		: compileImportExpression(program, fn, cursor, {
+				type: "Identifier",
+				name: "undefined",
+			});
+}
+
 function compileCall(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -8407,7 +8996,7 @@ function compileCall(
 ): number {
 	const calleeNode = callExpression.callee as unknown as ESTree.Node;
 	if ((calleeNode.type as string) === "Import") {
-		return -1;
+		return compileDynamicImport(program, fn, cursor, callExpression);
 	}
 
 	if (calleeNode.type === "Super") {
@@ -8546,6 +9135,16 @@ function compileSuperCall(
 		type: "constructSuper",
 		registers: [destination, parent, argumentsArray],
 	});
+
+	// super() binds `this`; refresh the lexical-`this` cell (seeded EMPTY at entry)
+	// so a nested arrow capturing `this` observes the bound instance.
+	if (fn.lexicalThisBinding) {
+		storeRegisterAtLocation(
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, fn.lexicalThisBinding),
+			destination,
+		);
+	}
 
 	// InitializeInstanceElements for a derived class runs right after super()
 	// returns, with this now initialized.
@@ -8832,10 +9431,13 @@ function compileStaticIdentifier(
 	const location = getOrCreateBindingLocation(program, fn, binding);
 	const destination = loadRegisterFromLocation(fn, cursor.block, location);
 
-	if (isTdzBinding(binding)) {
+	if (isTdzBinding(binding) || fn.inParameterExpression) {
 		// A let/const/class read before its declaration runs is in the temporal
 		// dead zone: throw ReferenceError. Harmless once initialized; bindings
 		// that are not hole-inited (catch params, loop vars) never read empty.
+		// While compiling a parameter default (inParameterExpression), any read
+		// is guarded too: a not-yet-initialized parameter reads EMPTY and must
+		// throw, while outer/earlier bindings are never EMPTY here (no-op check).
 		cursor.block.instructions.push({
 			type: "throwIfTdz",
 			registers: [destination],
@@ -8875,6 +9477,17 @@ function emitNamespaceObject(
 	binding: Binding,
 	exports: Array<{ name: string; exporter: Binding }>,
 ) {
+	const namespace = emitNamespaceObjectRegister(program, fn, block, exports);
+	const location = getOrCreateBindingLocation(program, fn, binding);
+	storeRegisterAtLocation(block, location, namespace);
+}
+
+function emitNamespaceObjectRegister(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	exports: Array<{ name: string; exporter: Binding }>,
+): number {
 	const entries: Array<{ nameStringIndex: number; slot: number }> = [];
 	for (const { name, exporter } of exports) {
 		const location = getOrCreateBindingLocation(program, fn, exporter);
@@ -8894,8 +9507,7 @@ function emitNamespaceObject(
 		exports: entries,
 	});
 
-	const location = getOrCreateBindingLocation(program, fn, binding);
-	storeRegisterAtLocation(block, location, namespace);
+	return namespace;
 }
 
 function loadRegisterFromLocation(
@@ -8988,6 +9600,25 @@ function getLexicalThisBinding(
 
 	const scope = fn.semanticFile.nodeToScope.get(node);
 	return scope?.bindings.find((binding) => binding.implicit === "this");
+}
+
+/**
+ * The implicit lexical-`new.target` binding a non-arrow function exposes for
+ * nested arrows to capture, or undefined. Arrows never own one.
+ */
+function getLexicalNewTargetBinding(
+	fn: IRFunction,
+	node:
+		| ESTree.FunctionDeclaration
+		| ESTree.FunctionExpression
+		| ESTree.ArrowFunctionExpression,
+) {
+	if (node.type === "ArrowFunctionExpression") {
+		return undefined;
+	}
+
+	const scope = fn.semanticFile.nodeToScope.get(node);
+	return scope?.bindings.find((binding) => binding.implicit === "new.target");
 }
 
 function compileLiteral(

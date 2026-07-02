@@ -12,7 +12,7 @@ export const TEST262_METADATA = {
 	 * loops) may TIMEOUT under full-run contention, which is accepted (they pass in
 	 * isolation; see the never-overwrite-flaky-verdicts memory).
 	 */
-	runTimeoutMs: 5_000,
+	runTimeoutMs: 7_000,
 	compileTimeoutMs: 60_000,
 
 	/**

@@ -25,9 +25,19 @@ export function parseScript(
 			raw: false,
 
 			preserveParens: false,
-			lexical: false,
+			// Enforce static-semantic early errors so invalid source is rejected
+			// with a SyntaxError at compile: lexical catches duplicate/redeclared
+			// bindings, illegal continue/break, duplicate switch defaults, etc.;
+			// validateRegex validates regexp literals; webcompat enables the AnnexB
+			// sloppy relaxations we actually support (`\8`/`\9` string escapes,
+			// labelled/block function declarations) so they are not over-rejected.
+			// (webcompat has one meriyah bug — it accepts an invalid call-expression
+			// destructuring target `[f() = 1] = x` — but breaking real AnnexB code
+			// is worse than missing that one early error.)
+			lexical: true,
+			webcompat: true,
 			jsx: false,
-			validateRegex: false,
+			validateRegex: true,
 		}),
 	};
 }
@@ -49,9 +59,14 @@ export function parseModule(txt: string): Pick<SemanticFile, "type" | "strict" |
 			raw: false,
 
 			preserveParens: false,
-			lexical: false,
+			// See parseScript: enforce early errors + regexp validation so invalid
+			// module source is rejected with a SyntaxError at compile. (webcompat is
+			// a no-op for modules — AnnexB is sloppy-script-only — but kept for
+			// config parity.)
+			lexical: true,
+			webcompat: true,
 			jsx: false,
-			validateRegex: false,
+			validateRegex: true,
 		}),
 	};
 }

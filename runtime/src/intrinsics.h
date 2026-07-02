@@ -226,6 +226,11 @@ typedef enum MalIntrinsic {
      * the source and a scope object marshaled from the caller's visible bindings.
      */
     MAL_INTRINSIC_DIRECT_EVAL,
+    /*
+     * HostImportModuleDynamically entry point emitted for `import(specifier)`.
+     * Not exposed on globalThis.
+     */
+    MAL_INTRINSIC_DYNAMIC_IMPORT,
     MAL_INTRINSIC_COUNT,
 } MalIntrinsic;
 

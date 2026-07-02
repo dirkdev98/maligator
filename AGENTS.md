@@ -28,3 +28,12 @@ MAL_DEBUG=true node ./src/index.ts ./tests/local/tmp2.js
 ```
 
 Use https://tc39.es/ecma262/multipage/ when looking up parts of the spec.
+
+## Working Preferences
+
+- Prefer root-cause, correct, performant fixes over narrow test-specific workarounds.
+- Ask for explicit approval before running full or otherwise expensive Test262 suites.
+- Use targeted single-test or small-batch verification during development.
+- Never use git worktrees.
+- When asked to commit, create unsigned local commits and do not push unless explicitly asked.
+- Work through clusters in phased semantic slices rather than stopping after the first passing case.

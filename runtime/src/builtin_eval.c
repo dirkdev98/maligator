@@ -4,11 +4,13 @@
 #include <string.h>
 
 #include "array_buffer_object.h"
+#include "builtin_promise.h"
 #include "builtin_eval.h"
 #include "compiler_wire.h"
 #include "function_object.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "promise_object.h"
 #include "typed_array_object.h"
 #include "value.h"
 #include "vm_load.h"
@@ -78,15 +80,16 @@ static bool ensure_compiler(MalVm *vm) {
 // the caller scope). Returns nullptr with a pending throw on a compile or load
 // failure.
 static MalLoadedDefinition *compile_source(MalVm *vm, MalValue source, bool direct, bool caller_strict,
-                                           bool in_param_expr) {
+                                           bool in_param_expr, bool in_field_initializer) {
     if (!ensure_compiler(vm)) {
         return nullptr;
     }
-    MalValue compile_args[4] = {source, mal_value_new_boolean(direct),
+    MalValue compile_args[5] = {source, mal_value_new_boolean(direct),
                                 mal_value_new_boolean(caller_strict),
-                                mal_value_new_boolean(in_param_expr)};
+                                mal_value_new_boolean(in_param_expr),
+                                mal_value_new_boolean(in_field_initializer)};
     MalCompletion compiled =
-        mal_vm_call_value(vm, vm->compiler_fn, mal_value_new_undefined(), compile_args, 4);
+        mal_vm_call_value(vm, vm->compiler_fn, mal_value_new_undefined(), compile_args, 5);
     if (compiled.kind == MAL_COMPLETION_THROW) {
         vm->completion = compiled;
         return nullptr;
@@ -112,8 +115,8 @@ static MalLoadedDefinition *compile_source(MalVm *vm, MalValue source, bool dire
 
 MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
     // Indirect eval: always sloppy (no containing strict context), never a
-    // parameter-expression context.
-    MalLoadedDefinition *loaded = compile_source(vm, source, false, false, false);
+    // parameter-expression or field-initializer context.
+    MalLoadedDefinition *loaded = compile_source(vm, source, false, false, false, false);
     if (loaded == nullptr) {
         return mal_value_new_undefined();
     }
@@ -137,8 +140,9 @@ MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
 // global. Run via push + run_until_frame_count (not call_value) so the injection
 // lands between pushing the frame and executing its body.
 MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, bool caller_strict,
-                            bool in_param_expr) {
-    MalLoadedDefinition *loaded = compile_source(vm, source, true, caller_strict, in_param_expr);
+                            bool in_param_expr, bool in_field_initializer, MalValue caller_this,
+                            MalValue caller_new_target) {
+    MalLoadedDefinition *loaded = compile_source(vm, source, true, caller_strict, in_param_expr, in_field_initializer);
     if (loaded == nullptr) {
         return mal_value_new_undefined();
     }
@@ -147,9 +151,9 @@ MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, b
     if (entry < 0) {
         return mal_value_new_undefined();
     }
-    // Runs the entry with the caller scope injected into its with-stack; leaves
-    // the completion in vm->completion (throw propagates).
-    return mal_vm_run_entry_with_scope(vm, entry, scope_object);
+    // Runs the entry with the caller scope injected into its with-stack and the
+    // caller's this/new.target bound; leaves the completion in vm->completion.
+    return mal_vm_run_entry_with_scope(vm, entry, scope_object, caller_this, caller_new_target);
 }
 
 // A small ASCII source fragment as a string value (for the Function wrapper).
@@ -241,7 +245,85 @@ static MalValue mal_builtin_direct_eval(MalVm *vm, MalValue this_value, const Ma
     if (!mal_value_is_string(source)) {
         return source;
     }
-    return mal_vm_eval_direct(vm, source, scope, caller_strict, in_param_expr);
+    // Direct eval inherits the caller's this/new.target, passed explicitly by the
+    // compiler (a compiled caller has no script frame to read them from).
+    MalValue caller_this = arg_count >= 5 ? args[4] : mal_value_new_undefined();
+    MalValue caller_new_target = arg_count >= 6 ? args[5] : mal_value_new_undefined();
+    bool in_field_initializer = arg_count >= 7 && mal_value_is_truthy(args[6]);
+    return mal_vm_eval_direct(vm, source, scope, caller_strict, in_param_expr, in_field_initializer,
+                              caller_this, caller_new_target);
+}
+
+static MalValue mal_dynamic_import_promise(MalVm *vm) {
+    MalPromiseObject *promise = mal_promise_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
+    return mal_value_from_promise_object(promise);
+}
+
+static MalValue mal_dynamic_import_fulfill_module(MalVm *vm, MalValue this_value, const MalValue *args,
+                                                  i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    MalNativeFunctionObject *fn = mal_value_to_native_function_object(callee);
+    MalValue namespace = mal_native_function_object_get_slot(fn, 0);
+    MalValue status = mal_native_function_object_get_slot(fn, 1);
+    if (mal_value_is_int32(status)) {
+        vm->globals[mal_value_to_i32(status)] = mal_value_new_boolean(true);
+    }
+    return namespace;
+}
+
+static MalValue mal_builtin_dynamic_import(MalVm *vm, MalValue this_value, const MalValue *args,
+                                           i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+
+    MalValue promise_value = mal_dynamic_import_promise(vm);
+    MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
+
+    MalValue specifier = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue init_fn = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    MalValue namespace = arg_count >= 3 ? args[2] : mal_value_new_undefined();
+    i32 status_slot = arg_count >= 4 && mal_value_is_int32(args[3]) ? mal_value_to_i32(args[3]) : -1;
+    MalString *specifier_string = nullptr;
+    if (!mal_vm_to_string(vm, specifier, &specifier_string)) {
+        MalValue reason = vm->completion.value;
+        vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined() };
+        mal_promise_reject(vm, promise, reason);
+        return promise_value;
+    }
+
+    (void) specifier_string;
+    if (mal_value_is_callable(init_fn) && status_slot >= 0 && !mal_value_is_truthy(vm->globals[status_slot])) {
+        MalCompletion completion = mal_vm_call_value(vm, init_fn, mal_value_new_undefined(), nullptr, 0);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            mal_promise_reject(vm, promise, completion.value);
+            return promise_value;
+        }
+        if (mal_value_is_promise_object(completion.value)) {
+            MalValue resolve = mal_value_new_undefined();
+            MalValue reject = mal_value_new_undefined();
+            mal_promise_create_resolving(vm, promise_value, &resolve, &reject);
+            MalValue slots[2] = { namespace, mal_value_from_i32(status_slot) };
+            MalValue on_fulfilled = mal_value_from_native_function_object(
+                mal_native_function_object_new_with_slots(
+                    &vm->heap,
+                    mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                    mal_intrinsic_ascii(vm, ""),
+                    mal_dynamic_import_fulfill_module,
+                    slots,
+                    2));
+            mal_promise_perform_then(vm, completion.value, on_fulfilled, reject, resolve, reject);
+            return promise_value;
+        }
+        vm->globals[status_slot] = mal_value_new_boolean(true);
+    }
+    mal_promise_fulfill(vm, promise, namespace);
+    return promise_value;
 }
 
 void mal_intrinsics_init_eval(MalVm *vm, MalObject *global_this) {
@@ -259,4 +341,9 @@ void mal_intrinsics_init_eval(MalVm *vm, MalObject *global_this) {
         mal_native_function_object_new_arity(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
             mal_intrinsic_ascii(vm, "eval"), 1, mal_builtin_direct_eval));
+
+    vm->intrinsics[MAL_INTRINSIC_DYNAMIC_IMPORT] = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, "import"), 1, mal_builtin_dynamic_import));
 }

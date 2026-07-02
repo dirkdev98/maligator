@@ -148,12 +148,41 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
 }
 
 static bool mal_builtin_string_is_whitespace(c16 code_unit) {
-    return (code_unit >= 0x09 && code_unit <= 0x0D) ||
-        code_unit == 0x20 ||
-        code_unit == 0xA0 ||
-        code_unit == 0x2028 ||
-        code_unit == 0x2029 ||
-        code_unit == 0xFEFF;
+    // WhiteSpace + LineTerminator (ES2023 12.2 / 12.3): TAB/LF/VT/FF/CR, SPACE,
+    // NBSP, BOM, LINE/PARAGRAPH SEPARATOR, and every Unicode Zs (Space_Separator)
+    // code point. The previous set omitted the Zs chars beyond NBSP (OGHAM space,
+    // the U+2000..U+200A run, narrow/medium/ideographic space), so `trim` and
+    // friends left them in place.
+    switch (code_unit) {
+        case 0x09:
+        case 0x0A:
+        case 0x0B:
+        case 0x0C:
+        case 0x0D:
+        case 0x20:
+        case 0xA0:
+        case 0x1680:
+        case 0x2000:
+        case 0x2001:
+        case 0x2002:
+        case 0x2003:
+        case 0x2004:
+        case 0x2005:
+        case 0x2006:
+        case 0x2007:
+        case 0x2008:
+        case 0x2009:
+        case 0x200A:
+        case 0x2028:
+        case 0x2029:
+        case 0x202F:
+        case 0x205F:
+        case 0x3000:
+        case 0xFEFF:
+            return true;
+        default:
+            return false;
+    }
 }
 
 /**
@@ -996,21 +1025,61 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
     u32 result_length = 0;
 
-    if (arg_count == 0 || mal_value_is_undefined(args[0])) {
+    // lim = ToUint32(limit) (spec step 6, after ToString(this) at step 3). Skip
+    // it if ToString(this) already threw so that first completion is preserved
+    // (native builtins compute through a pending throw and it is detected at the
+    // call boundary). An absent/undefined limit is 2^32-1.
+    u32 lim = UINT32_MAX;
+    if (vm->completion.kind != MAL_COMPLETION_THROW && arg_count >= 2 && !mal_value_is_undefined(args[1])) {
+        f64 lim_number;
+        if (mal_vm_to_number(vm, args[1], &lim_number)) {
+            if (isnan(lim_number) || isinf(lim_number)) {
+                lim = 0;
+            } else {
+                f64 wrapped = fmod(trunc(lim_number), 4294967296.0);
+                if (wrapped < 0) {
+                    wrapped += 4294967296.0;
+                }
+                lim = (u32) wrapped;
+            }
+        }
+    }
+
+    // R = ToString(separator) (spec step 7) runs BEFORE the lim = 0 check
+    // (step 8), so an observable/throwing separator.toString is exercised even
+    // when the limit is 0. (coerce is a no-op when a throw is already pending.)
+    bool separator_undefined = arg_count == 0 || mal_value_is_undefined(args[0]);
+    MalString *separator = separator_undefined ? nullptr : mal_builtin_string_coerce(vm, args[0]);
+
+    // Any coercion above (this / limit / separator) may have thrown; return a
+    // harmless empty array so the call boundary observes the first pending throw.
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_from_array_object(result);
+    }
+
+    // Spec step 8: a zero limit yields the empty array.
+    if (lim == 0) {
+        return mal_value_from_array_object(result);
+    }
+
+    // Spec step 9: an undefined separator yields the whole string.
+    if (separator_undefined) {
         mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, mal_value_from_string(string));
         return mal_value_from_array_object(result);
     }
 
-    MalString *separator = mal_builtin_string_coerce(vm, args[0]);
     usize length = mal_string_length(string);
     usize separator_length = mal_string_length(separator);
 
     if (separator_length == 0) {
-        // Split into individual code units.
+        // Split into individual code units, stopping at the limit.
         for (usize i = 0; i < length; i++) {
+            if (result_length == lim) {
+                return mal_value_from_array_object(result);
+            }
             mal_array_object_store(
                 result,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)},
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) result_length++)},
                 mal_builtin_string_from_units(vm, mal_string_code_units(string) + i, 1)
             );
         }
@@ -1030,6 +1099,9 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
             (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) result_length++)},
             mal_builtin_string_from_units(vm, mal_string_code_units(string) + segment_start, position - segment_start)
         );
+        if (result_length == lim) {
+            return mal_value_from_array_object(result);
+        }
         position += separator_length;
         segment_start = position;
     }

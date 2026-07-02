@@ -41,6 +41,13 @@ typedef struct MalObject {
      * fits the padding after the preceding bools.
      */
     bool immutable_prototype;
+    /**
+     * Set on the primitive prototypes (%String/Number/Boolean/Symbol/BigInt.prototype%)
+     * and %Object.prototype% at intrinsics init. Any define/set/delete/reparent of one
+     * breaks `mal_primitive_method_protector`, disabling the primitive-method inline
+     * cache (which assumes those prototypes are unmodified). Free: fits the padding.
+     */
+    bool watched_method_proto;
     /** Inline named-property values for the shape; null in dictionary mode. */
     MalValue *slots;
     /** Dictionary/overflow table (named + index props); null until needed. */

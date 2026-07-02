@@ -1065,7 +1065,7 @@ function scalarReplaceMutableObjectsInFunction(
 			if (instruction.type !== "createObject" && instruction.type !== "createObjectShaped") {
 				continue;
 			}
-			const objectRegister = instruction.registers[0]!;
+			const objectRegister = instruction.registers[0];
 			if (defCount.get(objectRegister) !== 1) {
 				continue;
 			}
@@ -1096,7 +1096,7 @@ function scalarReplaceMutableObjectsInFunction(
 				const aliasRegister = worklist.pop()!;
 				for (const { instruction: use, position } of usesOf.get(aliasRegister) ?? []) {
 					if (use.type === "loadProperty" && position === 1) {
-						const keyStringIndex = constStringIndex.get(use.registers[2]!);
+						const keyStringIndex = constStringIndex.get(use.registers[2]);
 						if (keyStringIndex === undefined) {
 							safe = false;
 							break;
@@ -1104,7 +1104,7 @@ function scalarReplaceMutableObjectsInFunction(
 						reads.push({ load: use, keyStringIndex });
 						touched.push(use);
 					} else if (use.type === "storeProperty" && position === 0) {
-						const keyStringIndex = constStringIndex.get(use.registers[1]!);
+						const keyStringIndex = constStringIndex.get(use.registers[1]);
 						if (keyStringIndex === undefined) {
 							safe = false;
 							break;
@@ -1113,7 +1113,7 @@ function scalarReplaceMutableObjectsInFunction(
 						touched.push(use);
 						hasStore = true;
 					} else if (use.type === "move" && position === 1) {
-						const target = use.registers[0]!;
+						const target = use.registers[0];
 						if (defCount.get(target) !== 1) {
 							safe = false;
 							break;

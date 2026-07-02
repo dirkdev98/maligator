@@ -119,6 +119,9 @@ function malFunctionRow(
 		`        .captured_count = ${fn.capturedCount},`,
 		`        .strict = ${fn.strict},`,
 		`        .needs_arguments = ${fn.needsArguments},`,
+		`        .is_derived_constructor = ${fn.isDerivedConstructor},`,
+		`        .is_class_constructor = ${fn.isClassConstructor},`,
+		`        .has_prototype = ${fn.hasPrototype},`,
 		`        .instruction_count = ${omitBytecode ? 0 : fn.instructions.length},`,
 		`        .instructions = ${omitBytecode ? "nullptr" : instructionsSymbol},`,
 		`        .handler_count = ${omitBytecode ? 0 : fn.handlers.length},`,
@@ -578,7 +581,7 @@ function emitInstruction(instruction: VmInstruction) {
 		case "DEFINE_PROPERTY":
 			return `{ .opcode = MAL_OP_DEFINE_PROPERTY, .as.define_property = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value}, .enumerable = ${instruction.enumerable} } }`;
 		case "SET_FUNCTION_NAME":
-			return `{ .opcode = MAL_OP_SET_FUNCTION_NAME, .as.set_function_name = { .func = ${instruction.func}, .key = ${instruction.key} } }`;
+			return `{ .opcode = MAL_OP_SET_FUNCTION_NAME, .as.set_function_name = { .func = ${instruction.func}, .key = ${instruction.key}, .prefix = ${instruction.prefix} } }`;
 		case "CREATE_PRIVATE_NAME":
 			return `{ .opcode = MAL_OP_CREATE_PRIVATE_NAME, .as.create_private_name = { .dst = ${instruction.dst} } }`;
 		case "DEFINE_PRIVATE":
@@ -613,6 +616,8 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_IS_EMPTY, .as.is_empty = { .dst = ${instruction.dst}, .src = ${instruction.src} } }`;
 		case "REQUIRE_COERCIBLE":
 			return `{ .opcode = MAL_OP_REQUIRE_COERCIBLE, .as.require_coercible = { .src = ${instruction.src} } }`;
+		case "CHECK_SUPER_CLASS":
+			return `{ .opcode = MAL_OP_CHECK_SUPER_CLASS, .as.check_super_class = { .parent = ${instruction.parent} } }`;
 		case "CREATE_REST_ARGUMENTS":
 			return `{ .opcode = MAL_OP_CREATE_REST_ARGUMENTS, .as.create_rest_arguments = { .dst = ${instruction.dst}, .start_index = ${instruction.startIndex} } }`;
 		case "ARRAY_REST":
@@ -750,6 +755,8 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_EVAL";
 		case "__directEval":
 			return "MAL_INTRINSIC_DIRECT_EVAL";
+		case "__dynamicImport":
+			return "MAL_INTRINSIC_DYNAMIC_IMPORT";
 		case "NaN":
 			return "MAL_INTRINSIC_NAN_VALUE";
 		case "Infinity":

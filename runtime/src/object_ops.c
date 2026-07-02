@@ -17,6 +17,15 @@
  */
 bool mal_array_elements_protector = true;
 
+/**
+ * Holds while none of the watched primitive prototypes (String/Number/Boolean/
+ * Symbol/BigInt.prototype + Object.prototype) has been mutated. The primitive-method
+ * inline cache (mal_vm_op_load_property_ic) caches resolved methods only while this
+ * is true; any define/set/delete/reparent of a watched prototype clears it (see the
+ * `watched_method_proto` object flag). Read on the primitive property-load hot path.
+ */
+bool mal_primitive_method_protector = true;
+
 /* Generational card barrier for a property descriptor stored into `owner`'s
  * dictionary table: any of value/getter/setter may be a young heap pointer. No-op
  * unless MAL_GC_GENERATIONAL is built (mal_gc_card folds out). */
@@ -184,6 +193,9 @@ bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
     if (object->fast_elements_proto) {
         mal_array_elements_protector = false;
     }
+    if (object->watched_method_proto) {
+        mal_primitive_method_protector = false;
+    }
 
     object->prototype = prototype;
     // Old object reparented onto a young prototype: remember it (the prototype is a
@@ -295,6 +307,11 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
     if (key.kind == MAL_KEY_INDEX && object->fast_elements_proto) {
         mal_array_elements_protector = false;
     }
+    // Defining any property on a watched primitive prototype invalidates the
+    // primitive-method cache (a new/changed method could shadow a cached lookup).
+    if (object->watched_method_proto) {
+        mal_primitive_method_protector = false;
+    }
 
     // Dense array element fast path. A default-data store at an integer index goes
     // straight into the vector; anything the vector cannot represent (non-default
@@ -383,6 +400,9 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
 }
 
 bool mal_object_delete_own(MalObject *object, MalKey key) {
+    if (object->watched_method_proto) {
+        mal_primitive_method_protector = false;
+    }
     // Dense array element: a present index becomes a hole (dense_delete shades the
     // dropped reference); dense elements are always configurable, so delete always
     // succeeds. In dense mode no index keys live in the table, so this is the whole
@@ -427,6 +447,11 @@ bool mal_object_delete_own(MalObject *object, MalKey key) {
 }
 
 bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
+    // Reassigning/adding a property on a watched primitive prototype (e.g.
+    // `String.prototype.charCodeAt = fn`) invalidates the primitive-method cache.
+    if (object->watched_method_proto) {
+        mal_primitive_method_protector = false;
+    }
     MalPropertyResolution resolution = mal_object_resolve_property(object, key);
 
     if (!resolution.found) {

@@ -106,6 +106,7 @@ export const WIRE_OPCODES = [
 	// (vm_load.c). APPEND-ONLY.
 	"WITH_RESOLVE_BASE",
 	"SET_FUNCTION_NAME",
+	"CHECK_SUPER_CLASS",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -212,6 +213,7 @@ export const WIRE_INTRINSICS = [
 	"eval",
 	"__directEval",
 	"Atomics",
+	"__dynamicImport",
 ] as const;
 const INTRINSIC_TAG = new Map<string, number>(
 	WIRE_INTRINSICS.map((name, i) => [name, i]),
@@ -464,6 +466,9 @@ function writeFunction(w: Writer, fn: VmFunction, debug: boolean): void {
 	w.u8(fn.isAsync && fn.isGenerator ? 3 : fn.isAsync ? 2 : fn.isGenerator ? 1 : 0);
 	w.u8(fn.strict ? 1 : 0);
 	w.u8(fn.needsArguments ? 1 : 0);
+	w.u8(fn.isDerivedConstructor ? 1 : 0);
+	w.u8(fn.isClassConstructor ? 1 : 0);
+	w.u8(fn.hasPrototype ? 1 : 0);
 	w.i32(fn.parameterCount);
 	w.i32(fn.length);
 	w.i32(fn.registerCount);
@@ -725,6 +730,7 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 		case "SET_FUNCTION_NAME":
 			w.i32(i.func);
 			w.i32(i.key);
+			w.u8(i.prefix);
 			return;
 		case "SET_PROTOTYPE":
 			w.i32(i.object);
@@ -757,6 +763,9 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			return;
 		case "REQUIRE_COERCIBLE":
 			w.i32(i.src);
+			return;
+		case "CHECK_SUPER_CLASS":
+			w.i32(i.parent);
 			return;
 		case "CREATE_REST_ARGUMENTS":
 			w.i32(i.dst);
@@ -890,6 +899,9 @@ function readFunction(r: Reader): VmFunction {
 	const kind = r.u8();
 	const strict = r.u8() !== 0;
 	const needsArguments = r.u8() !== 0;
+	const isDerivedConstructor = r.u8() !== 0;
+	const isClassConstructor = r.u8() !== 0;
+	const hasPrototype = r.u8() !== 0;
 	const parameterCount = r.i32();
 	const length = r.i32();
 	const registerCount = r.i32();
@@ -925,6 +937,9 @@ function readFunction(r: Reader): VmFunction {
 		capturedCount,
 		strict,
 		needsArguments,
+		isDerivedConstructor,
+		isClassConstructor,
+		hasPrototype,
 		instructions,
 		handlers,
 		fileIndex,
@@ -1138,6 +1153,8 @@ function readInstruction(r: Reader): VmInstruction {
 			};
 		case "SET_PROTOTYPE":
 			return { opcode, object: r.i32(), prototype: r.i32(), literal: r.u8() !== 0 };
+		case "SET_FUNCTION_NAME":
+			return { opcode, func: r.i32(), key: r.i32(), prefix: r.u8() };
 		case "LOAD_UNDECLARED":
 			return { opcode, dst: r.i32(), nameStringIndex: r.i32() };
 		case "LOAD_GLOBAL_PROPERTY":
@@ -1156,6 +1173,8 @@ function readInstruction(r: Reader): VmInstruction {
 			return { opcode, dst: r.i32(), src: r.i32() };
 		case "REQUIRE_COERCIBLE":
 			return { opcode, src: r.i32() };
+		case "CHECK_SUPER_CLASS":
+			return { opcode, parent: r.i32() };
 		case "CREATE_REST_ARGUMENTS":
 			return { opcode, dst: r.i32(), startIndex: r.i32() };
 		case "ARRAY_REST":

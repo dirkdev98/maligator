@@ -44,8 +44,6 @@ static MalValue mal_afs_reject_pending(MalVm *vm, MalValue cap_promise, MalValue
 static MalValue mal_async_from_sync_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
-    (void) args;
-    (void) arg_count;
 
     MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
     MalValue sync_iterator = mal_native_function_object_get_slot(self, MAL_AFS_NEXT_SLOT_SYNC_ITERATOR);
@@ -58,7 +56,14 @@ static MalValue mal_async_from_sync_next(MalVm *vm, MalValue this_value, const M
         return mal_value_new_undefined();
     }
 
-    MalCompletion step = mal_vm_call_value(vm, sync_next, sync_iterator, nullptr, 0);
+    // Forward the received value to the sync iterator's next: spec
+    // %AsyncFromSyncIteratorPrototype%.next(value) does IteratorNext with the
+    // value present, so `next` is invoked with the value as its sole argument
+    // (when absent it is invoked with none). `args` points into the rooted
+    // caller arg array, so it stays alive across the call.
+    MalCompletion step = arg_count >= 1
+        ? mal_vm_call_value(vm, sync_next, sync_iterator, args, 1)
+        : mal_vm_call_value(vm, sync_next, sync_iterator, nullptr, 0);
     if (step.kind == MAL_COMPLETION_THROW) {
         return mal_afs_reject_pending(vm, cap_promise, cap_reject);
     }
@@ -152,7 +157,14 @@ bool mal_vm_get_async_iterator(MalVm *vm, MalValue value, MalIteratorRecord *rec
         return mal_vm_async_iterator_from_method(vm, value, method, true, record_out);
     }
 
-    // No @@asyncIterator: wrap the sync iterator.
+    // GetMethod: a @@asyncIterator that is present but not callable is a TypeError
+    // — do NOT fall back to @@iterator (the sync method is never even looked up).
+    if (!mal_value_is_nil(method)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.asyncIterator is not a function");
+        return false;
+    }
+
+    // Undefined/null @@asyncIterator: wrap the sync iterator (async-from-sync).
     MalIteratorRecord sync_record;
     if (!mal_vm_get_iterator(vm, value, &sync_record)) {
         return false;

@@ -70,6 +70,28 @@ export interface VmFunction {
 	 */
 	needsArguments: boolean;
 
+	/**
+	 * A derived class constructor: `this` starts uninitialized (TDZ) and is bound
+	 * only by super(), so the construct site allocates no eager `this` and reads
+	 * of `this` before super() throw ReferenceError.
+	 */
+	isDerivedConstructor: boolean;
+
+	/**
+	 * A class constructor (base or derived): its `prototype` property is
+	 * non-writable (MakeConstructor with writablePrototype = false), unlike a
+	 * normal function's writable prototype.
+	 */
+	isClassConstructor: boolean;
+
+	/**
+	 * Whether this function owns a `prototype` property. False for methods,
+	 * getters, setters and arrows (not constructors); true for normal functions,
+	 * class constructors and generators. (Async non-generators are excluded at
+	 * runtime by kind.)
+	 */
+	hasPrototype: boolean;
+
 	instructions: Array<VmInstruction>;
 	handlers: Array<VmExceptionHandler>;
 
@@ -402,6 +424,8 @@ export type VmInstruction =
 			opcode: "SET_FUNCTION_NAME";
 			func: number;
 			key: number;
+			// 0 = no prefix, 1 = "get ", 2 = "set ".
+			prefix: number;
 	  }
 	| {
 			opcode: "CREATE_PRIVATE_NAME";
@@ -488,6 +512,10 @@ export type VmInstruction =
 	| {
 			opcode: "REQUIRE_COERCIBLE";
 			src: number;
+	  }
+	| {
+			opcode: "CHECK_SUPER_CLASS";
+			parent: number;
 	  }
 	| {
 			opcode: "CREATE_REST_ARGUMENTS";
@@ -654,6 +682,11 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		capturedCount: fn.nextCapturedIndex,
 		strict: fn.strict ?? fn.semanticFile.strict,
 		needsArguments,
+		isDerivedConstructor:
+			(fn.classContext?.isConstructor ?? false) &&
+			(fn.classContext?.isDerivedConstructor ?? false),
+		isClassConstructor: fn.classContext?.isConstructor ?? false,
+		hasPrototype: fn.hasPrototype ?? true,
 		instructions,
 		handlers: collectExceptionHandlers(instructions),
 		fileIndex,
@@ -1090,6 +1123,8 @@ function lowerInstructionToVmInstruction(
 				opcode: "SET_FUNCTION_NAME",
 				func: instruction.registers[0],
 				key: instruction.registers[1],
+				prefix:
+					instruction.namePrefix === "get" ? 1 : instruction.namePrefix === "set" ? 2 : 0,
 			};
 		case "createPrivateName":
 			return {
@@ -1191,6 +1226,11 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "REQUIRE_COERCIBLE",
 				src: instruction.registers[0],
+			};
+		case "checkSuperClass":
+			return {
+				opcode: "CHECK_SUPER_CLASS",
+				parent: instruction.registers[0],
 			};
 		case "createRestArguments":
 			return {

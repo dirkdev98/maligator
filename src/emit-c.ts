@@ -362,6 +362,15 @@ export function emitCompiledFunction(
 		return null;
 	}
 
+	// A derived constructor's `this` starts in a TDZ (uninitialized until super()),
+	// enforced only on the interpreter's LOAD_THIS / RETURN paths. Keep derived
+	// constructors interpreted so those checks apply. Most already are (they
+	// contain constructSuper, which the backend doesn't lower); this also covers
+	// the no-super/return-before-super error cases, which otherwise compile.
+	if (fn.isDerivedConstructor) {
+		return null;
+	}
+
 	// A function with its own captured slots needs a per-activation MalEnv node
 	// (function_index == this function) for LOAD/STORE_CAPTURED(owner == self) and
 	// for the closures it creates to capture. The interpreter's

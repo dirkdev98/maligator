@@ -346,6 +346,49 @@ void mal_intrinsics_init(MalVm *vm) {
     );
 
     mal_intrinsics_init_global_this(vm);
+
+    // All builtin prototypes/constructors are now fully populated. Watch the objects
+    // the primitive-method + intrinsic-own-property inline cache reads from, so any
+    // later user mutation invalidates the cache; the protector holds until then. Set
+    // last so the init-time method installs above do not trip it.
+    //   - the primitive prototypes + %Object.prototype% (the chain a primitive
+    //     receiver walks) — for `str.method()` / `num.method()`;
+    //   - the namespaces Math/JSON/Reflect/Atomics and every builtin constructor —
+    //     their static/namespace methods (`Math.floor`, `String.fromCharCode`,
+    //     `Object.keys`, …) live in the overflow table and are otherwise re-hashed
+    //     every call.
+    static const MalIntrinsic watched_lookup_objects[] = {
+        MAL_INTRINSIC_OBJECT_PROTOTYPE,
+        MAL_INTRINSIC_STRING_PROTOTYPE,
+        MAL_INTRINSIC_NUMBER_PROTOTYPE,
+        MAL_INTRINSIC_BOOLEAN_PROTOTYPE,
+        MAL_INTRINSIC_SYMBOL_PROTOTYPE,
+        MAL_INTRINSIC_BIGINT_PROTOTYPE,
+        MAL_INTRINSIC_MATH,
+        MAL_INTRINSIC_JSON,
+        MAL_INTRINSIC_REFLECT,
+        MAL_INTRINSIC_ATOMICS,
+    };
+    for (usize i = 0; i < countof(watched_lookup_objects); i++) {
+        MalValue obj = vm->intrinsics[watched_lookup_objects[i]];
+        if (mal_value_is_object(obj)) {
+            mal_value_to_object(obj)->watched_method_proto = true;
+        }
+    }
+    // Every builtin constructor (their static methods live in the overflow table).
+    for (usize i = 0; i < countof(constructor_slots); i++) {
+        MalValue value = vm->intrinsics[constructor_slots[i]];
+        if (mal_value_is_object(value)) {
+            mal_value_to_object(value)->watched_method_proto = true;
+        }
+    }
+    for (i32 kind = 0; kind < MAL_TA_KIND_COUNT; kind++) {
+        MalValue value = vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_CONSTRUCTOR_BASE + kind];
+        if (mal_value_is_object(value)) {
+            mal_value_to_object(value)->watched_method_proto = true;
+        }
+    }
+    mal_primitive_method_protector = true;
 }
 
 /**

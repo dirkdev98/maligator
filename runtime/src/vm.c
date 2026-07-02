@@ -1114,6 +1114,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_REQUIRE_COERCIBLE:
                 mal_op_require_coercible(frame, &instruction);
                 break;
+            case MAL_OP_CHECK_SUPER_CLASS:
+                mal_op_check_super_class(frame, &instruction);
+                break;
             case MAL_OP_CREATE_REST_ARGUMENTS:
                 mal_op_create_rest_arguments(frame, &instruction);
                 break;
@@ -1168,6 +1171,15 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_RETURN: {
                 MalValue return_value = frame->registers[instruction.as.ret.value];
                 if (frame->is_construct && !mal_value_is_object(return_value)) {
+                    // GetThisBinding: a derived constructor that returns a
+                    // non-object without having bound `this` (no super() call) is
+                    // a ReferenceError. The frame stays on the stack so the
+                    // post-switch unwind propagates the throw.
+                    if (mal_value_is_empty(frame->this_value)) {
+                        mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+                            "Must call super constructor in derived class before returning from derived constructor");
+                        break;
+                    }
                     return_value = frame->this_value;
                 }
 
@@ -1780,17 +1792,22 @@ MalValue mal_vm_interpret_function(
     return vm->completion.value;
 }
 
-MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue scope_object) {
+MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue scope_object,
+                                     MalValue this_value, MalValue new_target) {
     // Push the (spliced) eval entry, then inject the caller scope object into the
     // fresh frame's with-stack BEFORE running its body, so direct-eval free
     // identifiers (compiled as with-dynamic reads) resolve against it. Mirrors
     // mal_vm_interpret_function's push + run, but with the injection in between —
     // hence not routed through mal_vm_call_value.
     i32 baseline = vm->frame_count;
-    if (!mal_vm_push_function_frame(vm, function_index, nullptr, mal_value_new_undefined(), 0, -1, -1)) {
+    if (!mal_vm_push_function_frame(vm, function_index, nullptr, this_value, 0, -1, -1)) {
         return mal_value_new_undefined(); // pending RangeError (call stack)
     }
     MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
+    // Direct eval runs in the caller's `this`/new.target (GetThisEnvironment /
+    // GetNewTarget resolve against the calling context).
+    frame->this_value = this_value;
+    frame->new_target = new_target;
     frame->with_objects = malloc(sizeof(MalValue));
     frame->with_objects[0] = scope_object;
     frame->with_count = 1;
@@ -1946,27 +1963,38 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
     } else if (mal_value_is_function_object(resolution.callee)) {
         i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
         const MalFunction *function = &vm->definition->functions[function_index];
-        if (function->kind != MAL_FUNCTION_KIND_NORMAL) {
-            // Generators and other non-normal kinds are not constructors.
+        if (function->kind != MAL_FUNCTION_KIND_NORMAL || !function->has_prototype) {
+            // Not a constructor: generators/async (non-normal kind) and, among
+            // normal-kind functions, methods/getters/setters/arrows (which own no
+            // `prototype`, unlike normal functions and class constructors).
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
             completion = vm->completion;
         } else {
             MalEnv *env = mal_value_to_function_object(resolution.callee)->creation_env;
 
-            // OrdinaryCreateFromConstructor: allocate `this` from new.target's
-            // `.prototype` (falling back to %Object.prototype% when absent).
-            MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-            if (mal_value_is_object(effective_new_target)) {
-                MalValue prototype_value;
-                if (!mal_vm_get_property(vm, effective_new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype_value)) {
-                    free(resolution.owned_args);
-                    return vm->completion;
+            // A derived constructor's `this` is uninitialized until super() binds
+            // it (ECMA-262 [[ThisBindingStatus]] = uninitialized): allocate no
+            // eager instance and hand the frame the EMPTY sentinel, so any `this`
+            // read before super() throws ReferenceError.
+            MalValue this_value;
+            if (function->is_derived_constructor) {
+                this_value = mal_value_new_empty();
+            } else {
+                // OrdinaryCreateFromConstructor: allocate `this` from new.target's
+                // `.prototype` (falling back to %Object.prototype% when absent).
+                MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+                if (mal_value_is_object(effective_new_target)) {
+                    MalValue prototype_value;
+                    if (!mal_vm_get_property(vm, effective_new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype_value)) {
+                        free(resolution.owned_args);
+                        return vm->completion;
+                    }
+                    if (mal_value_is_object(prototype_value)) {
+                        prototype = mal_value_to_object(prototype_value);
+                    }
                 }
-                if (mal_value_is_object(prototype_value)) {
-                    prototype = mal_value_to_object(prototype_value);
-                }
+                this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
             }
-            MalValue this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
 
             if (function->compiled != nullptr) {
                 // Native-backend constructor: the compiled body applies the

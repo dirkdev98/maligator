@@ -26,8 +26,15 @@ export function loadEntrypointAndRunSemanticAnalysis(
 		graph,
 	};
 
+	const analyzed = new Set<string>();
 	for (const modulePath of graph.evaluationOrder) {
 		program.files.push(analyzeModuleRecord(graph.modules.get(modulePath)!));
+		analyzed.add(modulePath);
+	}
+	for (const [modulePath, record] of graph.modules) {
+		if (!analyzed.has(modulePath)) {
+			program.files.push(analyzeModuleRecord(record));
+		}
 	}
 
 	debugSemanticProgram(program);

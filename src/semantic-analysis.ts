@@ -80,13 +80,22 @@ type BindingKind = "var" | "let" | "const";
 export interface Binding {
 	kind: BindingKind;
 	name: string;
-	implicit?: "arguments" | "this";
+	implicit?: "arguments" | "this" | "new.target";
 
 	declarationNode?: ESTree.Node;
 	usageNodes: Array<ESTree.Node>;
 
 	undeclared?: true;
 	scopedTo?: "local" | "captured" | "global";
+
+	/**
+	 * A named function expression's own-name binding (CreateImmutableBinding).
+	 * It is initialized to the closure and reads normally, but is immutable:
+	 * reassigning it is a silent no-op in sloppy code and a TypeError in strict
+	 * code (unlike `const`, which always throws). The kind stays let/var for
+	 * storage/TDZ/read; only the assignment path honors this flag.
+	 */
+	immutableSelfReference?: true;
 
 	/**
 	 * An ES import binding. It aliases (shares storage with) the exporting
@@ -471,6 +480,9 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 				node.type === "FunctionDeclaration" ? scope.parent! : scope,
 				node,
 				scope.strict ? "let" : "var",
+				// A named function/generator/async expression's own-name binding is
+				// immutable (CreateImmutableBinding); a FunctionDeclaration's is not.
+				node.type === "FunctionExpression" ? true : undefined,
 			);
 		}
 
@@ -525,6 +537,7 @@ function extractBindingsAndRegister(
 	scope: Scope,
 	node: ESTree.Node,
 	kind: BindingKind,
+	immutableSelfReference?: true,
 ) {
 	/**
 	 * Recursively walk expression to extract names.
@@ -593,13 +606,17 @@ function extractBindingsAndRegister(
 	}
 
 	for (const name of names) {
-		const binding = {
+		const binding: Binding = {
 			kind,
 
 			name,
 			declarationNode: node,
 			usageNodes: [],
 		};
+
+		if (immutableSelfReference) {
+			binding.immutableSelfReference = true;
+		}
 
 		bindingScope.bindings.push(binding);
 		file.nodeToBinding.set(node, binding);
@@ -744,6 +761,33 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 					kind: "const",
 					name: "this",
 					implicit: "this",
+					declarationNode: owner.node,
+					usageNodes: [],
+				};
+				owner.bindings.push(binding);
+			}
+			binding.usageNodes.push(node);
+			file.nodeToBinding.set(node, binding);
+		}
+	}
+
+	// new.target inside an arrow is lexical too: bind it to an implicit
+	// "new.target" binding on the nearest enclosing non-arrow provider so the
+	// arrow captures it through the closure env (like `this`). A direct new.target
+	// in a non-arrow function keeps its own-frame loadNewTarget path.
+	if (
+		node.type === "MetaProperty" &&
+		(node as unknown as ESTree.MetaProperty).meta?.name === "new" &&
+		(node as unknown as ESTree.MetaProperty).property?.name === "target"
+	) {
+		const owner = resolveLexicalThisOwner(scope);
+		if (owner) {
+			let binding = owner.bindings.find((b) => b.implicit === "new.target");
+			if (!binding) {
+				binding = {
+					kind: "const",
+					name: "new.target",
+					implicit: "new.target",
 					declarationNode: owner.node,
 					usageNodes: [],
 				};

@@ -75,6 +75,7 @@ typedef enum MalOpcode {
     MAL_OP_IS_EMPTY,
     MAL_OP_THROW_IF_TDZ,
     MAL_OP_REQUIRE_COERCIBLE,
+    MAL_OP_CHECK_SUPER_CLASS,
     MAL_OP_CREATE_REST_ARGUMENTS,
     MAL_OP_ARRAY_REST,
     MAL_OP_COPY_DATA_PROPERTIES,
@@ -435,7 +436,9 @@ typedef struct MalInstruction {
         struct {
             // SetFunctionName([func], [key]): name an anonymous function/class value
             // from a computed property key (string → the key, symbol → "[desc]"/"").
+            // prefix: 0 none, 1 "get ", 2 "set " (accessor NamedEvaluation prefix).
             i32 func, key;
+            u8 prefix;
         } set_function_name;
 
         /**
@@ -498,6 +501,10 @@ typedef struct MalInstruction {
         struct {
             i32 src;
         } require_coercible;
+
+        struct {
+            i32 parent;
+        } check_super_class;
 
         struct {
             i32 dst, start_index;
@@ -650,6 +657,28 @@ typedef struct MalFunction {
      * allocating and copying the arguments slice entirely.
      */
     bool needs_arguments;
+
+    /**
+     * A derived class constructor. Its `this` is uninitialized (the EMPTY
+     * sentinel) until super() binds it, so the construct site allocates no eager
+     * `this` and reads of `this` before super() throw ReferenceError.
+     */
+    bool is_derived_constructor;
+
+    /**
+     * A class constructor (base or derived). Its `prototype` property is
+     * non-writable (MakeConstructor with writablePrototype = false), unlike a
+     * normal function's writable prototype.
+     */
+    bool is_class_constructor;
+
+    /**
+     * Whether the function owns a `prototype` property. False for methods,
+     * getters, setters and arrows (not constructors); true for normal functions,
+     * class constructors and generators. Async (non-generator) functions are
+     * excluded separately by kind.
+     */
+    bool has_prototype;
 
     i32 instruction_count;
     const MalInstruction *instructions;
@@ -1287,7 +1316,8 @@ MalValue mal_vm_interpret_function(
  * script completion value; a throw is left in vm->completion. Pass undefined for
  * scope_object to run with no injected scope.
  */
-MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue scope_object);
+MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue scope_object,
+                                     MalValue this_value, MalValue new_target);
 
 /**
  * `new callee(args)` as a value: allocate the instance, run the constructor

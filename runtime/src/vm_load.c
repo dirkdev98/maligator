@@ -100,6 +100,7 @@ typedef enum WireOp {
      * WIRE_OPCODES (serialize-vm.ts). APPEND-ONLY. */
     WIRE_WITH_RESOLVE_BASE,
     WIRE_SET_FUNCTION_NAME,
+    WIRE_CHECK_SUPER_CLASS,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -183,6 +184,7 @@ static const i32 wire_intrinsics[] = {
     MAL_INTRINSIC_EVAL,
     MAL_INTRINSIC_DIRECT_EVAL,
     MAL_INTRINSIC_ATOMICS,
+    MAL_INTRINSIC_DYNAMIC_IMPORT,
 };
 
 // ---- owned arena (chained calloc'd blocks; pointers stay stable, one free) ----
@@ -689,6 +691,7 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
             o->opcode = MAL_OP_SET_FUNCTION_NAME;
             o->as.set_function_name.func = rd_i32(r);
             o->as.set_function_name.key = rd_i32(r);
+            o->as.set_function_name.prefix = rd_u8(r);
             return;
         case WIRE_CREATE_PRIVATE_NAME:
             o->opcode = MAL_OP_CREATE_PRIVATE_NAME;
@@ -751,6 +754,10 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
         case WIRE_REQUIRE_COERCIBLE:
             o->opcode = MAL_OP_REQUIRE_COERCIBLE;
             o->as.require_coercible.src = rd_i32(r);
+            return;
+        case WIRE_CHECK_SUPER_CLASS:
+            o->opcode = MAL_OP_CHECK_SUPER_CLASS;
+            o->as.check_super_class.parent = rd_i32(r);
             return;
         case WIRE_CREATE_REST_ARGUMENTS:
             o->opcode = MAL_OP_CREATE_REST_ARGUMENTS;
@@ -824,6 +831,9 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     }
     fn->strict = rd_u8(r) != 0;
     fn->needs_arguments = rd_u8(r) != 0;
+    fn->is_derived_constructor = rd_u8(r) != 0;
+    fn->is_class_constructor = rd_u8(r) != 0;
+    fn->has_prototype = rd_u8(r) != 0;
     fn->parameter_count = rd_i32(r);
     fn->length = rd_i32(r);
     fn->register_count = rd_i32(r);

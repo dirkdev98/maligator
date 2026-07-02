@@ -274,8 +274,13 @@ export function test262PrepareBuild() {
 
 export function test262ShouldSkip(file: Test262File): boolean {
 	if (file.frontmatter.negative) {
-		// TODO(test262): negative runtime tests could assert on the throw kind.
-		return true;
+		// Parse/early/resolution negatives are resolved at compile time: a
+		// SyntaxError thrown while compiling is exactly the rejection the test
+		// expects (see test262CompileToC). Runtime negatives would need run-phase
+		// error-type matching (not yet implemented), so they stay skipped.
+		if (file.frontmatter.negative.phase === "runtime") {
+			return true;
+		}
 	}
 
 	// Variant-aware run-mode filtering. The sloppy pass runs only the tests that
@@ -523,6 +528,13 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 				? false
 				: !(file.frontmatter.flags?.includes("noStrict") ?? false);
 
+	// A parse/early/resolution negative test must be REJECTED at compile: a
+	// SyntaxError thrown below is the pass; compiling successfully is the fail.
+	const negative = file.frontmatter.negative;
+	const negativeAtCompile =
+		negative !== undefined &&
+		(negative.phase === "parse" || negative.phase === "early" || negative.phase === "resolution");
+
 	const compileStartedAt = performance.now();
 	try {
 		// Parse and scan before any further work. Module-flagged tests parse
@@ -530,10 +542,13 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 		// module-scoped, which the test references in the same scope).
 		const parsed = isModule ? parseModule(source) : parseScript(source, { strict });
 
-		// Module tests run through the loader/graph pipeline so sibling
-		// `*_FIXTURE.js` imports resolve from the test's real directory; the
-		// composed harness+test is the in-memory entry, and every module in the
-		// graph is forced to the module goal (test262 fixtures are `.js`).
+		const hasDynamicImport = file.frontmatter.features?.includes("dynamic-import") ?? false;
+
+		// Module and dynamic-import tests run through the loader/graph pipeline so
+		// sibling `*_FIXTURE.js` imports resolve from the test's real directory. For
+		// module tests, the composed harness+test and all fixtures are modules. For
+		// script dynamic-import tests, only dependencies are forced to modules; the
+		// entry remains a script.
 		const semanticProgram = isModule
 			? loadEntrypointAndRunSemanticAnalysis(
 					path.join(TEST262_METADATA.path, file.path),
@@ -542,12 +557,29 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 						goalOverride: "module",
 					},
 				)
+			: hasDynamicImport
+				? loadEntrypointAndRunSemanticAnalysis(
+						path.join(TEST262_METADATA.path, file.path),
+						{
+							entryGoal: "script",
+							entrySource: source,
+							dependencyGoalOverride: "module",
+						},
+					)
 			: analyzeSourceAndRunSemanticAnalysis(source, file.path, parsed);
 
 		const irProgram = compileSemanticProgramToIr(semanticProgram);
 		executeIROptimizations(irProgram);
 		allocateRegisters(irProgram);
 		const vmDefinition = lowerIrProgramToVmDefinition(irProgram);
+
+		if (negativeAtCompile) {
+			// The source compiled cleanly, but a parse/early/resolution negative
+			// test expects a SyntaxError before execution — accepting it is a fail.
+			outcome.result = "FAILED";
+			outcome.failure = `negative(${negative.phase}): expected ${negative.type} but compiled`;
+			return outcome;
+		}
 
 		const opcodes: Record<string, number> = {};
 		let instructionCount = 0;
@@ -566,6 +598,14 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 		outcome.definition = vmDefinition;
 		return outcome;
 	} catch (e) {
+		if (negativeAtCompile && e instanceof SyntaxError) {
+			// The expected parse/early/resolution SyntaxError (meriyah's ParseError
+			// extends SyntaxError; sema/IR early errors throw SyntaxError too) — the
+			// negative test is rejected as required, so it passes. A non-SyntaxError
+			// throw is our own compiler bug, not the expected rejection.
+			outcome.result = "PASSED";
+			return outcome;
+		}
 		outcome.result = "COMPILE_FAILED";
 		outcome.failure = `compile: ${e instanceof Error ? e.message : String(e)}`;
 		return outcome;

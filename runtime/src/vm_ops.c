@@ -540,6 +540,14 @@ void mal_op_set_function_name(MalCallable *callable, MalInstruction *instruction
         name_value = mal_value_from_string(mal_ops_to_string(&vm->heap, key));
     }
 
+    // A getter/setter prefixes the name with "get "/"set " (SetFunctionName's
+    // prefix), so `get [sym]` names the function "get [desc]".
+    u8 prefix = instruction->as.set_function_name.prefix;
+    if (prefix != 0) {
+        const char *text = prefix == 1 ? "get " : "set ";
+        name_value = mal_ops_add(&vm->heap, mal_value_from_string(mal_intrinsic_ascii(vm, text)), name_value);
+    }
+
     MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(mal_value_to_object(func), mal_intrinsic_string_key(vm, "name"), &name_desc);
 }
@@ -618,21 +626,31 @@ MalValue mal_create_arguments_object(
 ) {
     // The arguments object is an ordinary object whose [[Prototype]] is
     // %Object.prototype% (CreateUnmappedArgumentsObject step 2 / mapped step 8) —
-    // not %Array.prototype% and not null. It is backed by MalArrayObject only for
-    // its indexed-element storage; the prototype must still be Object.prototype so
-    // it inherits hasOwnProperty/etc.
-    MalArrayObject *arguments = mal_array_object_new(
+    // not %Array.prototype% and not null. It must NOT be an Array exotic: its
+    // `length` is an ordinary data property (writable, non-enumerable,
+    // configurable), so `arguments[i] = v` for i >= length adds an indexed
+    // property WITHOUT changing length (unlike an array's magic length), and
+    // Array.isArray(arguments) is false.
+    MalObject *arguments = mal_object_new(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])
     );
-    mal_array_object_set_length(arguments, arg_count);
 
+    // Indexed args first (enumerable, writable, configurable data properties)...
     for (i32 i = 0; i < arg_count; i++) {
         mal_object_set(
-            (MalObject *) arguments,
+            arguments,
             (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)},
             args[i]
         );
     }
+
+    // ...then the own `length` data property: writable + configurable, but
+    // non-enumerable (CreateUnmappedArgumentsObject step 4 / mapped step 22).
+    MalPropertyDesc length_desc = {
+        .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE,
+        .value = mal_value_from_i32(arg_count),
+    };
+    mal_object_define_own(arguments, mal_intrinsic_string_key(vm, "length"), &length_desc);
 
     // Make the arguments object iterable: an own @@iterator = %Array.prototype.values%
     // (spec CreateUnmappedArgumentsObject), non-enumerable/writable/configurable.
@@ -658,16 +676,16 @@ MalValue mal_create_arguments_object(
             .getter = thrower,
             .setter = thrower,
         };
-        mal_object_define_own((MalObject *) arguments, callee_key, &callee_desc);
+        mal_object_define_own(arguments, callee_key, &callee_desc);
     } else if (mal_value_is_callable(callee)) {
         MalPropertyDesc callee_desc = {
             .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE,
             .value = callee,
         };
-        mal_object_define_own((MalObject *) arguments, callee_key, &callee_desc);
+        mal_object_define_own(arguments, callee_key, &callee_desc);
     }
 
-    return mal_value_from_array_object(arguments);
+    return mal_value_from_object(arguments);
 }
 
 void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instruction) {
@@ -684,6 +702,14 @@ void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instr
 }
 
 void mal_op_load_this(MalCallable *callable, MalInstruction *instruction) {
+    // GetThisBinding: `this` in a derived constructor is in a TDZ until super()
+    // binds it. Reading it (directly, or as the receiver of a super property
+    // reference) before then is a ReferenceError.
+    if (mal_value_is_empty(callable->this_value)) {
+        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+            "Must call super constructor in derived class before accessing 'this'");
+        return;
+    }
     callable->registers[instruction->as.load_this.dst] = callable->this_value;
 }
 
@@ -813,8 +839,10 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
 
     if (mal_value_is_function_object(resolution.callee)) {
         i32 callee_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
-        if (vm->definition->functions[callee_index].kind != MAL_FUNCTION_KIND_NORMAL) {
-            // Generators (and other non-normal kinds) are not constructors.
+        const MalFunction *callee_fn = &vm->definition->functions[callee_index];
+        if (callee_fn->kind != MAL_FUNCTION_KIND_NORMAL || !callee_fn->has_prototype) {
+            // Not a constructor: generators/async (non-normal kind) and, among
+            // normal-kind functions, methods/getters/setters/arrows (no prototype).
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
             vm->value_stack_size = base;
             free(resolution.owned_args);
@@ -827,15 +855,22 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
             return;
         }
 
-        // Create this from the callee's prototype property.
-        MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-        MalValue prototype_value = mal_vm_function_prototype(vm, resolution.callee);
-        if (mal_value_is_object(prototype_value)) {
-            prototype = mal_value_to_object(prototype_value);
-        }
-
-        MalValue this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
         const MalFunction *function = &vm->definition->functions[callee_index];
+
+        // A derived constructor's `this` is uninitialized (the EMPTY sentinel)
+        // until super() binds it; a base constructor gets `this` created from the
+        // callee's prototype property (OrdinaryCreateFromConstructor).
+        MalValue this_value;
+        if (function->is_derived_constructor) {
+            this_value = mal_value_new_empty();
+        } else {
+            MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+            MalValue prototype_value = mal_vm_function_prototype(vm, resolution.callee);
+            if (mal_value_is_object(prototype_value)) {
+                prototype = mal_value_to_object(prototype_value);
+            }
+            this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+        }
         MalEnv *env = mal_value_to_function_object(resolution.callee)->creation_env;
 
         if (function->compiled != nullptr) {
@@ -1006,6 +1041,12 @@ void mal_op_construct_super(MalCallable *callable, MalInstruction *instruction) 
     MalValue new_target = callable->new_target;
     if (mal_value_is_undefined(new_target)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Class constructor cannot be invoked without 'new'");
+        return;
+    }
+    // BindThisValue: `this` may be bound only once. A second super() (this is no
+    // longer the uninitialized EMPTY sentinel) is a ReferenceError.
+    if (!mal_value_is_empty(callable->this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, "Super constructor may only be called once");
         return;
     }
     // Frames may relocate while the parent constructor runs; address the caller
@@ -1531,9 +1572,11 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
     }
 
     MalFunctionKind kind = MAL_FUNCTION_KIND_NORMAL;
+    bool is_class_constructor = false;
     if (mal_value_is_function_object(function_value)) {
         i32 index = mal_function_object_function_index(mal_value_to_function_object(function_value));
         kind = vm->definition->functions[index].kind;
+        is_class_constructor = vm->definition->functions[index].is_class_constructor;
     }
     bool is_generator_kind = kind == MAL_FUNCTION_KIND_GENERATOR || kind == MAL_FUNCTION_KIND_ASYNC_GENERATOR;
 
@@ -1546,7 +1589,10 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
         mal_intrinsic_define_data(vm, prototype, "constructor", function_value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     }
 
-    MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_from_object(prototype), MAL_PROPERTY_WRITABLE);
+    // MakeConstructor: a class constructor's prototype is non-writable (and
+    // non-configurable, non-enumerable); an ordinary function's is writable.
+    MalPropertyDesc desc = mal_intrinsic_data_desc(
+        mal_value_from_object(prototype), is_class_constructor ? 0 : MAL_PROPERTY_WRITABLE);
     mal_object_define_own(function, key, &desc);
     return desc.value;
 }
@@ -1598,10 +1644,12 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
             if (mal_object_get_own(mal_value_to_object(object_value), key).present) {
                 return false;
             }
-            // Async (non-generator) functions have no `prototype` property; fall
-            // through to the empty lookup (undefined value, false `in`).
+            // Methods, getters, setters and arrows are not constructors and own
+            // no `prototype`; async (non-generator) functions likewise. Only
+            // constructors and generators materialize one.
             i32 function_index = mal_function_object_function_index(mal_value_to_function_object(object_value));
-            if (vm->definition->functions[function_index].kind != MAL_FUNCTION_KIND_ASYNC) {
+            const MalFunction *fn = &vm->definition->functions[function_index];
+            if (fn->has_prototype && fn->kind != MAL_FUNCTION_KIND_ASYNC) {
                 *value_out = mal_vm_function_prototype(vm, object_value);
                 return true;
             }
@@ -2246,7 +2294,10 @@ bool mal_vm_is_constructor(MalVm *vm, MalValue value) {
     }
     if (mal_value_is_function_object(value)) {
         i32 index = mal_function_object_function_index(mal_value_to_function_object(value));
-        return vm->definition->functions[index].kind == MAL_FUNCTION_KIND_NORMAL;
+        const MalFunction *fn = &vm->definition->functions[index];
+        // A normal function or class constructor is a constructor; a
+        // method/getter/setter/arrow (normal kind, no `prototype`) is not.
+        return fn->kind == MAL_FUNCTION_KIND_NORMAL && fn->has_prototype;
     }
     return false;
 }
@@ -2282,13 +2333,55 @@ MalValue mal_vm_op_load_property(MalVm *vm, MalValue object_value, MalValue key_
     return mal_vm_op_load_property_keyed(vm, object_value, key);
 }
 
+// Primitive kinds for the method inline cache (0 = not a cacheable primitive:
+// object, undefined, or null). Each maps to a prototype intrinsic below.
+enum {
+    MAL_PRIM_KIND_STRING = 1,
+    MAL_PRIM_KIND_NUMBER,
+    MAL_PRIM_KIND_BOOLEAN,
+    MAL_PRIM_KIND_SYMBOL,
+    MAL_PRIM_KIND_BIGINT,
+};
+
+static u8 mal_primitive_method_kind(MalVm *vm, MalValue value) {
+    if (mal_value_is_string(value)) return MAL_PRIM_KIND_STRING;
+    if (mal_vm_value_is_number(value)) return MAL_PRIM_KIND_NUMBER;
+    if (mal_value_is_boolean(value)) return MAL_PRIM_KIND_BOOLEAN;
+    if (mal_value_is_symbol(value)) return MAL_PRIM_KIND_SYMBOL;
+    if (mal_value_is_bigint(value)) return MAL_PRIM_KIND_BIGINT;
+    (void) vm;
+    return 0;
+}
+
+static MalIntrinsic mal_primitive_method_proto_slot(u8 kind) {
+    switch (kind) {
+        case MAL_PRIM_KIND_STRING: return MAL_INTRINSIC_STRING_PROTOTYPE;
+        case MAL_PRIM_KIND_NUMBER: return MAL_INTRINSIC_NUMBER_PROTOTYPE;
+        case MAL_PRIM_KIND_BOOLEAN: return MAL_INTRINSIC_BOOLEAN_PROTOTYPE;
+        case MAL_PRIM_KIND_SYMBOL: return MAL_INTRINSIC_SYMBOL_PROTOTYPE;
+        default: return MAL_INTRINSIC_BIGINT_PROTOTYPE; // MAL_PRIM_KIND_BIGINT
+    }
+}
+
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
     if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
         MalObject *object = (MalObject *) mal_value_to_heap(object_value);
         // Hit needs the same shape AND the same key: a computed-key site (o[k])
         // reuses one cache entry across different keys, so the key must match too.
         if (object->shape == ic->shape && key_value == ic->key) {
-            return object->slots[ic->slot]; // same layout + key: slot still valid
+            if (ic->slot == MAL_IC_VALUE_SLOT) {
+                // Watched-intrinsic own overflow property, cached by value. The
+                // shape gate above is NOT sufficient (same-layout intrinsics share
+                // a shape but differ in overflow values), so require exact object
+                // identity too.
+                if (mal_primitive_method_protector && object == ic->obj) {
+                    return ic->value;
+                }
+                // Protector broke or different watched object at this polymorphic
+                // site: fall through and re-resolve (may re-fill for this object).
+            } else {
+                return object->slots[ic->slot]; // same layout + key: slot still valid
+            }
         }
         // Miss on a plain object. Convert the key ONCE (running any user
         // toString/valueOf exactly once) and reuse it for both the cache fill and
@@ -2313,12 +2406,103 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                     ic->shape = object->shape;
                     ic->key = key_value;
                     ic->slot = prop->slot;
+                    ic->prim_kind = 0; // this is now an object-shape entry
                 }
                 return object->slots[prop->slot];
+            }
+            // Own overflow-table data property on a watched intrinsic (String, Math,
+            // JSON, Object, Array, …): its many static/namespace methods live in the
+            // overflow table (no shape slot), so `String.fromCharCode` / `Math.floor`
+            // would re-hash every call. Cache the value while the protector holds; any
+            // mutation of a watched intrinsic clears it. Accessors are excluded
+            // (their getter must run per access).
+            if (object->watched_method_proto && mal_primitive_method_protector
+                && mal_value_is_heap(key_value)
+                && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
+                MalPropertyLookup own = mal_object_get_own(object, key);
+                if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+                    ic->shape = object->shape;
+                    ic->key = key_value;
+                    ic->slot = MAL_IC_VALUE_SLOT;
+                    ic->value = own.desc.value;
+                    ic->obj = object;
+                    ic->prim_kind = 0;
+                    return own.desc.value;
+                }
             }
         }
         // Prototype / overflow / index / symbol key: resolve with the converted key.
         return mal_vm_op_load_property_keyed(vm, object_value, key);
+    }
+
+    // Primitive-method inline cache: a method-name load on a string/number/boolean/
+    // symbol/bigint resolves on that kind's prototype every time otherwise (the
+    // dominant cost of string/number-method-heavy loops). Cache the resolved method
+    // while `mal_primitive_method_protector` holds (no watched prototype mutated).
+    u8 prim_kind = mal_primitive_method_kind(vm, object_value);
+    if (prim_kind != 0) {
+        if (mal_primitive_method_protector && ic->prim_kind == prim_kind && key_value == ic->key) {
+            return ic->value;
+        }
+        MalValue result = mal_vm_op_load_property(vm, object_value, key_value);
+        // Cache only a plain DATA method resolved on the (watched) prototype chain:
+        // an immortal string key that is not a string-receiver exotic own (length /
+        // canonical index, resolved on the value not the prototype) and not an
+        // accessor (whose getter must run each time).
+        if (mal_primitive_method_protector
+            && vm->completion.kind != MAL_COMPLETION_THROW
+            && mal_value_is_string(key_value)
+            && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
+            MalKey key = {.kind = MAL_KEY_STRING, .value = key_value};
+            bool string_exotic = prim_kind == MAL_PRIM_KIND_STRING &&
+                (mal_array_key_is_length(key) ||
+                    mal_vm_string_is_canonical_numeric_index(vm, mal_value_to_string(key_value)));
+            if (!string_exotic) {
+                MalObject *proto =
+                    mal_value_to_object(vm->intrinsics[mal_primitive_method_proto_slot(prim_kind)]);
+                MalPropertyResolution res = mal_object_resolve_property(proto, key);
+                if (res.found && !(res.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+                    ic->prim_kind = prim_kind;
+                    ic->key = key_value;
+                    ic->value = result; // == res.desc.value (non-shadowed data method)
+                    ic->shape = nullptr; // not an object-shape entry — avoid a false store/load hit
+                }
+            }
+        }
+        return result;
+    }
+
+    // Watched-intrinsic constructor/function own property (String.fromCharCode,
+    // Object.keys, Array.from, …): these are native-function objects, not
+    // MAL_HEAP_OBJECT, so the object branch above skipped them. Cache their own
+    // overflow-table methods by value while the protector holds (same rules as the
+    // plain-object namespaces Math/JSON handled above). Non-watched objects fall
+    // straight through (one predictable flag load).
+    if (mal_value_is_object(object_value)) {
+        MalObject *object = mal_value_to_object(object_value);
+        if (object->watched_method_proto && mal_primitive_method_protector) {
+            // Object identity — not just shape — because the typed-array
+            // constructors share one shape yet differ in overflow values
+            // (BYTES_PER_ELEMENT, name, …); shape+key alone would false-hit at a
+            // polymorphic site iterating over constructors.
+            if (ic->slot == MAL_IC_VALUE_SLOT && object == ic->obj && key_value == ic->key) {
+                return ic->value;
+            }
+            if (mal_value_is_string(key_value)
+                && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
+                MalKey key = {.kind = MAL_KEY_STRING, .value = key_value};
+                MalPropertyLookup own = mal_object_get_own(object, key);
+                if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+                    ic->shape = object->shape;
+                    ic->key = key_value;
+                    ic->slot = MAL_IC_VALUE_SLOT;
+                    ic->value = own.desc.value;
+                    ic->obj = object;
+                    ic->prim_kind = 0;
+                    return own.desc.value;
+                }
+            }
+        }
     }
     return mal_vm_op_load_property(vm, object_value, key_value);
 }
@@ -2328,8 +2512,9 @@ void mal_vm_op_store_property_ic(
 ) {
     if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
         MalObject *object = (MalObject *) mal_value_to_heap(object_value);
-        if (object->shape == ic->shape && key_value == ic->key) {
+        if (object->shape == ic->shape && key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
             // hit: overwrite an existing shaped data slot (shape + key unchanged).
+            // (A value-sentinel entry is a load-only cache — never index slots with it.)
             mal_gc_write_barrier(object->slots[ic->slot]);
             object->slots[ic->slot] = value;
             mal_gc_card(&object->header, value); // old object -> young value
@@ -3068,6 +3253,36 @@ void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction
     );
 }
 
+// ClassDefinitionEvaluation heritage check: the superclass must be null, or a
+// constructor whose `prototype` is an object or null. Sets vm->completion on a
+// violation (`extends 42`, `extends Math.abs`, `extends a-function-without-a
+// -valid-prototype`). The null literal is handled at compile time and never
+// reaches here; a runtime null value is accepted (protoParent is null).
+void mal_vm_op_check_super_class(MalVm *vm, MalValue parent) {
+    if (mal_value_is_null(parent)) {
+        return;
+    }
+    if (!mal_vm_is_constructor(vm, parent)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Class extends value is not a constructor or null");
+        return;
+    }
+    MalValue proto;
+    if (!mal_vm_get_property(vm, parent, mal_intrinsic_string_key(vm, "prototype"), &proto)) {
+        return; // a `prototype` getter threw; propagate its completion
+    }
+    if (!mal_value_is_object(proto) && !mal_value_is_null(proto)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Class extends value does not have valid prototype property");
+    }
+}
+
+void mal_op_check_super_class(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_check_super_class(
+        callable->vm,
+        callable->registers[instruction->as.check_super_class.parent]
+    );
+}
+
 // Build a rest-parameter array (`function f(...rest)`): the call arguments from
 // `start` onward as a fresh Array. Shared by the interpreter op and compiled code.
 MalValue mal_create_rest_arguments(MalVm *vm, const MalValue *args, i32 arg_count, i32 start) {
@@ -3322,7 +3537,13 @@ void mal_vm_op_define_accessor(
         desc.getter = accessor;
     }
 
-    mal_object_define_own(object, key, &desc);
+    // DefinePropertyOrThrow: a rejected define (e.g. a static accessor named
+    // 'prototype', which is non-configurable on the constructor) throws. The
+    // object-literal and fresh-prototype callers only define configurable own
+    // properties, which never reject.
+    if (mal_object_define_own(object, key, &desc) != MAL_DEFINE_OWN_APPLIED) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
+    }
 }
 
 void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction) {
@@ -3347,8 +3568,32 @@ void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_va
         flags |= MAL_PROPERTY_ENUMERABLE;
     }
 
+    // CreateDataProperty is [[DefineOwnProperty]]: a proxy receiver (e.g. a
+    // public class field installed on the object a derived class's super()
+    // returned) routes through the defineProperty trap rather than writing the
+    // proxy exotic's own slots, which no reads consult.
+    if (mal_value_is_proxy_object(object_value)) {
+        MalObject *descriptor = mal_intrinsic_new_object(vm);
+        MalPropertyFlags df = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+        mal_intrinsic_define_data(vm, descriptor, "value", value, df);
+        mal_intrinsic_define_data(vm, descriptor, "writable", mal_value_new_boolean(true), df);
+        mal_intrinsic_define_data(vm, descriptor, "enumerable", mal_value_new_boolean(enumerable), df);
+        mal_intrinsic_define_data(vm, descriptor, "configurable", mal_value_new_boolean(true), df);
+        bool ok = mal_proxy_define_own_property(vm, mal_value_to_proxy_object(object_value), key, mal_value_from_object(descriptor));
+        // CreateDataPropertyOrThrow: a trap that rejects (returns false) without
+        // itself throwing still surfaces a TypeError.
+        if (!ok && vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot define property on proxy");
+        }
+        return;
+    }
+
     MalPropertyDesc desc = mal_intrinsic_data_desc(value, flags);
     if (mal_object_define_own(mal_value_to_object(object_value), key, &desc) != MAL_DEFINE_OWN_APPLIED) {
+        // CreateDataPropertyOrThrow: a rejected define (e.g. a public class field
+        // on a receiver a prior initializer froze) surfaces a TypeError. The op's
+        // other callers target fresh extensible objects, which never reject.
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot create property on non-extensible object");
         return;
     }
     // Array exotic [[DefineOwnProperty]]: defining an index at or past length

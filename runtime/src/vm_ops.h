@@ -254,7 +254,29 @@ typedef struct MalInlineCache {
     const struct MalShape *shape;
     MalValue key; // the exact key value cached — a computed-key site (o[k]) varies
     u32 slot;
+    // `value` caches a resolved property value for the two protector-gated modes:
+    //  - primitive-method: `prim_kind` nonzero — `value` is `key` on that primitive
+    //    kind's (unmodified) prototype chain.
+    //  - watched-intrinsic own property: `prim_kind` 0 and `slot == MAL_IC_VALUE_SLOT`
+    //    — `value` is `key`'s own value on a watched intrinsic (String, Math, …),
+    //    which lives in the overflow table (no shape slot).
+    // Both are valid only while `mal_primitive_method_protector` holds. A plain
+    // object-shape entry has `prim_kind` 0 and a real `slot` (uses object->slots).
+    MalValue value;
+    // For a value-slot entry (`slot == MAL_IC_VALUE_SLOT`), the exact watched
+    // object the value belongs to. Shape is NOT a unique discriminator — the
+    // typed-array constructors (and other same-layout intrinsics) share one
+    // shape yet hold different overflow-table values (e.g. BYTES_PER_ELEMENT), so
+    // a polymorphic site reading `.BYTES_PER_ELEMENT` off different constructors
+    // would false-hit on shape+key alone. Watched intrinsics are immortal, so this
+    // pointer is stable (never freed/reused — no ABA). NULL for non-value entries.
+    const struct MalObject *obj;
+    u8 prim_kind;
 } MalInlineCache;
+
+// `slot` sentinel marking a protector-gated value entry (`value` holds the result,
+// there is no object slot). A real shape slot is a small inline index.
+#define MAL_IC_VALUE_SLOT UINT32_MAX
 
 /**
  * Inline-cached property load/store for the compiled backend. The fast path
@@ -411,6 +433,12 @@ void mal_vm_op_throw_if_tdz(MalVm *vm, MalValue value, i32 name_string_index);
  */
 void mal_vm_op_require_coercible(MalVm *vm, MalValue value);
 
+/**
+ * ClassDefinitionEvaluation heritage check: throw a TypeError unless `parent` is
+ * null or a constructor whose `prototype` is an object or null.
+ */
+void mal_vm_op_check_super_class(MalVm *vm, MalValue parent);
+
 /** `delete object[key]`; returns the boolean result, strict failure throws. */
 MalValue mal_vm_op_delete_property(MalVm *vm, MalValue object_value, MalValue key_value, bool strict);
 
@@ -486,6 +514,7 @@ void mal_op_load_global_property(MalCallable *callable, MalInstruction *instruct
 void mal_op_store_global_property(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction);
+void mal_op_check_super_class(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_rest_arguments(MalCallable *callable, MalInstruction *instruction);
 

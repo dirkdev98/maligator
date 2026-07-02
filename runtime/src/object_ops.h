@@ -87,6 +87,12 @@ void mal_object_array_deoptimize(struct MalArrayObject *array);
 extern bool mal_array_elements_protector;
 
 /**
+ * Holds while no watched primitive prototype has been mutated; gates the
+ * primitive-method inline cache. See the definition in object_ops.c.
+ */
+extern bool mal_primitive_method_protector;
+
+/**
  * The %Array.prototype% object (set at intrinsics init). Cached as a bare pointer so
  * the inline array index store fast path can confirm an array is on the default
  * prototype without a vm handle.

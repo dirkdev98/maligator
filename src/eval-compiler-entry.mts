@@ -21,6 +21,7 @@ declare const globalThis: {
 		direct?: boolean,
 		callerStrict?: boolean,
 		inParamExpr?: boolean,
+		inFieldInitializer?: boolean,
 	) => Uint8Array;
 };
 declare const SyntaxError: new (message?: string) => Error;
@@ -30,6 +31,7 @@ globalThis.__compile = function __compile(
 	direct?: boolean,
 	callerStrict?: boolean,
 	inParamExpr?: boolean,
+	inFieldInitializer?: boolean,
 ): Uint8Array {
 	try {
 		// completionValue: eval evaluates to its last expression's value.
@@ -44,6 +46,7 @@ globalThis.__compile = function __compile(
 			direct,
 			callerStrict,
 			inParamExpr,
+			inFieldInitializer,
 		});
 	} catch (e) {
 		// A parse / early error compiling eval source is a SyntaxError in the
