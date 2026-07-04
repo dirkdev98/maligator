@@ -31,6 +31,8 @@ Use https://tc39.es/ecma262/multipage/ when looking up parts of the spec.
 
 ## Working Preferences
 
+- Pre-1.0: freely change any API/internal contract when it improves the design or contracts (engine/host/runtime layering: see `isolate_todo.md`).
+
 - Prefer root-cause, correct, performant fixes over narrow test-specific workarounds.
 - Ask for explicit approval before running full or otherwise expensive Test262 suites.
 - Use targeted single-test or small-batch verification during development.

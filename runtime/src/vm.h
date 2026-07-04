@@ -1005,6 +1005,26 @@ typedef struct MalVm {
      * (and during) its first require, so require() returns `module.exports` live.
      */
     MalCjsModuleSlot *cjs_registry;
+
+    /**
+     * Fibers (isolate_todo.md Phase 0). This MalVm is the *isolate*: it owns the
+     * heap + globals, and one or more fibers execute on it (one at a time on this
+     * thread). `current_fiber` is the running one — its per-execution slice
+     * (value stack, frames, completion, GC root chains, stack limit) is live in
+     * the fields above and is swapped out to the fiber on a context switch.
+     * `fibers_head` links every live fiber so the collector can enumerate the
+     * suspended ones' saved roots. Both null until mal_fiber_init_main runs.
+     */
+    struct MalFiber *current_fiber;
+    struct MalFiber *fibers_head;
+
+    /**
+     * Opaque host context (the "host" layer: reactor, timers, later threads/clock),
+     * attached by mal_host_attach. The engine never dereferences it — host-layer
+     * code casts it back via mal_host(vm). Null for an engine-only embedding (e.g.
+     * the bare test262 runner). See host.h.
+     */
+    void *host;
 } MalVm;
 
 /**

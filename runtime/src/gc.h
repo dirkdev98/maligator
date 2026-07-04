@@ -55,6 +55,25 @@ void mal_gc_satb_record(MalValue old_value);
  * the collector (Phase 3) runs a step here / parks for the handshake (Phase 5). */
 void mal_gc_safepoint(MalVm *vm);
 
+/* Preemption hook (isolate_todo.md Phase 0). Null in a plain run; the scheduler
+ * installs one so a safepoint can yield the running fiber (a context switch is
+ * safe exactly where a collection is — same gate). Called at the end of
+ * mal_gc_safepoint. */
+extern void (*mal_gc_preempt_hook)(MalVm *vm);
+
+/* Mark a value (and, transitively, everything it reaches) as a live root. The
+ * public marking API for external root sources — the host/runtime layers call it
+ * from their registered scanner. Safe only during a collection's root scan. */
+void mal_gc_mark_value(MalValue value);
+void mal_gc_mark_values(const MalValue *values, i32 count);
+
+/* Root-source hook: how the host/runtime layers contribute GC roots the engine
+ * cannot see the types of (e.g. pending setTimeout callbacks). The registered fn
+ * is invoked during root scanning and marks its live values via mal_gc_mark_value.
+ * This keeps the engine's collector free of any host/runtime type knowledge. */
+typedef void (*MalGcRootSourceFn)(MalVm *vm, void *data);
+void mal_gc_register_root_source(MalGcRootSourceFn fn, void *data);
+
 /* Run a full stop-the-world mark/sweep collection now: shade roots, drain the
  * grey worklist tracing reachable cells, then finalize and reclaim the rest.
  * Invoked explicitly (the gc() host hook); never from the allocator. */

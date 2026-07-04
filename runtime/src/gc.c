@@ -11,6 +11,7 @@
 #include "./builtin_finalization_registry.h"
 #include "./builtin_iterator_helpers.h"
 #include "./builtin_weak_ref.h"
+#include "./fiber.h"
 #include "./function_object.h"
 #include "./generator_object.h"
 #include "./heap_string.h"
@@ -47,6 +48,31 @@ volatile bool mal_gc_poll = false;
 
 MalRootFrame *mal_root_frame_head = nullptr;
 MalRootSpan *mal_root_span_head = nullptr;
+
+/* Preemption hook (isolate_todo.md Phase 0). Null in a plain run; the scheduler
+ * installs one so a safepoint can yield the running fiber when its reduction
+ * budget is exhausted. Called from mal_gc_safepoint, i.e. only where a context
+ * switch is safe (roots precise, no un-rooted native frame). */
+void (*mal_gc_preempt_hook)(MalVm *vm) = nullptr;
+
+/* External root sources: how the host/runtime layers contribute GC roots to the
+ * engine without the engine knowing their types (e.g. pending setTimeout
+ * callbacks). Each is invoked during root scanning and calls mal_gc_mark_value on
+ * its live values. TODO: per-isolate registry once SMP runs multiple isolates. */
+#define MAL_GC_MAX_ROOT_SOURCES 8
+static struct {
+    MalGcRootSourceFn fn;
+    void *data;
+} g_root_sources[MAL_GC_MAX_ROOT_SOURCES];
+static i32 g_root_source_count = 0;
+
+void mal_gc_register_root_source(MalGcRootSourceFn fn, void *data) {
+    if (g_root_source_count < MAL_GC_MAX_ROOT_SOURCES) {
+        g_root_sources[g_root_source_count].fn = fn;
+        g_root_sources[g_root_source_count].data = data;
+        g_root_source_count++;
+    }
+}
 
 void mal_gc_satb_record(MalValue old_value) {
     (void) old_value;
@@ -158,12 +184,21 @@ void mal_gc_safepoint(MalVm *vm) {
             g_gc_stress_counter = 0;
             mal_gc_collect(vm);
         }
-        return;
+    } else if (mal_gc_poll) {
+        // Auto mode: collect only if actually due. The poll may also have been
+        // raised purely to force a preemption safepoint (below), so don't assume a
+        // collection is owed just because we were polled.
+        if (vm->heap.bytes_allocated >= mal_gc_next_at) {
+            mal_gc_collect(vm); // advances mal_gc_next_at past the surviving set
+        }
+        mal_gc_poll = false;
     }
-    // Auto mode: the poll was raised because bytes_allocated crossed the trigger.
-    // Collect (which advances mal_gc_next_at) and lower the poll until the next.
-    mal_gc_collect(vm);
-    mal_gc_poll = false;
+    // Preemption: this is a safe point to switch fibers (roots are precise here and
+    // no un-rooted native frame is live — the gate above). The scheduler's hook
+    // yields the running fiber if its budget is spent, and returns here on resume.
+    if (mal_gc_preempt_hook != nullptr) {
+        mal_gc_preempt_hook(vm);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +311,7 @@ static void mal_gc_shade(MalHeapHeader *cell) {
     mal_gc_grey_push(cell);
 }
 
-static void mal_gc_mark_value(MalValue value) {
+void mal_gc_mark_value(MalValue value) {
     if (mal_value_is_heap(value)) {
         mal_gc_shade(mal_value_to_heap(value));
     }
@@ -292,7 +327,7 @@ static bool mal_gc_is_marked(MalValue value) {
     return cell->storage == MAL_HEAP_STORAGE_IMMORTAL || cell->mark == MAL_MARK_BLACK;
 }
 
-static void mal_gc_mark_values(const MalValue *values, i32 count) {
+void mal_gc_mark_values(const MalValue *values, i32 count) {
     if (values == nullptr) {
         return;
     }
@@ -578,14 +613,67 @@ static void mal_gc_mark_job(MalJob *job) {
     mal_gc_mark_value(job->reject_fn);
 }
 
-static void mal_gc_scan_roots(MalVm *vm) {
-    mal_gc_mark_values(vm->value_stack, vm->value_stack_size);
-    for (i32 i = 0; i < vm->frame_count; ++i) {
-        mal_gc_trace_frame(&vm->frames[i]);
+/*
+ * Scan one fiber's execution slice: its value stack, interpreter frames, current
+ * completion, and its GC root chains (compiled-frame shadow stack + transient
+ * root spans). For the *running* fiber these come from the live MalVm fields + the
+ * global root-chain heads; for a *suspended* fiber they come from its saved slice
+ * (fiber.h) — the values are still valid because the collector is non-moving and a
+ * suspended fiber's C stack (holding the MalRootSpan records) is preserved.
+ */
+static void mal_gc_scan_fiber_exec(
+    MalValue *value_stack,
+    i32 value_stack_size,
+    MalVmFrame *frames,
+    i32 frame_count,
+    MalValue completion_value,
+    MalRootFrame *root_frame_head,
+    MalRootSpan *root_span_head) {
+    mal_gc_mark_values(value_stack, value_stack_size);
+    for (i32 i = 0; i < frame_count; ++i) {
+        mal_gc_trace_frame(&frames[i]);
     }
+    mal_gc_mark_value(completion_value);
+    for (MalRootFrame *frame = root_frame_head; frame != nullptr; frame = frame->prev) {
+        mal_gc_mark_values(frame->slots, frame->desc->slot_count);
+        mal_gc_trace_env(frame->env);
+    }
+    for (MalRootSpan *span = root_span_head; span != nullptr; span = span->prev) {
+        mal_gc_mark_values(span->slots, span->count);
+    }
+}
+
+static void mal_gc_scan_roots(MalVm *vm) {
+    // The running fiber's execution slice lives in the live MalVm fields + the
+    // global root-chain heads.
+    mal_gc_scan_fiber_exec(
+        vm->value_stack,
+        vm->value_stack_size,
+        vm->frames,
+        vm->frame_count,
+        vm->completion.value,
+        mal_root_frame_head,
+        mal_root_span_head);
+
+    // Every *suspended* fiber's slice lives in its saved state. Skip the running
+    // fiber (its live slice was scanned above) and any finished-but-unreaped one.
+    for (struct MalFiber *f = vm->fibers_head; f != nullptr; f = f->next) {
+        if (f == vm->current_fiber || f->state == MAL_FIBER_FINISHED) {
+            continue;
+        }
+        mal_gc_scan_fiber_exec(
+            f->exec.value_stack,
+            f->exec.value_stack_size,
+            f->exec.frames,
+            f->exec.frame_count,
+            f->exec.completion.value,
+            f->exec.root_frame_head,
+            f->exec.root_span_head);
+    }
+
+    // Isolate-shared roots (one per isolate, not per fiber).
     mal_gc_mark_values(vm->globals, vm->definition->global_count);
     mal_gc_mark_values(vm->intrinsics, MAL_INTRINSIC_COUNT);
-    mal_gc_mark_value(vm->completion.value);
     mal_gc_mark_values(vm->unhandled_rejections, vm->unhandled_count);
     mal_gc_mark_value(vm->entry_async_promise);
     mal_gc_trace_table(vm->symbol_registry);
@@ -609,16 +697,13 @@ static void mal_gc_scan_roots(MalVm *vm) {
         }
     }
 
-    // Compiled (native-backend) activation frames: each links a MalRootFrame whose
-    // slots alias its live MalValue registers. Plus any transient C scratch a
-    // builtin rooted with a root span.
-    for (MalRootFrame *frame = mal_root_frame_head; frame != nullptr; frame = frame->prev) {
-        mal_gc_mark_values(frame->slots, frame->desc->slot_count);
-        mal_gc_trace_env(frame->env);
+    // Host/runtime root sources (e.g. pending setTimeout callbacks) contribute
+    // their roots here, so the engine's collector needs no knowledge of their types.
+    for (i32 i = 0; i < g_root_source_count; ++i) {
+        g_root_sources[i].fn(vm, g_root_sources[i].data);
     }
-    for (MalRootSpan *span = mal_root_span_head; span != nullptr; span = span->prev) {
-        mal_gc_mark_values(span->slots, span->count);
-    }
+    // (Compiled shadow-frame + root-span chains are scanned per fiber above, via
+    // mal_gc_scan_fiber_exec.)
 }
 
 // --- Finalization ----------------------------------------------------------

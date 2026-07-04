@@ -26,13 +26,21 @@ export interface LocalBuildOptions {
 	 * Surface cmake/cc output instead of swallowing it.
 	 */
 	verbose: boolean;
+
+	/**
+	 * Entry-point translation unit linked with the emitted definition. Defaults to
+	 * the test262 harness main; a custom driver (e.g. the fiber test) overrides it.
+	 */
+	mainFile?: string;
 }
 
 /**
- * Configure and build LibMaligator into a local build directory at -O2.
- * Returns the path to the resulting static archive.
+ * Configure and build the three runtime archives (engine / host / runtime) into a
+ * local build directory at -O2. Returns their static-archive paths in link order
+ * (dependents first: runtime, host, engine — so a later archive resolves an earlier
+ * one's references), which the final cc links together (static + optimized).
  */
-function ensureRuntimeLibrary(verbose: boolean): string {
+function ensureRuntimeLibrary(verbose: boolean): Array<string> {
 	const stdio = verbose ? "inherit" : "ignore";
 
 	mkdirSync(LOCAL_DIR, { recursive: true });
@@ -50,13 +58,23 @@ function ensureRuntimeLibrary(verbose: boolean): string {
 		},
 	);
 
-	execFileSync("cmake", ["--build", BUILD_DIR, "--target", "LibMaligator"], { stdio });
+	execFileSync(
+		"cmake",
+		["--build", BUILD_DIR, "--target", "LibMaligator", "MalHost", "MalRuntime"],
+		{ stdio },
+	);
 
 	// Build the Rust shim the runtime links against: Date tz + Intl (ICU4X) and
 	// the RegExp engine (regress), both in libmal_rust.a.
 	ensureRustLibrary(verbose);
 
-	return path.join(BUILD_DIR, "libLibMaligator.a");
+	// Link order: runtime -> host -> engine (dependents first). rustLinkArgs() is
+	// appended after these by the caller (the engine references its symbols).
+	return [
+		path.join(BUILD_DIR, "libMalRuntime.a"),
+		path.join(BUILD_DIR, "libMalHost.a"),
+		path.join(BUILD_DIR, "libLibMaligator.a"),
+	];
 }
 
 /**
@@ -66,7 +84,7 @@ function ensureRuntimeLibrary(verbose: boolean): string {
  * binary path.
  */
 export function buildLoadDriver(verbose: boolean): string {
-	const lib = ensureRuntimeLibrary(verbose);
+	const libs = ensureRuntimeLibrary(verbose);
 	const binPath = path.join(LOCAL_DIR, `MaligatorLoad${buildSuffix()}`);
 
 	execFileSync(
@@ -77,9 +95,13 @@ export function buildLoadDriver(verbose: boolean): string {
 			"-I",
 			"runtime/src",
 			"-I",
+			"runtime/src/host",
+			"-I",
+			"runtime/src/runtime",
+			"-I",
 			RUST_INCLUDE_DIR,
 			"runtime/load_main.c",
-			lib,
+			...libs,
 			...rustLinkArgs(),
 			"-o",
 			binPath,
@@ -96,7 +118,7 @@ export function buildLoadDriver(verbose: boolean): string {
  * Returns the path to the binary.
  */
 export function buildLocalBinary(options: LocalBuildOptions): string {
-	const lib = ensureRuntimeLibrary(options.verbose);
+	const libs = ensureRuntimeLibrary(options.verbose);
 
 	// Suffix the artifacts under a sanitizer build so they do not clobber the
 	// normal binary (and vice-versa).
@@ -113,10 +135,14 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 			"-I",
 			"runtime/src",
 			"-I",
+			"runtime/src/host",
+			"-I",
+			"runtime/src/runtime",
+			"-I",
 			RUST_INCLUDE_DIR,
 			cPath,
-			"runtime/test262_main.c",
-			lib,
+			options.mainFile ?? "runtime/test262_main.c",
+			...libs,
 			...rustLinkArgs(),
 			"-o",
 			binPath,

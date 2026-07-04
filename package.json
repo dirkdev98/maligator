@@ -20,6 +20,9 @@
 		"test262": "node ./scripts/test262.ts",
 		"gate": "node ./scripts/gate.ts",
 		"gctest": "node ./scripts/gctest.ts",
+		"fibertest": "node ./scripts/fibertest.ts",
+		"reactortest": "node ./scripts/reactortest.ts",
+		"hosttest": "node ./scripts/hosttest.ts",
 		"leakcheck": "node ./scripts/leakcheck.ts",
 		"type-check": "tsc",
 		"update": "npx npm-check --update --save-exact"

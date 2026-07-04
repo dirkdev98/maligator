@@ -505,6 +505,10 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "Infinity", vm->intrinsics[MAL_INTRINSIC_INFINITY_VALUE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, global_this, "undefined", mal_value_new_undefined(), MAL_PROPERTY_NONE);
 
+    // NB: host globals (setTimeout/clearTimeout) are NOT installed here — they are a
+    // host concern, not an ECMAScript intrinsic, so the bare test262 environment
+    // stays free of them. The host entry installs them via mal_host_timers_install.
+
     // Runtime eval / new Function: a baked self-hosted compiler spliced on first
     // use (builtin_eval.c).
     mal_intrinsics_init_eval(vm, global_this);

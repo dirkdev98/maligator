@@ -11,6 +11,7 @@
 #include "builtin_async_generator.h"
 #include "bound_function_object.h"
 #include "builtin_object.h"
+#include "fiber.h"
 #include "function_object.h"
 #include "gc.h"
 #include "generator_object.h"
@@ -177,6 +178,12 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->native_call_depth = 0;
     vm->stack_limit = mal_vm_compute_stack_limit();
     vm->gc_native_frames = 0;
+    // Fibers: the main fiber is created at the end of init (once every exec field
+    // it adopts is finalized). Null the list heads first so init_main can link on.
+    vm->current_fiber = nullptr;
+    vm->fibers_head = nullptr;
+    // Host context (reactor/timers) is attached by the host layer, not the engine.
+    vm->host = nullptr;
     vm->active_job = nullptr;
     vm->kept_objects = nullptr;
     vm->kept_count = 0;
@@ -230,6 +237,12 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     } else {
         vm->cjs_registry = nullptr;
     }
+
+    // Main fiber: adopts the OS stack and the VM's now-finalized exec buffers, and
+    // becomes the running fiber. Every subsequent spawned fiber gets its own stack
+    // + exec slice, swapped in/out of these same MalVm fields on a context switch.
+    MalFiber *main_fiber = malloc(sizeof(MalFiber));
+    mal_fiber_init_main(main_fiber, vm);
 }
 
 MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
@@ -296,6 +309,31 @@ void mal_vm_clear_kept_objects(MalVm *vm) {
 }
 
 void mal_vm_free(MalVm *vm) {
+    // Tear down fibers. Spawned fibers own their stack + exec buffers (freed by
+    // mal_fiber_destroy); the main fiber adopted vm->value_stack / vm->frames, so
+    // it only gets unlinked here and its struct freed — those buffers are released
+    // below with the rest of the VM. At normal teardown only the main fiber is left
+    // (workers were reaped by the scheduler), but reap defensively.
+    MalFiber *main_fiber = nullptr;
+    MalFiber *fiber = vm->fibers_head;
+    while (fiber != nullptr) {
+        MalFiber *next = fiber->next;
+        if (fiber->is_main) {
+            main_fiber = fiber;
+        } else {
+            mal_fiber_destroy(vm, fiber);
+        }
+        fiber = next;
+    }
+    if (main_fiber != nullptr) {
+        mal_fiber_destroy(vm, main_fiber); // unlink only (is_main: no buffer/struct free)
+        free(main_fiber);
+    }
+    vm->fibers_head = nullptr;
+    vm->current_fiber = nullptr;
+    // The host context (reactor/timers) is torn down by the host layer
+    // (mal_host_detach), before mal_vm_free — not here.
+
     free(vm->kept_objects);
 
     // Definitions spliced at runtime for eval: their arenas back the spliced
