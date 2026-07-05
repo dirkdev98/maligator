@@ -74,6 +74,24 @@ void mal_gc_register_root_source(MalGcRootSourceFn fn, void *data) {
     }
 }
 
+/* Per-type finalizers registered by the host/runtime for types they own. */
+static MalGcFinalizer g_type_finalizers[MAL_HEAP_TYPE_COUNT];
+
+void mal_gc_register_finalizer(MalHeapType type, MalGcFinalizer fn) {
+    if ((usize) type < (usize) MAL_HEAP_TYPE_COUNT) {
+        g_type_finalizers[type] = fn;
+    }
+}
+
+/* Per-type tracers registered by the host/runtime for types they own. */
+static MalGcTracer g_type_tracers[MAL_HEAP_TYPE_COUNT];
+
+void mal_gc_register_tracer(MalHeapType type, MalGcTracer fn) {
+    if ((usize) type < (usize) MAL_HEAP_TYPE_COUNT) {
+        g_type_tracers[type] = fn;
+    }
+}
+
 void mal_gc_satb_record(MalValue old_value) {
     (void) old_value;
 }
@@ -434,6 +452,12 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
     MalObject *object = (MalObject *) cell;
     mal_gc_trace_object_common(object);
 
+    // Host/runtime-registered per-type tracers (e.g. the fetch Headers name/value
+    // list) — marks edges the engine has no type knowledge of.
+    if (g_type_tracers[cell->type] != nullptr) {
+        g_type_tracers[cell->type](cell);
+    }
+
     switch (cell->type) {
         case MAL_HEAP_ARRAY_OBJECT: {
             // Dense element vector: trace the live region [0, dense_count). Hole
@@ -724,6 +748,13 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
             return; // no owned side allocations (env slots are inline, not a MalObject)
         default:
             break;
+    }
+
+    // Host/runtime-registered per-type finalizers (e.g. fetch Response/Request body
+    // buffers) — frees their owned memory without an engine->runtime type dependency.
+    // Runs before the common object cleanup below.
+    if (g_type_finalizers[cell->type] != nullptr) {
+        g_type_finalizers[cell->type](cell);
     }
 
     // MalObject-based cell: free its type-specific owned memory, then the common

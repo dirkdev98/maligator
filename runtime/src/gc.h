@@ -74,6 +74,21 @@ void mal_gc_mark_values(const MalValue *values, i32 count);
 typedef void (*MalGcRootSourceFn)(MalVm *vm, void *data);
 void mal_gc_register_root_source(MalGcRootSourceFn fn, void *data);
 
+/* Per-type finalizer hook: the host/runtime layers register a finalizer for a heap
+ * type they define (e.g. the fetch Response/Request body buffers), so the engine's
+ * sweep frees their owned memory without a compile-time dependency on those types.
+ * Invoked once per dead cell of that type, before the common object cleanup; must be
+ * idempotent (null-after-free) — it also runs at teardown. */
+typedef void (*MalGcFinalizer)(MalHeapHeader *cell);
+void mal_gc_register_finalizer(MalHeapType type, MalGcFinalizer fn);
+
+/* Per-type tracer hook: for host/runtime types that hold MalValue edges the engine
+ * can't see (e.g. the fetch Headers name/value list). Invoked while tracing a live
+ * cell of that type, after the common object edges; marks the type's extra
+ * references via mal_gc_mark_value (box strings with mal_value_from_string). */
+typedef void (*MalGcTracer)(MalHeapHeader *cell);
+void mal_gc_register_tracer(MalHeapType type, MalGcTracer fn);
+
 /* Run a full stop-the-world mark/sweep collection now: shade roots, drain the
  * grey worklist tracing reachable cells, then finalize and reclaim the rest.
  * Invoked explicitly (the gc() host hook); never from the allocator. */

@@ -28,6 +28,7 @@ typedef struct MalHostTimer {
     MalValue callback;
     MalValue *args; /* heap copy of setTimeout extra args (nullptr if none) */
     i32 arg_count;
+    i64 repeat_ms;  /* setInterval period; 0 for a one-shot setTimeout */
     bool ready;     /* timer fired; callback awaits the macrotask phase */
     bool cancelled; /* clearTimeout'd before it fired/ran */
     MalVm *vm;      /* back-ref for the reactor waker */
@@ -38,7 +39,11 @@ typedef struct MalHostTimer {
  * task). `delay_ms` is clamped to >= 0. */
 i64 mal_host_set_timeout(MalVm *vm, MalValue callback, i64 delay_ms, MalValue *args, i32 arg_count);
 
-/* Cancel a pending timer by id (no-op if unknown / already run). */
+/* Register a repeating setInterval (re-armed each period until cleared). */
+i64 mal_host_set_interval(MalVm *vm, MalValue callback, i64 period_ms, MalValue *args, i32 arg_count);
+
+/* Cancel a pending timer by id (no-op if unknown / already run). Backs both
+ * clearTimeout and clearInterval (shared id space). */
 void mal_host_clear_timeout(MalVm *vm, i64 id);
 
 /* Drive the event loop until the isolate is idle (no timers, fd ops, or

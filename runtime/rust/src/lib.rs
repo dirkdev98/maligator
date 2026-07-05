@@ -16,6 +16,9 @@
 // The RegExp FFI (regress engine). See src/regexp.rs.
 pub mod regexp;
 
+// The WHATWG URL FFI (ada-url crate). See src/url.rs.
+pub mod url;
+
 /// ABI version. Bump on any breaking change to the C header so the C side can
 /// assert the linked archive matches `mal_i18n.h`.
 /// v2: added `mal_i18n_collator_free` / `mal_i18n_plural_rules_free` (gc_todo.md D2).

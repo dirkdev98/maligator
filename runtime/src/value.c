@@ -94,6 +94,78 @@ MalValue mal_value_from_regexp_object(MalRegExpObject *regexp) {
     return mal_value_from_heap((MalHeapHeader *) regexp);
 }
 
+bool mal_value_is_response_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_RESPONSE_OBJECT);
+}
+
+MalResponseObject *mal_value_to_response_object(MalValue value) {
+    return (MalResponseObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_response_object(MalResponseObject *response) {
+    return mal_value_from_heap((MalHeapHeader *) response);
+}
+
+bool mal_value_is_request_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_REQUEST_OBJECT);
+}
+
+MalRequestObject *mal_value_to_request_object(MalValue value) {
+    return (MalRequestObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_request_object(MalRequestObject *request) {
+    return mal_value_from_heap((MalHeapHeader *) request);
+}
+
+bool mal_value_is_headers_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_HEADERS_OBJECT);
+}
+
+MalHeadersObject *mal_value_to_headers_object(MalValue value) {
+    return (MalHeadersObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_headers_object(MalHeadersObject *headers) {
+    return mal_value_from_heap((MalHeapHeader *) headers);
+}
+
+bool mal_value_is_url_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_URL_OBJECT);
+}
+
+MalUrlObject *mal_value_to_url_object(MalValue value) {
+    return (MalUrlObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_url_object(MalUrlObject *url) {
+    return mal_value_from_heap((MalHeapHeader *) url);
+}
+
+bool mal_value_is_url_search_params_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_URL_SEARCH_PARAMS_OBJECT);
+}
+
+MalUrlSearchParamsObject *mal_value_to_url_search_params_object(MalValue value) {
+    return (MalUrlSearchParamsObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_url_search_params_object(MalUrlSearchParamsObject *params) {
+    return mal_value_from_heap((MalHeapHeader *) params);
+}
+
+bool mal_value_is_event_target_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_EVENT_TARGET_OBJECT);
+}
+
+MalEventTargetObject *mal_value_to_event_target_object(MalValue value) {
+    return (MalEventTargetObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_event_target_object(MalEventTargetObject *target) {
+    return mal_value_from_heap((MalHeapHeader *) target);
+}
+
 bool mal_value_is_regexp_string_iterator_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT);
 }

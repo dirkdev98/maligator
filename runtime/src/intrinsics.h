@@ -231,6 +231,39 @@ typedef enum MalIntrinsic {
      * Not exposed on globalThis.
      */
     MAL_INTRINSIC_DYNAMIC_IMPORT,
+    /*
+     * WinterTC fetch server slots (runtime/fetch.c). Installed only by the host
+     * entry (mal_fetch_install), so they stay undefined — and harmless — in the bare
+     * test262 VM. Stored here so the collector roots them (scan_roots marks every
+     * intrinsic), including the live fetch handler.
+     */
+    MAL_INTRINSIC_RESPONSE_CONSTRUCTOR,
+    MAL_INTRINSIC_RESPONSE_PROTOTYPE,
+    MAL_INTRINSIC_REQUEST_PROTOTYPE,
+    MAL_INTRINSIC_HEADERS_CONSTRUCTOR,
+    MAL_INTRINSIC_HEADERS_PROTOTYPE,
+    MAL_INTRINSIC_FETCH_HANDLER,
+    /*
+     * WHATWG URL / URLSearchParams (runtime/url.c). Host-entry only
+     * (mal_url_install), so they stay undefined in the bare test262 VM. Rooted by
+     * scan_roots like every intrinsic slot.
+     */
+    MAL_INTRINSIC_URL_CONSTRUCTOR,
+    MAL_INTRINSIC_URL_PROTOTYPE,
+    MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR,
+    MAL_INTRINSIC_URL_SEARCH_PARAMS_PROTOTYPE,
+    /*
+     * DOM Event / EventTarget / AbortSignal / AbortController (runtime/events.c).
+     * Host-entry only, so undefined in the bare test262 VM.
+     */
+    MAL_INTRINSIC_EVENT_CONSTRUCTOR,
+    MAL_INTRINSIC_EVENT_PROTOTYPE,
+    MAL_INTRINSIC_EVENT_TARGET_CONSTRUCTOR,
+    MAL_INTRINSIC_EVENT_TARGET_PROTOTYPE,
+    MAL_INTRINSIC_ABORT_SIGNAL_CONSTRUCTOR,
+    MAL_INTRINSIC_ABORT_SIGNAL_PROTOTYPE,
+    MAL_INTRINSIC_ABORT_CONTROLLER_CONSTRUCTOR,
+    MAL_INTRINSIC_ABORT_CONTROLLER_PROTOTYPE,
     MAL_INTRINSIC_COUNT,
 } MalIntrinsic;
 

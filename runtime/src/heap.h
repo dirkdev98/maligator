@@ -194,6 +194,41 @@ typedef enum MalHeapType {
     MAL_HEAP_FINALIZATION_REGISTRY_OBJECT,
 
     /**
+     * WinterTC fetch Response (MalResponseObject): status + an owned UTF-8 body
+     * byte buffer. Freed by the GC finalizer. See runtime/response_object.h.
+     */
+    MAL_HEAP_RESPONSE_OBJECT,
+    /**
+     * WinterTC fetch Request (MalRequestObject): method/url own-properties + an
+     * (optional) owned body byte buffer. See runtime/request_object.h.
+     */
+    MAL_HEAP_REQUEST_OBJECT,
+    /**
+     * WinterTC fetch Headers (MalHeadersObject): an ordered, case-insensitive list
+     * of (name, value) string pairs. Traced + finalized via registered hooks. See
+     * runtime/headers_object.h.
+     */
+    MAL_HEAP_HEADERS_OBJECT,
+    /**
+     * WHATWG URL (MalUrlObject): wraps an opaque ada-url handle, freed by the GC
+     * finalizer via mal_url_free. See runtime/url_object.h.
+     */
+    MAL_HEAP_URL_OBJECT,
+    /**
+     * WHATWG URLSearchParams (MalUrlSearchParamsObject): an ordered list of
+     * (name, value) string pairs. Traced + finalized via registered hooks. See
+     * runtime/url_object.h.
+     */
+    MAL_HEAP_URL_SEARCH_PARAMS_OBJECT,
+    /**
+     * DOM EventTarget / AbortSignal instances (MalEventTargetObject): an ordinary
+     * object plus a native (type, callback, once) listener list. Traced + finalized
+     * via registered hooks. AbortSignal state (aborted/reason) rides as own
+     * properties. See runtime/events_object.h.
+     */
+    MAL_HEAP_EVENT_TARGET_OBJECT,
+
+    /**
      * Sentinel: number of distinct heap types. Must stay last. Sizes the baked
      * per-type GC metadata table. Not a usable type tag.
      */

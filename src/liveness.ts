@@ -331,14 +331,23 @@ export function computeFunctionLiveness(fn: IRFunction): FunctionLiveness {
 			const allocOrCall = isSafepoint(instruction);
 			const loopPoll = isBackEdgeBranch(instruction, index);
 			if (allocOrCall || loopPoll) {
-				const def = definedRegister(instruction);
+				// `live` is the set live immediately AFTER this instruction (its
+				// live-out). The compiled backend emits the call/construct return poll
+				// AFTER storing the result into its destination register, so a result
+				// that a later instruction consumes is live ACROSS that poll and must
+				// be rooted through the collection. (Earlier this excluded the
+				// instruction's def, assuming GC only runs *inside* the op before the
+				// result is written — true for a property/binary safepoint, but NOT for
+				// the post-call poll: that freed a returned-and-used call result under
+				// GC pressure — `function f(){return [1,2,3].join(",");}` used by its
+				// caller, crashing only under MAL_GC_STRESS.) Keeping the def when it is
+				// live-out is sound for every safepoint (rooting a value never hurts); a
+				// def dead immediately after the op is simply absent from `live`.
 				const across = new Set<number>();
 				for (const register of live) {
-					if (register !== def) {
-						across.add(register);
-						liveAcrossSafepoint.add(register);
-						liveOrUsedAtSafepoint.add(register);
-					}
+					across.add(register);
+					liveAcrossSafepoint.add(register);
+					liveOrUsedAtSafepoint.add(register);
 				}
 				// The safepoint's own operands are consumed by an operation that can
 				// collect, so they must survive it even when dead immediately after

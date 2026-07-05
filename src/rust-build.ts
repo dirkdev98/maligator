@@ -36,9 +36,14 @@ export const RUST_LIB_PATH = path.join(CARGO_TARGET_DIR, "release", "libmal_rust
  *
  * The shim links clean on macOS with no frameworks so far. Extend here if a
  * future dependency introduces an undefined-symbol link error.
+ *
+ * `-lc++`: ada-url (URL parser) wraps the C++ `ada` library, whose objects are
+ * bundled into libmal_rust.a, so the final link needs the C++ stdlib. On this
+ * macOS/clang toolchain that is libc++ (`-lc++`); a gcc/Linux port would use
+ * `-lstdc++`.
  */
 export function rustLinkArgs(): Array<string> {
-	const args = [RUST_LIB_PATH];
+	const args = [RUST_LIB_PATH, "-lc++"];
 	return args;
 }
 

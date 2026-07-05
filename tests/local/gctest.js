@@ -89,4 +89,20 @@ ok(
 	guarded.a === 1 && guarded.b === "two" && guarded.c[2] === 5,
 );
 
+// 6. Call-return poll rooting: a value produced by a native builtin call,
+//    returned from a JS function and then consumed by the caller, must survive
+//    the safepoint the compiled backend polls at *after* storing the call result.
+//    Regression: the result register was excluded from the root frame as the
+//    call's "def" (assuming GC ran only *inside* the call, before the store), but
+//    the post-call poll runs after the store — so a returned-and-used value was
+//    freed under GC pressure. Crashed only under MAL_GC_STRESS.
+function joinInCallee() {
+	return [10, 20, 30].join(",");
+}
+function stringifyInCallee() {
+	return String(4242);
+}
+ok("call-return-poll-join-rooted", "x" + joinInCallee() === "x10,20,30");
+ok("call-return-poll-string-rooted", "n" + stringifyInCallee() === "n4242");
+
 console.log("gctest PASS " + passed + "/" + passed);

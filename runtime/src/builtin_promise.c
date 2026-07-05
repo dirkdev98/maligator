@@ -465,15 +465,23 @@ static MalValue mal_promise_reject_static(MalVm *vm, MalValue this_value, const 
 }
 
 bool mal_promise_resolve_value(MalVm *vm, MalValue value, MalValue *out_promise) {
+    // Root `value` for the whole operation: creating the promise capability (and the
+    // constructor read on the short-circuit path) allocates, and `value` is consumed
+    // afterwards — an unrooted heap value would be freed under GC pressure.
+    MalRootSpan value_root;
+    mal_gc_root(&value_root, &value, 1);
+
     // Short-circuit a value that is already a native %Promise% (no extra wrap,
     // matching the current spec's single-tick await on a native promise).
     if (mal_value_is_promise_object(value)) {
         MalValue constructor;
         if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, "constructor"), &constructor)) {
+            mal_gc_unroot(&value_root);
             return false;
         }
         if (constructor == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR]) {
             *out_promise = value;
+            mal_gc_unroot(&value_root);
             return true;
         }
     }
@@ -482,9 +490,11 @@ bool mal_promise_resolve_value(MalVm *vm, MalValue value, MalValue *out_promise)
     MalValue cap_resolve;
     MalValue cap_reject;
     if (!mal_promise_new_capability(vm, vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], &cap_promise, &cap_resolve, &cap_reject)) {
+        mal_gc_unroot(&value_root);
         return false;
     }
     mal_vm_call_value(vm, cap_resolve, mal_value_new_undefined(), &value, 1);
+    mal_gc_unroot(&value_root);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return false;
     }

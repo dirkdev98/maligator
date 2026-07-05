@@ -26,6 +26,12 @@ typedef struct MalDateObject MalDateObject;
 typedef struct MalIntlObject MalIntlObject;
 typedef struct MalRegExpObject MalRegExpObject;
 typedef struct MalRegExpStringIteratorObject MalRegExpStringIteratorObject;
+typedef struct MalResponseObject MalResponseObject;
+typedef struct MalRequestObject MalRequestObject;
+typedef struct MalHeadersObject MalHeadersObject;
+typedef struct MalUrlObject MalUrlObject;
+typedef struct MalUrlSearchParamsObject MalUrlSearchParamsObject;
+typedef struct MalEventTargetObject MalEventTargetObject;
 
 /**
  * NaN-Boxed MalValue representation.
@@ -300,7 +306,13 @@ static inline bool mal_value_is_object(MalValue value) {
         type == MAL_HEAP_REGEXP_OBJECT ||
         type == MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT ||
         type == MAL_HEAP_WEAK_REF_OBJECT ||
-        type == MAL_HEAP_FINALIZATION_REGISTRY_OBJECT;
+        type == MAL_HEAP_FINALIZATION_REGISTRY_OBJECT ||
+        type == MAL_HEAP_RESPONSE_OBJECT ||
+        type == MAL_HEAP_REQUEST_OBJECT ||
+        type == MAL_HEAP_HEADERS_OBJECT ||
+        type == MAL_HEAP_URL_OBJECT ||
+        type == MAL_HEAP_URL_SEARCH_PARAMS_OBJECT ||
+        type == MAL_HEAP_EVENT_TARGET_OBJECT;
 }
 
 /**
@@ -410,6 +422,36 @@ MalValue mal_value_from_intl_object(MalIntlObject *intl);
 bool mal_value_is_regexp_object(MalValue value);
 MalRegExpObject *mal_value_to_regexp_object(MalValue value);
 MalValue mal_value_from_regexp_object(MalRegExpObject *regexp);
+
+/** WinterTC fetch Response predicate + box/unbox. */
+bool mal_value_is_response_object(MalValue value);
+MalResponseObject *mal_value_to_response_object(MalValue value);
+MalValue mal_value_from_response_object(MalResponseObject *response);
+
+/** WinterTC fetch Request predicate + box/unbox. */
+bool mal_value_is_request_object(MalValue value);
+MalRequestObject *mal_value_to_request_object(MalValue value);
+MalValue mal_value_from_request_object(MalRequestObject *request);
+
+/** WinterTC fetch Headers predicate + box/unbox. */
+bool mal_value_is_headers_object(MalValue value);
+MalHeadersObject *mal_value_to_headers_object(MalValue value);
+MalValue mal_value_from_headers_object(MalHeadersObject *headers);
+
+/** WHATWG URL predicate + box/unbox. */
+bool mal_value_is_url_object(MalValue value);
+MalUrlObject *mal_value_to_url_object(MalValue value);
+MalValue mal_value_from_url_object(MalUrlObject *url);
+
+/** WHATWG URLSearchParams predicate + box/unbox. */
+bool mal_value_is_url_search_params_object(MalValue value);
+MalUrlSearchParamsObject *mal_value_to_url_search_params_object(MalValue value);
+MalValue mal_value_from_url_search_params_object(MalUrlSearchParamsObject *params);
+
+/** DOM EventTarget / AbortSignal predicate + box/unbox. */
+bool mal_value_is_event_target_object(MalValue value);
+MalEventTargetObject *mal_value_to_event_target_object(MalValue value);
+MalValue mal_value_from_event_target_object(MalEventTargetObject *target);
 
 /**
  * RegExp String Iterator predicate + box/unbox (matchAll's iterator).

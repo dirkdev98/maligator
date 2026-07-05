@@ -52,6 +52,6 @@ set_target_properties(mal_rust PROPERTIES
 
 # Dev-only harness (AGENTS.md local-verification flow). EXCLUDE_FROM_ALL so a
 # plain `cmake --build` (used by the test262 runner) builds only the libraries.
-# Links all three layers + rust.
+# Links all three layers + rust (+ libc++, which ada-url's bundled C++ needs).
 add_executable(MaligatorTest EXCLUDE_FROM_ALL test.c)
-target_link_libraries(MaligatorTest MalRuntime MalHost LibMaligator mal_rust)
+target_link_libraries(MaligatorTest MalRuntime MalHost LibMaligator mal_rust c++)

@@ -1,0 +1,316 @@
+#include "server.h"
+
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "host.h"
+#include "http.h"
+#include "net.h"
+#include "reactor.h"
+#include "vm.h"
+
+#define MAL_HTTP_RBUF_INIT 4096
+#define MAL_HTTP_HEADERS_MAX (64 * 1024) // reject header blocks larger than this
+
+MalHttpHandler mal_http_handler = nullptr;
+
+struct MalHttpServer {
+    MalVm *vm;
+    int listen_fd;
+    MalOp accept_op;
+};
+
+typedef struct MalHttpConn {
+    MalVm *vm;
+    int fd;
+    MalOp read_op;
+    MalOp write_op;
+
+    char *rbuf; // inbound bytes (request line + headers + body), growable
+    usize rcap;
+    usize rlen;
+
+    char *wbuf; // the response currently being written
+    usize wlen;
+    usize wsent;
+
+    bool keep_alive;
+} MalHttpConn;
+
+static MalReactor *conn_reactor(MalHttpConn *c) {
+    return &mal_host(c->vm)->reactor;
+}
+
+static void conn_arm_read(MalHttpConn *c);
+static void conn_arm_write(MalHttpConn *c);
+static void conn_process(MalHttpConn *c);
+
+static void conn_close(MalHttpConn *c) {
+    mal_reactor_cancel_op(conn_reactor(c), &c->read_op);
+    mal_reactor_cancel_op(conn_reactor(c), &c->write_op);
+    mal_net_close(c->fd);
+    free(c->rbuf);
+    free(c->wbuf);
+    free(c);
+}
+
+static void conn_read_cb(void *data);
+static void conn_write_cb(void *data);
+
+static void conn_arm_read(MalHttpConn *c) {
+    c->read_op.fd = c->fd;
+    c->read_op.interest = MAL_IO_READ;
+    c->read_op.waker = (MalWaker) {.fn = conn_read_cb, .data = c};
+    mal_reactor_add_op(conn_reactor(c), &c->read_op);
+}
+
+static void conn_arm_write(MalHttpConn *c) {
+    c->write_op.fd = c->fd;
+    c->write_op.interest = MAL_IO_WRITE;
+    c->write_op.waker = (MalWaker) {.fn = conn_write_cb, .data = c};
+    mal_reactor_add_op(conn_reactor(c), &c->write_op);
+}
+
+/* Queue a response with the given status + body bytes; caller sets c->keep_alive
+ * first. Public: the runtime's fetch hook calls this with the Response bytes. */
+void mal_http_conn_respond(
+    MalHttpConn *c,
+    int status,
+    const char *reason,
+    const char *headers,
+    usize headers_len,
+    const char *body,
+    usize body_len) {
+    static const char default_ct[] = "Content-Type: text/plain; charset=utf-8\r\n";
+
+    char status_line[128];
+    int status_len = snprintf(status_line, sizeof(status_line), "HTTP/1.1 %d %s\r\n", status, reason);
+    char framing[128];
+    int framing_len = snprintf(
+        framing,
+        sizeof(framing),
+        "Content-Length: %zu\r\nConnection: %s\r\n\r\n",
+        (size_t) body_len,
+        c->keep_alive ? "keep-alive" : "close");
+    if (status_len < 0 || framing_len < 0) {
+        conn_close(c);
+        return;
+    }
+
+    // Header block: the runtime's serialized Headers, or a default Content-Type.
+    const char *hdr = headers != nullptr ? headers : default_ct;
+    usize hdr_len = headers != nullptr ? headers_len : (sizeof(default_ct) - 1);
+
+    free(c->wbuf);
+    c->wlen = (usize) status_len + hdr_len + (usize) framing_len + body_len;
+    c->wbuf = malloc(c->wlen);
+    usize o = 0;
+    memcpy(c->wbuf + o, status_line, (usize) status_len);
+    o += (usize) status_len;
+    memcpy(c->wbuf + o, hdr, hdr_len);
+    o += hdr_len;
+    memcpy(c->wbuf + o, framing, (usize) framing_len);
+    o += (usize) framing_len;
+    if (body_len > 0) {
+        memcpy(c->wbuf + o, body, body_len);
+    }
+    c->wsent = 0;
+    conn_arm_write(c);
+}
+
+static void conn_send_error(MalHttpConn *c, int status, const char *reason) {
+    c->keep_alive = false;
+    mal_http_conn_respond(c, status, reason, nullptr, 0, reason, strlen(reason));
+}
+
+/* Try to handle one complete request currently buffered in rbuf. */
+static void conn_process(MalHttpConn *c) {
+    MalHttpRequest req;
+    usize consumed;
+    MalHttpParse p = mal_http_parse_request(c->rbuf, c->rlen, &req, &consumed);
+
+    if (p == MAL_HTTP_INCOMPLETE) {
+        if (c->rlen > MAL_HTTP_HEADERS_MAX) {
+            conn_send_error(c, 431, "Request Header Fields Too Large");
+            return;
+        }
+        conn_arm_read(c);
+        return;
+    }
+    if (p == MAL_HTTP_ERROR) {
+        conn_send_error(c, 400, "Bad Request");
+        return;
+    }
+
+    // Determine the body extent: Content-Length, or decode a chunked body in place.
+    // body_len = decoded body length at rbuf+consumed; need = raw bytes this request
+    // occupies (headers + framed body).
+    usize body_len;
+    usize need;
+    if (req.chunked) {
+        usize decoded;
+        usize raw;
+        MalHttpParse dp =
+            mal_http_dechunk(c->rbuf + consumed, c->rlen - consumed, &decoded, &raw);
+        if (dp == MAL_HTTP_INCOMPLETE) {
+            conn_arm_read(c);
+            return;
+        }
+        if (dp == MAL_HTTP_ERROR) {
+            conn_send_error(c, 400, "Bad Request");
+            return;
+        }
+        body_len = decoded;
+        need = consumed + raw;
+    } else {
+        usize content_length = req.content_length > 0 ? (usize) req.content_length : 0;
+        if (c->rlen < consumed + content_length) {
+            conn_arm_read(c); // wait for the rest of the body
+            return;
+        }
+        body_len = content_length;
+        need = consumed + content_length;
+    }
+
+    c->keep_alive = req.keep_alive;
+
+    // Dispatch: the runtime fetch handler (which reads the body pointing into rbuf
+    // during the call), or a built-in fixed response (transport smoke test).
+    if (mal_http_handler != nullptr) {
+        mal_http_handler(c->vm, c, &req, c->rbuf + consumed, body_len);
+    } else {
+        char msg[512];
+        int n = snprintf(
+            msg,
+            sizeof(msg),
+            "Maligator: %.*s %.*s\n",
+            (int) req.method_len,
+            req.method,
+            (int) req.target_len,
+            req.target);
+        mal_http_conn_respond(c, 200, "OK", nullptr, 0, msg, n > 0 ? (usize) n : 0);
+    }
+
+    // Consume this request; leftover is a pipelined follow-up handled after the
+    // write completes.
+    usize leftover = c->rlen - need;
+    memmove(c->rbuf, c->rbuf + need, leftover);
+    c->rlen = leftover;
+}
+
+static void conn_read_cb(void *data) {
+    MalHttpConn *c = data;
+
+    // Drain the socket (one-shot op fired: read until EAGAIN).
+    for (;;) {
+        if (c->rlen == c->rcap) {
+            usize ncap = c->rcap * 2;
+            char *nbuf = realloc(c->rbuf, ncap);
+            if (nbuf == nullptr) {
+                conn_close(c);
+                return;
+            }
+            c->rbuf = nbuf;
+            c->rcap = ncap;
+        }
+        ssize_t n = read(c->fd, c->rbuf + c->rlen, c->rcap - c->rlen);
+        if (n > 0) {
+            c->rlen += (usize) n;
+            continue;
+        }
+        if (n == 0) { // peer closed
+            conn_close(c);
+            return;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            break;
+        }
+        conn_close(c);
+        return;
+    }
+
+    conn_process(c);
+}
+
+static void conn_write_cb(void *data) {
+    MalHttpConn *c = data;
+
+    while (c->wsent < c->wlen) {
+        ssize_t n = write(c->fd, c->wbuf + c->wsent, c->wlen - c->wsent);
+        if (n > 0) {
+            c->wsent += (usize) n;
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            conn_arm_write(c); // socket buffer full: finish later
+            return;
+        }
+        conn_close(c);
+        return;
+    }
+
+    // Response fully written.
+    if (!c->keep_alive) {
+        conn_close(c);
+        return;
+    }
+    // Keep-alive: handle a pipelined request if already buffered, else read more.
+    if (c->rlen > 0) {
+        conn_process(c);
+    } else {
+        conn_arm_read(c);
+    }
+}
+
+static void server_accept_cb(void *data) {
+    MalHttpServer *server = data;
+
+    // Drain the backlog (one-shot: accept until EAGAIN), then re-arm.
+    for (;;) {
+        int fd = mal_net_accept(server->listen_fd);
+        if (fd < 0) {
+            break;
+        }
+        MalHttpConn *c = calloc(1, sizeof(MalHttpConn));
+        c->vm = server->vm;
+        c->fd = fd;
+        c->rbuf = malloc(MAL_HTTP_RBUF_INIT);
+        c->rcap = MAL_HTTP_RBUF_INIT;
+        c->rlen = 0;
+        conn_arm_read(c);
+    }
+
+    // Re-arm the accept op (one-shot).
+    server->accept_op.fd = server->listen_fd;
+    server->accept_op.interest = MAL_IO_READ;
+    server->accept_op.waker = (MalWaker) {.fn = server_accept_cb, .data = server};
+    mal_reactor_add_op(&mal_host(server->vm)->reactor, &server->accept_op);
+}
+
+MalHttpServer *mal_http_server_start(MalVm *vm, const char *host, u16 port) {
+    int fd = mal_net_listen(host, port, 128);
+    if (fd < 0) {
+        return nullptr;
+    }
+    MalHttpServer *server = calloc(1, sizeof(MalHttpServer));
+    server->vm = vm;
+    server->listen_fd = fd;
+    server->accept_op.fd = fd;
+    server->accept_op.interest = MAL_IO_READ;
+    server->accept_op.waker = (MalWaker) {.fn = server_accept_cb, .data = server};
+    mal_reactor_add_op(&mal_host(vm)->reactor, &server->accept_op);
+    return server;
+}
+
+u16 mal_http_server_port(const MalHttpServer *server) {
+    return mal_net_local_port(server->listen_fd);
+}
+
+void mal_http_server_stop(MalHttpServer *server) {
+    mal_reactor_cancel_op(&mal_host(server->vm)->reactor, &server->accept_op);
+    mal_net_close(server->listen_fd);
+    free(server);
+}

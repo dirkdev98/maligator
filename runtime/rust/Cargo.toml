@@ -34,6 +34,10 @@ writeable = "0.6"
 # panic-runtime symbols). The `utf16` feature matches over &[u16] with no UTF-8
 # conversion. See src/regexp.rs + docs/decisions/03-regexp.md.
 regress = { version = "0.11", features = ["utf16"] }
+# ada-url: the WHATWG URL parser (wraps the C++ `ada` library). Because it links a
+# C++ library, every final binary link needs the C++ stdlib (-lc++/-lstdc++), added
+# in src/rust-build.ts (rustLinkArgs). See src/url.rs + mal_url.h.
+ada-url = "3"
 
 [profile.release]
 opt-level = 3
