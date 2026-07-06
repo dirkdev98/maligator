@@ -13,8 +13,8 @@
  *     copy-paste is one constant ({@link STRESS_ENV}) plus small assert helpers.
  */
 
-import {  execFileSync, spawn } from "node:child_process";
-import type {ChildProcess} from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
@@ -52,6 +52,12 @@ export interface BuildOptions {
 	outDir?: string;
 	/** Link against pre-built archives (set by the vitest native lane's globalSetup). */
 	skipRuntimeBuild?: boolean;
+	/**
+	 * Include runtime eval / new Function (embed the baked compiler). Defaults to
+	 * true — internal tooling opts in. Set false to build the `engine.eval: false`
+	 * archive (no compiler embed, eval/Function throw EvalError at runtime).
+	 */
+	evalEnabled?: boolean;
 }
 
 /**
@@ -59,12 +65,15 @@ export interface BuildOptions {
  * lower → emit) and link it into a runnable binary. Returns the binary path.
  */
 export function buildNativeBinary(options: BuildOptions): string {
-	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(path.resolve(options.fixture));
+	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
+		path.resolve(options.fixture),
+	);
 	const ir = compileSemanticProgramToIr(semanticProgram);
 	executeIROptimizations(ir);
 	allocateRegisters(ir);
 	const definition = lowerIrProgramToVmDefinition(ir);
 	const cSource = emitVmDefinition(definition, { compiled: options.compiled ?? true });
+	const evalEnabled = options.evalEnabled ?? true;
 	return buildLocalBinary({
 		name: options.name,
 		cSource,
@@ -72,6 +81,9 @@ export function buildNativeBinary(options: BuildOptions): string {
 		mainFile: options.mainFile,
 		outDir: options.outDir,
 		skipRuntimeBuild: options.skipRuntimeBuild,
+		evalEnabled,
+		// eval-off gets its own cached archive; empty keeps the default eval-on dir.
+		cacheSuffix: evalEnabled ? "" : "noeval",
 	});
 }
 
@@ -86,7 +98,11 @@ export class RunError extends Error {
 	stderr: string;
 
 	constructor(message: string, stdout: string, stderr: string) {
-		super(stderr.trim() ? `${message}\n${stdout.trim()}\n${stderr.trim()}` : `${message}\n${stdout.trim()}`);
+		super(
+			stderr.trim()
+				? `${message}\n${stdout.trim()}\n${stderr.trim()}`
+				: `${message}\n${stdout.trim()}`,
+		);
 		this.name = "RunError";
 		this.stdout = stdout;
 		this.stderr = stderr;
@@ -106,7 +122,11 @@ export function runToStdout(binary: string, options: RunOptions = {}): string {
 		});
 	} catch (error) {
 		const e = error as { stdout?: string; stderr?: string };
-		throw new RunError(`binary exited non-zero: ${binary}`, e.stdout ?? "", e.stderr ?? "");
+		throw new RunError(
+			`binary exited non-zero: ${binary}`,
+			e.stdout ?? "",
+			e.stderr ?? "",
+		);
 	}
 }
 
@@ -152,7 +172,9 @@ export function assertExactLines(stdout: string, expected: Array<string>): void 
 	const lines = nonEmptyLines(stdout);
 	const ok = lines.length === expected.length && lines.every((l, i) => l === expected[i]);
 	if (!ok) {
-		throw new Error(`stdout line mismatch:\n  got: ${JSON.stringify(lines)}\n  exp: ${JSON.stringify(expected)}`);
+		throw new Error(
+			`stdout line mismatch:\n  got: ${JSON.stringify(lines)}\n  exp: ${JSON.stringify(expected)}`,
+		);
 	}
 }
 
@@ -164,7 +186,10 @@ export function assertExactLines(stdout: string, expected: Array<string>): void 
 export function waitForPort(child: ChildProcess, timeoutMs = 15000): Promise<number> {
 	return new Promise((resolve, reject) => {
 		let buf = "";
-		const timer = setTimeout(() => reject(new Error("timeout waiting for PORT")), timeoutMs);
+		const timer = setTimeout(
+			() => reject(new Error("timeout waiting for PORT")),
+			timeoutMs,
+		);
 		child.stdout?.on("data", (d: Buffer) => {
 			buf += d.toString();
 			const m = buf.match(/PORT (\d+)/);
@@ -189,7 +214,10 @@ export async function withServer<T>(
 	env: NodeJS.ProcessEnv,
 	body: (baseUrl: string) => Promise<T>,
 ): Promise<T> {
-	const child = spawn(binary, [], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
+	const child = spawn(binary, [], {
+		stdio: ["ignore", "pipe", "pipe"],
+		env: { ...process.env, ...env },
+	});
 	let stderr = "";
 	child.stderr?.on("data", (d: Buffer) => (stderr += d.toString()));
 	try {

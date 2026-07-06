@@ -1,6 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import {
+	assertEvalPolicy,
+	BuildConfigError,
+	buildConfigCacheSuffix,
+	loadBuildConfig,
+} from "./build-config.ts";
+import type { ResolvedBuildConfig } from "./build-config.ts";
 import { gmallocEnabled, runEnv } from "./build-flags.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { dumpProgramEscape } from "./escape.ts";
@@ -11,11 +18,12 @@ import { debugProgramLiveness } from "./liveness.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { lowerIrProgramToVmDefinition, vmDefinitionStats } from "./lower-vm.ts";
 import { allocateRegisters } from "./register-alloc.ts";
+import { collectDisallowedEvalUsage } from "./semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
 import { serializeVmDefinition } from "./serialize-vm.ts";
 import { log } from "./utils.ts";
 
-const FLAGS_WITH_VALUES = new Set(["--name", "--serialize"]);
+const FLAGS_WITH_VALUES = new Set(["--name", "--serialize", "--config"]);
 
 function argValue(name: string) {
 	const index = process.argv.indexOf(name);
@@ -51,9 +59,39 @@ if (!entrypoint || !existsSync(entrypoint)) {
 
 const entrypointPath = path.resolve(entrypoint);
 
+// The build config (maligator.build.json) is the source of truth for engine
+// capabilities. Absent → product defaults (eval OFF). A malformed / mistyped file
+// fails fast with a clean message rather than a stack trace.
+let buildConfig: ResolvedBuildConfig;
+try {
+	buildConfig = loadBuildConfig(argValue("--config"));
+} catch (error) {
+	if (error instanceof BuildConfigError) {
+		log.info(`error: ${error.message}`);
+		process.exit(1);
+	}
+	throw error;
+}
+
 const semTiming = log.time("semantic analysis");
 const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypointPath);
 semTiming();
+
+// Compile-time half of `engine.eval: false` enforcement (the runtime gate in
+// builtin_eval.c is the other). Skipped for `--serialize`, which emits the wire
+// definition for the baked compiler / eval tooling itself — internal, not a
+// user build subject to the policy.
+if (!argFlag("--serialize")) {
+	try {
+		assertEvalPolicy(buildConfig, collectDisallowedEvalUsage(semanticProgram));
+	} catch (error) {
+		if (error instanceof BuildConfigError) {
+			log.info(`error: ${error.message}`);
+			process.exit(1);
+		}
+		throw error;
+	}
+}
 
 const irTiming = log.time("compile to ir");
 const irProgram = compileSemanticProgramToIr(semanticProgram);
@@ -128,7 +166,13 @@ const name = argValue("--name") ?? "out";
 const verbose = argFlag("--verbose");
 
 const buildTiming = log.time("build binary");
-const binaryPath = buildLocalBinary({ name, cSource: output, verbose });
+const binaryPath = buildLocalBinary({
+	name,
+	cSource: output,
+	verbose,
+	evalEnabled: buildConfig.engine.eval,
+	cacheSuffix: buildConfigCacheSuffix(buildConfig),
+});
 buildTiming();
 log.info(`Binary: ${binaryPath}`);
 

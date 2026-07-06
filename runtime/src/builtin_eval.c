@@ -40,6 +40,15 @@ static void retain_loaded(MalVm *vm, MalLoadedDefinition *loaded) {
 // then delete the global so eval leaves nothing on globalThis. Returns false
 // with a pending throw on failure.
 static bool ensure_compiler(MalVm *vm) {
+#if !MAL_EVAL
+    // eval-disabled build (`engine.eval: false`): the baked compiler is not
+    // embedded. Every dynamic-code path (eval, new Function, the async/generator
+    // Function families, aliased indirect eval) reaches here, so this single
+    // throw is the runtime gate the static compile-time check cannot cover.
+    mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,
+                       "eval is disabled in this build (engine.eval is false)");
+    return false;
+#else
     if (vm->compiler_installed) {
         return true;
     }
@@ -73,6 +82,7 @@ static bool ensure_compiler(MalVm *vm) {
     mal_vm_delete_property(vm, global, key);
     vm->compiler_installed = true;
     return true;
+#endif
 }
 
 // Compile `source` (a JS string value) to a loaded definition via the baked

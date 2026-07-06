@@ -6,10 +6,24 @@ import { ensureCompilerWire } from "./compiler-bake.ts";
 import { ensureRustLibrary, RUST_INCLUDE_DIR, rustLinkArgs } from "./rust-build.ts";
 
 const LOCAL_DIR = ".cache/local";
-// A sanitizer build gets its own build dir + binaries so toggling MAL_ASAN /
-// MAL_UBSAN does not force a full reconfigure/rebuild of the normal -O2 archive
-// (CMAKE_C_FLAGS is cached per build dir). Empty suffix == the normal build.
-const BUILD_DIR = path.join(LOCAL_DIR, `lib${buildSuffix()}`);
+
+/**
+ * A sanitizer / generational / eval-disabled build gets its own build dir +
+ * binaries so toggling a dimension does not force a full reconfigure/rebuild of
+ * the normal -O2 archive (CMAKE_C_FLAGS is cached per build dir). `cacheSuffix` is
+ * the build-config hash (build-config.ts); empty == the default eval-on build.
+ */
+function buildDirFor(cacheSuffix: string): string {
+	return path.join(LOCAL_DIR, `lib${buildSuffix(cacheSuffix)}`);
+}
+
+/** The build dimensions that select a distinct cached archive. */
+interface RuntimeBuildDimensions {
+	/** Whether to embed the baked compiler + allow eval/Function. Default true. */
+	evalEnabled?: boolean;
+	/** Build-config hash suffix (build-config.ts). Default "" (eval-on archive). */
+	cacheSuffix?: string;
+}
 
 export interface LocalBuildOptions {
 	/**
@@ -47,6 +61,21 @@ export interface LocalBuildOptions {
 	 * parallel workers only emit + link and never race a shared `cmake`.
 	 */
 	skipRuntimeBuild?: boolean;
+
+	/**
+	 * Whether this binary includes runtime eval / new Function (embeds the 1.6 MB
+	 * baked compiler). Defaults to true (the eval-on archive). Set false for an
+	 * `engine.eval: false` build: no compiler embed, `-DMAL_EVAL=0`, and its own
+	 * cached archive keyed by {@link cacheSuffix}.
+	 */
+	evalEnabled?: boolean;
+
+	/**
+	 * Build-config hash (build-config.ts `buildConfigCacheSuffix`) selecting which
+	 * cached archive/build dir this binary links against. Defaults to "" (the
+	 * eval-on archive). Must be consistent with {@link evalEnabled}.
+	 */
+	cacheSuffix?: string;
 }
 
 /**
@@ -57,11 +86,11 @@ export interface LocalBuildOptions {
  * after globalSetup has built them once) link against these directly; a
  * concurrent `cmake` would otherwise race on the shared build dir.
  */
-function runtimeArchivePaths(): Array<string> {
+function runtimeArchivePaths(buildDir: string): Array<string> {
 	return [
-		path.join(BUILD_DIR, "libMalRuntime.a"),
-		path.join(BUILD_DIR, "libMalHost.a"),
-		path.join(BUILD_DIR, "libLibMaligator.a"),
+		path.join(buildDir, "libMalRuntime.a"),
+		path.join(buildDir, "libMalHost.a"),
+		path.join(buildDir, "libLibMaligator.a"),
 	];
 }
 
@@ -71,19 +100,29 @@ function runtimeArchivePaths(): Array<string> {
  * which the final cc links together (static + optimized). Exported so the vitest
  * native lane can build them ONCE in globalSetup before parallel workers link.
  */
-export function ensureRuntimeLibrary(verbose: boolean): Array<string> {
+export function ensureRuntimeLibrary(
+	verbose: boolean,
+	dimensions: RuntimeBuildDimensions = {},
+): Array<string> {
+	const evalEnabled = dimensions.evalEnabled ?? true;
+	const cacheSuffix = dimensions.cacheSuffix ?? "";
+	const buildDir = buildDirFor(cacheSuffix);
 	const stdio = verbose ? "inherit" : "ignore";
 
 	mkdirSync(LOCAL_DIR, { recursive: true });
 
 	// Generate the baked compiler wire (runtime/src/compiler.malw) before cmake:
 	// the GLOB pulls in compiler_wire.c, whose `#embed` needs the file to exist.
-	ensureCompilerWire(verbose);
+	// Skipped for an eval-disabled build — the `#embed` is guarded out by
+	// `-DMAL_EVAL=0`, so the file is never referenced (faster build, no bake).
+	if (evalEnabled) {
+		ensureCompilerWire(verbose);
+	}
 
 	// Re-running configure with unchanged cache variables is cheap.
 	execFileSync(
 		"cmake",
-		["-S", "runtime", "-B", BUILD_DIR, `-DCMAKE_C_FLAGS=${cmakeCFlags()}`],
+		["-S", "runtime", "-B", buildDir, `-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled })}`],
 		{
 			stdio,
 		},
@@ -91,7 +130,7 @@ export function ensureRuntimeLibrary(verbose: boolean): Array<string> {
 
 	execFileSync(
 		"cmake",
-		["--build", BUILD_DIR, "--target", "LibMaligator", "MalHost", "MalRuntime"],
+		["--build", buildDir, "--target", "LibMaligator", "MalHost", "MalRuntime"],
 		{ stdio },
 	);
 
@@ -101,7 +140,7 @@ export function ensureRuntimeLibrary(verbose: boolean): Array<string> {
 
 	// Link order: runtime -> host -> engine (dependents first). rustLinkArgs() is
 	// appended after these by the caller (the engine references its symbols).
-	return runtimeArchivePaths();
+	return runtimeArchivePaths(buildDir);
 }
 
 /**
@@ -145,11 +184,15 @@ export function buildLoadDriver(verbose: boolean): string {
  * Returns the path to the binary.
  */
 export function buildLocalBinary(options: LocalBuildOptions): string {
-	const libs = options.skipRuntimeBuild ? runtimeArchivePaths() : ensureRuntimeLibrary(options.verbose);
+	const evalEnabled = options.evalEnabled ?? true;
+	const cacheSuffix = options.cacheSuffix ?? "";
+	const libs = options.skipRuntimeBuild
+		? runtimeArchivePaths(buildDirFor(cacheSuffix))
+		: ensureRuntimeLibrary(options.verbose, { evalEnabled, cacheSuffix });
 
-	// Suffix the artifacts under a sanitizer build so they do not clobber the
-	// normal binary (and vice-versa).
-	const artifactName = `${options.name}${buildSuffix()}`;
+	// Suffix the artifacts under a sanitizer / eval-disabled build so they do not
+	// clobber the normal binary (and vice-versa).
+	const artifactName = `${options.name}${buildSuffix(cacheSuffix)}`;
 	const outDir = options.outDir ?? LOCAL_DIR;
 	mkdirSync(outDir, { recursive: true });
 	const cPath = path.join(outDir, `${artifactName}.c`);

@@ -80,12 +80,20 @@ export function gcDefines(): Array<string> {
  * the generational collector does not thrash the normal -O2 archive (CMAKE_C_FLAGS
  * is cached per build dir, and the header layout / barrier code differs). Empty for
  * the normal build.
+ *
+ * `cacheSuffix` folds in a hash of the build-affecting build config
+ * (build-config.ts `buildConfigCacheSuffix`), so an eval-disabled binary (which
+ * embeds no compiler and defines `-DMAL_EVAL=0`) gets its own archive rather than
+ * clobbering the default eval-on one. Empty (the default) keeps the unsuffixed dir.
  */
-export function buildSuffix(): string {
+export function buildSuffix(cacheSuffix = ""): string {
 	const mode = sanitizerMode();
 	let suffix = mode === "none" ? "" : `-${mode}`;
 	if (gcGenerational()) {
 		suffix += "-gen";
+	}
+	if (cacheSuffix) {
+		suffix += `-${cacheSuffix}`;
 	}
 	return suffix;
 }
@@ -98,9 +106,19 @@ export function optFlags(): Array<string> {
 	return sanitizerMode() === "none" ? ["-O2"] : ["-O1", "-g"];
 }
 
-/** The single `-DCMAKE_C_FLAGS=...` value for configuring LibMaligator. */
-export function cmakeCFlags(): string {
-	return [...optFlags(), ...SANITIZER_FLAGS[sanitizerMode()], ...gcDefines()].join(" ");
+/**
+ * The single `-DCMAKE_C_FLAGS=...` value for configuring LibMaligator. Passing
+ * `evalEnabled: false` adds `-DMAL_EVAL=0`, which drops the `#embed` of the 1.6 MB
+ * baked compiler and turns the eval/Function runtime path into an EvalError throw.
+ */
+export function cmakeCFlags(opts: { evalEnabled?: boolean } = {}): string {
+	const evalFlag = opts.evalEnabled === false ? ["-DMAL_EVAL=0"] : [];
+	return [
+		...optFlags(),
+		...SANITIZER_FLAGS[sanitizerMode()],
+		...gcDefines(),
+		...evalFlag,
+	].join(" ");
 }
 
 /** Extra cc flags (compile + link) for an emitted translation unit. */

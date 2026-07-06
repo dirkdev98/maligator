@@ -303,6 +303,63 @@ export function functionHasDirectEval(file: SemanticFile, node: ESTree.Node): bo
 	return file.hasDirectEval.has(node);
 }
 
+/** A statically-detected use of a dynamic-code entry point, with its location. */
+export interface DisallowedEvalUsage {
+	/** `eval(...)` or `Function(...)`/`new Function(...)`. */
+	kind: "eval" | "Function";
+	path: string;
+	line: number;
+	column: number;
+}
+
+/**
+ * The narrow, call-site-specific half of the `engine.eval: false` enforcement:
+ * flag `eval(...)` calls and `Function(...)` / `new Function(...)` constructions
+ * where the callee is the global (undeclared) binding. Bare references
+ * (`typeof eval`, `x instanceof Function`, `Function.prototype`) are intentionally
+ * NOT flagged — they create no dynamic code, and anything this misses (aliased
+ * indirect eval, `Object.getPrototypeOf(async()=>{}).constructor`, the other
+ * Function families) is caught by the runtime gate in builtin_eval.c.
+ */
+function collectFileEvalUsage(
+	node: ESTree.Node,
+	file: SemanticFile,
+	out: Array<DisallowedEvalUsage>,
+): void {
+	if (node.type === "CallExpression" || node.type === "NewExpression") {
+		const callee = node.callee as unknown as ESTree.Node;
+		if (callee.type === "Identifier" && file.nodeToBinding.get(callee)?.undeclared) {
+			const isEvalCall = callee.name === "eval" && node.type === "CallExpression";
+			const isFunctionCtor = callee.name === "Function";
+			if (isEvalCall || isFunctionCtor) {
+				const loc = callee.loc?.start ?? { line: 0, column: 0 };
+				out.push({
+					kind: isEvalCall ? "eval" : "Function",
+					path: file.path,
+					line: loc.line,
+					column: loc.column,
+				});
+			}
+		}
+	}
+	recurseAst(node, collectFileEvalUsage, file, out);
+}
+
+/**
+ * Collect every disallowed dynamic-code use across a program's files (see
+ * {@link collectFileEvalUsage}). Consumed by the compiler entry points when
+ * `engine.eval` is false to fail the build with a pointer at the config.
+ */
+export function collectDisallowedEvalUsage(
+	program: SemanticProgram,
+): Array<DisallowedEvalUsage> {
+	const out: Array<DisallowedEvalUsage> = [];
+	for (const file of program.files) {
+		collectFileEvalUsage(file.ast, file, out);
+	}
+	return out;
+}
+
 /**
  * Build up the scope tree and infer strict modes.
  */
@@ -766,8 +823,8 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 	// in a non-arrow function keeps its own-frame loadNewTarget path.
 	if (
 		node.type === "MetaProperty" &&
-		(node).meta?.name === "new" &&
-		(node).property?.name === "target"
+		node.meta?.name === "new" &&
+		node.property?.name === "target"
 	) {
 		const owner = resolveLexicalThisOwner(scope);
 		if (owner) {
@@ -818,7 +875,10 @@ function resolveLexicalThisOwner(scope: Scope): Scope | null {
 
 	// `this` is lexical: find the nearest enclosing non-arrow provider.
 	let owner: Scope | null = current.parent;
-	while (owner && (owner.node.type === "ArrowFunctionExpression" || !providesThis(owner.node.type))) {
+	while (
+		owner &&
+		(owner.node.type === "ArrowFunctionExpression" || !providesThis(owner.node.type))
+	) {
 		owner = owner.parent;
 	}
 	if (
