@@ -47,7 +47,13 @@ function objects() {
 	const N = 3000;
 	const particles = [];
 	for (let i = 0; i < N; i++) {
-		particles.push({ x: i * 0.5, y: -i * 0.25, vx: (i % 13) - 6, vy: (i % 7) - 3, mass: (i % 9) + 1 });
+		particles.push({
+			x: i * 0.5,
+			y: -i * 0.25,
+			vx: (i % 13) - 6,
+			vy: (i % 7) - 3,
+			mass: (i % 9) + 1,
+		});
 	}
 	let checksum = 0;
 	for (let step = 0; step < 500; step++) {
@@ -106,7 +112,10 @@ function intrinsics() {
 	for (let i = 0; i < N; i++) data.push(((i * 2654435761) % 10007) / 10007);
 	let acc = 0;
 	for (let iter = 0; iter < 200; iter++) {
-		const s = data.reduce((sum, v) => sum + Math.sqrt(v) * Math.sin(v) + Math.abs(v - 0.5), 0);
+		const s = data.reduce(
+			(sum, v) => sum + Math.sqrt(v) * Math.sin(v) + Math.abs(v - 0.5),
+			0,
+		);
 		let hits = 0;
 		data.forEach((v) => {
 			if (v > 0.5) hits = hits + Math.floor(v * 100);

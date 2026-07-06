@@ -12,8 +12,38 @@ export function allocateRegisters(program: IntermediateProgram) {
 	debugIntermediateProgram(program);
 }
 
-/** How a register's value is held downstream (drives rep-aware allocation). */
-type RegisterRep = "boxed" | "number";
+/**
+ * How a register's value is held downstream (drives rep-aware allocation). Must
+ * mirror emit-c's rep lattice (its `inferReps`/`producedRep`) exactly: a physical
+ * register is kept to a single rep so the native backend can hold `number`
+ * registers as C doubles and `boolean` registers as C bools. If the allocator
+ * coalesced values of differing rep into one physical register, emit-c's join
+ * would demote it to `boxed`, collapsing the native fast paths — which is what
+ * made hot `%`/comparison results (and the accumulators they feed) box.
+ */
+type RegisterRep = "boxed" | "number" | "boolean";
+
+/** Comparison operators emit-c lowers to a native C bool. Result rep: boolean. */
+const COMPARE_OPERATORS = new Set(["<", "<=", ">", ">=", "===", "==", "!==", "!="]);
+
+/**
+ * Binary operators emit-c lowers to native C over two `number` operands: the
+ * arithmetic set, the bitwise/shift ops, unsigned shift, and float remainder.
+ * Mirrors emit-c's `producesNumberFromNumbers`; `**` is excluded (stays boxed).
+ */
+const NUMBER_FROM_NUMBERS = new Set([
+	"+",
+	"-",
+	"*",
+	"/",
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+	"%",
+]);
 
 /**
  * Blocks in reverse postorder — a valid execution linearization in which every
@@ -99,36 +129,61 @@ const USE_ONLY_FIRST_REGISTER = new Set([
 ]);
 
 /**
- * IR producers whose result is a native-emittable JS number, used by the
- * native backend. Must match emit-c's notion of a `number` register so a
- * physical register the allocator keeps rep-consistent is inferred the same way.
+ * The rep an IR instruction's result naturally has given current operand reps, or
+ * null when an operand is still unknown (defer to a later fixpoint iteration).
+ * Mirrors emit-c's `producedRep`: comparisons and `!` yield a boolean; native
+ * arithmetic/bitwise/remainder over two numbers yields a number; unary `- + ~`
+ * over a number yields a number; everything else is boxed.
  */
-function producesNumber(
+function producedRep(
 	instruction: IRInstruction,
-	repOf: (register: number) => RegisterRep,
-): boolean {
+	repOf: (register: number) => RegisterRep | null,
+): RegisterRep | null {
 	switch (instruction.type) {
 		case "createNumber":
 		case "createF64":
-			return true;
+			return "number";
+		case "createBoolean":
+			return "boolean";
 		case "move":
-			return repOf(instruction.registers[1]) === "number";
+			return repOf(instruction.registers[1]!);
 		case "binary": {
 			const op = instruction.operator;
-			return (
-				(op === "+" || op === "-" || op === "*" || op === "/") &&
-				repOf(instruction.registers[1]) === "number" &&
-				repOf(instruction.registers[2]) === "number"
-			);
+			if (COMPARE_OPERATORS.has(op)) {
+				return "boolean";
+			}
+			if (NUMBER_FROM_NUMBERS.has(op)) {
+				const left = repOf(instruction.registers[1]!);
+				const right = repOf(instruction.registers[2]!);
+				if (left === null || right === null) {
+					return null;
+				}
+				return left === "number" && right === "number" ? "number" : "boxed";
+			}
+			return "boxed";
 		}
-		case "unary":
-			return (
-				(instruction.operator === "-" || instruction.operator === "+") &&
-				repOf(instruction.registers[1]) === "number"
-			);
+		case "unary": {
+			const op = instruction.operator;
+			if (op === "!") {
+				return "boolean";
+			}
+			if (op === "-" || op === "+" || op === "~") {
+				const src = repOf(instruction.registers[1]!);
+				return src === null ? null : src === "number" ? "number" : "boxed";
+			}
+			return "boxed";
+		}
 		default:
-			return false;
+			return "boxed";
 	}
+}
+
+/** Join two reps of a multiply-defined register: any disagreement is boxed. */
+function joinReps(current: RegisterRep | null, produced: RegisterRep): RegisterRep {
+	if (current === null) {
+		return produced;
+	}
+	return current === produced ? current : "boxed";
 }
 
 /** The virtual register an instruction defines (writes), or null. */
@@ -141,13 +196,15 @@ export function definedRegister(instruction: IRInstruction): number | null {
 }
 
 /**
- * Forward fixpoint over virtual registers: a non-parameter register is `number`
- * iff every instruction that defines it is a native-number producer over
- * `number` registers. Monotone (only demotes), so it converges. Parameters hold
- * boxed incoming arguments, so they start (and stay) `boxed`.
+ * Forward fixpoint over virtual registers (top = unknown, then {number, boolean},
+ * bottom = boxed): a register's rep is the join of the reps its definitions
+ * produce. `producedRep` depends on operand reps, so iterate to a fixpoint; reps
+ * only move down the lattice, so it converges. Parameters hold boxed incoming
+ * arguments, so they start (and stay) `boxed`; a register never resolved (only
+ * ever a non-first / iterator output, or unwritten) defaults to `boxed`.
  */
 function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
-	const reps = new Map<number, RegisterRep>();
+	const reps = new Map<number, RegisterRep | null>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
 			if (!("registers" in instruction)) {
@@ -155,13 +212,13 @@ function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
 			}
 			for (const register of instruction.registers) {
 				if (register >= 0 && !reps.has(register)) {
-					reps.set(register, register < fn.parameterCount ? "boxed" : "number");
+					reps.set(register, register < fn.parameterCount ? "boxed" : null);
 				}
 			}
 		}
 	}
 
-	const repOf = (register: number): RegisterRep => reps.get(register) ?? "boxed";
+	const repOf = (register: number): RegisterRep | null => reps.get(register) ?? "boxed";
 
 	let changed = true;
 	while (changed) {
@@ -169,18 +226,28 @@ function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				const dst = definedRegister(instruction);
-				if (dst === null || dst < fn.parameterCount || repOf(dst) !== "number") {
+				if (dst === null || dst < fn.parameterCount) {
 					continue;
 				}
-				if (!producesNumber(instruction, repOf)) {
-					reps.set(dst, "boxed");
+				const produced = producedRep(instruction, repOf);
+				// An operand still unknown: leave for a later iteration.
+				if (produced === null) {
+					continue;
+				}
+				const joined = joinReps(reps.get(dst) ?? null, produced);
+				if (joined !== reps.get(dst)) {
+					reps.set(dst, joined);
 					changed = true;
 				}
 			}
 		}
 	}
 
-	return reps;
+	const resolved = new Map<number, RegisterRep>();
+	for (const [register, rep] of reps) {
+		resolved.set(register, rep ?? "boxed");
+	}
+	return resolved;
 }
 
 /**
@@ -220,7 +287,11 @@ function allocateRegistersForFunction(fn: IRFunction) {
 	const repOf = (register: number): RegisterRep => virtualReps.get(register) ?? "boxed";
 
 	const virtualRegisterToRealRegister = new Map<number, number>();
-	const freeRegisters: Record<RegisterRep, Array<number>> = { boxed: [], number: [] };
+	const freeRegisters: Record<RegisterRep, Array<number>> = {
+		boxed: [],
+		number: [],
+		boolean: [],
+	};
 	let highestUsedRegister = -1;
 
 	// A register used in multiple blocks may be live across a loop back edge,

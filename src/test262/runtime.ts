@@ -524,7 +524,9 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 	const negative = file.frontmatter.negative;
 	const negativeAtCompile =
 		negative !== undefined &&
-		(negative.phase === "parse" || negative.phase === "early" || negative.phase === "resolution");
+		(negative.phase === "parse" ||
+			negative.phase === "early" ||
+			negative.phase === "resolution");
 
 	const compileStartedAt = performance.now();
 	try {
@@ -533,7 +535,8 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 		// module-scoped, which the test references in the same scope).
 		const parsed = isModule ? parseModule(source) : parseScript(source, { strict });
 
-		const hasDynamicImport = file.frontmatter.features?.includes("dynamic-import") ?? false;
+		const hasDynamicImport =
+			file.frontmatter.features?.includes("dynamic-import") ?? false;
 
 		// Module and dynamic-import tests run through the loader/graph pipeline so
 		// sibling `*_FIXTURE.js` imports resolve from the test's real directory. For
@@ -557,7 +560,7 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 							dependencyGoalOverride: "module",
 						},
 					)
-			: analyzeSourceAndRunSemanticAnalysis(source, file.path, parsed);
+				: analyzeSourceAndRunSemanticAnalysis(source, file.path, parsed);
 
 		const irProgram = compileSemanticProgramToIr(semanticProgram);
 		executeIROptimizations(irProgram);

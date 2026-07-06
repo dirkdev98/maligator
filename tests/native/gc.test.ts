@@ -2,7 +2,12 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
-import { assertPassLine, buildNativeBinary, runToStdout, STRESS_ENV } from "../../src/test-harness.ts";
+import {
+	assertPassLine,
+	buildNativeBinary,
+	runToStdout,
+	STRESS_ENV,
+} from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-"));
 
@@ -35,7 +40,10 @@ describe("targeted GC unit tests", () => {
 	});
 
 	it("compiled + MAL_GC_STRESS + MAL_GC_VERIFY", () => {
-		assertPassLine(runToStdout(compiled, { env: { ...HOST_GC, ...STRESS_ENV } }), "gctest");
+		assertPassLine(
+			runToStdout(compiled, { env: { ...HOST_GC, ...STRESS_ENV } }),
+			"gctest",
+		);
 	});
 
 	it("interpreter backend (Tier B root walk)", () => {

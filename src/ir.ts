@@ -3,7 +3,12 @@ import { isPureDataCjsModule } from "./cjs-exports.ts";
 import { linkModules } from "./linker.ts";
 import { COMMONJS_BINDINGS } from "./semantic-analysis.ts";
 import { FUNCTION_UNIT_NODE_TYPES } from "./semantic-analysis.ts";
-import type { Binding, Scope, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
+import type {
+	Binding,
+	Scope,
+	SemanticFile,
+	SemanticProgram,
+} from "./semantic-analysis.ts";
 import { log } from "./utils.ts";
 
 export interface IntermediateProgram {
@@ -2603,7 +2608,9 @@ function compileClass(
 		// ClassDefinitionEvaluation: the superclass must be a constructor whose
 		// `prototype` is an object or null (or the null literal, handled below).
 		// `extends 42`, `extends Math.abs`, `extends boundFn` (no prototype) throw.
-		if (!(classNode.superClass.type === "Literal" && classNode.superClass.value === null)) {
+		if (
+			!(classNode.superClass.type === "Literal" && classNode.superClass.value === null)
+		) {
 			cursor.block.instructions.push({ type: "checkSuperClass", registers: [parent] });
 		}
 
@@ -2846,7 +2853,10 @@ function compileClass(
 	if (parent !== -1) {
 		const parentPrototype = nextRegisterDestination(fn);
 		if (extendsNull) {
-			cursor.block.instructions.push({ type: "createNull", registers: [parentPrototype] });
+			cursor.block.instructions.push({
+				type: "createNull",
+				registers: [parentPrototype],
+			});
 		} else {
 			cursor.block.instructions.push({
 				type: "loadProperty",
@@ -3764,14 +3774,23 @@ function compileWithBaseRead(
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const foundJump: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	const foundJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
 	cursor.block.instructions.push(missJump, foundJump);
 
 	// Found: [[Get]] the property off the captured base object.
 	const foundIdx = fn.blocks.push({ instructions: [] }) - 1;
 	cursor.block = fn.blocks[foundIdx]!;
-	cursor.block.instructions.push({ type: "loadProperty", registers: [result, base, key] });
-	const foundJoin: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	cursor.block.instructions.push({
+		type: "loadProperty",
+		registers: [result, base, key],
+	});
+	const foundJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
 	cursor.block.instructions.push(foundJoin);
 
 	// Miss: resolve the static binding into the same result register.
@@ -3779,7 +3798,10 @@ function compileWithBaseRead(
 	cursor.block = fn.blocks[missIdx]!;
 	const staticValue = compileStaticIdentifier(program, fn, cursor, identifier);
 	cursor.block.instructions.push({ type: "move", registers: [result, staticValue] });
-	const missJoin: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	const missJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
 	cursor.block.instructions.push(missJoin);
 
 	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
@@ -3813,21 +3835,33 @@ function compileWithBaseStore(
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const foundJump: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	const foundJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
 	cursor.block.instructions.push(missJump, foundJump);
 
 	// Found: [[Set]] on the captured base object.
 	const foundIdx = fn.blocks.push({ instructions: [] }) - 1;
 	cursor.block = fn.blocks[foundIdx]!;
-	cursor.block.instructions.push({ type: "storeProperty", registers: [base, key, value] });
-	const foundJoin: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	cursor.block.instructions.push({
+		type: "storeProperty",
+		registers: [base, key, value],
+	});
+	const foundJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
 	cursor.block.instructions.push(foundJoin);
 
 	// Miss: static store.
 	const missIdx = fn.blocks.push({ instructions: [] }) - 1;
 	cursor.block = fn.blocks[missIdx]!;
 	compileStaticIdentifierTarget(program, fn, cursor, identifier, value, true);
-	const missJoin: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	const missJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
 	cursor.block.instructions.push(missJoin);
 
 	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
@@ -6247,7 +6281,11 @@ function compileVariableDeclaration(
 		// unconditionally function-scoped, not the initializer store. (`decl.init`
 		// only: a bare `var x;` performs no assignment.) The miss branch stores the
 		// hoisted local like the normal path below.
-		if (decl.init && decl.id.type === "Identifier" && fn.semanticFile.withDynamicNodes.has(decl.id)) {
+		if (
+			decl.init &&
+			decl.id.type === "Identifier" &&
+			fn.semanticFile.withDynamicNodes.has(decl.id)
+		) {
 			const nameStringIndex = getOrCreateStringConstant(program, binding.name);
 			const base = nextRegisterDestination(fn);
 			cursor.block.instructions.push({
@@ -6472,7 +6510,11 @@ function compileYieldStarExpression(
 	const notObjectIdx = fn.blocks.push(notObject) - 1;
 	{
 		const typeName = nextRegisterDestination(fn);
-		check.instructions.push({ type: "unary", registers: [typeName, result], operator: "typeof" });
+		check.instructions.push({
+			type: "unary",
+			registers: [typeName, result],
+			operator: "typeof",
+		});
 		// typeof "function" → a callable object: always valid.
 		const isFunc = nextRegisterDestination(fn);
 		check.instructions.push({
@@ -6480,7 +6522,11 @@ function compileYieldStarExpression(
 			registers: [isFunc, typeName, stringRegister(check, "function")],
 			operator: "===",
 		});
-		check.instructions.push({ type: "jumpIf", registers: [isFunc], blocks: [checkBodyIdx] });
+		check.instructions.push({
+			type: "jumpIf",
+			registers: [isFunc],
+			blocks: [checkBodyIdx],
+		});
 		// Otherwise it must be typeof "object" AND not null (typeof null is
 		// "object"); anything else (number/string/boolean/undefined/symbol/bigint)
 		// is a non-object result.
@@ -6491,14 +6537,26 @@ function compileYieldStarExpression(
 			operator: "===",
 		});
 		const notObjType = nextRegisterDestination(fn);
-		check.instructions.push({ type: "unary", registers: [notObjType, isObjType], operator: "!" });
-		check.instructions.push({ type: "jumpIf", registers: [notObjType], blocks: [notObjectIdx] });
+		check.instructions.push({
+			type: "unary",
+			registers: [notObjType, isObjType],
+			operator: "!",
+		});
+		check.instructions.push({
+			type: "jumpIf",
+			registers: [notObjType],
+			blocks: [notObjectIdx],
+		});
 		nullishGuard(check, result, notObjectIdx);
 		check.instructions.push({ type: "jump", blocks: [checkBodyIdx] });
 	}
 	{
 		const te = nextRegisterDestination(fn);
-		notObject.instructions.push({ type: "loadIntrinsic", registers: [te], intrinsic: "TypeError" });
+		notObject.instructions.push({
+			type: "loadIntrinsic",
+			registers: [te],
+			intrinsic: "TypeError",
+		});
 		const err = nextRegisterDestination(fn);
 		notObject.instructions.push({
 			type: "construct",
@@ -6515,7 +6573,11 @@ function compileYieldStarExpression(
 			type: "loadProperty",
 			registers: [doneReg, result, stringRegister(checkBody, "done")],
 		});
-		checkBody.instructions.push({ type: "jumpIf", registers: [doneReg], blocks: [doneIdx] });
+		checkBody.instructions.push({
+			type: "jumpIf",
+			registers: [doneReg],
+			blocks: [doneIdx],
+		});
 		const valueReg = nextRegisterDestination(fn);
 		checkBody.instructions.push({
 			type: "loadProperty",
@@ -6545,7 +6607,10 @@ function compileYieldStarExpression(
 			checkBody.instructions.push({ type: "jump", blocks: [headerIdx] });
 			const unwrapCursor: IRCursor = { block: unwrapAwait };
 			const awaited = compileAwaitRegister(fn, unwrapCursor, sentValue);
-			unwrapCursor.block.instructions.push({ type: "move", registers: [sentValue, awaited] });
+			unwrapCursor.block.instructions.push({
+				type: "move",
+				registers: [sentValue, awaited],
+			});
 			unwrapCursor.block.instructions.push({ type: "jump", blocks: [headerIdx] });
 		} else {
 			checkBody.instructions.push({ type: "jump", blocks: [headerIdx] });
@@ -8013,7 +8078,10 @@ function compileWithDynamicDelete(
 		registers: [emptyFlag],
 		blocks: [-1],
 	};
-	const foundJump: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	const foundJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
 	cursor.block.instructions.push(missJump, foundJump);
 
 	// Found: delete the property off the captured with-object.
@@ -8025,8 +8093,14 @@ function compileWithDynamicDelete(
 		registers: [key],
 		stringIndex: nameStringIndex,
 	});
-	cursor.block.instructions.push({ type: "deleteProperty", registers: [result, base, key] });
-	const foundJoin: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	cursor.block.instructions.push({
+		type: "deleteProperty",
+		registers: [result, base, key],
+	});
+	const foundJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
 	cursor.block.instructions.push(foundJoin);
 
 	// Miss: static delete into the same result register.
@@ -8034,7 +8108,10 @@ function compileWithDynamicDelete(
 	cursor.block = fn.blocks[missIdx]!;
 	const staticResult = compileStaticIdentifierDelete(program, fn, cursor, identifier);
 	cursor.block.instructions.push({ type: "move", registers: [result, staticResult] });
-	const missJoin: Extract<IRInstruction, { type: "jump" }> = { type: "jump", blocks: [-1] };
+	const missJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
 	cursor.block.instructions.push(missJoin);
 
 	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
@@ -8074,7 +8151,11 @@ function compileUpdateExpression(
 		if (program.evalDirect && identifierIsFree(fn, expression.argument)) {
 			const current = compileWithDynamicRead(program, fn, cursor, expression.argument);
 			const oldValue = nextRegisterDestination(fn);
-			cursor.block.instructions.push({ type: "unary", registers: [oldValue, current], operator: "+" });
+			cursor.block.instructions.push({
+				type: "unary",
+				registers: [oldValue, current],
+				operator: "+",
+			});
 			const one = compileNumberLiteral(fn, cursor, 1);
 			const newValue = nextRegisterDestination(fn);
 			cursor.block.instructions.push({
@@ -8756,7 +8837,11 @@ function visibleBindingsForDirectEval(
 	let scope: Scope | null | undefined = fn.semanticFile.nodeToScope.get(callNode);
 	while (scope) {
 		for (const binding of scope.bindings) {
-			if (!result.has(binding.name) && !binding.undeclared && binding.scopedTo !== "global") {
+			if (
+				!result.has(binding.name) &&
+				!binding.undeclared &&
+				binding.scopedTo !== "global"
+			) {
 				result.set(binding.name, binding);
 			}
 		}
@@ -8914,8 +8999,14 @@ function compileImportExpression(
 	const targetFile = targetPath
 		? program.semantic.files.find((file) => file.path === targetPath)
 		: undefined;
-	const targetInitIndex = targetFile?.commonjs ? -1 : targetFile ? compileFileInit(program, targetFile) : -1;
-	const namespaceExports = targetPath ? program.moduleNamespaces.get(targetPath) : undefined;
+	const targetInitIndex = targetFile?.commonjs
+		? -1
+		: targetFile
+			? compileFileInit(program, targetFile)
+			: -1;
+	const namespaceExports = targetPath
+		? program.moduleNamespaces.get(targetPath)
+		: undefined;
 
 	const callee = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
@@ -8928,7 +9019,8 @@ function compileImportExpression(
 	if (options) {
 		compileExpression(program, fn, cursor, options);
 	}
-	const initFn = targetInitIndex >= 0 ? nextRegisterDestination(fn) : compileUndefined(fn, cursor);
+	const initFn =
+		targetInitIndex >= 0 ? nextRegisterDestination(fn) : compileUndefined(fn, cursor);
 	if (targetInitIndex >= 0) {
 		cursor.block.instructions.push({
 			type: "createFunction",
@@ -8944,7 +9036,15 @@ function compileImportExpression(
 	const destination = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "call",
-		registers: [destination, callee, thisRegister, specifier, initFn, namespace, statusSlotRegister],
+		registers: [
+			destination,
+			callee,
+			thisRegister,
+			specifier,
+			initFn,
+			namespace,
+			statusSlotRegister,
+		],
 	});
 	return destination;
 }
@@ -8958,13 +9058,18 @@ function dynamicImportTargetPath(
 		return undefined;
 	}
 	const record = program.semantic.graph?.modules.get(fn.semanticFile.path);
-	return record?.dependencies.find(
-		(dependency) =>
-			dependency.kind === "dynamic" && dependency.specifier === source.value,
-	)?.resolvedPath ?? undefined;
+	return (
+		record?.dependencies.find(
+			(dependency) =>
+				dependency.kind === "dynamic" && dependency.specifier === source.value,
+		)?.resolvedPath ?? undefined
+	);
 }
 
-function getDynamicModuleStatusSlot(program: IntermediateProgram, modulePath: string): number {
+function getDynamicModuleStatusSlot(
+	program: IntermediateProgram,
+	modulePath: string,
+): number {
 	let slot = program.dynamicModuleStatusSlot.get(modulePath);
 	if (slot === undefined) {
 		slot = program.nextGlobalIndex++;
@@ -9788,7 +9893,9 @@ export function addInlineSourcePosition(
 	inlinedFunctionIndex: number,
 	callerPosId: number,
 ): number {
-	return program.sourcePositions.push({ line, column, inlinedFunctionIndex, callerPosId }) - 1;
+	return (
+		program.sourcePositions.push({ line, column, inlinedFunctionIndex, callerPosId }) - 1
+	);
 }
 
 /**

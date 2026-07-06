@@ -310,7 +310,12 @@ export function globalSlotFunctions(program: IntermediateProgram): Map<number, n
 	}
 	const resolved = new Map<number, number>();
 	for (const [slot, acc] of slots) {
-		if (acc.func !== undefined && acc.funcStores === 1 && acc.otherStores === 0 && !acc.conflict) {
+		if (
+			acc.func !== undefined &&
+			acc.funcStores === 1 &&
+			acc.otherStores === 0 &&
+			!acc.conflict
+		) {
 			resolved.set(slot, acc.func);
 		}
 	}
@@ -438,7 +443,10 @@ const hofSubstitutedCalls = new WeakSet<IRInstruction>();
  * Decode a string-constant index to a JS string (constants are UTF-16 code-unit
  * arrays; method names are ASCII).
  */
-export function decodeStringConstant(program: IntermediateProgram, index: number): string {
+export function decodeStringConstant(
+	program: IntermediateProgram,
+	index: number,
+): string {
 	return String.fromCharCode(...program.stringConstants[index]!);
 }
 
@@ -1386,7 +1394,13 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				// result (the sink register is unused). Append cursor = result.length.
 				callTail.push({
 					type: "call",
-					registers: [resultLenReg, flatMapAppendFn, undefinedReg, resultReg, callbackResult],
+					registers: [
+						resultLenReg,
+						flatMapAppendFn,
+						undefinedReg,
+						resultReg,
+						callbackResult,
+					],
 				});
 				callTail.push({ type: "jump", blocks: [loopIncr] });
 			} else if (spec.buildsResult === "filter") {

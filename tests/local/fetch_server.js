@@ -12,7 +12,9 @@ const server = Mal.serve({
 			return new Response("async-done");
 		}
 		if (request.url.endsWith("/json")) {
-			return new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+			return new Response('{"ok":true}', {
+				headers: { "content-type": "application/json" },
+			});
 		}
 		if (request.url.endsWith("/echo")) {
 			return new Response(request.headers.get("x-test") || "none");
@@ -41,9 +43,15 @@ const server = Mal.serve({
 			return Response.json({ ok: true, n: 42 });
 		}
 		if (request.url.endsWith("/reqctor")) {
-			const rr = new Request("https://x/y", { method: "PUT", body: "abc", headers: { "x-h": "v" } });
+			const rr = new Request("https://x/y", {
+				method: "PUT",
+				body: "abc",
+				headers: { "x-h": "v" },
+			});
 			const body = await rr.text();
-			return new Response(`m=${rr.method},u=${rr.url},h=${rr.headers.get("x-h")},b=${body}`);
+			return new Response(
+				`m=${rr.method},u=${rr.url},h=${rr.headers.get("x-h")},b=${body}`,
+			);
 		}
 		if (request.url.endsWith("/respread")) {
 			// Read back a locally-constructed Response via its async read methods.

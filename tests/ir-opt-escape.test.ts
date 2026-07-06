@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { executeIROptimizations } from "../src/ir-opt.ts";
+import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { parseScript } from "../src/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
@@ -32,14 +32,18 @@ function nested(source: string): ReturnType<typeof optimizedIr> {
 }
 
 test("a record read only by static own keys is scalar-replaced (allocation removed)", () => {
-	const fn = nested(`(function (a){ const p = { x: a, y: a + 1 }; return p.x + p.y; })(0);`);
+	const fn = nested(
+		`(function (a){ const p = { x: a, y: a + 1 }; return p.x + p.y; })(0);`,
+	);
 	expect(countOp(fn, "createObjectShaped")).toBe(0);
 	// The keys' string constants are dead once the reads become moves.
 	expect(countOp(fn, "loadProperty")).toBe(0);
 });
 
 test("a partially-read record is still removed (unread values fall to DCE)", () => {
-	const fn = nested(`(function (a){ const p = { a: a, b: a * 2, c: a * 3 }; return p.b; })(0);`);
+	const fn = nested(
+		`(function (a){ const p = { a: a, b: a * 2, c: a * 3 }; return p.b; })(0);`,
+	);
 	expect(countOp(fn, "createObjectShaped")).toBe(0);
 });
 
@@ -84,7 +88,9 @@ test("a mutated record adding a prototype-safe new key is scalar-replaced", () =
 });
 
 test("a mutated empty object built up with safe keys is scalar-replaced", () => {
-	const fn = nested(`(function (a){ const o = {}; o.x = a; o.y = a + 1; return o.x + o.y; })(0);`);
+	const fn = nested(
+		`(function (a){ const o = {}; o.x = a; o.y = a + 1; return o.x + o.y; })(0);`,
+	);
 	expect(countOp(fn, "createObject")).toBe(0);
 	expect(countOp(fn, "createObjectShaped")).toBe(0);
 });
@@ -97,14 +103,18 @@ test("a loop-accumulator object is scalar-replaced (register carries the value)"
 });
 
 test("a mutated record that escapes via return is NOT replaced", () => {
-	const fn = nested(`globalThis.r = (function (){ const p = { x: 1 }; p.x = 9; return p; })();`);
+	const fn = nested(
+		`globalThis.r = (function (){ const p = { x: 1 }; p.x = 9; return p; })();`,
+	);
 	expect(countOp(fn, "createObjectShaped")).toBe(1);
 });
 
 test("a store to a prototype-polluting new key keeps the allocation", () => {
 	// `p.toString = …` on a key the literal did not declare must go through [[Set]]
 	// (a prototype accessor could exist), so the object must remain.
-	const fn = nested(`(function (){ const p = { x: 1 }; p.toString = 9; return p.x; })();`);
+	const fn = nested(
+		`(function (){ const p = { x: 1 }; p.toString = 9; return p.x; })();`,
+	);
 	expect(countOp(fn, "createObjectShaped")).toBe(1);
 });
 
@@ -129,7 +139,9 @@ test("the pass is disabled for a generator body (C5)", () => {
 test("a record read in a different block is scalar-replaced (cross-block alias)", () => {
 	// `p` is stored to a local and read in two branches — reachable only through a
 	// move, which the move-alias closure follows.
-	const fn = nested(`(function (a, c){ const p = { x: a, y: a + 1 }; if (c) return p.x; return p.y; })(0, true);`);
+	const fn = nested(
+		`(function (a, c){ const p = { x: a, y: a + 1 }; if (c) return p.x; return p.y; })(0, true);`,
+	);
 	expect(countOp(fn, "createObjectShaped")).toBe(0);
 });
 
@@ -139,12 +151,16 @@ test("a record copied to another local then read is scalar-replaced", () => {
 });
 
 test("a record escaping through an alias copy is NOT replaced", () => {
-	const fn = nested(`globalThis.r = (function (a){ const p = { x: a }; const q = p; return q; })(0);`);
+	const fn = nested(
+		`globalThis.r = (function (a){ const p = { x: a }; const q = p; return q; })(0);`,
+	);
 	expect(countOp(fn, "createObjectShaped")).toBe(1);
 });
 
 test("a record whose alias is reassigned is NOT replaced", () => {
 	// `q` is not single-assignment, so the closure cannot prove it always holds p.
-	const fn = nested(`(function (a, c){ const p = { x: a }; let q = p; if (c) q = { x: 9 }; return q.x; })(0, true);`);
+	const fn = nested(
+		`(function (a, c){ const p = { x: a }; let q = p; if (c) q = { x: 9 }; return q.x; })(0, true);`,
+	);
 	expect(countOp(fn, "createObjectShaped")).toBe(2);
 });

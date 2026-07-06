@@ -2,7 +2,12 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { buildNativeBinary, HOST_MAIN, STRESS_ENV, withServer } from "../../src/test-harness.ts";
+import {
+	buildNativeBinary,
+	HOST_MAIN,
+	STRESS_ENV,
+	withServer,
+} from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-fetch-"));
 
@@ -80,7 +85,10 @@ describe("Mal.serve fetch server", () => {
 			const body = await fetch(`${base}/body`, { method: "POST", body: "hello-body" });
 			expect(await body.text()).toBe("body=hello-body");
 
-			const sum = await fetch(`${base}/sum`, { method: "POST", body: JSON.stringify({ a: 3, b: 4 }) });
+			const sum = await fetch(`${base}/sum`, {
+				method: "POST",
+				body: JSON.stringify({ a: 3, b: 4 }),
+			});
 			expect(await sum.text()).toBe("7");
 
 			const abuf = await fetch(`${base}/abuf`, { method: "POST", body: "abcd" });

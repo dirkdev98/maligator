@@ -7,7 +7,9 @@ const server = Mal.serve({
 			return new Response("made", { status: 201 });
 		}
 		if (request.url.endsWith("/json")) {
-			return new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+			return new Response('{"ok":true}', {
+				headers: { "content-type": "application/json" },
+			});
 		}
 		if (request.url.endsWith("/echo")) {
 			return new Response(request.headers.get("x-test") || "none");

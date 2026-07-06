@@ -600,7 +600,8 @@ MalValue mal_ops_divide(MalValue left, MalValue right) {
 }
 
 MalValue mal_ops_remainder(MalValue left, MalValue right) {
-    return mal_ops_number_value(fmod(mal_ops_to_number(left), mal_ops_to_number(right)));
+    return mal_ops_number_value(
+        mal_number_remainder(mal_ops_to_number(left), mal_ops_to_number(right)));
 }
 
 MalValue mal_ops_exponentiate(MalValue left, MalValue right) {

@@ -30,12 +30,28 @@ eq("String()", String(u), u.href);
 
 // Default port is dropped.
 eq("default-port-dropped", new URL("https://example.com:443/a").port, "");
-eq("default-port-href", new URL("https://example.com:443/a").href, "https://example.com/a");
+eq(
+	"default-port-href",
+	new URL("https://example.com:443/a").href,
+	"https://example.com/a",
+);
 
 // --- relative resolution via base ---
-eq("base-absolute-path", new URL("/a/b", "https://example.com/x/y").href, "https://example.com/a/b");
-eq("base-relative-path", new URL("q", "https://example.com/dir/").href, "https://example.com/dir/q");
-eq("base-dotdot", new URL("../z", "https://example.com/a/b/c").href, "https://example.com/a/z");
+eq(
+	"base-absolute-path",
+	new URL("/a/b", "https://example.com/x/y").href,
+	"https://example.com/a/b",
+);
+eq(
+	"base-relative-path",
+	new URL("q", "https://example.com/dir/").href,
+	"https://example.com/dir/q",
+);
+eq(
+	"base-dotdot",
+	new URL("../z", "https://example.com/a/b/c").href,
+	"https://example.com/a/z",
+);
 
 // --- invalid URL throws TypeError ---
 let threw = false;
@@ -124,7 +140,11 @@ eq("usp-forEach", forEachOut, "a:1;b:2;");
 
 // --- url.searchParams (snapshot read for v1) ---
 eq("url-searchParams-get", new URL("https://x.com/?a=1&b=2").searchParams.get("a"), "1");
-eq("url-searchParams-toString", new URL("https://x.com/?a=1&b=2").searchParams.toString(), "a=1&b=2");
+eq(
+	"url-searchParams-toString",
+	new URL("https://x.com/?a=1&b=2").searchParams.toString(),
+	"a=1&b=2",
+);
 
 // --- summary ---
 let passed = 0;

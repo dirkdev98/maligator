@@ -24,9 +24,15 @@ check("TextEncoder.encoding", enc.encoding === "utf-8");
 check("TextEncoder instanceof", enc instanceof TextEncoder);
 const encoded = enc.encode("héllo€");
 // h=104, é=C3 A9, l l o, €=E2 82 AC
-check("TextEncoder.encode utf-8", bytes(encoded) === "104,195,169,108,108,111,226,130,172");
+check(
+	"TextEncoder.encode utf-8",
+	bytes(encoded) === "104,195,169,108,108,111,226,130,172",
+);
 check("TextEncoder.encode is Uint8Array", encoded instanceof Uint8Array);
-check("TextEncoder.encode empty", bytes(enc.encode("")) === "" && enc.encode("").length === 0);
+check(
+	"TextEncoder.encode empty",
+	bytes(enc.encode("")) === "" && enc.encode("").length === 0,
+);
 
 // encodeInto: exact fit and truncated fit (never splits a code point)
 const dest = new Uint8Array(10);
@@ -42,8 +48,14 @@ const dec = new TextDecoder();
 check("TextDecoder.encoding", dec.encoding === "utf-8");
 check("TextDecoder round-trip", dec.decode(encoded) === "héllo€");
 check("TextDecoder empty", dec.decode() === "" && dec.decode(new Uint8Array(0)) === "");
-check("TextDecoder from ArrayBuffer", dec.decode(new Uint8Array([104, 105]).buffer) === "hi");
-check("TextDecoder BOM stripped", dec.decode(new Uint8Array([0xef, 0xbb, 0xbf, 104, 105])) === "hi");
+check(
+	"TextDecoder from ArrayBuffer",
+	dec.decode(new Uint8Array([104, 105]).buffer) === "hi",
+);
+check(
+	"TextDecoder BOM stripped",
+	dec.decode(new Uint8Array([0xef, 0xbb, 0xbf, 104, 105])) === "hi",
+);
 check("TextDecoder utf-8 alias", new TextDecoder("UTF-8").encoding === "utf-8");
 let decThrew = false;
 try {
@@ -57,7 +69,10 @@ check("TextDecoder rejects non-utf8", decThrew);
 check("btoa", btoa("hello") === "aGVsbG8=");
 check("btoa padding", btoa("foobar") === "Zm9vYmFy" && btoa("fo") === "Zm8=");
 check("atob", atob("aGVsbG8=") === "hello");
-check("btoa/atob round-trip", atob(btoa("The quick brown fox")) === "The quick brown fox");
+check(
+	"btoa/atob round-trip",
+	atob(btoa("The quick brown fox")) === "The quick brown fox",
+);
 check("atob whitespace tolerant", atob("aGVs bG8=") === "hello");
 let btoaThrew = false;
 try {
@@ -79,7 +94,10 @@ check("performance.now type", typeof performance.now() === "number");
 const p1 = performance.now();
 const p2 = performance.now();
 check("performance.now monotonic", p2 >= p1);
-check("performance.timeOrigin", typeof performance.timeOrigin === "number" && performance.timeOrigin > 0);
+check(
+	"performance.timeOrigin",
+	typeof performance.timeOrigin === "number" && performance.timeOrigin > 0,
+);
 
 // --- crypto ---
 const uuid = crypto.randomUUID();

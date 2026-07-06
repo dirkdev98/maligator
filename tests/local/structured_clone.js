@@ -38,9 +38,19 @@ const cd = structuredClone(d);
 check("date-clone", cd !== d && cd instanceof Date && cd.getTime() === 1000);
 
 // --- Map ---
-const m = new Map([["k", "v"], [1, 2]]);
+const m = new Map([
+	["k", "v"],
+	[1, 2],
+]);
 const cm = structuredClone(m);
-check("map-clone", cm !== m && cm instanceof Map && cm.size === 2 && cm.get("k") === "v" && cm.get(1) === 2);
+check(
+	"map-clone",
+	cm !== m &&
+		cm instanceof Map &&
+		cm.size === 2 &&
+		cm.get("k") === "v" &&
+		cm.get(1) === 2,
+);
 
 // --- Set ---
 const s = new Set([1, 2, 3]);
@@ -57,7 +67,10 @@ check("u8-independent", u[0] === 1);
 // --- ArrayBuffer ---
 const buf = new Uint8Array([9, 8, 7]).buffer;
 const cbuf = structuredClone(buf);
-check("ab-clone", cbuf !== buf && cbuf instanceof ArrayBuffer && new Uint8Array(cbuf)[0] === 9);
+check(
+	"ab-clone",
+	cbuf !== buf && cbuf instanceof ArrayBuffer && new Uint8Array(cbuf)[0] === 9,
+);
 
 // --- circular reference ---
 const circ = { name: "x" };

@@ -307,6 +307,18 @@ static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, 
             return out;
         }
     }
+    // Inline the monomorphic object-shape hit so a repeat `o.k` read is a shape +
+    // key compare and a slot load in the caller, not an out-of-line call. This
+    // replicates exactly the shape/key/slot gate at the top of
+    // mal_vm_op_load_property_ic (a data-slot hit is just `slots[slot]`); the
+    // value-slot (watched-intrinsic) and miss cases still defer to it, which also
+    // refills the cache. A zero-initialized cache has shape==NULL so it misses.
+    if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
+        const MalObject *object = (const MalObject *) mal_value_to_heap(object_value);
+        if (object->shape == ic->shape && key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
+            return object->slots[ic->slot];
+        }
+    }
     return mal_vm_op_load_property_ic(vm, object_value, key_value, ic);
 }
 
@@ -332,6 +344,21 @@ static inline void mal_vm_array_fast_store(MalVm *vm, MalValue object_value, Mal
                     return;
                 }
             }
+        }
+    }
+    // Inline the monomorphic object-shape hit (mirrors the top of
+    // mal_vm_op_store_property_ic): a repeat `o.k = v` overwrite of an existing
+    // default (writable) data slot is a barriered slot store in the caller, not an
+    // out-of-line call. The gc write-barrier (old value) and card (old->young)
+    // are required for the generational collector; `mal_gc_card` is a no-op when
+    // it is off. Everything else (miss, value-slot, accessor, fresh key) defers.
+    if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
+        MalObject *object = (MalObject *) mal_value_to_heap(object_value);
+        if (object->shape == ic->shape && key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
+            mal_gc_write_barrier(object->slots[ic->slot]);
+            object->slots[ic->slot] = value;
+            mal_gc_card(&object->header, value);
+            return;
         }
     }
     mal_vm_op_store_property_ic(vm, object_value, key_value, value, strict, ic);

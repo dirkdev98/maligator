@@ -71,7 +71,12 @@ function fileBytes(pathname: string): number {
 }
 
 /** Median wall-clock (ms) of N runs of a binary/command. */
-function timeCommand(cmd: string, args: Array<string>, runs: number, env?: NodeJS.ProcessEnv): number {
+function timeCommand(
+	cmd: string,
+	args: Array<string>,
+	runs: number,
+	env?: NodeJS.ProcessEnv,
+): number {
 	const times: Array<number> = [];
 	for (let i = 0; i < runs; i++) {
 		const start = process.hrtime.bigint();
@@ -89,7 +94,10 @@ function timeCommand(cmd: string, args: Array<string>, runs: number, env?: NodeJ
 function benchSize(): SizeMetrics {
 	// Building the language fixture (default test262 main, -O2) also (re)builds the
 	// three runtime archives we measure.
-	const binary = buildNativeBinary({ fixture: "bench/language.js", name: "bench-language" });
+	const binary = buildNativeBinary({
+		fixture: "bench/language.js",
+		name: "bench-language",
+	});
 	const lib = ".cache/local/lib";
 	return {
 		binaryBytes: fileBytes(binary),
@@ -103,7 +111,10 @@ function benchSize(): SizeMetrics {
 // ---- language (vs V8) -----------------------------------------------------
 
 function benchLanguage(runs: number): LanguageMetrics {
-	const binary = buildNativeBinary({ fixture: "bench/language.js", name: "bench-language" });
+	const binary = buildNativeBinary({
+		fixture: "bench/language.js",
+		name: "bench-language",
+	});
 	const malMs = timeCommand(binary, [], runs);
 	const nodeMs = timeCommand("node", ["bench/language.js"], runs);
 	return { malMs, nodeMs, ratio: malMs / nodeMs };
@@ -132,7 +143,10 @@ function benchGc(runs: number): Record<string, GcWorkload> {
 	process.env.MAL_GC_GENERATIONAL = "1";
 	try {
 		for (const workload of ["cli", "desktop", "server"]) {
-			const binary = buildNativeBinary({ fixture: `bench/gc/${workload}.js`, name: `bench-gc-${workload}` });
+			const binary = buildNativeBinary({
+				fixture: `bench/gc/${workload}.js`,
+				name: `bench-gc-${workload}`,
+			});
 			const walls: Array<number> = [];
 			const rsss: Array<number> = [];
 			let maxPause = 0;
@@ -184,7 +198,11 @@ function waitReachable(url: string): void {
 }
 
 /** Run oha for `duration` at `conc`, returning req/s + p99 ms. */
-function ohaRun(url: string, duration: string, conc: number): { rps: number; p99Ms: number } {
+function ohaRun(
+	url: string,
+	duration: string,
+	conc: number,
+): { rps: number; p99Ms: number } {
 	const out = execFileSync(
 		"oha",
 		["-z", duration, "-c", String(conc), "--no-tui", "--output-format", "json", url],
@@ -205,7 +223,11 @@ function benchHttp(duration: string, conc: number): HttpMetrics | null {
 		console.log("http: `oha` not installed — skipping (install oha for the http bench).");
 		return null;
 	}
-	const malBin = buildNativeBinary({ fixture: "bench/http/server_mal.js", name: "bench-http-mal", mainFile: HOST_MAIN });
+	const malBin = buildNativeBinary({
+		fixture: "bench/http/server_mal.js",
+		name: "bench-http-mal",
+		mainFile: HOST_MAIN,
+	});
 	const mal = spawn(malBin, [], { stdio: "ignore" });
 	const node = spawn("node", ["bench/http/server_node.js"], { stdio: "ignore" });
 	try {
@@ -232,8 +254,12 @@ function benchHttp(duration: string, conc: number): HttpMetrics | null {
 // ---- history + reporting --------------------------------------------------
 
 function gitInfo(): { commit: string; dirty: boolean } {
-	const commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf-8" }).trim();
-	const dirty = execFileSync("git", ["status", "--porcelain"], { encoding: "utf-8" }).trim().length > 0;
+	const commit = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+		encoding: "utf-8",
+	}).trim();
+	const dirty =
+		execFileSync("git", ["status", "--porcelain"], { encoding: "utf-8" }).trim().length >
+		0;
 	return { commit, dirty };
 }
 
@@ -246,7 +272,11 @@ function kb(bytes: number): string {
 	return `${(bytes / 1024).toFixed(1)}KB`;
 }
 
-function delta(current: number, previous: number | undefined, lowerIsBetter = true): string {
+function delta(
+	current: number,
+	previous: number | undefined,
+	lowerIsBetter = true,
+): string {
 	if (previous === undefined || previous === 0) return "";
 	const pct = ((current - previous) / previous) * 100;
 	const sign = pct >= 0 ? "+" : "";
@@ -260,18 +290,32 @@ function report(entry: Entry, previous: Entry | undefined): void {
 	if (entry.size) {
 		const p = previous?.size;
 		console.log("size:");
-		console.log(`  binary   ${kb(entry.size.binaryBytes)}${delta(entry.size.binaryBytes, p?.binaryBytes)}`);
-		console.log(`  runtime  ${kb(entry.size.runtimeArchiveBytes)}${delta(entry.size.runtimeArchiveBytes, p?.runtimeArchiveBytes)}`);
-		console.log(`  host     ${kb(entry.size.hostArchiveBytes)}${delta(entry.size.hostArchiveBytes, p?.hostArchiveBytes)}`);
-		console.log(`  engine   ${kb(entry.size.engineArchiveBytes)}${delta(entry.size.engineArchiveBytes, p?.engineArchiveBytes)}`);
-		console.log(`  rust     ${kb(entry.size.rustArchiveBytes)}${delta(entry.size.rustArchiveBytes, p?.rustArchiveBytes)}`);
+		console.log(
+			`  binary   ${kb(entry.size.binaryBytes)}${delta(entry.size.binaryBytes, p?.binaryBytes)}`,
+		);
+		console.log(
+			`  runtime  ${kb(entry.size.runtimeArchiveBytes)}${delta(entry.size.runtimeArchiveBytes, p?.runtimeArchiveBytes)}`,
+		);
+		console.log(
+			`  host     ${kb(entry.size.hostArchiveBytes)}${delta(entry.size.hostArchiveBytes, p?.hostArchiveBytes)}`,
+		);
+		console.log(
+			`  engine   ${kb(entry.size.engineArchiveBytes)}${delta(entry.size.engineArchiveBytes, p?.engineArchiveBytes)}`,
+		);
+		console.log(
+			`  rust     ${kb(entry.size.rustArchiveBytes)}${delta(entry.size.rustArchiveBytes, p?.rustArchiveBytes)}`,
+		);
 	}
 	if (entry.language) {
 		const p = previous?.language;
 		console.log("language (vs V8):");
-		console.log(`  maligator ${entry.language.malMs.toFixed(1)}ms${delta(entry.language.malMs, p?.malMs)}`);
+		console.log(
+			`  maligator ${entry.language.malMs.toFixed(1)}ms${delta(entry.language.malMs, p?.malMs)}`,
+		);
 		console.log(`  node      ${entry.language.nodeMs.toFixed(1)}ms`);
-		console.log(`  ratio     ${entry.language.ratio.toFixed(2)}x${delta(entry.language.ratio, p?.ratio)}`);
+		console.log(
+			`  ratio     ${entry.language.ratio.toFixed(2)}x${delta(entry.language.ratio, p?.ratio)}`,
+		);
 	}
 	if (entry.gc) {
 		console.log("gc (generational):");
@@ -285,9 +329,15 @@ function report(entry: Entry, previous: Entry | undefined): void {
 	if (entry.http) {
 		const p = previous?.http ?? undefined;
 		console.log("http (vs Node):");
-		console.log(`  maligator ${entry.http.malRps.toFixed(0)} req/s (p99 ${entry.http.malP99Ms.toFixed(2)}ms)${delta(entry.http.malRps, p?.malRps, false)}`);
-		console.log(`  node      ${entry.http.nodeRps.toFixed(0)} req/s (p99 ${entry.http.nodeP99Ms.toFixed(2)}ms)`);
-		console.log(`  ratio     ${entry.http.ratio.toFixed(2)}x${delta(entry.http.ratio, p?.ratio, false)}`);
+		console.log(
+			`  maligator ${entry.http.malRps.toFixed(0)} req/s (p99 ${entry.http.malP99Ms.toFixed(2)}ms)${delta(entry.http.malRps, p?.malRps, false)}`,
+		);
+		console.log(
+			`  node      ${entry.http.nodeRps.toFixed(0)} req/s (p99 ${entry.http.nodeP99Ms.toFixed(2)}ms)`,
+		);
+		console.log(
+			`  ratio     ${entry.http.ratio.toFixed(2)}x${delta(entry.http.ratio, p?.ratio, false)}`,
+		);
 	}
 }
 
@@ -322,7 +372,7 @@ if (update) {
 	if (baseline.entries.length > HISTORY_LIMIT) {
 		baseline.entries = baseline.entries.slice(-HISTORY_LIMIT);
 	}
-	writeFileSync(BASELINE_FILE, `${JSON.stringify(baseline, null, 2)  }\n`);
+	writeFileSync(BASELINE_FILE, `${JSON.stringify(baseline, null, 2)}\n`);
 	console.log(`\nUpdated ${BASELINE_FILE} for ${commit}.`);
 } else {
 	console.log("\n(run with --update to record this as the new baseline entry)");

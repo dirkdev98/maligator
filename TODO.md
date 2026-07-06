@@ -24,11 +24,11 @@ Whole-program DCE means a program that never references a feature must not link 
 in. `OFF buys` = what dropping the feature gets you.
 
 | Feature            | Mechanism                                     | OFF buys                                                                               |
-|--------------------|-----------------------------------------------|----------------------------------------------------------------------------------------|
-| eval / Function    | baked self-hosted compiler (`eval_todo.md`)   | drops the baked compiler **and re-enables whole-program DCE** (eval forces retain-all)  |
+| ------------------ | --------------------------------------------- | -------------------------------------------------------------------------------------- |
+| eval / Function    | baked self-hosted compiler (`eval_todo.md`)   | drops the baked compiler **and re-enables whole-program DCE** (eval forces retain-all) |
 | Intl               | ICU4X data via Rust                           | biggest single size win — today ~11 MB binaries; also locale-splitting                 |
 | RegExp             | regress (Rust staticlib, `-lc++`)             | drops the Rust regex engine                                                            |
-| Date / Temporal    | temporal_rs / jiff (Rust)                      | drops tz + calendar data                                                               |
+| Date / Temporal    | temporal_rs / jiff (Rust)                     | drops tz + calendar data                                                               |
 | WinterTC runtime   | fetch/Response/Headers/URL/web globals/timers | drops the web personality (already host-entry-install gated)                           |
 | Reactor / host I/O | sockets / timers / TLS / DNS                  | pure-compute programs link no reactor                                                  |
 | Actors / SMP       | fibers + schedulers                           | single-context programs skip it                                                        |
@@ -38,88 +38,91 @@ in. `OFF buys` = what dropping the feature gets you.
 | debug symbols      | position tables + stack traces                | strip mode = zero overhead                                                             |
 
 - [ ] **Design the feature-configuration DX.** How a user selects the above —
-  build profiles / target presets (`--profile bare-metal`) vs. auto-detect from the
-  program (a pure-compute CLI needs no reactor/WinterTC) vs. explicit flags. One
-  coherent knob surface + docs. Decide the interaction between manual flags and
-  automatic reachability (eval-off is the case where they compound). This is also
-  where the "is WinterTC excluded from the default binary?" call gets made.
+      build profiles / target presets (`--profile bare-metal`) vs. auto-detect from the
+      program (a pure-compute CLI needs no reactor/WinterTC) vs. explicit flags. One
+      coherent knob surface + docs. Decide the interaction between manual flags and
+      automatic reachability (eval-off is the case where they compound). This is also
+      where the "is WinterTC excluded from the default binary?" call gets made.
 - [ ] **Binary-size gate.** Track `hello-world` + `kitchen-sink` binary bytes per
-  commit, the way the test262 gate tracks conformance, so size regressions are
-  visible. Prerequisite for the size pass.
+      commit, the way the test262 gate tracks conformance, so size regressions are
+      visible. Prerequisite for the size pass.
 
 ## Priority 1 — Binary size
 
 - [ ] Don't link ICU4X data when Intl is unused; split locales (today: 11 MB binaries).
 - [ ] Drop the bytecode overlay for always-compiled, no-bail functions (kills the
-  dead `MalInstruction` table; forces a clean overlay contract).
+      dead `MalInstruction` table; forces a clean overlay contract).
 - [ ] Size-focused build profile (`-Os`/LTO/`--gc-sections`/musl-static/strip);
-  measure per-feature bytes; feed the size gate above.
+      measure per-feature bytes; feed the size gate above.
 
 ## Priority 2 — Performance
 
 - [ ] **String optimizations** — ropes/cons-strings + dependent (slice) strings so
-  `+` is O(1)-amortized and substring is zero-copy (GC trace-edge to parent).
+      `+` is O(1)-amortized and substring is zero-copy (GC trace-edge to parent).
 - [ ] **String/key interning (atom table)** — pointer-identity key compares, wider
-  IC coverage, substrate for faster dict/Map lookup + symbol fast path.
+      IC coverage, substrate for faster dict/Map lookup + symbol fast path.
 - [ ] **Call-site inline caches** — cache the callee/shape so compiled calls
-  speculate a fixed target; also lets the inliner fire at more sites.
+      speculate a fixed target; also lets the inliner fire at more sites.
 - [ ] **Allocation is the next bottleneck** (~15× vs Node on alloc bench):
   - [ ] Escape analysis → scalar replacement / stack alloc within the root frame
-    (extends the built scalar-replacement past the module-inlining baseline).
+        (extends the built scalar-replacement past the module-inlining baseline).
   - [ ] Generational GC already opt-in; region/arena (N.11) + drop-insertion (N.12).
 - [ ] Promise/microtask + suspendable-frame mallocs → GC-owned / pooled (entangled
-  with async rooting flakiness + generational GC).
+      with async rooting flakiness + generational GC).
 - [ ] Generate ops from a single op-descriptor list (kills the ~6-file opcode path).
 - [ ] Effect-summary table for builtins (T7.3) — unlocks functional-style inlining.
 
 ## Substrate roadmap
 
 ### GC (`gc_todo.md`)
+
 - [ ] Write-barrier completeness audit — prerequisite for the generational minor collector.
 - [ ] Concurrent collector: atomic mark bits + per-thread SATB queues (T5.1) → two
-  short STW pauses + concurrent mark + lazy sweep (T5.2) → parallel mark workers (T5.3).
+      short STW pauses + concurrent mark + lazy sweep (T5.2) → parallel mark workers (T5.3).
 - [ ] AOT write-barrier elision (T2.6); deterministic FFI free at scope end (T4.4).
 - [ ] Return empty RAW blocks to the OS (per-block free-count tracking).
 - [ ] Validation: ASAN config, per-inventory-row leak audit, cycle/WeakRef/ephemeron
-  unit tests, gate three ways (compiled / `--no-compiled` / compiled+STRESS).
+      unit tests, gate three ways (compiled / `--no-compiled` / compiled+STRESS).
 
 ### Isolate / reactor / actors (`isolate_todo.md`)
+
 - [ ] Phase 2 — Outbound I/O + client `fetch` (WinterTC, opt-in): TCP client sockets,
-  DNS via thread-pool, TLS above sockets (rustls/BearSSL, DCE-droppable), client
-  `fetch`/`Request`/`Response`. Small single-binary profile + size numbers.
+      DNS via thread-pool, TLS above sockets (rustls/BearSSL, DCE-droppable), client
+      `fetch`/`Request`/`Response`. Small single-binary profile + size numbers.
 - [ ] Phase 3 — Actors: fiber + mailbox, spawn/send/receive, reduction-budget
-  fairness, copy-message + transferables, mailbox rooting, supervision (link/monitor/kill).
+      fairness, copy-message + transferables, mailbox rooting, supervision (link/monitor/kill).
 - [ ] Phase 4 — SMP: thread-local GC globals (`TODO(SMP)`), one isolate per scheduler
-  thread, cross-isolate send (copy + MPSC + wake), work-stealing, per-isolate GC.
+      thread, cross-isolate send (copy + MPSC + wake), work-stealing, per-isolate GC.
 - [ ] Phase 5 — GUI embedding: pumped reactor inside a foreign main loop; spike a
-  Rust GUI crate (winit/wgpu) via FFI.
+      Rust GUI crate (winit/wgpu) via FFI.
 - [ ] Phase 6 — Bare-metal / freestanding: no-libc core, poll/ISR backend, fixed-size
-  fiber stacks, minimal-core build profile (ties to the opt-in catalog).
+      fiber stacks, minimal-core build profile (ties to the opt-in catalog).
 - [ ] Retire the malloc'd-jobs async/dynamic-import flakiness (isolate-owned rooted jobs).
 - [ ] Validate the x86_64 fiber switch on Linux.
 
 ### eval / Function (`eval_todo.md`)
+
 - [ ] Runtime native TS stripper (swc StripOnly once serde/icu4x clears) so eval-of-TS
-  needs no Node in the deployed binary.
+      needs no Node in the deployed binary.
 - [ ] Direct-eval Slice 3: enclosing-function locals, caller `this`/`new.target`/
-  `arguments`, async-eval-in-default-param cluster.
+      `arguments`, async-eval-in-default-param cluster.
 - [ ] Realms: `$262.createRealm` → unblock `ShadowRealm` + cross-realm tests.
 - [ ] (optional) Tier hot eval'd fns through emit-c when a toolchain is present;
-  reuse the wire format as a source-keyed bytecode cache.
+      reuse the wire format as a source-keyed bytecode cache.
 
 ## Priority 3 — General-purpose usability
 
 - [ ] WinterTC surface (opt-in): remaining fetch/Headers bits (`AbortSignal.any`,
-  DOMException, `Set-Cookie`, live `url.searchParams`, `request.json()` parse-error);
-  WPT harness.
+      DOMException, `Set-Cookie`, live `url.searchParams`, `request.json()` parse-error);
+      WPT harness.
 - [ ] A small, curated Node-compat subset for usability only (leaf stdlib for writing
-  new programs — not for running arbitrary npm). Scope TBD; keep binary impact
-  proportional.
+      new programs — not for running arbitrary npm). Scope TBD; keep binary impact
+      proportional.
 
 ## Conformance (`test262-todo.md`)
 
 - [ ] Cross-cutting feature builds: dynamic `import()` (502), Atomics agents /
-  `$262.agent`, realms/ShadowRealm.
+      `$262.agent`, realms/ShadowRealm.
 - [ ] RegExp `@@split`/`@@match`/`@@replace`/`@@search` (unblocks much of String).
 - [ ] Class clusters, compound-assignment, for-of, arguments-object, super.
 - [ ] Long tail per-area filters — see the doc's ranked list.
@@ -127,14 +130,14 @@ in. `OFF buys` = what dropping the feature gets you.
 ## Testing / tooling
 
 - [ ] **Clean up the test suite** so `npm test` + `npm run lint:ci` go green: the
-  2 pre-existing `liveness.test.ts` failures, the stale `sema.test.ts` inline
-  snapshot (hardcoded absolute path — see its `TODO: handle local paths for CI`),
-  and the lint debt gating oxfmt (`no-eq-null` errors + `no-console` warnings in
-  `scripts/*.ts`). Prune the `tests/local/*.js` grab-bag while there.
+      2 pre-existing `liveness.test.ts` failures, the stale `sema.test.ts` inline
+      snapshot (hardcoded absolute path — see its `TODO: handle local paths for CI`),
+      and the lint debt gating oxfmt (`no-eq-null` errors + `no-console` warnings in
+      `scripts/*.ts`). Prune the `tests/local/*.js` grab-bag while there.
 - [ ] **Quick regression test262 selection** — a small curated subset (a few
-  hundred tests across areas) that runs in seconds for a fast pre-commit signal,
-  complementing the full gate (~48 min on compiler changes). Keep it in sync with
-  the gate's committed verdicts.
+      hundred tests across areas) that runs in seconds for a fast pre-commit signal,
+      complementing the full gate (~48 min on compiler changes). Keep it in sync with
+      the gate's committed verdicts.
 
 ## Experiments / someday
 

@@ -45,7 +45,10 @@ check("once listener", onceCount === 1);
 
 // preventDefault via a listener makes dispatchEvent return false.
 et.addEventListener("c", (ev) => ev.preventDefault());
-check("dispatch returns false when prevented", et.dispatchEvent(new Event("c", { cancelable: true })) === false);
+check(
+	"dispatch returns false when prevented",
+	et.dispatchEvent(new Event("c", { cancelable: true })) === false,
+);
 
 // --- AbortController / AbortSignal ---
 const ac = new AbortController();
@@ -86,7 +89,10 @@ check("throwIfAborted no-op when live", didThrow === false);
 const sa = AbortSignal.abort("static-reason");
 check("static abort aborted", sa.aborted === true && sa.reason === "static-reason");
 const sad = AbortSignal.abort();
-check("static abort default reason is Error", sad.aborted === true && sad.reason instanceof Error);
+check(
+	"static abort default reason is Error",
+	sad.aborted === true && sad.reason instanceof Error,
+);
 
 // --- async: AbortSignal.timeout finalizes the run ---
 const ts = AbortSignal.timeout(10);

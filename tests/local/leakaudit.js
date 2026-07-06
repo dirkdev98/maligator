@@ -29,7 +29,12 @@ for (let i = 0; i < 3000; i++) {
 	sym[Symbol("s")] = i;
 	sym.n = i;
 	let acc = {};
-	Object.defineProperty(acc, "g", { get() { return i; }, configurable: true });
+	Object.defineProperty(acc, "g", {
+		get() {
+			return i;
+		},
+		configurable: true,
+	});
 	let frozen = Object.freeze({ p: i, q: i });
 	maybeKeep(i, [shaped, dict, del, sym, acc, frozen]);
 }
@@ -75,7 +80,9 @@ for (let i = 0; i < 2000; i++) {
 // 6. closures / bound functions
 for (let i = 0; i < 3000; i++) {
 	let base = i;
-	let f = function () { return base + 1; };
+	let f = function () {
+		return base + 1;
+	};
 	let b = f.bind(null);
 	maybeKeep(i, [f, b]);
 }
@@ -106,7 +113,9 @@ for (let i = 0; i < 1500; i++) {
 }
 // 8. promises + reactions
 for (let i = 0; i < 2000; i++) {
-	let p = Promise.resolve(i).then((x) => x + 1).then((x) => x * 2);
+	let p = Promise.resolve(i)
+		.then((x) => x + 1)
+		.then((x) => x * 2);
 	let r = Promise.reject("e").catch(() => i);
 	maybeKeep(i, [p, r]);
 }
@@ -126,7 +135,14 @@ for (let i = 0; i < 2000; i++) {
 	let e = new Error("boom " + i);
 	let bi = BigInt(i) * 1000000000000000000n;
 	let sy = Symbol("sym" + i);
-	let px = new Proxy({ v: i }, { get(t, k) { return t[k]; } });
+	let px = new Proxy(
+		{ v: i },
+		{
+			get(t, k) {
+				return t[k];
+			},
+		},
+	);
 	maybeKeep(i, [d, e.stack.length, bi, sy, px.v]);
 }
 

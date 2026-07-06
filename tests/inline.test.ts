@@ -266,7 +266,10 @@ test("a HOF method called with a non-function first arg is not a site", () => {
 // --- HOF callback inlining: substitution (forEach) ---
 
 /** Per-function instruction-type counts after optimization (program-wide). */
-function programInstrCount(source: string, predicate: (i: { type: string }) => boolean): number {
+function programInstrCount(
+	source: string,
+	predicate: (i: { type: string }) => boolean,
+): number {
 	const ir = optimizedProgram(source);
 	return ir.functions
 		.flatMap((fn) => fn.blocks.flatMap((b) => b.instructions))
@@ -280,7 +283,9 @@ test("arr.forEach(arrow) is replaced by a guarded inlined loop", () => {
 	expect(
 		programInstrCount(
 			source,
-			(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+			(i) =>
+				i.type === "loadIntrinsic" &&
+				(i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
 		),
 	).toBeGreaterThan(0);
 });
@@ -293,11 +298,15 @@ test("the forEach callback closure is sunk to the slow path (fast path allocates
 	const owner = ir.functions.find((fn) =>
 		fn.blocks.some((b) =>
 			b.instructions.some(
-				(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+				(i) =>
+					i.type === "loadIntrinsic" &&
+					(i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
 			),
 		),
 	)!;
-	const blocksWithClosure = owner.blocks.filter((b) => b.instructions.some((i) => i.type === "createFunction")).length;
+	const blocksWithClosure = owner.blocks.filter((b) =>
+		b.instructions.some((i) => i.type === "createFunction"),
+	).length;
 	expect(blocksWithClosure).toBe(1); // only the slow path creates the closure
 });
 
@@ -306,7 +315,9 @@ test("some/every/find/findIndex are each replaced by a guarded inlined loop", ()
 		const source = `(function (){ const a = [1,2,3]; return a.${method}(x => x > 1); })();`;
 		const guards = programInstrCount(
 			source,
-			(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+			(i) =>
+				i.type === "loadIntrinsic" &&
+				(i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
 		);
 		expect(guards, `${method} should be guard-inlined`).toBeGreaterThan(0);
 	}
@@ -317,7 +328,9 @@ test("flatMap is replaced by a guarded inlined loop using the flatten-append hel
 	expect(
 		programInstrCount(
 			source,
-			(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+			(i) =>
+				i.type === "loadIntrinsic" &&
+				(i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
 		),
 		"flatMap should be guard-inlined",
 	).toBeGreaterThan(0);
@@ -325,7 +338,9 @@ test("flatMap is replaced by a guarded inlined loop using the flatten-append hel
 	expect(
 		programInstrCount(
 			source,
-			(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayFlatMapAppend",
+			(i) =>
+				i.type === "loadIntrinsic" &&
+				(i as { intrinsic?: string }).intrinsic === "__arrayFlatMapAppend",
 		),
 		"flatMap should load the flatten-append helper",
 	).toBeGreaterThan(0);
@@ -337,11 +352,15 @@ test("the flatMap callback closure is sunk to the slow path", () => {
 	const owner = ir.functions.find((fn) =>
 		fn.blocks.some((b) =>
 			b.instructions.some(
-				(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+				(i) =>
+					i.type === "loadIntrinsic" &&
+					(i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
 			),
 		),
 	)!;
-	const blocksWithClosure = owner.blocks.filter((b) => b.instructions.some((i) => i.type === "createFunction")).length;
+	const blocksWithClosure = owner.blocks.filter((b) =>
+		b.instructions.some((i) => i.type === "createFunction"),
+	).length;
 	expect(blocksWithClosure).toBe(1); // only the slow path creates the closure
 });
 
@@ -350,7 +369,9 @@ test("map/filter are now replaced by a guarded inlined loop", () => {
 		const source = `(function (){ const a = [1,2,3]; return a.${method}(x => x * 2); })();`;
 		const guards = programInstrCount(
 			source,
-			(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+			(i) =>
+				i.type === "loadIntrinsic" &&
+				(i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
 		);
 		expect(guards, `${method} should be guard-inlined`).toBeGreaterThan(0);
 	}
@@ -362,11 +383,15 @@ test("the map callback closure is sunk to the slow path", () => {
 	const owner = ir.functions.find((fn) =>
 		fn.blocks.some((b) =>
 			b.instructions.some(
-				(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+				(i) =>
+					i.type === "loadIntrinsic" &&
+					(i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
 			),
 		),
 	)!;
-	const blocksWithClosure = owner.blocks.filter((b) => b.instructions.some((i) => i.type === "createFunction")).length;
+	const blocksWithClosure = owner.blocks.filter((b) =>
+		b.instructions.some((i) => i.type === "createFunction"),
+	).length;
 	expect(blocksWithClosure).toBe(1); // only the slow path creates the closure
 });
 
@@ -375,7 +400,9 @@ test("reduce(cb, init) is replaced by a guarded inlined loop; reduce(cb) is not"
 	expect(
 		programInstrCount(
 			withInit,
-			(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+			(i) =>
+				i.type === "loadIntrinsic" &&
+				(i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
 		),
 	).toBeGreaterThan(0);
 	// No initial value → not inlined (first-element/empty-throw stays on the slow path).
@@ -383,23 +410,32 @@ test("reduce(cb, init) is replaced by a guarded inlined loop; reduce(cb) is not"
 	expect(
 		programInstrCount(
 			noInit,
-			(i) => i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+			(i) =>
+				i.type === "loadIntrinsic" &&
+				(i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
 		),
 	).toBe(0);
 });
 
 test("backward HOF methods (reduceRight/findLast/findLastIndex) are guard-inlined", () => {
 	const cases: Array<[string, string]> = [
-		["reduceRight", `(function (){ const a=[1,2,3]; return a.reduceRight((acc,x)=>acc+x, 0); })();`],
+		[
+			"reduceRight",
+			`(function (){ const a=[1,2,3]; return a.reduceRight((acc,x)=>acc+x, 0); })();`,
+		],
 		["findLast", `(function (){ const a=[1,2,3]; return a.findLast(x=>x<2); })();`],
-		["findLastIndex", `(function (){ const a=[1,2,3]; return a.findLastIndex(x=>x<2); })();`],
+		[
+			"findLastIndex",
+			`(function (){ const a=[1,2,3]; return a.findLastIndex(x=>x<2); })();`,
+		],
 	];
 	for (const [name, source] of cases) {
 		expect(
 			programInstrCount(
 				source,
 				(i) =>
-					i.type === "loadIntrinsic" && (i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
+					i.type === "loadIntrinsic" &&
+					(i as { intrinsic?: string }).intrinsic === "__arrayIterationEligible",
 			),
 			`${name} should be guard-inlined`,
 		).toBeGreaterThan(0);

@@ -131,6 +131,37 @@ function producesNumberFromNumbers(operator: string): boolean {
 }
 
 /**
+ * The native C expression (an f64) computing `left <op> right` for a
+ * number-producing operator over two f64 operand expressions, or null if the
+ * operator does not produce a Number from Numbers. Bitwise/shift ops go through
+ * ToInt32 (mal_ops_number_to_i32) with the shift count masked to 5 bits; `>>>`
+ * yields a uint32; `%` uses the integer-fast-path remainder. Shared by both the
+ * pure-`number` result path (raw) and the mixed-rep guarded fast path (which
+ * re-boxes with mal_ops_number_value), so the two never drift.
+ */
+function nativeNumberExpr(operator: string, left: string, right: string): string | null {
+	const arith = NATIVE_ARITH[operator];
+	if (arith !== undefined) {
+		return `${left} ${arith} ${right}`;
+	}
+	const bitwise = NATIVE_BITWISE[operator];
+	if (bitwise !== undefined) {
+		const right32 =
+			operator === "<<" || operator === ">>"
+				? `(mal_ops_number_to_i32(${right}) & 0x1F)`
+				: `mal_ops_number_to_i32(${right})`;
+		return `(f64) (mal_ops_number_to_i32(${left}) ${bitwise} ${right32})`;
+	}
+	if (operator === ">>>") {
+		return `(f64) ((u32) mal_ops_number_to_i32(${left}) >> (mal_ops_number_to_i32(${right}) & 0x1F))`;
+	}
+	if (operator === "%") {
+		return `mal_number_remainder(${left}, ${right})`;
+	}
+	return null;
+}
+
+/**
  * Operators whose fully-general op never sets a THROW completion, so a boxed
  * fallback can skip the check. Only the strict-equality operators qualify:
  * they compare without any coercion. Every other operator can throw — `in`/
@@ -1047,7 +1078,6 @@ function emitInstruction(
 			const leftIsNum = reps[left] === "number";
 			const rightIsNum = reps[right] === "number";
 			const dstIsBool = reps[dst] === "boolean";
-			const arith = NATIVE_ARITH[operator];
 			const compare = NATIVE_COMPARE[operator];
 
 			// The dst is `number`-rep only when the lattice proved both operands are
@@ -1059,33 +1089,8 @@ function emitInstruction(
 				if (!leftIsNum || !rightIsNum) {
 					return null;
 				}
-				if (arith !== undefined) {
-					return [`r${dst} = ${num(left)} ${arith} ${num(right)};`];
-				}
-				const bitwise = NATIVE_BITWISE[operator];
-				if (bitwise !== undefined) {
-					// JS bitwise ops are over ToInt32; the shifts mask the count to 5
-					// bits. The signed-32-bit result becomes a double (boxed back to
-					// int32 by mal_ops_number_value, matching the interpreter's ops).
-					const right32 =
-						operator === "<<" || operator === ">>"
-							? `(mal_ops_number_to_i32(${num(right)}) & 0x1F)`
-							: `mal_ops_number_to_i32(${num(right)})`;
-					return [
-						`r${dst} = (f64) (mal_ops_number_to_i32(${num(left)}) ${bitwise} ${right32});`,
-					];
-				}
-				if (operator === ">>>") {
-					// Unsigned shift yields a uint32; a value ≥ 2^31 stays an f64 when
-					// boxed (mal_ops_number_value), like mal_ops_shift_right_unsigned.
-					return [
-						`r${dst} = (f64) ((u32) mal_ops_number_to_i32(${num(left)}) >> (mal_ops_number_to_i32(${num(right)}) & 0x1F));`,
-					];
-				}
-				if (operator === "%") {
-					return [`r${dst} = fmod(${num(left)}, ${num(right)});`];
-				}
-				return null;
+				const expr = nativeNumberExpr(operator, num(left), num(right));
+				return expr === null ? null : [`r${dst} = ${expr};`];
 			}
 
 			const slow = `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`;
@@ -1136,22 +1141,28 @@ function emitInstruction(
 				return null;
 			}
 
-			// Mixed rep on arithmetic: exactly one operand is a proven number, the
-			// other boxed. Speculate the boxed operand is a number and take a native
-			// double op when it is, else the fully-general op. `mal_ops_number_as_f64`
-			// recovers a number's exact f64 and `mal_ops_number_value` re-boxes with
-			// the interpreter's int32/-0/NaN canonicalization, so the fast path is
-			// observably identical to the fallback. (`+` stays correct: a proven
-			// number can't be a string, and the guard rejects a boxed string.)
-			if (leftIsNum !== rightIsNum && arith !== undefined) {
-				const guard = guardIsNumber(leftIsNum ? right : left);
-				const lines = [
-					`r${dst} = ${guard} ? mal_ops_number_value(${numericOf(left)} ${arith} ${numericOf(right)}) : ${slow};`,
-				];
-				if (binaryOpCanThrow(operator)) {
-					lines.push(completionCheck);
+			// Mixed rep on a number-producing op: exactly one operand is a proven
+			// number, the other boxed. Speculate the boxed operand is a number and
+			// take the native double op when it is, else the fully-general op.
+			// `mal_ops_number_as_f64` recovers a number's exact f64 and
+			// `mal_ops_number_value` re-boxes with the interpreter's int32/-0/NaN
+			// canonicalization, so the fast path is observably identical to the
+			// fallback — including `%` (mal_number_remainder) and the bitwise/shift
+			// ops (ToInt32). (`+` stays correct: a proven number can't be a string,
+			// and the guard rejects a boxed string, so the string-concat branch of
+			// the slow op is only reached when the native branch is not taken.)
+			if (leftIsNum !== rightIsNum) {
+				const nativeExpr = nativeNumberExpr(operator, numericOf(left), numericOf(right));
+				if (nativeExpr !== null) {
+					const guard = guardIsNumber(leftIsNum ? right : left);
+					const lines = [
+						`r${dst} = ${guard} ? mal_ops_number_value(${nativeExpr}) : ${slow};`,
+					];
+					if (binaryOpCanThrow(operator)) {
+						lines.push(completionCheck);
+					}
+					return lines;
 				}
-				return lines;
 			}
 
 			// Fully general fallback: both operands boxed, or string/bigint/`in`/

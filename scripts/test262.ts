@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import * as nodePath from "node:path";
 import * as os from "node:os";
+import * as nodePath from "node:path";
 import { Worker } from "node:worker_threads";
 import { test262LoadCache, test262PersistCache } from "../src/test262/cache.ts";
 import { TEST262_METADATA } from "../src/test262/constants.ts";
@@ -95,8 +95,9 @@ if (manifestPath) {
 	selection = selection.filter((file) => wanted.has(file.path));
 	const missing = wanted.size - selection.length;
 	test262Log(
-		`Manifest ${nodePath.basename(manifestPath)}: ${selection.length}/${wanted.size} files${ 
-			missing > 0 ? ` (${missing} not in corpus)` : ""}`,
+		`Manifest ${nodePath.basename(manifestPath)}: ${selection.length}/${wanted.size} files${
+			missing > 0 ? ` (${missing} not in corpus)` : ""
+		}`,
 	);
 }
 if (random) {

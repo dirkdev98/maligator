@@ -8,7 +8,10 @@ function check(name, ok) {
 	results.push([name, !!ok]);
 }
 
-const r = new Request("https://example.com/p", { method: "PUT", headers: { "x-a": "1" } });
+const r = new Request("https://example.com/p", {
+	method: "PUT",
+	headers: { "x-a": "1" },
+});
 check("url", r.url === "https://example.com/p");
 check("method", r.method === "PUT");
 check("headers is Headers", r.headers instanceof Headers);

@@ -11,6 +11,29 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value);
 f64 mal_ops_to_number(MalValue value);
 
 /**
+ * Number::remainder (JS `%`). Semantically `fmod`, but libm `fmod` dominates any
+ * modulo-heavy loop, and real code overwhelmingly takes `%` on integer-valued
+ * operands (indices, hashes, ring buffers). Fast-path those to a native integer
+ * remainder — C `%` truncates toward zero with the dividend's sign, matching
+ * Number::remainder exactly. Guarded to |operand| <= 2^53 so the double→int64
+ * cast is exact and can't overflow (which rules out the INT64_MIN % -1 UB), and
+ * a zero dividend returns the input to preserve -0 (sign of the dividend). Kept
+ * `static inline` (value_ops.h reaches both the runtime and the emitted C) so the
+ * native `%` path inlines it in the hot loop. Everything else defers to fmod.
+ */
+static inline f64 mal_number_remainder(f64 a, f64 b) {
+    if (b != 0.0 && a >= -9007199254740992.0 && a <= 9007199254740992.0 && b >= -9007199254740992.0 &&
+        b <= 9007199254740992.0) {
+        i64 ia = (i64) a;
+        i64 ib = (i64) b;
+        if ((f64) ia == a && (f64) ib == b) {
+            return ia == 0 ? a : (f64) (ia % ib);
+        }
+    }
+    return fmod(a, b);
+}
+
+/**
  * Whether the value is a JS Number (any of: int32, f64, NaN, -0, ±Infinity),
  * and the f64 recovery of a value already known to be one (precondition:
  * mal_ops_is_number). Both are written directly over the NaN-boxing layout

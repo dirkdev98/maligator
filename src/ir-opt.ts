@@ -771,7 +771,10 @@ function scalarReplaceObjectLiteralsInFunction(fn: IRFunction): boolean {
 	const constStringIndex = new Map<number, number>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
-			if (instruction.type === "createString" && defCount.get(instruction.registers[0]) === 1) {
+			if (
+				instruction.type === "createString" &&
+				defCount.get(instruction.registers[0]) === 1
+			) {
 				constStringIndex.set(instruction.registers[0], instruction.stringIndex);
 			}
 		}
@@ -779,7 +782,10 @@ function scalarReplaceObjectLiteralsInFunction(fn: IRFunction): boolean {
 
 	// Every USE of each register: the instruction plus the operand position. A
 	// position below the instruction's destination count is a definition, not a use.
-	const usesOf = new Map<number, Array<{ instruction: IRInstruction; position: number }>>();
+	const usesOf = new Map<
+		number,
+		Array<{ instruction: IRInstruction; position: number }>
+	>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
 			if (!("registers" in instruction)) {
@@ -799,7 +805,10 @@ function scalarReplaceObjectLiteralsInFunction(fn: IRFunction): boolean {
 
 	// Each firing record maps to the snapshot moves that replace its allocation;
 	// its alias-copy moves become dead and are dropped.
-	const snapshotsFor = new Map<IRInstruction, Array<{ snapshot: number; value: number }>>();
+	const snapshotsFor = new Map<
+		IRInstruction,
+		Array<{ snapshot: number; value: number }>
+	>();
 	const aliasMovesToDrop = new Set<IRInstruction>();
 	let changed = false;
 
@@ -1026,7 +1035,10 @@ function scalarReplaceMutableObjectsInFunction(
 	const constStringIndex = new Map<number, number>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
-			if (instruction.type === "createString" && defCount.get(instruction.registers[0]) === 1) {
+			if (
+				instruction.type === "createString" &&
+				defCount.get(instruction.registers[0]) === 1
+			) {
 				constStringIndex.set(instruction.registers[0], instruction.stringIndex);
 			}
 		}
@@ -1034,7 +1046,10 @@ function scalarReplaceMutableObjectsInFunction(
 
 	// Every use of each register: instruction + operand position (positions below
 	// the destination count are definitions, not uses).
-	const usesOf = new Map<number, Array<{ instruction: IRInstruction; position: number }>>();
+	const usesOf = new Map<
+		number,
+		Array<{ instruction: IRInstruction; position: number }>
+	>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
 			if (!("registers" in instruction)) {
@@ -1062,7 +1077,10 @@ function scalarReplaceMutableObjectsInFunction(
 
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
-			if (instruction.type !== "createObject" && instruction.type !== "createObjectShaped") {
+			if (
+				instruction.type !== "createObject" &&
+				instruction.type !== "createObjectShaped"
+			) {
 				continue;
 			}
 			const objectRegister = instruction.registers[0];

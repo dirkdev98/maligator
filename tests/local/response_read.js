@@ -29,12 +29,25 @@ check("binary-ctor status", rb.status === 200);
 // Static Response.json / redirect / error.
 const rj = Response.json({ ok: true, n: 5 });
 check("Response.json status", rj.status === 200);
-check("Response.json content-type", rj.headers.get("content-type") === "application/json");
-const rjCustom = Response.json({ a: 1 }, { status: 201, headers: { "content-type": "application/problem+json" } });
-check("Response.json keeps custom CT", rjCustom.headers.get("content-type") === "application/problem+json" && rjCustom.status === 201);
+check(
+	"Response.json content-type",
+	rj.headers.get("content-type") === "application/json",
+);
+const rjCustom = Response.json(
+	{ a: 1 },
+	{ status: 201, headers: { "content-type": "application/problem+json" } },
+);
+check(
+	"Response.json keeps custom CT",
+	rjCustom.headers.get("content-type") === "application/problem+json" &&
+		rjCustom.status === 201,
+);
 
 const rd = Response.redirect("https://example.com/x", 301);
-check("Response.redirect", rd.status === 301 && rd.headers.get("location") === "https://example.com/x");
+check(
+	"Response.redirect",
+	rd.status === 301 && rd.headers.get("location") === "https://example.com/x",
+);
 
 const re = Response.error();
 check("Response.error", re.status === 0);

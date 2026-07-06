@@ -2,7 +2,13 @@ import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, it } from "vitest";
-import { assertExactLines, buildNativeBinary, HOST_MAIN, runToStdout, STRESS_ENV } from "../../src/test-harness.ts";
+import {
+	assertExactLines,
+	buildNativeBinary,
+	HOST_MAIN,
+	runToStdout,
+	STRESS_ENV,
+} from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-host-"));
 
