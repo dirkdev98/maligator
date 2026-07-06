@@ -12,15 +12,22 @@ npm install
 # Local development script when working on the compiler.
 node ./src/index.ts
 
-# In-repo tests
-npm test run
+# Tests (Vitest: `unit` = pure-TS/fast, `native` = builds + runs isolate binaries)
+npm test run          # everything, once
+npm run test:unit     # fast lane only (watch loop)
+npm run test:native   # native feature-acceptance + test262 regression manifest
 
 # ESLint + formatting
 npm run lint
 npm run format
 
-# Test262 - JS interpreter
+# Benchmarks (binary size / language-vs-V8 / gc / http; --update records a baseline)
+npm run bench
+
+# Test262 (full suite — expensive)
 npm run test262
+# Curated common-case regression subset
+npm run test262:regressions
 ```
 
 ## Background

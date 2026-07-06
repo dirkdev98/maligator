@@ -60,30 +60,21 @@ const LIB_ARCHIVE = `${RUNTIME_BUILD_DIR}/libLibMaligator.a`;
 const BUILD_PATH = `${TEST262_METADATA.buildPath}${buildSuffix()}`;
 
 /**
- * Share byte-identical static arrays (the harness's instructions and string
- * constants) across the tests in a batch, instead of re-emitting them per test.
- * Halves the generated C and cuts cc ~25% on a cold run; content-addressed so it
- * cannot change behaviour. On by default (set T262_SHARED_HARNESS=0 to compare).
- * Folded into the cache key since it changes the compiled object.
- */
-function sharedHarnessEnabled(): boolean {
-	return process.env.T262_SHARED_HARNESS !== "0";
-}
-
-/**
  * Force every test function through the bytecode interpreter (no emit-c bodies).
  * Used to stress the GC: collection is only safe with no compiled frame on the C
  * stack, so an all-interpreter build lets a safepoint collect at every poll. Set
- * T262_NO_COMPILED=1. Folded into the cache key so it cannot reuse compiled
- * artifacts.
+ * MAL_INTERP=1. Folded into the cache key so it cannot reuse compiled artifacts.
  */
 function interpreterOnly(): boolean {
-	return process.env.T262_NO_COMPILED === "1";
+	return process.env.MAL_INTERP === "1";
 }
 
+// Batches always share the harness's byte-identical static arrays (instructions +
+// string constants) across their tests instead of re-emitting them per test —
+// halves the generated C and cuts cc ~25% on a cold run, content-addressed so it
+// cannot change behaviour. Folded into the cache key.
 function emitMode(): string {
-	const base = sharedHarnessEnabled() ? "shared-harness" : "per-test";
-	return interpreterOnly() ? `${base}-nocompiled` : base;
+	return interpreterOnly() ? "shared-harness-nocompiled" : "shared-harness";
 }
 
 /** Keys touched this run, so stale cache entries can be pruned at the end. */
@@ -829,20 +820,10 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		return;
 	}
 
-	// Emit the batch's C: one shared translation unit (deduping the harness) or
-	// each definition self-contained, headers prepended once either way.
+	// Emit the batch's C as one shared translation unit (deduping the harness),
+	// headers prepended once.
 	const compiled = !interpreterOnly();
-	const body = sharedHarnessEnabled()
-		? emitBatch(definitions, { compiled })
-		: definitions
-				.map((definition, i) =>
-					emitVmDefinition(definition, {
-						symbolSuffix: `_${i}`,
-						includeHeader: false,
-						compiled,
-					}),
-				)
-				.join("\n");
+	const body = emitBatch(definitions, { compiled });
 
 	const sources: Array<string> = [
 		'#include "vm.h"',

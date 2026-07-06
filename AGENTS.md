@@ -5,9 +5,28 @@
 - `npm run type-check` - TypeScript type checking
 - `npm run lint` - ESLint with auto-fix
 - `npm run lint:ci` - ESLint without auto-fix (CI)
-- `npm test` - Run all tests with Vitest
+- `npm test` - Run all tests with Vitest (unit + native projects)
 - `npm test run` - Run all tests once with Vitest
-- `npm test -- <filename>` - Run single test file (e.g., `npm test -- data-types.test.ts`)
+- `npm run test:unit` - Fast lane: pure-TS compiler tests only (no C build; the watch loop)
+- `npm run test:native` - Native lane: build each fixture into an isolate binary/server and drive it
+- `npm test -- <filename>` - Run a single test file
+- `npm run test:leak` - macOS-only GC leak audit (`leaks`), off by default
+- `npm run test262` - Full test262 suite (expensive; ask before running)
+- `npm run test262:regressions` - Curated common-case regression manifest vs the committed baseline (also runs inside the native lane)
+- `npm run bench` - Consolidated benchmark tracker (size / language-vs-V8 / gc / http); `--update` records a baseline entry
+
+### Manual milestone scripts (not part of `npm test`)
+
+- `node scripts/eval-phase2-check.ts` - wire-format loader differential
+- `node scripts/eval-selfhost-check.ts` - self-hosted compiler differential (slow: AOT-compiles the whole compiler)
+- `node scripts/eval-strip-check.ts` - ts-blank-space strip + source-position fidelity
+
+### Test / runtime flags
+
+- Build-time (own build dir): `MAL_ASAN`, `MAL_UBSAN`, `MAL_GC_GENERATIONAL`, `MAL_GMALLOC`.
+- Runtime GC instruments (same binary): `MAL_GC_STRESS`, `MAL_GC_VERIFY`, `MAL_GC_OFF`, `MAL_GC_THRESHOLD`, `MAL_GC_MAJOR_EVERY`, `MAL_GC_STATS`, `MAL_HOST_GC`, `MAL_GC_AT_EXIT`.
+- Backend: `MAL_INTERP=1` forces the bytecode interpreter (test262 runner); the native harness takes a `compiled` flag directly.
+- test262 runner: `--filter`, `--manifest <file>`, `--variant strict|sloppy`, `--jobs N`, `--compile-workers N`, `--check`, `--random`.
 
 ## Code Style
 

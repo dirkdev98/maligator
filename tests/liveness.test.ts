@@ -92,20 +92,24 @@ test("a temporary spanning a call is live across that call's safepoint", () => {
 	expect(liveness.liveAcrossSafepoint.has(firstCallResult)).toBe(true);
 });
 
-test("a value living in a frame-local slot across a call is NOT spilled to the root set", () => {
+test("a value living in a frame-local slot is NOT held in a register across the call", () => {
 	// `keep` is a named local: the IR holds it in a local slot (storeLocal /
 	// loadLocal), which is already a frame root scanned by the GC. So no register
-	// temporary spans the call, and the root-frame spill set is empty. This is the
-	// liveness-minimization the GC design wants (gc_todo.md Step 9 C1).
+	// temporary spans the `g()` call — its safepoint live set is empty. This is the
+	// liveness-minimization the GC design wants (gc_todo.md Step 9 C1). (Registers
+	// produced by OTHER safepoints and consumed downstream — e.g. the reloaded
+	// `keep` before `return` — are still rooted at those safepoints under the
+	// def-when-live-out rule, so we assert the call site itself, not the whole set.)
 	const fn = buildIr(
 		`(function f(g) { let keep = {}; g(); return keep; })(h);`,
 	).functions.find((candidate) => candidate.functionIndex === 1)!;
-	expect(instructionsOf(fn).some((instruction) => instruction.type === "call")).toBe(
-		true,
-	);
 
 	const liveness = computeFunctionLiveness(fn);
-	expect(liveness.liveAcrossSafepoint.size).toBe(0);
+	const callSafepoint = liveness.safepoints.find(
+		(sp) => fn.blocks[sp.blockIndex]!.instructions[sp.instructionIndex]!.type === "call",
+	);
+	expect(callSafepoint).toBeDefined();
+	expect(callSafepoint!.live.size).toBe(0);
 });
 
 test("computeProgramLiveness covers every function", () => {
@@ -203,16 +207,16 @@ test("safepoints list: union of per-safepoint live sets equals liveAcrossSafepoi
 });
 
 test("liveOrUsedAtSafepoint adds a safepoint's operands that are dead immediately after", () => {
-	// b0: r5 = g ; r6 = undefined ; r7 = call(r5, r6) ; r8 = undefined ; return r8
-	// r5 (callee) and r6 (arg) are operands of the call but never read again, so
-	// liveAcrossSafepoint (live-OUT) omits them. They are still handed to the callee
-	// (which can collect before re-rooting them), so liveOrUsedAtSafepoint — the set
-	// emit-c spills into the GC root frame — must include them. This is what
-	// preserves the invariant that a caller keeps an in-flight call's receiver/args
-	// reachable for the callee's `this`/args.
+	// b0: r5 = loadLocal ; r6 = undefined ; r7 = call(r5, r6) ; r8 = undefined ; return r8
+	// r5 (callee) and r6 (arg) are produced by non-safepoint ops and never read after
+	// the call, so liveAcrossSafepoint (live-OUT, plus any safepoint's own live-out
+	// def) omits them. They are still handed to the callee (which can collect before
+	// re-rooting them), so liveOrUsedAtSafepoint — the set emit-c spills into the GC
+	// root frame — must include them. This preserves the invariant that a caller keeps
+	// an in-flight call's receiver/args reachable for the callee's `this`/args.
 	const fn = fakeFn([
 		[
-			{ type: "loadUndeclared", registers: [5] },
+			{ type: "loadLocal", registers: [5] },
 			{ type: "createUndefined", registers: [6] },
 			{ type: "call", registers: [7, 5, 6] },
 			{ type: "createUndefined", registers: [8] },

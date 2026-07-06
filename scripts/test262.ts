@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import * as nodePath from "node:path";
 import * as os from "node:os";
 import { Worker } from "node:worker_threads";
 import { test262LoadCache, test262PersistCache } from "../src/test262/cache.ts";
@@ -34,6 +35,10 @@ const random = process.argv.includes("--random");
 // flaky verdicts clobbering the committed baseline.
 const checkMode = process.argv.includes("--check");
 const filter = argValue("--filter");
+// Restrict the run to an explicit newline-separated list of test paths (the
+// committed regression manifest). Like --filter, it is a partial run: it never
+// rewrites the committed results and does not prune the artifact cache.
+const manifestPath = argValue("--manifest");
 // Default to roughly half the cores (battery-friendly); was cpus-1 (near-full
 // utilization). Override with --jobs for a faster plugged-in run.
 const jobs = Number(argValue("--jobs") ?? Math.max(1, Math.floor(os.cpus().length / 2)));
@@ -80,10 +85,28 @@ if (filter) {
 	selection = selection.filter((file) => file.path.includes(filter));
 	test262Log(`Filtered to ${selection.length} files matching '${filter}'.`);
 }
+if (manifestPath) {
+	const wanted = new Set(
+		readFileSync(manifestPath, "utf-8")
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0 && !line.startsWith("#")),
+	);
+	selection = selection.filter((file) => wanted.has(file.path));
+	const missing = wanted.size - selection.length;
+	test262Log(
+		`Manifest ${nodePath.basename(manifestPath)}: ${selection.length}/${wanted.size} files${ 
+			missing > 0 ? ` (${missing} not in corpus)` : ""}`,
+	);
+}
 if (random) {
 	selection = selection.filter(() => Math.random() < 0.05);
 	test262Log(`Sampled ${selection.length} files.`);
 }
+
+// A manifest/filter/random run is partial: it must not rewrite the committed
+// results or prune the artifact cache (it never visits every key).
+const isPartialRun = Boolean(filter) || Boolean(manifestPath) || random;
 
 // Reset per pass by runVariant() so the two passes time and report
 // independently; the worker/progress closures below read these live.
@@ -253,7 +276,7 @@ async function runVariant(variant: "strict" | "sloppy"): Promise<VariantRun> {
 	// A full, unfiltered run touches every current-fingerprint cache key, so any
 	// untouched entry is stale and safe to drop. Skip pruning on partial runs - they
 	// would wrongly delete entries for the batches they never visited.
-	if (!filter && !random) {
+	if (!isPartialRun) {
 		test262PruneArtifactCache();
 	}
 
@@ -323,7 +346,7 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 	test262Log(`Result:`, summary);
 
 	const outputFile = TEST262_METADATA.outputFile;
-	const isFullRun = !filter && !random;
+	const isFullRun = !isPartialRun;
 
 	// Compare against the committed results to surface regressions, even on
 	// partial runs.

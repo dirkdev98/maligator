@@ -32,15 +32,46 @@ export interface LocalBuildOptions {
 	 * the test262 harness main; a custom driver (e.g. the fiber test) overrides it.
 	 */
 	mainFile?: string;
+
+	/**
+	 * Directory for the emitted `.c` and linked binary. Defaults to `.cache/local`.
+	 * The vitest native lane passes a per-test temp dir so parallel workers do not
+	 * clobber each other's artifacts (the shared runtime archives stay cached under
+	 * `.cache/local/lib` regardless).
+	 */
+	outDir?: string;
+
+	/**
+	 * Link against already-built runtime archives instead of (re)building them.
+	 * The vitest native lane sets this after globalSetup has built them once, so
+	 * parallel workers only emit + link and never race a shared `cmake`.
+	 */
+	skipRuntimeBuild?: boolean;
+}
+
+/**
+/**
+ * The three runtime archives in link order (dependents first: runtime, host,
+ * engine — so a later archive resolves an earlier one's references), WITHOUT
+ * building them. Callers that pass `skipRuntimeBuild` (the vitest native lane,
+ * after globalSetup has built them once) link against these directly; a
+ * concurrent `cmake` would otherwise race on the shared build dir.
+ */
+function runtimeArchivePaths(): Array<string> {
+	return [
+		path.join(BUILD_DIR, "libMalRuntime.a"),
+		path.join(BUILD_DIR, "libMalHost.a"),
+		path.join(BUILD_DIR, "libLibMaligator.a"),
+	];
 }
 
 /**
  * Configure and build the three runtime archives (engine / host / runtime) into a
- * local build directory at -O2. Returns their static-archive paths in link order
- * (dependents first: runtime, host, engine — so a later archive resolves an earlier
- * one's references), which the final cc links together (static + optimized).
+ * local build directory at -O2. Returns their static-archive paths in link order,
+ * which the final cc links together (static + optimized). Exported so the vitest
+ * native lane can build them ONCE in globalSetup before parallel workers link.
  */
-function ensureRuntimeLibrary(verbose: boolean): Array<string> {
+export function ensureRuntimeLibrary(verbose: boolean): Array<string> {
 	const stdio = verbose ? "inherit" : "ignore";
 
 	mkdirSync(LOCAL_DIR, { recursive: true });
@@ -70,11 +101,7 @@ function ensureRuntimeLibrary(verbose: boolean): Array<string> {
 
 	// Link order: runtime -> host -> engine (dependents first). rustLinkArgs() is
 	// appended after these by the caller (the engine references its symbols).
-	return [
-		path.join(BUILD_DIR, "libMalRuntime.a"),
-		path.join(BUILD_DIR, "libMalHost.a"),
-		path.join(BUILD_DIR, "libLibMaligator.a"),
-	];
+	return runtimeArchivePaths();
 }
 
 /**
@@ -118,13 +145,15 @@ export function buildLoadDriver(verbose: boolean): string {
  * Returns the path to the binary.
  */
 export function buildLocalBinary(options: LocalBuildOptions): string {
-	const libs = ensureRuntimeLibrary(options.verbose);
+	const libs = options.skipRuntimeBuild ? runtimeArchivePaths() : ensureRuntimeLibrary(options.verbose);
 
 	// Suffix the artifacts under a sanitizer build so they do not clobber the
 	// normal binary (and vice-versa).
 	const artifactName = `${options.name}${buildSuffix()}`;
-	const cPath = path.join(LOCAL_DIR, `${artifactName}.c`);
-	const binPath = path.join(LOCAL_DIR, artifactName);
+	const outDir = options.outDir ?? LOCAL_DIR;
+	mkdirSync(outDir, { recursive: true });
+	const cPath = path.join(outDir, `${artifactName}.c`);
+	const binPath = path.join(outDir, artifactName);
 	writeFileSync(cPath, options.cSource);
 
 	execFileSync(
