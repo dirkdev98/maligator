@@ -2,7 +2,7 @@
  * mal_regexp.h — C ABI for the `mal_regexp` Rust shim (the `regress` engine).
  *
  * Hand-maintained to mirror the `#[no_mangle] extern "C"` surface in
- * runtime/regexp/src/lib.rs. The C runtime owns all JS-spec glue (the RegExp
+ * runtime/rust/src/regexp.rs. The C runtime owns all JS-spec glue (the RegExp
  * object, lastIndex/global/sticky iteration, result-array shaping, the
  * Symbol.* protocol, $-substitution, the d-flag indices array); this header
  * exposes only flat match primitives.
@@ -37,7 +37,7 @@ uint32_t mal_regexp_abi_version(void);
 
 /* Compile `pattern` (UTF-16) with `flags`. Returns an opaque, leaked handle, or
  * NULL when the pattern is invalid (the C side throws SyntaxError). The handle
- * lives as long as the owning RegExp object and is never freed (no GC). */
+ * lives as long as the owning RegExp object; freed by mal_regexp_free. */
 void *mal_regexp_compile(const uint16_t *pattern, size_t pattern_len, uint32_t flags);
 
 /* Free a handle from mal_regexp_compile (null-tolerant, so the GC finalizer is

@@ -1,6 +1,8 @@
 # Maligator
 
-A JS to C compiler and runtime.
+A lean AOT-compiled JS engine — a JS-to-C compiler and runtime.
+
+**Goals:** performant; small binary size (opt-in features).
 
 ## Getting started
 

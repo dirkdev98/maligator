@@ -439,8 +439,6 @@ bool mal_value_is_truthy(MalValue value) {
         return mal_bigint_value(mal_value_to_bigint(value)) != 0;
     }
 
-    // TODO: Might need to check `valueOf` & BooleanData fields.
-
     // Any object is truthy.
     return true;
 }

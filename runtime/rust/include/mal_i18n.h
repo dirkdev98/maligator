@@ -2,7 +2,7 @@
  * mal_i18n.h — C ABI for the `mal_i18n` Rust shim (ICU4X / temporal_rs).
  *
  * Hand-maintained to mirror the `#[no_mangle] extern "C"` surface in
- * runtime/i18n/src/lib.rs. The C runtime owns all JS-spec glue; this header
+ * runtime/rust/src/lib.rs. The C runtime owns all JS-spec glue; this header
  * exposes only flat i18n primitives.
  */
 #pragma once

@@ -29,12 +29,10 @@ static inline void mal_heap_maybe_trigger_gc(const MalHeap *heap) {
  * is mmap'd when the newest is exhausted. Objects larger than the largest size
  * class go to the large-object space (LOS) as individually-malloc'd records.
  *
- * Phase 1 has no collector: nothing is reclaimed mid-run (cells are never freed,
- * matching the previous bump heap), and everything is released at shutdown by
- * mal_heap_free. The structure (per-block free lists, BLOCK_SIZE-aligned blocks,
- * chunk enumeration) is laid out so the Phase 3 mark/sweep collector can sweep
- * the bitmap, return cells to free lists, and madvise empty blocks to the OS
- * without touching the mutator-facing API.
+ * The structure (per-block free lists, BLOCK_SIZE-aligned blocks, chunk
+ * enumeration) lets the mark/sweep collector sweep the allocation bitmap, return
+ * dead cells to their free lists, and madvise empty blocks back to the OS without
+ * touching the mutator-facing API. mal_heap_free releases everything at shutdown.
  */
 
 #define MAL_GC_BLOCK_SIZE (32u * 1024u)

@@ -132,18 +132,6 @@ export function debugSemanticProgram(program: SemanticProgram) {
 	return output;
 }
 
-/**
- * Semantic analysis entrypoint.
- *
- * Builds the module graph from the entrypoint (loader/graph phase) and runs
- * semantic analysis over every reachable module in evaluation order
- * (dependencies before dependents). A program with no imports is a single-node
- * graph, so this is behaviorally identical to analyzing the one file.
- */
-/**
- * Run semantic analysis over in-memory source, optionally reusing an
- * existing parse. Used by tooling that composes sources without disk files.
- */
 /** Whether a Program begins with a "use strict" Directive Prologue. */
 function hasUseStrictDirective(ast: ESTree.Program): boolean {
 	for (const statement of ast.body) {
@@ -161,6 +149,10 @@ function hasUseStrictDirective(ast: ESTree.Program): boolean {
 	return false;
 }
 
+/**
+ * Run semantic analysis over in-memory source, optionally reusing an
+ * existing parse. Used by tooling that composes sources without disk files.
+ */
 export function analyzeSourceAndRunSemanticAnalysis(
 	contents: string,
 	virtualPath: string,
@@ -457,9 +449,6 @@ function createScopesFromNode(
 	recurseAst(node, createScopesFromNode, file, parentScope);
 }
 
-/**
- * Build up the scope tree and infer strict modes.
- */
 function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 	const scope = file.nodeToScope.get(node);
 	if (!scope) {
@@ -777,8 +766,8 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 	// in a non-arrow function keeps its own-frame loadNewTarget path.
 	if (
 		node.type === "MetaProperty" &&
-		(node as unknown as ESTree.MetaProperty).meta?.name === "new" &&
-		(node as unknown as ESTree.MetaProperty).property?.name === "target"
+		(node).meta?.name === "new" &&
+		(node).property?.name === "target"
 	) {
 		const owner = resolveLexicalThisOwner(scope);
 		if (owner) {

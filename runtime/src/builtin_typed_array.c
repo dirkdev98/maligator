@@ -28,12 +28,6 @@ static MalValue mal_ta_create(MalVm *vm, MalTypedArrayKind kind, u32 length) {
     return mal_value_from_typed_array_object(array);
 }
 
-// TypedArraySpeciesCreate(exemplar, «length»): construct via the exemplar's
-// constructor's @@species (defaulting to the matching %TypedArray% intrinsic),
-// then require the result to be a non-out-of-bounds TypedArray at least `length`
-// long. Returns false with a pending throw on any abrupt step (used by the
-// methods that build a new same-kind array: slice/map/filter/with/toReversed/
-// toSorted).
 // SpeciesConstructor(exemplar, defaultCtor): exemplar.constructor, then its
 // @@species (defaulting to the matching %TypedArray% intrinsic when either is
 // undefined/null; a non-object constructor or non-constructor @@species throws).
@@ -1671,7 +1665,7 @@ static i32 mal_hex_decode_char(c16 c) {
     return -1;
 }
 
-/** ValidateUint8Array: receiver must be a (non-out-of-bounds) Uint8Array. */
+/** ValidateUint8Array: receiver must be a Uint8Array. */
 static MalTypedArrayObject *mal_ta_uint8_this(MalVm *vm, MalValue this_value) {
     if (!mal_value_is_typed_array_object(this_value) ||
         mal_value_to_typed_array_object(this_value)->kind != MAL_TA_UINT8) {

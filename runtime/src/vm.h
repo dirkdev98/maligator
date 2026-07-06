@@ -896,7 +896,7 @@ typedef struct MalVm {
      * Promises that rejected while unhandled (no reject handler attached at
      * rejection time). Reported at the microtask checkpoint unless a handler was
      * attached before then (re-checked via [[PromiseIsHandled]]). A growable
-     * array of promise values; a GC root once tracing exists.
+     * array of promise values; traced as a root.
      */
     MalValue *unhandled_rejections;
     i32 unhandled_count;
@@ -992,8 +992,7 @@ typedef struct MalVm {
      * Captured stack traces, indexed by id. An Error stores its capture's id (an
      * i32) under a private property; the .stack getter looks the trace up here
      * and formats it lazily. Growable, never compacted — like the symbol-registry
-     * and unhandled-rejection roots it leaks until VM teardown (a GC root once
-     * tracing exists). Freed in mal_vm_free.
+     * and unhandled-rejection roots it leaks until VM teardown. Freed in mal_vm_free.
      */
     MalStackTrace **captured_traces;
     i32 captured_trace_count;

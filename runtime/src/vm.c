@@ -857,7 +857,7 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
     while (vm->frame_count > target_frame_count) {
         // GC safepoint poll. Polling once per dispatched
         // instruction covers both loop back-edges and call returns. Near-free
-        // until the collector raises mal_gc_poll (always false in Phase 2).
+        // until the collector raises mal_gc_poll.
         if (mal_gc_poll) {
             mal_gc_safepoint(vm);
         }

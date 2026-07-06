@@ -526,9 +526,6 @@ static MalObject *mal_builtin_map_scaffold(
     return prototype;
 }
 
-/**
- * Define a `size` accessor over the given getter callback.
- */
 static void mal_builtin_map_define_size(MalVm *vm, MalObject *prototype, MalNativeFunctionCallback getter) {
     MalPropertyDesc size_desc = {
         .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,

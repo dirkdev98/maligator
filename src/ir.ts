@@ -201,10 +201,6 @@ type BindingLocation =
 	  };
 
 /**
- * Class body context carried by constructor and method functions so super
- * references can reach the parent class through its captured binding.
- */
-/**
  * A single private member's resolution, shared by every function of the class
  * through the class context. Exactly one of field/method/get/set is populated:
  * a field carries its own-property key symbol, a method carries the shared
@@ -252,6 +248,10 @@ type IRStaticElement =
 	| { kind: "field"; entry: IRInstanceFieldPlanEntry }
 	| { kind: "block"; body: Array<ESTree.Statement> };
 
+/**
+ * Class body context carried by constructor and method functions so super
+ * references can reach the parent class through its captured binding.
+ */
 interface IRClassContext {
 	superBinding?: Binding;
 
@@ -6271,14 +6271,6 @@ function compileVariableDeclaration(
 }
 
 /**
- * Expression compilation dispatch.
- *
- * Expressions always return the virtual register index they used.
- *
- * nameHint carries the NamedEvaluation name for anonymous function and class
- * expressions: the binding or property name the value is assigned to.
- */
-/**
  * Resume mode codes written by the runtime into a yield's mode register and
  * matched by the dispatch below. Must stay in sync with MalGeneratorResumeMode
  * (NEXT = 0 is the fall-through and needs no comparison).
@@ -6722,6 +6714,14 @@ function compileAwaitRegister(
 	return emitResumeDispatch(fn, cursor, valueDst, modeDst);
 }
 
+/**
+ * Expression compilation dispatch.
+ *
+ * Expressions always return the virtual register index they used.
+ *
+ * nameHint carries the NamedEvaluation name for anonymous function and class
+ * expressions: the binding or property name the value is assigned to.
+ */
 function compileExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,

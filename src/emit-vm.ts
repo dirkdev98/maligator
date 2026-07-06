@@ -6,9 +6,6 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 
 type VmBinaryOperator = Extract<VmInstruction, { opcode: "BINARY" }>["operator"];
 
-/**
- * Emit a C translation unit with the static MalVmDefinition data.
- */
 export interface EmitOptions {
 	/**
 	 * Suffix for all emitted symbols, so multiple definitions can live in a
@@ -156,6 +153,9 @@ function handlerArrayBody(fn: VmDefinition["functions"][number]): string {
 		.join("\n");
 }
 
+/**
+ * Emit a C translation unit with the static MalVmDefinition data.
+ */
 export function emitVmDefinition(definition: VmDefinition, options: EmitOptions = {}) {
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
@@ -816,9 +816,6 @@ function emitCallArguments(args: Array<number>) {
 	return `(const i32[]) { ${args.join(", ")} }`;
 }
 
-/**
- * Convert operator to enum
- */
 export function emitBinaryOperator(operator: VmBinaryOperator) {
 	switch (operator) {
 		case "+":

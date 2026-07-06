@@ -549,9 +549,6 @@ export type VmInstruction =
 			operator: IRUnaryOperator;
 	  };
 
-/**
- * Lower optimized IR to a VM definition that can then be emitted as C.
- */
 export interface VmDefinitionStats {
 	functionCount: number;
 	instructionCount: number;
@@ -592,6 +589,9 @@ export function vmDefinitionStats(definition: VmDefinition): VmDefinitionStats {
 	return { functionCount: definition.functions.length, instructionCount };
 }
 
+/**
+ * Lower optimized IR to a VM definition that can then be emitted as C.
+ */
 export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDefinition {
 	// Build the debug-info file table: distinct source paths in first-seen order.
 	const files: Array<string> = [];

@@ -630,13 +630,6 @@ var verifyPrimordialCallableProperty = verifyCallableProperty;
 
 /// --------
 
-// verifyProperty(Array.prototype.map, "name", {
-//   value: "map",
-//   writable: false,
-//   enumerable: false,
-//   configurable: true
-// });
-
 function x({ quix }) {
 	function y(arg) {}
 }

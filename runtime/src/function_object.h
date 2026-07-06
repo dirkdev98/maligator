@@ -65,9 +65,6 @@ typedef struct MalNativeFunctionObject {
      * when the function carries none. Created via
      * mal_native_function_object_new_with_slots; a pair of functions can share
      * one mutable cell by storing the same heap object in a slot.
-     *
-     * TODO(gc): a GC root once tracing exists (these keep captured values
-     * reachable, like MalEnv slots and bound-function arguments).
      */
     MalValue *slots;
     i32 slot_count;

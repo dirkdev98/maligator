@@ -320,11 +320,11 @@ static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalVa
     return mal_value_from_array_object(array);
 }
 
+static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u32 index, MalValue value);
+
 /**
  * Apply the Array.from mapFn when present; returns false when it threw.
  */
-static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u32 index, MalValue value);
-
 static bool mal_builtin_array_from_map(MalVm *vm, MalValue map_fn, MalValue this_arg, u32 index, MalValue *element) {
     if (mal_value_is_undefined(map_fn)) {
         return true;

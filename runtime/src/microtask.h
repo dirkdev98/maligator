@@ -17,9 +17,6 @@ typedef enum MalJobKind {
  * A queued microtask. Jobs are drained FIFO at a baseline frame count by
  * mal_vm_drain_microtasks; running one may enqueue further jobs (the queue
  * grows during the drain and the loop continues until it empties).
- *
- * TODO(gc): the queue, and every MalValue a pending job holds, are GC roots
- * once tracing exists — a job keeps its handler/capability/argument reachable.
  */
 typedef struct MalJob {
     struct MalJob *next;

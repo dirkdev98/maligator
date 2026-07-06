@@ -19,11 +19,8 @@
  * epoch (an integral f64, or NaN). All calendar math is pure proleptic-Gregorian
  * arithmetic done here in C; the spec mandates the proleptic Gregorian calendar
  * only, so this never touches ICU4X/temporal_rs. The single data-dependent piece
- * is the local timezone offset (LocalTZA), routed through date_local_offset_ms.
- *
- * TODO(tz) #6: date_local_offset_ms currently returns 0 (local == UTC). It will
- * be replaced by a bundled-tzdb FFI call (mal_i18n) so the local getX/setX and
- * the toString timezone suffix become correct + deterministic.
+ * is the local timezone offset (LocalTZA), resolved via the bundled tzdb
+ * (mal_i18n_local_offset_ms).
  */
 
 static const f64 MS_PER_SECOND = 1000.0;
@@ -226,7 +223,7 @@ static f64 date_make_full_year(f64 year) {
 }
 
 // ---------------------------------------------------------------------------
-// Local time zone (LocalTZA). Stubbed to UTC for now; #6 wires the tz offset.
+// Local time zone (LocalTZA), resolved via the bundled tzdb (mal_i18n).
 // ---------------------------------------------------------------------------
 
 /** LocalTime(t): UTC -> local, via the system zone's offset (bundled tzdb). */
@@ -254,7 +251,6 @@ static f64 date_now_ms(void) {
 
 // ---------------------------------------------------------------------------
 // Date.parse — the Date Time String Format (§21.4.1.18, ISO 8601 simplified).
-// TODO(date) #12: also accept the toString()/toUTCString() output for round-trip.
 // ---------------------------------------------------------------------------
 
 typedef struct {

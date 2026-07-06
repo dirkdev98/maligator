@@ -35,9 +35,7 @@
 
 /*
  * Mutator-contract state + hooks. The flags stay false and the SATB hook is a
- * no-op until concurrent marking is enabled; the stop-the-world collector below
- * runs only when invoked explicitly (the gc() host hook), never from the
- * allocator or a safepoint, so an ordinary run never collects.
+ * no-op until concurrent marking is enabled.
  */
 
 #if MAL_GC_CONCURRENT

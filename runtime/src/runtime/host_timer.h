@@ -19,7 +19,7 @@ typedef struct MalObject MalObject;
  * Callbacks run on the main execution context (not a worker fiber), matching the
  * single-threaded event-loop semantics of the web platform; actors/fibers are a
  * separate concern. Each pending task holds its callback + extra args, which the
- * collector roots (mal_host_timers_gc_scan) so they survive until the task runs.
+ * collector roots (mal_host_timers_scan_roots) so they survive until the task runs.
  */
 
 typedef struct MalHostTimer {
@@ -49,9 +49,6 @@ void mal_host_clear_timeout(MalVm *vm, i64 id);
 /* Drive the event loop until the isolate is idle (no timers, fd ops, or
  * microtasks). Runs after the top-level program's synchronous phase. */
 void mal_host_run_event_loop(MalVm *vm);
-
-/* (GC roots the pending callbacks + args by walking vm->host_timers directly in
- * mal_gc_scan_roots — no separate hook needed.) */
 
 /* Free all remaining timer tasks (teardown). */
 void mal_host_timers_free(MalVm *vm);

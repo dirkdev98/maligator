@@ -7,9 +7,6 @@
  * Backing storage for Map/Set/WeakMap/WeakSet instances. The heap type
  * distinguishes map-shaped (key -> value) from set-shaped (key only) use;
  * the weak flag brands the Weak* variants on the shared layout.
- *
- * TODO(gc): Weak* collections hold strong references. Without a GC this is
- * observationally correct (no iteration surface, no finalization).
  */
 typedef struct MalMapObject {
     MalObject object;

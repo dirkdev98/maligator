@@ -2051,7 +2051,7 @@ static MalValue intl_display_names_constructor(MalVm *vm, MalValue this_value, c
     if (!ok) {
         return mal_value_new_undefined();
     }
-    // `type` is required (no fallback) -> RangeError("undefined ... type").
+    // `type` is required (no fallback); absent -> TypeError below.
     MalString *type = intl_option_enum(vm, options, "type", TYPES, countof(TYPES), nullptr, &ok);
     if (!ok) {
         return mal_value_new_undefined();

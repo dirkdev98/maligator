@@ -12,7 +12,6 @@
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
-#include "vm_ops.h"
 
 static bool mal_builtin_number_is_whitespace(c16 code_unit) {
     return (code_unit >= 0x09 && code_unit <= 0x0D) ||

@@ -86,7 +86,7 @@ fn utf16_to_codepoints(units: &[u16]) -> Vec<u32> {
 
 /// Compile a pattern (UTF-16) with the given flag bitmask. Returns an opaque,
 /// leaked handle (a boxed `CompiledPattern`), or NULL if the pattern is invalid
-/// — the C side maps NULL to a SyntaxError. Never freed (bump allocator, no GC).
+/// — the C side maps NULL to a SyntaxError. Freed by the C side via mal_regexp_free.
 #[no_mangle]
 pub unsafe extern "C" fn mal_regexp_compile(
     pattern: *const u16,

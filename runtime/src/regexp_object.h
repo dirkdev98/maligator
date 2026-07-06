@@ -26,13 +26,13 @@ typedef enum MalRegExpFlag {
 
 /**
  * A RegExp object: an ordinary object plus the [[RegExpMatcher]] (the compiled
- * regress handle, host-owned and never freed), [[OriginalSource]], and
+ * regress handle, host-owned), [[OriginalSource]], and
  * [[OriginalFlags]]. `lastIndex` is a spec data property, stored on the object's
  * property table (not a C field). See builtin_regexp.c for the abstract ops.
  */
 typedef struct MalRegExpObject {
     MalObject object;
-    void *matcher;        // [[RegExpMatcher]] — mal_regexp handle (leaked, no GC)
+    void *matcher;        // [[RegExpMatcher]] — mal_regexp handle (freed by the GC finalizer)
     MalString *source;    // [[OriginalSource]] (the raw pattern; .source escapes it)
     MalString *flags;     // [[OriginalFlags]] (the flags string as given)
     u32 flag_bits;        // parsed MalRegExpFlag bits (cache of `flags`)
