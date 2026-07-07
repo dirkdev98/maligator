@@ -123,6 +123,20 @@ function runtimeArchivePaths(buildDir: string): Array<string> {
 }
 
 /**
+ * The three runtime archive paths for a C-build-config suffix, named so the size
+ * bench can stat the archives matching each matrix config ("" = the canonical
+ * build dir). The single source of truth for the per-suffix archive locations.
+ */
+export function localRuntimeArchivePaths(cacheSuffix = ""): {
+	runtime: string;
+	host: string;
+	engine: string;
+} {
+	const [runtime, host, engine] = runtimeArchivePaths(buildDirFor(cacheSuffix));
+	return { runtime: runtime!, host: host!, engine: engine! };
+}
+
+/**
  * Configure and build the three runtime archives (engine / host / runtime) into a
  * local build directory at -O2. Returns their static-archive paths in link order,
  * which the final cc links together (static + optimized). Exported so the vitest

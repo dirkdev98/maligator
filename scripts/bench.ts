@@ -5,7 +5,10 @@
  *   node scripts/bench.ts [size|language|gc|http ...] [--runs N] [--update]
  *
  * Benches (default: all):
- *   - size      linked binary + per-archive bytes (the "small binary" goal). No V8 compare.
+ *   - size      linked binary + per-archive bytes across a build-config matrix
+ *               (full / no-eval / no-intl / minimal) — the "small binary" goal, one
+ *               row per config so each feature flag's marginal bytes are tracked. No
+ *               V8 compare.
  *   - language  bench/language.js wall time vs Node/V8 (wide instruction coverage).
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
  *               wall, peak RSS, max GC pause (macOS: RSS/pauses via /usr/bin/time -l
@@ -23,6 +26,10 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
+import { buildDerivationFromConfig, resolveBuildConfig } from "../src/build-config.ts";
+import type { MaligatorBuildConfig } from "../src/build-config.ts";
+import { localRuntimeArchivePaths } from "../src/local-build.ts";
+import { rustLibPath } from "../src/rust-build.ts";
 import { buildNativeBinary, HOST_MAIN } from "../src/test-harness.ts";
 
 const BASELINE_FILE = "bench/baseline.json";
@@ -55,7 +62,8 @@ interface HttpMetrics {
 interface Entry {
 	commit: string;
 	dirty: boolean;
-	size?: SizeMetrics;
+	/** Per-config binary/archive bytes (keyed by SIZE_PROFILES name). */
+	size?: Record<string, SizeMetrics>;
 	language?: LanguageMetrics;
 	gc?: Record<string, GcWorkload>;
 	http?: HttpMetrics | null;
@@ -91,21 +99,47 @@ function timeCommand(
 
 // ---- size -----------------------------------------------------------------
 
-function benchSize(): SizeMetrics {
-	// Building the language fixture (default test262 main, -O2) also (re)builds the
-	// three runtime archives we measure.
-	const binary = buildNativeBinary({
-		fixture: "bench/language.js",
-		name: "bench-language",
-	});
-	const lib = ".cache/local/lib";
-	return {
-		binaryBytes: fileBytes(binary),
-		runtimeArchiveBytes: fileBytes(`${lib}/libMalRuntime.a`),
-		hostArchiveBytes: fileBytes(`${lib}/libMalHost.a`),
-		engineArchiveBytes: fileBytes(`${lib}/libLibMaligator.a`),
-		rustArchiveBytes: fileBytes(".cache/cargo-target/release/libmal_rust.a"),
-	};
+/** The floor program: binary size is config-dominated, so the fixture is fixed. */
+const SIZE_FIXTURE = "bench/hello-world.js";
+
+/**
+ * The build-config matrix the size bench measures. Each is a real
+ * {@link MaligatorBuildConfig} resolved through the exact path a user build hits,
+ * so a profile's numbers reflect what shipping that config actually costs. `full`
+ * is the canonical dev build (eval + Intl on → the unsuffixed archives); `minimal`
+ * is the product default (eval + Intl off). The `no-*` rows isolate one axis so a
+ * feature's marginal bytes are directly readable. New feature flags (RegExp, URL,
+ * …) add rows here as they land, keeping each flag's win a tracked number.
+ */
+const SIZE_PROFILES: Array<{ name: string; config: MaligatorBuildConfig }> = [
+	{ name: "full", config: { engine: { eval: true, intl: { enabled: true } } } },
+	{ name: "no-eval", config: { engine: { eval: false, intl: { enabled: true } } } },
+	{ name: "no-intl", config: { engine: { eval: true, intl: { enabled: false } } } },
+	// Product defaults (eval + Intl off) — the realistic deployed floor.
+	{ name: "minimal", config: {} },
+];
+
+function benchSize(): Record<string, SizeMetrics> {
+	const result: Record<string, SizeMetrics> = {};
+	for (const profile of SIZE_PROFILES) {
+		const config = resolveBuildConfig(profile.config);
+		const { cacheSuffix, rustCacheSuffix } = buildDerivationFromConfig(config);
+		// Building the fixture also (re)builds the archives for this config's suffix.
+		const binary = buildNativeBinary({
+			fixture: SIZE_FIXTURE,
+			name: `bench-size-${profile.name}`,
+			config,
+		});
+		const archives = localRuntimeArchivePaths(cacheSuffix);
+		result[profile.name] = {
+			binaryBytes: fileBytes(binary),
+			runtimeArchiveBytes: fileBytes(archives.runtime),
+			hostArchiveBytes: fileBytes(archives.host),
+			engineArchiveBytes: fileBytes(archives.engine),
+			rustArchiveBytes: fileBytes(rustLibPath(rustCacheSuffix)),
+		};
+	}
+	return result;
 }
 
 // ---- language (vs V8) -----------------------------------------------------
@@ -268,8 +302,10 @@ function loadBaseline(): { entries: Array<Entry> } {
 	return JSON.parse(readFileSync(BASELINE_FILE, "utf-8")) as { entries: Array<Entry> };
 }
 
-function kb(bytes: number): string {
-	return `${(bytes / 1024).toFixed(1)}KB`;
+function humanBytes(bytes: number): string {
+	return bytes >= 1024 * 1024
+		? `${(bytes / (1024 * 1024)).toFixed(2)}MB`
+		: `${(bytes / 1024).toFixed(1)}KB`;
 }
 
 function delta(
@@ -288,23 +324,28 @@ function delta(
 function report(entry: Entry, previous: Entry | undefined): void {
 	console.log(`\n=== bench @ ${entry.commit}${entry.dirty ? " (dirty)" : ""} ===`);
 	if (entry.size) {
-		const p = previous?.size;
-		console.log("size:");
-		console.log(
-			`  binary   ${kb(entry.size.binaryBytes)}${delta(entry.size.binaryBytes, p?.binaryBytes)}`,
-		);
-		console.log(
-			`  runtime  ${kb(entry.size.runtimeArchiveBytes)}${delta(entry.size.runtimeArchiveBytes, p?.runtimeArchiveBytes)}`,
-		);
-		console.log(
-			`  host     ${kb(entry.size.hostArchiveBytes)}${delta(entry.size.hostArchiveBytes, p?.hostArchiveBytes)}`,
-		);
-		console.log(
-			`  engine   ${kb(entry.size.engineArchiveBytes)}${delta(entry.size.engineArchiveBytes, p?.engineArchiveBytes)}`,
-		);
-		console.log(
-			`  rust     ${kb(entry.size.rustArchiveBytes)}${delta(entry.size.rustArchiveBytes, p?.rustArchiveBytes)}`,
-		);
+		console.log("size (per build-config profile):");
+		for (const [name, m] of Object.entries(entry.size)) {
+			// Diff against the same profile in the previous entry (undefined the first
+			// run after the metric reshaped, which just shows no delta).
+			const p = previous?.size?.[name];
+			console.log(`  ${name}`);
+			console.log(
+				`    binary   ${humanBytes(m.binaryBytes)}${delta(m.binaryBytes, p?.binaryBytes)}`,
+			);
+			console.log(
+				`    runtime  ${humanBytes(m.runtimeArchiveBytes)}${delta(m.runtimeArchiveBytes, p?.runtimeArchiveBytes)}`,
+			);
+			console.log(
+				`    host     ${humanBytes(m.hostArchiveBytes)}${delta(m.hostArchiveBytes, p?.hostArchiveBytes)}`,
+			);
+			console.log(
+				`    engine   ${humanBytes(m.engineArchiveBytes)}${delta(m.engineArchiveBytes, p?.engineArchiveBytes)}`,
+			);
+			console.log(
+				`    rust     ${humanBytes(m.rustArchiveBytes)}${delta(m.rustArchiveBytes, p?.rustArchiveBytes)}`,
+			);
+		}
 	}
 	if (entry.language) {
 		const p = previous?.language;

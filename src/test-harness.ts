@@ -16,13 +16,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import * as path from "node:path";
-import {
-	buildConfigCacheSuffix,
-	intlCargoFeatures,
-	intlDisabledDefines,
-	resolveBuildConfig,
-	rustConfigCacheSuffix,
-} from "./build-config.ts";
+import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
+import type { ResolvedBuildConfig } from "./build-config.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
@@ -76,6 +71,13 @@ export interface BuildOptions {
 	 * false.
 	 */
 	intlFeatures?: Array<string>;
+	/**
+	 * A fully-resolved build config to build under. When provided it wins over the
+	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` fields (used by the size
+	 * bench to build a matrix of real config profiles); otherwise a config is
+	 * reconstructed from those flags.
+	 */
+	config?: ResolvedBuildConfig;
 }
 
 /**
@@ -91,16 +93,19 @@ export function buildNativeBinary(options: BuildOptions): string {
 	allocateRegisters(ir);
 	const definition = lowerIrProgramToVmDefinition(ir);
 	const cSource = emitVmDefinition(definition, { compiled: options.compiled ?? true });
-	const evalEnabled = options.evalEnabled ?? true;
-	const intlEnabled = options.intlEnabled ?? true;
 	// Reuse the real build-config resolution so cache suffixes / cargo features / C
 	// defines match the CLI exactly (canonical build → "" suffix → shared archives).
-	const config = resolveBuildConfig({
-		engine: {
-			eval: evalEnabled,
-			intl: { enabled: intlEnabled, features: options.intlFeatures ?? [] },
-		},
-	});
+	const config =
+		options.config ??
+		resolveBuildConfig({
+			engine: {
+				eval: options.evalEnabled ?? true,
+				intl: {
+					enabled: options.intlEnabled ?? true,
+					features: options.intlFeatures ?? [],
+				},
+			},
+		});
 	return buildLocalBinary({
 		name: options.name,
 		cSource,
@@ -108,12 +113,7 @@ export function buildNativeBinary(options: BuildOptions): string {
 		mainFile: options.mainFile,
 		outDir: options.outDir,
 		skipRuntimeBuild: options.skipRuntimeBuild,
-		evalEnabled,
-		intlEnabled,
-		intlServiceDefines: intlDisabledDefines(config),
-		intlFeatures: intlCargoFeatures(config),
-		cacheSuffix: buildConfigCacheSuffix(config),
-		rustCacheSuffix: rustConfigCacheSuffix(config),
+		...buildDerivationFromConfig(config),
 	});
 }
 

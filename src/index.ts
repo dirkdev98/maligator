@@ -4,11 +4,8 @@ import * as path from "node:path";
 import {
 	assertEvalPolicy,
 	BuildConfigError,
-	buildConfigCacheSuffix,
-	intlCargoFeatures,
-	intlDisabledDefines,
+	buildDerivationFromConfig,
 	loadBuildConfig,
-	rustConfigCacheSuffix,
 } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { gmallocEnabled, runEnv } from "./build-flags.ts";
@@ -173,12 +170,7 @@ const binaryPath = buildLocalBinary({
 	name,
 	cSource: output,
 	verbose,
-	evalEnabled: buildConfig.engine.eval,
-	intlEnabled: buildConfig.engine.intl.enabled,
-	intlServiceDefines: intlDisabledDefines(buildConfig),
-	intlFeatures: intlCargoFeatures(buildConfig),
-	cacheSuffix: buildConfigCacheSuffix(buildConfig),
-	rustCacheSuffix: rustConfigCacheSuffix(buildConfig),
+	...buildDerivationFromConfig(buildConfig),
 });
 buildTiming();
 log.info(`Binary: ${binaryPath}`);

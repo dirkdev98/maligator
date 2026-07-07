@@ -351,3 +351,32 @@ export function rustConfigCacheSuffix(config: ResolvedBuildConfig): string {
 	}
 	return shortHash({ intl: config.engine.intl.enabled, services });
 }
+
+/**
+ * The build inputs a resolved config maps to: the C `#if` gates (evalEnabled /
+ * intlEnabled / per-service disable defines), the Rust Cargo features, and the
+ * cache suffixes selecting the matching C + ICU archives. This is the single
+ * config → {@link LocalBuildOptions} projection shared by the CLI (index.ts), the
+ * native test harness, and the size bench, so all three build the exact same
+ * archives for a given config.
+ */
+export interface BuildDerivation {
+	evalEnabled: boolean;
+	intlEnabled: boolean;
+	intlServiceDefines: Array<string>;
+	intlFeatures: Array<string>;
+	cacheSuffix: string;
+	rustCacheSuffix: string;
+}
+
+/** Project a resolved config onto the {@link BuildDerivation} the build layer consumes. */
+export function buildDerivationFromConfig(config: ResolvedBuildConfig): BuildDerivation {
+	return {
+		evalEnabled: config.engine.eval,
+		intlEnabled: config.engine.intl.enabled,
+		intlServiceDefines: intlDisabledDefines(config),
+		intlFeatures: intlCargoFeatures(config),
+		cacheSuffix: buildConfigCacheSuffix(config),
+		rustCacheSuffix: rustConfigCacheSuffix(config),
+	};
+}
