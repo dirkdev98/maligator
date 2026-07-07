@@ -146,15 +146,15 @@ function producedRep(
 		case "createBoolean":
 			return "boolean";
 		case "move":
-			return repOf(instruction.registers[1]!);
+			return repOf(instruction.registers[1]);
 		case "binary": {
 			const op = instruction.operator;
 			if (COMPARE_OPERATORS.has(op)) {
 				return "boolean";
 			}
 			if (NUMBER_FROM_NUMBERS.has(op)) {
-				const left = repOf(instruction.registers[1]!);
-				const right = repOf(instruction.registers[2]!);
+				const left = repOf(instruction.registers[1]);
+				const right = repOf(instruction.registers[2]);
 				if (left === null || right === null) {
 					return null;
 				}
@@ -168,7 +168,7 @@ function producedRep(
 				return "boolean";
 			}
 			if (op === "-" || op === "+" || op === "~") {
-				const src = repOf(instruction.registers[1]!);
+				const src = repOf(instruction.registers[1]);
 				return src === null ? null : src === "number" ? "number" : "boxed";
 			}
 			return "boxed";
