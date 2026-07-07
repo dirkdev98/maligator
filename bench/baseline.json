@@ -113,6 +113,47 @@
           "rustArchiveBytes": 8344248
         }
       }
+    },
+    {
+      "commit": "f9242f0",
+      "dirty": false,
+      "size": {
+        "full": {
+          "binaryBytes": 14847344,
+          "runtimeArchiveBytes": 106944,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 2647472,
+          "rustArchiveBytes": 21746672
+        },
+        "no-eval": {
+          "binaryBytes": 13129976,
+          "runtimeArchiveBytes": 106944,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 945784,
+          "rustArchiveBytes": 21746672
+        },
+        "no-intl": {
+          "binaryBytes": 4315944,
+          "runtimeArchiveBytes": 106944,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 2543736,
+          "rustArchiveBytes": 8344232
+        },
+        "no-web": {
+          "binaryBytes": 14280712,
+          "runtimeArchiveBytes": 78720,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 2647472,
+          "rustArchiveBytes": 21106552
+        },
+        "minimal": {
+          "binaryBytes": 2031592,
+          "runtimeArchiveBytes": 78720,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 842048,
+          "rustArchiveBytes": 7703688
+        }
+      }
     }
   ]
 }
