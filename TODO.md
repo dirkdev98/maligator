@@ -52,6 +52,14 @@ in. `OFF buys` = what dropping the feature gets you.
 - [ ] Don't link ICU4X data when Intl is unused; split locales (today: 11 MB binaries).
 - [ ] Drop the bytecode overlay for always-compiled, no-bail functions (kills the
       dead `MalInstruction` table; forces a clean overlay contract).
+- [ ] **Production build mode** — keeps `-O2` (do NOT trade perf for size in prod) but
+      strips the symbol table (post-link `strip`, or `-Wl,-x`) off by default only in
+      this mode. Measured ~11% (~210 KB) off `minimal`; it drops native symbolication
+      (`nm`/`atos`/crash backtraces) but NOT the engine's own JS stack traces (separate
+      position tables). Distinct from the size-focused profile below (which trades perf).
+      Dev/default builds stay unstripped. `-dead_strip` measured ~1% here (eager
+      intrinsic install roots almost everything + Rust is already LTO'd), so it's not
+      the lever — compile-time feature gates are.
 - [ ] Size-focused build profile (`-Os`/LTO/`--gc-sections`/musl-static/strip);
       measure per-feature bytes; feed the size gate above.
 
