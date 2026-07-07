@@ -86,13 +86,27 @@ describe("loadBuildConfig", () => {
 		writeConfig(dir, "{ not json");
 		expect(() => loadBuildConfig(undefined, dir)).toThrow(BuildConfigError);
 	});
+
+	it("hard-errors on locale subsetting (not yet supported)", () => {
+		const dir = tmpdir();
+		writeConfig(dir, JSON.stringify({ engine: { intl: { enabled: true, languages: ["en"] } } }));
+		expect(() => loadBuildConfig(undefined, dir)).toThrow(/locale subsetting.*not yet supported/);
+	});
+
+	it("allows languages when Intl is disabled (irrelevant, no error)", () => {
+		const dir = tmpdir();
+		writeConfig(dir, JSON.stringify({ engine: { intl: { enabled: false, languages: ["en"] } } }));
+		expect(loadBuildConfig(undefined, dir).engine.intl.enabled).toBe(false);
+	});
 });
 
 describe("buildConfigCacheSuffix", () => {
-	it("is empty for the default eval-on archive", () => {
-		expect(buildConfigCacheSuffix(resolveBuildConfig({ engine: { eval: true } }))).toBe(
-			"",
-		);
+	it("is empty for the canonical (eval-on, Intl-on) archive", () => {
+		expect(
+			buildConfigCacheSuffix(
+				resolveBuildConfig({ engine: { eval: true, intl: { enabled: true } } }),
+			),
+		).toBe("");
 	});
 
 	it("is a stable non-empty hash for eval-off", () => {

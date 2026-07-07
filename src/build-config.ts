@@ -222,7 +222,20 @@ export function loadBuildConfig(
 	}
 
 	validate(parsed, CONFIG_SCHEMA, "");
-	return resolveBuildConfig(parsed as MaligatorBuildConfig);
+	const config = resolveBuildConfig(parsed as MaligatorBuildConfig);
+
+	// Locale subsetting (engine.intl.languages) is not yet wired: it needs an
+	// icu4x-datagen step feeding ICU4X_DATA_DIR, which is blocked on the ICU4X
+	// marker-contract (`--markers all` omits the compact-decimal markers icu_decimal
+	// references; `--markers-for-bin` finds none in our LTO'd staticlib). Fail loud
+	// rather than silently bake ALL locales into a dir that claims to be a subset.
+	if (config.engine.intl.enabled && config.engine.intl.languages.length > 0) {
+		throw new BuildConfigError(
+			"engine.intl.languages (locale subsetting) is not yet supported. Omit it to " +
+				"include all locales, or set engine.intl.enabled: false to drop Intl entirely.",
+		);
+	}
+	return config;
 }
 
 /** The normalized (deduped + sorted) selected locale set — stable hash input. */
