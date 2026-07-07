@@ -901,6 +901,10 @@ static MalValue mal_builtin_string_match_like(MalVm *vm, MalValue this_value, Ma
     if (dispatched != 0) {
         return out;
     }
+    // No @@match/@@search on the argument, so the spec coerces it to a fresh RegExp
+    // (new RegExp(arg)) and dispatches to that — inherently a regex operation, so
+    // under engine.regexp:false (regress gone) it throws rather than compiling one.
+#if MAL_REGEXP
     MalString *s = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -922,6 +926,12 @@ static MalValue mal_builtin_string_match_like(MalVm *vm, MalValue this_value, Ma
     MalValue s_value = mal_value_from_string(s);
     MalCompletion completion = mal_vm_call_value(vm, method, rx, &s_value, 1);
     return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
+#else
+    (void) symbol_slot;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "String.prototype.match/matchAll/search requires RegExp, which is disabled (engine.regexp is false)");
+    return mal_value_new_undefined();
+#endif
 }
 
 static MalValue mal_builtin_string_prototype_match(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -981,6 +991,8 @@ static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_
             return out;
         }
     }
+    // Coerce the argument to a fresh global RegExp — a regex op, so gated on regexp.
+#if MAL_REGEXP
     MalString *s = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -1002,6 +1014,11 @@ static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_
     MalValue s_value = mal_value_from_string(s);
     MalCompletion completion = mal_vm_call_value(vm, method, rx, &s_value, 1);
     return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
+#else
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "String.prototype.matchAll requires RegExp, which is disabled (engine.regexp is false)");
+    return mal_value_new_undefined();
+#endif
 }
 
 static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

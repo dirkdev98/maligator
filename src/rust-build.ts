@@ -46,6 +46,11 @@ export interface RustBuildConfig {
 	 * library from the archive and the `-lc++` link ({@link rustLinkArgs}).
 	 */
 	webPlatform?: boolean;
+	/**
+	 * Whether to compile the RegExp engine (regress) — the `regexp` Cargo feature
+	 * (engine.regexp). Default true. Off drops the regex engine + its Unicode tables.
+	 */
+	regexp?: boolean;
 	locales?: Array<string>;
 	cacheSuffix?: string;
 }
@@ -111,15 +116,20 @@ export function ensureRustLibrary(verbose = false, config: RustBuildConfig = {})
 	// --no-default-features so the archive carries exactly what we ask for:
 	//   - Intl on: the per-service subset, or `intl-full` when no subset is given.
 	//   - web-platform: the URL (ada) parser, when surface.webPlatform is on.
-	// jiff (tz) + regress (RegExp) are non-optional and always compile.
+	//   - regexp: the RegExp engine (regress), when engine.regexp is on.
+	// jiff (tz) is non-optional and always compiles.
 	const features = config.features ?? [];
 	const webPlatform = config.webPlatform ?? true;
+	const regexp = config.regexp ?? true;
 	const wantFeatures: Array<string> = [];
 	if (intlEnabled) {
 		wantFeatures.push(...(features.length > 0 ? features : ["intl-full"]));
 	}
 	if (webPlatform) {
 		wantFeatures.push("web-platform");
+	}
+	if (regexp) {
+		wantFeatures.push("regexp");
 	}
 	const args = ["build", "--release", "--no-default-features"];
 	if (wantFeatures.length > 0) {

@@ -3,6 +3,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import {
 	assertEvalPolicy,
+	assertRegexpPolicy,
 	BuildConfigError,
 	buildDerivationFromConfig,
 	loadBuildConfig,
@@ -18,7 +19,10 @@ import { debugProgramLiveness } from "./liveness.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import { lowerIrProgramToVmDefinition, vmDefinitionStats } from "./lower-vm.ts";
 import { allocateRegisters } from "./register-alloc.ts";
-import { collectDisallowedEvalUsage } from "./semantic-analysis.ts";
+import {
+	collectDisallowedEvalUsage,
+	collectDisallowedRegexpUsage,
+} from "./semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
 import { serializeVmDefinition } from "./serialize-vm.ts";
 import { log } from "./utils.ts";
@@ -84,6 +88,7 @@ semTiming();
 if (!argFlag("--serialize")) {
 	try {
 		assertEvalPolicy(buildConfig, collectDisallowedEvalUsage(semanticProgram));
+		assertRegexpPolicy(buildConfig, collectDisallowedRegexpUsage(semanticProgram));
 	} catch (error) {
 		if (error instanceof BuildConfigError) {
 			log.info(`error: ${error.message}`);

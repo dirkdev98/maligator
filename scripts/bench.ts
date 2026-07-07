@@ -6,9 +6,9 @@
  *
  * Benches (default: all):
  *   - size      linked binary + per-archive bytes across a build-config matrix
- *               (full / no-eval / no-intl / no-web / minimal) — the "small binary"
- *               goal, one row per config so each feature flag's marginal bytes are
- *               tracked. No V8 compare.
+ *               (full / no-eval / no-intl / no-web / no-regexp / minimal) — the
+ *               "small binary" goal, one row per config so each feature flag's
+ *               marginal bytes are tracked. No V8 compare.
  *   - language  bench/language.js wall time vs Node/V8 (wide instruction coverage).
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
  *               wall, peak RSS, max GC pause (macOS: RSS/pauses via /usr/bin/time -l
@@ -141,7 +141,17 @@ const SIZE_PROFILES: Array<{ name: string; config: MaligatorBuildConfig }> = [
 			surface: { webPlatform: false },
 		},
 	},
-	// Product defaults (eval + Intl + web all off) — the realistic deployed floor.
+	{
+		// Isolates the RegExp engine (regress) + its Unicode tables. RegExp defaults
+		// ON (core language), so minimal keeps it — this row shows its cost.
+		name: "no-regexp",
+		config: {
+			engine: { eval: true, regexp: false, intl: { enabled: true } },
+			surface: { webPlatform: true },
+		},
+	},
+	// Product defaults (eval + Intl + web off; regexp ON — core language). The
+	// realistic deployed floor.
 	{ name: "minimal", config: {} },
 ];
 

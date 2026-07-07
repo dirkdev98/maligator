@@ -360,6 +360,59 @@ export function collectDisallowedEvalUsage(
 	return out;
 }
 
+export interface DisallowedRegexpUsage {
+	/** A `/…/` literal or a `new RegExp(...)` / `RegExp(...)` on the global binding. */
+	kind: "literal" | "RegExp";
+	path: string;
+	line: number;
+	column: number;
+}
+
+/**
+ * The syntactic half of the `engine.regexp: false` enforcement: flag regex
+ * literals and `RegExp(...)` / `new RegExp(...)` on the global (undeclared) binding.
+ * The parallel to {@link collectFileEvalUsage}. Bare references (`typeof RegExp`)
+ * are not flagged, and anything this misses (a string coerced by
+ * `String.prototype.match`, an aliased `globalThis.RegExp`) is caught by the runtime
+ * gate (the RegExp intrinsic is not installed, so use throws).
+ */
+function collectFileRegexpUsage(
+	node: ESTree.Node,
+	file: SemanticFile,
+	out: Array<DisallowedRegexpUsage>,
+): void {
+	if (node.type === "Literal" && "regex" in node && node.regex) {
+		const loc = node.loc?.start ?? { line: 0, column: 0 };
+		out.push({ kind: "literal", path: file.path, line: loc.line, column: loc.column });
+	} else if (node.type === "CallExpression" || node.type === "NewExpression") {
+		const callee = node.callee as unknown as ESTree.Node;
+		if (
+			callee.type === "Identifier" &&
+			callee.name === "RegExp" &&
+			file.nodeToBinding.get(callee)?.undeclared
+		) {
+			const loc = callee.loc?.start ?? { line: 0, column: 0 };
+			out.push({ kind: "RegExp", path: file.path, line: loc.line, column: loc.column });
+		}
+	}
+	recurseAst(node, collectFileRegexpUsage, file, out);
+}
+
+/**
+ * Collect every syntactic RegExp use across a program's files (see
+ * {@link collectFileRegexpUsage}). Consumed by the compiler entry points when
+ * `engine.regexp` is false to fail the build with a pointer at the config.
+ */
+export function collectDisallowedRegexpUsage(
+	program: SemanticProgram,
+): Array<DisallowedRegexpUsage> {
+	const out: Array<DisallowedRegexpUsage> = [];
+	for (const file of program.files) {
+		collectFileRegexpUsage(file.ast, file, out);
+	}
+	return out;
+}
+
 /**
  * Build up the scope tree and infer strict modes.
  */

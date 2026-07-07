@@ -64,6 +64,19 @@ typedef size_t usize;
 #define MAL_WEB_PLATFORM 1
 #endif
 
+// Whether this build includes the RegExp engine (regress). Core ECMAScript, so
+// default on; the build config sets `-DMAL_REGEXP=0` (see build-flags.ts) when
+// `engine.regexp` is false, which compiles builtin_regexp.c / regexp_object.c away
+// (RegExp is not installed → `typeof RegExp === "undefined"`), makes the String
+// regex methods (match / matchAll / search, which coerce their arg to a RegExp)
+// throw, and guards the GC finalizer's `mal_regexp_free`. Must be kept in lockstep
+// with the Rust crate's `regexp` Cargo feature (rust-build.ts) — with it off the
+// regress FFI symbols are not linked, so a stray call would fail to link. Pure
+// string ops (split / replace / includes with a string arg) are unaffected.
+#ifndef MAL_REGEXP
+#define MAL_REGEXP 1
+#endif
+
 // Per-ECMA-402-service gates for engine.intl.features. Each defaults to MAL_INTL
 // (so `MAL_INTL=0` forces every service off, and a full Intl build has them all
 // on). A subset build passes `-DMAL_INTL_HAS_<SERVICE>=0` for each UNSELECTED

@@ -78,6 +78,12 @@ export interface BuildOptions {
 	 */
 	webPlatformEnabled?: boolean;
 	/**
+	 * Include the RegExp engine (regress). Defaults to true. Set false to build the
+	 * `engine.regexp: false` archive (no regress; RegExp uninstalled, String regex
+	 * methods throw).
+	 */
+	regexpEnabled?: boolean;
+	/**
 	 * A fully-resolved build config to build under. When provided it wins over the
 	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` / `webPlatformEnabled`
 	 * fields (used by the size bench to build a matrix of real config profiles);
@@ -106,6 +112,7 @@ export function buildNativeBinary(options: BuildOptions): string {
 		resolveBuildConfig({
 			engine: {
 				eval: options.evalEnabled ?? true,
+				regexp: options.regexpEnabled ?? true,
 				intl: {
 					enabled: options.intlEnabled ?? true,
 					features: options.intlFeatures ?? [],

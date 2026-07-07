@@ -122,6 +122,7 @@ export interface FeatureDefineOpts {
 	/** `-DMAL_INTL_HAS_<SERVICE>=0` for each dropped service (subset Intl build). */
 	intlServiceDefines?: Array<string>;
 	webPlatformEnabled?: boolean;
+	regexpEnabled?: boolean;
 }
 
 /**
@@ -140,7 +141,8 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 	const intlFlags =
 		opts.intlEnabled === false ? ["-DMAL_INTL=0"] : (opts.intlServiceDefines ?? []);
 	const webFlag = opts.webPlatformEnabled === false ? ["-DMAL_WEB_PLATFORM=0"] : [];
-	return [...evalFlag, ...intlFlags, ...webFlag];
+	const regexpFlag = opts.regexpEnabled === false ? ["-DMAL_REGEXP=0"] : [];
+	return [...evalFlag, ...intlFlags, ...webFlag, ...regexpFlag];
 }
 
 export function cmakeCFlags(opts: FeatureDefineOpts = {}): string {

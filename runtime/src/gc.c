@@ -803,11 +803,15 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
             break;
         }
         case MAL_HEAP_REGEXP_OBJECT: {
+#if MAL_REGEXP
+            // No regexp objects are ever allocated under engine.regexp:false, so this
+            // finalizer is dead there — and mal_regexp_free (regress FFI) isn't linked.
             MalRegExpObject *re = (MalRegExpObject *) cell;
             if (re->matcher != nullptr) {
                 mal_regexp_free(re->matcher);
                 re->matcher = nullptr;
             }
+#endif
             break;
         }
         case MAL_HEAP_INTL_OBJECT: {

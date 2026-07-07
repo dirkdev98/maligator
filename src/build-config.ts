@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
-import type { DisallowedEvalUsage } from "./semantic-analysis.ts";
+import type { DisallowedEvalUsage, DisallowedRegexpUsage } from "./semantic-analysis.ts";
 
 /**
  * The `maligator.build.json` build configuration (GitHub issue #2). The file is
@@ -12,14 +12,17 @@ import type { DisallowedEvalUsage } from "./semantic-analysis.ts";
  *
  * Every field is optional in the file — {@link resolveBuildConfig} fills defaults.
  * Defaults are deliberately conservative (the "product" defaults): eval OFF, Intl
- * OFF, single-threaded scheduler, only the Maligator surface. Internal tooling
- * (the native test harness, the eval self-host scripts, the test262 runner) opts
- * back in explicitly.
+ * OFF, web platform OFF, single-threaded scheduler, only the Maligator surface. The
+ * one exception is RegExp, which is core ECMAScript and so defaults ON (power users
+ * disable it explicitly). Internal tooling (the native test harness, the eval
+ * self-host scripts, the test262 runner) opts back in explicitly.
  */
 export interface MaligatorBuildConfig {
 	entry?: string;
 	engine?: {
 		eval?: boolean;
+		/** WHATWG RegExp (the regress engine). Core language, so defaults ON. */
+		regexp?: boolean;
 		intl?: {
 			enabled?: boolean;
 			/** Selected ECMA-402 services (see INTL_SERVICES); omitted/[] = all. */
@@ -42,6 +45,7 @@ export interface ResolvedBuildConfig {
 	entry: string | undefined;
 	engine: {
 		eval: boolean;
+		regexp: boolean;
 		intl: { enabled: boolean; features: Array<string>; languages: Array<string> };
 	};
 	host: { scheduler: "single" | "multiprocessing" };
@@ -162,6 +166,7 @@ const CONFIG_SCHEMA: ObjectSchema = {
 		engine: {
 			object: {
 				eval: booleanLeaf,
+				regexp: booleanLeaf,
 				intl: {
 					object: {
 						enabled: booleanLeaf,
@@ -207,6 +212,9 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 		entry: config.entry,
 		engine: {
 			eval: config.engine?.eval ?? false,
+			// RegExp is core ECMAScript, so it defaults ON (unlike eval/Intl/web) —
+			// power users disable it explicitly for size-critical builds.
+			regexp: config.engine?.regexp ?? true,
 			intl: {
 				enabled: config.engine?.intl?.enabled ?? false,
 				features: config.engine?.intl?.features ?? [],
@@ -245,6 +253,32 @@ export function assertEvalPolicy(
 	throw new BuildConfigError(
 		`eval is disabled by your build config (engine.eval is false):\n${sites}\n` +
 			`Enable it with { "engine": { "eval": true } } in maligator.build.json to use eval / new Function.`,
+	);
+}
+
+/**
+ * The compile-time half of `engine.regexp: false` enforcement (the runtime gate —
+ * the RegExp intrinsic simply not being installed — is the other). Given the
+ * statically-detected RegExp uses (from `collectDisallowedRegexpUsage`), throw a
+ * {@link BuildConfigError} pointing at each site and the config knob. A no-op when
+ * regexp is enabled (the default) or nothing was found.
+ */
+export function assertRegexpPolicy(
+	config: ResolvedBuildConfig,
+	usages: Array<DisallowedRegexpUsage>,
+): void {
+	if (config.engine.regexp || usages.length === 0) {
+		return;
+	}
+	const sites = usages
+		.map((u) => {
+			const what = u.kind === "literal" ? "regex literal /…/" : "new RegExp(...)";
+			return `  ${what} at ${u.path}:${u.line}:${u.column}`;
+		})
+		.join("\n");
+	throw new BuildConfigError(
+		`RegExp is disabled by your build config (engine.regexp is false):\n${sites}\n` +
+			`Remove { "engine": { "regexp": false } } from maligator.build.json to use RegExp (it is on by default).`,
 	);
 }
 
@@ -330,12 +364,20 @@ function shortHash(value: unknown): string {
  */
 export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 	// The C archive depends on eval, whether Intl is on, which services are selected
-	// (each flips a -DMAL_INTL_HAS_* define), and web-platform (url.c gating), but NOT
-	// on the locale set (that only changes the Rust/ICU datagen). Empty services =
-	// all; eval + Intl + all-services + web all on = canonical.
+	// (each flips a -DMAL_INTL_HAS_* define), web-platform (url.c gating), and regexp
+	// (builtin_regexp/regexp_object/gc/string gating), but NOT on the locale set (that
+	// only changes the Rust/ICU datagen). Empty services = all; eval + Intl +
+	// all-services + web + regexp all on = canonical.
 	const services = selectedIntlServices(config).sort();
 	const web = config.surface.webPlatform;
-	if (config.engine.eval && config.engine.intl.enabled && services.length === 0 && web) {
+	const regexp = config.engine.regexp;
+	if (
+		config.engine.eval &&
+		config.engine.intl.enabled &&
+		services.length === 0 &&
+		web &&
+		regexp
+	) {
 		return "";
 	}
 	return shortHash({
@@ -343,23 +385,25 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 		intl: config.engine.intl.enabled,
 		services,
 		web,
+		regexp,
 	});
 }
 
 /**
  * The Rust archive's cache suffix. It depends on the Intl axis (which icu
- * sub-crates + baked data compile) and `surface.webPlatform` (whether the ada URL
- * parser compiles), but NOT on `engine.eval` — so toggling eval does not trigger a
- * multi-minute ICU rebuild. "" for the canonical Intl-on / all-services / web-on
- * archive.
+ * sub-crates + baked data compile), `surface.webPlatform` (whether the ada URL
+ * parser compiles), and `engine.regexp` (whether regress compiles), but NOT on
+ * `engine.eval` — so toggling eval does not trigger a multi-minute ICU rebuild. ""
+ * for the canonical Intl-on / all-services / web-on / regexp-on archive.
  */
 export function rustConfigCacheSuffix(config: ResolvedBuildConfig): string {
 	const services = selectedIntlServices(config).sort();
 	const web = config.surface.webPlatform;
-	if (config.engine.intl.enabled && services.length === 0 && web) {
+	const regexp = config.engine.regexp;
+	if (config.engine.intl.enabled && services.length === 0 && web && regexp) {
 		return "";
 	}
-	return shortHash({ intl: config.engine.intl.enabled, services, web });
+	return shortHash({ intl: config.engine.intl.enabled, services, web, regexp });
 }
 
 /**
@@ -376,6 +420,7 @@ export interface BuildDerivation {
 	intlServiceDefines: Array<string>;
 	intlFeatures: Array<string>;
 	webPlatformEnabled: boolean;
+	regexpEnabled: boolean;
 	cacheSuffix: string;
 	rustCacheSuffix: string;
 }
@@ -388,6 +433,7 @@ export function buildDerivationFromConfig(config: ResolvedBuildConfig): BuildDer
 		intlServiceDefines: intlDisabledDefines(config),
 		intlFeatures: intlCargoFeatures(config),
 		webPlatformEnabled: config.surface.webPlatform,
+		regexpEnabled: config.engine.regexp,
 		cacheSuffix: buildConfigCacheSuffix(config),
 		rustCacheSuffix: rustConfigCacheSuffix(config),
 	};

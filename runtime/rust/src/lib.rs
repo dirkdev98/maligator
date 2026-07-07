@@ -13,7 +13,10 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The RegExp FFI (regress engine). See src/regexp.rs.
+// The RegExp FFI (regress engine). Gated behind the `regexp` Cargo feature
+// (engine.regexp) so a non-regex build drops the engine + its Unicode tables. See
+// src/regexp.rs.
+#[cfg(feature = "regexp")]
 pub mod regexp;
 
 // The WHATWG URL FFI (ada-url crate). Gated behind the `web-platform` Cargo
@@ -35,8 +38,8 @@ pub extern "C" fn mal_i18n_abi_version() -> u32 {
 
 // The Intl (ICU4X) surface. Gated behind the `intl` Cargo feature so an
 // `engine.intl: false` build compiles the ICU crates away entirely — dropping the
-// ~9 MB of baked CLDR data. tz (jiff) and regexp stay unconditional; url is gated
-// by `web-platform` (above). The
+// ~9 MB of baked CLDR data. tz (jiff) stays unconditional; regexp is gated by
+// `regexp` and url by `web-platform` (above). The
 // `#[no_mangle]` symbols export from inside this module regardless of Rust
 // visibility, so the C side links them exactly as before when the feature is on.
 #[cfg(feature = "intl")]

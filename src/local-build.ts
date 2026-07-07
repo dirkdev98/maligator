@@ -29,6 +29,8 @@ interface RuntimeBuildDimensions {
 	intlFeatures?: Array<string>;
 	/** Whether to compile the WHATWG URL (ada) surface (`web-platform`). Default true. */
 	webPlatformEnabled?: boolean;
+	/** Whether to compile the RegExp engine (regress / `regexp` feature). Default true. */
+	regexpEnabled?: boolean;
 	/** C-build-config hash suffix (build-config.ts). Default "" (canonical archive). */
 	cacheSuffix?: string;
 	/** Rust/Intl-config hash suffix selecting the ICU archive. Default "" (all services). */
@@ -102,6 +104,14 @@ export interface LocalBuildOptions {
 	webPlatformEnabled?: boolean;
 
 	/**
+	 * Whether this binary includes the RegExp engine (regress). Defaults to true. Set
+	 * false for an `engine.regexp: false` build: `-DMAL_REGEXP=0` on the C side
+	 * (builtin_regexp.c/regexp_object.c compile away, String regex methods throw) and
+	 * the regress-less Rust archive keyed by {@link rustCacheSuffix}.
+	 */
+	regexpEnabled?: boolean;
+
+	/**
 	 * C-build-config hash (build-config.ts `buildConfigCacheSuffix`) selecting the
 	 * C build dir / archive. Defaults to "" (canonical). Consistent with
 	 * {@link evalEnabled} + {@link intlEnabled}.
@@ -161,6 +171,7 @@ export function ensureRuntimeLibrary(
 	const intlServiceDefines = dimensions.intlServiceDefines ?? [];
 	const intlFeatures = dimensions.intlFeatures ?? [];
 	const webPlatformEnabled = dimensions.webPlatformEnabled ?? true;
+	const regexpEnabled = dimensions.regexpEnabled ?? true;
 	const cacheSuffix = dimensions.cacheSuffix ?? "";
 	const rustCacheSuffix = dimensions.rustCacheSuffix ?? "";
 	const buildDir = buildDirFor(cacheSuffix);
@@ -184,7 +195,7 @@ export function ensureRuntimeLibrary(
 			"runtime",
 			"-B",
 			buildDir,
-			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, intlEnabled, intlServiceDefines, webPlatformEnabled })}`,
+			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, intlEnabled, intlServiceDefines, webPlatformEnabled, regexpEnabled })}`,
 		],
 		{
 			stdio,
@@ -205,6 +216,7 @@ export function ensureRuntimeLibrary(
 		intlEnabled,
 		features: intlFeatures,
 		webPlatform: webPlatformEnabled,
+		regexp: regexpEnabled,
 		cacheSuffix: rustCacheSuffix,
 	});
 
@@ -257,6 +269,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 	const evalEnabled = options.evalEnabled ?? true;
 	const intlEnabled = options.intlEnabled ?? true;
 	const webPlatformEnabled = options.webPlatformEnabled ?? true;
+	const regexpEnabled = options.regexpEnabled ?? true;
 	const cacheSuffix = options.cacheSuffix ?? "";
 	const rustCacheSuffix = options.rustCacheSuffix ?? "";
 	const libs = options.skipRuntimeBuild
@@ -267,6 +280,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 				intlServiceDefines: options.intlServiceDefines,
 				intlFeatures: options.intlFeatures,
 				webPlatformEnabled,
+				regexpEnabled,
 				cacheSuffix,
 				rustCacheSuffix,
 			});
@@ -292,6 +306,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 				intlEnabled,
 				intlServiceDefines: options.intlServiceDefines,
 				webPlatformEnabled,
+				regexpEnabled,
 			}),
 			"-I",
 			"runtime/src",

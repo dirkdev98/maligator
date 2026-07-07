@@ -16,6 +16,13 @@
 #include "vm.h"
 #include "vm_ops.h"
 
+// The whole RegExp surface (constructor, prototype, exec, the Symbol.* protocol,
+// and mal_regexp_create) runs on the regress engine (mal_regexp_* FFI). An
+// engine.regexp:false build drops regress, so this TU must reference no regress
+// symbols — compile it away wholesale, leaving only a no-op install stub (below) so
+// intrinsics.c can still call mal_builtin_regexp_install unconditionally.
+#if MAL_REGEXP
+
 // The CreateDataPropertyOrThrow descriptor used for exec result-array members.
 #define REGEXP_WEC (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 
@@ -1799,3 +1806,12 @@ void mal_builtin_regexp_install(MalVm *vm) {
     regexp_define_getter(vm, prototype, (const byte *) "sticky", (const byte *) "get sticky", regexp_proto_get_sticky);
     regexp_define_getter(vm, prototype, (const byte *) "hasIndices", (const byte *) "get hasIndices", regexp_proto_get_has_indices);
 }
+
+#else // !MAL_REGEXP
+
+// engine.regexp:false — no RegExp global (typeof RegExp === "undefined").
+void mal_builtin_regexp_install(MalVm *vm) {
+    (void) vm;
+}
+
+#endif // MAL_REGEXP

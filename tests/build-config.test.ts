@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	assertEvalPolicy,
+	assertRegexpPolicy,
 	BuildConfigError,
 	buildConfigCacheSuffix,
 	intlCargoFeatures,
@@ -16,6 +17,7 @@ import { parseScript } from "../src/parser.ts";
 import {
 	analyzeSourceAndRunSemanticAnalysis,
 	collectDisallowedEvalUsage,
+	collectDisallowedRegexpUsage,
 } from "../src/semantic-analysis.ts";
 
 function tmpdir(): string {
@@ -33,6 +35,11 @@ describe("resolveBuildConfig defaults", () => {
 		expect(config.engine.intl.enabled).toBe(false);
 		expect(config.host.scheduler).toBe("single");
 		expect(config.surface).toEqual({ webPlatform: false, node: false, maligator: true });
+	});
+
+	it("defaults RegExp ON (core language, unlike eval/Intl/web)", () => {
+		expect(resolveBuildConfig({}).engine.regexp).toBe(true);
+		expect(resolveBuildConfig({ engine: { regexp: false } }).engine.regexp).toBe(false);
 	});
 
 	it("honors explicit values", () => {
@@ -214,6 +221,21 @@ describe("buildConfigCacheSuffix", () => {
 		// The Rust archive changes too (ada in/out), so its suffix must differ.
 		expect(rustConfigCacheSuffix(noWeb)).not.toBe(rustConfigCacheSuffix(canonical));
 	});
+
+	it("regexp-off is a distinct non-empty hash for both the C and Rust archives", () => {
+		const canonical = resolveBuildConfig({
+			engine: { eval: true, intl: { enabled: true } },
+			surface: { webPlatform: true },
+		});
+		const noRegexp = resolveBuildConfig({
+			engine: { eval: true, regexp: false, intl: { enabled: true } },
+			surface: { webPlatform: true },
+		});
+		expect(buildConfigCacheSuffix(noRegexp)).toMatch(/^[0-9a-f]{8}$/);
+		expect(buildConfigCacheSuffix(noRegexp)).not.toBe(buildConfigCacheSuffix(canonical));
+		// The Rust archive changes too (regress in/out), so its suffix must differ.
+		expect(rustConfigCacheSuffix(noRegexp)).not.toBe(rustConfigCacheSuffix(canonical));
+	});
 });
 
 /** Analyze a script and return its SemanticProgram. */
@@ -279,5 +301,41 @@ describe("assertEvalPolicy", () => {
 
 	it("is a no-op when nothing was flagged", () => {
 		expect(() => assertEvalPolicy(evalOff, [])).not.toThrow();
+	});
+});
+
+const regexpOff = resolveBuildConfig({ engine: { regexp: false } });
+const regexpOn = resolveBuildConfig({}); // default ON
+
+describe("collectDisallowedRegexpUsage + assertRegexpPolicy", () => {
+	it("flags a regex literal and new RegExp / RegExp(...) on the global", () => {
+		expect(
+			collectDisallowedRegexpUsage(analyze(`const r = /a/g;`)).map((u) => u.kind),
+		).toEqual(["literal"]);
+		expect(
+			collectDisallowedRegexpUsage(analyze(`new RegExp("a"); RegExp("b");`)).map(
+				(u) => u.kind,
+			),
+		).toEqual(["RegExp", "RegExp"]);
+	});
+
+	it("does not flag a shadowed local RegExp binding or a bare reference", () => {
+		expect(
+			collectDisallowedRegexpUsage(analyze(`function RegExp(){} RegExp();`)),
+		).toEqual([]);
+		expect(collectDisallowedRegexpUsage(analyze(`typeof RegExp;`))).toEqual([]);
+	});
+
+	it("throws when regexp is disabled and a literal is present", () => {
+		const usages = collectDisallowedRegexpUsage(analyze(`const r = /a/;`));
+		expect(() => assertRegexpPolicy(regexpOff, usages)).toThrow(
+			/engine\.regexp is false/,
+		);
+	});
+
+	it("is a no-op when regexp is enabled (the default) or nothing was flagged", () => {
+		const usages = collectDisallowedRegexpUsage(analyze(`const r = /a/;`));
+		expect(() => assertRegexpPolicy(regexpOn, usages)).not.toThrow();
+		expect(() => assertRegexpPolicy(regexpOff, [])).not.toThrow();
 	});
 });
