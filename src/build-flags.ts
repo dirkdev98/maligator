@@ -112,26 +112,43 @@ export function optFlags(): Array<string> {
  * baked compiler and turns the eval/Function runtime path into an EvalError throw.
  * `intlEnabled: false` adds `-DMAL_INTL=0`, which drops the Intl global + the ICU
  * call sites (kept in lockstep with the Rust `intl` Cargo feature).
+ * `webPlatformEnabled: false` adds `-DMAL_WEB_PLATFORM=0`, which compiles url.c away
+ * so no ada FFI symbols are referenced (in lockstep with the Rust `web-platform`
+ * feature, which drops the C++ ada parser + `-lc++`).
  */
-export function cmakeCFlags(
-	opts: {
-		evalEnabled?: boolean;
-		intlEnabled?: boolean;
-		/** `-DMAL_INTL_HAS_<SERVICE>=0` for each dropped service (subset Intl build). */
-		intlServiceDefines?: Array<string>;
-	} = {},
-): string {
+export interface FeatureDefineOpts {
+	evalEnabled?: boolean;
+	intlEnabled?: boolean;
+	/** `-DMAL_INTL_HAS_<SERVICE>=0` for each dropped service (subset Intl build). */
+	intlServiceDefines?: Array<string>;
+	webPlatformEnabled?: boolean;
+}
+
+/**
+ * The `-D…=0` feature defines a build config projects onto the C preprocessor.
+ * These MUST be passed identically to the cmake archive build AND to the final cc
+ * that compiles the entry driver (host_main.c / test262_main.c) + the emitted
+ * program: the entry driver has `#if MAL_WEB_PLATFORM` gates around the web
+ * installs, so if it compiled with the default (all-on) values while the archive
+ * compiled them off, it would reference definitions the archive omitted (undefined
+ * symbols at link).
+ */
+export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 	const evalFlag = opts.evalEnabled === false ? ["-DMAL_EVAL=0"] : [];
 	// Intl off → -DMAL_INTL=0 (per-service gates default to MAL_INTL, so all off).
 	// Intl on → per-service disable defines (empty for the full build).
 	const intlFlags =
 		opts.intlEnabled === false ? ["-DMAL_INTL=0"] : (opts.intlServiceDefines ?? []);
+	const webFlag = opts.webPlatformEnabled === false ? ["-DMAL_WEB_PLATFORM=0"] : [];
+	return [...evalFlag, ...intlFlags, ...webFlag];
+}
+
+export function cmakeCFlags(opts: FeatureDefineOpts = {}): string {
 	return [
 		...optFlags(),
 		...SANITIZER_FLAGS[sanitizerMode()],
 		...gcDefines(),
-		...evalFlag,
-		...intlFlags,
+		...featureDefines(opts),
 	].join(" ");
 }
 

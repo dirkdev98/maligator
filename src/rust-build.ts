@@ -40,6 +40,12 @@ export interface RustBuildConfig {
 	 * = all services (the default `intl-full`). Ignored when `intlEnabled` is false.
 	 */
 	features?: Array<string>;
+	/**
+	 * Whether to compile the WHATWG URL (ada) parser — the `web-platform` Cargo
+	 * feature (engine surface.webPlatform). Default true. Off drops the C++ ada
+	 * library from the archive and the `-lc++` link ({@link rustLinkArgs}).
+	 */
+	webPlatform?: boolean;
 	locales?: Array<string>;
 	cacheSuffix?: string;
 }
@@ -66,10 +72,11 @@ export function rustLibPath(cacheSuffix = ""): string {
  * `-lc++`: ada-url (URL parser) wraps the C++ `ada` library, whose objects are
  * bundled into libmal_rust.a, so the final link needs the C++ stdlib. On this
  * macOS/clang toolchain that is libc++ (`-lc++`); a gcc/Linux port would use
- * `-lstdc++`.
+ * `-lstdc++`. It is appended ONLY when `webPlatform` is on — with ada gated out
+ * (surface.webPlatform: false) there is no C++ to link, so the flag is dropped.
  */
-export function rustLinkArgs(cacheSuffix = ""): Array<string> {
-	return [rustLibPath(cacheSuffix), "-lc++"];
+export function rustLinkArgs(cacheSuffix = "", webPlatform = true): Array<string> {
+	return webPlatform ? [rustLibPath(cacheSuffix), "-lc++"] : [rustLibPath(cacheSuffix)];
 }
 
 const builtConfigs = new Set<string>();
@@ -100,15 +107,23 @@ export function ensureRustLibrary(verbose = false, config: RustBuildConfig = {})
 	}).trim();
 	const toolchainBin = path.dirname(cargoPath);
 
-	// Intl off → drop all default features (no ICU crates compiled). A selected
-	// service subset → --no-default-features + just those per-service features (each
-	// pulls the `intl` floor). All services (empty list) → the default `intl-full`.
+	// Build an explicit feature set from the resolved config, always with
+	// --no-default-features so the archive carries exactly what we ask for:
+	//   - Intl on: the per-service subset, or `intl-full` when no subset is given.
+	//   - web-platform: the URL (ada) parser, when surface.webPlatform is on.
+	// jiff (tz) + regress (RegExp) are non-optional and always compile.
 	const features = config.features ?? [];
-	const args = ["build", "--release"];
-	if (!intlEnabled) {
-		args.push("--no-default-features");
-	} else if (features.length > 0) {
-		args.push("--no-default-features", "--features", features.join(","));
+	const webPlatform = config.webPlatform ?? true;
+	const wantFeatures: Array<string> = [];
+	if (intlEnabled) {
+		wantFeatures.push(...(features.length > 0 ? features : ["intl-full"]));
+	}
+	if (webPlatform) {
+		wantFeatures.push("web-platform");
+	}
+	const args = ["build", "--release", "--no-default-features"];
+	if (wantFeatures.length > 0) {
+		args.push("--features", wantFeatures.join(","));
 	}
 
 	execFileSync("cargo", args, {

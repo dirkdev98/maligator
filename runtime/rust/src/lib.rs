@@ -16,7 +16,10 @@
 // The RegExp FFI (regress engine). See src/regexp.rs.
 pub mod regexp;
 
-// The WHATWG URL FFI (ada-url crate). See src/url.rs.
+// The WHATWG URL FFI (ada-url crate). Gated behind the `web-platform` Cargo
+// feature (engine surface.webPlatform) so a non-web build drops the C++ ada parser
+// and the `-lc++` it forces. See src/url.rs.
+#[cfg(feature = "web-platform")]
 pub mod url;
 
 /// ABI version. Bump on any breaking change to the C header so the C side can
@@ -32,7 +35,8 @@ pub extern "C" fn mal_i18n_abi_version() -> u32 {
 
 // The Intl (ICU4X) surface. Gated behind the `intl` Cargo feature so an
 // `engine.intl: false` build compiles the ICU crates away entirely — dropping the
-// ~9 MB of baked CLDR data. tz (jiff), regexp, and url stay unconditional. The
+// ~9 MB of baked CLDR data. tz (jiff) and regexp stay unconditional; url is gated
+// by `web-platform` (above). The
 // `#[no_mangle]` symbols export from inside this module regardless of Rust
 // visibility, so the C side links them exactly as before when the feature is on.
 #[cfg(feature = "intl")]

@@ -6,9 +6,9 @@
  *
  * Benches (default: all):
  *   - size      linked binary + per-archive bytes across a build-config matrix
- *               (full / no-eval / no-intl / minimal) — the "small binary" goal, one
- *               row per config so each feature flag's marginal bytes are tracked. No
- *               V8 compare.
+ *               (full / no-eval / no-intl / no-web / minimal) — the "small binary"
+ *               goal, one row per config so each feature flag's marginal bytes are
+ *               tracked. No V8 compare.
  *   - language  bench/language.js wall time vs Node/V8 (wide instruction coverage).
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
  *               wall, peak RSS, max GC pause (macOS: RSS/pauses via /usr/bin/time -l
@@ -112,10 +112,36 @@ const SIZE_FIXTURE = "bench/hello-world.js";
  * …) add rows here as they land, keeping each flag's win a tracked number.
  */
 const SIZE_PROFILES: Array<{ name: string; config: MaligatorBuildConfig }> = [
-	{ name: "full", config: { engine: { eval: true, intl: { enabled: true } } } },
-	{ name: "no-eval", config: { engine: { eval: false, intl: { enabled: true } } } },
-	{ name: "no-intl", config: { engine: { eval: true, intl: { enabled: false } } } },
-	// Product defaults (eval + Intl off) — the realistic deployed floor.
+	{
+		name: "full",
+		config: {
+			engine: { eval: true, intl: { enabled: true } },
+			surface: { webPlatform: true },
+		},
+	},
+	{
+		name: "no-eval",
+		config: {
+			engine: { eval: false, intl: { enabled: true } },
+			surface: { webPlatform: true },
+		},
+	},
+	{
+		name: "no-intl",
+		config: {
+			engine: { eval: true, intl: { enabled: false } },
+			surface: { webPlatform: true },
+		},
+	},
+	{
+		// Isolates the WHATWG URL (ada C++ parser) + `-lc++`.
+		name: "no-web",
+		config: {
+			engine: { eval: true, intl: { enabled: true } },
+			surface: { webPlatform: false },
+		},
+	},
+	// Product defaults (eval + Intl + web all off) — the realistic deployed floor.
 	{ name: "minimal", config: {} },
 ];
 

@@ -31,12 +31,19 @@ int main(void) {
     // runs on. Then install host globals (not in the shared intrinsics, so only
     // host programs see them): setTimeout / clearTimeout on globalThis.
     mal_host_attach(&vm);
+#if MAL_WEB_PLATFORM
+    // The WinterTC web personality (surface.webPlatform). Off → none of these
+    // install, so their translation units — and the ada C++ URL parser + `-lc++`
+    // they'd pull — are never referenced and drop out at link. `Mal.serve` rides in
+    // with mal_fetch_install (fetch.c). The reactor (mal_host_attach) is a separate
+    // axis and stays: a non-web host program still gets the event loop.
     MalObject *global_this = mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
-    mal_host_timers_install(&vm, global_this);
-    mal_fetch_install(&vm, global_this);
-    mal_web_globals_install(&vm, global_this);
-    mal_url_install(&vm, global_this);
-    mal_events_install(&vm, global_this);
+    mal_host_timers_install(&vm, global_this);   // setTimeout / clearTimeout
+    mal_fetch_install(&vm, global_this);          // fetch / Response / Headers / Mal.serve
+    mal_web_globals_install(&vm, global_this);    // TextEncoder / TextDecoder / …
+    mal_url_install(&vm, global_this);            // URL / URLSearchParams (ada)
+    mal_events_install(&vm, global_this);         // EventTarget / Event
+#endif
 
     MalCallable *callable = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, callable);      // synchronous top level + its microtask drain

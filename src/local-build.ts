@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { buildSuffix, ccExtraFlags, cmakeCFlags } from "./build-flags.ts";
+import { buildSuffix, ccExtraFlags, cmakeCFlags, featureDefines } from "./build-flags.ts";
 import { ensureCompilerWire } from "./compiler-bake.ts";
 import { ensureRustLibrary, RUST_INCLUDE_DIR, rustLinkArgs } from "./rust-build.ts";
 
@@ -27,6 +27,8 @@ interface RuntimeBuildDimensions {
 	intlServiceDefines?: Array<string>;
 	/** Per-service Rust Cargo features (`intl-collator`, …) for a subset Intl build. */
 	intlFeatures?: Array<string>;
+	/** Whether to compile the WHATWG URL (ada) surface (`web-platform`). Default true. */
+	webPlatformEnabled?: boolean;
 	/** C-build-config hash suffix (build-config.ts). Default "" (canonical archive). */
 	cacheSuffix?: string;
 	/** Rust/Intl-config hash suffix selecting the ICU archive. Default "" (all services). */
@@ -92,6 +94,14 @@ export interface LocalBuildOptions {
 	intlFeatures?: Array<string>;
 
 	/**
+	 * Whether this binary includes the WHATWG URL (ada) surface. Defaults to true.
+	 * Set false for a `surface.webPlatform: false` build: `-DMAL_WEB_PLATFORM=0` on
+	 * the C side (url.c compiles away), the `--no-default-features` ada-less Rust
+	 * archive keyed by {@link rustCacheSuffix}, and no `-lc++` at link.
+	 */
+	webPlatformEnabled?: boolean;
+
+	/**
 	 * C-build-config hash (build-config.ts `buildConfigCacheSuffix`) selecting the
 	 * C build dir / archive. Defaults to "" (canonical). Consistent with
 	 * {@link evalEnabled} + {@link intlEnabled}.
@@ -150,6 +160,7 @@ export function ensureRuntimeLibrary(
 	const intlEnabled = dimensions.intlEnabled ?? true;
 	const intlServiceDefines = dimensions.intlServiceDefines ?? [];
 	const intlFeatures = dimensions.intlFeatures ?? [];
+	const webPlatformEnabled = dimensions.webPlatformEnabled ?? true;
 	const cacheSuffix = dimensions.cacheSuffix ?? "";
 	const rustCacheSuffix = dimensions.rustCacheSuffix ?? "";
 	const buildDir = buildDirFor(cacheSuffix);
@@ -173,7 +184,7 @@ export function ensureRuntimeLibrary(
 			"runtime",
 			"-B",
 			buildDir,
-			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, intlEnabled, intlServiceDefines })}`,
+			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, intlEnabled, intlServiceDefines, webPlatformEnabled })}`,
 		],
 		{
 			stdio,
@@ -186,10 +197,16 @@ export function ensureRuntimeLibrary(
 		{ stdio },
 	);
 
-	// Build the Rust shim the runtime links against: Date tz + Intl (ICU4X) and
-	// the RegExp engine (regress), all in libmal_rust.a. Intl-off drops the ICU
-	// crates; the archive is keyed by rustCacheSuffix so variants coexist.
-	ensureRustLibrary(verbose, { intlEnabled, features: intlFeatures, cacheSuffix: rustCacheSuffix });
+	// Build the Rust shim the runtime links against: Date tz (jiff) + the RegExp
+	// engine (regress), always; Intl (ICU4X) and the URL (ada) parser by feature.
+	// Intl-off drops the ICU crates, web-off drops ada; the archive is keyed by
+	// rustCacheSuffix so variants coexist.
+	ensureRustLibrary(verbose, {
+		intlEnabled,
+		features: intlFeatures,
+		webPlatform: webPlatformEnabled,
+		cacheSuffix: rustCacheSuffix,
+	});
 
 	// Link order: runtime -> host -> engine (dependents first). rustLinkArgs() is
 	// appended after these by the caller (the engine references its symbols).
@@ -239,6 +256,7 @@ export function buildLoadDriver(verbose: boolean): string {
 export function buildLocalBinary(options: LocalBuildOptions): string {
 	const evalEnabled = options.evalEnabled ?? true;
 	const intlEnabled = options.intlEnabled ?? true;
+	const webPlatformEnabled = options.webPlatformEnabled ?? true;
 	const cacheSuffix = options.cacheSuffix ?? "";
 	const rustCacheSuffix = options.rustCacheSuffix ?? "";
 	const libs = options.skipRuntimeBuild
@@ -248,6 +266,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 				intlEnabled,
 				intlServiceDefines: options.intlServiceDefines,
 				intlFeatures: options.intlFeatures,
+				webPlatformEnabled,
 				cacheSuffix,
 				rustCacheSuffix,
 			});
@@ -266,6 +285,14 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 		[
 			"-std=c2x",
 			...ccExtraFlags(),
+			// The entry driver (host_main.c) gates its web installs on MAL_WEB_PLATFORM;
+			// it must compile with the same feature defines as the archive it links.
+			...featureDefines({
+				evalEnabled,
+				intlEnabled,
+				intlServiceDefines: options.intlServiceDefines,
+				webPlatformEnabled,
+			}),
 			"-I",
 			"runtime/src",
 			"-I",
@@ -277,7 +304,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 			cPath,
 			options.mainFile ?? "runtime/test262_main.c",
 			...libs,
-			...rustLinkArgs(rustCacheSuffix),
+			...rustLinkArgs(rustCacheSuffix, webPlatformEnabled),
 			"-o",
 			binPath,
 		],

@@ -321,35 +321,45 @@ function shortHash(value: unknown): string {
  * A short stable hash of the build-affecting projection of the config, used as the
  * C build-directory suffix (build-flags.ts) so binaries built under different
  * capabilities do not clobber each other's cached archives. The C archive depends
- * on `engine.eval` (flips `-DMAL_EVAL` + whether the 1.6 MB compiler is embedded)
- * and `engine.intl` (flips `-DMAL_INTL` + the locale-sensitive fallbacks).
- * Purely-frontend or not-yet-wired fields (surface, host) are excluded so unrelated
- * edits do not needlessly invalidate the cache. Returns "" for the canonical build
- * (eval on, Intl on, all locales) so it keeps the unsuffixed build dir.
+ * on `engine.eval` (flips `-DMAL_EVAL` + whether the 1.6 MB compiler is embedded),
+ * `engine.intl` (flips `-DMAL_INTL` + the locale-sensitive fallbacks), and
+ * `surface.webPlatform` (flips `-DMAL_WEB_PLATFORM` + whether url.c compiles).
+ * Not-yet-wired fields (host) are excluded so unrelated edits do not needlessly
+ * invalidate the cache. Returns "" for the canonical build (eval on, Intl on, all
+ * locales, web on) so it keeps the unsuffixed build dir.
  */
 export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
-	// The C archive depends on eval, whether Intl is on, and which services are
-	// selected (each flips a -DMAL_INTL_HAS_* define), but NOT on the locale set
-	// (that only changes the Rust/ICU datagen). Empty services list = all = canonical.
+	// The C archive depends on eval, whether Intl is on, which services are selected
+	// (each flips a -DMAL_INTL_HAS_* define), and web-platform (url.c gating), but NOT
+	// on the locale set (that only changes the Rust/ICU datagen). Empty services =
+	// all; eval + Intl + all-services + web all on = canonical.
 	const services = selectedIntlServices(config).sort();
-	if (config.engine.eval && config.engine.intl.enabled && services.length === 0) {
+	const web = config.surface.webPlatform;
+	if (config.engine.eval && config.engine.intl.enabled && services.length === 0 && web) {
 		return "";
 	}
-	return shortHash({ eval: config.engine.eval, intl: config.engine.intl.enabled, services });
+	return shortHash({
+		eval: config.engine.eval,
+		intl: config.engine.intl.enabled,
+		services,
+		web,
+	});
 }
 
 /**
- * The Rust (ICU4X) archive's cache suffix. It depends ONLY on the Intl axis (which
- * icu sub-crates + baked data compile: whether Intl is on and which services are
- * selected), NOT on `engine.eval` — so toggling eval does not trigger a multi-minute
- * ICU rebuild. "" for the canonical Intl-on / all-services archive.
+ * The Rust archive's cache suffix. It depends on the Intl axis (which icu
+ * sub-crates + baked data compile) and `surface.webPlatform` (whether the ada URL
+ * parser compiles), but NOT on `engine.eval` — so toggling eval does not trigger a
+ * multi-minute ICU rebuild. "" for the canonical Intl-on / all-services / web-on
+ * archive.
  */
 export function rustConfigCacheSuffix(config: ResolvedBuildConfig): string {
 	const services = selectedIntlServices(config).sort();
-	if (config.engine.intl.enabled && services.length === 0) {
+	const web = config.surface.webPlatform;
+	if (config.engine.intl.enabled && services.length === 0 && web) {
 		return "";
 	}
-	return shortHash({ intl: config.engine.intl.enabled, services });
+	return shortHash({ intl: config.engine.intl.enabled, services, web });
 }
 
 /**
@@ -365,6 +375,7 @@ export interface BuildDerivation {
 	intlEnabled: boolean;
 	intlServiceDefines: Array<string>;
 	intlFeatures: Array<string>;
+	webPlatformEnabled: boolean;
 	cacheSuffix: string;
 	rustCacheSuffix: string;
 }
@@ -376,6 +387,7 @@ export function buildDerivationFromConfig(config: ResolvedBuildConfig): BuildDer
 		intlEnabled: config.engine.intl.enabled,
 		intlServiceDefines: intlDisabledDefines(config),
 		intlFeatures: intlCargoFeatures(config),
+		webPlatformEnabled: config.surface.webPlatform,
 		cacheSuffix: buildConfigCacheSuffix(config),
 		rustCacheSuffix: rustConfigCacheSuffix(config),
 	};

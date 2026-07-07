@@ -72,10 +72,16 @@ export interface BuildOptions {
 	 */
 	intlFeatures?: Array<string>;
 	/**
+	 * Include the WHATWG URL (ada) surface. Defaults to true — internal tooling opts
+	 * in. Set false to build the `surface.webPlatform: false` archive (no ada / URL,
+	 * no `-lc++`).
+	 */
+	webPlatformEnabled?: boolean;
+	/**
 	 * A fully-resolved build config to build under. When provided it wins over the
-	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` fields (used by the size
-	 * bench to build a matrix of real config profiles); otherwise a config is
-	 * reconstructed from those flags.
+	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` / `webPlatformEnabled`
+	 * fields (used by the size bench to build a matrix of real config profiles);
+	 * otherwise a config is reconstructed from those flags.
 	 */
 	config?: ResolvedBuildConfig;
 }
@@ -105,6 +111,7 @@ export function buildNativeBinary(options: BuildOptions): string {
 					features: options.intlFeatures ?? [],
 				},
 			},
+			surface: { webPlatform: options.webPlatformEnabled ?? true },
 		});
 	return buildLocalBinary({
 		name: options.name,

@@ -50,17 +50,22 @@ writeable = { version = "0.6", optional = true }
 # panic-runtime symbols). The `utf16` feature matches over &[u16] with no UTF-8
 # conversion. See src/regexp.rs + docs/decisions/03-regexp.md.
 regress = { version = "0.11", features = ["utf16"] }
-# ada-url: the WHATWG URL parser (wraps the C++ `ada` library). Because it links a
-# C++ library, every final binary link needs the C++ stdlib (-lc++/-lstdc++), added
-# in src/rust-build.ts (rustLinkArgs). See src/url.rs + mal_url.h.
-ada-url = "3"
+# ada-url: the WHATWG URL parser (wraps the C++ `ada` library). Optional + gated
+# behind the `web-platform` feature (engine surface.webPlatform): dropping it drops
+# the C++ URL parser AND the `-lc++` every ada link otherwise forces (rustLinkArgs
+# only appends it when web-platform is on). See src/url.rs + mal_url.h.
+ada-url = { version = "3", optional = true }
 
 [features]
-# On by default so dev/test262 builds carry the full Intl surface. `engine.intl`
-# maps to these features (src/rust-build.ts): enabled:false → --no-default-features
-# (no ICU at all); a feature subset → --no-default-features --features intl-<svc>...
-# jiff/regress/ada are non-optional and always build.
-default = ["intl-full"]
+# On by default so dev/test262 builds carry the full Intl + web surface. The build
+# maps the resolved config to an explicit feature set (src/rust-build.ts): Intl
+# services via intl-*, the URL (ada) parser via web-platform. jiff/regress are
+# non-optional and always build.
+default = ["intl-full", "web-platform"]
+
+# The WHATWG URL surface: the ada-url (C++) parser. Off drops ada + the `-lc++`
+# link. Maps to engine surface.webPlatform (rust-build.ts) + C `-DMAL_WEB_PLATFORM`.
+web-platform = ["dep:ada-url"]
 
 # The always-on Intl floor: locale parsing/negotiation (Intl.Locale,
 # getCanonicalLocales, maximize/minimize) + result stringification. Every service

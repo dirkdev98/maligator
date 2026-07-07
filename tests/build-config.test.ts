@@ -92,13 +92,21 @@ describe("loadBuildConfig", () => {
 
 	it("hard-errors on locale subsetting (not yet supported)", () => {
 		const dir = tmpdir();
-		writeConfig(dir, JSON.stringify({ engine: { intl: { enabled: true, languages: ["en"] } } }));
-		expect(() => loadBuildConfig(undefined, dir)).toThrow(/locale subsetting.*not yet supported/);
+		writeConfig(
+			dir,
+			JSON.stringify({ engine: { intl: { enabled: true, languages: ["en"] } } }),
+		);
+		expect(() => loadBuildConfig(undefined, dir)).toThrow(
+			/locale subsetting.*not yet supported/,
+		);
 	});
 
 	it("allows languages when Intl is disabled (irrelevant, no error)", () => {
 		const dir = tmpdir();
-		writeConfig(dir, JSON.stringify({ engine: { intl: { enabled: false, languages: ["en"] } } }));
+		writeConfig(
+			dir,
+			JSON.stringify({ engine: { intl: { enabled: false, languages: ["en"] } } }),
+		);
 		expect(loadBuildConfig(undefined, dir).engine.intl.enabled).toBe(false);
 	});
 
@@ -106,7 +114,9 @@ describe("loadBuildConfig", () => {
 		const dir = tmpdir();
 		writeConfig(
 			dir,
-			JSON.stringify({ engine: { intl: { enabled: true, features: ["collator", "bogus"] } } }),
+			JSON.stringify({
+				engine: { intl: { enabled: true, features: ["collator", "bogus"] } },
+			}),
 		);
 		expect(() => loadBuildConfig(undefined, dir)).toThrow(/unknown service 'bogus'/);
 	});
@@ -115,9 +125,13 @@ describe("loadBuildConfig", () => {
 		const dir = tmpdir();
 		writeConfig(
 			dir,
-			JSON.stringify({ engine: { intl: { enabled: true, features: ["number-format"] } } }),
+			JSON.stringify({
+				engine: { intl: { enabled: true, features: ["number-format"] } },
+			}),
 		);
-		expect(loadBuildConfig(undefined, dir).engine.intl.features).toEqual(["number-format"]);
+		expect(loadBuildConfig(undefined, dir).engine.intl.features).toEqual([
+			"number-format",
+		]);
 	});
 });
 
@@ -138,7 +152,10 @@ describe("intl feature → cargo features + C defines", () => {
 
 	it("subset → per-service cargo features + disable defines for the rest", () => {
 		const subset = config({ enabled: true, features: ["number-format", "collator"] });
-		expect(intlCargoFeatures(subset).sort()).toEqual(["intl-collator", "intl-number-format"]);
+		expect(intlCargoFeatures(subset).sort()).toEqual([
+			"intl-collator",
+			"intl-number-format",
+		]);
 		const defines = intlDisabledDefines(subset);
 		expect(defines).toContain("-DMAL_INTL_HAS_SEGMENTER=0");
 		expect(defines).toContain("-DMAL_INTL_HAS_DISPLAY_NAMES=0");
@@ -148,9 +165,13 @@ describe("intl feature → cargo features + C defines", () => {
 	});
 
 	it("distinct feature sets get distinct cache suffixes; all-services is canonical", () => {
-		const all = resolveBuildConfig({ engine: { eval: true, intl: { enabled: true } } });
+		const all = resolveBuildConfig({
+			engine: { eval: true, intl: { enabled: true } },
+			surface: { webPlatform: true },
+		});
 		const subset = resolveBuildConfig({
 			engine: { eval: true, intl: { enabled: true, features: ["number-format"] } },
+			surface: { webPlatform: true },
 		});
 		expect(buildConfigCacheSuffix(all)).toBe(""); // canonical
 		expect(rustConfigCacheSuffix(all)).toBe("");
@@ -161,10 +182,13 @@ describe("intl feature → cargo features + C defines", () => {
 });
 
 describe("buildConfigCacheSuffix", () => {
-	it("is empty for the canonical (eval-on, Intl-on) archive", () => {
+	it("is empty for the canonical (eval-on, Intl-on, web-on) archive", () => {
 		expect(
 			buildConfigCacheSuffix(
-				resolveBuildConfig({ engine: { eval: true, intl: { enabled: true } } }),
+				resolveBuildConfig({
+					engine: { eval: true, intl: { enabled: true } },
+					surface: { webPlatform: true },
+				}),
 			),
 		).toBe("");
 	});
@@ -174,6 +198,21 @@ describe("buildConfigCacheSuffix", () => {
 		const suffix = buildConfigCacheSuffix(off);
 		expect(suffix).toMatch(/^[0-9a-f]{8}$/);
 		expect(buildConfigCacheSuffix(off)).toBe(suffix);
+	});
+
+	it("webPlatform-off is a distinct non-empty hash for both the C and Rust archives", () => {
+		const canonical = resolveBuildConfig({
+			engine: { eval: true, intl: { enabled: true } },
+			surface: { webPlatform: true },
+		});
+		const noWeb = resolveBuildConfig({
+			engine: { eval: true, intl: { enabled: true } },
+			surface: { webPlatform: false },
+		});
+		expect(buildConfigCacheSuffix(noWeb)).toMatch(/^[0-9a-f]{8}$/);
+		expect(buildConfigCacheSuffix(noWeb)).not.toBe(buildConfigCacheSuffix(canonical));
+		// The Rust archive changes too (ada in/out), so its suffix must differ.
+		expect(rustConfigCacheSuffix(noWeb)).not.toBe(rustConfigCacheSuffix(canonical));
 	});
 });
 
