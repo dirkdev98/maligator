@@ -74,6 +74,8 @@ const C_HEADER_LINES = [
 	'#include "value_ops.h"',
 	// The compiled (emit-c) for-of lowering uses the iterator-record helpers.
 	'#include "builtin_iterator.h"',
+	// Compiled coroutines dereference MalGeneratorObject (resume_state->frame).
+	'#include "generator_object.h"',
 	"",
 ];
 

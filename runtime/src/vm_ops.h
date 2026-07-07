@@ -656,3 +656,47 @@ void mal_op_merge_data_properties(MalCallable *callable, MalInstruction *instruc
 void mal_op_jump(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction);
+
+// ---------------------------------------------------------------------------
+// Compiled coroutines (native-backend generators & async). These have no
+// interpreter counterpart: the interpreter drives GENERATOR_START/YIELD/AWAIT/
+// RETURN inline in its dispatch loop, whereas a compiled coroutine is a single
+// C function that suspends by returning and resumes by re-entry. See
+// docs/decisions/03-compiled-coroutines.md.
+// ---------------------------------------------------------------------------
+
+// Allocate a compiled coroutine's heap register buffer (all undefined). Sized by
+// the backend to cover registers + the with-object stack + a self-reference slot;
+// owned by the coroutine object once GENERATOR_START/ASYNC_START adopts it, freed
+// on completion.
+MalValue *mal_coroutine_alloc_registers(i32 slot_count);
+
+// GENERATOR_START: build the generator instance (prototype from callee.prototype,
+// else the intrinsic generator/async-generator prototype), adopt `registers` as
+// its suspended frame at `resume_ip`, and leave it SUSPENDED_START. Returns the
+// generator; the compiled body hands it back to the caller.
+MalGeneratorObject *mal_vm_op_generator_start_compiled(
+    MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
+    MalValue *registers, i32 resume_ip, bool is_async_generator);
+
+// YIELD (compiled): record the yielded value, resume registers, and resume IP on
+// the coroutine, save the current env, mark SUSPENDED_YIELD, and (for an async
+// generator) settle the front request. The compiled body then returns.
+void mal_vm_op_yield_compiled(
+    MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
+    i32 mode_dst, i32 resume_ip, MalEnv *env);
+
+// Coroutine RETURN (compiled): mark COMPLETED (before freeing, so the finalizer's
+// suspended-only free avoids a double-free), free the register buffer, and route
+// the value — async generator / async settle their promise, a plain generator
+// leaves it in a NORMAL completion for the .next() driver.
+void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue value);
+
+// Coroutine uncaught throw (compiled): the body threw past its own handlers. Mark
+// COMPLETED and free the register buffer; a plain generator leaves the THROW
+// completion for its .next() caller, while an async function rejects its result
+// promise (the async body's implicit try/catch). vm->completion.value is the
+// pending exception. `generator` is null when a generator's parameter prologue
+// throws before GENERATOR_START has created it — the throw then propagates
+// synchronously and `registers` (the orphaned buffer) is released here.
+void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue *registers);

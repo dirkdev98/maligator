@@ -618,6 +618,8 @@ typedef enum MalFunctionKind {
 typedef struct MalVm MalVm;
 typedef struct MalEnv MalEnv;
 
+struct MalGeneratorObject;
+
 /**
  * A function lowered directly to C by the native backend. When set on a
  * MalFunction, an ordinary call invokes this instead of interpreting the
@@ -636,7 +638,13 @@ typedef MalValue (*MalCompiledFunction)(
     // The invoked function object, for a sloppy-mode `arguments.callee` (the
     // compiled frame carries no callee otherwise). Undefined for the top-level
     // entry. Strict functions ignore it (their callee is poisoned).
-    MalValue callee
+    MalValue callee,
+    // Non-null only when resuming a suspended compiled coroutine (generator/
+    // async): the coroutine object whose saved frame the body restores and whose
+    // instruction_pointer selects the resume label. Null on every ordinary call,
+    // construct, and program-entry invocation; non-coroutine functions ignore it.
+    // See docs/decisions/03-compiled-coroutines.md.
+    struct MalGeneratorObject *resume_state
 );
 
 typedef struct MalFunction {

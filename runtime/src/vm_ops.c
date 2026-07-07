@@ -3,12 +3,16 @@
 #include <stdlib.h>
 
 #include "array_object.h"
+#include "async_function.h"
 #include "bound_function_object.h"
 #include "builtin_array.h"
+#include "builtin_async_generator.h"
 #include "builtin_async_iterator.h"
 #include "builtin_iterator.h"
 #include "function_object.h"
 #include "gc.h"
+#include "generator_object.h"
+#include "intrinsics.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
@@ -835,7 +839,7 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
                 MalValue result = mal_value_new_undefined();
                 if (mal_vm_enter_compiled(vm, function_index)) {
                     MalValue this_value = mal_vm_callee_this(vm, function, resolution.this_value);
-                    result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, mal_value_new_undefined(), env, resolution.callee);
+                    result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, mal_value_new_undefined(), env, resolution.callee, nullptr);
                     mal_vm_leave_compiled(vm);
                 }
                 vm->frames[caller_frame_index].registers[dst] = result;
@@ -947,7 +951,7 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
                 // inside the constructor would otherwise sweep it.
                 MalCalleeRoots ncr;
                 mal_gc_callee_roots_begin(&ncr, this_value, resolution.callee, &vm->value_stack[base], resolution.arg_count);
-                result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, resolution.callee, env, resolution.callee);
+                result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, resolution.callee, env, resolution.callee, nullptr);
                 mal_gc_callee_roots_end(&ncr);
                 mal_vm_leave_compiled(vm);
             }
@@ -3970,4 +3974,140 @@ void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction) {
     if (mal_value_is_truthy(callable->registers[instruction->as.jump_if.cond])) {
         callable->instruction_pointer = instruction->as.jump_if.target_ip;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Compiled coroutines. See docs/decisions/03-compiled-coroutines.md.
+// ---------------------------------------------------------------------------
+
+MalValue *mal_coroutine_alloc_registers(i32 slot_count) {
+    MalValue *registers = malloc(sizeof(MalValue) * (usize) slot_count);
+    for (i32 i = 0; i < slot_count; i++) {
+        registers[i] = mal_value_new_undefined();
+    }
+    return registers;
+}
+
+MalGeneratorObject *mal_vm_op_generator_start_compiled(
+    MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
+    MalValue *registers, i32 resume_ip, bool is_async_generator) {
+    // The instance inherits the generator function's own .prototype (which
+    // inherits %GeneratorPrototype% / %AsyncGeneratorPrototype%), else the
+    // intrinsic prototype. `registers` is already published as a GC root by the
+    // caller, so a getter on .prototype cannot sweep the pending activation.
+    MalObject *generator_prototype = mal_value_to_object(vm->intrinsics[
+        is_async_generator ? MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE : MAL_INTRINSIC_GENERATOR_PROTOTYPE
+    ]);
+    MalValue prototype_value;
+    if (mal_value_is_object(callee) &&
+        mal_vm_get_property(vm, callee, mal_intrinsic_string_key(vm, "prototype"), &prototype_value) &&
+        mal_value_is_object(prototype_value)) {
+        generator_prototype = mal_value_to_object(prototype_value);
+    }
+
+    MalGeneratorObject *generator = mal_generator_object_new(&vm->heap, generator_prototype);
+    if (is_async_generator) {
+        generator->is_async = true;
+        generator->is_async_generator = true;
+    }
+
+    // Adopt the register buffer as the suspended activation. arguments/with_objects
+    // stay null (the compiled body materializes an arguments object into a register
+    // and keeps its with-stack inside the register buffer); the trace scans exactly
+    // frame.function->register_count register slots (the with/self slots beyond it
+    // are covered by the compiled root frame, which spans the whole buffer).
+    generator->frame.vm = vm;
+    generator->frame.function_index = function_index;
+    generator->frame.function = &vm->live_definition.functions[function_index];
+    generator->frame.registers = registers;
+    generator->frame.arguments = nullptr;
+    generator->frame.argument_count = 0;
+    generator->frame.stack_base = -1;
+    generator->frame.this_value = this_value;
+    generator->frame.arguments_object = mal_value_new_undefined();
+    generator->frame.callee = callee;
+    generator->frame.generator = generator;
+    generator->frame.env = env;
+    generator->frame.is_construct = false;
+    generator->frame.new_target = mal_value_new_undefined();
+    generator->frame.instruction_pointer = resume_ip;
+    generator->frame.return_register = -1;
+    generator->frame.caller_frame_index = -1;
+    generator->frame.with_objects = nullptr;
+    generator->frame.with_count = 0;
+    generator->frame.with_capacity = 0;
+    generator->state = MAL_GENERATOR_SUSPENDED_START;
+
+    // The generator now owns a frame of (possibly young) register values; if it is
+    // old, remember it so a minor collection traces that frame.
+    mal_gc_remember_if_old(&generator->object.header);
+    return generator;
+}
+
+void mal_vm_op_yield_compiled(
+    MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
+    i32 mode_dst, i32 resume_ip, MalEnv *env) {
+    generator->yielded_value = yielded;
+    generator->resume_value_register = value_dst;
+    generator->resume_mode_register = mode_dst;
+    generator->state = MAL_GENERATOR_SUSPENDED_YIELD;
+    // The register buffer is mutated in place (it is gen->frame.registers), so only
+    // the resume point and the current env need saving for a later resume.
+    generator->frame.instruction_pointer = resume_ip;
+    generator->frame.env = env;
+    mal_gc_remember_if_old(&generator->object.header);
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+
+    // An async generator's yield settles the front request promise with
+    // { value, done: false } and drives the next request (the yielded value was
+    // already awaited by the compiler-inserted await preceding this yield).
+    if (generator->is_async_generator) {
+        mal_async_generator_yield(vm, generator);
+    }
+}
+
+void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue value) {
+    // COMPLETED before freeing: the finalizer frees the buffers only while
+    // suspended, so marking first keeps a swept-after-completion object from
+    // double-freeing (matching the interpreter's RETURN + finalizer contract).
+    // The freed frame.registers is left dangling, exactly as the interpreter does.
+    generator->state = MAL_GENERATOR_COMPLETED;
+    free(generator->frame.registers);
+
+    if (generator->is_async_generator) {
+        // Completing the async generator settles the front request { value, done: true }.
+        mal_async_generator_return(vm, generator, value);
+    } else if (generator->is_async) {
+        // Resolving the result promise is the async function's return.
+        mal_async_function_settle_return(vm, generator, value);
+    } else {
+        // Plain generator: the .next() driver reads the value from the completion.
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+    }
+}
+
+void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue *registers) {
+    if (generator == nullptr) {
+        // A generator's parameter prologue threw before GENERATOR_START adopted the
+        // buffer: no coroutine object exists, so release the orphaned buffer and let
+        // the throw propagate synchronously to the caller (params are evaluated
+        // eagerly at call time, before the generator is created).
+        free(registers);
+        return;
+    }
+
+    // COMPLETED before free (finalizer contract), then free the activation. See
+    // mal_vm_op_coroutine_return_compiled.
+    generator->state = MAL_GENERATOR_COMPLETED;
+    free(generator->frame.registers);
+
+    if (generator->is_async && !generator->is_async_generator) {
+        // The async function's body threw: reject its result promise rather than
+        // propagate (the async body's implicit try/catch). settle_throw clears the
+        // completion once the rejection is scheduled.
+        mal_async_function_settle_throw(vm, generator, vm->completion.value);
+    }
+    // Plain generator: leave vm->completion == THROW for the .next() caller to
+    // re-raise. (Async generators route rejections through the request queue; that
+    // path is wired with the async ops.)
 }

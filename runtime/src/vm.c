@@ -1400,7 +1400,7 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
         } else {
             MalValue value = entry->compiled(
                 vm, mal_value_new_undefined(), nullptr, 0, mal_value_new_undefined(), nullptr,
-                mal_value_new_undefined()
+                mal_value_new_undefined(), nullptr
             );
             mal_vm_leave_compiled(vm);
             script_completion = vm->completion.kind == MAL_COMPLETION_THROW
@@ -1442,6 +1442,42 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
 }
 
 void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue sent_value, i32 resume_mode) {
+    // Re-resolve in case a runtime-eval splice moved the function table while
+    // this generator was suspended (function_index is the source of truth).
+    const MalFunction *function = &vm->live_definition.functions[generator->frame.function_index];
+
+    if (function->compiled != nullptr) {
+        // Compiled coroutine: no interpreter frame is pushed and no dispatch loop
+        // runs. Deliver the sent value + resume mode into the heap register buffer
+        // (indexed by register number, as the yield/await recorded), then re-enter
+        // the compiled body with resume_state set; its entry dispatch jumps to the
+        // saved resume label and the front-end's inline post-suspend dispatch reads
+        // the mode. The C-stack / depth guard lives in mal_vm_enter_compiled. See
+        // docs/decisions/03-compiled-coroutines.md.
+        if (!mal_vm_enter_compiled(vm, generator->frame.function_index)) {
+            generator->state = MAL_GENERATOR_COMPLETED;
+            return;
+        }
+        generator->frame.function = function;
+        if (generator->resume_value_register >= 0) {
+            generator->frame.registers[generator->resume_value_register] = sent_value;
+        }
+        if (generator->resume_mode_register >= 0) {
+            generator->frame.registers[generator->resume_mode_register] = mal_value_from_i32(resume_mode);
+        }
+        generator->state = MAL_GENERATOR_EXECUTING;
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+        // this/env/callee are re-read from generator->frame by the resume path; the
+        // args/new_target params are unused on resume (the prologue is skipped).
+        function->compiled(vm, generator->frame.this_value, nullptr, 0,
+            mal_value_new_undefined(), generator->frame.env, generator->frame.callee, generator);
+        mal_vm_leave_compiled(vm);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            generator->state = MAL_GENERATOR_COMPLETED;
+        }
+        return;
+    }
+
     if (vm->frame_count >= vm->frame_capacity) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
         return;
@@ -1451,9 +1487,7 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
     MalVmFrame *frame = &vm->frames[vm->frame_count++];
     *frame = generator->frame;
     frame->vm = vm;
-    // Re-resolve in case a runtime-eval splice moved the function table while
-    // this generator was suspended (function_index is the source of truth).
-    frame->function = &vm->live_definition.functions[frame->function_index];
+    frame->function = function;
     frame->generator = generator;
     frame->return_register = -1;
     frame->caller_frame_index = -1;
@@ -1907,7 +1941,7 @@ MalCompletion mal_vm_call_value(
                 completion = vm->completion;
             } else {
                 MalValue this_value = mal_vm_callee_this(vm, function, resolution.this_value);
-                MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), env, resolution.callee);
+                MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), env, resolution.callee, nullptr);
                 mal_vm_leave_compiled(vm);
                 completion = vm->completion.kind == MAL_COMPLETION_THROW
                     ? vm->completion
@@ -2046,7 +2080,7 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                     // collection inside the constructor would otherwise sweep it.
                     MalCalleeRoots ncr;
                     mal_gc_callee_roots_begin(&ncr, this_value, effective_new_target, resolution.args, resolution.arg_count);
-                    MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, effective_new_target, env, resolution.callee);
+                    MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, effective_new_target, env, resolution.callee, nullptr);
                     mal_gc_callee_roots_end(&ncr);
                     mal_vm_leave_compiled(vm);
                     completion = vm->completion.kind == MAL_COMPLETION_THROW

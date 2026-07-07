@@ -57,6 +57,47 @@ export interface CompiledFunction {
 }
 
 /**
+ * Threaded through the body emission for a resumable (generator/async) function.
+ * A coroutine holds every register boxed in a heap buffer named `__gc_slots` (so
+ * the existing register/with-object references work unchanged), indexed directly
+ * by register number; `selfSlot` is the trailing buffer slot holding the
+ * coroutine object (rooting its yielded value / async fields). GENERATOR_START,
+ * YIELD, AWAIT and the coroutine RETURN forms consult this. Null for ordinary
+ * straight-line functions.
+ */
+interface CoroutineContext {
+	functionIndex: number;
+	selfSlot: number;
+	/** Async function (not a generator): returns its result promise, uses ASYNC_START/AWAIT. */
+	isAsyncFunction: boolean;
+	/** `async function*`: GENERATOR_START-based, but its yields await + settle requests. */
+	isAsyncGenerator: boolean;
+}
+
+/**
+ * The resume points of a coroutine — the instruction after each suspend
+ * (GENERATOR_START/YIELD/AWAIT), where a resume re-enters — paired with the
+ * static `with`-nesting depth there (restored into __with_count on resume). The
+ * instruction pointer is advanced past the suspend before the frame is saved, so
+ * the resume IP is the following instruction.
+ */
+function resumePointsOf(fn: VmFunction): Array<{ resumeIp: number; withDepth: number }> {
+	const points: Array<{ resumeIp: number; withDepth: number }> = [];
+	let depth = 0;
+	for (let ip = 0; ip < fn.instructions.length; ip++) {
+		const opcode = fn.instructions[ip]!.opcode;
+		if (opcode === "GENERATOR_START" || opcode === "YIELD" || opcode === "AWAIT") {
+			points.push({ resumeIp: ip + 1, withDepth: depth });
+		} else if (opcode === "WITH_ENTER") {
+			depth++;
+		} else if (opcode === "WITH_EXIT" && depth > 0) {
+			depth--;
+		}
+	}
+	return points;
+}
+
+/**
  * Render an f64 value as a valid C double expression. `toExponential()` is fine
  * for finite values but yields the bare words `Infinity`/`NaN` for non-finite
  * ones, which are not C constants — emit compiler builtins instead (no <math.h>
@@ -411,10 +452,13 @@ export function emitCompiledFunction(
 	// an empty promotable set (no speculation, no guard, no further fallback).
 	override?: { symbol: string; promotable: Set<number> },
 ): CompiledFunction | null {
-	// Generators and async functions suspend mid-body; they are not straight-line
-	// C functions (the resumable-compiled-function backend is a later milestone).
+	// Generators and async functions suspend mid-body: they lower to a resumable C
+	// function (a heap register frame + entry dispatch to the saved resume point)
+	// rather than the straight-line shape below. See emitResumableFunction and
+	// docs/decisions/03-compiled-coroutines.md. (override is only ever set for the
+	// boxed fallback of a promoting normal function, never a coroutine.)
 	if (fn.isGenerator || fn.isAsync) {
-		return null;
+		return emitResumableFunction(fn, index, suffix, debug);
 	}
 
 	// A function with its own captured slots needs a per-activation MalEnv node
@@ -483,7 +527,7 @@ export function emitCompiledFunction(
 	const needsRootFrame = totalSlots > 0 || capturesEnv;
 	const gcUnlink = needsRootFrame ? "mal_root_frame_head = __gc_frame.prev; " : "";
 
-	const body = emitBody(fn, suffix, reps, debug, gcUnlink, withBase, thisSlot);
+	const body = emitBody(fn, suffix, reps, debug, gcUnlink, withBase, thisSlot, null);
 	if (body === null) {
 		return null;
 	}
@@ -524,18 +568,19 @@ export function emitCompiledFunction(
 			return null; // the promoting variant lowered, so this cannot happen
 		}
 		fallbackSource = `${boxed.source}\n\n`;
-		bailTarget = `${boxedSymbol}(vm, this_value, args, arg_count, new_target, env, callee)`;
+		bailTarget = `${boxedSymbol}(vm, this_value, args, arg_count, new_target, env, callee, resume_state)`;
 	}
 
 	const lines: Array<string> = [];
 
 	lines.push(
-		`static MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee) {`,
+		`static MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state) {`,
 	);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
 	lines.push(`    (void) callee;`);
+	lines.push(`    (void) resume_state;`);
 
 	// Registers are plain C locals: `number`-rep ones as doubles, `boolean`-rep
 	// as bool (both unboxed). MalValue-rep registers instead alias slots of the
@@ -636,6 +681,145 @@ export function emitCompiledFunction(
 	}
 
 	return { symbol, source: fallbackSource + lines.join("\n") };
+}
+
+/**
+ * Emit a resumable C function for a generator/async `fn`, or null when its body
+ * uses an opcode the backend cannot lower yet (e.g. ASYNC_START/AWAIT before the
+ * async milestone → async functions and async generators bail). See
+ * docs/decisions/03-compiled-coroutines.md.
+ *
+ * The activation lives in a heap MalValue buffer (named __gc_slots so the shared
+ * register/with-object emission works unchanged): registers [0,registerCount),
+ * the with-object stack, then a self slot holding the coroutine object. A fresh
+ * call allocates the buffer, runs the parameter prologue and body until the first
+ * suspend; a resume restores the buffer + env from the coroutine and dispatches
+ * to the saved resume label. Every register is boxed (no rep specialization: an
+ * unboxed C local would not survive a suspend, and the resume ABI writes values
+ * by register index).
+ */
+function emitResumableFunction(
+	fn: VmFunction,
+	index: number,
+	suffix: string,
+	debug: boolean,
+): CompiledFunction | null {
+	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
+	const isAsyncGenerator = fn.isAsync && fn.isGenerator;
+
+	const reps: Array<RegisterRep> = new Array(fn.registerCount).fill("boxed");
+
+	// Buffer layout: registers | with-object stack | coroutine self-reference.
+	const maxWithDepth = maxWithNesting(fn);
+	const withBase = fn.registerCount;
+	const selfSlot = fn.registerCount + maxWithDepth;
+	const totalSlots = fn.registerCount + maxWithDepth + 1;
+
+	const capturesEnv = fn.capturedCount > 0;
+	// The root frame spans the whole buffer and is always published, so every exit
+	// past it must unlink it.
+	const gcUnlink = "mal_root_frame_head = __gc_frame.prev; ";
+
+	const coro: CoroutineContext = {
+		functionIndex: index,
+		selfSlot,
+		isAsyncFunction,
+		isAsyncGenerator,
+	};
+
+	// thisSlot is -1: a coroutine is never a derived constructor, and `this` is read
+	// from the this_value parameter (which the resume path is invoked with from the
+	// saved frame), so no mutable this-slot is needed.
+	const body = emitBody(fn, suffix, reps, debug, gcUnlink, withBase, -1, coro);
+	if (body === null) {
+		return null;
+	}
+	if (body.some((line) => /\br-\d/.test(line))) {
+		return null;
+	}
+
+	const resumePoints = resumePointsOf(fn);
+	const symbol = `mal_compiled_${index}${suffix}`;
+	const lines: Array<string> = [];
+
+	lines.push(
+		`static MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, struct MalGeneratorObject *resume_state) {`,
+	);
+	lines.push(`    (void) this_value;`);
+	lines.push(`    (void) new_target;`);
+
+	lines.push(`    MalValue *__gc_slots;`);
+	lines.push(`    MalGeneratorObject *__coro = resume_state;`);
+	lines.push(`    (void) __coro;`);
+	if (maxWithDepth > 0) {
+		lines.push(`    i32 __with_count = 0;`);
+	}
+	if (isAsyncFunction) {
+		// The result promise the caller receives; created by ASYNC_START on the fresh
+		// run and returned at every exit (ignored on a resume, where it is undefined).
+		lines.push(`    MalValue __async_result_promise = MAL_VALUE_UNDEFINED;`);
+	}
+	for (let i = 0; i < fn.registerCount; i++) {
+		lines.push(`#define r${i} (__gc_slots[${i}])`);
+	}
+
+	lines.push(
+		`    static const MalFrameDescriptor __gc_desc = { .function_index = ${index}, .slot_count = ${totalSlots} };`,
+		`    MalRootFrame __gc_frame;`,
+	);
+
+	// RESUME: restore buffer + env, publish the root frame over the buffer, dispatch
+	// to the saved resume label (restoring the static with-depth there). The sent
+	// value / resume mode were already written into the buffer by index.
+	lines.push(`    if (resume_state != nullptr) {`);
+	lines.push(`        __gc_slots = resume_state->frame.registers;`);
+	lines.push(`        env = resume_state->frame.env;`);
+	lines.push(
+		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .env = env };`,
+	);
+	lines.push(`        mal_root_frame_head = &__gc_frame;`);
+	lines.push(`        switch (resume_state->frame.instruction_pointer) {`);
+	for (const { resumeIp, withDepth } of resumePoints) {
+		const setWith = maxWithDepth > 0 ? `__with_count = ${withDepth}; ` : "";
+		lines.push(`        case ${resumeIp}: ${setWith}goto L${resumeIp};`);
+	}
+	// Unreachable: a saved resume IP is always one of the recorded points.
+	lines.push(`        default: break;`);
+	lines.push(`        }`);
+	lines.push(`    } else {`);
+
+	// FRESH: allocate the buffer (already all-undefined), publish the root frame,
+	// build the captured env, then load parameters boxed before falling into body.
+	lines.push(`        __gc_slots = mal_coroutine_alloc_registers(${totalSlots});`);
+	lines.push(
+		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .env = env };`,
+	);
+	lines.push(`        mal_root_frame_head = &__gc_frame;`);
+	if (capturesEnv) {
+		lines.push(
+			`        env = mal_env_new(vm, env, ${index}, ${fn.capturedCount});`,
+			`        __gc_frame.env = env;`,
+		);
+	}
+	for (let i = 0; i < fn.parameterCount; i++) {
+		lines.push(`        r${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`);
+	}
+	lines.push(`    }`);
+
+	lines.push(...body);
+
+	// Falling off the end is an implicit `return undefined` — complete the coroutine.
+	const fallReturn = isAsyncFunction ? "__async_result_promise" : "MAL_VALUE_UNDEFINED";
+	lines.push(
+		`    mal_vm_op_coroutine_return_compiled(vm, __coro, MAL_VALUE_UNDEFINED);`,
+		`    ${gcUnlink}return ${fallReturn};`,
+	);
+	lines.push("}");
+	for (let i = 0; i < fn.registerCount; i++) {
+		lines.push(`#undef r${i}`);
+	}
+
+	return { symbol, source: lines.join("\n") };
 }
 
 /** The C type a register of the given rep is held in. */
@@ -792,11 +976,22 @@ function emitBody(
 	gcUnlink: string,
 	withBase: number,
 	thisSlot: number,
+	coro: CoroutineContext | null,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
 		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") {
 			jumpTargets.add(instruction.targetIp);
+		}
+	}
+	// A coroutine resumes at the instruction after each suspend (GENERATOR_START/
+	// YIELD/AWAIT), so those need labels for the entry dispatch to jump to.
+	if (coro !== null) {
+		for (let ip = 0; ip < fn.instructions.length; ip++) {
+			const opcode = fn.instructions[ip]!.opcode;
+			if (opcode === "GENERATOR_START" || opcode === "YIELD" || opcode === "AWAIT") {
+				jumpTargets.add(ip + 1);
+			}
 		}
 	}
 	// Exception handlers are reached only via the on-throw goto, so their entry
@@ -854,6 +1049,7 @@ function emitBody(
 			gcUnlink,
 			withBase,
 			thisSlot,
+			coro,
 		);
 		if (emitted === null) {
 			return null;
@@ -882,6 +1078,7 @@ function emitInstruction(
 	gcUnlink: string,
 	withBase: number,
 	thisSlot: number,
+	coro: CoroutineContext | null,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -910,10 +1107,23 @@ function emitInstruction(
 	// On a pending throw with no in-function handler we leave the compiled frame,
 	// so unlink its root frame first; a goto to an in-function handler keeps the
 	// frame live (no unlink).
+	// The value a coroutine's C function returns at an exit: an async function hands
+	// back its result promise (meaningful only on the initial synchronous run — a
+	// resume's return is ignored); everything else returns undefined.
+	const coroReturnValue =
+		coro !== null && coro.isAsyncFunction
+			? "__async_result_promise"
+			: "MAL_VALUE_UNDEFINED";
 	const onThrow =
 		handlerIp !== undefined
 			? `goto L${handlerIp};`
-			: `{ ${gcUnlink}return MAL_VALUE_UNDEFINED; }`;
+			: coro !== null
+				? // Throwing out of a coroutine: complete it (free the activation, route
+					// the throw by kind) before leaving the frame. __coro is null if the
+					// parameter prologue threw before GENERATOR_START — then the raw buffer
+					// is released and the throw propagates synchronously.
+					`{ mal_vm_op_coroutine_throw_compiled(vm, __coro, __gc_slots); ${gcUnlink}return ${coroReturnValue}; }`
+				: `{ ${gcUnlink}return MAL_VALUE_UNDEFINED; }`;
 	const throwCheck = `if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`;
 
 	// GC safepoint poll. Emitted at call returns and loop
@@ -1400,6 +1610,14 @@ function emitInstruction(
 			// Register -1 is the "no value" sentinel (a synthesized empty return).
 			const value =
 				instruction.value < 0 ? "MAL_VALUE_UNDEFINED" : boxed(instruction.value);
+			// A coroutine body's return completes the activation: free its buffer and
+			// settle its promise / hand the value to the .next() driver.
+			if (coro !== null) {
+				return [
+					`mal_vm_op_coroutine_return_compiled(vm, __coro, ${value});`,
+					`${gcUnlink}return ${coroReturnValue};`,
+				];
+			}
 			// A derived constructor substitutes the super-bound `this` for a
 			// non-object return, and returning before super() bound it is a
 			// ReferenceError — so route through the checked helper (which can throw).
@@ -1580,6 +1798,31 @@ function emitInstruction(
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 				`r${instruction.dst} = ${thisRef};`,
 				poll, // call-return safepoint
+			];
+		}
+		case "GENERATOR_START": {
+			// Resumable functions only. Build the generator/async-generator instance
+			// adopting this activation's buffer, then suspend at the next instruction
+			// and hand the generator back to the caller (the first .next() resumes it).
+			if (coro === null) {
+				return null;
+			}
+			return [
+				`__coro = mal_vm_op_generator_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __gc_slots, ${ip + 1}, ${coro.isAsyncGenerator});`,
+				`__gc_slots[${coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
+				`${gcUnlink}return mal_value_from_object((MalObject *) __coro);`,
+			];
+		}
+		case "YIELD": {
+			// Record the yielded value, resume registers, and resume point on the
+			// coroutine, save the current env, then suspend (return). A resume
+			// re-enters at ip+1, where the front-end's inline dispatch reads the mode.
+			if (coro === null) {
+				return null;
+			}
+			return [
+				`mal_vm_op_yield_compiled(vm, __coro, ${boxed(instruction.yieldedSrc)}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, env);`,
+				`${gcUnlink}return ${coroReturnValue};`,
 			];
 		}
 		default:
