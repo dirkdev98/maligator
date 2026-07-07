@@ -86,44 +86,44 @@ intl = ["dep:icu_locale", "icu_locale/compiled_data", "dep:writeable"]
 intl-collator = ["intl", "dep:icu_collator", "icu_collator/compiled_data"]
 intl-number-format = ["intl", "dep:icu_decimal", "icu_decimal/compiled_data"]
 intl-date-time-format = [
-    "intl",
-    "intl-number-format",
-    "dep:icu_datetime",
-    "icu_datetime/compiled_data",
-    "dep:icu_calendar",
-    "icu_calendar/compiled_data",
-    "dep:icu_time",
-    "icu_time/compiled_data",
+	"intl",
+	"intl-number-format",
+	"dep:icu_datetime",
+	"icu_datetime/compiled_data",
+	"dep:icu_calendar",
+	"icu_calendar/compiled_data",
+	"dep:icu_time",
+	"icu_time/compiled_data",
 ]
 intl-plural-rules = ["intl", "dep:icu_plurals", "icu_plurals/compiled_data"]
 intl-list-format = ["intl", "dep:icu_list", "icu_list/compiled_data"]
 intl-segmenter = ["intl", "dep:icu_segmenter", "icu_segmenter/compiled_data"]
 intl-display-names = ["intl", "dep:icu_experimental", "icu_experimental/compiled_data"]
 intl-relative-time-format = [
-    "intl",
-    "intl-number-format",
-    "dep:icu_experimental",
-    "icu_experimental/compiled_data",
+	"intl",
+	"intl-number-format",
+	"dep:icu_experimental",
+	"icu_experimental/compiled_data",
 ]
 intl-duration-format = [
-    "intl",
-    "intl-number-format",
-    "intl-plural-rules",
-    "dep:icu_experimental",
-    "icu_experimental/compiled_data",
+	"intl",
+	"intl-number-format",
+	"intl-plural-rules",
+	"dep:icu_experimental",
+	"icu_experimental/compiled_data",
 ]
 
 # Every service (the canonical dev/test262 build).
 intl-full = [
-    "intl-collator",
-    "intl-number-format",
-    "intl-date-time-format",
-    "intl-plural-rules",
-    "intl-list-format",
-    "intl-segmenter",
-    "intl-display-names",
-    "intl-relative-time-format",
-    "intl-duration-format",
+	"intl-collator",
+	"intl-number-format",
+	"intl-date-time-format",
+	"intl-plural-rules",
+	"intl-list-format",
+	"intl-segmenter",
+	"intl-display-names",
+	"intl-relative-time-format",
+	"intl-duration-format",
 ]
 
 [profile.release]

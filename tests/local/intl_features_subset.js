@@ -12,7 +12,10 @@ function check(name, ok) {
 
 // Selected services present + localized.
 check("Intl present", typeof Intl === "object");
-check("NumberFormat localized", new Intl.NumberFormat("de-DE").format(1234.5) === "1.234,5");
+check(
+	"NumberFormat localized",
+	new Intl.NumberFormat("de-DE").format(1234.5) === "1.234,5",
+);
 check("Collator present", typeof Intl.Collator === "function");
 check("localeCompare (collator)", "b".localeCompare("a") === 1);
 check("DateTimeFormat present", typeof Intl.DateTimeFormat === "function");

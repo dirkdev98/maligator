@@ -70,7 +70,10 @@ export class BuildConfigError extends Error {
 export const INTL_SERVICES: Record<string, { cargo: string; define: string }> = {
 	collator: { cargo: "intl-collator", define: "MAL_INTL_HAS_COLLATOR" },
 	"number-format": { cargo: "intl-number-format", define: "MAL_INTL_HAS_NUMBER_FORMAT" },
-	"date-time-format": { cargo: "intl-date-time-format", define: "MAL_INTL_HAS_DATE_TIME_FORMAT" },
+	"date-time-format": {
+		cargo: "intl-date-time-format",
+		define: "MAL_INTL_HAS_DATE_TIME_FORMAT",
+	},
 	"plural-rules": { cargo: "intl-plural-rules", define: "MAL_INTL_HAS_PLURAL_RULES" },
 	"list-format": { cargo: "intl-list-format", define: "MAL_INTL_HAS_LIST_FORMAT" },
 	segmenter: { cargo: "intl-segmenter", define: "MAL_INTL_HAS_SEGMENTER" },
@@ -79,7 +82,10 @@ export const INTL_SERVICES: Record<string, { cargo: string; define: string }> = 
 		cargo: "intl-relative-time-format",
 		define: "MAL_INTL_HAS_RELATIVE_TIME_FORMAT",
 	},
-	"duration-format": { cargo: "intl-duration-format", define: "MAL_INTL_HAS_DURATION_FORMAT" },
+	"duration-format": {
+		cargo: "intl-duration-format",
+		define: "MAL_INTL_HAS_DURATION_FORMAT",
+	},
 };
 
 /** Deduped selected Intl services; [] means all services (the default). */

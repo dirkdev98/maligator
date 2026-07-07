@@ -23,7 +23,10 @@ check("negative number toLocaleString", (-42).toLocaleString() === "-42");
 const d = new Date(1000000000000); // 2001-09-09T01:46:40Z
 check("toLocaleDateString shape", /^\d{4}-\d{2}-\d{2}$/.test(d.toLocaleDateString()));
 check("toLocaleTimeString shape", /^\d{2}:\d{2}:\d{2}$/.test(d.toLocaleTimeString()));
-check("toLocaleString shape", /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(d.toLocaleString()));
+check(
+	"toLocaleString shape",
+	/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(d.toLocaleString()),
+);
 check("invalid date", new Date(NaN).toLocaleString() === "Invalid Date");
 
 // toLocale{Upper,Lower}Case already alias the plain case methods.

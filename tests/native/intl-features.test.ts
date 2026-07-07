@@ -15,7 +15,13 @@ import {
 // Segmenter (LSTM, ~12 MB) and the experimental trio. Asserts the selected services
 // localize, the dropped ones are absent, and the subset binary is much smaller.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-intl-feat-"));
-const CORE = ["collator", "number-format", "date-time-format", "plural-rules", "list-format"];
+const CORE = [
+	"collator",
+	"number-format",
+	"date-time-format",
+	"plural-rules",
+	"list-format",
+];
 
 describe("engine.intl.features (service subset)", () => {
 	let subsetBin: string;
