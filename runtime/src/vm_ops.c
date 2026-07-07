@@ -233,12 +233,12 @@ void mal_op_create_array(MalCallable *callable, MalInstruction *instruction) {
         mal_vm_op_create_array(callable->vm, instruction->as.create_array.length);
 }
 
-void mal_op_create_module_namespace(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    i32 count = instruction->as.create_module_namespace.count;
-    const i32 *name_indices = instruction->as.create_module_namespace.name_indices;
-    const i32 *slots = instruction->as.create_module_namespace.slots;
-
+// Shared by the interpreter op and the native backend: build a module namespace
+// exotic object from the (name-constant-index, export-slot) pairs. No user code
+// runs, so it never throws.
+MalValue mal_vm_op_create_module_namespace(
+    MalVm *vm, i32 count, const i32 *name_indices, const i32 *slots
+) {
     MalModuleNamespaceExport *exports =
         count > 0 ? malloc(sizeof(MalModuleNamespaceExport) * (usize) count) : nullptr;
     for (i32 i = 0; i < count; i++) {
@@ -247,8 +247,16 @@ void mal_op_create_module_namespace(MalCallable *callable, MalInstruction *instr
     }
 
     MalModuleNamespaceObject *ns = mal_module_namespace_object_new(&vm->heap, exports, count);
-    callable->registers[instruction->as.create_module_namespace.dst] =
-        mal_value_from_module_namespace_object(ns);
+    return mal_value_from_module_namespace_object(ns);
+}
+
+void mal_op_create_module_namespace(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.create_module_namespace.dst] = mal_vm_op_create_module_namespace(
+        callable->vm,
+        instruction->as.create_module_namespace.count,
+        instruction->as.create_module_namespace.name_indices,
+        instruction->as.create_module_namespace.slots
+    );
 }
 
 // Build one of a tagged template's two string arrays. Each element is a frozen
@@ -270,25 +278,21 @@ static MalArrayObject *mal_vm_build_template_string_array(MalVm *vm, const i32 *
     return array;
 }
 
-void mal_op_create_template_object(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    i32 cache_slot = instruction->as.create_template_object.cache_slot;
-
-    // Stable identity: build the template object once, then hand back the cached
-    // value on every later evaluation of this same tagged-template site.
+// Shared by the interpreter op and the native backend: build (or return the
+// cached) tagged-template strings object for one template site. Stable identity —
+// built once, then the cached global slot is returned on every later evaluation.
+// No user code runs, so it never throws.
+MalValue mal_vm_op_create_template_object(
+    MalVm *vm, i32 cache_slot, i32 count, const i32 *cooked_indices, const i32 *raw_indices
+) {
     if (!mal_value_is_undefined(vm->globals[cache_slot])) {
-        callable->registers[instruction->as.create_template_object.dst] = vm->globals[cache_slot];
-        return;
+        return vm->globals[cache_slot];
     }
 
-    i32 count = instruction->as.create_template_object.count;
-
-    MalArrayObject *raw =
-        mal_vm_build_template_string_array(vm, instruction->as.create_template_object.raw_indices, count);
+    MalArrayObject *raw = mal_vm_build_template_string_array(vm, raw_indices, count);
     mal_object_set_extensible(&raw->object, false);
 
-    MalArrayObject *cooked =
-        mal_vm_build_template_string_array(vm, instruction->as.create_template_object.cooked_indices, count);
+    MalArrayObject *cooked = mal_vm_build_template_string_array(vm, cooked_indices, count);
 
     // `raw` is a frozen, non-enumerable own property of the cooked array; attach
     // it before sealing the cooked array (a non-extensible object rejects it).
@@ -299,7 +303,17 @@ void mal_op_create_template_object(MalCallable *callable, MalInstruction *instru
 
     MalValue result = mal_value_from_array_object(cooked);
     vm->globals[cache_slot] = result;
-    callable->registers[instruction->as.create_template_object.dst] = result;
+    return result;
+}
+
+void mal_op_create_template_object(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.create_template_object.dst] = mal_vm_op_create_template_object(
+        callable->vm,
+        instruction->as.create_template_object.cache_slot,
+        instruction->as.create_template_object.count,
+        instruction->as.create_template_object.cooked_indices,
+        instruction->as.create_template_object.raw_indices
+    );
 }
 
 // Spec HasBinding for a `with` object environment record: HasProperty(O, P)
@@ -325,13 +339,24 @@ static bool mal_vm_with_has_binding(MalVm *vm, MalValue object, MalKey key) {
     return true;
 }
 
-void mal_op_with_enter(MalCallable *callable, MalInstruction *instruction) {
-    MalValue object = callable->registers[instruction->as.with_enter.object];
+// Shared by the interpreter op and the native backend: WithBaseObject nil check.
+// Returns false (with a pending TypeError) if the with-expression is null or
+// undefined; otherwise true. The caller pushes `object` onto its own with-stack
+// (per-activation storage: the interpreter frame's, or the compiled frame's rooted
+// slots) — kept caller-side because the two backends store it differently.
+bool mal_vm_op_with_enter(MalVm *vm, MalValue object) {
     if (mal_value_is_nil(object)) {
         mal_vm_throw_error(
-            callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Cannot convert undefined or null to object"
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object"
         );
+        return false;
+    }
+    return true;
+}
+
+void mal_op_with_enter(MalCallable *callable, MalInstruction *instruction) {
+    MalValue object = callable->registers[instruction->as.with_enter.object];
+    if (!mal_vm_op_with_enter(callable->vm, object)) {
         return;
     }
 
@@ -350,66 +375,92 @@ void mal_op_with_exit(MalCallable *callable, MalInstruction *instruction) {
     }
 }
 
-void mal_op_with_get(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    MalValue name =
-        mal_value_from_string(&vm->definition->string_constants[instruction->as.with_get.name_string_index]);
+// Shared by the interpreter op and the native backend: resolve a name against the
+// with-object stack (innermost first). `with_objects[0..with_count)` is the caller's
+// per-activation stack. Returns the bound value, or the EMPTY sentinel on a miss
+// (the compiled fallback then reads the static binding). A getter / @@unscopables
+// probe can throw; callers check the completion.
+MalValue mal_vm_op_with_get(
+    MalVm *vm, const MalValue *with_objects, i32 with_count, i32 name_string_index
+) {
+    MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
-        for (i32 i = callable->with_count - 1; i >= 0; i--) {
-            MalValue object = callable->with_objects[i];
+        for (i32 i = with_count - 1; i >= 0; i--) {
+            MalValue object = with_objects[i];
             if (mal_vm_with_has_binding(vm, object, key)) {
                 MalValue value;
                 if (!mal_vm_get_property(vm, object, key, &value)) {
                     value = mal_value_new_undefined();
                 }
-                callable->registers[instruction->as.with_get.dst] = value;
-                return;
+                return value;
             }
         }
     }
-    // Miss: the EMPTY sentinel tells the compiled fallback to use the static binding.
-    callable->registers[instruction->as.with_get.dst] = mal_value_new_empty();
+    // Miss: the EMPTY sentinel tells the caller to use the static binding.
+    return mal_value_new_empty();
+}
+
+void mal_op_with_get(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.with_get.dst] = mal_vm_op_with_get(
+        callable->vm, callable->with_objects, callable->with_count,
+        instruction->as.with_get.name_string_index
+    );
+}
+
+// Shared: resolve the reference BASE (the with-object itself, not its value) so the
+// caller reads/writes the property through it. EMPTY sentinel on a miss.
+MalValue mal_vm_op_with_resolve_base(
+    MalVm *vm, const MalValue *with_objects, i32 with_count, i32 name_string_index
+) {
+    MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
+    MalKey key;
+    if (mal_vm_value_to_property_key(vm, name, &key)) {
+        for (i32 i = with_count - 1; i >= 0; i--) {
+            MalValue object = with_objects[i];
+            if (mal_vm_with_has_binding(vm, object, key)) {
+                return object;
+            }
+        }
+    }
+    // Miss: the EMPTY sentinel tells the caller to use the static binding.
+    return mal_value_new_empty();
 }
 
 void mal_op_with_resolve_base(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    MalValue name =
-        mal_value_from_string(&vm->definition->string_constants[instruction->as.with_resolve_base.name_string_index]);
+    callable->registers[instruction->as.with_resolve_base.dst] = mal_vm_op_with_resolve_base(
+        callable->vm, callable->with_objects, callable->with_count,
+        instruction->as.with_resolve_base.name_string_index
+    );
+}
+
+// Shared: assign to a name found on the with-stack. Returns whether a binding was
+// found (a miss lets the caller fall back to the static binding). `with` is
+// sloppy-only, so a rejected set silently no-ops.
+bool mal_vm_op_with_set(
+    MalVm *vm, const MalValue *with_objects, i32 with_count, i32 name_string_index, MalValue value
+) {
+    MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
-        for (i32 i = callable->with_count - 1; i >= 0; i--) {
-            MalValue object = callable->with_objects[i];
+        for (i32 i = with_count - 1; i >= 0; i--) {
+            MalValue object = with_objects[i];
             if (mal_vm_with_has_binding(vm, object, key)) {
-                // Return the with-object itself (the reference base), NOT its value:
-                // the caller reads/writes the property through this captured base.
-                callable->registers[instruction->as.with_resolve_base.dst] = object;
-                return;
+                mal_vm_set_property(vm, object, key, value, object);
+                return true;
             }
         }
     }
-    // Miss: the EMPTY sentinel tells the compiled fallback to use the static binding.
-    callable->registers[instruction->as.with_resolve_base.dst] = mal_value_new_empty();
+    return false;
 }
 
 void mal_op_with_set(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    MalValue name =
-        mal_value_from_string(&vm->definition->string_constants[instruction->as.with_set.name_string_index]);
-    MalValue value = callable->registers[instruction->as.with_set.value];
-    MalKey key;
-    if (mal_vm_value_to_property_key(vm, name, &key)) {
-        for (i32 i = callable->with_count - 1; i >= 0; i--) {
-            MalValue object = callable->with_objects[i];
-            if (mal_vm_with_has_binding(vm, object, key)) {
-                // `with` is sloppy-only, so a rejected set silently no-ops.
-                mal_vm_set_property(vm, object, key, value, object);
-                callable->registers[instruction->as.with_set.found] = mal_value_new_boolean(true);
-                return;
-            }
-        }
-    }
-    callable->registers[instruction->as.with_set.found] = mal_value_new_boolean(false);
+    bool found = mal_vm_op_with_set(
+        callable->vm, callable->with_objects, callable->with_count,
+        instruction->as.with_set.name_string_index,
+        callable->registers[instruction->as.with_set.value]
+    );
+    callable->registers[instruction->as.with_set.found] = mal_value_new_boolean(found);
 }
 
 void mal_op_is_empty(MalCallable *callable, MalInstruction *instruction) {
@@ -513,10 +564,10 @@ void mal_op_create_function(MalCallable *callable, MalInstruction *instruction) 
 // String key names it directly, a Symbol key names it "[description]" (or "" when
 // the symbol has no description). Redefines the "" name set at CREATE_FUNCTION
 // (configurable), matching { writable:false, enumerable:false, configurable:true }.
-void mal_op_set_function_name(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    MalValue func = callable->registers[instruction->as.set_function_name.func];
-    MalValue key = callable->registers[instruction->as.set_function_name.key];
+// Shared by the interpreter op and the native backend: SetFunctionName(func, key,
+// prefix) — install the "name" own data property. `key` is an already-evaluated
+// property key (string/number/symbol), so no @@toPrimitive re-entry; never throws.
+void mal_vm_op_set_function_name(MalVm *vm, MalValue func, MalValue key, u8 prefix) {
     if (!mal_value_is_object(func)) {
         return;
     }
@@ -542,7 +593,6 @@ void mal_op_set_function_name(MalCallable *callable, MalInstruction *instruction
 
     // A getter/setter prefixes the name with "get "/"set " (SetFunctionName's
     // prefix), so `get [sym]` names the function "get [desc]".
-    u8 prefix = instruction->as.set_function_name.prefix;
     if (prefix != 0) {
         const char *text = prefix == 1 ? "get " : "set ";
         name_value = mal_ops_add(&vm->heap, mal_value_from_string(mal_intrinsic_ascii(vm, text)), name_value);
@@ -550,6 +600,15 @@ void mal_op_set_function_name(MalCallable *callable, MalInstruction *instruction
 
     MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(mal_value_to_object(func), mal_intrinsic_string_key(vm, "name"), &name_desc);
+}
+
+void mal_op_set_function_name(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_set_function_name(
+        callable->vm,
+        callable->registers[instruction->as.set_function_name.func],
+        callable->registers[instruction->as.set_function_name.key],
+        instruction->as.set_function_name.prefix
+    );
 }
 
 // Walk the environment chain to the activation that owns the captured binding
@@ -995,6 +1054,38 @@ void mal_op_call_spread(MalCallable *callable, MalInstruction *instruction) {
     mal_vm_call_dispatch(vm, callee, this_value, base, argument_count, dst);
 }
 
+// Shared spread call/construct for the native backend: marshal the spread array's
+// elements onto the value stack (bounds-checked — RangeError on overflow), dispatch
+// through the compiled calling convention, then pop the marshaled window and return
+// the completion. The value stack is fixed-capacity (never realloc'd), so the args
+// pointer stays valid across the call. A throw (overflow, or from the callee)
+// arrives via the returned completion.
+MalCompletion mal_vm_op_call_spread(
+    MalVm *vm, MalValue callee, MalValue this_value, MalValue arguments_array
+) {
+    i32 base = vm->value_stack_size;
+    i32 argument_count = mal_vm_marshal_spread(vm, arguments_array);
+    if (argument_count < 0) {
+        return vm->completion;
+    }
+    MalCompletion completion =
+        mal_vm_call_value(vm, callee, this_value, &vm->value_stack[base], argument_count);
+    vm->value_stack_size = base;
+    return completion;
+}
+
+MalCompletion mal_vm_op_construct_spread(MalVm *vm, MalValue callee, MalValue arguments_array) {
+    i32 base = vm->value_stack_size;
+    i32 argument_count = mal_vm_marshal_spread(vm, arguments_array);
+    if (argument_count < 0) {
+        return vm->completion;
+    }
+    MalCompletion completion =
+        mal_vm_construct_value(vm, callee, &vm->value_stack[base], argument_count);
+    vm->value_stack_size = base;
+    return completion;
+}
+
 void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     MalValue callee = callable->registers[instruction->as.construct.callee];
@@ -1029,53 +1120,101 @@ void mal_op_construct_spread(MalCallable *callable, MalInstruction *instruction)
     mal_vm_construct_dispatch(vm, callee, base, argument_count, dst);
 }
 
-void mal_op_construct_super(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    MalValue parent = callable->registers[instruction->as.construct_super.parent];
-    MalValue arguments_array = callable->registers[instruction->as.construct_super.arguments_array];
-    i32 dst = instruction->as.construct_super.dst;
-    // The derived constructor's new.target is forwarded to the parent, so the
-    // instance is built from the most-derived class's prototype. A super() with
-    // no new.target means the derived class constructor was invoked without
-    // `new` (a class constructor has no [[Call]]); that is a TypeError.
-    MalValue new_target = callable->new_target;
+// Shared by the interpreter op and the native backend: `super(...args)`. Constructs
+// the parent with the derived new.target and BindThisValue-binds the result as
+// `this`. `current_this` is the (uninitialized EMPTY) binding; on success *this_out
+// receives the bound `this` (which the caller stores back into its this binding and
+// the dst register). Sets vm->completion and returns it on any throw.
+MalCompletion mal_vm_op_construct_super(
+    MalVm *vm, MalValue parent, MalValue arguments_array, MalValue new_target,
+    MalValue current_this, MalValue *this_out
+) {
+    *this_out = current_this;
+    // A super() with no new.target means the derived class constructor was invoked
+    // without `new` (a class constructor has no [[Call]]); that is a TypeError.
     if (mal_value_is_undefined(new_target)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Class constructor cannot be invoked without 'new'");
-        return;
+        return vm->completion;
     }
     // BindThisValue: `this` may be bound only once. A second super() (this is no
     // longer the uninitialized EMPTY sentinel) is a ReferenceError.
-    if (!mal_value_is_empty(callable->this_value)) {
+    if (!mal_value_is_empty(current_this)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, "Super constructor may only be called once");
-        return;
+        return vm->completion;
     }
-    // Frames may relocate while the parent constructor runs; address the caller
-    // by index for the post-construct writes rather than holding `callable`.
-    i32 caller_frame_index = vm->frame_count - 1;
 
-    // Marshal the super arguments onto the value stack (above the caller window).
+    // Marshal the super arguments onto the value stack (bounds-checked); the value
+    // stack is fixed-capacity, so the args pointer stays valid across the construct.
     i32 base = vm->value_stack_size;
     i32 argument_count = mal_vm_marshal_spread(vm, arguments_array);
     if (argument_count < 0) {
-        return;
+        return vm->completion;
     }
 
     MalCompletion completion = mal_vm_construct_value_with_target(vm, parent, &vm->value_stack[base], argument_count, new_target);
     vm->value_stack_size = base;
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
-        return;
+        return completion;
     }
 
     // BindThisValue: the derived constructor's `this` is the object the super
     // constructor produced. A non-object result only arises from the deliberate
     // lack of primitive wrapper objects (super to Number/String/Boolean returns
-    // a primitive); keep the eagerly-allocated `this` so the derived prototype
-    // chain — and `instanceof` — are preserved.
+    // a primitive); keep the uninitialized binding as-is in that case.
     if (mal_value_is_object(completion.value)) {
-        vm->frames[caller_frame_index].this_value = completion.value;
+        *this_out = completion.value;
     }
-    vm->frames[caller_frame_index].registers[dst] = vm->frames[caller_frame_index].this_value;
+    return completion;
+}
+
+void mal_op_construct_super(MalCallable *callable, MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    // Frames may relocate while the parent constructor runs; address the caller
+    // by index for the post-construct writes rather than holding `callable`.
+    i32 caller_frame_index = vm->frame_count - 1;
+    MalValue bound_this;
+    MalCompletion completion = mal_vm_op_construct_super(
+        vm,
+        callable->registers[instruction->as.construct_super.parent],
+        callable->registers[instruction->as.construct_super.arguments_array],
+        callable->new_target,
+        callable->this_value,
+        &bound_this
+    );
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        return;
+    }
+    vm->frames[caller_frame_index].this_value = bound_this;
+    vm->frames[caller_frame_index].registers[instruction->as.construct_super.dst] = bound_this;
+}
+
+// GetThisBinding for a derived constructor: `this` is uninitialized (the EMPTY
+// sentinel) until super() binds it; reading it before then is a ReferenceError.
+// Shared by the interpreter op and the native backend; returns the binding (EMPTY
+// on the throw path, which the caller ignores after checking the completion).
+MalValue mal_vm_op_get_this(MalVm *vm, MalValue this_value) {
+    if (mal_value_is_empty(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+            "Must call super constructor in derived class before accessing 'this'");
+    }
+    return this_value;
+}
+
+// The RETURN result of a derived constructor: a non-object completion becomes the
+// bound `this`, but returning before super() has bound it (EMPTY) is a
+// ReferenceError. Mirrors the interpreter's construct-frame RETURN handling; sets
+// vm->completion on the TDZ error (caller checks it).
+MalValue mal_vm_op_derived_construct_return(MalVm *vm, MalValue value, MalValue this_value) {
+    if (!mal_value_is_object(value)) {
+        if (mal_value_is_empty(this_value)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+                "Must call super constructor in derived class before returning from derived constructor");
+            return mal_value_new_undefined();
+        }
+        return this_value;
+    }
+    return value;
 }
 
 void mal_op_throw(MalCallable *callable, MalInstruction *instruction) {
@@ -2767,20 +2906,20 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
     );
 }
 
-void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruction) {
-    MalValue object_value = callable->registers[instruction->as.store_super_property.object];
-    MalValue key_value = callable->registers[instruction->as.store_super_property.key];
-    MalValue value = callable->registers[instruction->as.store_super_property.value];
-    MalValue receiver = callable->registers[instruction->as.store_super_property.receiver];
-    bool strict = callable->function->strict;
-
+// Shared by the interpreter op and the native backend: `super.p = value` /
+// `super[k] = value`. `object` is the [[HomeObject]]'s prototype (the controlling
+// descriptor's source); the write applies to `receiver` (the derived `this`). A
+// setter can throw, and strict-mode rejections throw; sets vm->completion.
+void mal_vm_op_store_super_property(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, MalValue receiver, bool strict
+) {
     if (mal_value_is_nil(object_value)) {
-        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set properties of null or undefined");
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set properties of null or undefined");
         return;
     }
 
     MalKey key;
-    if (!mal_vm_value_to_property_key(callable->vm, key_value, &key)) {
+    if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
         return;
     }
 
@@ -2792,21 +2931,21 @@ void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruct
         if (resolution.found && (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
             if (!mal_value_is_callable(resolution.desc.setter)) {
                 if (strict) {
-                    mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set property which has only a getter");
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set property which has only a getter");
                 }
                 return;
             }
 
-            MalCompletion completion = mal_vm_call_value(callable->vm, resolution.desc.setter, receiver, &value, 1);
+            MalCompletion completion = mal_vm_call_value(vm, resolution.desc.setter, receiver, &value, 1);
             if (completion.kind != MAL_COMPLETION_NORMAL) {
-                callable->vm->completion = completion;
+                vm->completion = completion;
             }
             return;
         }
 
         if (resolution.found && !(resolution.desc.flags & MAL_PROPERTY_WRITABLE)) {
             if (strict) {
-                mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
             }
             return;
         }
@@ -2814,7 +2953,7 @@ void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruct
 
     if (!mal_value_is_object(receiver)) {
         if (strict) {
-            mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot create property on a primitive");
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot create property on a primitive");
         }
         return;
     }
@@ -2826,7 +2965,7 @@ void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruct
             !(own.desc.flags & MAL_PROPERTY_WRITABLE);
         if (rejected) {
             if (strict) {
-                mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
             }
             return;
         }
@@ -2838,7 +2977,7 @@ void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruct
 
     if (!mal_object_is_extensible(receiver_object)) {
         if (strict) {
-            mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot add property to a non-extensible object");
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot add property to a non-extensible object");
         }
         return;
     }
@@ -2849,6 +2988,17 @@ void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruct
     MalPropertyDesc desc = mal_intrinsic_data_desc(
         value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(receiver_object, key, &desc);
+}
+
+void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_store_super_property(
+        callable->vm,
+        callable->registers[instruction->as.store_super_property.object],
+        callable->registers[instruction->as.store_super_property.key],
+        callable->registers[instruction->as.store_super_property.value],
+        callable->registers[instruction->as.store_super_property.receiver],
+        callable->function->strict
+    );
 }
 
 void mal_op_get_iterator(MalCallable *callable, MalInstruction *instruction) {
@@ -3117,18 +3267,23 @@ void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
         mal_for_in_keys(callable->vm, callable->registers[instruction->as.for_in_keys.source]);
 }
 
-void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction) {
-    MalValue value = callable->registers[instruction->as.load_prototype.object];
-    MalValue result = mal_value_new_null();
-
-    if (mal_value_is_object(value)) {
-        MalObject *prototype = mal_object_get_prototype(mal_value_to_object(value));
+// Shared by the interpreter op and the native backend: read `object`'s internal
+// [[Prototype]] slot (super-property base resolution). Reads the slot directly —
+// no proxy [[GetPrototypeOf]] trap — so it never runs user code or throws.
+MalValue mal_vm_op_load_prototype(MalVm *vm, MalValue object_value) {
+    (void) vm;
+    if (mal_value_is_object(object_value)) {
+        MalObject *prototype = mal_object_get_prototype(mal_value_to_object(object_value));
         if (prototype != nullptr) {
-            result = mal_value_from_object(prototype);
+            return mal_value_from_object(prototype);
         }
     }
+    return mal_value_new_null();
+}
 
-    callable->registers[instruction->as.load_prototype.dst] = result;
+void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.load_prototype.dst] =
+        mal_vm_op_load_prototype(callable->vm, callable->registers[instruction->as.load_prototype.object]);
 }
 
 /**
@@ -3363,19 +3518,23 @@ void mal_op_array_rest(MalCallable *callable, MalInstruction *instruction) {
     );
 }
 
-void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruction) {
-    MalVm *vm = callable->vm;
-    MalValue source = callable->registers[instruction->as.copy_data_properties.src];
-
+// Shared by the interpreter op and the native backend: object rest/spread
+// destructuring (`const {a, ...rest} = source`) — copy source's own enumerable
+// properties (minus the excluded keys) onto a fresh object. A source getter or an
+// excluded-key ToPropertyKey can throw: sets vm->completion and returns undefined,
+// so callers must check the completion. `excluded_keys` are already-evaluated
+// property-key values (the compiled caller boxes them from its registers).
+MalValue mal_vm_op_copy_data_properties(
+    MalVm *vm, MalValue source, const MalValue *excluded_keys, i32 excluded_count
+) {
     if (mal_value_is_nil(source)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot destructure null or undefined");
-        return;
+        return mal_value_new_undefined();
     }
 
     // The excluded keys land in a throwaway object so the membership checks
     // reuse the property table's key equality.
     MalObject *excluded = nullptr;
-    i32 excluded_count = instruction->as.copy_data_properties.excluded_count;
     if (excluded_count > 0) {
         excluded = mal_object_new(&vm->heap, nullptr);
     }
@@ -3397,7 +3556,7 @@ void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruct
     bool ok = true;
 
     for (i32 i = 0; i < excluded_count; i++) {
-        MalValue key_value = callable->registers[instruction->as.copy_data_properties.excluded[i]];
+        MalValue key_value = excluded_keys[i];
         MalKey key;
         if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
             ok = false;
@@ -3446,8 +3605,25 @@ void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruct
 
 done:
     mal_gc_unroot(&span);
-    if (ok) {
-        callable->registers[instruction->as.copy_data_properties.dst] = mal_value_from_object(copy);
+    return ok ? mal_value_from_object(copy) : mal_value_new_undefined();
+}
+
+void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruction) {
+    i32 excluded_count = instruction->as.copy_data_properties.excluded_count;
+    // Marshal the excluded-key registers into a contiguous buffer for the shared
+    // op. The values alias rooted frame registers and no collection runs before
+    // the op consumes them (allocation only requests a poll), so the copies stay live.
+    MalValue excluded_keys[excluded_count > 0 ? excluded_count : 1];
+    for (i32 i = 0; i < excluded_count; i++) {
+        excluded_keys[i] = callable->registers[instruction->as.copy_data_properties.excluded[i]];
+    }
+
+    MalValue result = mal_vm_op_copy_data_properties(
+        callable->vm, callable->registers[instruction->as.copy_data_properties.src],
+        excluded_keys, excluded_count
+    );
+    if (callable->vm->completion.kind != MAL_COMPLETION_THROW) {
+        callable->registers[instruction->as.copy_data_properties.dst] = result;
     }
 }
 
@@ -3624,16 +3800,21 @@ void mal_op_define_property(MalCallable *callable, MalInstruction *instruction) 
 static const byte *const mal_private_absent_message =
     "Cannot access private member on an object whose class did not declare it";
 
-void mal_op_create_private_name(MalCallable *callable, MalInstruction *instruction) {
-    MalSymbol *symbol = mal_symbol_new_private(&callable->vm->heap);
-    callable->registers[instruction->as.create_private_name.dst] = mal_value_from_symbol(symbol);
+// Shared by the interpreter op and the native backend: a fresh unique private
+// name (a hidden private symbol). Never throws.
+MalValue mal_vm_op_create_private_name(MalVm *vm) {
+    return mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
 }
 
-void mal_op_define_private(MalCallable *callable, MalInstruction *instruction) {
-    MalValue object_value = callable->registers[instruction->as.define_private.object];
-    MalValue key_value = callable->registers[instruction->as.define_private.key];
-    MalValue value = callable->registers[instruction->as.define_private.value];
+void mal_op_create_private_name(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.create_private_name.dst] =
+        mal_vm_op_create_private_name(callable->vm);
+}
 
+// Shared by the interpreter op and the native backend: AddPrivateName — install a
+// private field/method/brand on a freshly built instance or class object. A second
+// install of the same name on one object throws; sets vm->completion.
+void mal_vm_op_define_private(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value) {
     // The receiver is always a freshly built instance or the class object.
     if (!mal_value_is_object(object_value)) {
         return;
@@ -3646,7 +3827,7 @@ void mal_op_define_private(MalCallable *callable, MalInstruction *instruction) {
         // AddPrivateName rejects installing the same private element twice on
         // one object (re-entrant construction of the same this).
         mal_vm_throw_error(
-            callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Cannot initialize the same private member twice on an object"
         );
         return;
@@ -3658,35 +3839,51 @@ void mal_op_define_private(MalCallable *callable, MalInstruction *instruction) {
     mal_object_define_own(object, key, &desc);
 }
 
-void mal_op_load_private(MalCallable *callable, MalInstruction *instruction) {
-    MalValue object_value = callable->registers[instruction->as.load_private.object];
-    MalValue key_value = callable->registers[instruction->as.load_private.key];
-    i32 dst = instruction->as.load_private.dst;
+void mal_op_define_private(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_define_private(
+        callable->vm,
+        callable->registers[instruction->as.define_private.object],
+        callable->registers[instruction->as.define_private.key],
+        callable->registers[instruction->as.define_private.value]
+    );
+}
 
+// Shared by the interpreter op and the native backend: PrivateGet. A receiver not
+// branded by the declaring class throws; sets vm->completion and returns undefined.
+MalValue mal_vm_op_load_private(MalVm *vm, MalValue object_value, MalValue key_value) {
     if (!mal_value_is_object(object_value)) {
-        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
-        return;
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
+        return mal_value_new_undefined();
     }
 
     MalKey key = {.kind = MAL_KEY_SYMBOL, .value = key_value};
     MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(object_value), key);
     if (!lookup.present) {
-        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
-        return;
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
+        return mal_value_new_undefined();
     }
 
     // Private fields and the brand marker are always data descriptors;
     // private accessors are dispatched by the compiler, never stored here.
-    callable->registers[dst] = lookup.desc.value;
+    return lookup.desc.value;
 }
 
-void mal_op_store_private(MalCallable *callable, MalInstruction *instruction) {
-    MalValue object_value = callable->registers[instruction->as.store_private.object];
-    MalValue key_value = callable->registers[instruction->as.store_private.key];
-    MalValue value = callable->registers[instruction->as.store_private.value];
+void mal_op_load_private(MalCallable *callable, MalInstruction *instruction) {
+    MalValue result = mal_vm_op_load_private(
+        callable->vm,
+        callable->registers[instruction->as.load_private.object],
+        callable->registers[instruction->as.load_private.key]
+    );
+    if (callable->vm->completion.kind != MAL_COMPLETION_THROW) {
+        callable->registers[instruction->as.load_private.dst] = result;
+    }
+}
 
+// Shared by the interpreter op and the native backend: PrivateSet. Requires the
+// private name to already be installed on the receiver, else throws.
+void mal_vm_op_store_private(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value) {
     if (!mal_value_is_object(object_value)) {
-        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
         return;
     }
 
@@ -3694,7 +3891,7 @@ void mal_op_store_private(MalCallable *callable, MalInstruction *instruction) {
     MalKey key = {.kind = MAL_KEY_SYMBOL, .value = key_value};
     if (!mal_object_get_own(object, key).present) {
         // PrivateSet requires the private name to already be installed.
-        mal_vm_throw_error(callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
         return;
     }
 
@@ -3702,23 +3899,41 @@ void mal_op_store_private(MalCallable *callable, MalInstruction *instruction) {
     mal_gc_card(&object->header, value); // old instance -> young private field value
 }
 
-void mal_op_has_private(MalCallable *callable, MalInstruction *instruction) {
-    MalValue object_value = callable->registers[instruction->as.has_private.object];
-    MalValue key_value = callable->registers[instruction->as.has_private.key];
-    i32 dst = instruction->as.has_private.dst;
+void mal_op_store_private(MalCallable *callable, MalInstruction *instruction) {
+    mal_vm_op_store_private(
+        callable->vm,
+        callable->registers[instruction->as.store_private.object],
+        callable->registers[instruction->as.store_private.key],
+        callable->registers[instruction->as.store_private.value]
+    );
+}
 
+// Shared by the interpreter op and the native backend: the ergonomic brand check
+// `#x in obj`. `#x in <non-object>` throws; otherwise returns the presence boolean.
+MalValue mal_vm_op_has_private(MalVm *vm, MalValue object_value, MalValue key_value) {
     if (!mal_value_is_object(object_value)) {
         // `#x in <non-object>` throws (ergonomic brand check step 6).
         mal_vm_throw_error(
-            callable->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "Cannot use 'in' to check for a private member of a non-object"
         );
-        return;
+        return mal_value_new_undefined();
     }
 
     MalKey key = {.kind = MAL_KEY_SYMBOL, .value = key_value};
     bool present = mal_object_get_own(mal_value_to_object(object_value), key).present;
-    callable->registers[dst] = mal_value_new_boolean(present);
+    return mal_value_new_boolean(present);
+}
+
+void mal_op_has_private(MalCallable *callable, MalInstruction *instruction) {
+    MalValue result = mal_vm_op_has_private(
+        callable->vm,
+        callable->registers[instruction->as.has_private.object],
+        callable->registers[instruction->as.has_private.key]
+    );
+    if (callable->vm->completion.kind != MAL_COMPLETION_THROW) {
+        callable->registers[instruction->as.has_private.dst] = result;
+    }
 }
 
 // Shared by the interpreter op and the native backend: set [[Prototype]] for an

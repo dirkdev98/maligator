@@ -378,6 +378,30 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 }
 
 /**
+ * The maximum number of simultaneously-open `with` blocks in the function — the
+ * running depth of WITH_ENTER over WITH_EXIT. Sizes the compiled frame's rooted
+ * with-object stack. The markers are balanced (a with-object is pushed on entry
+ * and popped on every exit path), so the running maximum is an exact bound.
+ */
+function maxWithNesting(fn: VmFunction): number {
+	let depth = 0;
+	let max = 0;
+	for (const instruction of fn.instructions) {
+		if (instruction.opcode === "WITH_ENTER") {
+			depth++;
+			if (depth > max) {
+				max = depth;
+			}
+		} else if (instruction.opcode === "WITH_EXIT") {
+			if (depth > 0) {
+				depth--;
+			}
+		}
+	}
+	return max;
+}
+
+/**
  * Emit a compiled C function for `fn`, or null when it uses a construct the
  * backend doesn't lower yet (the caller then leaves it to the interpreter).
  */
@@ -390,15 +414,6 @@ export function emitCompiledFunction(
 	// Generators and async functions suspend mid-body; they are not straight-line
 	// C functions (the resumable-compiled-function backend is a later milestone).
 	if (fn.isGenerator || fn.isAsync) {
-		return null;
-	}
-
-	// A derived constructor's `this` starts in a TDZ (uninitialized until super()),
-	// enforced only on the interpreter's LOAD_THIS / RETURN paths. Keep derived
-	// constructors interpreted so those checks apply. Most already are (they
-	// contain constructSuper, which the backend doesn't lower); this also covers
-	// the no-super/return-before-super error cases, which otherwise compile.
-	if (fn.isDerivedConstructor) {
 		return null;
 	}
 
@@ -444,12 +459,31 @@ export function emitCompiledFunction(
 	const slotOf = new Map<number, number>();
 	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
 	const slotCount = valueRegs.length;
-	// A root frame is needed to scan MalValue registers and/or this activation's
-	// captured env; every exit past its link must unlink it.
-	const needsRootFrame = slotCount > 0 || capturesEnv;
+
+	// `with` object stack: a `with (o)` block pushes `o`, and the WITH_GET/
+	// WITH_RESOLVE_BASE/WITH_SET ops inside search it (innermost first). The stack
+	// is per-activation and must be a GC root (a with-object is live across property
+	// accesses in the body), so it lives in trailing __gc_slots the collector already
+	// scans — [withBase, withBase + maxWithDepth). Depth is the max ENTER-over-EXIT
+	// nesting, statically known from the balanced markers.
+	const maxWithDepth = maxWithNesting(fn);
+	const withBase = slotCount;
+
+	// A derived constructor's `this` is uninitialized (the EMPTY sentinel) until
+	// super() binds it, and CONSTRUCT_SUPER reassigns it mid-body — so it can't be
+	// the immutable `this_value` parameter. It lives in its own rooted slot (the
+	// bound instance is live across the rest of the body), initialized from the
+	// EMPTY parameter and read through the TDZ-checked LOAD_THIS / RETURN forms.
+	const thisSlot = fn.isDerivedConstructor ? slotCount + maxWithDepth : -1;
+	const totalSlots = slotCount + maxWithDepth + (fn.isDerivedConstructor ? 1 : 0);
+
+	// A root frame is needed to scan MalValue registers, the with-object stack, a
+	// derived constructor's `this`, and/or this activation's captured env; every
+	// exit past its link must unlink it.
+	const needsRootFrame = totalSlots > 0 || capturesEnv;
 	const gcUnlink = needsRootFrame ? "mal_root_frame_head = __gc_frame.prev; " : "";
 
-	const body = emitBody(fn, suffix, reps, debug, gcUnlink);
+	const body = emitBody(fn, suffix, reps, debug, gcUnlink, withBase, thisSlot);
 	if (body === null) {
 		return null;
 	}
@@ -484,8 +518,11 @@ export function emitCompiledFunction(
 	// root-frame array so the collector can scan them; the `#define` keeps the
 	// `r<i>` spelling used throughout the body. The macros are #undef'd at the end
 	// of the function (the batch path emits many functions into one unit).
-	if (slotCount > 0) {
-		lines.push(`    MalValue __gc_slots[${slotCount}];`);
+	if (totalSlots > 0) {
+		lines.push(`    MalValue __gc_slots[${totalSlots}];`);
+	}
+	if (maxWithDepth > 0) {
+		lines.push(`    i32 __with_count = 0;`);
 	}
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
@@ -535,6 +572,15 @@ export function emitCompiledFunction(
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
 		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
 	}
+	// The with-object region is scanned by the collector (slot_count covers it), so
+	// initialize it before publishing even though __with_count starts at 0.
+	for (let s = withBase; s < withBase + maxWithDepth; s++) {
+		lines.push(`    __gc_slots[${s}] = MAL_VALUE_UNDEFINED;`);
+	}
+	// A derived constructor's rooted `this` slot starts as the (EMPTY) parameter.
+	if (thisSlot >= 0) {
+		lines.push(`    __gc_slots[${thisSlot}] = this_value;`);
+	}
 
 	// Publish the root frame first, with every register slot already initialized,
 	// so the collector can scan them before any allocation. mal_env_new is now a GC
@@ -543,8 +589,8 @@ export function emitCompiledFunction(
 	// The promoted-param bail above returns before this point (no unlink).
 	if (needsRootFrame) {
 		lines.push(
-			`    static const MalFrameDescriptor __gc_desc = { .function_index = ${index}, .slot_count = ${slotCount} };`,
-			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${slotCount > 0 ? "__gc_slots" : "nullptr"}, .env = nullptr };`,
+			`    static const MalFrameDescriptor __gc_desc = { .function_index = ${index}, .slot_count = ${totalSlots} };`,
+			`    MalRootFrame __gc_frame = { .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .env = nullptr };`,
 			`    mal_root_frame_head = &__gc_frame;`,
 		);
 	}
@@ -730,6 +776,8 @@ function emitBody(
 	reps: Array<RegisterRep>,
 	debug: boolean,
 	gcUnlink: string,
+	withBase: number,
+	thisSlot: number,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
@@ -790,6 +838,8 @@ function emitBody(
 			fn.strict,
 			handlerForIp(ip),
 			gcUnlink,
+			withBase,
+			thisSlot,
 		);
 		if (emitted === null) {
 			return null;
@@ -816,6 +866,8 @@ function emitInstruction(
 	strict: boolean,
 	handlerIp: number | undefined,
 	gcUnlink: string,
+	withBase: number,
+	thisSlot: number,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -854,6 +906,10 @@ function emitInstruction(
 	// back-edges so a compiled function is interruptible for collection. Near-free
 	// until the collector raises mal_gc_poll (always false until Phase 3).
 	const poll = "if (mal_gc_poll) mal_gc_safepoint(vm);";
+
+	// Where `this` is stored: a derived constructor's is a mutable rooted slot
+	// (super() rebinds it); everything else reads the immutable `this_value` param.
+	const thisRef = thisSlot >= 0 ? `__gc_slots[${thisSlot}]` : "this_value";
 
 	switch (instruction.opcode) {
 		case "MOVE": {
@@ -972,7 +1028,12 @@ function emitInstruction(
 				throwCheck,
 			];
 		case "LOAD_THIS":
-			return [`r${instruction.dst} = this_value;`];
+			// A derived constructor's `this` is in a TDZ until super() binds it, so a
+			// read before then is a ReferenceError; an ordinary function's `this` is
+			// always initialized and reads straight from the parameter.
+			return thisSlot >= 0
+				? [`r${instruction.dst} = mal_vm_op_get_this(vm, ${thisRef});`, throwCheck]
+				: [`r${instruction.dst} = this_value;`];
 		case "LOAD_NEW_TARGET":
 			return [`r${instruction.dst} = new_target;`];
 		case "LOAD_CAPTURED":
@@ -1325,16 +1386,192 @@ function emitInstruction(
 			return instruction.targetIp <= ip
 				? [`if (${truthy(instruction.cond)}) { ${poll} goto L${instruction.targetIp}; }`]
 				: [`if (${truthy(instruction.cond)}) goto L${instruction.targetIp};`];
-		case "RETURN":
+		case "RETURN": {
 			// Register -1 is the "no value" sentinel (a synthesized empty return).
+			const value =
+				instruction.value < 0 ? "MAL_VALUE_UNDEFINED" : boxed(instruction.value);
+			// A derived constructor substitutes the super-bound `this` for a
+			// non-object return, and returning before super() bound it is a
+			// ReferenceError — so route through the checked helper (which can throw).
+			if (thisSlot >= 0) {
+				const ret = `derived_ret_${ip}`;
+				return [
+					`MalValue ${ret} = mal_vm_op_derived_construct_return(vm, ${value}, ${thisRef});`,
+					throwCheck,
+					`${gcUnlink}return ${ret};`,
+				];
+			}
 			// Route through mal_ops_construct_result so a [[Construct]] invocation
 			// (new_target set) substitutes `this` for a non-object completion; a
 			// plain call passes the value through unchanged.
 			return [
-				instruction.value < 0
-					? `${gcUnlink}return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`
-					: `${gcUnlink}return mal_ops_construct_result(${boxed(instruction.value)}, this_value, new_target);`,
+				`${gcUnlink}return mal_ops_construct_result(${value}, this_value, new_target);`,
 			];
+		}
+		case "LOAD_GLOBAL_PROPERTY":
+			// Sloppy-mode read of an unresolved name off globalThis; a missing name
+			// throws ReferenceError and a global getter can throw, so propagate.
+			return [
+				`r${instruction.dst} = mal_vm_op_load_global_property(vm, ${instruction.nameStringIndex});`,
+				throwCheck,
+			];
+		case "LOAD_PROTOTYPE":
+			// Reads the internal [[Prototype]] slot directly (no proxy trap) — never throws.
+			return [
+				`r${instruction.dst} = mal_vm_op_load_prototype(vm, ${boxed(instruction.object)});`,
+			];
+		case "SET_FUNCTION_NAME":
+			// Installs the "name" data property from an already-evaluated key; no user code.
+			return [
+				`mal_vm_op_set_function_name(vm, ${boxed(instruction.func)}, ${boxed(instruction.key)}, ${instruction.prefix});`,
+			];
+		case "ITERATOR_NEXT": {
+			// IteratorNext: call `next` with the iterator as `this` and no args, exactly
+			// like a 0-arg CALL. A throw propagates via the completion.
+			const tmp = `iter_next_${ip}`;
+			return [
+				`MalCompletion ${tmp} = mal_vm_call_value(vm, ${boxed(instruction.next)}, ${boxed(instruction.iterator)}, nullptr, 0);`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`r${instruction.resultDst} = ${tmp}.value;`,
+				poll, // call-return safepoint
+			];
+		}
+		case "CREATE_TEMPLATE_OBJECT": {
+			const count = instruction.cookedIndices.length;
+			const cooked =
+				count > 0
+					? `(const i32[]){ ${instruction.cookedIndices.join(", ")} }`
+					: "nullptr";
+			const raw =
+				count > 0 ? `(const i32[]){ ${instruction.rawIndices.join(", ")} }` : "nullptr";
+			return [
+				`r${instruction.dst} = mal_vm_op_create_template_object(vm, ${instruction.cacheSlot}, ${count}, ${cooked}, ${raw});`,
+			];
+		}
+		case "CREATE_MODULE_NAMESPACE": {
+			const count = instruction.nameIndices.length;
+			const names =
+				count > 0 ? `(const i32[]){ ${instruction.nameIndices.join(", ")} }` : "nullptr";
+			const slots =
+				count > 0 ? `(const i32[]){ ${instruction.slots.join(", ")} }` : "nullptr";
+			return [
+				`r${instruction.dst} = mal_vm_op_create_module_namespace(vm, ${count}, ${names}, ${slots});`,
+			];
+		}
+		case "COPY_DATA_PROPERTIES": {
+			// Object rest `{...rest}`: excluded keys are the sibling destructured
+			// registers, boxed into a temp array (rooted originals + no synchronous
+			// collection keep the copies live). A source getter can throw.
+			const excluded =
+				instruction.excluded.length > 0
+					? `((MalValue[]){ ${instruction.excluded.map((r) => boxed(r)).join(", ")} })`
+					: "nullptr";
+			return [
+				`r${instruction.dst} = mal_vm_op_copy_data_properties(vm, ${boxed(instruction.src)}, ${excluded}, ${instruction.excludedCount});`,
+				throwCheck,
+			];
+		}
+		case "CREATE_PRIVATE_NAME":
+			// A fresh unique private name (hidden symbol); never throws.
+			return [`r${instruction.dst} = mal_vm_op_create_private_name(vm);`];
+		case "DEFINE_PRIVATE":
+			// AddPrivateName on a fresh instance/class object; a duplicate install throws.
+			return [
+				`mal_vm_op_define_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)});`,
+				throwCheck,
+			];
+		case "LOAD_PRIVATE":
+			// PrivateGet; an unbranded receiver throws.
+			return [
+				`r${instruction.dst} = mal_vm_op_load_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
+				throwCheck,
+			];
+		case "STORE_PRIVATE":
+			// PrivateSet; the name must already be installed, else throws.
+			return [
+				`mal_vm_op_store_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)});`,
+				throwCheck,
+			];
+		case "HAS_PRIVATE":
+			// Ergonomic brand check `#x in obj`; a non-object receiver throws.
+			return [
+				`r${instruction.dst} = mal_vm_op_has_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
+				throwCheck,
+			];
+		case "CALL_SPREAD": {
+			// `f(...args)`: marshal the spread array and dispatch, mirroring CALL.
+			const tmp = `call_spread_${ip}`;
+			return [
+				`MalCompletion ${tmp} = mal_vm_op_call_spread(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.argumentsArray)});`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`r${instruction.dst} = ${tmp}.value;`,
+				poll, // call-return safepoint
+			];
+		}
+		case "CONSTRUCT_SPREAD": {
+			// `new C(...args)`: marshal the spread array and dispatch, mirroring CONSTRUCT.
+			const tmp = `construct_spread_${ip}`;
+			return [
+				`MalCompletion ${tmp} = mal_vm_op_construct_spread(vm, ${boxed(instruction.callee)}, ${boxed(instruction.argumentsArray)});`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`r${instruction.dst} = ${tmp}.value;`,
+				poll, // call-return safepoint
+			];
+		}
+		case "WITH_ENTER":
+			// Validate the with-expression (nil throws), then push it onto this
+			// frame's rooted with-object stack (trailing __gc_slots).
+			return [
+				`if (!mal_vm_op_with_enter(vm, ${boxed(instruction.object)})) ${onThrow}`,
+				`__gc_slots[${withBase} + __with_count++] = ${boxed(instruction.object)};`,
+			];
+		case "WITH_EXIT":
+			return [`if (__with_count > 0) __with_count--;`];
+		case "WITH_GET":
+			// Resolve a name against the with-stack; EMPTY sentinel on a miss (the IR
+			// then falls back to the static binding). A getter / @@unscopables can throw.
+			return [
+				`r${instruction.dst} = mal_vm_op_with_get(vm, &__gc_slots[${withBase}], __with_count, ${instruction.nameStringIndex});`,
+				throwCheck,
+			];
+		case "WITH_RESOLVE_BASE":
+			// The reference base (the with-object itself) for a read/write through it.
+			return [
+				`r${instruction.dst} = mal_vm_op_with_resolve_base(vm, &__gc_slots[${withBase}], __with_count, ${instruction.nameStringIndex});`,
+				throwCheck,
+			];
+		case "WITH_SET":
+			// Assign through the with-stack; `found` (always boxed-rep) reports whether
+			// a binding matched so the IR can fall back to the static binding on a miss.
+			return [
+				`r${instruction.found} = mal_value_new_boolean(mal_vm_op_with_set(vm, &__gc_slots[${withBase}], __with_count, ${instruction.nameStringIndex}, ${boxed(instruction.value)}));`,
+				throwCheck,
+			];
+		case "CHECK_SUPER_CLASS":
+			// ClassDefinitionEvaluation heritage check; a bad `extends` value throws.
+			return [
+				`mal_vm_op_check_super_class(vm, ${boxed(instruction.parent)});`,
+				throwCheck,
+			];
+		case "STORE_SUPER_PROPERTY":
+			// `super.p = v`: the base descriptor governs, the write hits `receiver`.
+			// A setter or a strict-mode rejection throws.
+			return [
+				`mal_vm_op_store_super_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${boxed(instruction.receiver)}, ${strict});`,
+				throwCheck,
+			];
+		case "CONSTRUCT_SUPER": {
+			// `super(...args)`: construct the parent, bind the result as this activation's
+			// (rooted, mutable) `this`, and yield it. Only appears in derived
+			// constructors, so `thisRef` is always the rooted this-slot.
+			const tmp = `construct_super_${ip}`;
+			return [
+				`MalCompletion ${tmp} = mal_vm_op_construct_super(vm, ${boxed(instruction.parent)}, ${boxed(instruction.argumentsArray)}, new_target, ${thisRef}, &${thisRef});`,
+				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`r${instruction.dst} = ${thisRef};`,
+				poll, // call-return safepoint
+			];
+		}
 		default:
 			// Not lowered yet — the function stays on the interpreter. This is the
 			// blank to fill in (calls, property access, captures, ...).

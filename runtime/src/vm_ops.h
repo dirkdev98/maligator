@@ -489,6 +489,99 @@ MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index);
 /** Write `value` to the global object property `name_string_index` (creating it). */
 void mal_vm_op_store_global_property(MalVm *vm, i32 name_string_index, MalValue value);
 
+/** Read `object`'s internal [[Prototype]] slot (null if none); never throws. */
+MalValue mal_vm_op_load_prototype(MalVm *vm, MalValue object_value);
+
+/** SetFunctionName: install the "name" data property (prefix 0=none, 1=get, 2=set). */
+void mal_vm_op_set_function_name(MalVm *vm, MalValue func, MalValue key, u8 prefix);
+
+/** Build (or return the cached) tagged-template strings object for one site. */
+MalValue mal_vm_op_create_template_object(
+    MalVm *vm, i32 cache_slot, i32 count, const i32 *cooked_indices, const i32 *raw_indices
+);
+
+/** Build a module namespace exotic object from (name-constant, export-slot) pairs. */
+MalValue mal_vm_op_create_module_namespace(
+    MalVm *vm, i32 count, const i32 *name_indices, const i32 *slots
+);
+
+/**
+ * Object rest/spread destructuring: copy source's own enumerable properties (minus
+ * `excluded_keys`) onto a fresh object. A source getter / excluded-key ToPropertyKey
+ * can throw (sets vm->completion); callers check the completion.
+ */
+MalValue mal_vm_op_copy_data_properties(
+    MalVm *vm, MalValue source, const MalValue *excluded_keys, i32 excluded_count
+);
+
+/** A fresh unique private name (hidden private symbol); never throws. */
+MalValue mal_vm_op_create_private_name(MalVm *vm);
+
+/** AddPrivateName: install a private element on a new instance; dup install throws. */
+void mal_vm_op_define_private(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value);
+
+/** PrivateGet; an unbranded receiver throws (sets vm->completion). */
+MalValue mal_vm_op_load_private(MalVm *vm, MalValue object_value, MalValue key_value);
+
+/** PrivateSet; the name must already be installed on the receiver, else throws. */
+void mal_vm_op_store_private(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value);
+
+/** Ergonomic brand check `#x in obj`; a non-object receiver throws. */
+MalValue mal_vm_op_has_private(MalVm *vm, MalValue object_value, MalValue key_value);
+
+/**
+ * Spread call `f(...args)` for the native backend: marshal the array onto the
+ * value stack (RangeError on overflow) and dispatch, returning the completion.
+ */
+MalCompletion mal_vm_op_call_spread(
+    MalVm *vm, MalValue callee, MalValue this_value, MalValue arguments_array
+);
+
+/** Spread construct `new C(...args)` for the native backend; see call_spread. */
+MalCompletion mal_vm_op_construct_spread(MalVm *vm, MalValue callee, MalValue arguments_array);
+
+/** `super.p = v` / `super[k] = v`: write to `receiver` via the super base descriptor. */
+void mal_vm_op_store_super_property(
+    MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, MalValue receiver, bool strict
+);
+
+/**
+ * `super(...args)`: construct `parent` with the derived new.target and BindThisValue
+ * the result. `current_this` is the (EMPTY) binding; on success *this_out is the
+ * bound `this`. Returns the completion (a throw on double-super / no new.target /
+ * parent throw).
+ */
+MalCompletion mal_vm_op_construct_super(
+    MalVm *vm, MalValue parent, MalValue arguments_array, MalValue new_target,
+    MalValue current_this, MalValue *this_out
+);
+
+/** GetThisBinding for a derived constructor: ReferenceError if `this` is unbound. */
+MalValue mal_vm_op_get_this(MalVm *vm, MalValue this_value);
+
+/** Derived-constructor RETURN: non-object → bound `this`; returning pre-super throws. */
+MalValue mal_vm_op_derived_construct_return(MalVm *vm, MalValue value, MalValue this_value);
+
+/**
+ * `with` statement support, shared by the interpreter op and the native backend.
+ * The with-object stack is per-activation and supplied by the caller (the
+ * interpreter frame's `with_objects`, or the compiled frame's rooted slots), so
+ * these helpers take it as (objects, count). `with_enter` only validates the
+ * with-expression (nil → false + pending TypeError); the caller does the push.
+ * `with_get`/`with_resolve_base` return the EMPTY sentinel on a miss so the caller
+ * falls back to the static binding; `with_set` returns whether a binding was found.
+ */
+bool mal_vm_op_with_enter(MalVm *vm, MalValue object);
+MalValue mal_vm_op_with_get(
+    MalVm *vm, const MalValue *with_objects, i32 with_count, i32 name_string_index
+);
+MalValue mal_vm_op_with_resolve_base(
+    MalVm *vm, const MalValue *with_objects, i32 with_count, i32 name_string_index
+);
+bool mal_vm_op_with_set(
+    MalVm *vm, const MalValue *with_objects, i32 with_count, i32 name_string_index, MalValue value
+);
+
 /**
  * Resolve (creating if absent) a function's `.prototype` object — the parent of
  * instances built by [[Construct]]. Exposed for mal_vm_construct_value.
