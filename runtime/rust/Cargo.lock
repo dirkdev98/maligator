@@ -141,30 +141,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "icu"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00380f83691e089bcfa4aeb03a2d96a910b1c9ea406d6f822fc19dfb8b58d1ec"
-dependencies = [
- "icu_calendar",
- "icu_casemap",
- "icu_collator",
- "icu_collections",
- "icu_datetime",
- "icu_decimal",
- "icu_experimental",
- "icu_list",
- "icu_locale",
- "icu_normalizer",
- "icu_pattern",
- "icu_plurals",
- "icu_properties",
- "icu_provider",
- "icu_segmenter",
- "icu_time",
-]
-
-[[package]]
 name = "icu_calendar"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -632,8 +608,16 @@ name = "mal_rust"
 version = "0.1.0"
 dependencies = [
  "ada-url",
- "icu",
+ "icu_calendar",
+ "icu_collator",
+ "icu_datetime",
+ "icu_decimal",
  "icu_experimental",
+ "icu_list",
+ "icu_locale",
+ "icu_plurals",
+ "icu_segmenter",
+ "icu_time",
  "jiff",
  "regress",
  "writeable",
