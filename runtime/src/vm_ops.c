@@ -9,10 +9,12 @@
 #include "builtin_async_generator.h"
 #include "builtin_async_iterator.h"
 #include "builtin_iterator.h"
+#include "builtin_promise.h"
 #include "function_object.h"
 #include "gc.h"
 #include "generator_object.h"
 #include "intrinsics.h"
+#include "promise_object.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
@@ -4070,9 +4072,7 @@ void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generato
     // COMPLETED before freeing: the finalizer frees the buffers only while
     // suspended, so marking first keeps a swept-after-completion object from
     // double-freeing (matching the interpreter's RETURN + finalizer contract).
-    // The freed frame.registers is left dangling, exactly as the interpreter does.
     generator->state = MAL_GENERATOR_COMPLETED;
-    free(generator->frame.registers);
 
     if (generator->is_async_generator) {
         // Completing the async generator settles the front request { value, done: true }.
@@ -4084,6 +4084,12 @@ void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generato
         // Plain generator: the .next() driver reads the value from the completion.
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
     }
+
+    // Free after routing: settle_* re-enters the VM (mal_vm_call_value), and the
+    // compiled frame's root frame is still linked over this buffer until the caller
+    // unlinks it — freeing first would expose a freed buffer to a collection there.
+    // The freed frame.registers is then left dangling, exactly as the interpreter.
+    free(generator->frame.registers);
 }
 
 void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue *registers) {
@@ -4096,18 +4102,89 @@ void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator
         return;
     }
 
-    // COMPLETED before free (finalizer contract), then free the activation. See
-    // mal_vm_op_coroutine_return_compiled.
+    // Capture the pending exception, then reset the completion to NORMAL *before*
+    // settling: settle_* / throw_done re-enter the VM via mal_vm_call_value, which
+    // must not run the reject reaction with a pending THROW (it would swallow it).
+    // This mirrors the interpreter's async-uncaught-throw handler (vm.c).
+    MalValue reason = vm->completion.value;
     generator->state = MAL_GENERATOR_COMPLETED;
-    free(generator->frame.registers);
 
-    if (generator->is_async && !generator->is_async_generator) {
+    if (generator->is_async_generator) {
+        // Reject the front request with the pending exception and settle the agen.
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+        mal_async_generator_throw_done(vm, generator, reason);
+    } else if (generator->is_async) {
         // The async function's body threw: reject its result promise rather than
-        // propagate (the async body's implicit try/catch). settle_throw clears the
-        // completion once the rejection is scheduled.
-        mal_async_function_settle_throw(vm, generator, vm->completion.value);
+        // propagate (the async body's implicit try/catch).
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+        mal_async_function_settle_throw(vm, generator, reason);
     }
-    // Plain generator: leave vm->completion == THROW for the .next() caller to
-    // re-raise. (Async generators route rejections through the request queue; that
-    // path is wired with the async ops.)
+    // Plain generator: leave vm->completion == THROW(reason) for the .next() caller
+    // to re-raise.
+
+    // Free after routing (see mal_vm_op_coroutine_return_compiled) — the root frame
+    // is still linked over this buffer during the settle above.
+    free(generator->frame.registers);
+}
+
+MalGeneratorObject *mal_vm_op_async_start_compiled(
+    MalVm *vm, i32 function_index, MalValue this_value, MalEnv *env, MalValue *registers,
+    MalValue *out_promise) {
+    MalPromiseObject *promise = mal_promise_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
+    MalValue promise_value = mal_value_from_promise_object(promise);
+
+    MalValue resolve;
+    MalValue reject;
+    mal_promise_create_resolving(vm, promise_value, &resolve, &reject);
+
+    // The hidden async state reuses the generator suspendable-frame object.
+    MalGeneratorObject *state = mal_generator_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    state->is_async = true;
+    state->async_resolve = resolve;
+    state->async_reject = reject;
+    state->state = MAL_GENERATOR_EXECUTING;
+    // Link the result promise back to this async state for async stack stitching.
+    promise->async_owner = state;
+
+    state->frame.vm = vm;
+    state->frame.function_index = function_index;
+    state->frame.function = &vm->live_definition.functions[function_index];
+    state->frame.registers = registers;
+    state->frame.arguments = nullptr;
+    state->frame.argument_count = 0;
+    state->frame.stack_base = -1;
+    state->frame.this_value = this_value;
+    state->frame.arguments_object = mal_value_new_undefined();
+    state->frame.callee = mal_value_new_undefined();
+    state->frame.generator = state;
+    state->frame.env = env;
+    state->frame.is_construct = false;
+    state->frame.new_target = mal_value_new_undefined();
+    state->frame.instruction_pointer = -1; // set at each await
+    state->frame.return_register = -1;
+    state->frame.caller_frame_index = -1;
+    state->frame.with_objects = nullptr;
+    state->frame.with_count = 0;
+    state->frame.with_capacity = 0;
+
+    mal_gc_remember_if_old(&state->object.header);
+
+    *out_promise = promise_value;
+    return state;
+}
+
+void mal_vm_op_await_compiled(
+    MalVm *vm, MalGeneratorObject *state, MalValue awaited, i32 value_dst, i32 mode_dst,
+    i32 resume_ip, MalEnv *env) {
+    state->resume_value_register = value_dst;
+    state->resume_mode_register = mode_dst;
+    state->state = MAL_GENERATOR_SUSPENDED_YIELD;
+    state->frame.instruction_pointer = resume_ip;
+    state->frame.env = env;
+    mal_gc_remember_if_old(&state->object.header);
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    // Hook the settlement continuation; when the awaited value settles a microtask
+    // resumes this state. (If PromiseResolve throws, this resumes synchronously with
+    // a throw — a nested resume of the same compiled function, which then returns.)
+    mal_async_function_await(vm, state, awaited);
 }

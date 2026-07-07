@@ -833,6 +833,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		'#include "vm_ops.h"',
 		'#include "value_ops.h"',
 		'#include "builtin_iterator.h"',
+		'#include "builtin_async_iterator.h"',
 		// Compiled coroutines dereference MalGeneratorObject (resume_state->frame).
 		'#include "generator_object.h"',
 		"",
@@ -992,7 +993,7 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 	try {
 		writeFileSync(
 			`${baseName}.c`,
-			`#include "vm.h"\n#include "vm_ops.h"\n#include "value_ops.h"\n#include "builtin_iterator.h"\n#include "generator_object.h"\n\n${cSource}`,
+			`#include "vm.h"\n#include "vm_ops.h"\n#include "value_ops.h"\n#include "builtin_iterator.h"\n#include "builtin_async_iterator.h"\n#include "generator_object.h"\n\n${cSource}`,
 		);
 		await execFileAsync(
 			"cc",

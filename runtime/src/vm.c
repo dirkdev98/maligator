@@ -1403,6 +1403,12 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
                 mal_value_new_undefined(), nullptr
             );
             mal_vm_leave_compiled(vm);
+            // A compiled async entry (a top-level-await module) returns its result
+            // promise; record it so a rejected module evaluation fails the run,
+            // mirroring mal_async_function_start's caller-less branch.
+            if (entry->kind == MAL_FUNCTION_KIND_ASYNC) {
+                vm->entry_async_promise = value;
+            }
             script_completion = vm->completion.kind == MAL_COMPLETION_THROW
                 ? vm->completion
                 : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};

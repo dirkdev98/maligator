@@ -1563,6 +1563,17 @@ function emitInstruction(
 				`r${instruction.nextDst} = ${rec}.next_method;`,
 			];
 		}
+		case "GET_ASYNC_ITERATOR": {
+			// GetIterator(source, async): fetch @@asyncIterator (falling back to a
+			// sync iterator wrapped as async). A missing/throwing method propagates.
+			const rec = `aiter_rec_${ip}`;
+			return [
+				`MalIteratorRecord ${rec};`,
+				`if (!mal_vm_get_async_iterator(vm, ${boxed(instruction.source)}, &${rec})) ${onThrow}`,
+				`r${instruction.iteratorDst} = ${rec}.iterator;`,
+				`r${instruction.nextDst} = ${rec}.next_method;`,
+			];
+		}
 		case "ITERATOR_STEP": {
 			const rec = `iter_rec_${ip}`;
 			const val = `iter_val_${ip}`;
@@ -1822,6 +1833,30 @@ function emitInstruction(
 			}
 			return [
 				`mal_vm_op_yield_compiled(vm, __coro, ${boxed(instruction.yieldedSrc)}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, env);`,
+				`${gcUnlink}return ${coroReturnValue};`,
+			];
+		}
+		case "ASYNC_START": {
+			// Create the result promise + hidden async state adopting this
+			// activation's buffer; unlike GENERATOR_START the body keeps running (no
+			// suspend). Every later exit returns the promise (__async_result_promise).
+			if (coro === null) {
+				return null;
+			}
+			return [
+				`__coro = mal_vm_op_async_start_compiled(vm, ${coro.functionIndex}, this_value, env, __gc_slots, &__async_result_promise);`,
+				`__gc_slots[${coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
+			];
+		}
+		case "AWAIT": {
+			// Suspend on the awaited value: record the resume registers/point + env,
+			// hook the settlement continuation, and return. A resume re-enters at ip+1
+			// where the front-end's inline dispatch reads the delivered value/mode.
+			if (coro === null) {
+				return null;
+			}
+			return [
+				`mal_vm_op_await_compiled(vm, __coro, ${boxed(instruction.awaitedSrc)}, ${instruction.valueDst}, ${instruction.modeDst}, ${ip + 1}, env);`,
 				`${gcUnlink}return ${coroReturnValue};`,
 			];
 		}
