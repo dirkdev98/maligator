@@ -22,6 +22,8 @@ export interface MaligatorBuildConfig {
 		eval?: boolean;
 		intl?: {
 			enabled?: boolean;
+			/** Selected ECMA-402 services (see INTL_SERVICES); omitted/[] = all. */
+			features?: Array<string>;
 			languages?: Array<string>;
 		};
 	};
@@ -40,7 +42,7 @@ export interface ResolvedBuildConfig {
 	entry: string | undefined;
 	engine: {
 		eval: boolean;
-		intl: { enabled: boolean; languages: Array<string> };
+		intl: { enabled: boolean; features: Array<string>; languages: Array<string> };
 	};
 	host: { scheduler: "single" | "multiprocessing" };
 	surface: { webPlatform: boolean; node: boolean; maligator: boolean };
@@ -52,6 +54,63 @@ export class BuildConfigError extends Error {
 		super(message);
 		this.name = "BuildConfigError";
 	}
+}
+
+/**
+ * The selectable Intl services (engine.intl.features), each mapped to its Rust
+ * Cargo feature and C build define. Intl.Locale / getCanonicalLocales are the
+ * always-on floor and are not listed. An omitted / empty `features` list means ALL
+ * services (the canonical `intl-full` build). Selecting a subset drops the rest's
+ * icu sub-crate + baked data — Segmenter alone is ~12 MB.
+ */
+export const INTL_SERVICES: Record<string, { cargo: string; define: string }> = {
+	collator: { cargo: "intl-collator", define: "MAL_INTL_HAS_COLLATOR" },
+	"number-format": { cargo: "intl-number-format", define: "MAL_INTL_HAS_NUMBER_FORMAT" },
+	"date-time-format": { cargo: "intl-date-time-format", define: "MAL_INTL_HAS_DATE_TIME_FORMAT" },
+	"plural-rules": { cargo: "intl-plural-rules", define: "MAL_INTL_HAS_PLURAL_RULES" },
+	"list-format": { cargo: "intl-list-format", define: "MAL_INTL_HAS_LIST_FORMAT" },
+	segmenter: { cargo: "intl-segmenter", define: "MAL_INTL_HAS_SEGMENTER" },
+	"display-names": { cargo: "intl-display-names", define: "MAL_INTL_HAS_DISPLAY_NAMES" },
+	"relative-time-format": {
+		cargo: "intl-relative-time-format",
+		define: "MAL_INTL_HAS_RELATIVE_TIME_FORMAT",
+	},
+	"duration-format": { cargo: "intl-duration-format", define: "MAL_INTL_HAS_DURATION_FORMAT" },
+};
+
+/** Deduped selected Intl services; [] means all services (the default). */
+function selectedIntlServices(config: ResolvedBuildConfig): Array<string> {
+	return [...new Set(config.engine.intl.features)];
+}
+
+/**
+ * Rust Cargo features selecting the Intl build. Empty when Intl is off (the caller
+ * passes --no-default-features) or all services are selected (the default
+ * `intl-full` build). A subset returns the per-service features, built with
+ * --no-default-features.
+ */
+export function intlCargoFeatures(config: ResolvedBuildConfig): Array<string> {
+	if (!config.engine.intl.enabled) {
+		return [];
+	}
+	return selectedIntlServices(config).map((name) => INTL_SERVICES[name]!.cargo);
+}
+
+/**
+ * C `-D…=0` defines disabling each UNSELECTED Intl service on a subset build. Empty
+ * when Intl is off (`-DMAL_INTL=0` covers everything) or all services are selected.
+ */
+export function intlDisabledDefines(config: ResolvedBuildConfig): Array<string> {
+	if (!config.engine.intl.enabled) {
+		return [];
+	}
+	const selected = new Set(selectedIntlServices(config));
+	if (selected.size === 0) {
+		return [];
+	}
+	return Object.entries(INTL_SERVICES)
+		.filter(([name]) => !selected.has(name))
+		.map(([, service]) => `-D${service.define}=0`);
 }
 
 /**
@@ -103,7 +162,13 @@ const CONFIG_SCHEMA: ObjectSchema = {
 		engine: {
 			object: {
 				eval: booleanLeaf,
-				intl: { object: { enabled: booleanLeaf, languages: stringArrayLeaf } },
+				intl: {
+					object: {
+						enabled: booleanLeaf,
+						features: stringArrayLeaf,
+						languages: stringArrayLeaf,
+					},
+				},
 			},
 		},
 		host: { object: { scheduler: schedulerLeaf } },
@@ -144,6 +209,7 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 			eval: config.engine?.eval ?? false,
 			intl: {
 				enabled: config.engine?.intl?.enabled ?? false,
+				features: config.engine?.intl?.features ?? [],
 				languages: config.engine?.intl?.languages ?? [],
 			},
 		},
@@ -224,6 +290,15 @@ export function loadBuildConfig(
 	validate(parsed, CONFIG_SCHEMA, "");
 	const config = resolveBuildConfig(parsed as MaligatorBuildConfig);
 
+	// Reject unknown engine.intl.features service names (typo protection).
+	for (const name of config.engine.intl.features) {
+		if (!(name in INTL_SERVICES)) {
+			throw new BuildConfigError(
+				`engine.intl.features: unknown service '${name}' (allowed: ${Object.keys(INTL_SERVICES).join(", ")})`,
+			);
+		}
+	}
+
 	// Locale subsetting (engine.intl.languages) is not yet wired: it needs an
 	// icu4x-datagen step feeding ICU4X_DATA_DIR, which is blocked on the ICU4X
 	// marker-contract (`--markers all` omits the compact-decimal markers icu_decimal
@@ -236,11 +311,6 @@ export function loadBuildConfig(
 		);
 	}
 	return config;
-}
-
-/** The normalized (deduped + sorted) selected locale set — stable hash input. */
-function normalizedLocales(config: ResolvedBuildConfig): Array<string> {
-	return [...new Set(config.engine.intl.languages)].sort();
 }
 
 function shortHash(value: unknown): string {
@@ -258,25 +328,26 @@ function shortHash(value: unknown): string {
  * (eval on, Intl on, all locales) so it keeps the unsuffixed build dir.
  */
 export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
-	// The C archive depends on eval + whether Intl is on, but NOT on the locale set
-	// (that only changes the Rust/ICU datagen). Keying on locales here would spawn
-	// redundant identical C build dirs.
-	if (config.engine.eval && config.engine.intl.enabled) {
+	// The C archive depends on eval, whether Intl is on, and which services are
+	// selected (each flips a -DMAL_INTL_HAS_* define), but NOT on the locale set
+	// (that only changes the Rust/ICU datagen). Empty services list = all = canonical.
+	const services = selectedIntlServices(config).sort();
+	if (config.engine.eval && config.engine.intl.enabled && services.length === 0) {
 		return "";
 	}
-	return shortHash({ eval: config.engine.eval, intl: config.engine.intl.enabled });
+	return shortHash({ eval: config.engine.eval, intl: config.engine.intl.enabled, services });
 }
 
 /**
- * The Rust (ICU4X) archive's cache suffix. It depends ONLY on the Intl axis
- * (whether ICU is compiled + which locales are baked), NOT on `engine.eval` — so
- * toggling eval does not trigger a multi-minute ICU rebuild. "" for the canonical
- * Intl-on/all-locales archive.
+ * The Rust (ICU4X) archive's cache suffix. It depends ONLY on the Intl axis (which
+ * icu sub-crates + baked data compile: whether Intl is on and which services are
+ * selected), NOT on `engine.eval` — so toggling eval does not trigger a multi-minute
+ * ICU rebuild. "" for the canonical Intl-on / all-services archive.
  */
 export function rustConfigCacheSuffix(config: ResolvedBuildConfig): string {
-	const locales = normalizedLocales(config);
-	if (config.engine.intl.enabled && locales.length === 0) {
+	const services = selectedIntlServices(config).sort();
+	if (config.engine.intl.enabled && services.length === 0) {
 		return "";
 	}
-	return shortHash({ intl: config.engine.intl.enabled, locales });
+	return shortHash({ intl: config.engine.intl.enabled, services });
 }

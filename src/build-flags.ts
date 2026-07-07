@@ -113,15 +113,25 @@ export function optFlags(): Array<string> {
  * `intlEnabled: false` adds `-DMAL_INTL=0`, which drops the Intl global + the ICU
  * call sites (kept in lockstep with the Rust `intl` Cargo feature).
  */
-export function cmakeCFlags(opts: { evalEnabled?: boolean; intlEnabled?: boolean } = {}): string {
+export function cmakeCFlags(
+	opts: {
+		evalEnabled?: boolean;
+		intlEnabled?: boolean;
+		/** `-DMAL_INTL_HAS_<SERVICE>=0` for each dropped service (subset Intl build). */
+		intlServiceDefines?: Array<string>;
+	} = {},
+): string {
 	const evalFlag = opts.evalEnabled === false ? ["-DMAL_EVAL=0"] : [];
-	const intlFlag = opts.intlEnabled === false ? ["-DMAL_INTL=0"] : [];
+	// Intl off → -DMAL_INTL=0 (per-service gates default to MAL_INTL, so all off).
+	// Intl on → per-service disable defines (empty for the full build).
+	const intlFlags =
+		opts.intlEnabled === false ? ["-DMAL_INTL=0"] : (opts.intlServiceDefines ?? []);
 	return [
 		...optFlags(),
 		...SANITIZER_FLAGS[sanitizerMode()],
 		...gcDefines(),
 		...evalFlag,
-		...intlFlag,
+		...intlFlags,
 	].join(" ");
 }
 

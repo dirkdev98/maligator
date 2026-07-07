@@ -6,8 +6,11 @@ import {
 	assertEvalPolicy,
 	BuildConfigError,
 	buildConfigCacheSuffix,
+	intlCargoFeatures,
+	intlDisabledDefines,
 	loadBuildConfig,
 	resolveBuildConfig,
+	rustConfigCacheSuffix,
 } from "../src/build-config.ts";
 import { parseScript } from "../src/parser.ts";
 import {
@@ -97,6 +100,63 @@ describe("loadBuildConfig", () => {
 		const dir = tmpdir();
 		writeConfig(dir, JSON.stringify({ engine: { intl: { enabled: false, languages: ["en"] } } }));
 		expect(loadBuildConfig(undefined, dir).engine.intl.enabled).toBe(false);
+	});
+
+	it("hard-errors on an unknown intl.features service name", () => {
+		const dir = tmpdir();
+		writeConfig(
+			dir,
+			JSON.stringify({ engine: { intl: { enabled: true, features: ["collator", "bogus"] } } }),
+		);
+		expect(() => loadBuildConfig(undefined, dir)).toThrow(/unknown service 'bogus'/);
+	});
+
+	it("accepts a valid intl.features subset", () => {
+		const dir = tmpdir();
+		writeConfig(
+			dir,
+			JSON.stringify({ engine: { intl: { enabled: true, features: ["number-format"] } } }),
+		);
+		expect(loadBuildConfig(undefined, dir).engine.intl.features).toEqual(["number-format"]);
+	});
+});
+
+describe("intl feature → cargo features + C defines", () => {
+	const config = (intl: object) => resolveBuildConfig({ engine: { intl } });
+
+	it("Intl off → no cargo features, no service defines (-DMAL_INTL=0 handles it)", () => {
+		const off = config({ enabled: false });
+		expect(intlCargoFeatures(off)).toEqual([]);
+		expect(intlDisabledDefines(off)).toEqual([]);
+	});
+
+	it("all services (empty features) → default intl-full, no disable defines", () => {
+		const all = config({ enabled: true });
+		expect(intlCargoFeatures(all)).toEqual([]); // empty → cargo default (intl-full)
+		expect(intlDisabledDefines(all)).toEqual([]);
+	});
+
+	it("subset → per-service cargo features + disable defines for the rest", () => {
+		const subset = config({ enabled: true, features: ["number-format", "collator"] });
+		expect(intlCargoFeatures(subset).sort()).toEqual(["intl-collator", "intl-number-format"]);
+		const defines = intlDisabledDefines(subset);
+		expect(defines).toContain("-DMAL_INTL_HAS_SEGMENTER=0");
+		expect(defines).toContain("-DMAL_INTL_HAS_DISPLAY_NAMES=0");
+		// selected services are NOT disabled
+		expect(defines).not.toContain("-DMAL_INTL_HAS_COLLATOR=0");
+		expect(defines).not.toContain("-DMAL_INTL_HAS_NUMBER_FORMAT=0");
+	});
+
+	it("distinct feature sets get distinct cache suffixes; all-services is canonical", () => {
+		const all = resolveBuildConfig({ engine: { eval: true, intl: { enabled: true } } });
+		const subset = resolveBuildConfig({
+			engine: { eval: true, intl: { enabled: true, features: ["number-format"] } },
+		});
+		expect(buildConfigCacheSuffix(all)).toBe(""); // canonical
+		expect(rustConfigCacheSuffix(all)).toBe("");
+		expect(buildConfigCacheSuffix(subset)).toMatch(/^[0-9a-f]{8}$/);
+		expect(rustConfigCacheSuffix(subset)).toMatch(/^[0-9a-f]{8}$/);
+		expect(buildConfigCacheSuffix(subset)).not.toBe(buildConfigCacheSuffix(all));
 	});
 });
 

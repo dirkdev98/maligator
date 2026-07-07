@@ -52,3 +52,39 @@ typedef size_t usize;
 #ifndef MAL_INTL
 #define MAL_INTL 1
 #endif
+
+// Per-ECMA-402-service gates for engine.intl.features. Each defaults to MAL_INTL
+// (so `MAL_INTL=0` forces every service off, and a full Intl build has them all
+// on). A subset build passes `-DMAL_INTL_HAS_<SERVICE>=0` for each UNSELECTED
+// service (build-flags.ts), in lockstep with the Rust `intl-<service>` Cargo
+// features — an off service's icu sub-crate + baked data are not compiled.
+// Intl.Locale / getCanonicalLocales are the floor (gated by MAL_INTL, not
+// per-service). Named MAL_INTL_HAS_* to avoid colliding with the MalIntlKind enum
+// values (MAL_INTL_COLLATOR, …) in intl_object.h.
+#ifndef MAL_INTL_HAS_COLLATOR
+#define MAL_INTL_HAS_COLLATOR MAL_INTL
+#endif
+#ifndef MAL_INTL_HAS_NUMBER_FORMAT
+#define MAL_INTL_HAS_NUMBER_FORMAT MAL_INTL
+#endif
+#ifndef MAL_INTL_HAS_DATE_TIME_FORMAT
+#define MAL_INTL_HAS_DATE_TIME_FORMAT MAL_INTL
+#endif
+#ifndef MAL_INTL_HAS_PLURAL_RULES
+#define MAL_INTL_HAS_PLURAL_RULES MAL_INTL
+#endif
+#ifndef MAL_INTL_HAS_LIST_FORMAT
+#define MAL_INTL_HAS_LIST_FORMAT MAL_INTL
+#endif
+#ifndef MAL_INTL_HAS_SEGMENTER
+#define MAL_INTL_HAS_SEGMENTER MAL_INTL
+#endif
+#ifndef MAL_INTL_HAS_DISPLAY_NAMES
+#define MAL_INTL_HAS_DISPLAY_NAMES MAL_INTL
+#endif
+#ifndef MAL_INTL_HAS_RELATIVE_TIME_FORMAT
+#define MAL_INTL_HAS_RELATIVE_TIME_FORMAT MAL_INTL
+#endif
+#ifndef MAL_INTL_HAS_DURATION_FORMAT
+#define MAL_INTL_HAS_DURATION_FORMAT MAL_INTL
+#endif

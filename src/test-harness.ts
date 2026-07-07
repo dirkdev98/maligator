@@ -16,6 +16,13 @@
 import { execFileSync, spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import * as path from "node:path";
+import {
+	buildConfigCacheSuffix,
+	intlCargoFeatures,
+	intlDisabledDefines,
+	resolveBuildConfig,
+	rustConfigCacheSuffix,
+} from "./build-config.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
@@ -63,6 +70,12 @@ export interface BuildOptions {
 	 * `engine.intl: false` archive (no ICU crates / baked CLDR data, no Intl global).
 	 */
 	intlEnabled?: boolean;
+	/**
+	 * Selected Intl services (engine.intl.features service names); omitted/[] = all.
+	 * A subset drops the rest's icu sub-crate + baked data. Ignored if intlEnabled is
+	 * false.
+	 */
+	intlFeatures?: Array<string>;
 }
 
 /**
@@ -80,10 +93,14 @@ export function buildNativeBinary(options: BuildOptions): string {
 	const cSource = emitVmDefinition(definition, { compiled: options.compiled ?? true });
 	const evalEnabled = options.evalEnabled ?? true;
 	const intlEnabled = options.intlEnabled ?? true;
-	// Distinct cached archives per capability combo; empty keeps the canonical dirs.
-	const parts: Array<string> = [];
-	if (!evalEnabled) parts.push("noeval");
-	if (!intlEnabled) parts.push("nointl");
+	// Reuse the real build-config resolution so cache suffixes / cargo features / C
+	// defines match the CLI exactly (canonical build → "" suffix → shared archives).
+	const config = resolveBuildConfig({
+		engine: {
+			eval: evalEnabled,
+			intl: { enabled: intlEnabled, features: options.intlFeatures ?? [] },
+		},
+	});
 	return buildLocalBinary({
 		name: options.name,
 		cSource,
@@ -93,8 +110,10 @@ export function buildNativeBinary(options: BuildOptions): string {
 		skipRuntimeBuild: options.skipRuntimeBuild,
 		evalEnabled,
 		intlEnabled,
-		cacheSuffix: parts.join("-"),
-		rustCacheSuffix: intlEnabled ? "" : "nointl",
+		intlServiceDefines: intlDisabledDefines(config),
+		intlFeatures: intlCargoFeatures(config),
+		cacheSuffix: buildConfigCacheSuffix(config),
+		rustCacheSuffix: rustConfigCacheSuffix(config),
 	});
 }
 

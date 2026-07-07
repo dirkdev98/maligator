@@ -5,6 +5,8 @@ import {
 	assertEvalPolicy,
 	BuildConfigError,
 	buildConfigCacheSuffix,
+	intlCargoFeatures,
+	intlDisabledDefines,
 	loadBuildConfig,
 	rustConfigCacheSuffix,
 } from "./build-config.ts";
@@ -173,6 +175,8 @@ const binaryPath = buildLocalBinary({
 	verbose,
 	evalEnabled: buildConfig.engine.eval,
 	intlEnabled: buildConfig.engine.intl.enabled,
+	intlServiceDefines: intlDisabledDefines(buildConfig),
+	intlFeatures: intlCargoFeatures(buildConfig),
 	cacheSuffix: buildConfigCacheSuffix(buildConfig),
 	rustCacheSuffix: rustConfigCacheSuffix(buildConfig),
 });

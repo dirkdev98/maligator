@@ -16,6 +16,66 @@
 #include "vm.h"
 #include "vm_ops.h"
 
+// Locale-insensitive fallbacks for the non-namespace locale-sensitive methods
+// (String.localeCompare / Number.toLocaleString / Date.toLocale*String), used when
+// the backing Intl service is absent — either the whole Intl surface is off
+// (MAL_INTL=0) or just that service (engine.intl.features drops it). ECMA-402
+// permits this for an Intl-less implementation. Defined only when the service is
+// off (`#if !MAL_INTL_<SERVICE>`), so there is no unused-function warning when it is
+// on; consumed by both the in-namespace dispatch and the MAL_INTL=0 stubs below.
+
+#if !MAL_INTL_HAS_COLLATOR
+// localeCompare → UTF-16 code-unit ordering. `this_string` is already a String
+// (the caller coerced it); ToString `that_value` (may throw on a Symbol).
+static MalValue intl_fallback_locale_compare(MalVm *vm, MalValue this_string, MalValue that_value) {
+    MalString *a = mal_value_to_string(this_string);
+    MalString *b = nullptr;
+    if (!mal_vm_to_string(vm, that_value, &b)) {
+        return mal_value_new_undefined();
+    }
+    usize la = mal_string_length(a);
+    usize lb = mal_string_length(b);
+    const c16 *ua = mal_string_code_units(a);
+    const c16 *ub = mal_string_code_units(b);
+    usize n = la < lb ? la : lb;
+    for (usize i = 0; i < n; i++) {
+        if (ua[i] != ub[i]) {
+            return mal_value_from_i32(ua[i] < ub[i] ? -1 : 1);
+        }
+    }
+    return mal_value_from_i32(la == lb ? 0 : (la < lb ? -1 : 1));
+}
+#endif
+
+#if !MAL_INTL_HAS_NUMBER_FORMAT
+// Number.toLocaleString → base-10 Number::toString.
+static MalValue intl_fallback_number_to_locale_string(MalVm *vm, f64 number) {
+    return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
+}
+#endif
+
+#if !MAL_INTL_HAS_DATE_TIME_FORMAT
+// Date.toLocale{,Date,Time}String → fixed non-localized civil-time render (which:
+// 0 date+time, 1 date, 2 time). Non-finite time → "Invalid Date" (as toString does).
+static MalValue intl_fallback_date_to_locale_string(MalVm *vm, f64 time_value, i32 which) {
+    char buf[64];
+    i32 year, month, day, hour, minute, second;
+    if (!mal_date_to_local_components(time_value, &year, &month, &day, &hour, &minute, &second)) {
+        return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) "Invalid Date", 12));
+    }
+    int len;
+    if (which == 1) {
+        len = snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month, day);
+    } else if (which == 2) {
+        len = snprintf(buf, sizeof(buf), "%02d:%02d:%02d", hour, minute, second);
+    } else {
+        len = snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute,
+                       second);
+    }
+    return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) buf, (usize) len));
+}
+#endif
+
 #if MAL_INTL
 
 /*
@@ -838,6 +898,7 @@ static MalValue intl_resolved_copy(MalVm *vm, MalValue template_value, const cha
 // Intl.Collator
 // ---------------------------------------------------------------------------
 
+#if MAL_INTL_HAS_COLLATOR
 static MalValue intl_collator_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -1004,7 +1065,12 @@ static MalValue intl_collator_supported_locales_of(MalVm *vm, MalValue this_valu
  * per-call Collator over (locales, options) comparing two already-resolved
  * strings. Returns a Number (-1/0/1), or undefined with a pending throw.
  */
+#endif // MAL_INTL_HAS_COLLATOR — collator service statics
+
+// String.prototype.localeCompare: a real Collator when the service is present,
+// else the UTF-16 code-unit fallback. Always defined (builtin_string.c calls it).
 MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that_value, MalValue locales, MalValue options) {
+#if MAL_INTL_HAS_COLLATOR
     MalString *self;
     MalString *that;
     if (!mal_vm_to_string(vm, this_string, &self)) {
@@ -1025,8 +1091,14 @@ MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that_
         (const uint16_t *) mal_string_code_units(that), mal_string_length(that)
     );
     return mal_value_from_i32(result);
+#else
+    (void) locales;
+    (void) options;
+    return intl_fallback_locale_compare(vm, this_string, that_value);
+#endif
 }
 
+#if MAL_INTL_HAS_COLLATOR
 static void intl_install_collator(MalVm *vm, MalObject *intl_object) {
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
@@ -1055,6 +1127,9 @@ static void intl_install_collator(MalVm *vm, MalObject *intl_object) {
 
 static const char *const PLURAL_CATEGORIES[6] = {"zero", "one", "two", "few", "many", "other"};
 
+#endif // MAL_INTL_HAS_COLLATOR — install
+
+#if MAL_INTL_HAS_PLURAL_RULES
 static MalValue intl_plural_rules_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -1240,6 +1315,9 @@ static MalValue intl_number_format_value(MalVm *vm, MalIntlObject *nf, f64 numbe
     return result;
 }
 
+#endif // MAL_INTL_HAS_PLURAL_RULES
+
+#if MAL_INTL_HAS_NUMBER_FORMAT
 static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -1376,15 +1454,25 @@ static MalValue intl_number_format_supported_locales_of(MalVm *vm, MalValue this
     return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
+#endif // MAL_INTL_HAS_NUMBER_FORMAT — number format service statics
+
+// Number.prototype.toLocaleString: real NumberFormat when present, else base-10.
 MalValue mal_intl_number_to_locale_string(MalVm *vm, f64 number, MalValue locales, MalValue options) {
+#if MAL_INTL_HAS_NUMBER_FORMAT
     MalValue ctor_args[2] = {locales, options};
     MalValue nf = intl_number_format_constructor(vm, mal_value_new_undefined(), ctor_args, 2, mal_value_new_undefined(), mal_value_new_undefined());
     if (!mal_value_is_intl_object(nf)) {
         return mal_value_new_undefined();
     }
     return intl_number_format_value(vm, mal_value_to_intl_object(nf), number);
+#else
+    (void) locales;
+    (void) options;
+    return intl_fallback_number_to_locale_string(vm, number);
+#endif
 }
 
+#if MAL_INTL_HAS_NUMBER_FORMAT
 static void intl_install_number_format(MalVm *vm, MalObject *intl_object) {
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
@@ -1458,6 +1546,9 @@ static MalValue intl_datetime_format_epoch(MalVm *vm, MalString *locale, f64 epo
     return result;
 }
 
+#endif // MAL_INTL_HAS_NUMBER_FORMAT — install
+
+#if MAL_INTL_HAS_DATE_TIME_FORMAT
 static MalValue intl_date_time_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -1665,7 +1756,12 @@ static MalValue intl_date_time_format_supported_locales_of(MalVm *vm, MalValue t
     return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
+#endif // MAL_INTL_HAS_DATE_TIME_FORMAT — date/time format service statics
+
+// Date.prototype.toLocale{,Date,Time}String: real DateTimeFormat when present,
+// else a fixed non-localized civil-time render.
 MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue locales, MalValue options, i32 which) {
+#if MAL_INTL_HAS_DATE_TIME_FORMAT
     if (!isfinite(time_value)) {
         return mal_value_from_string(mal_intrinsic_ascii(vm, "Invalid Date"));
     }
@@ -1700,8 +1796,14 @@ MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue loca
         }
     }
     return intl_datetime_format_epoch(vm, locale, time_value, date_code, time_code);
+#else
+    (void) locales;
+    (void) options;
+    return intl_fallback_date_to_locale_string(vm, time_value, which);
+#endif
 }
 
+#if MAL_INTL_HAS_DATE_TIME_FORMAT
 static void intl_install_date_time_format(MalVm *vm, MalObject *intl_object) {
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
@@ -1750,6 +1852,9 @@ static i32 intl_list_length_code(const MalString *style) {
     return 0; // long
 }
 
+#endif // MAL_INTL_HAS_DATE_TIME_FORMAT — install
+
+#if MAL_INTL_HAS_LIST_FORMAT
 static MalValue intl_list_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -2022,6 +2127,9 @@ static void intl_install_list_format(MalVm *vm, MalObject *intl_object) {
 // Intl.DisplayNames — icu::experimental::displaynames (region/script/language).
 // ---------------------------------------------------------------------------
 
+#endif // MAL_INTL_HAS_LIST_FORMAT
+
+#if MAL_INTL_HAS_DISPLAY_NAMES
 static MalValue intl_display_names_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -2216,6 +2324,9 @@ static i32 intl_relative_unit_code(const MalString *unit) {
     return -1;
 }
 
+#endif // MAL_INTL_HAS_DISPLAY_NAMES
+
+#if MAL_INTL_HAS_RELATIVE_TIME_FORMAT
 static MalValue intl_relative_time_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -2487,6 +2598,9 @@ static MalValue intl_make_segment_data(MalVm *vm, MalString *input, i32 start, i
     return mal_value_from_object(data);
 }
 
+#endif // MAL_INTL_HAS_RELATIVE_TIME_FORMAT
+
+#if MAL_INTL_HAS_SEGMENTER
 static MalValue intl_segmenter_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -2784,6 +2898,9 @@ static bool dur_str_eq(const char *a, const char *b) {
     return a != nullptr && strcmp(a, b) == 0;
 }
 
+#endif // MAL_INTL_HAS_SEGMENTER
+
+#if MAL_INTL_HAS_DURATION_FORMAT
 static MalValue intl_duration_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -3093,6 +3210,8 @@ static void intl_install_duration_format(MalVm *vm, MalObject *intl_object) {
 // Install
 // ---------------------------------------------------------------------------
 
+#endif // MAL_INTL_HAS_DURATION_FORMAT
+
 void mal_builtin_intl_install(MalVm *vm) {
     MalObject *intl = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     vm->intrinsics[MAL_INTRINSIC_INTL] = mal_value_from_object(intl);
@@ -3101,83 +3220,63 @@ void mal_builtin_intl_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, intl, "getCanonicalLocales", 1, intl_get_canonical_locales);
     mal_intrinsic_define_method_n(vm, intl, "supportedValuesOf", 1, intl_supported_values_of);
 
-    intl_install_locale(vm, intl);
+    intl_install_locale(vm, intl); // floor: Intl.Locale (always present when Intl is on)
+#if MAL_INTL_HAS_COLLATOR
     intl_install_collator(vm, intl);
+#endif
+#if MAL_INTL_HAS_PLURAL_RULES
     intl_install_plural_rules(vm, intl);
+#endif
+#if MAL_INTL_HAS_NUMBER_FORMAT
     intl_install_number_format(vm, intl);
+#endif
+#if MAL_INTL_HAS_DATE_TIME_FORMAT
     intl_install_date_time_format(vm, intl);
+#endif
+#if MAL_INTL_HAS_LIST_FORMAT
     intl_install_list_format(vm, intl);
+#endif
+#if MAL_INTL_HAS_DISPLAY_NAMES
     intl_install_display_names(vm, intl);
+#endif
+#if MAL_INTL_HAS_RELATIVE_TIME_FORMAT
     intl_install_relative_time_format(vm, intl);
+#endif
+#if MAL_INTL_HAS_SEGMENTER
     intl_install_segmenter(vm, intl);
+#endif
+#if MAL_INTL_HAS_DURATION_FORMAT
     intl_install_duration_format(vm, intl);
+#endif
 }
 
 #else // !MAL_INTL
 
-// engine.intl disabled: no ICU. The `Intl` global is not installed (so
-// `typeof Intl === "undefined"`), and the locale-sensitive methods outside the
-// Intl namespace (localeCompare / toLocaleString) degrade to locale-insensitive
-// behaviour, which ECMA-402 explicitly permits for an implementation without
-// Intl. These are the only symbols the rest of the runtime references, so the
-// full ICU surface above compiles away with the `intl` Cargo feature.
+// engine.intl fully disabled: no ICU, no `Intl` global (typeof Intl ===
+// "undefined"). The locale-sensitive non-namespace methods delegate to the
+// locale-insensitive fallbacks above (all services are off here, so the
+// #if !MAL_INTL_<SERVICE> helpers are all defined).
 
 void mal_builtin_intl_install(MalVm *vm) {
     (void) vm; // no Intl namespace in this build
 }
 
-// localeCompare without a collator: compare by UTF-16 code unit (the
-// locale-independent ordering). `this_string` is already a String (the caller
-// coerced it); ToString `that_value` (may throw on a Symbol).
 MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that_value, MalValue locales, MalValue options) {
     (void) locales;
     (void) options;
-    MalString *a = mal_value_to_string(this_string);
-    MalString *b = nullptr;
-    if (!mal_vm_to_string(vm, that_value, &b)) {
-        return mal_value_new_undefined();
-    }
-    usize la = mal_string_length(a);
-    usize lb = mal_string_length(b);
-    const c16 *ua = mal_string_code_units(a);
-    const c16 *ub = mal_string_code_units(b);
-    usize n = la < lb ? la : lb;
-    for (usize i = 0; i < n; i++) {
-        if (ua[i] != ub[i]) {
-            return mal_value_from_i32(ua[i] < ub[i] ? -1 : 1);
-        }
-    }
-    return mal_value_from_i32(la == lb ? 0 : (la < lb ? -1 : 1));
+    return intl_fallback_locale_compare(vm, this_string, that_value);
 }
 
-// Number.prototype.toLocaleString without Intl: the default Number::toString
-// (base 10), matching the spec's "no locale sensitivity" fallback.
 MalValue mal_intl_number_to_locale_string(MalVm *vm, f64 number, MalValue locales, MalValue options) {
     (void) locales;
     (void) options;
-    return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
+    return intl_fallback_number_to_locale_string(vm, number);
 }
 
-// Date.prototype.toLocale{,Date,Time}String without Intl: a fixed, non-localized
-// ISO-like rendering of the LOCAL civil components (which: 0 date+time, 1 date,
-// 2 time). Non-finite time → "Invalid Date" (as toString does).
 MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue locales, MalValue options, i32 which) {
     (void) locales;
     (void) options;
-    char buf[64];
-    i32 year, month, day, hour, minute, second;
-    if (!mal_date_to_local_components(time_value, &year, &month, &day, &hour, &minute, &second)) {
-        return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) "Invalid Date", 12));
-    }
-    int len;
-    if (which == 1) {
-        len = snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month, day);
-    } else if (which == 2) {
-        len = snprintf(buf, sizeof(buf), "%02d:%02d:%02d", hour, minute, second);
-    } else {
-        len = snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second);
-    }
-    return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) buf, (usize) len));
+    return intl_fallback_date_to_locale_string(vm, time_value, which);
 }
 
 #endif // MAL_INTL

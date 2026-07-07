@@ -23,9 +23,13 @@ interface RuntimeBuildDimensions {
 	evalEnabled?: boolean;
 	/** Whether to link the Intl (ICU4X) surface. Default true. */
 	intlEnabled?: boolean;
+	/** `-DMAL_INTL_HAS_<SERVICE>=0` cc defines for dropped Intl services (subset build). */
+	intlServiceDefines?: Array<string>;
+	/** Per-service Rust Cargo features (`intl-collator`, …) for a subset Intl build. */
+	intlFeatures?: Array<string>;
 	/** C-build-config hash suffix (build-config.ts). Default "" (canonical archive). */
 	cacheSuffix?: string;
-	/** Rust/Intl-config hash suffix selecting the ICU archive. Default "" (all locales). */
+	/** Rust/Intl-config hash suffix selecting the ICU archive. Default "" (all services). */
 	rustCacheSuffix?: string;
 }
 
@@ -81,6 +85,12 @@ export interface LocalBuildOptions {
 	 */
 	intlEnabled?: boolean;
 
+	/** `-DMAL_INTL_HAS_<SERVICE>=0` cc defines for dropped Intl services (subset). */
+	intlServiceDefines?: Array<string>;
+
+	/** Per-service Rust Cargo features (`intl-collator`, …) for a subset Intl build. */
+	intlFeatures?: Array<string>;
+
 	/**
 	 * C-build-config hash (build-config.ts `buildConfigCacheSuffix`) selecting the
 	 * C build dir / archive. Defaults to "" (canonical). Consistent with
@@ -124,6 +134,8 @@ export function ensureRuntimeLibrary(
 ): Array<string> {
 	const evalEnabled = dimensions.evalEnabled ?? true;
 	const intlEnabled = dimensions.intlEnabled ?? true;
+	const intlServiceDefines = dimensions.intlServiceDefines ?? [];
+	const intlFeatures = dimensions.intlFeatures ?? [];
 	const cacheSuffix = dimensions.cacheSuffix ?? "";
 	const rustCacheSuffix = dimensions.rustCacheSuffix ?? "";
 	const buildDir = buildDirFor(cacheSuffix);
@@ -147,7 +159,7 @@ export function ensureRuntimeLibrary(
 			"runtime",
 			"-B",
 			buildDir,
-			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, intlEnabled })}`,
+			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, intlEnabled, intlServiceDefines })}`,
 		],
 		{
 			stdio,
@@ -163,7 +175,7 @@ export function ensureRuntimeLibrary(
 	// Build the Rust shim the runtime links against: Date tz + Intl (ICU4X) and
 	// the RegExp engine (regress), all in libmal_rust.a. Intl-off drops the ICU
 	// crates; the archive is keyed by rustCacheSuffix so variants coexist.
-	ensureRustLibrary(verbose, { intlEnabled, cacheSuffix: rustCacheSuffix });
+	ensureRustLibrary(verbose, { intlEnabled, features: intlFeatures, cacheSuffix: rustCacheSuffix });
 
 	// Link order: runtime -> host -> engine (dependents first). rustLinkArgs() is
 	// appended after these by the caller (the engine references its symbols).
@@ -220,6 +232,8 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 		: ensureRuntimeLibrary(options.verbose, {
 				evalEnabled,
 				intlEnabled,
+				intlServiceDefines: options.intlServiceDefines,
+				intlFeatures: options.intlFeatures,
 				cacheSuffix,
 				rustCacheSuffix,
 			});
