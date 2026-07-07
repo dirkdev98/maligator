@@ -203,10 +203,11 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 		}
 	}
 
-	// A function that always runs its compiled body (compiled, with no
-	// param-unboxing guard that could bail) never reaches the interpreter, so its
-	// bytecode and handler tables are dead weight — skip emitting them entirely.
-	const omitBytecode = compiled.map((c) => c !== null && !c.bailsToInterpreter);
+	// A compiled function never re-enters the interpreter — a speculative param
+	// guard falls back to a boxed compiled variant, not the bytecode — so its
+	// bytecode and handler tables are dead weight. Only uncompiled functions
+	// (generators/async) keep their overlay.
+	const omitBytecode = compiled.map((c) => c !== null);
 
 	const positionInfo: Array<{ symbol: string; count: number }> = [];
 
@@ -398,8 +399,9 @@ export function emitBatch(
 			}
 		}
 
-		// Always-compiled functions (no interpreter bail) need no bytecode tables.
-		const omitBytecode = compiled.map((c) => c !== null && !c.bailsToInterpreter);
+		// Compiled functions never re-enter the interpreter (a param guard falls
+		// back to a boxed compiled variant), so they need no bytecode tables.
+		const omitBytecode = compiled.map((c) => c !== null);
 
 		const instructionSymbols: Array<string> = [];
 		const handlerSymbols: Array<string> = [];

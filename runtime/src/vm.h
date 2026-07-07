@@ -632,7 +632,11 @@ typedef MalValue (*MalCompiledFunction)(
     const MalValue *args,
     i32 arg_count,
     MalValue new_target,
-    MalEnv *env
+    MalEnv *env,
+    // The invoked function object, for a sloppy-mode `arguments.callee` (the
+    // compiled frame carries no callee otherwise). Undefined for the top-level
+    // entry. Strict functions ignore it (their callee is poisoned).
+    MalValue callee
 );
 
 typedef struct MalFunction {

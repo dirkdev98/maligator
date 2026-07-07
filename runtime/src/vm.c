@@ -1399,7 +1399,8 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
             script_completion = vm->completion;
         } else {
             MalValue value = entry->compiled(
-                vm, mal_value_new_undefined(), nullptr, 0, mal_value_new_undefined(), nullptr
+                vm, mal_value_new_undefined(), nullptr, 0, mal_value_new_undefined(), nullptr,
+                mal_value_new_undefined()
             );
             mal_vm_leave_compiled(vm);
             script_completion = vm->completion.kind == MAL_COMPLETION_THROW
@@ -1906,7 +1907,7 @@ MalCompletion mal_vm_call_value(
                 completion = vm->completion;
             } else {
                 MalValue this_value = mal_vm_callee_this(vm, function, resolution.this_value);
-                MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), env);
+                MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), env, resolution.callee);
                 mal_vm_leave_compiled(vm);
                 completion = vm->completion.kind == MAL_COMPLETION_THROW
                     ? vm->completion
@@ -2045,7 +2046,7 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                     // collection inside the constructor would otherwise sweep it.
                     MalCalleeRoots ncr;
                     mal_gc_callee_roots_begin(&ncr, this_value, effective_new_target, resolution.args, resolution.arg_count);
-                    MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, effective_new_target, env);
+                    MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, effective_new_target, env, resolution.callee);
                     mal_gc_callee_roots_end(&ncr);
                     mal_vm_leave_compiled(vm);
                     completion = vm->completion.kind == MAL_COMPLETION_THROW

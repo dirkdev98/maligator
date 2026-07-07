@@ -48,15 +48,12 @@ type RegisterRep = "boxed" | "number" | "boolean";
 export interface CompiledFunction {
 	/** The C symbol to install as MalFunction.compiled. */
 	symbol: string;
-	/** The full `static MalValue ...(...) { ... }` definition. */
-	source: string;
 	/**
-	 * Whether the compiled body can fall back to the bytecode interpreter at
-	 * runtime. Only the speculative param-unboxing guard does so (via
-	 * mal_vm_interpret_function); a function with no promoted params never bails,
-	 * so its bytecode is dead and can be omitted from the emitted module.
+	 * The full `static MalValue ...(...) { ... }` definition — plus, for a function
+	 * that speculatively unboxes params, its fully-boxed fallback variant emitted
+	 * ahead of it (the entry guard jumps there instead of the interpreter).
 	 */
-	bailsToInterpreter: boolean;
+	source: string;
 }
 
 /**
@@ -410,6 +407,9 @@ export function emitCompiledFunction(
 	index: number,
 	suffix: string,
 	debug: boolean,
+	// Set when emitting the boxed fallback variant (see below): a fixed symbol and
+	// an empty promotable set (no speculation, no guard, no further fallback).
+	override?: { symbol: string; promotable: Set<number> },
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body; they are not straight-line
 	// C functions (the resumable-compiled-function backend is a later milestone).
@@ -425,7 +425,7 @@ export function emitCompiledFunction(
 	// access and CREATE_FUNCTION see this activation's slots.
 	const capturesEnv = fn.capturedCount > 0;
 
-	const promotableParams = numericParamCandidates(fn);
+	const promotableParams = override?.promotable ?? numericParamCandidates(fn);
 	const reps = inferReps(fn, promotableParams);
 
 	// MalValue-typed registers can hold heap pointers, so they are GC roots: back
@@ -503,15 +503,39 @@ export function emitCompiledFunction(
 	);
 	const isPromoted = new Set(promotedParams);
 
-	const symbol = `mal_compiled_${index}${suffix}`;
+	const symbol = override?.symbol ?? `mal_compiled_${index}${suffix}`;
+
+	// PARAM-BAIL FALLBACK: when this variant speculatively unboxes params, its
+	// entry guard must have somewhere to go when an argument is not a number.
+	// Rather than re-enter the bytecode interpreter (which would keep the whole
+	// interpreter live), emit a second, fully-boxed variant of this same function
+	// and jump there. That variant promotes nothing, so it never bails — no
+	// compiled function depends on the interpreter, and the bytecode overlay can
+	// be dropped for every compiled function.
+	let fallbackSource = "";
+	let bailTarget = "";
+	if (promotedParams.length > 0) {
+		const boxedSymbol = `mal_compiled_${index}_boxed${suffix}`;
+		const boxed = emitCompiledFunction(fn, index, suffix, debug, {
+			symbol: boxedSymbol,
+			promotable: new Set(),
+		});
+		if (boxed === null) {
+			return null; // the promoting variant lowered, so this cannot happen
+		}
+		fallbackSource = `${boxed.source}\n\n`;
+		bailTarget = `${boxedSymbol}(vm, this_value, args, arg_count, new_target, env, callee)`;
+	}
+
 	const lines: Array<string> = [];
 
 	lines.push(
-		`static MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env) {`,
+		`static MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee) {`,
 	);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
+	lines.push(`    (void) callee;`);
 
 	// Registers are plain C locals: `number`-rep ones as doubles, `boolean`-rep
 	// as bool (both unboxed). MalValue-rep registers instead alias slots of the
@@ -533,12 +557,11 @@ export function emitCompiledFunction(
 		}
 	}
 
-	// Promoted parameters: load each boxed, guard that every one is a number,
-	// and bail to the interpreter — running THIS function's own bytecode by
-	// index — when any is not (a normal call dispatch would re-enter .compiled
-	// and loop forever). undefined (incl. a missing argument) is not a number,
-	// so under-application bails and interprets identically. Past the guard the
-	// fast body runs fully unboxed with no per-op number checks.
+	// Promoted parameters: load each boxed, guard that every one is a number, and
+	// fall back to the fully-boxed variant when any is not. undefined (incl. a
+	// missing argument) is not a number, so under-application takes the boxed path
+	// and behaves identically. Past the guard the fast body runs fully unboxed with
+	// no per-op number checks.
 	if (promotedParams.length > 0) {
 		for (const i of promotedParams) {
 			lines.push(
@@ -546,16 +569,7 @@ export function emitCompiledFunction(
 			);
 		}
 		const guard = promotedParams.map((i) => `!mal_ops_is_number(p${i})`).join(" || ");
-		lines.push(`    if (${guard}) {`);
-		if (debug) {
-			// The interpreter's pushed frame represents this function from here;
-			// hide the native frame so a capture does not show it twice.
-			lines.push(`        mal_vm_compiled_bailed(vm);`);
-		}
-		lines.push(
-			`        return mal_vm_interpret_function(vm, ${index}, MAL_VALUE_UNDEFINED, this_value, args, arg_count, new_target, env);`,
-		);
-		lines.push(`    }`);
+		lines.push(`    if (${guard}) {`, `        return ${bailTarget};`, `    }`);
 		for (const i of promotedParams) {
 			lines.push(`    r${i} = mal_ops_number_as_f64(p${i});`);
 		}
@@ -586,7 +600,7 @@ export function emitCompiledFunction(
 	// so the collector can scan them before any allocation. mal_env_new is now a GC
 	// allocation (MalEnv is a cell), so the env is built and linked into the
 	// already-published frame afterwards — never held unrooted across a safepoint.
-	// The promoted-param bail above returns before this point (no unlink).
+	// The promoted-param guard above returns before this point (no unlink).
 	if (needsRootFrame) {
 		lines.push(
 			`    static const MalFrameDescriptor __gc_desc = { .function_index = ${index}, .slot_count = ${totalSlots} };`,
@@ -608,20 +622,20 @@ export function emitCompiledFunction(
 	lines.push(...body);
 
 	// Falling off the end returns undefined — or `this` for a constructor with no
-	// explicit object return (mal_ops_construct_result with new_target set).
+	// explicit object return. A derived constructor routes through the checked
+	// helper (returning before super() is a ReferenceError); everything else uses
+	// mal_ops_construct_result (with new_target set for a [[Construct]] call).
 	lines.push(
-		`    ${gcUnlink}return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`,
+		thisSlot >= 0
+			? `    ${gcUnlink}return mal_vm_op_derived_construct_return(vm, MAL_VALUE_UNDEFINED, __gc_slots[${thisSlot}]);`
+			: `    ${gcUnlink}return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`,
 	);
 	lines.push("}");
 	for (const i of valueRegs) {
 		lines.push(`#undef r${i}`);
 	}
 
-	return {
-		symbol,
-		source: lines.join("\n"),
-		bailsToInterpreter: promotedParams.length > 0,
-	};
+	return { symbol, source: fallbackSource + lines.join("\n") };
 }
 
 /** The C type a register of the given rep is held in. */
@@ -1100,15 +1114,11 @@ function emitInstruction(
 				throwCheck,
 			];
 		case "CREATE_ARGUMENTS_OBJECT":
-			// The unmapped `arguments` object. A compiled frame does not carry its
-			// callee, so only strict functions — whose `callee` is poisoned with
-			// %ThrowTypeError% rather than exposing the function — lower here; sloppy
-			// functions stay on the interpreter, which has the callee.
-			if (!strict) {
-				return null;
-			}
+			// The unmapped `arguments` object (this engine never maps parameters). A
+			// strict function poisons `.callee`; a sloppy one exposes the invoked
+			// function, which reaches the compiled frame via the `callee` parameter.
 			return [
-				`r${instruction.dst} = mal_create_arguments_object(vm, args, arg_count, MAL_VALUE_UNDEFINED, true);`,
+				`r${instruction.dst} = mal_create_arguments_object(vm, args, arg_count, callee, ${strict});`,
 			];
 		case "CREATE_REST_ARGUMENTS":
 			// A rest parameter `function f(...rest)`: the call arguments from

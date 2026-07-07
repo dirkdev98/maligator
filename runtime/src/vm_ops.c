@@ -835,7 +835,7 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
                 MalValue result = mal_value_new_undefined();
                 if (mal_vm_enter_compiled(vm, function_index)) {
                     MalValue this_value = mal_vm_callee_this(vm, function, resolution.this_value);
-                    result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, mal_value_new_undefined(), env);
+                    result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, mal_value_new_undefined(), env, resolution.callee);
                     mal_vm_leave_compiled(vm);
                 }
                 vm->frames[caller_frame_index].registers[dst] = result;
@@ -947,7 +947,7 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
                 // inside the constructor would otherwise sweep it.
                 MalCalleeRoots ncr;
                 mal_gc_callee_roots_begin(&ncr, this_value, resolution.callee, &vm->value_stack[base], resolution.arg_count);
-                result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, resolution.callee, env);
+                result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, resolution.callee, env, resolution.callee);
                 mal_gc_callee_roots_end(&ncr);
                 mal_vm_leave_compiled(vm);
             }
