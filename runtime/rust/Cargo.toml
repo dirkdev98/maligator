@@ -21,13 +21,27 @@ crate-type = ["staticlib"]
 # /etc/localtime symlink via TimeZone::system().
 jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
 # ICU4X for the Intl surface. Optional + gated behind the `intl` feature so an
-# `engine.intl: false` build omits the ICU crates entirely (dropping ~9 MB of baked
-# CLDR data). compiled_data (default) bundles CLDR data for all locales; a curated
-# locale subset is selected via icu4x-datagen (see src/rust-build.ts).
-icu = { version = "2", optional = true }
-# Experimental ICU services (icu::experimental re-exports this): DisplayNames,
-# RelativeTimeFormat, Duration. compiled_data bundles their CLDR data.
-icu_experimental = { version = "0.5", features = ["compiled_data"], optional = true }
+# ICU4X for the Intl surface — one optional sub-crate PER ECMA-402 service (not the
+# `icu` meta-crate, which pulls every component non-optionally). This lets the build
+# config select services (engine.intl.features): an unselected service's crate isn't
+# compiled, so its compiled_data (baked CLDR) never lands in the binary. `icu_locale`
+# + `writeable` are the always-on floor (locale parsing / negotiation + result
+# stringification). Sizes are dominated by locale-INDEPENDENT per-service data —
+# Segmenter's LSTM models alone are ~12 MB, Collator's root table ~4 MB.
+# `alloc` on decimal/datetime/calendar/time/list matches what the `icu` meta-crate
+# enabled: it gates the `format_to_string` / Display impls our FFI stringifies with.
+icu_locale = { version = "2", optional = true }
+icu_collator = { version = "2", optional = true }
+icu_decimal = { version = "2", optional = true, features = ["alloc"] }
+icu_datetime = { version = "2", optional = true }
+icu_calendar = { version = "2", optional = true, features = ["alloc"] }
+icu_time = { version = "2", optional = true, features = ["alloc"] }
+icu_plurals = { version = "2", optional = true }
+icu_list = { version = "2", optional = true, features = ["alloc"] }
+icu_segmenter = { version = "2", optional = true }
+# Experimental ICU services (one crate for all three): DisplayNames,
+# RelativeTimeFormat, Duration. Their CLDR data is all-or-nothing at the crate level.
+icu_experimental = { version = "0.5", optional = true }
 # Writeable: stringify ICU "formatted" results that expose Writeable (not Display).
 writeable = { version = "0.6", optional = true }
 # temporal_rs joins here for the Temporal global.
@@ -42,11 +56,64 @@ regress = { version = "0.11", features = ["utf16"] }
 ada-url = "3"
 
 [features]
-# On by default so dev/test262 builds carry the full Intl surface. An
-# `engine.intl: false` build passes --no-default-features (see src/rust-build.ts),
-# which drops the ICU crates + the gated `mod intl`; jiff/regress/ada stay.
-default = ["intl"]
-intl = ["dep:icu", "dep:icu_experimental", "dep:writeable"]
+# On by default so dev/test262 builds carry the full Intl surface. `engine.intl`
+# maps to these features (src/rust-build.ts): enabled:false → --no-default-features
+# (no ICU at all); a feature subset → --no-default-features --features intl-<svc>...
+# jiff/regress/ada are non-optional and always build.
+default = ["intl-full"]
+
+# The always-on Intl floor: locale parsing/negotiation (Intl.Locale,
+# getCanonicalLocales, maximize/minimize) + result stringification. Every service
+# feature enables it. ~0.2 MB.
+intl = ["dep:icu_locale", "icu_locale/compiled_data", "dep:writeable"]
+
+# One feature per ECMA-402 service. Each pulls its icu sub-crate(s) + compiled_data;
+# cargo resolves the transitive DATA crates (e.g. icu_collator/compiled_data pulls
+# icu_normalizer + icu_properties). Cross-service edges seen in lib.rs are explicit:
+# DateTimeFormat constructs icu_calendar/icu_time inputs and renders via decimal;
+# RelativeTime/Duration use decimal (+ plurals).
+intl-collator = ["intl", "dep:icu_collator", "icu_collator/compiled_data"]
+intl-number-format = ["intl", "dep:icu_decimal", "icu_decimal/compiled_data"]
+intl-date-time-format = [
+    "intl",
+    "intl-number-format",
+    "dep:icu_datetime",
+    "icu_datetime/compiled_data",
+    "dep:icu_calendar",
+    "icu_calendar/compiled_data",
+    "dep:icu_time",
+    "icu_time/compiled_data",
+]
+intl-plural-rules = ["intl", "dep:icu_plurals", "icu_plurals/compiled_data"]
+intl-list-format = ["intl", "dep:icu_list", "icu_list/compiled_data"]
+intl-segmenter = ["intl", "dep:icu_segmenter", "icu_segmenter/compiled_data"]
+intl-display-names = ["intl", "dep:icu_experimental", "icu_experimental/compiled_data"]
+intl-relative-time-format = [
+    "intl",
+    "intl-number-format",
+    "dep:icu_experimental",
+    "icu_experimental/compiled_data",
+]
+intl-duration-format = [
+    "intl",
+    "intl-number-format",
+    "intl-plural-rules",
+    "dep:icu_experimental",
+    "icu_experimental/compiled_data",
+]
+
+# Every service (the canonical dev/test262 build).
+intl-full = [
+    "intl-collator",
+    "intl-number-format",
+    "intl-date-time-format",
+    "intl-plural-rules",
+    "intl-list-format",
+    "intl-segmenter",
+    "intl-display-names",
+    "intl-relative-time-format",
+    "intl-duration-format",
+]
 
 [profile.release]
 opt-level = 3

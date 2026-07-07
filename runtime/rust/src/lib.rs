@@ -50,15 +50,15 @@ fn write_str(s: &str, out: *mut u8, out_cap: i32) -> i32 {
 }
 
 /// Parse a BCP-47 tag from a UTF-8 buffer into an ICU4X Locale.
-fn parse_locale(tag_ptr: *const u8, tag_len: usize) -> Option<icu::locale::Locale> {
+fn parse_locale(tag_ptr: *const u8, tag_len: usize) -> Option<icu_locale::Locale> {
     let bytes = unsafe { core::slice::from_raw_parts(tag_ptr, tag_len) };
-    core::str::from_utf8(bytes).ok().and_then(|text| text.parse::<icu::locale::Locale>().ok())
+    core::str::from_utf8(bytes).ok().and_then(|text| text.parse::<icu_locale::Locale>().ok())
 }
 
 // Cheap to construct over baked compiled_data (zero-copy refs to static data),
 // and LocaleExpander is not Sync, so we build one per call rather than caching.
-fn locale_expander() -> icu::locale::LocaleExpander {
-    icu::locale::LocaleExpander::new_extended()
+fn locale_expander() -> icu_locale::LocaleExpander {
+    icu_locale::LocaleExpander::new_extended()
 }
 
 /// Parse + canonicalize a BCP-47 locale tag into `out`; returns the full length,
@@ -110,7 +110,7 @@ pub const MAL_LOCALE_FIELD_NUMBERING_SYSTEM: i32 = 9;
 /// invalid tag or unknown field.
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_locale_field(tag_ptr: *const u8, tag_len: usize, field: i32, out: *mut u8, out_cap: i32) -> i32 {
-    use icu::locale::extensions::unicode::key;
+    use icu_locale::extensions::unicode::key;
     let Some(locale) = parse_locale(tag_ptr, tag_len) else {
         return -1;
     };
@@ -143,6 +143,7 @@ pub unsafe extern "C" fn mal_i18n_locale_field(tag_ptr: *const u8, tag_len: usiz
 /// Build a Collator for `locale` with ECMA-402-mapped options. Returns an opaque
 /// (leaked) pointer, or null on failure. strength: 0 primary, 1 secondary, 2
 /// tertiary; case_first: 0 off, 1 upper, 2 lower.
+#[cfg(feature = "intl-collator")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_collator_new(
     locale_ptr: *const u8,
@@ -152,9 +153,9 @@ pub unsafe extern "C" fn mal_i18n_collator_new(
     numeric: i32,
     case_first: i32,
 ) -> *mut core::ffi::c_void {
-    use icu::collator::options::{CaseLevel, CollatorOptions, Strength};
-    use icu::collator::preferences::{CollationCaseFirst, CollationNumericOrdering};
-    use icu::collator::{Collator, CollatorPreferences};
+    use icu_collator::options::{CaseLevel, CollatorOptions, Strength};
+    use icu_collator::preferences::{CollationCaseFirst, CollationNumericOrdering};
+    use icu_collator::{Collator, CollatorPreferences};
 
     let Some(locale) = parse_locale(locale_ptr, locale_len) else {
         return core::ptr::null_mut();
@@ -191,6 +192,7 @@ pub unsafe extern "C" fn mal_i18n_collator_new(
 }
 
 /// Compare two UTF-16 strings with a collator handle: -1 / 0 / 1.
+#[cfg(feature = "intl-collator")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_collator_compare_utf16(
     handle: *mut core::ffi::c_void,
@@ -199,7 +201,7 @@ pub unsafe extern "C" fn mal_i18n_collator_compare_utf16(
     b_ptr: *const u16,
     b_len: usize,
 ) -> i32 {
-    let collator = unsafe { &*(handle as *const icu::collator::CollatorBorrowed<'static>) };
+    let collator = unsafe { &*(handle as *const icu_collator::CollatorBorrowed<'static>) };
     let a = unsafe { core::slice::from_raw_parts(a_ptr, a_len) };
     let b = unsafe { core::slice::from_raw_parts(b_ptr, b_len) };
     let sa = String::from_utf16_lossy(a);
@@ -214,12 +216,13 @@ pub unsafe extern "C" fn mal_i18n_collator_compare_utf16(
 /// Free a collator handle from `mal_i18n_collator_new`. Null-tolerant (idempotent
 /// GC finalizer). Must box-drop the exact `CollatorBorrowed<'static>` that
 /// `mal_i18n_collator_new` leaked.
+#[cfg(feature = "intl-collator")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_collator_free(handle: *mut core::ffi::c_void) {
     if handle.is_null() {
         return;
     }
-    drop(unsafe { Box::from_raw(handle as *mut icu::collator::CollatorBorrowed<'static>) });
+    drop(unsafe { Box::from_raw(handle as *mut icu_collator::CollatorBorrowed<'static>) });
 }
 
 // ---------------------------------------------------------------------------
@@ -227,9 +230,10 @@ pub unsafe extern "C" fn mal_i18n_collator_free(handle: *mut core::ffi::c_void) 
 // ---------------------------------------------------------------------------
 
 /// Build a PluralRules for `locale` (ordinal != 0 selects ordinal rules).
+#[cfg(feature = "intl-plural-rules")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_plural_rules_new(locale_ptr: *const u8, locale_len: usize, ordinal: i32) -> *mut core::ffi::c_void {
-    use icu::plurals::{PluralRuleType, PluralRules};
+    use icu_plurals::{PluralRuleType, PluralRules};
     let Some(locale) = parse_locale(locale_ptr, locale_len) else {
         return core::ptr::null_mut();
     };
@@ -242,10 +246,11 @@ pub unsafe extern "C" fn mal_i18n_plural_rules_new(locale_ptr: *const u8, locale
 }
 
 /// Select the plural category for `number`: 0 zero, 1 one, 2 two, 3 few, 4 many, 5 other.
+#[cfg(feature = "intl-plural-rules")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_plural_category(handle: *mut core::ffi::c_void, number: f64) -> i32 {
-    use icu::plurals::PluralCategory;
-    let rules = unsafe { &*(handle as *const icu::plurals::PluralRules) };
+    use icu_plurals::PluralCategory;
+    let rules = unsafe { &*(handle as *const icu_plurals::PluralRules) };
     // TODO #12: derive operands from the formatted number (min/max fraction
     // digits) instead of the integer value, so fractional categories are exact.
     match rules.category_for(number as i128) {
@@ -259,12 +264,13 @@ pub unsafe extern "C" fn mal_i18n_plural_category(handle: *mut core::ffi::c_void
 }
 
 /// Free a plural-rules handle from `mal_i18n_plural_rules_new`. Null-tolerant.
+#[cfg(feature = "intl-plural-rules")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_plural_rules_free(handle: *mut core::ffi::c_void) {
     if handle.is_null() {
         return;
     }
-    drop(unsafe { Box::from_raw(handle as *mut icu::plurals::PluralRules) });
+    drop(unsafe { Box::from_raw(handle as *mut icu_plurals::PluralRules) });
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +280,7 @@ pub unsafe extern "C" fn mal_i18n_plural_rules_free(handle: *mut core::ffi::c_vo
 /// Format `number` for `locale`. percent != 0 scales by 100 and appends '%'.
 /// Honors min integer / min+max fraction digits and grouping. Writes UTF-8 into
 /// `out`; returns the full length, or -1 on failure.
+#[cfg(feature = "intl-number-format")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_number_format(
     locale_ptr: *const u8,
@@ -287,9 +294,9 @@ pub unsafe extern "C" fn mal_i18n_number_format(
     out: *mut u8,
     out_cap: i32,
 ) -> i32 {
-    use icu::decimal::input::Decimal;
-    use icu::decimal::options::{DecimalFormatterOptions, GroupingStrategy};
-    use icu::decimal::DecimalFormatter;
+    use icu_decimal::input::Decimal;
+    use icu_decimal::options::{DecimalFormatterOptions, GroupingStrategy};
+    use icu_decimal::DecimalFormatter;
 
     let Some(locale) = parse_locale(locale_ptr, locale_len) else {
         return -1;
@@ -333,6 +340,7 @@ pub unsafe extern "C" fn mal_i18n_number_format(
 /// Format civil date/time components for `locale`. date_style / time_style:
 /// -1 none, 0 full, 1 long, 2 medium, 3 short. Writes UTF-8 into `out`; returns
 /// the full length, or -1 on failure.
+#[cfg(feature = "intl-date-time-format")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_datetime_format(
     locale_ptr: *const u8,
@@ -348,20 +356,20 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
     out: *mut u8,
     out_cap: i32,
 ) -> i32 {
-    use icu::datetime::fieldsets;
-    use icu::datetime::options::{Length, TimePrecision};
-    use icu::datetime::DateTimeFormatter;
+    use icu_datetime::fieldsets;
+    use icu_datetime::options::{Length, TimePrecision};
+    use icu_datetime::DateTimeFormatter;
 
     let Some(locale) = parse_locale(locale_ptr, locale_len) else {
         return -1;
     };
-    let Ok(date) = icu::calendar::Date::try_new_iso(year, month as u8, day as u8) else {
+    let Ok(date) = icu_calendar::Date::try_new_iso(year, month as u8, day as u8) else {
         return -1;
     };
-    let Ok(time) = icu::time::Time::try_new(hour as u8, minute as u8, second as u8, 0) else {
+    let Ok(time) = icu_time::Time::try_new(hour as u8, minute as u8, second as u8, 0) else {
         return -1;
     };
-    let input = icu::time::DateTime { date, time };
+    let input = icu_time::DateTime { date, time };
 
     let to_length = |style: i32| match style {
         0 | 1 => Length::Long, // "full" maps to the closest available, "long"
@@ -398,7 +406,7 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
 }
 
 // ---------------------------------------------------------------------------
-// Intl.ListFormat — icu::list::ListFormatter (and/or/unit, wide/short/narrow).
+// Intl.ListFormat — icu_list::ListFormatter (and/or/unit, wide/short/narrow).
 // ---------------------------------------------------------------------------
 
 /// A borrowed UTF-16 string, matching the C-side `MalU16Str`. Used to pass a JS
@@ -412,6 +420,7 @@ pub struct MalU16Str {
 /// Format a list of strings for `locale`. list_type: 0 conjunction(and), 1
 /// disjunction(or), 2 unit; length: 0 long, 1 short, 2 narrow. Writes UTF-8 into
 /// `out`; returns the full length, or -1 on failure.
+#[cfg(feature = "intl-list-format")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_list_format(
     locale_ptr: *const u8,
@@ -423,8 +432,8 @@ pub unsafe extern "C" fn mal_i18n_list_format(
     out: *mut u8,
     out_cap: i32,
 ) -> i32 {
-    use icu::list::options::{ListFormatterOptions, ListLength};
-    use icu::list::ListFormatter;
+    use icu_list::options::{ListFormatterOptions, ListLength};
+    use icu_list::ListFormatter;
 
     let Some(locale) = parse_locale(locale_ptr, locale_len) else {
         return -1;
@@ -456,7 +465,7 @@ pub unsafe extern "C" fn mal_i18n_list_format(
 }
 
 // ---------------------------------------------------------------------------
-// Intl.Segmenter — icu::segmenter (grapheme / word / sentence).
+// Intl.Segmenter — icu_segmenter (grapheme / word / sentence).
 // ---------------------------------------------------------------------------
 
 /// Segment `text` (UTF-16) at the given granularity (0 grapheme, 1 word, 2
@@ -465,6 +474,7 @@ pub unsafe extern "C" fn mal_i18n_list_format(
 /// per-segment isWordLike flag (0/1) into `wordlike_out` (meaningful only for
 /// word granularity). `cap` is the capacity of `bounds_out` in i32 elements.
 /// Returns the number of boundaries written.
+#[cfg(feature = "intl-segmenter")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_segment(
     granularity: i32,
@@ -474,8 +484,8 @@ pub unsafe extern "C" fn mal_i18n_segment(
     wordlike_out: *mut u8,
     cap: i32,
 ) -> i32 {
-    use icu::segmenter::options::{SentenceBreakInvariantOptions, WordBreakInvariantOptions};
-    use icu::segmenter::{GraphemeClusterSegmenter, SentenceSegmenter, WordSegmenter};
+    use icu_segmenter::options::{SentenceBreakInvariantOptions, WordBreakInvariantOptions};
+    use icu_segmenter::{GraphemeClusterSegmenter, SentenceSegmenter, WordSegmenter};
 
     let u = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
     let s = String::from_utf16_lossy(u);
@@ -540,6 +550,7 @@ pub unsafe extern "C" fn mal_i18n_segment(
 /// Display name for a code. kind: 0 region, 1 script, 2 language. style: 0 long,
 /// 1 short, 2 narrow. Writes UTF-8 into `out`; returns the length, -1 when there
 /// is no name (C decides Fallback), or -2 when the code is structurally invalid.
+#[cfg(feature = "intl-display-names")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_display_name(
     locale_ptr: *const u8,
@@ -555,7 +566,7 @@ pub unsafe extern "C" fn mal_i18n_display_name(
         LanguageDisplayNames, RegionDisplayNames, ScriptDisplayNames,
     };
     use icu_experimental::displaynames::{DisplayNamesOptions, Style};
-    use icu::locale::subtags::{Language, Region, Script};
+    use icu_locale::subtags::{Language, Region, Script};
 
     let Some(locale) = parse_locale(locale_ptr, locale_len) else {
         return -1;
@@ -613,6 +624,7 @@ pub unsafe extern "C" fn mal_i18n_display_name(
 /// unit: 0 second, 1 minute, 2 hour, 3 day, 4 week, 5 month, 6 quarter, 7 year.
 /// numeric_auto != 0 selects Numeric::Auto ("yesterday"), else Always ("1 day
 /// ago"). Writes UTF-8 into `out`; returns the length, or -1 on failure.
+#[cfg(feature = "intl-relative-time-format")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_relative_time(
     locale_ptr: *const u8,
@@ -624,7 +636,7 @@ pub unsafe extern "C" fn mal_i18n_relative_time(
     out: *mut u8,
     out_cap: i32,
 ) -> i32 {
-    use icu::decimal::input::Decimal;
+    use icu_decimal::input::Decimal;
     use icu_experimental::relativetime::options::Numeric;
     use icu_experimental::relativetime::{RelativeTimeFormatter, RelativeTimeFormatterOptions};
     use writeable::Writeable;
@@ -683,6 +695,7 @@ pub unsafe extern "C" fn mal_i18n_relative_time(
 /// sign_negative != 0 marks the whole duration negative. `units` is 10 u64s in
 /// the order years, months, weeks, days, hours, minutes, seconds, milliseconds,
 /// microseconds, nanoseconds. Writes UTF-8 into `out`; returns the length, or -1.
+#[cfg(feature = "intl-duration-format")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_duration_format(
     locale_ptr: *const u8,
