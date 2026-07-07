@@ -10,7 +10,7 @@ description = "The Maligator runtime's Rust FFI shim: ICU4X (Intl), regress (Reg
 # linked into one binary — each bundles its own std panic runtime (duplicate
 # rust_eh_personality / EMPTY_PANIC symbols). The Maligator C runtime owns all
 # JS-spec glue; this crate exposes only flat primitives over the C ABI, with one
-# header per domain (mal_i18n.h, mal_regexp.h). See docs/decisions/{03-regexp,05-date-intl}.md.
+# header per domain (mal_i18n.h, mal_regexp.h).
 [lib]
 name = "mal_rust"
 crate-type = ["staticlib"]
@@ -20,14 +20,16 @@ crate-type = ["staticlib"]
 # /usr/share/zoneinfo). The system zone *identity* still comes from TZ / the
 # /etc/localtime symlink via TimeZone::system().
 jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
-# ICU4X for the Intl surface. compiled_data (default) bundles CLDR data for all
-# locales; the curated-subset / consumer-selectable-locales build is a TODO.
-icu = "2"
+# ICU4X for the Intl surface. Optional + gated behind the `intl` feature so an
+# `engine.intl: false` build omits the ICU crates entirely (dropping ~9 MB of baked
+# CLDR data). compiled_data (default) bundles CLDR data for all locales; a curated
+# locale subset is selected via icu4x-datagen (see src/rust-build.ts).
+icu = { version = "2", optional = true }
 # Experimental ICU services (icu::experimental re-exports this): DisplayNames,
 # RelativeTimeFormat, Duration. compiled_data bundles their CLDR data.
-icu_experimental = { version = "0.5", features = ["compiled_data"] }
+icu_experimental = { version = "0.5", features = ["compiled_data"], optional = true }
 # Writeable: stringify ICU "formatted" results that expose Writeable (not Display).
-writeable = "0.6"
+writeable = { version = "0.6", optional = true }
 # temporal_rs joins here for the Temporal global.
 # regress: the ECMAScript RegExp engine (the one Boa uses). Lives in this crate
 # rather than its own because two Rust staticlibs can't co-link (duplicate std
@@ -38,6 +40,13 @@ regress = { version = "0.11", features = ["utf16"] }
 # C++ library, every final binary link needs the C++ stdlib (-lc++/-lstdc++), added
 # in src/rust-build.ts (rustLinkArgs). See src/url.rs + mal_url.h.
 ada-url = "3"
+
+[features]
+# On by default so dev/test262 builds carry the full Intl surface. An
+# `engine.intl: false` build passes --no-default-features (see src/rust-build.ts),
+# which drops the ICU crates + the gated `mod intl`; jiff/regress/ada stay.
+default = ["intl"]
+intl = ["dep:icu", "dep:icu_experimental", "dep:writeable"]
 
 [profile.release]
 opt-level = 3

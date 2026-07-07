@@ -225,23 +225,45 @@ export function loadBuildConfig(
 	return resolveBuildConfig(parsed as MaligatorBuildConfig);
 }
 
+/** The normalized (deduped + sorted) selected locale set — stable hash input. */
+function normalizedLocales(config: ResolvedBuildConfig): Array<string> {
+	return [...new Set(config.engine.intl.languages)].sort();
+}
+
+function shortHash(value: unknown): string {
+	return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 8);
+}
+
 /**
  * A short stable hash of the build-affecting projection of the config, used as the
- * cache/build-directory suffix (build-flags.ts) so binaries built under different
- * capabilities do not clobber each other's cached archives. Only dimensions that
- * change the emitted archive belong here — today just `engine.eval` (it flips
- * `-DMAL_EVAL` and whether the 1.6 MB compiler is embedded). Purely-frontend or
- * not-yet-wired fields (entry, surface, host) are excluded so unrelated edits do
- * not needlessly invalidate the cache. Returns "" for the default (eval-on)
- * archive so it keeps the unsuffixed build dir.
+ * C build-directory suffix (build-flags.ts) so binaries built under different
+ * capabilities do not clobber each other's cached archives. The C archive depends
+ * on `engine.eval` (flips `-DMAL_EVAL` + whether the 1.6 MB compiler is embedded)
+ * and `engine.intl` (flips `-DMAL_INTL` + the locale-sensitive fallbacks).
+ * Purely-frontend or not-yet-wired fields (surface, host) are excluded so unrelated
+ * edits do not needlessly invalidate the cache. Returns "" for the canonical build
+ * (eval on, Intl on, all locales) so it keeps the unsuffixed build dir.
  */
 export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
-	const buildAffecting = { eval: config.engine.eval };
-	if (config.engine.eval) {
+	// The C archive depends on eval + whether Intl is on, but NOT on the locale set
+	// (that only changes the Rust/ICU datagen). Keying on locales here would spawn
+	// redundant identical C build dirs.
+	if (config.engine.eval && config.engine.intl.enabled) {
 		return "";
 	}
-	return createHash("sha256")
-		.update(JSON.stringify(buildAffecting))
-		.digest("hex")
-		.slice(0, 8);
+	return shortHash({ eval: config.engine.eval, intl: config.engine.intl.enabled });
+}
+
+/**
+ * The Rust (ICU4X) archive's cache suffix. It depends ONLY on the Intl axis
+ * (whether ICU is compiled + which locales are baked), NOT on `engine.eval` — so
+ * toggling eval does not trigger a multi-minute ICU rebuild. "" for the canonical
+ * Intl-on/all-locales archive.
+ */
+export function rustConfigCacheSuffix(config: ResolvedBuildConfig): string {
+	const locales = normalizedLocales(config);
+	if (config.engine.intl.enabled && locales.length === 0) {
+		return "";
+	}
+	return shortHash({ intl: config.engine.intl.enabled, locales });
 }

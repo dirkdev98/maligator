@@ -6,6 +6,7 @@ import {
 	BuildConfigError,
 	buildConfigCacheSuffix,
 	loadBuildConfig,
+	rustConfigCacheSuffix,
 } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { gmallocEnabled, runEnv } from "./build-flags.ts";
@@ -171,7 +172,9 @@ const binaryPath = buildLocalBinary({
 	cSource: output,
 	verbose,
 	evalEnabled: buildConfig.engine.eval,
+	intlEnabled: buildConfig.engine.intl.enabled,
 	cacheSuffix: buildConfigCacheSuffix(buildConfig),
+	rustCacheSuffix: rustConfigCacheSuffix(buildConfig),
 });
 buildTiming();
 log.info(`Binary: ${binaryPath}`);

@@ -16,6 +16,8 @@
 #include "vm.h"
 #include "vm_ops.h"
 
+#if MAL_INTL
+
 /*
  * Intl (ECMA-402). The JS-spec glue — option-bag parsing, coercions, locale
  * negotiation, the result-shaping abstract operations — lives here in C; the
@@ -3110,3 +3112,72 @@ void mal_builtin_intl_install(MalVm *vm) {
     intl_install_segmenter(vm, intl);
     intl_install_duration_format(vm, intl);
 }
+
+#else // !MAL_INTL
+
+// engine.intl disabled: no ICU. The `Intl` global is not installed (so
+// `typeof Intl === "undefined"`), and the locale-sensitive methods outside the
+// Intl namespace (localeCompare / toLocaleString) degrade to locale-insensitive
+// behaviour, which ECMA-402 explicitly permits for an implementation without
+// Intl. These are the only symbols the rest of the runtime references, so the
+// full ICU surface above compiles away with the `intl` Cargo feature.
+
+void mal_builtin_intl_install(MalVm *vm) {
+    (void) vm; // no Intl namespace in this build
+}
+
+// localeCompare without a collator: compare by UTF-16 code unit (the
+// locale-independent ordering). `this_string` is already a String (the caller
+// coerced it); ToString `that_value` (may throw on a Symbol).
+MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that_value, MalValue locales, MalValue options) {
+    (void) locales;
+    (void) options;
+    MalString *a = mal_value_to_string(this_string);
+    MalString *b = nullptr;
+    if (!mal_vm_to_string(vm, that_value, &b)) {
+        return mal_value_new_undefined();
+    }
+    usize la = mal_string_length(a);
+    usize lb = mal_string_length(b);
+    const c16 *ua = mal_string_code_units(a);
+    const c16 *ub = mal_string_code_units(b);
+    usize n = la < lb ? la : lb;
+    for (usize i = 0; i < n; i++) {
+        if (ua[i] != ub[i]) {
+            return mal_value_from_i32(ua[i] < ub[i] ? -1 : 1);
+        }
+    }
+    return mal_value_from_i32(la == lb ? 0 : (la < lb ? -1 : 1));
+}
+
+// Number.prototype.toLocaleString without Intl: the default Number::toString
+// (base 10), matching the spec's "no locale sensitivity" fallback.
+MalValue mal_intl_number_to_locale_string(MalVm *vm, f64 number, MalValue locales, MalValue options) {
+    (void) locales;
+    (void) options;
+    return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
+}
+
+// Date.prototype.toLocale{,Date,Time}String without Intl: a fixed, non-localized
+// ISO-like rendering of the LOCAL civil components (which: 0 date+time, 1 date,
+// 2 time). Non-finite time → "Invalid Date" (as toString does).
+MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue locales, MalValue options, i32 which) {
+    (void) locales;
+    (void) options;
+    char buf[64];
+    i32 year, month, day, hour, minute, second;
+    if (!mal_date_to_local_components(time_value, &year, &month, &day, &hour, &minute, &second)) {
+        return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) "Invalid Date", 12));
+    }
+    int len;
+    if (which == 1) {
+        len = snprintf(buf, sizeof(buf), "%04d-%02d-%02d", year, month, day);
+    } else if (which == 2) {
+        len = snprintf(buf, sizeof(buf), "%02d:%02d:%02d", hour, minute, second);
+    } else {
+        len = snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second);
+    }
+    return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) buf, (usize) len));
+}
+
+#endif // MAL_INTL

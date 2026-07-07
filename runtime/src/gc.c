@@ -813,11 +813,16 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         case MAL_HEAP_INTL_OBJECT: {
             MalIntlObject *intl = (MalIntlObject *) cell;
             if (intl->handle != nullptr) {
+#if MAL_INTL
+                // Only an Intl-enabled build can create these ICU handles (and only
+                // it links the free fns); with Intl off no MalIntlObject carries a
+                // handle, so this is unreachable — guarded to keep the link clean.
                 if (intl->kind == MAL_INTL_COLLATOR) {
                     mal_i18n_collator_free(intl->handle);
                 } else if (intl->kind == MAL_INTL_PLURAL_RULES) {
                     mal_i18n_plural_rules_free(intl->handle);
                 }
+#endif
                 intl->handle = nullptr;
             }
             break;

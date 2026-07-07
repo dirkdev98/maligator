@@ -40,3 +40,15 @@ typedef size_t usize;
 #ifndef MAL_EVAL
 #define MAL_EVAL 1
 #endif
+
+// Whether this build includes the Intl (ECMA-402 / ICU4X) surface and its ~9 MB
+// of baked CLDR data. Default on; the build config sets `-DMAL_INTL=0` (see
+// build-flags.ts) when `engine.intl` is disabled, which makes builtin_intl.c
+// install no `Intl` global (so `typeof Intl === "undefined"`) and the
+// locale-sensitive methods (localeCompare / toLocaleString) fall back to
+// locale-insensitive behaviour. Must be kept in lockstep with the Rust crate's
+// `intl` Cargo feature (rust-build.ts) — with it off the ICU FFI symbols are not
+// linked, so a stray call would fail to link.
+#ifndef MAL_INTL
+#define MAL_INTL 1
+#endif

@@ -58,6 +58,11 @@ export interface BuildOptions {
 	 * archive (no compiler embed, eval/Function throw EvalError at runtime).
 	 */
 	evalEnabled?: boolean;
+	/**
+	 * Include the Intl (ICU4X) surface. Defaults to true. Set false to build the
+	 * `engine.intl: false` archive (no ICU crates / baked CLDR data, no Intl global).
+	 */
+	intlEnabled?: boolean;
 }
 
 /**
@@ -74,6 +79,11 @@ export function buildNativeBinary(options: BuildOptions): string {
 	const definition = lowerIrProgramToVmDefinition(ir);
 	const cSource = emitVmDefinition(definition, { compiled: options.compiled ?? true });
 	const evalEnabled = options.evalEnabled ?? true;
+	const intlEnabled = options.intlEnabled ?? true;
+	// Distinct cached archives per capability combo; empty keeps the canonical dirs.
+	const parts: Array<string> = [];
+	if (!evalEnabled) parts.push("noeval");
+	if (!intlEnabled) parts.push("nointl");
 	return buildLocalBinary({
 		name: options.name,
 		cSource,
@@ -82,8 +92,9 @@ export function buildNativeBinary(options: BuildOptions): string {
 		outDir: options.outDir,
 		skipRuntimeBuild: options.skipRuntimeBuild,
 		evalEnabled,
-		// eval-off gets its own cached archive; empty keeps the default eval-on dir.
-		cacheSuffix: evalEnabled ? "" : "noeval",
+		intlEnabled,
+		cacheSuffix: parts.join("-"),
+		rustCacheSuffix: intlEnabled ? "" : "nointl",
 	});
 }
 

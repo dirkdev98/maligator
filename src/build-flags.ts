@@ -110,14 +110,18 @@ export function optFlags(): Array<string> {
  * The single `-DCMAKE_C_FLAGS=...` value for configuring LibMaligator. Passing
  * `evalEnabled: false` adds `-DMAL_EVAL=0`, which drops the `#embed` of the 1.6 MB
  * baked compiler and turns the eval/Function runtime path into an EvalError throw.
+ * `intlEnabled: false` adds `-DMAL_INTL=0`, which drops the Intl global + the ICU
+ * call sites (kept in lockstep with the Rust `intl` Cargo feature).
  */
-export function cmakeCFlags(opts: { evalEnabled?: boolean } = {}): string {
+export function cmakeCFlags(opts: { evalEnabled?: boolean; intlEnabled?: boolean } = {}): string {
 	const evalFlag = opts.evalEnabled === false ? ["-DMAL_EVAL=0"] : [];
+	const intlFlag = opts.intlEnabled === false ? ["-DMAL_INTL=0"] : [];
 	return [
 		...optFlags(),
 		...SANITIZER_FLAGS[sanitizerMode()],
 		...gcDefines(),
 		...evalFlag,
+		...intlFlag,
 	].join(" ");
 }
 

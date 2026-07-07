@@ -30,6 +30,14 @@ pub extern "C" fn mal_i18n_abi_version() -> u32 {
     MAL_I18N_ABI_VERSION
 }
 
+// The Intl (ICU4X) surface. Gated behind the `intl` Cargo feature so an
+// `engine.intl: false` build compiles the ICU crates away entirely — dropping the
+// ~9 MB of baked CLDR data. tz (jiff), regexp, and url stay unconditional. The
+// `#[no_mangle]` symbols export from inside this module regardless of Rust
+// visibility, so the C side links them exactly as before when the feature is on.
+#[cfg(feature = "intl")]
+mod intl {
+
 /// Copy `s` (UTF-8) into the caller buffer `out` (at most `out_cap` bytes) and
 /// return the full byte length, so the C side can probe with cap 0 then fill.
 fn write_str(s: &str, out: *mut u8, out_cap: i32) -> i32 {
@@ -726,9 +734,12 @@ pub unsafe extern "C" fn mal_i18n_duration_format(
     let text = formatter.format(&duration).write_to_string().into_owned();
     write_str(&text, out, out_cap)
 }
+} // mod intl
 
 /// Status codes returned by fallible FFI entry points. The C side maps these to
-/// the appropriate JS exception (e.g. `Range` -> RangeError).
+/// the appropriate JS exception (e.g. `Range` -> RangeError). Mirrors the enum in
+/// mal_i18n.h; kept at crate root (not in `mod intl`) as the FFI return-code
+/// contract, independent of the `intl` feature.
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MalI18nStatus {

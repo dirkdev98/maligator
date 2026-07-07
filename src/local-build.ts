@@ -21,8 +21,12 @@ function buildDirFor(cacheSuffix: string): string {
 interface RuntimeBuildDimensions {
 	/** Whether to embed the baked compiler + allow eval/Function. Default true. */
 	evalEnabled?: boolean;
-	/** Build-config hash suffix (build-config.ts). Default "" (eval-on archive). */
+	/** Whether to link the Intl (ICU4X) surface. Default true. */
+	intlEnabled?: boolean;
+	/** C-build-config hash suffix (build-config.ts). Default "" (canonical archive). */
 	cacheSuffix?: string;
+	/** Rust/Intl-config hash suffix selecting the ICU archive. Default "" (all locales). */
+	rustCacheSuffix?: string;
 }
 
 export interface LocalBuildOptions {
@@ -71,11 +75,25 @@ export interface LocalBuildOptions {
 	evalEnabled?: boolean;
 
 	/**
-	 * Build-config hash (build-config.ts `buildConfigCacheSuffix`) selecting which
-	 * cached archive/build dir this binary links against. Defaults to "" (the
-	 * eval-on archive). Must be consistent with {@link evalEnabled}.
+	 * Whether this binary includes the Intl (ICU4X) surface. Defaults to true. Set
+	 * false for an `engine.intl: false` build: `-DMAL_INTL=0` on the C side and the
+	 * `--no-default-features` ICU-less Rust archive keyed by {@link rustCacheSuffix}.
+	 */
+	intlEnabled?: boolean;
+
+	/**
+	 * C-build-config hash (build-config.ts `buildConfigCacheSuffix`) selecting the
+	 * C build dir / archive. Defaults to "" (canonical). Consistent with
+	 * {@link evalEnabled} + {@link intlEnabled}.
 	 */
 	cacheSuffix?: string;
+
+	/**
+	 * Rust/Intl-config hash (build-config.ts `rustConfigCacheSuffix`) selecting the
+	 * ICU archive to link. Defaults to "" (Intl on, all locales). Keyed on the Intl
+	 * axis only, so toggling eval does not rebuild ICU.
+	 */
+	rustCacheSuffix?: string;
 }
 
 /**
@@ -105,7 +123,9 @@ export function ensureRuntimeLibrary(
 	dimensions: RuntimeBuildDimensions = {},
 ): Array<string> {
 	const evalEnabled = dimensions.evalEnabled ?? true;
+	const intlEnabled = dimensions.intlEnabled ?? true;
 	const cacheSuffix = dimensions.cacheSuffix ?? "";
+	const rustCacheSuffix = dimensions.rustCacheSuffix ?? "";
 	const buildDir = buildDirFor(cacheSuffix);
 	const stdio = verbose ? "inherit" : "ignore";
 
@@ -122,7 +142,13 @@ export function ensureRuntimeLibrary(
 	// Re-running configure with unchanged cache variables is cheap.
 	execFileSync(
 		"cmake",
-		["-S", "runtime", "-B", buildDir, `-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled })}`],
+		[
+			"-S",
+			"runtime",
+			"-B",
+			buildDir,
+			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, intlEnabled })}`,
+		],
 		{
 			stdio,
 		},
@@ -135,8 +161,9 @@ export function ensureRuntimeLibrary(
 	);
 
 	// Build the Rust shim the runtime links against: Date tz + Intl (ICU4X) and
-	// the RegExp engine (regress), both in libmal_rust.a.
-	ensureRustLibrary(verbose);
+	// the RegExp engine (regress), all in libmal_rust.a. Intl-off drops the ICU
+	// crates; the archive is keyed by rustCacheSuffix so variants coexist.
+	ensureRustLibrary(verbose, { intlEnabled, cacheSuffix: rustCacheSuffix });
 
 	// Link order: runtime -> host -> engine (dependents first). rustLinkArgs() is
 	// appended after these by the caller (the engine references its symbols).
@@ -185,10 +212,17 @@ export function buildLoadDriver(verbose: boolean): string {
  */
 export function buildLocalBinary(options: LocalBuildOptions): string {
 	const evalEnabled = options.evalEnabled ?? true;
+	const intlEnabled = options.intlEnabled ?? true;
 	const cacheSuffix = options.cacheSuffix ?? "";
+	const rustCacheSuffix = options.rustCacheSuffix ?? "";
 	const libs = options.skipRuntimeBuild
 		? runtimeArchivePaths(buildDirFor(cacheSuffix))
-		: ensureRuntimeLibrary(options.verbose, { evalEnabled, cacheSuffix });
+		: ensureRuntimeLibrary(options.verbose, {
+				evalEnabled,
+				intlEnabled,
+				cacheSuffix,
+				rustCacheSuffix,
+			});
 
 	// Suffix the artifacts under a sanitizer / eval-disabled build so they do not
 	// clobber the normal binary (and vice-versa).
@@ -215,7 +249,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 			cPath,
 			options.mainFile ?? "runtime/test262_main.c",
 			...libs,
-			...rustLinkArgs(),
+			...rustLinkArgs(rustCacheSuffix),
 			"-o",
 			binPath,
 		],
