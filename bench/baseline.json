@@ -255,6 +255,59 @@
         "nodeMs": 103.0395,
         "ratio": 3.061395144580476
       }
+    },
+    {
+      "commit": "25c2fff",
+      "dirty": false,
+      "size": {
+        "full": {
+          "binaryBytes": 14849296,
+          "runtimeArchiveBytes": 106944,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 2658168,
+          "rustArchiveBytes": 21746656
+        },
+        "no-eval": {
+          "binaryBytes": 13131912,
+          "runtimeArchiveBytes": 106944,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 954128,
+          "rustArchiveBytes": 21746656
+        },
+        "no-intl": {
+          "binaryBytes": 4317848,
+          "runtimeArchiveBytes": 106944,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 2554432,
+          "rustArchiveBytes": 8344256
+        },
+        "no-web": {
+          "binaryBytes": 14282584,
+          "runtimeArchiveBytes": 78720,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 2658168,
+          "rustArchiveBytes": 21106552
+        },
+        "no-regexp": {
+          "binaryBytes": 14261776,
+          "runtimeArchiveBytes": 106944,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 2618832,
+          "rustArchiveBytes": 20761016
+        },
+        "minimal": {
+          "binaryBytes": 2033480,
+          "runtimeArchiveBytes": 78720,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 850392,
+          "rustArchiveBytes": 7703680
+        }
+      },
+      "language": {
+        "malMs": 305.349417,
+        "nodeMs": 104.137208,
+        "ratio": 2.9321836341147156
+      }
     }
   ]
 }
