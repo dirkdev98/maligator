@@ -8,10 +8,10 @@
 
 /** A transition edge: parent + (key, attrs) -> child. */
 struct MalShapeTransition {
-    MalKey key;
-    u8 attrs;
+    MalValue key;
     MalShape *child;
     MalShapeTransition *next;
+    u8 attrs;
 };
 
 /**
@@ -30,17 +30,17 @@ MalShape *mal_shape_empty(void) {
     return &g_empty_shape;
 }
 
-/* Key equality matching the table's rule: string keys by content, others by
- * value bits (MAL_KEY_SYMBOL/OBJECT compare pointer identity, INDEX/NUMBER/STATIC
- * compare bit pattern). Keep in sync with mal_table_key_equals (table.c). */
-static bool mal_shape_key_equals(MalKey left, MalKey right) {
-    if (left.kind != right.kind) {
-        return false;
+/* Key-value equality matching the table's kind-free rule: two distinct string
+ * pointers compare by content, everything else by value bits (which already
+ * encode the class). Keep in sync with mal_table_value_equals (table.c). */
+static bool mal_shape_value_equals(MalValue left, MalValue right) {
+    if (left == right) {
+        return true;
     }
-    if (left.kind != MAL_KEY_STRING) {
-        return left.value == right.value;
+    if (mal_value_is_string(left) && mal_value_is_string(right)) {
+        return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
     }
-    return mal_string_equals(mal_value_to_string(left.value), mal_value_to_string(right.value));
+    return false;
 }
 
 bool mal_shape_attrs_are_default(u8 attrs) {
@@ -50,7 +50,7 @@ bool mal_shape_attrs_are_default(u8 attrs) {
 
 i32 mal_shape_find(const MalShape *shape, MalKey key) {
     for (u32 i = 0; i < shape->inline_count; ++i) {
-        if (mal_shape_key_equals(shape->props[i].key, key)) {
+        if (mal_shape_value_equals(shape->props[i].key, key.value)) {
             return (i32) i;
         }
     }
@@ -72,7 +72,7 @@ MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
     // Reuse an existing transition so all objects that add the same property in
     // the same order share one child shape (the interning that makes shapes pay).
     for (MalShapeTransition *t = shape->transitions; t != nullptr; t = t->next) {
-        if (t->attrs == attrs && mal_shape_key_equals(t->key, key)) {
+        if (t->attrs == attrs && mal_shape_value_equals(t->key, key.value)) {
             return t->child;
         }
     }
@@ -85,7 +85,7 @@ MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
         memcpy(child->props, shape->props, sizeof(MalShapeProp) * shape->inline_count);
     }
     child->props[shape->inline_count] = (MalShapeProp){
-        .key = key,
+        .key = key.value,
         .attrs = attrs,
         .slot = shape->inline_count,
     };
@@ -93,7 +93,7 @@ MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
     child->transitions = nullptr;
 
     MalShapeTransition *transition = malloc(sizeof(MalShapeTransition));
-    transition->key = key;
+    transition->key = key.value;
     transition->attrs = attrs;
     transition->child = child;
     transition->next = shape->transitions;

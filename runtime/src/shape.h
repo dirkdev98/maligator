@@ -40,13 +40,15 @@
 typedef struct MalShape MalShape;
 typedef struct MalShapeTransition MalShapeTransition;
 
-/** One named property in a shape: its key, attribute flags, and slot index. */
+/** One named property in a shape: its key, slot index, and attribute flags. */
 typedef struct MalShapeProp {
-    MalKey key;
-    /** MalPropertyFlags for a default data property (writable/enumerable/configurable). */
-    u8 attrs;
+    /** Key value; the equality domain is derived on read (mal_key_kind_of).
+     * Shapes only ever hold string/symbol keys. */
+    MalValue key;
     /** Inline slot index in the object's slots buffer. */
     u32 slot;
+    /** MalPropertyFlags for a default data property (writable/enumerable/configurable). */
+    u8 attrs;
 } MalShapeProp;
 
 struct MalShape {

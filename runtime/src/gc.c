@@ -416,7 +416,7 @@ static void mal_gc_trace_object_common(MalObject *object) {
     const MalShape *shape = object->shape;
     if (object->slots != nullptr) {
         for (u32 i = 0; i < shape->inline_count; ++i) {
-            mal_gc_mark_value(shape->props[i].key.value);
+            mal_gc_mark_value(shape->props[i].key);
             mal_gc_mark_value(object->slots[shape->props[i].slot]);
         }
     }

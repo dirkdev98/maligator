@@ -48,7 +48,7 @@ static bool mal_property_iter_next_shape(MalPropertyIter *iter, MalKey *key_out,
             continue;
         }
 
-        *key_out = prop->key;
+        *key_out = mal_key_from_value(prop->key);
         *desc_out = desc;
         return true;
     }

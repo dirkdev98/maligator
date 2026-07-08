@@ -10,7 +10,9 @@
 #define MAL_TABLE_MAX_LOAD_DENOMINATOR 4
 
 typedef struct MalTableEntry {
-    MalKey key;
+    // The key's value only; the equality domain (MalKeyKind) is derived on read
+    // via mal_key_kind_of, so an entry needs no separate 4-byte kind field.
+    MalValue key;
     void *data;
     MalValue value;
     bool live;
@@ -36,34 +38,36 @@ static u64 mal_table_hash_mix(u64 value) {
     return value;
 }
 
-static u64 mal_table_hash_key(MalKey key) {
-    u64 hash = mal_table_hash_mix((u64) key.kind);
-
-    if (key.kind == MAL_KEY_STRING) {
-        const MalString *string = mal_value_to_string(key.value);
-        return mal_table_hash_mix(hash ^ mal_string_hash(string));
+// Hash and equality operate directly on the stored key value (kind-free): the
+// value's bits already encode its class (an int32 INDEX never bit-equals an
+// f64 NUMBER, etc.), so two keys are equal iff their values are bit-equal — or,
+// for two distinct string pointers, equal by code units. This is behaviour-
+// identical to the former kind-guarded comparison but needs no stored kind.
+static u64 mal_table_hash_value(MalValue value) {
+    if (mal_value_is_string(value)) {
+        return mal_table_hash_mix(mal_string_hash(mal_value_to_string(value)));
     }
 
-    return mal_table_hash_mix(hash ^ key.value);
+    return mal_table_hash_mix(value);
 }
 
-static bool mal_table_key_equals(MalKey left, MalKey right) {
-    if (left.kind != right.kind) {
-        return false;
+static bool mal_table_value_equals(MalValue left, MalValue right) {
+    if (left == right) {
+        return true;
     }
 
-    if (left.kind != MAL_KEY_STRING) {
-        return left.value == right.value;
+    if (mal_value_is_string(left) && mal_value_is_string(right)) {
+        return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
     }
 
-    return mal_string_equals(mal_value_to_string(left.value), mal_value_to_string(right.value));
+    return false;
 }
 
-static usize mal_table_find_slot(MalTableEntry **slots, usize capacity, MalKey key) {
-    usize index = mal_table_hash_key(key) & (capacity - 1);
+static usize mal_table_find_slot(MalTableEntry **slots, usize capacity, MalValue key) {
+    usize index = mal_table_hash_value(key) & (capacity - 1);
 
     while (slots[index] != nullptr) {
-        if (slots[index]->live && mal_table_key_equals(slots[index]->key, key)) {
+        if (slots[index]->live && mal_table_value_equals(slots[index]->key, key)) {
             break;
         }
 
@@ -158,7 +162,7 @@ usize mal_table_size(const MalTable *table) {
 }
 
 MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
-    usize index = mal_table_find_slot(table->slots, table->slot_capacity, key);
+    usize index = mal_table_find_slot(table->slots, table->slot_capacity, key.value);
     MalTableEntry *entry = table->slots[index];
 
     if (entry == nullptr) {
@@ -179,7 +183,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key) {
     mal_table_grow_order_if_needed(table);
 
     MalTableEntry *entry = malloc(sizeof(MalTableEntry));
-    entry->key = key;
+    entry->key = key.value;
     entry->data = nullptr;
     entry->value = mal_value_new_undefined();
     entry->live = true;
@@ -193,7 +197,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key) {
 }
 
 bool mal_table_delete(MalTable *table, MalKey key) {
-    usize index = mal_table_find_slot(table->slots, table->slot_capacity, key);
+    usize index = mal_table_find_slot(table->slots, table->slot_capacity, key.value);
     MalTableEntry *entry = table->slots[index];
 
     if (entry == nullptr) {
@@ -204,7 +208,7 @@ bool mal_table_delete(MalTable *table, MalKey key) {
     // owner but mutated independently, so a key/value dropped mid-cycle must be
     // shaded or it could be lost. Generic here (key + inline value); the property
     // MOP shades a deleted descriptor's value/getter/setter. Folds out off-cycle.
-    mal_gc_write_barrier(entry->key.value);
+    mal_gc_write_barrier(entry->key);
     mal_gc_write_barrier(entry->value);
 
     entry->live = false;
@@ -224,7 +228,7 @@ void mal_table_clear(MalTable *table) {
 
         if (entry != nullptr && entry->live) {
             // SATB: shade each dropped key/value (see mal_table_delete).
-            mal_gc_write_barrier(entry->key.value);
+            mal_gc_write_barrier(entry->key);
             mal_gc_write_barrier(entry->value);
             entry->live = false;
             table->tombstone_count++;
@@ -270,7 +274,7 @@ void mal_table_compact(MalTable *table) {
 MalKey mal_table_entry_key(const MalTable *table, void *entry) {
     (void) table;
 
-    return ((MalTableEntry *) entry)->key;
+    return mal_key_from_value(((MalTableEntry *) entry)->key);
 }
 
 void *mal_table_entry_data(const MalTable *table, void *entry) {
@@ -318,7 +322,7 @@ bool mal_table_iter_next(MalTableIter *iter, MalKey *key_out, void **entry_out) 
             continue;
         }
 
-        *key_out = entry->key;
+        *key_out = mal_key_from_value(entry->key);
         *entry_out = entry;
 
         return true;

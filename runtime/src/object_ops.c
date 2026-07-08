@@ -135,7 +135,7 @@ static void mal_object_dictionarize(MalObject *object) {
     for (u32 i = 0; i < shape->inline_count; ++i) {
         const MalShapeProp *prop = &shape->props[i];
         MalPropertyDesc desc = mal_object_data_desc(object->slots[prop->slot], prop->attrs);
-        mal_property_define(table, prop->key, &desc);
+        mal_property_define(table, mal_key_from_value(prop->key), &desc);
     }
     object->shape = mal_shape_empty();
     // The inline-slot values are now all migrated into the overflow table, so the
