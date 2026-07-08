@@ -40,6 +40,8 @@ typedef struct MalArrayObject {
     bool dense_deopted : 1;
 } MalArrayObject;
 
+static_assert(sizeof(MalArrayObject) <= 64, "MalArrayObject outgrew its 64-byte size class");
+
 /** Whether the array uses the dense element fast path (vs. legacy table storage). */
 bool mal_array_object_is_dense(const MalArrayObject *array);
 

@@ -70,6 +70,8 @@ typedef struct MalIteratorHelperObject {
     i32 index;
 } MalIteratorHelperObject;
 
+static_assert(sizeof(MalIteratorHelperObject) <= 128, "MalIteratorHelperObject outgrew its 128-byte size class");
+
 /**
  * Install the Iterator Helpers surface: the %Iterator% global (abstract
  * constructor) + Iterator.from, the %IteratorPrototype% accessors (constructor,

@@ -299,6 +299,9 @@ typedef struct MalInlineCache {
     bool megamorphic;
 } MalInlineCache;
 
+// One per property-access site; keep it at/under 80 bytes.
+static_assert(sizeof(MalInlineCache) <= 80, "MalInlineCache outgrew 80 bytes");
+
 // `slot` sentinel marking a protector-gated value entry (`value` holds the result,
 // there is no object slot). A real shape slot is a small inline index.
 #define MAL_IC_VALUE_SLOT UINT32_MAX

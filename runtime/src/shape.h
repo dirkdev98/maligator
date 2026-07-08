@@ -51,6 +51,8 @@ typedef struct MalShapeProp {
     u8 attrs;
 } MalShapeProp;
 
+static_assert(sizeof(MalShapeProp) <= 16, "MalShapeProp outgrew 16 bytes (one per shaped property)");
+
 struct MalShape {
     MalHeapHeader header; /* MAL_HEAP_SHAPE */
     /** Number of named properties / inline slots. */
@@ -62,6 +64,8 @@ struct MalShape {
     /** Children, one per distinct added (key, attrs); singly linked. */
     MalShapeTransition *transitions;
 };
+
+static_assert(sizeof(MalShape) <= 32, "MalShape outgrew its 32-byte size class");
 
 /** The immortal empty shape: the root of the transition tree (0 properties). */
 MalShape *mal_shape_empty(void);

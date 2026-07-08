@@ -58,6 +58,11 @@ typedef struct MalObject {
     MalTable *overflow;
 } MalObject;
 
+// Size-class guard: MalObject is the base of ~30 heap types, so it must stay in
+// the 48-byte class (4 pointers + a 3-byte header + a flag byte = 40). A new
+// field that pushed it past 48 would bump every object type up a class.
+static_assert(sizeof(MalObject) <= 48, "MalObject outgrew its 48-byte size class");
+
 /**
  * Initialize object state in caller-provided storage.
  */

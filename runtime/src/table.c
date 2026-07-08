@@ -21,6 +21,9 @@ typedef struct MalTableEntry {
     bool live;
 } MalTableEntry;
 
+// One per Map/Set/dictionary entry; must stay in the 32-byte size class.
+static_assert(sizeof(MalTableEntry) <= 32, "MalTableEntry outgrew its 32-byte size class");
+
 /**
  * Insertion-ordered open-addressed table. `entries` holds the entries inline in
  * insertion order (append-only; a delete tombstones in place via `live`), and

@@ -19,6 +19,8 @@ typedef struct MalString {
     const c16 *code_units;
 } MalString;
 
+static_assert(sizeof(MalString) <= 32, "MalString outgrew its 32-byte size class");
+
 /**
  * Hash a UTF-16 code unit sequence.
  */

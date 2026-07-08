@@ -24,6 +24,8 @@ typedef struct MalSymbol {
     MalString *description;
 } MalSymbol;
 
+static_assert(sizeof(MalSymbol) <= 16, "MalSymbol outgrew its 16-byte size class");
+
 /**
  * Initialize a symbol allocation in caller-provided storage.
  */
