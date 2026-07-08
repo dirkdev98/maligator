@@ -385,6 +385,83 @@
         "malP99Ms": 2.189125,
         "nodeP99Ms": 1.027083
       }
+    },
+    {
+      "commit": "b6429d0",
+      "dirty": false,
+      "size": {
+        "full": {
+          "binaryBytes": 14865792,
+          "runtimeArchiveBytes": 105664,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 2658464,
+          "rustArchiveBytes": 21746656
+        },
+        "no-eval": {
+          "binaryBytes": 13148408,
+          "runtimeArchiveBytes": 105664,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 953368,
+          "rustArchiveBytes": 21746656
+        },
+        "no-intl": {
+          "binaryBytes": 4334344,
+          "runtimeArchiveBytes": 105664,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 2555920,
+          "rustArchiveBytes": 8344256
+        },
+        "no-web": {
+          "binaryBytes": 14299080,
+          "runtimeArchiveBytes": 78000,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 2658464,
+          "rustArchiveBytes": 21106552
+        },
+        "no-regexp": {
+          "binaryBytes": 14261760,
+          "runtimeArchiveBytes": 105664,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 2619440,
+          "rustArchiveBytes": 20761016
+        },
+        "minimal": {
+          "binaryBytes": 2049976,
+          "runtimeArchiveBytes": 78000,
+          "hostArchiveBytes": 21080,
+          "engineArchiveBytes": 850824,
+          "rustArchiveBytes": 7703680
+        }
+      },
+      "language": {
+        "malMs": 262.754583,
+        "nodeMs": 116.167792,
+        "ratio": 2.2618539827287067
+      },
+      "gc": {
+        "cli": {
+          "wallMs": 107.188833,
+          "rssMb": 27.609375,
+          "maxPauseMs": 4.728
+        },
+        "desktop": {
+          "wallMs": 2868.293166,
+          "rssMb": 24.421875,
+          "maxPauseMs": 9.547
+        },
+        "server": {
+          "wallMs": 6213.072917,
+          "rssMb": 21.703125,
+          "maxPauseMs": 16.334
+        }
+      },
+      "http": {
+        "malRps": 111811.60220847228,
+        "nodeRps": 100116.79981404479,
+        "ratio": 1.1168115882264436,
+        "malP99Ms": 2.3489169999999997,
+        "nodeP99Ms": 1.109667
+      }
     }
   ]
 }
