@@ -9,7 +9,7 @@ typedef struct MalVm MalVm;
 /**
  * Which lazy transform an Iterator Helper applies (or WRAP for Iterator.from).
  */
-typedef enum MalIteratorHelperKind {
+typedef enum MalIteratorHelperKind : u8 {
     MAL_ITERATOR_HELPER_MAP,
     MAL_ITERATOR_HELPER_FILTER,
     MAL_ITERATOR_HELPER_TAKE,
@@ -21,7 +21,7 @@ typedef enum MalIteratorHelperKind {
 } MalIteratorHelperKind;
 
 /** Iterator.zip / Iterator.zipKeyed iteration mode. */
-typedef enum MalIteratorZipMode {
+typedef enum MalIteratorZipMode : u8 {
     MAL_ITERATOR_ZIP_SHORTEST,
     MAL_ITERATOR_ZIP_LONGEST,
     MAL_ITERATOR_ZIP_STRICT,
@@ -33,7 +33,6 @@ typedef enum MalIteratorZipMode {
  */
 typedef struct MalIteratorHelperObject {
     MalObject object;
-    MalIteratorHelperKind kind;
 
     // Underlying iterator record.
     MalValue iterator;
@@ -43,11 +42,6 @@ typedef struct MalIteratorHelperObject {
     MalValue callback;
     // take/drop remaining count.
     f64 counter;
-    bool done;
-    // Guards against re-entrant next() (GeneratorState "executing"): a TypeError
-    // is thrown if next() is called while a previous next() is still on the stack.
-    bool running;
-    i32 index;
 
     // flatMap: the inner iterator currently being drained.
     // concat: the currently-open source iterator.
@@ -64,7 +58,16 @@ typedef struct MalIteratorHelperObject {
     MalValue source_methods;
     MalValue zip_padding;
     MalValue zip_keys;
+
+    // Scalar fields clustered last so they share one trailing word (no interior
+    // padding between the 8-byte MalValue members above).
+    MalIteratorHelperKind kind;
     MalIteratorZipMode zip_mode;
+    bool done;
+    // Guards against re-entrant next() (GeneratorState "executing"): a TypeError
+    // is thrown if next() is called while a previous next() is still on the stack.
+    bool running;
+    i32 index;
 } MalIteratorHelperObject;
 
 /**
