@@ -648,7 +648,6 @@ typedef MalValue (*MalCompiledFunction)(
     // async): the coroutine object whose saved frame the body restores and whose
     // instruction_pointer selects the resume label. Null on every ordinary call,
     // construct, and program-entry invocation; non-coroutine functions ignore it.
-    // See docs/decisions/03-compiled-coroutines.md.
     struct MalGeneratorObject *resume_state
 );
 

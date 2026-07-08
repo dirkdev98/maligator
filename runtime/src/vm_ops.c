@@ -3978,7 +3978,7 @@ void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction) {
 }
 
 // ---------------------------------------------------------------------------
-// Compiled coroutines. See docs/decisions/03-compiled-coroutines.md.
+// Compiled coroutines (native-backend generators & async).
 // ---------------------------------------------------------------------------
 
 MalValue *mal_coroutine_alloc_registers(i32 slot_count) {

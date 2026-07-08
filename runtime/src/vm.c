@@ -1472,8 +1472,7 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
         // (indexed by register number, as the yield/await recorded), then re-enter
         // the compiled body with resume_state set; its entry dispatch jumps to the
         // saved resume label and the front-end's inline post-suspend dispatch reads
-        // the mode. The C-stack / depth guard lives in mal_vm_enter_compiled. See
-        // docs/decisions/03-compiled-coroutines.md.
+        // the mode. The C-stack / depth guard lives in mal_vm_enter_compiled.
         if (!mal_vm_enter_compiled(vm, generator->frame.function_index)) {
             generator->state = MAL_GENERATOR_COMPLETED;
             return;

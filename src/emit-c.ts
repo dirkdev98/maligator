@@ -435,9 +435,9 @@ export function emitCompiledFunction(
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
-	// rather than the straight-line shape below. See emitResumableFunction and
-	// docs/decisions/03-compiled-coroutines.md. (override is only ever set for the
-	// boxed fallback of a promoting normal function, never a coroutine.)
+	// rather than the straight-line shape below (see emitResumableFunction). (override
+	// is only ever set for the boxed fallback of a promoting normal function, never a
+	// coroutine.)
 	if (fn.isGenerator || fn.isAsync) {
 		return emitResumableFunction(fn, index, suffix, debug);
 	}
@@ -662,8 +662,7 @@ export function emitCompiledFunction(
 /**
  * Emit a resumable C function for a generator/async `fn`, or null when its body
  * uses an opcode the backend cannot lower yet (e.g. ASYNC_START/AWAIT before the
- * async milestone → async functions and async generators bail). See
- * docs/decisions/03-compiled-coroutines.md.
+ * async milestone → async functions and async generators bail).
  *
  * The activation lives in a heap MalValue buffer (named __gc_slots so the shared
  * register/with-object emission works unchanged): registers [0,registerCount),

@@ -708,8 +708,7 @@ void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction);
 // Compiled coroutines (native-backend generators & async). These have no
 // interpreter counterpart: the interpreter drives GENERATOR_START/YIELD/AWAIT/
 // RETURN inline in its dispatch loop, whereas a compiled coroutine is a single
-// C function that suspends by returning and resumes by re-entry. See
-// docs/decisions/03-compiled-coroutines.md.
+// C function that suspends by returning and resumes by re-entry.
 // ---------------------------------------------------------------------------
 
 // Allocate a compiled coroutine's heap register buffer (all undefined). Sized by

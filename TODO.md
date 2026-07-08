@@ -54,7 +54,6 @@ in. `OFF buys` = what dropping the feature gets you.
       hoist one shape/dense guard over a safepoint-free window, then direct slot/element
       access + throwCheck elision, deopting to the per-access ICs on a miss. Later:
       polymorphic IC, inline object slots, value type-feedback (unlocks sound load-CSE).
-      Design: `docs/decisions/04-object-array-fast-paths.md`.
 - [ ] **Chained numeric unboxing** — fuse a safepoint-free arithmetic sub-tree
       (`p.vy + 0.01*p.mass`, `(a.x-b.x)*(a.x-b.x)`) under one leaf-guard into native math +
       one box (region if/else in emit-c). Modest gain (chain-heavy code already beats V8);
@@ -87,6 +86,10 @@ in. `OFF buys` = what dropping the feature gets you.
       Dev/default builds stay unstripped. `-dead_strip` measured ~1% here (eager
       intrinsic install roots almost everything + Rust is already LTO'd), so it's not
       the lever — compile-time feature gates are.
+      - [ ] **Enable LTO (`MAL_LTO`) in this mode** — whole-program inline of the emitted
+            TU's calls into the runtime archives; the single biggest speed lever measured
+            (language ratio 2.05× → 1.77×). Cost is link time, so it stays opt-in / prod-only,
+            not on dev builds.
 - [ ] Size-focused build profile (`-Os`/LTO/`--gc-sections`/musl-static/strip);
       measure per-feature bytes; feed the size gate above.
 
