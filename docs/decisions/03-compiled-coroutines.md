@@ -3,8 +3,9 @@
 ## Context
 
 The native-C backend (`emit-c.ts`) lowers eligible functions straight to C, no
-VM dispatch loop. The #1 project priority is small binary size, and the payoff
-of the backend is being able to _strip the interpreter_ when `eval` is disabled.
+VM dispatch loop. Performance is the top project priority, with small binary size
+close behind; one payoff of the backend is being able to _strip the interpreter_
+when `eval` is disabled (a size win).
 Until now the backend bailed on every generator/async function (`fn.isGenerator
 || fn.isAsync` → `return null`), so any program using them kept the whole
 bytecode interpreter reachable. That blocks the strip.

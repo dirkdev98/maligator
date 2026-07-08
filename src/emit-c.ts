@@ -131,6 +131,17 @@ const NATIVE_COMPARE: Record<string, string> = {
 };
 
 /**
+ * The relational comparisons. When BOTH operands are boxed (no static proof
+ * either is a number) the backend still speculates a numeric compare for these —
+ * `a < b` is overwhelmingly numeric in hot code and relational comparison coerces
+ * to a number anyway — but NOT for equality (both-boxed `==`/`===` is typically
+ * object/string identity, where the numeric bet loses and the strict slow path is
+ * already coercion-free). The mixed case (one operand proven number) still
+ * speculates every comparison, equality included: there the numeric prior is real.
+ */
+const RELATIONAL_COMPARE = new Set<string>(["<", "<=", ">", ">="]);
+
+/**
  * Bitwise/shift operators emitted as native C on two `number`-rep operands.
  * JS defines these over ToInt32 (mal_ops_number_to_i32), with the shift count
  * masked to 5 bits. The signed-32-bit result is held as a `number`-rep double
@@ -633,6 +644,13 @@ export function emitCompiledFunction(
 			? `    ${gcUnlink}return mal_vm_op_derived_construct_return(vm, MAL_VALUE_UNDEFINED, __gc_slots[${thisSlot}]);`
 			: `    ${gcUnlink}return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`,
 	);
+	// Shared throw-exit: unlink the root frame and leave the compiled frame with the
+	// throw pending (the dispatch caller observes vm->completion). Reached only by
+	// `goto` from a no-handler throw; placed after the unconditional fall-off return
+	// so control never falls into it. Omitted when nothing routes here.
+	if (bodyUsesThrowExit(body)) {
+		lines.push(`__throw_exit:;`, `    ${gcUnlink}return MAL_VALUE_UNDEFINED;`);
+	}
 	lines.push("}");
 	for (const i of valueRegs) {
 		lines.push(`#undef r${i}`);
@@ -767,12 +785,31 @@ function emitResumableFunction(
 		`    mal_vm_op_coroutine_return_compiled(vm, __coro, MAL_VALUE_UNDEFINED);`,
 		`    ${gcUnlink}return ${fallReturn};`,
 	);
+	// Shared throw-exit for a coroutine: complete the activation (free it, route the
+	// throw by kind) before leaving the frame. __coro is null if the parameter
+	// prologue threw before GENERATOR_START — then the raw buffer is released and the
+	// throw propagates synchronously. Reached only by `goto`; omitted when unused.
+	if (bodyUsesThrowExit(body)) {
+		lines.push(
+			`__throw_exit:;`,
+			`    mal_vm_op_coroutine_throw_compiled(vm, __coro, __gc_slots); ${gcUnlink}return ${fallReturn};`,
+		);
+	}
 	lines.push("}");
 	for (let i = 0; i < fn.registerCount; i++) {
 		lines.push(`#undef r${i}`);
 	}
 
 	return { symbol, source: lines.join("\n") };
+}
+
+/**
+ * Whether an emitted body references the shared per-function throw-exit label —
+ * i.e. some fallible op outside a try/catch routed its throw to `__throw_exit`.
+ * When false the label (and its epilogue) is omitted so no unused-label is emitted.
+ */
+function bodyUsesThrowExit(body: Array<string>): boolean {
+	return body.some((line) => line.includes("__throw_exit"));
 }
 
 /** The C type a register of the given rep is held in. */
@@ -1054,9 +1091,12 @@ function emitInstruction(
 	// try/catch handler when this instruction is inside one (CATCH there reads
 	// vm->completion.value), otherwise out of the compiled frame (the dispatch
 	// caller observes vm->completion). Mirrors the interpreter's unwinder.
-	// On a pending throw with no in-function handler we leave the compiled frame,
-	// so unlink its root frame first; a goto to an in-function handler keeps the
-	// frame live (no unlink).
+	// The no-handler case leaves via a single shared per-function `__throw_exit`
+	// label (emitted once at the function end by the caller — see THROW_EXIT_*),
+	// rather than inlining the unlink+return at every fallible op: the leave-frame
+	// epilogue is identical across all sites, so ~one goto per op replaces a full
+	// `{ unlink; return; }` copy (a large codesize saving). A goto to an
+	// in-function handler keeps the frame live (no unlink); the shared exit unlinks.
 	// The value a coroutine's C function returns at an exit: an async function hands
 	// back its result promise (meaningful only on the initial synchronous run — a
 	// resume's return is ignored); everything else returns undefined.
@@ -1065,15 +1105,7 @@ function emitInstruction(
 			? "__async_result_promise"
 			: "MAL_VALUE_UNDEFINED";
 	const onThrow =
-		handlerIp !== undefined
-			? `goto L${handlerIp};`
-			: coro !== null
-				? // Throwing out of a coroutine: complete it (free the activation, route
-					// the throw by kind) before leaving the frame. __coro is null if the
-					// parameter prologue threw before GENERATOR_START — then the raw buffer
-					// is released and the throw propagates synchronously.
-					`{ mal_vm_op_coroutine_throw_compiled(vm, __coro, __gc_slots); ${gcUnlink}return ${coroReturnValue}; }`
-				: `{ ${gcUnlink}return MAL_VALUE_UNDEFINED; }`;
+		handlerIp !== undefined ? `goto L${handlerIp};` : "goto __throw_exit;";
 	const throwCheck = `if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`;
 
 	// GC safepoint poll. Emitted at call returns and loop
@@ -1251,18 +1283,34 @@ function emitInstruction(
 			// is a direct slot read with no key conversion or shape search.
 			// mal_vm_array_fast_load inlines a dense-array index read ahead of the IC
 			// (a non-array / non-index key falls straight through at no real cost).
-			return [
-				`static MalInlineCache __ic_${ip};`,
-				`r${instruction.dst} = mal_vm_array_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
-				throwCheck,
-			];
+			// A number-rep index takes the _index variant, which reads the dense array
+			// straight from the raw f64 with no key boxing round-trip (the `arr[i]` hot
+			// path); the string-key case boxes as before to drive the shape IC.
+			return reps[instruction.key] === "number"
+				? [
+						`static MalInlineCache __ic_${ip};`,
+						`r${instruction.dst} = mal_vm_array_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__ic_${ip});`,
+						throwCheck,
+					]
+				: [
+						`static MalInlineCache __ic_${ip};`,
+						`r${instruction.dst} = mal_vm_array_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
+						throwCheck,
+					];
 		case "STORE_PROPERTY":
-			// mal_vm_array_fast_store inlines a dense-array index store ahead of the IC.
-			return [
-				`static MalInlineCache __ic_${ip};`,
-				`mal_vm_array_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
-				throwCheck,
-			];
+			// mal_vm_array_fast_store inlines a dense-array index store ahead of the IC;
+			// a number-rep index takes the _index variant (no key boxing round-trip).
+			return reps[instruction.key] === "number"
+				? [
+						`static MalInlineCache __ic_${ip};`,
+						`mal_vm_array_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
+						throwCheck,
+					]
+				: [
+						`static MalInlineCache __ic_${ip};`,
+						`mal_vm_array_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
+						throwCheck,
+					];
 		case "TO_PROPERTY_KEY":
 			return [
 				`r${instruction.dst} = mal_vm_op_to_property_key(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
@@ -1343,6 +1391,19 @@ function emitInstruction(
 			const numericOf = (r: number): string =>
 				reps[r] === "number" ? `r${r}` : `mal_ops_number_as_f64(${boxed(r)})`;
 			const guardIsNumber = (r: number): string => `mal_ops_is_number(${boxed(r)})`;
+			// The speculative guard for a native numeric path: the AND of an
+			// is-number test over each operand not already proven number-rep (0, 1,
+			// or 2 tests). Empty when both operands are proven numbers — then the
+			// native path is unconditional and the slow branch is never emitted.
+			const nonNumberOperands: Array<number> = [];
+			if (!leftIsNum) {
+				nonNumberOperands.push(left);
+			}
+			if (!rightIsNum) {
+				nonNumberOperands.push(right);
+			}
+			const numberGuard = nonNumberOperands.map(guardIsNumber).join(" && ");
+			const bothBoxed = !leftIsNum && !rightIsNum;
 
 			// Comparisons yield a boolean. The native compare over two numbers
 			// never throws; the fully-general op can, though — the relational and
@@ -1355,13 +1416,15 @@ function emitInstruction(
 					return [storeBool(`${num(left)} ${compare} ${num(right)}`)];
 				}
 				const compareCheck = binaryOpCanThrow(operator) ? [completionCheck] : [];
-				if (leftIsNum !== rightIsNum) {
-					const guard = guardIsNumber(leftIsNum ? right : left);
+				// Speculate a numeric compare when there is a numeric prior: always in
+				// the mixed case (one operand proven number), and in the both-boxed
+				// case only for the relational operators (see RELATIONAL_COMPARE).
+				if (!bothBoxed || RELATIONAL_COMPARE.has(operator)) {
 					const fastBool = `${numericOf(left)} ${compare} ${numericOf(right)}`;
 					return [
 						dstIsBool
-							? `r${dst} = ${guard} ? (${fastBool}) : mal_value_to_boolean(${slow});`
-							: `r${dst} = ${guard} ? mal_value_new_boolean(${fastBool}) : ${slow};`,
+							? `r${dst} = ${numberGuard} ? (${fastBool}) : mal_value_to_boolean(${slow});`
+							: `r${dst} = ${numberGuard} ? mal_value_new_boolean(${fastBool}) : ${slow};`,
 						...compareCheck,
 					];
 				}
@@ -1377,34 +1440,40 @@ function emitInstruction(
 				return null;
 			}
 
-			// Mixed rep on a number-producing op: exactly one operand is a proven
-			// number, the other boxed. Speculate the boxed operand is a number and
-			// take the native double op when it is, else the fully-general op.
-			// `mal_ops_number_as_f64` recovers a number's exact f64 and
-			// `mal_ops_number_value` re-boxes with the interpreter's int32/-0/NaN
+			// Number-producing op with at least one boxed operand (both-proven-number
+			// takes the number-rep path above). Speculate the boxed operand(s) are
+			// numbers and take the native double op when they are, else the
+			// fully-general op. `mal_ops_number_as_f64` recovers a number's exact f64
+			// and `mal_ops_number_value` re-boxes with the interpreter's int32/-0/NaN
 			// canonicalization, so the fast path is observably identical to the
 			// fallback — including `%` (mal_number_remainder) and the bitwise/shift
-			// ops (ToInt32). (`+` stays correct: a proven number can't be a string,
-			// and the guard rejects a boxed string, so the string-concat branch of
-			// the slow op is only reached when the native branch is not taken.)
-			if (leftIsNum !== rightIsNum) {
+			// ops (ToInt32). `+` stays correct: the guard rejects a boxed string, so
+			// the string-concat branch of the slow op is only reached when the native
+			// branch is not taken. This covers both the mixed and both-boxed cases;
+			// for both-boxed there is no static proof, but the guard is a cheap,
+			// well-predicted bit test and hot arithmetic is overwhelmingly numeric.
+			if (producesNumberFromNumbers(operator)) {
 				const nativeExpr = nativeNumberExpr(operator, numericOf(left), numericOf(right));
 				if (nativeExpr !== null) {
-					const guard = guardIsNumber(leftIsNum ? right : left);
-					const lines = [
-						`r${dst} = ${guard} ? mal_ops_number_value(${nativeExpr}) : ${slow};`,
-					];
-					if (binaryOpCanThrow(operator)) {
-						lines.push(completionCheck);
+					const fast = `mal_ops_number_value(${nativeExpr})`;
+					// numberGuard is empty only when both operands are proven numbers but
+					// the dst rep was joined to boxed elsewhere — then native is
+					// unconditional and never throws.
+					if (numberGuard === "") {
+						return [`r${dst} = ${fast};`];
 					}
-					return lines;
+					const lowered = [`r${dst} = ${numberGuard} ? ${fast} : ${slow};`];
+					if (binaryOpCanThrow(operator)) {
+						lowered.push(completionCheck);
+					}
+					return lowered;
 				}
 			}
 
-			// Fully general fallback: both operands boxed, or string/bigint/`in`/
-			// `instanceof`. Any non-comparison op can throw (BigInt domain errors),
-			// so propagate the completion — previously only `in`/`instanceof` did,
-			// which silently swallowed BigInt TypeErrors/RangeErrors here.
+			// Fully general fallback: `**`, `in`, `instanceof`, or a string/bigint
+			// operand. Any non-comparison op can throw (BigInt domain errors), so
+			// propagate the completion — previously only `in`/`instanceof` did, which
+			// silently swallowed BigInt TypeErrors/RangeErrors here.
 			const lowered = [`r${dst} = ${slow};`];
 			if (binaryOpCanThrow(operator)) {
 				lowered.push(completionCheck);

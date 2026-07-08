@@ -340,27 +340,8 @@ static i32 mal_ops_to_i32(MalValue value) {
     return (i32) number;
 }
 
-MalValue mal_ops_number_value(f64 value) {
-    if (isnan(value)) {
-        return mal_value_new_nan();
-    }
-
-    // Negative zero is a distinct Number (Object.is, 1/x, sameValue) and must
-    // not be canonicalized to the int32 +0 the next branch would produce. Keep
-    // it as a raw f64 — the same encoding the interpreter stores for a `-0`
-    // literal — so arithmetic that yields -0 (e.g. -1 * 0) and the compiled
-    // backend's boundary boxing both preserve it.
-    if (value == 0.0 && signbit(value)) {
-        return mal_value_from_f64(value);
-    }
-
-    if (value >= INT32_MIN && value <= INT32_MAX && trunc(value) == value) {
-        return mal_value_from_i32((i32) value);
-    }
-
-    // Also maps infinities to their static encodings.
-    return mal_value_from_f64_convert_nan(value);
-}
+// mal_ops_number_value is now static inline in value_ops.h (inlined into the
+// emitted native-C backend's boundary boxing).
 
 MalValue mal_ops_add(MalHeap *heap, MalValue left, MalValue right) {
     if (mal_value_is_string(left) || mal_value_is_string(right)) {

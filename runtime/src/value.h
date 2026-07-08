@@ -545,9 +545,13 @@ MalPromiseObject *mal_value_to_promise_object(MalValue value);
 MalIteratorHelperObject *mal_value_to_iterator_helper_object(MalValue value);
 
 /**
- * Box a string.
+ * Box a string. Inline (a single tagged-pointer or) so a constant string key in
+ * the emitted native-C backend folds to an immediate instead of a cross-TU call
+ * per hot-loop property access (the emitted TU links -O2 with no LTO).
  */
-MalValue mal_value_from_string(MalString *string);
+static inline MalValue mal_value_from_string(MalString *string) {
+    return mal_value_from_heap((MalHeapHeader *) string);
+}
 
 /**
  * Box a symbol.
@@ -555,14 +559,19 @@ MalValue mal_value_from_string(MalString *string);
 MalValue mal_value_from_symbol(MalSymbol *symbol);
 
 /**
- * Box a BigInt.
+ * Box a BigInt. Inline for the same reason as mal_value_from_string (the backend
+ * emits it for a BigInt literal key/value).
  */
-MalValue mal_value_from_bigint(MalBigInt *bigint);
+static inline MalValue mal_value_from_bigint(MalBigInt *bigint) {
+    return mal_value_from_heap((MalHeapHeader *) bigint);
+}
 
 /**
- * Box an object.
+ * Box an object. Inline for the same reason as mal_value_from_string.
  */
-MalValue mal_value_from_object(MalObject *object);
+static inline MalValue mal_value_from_object(MalObject *object) {
+    return mal_value_from_heap((MalHeapHeader *) object);
+}
 
 /**
  * Box a function object.

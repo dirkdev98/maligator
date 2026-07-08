@@ -103,9 +103,33 @@ static inline MalValue mal_ops_construct_result(MalValue value, MalValue this_va
 }
 
 /**
- * Box a f64 as an int32 when integral and in range, else as f64/NaN.
+ * Box a f64 as an int32 when integral and in range, else as f64/NaN. Kept
+ * `static inline` (value_ops.h reaches both the runtime and the emitted C) so the
+ * native-C backend's boundary boxing inlines in the hot loop instead of a cross-TU
+ * call per boxed arithmetic result — and so `mal_ops_number_as_f64` composed with
+ * it (a chained guarded-numeric op re-boxing then re-unboxing) can fold to identity.
  */
-MalValue mal_ops_number_value(f64 value);
+static inline MalValue mal_ops_number_value(f64 value) {
+    if (isnan(value)) {
+        return mal_value_new_nan();
+    }
+
+    // Negative zero is a distinct Number (Object.is, 1/x, sameValue) and must
+    // not be canonicalized to the int32 +0 the next branch would produce. Keep
+    // it as a raw f64 — the same encoding the interpreter stores for a `-0`
+    // literal — so arithmetic that yields -0 (e.g. -1 * 0) and the compiled
+    // backend's boundary boxing both preserve it.
+    if (value == 0.0 && signbit(value)) {
+        return mal_value_from_f64(value);
+    }
+
+    if (value >= INT32_MIN && value <= INT32_MAX && trunc(value) == value) {
+        return mal_value_from_i32((i32) value);
+    }
+
+    // Also maps infinities to their static encodings.
+    return mal_value_from_f64_convert_nan(value);
+}
 
 MalValue mal_ops_add(MalHeap *heap, MalValue left, MalValue right);
 

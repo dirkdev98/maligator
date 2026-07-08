@@ -9,10 +9,10 @@ actors / SMP / GUI / bare-metal), `eval_todo.md` (eval / Function / realms),
 
 A lean AOT-compiled JS engine. Priorities, in order:
 
-1. **Small binary size** — every non-core feature is opt-in; a binary's size is
-   proportional to what the program actually uses.
-2. **Performance** — never a JIT, but AOT-fast: whole-program inlining, escape
+1. **Performance** — never a JIT, but AOT-fast: whole-program inlining, escape
    analysis, inline caches, precise non-moving GC.
+2. **Small binary size** — every non-core feature is opt-in; a binary's size is
+   proportional to what the program actually uses.
 3. **General-purpose usability** — WinterTC (opt-in) + a small curated Node-compat
    subset. Never the full Node/npm suite; binary impact stays proportional.
 4. **Explore what's fun** — after more GC / perf / multiprocessing, lean toward
@@ -47,24 +47,16 @@ in. `OFF buys` = what dropping the feature gets you.
       commit, the way the test262 gate tracks conformance, so size regressions are
       visible. Prerequisite for the size pass.
 
-## Priority 1 — Binary size
+## Priority 1 — Performance
 
-- [ ] Don't link ICU4X data when Intl is unused; split locales (today: 11 MB binaries).
-- [ ] Drop the bytecode overlay for always-compiled, no-bail functions (kills the
-      dead `MalInstruction` table; forces a clean overlay contract).
-- [ ] **Production build mode** — keeps `-O2` (do NOT trade perf for size in prod) but
-      strips the symbol table (post-link `strip`, or `-Wl,-x`) off by default only in
-      this mode. Measured ~11% (~210 KB) off `minimal`; it drops native symbolication
-      (`nm`/`atos`/crash backtraces) but NOT the engine's own JS stack traces (separate
-      position tables). Distinct from the size-focused profile below (which trades perf).
-      Dev/default builds stay unstripped. `-dead_strip` measured ~1% here (eager
-      intrinsic install roots almost everything + Rust is already LTO'd), so it's not
-      the lever — compile-time feature gates are.
-- [ ] Size-focused build profile (`-Os`/LTO/`--gc-sections`/musl-static/strip);
-      measure per-feature bytes; feed the size gate above.
-
-## Priority 2 — Performance
-
+- [ ] **Object & array access fast paths** (the measured gap — `objects` ~4.9×, `arrays`
+      ~3.5× vs V8, while arithmetic-chain code already beats it). Inline object slots +
+      polymorphic IC + shape speculation; direct dense-element load/store when the shape is
+      known. Also unlocks sound load-CSE.
+- [ ] **Chained numeric unboxing** — fuse a safepoint-free arithmetic sub-tree
+      (`p.vy + 0.01*p.mass`, `(a.x-b.x)*(a.x-b.x)`) under one leaf-guard into native math +
+      one box (region if/else in emit-c). Modest gain (chain-heavy code already beats V8);
+      the delicate numeric core wants careful -0/NaN/throw differential testing.
 - [ ] **String optimizations** — ropes/cons-strings + dependent (slice) strings so
       `+` is O(1)-amortized and substring is zero-copy (GC trace-edge to parent).
 - [ ] **String/key interning (atom table)** — pointer-identity key compares, wider
@@ -79,6 +71,22 @@ in. `OFF buys` = what dropping the feature gets you.
       with async rooting flakiness + generational GC).
 - [ ] Generate ops from a single op-descriptor list (kills the ~6-file opcode path).
 - [ ] Effect-summary table for builtins (T7.3) — unlocks functional-style inlining.
+
+## Priority 2 — Binary size
+
+- [ ] Don't link ICU4X data when Intl is unused; split locales (today: 11 MB binaries).
+- [ ] Drop the bytecode overlay for always-compiled, no-bail functions (kills the
+      dead `MalInstruction` table; forces a clean overlay contract).
+- [ ] **Production build mode** — keeps `-O2` (do NOT trade perf for size in prod) but
+      strips the symbol table (post-link `strip`, or `-Wl,-x`) off by default only in
+      this mode. Measured ~11% (~210 KB) off `minimal`; it drops native symbolication
+      (`nm`/`atos`/crash backtraces) but NOT the engine's own JS stack traces (separate
+      position tables). Distinct from the size-focused profile below (which trades perf).
+      Dev/default builds stay unstripped. `-dead_strip` measured ~1% here (eager
+      intrinsic install roots almost everything + Rust is already LTO'd), so it's not
+      the lever — compile-time feature gates are.
+- [ ] Size-focused build profile (`-Os`/LTO/`--gc-sections`/musl-static/strip);
+      measure per-feature bytes; feed the size gate above.
 
 ## Substrate roadmap
 

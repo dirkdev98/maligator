@@ -103,7 +103,16 @@ export function buildSuffix(cacheSuffix = ""): string {
  * -O1 -g (the sanitizer is slow, and -g + a non-zero -O keeps frames + symbols).
  */
 export function optFlags(): Array<string> {
-	return sanitizerMode() === "none" ? ["-O2"] : ["-O1", "-g"];
+	if (sanitizerMode() !== "none") {
+		return ["-O1", "-g"];
+	}
+	// Opt-in link-time optimization (`MAL_LTO=1`): compiles the runtime archives and
+	// the emitted TU with `-flto` so the C compiler inlines across translation units
+	// (the emitted native-C backend's calls into the runtime — mal_vm_binary_op, the
+	// IC ops, value helpers) and dead-strips unreachable code at link. Off by default
+	// (it lengthens the link); the flag must reach both the archive (CMAKE_C_FLAGS)
+	// and the final cc, which optFlags feeds via cmakeCFlags/ccExtraFlags.
+	return envOn("MAL_LTO") ? ["-O2", "-flto"] : ["-O2"];
 }
 
 /**

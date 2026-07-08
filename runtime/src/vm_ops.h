@@ -5,6 +5,7 @@
 #include "builtin_iterator.h"
 #include "object_ops.h"
 #include "table.h"
+#include "value_ops.h" // mal_ops_number_value, for the numeric-index fast paths
 #include "vm.h"
 
 /**
@@ -364,6 +365,56 @@ static inline void mal_vm_array_fast_store(MalVm *vm, MalValue object_value, Mal
         }
     }
     mal_vm_op_store_property_ic(vm, object_value, key_value, value, strict, ic);
+}
+
+/**
+ * Numeric-index variants of the fast load/store, for an `obj[i]` site whose index
+ * the native backend holds as a raw f64 (number-rep). They take the index UNBOXED
+ * so a dense-array access does not box it into a MalValue only for the boxed fast
+ * path to unbox it again — the boxing round-trip that dominates a tight
+ * element-access loop. The dense test accepts any array index (integral, 0..2^32-1);
+ * anything else (a non-array object, a fractional/out-of-range index, a dense miss)
+ * boxes the index once and defers to the boxed fast path, which is observably
+ * identical (`mal_ops_number_value` canonicalizes exactly as the interpreter's key
+ * boxing, so `obj[0]`-on-a-plain-object still services the monomorphic object IC).
+ */
+static inline MalValue mal_vm_array_fast_load_index(MalVm *vm, MalValue object_value, f64 index,
+                                                    MalInlineCache *ic) {
+    if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
+        i64 i = (i64) index;
+        if ((f64) i == index && i >= 0 && i <= UINT32_MAX) {
+            MalValue out;
+            if (mal_array_object_dense_get((const MalArrayObject *) mal_value_to_heap(object_value), (u32) i,
+                                           &out)) {
+                return out;
+            }
+        }
+    }
+    return mal_vm_array_fast_load(vm, object_value, mal_ops_number_value(index), ic);
+}
+
+static inline void mal_vm_array_fast_store_index(MalVm *vm, MalValue object_value, f64 index, MalValue value,
+                                                 bool strict, MalInlineCache *ic) {
+    if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
+        i64 i = (i64) index;
+        if ((f64) i == index && i >= 0 && i <= UINT32_MAX) {
+            MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(object_value);
+            if (mal_array_object_dense_has(array, (u32) i)) {
+                mal_array_object_dense_store(array, (u32) i, value);
+                return;
+            }
+            if (!array->dense_deopted && mal_array_elements_protector && array->object.extensible &&
+                array->length_writable && array->object.prototype == mal_array_prototype_object) {
+                if (mal_array_object_dense_store(array, (u32) i, value) == MAL_ARRAY_DENSE_APPLIED) {
+                    if ((u32) i >= array->length) {
+                        array->length = (u32) i + 1;
+                    }
+                    return;
+                }
+            }
+        }
+    }
+    mal_vm_array_fast_store(vm, object_value, mal_ops_number_value(index), value, strict, ic);
 }
 
 /**

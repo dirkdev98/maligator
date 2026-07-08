@@ -350,20 +350,11 @@ MalIteratorHelperObject *mal_value_to_iterator_helper_object(MalValue value) {
     return (MalIteratorHelperObject *) mal_value_to_heap(value);
 }
 
-MalValue mal_value_from_string(MalString *string) {
-    return mal_value_from_heap((MalHeapHeader *) string);
-}
+// mal_value_from_string / _from_bigint / _from_object are now static inline in
+// value.h (constant-foldable in the emitted native-C backend).
 
 MalValue mal_value_from_symbol(MalSymbol *symbol) {
     return mal_value_from_heap((MalHeapHeader *) symbol);
-}
-
-MalValue mal_value_from_bigint(MalBigInt *bigint) {
-    return mal_value_from_heap((MalHeapHeader *) bigint);
-}
-
-MalValue mal_value_from_object(MalObject *object) {
-    return mal_value_from_heap((MalHeapHeader *) object);
 }
 
 MalValue mal_value_from_function_object(MalFunctionObject *function) {
