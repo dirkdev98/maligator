@@ -348,6 +348,53 @@ void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_
  * on the slow path. These mirror the runtime fast paths in mal_vm_op_store_property_keyed
  * / mal_vm_get_property_with_receiver, so the interpreter and native backends agree.
  */
+/**
+ * Plain-object (`MAL_HEAP_OBJECT`) guard for a property-access region: returns the
+ * object pointer, or null for any non-plain-object receiver (array/function/primitive
+ * wrapper/…), which then takes the general IC path. Like mal_vm_as_array, the guard is
+ * sound across a whole region even past a call/allocation — the heap type is invariant,
+ * the collector is non-moving, and the object register keeps it rooted.
+ */
+static inline MalObject *mal_vm_as_object(MalValue v) {
+    return mal_value_is_heap_type(v, MAL_HEAP_OBJECT) ? (MalObject *) mal_value_to_heap(v) : nullptr;
+}
+
+/**
+ * Monomorphic shape-slot read of `object[key]` via the site's inline cache. Returns
+ * true and writes *out on a hit (cached shape + key resolving to a real data slot);
+ * false on any miss (different shape, computed-key mismatch, or a value-slot/accessor
+ * entry), which the caller resolves via the out-of-line IC op (poly / mega / refill). A
+ * data-slot hit reads `slots[slot]` and runs NO user code, so a region access omits the
+ * throwCheck on the hit path. Mirrors the shape/key/slot gate in mal_vm_op_load_property_ic;
+ * a zero-initialized cache has shape==null so it misses.
+ */
+static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key, const MalInlineCache *ic,
+                                          MalValue *out) {
+    if (object->shape == ic->shape && key == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
+        *out = object->slots[ic->slot];
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Monomorphic shape-slot overwrite of an existing writable data slot (barriered).
+ * Returns true when applied; false (miss / value-slot / accessor / read-only / fresh
+ * key) leaves the store to the general [[Set]]. A successful overwrite runs no user
+ * code. The gc write-barrier (old value) + card (old->young) are required for the
+ * generational collector and fold out when it is off.
+ */
+static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalValue value,
+                                           const MalInlineCache *ic) {
+    if (object->shape == ic->shape && key == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
+        mal_gc_write_barrier(object->slots[ic->slot]);
+        object->slots[ic->slot] = value;
+        mal_gc_card(&object->header, value);
+        return true;
+    }
+    return false;
+}
+
 static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
     if (mal_value_is_int32(key_value) && mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
         i32 index = mal_value_to_i32(key_value);
@@ -358,16 +405,13 @@ static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, 
         }
     }
     // Inline the monomorphic object-shape hit so a repeat `o.k` read is a shape +
-    // key compare and a slot load in the caller, not an out-of-line call. This
-    // replicates exactly the shape/key/slot gate at the top of
-    // mal_vm_op_load_property_ic (a data-slot hit is just `slots[slot]`); the
-    // value-slot (watched-intrinsic) and miss cases still defer to it, which also
-    // refills the cache. A zero-initialized cache has shape==NULL so it misses.
-    if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
-        const MalObject *object = (const MalObject *) mal_value_to_heap(object_value);
-        if (object->shape == ic->shape && key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
-            return object->slots[ic->slot];
-        }
+    // key compare and a slot load in the caller, not an out-of-line call. The
+    // value-slot (watched-intrinsic) and miss cases defer to mal_vm_op_load_property_ic,
+    // which also refills the cache.
+    MalObject *object = mal_vm_as_object(object_value);
+    MalValue out;
+    if (object != nullptr && mal_vm_object_try_load(object, key_value, ic, &out)) {
+        return out;
     }
     // Everything past the monomorphic hit (polymorphic overflow, megamorphic stub
     // probe, and the miss/refill) lives in mal_vm_op_load_property_ic, out of line:
@@ -401,19 +445,12 @@ static inline void mal_vm_array_fast_store(MalVm *vm, MalValue object_value, Mal
         }
     }
     // Inline the monomorphic object-shape hit (mirrors the top of
-    // mal_vm_op_store_property_ic): a repeat `o.k = v` overwrite of an existing
-    // default (writable) data slot is a barriered slot store in the caller, not an
-    // out-of-line call. The gc write-barrier (old value) and card (old->young)
-    // are required for the generational collector; `mal_gc_card` is a no-op when
-    // it is off. Everything else (miss, value-slot, accessor, fresh key) defers.
-    if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
-        MalObject *object = (MalObject *) mal_value_to_heap(object_value);
-        if (object->shape == ic->shape && key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
-            mal_gc_write_barrier(object->slots[ic->slot]);
-            object->slots[ic->slot] = value;
-            mal_gc_card(&object->header, value);
-            return;
-        }
+    // mal_vm_op_store_property_ic): a repeat `o.k = v` overwrite of an existing default
+    // (writable) data slot is a barriered slot store in the caller. Everything else
+    // (miss, value-slot, accessor, fresh key) defers.
+    MalObject *object = mal_vm_as_object(object_value);
+    if (object != nullptr && mal_vm_object_try_store(object, key_value, value, ic)) {
+        return;
     }
     // Polymorphic overflow + miss/refill live out of line in mal_vm_op_store_property_ic
     // (see the load fast path for why the inline path stays monomorphic-only).

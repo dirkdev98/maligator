@@ -682,7 +682,7 @@ function emitResumableFunction(
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
 	const isAsyncGenerator = fn.isAsync && fn.isGenerator;
 
-	const reps: Array<RegisterRep> = new Array(fn.registerCount).fill("boxed");
+	const reps: Array<RegisterRep> = new Array<RegisterRep>(fn.registerCount).fill("boxed");
 
 	// Buffer layout: registers | coroutine self-reference. A `with` scope lives on
 	// the env chain (gen->frame.env, saved/restored across suspend), not the buffer.
@@ -1005,19 +1005,22 @@ function emitBody(
 		return best?.handlerIp;
 	};
 
-	// Dense-array guarded regions (Phase 1). Group consecutive index-form (number-rep
-	// key) LOAD/STORE_PROPERTY on the same object register within a straight-line window
-	// into one hoisted array guard (`mal_vm_as_array`): the first access declares the
-	// guard local, the rest reuse it, and each access omits the per-access throwCheck on a
-	// dense hit (see mal_vm_array_try_load/try_store). A run is bounded by a label (control
-	// could enter without passing the guard), a redefinition of the guarded register, or a
-	// control-flow terminator — the guarded pointer must be established before, and stay
-	// valid through, every access it covers. The pointer survives calls/allocations inside
-	// the run (array heap type is invariant, the collector is non-moving, the register
-	// keeps the array rooted), so a run need not be safepoint-free.
-	const arrayGuard = new Map<number, { name: string; declare: boolean }>();
+	// Guarded property-access regions. Group consecutive LOAD/STORE_PROPERTY on the same
+	// object register within a straight-line window under one hoisted receiver guard: an
+	// index-form (number-rep key) run guards a dense array (`mal_vm_as_array`), a string-key
+	// run guards a plain object (`mal_vm_as_object`). The first access declares the guard
+	// local, the rest reuse it, and each access omits the per-access throwCheck on a fast hit
+	// (a dense element / a monomorphic data-slot access runs no user code). A run is
+	// homogeneous in kind (array vs object need different guards) and bounded by a label
+	// (control could enter without passing the guard), a redefinition of the guarded
+	// register, or a control-flow terminator. The guard survives calls/allocations inside
+	// the run (the receiver's heap type is invariant, the collector is non-moving, the
+	// register keeps it rooted) and each access re-reads shape/elements fresh, so a run need
+	// not be safepoint-free.
+	const regionGuard = new Map<number, { name: string; declare: boolean }>();
 	{
 		let runReg: number | null = null;
+		let runKind: "array" | "object" | null = null;
 		let runName = "";
 		let guardId = 0;
 		for (let ip = 0; ip < fn.instructions.length; ip++) {
@@ -1025,17 +1028,16 @@ function emitBody(
 			if (jumpTargets.has(ip)) {
 				runReg = null;
 			}
-			const isIndexAccess =
-				(instr.opcode === "LOAD_PROPERTY" || instr.opcode === "STORE_PROPERTY") &&
-				reps[instr.key] === "number";
-			if (isIndexAccess) {
+			if (instr.opcode === "LOAD_PROPERTY" || instr.opcode === "STORE_PROPERTY") {
+				const kind = reps[instr.key] === "number" ? "array" : "object";
 				const obj = instr.object;
-				if (runReg === obj) {
-					arrayGuard.set(ip, { name: runName, declare: false });
+				if (runReg === obj && runKind === kind) {
+					regionGuard.set(ip, { name: runName, declare: false });
 				} else {
-					runName = `__arr_${guardId++}`;
-					arrayGuard.set(ip, { name: runName, declare: true });
+					runName = `__reg${guardId++}`;
+					regionGuard.set(ip, { name: runName, declare: true });
 					runReg = obj;
+					runKind = kind;
 				}
 			}
 			// End the run when the guarded register is redefined (the cached pointer no
@@ -1086,7 +1088,7 @@ function emitBody(
 			gcUnlink,
 			thisSlot,
 			coro,
-			arrayGuard.get(ip),
+			regionGuard.get(ip),
 		);
 		if (emitted === null) {
 			return null;
@@ -1115,7 +1117,7 @@ function emitInstruction(
 	gcUnlink: string,
 	thisSlot: number,
 	coro: CoroutineContext | null,
-	arrayRegion: { name: string; declare: boolean } | undefined,
+	region: { name: string; declare: boolean } | undefined,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -1327,29 +1329,24 @@ function emitInstruction(
 			];
 		}
 		case "LOAD_PROPERTY": {
-			// A per-site monomorphic inline cache: a static persists across calls and
-			// (zero-initialized) starts empty. On a repeat access to the same shape it
-			// is a direct slot read with no key conversion or shape search.
-			// mal_vm_array_fast_load inlines a dense-array index read ahead of the IC
-			// (a non-array / non-index key falls straight through at no real cost).
-			// A number-rep index takes the guarded-region form: one hoisted array guard
-			// (mal_vm_as_array) covers the run, and a dense hit runs no user code so it
-			// skips the throwCheck; a miss/non-array falls back to the general _index op
-			// (which keeps the throwCheck). The string-key case boxes to drive the shape IC.
+			// Per-site monomorphic inline cache (a static, zero-initialized → starts empty).
+			// A hit is a direct slot/element read with no shape search or key conversion, and
+			// runs no user code — so the guarded-region form drops the throwCheck on the hit
+			// path (only the general-IC miss fallback keeps it). One hoisted receiver guard
+			// covers the run: an array (mal_vm_as_array) for a number-rep index, a plain
+			// object (mal_vm_as_object) for a string key. The hit writes a short-lived temp,
+			// not &r${dst}: address-taking the long-lived destination register would pin it to
+			// the stack across the whole function; the temp promotes back to a register once
+			// the try_* helper inlines.
+			const reg = region ?? { name: `__reg_s${ip}`, declare: true };
 			if (reps[instruction.key] === "number") {
-				const region = arrayRegion ?? { name: `__arr_s${ip}`, declare: true };
-				// The dense hit writes a short-lived temp, not &r${dst}: address-taking the
-				// long-lived destination register would pin it to the stack across the whole
-				// function; the temp is promoted back to a register once try_load inlines.
 				return [
-					...(region.declare
-						? [
-								`MalArrayObject *${region.name} = mal_vm_as_array(${boxed(instruction.object)});`,
-							]
+					...(reg.declare
+						? [`MalArrayObject *${reg.name} = mal_vm_as_array(${boxed(instruction.object)});`]
 						: []),
 					`static MalInlineCache __ic_${ip};`,
 					`MalValue __v_${ip};`,
-					`if (${region.name} && mal_vm_array_try_load(${region.name}, ${num(instruction.key)}, &__v_${ip})) {`,
+					`if (${reg.name} && mal_vm_array_try_load(${reg.name}, ${num(instruction.key)}, &__v_${ip})) {`,
 					`  r${instruction.dst} = __v_${ip};`,
 					`} else {`,
 					`  r${instruction.dst} = mal_vm_array_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__ic_${ip});`,
@@ -1358,35 +1355,45 @@ function emitInstruction(
 				];
 			}
 			return [
+				...(reg.declare
+					? [`MalObject *${reg.name} = mal_vm_as_object(${boxed(instruction.object)});`]
+					: []),
 				`static MalInlineCache __ic_${ip};`,
-				`r${instruction.dst} = mal_vm_array_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
-				throwCheck,
+				`MalValue __v_${ip};`,
+				`if (${reg.name} && mal_vm_object_try_load(${reg.name}, ${boxed(instruction.key)}, &__ic_${ip}, &__v_${ip})) {`,
+				`  r${instruction.dst} = __v_${ip};`,
+				`} else {`,
+				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
+				`  ${throwCheck}`,
+				`}`,
 			];
 		}
 		case "STORE_PROPERTY": {
-			// mal_vm_array_fast_store inlines a dense-array index store ahead of the IC;
-			// a number-rep index takes the guarded-region form (see LOAD_PROPERTY): a dense
-			// store (overwrite, or a protector-guarded fresh index) runs no user code and
-			// skips the throwCheck; anything else falls back to the general _index store.
+			// See LOAD_PROPERTY: a monomorphic data-slot/dense-element hit runs no user code,
+			// so the region form drops the throwCheck on the hit; the general-[[Set]] miss
+			// fallback keeps it. Array (number-rep index) vs plain object (string key).
+			const reg = region ?? { name: `__reg_s${ip}`, declare: true };
 			if (reps[instruction.key] === "number") {
-				const region = arrayRegion ?? { name: `__arr_s${ip}`, declare: true };
 				return [
-					...(region.declare
-						? [
-								`MalArrayObject *${region.name} = mal_vm_as_array(${boxed(instruction.object)});`,
-							]
+					...(reg.declare
+						? [`MalArrayObject *${reg.name} = mal_vm_as_array(${boxed(instruction.object)});`]
 						: []),
 					`static MalInlineCache __ic_${ip};`,
-					`if (!(${region.name} && mal_vm_array_try_store(${region.name}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+					`if (!(${reg.name} && mal_vm_array_try_store(${reg.name}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
 					`  mal_vm_array_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
 					`  ${throwCheck}`,
 					`}`,
 				];
 			}
 			return [
+				...(reg.declare
+					? [`MalObject *${reg.name} = mal_vm_as_object(${boxed(instruction.object)});`]
+					: []),
 				`static MalInlineCache __ic_${ip};`,
-				`mal_vm_array_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
-				throwCheck,
+				`if (!(${reg.name} && mal_vm_object_try_store(${reg.name}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, &__ic_${ip}))) {`,
+				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
+				`  ${throwCheck}`,
+				`}`,
 			];
 		}
 		case "TO_PROPERTY_KEY":
