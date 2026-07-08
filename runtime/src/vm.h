@@ -870,6 +870,14 @@ typedef struct MalVm {
      */
     struct MalInlineCache **interp_ic;
 
+    /**
+     * Megamorphic property-load stub cache: a shared, direct-mapped (shape, key) ->
+     * slot table (MAL_STUB_CACHE_SIZE entries) probed when a site's inline N-way
+     * cache has gone megamorphic. Allocated at VM init, zero-initialized (empty).
+     * See MalStubEntry / mal_stub_hash in vm_ops.h.
+     */
+    struct MalStubEntry *load_stub;
+
     MalHeap heap;
     MalValue *globals;
     MalValue intrinsics[MAL_INTRINSIC_COUNT];

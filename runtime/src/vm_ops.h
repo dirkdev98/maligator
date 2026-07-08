@@ -305,6 +305,28 @@ typedef struct MalInlineCache {
 // there is no object slot). A real shape slot is a small inline index.
 #define MAL_IC_VALUE_SLOT UINT32_MAX
 
+// Megamorphic stub cache: a shared, per-VM, direct-mapped (shape, key) -> data slot
+// table consulted when a per-site cache has gone megamorphic (saw more shapes than
+// the inline N-way holds). It scales to any number of shapes and bounds the
+// megamorphic worst case — an O(1) probe instead of a per-access shape search that
+// also thrashes the single site cache. Load-only for now (megamorphic stores are
+// rarer and still resolve out-of-line). Direct-mapped: a collision just re-resolves
+// and overwrites, so a stale/absent entry is only a perf miss, never wrong.
+#define MAL_STUB_CACHE_BITS 10
+#define MAL_STUB_CACHE_SIZE (1u << MAL_STUB_CACHE_BITS)
+
+typedef struct MalStubEntry {
+    const struct MalShape *shape;
+    MalValue key;
+    u32 slot;
+} MalStubEntry;
+
+/** Direct-mapped index for (shape, key) in the stub cache. */
+static inline u32 mal_stub_hash(const struct MalShape *shape, MalValue key) {
+    u64 h = ((u64) (uptr) shape >> 4) * 2654435761u ^ ((u64) key * 1099511628211u >> 13);
+    return (u32) h & (MAL_STUB_CACHE_SIZE - 1u);
+}
+
 /**
  * Inline-cached property load/store for the compiled backend. The fast path
  * applies only to a plain object (MAL_HEAP_OBJECT) whose own property is a
@@ -326,21 +348,12 @@ void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_
  * / mal_vm_get_property_with_receiver, so the interpreter and native backends agree.
  */
 static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
-    if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
-        MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(object_value);
-        if (mal_value_is_int32(key_value)) {
-            i32 index = mal_value_to_i32(key_value);
-            MalValue out;
-            if (index >= 0 && mal_array_object_dense_get(array, (u32) index, &out)) {
-                return out;
-            }
-        } else if (mal_value_is_string(key_value)
-                   && mal_array_key_is_length((MalKey){.kind = MAL_KEY_STRING, .value = key_value})) {
-            // `arr.length` is an exotic own field, not a shape slot and not a
-            // MAL_HEAP_OBJECT hit — so the object IC below never covers it and a
-            // `for (i < arr.length)` loop would otherwise pay a full generic lookup
-            // every iteration. Read the length field directly (u32 -> Number).
-            return mal_ops_number_value((f64) array->length);
+    if (mal_value_is_int32(key_value) && mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
+        i32 index = mal_value_to_i32(key_value);
+        MalValue out;
+        if (index >= 0 &&
+            mal_array_object_dense_get((const MalArrayObject *) mal_value_to_heap(object_value), (u32) index, &out)) {
+            return out;
         }
     }
     // Inline the monomorphic object-shape hit so a repeat `o.k` read is a shape +
@@ -354,17 +367,11 @@ static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, 
         if (object->shape == ic->shape && key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
             return object->slots[ic->slot];
         }
-        // Polymorphic overflow: a previously-seen alternate shape for the same key.
-        // Kept inline so a 2-4-shape site stays here rather than the out-of-line
-        // re-resolve below (the dominant cost of the monomorphic-only cache).
-        if (ic->poly_count > 0 && key_value == ic->key) {
-            for (u8 i = 0; i < ic->poly_count; i++) {
-                if (object->shape == ic->poly[i].shape) {
-                    return object->slots[ic->poly[i].slot];
-                }
-            }
-        }
     }
+    // Everything past the monomorphic hit (polymorphic overflow, megamorphic stub
+    // probe, and the miss/refill) lives in mal_vm_op_load_property_ic, out of line:
+    // keeping this inline fast path tiny stops the poly/mega logic from bloating
+    // every compiled property site (which regressed the monomorphic hot path).
     return mal_vm_op_load_property_ic(vm, object_value, key_value, ic);
 }
 
@@ -406,19 +413,9 @@ static inline void mal_vm_array_fast_store(MalVm *vm, MalValue object_value, Mal
             mal_gc_card(&object->header, value);
             return;
         }
-        // Polymorphic overflow (default-writable data slots only — see the refill in
-        // mal_vm_op_store_property_ic): a repeat overwrite on an alternate shape.
-        if (ic->poly_count > 0 && key_value == ic->key) {
-            for (u8 i = 0; i < ic->poly_count; i++) {
-                if (object->shape == ic->poly[i].shape) {
-                    mal_gc_write_barrier(object->slots[ic->poly[i].slot]);
-                    object->slots[ic->poly[i].slot] = value;
-                    mal_gc_card(&object->header, value);
-                    return;
-                }
-            }
-        }
     }
+    // Polymorphic overflow + miss/refill live out of line in mal_vm_op_store_property_ic
+    // (see the load fast path for why the inline path stays monomorphic-only).
     mal_vm_op_store_property_ic(vm, object_value, key_value, value, strict, ic);
 }
 

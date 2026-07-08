@@ -170,6 +170,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->live_definition.bigint_constants = bigints;
 
     vm->interp_ic = calloc((usize) vm->function_capacity, sizeof(struct MalInlineCache *));
+    vm->load_stub = calloc((usize) MAL_STUB_CACHE_SIZE, sizeof(MalStubEntry));
     vm->global_capacity = definition->global_count > 0 ? definition->global_count : 1;
     vm->globals = malloc(sizeof(MalValue) * (usize) vm->global_capacity);
     // Fixed-capacity, never reallocated (see MAL_MAX_CALL_FRAMES): keeps every
@@ -354,6 +355,7 @@ void mal_vm_free(MalVm *vm) {
         }
         free(vm->interp_ic);
     }
+    free(vm->load_stub);
     // Only heap-resident (generator/async) leftover frames own their buffers;
     // value-stack frames live in vm->value_stack, freed below.
     for (i32 i = 0; i < vm->frame_count; i++) {

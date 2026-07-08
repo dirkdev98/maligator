@@ -2541,6 +2541,14 @@ static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue ke
 }
 
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
+    // Array `.length`: an exotic own field (not a shape slot, and arrays are not
+    // MAL_HEAP_OBJECT), so read it directly instead of the generic keyed resolver.
+    // Out of line rather than in the inline fast path: keeping the length check off
+    // every compiled property site avoids bloating the monomorphic object hot path.
+    if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT) && mal_value_is_string(key_value)
+        && mal_array_key_is_length((MalKey){.kind = MAL_KEY_STRING, .value = key_value})) {
+        return mal_ops_number_value((f64) ((const MalArrayObject *) mal_value_to_heap(object_value))->length);
+    }
     if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
         MalObject *object = (MalObject *) mal_value_to_heap(object_value);
         // Hit needs the same shape AND the same key: a computed-key site (o[k])
@@ -2569,6 +2577,14 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 }
             }
         }
+        // Megamorphic: consult the shared stub cache before a shape search (serves
+        // the interpreter and any compiled access whose inline stub probe was cold).
+        if (ic->megamorphic) {
+            const MalStubEntry *e = &vm->load_stub[mal_stub_hash(object->shape, key_value)];
+            if (e->shape == object->shape && e->key == key_value) {
+                return object->slots[e->slot];
+            }
+        }
         // Miss on a plain object. Convert the key ONCE (running any user
         // toString/valueOf exactly once) and reuse it for both the cache fill and
         // the slow path — never fall through to a re-converting generic op.
@@ -2591,6 +2607,12 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 if (mal_value_is_heap(key_value)
                     && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
                     mal_ic_record(ic, object->shape, key_value, prop->slot);
+                    // Warm the shared stub cache so a megamorphic site's next access to
+                    // this (shape,key) is an O(1) probe rather than another shape search.
+                    MalStubEntry *stub = &vm->load_stub[mal_stub_hash(object->shape, key_value)];
+                    stub->shape = object->shape;
+                    stub->key = key_value;
+                    stub->slot = prop->slot;
                 }
                 return object->slots[prop->slot];
             }
