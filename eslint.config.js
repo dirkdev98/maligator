@@ -8,4 +8,9 @@ export default defineConfig(
 	{
 		ignores: ["tests/local", "bench"],
 	},
+	{
+		// CLI/dev scripts print to stdout/stderr by design — console is their output.
+		files: ["scripts/**"],
+		rules: { "no-console": "off" },
+	},
 );

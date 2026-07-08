@@ -112,11 +112,10 @@ in. `OFF buys` = what dropping the feature gets you.
       position tables). Distinct from the size-focused profile below (which trades perf).
       Dev/default builds stay unstripped. `-dead_strip` measured ~1% here (eager
       intrinsic install roots almost everything + Rust is already LTO'd), so it's not
-      the lever — compile-time feature gates are.
-      - [ ] **Enable LTO (`MAL_LTO`) in this mode** — whole-program inline of the emitted
-            TU's calls into the runtime archives; the single biggest speed lever measured
-            (language ratio 2.05× → 1.77×). Cost is link time, so it stays opt-in / prod-only,
-            not on dev builds.
+      the lever — compile-time feature gates are. - [ ] **Enable LTO (`MAL_LTO`) in this mode** — whole-program inline of the emitted
+      TU's calls into the runtime archives; the single biggest speed lever measured
+      (language ratio 2.05× → 1.77×). Cost is link time, so it stays opt-in / prod-only,
+      not on dev builds.
 - [ ] Size-focused build profile (`-Os`/LTO/`--gc-sections`/musl-static/strip);
       measure per-feature bytes; feed the size gate above.
 

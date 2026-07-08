@@ -1342,7 +1342,9 @@ function emitInstruction(
 			if (reps[instruction.key] === "number") {
 				return [
 					...(reg.declare
-						? [`MalArrayObject *${reg.name} = mal_vm_as_array(${boxed(instruction.object)});`]
+						? [
+								`MalArrayObject *${reg.name} = mal_vm_as_array(${boxed(instruction.object)});`,
+							]
 						: []),
 					`static MalInlineCache __ic_${ip};`,
 					`MalValue __v_${ip};`,
@@ -1376,7 +1378,9 @@ function emitInstruction(
 			if (reps[instruction.key] === "number") {
 				return [
 					...(reg.declare
-						? [`MalArrayObject *${reg.name} = mal_vm_as_array(${boxed(instruction.object)});`]
+						? [
+								`MalArrayObject *${reg.name} = mal_vm_as_array(${boxed(instruction.object)});`,
+							]
 						: []),
 					`static MalInlineCache __ic_${ip};`,
 					`if (!(${reg.name} && mal_vm_array_try_store(${reg.name}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
