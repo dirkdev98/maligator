@@ -302,12 +302,21 @@ void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_
  * / mal_vm_get_property_with_receiver, so the interpreter and native backends agree.
  */
 static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
-    if (mal_value_is_int32(key_value) && mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
-        i32 index = mal_value_to_i32(key_value);
-        MalValue out;
-        if (index >= 0 &&
-            mal_array_object_dense_get((const MalArrayObject *) mal_value_to_heap(object_value), (u32) index, &out)) {
-            return out;
+    if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
+        MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(object_value);
+        if (mal_value_is_int32(key_value)) {
+            i32 index = mal_value_to_i32(key_value);
+            MalValue out;
+            if (index >= 0 && mal_array_object_dense_get(array, (u32) index, &out)) {
+                return out;
+            }
+        } else if (mal_value_is_string(key_value)
+                   && mal_array_key_is_length((MalKey){.kind = MAL_KEY_STRING, .value = key_value})) {
+            // `arr.length` is an exotic own field, not a shape slot and not a
+            // MAL_HEAP_OBJECT hit — so the object IC below never covers it and a
+            // `for (i < arr.length)` loop would otherwise pay a full generic lookup
+            // every iteration. Read the length field directly (u32 -> Number).
+            return mal_ops_number_value((f64) array->length);
         }
     }
     // Inline the monomorphic object-shape hit so a repeat `o.k` read is a shape +
