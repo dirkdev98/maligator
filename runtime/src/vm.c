@@ -1400,15 +1400,20 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
         // Native-backend entry: invoke directly (no interpreter frame). It returns
         // the module completion value; a throw surfaces via vm->completion. Calls
         // it makes to interpreted functions push their own frames, so the value
-        // stack needs no entry activation. The entry takes no args and runs with
-        // `this` undefined and no creation environment (matching the frame below).
+        // stack needs no entry activation. The entry takes no args and no creation
+        // environment; `this` is OrdinaryCallBindThis'd like the interpreter frame
+        // (mal_vm_callee_this in push_function_frame) — globalThis for a sloppy
+        // script, undefined for a strict script / module — so LOAD_THIS in the entry
+        // (e.g. a `this` inside a `with`, which lowers to LOAD_THIS not GLOBAL_THIS)
+        // sees the same value as the interpreter.
+        MalValue entry_this = mal_vm_callee_this(vm, entry, mal_value_new_undefined());
         vm->completion =
             (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
         if (!mal_vm_enter_compiled(vm, entry_index)) {
             script_completion = vm->completion;
         } else {
             MalValue value = entry->compiled(
-                vm, mal_value_new_undefined(), nullptr, 0, mal_value_new_undefined(), nullptr,
+                vm, entry_this, nullptr, 0, mal_value_new_undefined(), nullptr,
                 mal_value_new_undefined(), nullptr
             );
             mal_vm_leave_compiled(vm);
