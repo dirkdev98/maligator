@@ -49,7 +49,7 @@ static inline f64 mal_number_remainder(f64 a, f64 b) {
  */
 static inline bool mal_ops_is_number(MalValue value) {
     return ((value & MASK_EXPONENT_BITS) != MASK_EXPONENT_BITS) || // genuine f64 (incl ±0.0)
-        ((value & MAL_VALUE_INT32) == MAL_VALUE_INT32) ||          // tagged int32
+        ((value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_INT32) ||          // tagged int32
         value == MAL_VALUE_NAN ||
         value == MAL_VALUE_NEGATIVE_ZERO ||
         value == MAL_VALUE_POSITIVE_INFINITY ||
@@ -60,7 +60,7 @@ static inline f64 mal_ops_number_as_f64(MalValue value) {
     if ((value & MASK_EXPONENT_BITS) != MASK_EXPONENT_BITS) {
         return *(f64 *) &value; // genuine double, incl ±0.0
     }
-    if ((value & MAL_VALUE_INT32) == MAL_VALUE_INT32) {
+    if ((value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_INT32) {
         return (f64) (i32) (u32) (value & MASK_INT32); // tagged int32
     }
     if (value == MAL_VALUE_POSITIVE_INFINITY) {

@@ -19,7 +19,7 @@ bool mal_value_is_bound_function_object(MalValue value) {
 }
 
 bool mal_value_is_array_object(MalValue value) {
-    return mal_value_is_heap_type(value, MAL_HEAP_ARRAY_OBJECT);
+    return (value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_ARRAY;
 }
 
 bool mal_value_is_module_namespace_object(MalValue value) {
@@ -281,13 +281,17 @@ bool mal_value_this_boolean_value(MalValue value, MalValue *out) {
 }
 
 bool mal_value_is_callable(MalValue value) {
-    // A proxy is callable iff its (non-revoked) target chain ends at a callable.
+    // Script/native/bound functions all carry the CALLABLE class — one compare,
+    // no dereference.
+    if ((value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_CALLABLE) {
+        return true;
+    }
+    // A proxy (an OBJECT-class value) is callable iff its (non-revoked) target
+    // chain ends at a callable.
     if (mal_value_is_proxy_object(value)) {
         return mal_proxy_target_is_callable(value);
     }
-    return mal_value_is_function_object(value) ||
-        mal_value_is_native_function_object(value) ||
-        mal_value_is_bound_function_object(value);
+    return false;
 }
 
 MalString *mal_value_to_string(MalValue value) {

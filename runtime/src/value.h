@@ -43,10 +43,11 @@ typedef struct MalEventTargetObject MalEventTargetObject;
  * Pointers are at most 48-bits. So we have 11 NaN bits, 48 pointer bits (or other values) + the first mantissa bit reserved.
  * Which leaves the sign bit and the 2nd, 3rd and 4th mantissa bits to encode data.
  *
- * We use the sign bit to determine if we have an inline value for various static things like null, undefined, true,
- * false which are then encoded on the lower bits.
- *
- * The dynamic values use the 3 left over mantissa bits to differentiate between the different dynamic uses.
+ * Those 3 mantissa bits (50..48) are a class selector distinguishing the boxed
+ * kinds — static, int32, and the six heap classes (string/symbol/bigint/object/
+ * array/callable); see the MAL_VALUE_* tags below. The static class (selector
+ * 000) discriminates its members (null/undefined/true/false/±0/±Inf/empty/hole)
+ * in the low payload bits. The sign bit is currently free for future use.
  */
 typedef u64 MalValue;
 
@@ -81,14 +82,28 @@ typedef u64 MalValue;
 #define MAL_VALUE_ARRAY_HOLE (MAL_VALUE_STATIC | 0x0A)
 
 
-// Inline dynamic values. We have room for 7 items (3 bits).
-// Some other use cases might be to inline symbols, packaged strings, or differentiate types to pointer values.
-#define MAL_VALUE_DYNAMIC (MAL_VALUE_STATIC | MASK_SIGN_BIT)
-#define MAL_VALUE_INT32 (MAL_VALUE_STATIC | 0x0001000000000000)
-// We have a decision at some point to go from 48-bit pointers to 32-bit pointers.
-// This would mean that we have another 16-bits available, and could potentially store the MalHeapHeader inline.
-// The downside is that we constrain ourselves to a 4GB heap
-#define MAL_VALUE_PTR (MAL_VALUE_STATIC | 0x0002000000000000)
+// Boxed (non-double) values carry a 3-bit class selector in mantissa bits 50..48
+// (bit 51 is the reserved quiet-NaN bit; bits 62..52 are the all-ones exponent;
+// the sign bit 63 stays free). Static sub-values (null/undefined/bool/±0/±Inf/
+// empty/hole) keep selector 000 and discriminate in the low bits.
+//
+// The classes are ORDERED so that masking off sign + payload yields a monotonic
+// value: the two non-pointer classes (static, int32) sit lowest, then the heap
+// classes, with the object family (object, array, callable) at the top. So
+// `is_heap` and `is_object` are single unsigned range compares and every other
+// type predicate an exact compare — none dereferences the pointer. The 48-bit
+// payload lives below the selector (MAKS_PTR), so mal_value_to_heap masks it off
+// unchanged. A value's class is fixed at allocation and never changes.
+#define MAL_VALUE_INT32 (MAL_VALUE_STATIC | 0x0001000000000000)    // tag 001
+#define MAL_VALUE_STRING (MAL_VALUE_STATIC | 0x0002000000000000)   // tag 010
+#define MAL_VALUE_SYMBOL (MAL_VALUE_STATIC | 0x0003000000000000)   // tag 011
+#define MAL_VALUE_BIGINT (MAL_VALUE_STATIC | 0x0004000000000000)   // tag 100
+#define MAL_VALUE_OBJECT (MAL_VALUE_STATIC | 0x0005000000000000)   // tag 101
+#define MAL_VALUE_ARRAY (MAL_VALUE_STATIC | 0x0006000000000000)    // tag 110
+#define MAL_VALUE_CALLABLE (MAL_VALUE_STATIC | 0x0007000000000000) // tag 111
+// Sign-excluded class field (exponent + quiet bit + 3-bit selector). Masking a
+// value with this and comparing against the constants above classifies it.
+#define MAL_VALUE_CLASS_MASK 0x7FFF000000000000
 
 
 /**
@@ -230,17 +245,44 @@ static inline i32 mal_value_to_i32(MalValue value) {
 
 /** Check if the value is an i32. */
 static inline bool mal_value_is_int32(MalValue value) {
-    return (value & MAL_VALUE_INT32) == MAL_VALUE_INT32;
+    return (value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_INT32;
 }
 
-/** Box a heap allocation. */
+/**
+ * The boxed-value class selector for a heap type. Strings, symbols, bigints,
+ * arrays and the three callable types get their own class; every other object
+ * type (ordinary + all exotics + never-boxed internal cells) is the generic
+ * OBJECT class, which is what keeps `is_object` a range compare. Consulted once
+ * per box in mal_value_from_heap; the class then rides in the value with no
+ * further header reads on the type-predicate hot paths.
+ */
+static inline MalValue mal_tag_for_heap_type(MalHeapType type) {
+    switch (type) {
+        case MAL_HEAP_STRING:
+            return MAL_VALUE_STRING;
+        case MAL_HEAP_SYMBOL:
+            return MAL_VALUE_SYMBOL;
+        case MAL_HEAP_BIGINT:
+            return MAL_VALUE_BIGINT;
+        case MAL_HEAP_ARRAY_OBJECT:
+            return MAL_VALUE_ARRAY;
+        case MAL_HEAP_FUNCTION_OBJECT:
+        case MAL_HEAP_NATIVE_FUNCTION_OBJECT:
+        case MAL_HEAP_BOUND_FUNCTION_OBJECT:
+            return MAL_VALUE_CALLABLE;
+        default:
+            return MAL_VALUE_OBJECT;
+    }
+}
+
+/** Box a heap allocation, tagging it with its type's class. */
 static inline MalValue mal_value_from_heap(MalHeapHeader *heap) {
-    return MAL_VALUE_PTR | ((uptr) heap & MAKS_PTR);
+    return mal_tag_for_heap_type(heap->type) | ((uptr) heap & MAKS_PTR);
 }
 
-/** Check if the value is heap-backed. */
+/** Check if the value is heap-backed (string/symbol/bigint or any object). */
 static inline bool mal_value_is_heap(MalValue value) {
-    return (value & MAL_VALUE_PTR) == MAL_VALUE_PTR;
+    return (value & MAL_VALUE_CLASS_MASK) >= MAL_VALUE_STRING;
 }
 
 /** Unbox a heap allocation. */
@@ -265,54 +307,27 @@ static inline bool mal_value_is_heap_type(MalValue value, MalHeapType type) {
 
 /** Check if the value is a string. */
 static inline bool mal_value_is_string(MalValue value) {
-    return mal_value_is_heap_type(value, MAL_HEAP_STRING);
+    return (value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_STRING;
 }
 
 /** Check if the value is a symbol. */
 static inline bool mal_value_is_symbol(MalValue value) {
-    return mal_value_is_heap_type(value, MAL_HEAP_SYMBOL);
+    return (value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_SYMBOL;
 }
 
 /** Check if the value is a BigInt. */
 static inline bool mal_value_is_bigint(MalValue value) {
-    return mal_value_is_heap_type(value, MAL_HEAP_BIGINT);
+    return (value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_BIGINT;
 }
 
-/** Check if the value is an object. */
+/**
+ * Check if the value is an object (ordinary or any exotic, including arrays and
+ * callables — the whole object family sits at the top of the class ordering).
+ * Strings/symbols/bigints are heap-backed but not objects, so they fall below
+ * the OBJECT threshold.
+ */
 static inline bool mal_value_is_object(MalValue value) {
-    if (!mal_value_is_heap(value)) {
-        return false;
-    }
-    MalHeapType type = mal_value_heap_type(value);
-    return type == MAL_HEAP_OBJECT ||
-        type == MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT ||
-        type == MAL_HEAP_FUNCTION_OBJECT ||
-        type == MAL_HEAP_NATIVE_FUNCTION_OBJECT ||
-        type == MAL_HEAP_BOUND_FUNCTION_OBJECT ||
-        type == MAL_HEAP_ARRAY_OBJECT ||
-        type == MAL_HEAP_MAP_OBJECT ||
-        type == MAL_HEAP_SET_OBJECT ||
-        type == MAL_HEAP_ITERATOR_OBJECT ||
-        type == MAL_HEAP_GENERATOR_OBJECT ||
-        type == MAL_HEAP_ARRAY_BUFFER_OBJECT ||
-        type == MAL_HEAP_TYPED_ARRAY_OBJECT ||
-        type == MAL_HEAP_DATA_VIEW_OBJECT ||
-        type == MAL_HEAP_PROMISE_OBJECT ||
-        type == MAL_HEAP_ITERATOR_HELPER_OBJECT ||
-        type == MAL_HEAP_MODULE_NAMESPACE_OBJECT ||
-        type == MAL_HEAP_PROXY_OBJECT ||
-        type == MAL_HEAP_DATE_OBJECT ||
-        type == MAL_HEAP_INTL_OBJECT ||
-        type == MAL_HEAP_REGEXP_OBJECT ||
-        type == MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT ||
-        type == MAL_HEAP_WEAK_REF_OBJECT ||
-        type == MAL_HEAP_FINALIZATION_REGISTRY_OBJECT ||
-        type == MAL_HEAP_RESPONSE_OBJECT ||
-        type == MAL_HEAP_REQUEST_OBJECT ||
-        type == MAL_HEAP_HEADERS_OBJECT ||
-        type == MAL_HEAP_URL_OBJECT ||
-        type == MAL_HEAP_URL_SEARCH_PARAMS_OBJECT ||
-        type == MAL_HEAP_EVENT_TARGET_OBJECT;
+    return (value & MAL_VALUE_CLASS_MASK) >= MAL_VALUE_OBJECT;
 }
 
 /**
@@ -550,7 +565,10 @@ MalIteratorHelperObject *mal_value_to_iterator_helper_object(MalValue value);
  * per hot-loop property access (the emitted TU links -O2 with no LTO).
  */
 static inline MalValue mal_value_from_string(MalString *string) {
-    return mal_value_from_heap((MalHeapHeader *) string);
+    // Hardcode the STRING class (type-exact by construction) rather than reading
+    // string->header.type, so a baked constant-string address still folds to an
+    // immediate in the emitted backend.
+    return MAL_VALUE_STRING | ((uptr) string & MAKS_PTR);
 }
 
 /**
@@ -563,7 +581,9 @@ MalValue mal_value_from_symbol(MalSymbol *symbol);
  * emits it for a BigInt literal key/value).
  */
 static inline MalValue mal_value_from_bigint(MalBigInt *bigint) {
-    return mal_value_from_heap((MalHeapHeader *) bigint);
+    // Hardcode the BIGINT class (see mal_value_from_string): baked bigint
+    // constants fold to an immediate.
+    return MAL_VALUE_BIGINT | ((uptr) bigint & MAKS_PTR);
 }
 
 /**
