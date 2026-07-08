@@ -9,6 +9,9 @@
 #define MAL_TABLE_MAX_LOAD_NUMERATOR 3
 #define MAL_TABLE_MAX_LOAD_DENOMINATOR 4
 
+// Empty hash slot sentinel (slots hold indices into `entries`, or this).
+#define MAL_TABLE_EMPTY (-1)
+
 typedef struct MalTableEntry {
     // The key's value only; the equality domain (MalKeyKind) is derived on read
     // via mal_key_kind_of, so an entry needs no separate 4-byte kind field.
@@ -18,15 +21,38 @@ typedef struct MalTableEntry {
     bool live;
 } MalTableEntry;
 
+/**
+ * Insertion-ordered open-addressed table. `entries` holds the entries inline in
+ * insertion order (append-only; a delete tombstones in place via `live`), and
+ * `slots` is the open-addressed hash — each slot is an INDEX into `entries` (or
+ * MAL_TABLE_EMPTY). Entry handles and iterators are therefore entry INDICES, not
+ * pointers, so they survive a realloc of `entries` on growth; only mal_table_compact
+ * renumbers, and (like the former per-entry-pointer scheme) it must not run while a
+ * handle/iterator is outstanding — which is why an iterated table (Map/Set) never
+ * compacts. This replaces the previous representation (an array of pointers to
+ * individually malloc'd entries plus a parallel order array): one contiguous
+ * allocation, no per-entry malloc, and 4-byte slot indices instead of 8-byte
+ * pointers.
+ */
 typedef struct MalTable {
     MalTableMode mode;
-    usize size;
-    usize tombstone_count;
-    usize slot_capacity;
-    usize order_capacity;
-    MalTableEntry **slots;
-    MalTableEntry **order;
+    u32 size;            // live entries
+    u32 tombstone_count; // dead entries still occupying an `entries` cell
+    u32 slot_capacity;   // hash array length (power of two)
+    u32 entry_count;     // used `entries` cells (live + tombstones); the append cursor
+    u32 entry_capacity;  // allocated `entries` cells
+    i32 *slots;
+    MalTableEntry *entries;
 } MalTable;
+
+// Entry handles are 1-based indices boxed as void* (0/NULL means "no entry").
+static inline void *mal_table_handle(u32 index) {
+    return (void *) (uptr) (index + 1);
+}
+
+static inline u32 mal_table_handle_index(const void *handle) {
+    return (u32) ((uptr) handle - 1);
+}
 
 static u64 mal_table_hash_mix(u64 value) {
     value ^= value >> 30;
@@ -63,34 +89,41 @@ static bool mal_table_value_equals(MalValue left, MalValue right) {
     return false;
 }
 
-static usize mal_table_find_slot(MalTableEntry **slots, usize capacity, MalValue key) {
-    usize index = mal_table_hash_value(key) & (capacity - 1);
+// The hash slot for `key`: either the slot holding a live entry equal to `key`,
+// or the first empty slot on its probe chain (slots only ever reference live
+// entries — a delete rebuilds the chains — so probing stops at the first empty).
+static usize mal_table_find_slot(const MalTable *table, MalValue key) {
+    usize mask = table->slot_capacity - 1;
+    usize index = mal_table_hash_value(key) & mask;
 
-    while (slots[index] != nullptr) {
-        if (slots[index]->live && mal_table_value_equals(slots[index]->key, key)) {
+    while (table->slots[index] != MAL_TABLE_EMPTY) {
+        MalTableEntry *entry = &table->entries[table->slots[index]];
+        if (entry->live && mal_table_value_equals(entry->key, key)) {
             break;
         }
 
-        index = (index + 1) & (capacity - 1);
+        index = (index + 1) & mask;
     }
 
     return index;
 }
 
-static void mal_table_insert_slot(MalTableEntry **slots, usize capacity, MalTableEntry *entry) {
-    usize index = mal_table_find_slot(slots, capacity, entry->key);
-    slots[index] = entry;
-}
+static void mal_table_rehash(MalTable *table, u32 capacity) {
+    i32 *slots = malloc(capacity * sizeof(i32));
+    for (u32 i = 0; i < capacity; i++) {
+        slots[i] = MAL_TABLE_EMPTY;
+    }
 
-static void mal_table_rehash(MalTable *table, usize capacity) {
-    MalTableEntry **slots = calloc(capacity, sizeof(MalTableEntry *));
-
-    for (usize i = 0; i < table->order_capacity; i++) {
-        MalTableEntry *entry = table->order[i];
-
-        if (entry != nullptr && entry->live) {
-            mal_table_insert_slot(slots, capacity, entry);
+    usize mask = capacity - 1;
+    for (u32 e = 0; e < table->entry_count; e++) {
+        if (!table->entries[e].live) {
+            continue;
         }
+        usize index = mal_table_hash_value(table->entries[e].key) & mask;
+        while (slots[index] != MAL_TABLE_EMPTY) {
+            index = (index + 1) & mask;
+        }
+        slots[index] = (i32) e;
     }
 
     free(table->slots);
@@ -108,21 +141,15 @@ static void mal_table_grow_slots_if_needed(MalTable *table) {
     mal_table_rehash(table, table->slot_capacity * 2);
 }
 
-static void mal_table_grow_order_if_needed(MalTable *table) {
-    usize used_size = table->size + table->tombstone_count;
-
-    if (used_size < table->order_capacity) {
+// Grows `entries` when the append cursor reaches capacity. The realloc may move
+// the buffer, but handles/iterators are indices, so they stay valid.
+static void mal_table_grow_entries_if_needed(MalTable *table) {
+    if (table->entry_count < table->entry_capacity) {
         return;
     }
 
-    usize capacity = table->order_capacity * 2;
-    table->order = realloc(table->order, sizeof(MalTableEntry *) * capacity);
-
-    for (usize i = table->order_capacity; i < capacity; i++) {
-        table->order[i] = nullptr;
-    }
-
-    table->order_capacity = capacity;
+    table->entry_capacity *= 2;
+    table->entries = realloc(table->entries, sizeof(MalTableEntry) * table->entry_capacity);
 }
 
 MalTable *mal_table_new(MalTableMode mode) {
@@ -132,24 +159,26 @@ MalTable *mal_table_new(MalTableMode mode) {
     table->size = 0;
     table->tombstone_count = 0;
     table->slot_capacity = MAL_TABLE_MIN_CAPACITY;
-    table->order_capacity = MAL_TABLE_MIN_CAPACITY;
-    table->slots = calloc(table->slot_capacity, sizeof(MalTableEntry *));
-    table->order = calloc(table->order_capacity, sizeof(MalTableEntry *));
+    table->entry_count = 0;
+    table->entry_capacity = MAL_TABLE_MIN_CAPACITY;
+    table->slots = malloc(table->slot_capacity * sizeof(i32));
+    for (u32 i = 0; i < table->slot_capacity; i++) {
+        table->slots[i] = MAL_TABLE_EMPTY;
+    }
+    table->entries = malloc(table->entry_capacity * sizeof(MalTableEntry));
 
     return table;
 }
 
 void mal_table_free(MalTable *table) {
-    for (usize i = 0; i < table->order_capacity; i++) {
-        if (table->order[i] != nullptr) {
-            free(table->order[i]->data);
-        }
-
-        free(table->order[i]);
+    // Owned descriptor data is held by every occupied cell (live or tombstoned)
+    // until compact/free, so release all of them.
+    for (u32 e = 0; e < table->entry_count; e++) {
+        free(table->entries[e].data);
     }
 
     free(table->slots);
-    free(table->order);
+    free(table->entries);
     free(table);
 }
 
@@ -162,47 +191,49 @@ usize mal_table_size(const MalTable *table) {
 }
 
 MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
-    usize index = mal_table_find_slot(table->slots, table->slot_capacity, key.value);
-    MalTableEntry *entry = table->slots[index];
+    usize index = mal_table_find_slot(table, key.value);
+    i32 entry = table->slots[index];
 
-    if (entry == nullptr) {
+    if (entry == MAL_TABLE_EMPTY) {
         return (MalTableLookup) {.present = false, .entry = nullptr};
     }
 
-    return (MalTableLookup) {.present = true, .entry = entry};
+    return (MalTableLookup) {.present = true, .entry = mal_table_handle((u32) entry)};
 }
 
 void *mal_table_upsert_entry(MalTable *table, MalKey key) {
-    MalTableLookup lookup = mal_table_lookup(table, key);
-
-    if (lookup.present) {
-        return lookup.entry;
+    usize index = mal_table_find_slot(table, key.value);
+    if (table->slots[index] != MAL_TABLE_EMPTY) {
+        return mal_table_handle((u32) table->slots[index]);
     }
 
+    // Grow first (both may reallocate / rehash), then re-find the now-valid slot.
+    mal_table_grow_entries_if_needed(table);
     mal_table_grow_slots_if_needed(table);
-    mal_table_grow_order_if_needed(table);
+    index = mal_table_find_slot(table, key.value);
 
-    MalTableEntry *entry = malloc(sizeof(MalTableEntry));
+    u32 entry_index = table->entry_count++;
+    MalTableEntry *entry = &table->entries[entry_index];
     entry->key = key.value;
     entry->data = nullptr;
     entry->value = mal_value_new_undefined();
     entry->live = true;
 
-    table->order[table->size + table->tombstone_count] = entry;
+    table->slots[index] = (i32) entry_index;
     table->size++;
 
-    mal_table_insert_slot(table->slots, table->slot_capacity, entry);
-
-    return entry;
+    return mal_table_handle(entry_index);
 }
 
 bool mal_table_delete(MalTable *table, MalKey key) {
-    usize index = mal_table_find_slot(table->slots, table->slot_capacity, key.value);
-    MalTableEntry *entry = table->slots[index];
+    usize index = mal_table_find_slot(table, key.value);
+    i32 entry_index = table->slots[index];
 
-    if (entry == nullptr) {
+    if (entry_index == MAL_TABLE_EMPTY) {
         return false;
     }
+
+    MalTableEntry *entry = &table->entries[entry_index];
 
     // SATB obligation: a RAW table is traced via its
     // owner but mutated independently, so a key/value dropped mid-cycle must be
@@ -211,8 +242,9 @@ bool mal_table_delete(MalTable *table, MalKey key) {
     mal_gc_write_barrier(entry->key);
     mal_gc_write_barrier(entry->value);
 
+    // Tombstone the cell in place (keeps insertion order / outstanding indices
+    // valid); the sweep-out of dead cells happens in compact.
     entry->live = false;
-    table->slots[index] = nullptr;
     table->size--;
     table->tombstone_count++;
 
@@ -223,88 +255,67 @@ bool mal_table_delete(MalTable *table, MalKey key) {
 }
 
 void mal_table_clear(MalTable *table) {
-    for (usize i = 0; i < table->order_capacity; i++) {
-        MalTableEntry *entry = table->order[i];
-
-        if (entry != nullptr && entry->live) {
+    for (u32 e = 0; e < table->entry_count; e++) {
+        if (table->entries[e].live) {
             // SATB: shade each dropped key/value (see mal_table_delete).
-            mal_gc_write_barrier(entry->key);
-            mal_gc_write_barrier(entry->value);
-            entry->live = false;
+            mal_gc_write_barrier(table->entries[e].key);
+            mal_gc_write_barrier(table->entries[e].value);
+            table->entries[e].live = false;
             table->tombstone_count++;
         }
     }
 
     table->size = 0;
 
-    for (usize i = 0; i < table->slot_capacity; i++) {
-        table->slots[i] = nullptr;
+    for (u32 i = 0; i < table->slot_capacity; i++) {
+        table->slots[i] = MAL_TABLE_EMPTY;
     }
 }
 
 void mal_table_compact(MalTable *table) {
-    usize write_index = 0;
+    u32 write_index = 0;
 
-    for (usize read_index = 0; read_index < table->order_capacity; read_index++) {
-        MalTableEntry *entry = table->order[read_index];
-
-        if (entry == nullptr) {
-            continue;
-        }
+    for (u32 read_index = 0; read_index < table->entry_count; read_index++) {
+        MalTableEntry *entry = &table->entries[read_index];
 
         if (!entry->live) {
             free(entry->data);
-            free(entry);
-            table->order[read_index] = nullptr;
             continue;
         }
 
-        table->order[write_index] = entry;
+        if (write_index != read_index) {
+            table->entries[write_index] = *entry;
+        }
         write_index++;
     }
 
-    for (usize i = write_index; i < table->order_capacity; i++) {
-        table->order[i] = nullptr;
-    }
-
+    table->entry_count = write_index;
     table->tombstone_count = 0;
     mal_table_rehash(table, table->slot_capacity);
 }
 
 MalKey mal_table_entry_key(const MalTable *table, void *entry) {
-    (void) table;
-
-    return mal_key_from_value(((MalTableEntry *) entry)->key);
+    return mal_key_from_value(table->entries[mal_table_handle_index(entry)].key);
 }
 
 void *mal_table_entry_data(const MalTable *table, void *entry) {
-    (void) table;
-
-    return ((MalTableEntry *) entry)->data;
+    return table->entries[mal_table_handle_index(entry)].data;
 }
 
 void mal_table_entry_set_owned_data(MalTable *table, void *entry, void *data) {
-    (void) table;
-
-    ((MalTableEntry *) entry)->data = data;
+    table->entries[mal_table_handle_index(entry)].data = data;
 }
 
 MalValue mal_table_entry_value(const MalTable *table, void *entry) {
-    (void) table;
-
-    return ((MalTableEntry *) entry)->value;
+    return table->entries[mal_table_handle_index(entry)].value;
 }
 
 void mal_table_entry_set_value(MalTable *table, void *entry, MalValue value) {
-    (void) table;
-
-    ((MalTableEntry *) entry)->value = value;
+    table->entries[mal_table_handle_index(entry)].value = value;
 }
 
 bool mal_table_entry_is_live(const MalTable *table, const void *entry) {
-    (void) table;
-
-    return ((const MalTableEntry *) entry)->live;
+    return table->entries[mal_table_handle_index(entry)].live;
 }
 
 void mal_table_iter_init(MalTableIter *iter, MalTable *table, MalTableIterKind kind) {
@@ -314,16 +325,16 @@ void mal_table_iter_init(MalTableIter *iter, MalTable *table, MalTableIterKind k
 }
 
 bool mal_table_iter_next(MalTableIter *iter, MalKey *key_out, void **entry_out) {
-    while (iter->index < iter->table->order_capacity) {
-        MalTableEntry *entry = iter->table->order[iter->index];
-        iter->index++;
+    while (iter->index < iter->table->entry_count) {
+        u32 entry_index = (u32) iter->index++;
+        MalTableEntry *entry = &iter->table->entries[entry_index];
 
-        if (entry == nullptr || !entry->live) {
+        if (!entry->live) {
             continue;
         }
 
         *key_out = mal_key_from_value(entry->key);
-        *entry_out = entry;
+        *entry_out = mal_table_handle(entry_index);
 
         return true;
     }
