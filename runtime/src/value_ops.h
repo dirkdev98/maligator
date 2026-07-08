@@ -27,7 +27,13 @@ static inline f64 mal_number_remainder(f64 a, f64 b) {
         i64 ia = (i64) a;
         i64 ib = (i64) b;
         if ((f64) ia == a && (f64) ib == b) {
-            return ia == 0 ? a : (f64) (ia % ib);
+            if (ia == 0) {
+                return a; // ±0 dividend: the result is the dividend, keeping its sign
+            }
+            i64 r = ia % ib;
+            // A zero remainder takes the sign of the dividend (ECMAScript
+            // Number::remainder / IEEE 754); the integer 0 would otherwise be +0.
+            return r == 0 ? (ia < 0 ? -0.0 : 0.0) : (f64) r;
         }
     }
     return fmod(a, b);
