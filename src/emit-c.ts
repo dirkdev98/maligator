@@ -76,22 +76,16 @@ interface CoroutineContext {
 
 /**
  * The resume points of a coroutine — the instruction after each suspend
- * (GENERATOR_START/YIELD/AWAIT), where a resume re-enters — paired with the
- * static `with`-nesting depth there (restored into __with_count on resume). The
- * instruction pointer is advanced past the suspend before the frame is saved, so
- * the resume IP is the following instruction.
+ * (GENERATOR_START/YIELD/AWAIT), where a resume re-enters. The instruction pointer
+ * is advanced past the suspend before the frame is saved, so the resume IP is the
+ * following instruction.
  */
-function resumePointsOf(fn: VmFunction): Array<{ resumeIp: number; withDepth: number }> {
-	const points: Array<{ resumeIp: number; withDepth: number }> = [];
-	let depth = 0;
+function resumePointsOf(fn: VmFunction): Array<number> {
+	const points: Array<number> = [];
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		const opcode = fn.instructions[ip]!.opcode;
 		if (opcode === "GENERATOR_START" || opcode === "YIELD" || opcode === "AWAIT") {
-			points.push({ resumeIp: ip + 1, withDepth: depth });
-		} else if (opcode === "WITH_ENTER") {
-			depth++;
-		} else if (opcode === "WITH_EXIT" && depth > 0) {
-			depth--;
+			points.push(ip + 1);
 		}
 	}
 	return points;
@@ -416,30 +410,6 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 }
 
 /**
- * The maximum number of simultaneously-open `with` blocks in the function — the
- * running depth of WITH_ENTER over WITH_EXIT. Sizes the compiled frame's rooted
- * with-object stack. The markers are balanced (a with-object is pushed on entry
- * and popped on every exit path), so the running maximum is an exact bound.
- */
-function maxWithNesting(fn: VmFunction): number {
-	let depth = 0;
-	let max = 0;
-	for (const instruction of fn.instructions) {
-		if (instruction.opcode === "WITH_ENTER") {
-			depth++;
-			if (depth > max) {
-				max = depth;
-			}
-		} else if (instruction.opcode === "WITH_EXIT") {
-			if (depth > 0) {
-				depth--;
-			}
-		}
-	}
-	return max;
-}
-
-/**
  * Emit a compiled C function for `fn`, or null when it uses a construct the
  * backend doesn't lower yet (the caller then leaves it to the interpreter).
  */
@@ -504,30 +474,26 @@ export function emitCompiledFunction(
 	valueRegs.forEach((reg, slot) => slotOf.set(reg, slot));
 	const slotCount = valueRegs.length;
 
-	// `with` object stack: a `with (o)` block pushes `o`, and the WITH_GET/
-	// WITH_RESOLVE_BASE/WITH_SET ops inside search it (innermost first). The stack
-	// is per-activation and must be a GC root (a with-object is live across property
-	// accesses in the body), so it lives in trailing __gc_slots the collector already
-	// scans — [withBase, withBase + maxWithDepth). Depth is the max ENTER-over-EXIT
-	// nesting, statically known from the balanced markers.
-	const maxWithDepth = maxWithNesting(fn);
-	const withBase = slotCount;
-
 	// A derived constructor's `this` is uninitialized (the EMPTY sentinel) until
 	// super() binds it, and CONSTRUCT_SUPER reassigns it mid-body — so it can't be
 	// the immutable `this_value` parameter. It lives in its own rooted slot (the
 	// bound instance is live across the rest of the body), initialized from the
 	// EMPTY parameter and read through the TDZ-checked LOAD_THIS / RETURN forms.
-	const thisSlot = fn.isDerivedConstructor ? slotCount + maxWithDepth : -1;
-	const totalSlots = slotCount + maxWithDepth + (fn.isDerivedConstructor ? 1 : 0);
+	const thisSlot = fn.isDerivedConstructor ? slotCount : -1;
+	const totalSlots = slotCount + (fn.isDerivedConstructor ? 1 : 0);
 
-	// A root frame is needed to scan MalValue registers, the with-object stack, a
-	// derived constructor's `this`, and/or this activation's captured env; every
+	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
+	// so a with-function reassigns `env` and needs the root frame to keep the live
+	// with-env rooted (the with-object is live across property accesses in the body).
+	const hasWith = fn.instructions.some((i) => i.opcode === "WITH_ENTER");
+
+	// A root frame is needed to scan MalValue registers, a derived constructor's
+	// `this`, this activation's captured env, and/or a reassigned `with` env; every
 	// exit past its link must unlink it.
-	const needsRootFrame = totalSlots > 0 || capturesEnv;
+	const needsRootFrame = totalSlots > 0 || capturesEnv || hasWith;
 	const gcUnlink = needsRootFrame ? "mal_root_frame_head = __gc_frame.prev; " : "";
 
-	const body = emitBody(fn, suffix, reps, debug, gcUnlink, withBase, thisSlot, null);
+	const body = emitBody(fn, suffix, reps, debug, gcUnlink, thisSlot, null);
 	if (body === null) {
 		return null;
 	}
@@ -590,9 +556,6 @@ export function emitCompiledFunction(
 	if (totalSlots > 0) {
 		lines.push(`    MalValue __gc_slots[${totalSlots}];`);
 	}
-	if (maxWithDepth > 0) {
-		lines.push(`    i32 __with_count = 0;`);
-	}
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
 		if (slot !== undefined) {
@@ -630,11 +593,6 @@ export function emitCompiledFunction(
 	}
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
 		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
-	}
-	// The with-object region is scanned by the collector (slot_count covers it), so
-	// initialize it before publishing even though __with_count starts at 0.
-	for (let s = withBase; s < withBase + maxWithDepth; s++) {
-		lines.push(`    __gc_slots[${s}] = MAL_VALUE_UNDEFINED;`);
 	}
 	// A derived constructor's rooted `this` slot starts as the (EMPTY) parameter.
 	if (thisSlot >= 0) {
@@ -709,11 +667,10 @@ function emitResumableFunction(
 
 	const reps: Array<RegisterRep> = new Array(fn.registerCount).fill("boxed");
 
-	// Buffer layout: registers | with-object stack | coroutine self-reference.
-	const maxWithDepth = maxWithNesting(fn);
-	const withBase = fn.registerCount;
-	const selfSlot = fn.registerCount + maxWithDepth;
-	const totalSlots = fn.registerCount + maxWithDepth + 1;
+	// Buffer layout: registers | coroutine self-reference. A `with` scope lives on
+	// the env chain (gen->frame.env, saved/restored across suspend), not the buffer.
+	const selfSlot = fn.registerCount;
+	const totalSlots = fn.registerCount + 1;
 
 	const capturesEnv = fn.capturedCount > 0;
 	// The root frame spans the whole buffer and is always published, so every exit
@@ -730,7 +687,7 @@ function emitResumableFunction(
 	// thisSlot is -1: a coroutine is never a derived constructor, and `this` is read
 	// from the this_value parameter (which the resume path is invoked with from the
 	// saved frame), so no mutable this-slot is needed.
-	const body = emitBody(fn, suffix, reps, debug, gcUnlink, withBase, -1, coro);
+	const body = emitBody(fn, suffix, reps, debug, gcUnlink, -1, coro);
 	if (body === null) {
 		return null;
 	}
@@ -751,9 +708,6 @@ function emitResumableFunction(
 	lines.push(`    MalValue *__gc_slots;`);
 	lines.push(`    MalGeneratorObject *__coro = resume_state;`);
 	lines.push(`    (void) __coro;`);
-	if (maxWithDepth > 0) {
-		lines.push(`    i32 __with_count = 0;`);
-	}
 	if (isAsyncFunction) {
 		// The result promise the caller receives; created by ASYNC_START on the fresh
 		// run and returned at every exit (ignored on a resume, where it is undefined).
@@ -769,8 +723,8 @@ function emitResumableFunction(
 	);
 
 	// RESUME: restore buffer + env, publish the root frame over the buffer, dispatch
-	// to the saved resume label (restoring the static with-depth there). The sent
-	// value / resume mode were already written into the buffer by index.
+	// to the saved resume label. The sent value / resume mode were already written
+	// into the buffer by index; a `with` env is restored via resume_state->frame.env.
 	lines.push(`    if (resume_state != nullptr) {`);
 	lines.push(`        __gc_slots = resume_state->frame.registers;`);
 	lines.push(`        env = resume_state->frame.env;`);
@@ -779,9 +733,8 @@ function emitResumableFunction(
 	);
 	lines.push(`        mal_root_frame_head = &__gc_frame;`);
 	lines.push(`        switch (resume_state->frame.instruction_pointer) {`);
-	for (const { resumeIp, withDepth } of resumePoints) {
-		const setWith = maxWithDepth > 0 ? `__with_count = ${withDepth}; ` : "";
-		lines.push(`        case ${resumeIp}: ${setWith}goto L${resumeIp};`);
+	for (const resumeIp of resumePoints) {
+		lines.push(`        case ${resumeIp}: goto L${resumeIp};`);
 	}
 	// Unreachable: a saved resume IP is always one of the recorded points.
 	lines.push(`        default: break;`);
@@ -974,7 +927,6 @@ function emitBody(
 	reps: Array<RegisterRep>,
 	debug: boolean,
 	gcUnlink: string,
-	withBase: number,
 	thisSlot: number,
 	coro: CoroutineContext | null,
 ): Array<string> | null {
@@ -1047,7 +999,6 @@ function emitBody(
 			fn.strict,
 			handlerForIp(ip),
 			gcUnlink,
-			withBase,
 			thisSlot,
 			coro,
 		);
@@ -1076,7 +1027,6 @@ function emitInstruction(
 	strict: boolean,
 	handlerIp: number | undefined,
 	gcUnlink: string,
-	withBase: number,
 	thisSlot: number,
 	coro: CoroutineContext | null,
 ): Array<string> | null {
@@ -1762,33 +1712,43 @@ function emitInstruction(
 				poll, // call-return safepoint
 			];
 		}
-		case "WITH_ENTER":
-			// Validate the with-expression (nil throws), then push it onto this
-			// frame's rooted with-object stack (trailing __gc_slots).
+		case "WITH_ENTER": {
+			// Push a `with` object environment record onto the env chain (nil throws).
+			// A temp holds the new env so a throw leaves `env` at the pre-with scope for
+			// an in-function handler. Keeping the with-object on the env chain (not a
+			// frame-local stack) lets closures created in the body capture it.
+			const tmp = `with_env_${ip}`;
+			const frameUpdate = gcUnlink !== "" ? " __gc_frame.env = env;" : "";
 			return [
-				`if (!mal_vm_op_with_enter(vm, ${boxed(instruction.object)})) ${onThrow}`,
-				`__gc_slots[${withBase} + __with_count++] = ${boxed(instruction.object)};`,
+				`MalEnv *${tmp} = mal_vm_op_with_enter(vm, env, ${boxed(instruction.object)});`,
+				throwCheck,
+				`env = ${tmp};${frameUpdate}`,
 			];
-		case "WITH_EXIT":
-			return [`if (__with_count > 0) __with_count--;`];
+		}
+		case "WITH_EXIT": {
+			// Pop the with-env pushed by the matching WITH_ENTER.
+			const frameUpdate = gcUnlink !== "" ? " __gc_frame.env = env;" : "";
+			return [`env = env->parent;${frameUpdate}`];
+		}
 		case "WITH_GET":
-			// Resolve a name against the with-stack; EMPTY sentinel on a miss (the IR
-			// then falls back to the static binding). A getter / @@unscopables can throw.
+			// Resolve a name against the with-envs on the chain; EMPTY sentinel on a miss
+			// (the IR then falls back to the static binding). A getter / @@unscopables
+			// can throw.
 			return [
-				`r${instruction.dst} = mal_vm_op_with_get(vm, &__gc_slots[${withBase}], __with_count, ${instruction.nameStringIndex});`,
+				`r${instruction.dst} = mal_vm_op_with_get(vm, env, ${instruction.nameStringIndex});`,
 				throwCheck,
 			];
 		case "WITH_RESOLVE_BASE":
 			// The reference base (the with-object itself) for a read/write through it.
 			return [
-				`r${instruction.dst} = mal_vm_op_with_resolve_base(vm, &__gc_slots[${withBase}], __with_count, ${instruction.nameStringIndex});`,
+				`r${instruction.dst} = mal_vm_op_with_resolve_base(vm, env, ${instruction.nameStringIndex});`,
 				throwCheck,
 			];
 		case "WITH_SET":
-			// Assign through the with-stack; `found` (always boxed-rep) reports whether
-			// a binding matched so the IR can fall back to the static binding on a miss.
+			// Assign through the with-envs; `found` (always boxed-rep) reports whether a
+			// binding matched so the IR can fall back to the static binding on a miss.
 			return [
-				`r${instruction.found} = mal_value_new_boolean(mal_vm_op_with_set(vm, &__gc_slots[${withBase}], __with_count, ${instruction.nameStringIndex}, ${boxed(instruction.value)}));`,
+				`r${instruction.found} = mal_value_new_boolean(mal_vm_op_with_set(vm, env, ${instruction.nameStringIndex}, ${boxed(instruction.value)}));`,
 				throwCheck,
 			];
 		case "CHECK_SUPER_CLASS":

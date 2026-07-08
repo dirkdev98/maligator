@@ -345,55 +345,49 @@ static bool mal_vm_with_has_binding(MalVm *vm, MalValue object, MalKey key) {
     return true;
 }
 
-// Shared by the interpreter op and the native backend: WithBaseObject nil check.
-// Returns false (with a pending TypeError) if the with-expression is null or
-// undefined; otherwise true. The caller pushes `object` onto its own with-stack
-// (per-activation storage: the interpreter frame's, or the compiled frame's rooted
-// slots) — kept caller-side because the two backends store it differently.
-bool mal_vm_op_with_enter(MalVm *vm, MalValue object) {
+// Shared by the interpreter op and the native backend: WithBaseObject. Returns a
+// new `with` object environment record linked onto `parent` (the caller assigns it
+// to its `env`), or null with a pending TypeError if the with-expression is null or
+// undefined. Placing the with-object on the env chain (rather than a frame-local
+// stack) means a closure created in the body captures it via its creation_env.
+MalEnv *mal_vm_op_with_enter(MalVm *vm, MalEnv *parent, MalValue object) {
     if (mal_value_is_nil(object)) {
         mal_vm_throw_error(
             vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object"
         );
-        return false;
+        return nullptr;
     }
-    return true;
+    return mal_env_new_with_object(vm, parent, object);
 }
 
 void mal_op_with_enter(MalCallable *callable, MalInstruction *instruction) {
     MalValue object = callable->registers[instruction->as.with_enter.object];
-    if (!mal_vm_op_with_enter(callable->vm, object)) {
-        return;
+    MalEnv *env = mal_vm_op_with_enter(callable->vm, callable->env, object);
+    if (env != nullptr) {
+        callable->env = env;
     }
-
-    if (callable->with_count == callable->with_capacity) {
-        callable->with_capacity = callable->with_capacity == 0 ? 4 : callable->with_capacity * 2;
-        callable->with_objects =
-            realloc(callable->with_objects, sizeof(MalValue) * (usize) callable->with_capacity);
-    }
-    callable->with_objects[callable->with_count++] = object;
 }
 
 void mal_op_with_exit(MalCallable *callable, MalInstruction *instruction) {
     (void) instruction;
-    if (callable->with_count > 0) {
-        callable->with_count--;
-    }
+    // Pop the with object environment record pushed by the matching WITH_ENTER.
+    callable->env = callable->env->parent;
 }
 
 // Shared by the interpreter op and the native backend: resolve a name against the
-// with-object stack (innermost first). `with_objects[0..with_count)` is the caller's
-// per-activation stack. Returns the bound value, or the EMPTY sentinel on a miss
-// (the compiled fallback then reads the static binding). A getter / @@unscopables
-// probe can throw; callers check the completion.
-MalValue mal_vm_op_with_get(
-    MalVm *vm, const MalValue *with_objects, i32 with_count, i32 name_string_index
-) {
+// `with` object environment records on the env chain (innermost first). Returns the
+// bound value, or the EMPTY sentinel on a miss (the compiled/interpreted fallback
+// then reads the static binding). A getter / @@unscopables probe can throw; callers
+// check the completion.
+MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index) {
     MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
-        for (i32 i = with_count - 1; i >= 0; i--) {
-            MalValue object = with_objects[i];
+        for (MalEnv *e = env; e != nullptr; e = e->parent) {
+            if (e->function_index != MAL_ENV_WITH_OBJECT) {
+                continue;
+            }
+            MalValue object = e->slots[0];
             if (mal_vm_with_has_binding(vm, object, key)) {
                 MalValue value;
                 if (!mal_vm_get_property(vm, object, key, &value)) {
@@ -409,21 +403,21 @@ MalValue mal_vm_op_with_get(
 
 void mal_op_with_get(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.with_get.dst] = mal_vm_op_with_get(
-        callable->vm, callable->with_objects, callable->with_count,
-        instruction->as.with_get.name_string_index
+        callable->vm, callable->env, instruction->as.with_get.name_string_index
     );
 }
 
 // Shared: resolve the reference BASE (the with-object itself, not its value) so the
 // caller reads/writes the property through it. EMPTY sentinel on a miss.
-MalValue mal_vm_op_with_resolve_base(
-    MalVm *vm, const MalValue *with_objects, i32 with_count, i32 name_string_index
-) {
+MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_index) {
     MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
-        for (i32 i = with_count - 1; i >= 0; i--) {
-            MalValue object = with_objects[i];
+        for (MalEnv *e = env; e != nullptr; e = e->parent) {
+            if (e->function_index != MAL_ENV_WITH_OBJECT) {
+                continue;
+            }
+            MalValue object = e->slots[0];
             if (mal_vm_with_has_binding(vm, object, key)) {
                 return object;
             }
@@ -435,22 +429,22 @@ MalValue mal_vm_op_with_resolve_base(
 
 void mal_op_with_resolve_base(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.with_resolve_base.dst] = mal_vm_op_with_resolve_base(
-        callable->vm, callable->with_objects, callable->with_count,
-        instruction->as.with_resolve_base.name_string_index
+        callable->vm, callable->env, instruction->as.with_resolve_base.name_string_index
     );
 }
 
-// Shared: assign to a name found on the with-stack. Returns whether a binding was
-// found (a miss lets the caller fall back to the static binding). `with` is
-// sloppy-only, so a rejected set silently no-ops.
-bool mal_vm_op_with_set(
-    MalVm *vm, const MalValue *with_objects, i32 with_count, i32 name_string_index, MalValue value
-) {
+// Shared: assign to a name found on a with-object environment record. Returns
+// whether a binding was found (a miss lets the caller fall back to the static
+// binding). `with` is sloppy-only, so a rejected set silently no-ops.
+bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue value) {
     MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
     MalKey key;
     if (mal_vm_value_to_property_key(vm, name, &key)) {
-        for (i32 i = with_count - 1; i >= 0; i--) {
-            MalValue object = with_objects[i];
+        for (MalEnv *e = env; e != nullptr; e = e->parent) {
+            if (e->function_index != MAL_ENV_WITH_OBJECT) {
+                continue;
+            }
+            MalValue object = e->slots[0];
             if (mal_vm_with_has_binding(vm, object, key)) {
                 mal_vm_set_property(vm, object, key, value, object);
                 return true;
@@ -462,8 +456,7 @@ bool mal_vm_op_with_set(
 
 void mal_op_with_set(MalCallable *callable, MalInstruction *instruction) {
     bool found = mal_vm_op_with_set(
-        callable->vm, callable->with_objects, callable->with_count,
-        instruction->as.with_set.name_string_index,
+        callable->vm, callable->env, instruction->as.with_set.name_string_index,
         callable->registers[instruction->as.with_set.value]
     );
     callable->registers[instruction->as.with_set.found] = mal_value_new_boolean(found);

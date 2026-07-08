@@ -74,6 +74,12 @@ MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
     return env;
 }
 
+MalEnv *mal_env_new_with_object(MalVm *vm, MalEnv *parent, MalValue object) {
+    MalEnv *env = mal_env_new(vm, parent, MAL_ENV_WITH_OBJECT, 1);
+    env->slots[0] = object;
+    return env;
+}
+
 // Bytes of C stack kept in reserve below the limit: a single compiled frame (its
 // MalValue registers) plus the runtime helpers it may call before the next
 // compiled-entry check. Generous — the stack is megabytes, so reserving this much
@@ -1890,10 +1896,9 @@ MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue sco
     // GetNewTarget resolve against the calling context).
     frame->this_value = this_value;
     frame->new_target = new_target;
-    frame->with_objects = malloc(sizeof(MalValue));
-    frame->with_objects[0] = scope_object;
-    frame->with_count = 1;
-    frame->with_capacity = 1;
+    // The caller's scope object resolves free names in the eval'd code: expose it as
+    // a with object environment record on the frame's env chain (WITH_GET walks it).
+    frame->env = mal_env_new_with_object(vm, frame->env, scope_object);
 
     mal_vm_run_until_frame_count(vm, baseline);
     return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()

@@ -796,6 +796,14 @@ typedef struct MalEnv {
     MalValue slots[];
 } MalEnv;
 
+// function_index sentinel marking an object environment record: a `with` scope.
+// slots[0] holds the with-object. Distinct from any function index (>= 0) and any
+// synthetic loop-scope id (small negatives, decremented per loop), so LOAD/STORE_
+// CAPTURED never match it — only the WITH_* ops walk the chain looking for it. A
+// with scope on the env chain (rather than a frame-local stack) is what lets a
+// closure created inside `with` capture the with-object via its creation_env.
+#define MAL_ENV_WITH_OBJECT (-2147483647 - 1)
+
 /**
  * A native-backend (compiled) call frame, tracked only for stack traces. The
  * interpreter's frames live in MalVm.frames; compiled functions run on the C
@@ -1269,6 +1277,11 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded);
  * collection: the caller must have rooted `parent` and any live frame slots
  * before calling (the compiled prologue publishes its root frame first). */
 MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count);
+
+// Allocate a `with` object environment record (function_index MAL_ENV_WITH_OBJECT,
+// slots[0] = object) and link it onto `parent`. Pushed onto the env chain by
+// WITH_ENTER so closures created in the body capture it.
+MalEnv *mal_env_new_with_object(MalVm *vm, MalEnv *parent, MalValue object);
 
 /** AddToKeptObjects: pin a WeakRef target for the rest of the current turn. */
 void mal_vm_add_kept_object(MalVm *vm, MalValue value);

@@ -573,16 +573,10 @@ MalValue mal_vm_op_derived_construct_return(MalVm *vm, MalValue value, MalValue 
  * `with_get`/`with_resolve_base` return the EMPTY sentinel on a miss so the caller
  * falls back to the static binding; `with_set` returns whether a binding was found.
  */
-bool mal_vm_op_with_enter(MalVm *vm, MalValue object);
-MalValue mal_vm_op_with_get(
-    MalVm *vm, const MalValue *with_objects, i32 with_count, i32 name_string_index
-);
-MalValue mal_vm_op_with_resolve_base(
-    MalVm *vm, const MalValue *with_objects, i32 with_count, i32 name_string_index
-);
-bool mal_vm_op_with_set(
-    MalVm *vm, const MalValue *with_objects, i32 with_count, i32 name_string_index, MalValue value
-);
+MalEnv *mal_vm_op_with_enter(MalVm *vm, MalEnv *parent, MalValue object);
+MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index);
+MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_index);
+bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue value);
 
 /**
  * Resolve (creating if absent) a function's `.prototype` object — the parent of
