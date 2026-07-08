@@ -782,6 +782,12 @@ void mal_op_load_new_target(MalCallable *callable, MalInstruction *instruction) 
     callable->registers[instruction->as.load_new_target.dst] = callable->new_target;
 }
 
+void mal_op_load_callee(MalCallable *callable, MalInstruction *instruction) {
+    // The function object that pushed this frame — used to initialize a named
+    // function expression's own-name binding to the closure.
+    callable->registers[instruction->as.load_callee.dst] = callable->callee;
+}
+
 /**
  * A bound function's combined arguments aren't the region the caller marshaled
  * at `base`, so replace that region with them in place — restoring the calling

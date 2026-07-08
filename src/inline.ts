@@ -43,6 +43,7 @@ function disqualifies(instruction: IRInstruction): boolean {
 	switch (instruction.type) {
 		case "loadThis":
 		case "loadNewTarget":
+		case "loadCallee":
 		case "createArgumentsObject":
 		case "createRestArguments":
 		case "withEnter":

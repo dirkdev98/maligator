@@ -742,6 +742,15 @@ export type IRInstruction =
 			registers: [number];
 	  }
 	| {
+			// [destination]; the function object that pushed the active frame. Used
+			// to initialize a named function expression's own-name binding to the
+			// closure at entry (the interpreter reads frame->callee, compiled reads
+			// its callee parameter).
+			type: "loadCallee";
+
+			registers: [number];
+	  }
+	| {
 			// TODO(opt): there is an optimization opportunity when a store is 'immediately'
 			// followed by a load.
 			type: `store${"Local" | "Captured" | "Global"}`;
@@ -3502,6 +3511,24 @@ function compileFunctionParams(
 			block,
 			getOrCreateBindingLocation(program, fn, newTargetBinding),
 			newTargetRegister,
+		);
+	}
+
+	// A named function expression binds its own name to the closure in an immutable
+	// binding scoped to its body (CreateImmutableBinding + InitializeBinding), so
+	// the body can reference itself (recursion). Initialize that binding to the
+	// callee at entry. Only named function/generator/async EXPRESSIONS carry an
+	// immutableSelfReference binding (mapped from the function node); declarations
+	// bind their name in the parent scope and need no entry init, and shadowing by a
+	// same-named parameter simply leaves this store's location unread.
+	const selfNameBinding = fn.semanticFile.nodeToBinding.get(node);
+	if (selfNameBinding?.immutableSelfReference) {
+		const calleeRegister = nextRegisterDestination(fn);
+		block.instructions.push({ type: "loadCallee", registers: [calleeRegister] });
+		storeRegisterAtLocation(
+			block,
+			getOrCreateBindingLocation(program, fn, selfNameBinding),
+			calleeRegister,
 		);
 	}
 

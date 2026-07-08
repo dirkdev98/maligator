@@ -936,6 +936,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_LOAD_THIS:
                 mal_op_load_this(frame, &instruction);
                 break;
+            case MAL_OP_LOAD_CALLEE:
+                mal_op_load_callee(frame, &instruction);
+                break;
             case MAL_OP_LOAD_NEW_TARGET:
                 mal_op_load_new_target(frame, &instruction);
                 break;

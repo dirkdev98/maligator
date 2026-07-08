@@ -101,6 +101,7 @@ typedef enum WireOp {
     WIRE_WITH_RESOLVE_BASE,
     WIRE_SET_FUNCTION_NAME,
     WIRE_CHECK_SUPER_CLASS,
+    WIRE_LOAD_CALLEE,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -457,6 +458,10 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
         case WIRE_LOAD_NEW_TARGET:
             o->opcode = MAL_OP_LOAD_NEW_TARGET;
             o->as.load_new_target.dst = rd_i32(r);
+            return;
+        case WIRE_LOAD_CALLEE:
+            o->opcode = MAL_OP_LOAD_CALLEE;
+            o->as.load_callee.dst = rd_i32(r);
             return;
         case WIRE_CALL:
             o->opcode = MAL_OP_CALL;

@@ -228,6 +228,10 @@ export type VmInstruction =
 			dst: number;
 	  }
 	| {
+			opcode: "LOAD_CALLEE";
+			dst: number;
+	  }
+	| {
 			opcode: "CALL";
 			dst: number;
 			callee: number;
@@ -872,6 +876,11 @@ function lowerInstructionToVmInstruction(
 		case "loadNewTarget":
 			return {
 				opcode: "LOAD_NEW_TARGET",
+				dst: instruction.registers[0],
+			};
+		case "loadCallee":
+			return {
+				opcode: "LOAD_CALLEE",
 				dst: instruction.registers[0],
 			};
 		case "call":

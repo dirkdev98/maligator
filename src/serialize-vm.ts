@@ -107,6 +107,7 @@ export const WIRE_OPCODES = [
 	"WITH_RESOLVE_BASE",
 	"SET_FUNCTION_NAME",
 	"CHECK_SUPER_CLASS",
+	"LOAD_CALLEE",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -549,6 +550,7 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 		case "CREATE_ARGUMENTS_OBJECT":
 		case "LOAD_THIS":
 		case "LOAD_NEW_TARGET":
+		case "LOAD_CALLEE":
 		case "CATCH":
 		case "CREATE_PRIVATE_NAME":
 			w.i32(i.dst);
@@ -1002,6 +1004,8 @@ function readInstruction(r: Reader): VmInstruction {
 		case "LOAD_THIS":
 			return { opcode, dst: r.i32() };
 		case "LOAD_NEW_TARGET":
+			return { opcode, dst: r.i32() };
+		case "LOAD_CALLEE":
 			return { opcode, dst: r.i32() };
 		case "CATCH":
 			return { opcode, dst: r.i32() };

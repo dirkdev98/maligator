@@ -1260,6 +1260,11 @@ function emitInstruction(
 				: [`r${instruction.dst} = this_value;`];
 		case "LOAD_NEW_TARGET":
 			return [`r${instruction.dst} = new_target;`];
+		case "LOAD_CALLEE":
+			// The invoked closure — used to initialize a named function expression's
+			// own-name binding. Only emitted in the entry prologue, so `callee` is the
+			// fresh-call parameter (a coroutine resume skips the prologue).
+			return [`r${instruction.dst} = callee;`];
 		case "LOAD_CAPTURED":
 			return [
 				`r${instruction.dst} = mal_vm_load_captured(env, ${instruction.ownerFunctionIndex}, ${instruction.index});`,

@@ -512,6 +512,8 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_LOAD_THIS, .as.load_this = { .dst = ${instruction.dst} } }`;
 		case "LOAD_NEW_TARGET":
 			return `{ .opcode = MAL_OP_LOAD_NEW_TARGET, .as.load_new_target = { .dst = ${instruction.dst} } }`;
+		case "LOAD_CALLEE":
+			return `{ .opcode = MAL_OP_LOAD_CALLEE, .as.load_callee = { .dst = ${instruction.dst} } }`;
 		case "CALL":
 			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .argument_count = ${instruction.argumentCount}, .arguments = ${emitCallArguments(instruction.arguments)} } }`;
 		case "CONSTRUCT":

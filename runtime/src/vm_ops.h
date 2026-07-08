@@ -171,6 +171,8 @@ void mal_op_load_this(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_load_new_target(MalCallable *callable, MalInstruction *instruction);
 
+void mal_op_load_callee(MalCallable *callable, MalInstruction *instruction);
+
 void mal_op_call(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_call_spread(MalCallable *callable, MalInstruction *instruction);
