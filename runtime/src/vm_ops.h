@@ -246,12 +246,28 @@ MalValue mal_vm_op_load_property(MalVm *vm, MalValue object_value, MalValue key_
 
 void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict);
 
+// Extra polymorphic shapes cached inline for one fixed-key object-property site
+// (beyond the monomorphic primary) before it is treated as megamorphic. 3 extra +
+// the primary = a 4-way site, matching the common "handful of shapes" case.
+#define MAL_IC_POLY_EXTRA 3
+
+// One (shape -> data slot) entry in a site's polymorphic overflow. Inline in
+// MalInlineCache (no heap allocation), so a zero-initialized cache is simply an
+// empty monomorphic site and there is nothing to free on teardown.
+typedef struct MalICPolyEntry {
+    const struct MalShape *shape;
+    u32 slot;
+} MalICPolyEntry;
+
 /**
- * Monomorphic inline cache for a single property-access site: the shape last seen
- * there and the slot the property occupied in it. A shape is immutable and never
- * freed, so on a later access whose object has the same shape the slot is still
- * valid — the property read/write is then a direct slot access with no key
- * conversion or shape search. Zero-initialized (shape == nullptr) means empty.
+ * Inline cache for a single property-access site. The primary entry (shape/slot,
+ * or a protector-gated special entry) is the monomorphic fast path; a fixed-key
+ * object site that sees more than one shape accumulates the alternates in the
+ * inline polymorphic overflow (`poly`), checked right after the primary so a
+ * 2-4-shape site stays on the inline fast path instead of an out-of-line
+ * re-resolve. A shape is immutable and never freed, so a cached (shape -> slot) is
+ * valid for the life of the site. Zero-initialized (shape == nullptr,
+ * poly_count == 0) means empty.
  */
 typedef struct MalInlineCache {
     const struct MalShape *shape;
@@ -275,6 +291,14 @@ typedef struct MalInlineCache {
     // pointer is stable (never freed/reused — no ABA). NULL for non-value entries.
     const struct MalObject *obj;
     u8 prim_kind;
+    // Polymorphic overflow: plain-object data-slot alternates for `key` beyond the
+    // primary. `poly_count == 0` is a monomorphic site. `megamorphic` marks a site
+    // that saw more than MAL_IC_POLY_EXTRA+1 shapes; it stops accumulating (a future
+    // megamorphic stub cache serves those). Only valid for a MAL_HEAP_OBJECT
+    // receiver whose access key equals `key`.
+    u8 poly_count;
+    bool megamorphic;
+    MalICPolyEntry poly[MAL_IC_POLY_EXTRA];
 } MalInlineCache;
 
 // `slot` sentinel marking a protector-gated value entry (`value` holds the result,
@@ -330,6 +354,16 @@ static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, 
         if (object->shape == ic->shape && key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
             return object->slots[ic->slot];
         }
+        // Polymorphic overflow: a previously-seen alternate shape for the same key.
+        // Kept inline so a 2-4-shape site stays here rather than the out-of-line
+        // re-resolve below (the dominant cost of the monomorphic-only cache).
+        if (ic->poly_count > 0 && key_value == ic->key) {
+            for (u8 i = 0; i < ic->poly_count; i++) {
+                if (object->shape == ic->poly[i].shape) {
+                    return object->slots[ic->poly[i].slot];
+                }
+            }
+        }
     }
     return mal_vm_op_load_property_ic(vm, object_value, key_value, ic);
 }
@@ -371,6 +405,18 @@ static inline void mal_vm_array_fast_store(MalVm *vm, MalValue object_value, Mal
             object->slots[ic->slot] = value;
             mal_gc_card(&object->header, value);
             return;
+        }
+        // Polymorphic overflow (default-writable data slots only — see the refill in
+        // mal_vm_op_store_property_ic): a repeat overwrite on an alternate shape.
+        if (ic->poly_count > 0 && key_value == ic->key) {
+            for (u8 i = 0; i < ic->poly_count; i++) {
+                if (object->shape == ic->poly[i].shape) {
+                    mal_gc_write_barrier(object->slots[ic->poly[i].slot]);
+                    object->slots[ic->poly[i].slot] = value;
+                    mal_gc_card(&object->header, value);
+                    return;
+                }
+            }
         }
     }
     mal_vm_op_store_property_ic(vm, object_value, key_value, value, strict, ic);

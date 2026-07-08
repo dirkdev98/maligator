@@ -2507,6 +2507,39 @@ static MalIntrinsic mal_primitive_method_proto_slot(u8 kind) {
     }
 }
 
+// Record a resolved plain-object data slot (shape -> slot for `key`) in the site
+// cache. The primary (shape/slot) stays the first entry; a fixed-key site that
+// sees another shape accumulates it into the polymorphic overflow, up to
+// MAL_IC_POLY_EXTRA, after which the site is marked megamorphic and stops growing.
+// A key change (computed-key site) or a site currently holding a protector-gated
+// special entry (prim-method / watched-value) restarts monomorphic for this slot.
+static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue key, u32 slot) {
+    if (key != ic->key || ic->shape == nullptr || ic->slot == MAL_IC_VALUE_SLOT || ic->prim_kind != 0) {
+        ic->shape = shape;
+        ic->key = key;
+        ic->slot = slot;
+        ic->prim_kind = 0;
+        ic->poly_count = 0;
+        ic->megamorphic = false;
+        return;
+    }
+    if (shape == ic->shape || ic->megamorphic) {
+        return;
+    }
+    for (u8 i = 0; i < ic->poly_count; i++) {
+        if (ic->poly[i].shape == shape) {
+            return;
+        }
+    }
+    if (ic->poly_count < MAL_IC_POLY_EXTRA) {
+        ic->poly[ic->poly_count].shape = shape;
+        ic->poly[ic->poly_count].slot = slot;
+        ic->poly_count++;
+    } else {
+        ic->megamorphic = true;
+    }
+}
+
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
     if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
         MalObject *object = (MalObject *) mal_value_to_heap(object_value);
@@ -2527,6 +2560,15 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 return object->slots[ic->slot]; // same layout + key: slot still valid
             }
         }
+        // Polymorphic overflow: a previously-seen alternate shape for the same key
+        // (matches the inline fast path in mal_vm_array_fast_load).
+        if (ic->poly_count > 0 && key_value == ic->key) {
+            for (u8 i = 0; i < ic->poly_count; i++) {
+                if (object->shape == ic->poly[i].shape) {
+                    return object->slots[ic->poly[i].slot];
+                }
+            }
+        }
         // Miss on a plain object. Convert the key ONCE (running any user
         // toString/valueOf exactly once) and reuse it for both the cache fill and
         // the slow path — never fall through to a re-converting generic op.
@@ -2544,13 +2586,11 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 // same-address key would false-hit), and ic->key is not a GC root.
                 // A non-heap key here is ToPropertyKey of a number (e.g. o[1.1] →
                 // "1.1"); key_value is still the number, so it must NOT be derefed —
-                // such keys are simply left uncached.
+                // such keys are simply left uncached. Accumulates alternate shapes
+                // (polymorphic sites) rather than evicting the previous shape.
                 if (mal_value_is_heap(key_value)
                     && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
-                    ic->shape = object->shape;
-                    ic->key = key_value;
-                    ic->slot = prop->slot;
-                    ic->prim_kind = 0; // this is now an object-shape entry
+                    mal_ic_record(ic, object->shape, key_value, prop->slot);
                 }
                 return object->slots[prop->slot];
             }
@@ -2664,6 +2704,18 @@ void mal_vm_op_store_property_ic(
             mal_gc_card(&object->header, value); // old object -> young value
             return;
         }
+        // Polymorphic overflow: an alternate shape for the same key. Entries are only
+        // added for default-writable data slots (below), so this overwrite is sound.
+        if (ic->poly_count > 0 && key_value == ic->key) {
+            for (u8 i = 0; i < ic->poly_count; i++) {
+                if (object->shape == ic->poly[i].shape) {
+                    mal_gc_write_barrier(object->slots[ic->poly[i].slot]);
+                    object->slots[ic->poly[i].slot] = value;
+                    mal_gc_card(&object->header, value);
+                    return;
+                }
+            }
+        }
         // Convert the key ONCE (running any user toString/valueOf once) and reuse
         // it for the cache fill and the slow path — never re-convert via the
         // generic op (that would fire the key's side effect a second time).
@@ -2679,11 +2731,10 @@ void mal_vm_op_store_property_ic(
                 const MalShapeProp *prop = &object->shape->props[idx];
                 // Cache only a heap immortal key (see the load path's ABA note); a
                 // non-heap key (ToPropertyKey of a number) must not be derefed.
+                // Accumulates alternate shapes (polymorphic sites) like the load path.
                 if (mal_value_is_heap(key_value)
                     && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
-                    ic->shape = object->shape;
-                    ic->key = key_value;
-                    ic->slot = prop->slot;
+                    mal_ic_record(ic, object->shape, key_value, prop->slot);
                 }
                 mal_gc_write_barrier(object->slots[prop->slot]);
                 object->slots[prop->slot] = value;
