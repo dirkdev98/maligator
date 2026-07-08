@@ -6,7 +6,7 @@
 /**
  * Storage policy for the UTF-16 code units referenced by a MalString.
  */
-typedef enum MalStringStorage {
+typedef enum MalStringStorage : u8 {
     MAL_STRING_STORAGE_OWNED,
     MAL_STRING_STORAGE_EXTERNAL,
 } MalStringStorage;

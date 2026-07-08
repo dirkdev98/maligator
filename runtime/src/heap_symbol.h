@@ -7,20 +7,21 @@ typedef struct MalString MalString;
 
 typedef struct MalSymbol {
     MalHeapHeader header;
-    MalString *description;
 
     /**
      * Set for symbols created through the Symbol.for registry: keyFor
      * answers with the description, and CanBeHeldWeakly excludes them.
      */
-    bool registered;
+    bool registered : 1;
 
     /**
      * Set for the synthetic symbols that back private class members. They key
      * own properties just like ordinary symbols but stay hidden from
      * reflection (getOwnPropertySymbols / getOwnPropertyDescriptors).
      */
-    bool is_private;
+    bool is_private : 1;
+
+    MalString *description;
 } MalSymbol;
 
 /**

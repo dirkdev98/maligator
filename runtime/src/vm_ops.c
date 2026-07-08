@@ -2527,13 +2527,13 @@ static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue ke
         return;
     }
     for (u8 i = 0; i < ic->poly_count; i++) {
-        if (ic->poly[i].shape == shape) {
+        if (ic->poly_shape[i] == shape) {
             return;
         }
     }
     if (ic->poly_count < MAL_IC_POLY_EXTRA) {
-        ic->poly[ic->poly_count].shape = shape;
-        ic->poly[ic->poly_count].slot = slot;
+        ic->poly_shape[ic->poly_count] = shape;
+        ic->poly_slot[ic->poly_count] = slot;
         ic->poly_count++;
     } else {
         ic->megamorphic = true;
@@ -2572,8 +2572,8 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         // (matches the inline fast path in mal_vm_array_fast_load).
         if (ic->poly_count > 0 && key_value == ic->key) {
             for (u8 i = 0; i < ic->poly_count; i++) {
-                if (object->shape == ic->poly[i].shape) {
-                    return object->slots[ic->poly[i].slot];
+                if (object->shape == ic->poly_shape[i]) {
+                    return object->slots[ic->poly_slot[i]];
                 }
             }
         }
@@ -2730,9 +2730,9 @@ void mal_vm_op_store_property_ic(
         // added for default-writable data slots (below), so this overwrite is sound.
         if (ic->poly_count > 0 && key_value == ic->key) {
             for (u8 i = 0; i < ic->poly_count; i++) {
-                if (object->shape == ic->poly[i].shape) {
-                    mal_gc_write_barrier(object->slots[ic->poly[i].slot]);
-                    object->slots[ic->poly[i].slot] = value;
+                if (object->shape == ic->poly_shape[i]) {
+                    mal_gc_write_barrier(object->slots[ic->poly_slot[i]]);
+                    object->slots[ic->poly_slot[i]] = value;
                     mal_gc_card(&object->header, value);
                     return;
                 }

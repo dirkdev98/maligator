@@ -6,7 +6,7 @@
 /**
  * Iteration source + result shape for a built-in iterator instance.
  */
-typedef enum MalIteratorKind {
+typedef enum MalIteratorKind : u8 {
     MAL_ITERATOR_MAP_KEYS,
     MAL_ITERATOR_MAP_VALUES,
     MAL_ITERATOR_MAP_ENTRIES,
@@ -26,7 +26,6 @@ typedef enum MalIteratorKind {
  */
 typedef struct MalIteratorObject {
     MalObject object;
-    MalIteratorKind kind;
     MalValue target;
 
     /**
@@ -34,6 +33,8 @@ typedef struct MalIteratorObject {
      * code-unit index for strings.
      */
     u64 index;
+
+    MalIteratorKind kind;
 
     /**
      * Set once iteration reports done; stays done even if the source grows

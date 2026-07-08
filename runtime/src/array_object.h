@@ -5,14 +5,6 @@
 
 typedef struct MalArrayObject {
     MalObject object;
-    u32 length;
-
-    /**
-     * length is writable by default; Object.defineProperty(arr, "length",
-     * { writable: false }) clears this, after which length-changing stores
-     * are rejected.
-     */
-    bool length_writable;
 
     /**
      * Dense element fast path. In dense mode (`elements != nullptr`), integer-index
@@ -28,8 +20,16 @@ typedef struct MalArrayObject {
      * deopt the dense fields stay null/zero forever for that array.
      */
     MalValue *elements;
+    u32 length;
     u32 capacity;    // allocated slots in `elements`
     u32 dense_count; // number of leading slots that are part of the dense region
+
+    /**
+     * length is writable by default; Object.defineProperty(arr, "length",
+     * { writable: false }) clears this, after which length-changing stores
+     * are rejected.
+     */
+    bool length_writable : 1;
 
     /**
      * Set once an array has deoptimized to table storage; it then stays table-mode
@@ -37,7 +37,7 @@ typedef struct MalArrayObject {
      * must use the table) from a fresh/lazy one (elements == null, still eligible —
      * the first contiguous index store creates the vector).
      */
-    bool dense_deopted;
+    bool dense_deopted : 1;
 } MalArrayObject;
 
 /** Whether the array uses the dense element fast path (vs. legacy table storage). */

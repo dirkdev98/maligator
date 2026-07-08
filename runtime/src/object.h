@@ -18,36 +18,40 @@
  */
 typedef struct MalObject {
     MalHeapHeader header;
-    MalShape *shape;
-    struct MalObject *prototype;
-    bool extensible;
+    /*
+     * State flags packed into one byte (:1 bitfields) that sits in the word the
+     * 3-byte header shares with them, so they cost nothing before the first
+     * 8-aligned pointer. Written rarely (mostly at init / intrinsics setup),
+     * read on the MOP path as a single masked load.
+     */
+    /** [[Extensible]]. */
+    bool extensible : 1;
     /**
      * Set only on %Array.prototype% and %Object.prototype% (at intrinsics init).
      * Lets the low-level MOP invalidate the array fast-elements protector
      * (mal_array_elements_protector) when an integer-index property is defined on,
-     * or the prototype changed of, one of those objects — without a vm handle. Free:
-     * fits the padding after `extensible`.
+     * or the prototype changed of, one of those objects — without a vm handle.
      */
-    bool fast_elements_proto;
+    bool fast_elements_proto : 1;
     /**
      * [[IsRawJSON]] marker for JSON.rawJSON results. An internal slot (not a
-     * property), so it stays invisible to getOwnPropertyNames/Symbols. Free: fits
-     * the padding after the preceding bools.
+     * property), so it stays invisible to getOwnPropertyNames/Symbols.
      */
-    bool is_raw_json;
+    bool is_raw_json : 1;
     /**
      * Immutable-prototype exotic object (e.g. %Object.prototype%): [[SetPrototypeOf]]
-     * rejects any change to a different prototype (SetImmutablePrototype). Free:
-     * fits the padding after the preceding bools.
+     * rejects any change to a different prototype (SetImmutablePrototype).
      */
-    bool immutable_prototype;
+    bool immutable_prototype : 1;
     /**
      * Set on the primitive prototypes (%String/Number/Boolean/Symbol/BigInt.prototype%)
      * and %Object.prototype% at intrinsics init. Any define/set/delete/reparent of one
      * breaks `mal_primitive_method_protector`, disabling the primitive-method inline
-     * cache (which assumes those prototypes are unmodified). Free: fits the padding.
+     * cache (which assumes those prototypes are unmodified).
      */
-    bool watched_method_proto;
+    bool watched_method_proto : 1;
+    MalShape *shape;
+    struct MalObject *prototype;
     /** Inline named-property values for the shape; null in dictionary mode. */
     MalValue *slots;
     /** Dictionary/overflow table (named + index props); null until needed. */

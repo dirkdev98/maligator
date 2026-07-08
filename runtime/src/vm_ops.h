@@ -251,28 +251,23 @@ void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_val
 // the primary = a 4-way site, matching the common "handful of shapes" case.
 #define MAL_IC_POLY_EXTRA 3
 
-// One (shape -> data slot) entry in a site's polymorphic overflow. Inline in
-// MalInlineCache (no heap allocation), so a zero-initialized cache is simply an
-// empty monomorphic site and there is nothing to free on teardown.
-typedef struct MalICPolyEntry {
-    const struct MalShape *shape;
-    u32 slot;
-} MalICPolyEntry;
-
 /**
  * Inline cache for a single property-access site. The primary entry (shape/slot,
  * or a protector-gated special entry) is the monomorphic fast path; a fixed-key
  * object site that sees more than one shape accumulates the alternates in the
- * inline polymorphic overflow (`poly`), checked right after the primary so a
- * 2-4-shape site stays on the inline fast path instead of an out-of-line
- * re-resolve. A shape is immutable and never freed, so a cached (shape -> slot) is
- * valid for the life of the site. Zero-initialized (shape == nullptr,
- * poly_count == 0) means empty.
+ * inline polymorphic overflow (`poly_shape`/`poly_slot`), checked right after the
+ * primary so a 2-4-shape site stays on the inline fast path instead of an
+ * out-of-line re-resolve. A shape is immutable and never freed, so a cached
+ * (shape -> slot) is valid for the life of the site. Zero-initialized
+ * (shape == nullptr, poly_count == 0) means empty — the overflow is inline (no
+ * heap allocation), so there is nothing to free on teardown.
+ *
+ * Fields are grouped 8-byte members first, then the u32 slots, then the byte
+ * flags, so the site carries no interior padding.
  */
 typedef struct MalInlineCache {
     const struct MalShape *shape;
     MalValue key; // the exact key value cached — a computed-key site (o[k]) varies
-    u32 slot;
     // `value` caches a resolved property value for the two protector-gated modes:
     //  - primitive-method: `prim_kind` nonzero — `value` is `key` on that primitive
     //    kind's (unmodified) prototype chain.
@@ -290,15 +285,18 @@ typedef struct MalInlineCache {
     // would false-hit on shape+key alone. Watched intrinsics are immortal, so this
     // pointer is stable (never freed/reused — no ABA). NULL for non-value entries.
     const struct MalObject *obj;
-    u8 prim_kind;
-    // Polymorphic overflow: plain-object data-slot alternates for `key` beyond the
-    // primary. `poly_count == 0` is a monomorphic site. `megamorphic` marks a site
-    // that saw more than MAL_IC_POLY_EXTRA+1 shapes; it stops accumulating (a future
-    // megamorphic stub cache serves those). Only valid for a MAL_HEAP_OBJECT
+    // Polymorphic overflow, stored SoA (parallel `poly_shape[i]` / `poly_slot[i]`):
+    // plain-object data-slot alternates for `key` beyond the primary. `poly_count`
+    // entries are live. `poly_count == 0` is a monomorphic site; `megamorphic` marks
+    // a site that saw more than MAL_IC_POLY_EXTRA+1 shapes and stops accumulating (a
+    // future megamorphic stub cache serves those). Only valid for a MAL_HEAP_OBJECT
     // receiver whose access key equals `key`.
+    const struct MalShape *poly_shape[MAL_IC_POLY_EXTRA];
+    u32 slot;
+    u32 poly_slot[MAL_IC_POLY_EXTRA];
+    u8 prim_kind;
     u8 poly_count;
     bool megamorphic;
-    MalICPolyEntry poly[MAL_IC_POLY_EXTRA];
 } MalInlineCache;
 
 // `slot` sentinel marking a protector-gated value entry (`value` holds the result,

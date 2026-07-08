@@ -8,7 +8,7 @@
 /**
  * Generator lifecycle (subset of the spec [[GeneratorState]] values).
  */
-typedef enum MalGeneratorState {
+typedef enum MalGeneratorState : u8 {
     MAL_GENERATOR_SUSPENDED_START,
     MAL_GENERATOR_SUSPENDED_YIELD,
     MAL_GENERATOR_EXECUTING,
@@ -34,7 +34,6 @@ typedef enum MalGeneratorResumeMode {
  */
 typedef struct MalGeneratorObject {
     MalObject object;
-    MalGeneratorState state;
     MalVmFrame frame;
 
     /**
@@ -57,7 +56,6 @@ typedef struct MalGeneratorObject {
      * async_reject are the result promise's resolving functions, invoked when
      * the body returns or throws. Such an object is never exposed to user code.
      */
-    bool is_async;
     MalValue async_resolve;
     MalValue async_reject;
 
@@ -72,16 +70,21 @@ typedef struct MalGeneratorObject {
     struct MalGeneratorObject *awaited_by;
 
     /**
-     * Async generators (`async function*`) set is_async_generator (and is_async,
-     * so await works). Each next/throw/return call enqueues a request here and
-     * gets a promise back; the driver (builtin_async_generator.c) resolves the
-     * front request when the body yields/returns/throws. agen_running guards
-     * against re-entrant driving while the body is mid-step (e.g. awaiting).
+     * Async generators (`async function*`) enqueue their next/throw/return
+     * requests here; the driver (builtin_async_generator.c) resolves the front
+     * request when the body yields/returns/throws.
      */
-    bool is_async_generator;
-    bool agen_running;
     struct MalAsyncGeneratorRequest *agen_queue_head;
     struct MalAsyncGeneratorRequest *agen_queue_tail;
+
+    /* State + flags clustered so the enum/bools share one trailing word. */
+    MalGeneratorState state;
+    /** See async_resolve: this object is an async function's hidden state. */
+    bool is_async : 1;
+    /** `async function*`: sets is_async too, so await works. */
+    bool is_async_generator : 1;
+    /** Guards against re-entrant driving while the body is mid-step (awaiting). */
+    bool agen_running : 1;
 } MalGeneratorObject;
 
 /**

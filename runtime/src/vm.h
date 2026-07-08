@@ -1178,6 +1178,11 @@ MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace);
 typedef struct MalGeneratorObject MalGeneratorObject;
 
 typedef struct MalVmFrame {
+    /*
+     * Fields are grouped 8-byte members first, then the i32 cluster, then the
+     * lone bool, so a per-call frame carries no interior padding (it is on the
+     * interpreter's hot frame stack and embedded in every generator).
+     */
     MalVm *vm;
     /**
      * Resolved (cached) pointer into vm->live_definition.functions, used by the
@@ -1187,19 +1192,8 @@ typedef struct MalVmFrame {
      * re-resolves too, in case a splice moved the table while it was suspended).
      */
     const MalFunction *function;
-    i32 function_index;
     MalValue *registers;
     MalValue *arguments;
-    i32 argument_count;
-
-    /**
-     * For a value-stack frame, the value_stack_size to restore when this frame
-     * is torn down (also the base of its register/argument window). -1 marks a
-     * heap-resident activation (generators/async): its registers and arguments
-     * are owned heap buffers, freed on teardown rather than popped off the stack.
-     */
-    i32 stack_base;
-
     MalValue this_value;
     MalValue arguments_object;
 
@@ -1224,19 +1218,10 @@ typedef struct MalVmFrame {
     MalEnv *env;
 
     /**
-     * Construct frames replace non-object return values with this_value.
-     */
-    bool is_construct;
-
-    /**
      * The new.target for this activation: the constructor when invoked through
      * `new`/construct, undefined for an ordinary call. LOAD_NEW_TARGET reads it.
      */
     MalValue new_target;
-
-    i32 instruction_pointer;
-    i32 return_register;
-    i32 caller_frame_index;
 
     /**
      * Monotonic sequence number assigned when this frame was pushed (or a
@@ -1251,8 +1236,28 @@ typedef struct MalVmFrame {
      * enters a `with`. Freed on frame teardown.
      */
     MalValue *with_objects;
+
+    i32 function_index;
+    i32 argument_count;
+
+    /**
+     * For a value-stack frame, the value_stack_size to restore when this frame
+     * is torn down (also the base of its register/argument window). -1 marks a
+     * heap-resident activation (generators/async): its registers and arguments
+     * are owned heap buffers, freed on teardown rather than popped off the stack.
+     */
+    i32 stack_base;
+
+    i32 instruction_pointer;
+    i32 return_register;
+    i32 caller_frame_index;
     i32 with_count;
     i32 with_capacity;
+
+    /**
+     * Construct frames replace non-object return values with this_value.
+     */
+    bool is_construct;
 } MalVmFrame;
 
 typedef MalVmFrame MalCallable;

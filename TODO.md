@@ -70,6 +70,26 @@ in. `OFF buys` = what dropping the feature gets you.
   - [ ] Generational GC already opt-in; region/arena (N.11) + drop-insertion (N.12).
 - [ ] Promise/microtask + suspendable-frame mallocs → GC-owned / pooled (entangled
       with async rooting flakiness + generational GC).
+- [ ] **Struct layout / memory density.** Phase 1+2 landed (`MalHeapHeader` 12→3 via
+      `enum : u8`; `MalObject` 56→40 with flag bitfields; most heap objects dropped a
+      16-byte size class — arrays/iterators 96→64, generator 320→256, string 48→32,
+      symbol 32→16; `MalInlineCache` 96→80 SoA poly; `MalVmFrame` 144→136). Remaining:
+  - [ ] **`MalKey`: derive `kind` from the NaN-box tag, 16→8.** Ripples to
+        `MalTableEntry` (40→32, class 48→32 — one per Map/Set/dict entry),
+        `MalShapeProp` (24→16, also pack attrs+slot into one u32), and the lookup
+        structs. Needs an INDEX-vs-NUMBER + equality-domain audit; validate via the
+        full test262 gate, not deterministically.
+  - [ ] **`MalTable` entry storage** — inline open-addressed entries instead of
+        `MalTableEntry**` + a parallel `order` array + a malloc per entry. Removes an
+        allocation and a pointer-chase per Map/dictionary access. Substantial rewrite.
+  - [ ] **`MalIteratorHelperObject` (160)** — flattened union-of-variants; every
+        instance carries the zip/concat fields (`sources`/`source_methods`/
+        `zip_padding`/`zip_keys`/`zip_mode`, ~36 B) unused by map/filter/take/drop.
+        A `union` over the variant tails ~halves the common case.
+  - [ ] **`MalVm` (2888, singleton) / host structs (`MalHttpRequest` 2112)** — scan
+        only once the isolate work multiplies `MalVm` instances (one per scheduler thread).
+  - [ ] Add `static_assert(sizeof(MalObject) <= 48, …)` (+ peers) so a new field that
+        regresses a size-class drop fails the build loudly.
 - [ ] Generate ops from a single op-descriptor list (kills the ~6-file opcode path).
 - [ ] Effect-summary table for builtins (T7.3) — unlocks functional-style inlining.
 
@@ -77,7 +97,12 @@ in. `OFF buys` = what dropping the feature gets you.
 
 - [ ] Don't link ICU4X data when Intl is unused; split locales (today: 11 MB binaries).
 - [ ] Drop the bytecode overlay for always-compiled, no-bail functions (kills the
-      dead `MalInstruction` table; forces a clean overlay contract).
+      dead `MalInstruction` table; forces a clean overlay contract). While the table
+      still exists: `MalInstruction` is 40 B, forced by the three pointer-carrying
+      union arms (`create_object_shaped`/`create_template_object`/
+      `create_module_namespace`) + a 4-B `MalOpcode`. Moving those arms' pointers
+      behind index tables lets `MalOpcode` be `u8` and the union pack to ~24, shrinking
+      the baked image + icache.
 - [ ] **Production build mode** — keeps `-O2` (do NOT trade perf for size in prod) but
       strips the symbol table (post-link `strip`, or `-Wl,-x`) off by default only in
       this mode. Measured ~11% (~210 KB) off `minimal`; it drops native symbolication

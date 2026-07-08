@@ -71,7 +71,7 @@ typedef struct MalHeap {
 /**
  * Runtime heap allocation kinds that may be boxed into a MalValue.
  */
-typedef enum MalHeapType {
+typedef enum MalHeapType : u8 {
     /**
      * Primitive wrapper exotic objects (new String/Number/Boolean(...),
      * Object(primitive)) holding a [[PrimitiveData]] slot. See
@@ -244,7 +244,7 @@ typedef enum MalHeapType {
  * collects them nor traces through them as owned. The boundary is defined here
  * so the eventual GC is correct-by-construction for constants.
  */
-typedef enum MalHeapStorage {
+typedef enum MalHeapStorage : u8 {
     MAL_HEAP_STORAGE_DYNAMIC,
     MAL_HEAP_STORAGE_IMMORTAL,
 } MalHeapStorage;
@@ -265,13 +265,18 @@ typedef enum MalHeapMark {
 /**
  * Common header stored at the start of every pointer-boxed heap allocation.
  *
+ * `type` and `storage` are u8-backed enums and `mark` a u8, so the header is
+ * 3 bytes (align 1) and any embedder's first pointer follows in the same 8-byte
+ * word rather than after a 4-byte-enum-padded 12-byte header.
+ *
  * Under MAL_GC_GENERATIONAL the `dirty` byte records remembered-set membership:
  * the generational write barrier sets it (and links the cell on the remembered
  * set) when an old (survived-a-collection, sticky-BLACK) cell is written with a
  * young pointer, so the minor collector traces that cell without re-marking the
- * whole old generation. The field is gated so a non-generational build's header
- * is byte-identical to before (and `dirty` falls in existing padding regardless,
- * so even when present it does not grow the cell or shift the free-list link).
+ * whole old generation. The 4th byte it occupies falls in the padding every
+ * embedder already carries after the header (MalObject packs its flags into one
+ * byte, leaving the rest of the word slack), so `dirty` grows neither the header
+ * nor the cell and never shifts the free-list link.
  */
 typedef struct MalHeapHeader {
     MalHeapType type;
