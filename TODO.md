@@ -70,26 +70,20 @@ in. `OFF buys` = what dropping the feature gets you.
   - [ ] Generational GC already opt-in; region/arena (N.11) + drop-insertion (N.12).
 - [ ] Promise/microtask + suspendable-frame mallocs → GC-owned / pooled (entangled
       with async rooting flakiness + generational GC).
-- [ ] **Struct layout / memory density.** Phase 1+2 landed (`MalHeapHeader` 12→3 via
-      `enum : u8`; `MalObject` 56→40 with flag bitfields; most heap objects dropped a
-      16-byte size class — arrays/iterators 96→64, generator 320→256, string 48→32,
-      symbol 32→16; `MalInlineCache` 96→80 SoA poly; `MalVmFrame` 144→136). Remaining:
-  - [ ] **`MalKey`: derive `kind` from the NaN-box tag, 16→8.** Ripples to
-        `MalTableEntry` (40→32, class 48→32 — one per Map/Set/dict entry),
-        `MalShapeProp` (24→16, also pack attrs+slot into one u32), and the lookup
-        structs. Needs an INDEX-vs-NUMBER + equality-domain audit; validate via the
-        full test262 gate, not deterministically.
-  - [ ] **`MalTable` entry storage** — inline open-addressed entries instead of
-        `MalTableEntry**` + a parallel `order` array + a malloc per entry. Removes an
-        allocation and a pointer-chase per Map/dictionary access. Substantial rewrite.
-  - [ ] **`MalIteratorHelperObject` (160)** — flattened union-of-variants; every
-        instance carries the zip/concat fields (`sources`/`source_methods`/
-        `zip_padding`/`zip_keys`/`zip_mode`, ~36 B) unused by map/filter/take/drop.
-        A `union` over the variant tails ~halves the common case.
+- [x] **Struct layout / memory density.** Landed: `MalHeapHeader` 12→3 (`enum : u8`);
+      `MalObject` 56→40 (flag bitfields); most heap objects dropped a 16-byte size class
+      (arrays/iterators 96→64, generator 320→256, string 48→32, symbol 32→16);
+      `MalInlineCache` 96→80 (SoA poly); `MalVmFrame` 144→136. Boxed-value pointer tags
+      made the hot type predicates dereference-free (language ratio 2.25×→2.17×). `MalKey`
+      kind is now derived from the value tag, so `MalTableEntry` is 32 (class 48→32) and
+      `MalShapeProp` 16 (class 32→16). `MalTable` entries are inline open-addressed (no
+      per-entry malloc; index handles survive realloc). `MalIteratorHelperObject` 144→128.
+      `static_assert` size-class guards cap the wins. Remaining:
+  - [ ] **`MalInstruction` union pack (24 from 40)** — deferred with the bytecode-overlay
+        redesign (see Priority 2): needs the pointer-carrying opcode arms relocated behind
+        side-table indices (a wire-format change across emit-c / serialize-vm / vm_load).
   - [ ] **`MalVm` (2888, singleton) / host structs (`MalHttpRequest` 2112)** — scan
         only once the isolate work multiplies `MalVm` instances (one per scheduler thread).
-  - [ ] Add `static_assert(sizeof(MalObject) <= 48, …)` (+ peers) so a new field that
-        regresses a size-class drop fails the build loudly.
 - [ ] Generate ops from a single op-descriptor list (kills the ~6-file opcode path).
 - [ ] Effect-summary table for builtins (T7.3) — unlocks functional-style inlining.
 
