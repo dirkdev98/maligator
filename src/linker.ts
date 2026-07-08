@@ -18,7 +18,7 @@ import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis
  * export share one slot: this is Rollup-style scope hoisting, and live bindings
  * fall out for free (a reassignment in the exporter is observed by importers).
  *
- * See docs/decisions/04-bundler.md. ESM → CommonJS interop is also resolved
+ * ESM → CommonJS interop is also resolved
  * here: an `import` from a CJS module is recorded in `cjsImports` (not aliased)
  * for ir.ts to initialize from `require(...)`. Deferred: re-exporting from CJS
  * (`export … from "cjs"`), `export * as ns`, `export *` ambiguity de-dup, and

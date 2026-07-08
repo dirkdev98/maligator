@@ -31,7 +31,7 @@ function stripTypeAnnotations(source: string, filePath: string): string {
  * every dependency, and computes a deterministic evaluation order with cycles
  * identified.
  *
- * See docs/decisions/04-bundler.md. This phase only builds the graph; it does
+ * This phase only builds the graph; it does
  * not lower imports/exports to IR (that is a later milestone). A program with
  * no imports is simply a single-node graph, so the existing single-file path is
  * unchanged.

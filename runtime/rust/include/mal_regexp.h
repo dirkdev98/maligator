@@ -9,7 +9,7 @@
  *
  * Patterns and subjects are UTF-16 (`const uint16_t *` + length) — MalString's
  * native storage — so they cross zero-copy. All offsets are u16 code-unit
- * indices, i.e. JS string indices directly. See docs/decisions/03-regexp.md.
+ * indices, i.e. JS string indices directly.
  */
 #pragma once
 

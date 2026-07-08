@@ -129,7 +129,6 @@ const SKIPPED_SLOW_PATHS = [
 	// building the test string — before regex even runs. The regex semantics they
 	// cover (regress's \p{} data + character classes) are exercised by
 	// smaller-scale tests; these are a string-perf limitation, not a regex gap.
-	// See docs/decisions/03-regexp.md.
 	"built-ins/RegExp/CharacterClassEscapes",
 	"built-ins/RegExp/property-escapes",
 ];
