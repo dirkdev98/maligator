@@ -1005,6 +1005,55 @@ function emitBody(
 		return best?.handlerIp;
 	};
 
+	// Dense-array guarded regions (Phase 1). Group consecutive index-form (number-rep
+	// key) LOAD/STORE_PROPERTY on the same object register within a straight-line window
+	// into one hoisted array guard (`mal_vm_as_array`): the first access declares the
+	// guard local, the rest reuse it, and each access omits the per-access throwCheck on a
+	// dense hit (see mal_vm_array_try_load/try_store). A run is bounded by a label (control
+	// could enter without passing the guard), a redefinition of the guarded register, or a
+	// control-flow terminator — the guarded pointer must be established before, and stay
+	// valid through, every access it covers. The pointer survives calls/allocations inside
+	// the run (array heap type is invariant, the collector is non-moving, the register
+	// keeps the array rooted), so a run need not be safepoint-free.
+	const arrayGuard = new Map<number, { name: string; declare: boolean }>();
+	{
+		let runReg: number | null = null;
+		let runName = "";
+		let guardId = 0;
+		for (let ip = 0; ip < fn.instructions.length; ip++) {
+			const instr = fn.instructions[ip]!;
+			if (jumpTargets.has(ip)) {
+				runReg = null;
+			}
+			const isIndexAccess =
+				(instr.opcode === "LOAD_PROPERTY" || instr.opcode === "STORE_PROPERTY") &&
+				reps[instr.key] === "number";
+			if (isIndexAccess) {
+				const obj = instr.object;
+				if (runReg === obj) {
+					arrayGuard.set(ip, { name: runName, declare: false });
+				} else {
+					runName = `__arr_${guardId++}`;
+					arrayGuard.set(ip, { name: runName, declare: true });
+					runReg = obj;
+				}
+			}
+			// End the run when the guarded register is redefined (the cached pointer no
+			// longer describes it): the current access, if any, already read the live guard.
+			if (runReg !== null && writeRegisters(instr).includes(runReg)) {
+				runReg = null;
+			}
+			if (
+				instr.opcode === "JUMP" ||
+				instr.opcode === "JUMP_IF" ||
+				instr.opcode === "RETURN" ||
+				instr.opcode === "THROW"
+			) {
+				runReg = null;
+			}
+		}
+	}
+
 	const lines: Array<string> = [];
 	// Statement-granular source position for this compiled frame: write it into
 	// the native frame whenever it changes, so a stack capture taken anywhere in
@@ -1037,6 +1086,7 @@ function emitBody(
 			gcUnlink,
 			thisSlot,
 			coro,
+			arrayGuard.get(ip),
 		);
 		if (emitted === null) {
 			return null;
@@ -1065,6 +1115,7 @@ function emitInstruction(
 	gcUnlink: string,
 	thisSlot: number,
 	coro: CoroutineContext | null,
+	arrayRegion: { name: string; declare: boolean } | undefined,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -1103,8 +1154,7 @@ function emitInstruction(
 		coro !== null && coro.isAsyncFunction
 			? "__async_result_promise"
 			: "MAL_VALUE_UNDEFINED";
-	const onThrow =
-		handlerIp !== undefined ? `goto L${handlerIp};` : "goto __throw_exit;";
+	const onThrow = handlerIp !== undefined ? `goto L${handlerIp};` : "goto __throw_exit;";
 	const throwCheck = `if (vm->completion.kind == MAL_COMPLETION_THROW) ${onThrow}`;
 
 	// GC safepoint poll. Emitted at call returns and loop
@@ -1276,40 +1326,69 @@ function emitInstruction(
 				`{ MalEnv *__old_env = env; env = mal_env_new(vm, __old_env->parent, ${instruction.scopeId}, ${instruction.slotCount}); for (i32 __i = 0; __i < ${instruction.slotCount}; __i++) env->slots[__i] = __old_env->slots[__i]; }${frameUpdate}`,
 			];
 		}
-		case "LOAD_PROPERTY":
+		case "LOAD_PROPERTY": {
 			// A per-site monomorphic inline cache: a static persists across calls and
 			// (zero-initialized) starts empty. On a repeat access to the same shape it
 			// is a direct slot read with no key conversion or shape search.
 			// mal_vm_array_fast_load inlines a dense-array index read ahead of the IC
 			// (a non-array / non-index key falls straight through at no real cost).
-			// A number-rep index takes the _index variant, which reads the dense array
-			// straight from the raw f64 with no key boxing round-trip (the `arr[i]` hot
-			// path); the string-key case boxes as before to drive the shape IC.
-			return reps[instruction.key] === "number"
-				? [
-						`static MalInlineCache __ic_${ip};`,
-						`r${instruction.dst} = mal_vm_array_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__ic_${ip});`,
-						throwCheck,
-					]
-				: [
-						`static MalInlineCache __ic_${ip};`,
-						`r${instruction.dst} = mal_vm_array_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
-						throwCheck,
-					];
-		case "STORE_PROPERTY":
+			// A number-rep index takes the guarded-region form: one hoisted array guard
+			// (mal_vm_as_array) covers the run, and a dense hit runs no user code so it
+			// skips the throwCheck; a miss/non-array falls back to the general _index op
+			// (which keeps the throwCheck). The string-key case boxes to drive the shape IC.
+			if (reps[instruction.key] === "number") {
+				const region = arrayRegion ?? { name: `__arr_s${ip}`, declare: true };
+				// The dense hit writes a short-lived temp, not &r${dst}: address-taking the
+				// long-lived destination register would pin it to the stack across the whole
+				// function; the temp is promoted back to a register once try_load inlines.
+				return [
+					...(region.declare
+						? [
+								`MalArrayObject *${region.name} = mal_vm_as_array(${boxed(instruction.object)});`,
+							]
+						: []),
+					`static MalInlineCache __ic_${ip};`,
+					`MalValue __v_${ip};`,
+					`if (${region.name} && mal_vm_array_try_load(${region.name}, ${num(instruction.key)}, &__v_${ip})) {`,
+					`  r${instruction.dst} = __v_${ip};`,
+					`} else {`,
+					`  r${instruction.dst} = mal_vm_array_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &__ic_${ip});`,
+					`  ${throwCheck}`,
+					`}`,
+				];
+			}
+			return [
+				`static MalInlineCache __ic_${ip};`,
+				`r${instruction.dst} = mal_vm_array_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
+				throwCheck,
+			];
+		}
+		case "STORE_PROPERTY": {
 			// mal_vm_array_fast_store inlines a dense-array index store ahead of the IC;
-			// a number-rep index takes the _index variant (no key boxing round-trip).
-			return reps[instruction.key] === "number"
-				? [
-						`static MalInlineCache __ic_${ip};`,
-						`mal_vm_array_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
-						throwCheck,
-					]
-				: [
-						`static MalInlineCache __ic_${ip};`,
-						`mal_vm_array_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
-						throwCheck,
-					];
+			// a number-rep index takes the guarded-region form (see LOAD_PROPERTY): a dense
+			// store (overwrite, or a protector-guarded fresh index) runs no user code and
+			// skips the throwCheck; anything else falls back to the general _index store.
+			if (reps[instruction.key] === "number") {
+				const region = arrayRegion ?? { name: `__arr_s${ip}`, declare: true };
+				return [
+					...(region.declare
+						? [
+								`MalArrayObject *${region.name} = mal_vm_as_array(${boxed(instruction.object)});`,
+							]
+						: []),
+					`static MalInlineCache __ic_${ip};`,
+					`if (!(${region.name} && mal_vm_array_try_store(${region.name}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+					`  mal_vm_array_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
+					`  ${throwCheck}`,
+					`}`,
+				];
+			}
+			return [
+				`static MalInlineCache __ic_${ip};`,
+				`mal_vm_array_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
+				throwCheck,
+			];
+		}
 		case "TO_PROPERTY_KEY":
 			return [
 				`r${instruction.dst} = mal_vm_op_to_property_key(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,

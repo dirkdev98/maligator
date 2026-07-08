@@ -51,9 +51,33 @@ in. `OFF buys` = what dropping the feature gets you.
 
 - [ ] **Object & array access fast paths** (the measured gap — `objects` ~4.9×, `arrays`
       ~3.5× vs V8, while arithmetic-chain code already beats it). Guarded access regions:
-      hoist one shape/dense guard over a safepoint-free window, then direct slot/element
+      hoist one shape/dense guard over a straight-line window, then direct slot/element
       access + throwCheck elision, deopting to the per-access ICs on a miss. Later:
       polymorphic IC, inline object slots, value type-feedback (unlocks sound load-CSE).
+  - [x] **Phase 1 — dense-array guarded regions + throwCheck elision.** emit-c groups a
+        run of index-form `arr[i]` LOAD/STORE_PROPERTY on one array register (register not
+        reassigned mid-run, no label/terminator between) under one hoisted `mal_vm_as_array`
+        guard; each access attempts a dense hit (`mal_vm_array_try_load`/`try_store`, which run
+        no user code) and omits the per-access `completion.kind` throwCheck on the hit — only
+        the miss fallback (proto walk / inherited setter) keeps it. Sound past
+        calls/allocations in the run: array heap type is invariant, the collector is
+        non-moving (raw `MalArrayObject*` stays valid), the register keeps the array rooted,
+        and each access re-reads `elements`/`dense_count`/`length` fresh (an intervening
+        store/callback that grows/deopts the array is observed). The dense load routes through
+        a short-lived temp, not `&r${dst}`, so the destination stays register-allocated.
+        **Measured (native, best-of-6 vs V8): pure `arr[i]` read loop +5.7%, write loop +22%,
+        mixed read+write region +17.6%** (the per-access throwCheck split carries singletons;
+        the guard hoist compounds on multi-access regions). Validated: diff-compiled native
+        vs interpreter +GC-stress on a broad array oracle (holes, OOB, non-integer index,
+        inherited setter/getter incl. a throwing OOB getter, non-writable length, custom
+        proto, mid-region length mutation) — Node-identical; test262 regression manifest
+        (264/264) + `built-ins/Array/prototype` sweep (2668 pass, 0 regressions across 2752+
+        compiled files). Cost: array-index sites emit ~2-3× more C (fast + fallback); size
+        gate will track it.
+  - [ ] **Phase 2 — shape-guarded object regions** for `p.k` (the `objects` gap): hoist one
+        shape guard per straight-line run, resolve each key's slot once, direct data-slot
+        access with no per-access shape/key/throw check; excludes accessor/absent/reshaping
+        keys (deopt). Follow-ons: polymorphic-shape region, inline object slots.
 - [ ] **Chained numeric unboxing** — fuse a safepoint-free arithmetic sub-tree
       (`p.vy + 0.01*p.mass`, `(a.x-b.x)*(a.x-b.x)`) under one leaf-guard into native math +
       one box (region if/else in emit-c). Modest gain (chain-heavy code already beats V8);

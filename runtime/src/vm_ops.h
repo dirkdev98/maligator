@@ -421,6 +421,67 @@ static inline void mal_vm_array_fast_store(MalVm *vm, MalValue object_value, Mal
 }
 
 /**
+ * Guarded-access-region primitives (native backend, Phase 1). A run of `arr[i]`
+ * accesses on the same array register within a basic block hoists one array guard
+ * (`mal_vm_as_array`) instead of re-testing the heap type at every access, then each
+ * access attempts a dense hit via `try_load`/`try_store`. A dense hit returns a value
+ * already stored in the vector (load) or writes one (store) — it runs NO user code, so
+ * the emitted region omits the per-access `completion.kind` throw check on the hit path
+ * (only the miss fallback, which routes to the proto chain / a setter, keeps it).
+ *
+ * The hoisted guard is sound across the whole region even past a call/allocation: an
+ * array object's heap type never changes, the collector is non-moving (so the raw
+ * `MalArrayObject*` stays valid), and the array register keeps the object rooted. Each
+ * access still re-reads `elements`/`dense_count`/`length` fresh, so an intervening store
+ * or user callback that grows/reshapes the array is observed correctly.
+ */
+static inline MalArrayObject *mal_vm_as_array(MalValue v) {
+    return mal_value_is_heap_type(v, MAL_HEAP_ARRAY_OBJECT) ? (MalArrayObject *) mal_value_to_heap(v)
+                                                            : nullptr;
+}
+
+/**
+ * Attempt a dense-vector read of `arr[index]`. Returns true and writes *out on a hit
+ * (in-range, non-hole); false when the index is not a valid array index or misses the
+ * dense region (the caller then takes the general path). Never runs user code.
+ */
+static inline bool mal_vm_array_try_load(const MalArrayObject *arr, f64 index, MalValue *out) {
+    i64 i = (i64) index;
+    if ((f64) i == index && i >= 0 && i <= UINT32_MAX) {
+        return mal_array_object_dense_get(arr, (u32) i, out);
+    }
+    return false;
+}
+
+/**
+ * Attempt a dense-vector store of `arr[index] = value`. Returns true when applied
+ * (an overwrite of a present element — own data shadows any inherited setter — or a
+ * fresh index under the fast-elements protector on the default %Array.prototype% with
+ * a writable length); false when the general [[Set]] is required. Never runs user code.
+ * Mirrors the dense arms of mal_vm_array_fast_store_index exactly.
+ */
+static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalValue value) {
+    i64 i = (i64) index;
+    if ((f64) i == index && i >= 0 && i <= UINT32_MAX) {
+        u32 k = (u32) i;
+        if (mal_array_object_dense_has(arr, k)) {
+            mal_array_object_dense_store(arr, k, value);
+            return true;
+        }
+        if (!arr->dense_deopted && mal_array_elements_protector && arr->object.extensible &&
+            arr->length_writable && arr->object.prototype == mal_array_prototype_object) {
+            if (mal_array_object_dense_store(arr, k, value) == MAL_ARRAY_DENSE_APPLIED) {
+                if (k >= arr->length) {
+                    arr->length = k + 1;
+                }
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/**
  * Numeric-index variants of the fast load/store, for an `obj[i]` site whose index
  * the native backend holds as a raw f64 (number-rep). They take the index UNBOXED
  * so a dense-array access does not box it into a MalValue only for the boxed fast
@@ -433,39 +494,19 @@ static inline void mal_vm_array_fast_store(MalVm *vm, MalValue object_value, Mal
  */
 static inline MalValue mal_vm_array_fast_load_index(MalVm *vm, MalValue object_value, f64 index,
                                                     MalInlineCache *ic) {
-    if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
-        i64 i = (i64) index;
-        if ((f64) i == index && i >= 0 && i <= UINT32_MAX) {
-            MalValue out;
-            if (mal_array_object_dense_get((const MalArrayObject *) mal_value_to_heap(object_value), (u32) i,
-                                           &out)) {
-                return out;
-            }
-        }
+    MalArrayObject *array = mal_vm_as_array(object_value);
+    MalValue out;
+    if (array != nullptr && mal_vm_array_try_load(array, index, &out)) {
+        return out;
     }
     return mal_vm_array_fast_load(vm, object_value, mal_ops_number_value(index), ic);
 }
 
 static inline void mal_vm_array_fast_store_index(MalVm *vm, MalValue object_value, f64 index, MalValue value,
                                                  bool strict, MalInlineCache *ic) {
-    if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
-        i64 i = (i64) index;
-        if ((f64) i == index && i >= 0 && i <= UINT32_MAX) {
-            MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(object_value);
-            if (mal_array_object_dense_has(array, (u32) i)) {
-                mal_array_object_dense_store(array, (u32) i, value);
-                return;
-            }
-            if (!array->dense_deopted && mal_array_elements_protector && array->object.extensible &&
-                array->length_writable && array->object.prototype == mal_array_prototype_object) {
-                if (mal_array_object_dense_store(array, (u32) i, value) == MAL_ARRAY_DENSE_APPLIED) {
-                    if ((u32) i >= array->length) {
-                        array->length = (u32) i + 1;
-                    }
-                    return;
-                }
-            }
-        }
+    MalArrayObject *array = mal_vm_as_array(object_value);
+    if (array != nullptr && mal_vm_array_try_store(array, index, value)) {
+        return;
     }
     mal_vm_array_fast_store(vm, object_value, mal_ops_number_value(index), value, strict, ic);
 }
