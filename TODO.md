@@ -50,9 +50,11 @@ in. `OFF buys` = what dropping the feature gets you.
 ## Priority 1 — Performance
 
 - [ ] **Object & array access fast paths** (the measured gap — `objects` ~4.9×, `arrays`
-      ~3.5× vs V8, while arithmetic-chain code already beats it). Inline object slots +
-      polymorphic IC + shape speculation; direct dense-element load/store when the shape is
-      known. Also unlocks sound load-CSE.
+      ~3.5× vs V8, while arithmetic-chain code already beats it). Guarded access regions:
+      hoist one shape/dense guard over a safepoint-free window, then direct slot/element
+      access + throwCheck elision, deopting to the per-access ICs on a miss. Later:
+      polymorphic IC, inline object slots, value type-feedback (unlocks sound load-CSE).
+      Design: `docs/decisions/04-object-array-fast-paths.md`.
 - [ ] **Chained numeric unboxing** — fuse a safepoint-free arithmetic sub-tree
       (`p.vy + 0.01*p.mass`, `(a.x-b.x)*(a.x-b.x)`) under one leaf-guard into native math +
       one box (region if/else in emit-c). Modest gain (chain-heavy code already beats V8);
