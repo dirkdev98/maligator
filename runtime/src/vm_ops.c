@@ -2772,28 +2772,31 @@ void mal_vm_op_store_property_ic(
     mal_vm_op_store_property(vm, object_value, key_value, value, strict);
 }
 
-const MalShape *mal_vm_object_region_commit(const MalObject *o, const MalInlineCache *const *ics, u32 k,
-                                            MalValue *keys_out, u32 *slots_out) {
-    if (o == nullptr) {
-        return nullptr;
+int mal_vm_object_region_add_variant(const MalObject *o, const MalInlineCache *const *ics, u32 k,
+                                     const MalShape **shapes, u32 *slots, MalValue *keys, u32 *count, u32 max) {
+    if (o == nullptr || *count >= max) {
+        return -1;
     }
     const MalShape *shape = o->shape;
     // Every site must have monomorphically resolved a plain data slot on THIS shape. A
-    // value-slot entry (watched intrinsic) or a site that cached a different shape (poly /
-    // dictionary / miss) disqualifies the run — it keeps the per-access IC path.
+    // value-slot entry (watched intrinsic) or a site that cached a different shape (dictionary
+    // / miss / a shape not yet in this run) disqualifies it — the run keeps the per-site IC.
     for (u32 i = 0; i < k; i++) {
         if (ics[i]->shape != shape || ics[i]->slot == MAL_IC_VALUE_SLOT) {
-            return nullptr;
+            return -1;
         }
     }
-    // Cache each site's (key, slot) as a unit so the fast path's key compare and slot read
-    // stay consistent: a computed-key site whose key later drifts fails the key compare and
-    // takes the IC path — it never reads a slot cached for a different key.
+    u32 v = *count;
+    // Per-variant slots; keys are shared across variants (same access sites → same keys) and
+    // cached as a unit with the slots so a computed-key site whose key drifts fails the fast
+    // path's key compare and never reads a slot cached for a different key.
     for (u32 i = 0; i < k; i++) {
-        keys_out[i] = ics[i]->key;
-        slots_out[i] = ics[i]->slot;
+        slots[v * k + i] = ics[i]->slot;
+        keys[i] = ics[i]->key;
     }
-    return shape;
+    shapes[v] = shape;
+    *count = v + 1;
+    return (int) v;
 }
 
 /** The inline cache for the property op currently executing in `callable`. The

@@ -339,19 +339,40 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
 
 void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic);
 
+/** Max object shapes a consolidated region caches before it stops accumulating and the
+ * overflow (megamorphic) accesses stay on the per-site IC path. */
+#define MAL_OBJECT_REGION_MAX_SHAPES 4u
+
 /**
- * Consolidated-object-region commit (native backend). Given the `k` per-site inline
- * caches of a straight-line run of `p.k` accesses on one object register, all just
- * resolved on the slow path, try to lift the run onto a single shape guard: if every
- * cache monomorphically resolved a plain data slot on `o`'s current shape, write each
- * slot into `slots_out[i]` and return that shape; otherwise return null (the run keeps
- * taking the per-access IC path). A load site records a shape data slot and a store site
- * records only a default-writable data slot (see mal_vm_op_{load,store}_property_ic), so
- * `slot != MAL_IC_VALUE_SLOT` on the matched shape means the region's direct read /
- * barriered overwrite is sound; the shape guard (shape encodes attrs) keeps it so.
+ * Consolidated-object-region shape match (native backend): the index of `shape` among the
+ * region's `count` cached variant shapes, or -1. Called once per region entry; a hit means
+ * every access in the run reads its slot from `slots[hit * k + i]` with no per-access shape
+ * check. Shapes are interned/stable (the property IC relies on the same pointer identity),
+ * so this needs no epoch guard — the cache holds only shapes/keys/slots, never a collectable
+ * object pointer.
  */
-const MalShape *mal_vm_object_region_commit(const MalObject *o, const MalInlineCache *const *ics, u32 k,
-                                            MalValue *keys_out, u32 *slots_out);
+static inline int mal_vm_object_region_variant(const MalShape *shape, const MalShape *const *shapes,
+                                               u32 count) {
+    for (u32 i = 0; i < count; i++) {
+        if (shapes[i] == shape) {
+            return (int) i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Add `o`'s current shape as a new region variant on the slow path (after the run's per-site
+ * ICs resolved). Succeeds — appending the shape, its per-site `slots`, and the shared `keys`,
+ * and returning the new variant index — iff there is room (`*count < max`) and every site
+ * monomorphically resolved a plain data slot on this shape. Else returns -1 (the run keeps
+ * taking the per-site IC path). A load site records a shape data slot and a store site only a
+ * default-writable one (see mal_vm_op_{load,store}_property_ic), so `slot != MAL_IC_VALUE_SLOT`
+ * on the matched shape makes the region's direct read / barriered overwrite sound; the shape
+ * guard (shape encodes attrs) keeps it so.
+ */
+int mal_vm_object_region_add_variant(const MalObject *o, const MalInlineCache *const *ics, u32 k,
+                                     const MalShape **shapes, u32 *slots, MalValue *keys, u32 *count, u32 max);
 
 /**
  * Inline dense-array index access for the native backend (emit-c), so a `obj[i]`

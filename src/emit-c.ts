@@ -972,30 +972,44 @@ interface RegionAccess {
 }
 
 /**
- * Hoisted state for a consolidated object region: the cached shape + per-access slot
- * array (statics, so they persist across calls like an IC), the object pointer, and the
- * one-shot `__rgok` flag (`true` ⟺ the object's shape matches the cache, so every access
- * is a direct slot). Emitted once, at the run's first access.
+ * Hoisted state for a consolidated (polymorphic) object region: up to
+ * MAL_OBJECT_REGION_MAX_SHAPES cached variant shapes, the shared per-access keys, and the
+ * per-variant slot table (statics, so they persist across calls like an IC), plus the object
+ * pointer, the matched variant index `_v` (-1 = miss), and the `_ok` flag. Emitted once, at
+ * the run's first access. Real code is often polymorphic at a site; caching a few shapes lets
+ * the run stay consolidated instead of deopting to the per-access ICs on every other shape.
  */
 function consolidatedRegionDeclare(reg: RegionAccess, objExpr: string): Array<string> {
 	return [
-		`static const MalShape *${reg.name}_sh;`,
+		`static const MalShape *${reg.name}_sh[MAL_OBJECT_REGION_MAX_SHAPES];`,
 		`static MalValue ${reg.name}_key[${reg.size}];`,
-		`static u32 ${reg.name}_sl[${reg.size}];`,
+		`static u32 ${reg.name}_sl[MAL_OBJECT_REGION_MAX_SHAPES * ${reg.size}];`,
+		`static u32 ${reg.name}_n;`,
 		`MalObject *${reg.name}_o = mal_vm_as_object(${objExpr});`,
-		`bool ${reg.name}_ok = ${reg.name}_o && ${reg.name}_o->shape == ${reg.name}_sh;`,
+		// Resolve the matched variant's slot row to a pointer ONCE (offset amortized over the
+		// run), so each access is a direct `_slp[i]` — no per-access multiply. The primary
+		// variant (index 0 — the monomorphic / dominant shape) is a single compare to the base
+		// row, so the common case costs exactly the monomorphic form; only other shapes scan.
+		`const u32 *${reg.name}_slp;`,
+		`if (${reg.name}_o && ${reg.name}_o->shape == ${reg.name}_sh[0]) {`,
+		`  ${reg.name}_slp = ${reg.name}_sl;`,
+		`} else {`,
+		`  int ${reg.name}_v = ${reg.name}_o ? mal_vm_object_region_variant(${reg.name}_o->shape, ${reg.name}_sh, ${reg.name}_n) : -1;`,
+		`  ${reg.name}_slp = ${reg.name}_v >= 0 ? &${reg.name}_sl[${reg.name}_v * ${reg.size}] : nullptr;`,
+		`}`,
+		`bool ${reg.name}_ok = ${reg.name}_slp != nullptr;`,
 	];
 }
 
 /**
  * Slow-path commit for a consolidated object region, emitted after the run's last access:
- * when the guard missed (`!__rgok`), try to lift the run's just-resolved per-site ICs onto
- * a single shape → cached slots for the next iteration. Emitted once, at the last access.
+ * when the guard missed (`!__rgok`), try to add the object's shape as a new region variant
+ * (its per-site ICs having just resolved) so the next matching iteration is consolidated.
  */
 function consolidatedRegionCommit(reg: RegionAccess): Array<string> {
 	const ptrs = reg.commitIps!.map((i) => `&__ic_${i}`).join(", ");
 	return [
-		`if (!${reg.name}_ok) ${reg.name}_sh = mal_vm_object_region_commit(${reg.name}_o, (const MalInlineCache *[]){${ptrs}}, ${reg.size}, ${reg.name}_key, ${reg.name}_sl);`,
+		`if (!${reg.name}_ok) mal_vm_object_region_add_variant(${reg.name}_o, (const MalInlineCache *[]){${ptrs}}, ${reg.size}, ${reg.name}_sh, ${reg.name}_sl, ${reg.name}_key, &${reg.name}_n, MAL_OBJECT_REGION_MAX_SHAPES);`,
 	];
 }
 
@@ -1463,7 +1477,7 @@ function emitInstruction(
 				`static MalInlineCache __ic_${ip};`,
 				`MalValue __v_${ip};`,
 				`if (${reg.name}_ok && ${boxed(instruction.key)} == ${reg.name}_key[${reg.slotIndex}]) {`,
-				`  __v_${ip} = ${reg.name}_o->slots[${reg.name}_sl[${reg.slotIndex}]];`,
+				`  __v_${ip} = ${reg.name}_o->slots[${reg.name}_slp[${reg.slotIndex}]];`,
 				`} else {`,
 				`  __v_${ip} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
 				`  ${throwCheck}`,
@@ -1517,7 +1531,7 @@ function emitInstruction(
 				...(reg.declare ? consolidatedRegionDeclare(reg, boxed(instruction.object)) : []),
 				`static MalInlineCache __ic_${ip};`,
 				`if (${reg.name}_ok && ${boxed(instruction.key)} == ${reg.name}_key[${reg.slotIndex}]) {`,
-				`  mal_vm_object_slot_store(${reg.name}_o, ${reg.name}_sl[${reg.slotIndex}], ${boxed(instruction.value)});`,
+				`  mal_vm_object_slot_store(${reg.name}_o, ${reg.name}_slp[${reg.slotIndex}], ${boxed(instruction.value)});`,
 				`} else {`,
 				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
 				`  ${throwCheck}`,
