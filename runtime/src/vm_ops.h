@@ -340,6 +340,20 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
 void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic);
 
 /**
+ * Consolidated-object-region commit (native backend). Given the `k` per-site inline
+ * caches of a straight-line run of `p.k` accesses on one object register, all just
+ * resolved on the slow path, try to lift the run onto a single shape guard: if every
+ * cache monomorphically resolved a plain data slot on `o`'s current shape, write each
+ * slot into `slots_out[i]` and return that shape; otherwise return null (the run keeps
+ * taking the per-access IC path). A load site records a shape data slot and a store site
+ * records only a default-writable data slot (see mal_vm_op_{load,store}_property_ic), so
+ * `slot != MAL_IC_VALUE_SLOT` on the matched shape means the region's direct read /
+ * barriered overwrite is sound; the shape guard (shape encodes attrs) keeps it so.
+ */
+const MalShape *mal_vm_object_region_commit(const MalObject *o, const MalInlineCache *const *ics, u32 k,
+                                            MalValue *keys_out, u32 *slots_out);
+
+/**
  * Inline dense-array index access for the native backend (emit-c), so a `obj[i]`
  * read/write of a dense array is a direct vector load/store rather than a nested
  * runtime call. A non-array object, a non-int32 key, or a dense miss falls back to
@@ -393,6 +407,17 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
         return true;
     }
     return false;
+}
+
+/**
+ * Barriered overwrite of a known data slot — the fast store in a consolidated object
+ * region, where the region's shape guard has already established that `slot` is a
+ * writable data slot on this object's shape (so this runs no user code).
+ */
+static inline void mal_vm_object_slot_store(MalObject *object, u32 slot, MalValue value) {
+    mal_gc_write_barrier(object->slots[slot]);
+    object->slots[slot] = value;
+    mal_gc_card(&object->header, value);
 }
 
 static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {

@@ -2772,6 +2772,30 @@ void mal_vm_op_store_property_ic(
     mal_vm_op_store_property(vm, object_value, key_value, value, strict);
 }
 
+const MalShape *mal_vm_object_region_commit(const MalObject *o, const MalInlineCache *const *ics, u32 k,
+                                            MalValue *keys_out, u32 *slots_out) {
+    if (o == nullptr) {
+        return nullptr;
+    }
+    const MalShape *shape = o->shape;
+    // Every site must have monomorphically resolved a plain data slot on THIS shape. A
+    // value-slot entry (watched intrinsic) or a site that cached a different shape (poly /
+    // dictionary / miss) disqualifies the run — it keeps the per-access IC path.
+    for (u32 i = 0; i < k; i++) {
+        if (ics[i]->shape != shape || ics[i]->slot == MAL_IC_VALUE_SLOT) {
+            return nullptr;
+        }
+    }
+    // Cache each site's (key, slot) as a unit so the fast path's key compare and slot read
+    // stay consistent: a computed-key site whose key later drifts fails the key compare and
+    // takes the IC path — it never reads a slot cached for a different key.
+    for (u32 i = 0; i < k; i++) {
+        keys_out[i] = ics[i]->key;
+        slots_out[i] = ics[i]->slot;
+    }
+    return shape;
+}
+
 /** The inline cache for the property op currently executing in `callable`. The
  * dispatch has already advanced instruction_pointer, so the op's index is one
  * back. The function's cache array is allocated on first use. */

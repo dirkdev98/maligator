@@ -954,6 +954,52 @@ function producedRep(
 }
 
 /**
+ * A property-access instruction's membership in a guarded region (see the region
+ * detection in emitBody). `name` is the region's base identifier; `declare` marks the
+ * run's first access (which emits the hoisted receiver guard). For a consolidated object
+ * region (`consolidated`, ≥2 string-key accesses on one object), `slotIndex` is this
+ * access's position in the region's cached-slot array and `commitIps` — set only on the
+ * run's last access — lists every access ip so the slow path can commit the region cache.
+ */
+interface RegionAccess {
+	name: string;
+	kind: "array" | "object";
+	declare: boolean;
+	consolidated: boolean;
+	slotIndex: number;
+	size: number;
+	commitIps: Array<number> | null;
+}
+
+/**
+ * Hoisted state for a consolidated object region: the cached shape + per-access slot
+ * array (statics, so they persist across calls like an IC), the object pointer, and the
+ * one-shot `__rgok` flag (`true` ⟺ the object's shape matches the cache, so every access
+ * is a direct slot). Emitted once, at the run's first access.
+ */
+function consolidatedRegionDeclare(reg: RegionAccess, objExpr: string): Array<string> {
+	return [
+		`static const MalShape *${reg.name}_sh;`,
+		`static MalValue ${reg.name}_key[${reg.size}];`,
+		`static u32 ${reg.name}_sl[${reg.size}];`,
+		`MalObject *${reg.name}_o = mal_vm_as_object(${objExpr});`,
+		`bool ${reg.name}_ok = ${reg.name}_o && ${reg.name}_o->shape == ${reg.name}_sh;`,
+	];
+}
+
+/**
+ * Slow-path commit for a consolidated object region, emitted after the run's last access:
+ * when the guard missed (`!__rgok`), try to lift the run's just-resolved per-site ICs onto
+ * a single shape → cached slots for the next iteration. Emitted once, at the last access.
+ */
+function consolidatedRegionCommit(reg: RegionAccess): Array<string> {
+	const ptrs = reg.commitIps!.map((i) => `&__ic_${i}`).join(", ");
+	return [
+		`if (!${reg.name}_ok) ${reg.name}_sh = mal_vm_object_region_commit(${reg.name}_o, (const MalInlineCache *[]){${ptrs}}, ${reg.size}, ${reg.name}_key, ${reg.name}_sl);`,
+	];
+}
+
+/**
  * Emit the instruction body, with labels at jump targets and gotos for jumps.
  * Returns null if any instruction is not yet lowerable.
  */
@@ -1017,33 +1063,43 @@ function emitBody(
 	// the run (the receiver's heap type is invariant, the collector is non-moving, the
 	// register keeps it rooted) and each access re-reads shape/elements fresh, so a run need
 	// not be safepoint-free.
-	const regionGuard = new Map<number, { name: string; declare: boolean }>();
+	const regionGuard = new Map<number, RegionAccess>();
 	{
-		let runReg: number | null = null;
-		let runKind: "array" | "object" | null = null;
-		let runName = "";
-		let guardId = 0;
+		// First collect maximal runs of same-kind, same-register accesses, then assign each
+		// run its region info. A run ends at a label, a redefinition of the accessed
+		// register, or a control-flow terminator.
+		interface Run {
+			reg: number;
+			kind: "array" | "object";
+			ips: Array<number>;
+		}
+		const runs: Array<Run> = [];
+		let cur: Run | null = null;
+		const flush = (): void => {
+			if (cur !== null) {
+				runs.push(cur);
+				cur = null;
+			}
+		};
 		for (let ip = 0; ip < fn.instructions.length; ip++) {
 			const instr = fn.instructions[ip]!;
 			if (jumpTargets.has(ip)) {
-				runReg = null;
+				flush();
 			}
 			if (instr.opcode === "LOAD_PROPERTY" || instr.opcode === "STORE_PROPERTY") {
 				const kind = reps[instr.key] === "number" ? "array" : "object";
 				const obj = instr.object;
-				if (runReg === obj && runKind === kind) {
-					regionGuard.set(ip, { name: runName, declare: false });
+				if (cur !== null && cur.reg === obj && cur.kind === kind) {
+					cur.ips.push(ip);
 				} else {
-					runName = `__reg${guardId++}`;
-					regionGuard.set(ip, { name: runName, declare: true });
-					runReg = obj;
-					runKind = kind;
+					flush();
+					cur = { reg: obj, kind, ips: [ip] };
 				}
 			}
-			// End the run when the guarded register is redefined (the cached pointer no
-			// longer describes it): the current access, if any, already read the live guard.
-			if (runReg !== null && writeRegisters(instr).includes(runReg)) {
-				runReg = null;
+			// The current access (if any) already read the live guard above; a redefinition
+			// of the accessed register now ends the run so later accesses re-guard.
+			if (cur !== null && writeRegisters(instr).includes(cur.reg)) {
+				flush();
 			}
 			if (
 				instr.opcode === "JUMP" ||
@@ -1051,8 +1107,28 @@ function emitBody(
 				instr.opcode === "RETURN" ||
 				instr.opcode === "THROW"
 			) {
-				runReg = null;
+				flush();
 			}
+		}
+		flush();
+
+		let guardId = 0;
+		for (const run of runs) {
+			const name = `__rg${guardId++}`;
+			// A ≥2-access object run consolidates onto ONE shape guard + a cached-slot array;
+			// arrays and single object accesses keep the per-access guarded form.
+			const consolidated = run.kind === "object" && run.ips.length >= 2;
+			run.ips.forEach((ip, i) => {
+				regionGuard.set(ip, {
+					name,
+					kind: run.kind,
+					declare: i === 0,
+					consolidated,
+					slotIndex: i,
+					size: run.ips.length,
+					commitIps: consolidated && i === run.ips.length - 1 ? run.ips : null,
+				});
+			});
 		}
 	}
 
@@ -1117,7 +1193,7 @@ function emitInstruction(
 	gcUnlink: string,
 	thisSlot: number,
 	coro: CoroutineContext | null,
-	region: { name: string; declare: boolean } | undefined,
+	region: RegionAccess | undefined,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -1338,8 +1414,16 @@ function emitInstruction(
 			// not &r${dst}: address-taking the long-lived destination register would pin it to
 			// the stack across the whole function; the temp promotes back to a register once
 			// the try_* helper inlines.
-			const reg = region ?? { name: `__reg_s${ip}`, declare: true };
-			if (reps[instruction.key] === "number") {
+			const reg: RegionAccess = region ?? {
+				name: `__rg_s${ip}`,
+				kind: reps[instruction.key] === "number" ? "array" : "object",
+				declare: true,
+				consolidated: false,
+				slotIndex: 0,
+				size: 1,
+				commitIps: null,
+			};
+			if (reg.kind === "array") {
 				return [
 					...(reg.declare
 						? [
@@ -1356,26 +1440,52 @@ function emitInstruction(
 					`}`,
 				];
 			}
+			if (!reg.consolidated) {
+				return [
+					...(reg.declare
+						? [`MalObject *${reg.name} = mal_vm_as_object(${boxed(instruction.object)});`]
+						: []),
+					`static MalInlineCache __ic_${ip};`,
+					`MalValue __v_${ip};`,
+					`if (${reg.name} && mal_vm_object_try_load(${reg.name}, ${boxed(instruction.key)}, &__ic_${ip}, &__v_${ip})) {`,
+					`  r${instruction.dst} = __v_${ip};`,
+					`} else {`,
+					`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
+					`  ${throwCheck}`,
+					`}`,
+				];
+			}
+			// Consolidated object region: one shape guard (__rgok) covers the run; a hit is a
+			// direct cached-slot read (key compare guards a computed-key mismatch), a miss the
+			// per-access IC. The run's last access commits the cache on the slow path.
 			return [
-				...(reg.declare
-					? [`MalObject *${reg.name} = mal_vm_as_object(${boxed(instruction.object)});`]
-					: []),
+				...(reg.declare ? consolidatedRegionDeclare(reg, boxed(instruction.object)) : []),
 				`static MalInlineCache __ic_${ip};`,
 				`MalValue __v_${ip};`,
-				`if (${reg.name} && mal_vm_object_try_load(${reg.name}, ${boxed(instruction.key)}, &__ic_${ip}, &__v_${ip})) {`,
-				`  r${instruction.dst} = __v_${ip};`,
+				`if (${reg.name}_ok && ${boxed(instruction.key)} == ${reg.name}_key[${reg.slotIndex}]) {`,
+				`  __v_${ip} = ${reg.name}_o->slots[${reg.name}_sl[${reg.slotIndex}]];`,
 				`} else {`,
-				`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
+				`  __v_${ip} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
 				`  ${throwCheck}`,
 				`}`,
+				`r${instruction.dst} = __v_${ip};`,
+				...(reg.commitIps ? consolidatedRegionCommit(reg) : []),
 			];
 		}
 		case "STORE_PROPERTY": {
 			// See LOAD_PROPERTY: a monomorphic data-slot/dense-element hit runs no user code,
 			// so the region form drops the throwCheck on the hit; the general-[[Set]] miss
 			// fallback keeps it. Array (number-rep index) vs plain object (string key).
-			const reg = region ?? { name: `__reg_s${ip}`, declare: true };
-			if (reps[instruction.key] === "number") {
+			const reg: RegionAccess = region ?? {
+				name: `__rg_s${ip}`,
+				kind: reps[instruction.key] === "number" ? "array" : "object",
+				declare: true,
+				consolidated: false,
+				slotIndex: 0,
+				size: 1,
+				commitIps: null,
+			};
+			if (reg.kind === "array") {
 				return [
 					...(reg.declare
 						? [
@@ -1389,15 +1499,30 @@ function emitInstruction(
 					`}`,
 				];
 			}
+			if (!reg.consolidated) {
+				return [
+					...(reg.declare
+						? [`MalObject *${reg.name} = mal_vm_as_object(${boxed(instruction.object)});`]
+						: []),
+					`static MalInlineCache __ic_${ip};`,
+					`if (!(${reg.name} && mal_vm_object_try_store(${reg.name}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, &__ic_${ip}))) {`,
+					`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
+					`  ${throwCheck}`,
+					`}`,
+				];
+			}
+			// Consolidated object region (see LOAD_PROPERTY): a hit is a barriered cached-slot
+			// overwrite (the shape guard proved the slot writable-default), a miss the IC.
 			return [
-				...(reg.declare
-					? [`MalObject *${reg.name} = mal_vm_as_object(${boxed(instruction.object)});`]
-					: []),
+				...(reg.declare ? consolidatedRegionDeclare(reg, boxed(instruction.object)) : []),
 				`static MalInlineCache __ic_${ip};`,
-				`if (!(${reg.name} && mal_vm_object_try_store(${reg.name}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, &__ic_${ip}))) {`,
+				`if (${reg.name}_ok && ${boxed(instruction.key)} == ${reg.name}_key[${reg.slotIndex}]) {`,
+				`  mal_vm_object_slot_store(${reg.name}_o, ${reg.name}_sl[${reg.slotIndex}], ${boxed(instruction.value)});`,
+				`} else {`,
 				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
 				`  ${throwCheck}`,
 				`}`,
+				...(reg.commitIps ? consolidatedRegionCommit(reg) : []),
 			];
 		}
 		case "TO_PROPERTY_KEY":
