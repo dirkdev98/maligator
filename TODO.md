@@ -49,25 +49,22 @@ in. `OFF buys` = what dropping the feature gets you.
 
 ## Priority 1 — Performance
 
-- [ ] **Object & array access fast paths — follow-ons.** Guarded regions have landed for
-      arrays (dense element) and objects (`p.k`), both per-access and, for objects, a
-      consolidated region: one shape guard per straight-line run + a `{shape,key,slot[K]}`
-      cache (committed from the per-site ICs on the slow path), then direct data-slot access
-      with the `completion.kind` throwCheck elided. Remaining:
-  - [ ] **Polymorphic-shape region** — admit a handful of shapes at a region; the monomorphic
-        guard currently deopts the whole run to the per-access ICs on any other shape, and
-        real code is often polymorphic.
-  - [ ] **Value type-feedback on loads → chained numeric unboxing** — speculate a loaded field
-        is a number and keep it unboxed through the following arithmetic. The physics
-        `objects()` residual is now the per-op is_number/box on loaded fields, not the access;
-        the consolidated region is the substrate (loaded-value provenance). Pairs with the
-        standalone "Chained numeric unboxing" item below. (Inline object slots — folding
-        `slots` into MalObject — is blocked: MalObject is embedded as the first member of ~20
-        exotic subtypes, so it can't end in a flexible array; see shape.h.)
-- [ ] **Chained numeric unboxing** — fuse a safepoint-free arithmetic sub-tree
-      (`p.vy + 0.01*p.mass`, `(a.x-b.x)*(a.x-b.x)`) under one leaf-guard into native math +
-      one box (region if/else in emit-c). Modest gain (chain-heavy code already beats V8);
-      the delicate numeric core wants careful -0/NaN/throw differential testing.
+- [ ] **Object & array access fast paths — residual.** Guarded regions have landed for
+      arrays (dense element) and objects (`p.k`): per-access, plus a consolidated object
+      region (one guard per straight-line run + a per-variant `{shape,key,slot}` cache, up to
+      N shapes / polymorphic), direct data-slot access with the `completion.kind` throwCheck
+      elided. The remaining object residual is the arithmetic ON loaded fields, not the access
+      — see numeric unboxing below. (Inline object slots — folding `slots` into MalObject — is
+      blocked: MalObject is embedded as the first member of ~20 exotic subtypes, so it can't
+      end in a flexible array; see shape.h.)
+- [ ] **Chained numeric unboxing / value type-feedback on loads** — the `objects()` /
+      chain-heavy residual is the per-op is_number + int32-canonicalizing box on loaded
+      (boxed-rep) fields. Two options, both measured LOW-ROI so far and deferred: (a) fuse a
+      number-producing arithmetic sub-tree under one leaf-guard into native math + one box —
+      but chain code is already ~1.95× vs V8, sound fusion needs def-use over post-regalloc
+      register reuse + slow-path duplication, and −0/NaN differential testing; (b) speculate a
+      loaded field is a number (type-feedback) and carry it unboxed with a deopt. Revisit only
+      with a clearer win or once (b)'s deopt machinery exists for another reason.
 - [ ] **String optimizations** — ropes/cons-strings + dependent (slice) strings so
       `+` is O(1)-amortized and substring is zero-copy (GC trace-edge to parent).
 - [ ] **String/key interning (atom table)** — pointer-identity key compares, wider
