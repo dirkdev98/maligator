@@ -69,16 +69,16 @@ in. `OFF buys` = what dropping the feature gets you.
       `+` is O(1)-amortized and substring is zero-copy (GC trace-edge to parent).
 - [ ] **String/key interning (atom table)** — pointer-identity key compares, wider
       IC coverage, substrate for faster dict/Map lookup + symbol fast path.
-- [ ] **Call-site inlining — follow-ons.** Landed: a monomorphic call-target cache
-      (identity + heap-epoch guarded); and speculative _guarded inlining_ of reassignable
-      script-global direct calls — the guarded-inline machinery (splice primitive with a
-      this-source, the `guardFunctionIndex` op, the deopt transform). Remaining:
-  - [ ] **Shape-guarded method inlining** — `obj.m()` where the method resolves (by name /
-        shape) to a known candidate; guard the receiver shape (runtime per-site cache), inline
-        with `this` = receiver (the splice already supports it), deopt on a miss. The bigger
-        OO win; reuses the phase-B machinery + a shape-guard op variant.
-  - [ ] **Polymorphic call cache + leaner `enter_compiled`** for the truly-dynamic remainder
-        (function-param / megamorphic callees inlining can't reach).
+- [ ] **Call-site inlining — residual.** Landed: a polymorphic call-target cache (identity +
+      heap-epoch guarded, N ways); guarded inlining of reassignable script-global direct calls
+      (`guardFunctionIndex` op + the splice/deopt machinery); and guarded method inlining
+      (`obj.m()` inlined behind the same index guard on the proto-resolved callee, `this` =
+      receiver). Residual: method inlining's win is bounded by the per-call `loadProperty(recv,
+    "m")` **proto-chain walk** — proto-method loads aren't IC-cached, and the guard still
+      needs the loaded callee. The bigger method win needs a **cached proto-method load** (a
+      shape→method IC, which needs prototype-validity cells — none exist yet) so the resolution
+      itself is skipped. `enter_compiled` micro-opts (skip the native-frame push when a trace
+      can't be observed) are a minor separate lever.
 - [ ] **Allocation is the next bottleneck** (~15× vs Node on alloc bench):
   - [ ] Escape analysis → scalar replacement / stack alloc within the root frame
         (extends the built scalar-replacement past the module-inlining baseline).
