@@ -731,6 +731,104 @@ function wrapInlinePosition(
 	);
 }
 
+/**
+ * Emit a target function's blocks for inlining at a call site: register operands shifted
+ * by `offset`, the callee's `this` reads mapped to `thisSource` (a caller register, or a
+ * synthesized `undefined` when null), every `return` converted to move-into-`destination`
+ * (when >= 0) + jump to `joinIndex`, and intra-target branch targets shifted by
+ * `blockBase`. The parameter binding (args → param registers, missing → undefined) is
+ * prepended to the first block, so the caller only appends these blocks and routes control
+ * to `blockBase`.
+ *
+ * Shared by the unconditional multi-block inliner and the guarded (speculative) inliner;
+ * `targetBlocks` must be `multiBlockInlinable(target)` (every block ends in an explicit
+ * jump/return/throw, no try/closure markers). The `this` mapping is dormant until a target
+ * that reads `this` is admitted (method inlining) — plain-call inlining passes `null`.
+ */
+function buildInlinedBlocks(
+	program: IntermediateProgram,
+	target: IRFunction,
+	targetBlocks: ReadonlyArray<IRBlock>,
+	args: ReadonlyArray<number>,
+	thisSource: number | null,
+	destination: number,
+	offset: number,
+	callSitePos: number,
+	blockBase: number,
+	joinIndex: number,
+): Array<IRBlock> {
+	const rewrap = (
+		instruction: Extract<IRInstruction, { type: "sourcePos" }>,
+	): IRInstruction => ({
+		type: "sourcePos",
+		pos: wrapInlinePosition(program, instruction.pos, target.functionIndex, callSitePos),
+	});
+	const setup: Array<IRInstruction> = [];
+	for (let i = 0; i < target.parameterCount; ++i) {
+		const paramRegister = offset + i;
+		setup.push(
+			i < args.length
+				? { type: "move", registers: [paramRegister, args[i]!] }
+				: { type: "createUndefined", registers: [paramRegister] },
+		);
+	}
+	const out: Array<IRBlock> = [];
+	targetBlocks.forEach((tblock, blockIdx) => {
+		const instructions: Array<IRInstruction> = blockIdx === 0 ? [...setup] : [];
+		for (const instruction of tblock.instructions) {
+			if (instruction.type === "sourcePos") {
+				instructions.push(rewrap(instruction));
+				continue;
+			}
+			if (instruction.type === "return") {
+				const returnRegister = instruction.registers[0];
+				if (destination >= 0) {
+					instructions.push({
+						type: "move",
+						registers: [
+							destination,
+							returnRegister >= 0 ? returnRegister + offset : returnRegister,
+						],
+					});
+				}
+				instructions.push({ type: "jump", blocks: [joinIndex] });
+				break; // terminator: the rest of this block is dead
+			}
+			if (instruction.type === "throw") {
+				instructions.push(withRegisterOffset(instruction, offset));
+				break;
+			}
+			if (instruction.type === "jump") {
+				instructions.push({ type: "jump", blocks: [instruction.blocks[0] + blockBase] });
+				break;
+			}
+			if (instruction.type === "jumpIf") {
+				const condition = instruction.registers[0];
+				instructions.push({
+					type: "jumpIf",
+					registers: [condition >= 0 ? condition + offset : condition],
+					blocks: [instruction.blocks[0] + blockBase],
+				});
+				continue;
+			}
+			if (instruction.type === "loadThis") {
+				// `this` in the callee resolves to the receiver at the call site (undefined
+				// for a plain call) — read `thisSource` instead of the callee's activation.
+				const dst = offset + instruction.registers[0];
+				instructions.push(
+					thisSource === null
+						? { type: "createUndefined", registers: [dst] }
+						: { type: "move", registers: [dst, thisSource] },
+				);
+				continue;
+			}
+			instructions.push(withRegisterOffset(instruction, offset));
+		}
+		out.push({ instructions });
+	});
+	return out;
+}
+
 /** Total real (non-marker) instruction count of a function. */
 function instructionCount(fn: IRFunction): number {
 	let count = 0;
@@ -872,10 +970,9 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 			}
 
 			// Multi-block target: split the host block at the call, append the target's
-			// blocks (offset registers, branch targets by +base) and a join block, and
-			// convert every `return` to move-to-dst + jump-to-join. Block order is
-			// irrelevant (all edges are explicit), so appending at the end is sound and
-			// touches no existing block index.
+			// blocks (via buildInlinedBlocks) and a join block. Block order is irrelevant
+			// (all edges are explicit), so appending at the end is sound and touches no
+			// existing block index.
 			const blocks = multiBlocks!;
 			const base = fn.blocks.length;
 			const joinIndex = base + blocks.length;
@@ -886,54 +983,26 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 				// handler ranges (see containsTryMarker).
 				continue;
 			}
-			// Host: pre + param binding + jump to the inlined entry (the target's block 0).
+			// Host: pre + jump to the inlined entry (the target's block 0, which begins with
+			// the parameter binding buildInlinedBlocks prepends).
 			host.instructions = [
 				...host.instructions.slice(0, index),
-				...paramSetup,
 				{ type: "jump", blocks: [base] },
 			];
-
-			for (const tblock of blocks) {
-				const out: Array<IRInstruction> = [];
-				for (const instruction of tblock.instructions) {
-					if (instruction.type === "sourcePos") {
-						out.push(rewrap(instruction));
-						continue;
-					}
-					if (instruction.type === "return") {
-						const returnRegister = instruction.registers[0];
-						if (destination >= 0) {
-							out.push({
-								type: "move",
-								registers: [
-									destination,
-									returnRegister >= 0 ? returnRegister + offset : returnRegister,
-								],
-							});
-						}
-						out.push({ type: "jump", blocks: [joinIndex] });
-						break; // terminator: the rest of this block is dead
-					}
-					if (instruction.type === "throw") {
-						out.push(withRegisterOffset(instruction, offset));
-						break;
-					}
-					if (instruction.type === "jump") {
-						out.push({ type: "jump", blocks: [instruction.blocks[0] + base] });
-						break;
-					}
-					if (instruction.type === "jumpIf") {
-						const condition = instruction.registers[0];
-						out.push({
-							type: "jumpIf",
-							registers: [condition >= 0 ? condition + offset : condition],
-							blocks: [instruction.blocks[0] + base],
-						});
-						continue;
-					}
-					out.push(withRegisterOffset(instruction, offset));
-				}
-				fn.blocks.push({ instructions: out });
+			// Plain call → no receiver (thisSource null); the target is `this`-free anyway.
+			for (const inlinedBlock of buildInlinedBlocks(
+				program,
+				targetFn,
+				blocks,
+				args,
+				null,
+				destination,
+				offset,
+				callSitePos,
+				base,
+				joinIndex,
+			)) {
+				fn.blocks.push(inlinedBlock);
 			}
 			// Join: the host's tail after the call (already ends in the host's terminator).
 			fn.blocks.push({ instructions: post });
