@@ -49,19 +49,21 @@ in. `OFF buys` = what dropping the feature gets you.
 
 ## Priority 1 — Performance
 
-- [ ] **Object & array access fast paths.** Per-access guarded regions have landed for both
-      arrays (dense element) and objects (`p.k` monomorphic slot): one hoisted receiver guard
-      (`mal_vm_as_array` / `mal_vm_as_object`) per straight-line run, with the `completion.kind`
-      throwCheck elided on the fast hit (dense element / data slot run no user code). Remaining:
-  - [ ] **Consolidated shape-guarded object region** — check the object's shape ONCE per run
-        (a `{shape, slot[K]}` region cache) then direct data-slot access with NO per-access
-        shape/key/slot check, deopting the whole run to the per-access ICs on a shape miss.
-        A bigger `objects` win than the per-access form (which still re-checks shape+key each
-        access); needs region-body duplication (fast direct / slow IC) in emit-c.
-  - [ ] **Polymorphic-shape region + inline object slots + value type-feedback** — a region
-        guard that admits a few shapes; fold the `slots` array into the object to kill the
-        double indirection; speculate a loaded property is a number and keep it unboxed
-        through the following arithmetic (sound load-CSE).
+- [ ] **Object & array access fast paths — follow-ons.** Guarded regions have landed for
+      arrays (dense element) and objects (`p.k`), both per-access and, for objects, a
+      consolidated region: one shape guard per straight-line run + a `{shape,key,slot[K]}`
+      cache (committed from the per-site ICs on the slow path), then direct data-slot access
+      with the `completion.kind` throwCheck elided. Remaining:
+  - [ ] **Polymorphic-shape region** — admit a handful of shapes at a region; the monomorphic
+        guard currently deopts the whole run to the per-access ICs on any other shape, and
+        real code is often polymorphic.
+  - [ ] **Value type-feedback on loads → chained numeric unboxing** — speculate a loaded field
+        is a number and keep it unboxed through the following arithmetic. The physics
+        `objects()` residual is now the per-op is_number/box on loaded fields, not the access;
+        the consolidated region is the substrate (loaded-value provenance). Pairs with the
+        standalone "Chained numeric unboxing" item below. (Inline object slots — folding
+        `slots` into MalObject — is blocked: MalObject is embedded as the first member of ~20
+        exotic subtypes, so it can't end in a flexible array; see shape.h.)
 - [ ] **Chained numeric unboxing** — fuse a safepoint-free arithmetic sub-tree
       (`p.vy + 0.01*p.mass`, `(a.x-b.x)*(a.x-b.x)`) under one leaf-guard into native math +
       one box (region if/else in emit-c). Modest gain (chain-heavy code already beats V8);
@@ -70,8 +72,12 @@ in. `OFF buys` = what dropping the feature gets you.
       `+` is O(1)-amortized and substring is zero-copy (GC trace-edge to parent).
 - [ ] **String/key interning (atom table)** — pointer-identity key compares, wider
       IC coverage, substrate for faster dict/Map lookup + symbol fast path.
-- [ ] **Call-site inline caches** — cache the callee/shape so compiled calls
-      speculate a fixed target; also lets the inliner fire at more sites.
+- [ ] **Call-site inline caches — follow-ons.** A monomorphic call-target cache landed
+      (identity-guarded, heap-epoch-invalidated, MalFunction re-derived from the stable index):
+      a repeat call to the same compiled callee skips the dispatch chain (~15% on call-heavy
+      loops, covers heap callees not just immortal). Remaining: a polymorphic call cache, and
+      speculative inlining of the cached callee (splice the body under the identity guard +
+      deopt) — the big win, and it fires the inliner at dynamic / script-mode call sites.
 - [ ] **Allocation is the next bottleneck** (~15× vs Node on alloc bench):
   - [ ] Escape analysis → scalar replacement / stack alloc within the root frame
         (extends the built scalar-replacement past the module-inlining baseline).
