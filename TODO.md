@@ -69,27 +69,23 @@ in. `OFF buys` = what dropping the feature gets you.
       `+` is O(1)-amortized and substring is zero-copy (GC trace-edge to parent).
 - [ ] **String/key interning (atom table)** — pointer-identity key compares, wider
       IC coverage, substrate for faster dict/Map lookup + symbol fast path.
-- [ ] **Call-site inline caches — follow-ons.** A monomorphic call-target cache landed
-      (identity-guarded, heap-epoch-invalidated, MalFunction re-derived from the stable index):
-      a repeat call to the same compiled callee skips the dispatch chain (~15% on call-heavy
-      loops, covers heap callees not just immortal). Remaining: a polymorphic call cache, and
-      speculative inlining of the cached callee (splice the body under the identity guard +
-      deopt) — the big win, and it fires the inliner at dynamic / script-mode call sites.
+- [ ] **Call-site inlining — follow-ons.** Landed: a monomorphic call-target cache
+      (identity + heap-epoch guarded); and speculative _guarded inlining_ of reassignable
+      script-global direct calls — the guarded-inline machinery (splice primitive with a
+      this-source, the `guardFunctionIndex` op, the deopt transform). Remaining:
+  - [ ] **Shape-guarded method inlining** — `obj.m()` where the method resolves (by name /
+        shape) to a known candidate; guard the receiver shape (runtime per-site cache), inline
+        with `this` = receiver (the splice already supports it), deopt on a miss. The bigger
+        OO win; reuses the phase-B machinery + a shape-guard op variant.
+  - [ ] **Polymorphic call cache + leaner `enter_compiled`** for the truly-dynamic remainder
+        (function-param / megamorphic callees inlining can't reach).
 - [ ] **Allocation is the next bottleneck** (~15× vs Node on alloc bench):
   - [ ] Escape analysis → scalar replacement / stack alloc within the root frame
         (extends the built scalar-replacement past the module-inlining baseline).
   - [ ] Generational GC already opt-in; region/arena (N.11) + drop-insertion (N.12).
 - [ ] Promise/microtask + suspendable-frame mallocs → GC-owned / pooled (entangled
       with async rooting flakiness + generational GC).
-- [x] **Struct layout / memory density.** Landed: `MalHeapHeader` 12→3 (`enum : u8`);
-      `MalObject` 56→40 (flag bitfields); most heap objects dropped a 16-byte size class
-      (arrays/iterators 96→64, generator 320→256, string 48→32, symbol 32→16);
-      `MalInlineCache` 96→80 (SoA poly); `MalVmFrame` 144→136. Boxed-value pointer tags
-      made the hot type predicates dereference-free (language ratio 2.25×→2.17×). `MalKey`
-      kind is now derived from the value tag, so `MalTableEntry` is 32 (class 48→32) and
-      `MalShapeProp` 16 (class 32→16). `MalTable` entries are inline open-addressed (no
-      per-entry malloc; index handles survive realloc). `MalIteratorHelperObject` 144→128.
-      `static_assert` size-class guards cap the wins. Remaining:
+- [ ] **Struct-layout follow-ons** (the memory-density pass otherwise landed):
   - [ ] **`MalInstruction` union pack (24 from 40)** — deferred with the bytecode-overlay
         redesign (see Priority 2): needs the pointer-carrying opcode arms relocated behind
         side-table indices (a wire-format change across emit-c / serialize-vm / vm_load).
