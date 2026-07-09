@@ -1356,25 +1356,31 @@ MalCompletion mal_vm_call_value(
     i32 arg_count
 );
 
+/** Polymorphic call-cache ways: a site accumulates up to this many distinct compiled
+ * callees before it stops caching and the overflow stays on the full dispatch path. */
+#define MAL_CALL_CACHE_WAYS 4u
+
 /**
- * Monomorphic call-site cache for the native backend. A CALL site whose callee is a plain
- * compiled user function (not bound / native / proxy / interpreted) caches it by identity,
- * so a repeat call to the same function skips the full dispatch chain in mal_vm_call_value
+ * Polymorphic call-site cache for the native backend. A CALL site whose callee is a plain
+ * compiled user function (not bound / native / proxy / interpreted) caches it by identity, so
+ * a repeat call to a previously-seen callee skips the full dispatch chain in mal_vm_call_value
  * (proxy/bound/native probing, bound-arg resolution + free, function/env unwrap) and enters
- * the compiled body directly. `callee` is the cached function-object value; `function_index`
- * + `env` are its immutable identity (the MalFunction is re-derived from the index each hit,
- * since eval/new Function reallocs the function array). A zero-initialized cache never matches
- * (a boxed callee is nonzero), so the first call takes the slow path and fills it.
+ * the compiled body directly. Up to MAL_CALL_CACHE_WAYS callees are held (a dispatch-table /
+ * callback site sees a handful); `callee[v]` is the cached function-object value and
+ * `function_index[v]` + `env[v]` its immutable identity (the MalFunction is re-derived from the
+ * index each hit, since eval/new Function reallocs the function array). A zero-initialized
+ * cache has count 0, so the first call takes the slow path and fills a way.
  *
- * `epoch` is the heap epoch at fill time. A function object is collectable, so its address
- * could be freed and reused after a GC — the raw `callee` bit-compare would then false-hit a
- * stale body/env (an ABA hazard). A cell is only freed across a sweep, which bumps the epoch,
- * so requiring the epoch to match invalidates the cache exactly when reuse is possible.
+ * `epoch` is the heap epoch the ways were filled in. A function object is collectable, so its
+ * address could be freed and reused after a GC — a raw `callee` bit-compare would then
+ * false-hit a stale body/env (an ABA hazard). A cell is only freed across a sweep, which bumps
+ * the epoch, so a changed epoch invalidates every way (the ways are cleared on the next fill).
  */
 typedef struct MalCallCache {
-    MalValue callee;
-    MalEnv *env;
-    i32 function_index;
+    MalValue callee[MAL_CALL_CACHE_WAYS];
+    MalEnv *env[MAL_CALL_CACHE_WAYS];
+    i32 function_index[MAL_CALL_CACHE_WAYS];
+    u32 count;
     u32 epoch;
 } MalCallCache;
 
