@@ -1349,6 +1349,37 @@ MalCompletion mal_vm_call_value(
 );
 
 /**
+ * Monomorphic call-site cache for the native backend. A CALL site whose callee is a plain
+ * compiled user function (not bound / native / proxy / interpreted) caches it by identity,
+ * so a repeat call to the same function skips the full dispatch chain in mal_vm_call_value
+ * (proxy/bound/native probing, bound-arg resolution + free, function/env unwrap) and enters
+ * the compiled body directly. `callee` is the cached function-object value; `function_index`
+ * + `env` are its immutable identity (the MalFunction is re-derived from the index each hit,
+ * since eval/new Function reallocs the function array). A zero-initialized cache never matches
+ * (a boxed callee is nonzero), so the first call takes the slow path and fills it.
+ *
+ * `epoch` is the heap epoch at fill time. A function object is collectable, so its address
+ * could be freed and reused after a GC — the raw `callee` bit-compare would then false-hit a
+ * stale body/env (an ABA hazard). A cell is only freed across a sweep, which bumps the epoch,
+ * so requiring the epoch to match invalidates the cache exactly when reuse is possible.
+ */
+typedef struct MalCallCache {
+    MalValue callee;
+    MalEnv *env;
+    i32 function_index;
+    u32 epoch;
+} MalCallCache;
+
+MalCompletion mal_vm_call_cached(
+    MalVm *vm,
+    MalCallCache *cc,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+);
+
+/**
  * Push a bytecode frame for `function_index` and run it to completion, marshaling
  * `args` onto the top of the value stack as the callee's incoming window, and
  * returning the result (vm->completion carries a throw out). Unlike

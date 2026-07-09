@@ -405,6 +405,9 @@ static inline void mal_gc_poison_cell(u8 *cell, u32 cell_size, usize free_offset
 }
 
 void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize) {
+    // A cell may be freed (below) and its address later reused, so any identity cache
+    // keyed on a raw cell pointer is only valid within one epoch (see MalHeap.epoch).
+    heap->epoch++;
     usize data_offset = mal_gc_cell_data_offset();
     usize free_offset = mal_gc_free_next_offset();
 

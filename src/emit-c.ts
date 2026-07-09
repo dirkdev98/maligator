@@ -1741,8 +1741,12 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map((r) => boxed(r)).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			// A per-site monomorphic call cache: a repeat call to the same compiled callee
+			// skips the dispatch chain (see mal_vm_call_cached). The identity guard keeps it
+			// sound for bound/native/proxy/interpreted callees (they stay on the slow path).
 			return [
-				`MalCompletion ${tmp} = mal_vm_call_value(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+				`static MalCallCache __cc_${ip};`,
+				`MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll, // call-return safepoint

@@ -66,6 +66,11 @@ typedef struct MalHeap {
     /** Bytes of managed cells that survived the last sweep; sizes the next
      * auto-collection trigger. Zero until the first collection. */
     usize live_bytes;
+    /** Bumped at the start of every sweep. A cell address can only be freed and
+     * reused across a sweep, so callers that cache a raw cell pointer by identity
+     * (the native backend's call-site cache) tag it with the epoch and treat a
+     * changed epoch as an invalidation — closing the ABA hole without rooting. */
+    u32 epoch;
 } MalHeap;
 
 /**

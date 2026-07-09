@@ -1994,6 +1994,59 @@ MalCompletion mal_vm_call_value(
     return completion;
 }
 
+MalCompletion mal_vm_call_cached(
+    MalVm *vm,
+    MalCallCache *cc,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return vm->completion;
+    }
+    // Monomorphic hit: the same plain compiled function object as last time, within the same
+    // heap epoch (so `callee`'s cell can't have been freed + its address reused — see the ABA
+    // note on MalCallCache). Its index / body / env are immutable, so this skips the whole
+    // dispatch chain and enters the body directly (mirrors the compiled-callee arm of
+    // mal_vm_call_value). cc->env stays alive: within the epoch the callee object lives, and a
+    // live function object keeps its creation_env reachable.
+    if (callee == cc->callee && cc->epoch == vm->heap.epoch) {
+        // Re-derive the MalFunction from the (stable) index rather than caching a pointer:
+        // eval/new Function grows vm->definition->functions (a realloc'd C array, not a GC
+        // cell, so the heap-epoch guard would NOT catch its moving), which would dangle a
+        // cached pointer. The index is stable across such growth.
+        const MalFunction *function = &vm->definition->functions[cc->function_index];
+        if (!mal_vm_enter_compiled(vm, cc->function_index)) {
+            return vm->completion;
+        }
+        MalValue tv = mal_vm_callee_this(vm, function, this_value);
+        MalValue value =
+            function->compiled(vm, tv, args, arg_count, mal_value_new_undefined(), cc->env, callee, nullptr);
+        mal_vm_leave_compiled(vm);
+        return vm->completion.kind == MAL_COMPLETION_THROW
+            ? vm->completion
+            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+    }
+
+    MalCompletion completion = mal_vm_call_value(vm, callee, this_value, args, arg_count);
+    // Fill/refill the cache when the callee is a plain compiled user function — the only case
+    // the fast path handles. Bound/native/proxy/interpreted callees are left uncached (the
+    // identity guard simply keeps missing for them). Tagged with the current epoch so a later
+    // sweep that could reuse this address invalidates the entry.
+    if (mal_value_is_function_object(callee)) {
+        i32 index = mal_function_object_function_index(mal_value_to_function_object(callee));
+        const MalFunction *function = &vm->definition->functions[index];
+        if (function->compiled != nullptr) {
+            cc->callee = callee;
+            cc->env = mal_value_to_function_object(callee)->creation_env;
+            cc->function_index = index;
+            cc->epoch = vm->heap.epoch;
+        }
+    }
+    return completion;
+}
+
 MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count) {
     return mal_vm_construct_value_with_target(vm, callee, args, arg_count, callee);
 }
