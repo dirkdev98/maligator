@@ -126,6 +126,13 @@ const USE_ONLY_FIRST_REGISTER = new Set([
 	"setPrototype",
 	"setFunctionName",
 	"requireCoercible",
+	// A temporal-dead-zone guard: throws if its operand is the TDZ sentinel and
+	// otherwise passes the value through unchanged (lowers to THROW_IF_TDZ { src },
+	// no destination — like requireCoercible). Modelling it as a definition would
+	// inflate the operand's def count and defeat every single-assignment analysis
+	// (inliner callee resolution, escape, scalar replacement) for the `let`/`const`
+	// bindings that emit a `throwIfTdz` on every read.
+	"throwIfTdz",
 ]);
 
 /**
