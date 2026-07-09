@@ -379,6 +379,176 @@ export function findInlinableCalls(
 }
 
 // ---------------------------------------------------------------------------
+// Speculative (guarded) direct-call inlining — ELIGIBILITY ANALYSIS ONLY.
+//
+// A call whose callee is loaded from a *reassignable* global (`loadGlobalProperty`,
+// i.e. a script-mode top-level `function`) can't be statically resolved — the binding
+// might be reassigned — so `findInlinableCalls` skips it. But the compiler still knows
+// the *candidate*: the top-level function declaration that initializes that name. A
+// runtime guard (`function_index(callee) === F`) makes inlining it sound — a
+// reassignment just fails the guard and deopts to the normal call. This pass only
+// *detects* such sites (zero miscompile risk); the guarded transform re-checks + guards.
+// ---------------------------------------------------------------------------
+
+export interface SpeculativeInlineSite {
+	/** The `call` instruction (`[dst, callee, this, ...args]`). */
+	call: IRInstruction;
+	/** functionIndex of the candidate the callee is speculated to be (guarded at runtime). */
+	target: number;
+	/** The global name the callee is loaded from (the guard's subject; for diagnostics). */
+	nameStringIndex: number;
+}
+
+export interface ProgramSpeculativeSites {
+	/** Keyed by caller `IRFunction.functionIndex`. */
+	byCaller: Map<number, Array<SpeculativeInlineSite>>;
+}
+
+/**
+ * Whether a function is free of captured-env access, so inlining it into a caller that is
+ * NOT its lexical definer stays sound: its free variables must be module globals (resolved
+ * identically anywhere), not enclosing-function locals reached via the env chain (which
+ * would resolve against the wrong env once spliced elsewhere). A top-level function is
+ * always env-independent; the check is defensive.
+ */
+function isEnvIndependent(fn: IRFunction): boolean {
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.type === "loadCaptured" || instruction.type === "storeCaptured") {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+/**
+ * Map a global property name to the top-level function declaration that initializes it
+ * (`storeGlobalProperty N ← createFunction F`), when unambiguous — the speculative
+ * candidate for a `globalProperty` call. A name with two distinct function declarations is
+ * ambiguous and omitted. A later reassignment of the name does not disqualify it: the
+ * runtime guard handles that (it is the whole point of speculating a reassignable binding).
+ */
+function globalFunctionDeclarations(program: IntermediateProgram): Map<number, number> {
+	const found = new Map<number, number>();
+	const ambiguous = new Set<number>();
+	for (const fn of program.functions) {
+		// A linear per-block last-writer scan, not singleDefinitions: hoisted declarations
+		// reuse one destination register across every `createFunction F; storeGlobalProperty
+		// N` pair (so the register is multi-def), and the pair is adjacent, so the most
+		// recent writer of the store's source is the createFunction that feeds it.
+		for (const block of fn.blocks) {
+			const lastWriter = new Map<number, IRInstruction>();
+			for (const instruction of block.instructions) {
+				if (instruction.type === "storeGlobalProperty") {
+					const source = lastWriter.get(instruction.registers[0]);
+					if (source !== undefined && source.type === "createFunction") {
+						const name = instruction.nameStringIndex;
+						const existing = found.get(name);
+						if (existing !== undefined && existing !== source.functionIndex) {
+							ambiguous.add(name);
+						} else {
+							found.set(name, source.functionIndex);
+						}
+					}
+				}
+				const def = definedRegister(instruction);
+				if (def !== null) {
+					lastWriter.set(def, instruction);
+				}
+			}
+		}
+	}
+	for (const name of ambiguous) {
+		found.delete(name);
+	}
+	return found;
+}
+
+/**
+ * Find direct-call sites whose callee is loaded from a reassignable global with a known
+ * top-level function declaration F — the sites a `function_index(callee) === F` guard makes
+ * inlinable. F must be an env-independent, inlinable-shaped `isInlinableTarget` and not the
+ * caller itself (direct self-recursion). Detection only.
+ */
+export function findSpeculativeInlineSites(
+	program: IntermediateProgram,
+): ProgramSpeculativeSites {
+	const targetOf = new Map<number, IRFunction>();
+	for (const fn of program.functions) {
+		targetOf.set(fn.functionIndex, fn);
+	}
+	const globalDecls = globalFunctionDeclarations(program);
+	const eligible = (index: number): boolean => {
+		const fn = targetOf.get(index);
+		return (
+			fn !== undefined &&
+			isInlinableTarget(fn) &&
+			isEnvIndependent(fn) &&
+			(singleReturnBlock(fn) !== null || multiBlockInlinable(fn) !== null)
+		);
+	};
+	const byCaller = new Map<number, Array<SpeculativeInlineSite>>();
+	for (const fn of program.functions) {
+		const defs = singleDefinitions(fn);
+		const sites: Array<SpeculativeInlineSite> = [];
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "call") {
+					continue;
+				}
+				// A reassignable-global reference reads `globalThis[name]`, i.e. the callee's
+				// def is `loadProperty(loadIntrinsic globalThis, createString name)` (see the
+				// globalProperty read path in ir.ts). Match that trio.
+				const callee = defs.get(instruction.registers[1]);
+				if (callee === undefined || callee.type !== "loadProperty") {
+					continue;
+				}
+				const object = defs.get(callee.registers[1]);
+				const key = defs.get(callee.registers[2]);
+				if (
+					object === undefined ||
+					object.type !== "loadIntrinsic" ||
+					object.intrinsic !== "globalThis" ||
+					key === undefined ||
+					key.type !== "createString"
+				) {
+					continue;
+				}
+				const target = globalDecls.get(key.stringIndex);
+				if (target === undefined || target === fn.functionIndex || !eligible(target)) {
+					continue; // no candidate / direct self-recursion / not inlinable
+				}
+				sites.push({ call: instruction, target, nameStringIndex: key.stringIndex });
+			}
+		}
+		if (sites.length > 0) {
+			byCaller.set(fn.functionIndex, sites);
+		}
+	}
+	return { byCaller };
+}
+
+export function debugSpeculativeInlineSites(program: IntermediateProgram): string {
+	const { byCaller } = findSpeculativeInlineSites(program);
+	let output = "";
+	for (const fn of program.functions) {
+		const sites = byCaller.get(fn.functionIndex);
+		if (sites === undefined || sites.length === 0) {
+			continue;
+		}
+		output += `fn#${fn.functionIndex}: ${sites.length} speculative call(s) → ${sites
+			.map(
+				(site) =>
+					`${decodeStringConstant(program, site.nameStringIndex)}=#${site.target}`,
+			)
+			.join(", ")}\n`;
+	}
+	log.info(output || "(no speculative inline sites)\n");
+	return output;
+}
+
+// ---------------------------------------------------------------------------
 // HOF callback inlining — ELIGIBILITY ANALYSIS ONLY (no transformation yet).
 //
 // `arr.forEach(cb)` / `map` / `filter` … allocate a fresh closure (+ captured

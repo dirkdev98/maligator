@@ -12,7 +12,11 @@ import type { ResolvedBuildConfig } from "./build-config.ts";
 import { gmallocEnabled, runEnv } from "./build-flags.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { dumpProgramEscape } from "./escape.ts";
-import { debugHofInlineSites, debugInlinableCalls } from "./inline.ts";
+import {
+	debugHofInlineSites,
+	debugInlinableCalls,
+	debugSpeculativeInlineSites,
+} from "./inline.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
 import { debugProgramLiveness } from "./liveness.ts";
@@ -129,6 +133,14 @@ if (argFlag("--dump-inline")) {
 // substitution pass will consume these).
 if (argFlag("--dump-hof")) {
 	debugHofInlineSites(irProgram);
+}
+
+// Speculative (guarded) direct-call inlining eligibility (call-opt phase B). Detection
+// only — no transformation yet. `--dump-speculative` lists direct calls whose callee is a
+// reassignable global with a known top-level function declaration, which a runtime
+// function-index guard makes inlinable.
+if (argFlag("--dump-speculative")) {
+	debugSpeculativeInlineSites(irProgram);
 }
 
 // Escape / effect summary analysis (task #3 / §N.7). Detection only — no
