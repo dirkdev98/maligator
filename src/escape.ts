@@ -727,6 +727,155 @@ export function registerEscapesFrame(
 }
 
 // ---------------------------------------------------------------------------
+// Stack-allocation candidate classification (T7.4 / §N.7).
+//
+// A single-assignment, non-escaping allocation whose SHAPE never transitions can
+// be placed in the caller's C frame instead of the GC heap: the object keeps its
+// identity (so it may still be passed to the non-retaining callees the escape
+// lattice already blesses) but never touches the collector. This is the residual
+// scalar replacement (ir-opt.ts) cannot take — scalar replacement additionally
+// requires that identity is never observed (no call-arg / dynamic-key use) and
+// removes the object entirely; stack allocation keeps a real object for the cases
+// that flow through a real call or a dynamic-key read.
+//
+// Safety rests on three runtime facts (gc_todo.md §N.7; verified in gc.c):
+//  - the container is a C-stack MalObject with storage=IMMORTAL, so mal_gc_shade
+//    always skips it (gc.c:311) → it is never marked BLACK → no stale-mark
+//    use-after-free even when a callee roots the boxed pointer across a GC;
+//  - its slots live in a stack MalValue[] rooted as a run in the §J root frame, so
+//    its referents stay live at any safepoint, from any call depth;
+//  - it owns no heap side-allocation (no `overflow` table), which requires the
+//    shape to be fixed — hence the shape-transition check below.
+// The escape lattice already proves non-retention + binding stability (only stable
+// global/lexical slots resolve to a callee summary; reassignable globals stay
+// `retained`), so this classifier's only added obligation is ruling out shape
+// mutation.
+// ---------------------------------------------------------------------------
+
+export type StackAllocClass = "scalar" | "stack";
+
+export interface StackAllocCandidate {
+	register: number;
+	allocType: string;
+	/** "stack": identity observed (call arg / dynamic-key read) — the residual only
+	 * stack allocation can take. "scalar": ir-opt.ts already removes it entirely;
+	 * reported for comparison. */
+	klass: StackAllocClass;
+}
+
+/** The constant string-key index a key register holds, if its sole definition is a
+ * `createString`; undefined for a dynamic (computed) key. */
+function constKeyStringIndex(ctx: FunctionContext, keyRegister: number): number | undefined {
+	const def = ctx.singleDefs.get(keyRegister);
+	return def?.type === "createString" ? def.stringIndex : undefined;
+}
+
+/**
+ * Classify a single-assignment, non-escaping `createObjectShaped` as a stack
+ * candidate, or `undefined` if its shape can transition (a store of a key the
+ * literal did not declare, a dynamic-key store, or a shape-changing op such as
+ * `defineProperty`/`delete`/`setPrototype` — any of which would force a heap
+ * `overflow` table the stack object cannot own). Precondition: the register does
+ * not escape the frame, so every use is already in the escape lattice's blessed,
+ * non-retaining set; this only rules out shape mutation.
+ */
+function classifyShapedStackAlloc(
+	ctx: FunctionContext,
+	alloc: Extract<IRInstruction, { type: "createObjectShaped" }>,
+): StackAllocClass | undefined {
+	const shapeKeys = new Set(alloc.keyStringIndices);
+	let identityObserved = false;
+	const seen = new Set<number>([alloc.registers[0]]);
+	const worklist = [alloc.registers[0]];
+	while (worklist.length > 0) {
+		const alias = worklist.pop()!;
+		for (const { instruction, position } of ctx.usesOf.get(alias) ?? []) {
+			switch (instruction.type) {
+				case "loadProperty": {
+					// [dst, object, key]; object read at pos 1. A dynamic key observes the
+					// shape at runtime → not scalar-replaceable, but still stack-allocatable
+					// (a real MalObject answers the MOP read).
+					if (position !== 1) return undefined;
+					if (constKeyStringIndex(ctx, instruction.registers[2]) === undefined) {
+						identityObserved = true;
+					}
+					break;
+				}
+				case "loadPrototype": {
+					if (position !== 1) return undefined; // [dst, object]
+					break;
+				}
+				case "storeProperty": {
+					// [object, key, value]; object at pos 0. A store of a key not already in
+					// the shape (or a dynamic key) transitions the shape → forces overflow.
+					if (position !== 0) return undefined;
+					const key = constKeyStringIndex(ctx, instruction.registers[1]);
+					if (key === undefined || !shapeKeys.has(key)) return undefined;
+					break;
+				}
+				case "move": {
+					if (position !== 1) return undefined; // [dst, src]
+					const dst = instruction.registers[0];
+					if (ctx.defCount.get(dst) !== 1) return undefined;
+					if (!seen.has(dst)) {
+						seen.add(dst);
+						worklist.push(dst);
+					}
+					break;
+				}
+				case "call":
+				case "callSpread": {
+					// The escape lattice proved this callee neither retains the value nor is
+					// a reassignable binding, else the register would have escaped and never
+					// reached here. Identity flows to the callee → not scalar-replaceable.
+					identityObserved = true;
+					break;
+				}
+				default:
+					// defineProperty / defineAccessor / setPrototype / deleteProperty and any
+					// other shape-mutating or unrecognized use: disqualify (the escape lattice
+					// blesses some of these at pos 0 as non-retaining, but they change layout).
+					return undefined;
+			}
+		}
+	}
+	return identityObserved ? "stack" : "scalar";
+}
+
+/** Every stack-allocation candidate in `fn`, keyed by allocation destination
+ * register. Pure analysis — consumed by emit-c (behind MAL_STACK_ALLOC). */
+export function stackAllocCandidates(
+	analysis: ProgramEscape,
+	fn: IRFunction,
+): Map<number, StackAllocCandidate> {
+	const result = new Map<number, StackAllocCandidate>();
+	const ctx = analysis.contexts.get(fn.functionIndex);
+	if (ctx === undefined) {
+		return result;
+	}
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.type !== "createObjectShaped") {
+				continue;
+			}
+			const register = instruction.registers[0];
+			if (ctx.defCount.get(register) !== 1) {
+				continue;
+			}
+			const kind = escapeOfRegister(analysis.program, fn, ctx, register, analysis.summaries);
+			if (escapesFrame(kind)) {
+				continue;
+			}
+			const klass = classifyShapedStackAlloc(ctx, instruction);
+			if (klass !== undefined) {
+				result.set(register, { register, allocType: instruction.type, klass });
+			}
+		}
+	}
+	return result;
+}
+
+// ---------------------------------------------------------------------------
 // Debug dump (`--dump-escape`).
 // ---------------------------------------------------------------------------
 
@@ -800,4 +949,41 @@ export function debugProgramEscape(program: IntermediateProgram): string {
 
 export function dumpProgramEscape(program: IntermediateProgram): void {
 	log.info(debugProgramEscape(program));
+}
+
+/** `--dump-stack-alloc`: per-function stack-allocation candidates + a corpus tally
+ * (how many heap allocations escape analysis proves are frame-local and
+ * shape-fixed). Diagnostic only — the transform lives in emit-c. */
+export function debugStackAlloc(program: IntermediateProgram): string {
+	const analysis = analyzeProgramEscape(program);
+	const lines: Array<string> = ["=== stack-allocation candidates ==="];
+	let stackCount = 0;
+	let scalarCount = 0;
+	for (const fn of program.functions) {
+		const candidates = stackAllocCandidates(analysis, fn);
+		if (candidates.size === 0) {
+			continue;
+		}
+		const name =
+			fn.nameStringIndex >= 0 && fn.nameStringIndex < program.stringConstants.length
+				? decodeStringConstant(program, fn.nameStringIndex)
+				: "<anon>";
+		lines.push(`fn#${fn.functionIndex} ${name}`);
+		for (const c of candidates.values()) {
+			lines.push(`    r${c.register} ${c.allocType}: ${c.klass}`);
+			if (c.klass === "stack") {
+				stackCount++;
+			} else {
+				scalarCount++;
+			}
+		}
+	}
+	lines.push(
+		`=== ${stackCount} stack-only (identity observed) + ${scalarCount} also-scalar-replaceable ===`,
+	);
+	return lines.join("\n");
+}
+
+export function dumpStackAlloc(program: IntermediateProgram): void {
+	log.info(debugStackAlloc(program));
 }

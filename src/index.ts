@@ -11,7 +11,7 @@ import {
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { gmallocEnabled, runEnv } from "./build-flags.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
-import { dumpProgramEscape } from "./escape.ts";
+import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
 import {
 	debugHofInlineSites,
 	debugInlinableCalls,
@@ -157,6 +157,14 @@ if (argFlag("--dump-methods")) {
 // scalar-replacement (T7.4) and write-barrier-elision (T2.6) passes consume.
 if (argFlag("--dump-escape")) {
 	dumpProgramEscape(irProgram);
+}
+
+// Stack-allocation candidates (T7.4 / §N.7). Detection only. `--dump-stack-alloc`
+// lists each single-assignment, non-escaping, shape-fixed shaped-object allocation
+// and whether it is stack-only (identity observed) or also scalar-replaceable — the
+// set emit-c places in the C root frame under MAL_STACK_ALLOC.
+if (argFlag("--dump-stack-alloc")) {
+	dumpStackAlloc(irProgram);
 }
 
 const registerAllocTiming = log.time("register allocation");
