@@ -108,6 +108,7 @@ export const WIRE_OPCODES = [
 	"SET_FUNCTION_NAME",
 	"CHECK_SUPER_CLASS",
 	"LOAD_CALLEE",
+	"GUARD_FUNCTION_INDEX",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -627,6 +628,11 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.ownerFunctionIndex);
 			w.i32(i.index);
 			return;
+		case "GUARD_FUNCTION_INDEX":
+			w.i32(i.dst);
+			w.i32(i.callee);
+			w.i32(i.functionIndex);
+			return;
 		case "STORE_CAPTURED":
 			w.i32(i.src);
 			w.i32(i.ownerFunctionIndex);
@@ -1076,6 +1082,8 @@ function readInstruction(r: Reader): VmInstruction {
 		}
 		case "LOAD_CAPTURED":
 			return { opcode, dst: r.i32(), ownerFunctionIndex: r.i32(), index: r.i32() };
+		case "GUARD_FUNCTION_INDEX":
+			return { opcode, dst: r.i32(), callee: r.i32(), functionIndex: r.i32() };
 		case "STORE_CAPTURED":
 			return { opcode, src: r.i32(), ownerFunctionIndex: r.i32(), index: r.i32() };
 		case "ENV_PUSH":

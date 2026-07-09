@@ -667,6 +667,15 @@ export type IRInstruction =
 			registers: [number];
 	  }
 	| {
+			// Speculative-call-inlining guard (produced by the inliner, not the front end):
+			// dst := callee is a function object with `functionIndex`. Feeds a jumpIf that
+			// picks the inlined body vs the deopt call.
+			type: "guardFunctionIndex";
+			// [destination (boolean), callee]
+			registers: [number, number];
+			functionIndex: number;
+	  }
+	| {
 			// Per-iteration loop environment (CreatePerIterationEnvironment). envPush
 			// enters a loop scope (fresh env, parent = current); envCopy replaces the
 			// current scope env with a sibling that copies the bindings forward; envPop

@@ -291,6 +291,12 @@ export type VmInstruction =
 			index: number;
 	  }
 	| {
+			opcode: "GUARD_FUNCTION_INDEX";
+			dst: number;
+			callee: number;
+			functionIndex: number;
+	  }
+	| {
 			opcode: "LOAD_GLOBAL";
 			dst: number;
 			index: number;
@@ -877,6 +883,13 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "LOAD_NEW_TARGET",
 				dst: instruction.registers[0],
+			};
+		case "guardFunctionIndex":
+			return {
+				opcode: "GUARD_FUNCTION_INDEX",
+				dst: instruction.registers[0],
+				callee: instruction.registers[1],
+				functionIndex: instruction.functionIndex,
 			};
 		case "loadCallee":
 			return {

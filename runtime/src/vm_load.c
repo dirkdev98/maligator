@@ -102,6 +102,7 @@ typedef enum WireOp {
     WIRE_SET_FUNCTION_NAME,
     WIRE_CHECK_SUPER_CLASS,
     WIRE_LOAD_CALLEE,
+    WIRE_GUARD_FUNCTION_INDEX,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -528,6 +529,12 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
             o->as.load_captured.dst = rd_i32(r);
             o->as.load_captured.owner_function_index = rd_i32(r);
             o->as.load_captured.index = rd_i32(r);
+            return;
+        case WIRE_GUARD_FUNCTION_INDEX:
+            o->opcode = MAL_OP_GUARD_FUNCTION_INDEX;
+            o->as.guard_function_index.dst = rd_i32(r);
+            o->as.guard_function_index.callee = rd_i32(r);
+            o->as.guard_function_index.function_index = rd_i32(r);
             return;
         case WIRE_STORE_CAPTURED:
             o->opcode = MAL_OP_STORE_CAPTURED;

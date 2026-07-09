@@ -640,6 +640,15 @@ void mal_op_load_captured(MalCallable *callable, MalInstruction *instruction) {
     );
 }
 
+void mal_op_guard_function_index(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.guard_function_index.dst] = mal_value_new_boolean(
+        mal_vm_callee_has_index(
+            callable->registers[instruction->as.guard_function_index.callee],
+            instruction->as.guard_function_index.function_index
+        )
+    );
+}
+
 void mal_op_store_captured(MalCallable *callable, MalInstruction *instruction) {
     mal_vm_store_captured(
         callable->env,

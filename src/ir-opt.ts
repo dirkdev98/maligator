@@ -4,6 +4,7 @@ import {
 	optEmptyDeadFunctions,
 	optInlineCalls,
 	optInlineHofCallbacks,
+	optInlineSpeculative,
 } from "./inline.ts";
 import { debugIntermediateProgram } from "./ir.ts";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
@@ -69,6 +70,10 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		// cross-call object flow) and DCE (which drops the now-unused closure's
 		// createFunction → no closure/env allocation).
 		optInlineCalls,
+		// Speculative (guarded) inlining of reassignable-global direct calls (script-mode
+		// top-level functions). Runs after the static inliner so only genuinely-dynamic
+		// callees reach it; its deopt path is a normal call, folded no further.
+		optInlineSpeculative,
 		// Runs after copy propagation so a record's reads reference its allocation
 		// register directly (not a local copy), and before DCE so the freed key
 		// constants and unread values are cleaned up the same round.

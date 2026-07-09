@@ -1179,6 +1179,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_LOAD_CAPTURED:
                 mal_op_load_captured(frame, &instruction);
                 break;
+            case MAL_OP_GUARD_FUNCTION_INDEX:
+                mal_op_guard_function_index(frame, &instruction);
+                break;
             case MAL_OP_STORE_CAPTURED:
                 mal_op_store_captured(frame, &instruction);
                 break;

@@ -471,6 +471,14 @@ function globalFunctionDeclarations(program: IntermediateProgram): Map<number, n
  * inlinable. F must be an env-independent, inlinable-shaped `isInlinableTarget` and not the
  * caller itself (direct self-recursion). Detection only.
  */
+/**
+ * Calls the speculative substitution has already wrapped (the original call is preserved on
+ * the deopt path). Re-detecting them would re-wrap every fixpoint round — the callee's
+ * loadProperty def survives in the pre-guard code — so they are excluded here. Keyed on the
+ * instruction object, which the substitution reuses verbatim in the deopt block.
+ */
+const speculativeSubstituted = new WeakSet<IRInstruction>();
+
 export function findSpeculativeInlineSites(
 	program: IntermediateProgram,
 ): ProgramSpeculativeSites {
@@ -494,7 +502,7 @@ export function findSpeculativeInlineSites(
 		const sites: Array<SpeculativeInlineSite> = [];
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				if (instruction.type !== "call") {
+				if (instruction.type !== "call" || speculativeSubstituted.has(instruction)) {
 					continue;
 				}
 				// A reassignable-global reference reads `globalThis[name]`, i.e. the callee's
@@ -1174,6 +1182,129 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 			)) {
 				fn.blocks.push(inlinedBlock);
 			}
+			// Join: the host's tail after the call (already ends in the host's terminator).
+			fn.blocks.push({ instructions: post });
+			changed = true;
+		}
+	}
+	return changed;
+}
+
+// ---------------------------------------------------------------------------
+// Speculative (guarded) direct-call inlining — SUBSTITUTION. For each site
+// findSpeculativeInlineSites reports, splice the candidate F's body behind a runtime
+// `function_index(callee) === F` guard, deopting to the original call on a miss:
+//
+//   pre; t = guardFunctionIndex(callee, F); if (t) goto inline; else goto deopt
+//   inline: <F's body (buildInlinedBlocks), return → move-to-dst + goto join>
+//   deopt:  <original call>; goto join
+//   join:   <the host's tail after the call>
+//
+// The guard is never trusted for correctness (the deopt path is the real call), so this is
+// sound for a reassignable binding: a reassignment / any other callee simply fails the guard.
+// ---------------------------------------------------------------------------
+
+export function optInlineSpeculative(program: IntermediateProgram): boolean {
+	let changed = false;
+	const { byCaller } = findSpeculativeInlineSites(program);
+	const targetOf = new Map<number, IRFunction>();
+	for (const fn of program.functions) {
+		targetOf.set(fn.functionIndex, fn);
+	}
+
+	for (const fn of program.functions) {
+		const sites = byCaller.get(fn.functionIndex);
+		if (sites === undefined) {
+			continue;
+		}
+		for (const { call, target } of sites) {
+			if (
+				speculativeSubstituted.has(call) ||
+				instructionCount(fn) >= MAX_CALLER_INSTRUCTIONS
+			) {
+				continue;
+			}
+			const targetFn = targetOf.get(target);
+			if (targetFn === undefined) {
+				continue;
+			}
+			const blocks = multiBlockInlinable(targetFn);
+			if (blocks === null) {
+				continue; // not a splice-able control-flow shape
+			}
+
+			// Locate the call by reference (earlier substitutions shift indices/blocks).
+			let host: IRBlock | undefined;
+			let index = -1;
+			for (const candidateBlock of fn.blocks) {
+				const at = candidateBlock.instructions.indexOf(call);
+				if (at >= 0) {
+					host = candidateBlock;
+					index = at;
+					break;
+				}
+			}
+			if (host === undefined || isCallInTry(fn, host, index)) {
+				continue; // gone / relocating out of an enclosing try (see multi-block inliner)
+			}
+
+			// call.registers = [destination, callee, this, ...arguments]
+			const callRegisters = (call as { registers: ReadonlyArray<number> }).registers;
+			const destination = callRegisters[0]!;
+			const calleeRegister = callRegisters[1]!;
+			const args = callRegisters.slice(3);
+			const post = host.instructions.slice(index + 1);
+			if (post.length === 0 || containsTryMarker(post)) {
+				continue;
+			}
+
+			let callSitePos = -1;
+			for (let i = index - 1; i >= 0; --i) {
+				const prior = host.instructions[i]!;
+				if (prior.type === "sourcePos") {
+					callSitePos = prior.pos;
+					break;
+				}
+			}
+
+			const offset = fn.nextRegisterDestination;
+			fn.nextRegisterDestination += targetFn.nextRegisterDestination;
+			const guardRegister = fn.nextRegisterDestination++;
+
+			const base = fn.blocks.length;
+			const deoptIndex = base + blocks.length;
+			const joinIndex = deoptIndex + 1;
+
+			// Host: pre + guard + jumpIf(inline entry) + jump(deopt).
+			host.instructions = [
+				...host.instructions.slice(0, index),
+				{
+					type: "guardFunctionIndex",
+					registers: [guardRegister, calleeRegister],
+					functionIndex: target,
+				},
+				{ type: "jumpIf", registers: [guardRegister], blocks: [base] },
+				{ type: "jump", blocks: [deoptIndex] },
+			];
+			// Inline blocks [base, deoptIndex): the guarded fast path. A plain call has no
+			// receiver (thisSource null); an eligible target is `this`-free regardless.
+			for (const inlinedBlock of buildInlinedBlocks(
+				program,
+				targetFn,
+				blocks,
+				args,
+				null,
+				destination,
+				offset,
+				callSitePos,
+				base,
+				joinIndex,
+			)) {
+				fn.blocks.push(inlinedBlock);
+			}
+			// Deopt block: the original call verbatim, then jump to the join.
+			speculativeSubstituted.add(call);
+			fn.blocks.push({ instructions: [call, { type: "jump", blocks: [joinIndex] }] });
 			// Join: the host's tail after the call (already ends in the host's terminator).
 			fn.blocks.push({ instructions: post });
 			changed = true;

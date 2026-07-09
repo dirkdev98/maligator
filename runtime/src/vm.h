@@ -98,6 +98,10 @@ typedef enum MalOpcode {
     MAL_OP_ENV_PUSH,
     MAL_OP_ENV_COPY,
     MAL_OP_ENV_POP,
+    // Speculative-call-inlining guard: dst = (callee is a function object with the cached
+    // function index). Appended last to keep every prior opcode's numeric value stable for
+    // the serialized wire format. Must stay in lockstep with serialize-vm's opcode list.
+    MAL_OP_GUARD_FUNCTION_INDEX,
 } MalOpcode;
 
 typedef enum MalBinaryOp {
@@ -296,6 +300,10 @@ typedef struct MalInstruction {
         struct {
             i32 dst, owner_function_index, index;
         } load_captured;
+
+        struct {
+            i32 dst, callee, function_index;
+        } guard_function_index;
 
         struct {
             i32 dst, index;

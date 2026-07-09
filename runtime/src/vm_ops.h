@@ -3,10 +3,24 @@
 #include "./defaults.h"
 #include "array_object.h"
 #include "builtin_iterator.h"
+#include "function_object.h" // mal_function_object_function_index, for the call guard
 #include "object_ops.h"
 #include "table.h"
 #include "value_ops.h" // mal_ops_number_value, for the numeric-index fast paths
 #include "vm.h"
+
+/**
+ * Speculative-call-inlining guard: whether `callee` is a plain function object with the
+ * given function index — the candidate the call site was inlined against. A miss deopts to
+ * the real call (so a reassigned global, a bound/native/proxy callee, or any other function
+ * simply takes the un-inlined path). The heap-type test is inline; the index accessor is the
+ * only out-of-line bit and is reached only when the type already matched.
+ */
+static inline bool mal_vm_callee_has_index(MalValue callee, i32 function_index) {
+    return mal_value_is_heap_type(callee, MAL_HEAP_FUNCTION_OBJECT) &&
+           mal_function_object_function_index((const MalFunctionObject *) mal_value_to_heap(callee)) ==
+               function_index;
+}
 
 /**
  * Normalize a value into a property key, converting canonical numeric strings
@@ -217,6 +231,7 @@ void mal_op_load_global(MalCallable *callable, MalInstruction *instruction);
 void mal_op_load_intrinsic(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_load_captured(MalCallable *callable, MalInstruction *instruction);
+void mal_op_guard_function_index(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_store_captured(MalCallable *callable, MalInstruction *instruction);
 

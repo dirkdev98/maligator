@@ -918,6 +918,8 @@ function producedRep(
 			return "number";
 		case "CREATE_BOOLEAN":
 			return "boolean";
+		case "GUARD_FUNCTION_INDEX":
+			return "boolean";
 		case "MOVE":
 			return reps[instruction.src] ?? null;
 		case "BINARY": {
@@ -1383,6 +1385,11 @@ function emitInstruction(
 				: [`r${instruction.dst} = this_value;`];
 		case "LOAD_NEW_TARGET":
 			return [`r${instruction.dst} = new_target;`];
+		case "GUARD_FUNCTION_INDEX":
+			// Speculative-inline guard → boolean-rep dst (a raw C bool feeding the jumpIf).
+			return [
+				`r${instruction.dst} = mal_vm_callee_has_index(${boxed(instruction.callee)}, ${instruction.functionIndex});`,
+			];
 		case "LOAD_CALLEE":
 			// The invoked closure — used to initialize a named function expression's
 			// own-name binding. Only emitted in the entry prologue, so `callee` is the
