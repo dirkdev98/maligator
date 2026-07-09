@@ -4,6 +4,7 @@ import {
 	optEmptyDeadFunctions,
 	optInlineCalls,
 	optInlineHofCallbacks,
+	optInlineMethod,
 	optInlineSpeculative,
 } from "./inline.ts";
 import { debugIntermediateProgram } from "./ir.ts";
@@ -74,6 +75,10 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		// top-level functions). Runs after the static inliner so only genuinely-dynamic
 		// callees reach it; its deopt path is a normal call, folded no further.
 		optInlineSpeculative,
+		// Shape-guarded method inlining: `obj.m()` where m uniquely resolves to a known
+		// candidate; guarded by the resolved callee's function index (the loadProperty callee
+		// is already the proto-resolved method), inlined with this = receiver. Deopt = call.
+		optInlineMethod,
 		// Runs after copy propagation so a record's reads reference its allocation
 		// register directly (not a local copy), and before DCE so the freed key
 		// constants and unread values are cleaned up the same round.

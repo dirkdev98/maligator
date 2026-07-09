@@ -472,12 +472,12 @@ function globalFunctionDeclarations(program: IntermediateProgram): Map<number, n
  * caller itself (direct self-recursion). Detection only.
  */
 /**
- * Calls the speculative substitution has already wrapped (the original call is preserved on
- * the deopt path). Re-detecting them would re-wrap every fixpoint round — the callee's
- * loadProperty def survives in the pre-guard code — so they are excluded here. Keyed on the
- * instruction object, which the substitution reuses verbatim in the deopt block.
+ * Calls a guarded substitution (speculative-global or method) has already wrapped — the
+ * original call is preserved verbatim on the deopt path, and its callee's loadProperty def
+ * survives in the pre-guard code, so re-detecting would re-wrap every fixpoint round. Both
+ * the speculative and method analyses exclude these. Keyed on the instruction object.
  */
-const speculativeSubstituted = new WeakSet<IRInstruction>();
+const guardedInlineSubstituted = new WeakSet<IRInstruction>();
 
 export function findSpeculativeInlineSites(
 	program: IntermediateProgram,
@@ -502,7 +502,7 @@ export function findSpeculativeInlineSites(
 		const sites: Array<SpeculativeInlineSite> = [];
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				if (instruction.type !== "call" || speculativeSubstituted.has(instruction)) {
+				if (instruction.type !== "call" || guardedInlineSubstituted.has(instruction)) {
 					continue;
 				}
 				// A reassignable-global reference reads `globalThis[name]`, i.e. the callee's
@@ -686,12 +686,6 @@ function methodDefinitionsByName(program: IntermediateProgram): Map<number, numb
 }
 
 /**
- * Calls the method substitution has already wrapped (excluded to avoid re-wrapping every
- * fixpoint round — the receiver-loadProperty def survives in the pre-guard code).
- */
-const methodSubstituted = new WeakSet<IRInstruction>();
-
-/**
  * Find `obj.m(args)` sites whose method name has a unique program-wide definition F that is
  * an inlinable method target. `obj.m()` is a `call` whose callee is
  * `loadProperty(receiver, createString name)` and whose `this` is that same receiver.
@@ -718,7 +712,7 @@ export function findMethodInlineSites(program: IntermediateProgram): ProgramMeth
 		const sites: Array<MethodInlineSite> = [];
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				if (instruction.type !== "call" || methodSubstituted.has(instruction)) {
+				if (instruction.type !== "call" || guardedInlineSubstituted.has(instruction)) {
 					continue;
 				}
 				const callee = defs.get(instruction.registers[1]);
@@ -1421,6 +1415,106 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 // sound for a reassignable binding: a reassignment / any other callee simply fails the guard.
 // ---------------------------------------------------------------------------
 
+/**
+ * Splice `targetFn`'s body at `call` behind a `function_index(callee) === targetFn` guard,
+ * deopting to the original call on a miss. `thisSource` maps the callee's `this` — null for a
+ * plain call, the receiver register for a method (`obj.m()`, whose callee is already the
+ * proto-resolved method, so the same index guard suffices — no shape / proto-validity check).
+ * Shared by the speculative-global and method inliners; returns true if it rewrote the call.
+ */
+function inlineGuardedCallSite(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	call: IRInstruction,
+	targetFn: IRFunction,
+	thisSource: number | null,
+): boolean {
+	if (
+		guardedInlineSubstituted.has(call) ||
+		instructionCount(fn) >= MAX_CALLER_INSTRUCTIONS
+	) {
+		return false;
+	}
+	const blocks = multiBlockInlinable(targetFn);
+	if (blocks === null) {
+		return false; // not a splice-able control-flow shape
+	}
+	// Locate the call by reference (earlier substitutions shift indices/blocks).
+	let host: IRBlock | undefined;
+	let index = -1;
+	for (const candidateBlock of fn.blocks) {
+		const at = candidateBlock.instructions.indexOf(call);
+		if (at >= 0) {
+			host = candidateBlock;
+			index = at;
+			break;
+		}
+	}
+	if (host === undefined || isCallInTry(fn, host, index)) {
+		return false; // gone / relocating out of an enclosing try (see multi-block inliner)
+	}
+
+	// call.registers = [destination, callee, this, ...arguments]
+	const callRegisters = (call as { registers: ReadonlyArray<number> }).registers;
+	const destination = callRegisters[0]!;
+	const calleeRegister = callRegisters[1]!;
+	const args = callRegisters.slice(3);
+	const post = host.instructions.slice(index + 1);
+	if (post.length === 0 || containsTryMarker(post)) {
+		return false;
+	}
+
+	let callSitePos = -1;
+	for (let i = index - 1; i >= 0; --i) {
+		const prior = host.instructions[i]!;
+		if (prior.type === "sourcePos") {
+			callSitePos = prior.pos;
+			break;
+		}
+	}
+
+	const offset = fn.nextRegisterDestination;
+	fn.nextRegisterDestination += targetFn.nextRegisterDestination;
+	const guardRegister = fn.nextRegisterDestination++;
+
+	const base = fn.blocks.length;
+	const deoptIndex = base + blocks.length;
+	const joinIndex = deoptIndex + 1;
+
+	// Host: pre + guard + jumpIf(inline entry) + jump(deopt).
+	host.instructions = [
+		...host.instructions.slice(0, index),
+		{
+			type: "guardFunctionIndex",
+			registers: [guardRegister, calleeRegister],
+			functionIndex: targetFn.functionIndex,
+		},
+		{ type: "jumpIf", registers: [guardRegister], blocks: [base] },
+		{ type: "jump", blocks: [deoptIndex] },
+	];
+	// Inline blocks [base, deoptIndex): the guarded fast path (this → thisSource).
+	for (const inlinedBlock of buildInlinedBlocks(
+		program,
+		targetFn,
+		blocks,
+		args,
+		thisSource,
+		destination,
+		offset,
+		callSitePos,
+		base,
+		joinIndex,
+	)) {
+		fn.blocks.push(inlinedBlock);
+	}
+	// Deopt block: the original call verbatim, then jump to the join.
+	guardedInlineSubstituted.add(call);
+	fn.blocks.push({ instructions: [call, { type: "jump", blocks: [joinIndex] }] });
+	// Join: the host's tail after the call (already ends in the host's terminator).
+	fn.blocks.push({ instructions: post });
+	return true;
+}
+
 export function optInlineSpeculative(program: IntermediateProgram): boolean {
 	let changed = false;
 	const { byCaller } = findSpeculativeInlineSites(program);
@@ -1428,103 +1522,37 @@ export function optInlineSpeculative(program: IntermediateProgram): boolean {
 	for (const fn of program.functions) {
 		targetOf.set(fn.functionIndex, fn);
 	}
-
 	for (const fn of program.functions) {
-		const sites = byCaller.get(fn.functionIndex);
-		if (sites === undefined) {
-			continue;
-		}
-		for (const { call, target } of sites) {
-			if (
-				speculativeSubstituted.has(call) ||
-				instructionCount(fn) >= MAX_CALLER_INSTRUCTIONS
-			) {
-				continue;
-			}
+		for (const { call, target } of byCaller.get(fn.functionIndex) ?? []) {
 			const targetFn = targetOf.get(target);
-			if (targetFn === undefined) {
-				continue;
+			if (
+				targetFn !== undefined &&
+				inlineGuardedCallSite(program, fn, call, targetFn, null)
+			) {
+				changed = true;
 			}
-			const blocks = multiBlockInlinable(targetFn);
-			if (blocks === null) {
-				continue; // not a splice-able control-flow shape
-			}
+		}
+	}
+	return changed;
+}
 
-			// Locate the call by reference (earlier substitutions shift indices/blocks).
-			let host: IRBlock | undefined;
-			let index = -1;
-			for (const candidateBlock of fn.blocks) {
-				const at = candidateBlock.instructions.indexOf(call);
-				if (at >= 0) {
-					host = candidateBlock;
-					index = at;
-					break;
-				}
+export function optInlineMethod(program: IntermediateProgram): boolean {
+	let changed = false;
+	const { byCaller } = findMethodInlineSites(program);
+	const targetOf = new Map<number, IRFunction>();
+	for (const fn of program.functions) {
+		targetOf.set(fn.functionIndex, fn);
+	}
+	for (const fn of program.functions) {
+		for (const { call, target, receiverRegister } of byCaller.get(fn.functionIndex) ??
+			[]) {
+			const targetFn = targetOf.get(target);
+			if (
+				targetFn !== undefined &&
+				inlineGuardedCallSite(program, fn, call, targetFn, receiverRegister)
+			) {
+				changed = true;
 			}
-			if (host === undefined || isCallInTry(fn, host, index)) {
-				continue; // gone / relocating out of an enclosing try (see multi-block inliner)
-			}
-
-			// call.registers = [destination, callee, this, ...arguments]
-			const callRegisters = (call as { registers: ReadonlyArray<number> }).registers;
-			const destination = callRegisters[0]!;
-			const calleeRegister = callRegisters[1]!;
-			const args = callRegisters.slice(3);
-			const post = host.instructions.slice(index + 1);
-			if (post.length === 0 || containsTryMarker(post)) {
-				continue;
-			}
-
-			let callSitePos = -1;
-			for (let i = index - 1; i >= 0; --i) {
-				const prior = host.instructions[i]!;
-				if (prior.type === "sourcePos") {
-					callSitePos = prior.pos;
-					break;
-				}
-			}
-
-			const offset = fn.nextRegisterDestination;
-			fn.nextRegisterDestination += targetFn.nextRegisterDestination;
-			const guardRegister = fn.nextRegisterDestination++;
-
-			const base = fn.blocks.length;
-			const deoptIndex = base + blocks.length;
-			const joinIndex = deoptIndex + 1;
-
-			// Host: pre + guard + jumpIf(inline entry) + jump(deopt).
-			host.instructions = [
-				...host.instructions.slice(0, index),
-				{
-					type: "guardFunctionIndex",
-					registers: [guardRegister, calleeRegister],
-					functionIndex: target,
-				},
-				{ type: "jumpIf", registers: [guardRegister], blocks: [base] },
-				{ type: "jump", blocks: [deoptIndex] },
-			];
-			// Inline blocks [base, deoptIndex): the guarded fast path. A plain call has no
-			// receiver (thisSource null); an eligible target is `this`-free regardless.
-			for (const inlinedBlock of buildInlinedBlocks(
-				program,
-				targetFn,
-				blocks,
-				args,
-				null,
-				destination,
-				offset,
-				callSitePos,
-				base,
-				joinIndex,
-			)) {
-				fn.blocks.push(inlinedBlock);
-			}
-			// Deopt block: the original call verbatim, then jump to the join.
-			speculativeSubstituted.add(call);
-			fn.blocks.push({ instructions: [call, { type: "jump", blocks: [joinIndex] }] });
-			// Join: the host's tail after the call (already ends in the host's terminator).
-			fn.blocks.push({ instructions: post });
-			changed = true;
 		}
 	}
 	return changed;
