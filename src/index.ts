@@ -15,6 +15,7 @@ import { dumpProgramEscape } from "./escape.ts";
 import {
 	debugHofInlineSites,
 	debugInlinableCalls,
+	debugMethodInlineSites,
 	debugSpeculativeInlineSites,
 } from "./inline.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
@@ -141,6 +142,13 @@ if (argFlag("--dump-hof")) {
 // function-index guard makes inlinable.
 if (argFlag("--dump-speculative")) {
 	debugSpeculativeInlineSites(irProgram);
+}
+
+// Shape-guarded method inlining eligibility (call-opt phase C). Detection only.
+// `--dump-methods` lists `obj.m()` sites whose method name uniquely resolves to an inlinable
+// candidate — the sites a receiver-shape guard will make inlinable.
+if (argFlag("--dump-methods")) {
+	debugMethodInlineSites(irProgram);
 }
 
 // Escape / effect summary analysis (task #3 / §N.7). Detection only — no

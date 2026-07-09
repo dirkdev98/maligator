@@ -557,6 +557,223 @@ export function debugSpeculativeInlineSites(program: IntermediateProgram): strin
 }
 
 // ---------------------------------------------------------------------------
+// Shape-guarded method inlining — ELIGIBILITY ANALYSIS ONLY (phase C).
+//
+// `obj.m(args)` can't be statically resolved (the method lives on obj's runtime prototype),
+// but the compiler knows the *candidate* when a method named `m` is defined exactly once in
+// the program (`defineProperty(proto, "m", createFunction F)`). A receiver-shape guard makes
+// inlining F sound: cache the shape whose `m` resolves to F, guard `recv.shape === cached`,
+// inline with `this` = the receiver (the splice already supports it), deopt on a miss. This
+// pass only detects the sites; the transform re-checks + guards.
+// ---------------------------------------------------------------------------
+
+export interface MethodInlineSite {
+	/** The `call` instruction (`[dst, callee, this=receiver, ...args]`). */
+	call: IRInstruction;
+	/** functionIndex of the candidate method (guarded by the receiver shape at runtime). */
+	target: number;
+	/** Register holding the receiver (also the call's `this`). */
+	receiverRegister: number;
+	/** The method name (its subject for the shape guard; for diagnostics). */
+	nameStringIndex: number;
+}
+
+export interface ProgramMethodSites {
+	byCaller: Map<number, Array<MethodInlineSite>>;
+}
+
+/**
+ * Constructs that make a *method* unsafe to inline into an arbitrary caller, beyond the
+ * shared disqualifiers. `this` is now ALLOWED (the splice maps it to the receiver), but
+ * private-field and `super` access are class-relative — a private name / home-object binding
+ * doesn't survive relocation out of the class body — so they still disqualify.
+ */
+function methodDisqualifies(instruction: IRInstruction): boolean {
+	switch (instruction.type) {
+		case "loadNewTarget":
+		case "loadCallee":
+		case "createArgumentsObject":
+		case "createRestArguments":
+		case "withEnter":
+		case "withExit":
+		case "withGet":
+		case "withResolveBase":
+		case "withSet":
+		case "loadPrivate":
+		case "storePrivate":
+		case "hasPrivate":
+		case "definePrivate":
+		case "createPrivateName":
+		case "storeSuperProperty":
+		case "checkSuperClass":
+			return true;
+		default:
+			return false;
+	}
+}
+
+/** Like isInlinableTarget but for a method body: `this` is allowed, private/super are not. */
+function isInlinableMethodTarget(fn: IRFunction): boolean {
+	if (fn.isGenerator || fn.isAsync) {
+		return false;
+	}
+	if (fn.argumentsObjectRegister !== undefined) {
+		return false;
+	}
+	if ((fn.nextCapturedIndex ?? 0) > 0) {
+		return false;
+	}
+	if (fn.semanticFile.hasDirectEval.size > 0) {
+		return false;
+	}
+	let count = 0;
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.type === "sourcePos") {
+				continue;
+			}
+			if (methodDisqualifies(instruction)) {
+				return false;
+			}
+			count++;
+		}
+	}
+	return count > 0 && count <= MAX_INLINE_INSTRUCTIONS;
+}
+
+/**
+ * Map a method name to the function that uniquely defines it across the program
+ * (`defineProperty(proto, createString name, createFunction F)`). A name defined by two
+ * distinct functions is ambiguous and omitted — the shape guard would still be sound, but a
+ * single candidate is the compile-time body we can splice.
+ */
+function methodDefinitionsByName(program: IntermediateProgram): Map<number, number> {
+	const found = new Map<number, number>();
+	const ambiguous = new Set<number>();
+	for (const fn of program.functions) {
+		for (const block of fn.blocks) {
+			const lastWriter = new Map<number, IRInstruction>();
+			for (const instruction of block.instructions) {
+				if (instruction.type === "defineProperty") {
+					const key = lastWriter.get(instruction.registers[1]);
+					const value = lastWriter.get(instruction.registers[2]);
+					if (
+						key !== undefined &&
+						key.type === "createString" &&
+						value !== undefined &&
+						value.type === "createFunction"
+					) {
+						const name = key.stringIndex;
+						const existing = found.get(name);
+						if (existing !== undefined && existing !== value.functionIndex) {
+							ambiguous.add(name);
+						} else {
+							found.set(name, value.functionIndex);
+						}
+					}
+				}
+				const def = definedRegister(instruction);
+				if (def !== null) {
+					lastWriter.set(def, instruction);
+				}
+			}
+		}
+	}
+	for (const name of ambiguous) {
+		found.delete(name);
+	}
+	return found;
+}
+
+/**
+ * Calls the method substitution has already wrapped (excluded to avoid re-wrapping every
+ * fixpoint round — the receiver-loadProperty def survives in the pre-guard code).
+ */
+const methodSubstituted = new WeakSet<IRInstruction>();
+
+/**
+ * Find `obj.m(args)` sites whose method name has a unique program-wide definition F that is
+ * an inlinable method target. `obj.m()` is a `call` whose callee is
+ * `loadProperty(receiver, createString name)` and whose `this` is that same receiver.
+ * Detection only.
+ */
+export function findMethodInlineSites(program: IntermediateProgram): ProgramMethodSites {
+	const targetOf = new Map<number, IRFunction>();
+	for (const fn of program.functions) {
+		targetOf.set(fn.functionIndex, fn);
+	}
+	const methods = methodDefinitionsByName(program);
+	const eligible = (index: number): boolean => {
+		const fn = targetOf.get(index);
+		return (
+			fn !== undefined &&
+			isInlinableMethodTarget(fn) &&
+			isEnvIndependent(fn) &&
+			multiBlockInlinable(fn) !== null
+		);
+	};
+	const byCaller = new Map<number, Array<MethodInlineSite>>();
+	for (const fn of program.functions) {
+		const defs = singleDefinitions(fn);
+		const sites: Array<MethodInlineSite> = [];
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "call" || methodSubstituted.has(instruction)) {
+					continue;
+				}
+				const callee = defs.get(instruction.registers[1]);
+				if (callee === undefined || callee.type !== "loadProperty") {
+					continue;
+				}
+				const receiverRegister = callee.registers[1];
+				// A method call binds `this` to the receiver: the call's this (registers[2])
+				// is the same register the callee was loaded from.
+				if (instruction.registers[2] !== receiverRegister) {
+					continue;
+				}
+				const key = defs.get(callee.registers[2]);
+				if (key === undefined || key.type !== "createString") {
+					continue;
+				}
+				const target = methods.get(key.stringIndex);
+				if (target === undefined || target === fn.functionIndex || !eligible(target)) {
+					continue;
+				}
+				sites.push({
+					call: instruction,
+					target,
+					receiverRegister,
+					nameStringIndex: key.stringIndex,
+				});
+			}
+		}
+		if (sites.length > 0) {
+			byCaller.set(fn.functionIndex, sites);
+		}
+	}
+	return { byCaller };
+}
+
+export function debugMethodInlineSites(program: IntermediateProgram): string {
+	const { byCaller } = findMethodInlineSites(program);
+	let output = "";
+	for (const fn of program.functions) {
+		const sites = byCaller.get(fn.functionIndex);
+		if (sites === undefined || sites.length === 0) {
+			continue;
+		}
+		output += `fn#${fn.functionIndex}: ${sites.length} method call(s) → ${sites
+			.map(
+				(site) =>
+					`${decodeStringConstant(program, site.nameStringIndex)}=#${site.target}`,
+			)
+			.join(", ")}\n`;
+	}
+	log.info(output || "(no method inline sites)\n");
+	return output;
+}
+
+// ---------------------------------------------------------------------------
 // HOF callback inlining — ELIGIBILITY ANALYSIS ONLY (no transformation yet).
 //
 // `arr.forEach(cb)` / `map` / `filter` … allocate a fresh closure (+ captured
