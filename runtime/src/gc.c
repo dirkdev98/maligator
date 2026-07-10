@@ -579,7 +579,27 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
         }
         case MAL_HEAP_GENERATOR_OBJECT: {
             MalGeneratorObject *gen = (MalGeneratorObject *) cell;
-            mal_gc_trace_frame(&gen->frame);
+            // A COMPLETED coroutine's frame register/argument buffers were freed at
+            // teardown (mal_vm_op_coroutine_return_compiled / the interpreter frame
+            // pop) yet frame.registers stays dangling and frame.function stays set —
+            // tracing it would follow freed memory. Skip it, mirroring the finalizer,
+            // which frees the frame buffers only while the coroutine is suspended.
+            if (gen->state != MAL_GENERATOR_COMPLETED) {
+                // Re-resolve the frame's function from its index (the source of
+                // truth) before tracing: an eval splice can realloc the function
+                // table and move it, dangling the cached gen->frame.function until
+                // the coroutine next resumes (which re-resolves the same way, see
+                // mal_vm_resume_generator). mal_vm_splice_definition only fixes up
+                // the live vm->frames, not suspended coroutine frames, and this
+                // trace runs before the resume. frame.function is null for a
+                // never-populated frame (mal_generator_object_new), which stays a
+                // no-op trace.
+                if (gen->frame.function != nullptr) {
+                    gen->frame.function =
+                        &g_gc_vm->live_definition.functions[gen->frame.function_index];
+                }
+                mal_gc_trace_frame(&gen->frame);
+            }
             mal_gc_mark_value(gen->yielded_value);
             mal_gc_mark_value(gen->async_resolve);
             mal_gc_mark_value(gen->async_reject);

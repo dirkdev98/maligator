@@ -83,8 +83,8 @@ in. `OFF buys` = what dropping the feature gets you.
   - [ ] Escape analysis → scalar replacement / stack alloc within the root frame
         (extends the built scalar-replacement past the module-inlining baseline).
   - [ ] Generational GC already opt-in; region/arena (N.11) + drop-insertion (N.12).
-- [ ] Promise/microtask + suspendable-frame mallocs → GC-owned / pooled (entangled
-      with async rooting flakiness + generational GC).
+- [ ] Promise/microtask + suspendable-frame mallocs → GC-owned / pooled (perf/footprint
+      only — the async rooting flakiness formerly entangled here is fixed).
 - [ ] **Struct-layout follow-ons** (the memory-density pass otherwise landed):
   - [ ] **`MalInstruction` union pack (24 from 40)** — deferred with the bytecode-overlay
         redesign (see Priority 2): needs the pointer-carrying opcode arms relocated behind
@@ -122,13 +122,18 @@ in. `OFF buys` = what dropping the feature gets you.
 
 ### GC (`gc_todo.md`)
 
-- [ ] Write-barrier completeness audit — prerequisite for the generational minor collector.
-- [ ] Concurrent collector: atomic mark bits + per-thread SATB queues (T5.1) → two
-      short STW pauses + concurrent mark + lazy sweep (T5.2) → parallel mark workers (T5.3).
-- [ ] AOT write-barrier elision (T2.6); deterministic FFI free at scope end (T4.4).
-- [ ] Return empty RAW blocks to the OS (per-block free-count tracking).
-- [ ] Validation: ASAN config, per-inventory-row leak audit, cycle/WeakRef/ephemeron
-      unit tests, gate three ways (compiled / `--no-compiled` / compiled+STRESS).
+- [ ] Pre-work gating concurrency: validation hardening (ASAN config, GC unit tests,
+      leak audit, codified three-way gate); SATB-completeness audit (card-site ↔
+      SATB-site parity). (The async/dynamic-import nondeterminism is fixed —
+      coroutine-frame tracing defects, see `gc_todo.md` §0.)
+- [ ] Generational ON by default (measure the pure card-barrier tax first via
+      gen@`MAJOR_EVERY=1` vs non-gen; keep the opt-out for minimal profiles).
+- [ ] Concurrent collector, incremental-first: C1 mutator-thread incremental
+      mark/sweep (SATB buffer, black allocation, pacer + STW backstop, per-isolate
+      `MalGcState`, `MAL_GC_MODE=stw`) → C2 marker thread (atomic mark byte,
+      handshake; sweep stays on the mutator) → C3 parallel mark workers. Then AOT
+      write-barrier elision (T2.6).
+- [ ] Deterministic FFI free at scope end (T4.4); return empty RAW blocks to the OS.
 
 ### Isolate / reactor / actors (`isolate_todo.md`)
 
@@ -143,8 +148,9 @@ in. `OFF buys` = what dropping the feature gets you.
       Rust GUI crate (winit/wgpu) via FFI.
 - [ ] Phase 6 — Bare-metal / freestanding: no-libc core, poll/ISR backend, fixed-size
       fiber stacks, minimal-core build profile (ties to the opt-in catalog).
-- [ ] Retire the malloc'd-jobs async/dynamic-import flakiness (isolate-owned rooted jobs).
 - [ ] Validate the x86_64 fiber switch on Linux.
+- [ ] Fiber frames after an eval definition-splice: `mal_gc_scan_fiber_exec` traces
+      stale cached `function` pointers (see `gc_todo.md` §5) — fix before Phase 3 actors.
 
 ### eval / Function (`eval_todo.md`)
 
