@@ -62,9 +62,10 @@ const CC_LINK_FLAGS = ["-std=c2x", "-O0", ...sanitizerCcFlags()];
 
 /**
  * The runtime build dir + library, and the harness-main object dir, all suffixed
- * per GC/sanitizer build dimension (`buildSuffix()`), so the generational build
- * (`MAL_GC_GENERATIONAL=1` → `runtime/build-gen`, `.cache/test262-build-gen`) gets
- * its own archive + mains and never clobbers the default non-gen artifacts. The
+ * per GC/sanitizer build dimension (`buildSuffix()`). Generational is the default
+ * (unsuffixed → `runtime/build`, `.cache/test262-build`); the opt-out build
+ * (`MAL_GC_GENERATIONAL=0` → `runtime/build-nongen`, `.cache/test262-build-nongen`)
+ * gets its own archive + mains and never clobbers the default gen artifacts. The
  * generated-C TU + the mains all see the same `gcDefines()` (folded into
  * CC_COMPILE_FLAGS, so the artifact-cache fingerprint separates gen/non-gen too).
  */
@@ -241,12 +242,14 @@ export function test262PrepareBuild() {
 	rmSync(BUILD_PATH, { recursive: true, force: true });
 	mkdirSync(BUILD_PATH, { recursive: true });
 
-	test262Log(`Building LibMaligator${gcGenerational() ? " (generational)" : ""}...`);
+	test262Log(`Building LibMaligator${gcGenerational() ? " (generational)" : " (non-generational)"}...`);
 	// Generate the baked compiler wire (runtime/src/compiler.malw) before cmake:
 	// the GLOB pulls in compiler_wire.c, whose `#embed` needs the file present.
 	ensureCompilerWire(false);
-	// The default non-gen build dir (runtime/build) is configured out-of-band; a
-	// suffixed dimension (gen / sanitizer) is configured here with its defines.
+	// The default (generational) build dir (runtime/build) is configured out-of-band
+	// and relies on gc.h's MAL_GC_GENERATIONAL default (a stale pre-flip non-gen
+	// archive is rebuilt by cmake's header-dependency tracking); a suffixed dimension
+	// (nongen opt-out / sanitizer) is configured here with its explicit defines.
 	if (buildSuffix() !== "") {
 		execSync(
 			`cmake -S runtime -B ${RUNTIME_BUILD_DIR} -DCMAKE_C_FLAGS=${JSON.stringify(cmakeCFlags())}`,

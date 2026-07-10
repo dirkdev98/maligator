@@ -14,9 +14,11 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-"));
 
 // Forced-collection host hooks on for every run; the fixture asserts, a failed
 // assertion throws (non-zero exit) which runToStdout surfaces. The whole suite is
-// build-dimension-parametric: `MAL_GC_GENERATIONAL=1 npm run test:native` (or an
-// MAL_UBSAN=1 build) re-runs every fixture under that dimension — globalSetup
-// builds the matching archive and the fixtures link against it unchanged.
+// build-dimension-parametric: the default `npm run test:native` runs the
+// generational collector (the 2026-07-10 default), while `MAL_GC_GENERATIONAL=0
+// npm run test:native` (or an MAL_UBSAN=1 build) re-runs every fixture under that
+// dimension — globalSetup builds the matching archive and the fixtures link
+// against it unchanged.
 const HOST_GC: NodeJS.ProcessEnv = { MAL_HOST_GC: "1" };
 
 /**

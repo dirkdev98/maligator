@@ -17,14 +17,11 @@
 
 typedef struct MalVm MalVm;
 
-/* Build-time gates. Off => the SATB / generational-card halves
- * of the write barrier fold out, so a non-concurrent build pays nothing. */
-#ifndef MAL_GC_CONCURRENT
-#define MAL_GC_CONCURRENT 0
-#endif
-#ifndef MAL_GC_GENERATIONAL
-#define MAL_GC_GENERATIONAL 0
-#endif
+/* Build-time gates MAL_GC_GENERATIONAL (default ON since 2026-07-10) and
+ * MAL_GC_CONCURRENT (default off) are defined in defaults.h — the shared header
+ * heap.h also reads, so its `dirty`-byte layout and this file's barrier code can
+ * never disagree on the default. Off => the SATB / generational-card halves of the
+ * write barrier fold out, so that build pays nothing. */
 
 #if MAL_GC_CONCURRENT
 /* Set during a concurrent mark cycle; gates the SATB barrier. */

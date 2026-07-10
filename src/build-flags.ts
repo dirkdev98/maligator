@@ -76,13 +76,15 @@ const SANITIZER_FLAGS: Record<SanitizerMode, Array<string>> = {
 };
 
 /**
- * Whether to build the generational collector (`MAL_GC_GENERATIONAL=1`): a
- * non-moving sticky-mark-bit minor collector layered on the STW mark-sweep. Off by
- * default — the inliner already removes most young garbage, so it stays an opt-in
- * build dimension (the day-one barrier sites compile to nothing when off, §5.4a).
+ * Whether to build the generational collector (`MAL_GC_GENERATIONAL`): a
+ * non-moving sticky-mark-bit minor collector layered on the STW mark-sweep. ON by
+ * default (2026-07-10 flip — the measured per-store card tax is ~1.3% median on
+ * store-heavy micros). Opt out with an explicit `MAL_GC_GENERATIONAL=0` (the
+ * card-barrier sites then compile to nothing, §5.4a) for minimal/bare-metal
+ * profiles; any other value (incl. unset) keeps it on.
  */
 export function gcGenerational(): boolean {
-	return envOn("MAL_GC_GENERATIONAL");
+	return process.env.MAL_GC_GENERATIONAL !== "0";
 }
 
 /**
@@ -98,10 +100,16 @@ export function gcConcurrent(): boolean {
 	return envOn("MAL_GC_CONCURRENT");
 }
 
-/** Preprocessor defines selecting GC build dimensions. */
+/**
+ * Preprocessor defines selecting GC build dimensions. The generational define is
+ * emitted EXPLICITLY (=1 or =0) rather than only when opted in: the opt-out
+ * (`=0`) must reach the C preprocessor end-to-end, and stamping the value into
+ * every cc flag set also changes the test262 artifact-cache fingerprint so the
+ * 2026-07-10 default flip cannot silently reuse pre-flip (non-gen) objects.
+ */
 export function gcDefines(): Array<string> {
 	return [
-		...(gcGenerational() ? ["-DMAL_GC_GENERATIONAL=1"] : []),
+		`-DMAL_GC_GENERATIONAL=${gcGenerational() ? 1 : 0}`,
 		...(gcConcurrent() ? ["-DMAL_GC_CONCURRENT=1"] : []),
 	];
 }
@@ -120,8 +128,11 @@ export function gcDefines(): Array<string> {
 export function buildSuffix(cacheSuffix = ""): string {
 	const mode = sanitizerMode();
 	let suffix = mode === "none" ? "" : `-${mode}`;
-	if (gcGenerational()) {
-		suffix += "-gen";
+	// Generational is the default (2026-07-10 flip), so it is UNSUFFIXED; the
+	// opt-out (`MAL_GC_GENERATIONAL=0`) gets its own `-nongen` dir so the two
+	// dimensions never share an archive/cache (header layout + barrier code differ).
+	if (!gcGenerational()) {
+		suffix += "-nongen";
 	}
 	if (gcConcurrent()) {
 		suffix += "-conc";

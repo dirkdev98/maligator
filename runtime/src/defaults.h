@@ -77,6 +77,27 @@ typedef size_t usize;
 #define MAL_REGEXP 1
 #endif
 
+// GC build-dimension gates. These MUST live here (the shared low-level header
+// every TU includes first) rather than in gc.h: heap.h gates the header's `dirty`
+// remembered-set byte on `#if MAL_GC_GENERATIONAL` but includes only defaults.h,
+// so a fallback in gc.h would leave heap.h and gc.h disagreeing on the default in
+// any TU that reaches heap.h before gc.h (harmless while the default was 0 —
+// undefined evaluates to 0 — but a struct-layout mismatch once it is 1).
+//
+// MAL_GC_GENERATIONAL: the non-moving sticky-mark-bit generational collector.
+// Default ON (2026-07-10 flip — the measured per-store card tax is ~1.3% median on
+// store-heavy micros); the build config sets `-DMAL_GC_GENERATIONAL=0`
+// (build-flags.ts) to opt out for minimal/bare-metal profiles, folding the card
+// barrier + the `dirty` byte out entirely.
+#ifndef MAL_GC_GENERATIONAL
+#define MAL_GC_GENERATIONAL 1
+#endif
+// MAL_GC_CONCURRENT: the SATB deletion-barrier half. Default off; the barrier
+// folds out unless `-DMAL_GC_CONCURRENT=1`.
+#ifndef MAL_GC_CONCURRENT
+#define MAL_GC_CONCURRENT 0
+#endif
+
 // Per-ECMA-402-service gates for engine.intl.features. Each defaults to MAL_INTL
 // (so `MAL_INTL=0` forces every service off, and a full Intl build has them all
 // on). A subset build passes `-DMAL_INTL_HAS_<SERVICE>=0` for each UNSELECTED

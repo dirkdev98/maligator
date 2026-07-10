@@ -32,7 +32,7 @@ in. `OFF buys` = what dropping the feature gets you.
 | WinterTC runtime   | fetch/Response/Headers/URL/web globals/timers | drops the web personality (already host-entry-install gated)                           |
 | Reactor / host I/O | sockets / timers / TLS / DNS                  | pure-compute programs link no reactor                                                  |
 | Actors / SMP       | fibers + schedulers                           | single-context programs skip it                                                        |
-| GC generational    | `MAL_GC_GENERATIONAL`                         | day-one barriers compile to nothing when off                                           |
+| GC generational    | default ON; `MAL_GC_GENERATIONAL=0` opts out  | opt-out drops the card barrier (~1.3% median store tax) for minimal/bare-metal profiles |
 | GC concurrent      | `MAL_GC_CONCURRENT`                           | STW-only collector                                                                     |
 | bytecode overlay   | fallback `MalInstruction` table               | drop for always-compiled/no-bail fns → smaller image                                   |
 | debug symbols      | position tables + stack traces                | strip mode = zero overhead                                                             |
@@ -82,7 +82,7 @@ in. `OFF buys` = what dropping the feature gets you.
 - [ ] **Allocation is the next bottleneck** (~15× vs Node on alloc bench):
   - [ ] Escape analysis → scalar replacement / stack alloc within the root frame
         (extends the built scalar-replacement past the module-inlining baseline).
-  - [ ] Generational GC already opt-in; region/arena (N.11) + drop-insertion (N.12).
+  - [ ] Generational GC now default-ON; region/arena (N.11) + drop-insertion (N.12).
 - [ ] Promise/microtask + suspendable-frame mallocs → GC-owned / pooled (perf/footprint
       only — the async rooting flakiness formerly entangled here is fixed).
 - [ ] **Struct-layout follow-ons** (the memory-density pass otherwise landed):
@@ -122,8 +122,6 @@ in. `OFF buys` = what dropping the feature gets you.
 
 ### GC (`gc_todo.md`)
 
-- [ ] Generational ON by default (measure the pure card-barrier tax first via
-      gen@`MAJOR_EVERY=1` vs non-gen; keep the opt-out for minimal profiles).
 - [ ] Concurrent collector, incremental-first: C1 mutator-thread incremental
       mark/sweep (SATB buffer, black allocation, pacer + STW backstop, per-isolate
       `MalGcState`, `MAL_GC_MODE=stw`) → C2 marker thread (atomic mark byte,
@@ -146,7 +144,7 @@ in. `OFF buys` = what dropping the feature gets you.
       fiber stacks, minimal-core build profile (ties to the opt-in catalog).
 - [ ] Validate the x86_64 fiber switch on Linux.
 - [ ] Fiber frames after an eval definition-splice: `mal_gc_scan_fiber_exec` traces
-      stale cached `function` pointers (see `gc_todo.md` §5) — fix before Phase 3 actors.
+      stale cached `function` pointers (see `gc_todo.md` §4) — fix before Phase 3 actors.
 
 ### eval / Function (`eval_todo.md`)
 

@@ -13,9 +13,12 @@
  *
  * Each mode is threaded purely through env vars the test262 machinery already
  * reads (MAL_INTERP folds into the artifact-cache key; MAL_GC_STRESS reaches the
- * forked test binary via runEnv) — the same env-driven dimension pattern the
- * generational build uses (MAL_GC_GENERATIONAL → build-gen). Add a mode here by
- * adding an entry to MODES; a future concurrent build is `MAL_GC_CONCURRENT=1`.
+ * forked test binary via runEnv) — the same env-driven dimension pattern the GC
+ * build dimension uses. Since the 2026-07-10 flip the DEFAULT build is
+ * generational (unsuffixed), so an unqualified gate run already exercises the gen
+ * collector; the non-gen opt-out dimension is `MAL_GC_GENERATIONAL=0 npm run gate`
+ * (→ `runtime/build-nongen`). Add a mode here by adding an entry to MODES; a
+ * future concurrent build is `MAL_GC_CONCURRENT=1`.
  *
  * COST: a full unscoped gate is ~3× a full test262 run, and the stress mode is
  * several× slower again (it collects constantly). DO NOT run it unscoped without
