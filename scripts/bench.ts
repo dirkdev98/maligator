@@ -2,7 +2,7 @@
  * Consolidated benchmark runner + historical tracker. One entry point drives the
  * whole bench/ tree and diffs against a commit-attributed baseline:
  *
- *   node scripts/bench.ts [size|language|gc|http ...] [--runs N] [--update]
+ *   node scripts/bench.ts [size|language|module|gc|http ...] [--runs N] [--update]
  *
  * Benches (default: all):
  *   - size      linked binary + per-archive bytes across a build-config matrix
@@ -10,6 +10,11 @@
  *               "small binary" goal, one row per config so each feature flag's
  *               marginal bytes are tracked. No V8 compare.
  *   - language  bench/language.js wall time vs Node/V8 (wide instruction coverage).
+ *   - module    bench/module-alloc.mjs: an ES module whose top-level const-bound
+ *               helpers are composed in a hot allocation loop. Wall time vs V8 plus
+ *               the GC collection count — the tripwire for the const/module-scope
+ *               inlining + scalar-replacement class (0 collections when the loop's
+ *               transients are fully eliminated), which language.js does not cover.
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
  *               wall, peak RSS, max GC pause (macOS: RSS/pauses via /usr/bin/time -l
  *               + MAL_GC_STATS). No V8 compare.
@@ -47,6 +52,20 @@ interface LanguageMetrics {
 	nodeMs: number;
 	ratio: number;
 }
+interface ModuleMetrics {
+	malMs: number;
+	nodeMs: number;
+	ratio: number;
+	/**
+	 * GC collections in the maligator run — the point of this bench. The
+	 * const-helper inlining chain scalar-replaces every transient, so a healthy
+	 * build reports exactly 0; a regression that breaks callee resolution or
+	 * scalar replacement spikes it into the hundreds (and multiplies wall time).
+	 */
+	collections: number;
+	/** Peak live heap (KB); tiny when the transients are eliminated. */
+	peakLiveKb: number;
+}
 interface GcWorkload {
 	wallMs: number;
 	rssMb: number;
@@ -65,6 +84,7 @@ interface Entry {
 	/** Per-config binary/archive bytes (keyed by SIZE_PROFILES name). */
 	size?: Record<string, SizeMetrics>;
 	language?: LanguageMetrics;
+	module?: ModuleMetrics;
 	gc?: Record<string, GcWorkload>;
 	http?: HttpMetrics | null;
 }
@@ -190,12 +210,44 @@ function benchLanguage(runs: number): LanguageMetrics {
 	return { malMs, nodeMs, ratio: malMs / nodeMs };
 }
 
+// ---- module (const-helper allocation; vs V8) ------------------------------
+
+/** A `key=value` field from the single `MAL_GC_STATS=1` `[gc-stats]` line. */
+function parseGcStat(stderr: string, field: string): number {
+	const line = stderr.split("\n").find((l) => l.includes("[gc-stats]"));
+	const m = line?.match(new RegExp(`${field}=([0-9.]+)`));
+	return m ? Number(m[1]) : 0;
+}
+
+function benchModule(runs: number): ModuleMetrics {
+	const binary = buildNativeBinary({
+		fixture: "bench/module-alloc.mjs",
+		name: "bench-module",
+	});
+	const malMs = timeCommand(binary, [], runs);
+	const nodeMs = timeCommand("node", ["bench/module-alloc.mjs"], runs);
+	// One instrumented run for the allocation signal this bench exists to track:
+	// zero collections means the const-helper inlining chain scalar-replaced every
+	// transient. (Works on the default collector — no generational build needed.)
+	const r = spawnSync(binary, [], {
+		env: { ...process.env, MAL_GC_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	const stderr = r.stderr ?? "";
+	return {
+		malMs,
+		nodeMs,
+		ratio: malMs / nodeMs,
+		collections: parseGcStat(stderr, "collections"),
+		peakLiveKb: parseGcStat(stderr, "peak_live_bytes") / 1024,
+	};
+}
+
 // ---- gc -------------------------------------------------------------------
 
 function parseGcMaxPause(stderr: string): number {
-	const line = stderr.split("\n").find((l) => l.includes("[gc-stats]"));
-	const m = line?.match(/max_pause_ms=([0-9.]+)/);
-	return m ? Number(m[1]) : 0;
+	return parseGcStat(stderr, "max_pause_ms");
 }
 
 /** macOS `/usr/bin/time -l` peak RSS (bytes). */
@@ -394,6 +446,24 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			`  ratio     ${entry.language.ratio.toFixed(2)}x${delta(entry.language.ratio, p?.ratio)}`,
 		);
 	}
+	if (entry.module) {
+		const p = previous?.module;
+		console.log("module (const-helper allocation; vs V8):");
+		console.log(
+			`  maligator ${entry.module.malMs.toFixed(1)}ms${delta(entry.module.malMs, p?.malMs)}`,
+		);
+		console.log(`  node      ${entry.module.nodeMs.toFixed(1)}ms`);
+		console.log(
+			`  ratio     ${entry.module.ratio.toFixed(2)}x${delta(entry.module.ratio, p?.ratio)}`,
+		);
+		// Primary signal: 0 = every transient scalar-replaced. Nonzero is a
+		// regression in const-bound-callee inlining, so flag it rather than rely on
+		// a percent delta off a zero baseline.
+		const regressed = entry.module.collections > 0 ? " ↑ REGRESSED" : "";
+		console.log(
+			`  gc        ${entry.module.collections} collections${regressed}, ${entry.module.peakLiveKb.toFixed(1)}KB peak live`,
+		);
+	}
 	if (entry.gc) {
 		console.log("gc (generational):");
 		for (const [name, w] of Object.entries(entry.gc)) {
@@ -425,13 +495,15 @@ const update = args.includes("--update");
 const runsIdx = args.indexOf("--runs");
 const runs = runsIdx >= 0 ? Number(args[runsIdx + 1]) : 5;
 const selected = args.filter((a) => !a.startsWith("--") && !/^\d+$/.test(a));
-const which = selected.length > 0 ? selected : ["size", "language", "gc", "http"];
+const which =
+	selected.length > 0 ? selected : ["size", "language", "module", "gc", "http"];
 
 const { commit, dirty } = gitInfo();
 const entry: Entry = { commit, dirty };
 
 if (which.includes("size")) entry.size = benchSize();
 if (which.includes("language")) entry.language = benchLanguage(runs);
+if (which.includes("module")) entry.module = benchModule(runs);
 if (which.includes("gc")) entry.gc = benchGc(runs);
 if (which.includes("http")) entry.http = benchHttp("10s", 50);
 
