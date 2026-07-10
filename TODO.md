@@ -122,10 +122,10 @@ in. `OFF buys` = what dropping the feature gets you.
 
 ### GC (`gc_todo.md`)
 
-- [ ] Pre-work gating concurrency: validation hardening (ASAN config, GC unit tests,
-      leak audit, codified three-way gate); SATB-completeness audit (card-site ↔
-      SATB-site parity). (The async/dynamic-import nondeterminism is fixed —
-      coroutine-frame tracing defects, see `gc_todo.md` §0.)
+- [ ] Pre-work gating concurrency: SATB-completeness audit (card-site ↔ SATB-site
+      parity). (Rooting flakiness fixed; validation rig landed — `npm run gate`,
+      5 GC fixtures × 4 runs, leak checklist; ASan runtime infeasible on macOS,
+      substitute = gmalloc + STRESS+VERIFY, ASan for Linux/CI.)
 - [ ] Generational ON by default (measure the pure card-barrier tax first via
       gen@`MAJOR_EVERY=1` vs non-gen; keep the opt-out for minimal profiles).
 - [ ] Concurrent collector, incremental-first: C1 mutator-thread incremental

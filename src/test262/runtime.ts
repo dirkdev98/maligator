@@ -9,6 +9,7 @@ import {
 	gcGenerational,
 	gmallocEnabled,
 	runEnv,
+	sanitizerCcFlags,
 } from "../build-flags.ts";
 import { ensureCompilerWire } from "../compiler-bake.ts";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
@@ -44,8 +45,20 @@ const execFileAsync = promisify(execFile);
  * split lets the artifact cache reuse the compiled object across runs whenever
  * only the runtime implementation changed.
  */
-const CC_COMPILE_FLAGS = ["-std=c2x", "-O0", "-I", "runtime/src", ...gcDefines()];
-const CC_LINK_FLAGS = ["-std=c2x", "-O0"];
+// The -O0 stays for fast compiles, but sanitizerCcFlags() must reach the
+// generated-C object, the harness mains, AND the final link: under MAL_ASAN /
+// MAL_UBSAN the archive is built instrumented (cmakeCFlags), so every consumer
+// needs the matching `-fsanitize=…` or the link pulls in undefined
+// sanitizer-runtime symbols. Empty for a normal build.
+const CC_COMPILE_FLAGS = [
+	"-std=c2x",
+	"-O0",
+	"-I",
+	"runtime/src",
+	...gcDefines(),
+	...sanitizerCcFlags(),
+];
+const CC_LINK_FLAGS = ["-std=c2x", "-O0", ...sanitizerCcFlags()];
 
 /**
  * The runtime build dir + library, and the harness-main object dir, all suffixed
@@ -249,15 +262,16 @@ export function test262PrepareBuild() {
 	ensureRustLibrary();
 
 	// The mains include gc.h, whose header layout + barrier code differ under
-	// MAL_GC_GENERATIONAL, so they must compile with the same defines as the lib.
-	const defines = gcDefines().join(" ");
+	// MAL_GC_GENERATIONAL, so they must compile with the same defines as the lib;
+	// sanitizerCcFlags() likewise keeps them instrumented in lockstep with the lib.
+	const mainFlags = [...gcDefines(), ...sanitizerCcFlags()].join(" ");
 	test262Log("Compiling harness mains...");
 	execSync(
-		`cc -std=c2x -O1 -I runtime/src ${defines} -c runtime/test262_main.c -o ${BUILD_PATH}/test262_main.o`,
+		`cc -std=c2x -O1 -I runtime/src ${mainFlags} -c runtime/test262_main.c -o ${BUILD_PATH}/test262_main.o`,
 		{ stdio: "inherit" },
 	);
 	execSync(
-		`cc -std=c2x -O1 -I runtime/src ${defines} -c runtime/test262_batch.c -o ${BUILD_PATH}/test262_batch.o`,
+		`cc -std=c2x -O1 -I runtime/src ${mainFlags} -c runtime/test262_batch.c -o ${BUILD_PATH}/test262_batch.o`,
 		{ stdio: "inherit" },
 	);
 }
@@ -1001,6 +1015,7 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 				"-O0",
 				"-I",
 				"runtime/src",
+				...sanitizerCcFlags(),
 				`${baseName}.c`,
 				`${BUILD_PATH}/test262_main.o`,
 				LIB_ARCHIVE,

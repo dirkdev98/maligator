@@ -15,6 +15,7 @@
 	"scripts": {
 		"bench": "node ./scripts/bench.ts",
 		"format": "oxfmt",
+		"gate": "node ./scripts/gate.ts",
 		"lint": "eslint . --concurrency=auto --fix --cache --cache-location .cache/eslint/ && oxfmt",
 		"lint:ci": "eslint . --concurrency=auto && oxfmt --check",
 		"test": "vitest",

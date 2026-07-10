@@ -22,6 +22,21 @@
  *  - **UBSan** (`MAL_UBSAN=1`): compile-time `-fsanitize=undefined`. Works on
  *    macOS (no shadow memory), catches runtime UB in the C runtime.
  *  - **`leaks`** (the macOS tool): shutdown leak detection, run separately.
+ *
+ * ## Running the GC instrument (the primary UAF / double-free lane)
+ *
+ * The GC fixtures already run under MAL_GC_STRESS+MAL_GC_VERIFY inside the native
+ * lane (`npm run test:native`), so routine coverage needs no extra entry point.
+ * To drive the whole GC lane + the regression manifest under the strongest
+ * available memory-error instrument (as a one-off, not part of `npm test`):
+ *
+ *   # Linux / CI (ASan is the intended primary instrument; see the note above):
+ *   MAL_ASAN=1 MAL_GC_STRESS=2 npm run test:native
+ *   MAL_ASAN=1 MAL_GC_STRESS=2 npm run test262:regressions
+ *
+ *   # macOS (ASan deadlocks in AsanInitInternal — use the working stack instead):
+ *   MAL_GC_STRESS=2 MAL_GC_VERIFY=1 npm run test:native          # cell poison-on-free
+ *   MAL_GMALLOC=1 MAL_GC_STRESS=2 npm run test262:regressions     # libc-buffer UAF
  */
 
 export type SanitizerMode = "none" | "asan" | "ubsan";
@@ -166,6 +181,17 @@ export function cmakeCFlags(opts: FeatureDefineOpts = {}): string {
 /** Extra cc flags (compile + link) for an emitted translation unit. */
 export function ccExtraFlags(): Array<string> {
 	return [...optFlags(), ...SANITIZER_FLAGS[sanitizerMode()], ...gcDefines()];
+}
+
+/**
+ * Just the sanitizer flags (`-fsanitize=…`) for the current mode, without the
+ * opt/gc flags. The test262 runner keeps its own `-O0` (fast compile) but must
+ * still add these to EVERY cc — the generated-C object, the harness mains, and
+ * the final link — or an ASan/UBSan-instrumented archive links with undefined
+ * sanitizer-runtime symbols. Empty for a normal build.
+ */
+export function sanitizerCcFlags(): Array<string> {
+	return SANITIZER_FLAGS[sanitizerMode()];
 }
 
 const GMALLOC_PATH = "/usr/lib/libgmalloc.dylib";
