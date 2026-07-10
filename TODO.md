@@ -10,7 +10,7 @@ actors / SMP / GUI / bare-metal), `eval_todo.md` (eval / Function / realms),
 A lean AOT-compiled JS engine. Priorities, in order:
 
 1. **Performance** — never a JIT, but AOT-fast: whole-program inlining, escape
-   analysis, inline caches, precise non-moving GC.
+   analysis, inline caches, precise non-moving generational GC (opt-in concurrent).
 2. **Small binary size** — every non-core feature is opt-in; a binary's size is
    proportional to what the program actually uses.
 3. **General-purpose usability** — WinterTC (opt-in) + a small curated Node-compat
@@ -33,7 +33,7 @@ in. `OFF buys` = what dropping the feature gets you.
 | Reactor / host I/O | sockets / timers / TLS / DNS                  | pure-compute programs link no reactor                                                  |
 | Actors / SMP       | fibers + schedulers                           | single-context programs skip it                                                        |
 | GC generational    | default ON; `MAL_GC_GENERATIONAL=0` opts out  | opt-out drops the card barrier (~1.3% median store tax) for minimal/bare-metal profiles |
-| GC concurrent      | `MAL_GC_CONCURRENT`                           | STW-only collector                                                                     |
+| GC concurrent      | `MAL_GC_CONCURRENT`                           | STW-only collector — drops the SATB barrier + incremental-cycle machinery              |
 | bytecode overlay   | fallback `MalInstruction` table               | drop for always-compiled/no-bail fns → smaller image                                   |
 | debug symbols      | position tables + stack traces                | strip mode = zero overhead                                                             |
 
@@ -82,9 +82,9 @@ in. `OFF buys` = what dropping the feature gets you.
 - [ ] **Allocation is the next bottleneck** (~15× vs Node on alloc bench):
   - [ ] Escape analysis → scalar replacement / stack alloc within the root frame
         (extends the built scalar-replacement past the module-inlining baseline).
-  - [ ] Generational GC now default-ON; region/arena (N.11) + drop-insertion (N.12).
-- [ ] Promise/microtask + suspendable-frame mallocs → GC-owned / pooled (perf/footprint
-      only — the async rooting flakiness formerly entangled here is fixed).
+  - [ ] Region/arena allocation (N.11) + drop-insertion free-lists (N.12).
+- [ ] Promise/microtask + suspendable-frame mallocs → pooled (pure alloc-rate win;
+      2026-07-10 audit: tiny + deterministically freed, no trigger/footprint concern).
 - [ ] **Struct-layout follow-ons** (the memory-density pass otherwise landed):
   - [ ] **`MalInstruction` union pack (24 from 40)** — deferred with the bytecode-overlay
         redesign (see Priority 2): needs the pointer-carrying opcode arms relocated behind
@@ -111,10 +111,11 @@ in. `OFF buys` = what dropping the feature gets you.
       position tables). Distinct from the size-focused profile below (which trades perf).
       Dev/default builds stay unstripped. `-dead_strip` measured ~1% here (eager
       intrinsic install roots almost everything + Rust is already LTO'd), so it's not
-      the lever — compile-time feature gates are. - [ ] **Enable LTO (`MAL_LTO`) in this mode** — whole-program inline of the emitted
-      TU's calls into the runtime archives; the single biggest speed lever measured
-      (language ratio 2.05× → 1.77×). Cost is link time, so it stays opt-in / prod-only,
-      not on dev builds.
+      the lever — compile-time feature gates are.
+- [ ] **Enable LTO (`MAL_LTO`) in the production mode** — whole-program inline of the
+      emitted TU's calls into the runtime archives; the single biggest speed lever
+      measured (language ratio 2.05× → 1.77×). Cost is link time, so it stays
+      opt-in / prod-only, not on dev builds.
 - [ ] Size-focused build profile (`-Os`/LTO/`--gc-sections`/musl-static/strip);
       measure per-feature bytes; feed the size gate above.
 
@@ -122,11 +123,9 @@ in. `OFF buys` = what dropping the feature gets you.
 
 ### GC (`gc_todo.md`)
 
-- [ ] Concurrent collector: **C1 (incremental mutator-thread mark/sweep) DONE
-      2026-07-10** — desktop max pause 4.8→0.95 ms, server 3.3→1.28 ms. T2.6
-      barrier elision measured and CLOSED NO-GO (~0% realistic tax; see
-      `gc_todo.md`). Remaining: C2 marker thread + C3 parallel workers, deferred
-      until a big-heap workload demands them (design accounted for).
+- [ ] C2 marker thread + C3 parallel mark workers — deferred until a big-heap
+      workload demands them (the C1 incremental collector shipped 2026-07-10 and
+      its design accounts for both).
 - [ ] Deterministic FFI free at scope end (T4.4, gated behind the escape work).
 
 ### Isolate / reactor / actors (`isolate_todo.md`)
