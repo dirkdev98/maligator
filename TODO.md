@@ -127,7 +127,8 @@ in. `OFF buys` = what dropping the feature gets you.
       AOT write-barrier elision (T2.6, now measurable); C2 marker thread + C3
       parallel workers deferred until a big-heap workload demands them (design
       accounted for).
-- [ ] Deterministic FFI free at scope end (T4.4); return empty RAW blocks to the OS.
+- [ ] Deterministic FFI free at scope end (T4.4); `MalTable` trigger-accounting
+      migration (property tables / Map-Set backing are invisible to the GC trigger).
 
 ### Isolate / reactor / actors (`isolate_todo.md`)
 

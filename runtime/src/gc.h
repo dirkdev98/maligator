@@ -105,6 +105,12 @@ void mal_gc_register_finalizer(MalHeapType type, MalGcFinalizer fn);
 typedef void (*MalGcTracer)(MalHeapHeader *cell);
 void mal_gc_register_tracer(MalHeapType type, MalGcTracer fn);
 
+/* The heap of the vm this mutator's collector serves (set once at mal_gc_init, live
+ * for the vm's lifetime). Lets mutator code that only has an object in hand — not a
+ * heap — reach the allocator for gc_free_raw / gc_realloc_raw of owner buffers (the
+ * array dense-element vector's grow/free/deopt paths). */
+MalHeap *mal_gc_current_heap(void);
+
 /* Run a full stop-the-world mark/sweep collection now: shade roots, drain the
  * grey worklist tracing reachable cells, then finalize and reclaim the rest.
  * Invoked explicitly (the gc() host hook); never from the allocator. */

@@ -247,7 +247,7 @@ void mal_object_array_deoptimize(MalArrayObject *array) {
         mal_object_define_own(&array->object, key, &desc);
     }
     mal_gc_unroot(&span);
-    free(buffer);
+    gc_free_raw(mal_gc_current_heap(), buffer); // dense vector lives in the RAW space
 }
 
 MalPropertyLookup mal_object_get_own(const MalObject *object, MalKey key) {

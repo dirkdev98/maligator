@@ -51,15 +51,17 @@ typedef struct MalHeap {
      * allocator reuses these before bumping. Empty between (and without) any
      * collection, so an uncollected run is pure bump allocation as before. */
     void *cell_free[MAL_GC_NUM_SIZE_CLASSES];
-    /** Reclaimed owner-held RAW buffers (string code units, function slots,
-     * bound args, BigInt digits) per size class. Unlike cell_free, this is NOT
-     * rebuilt by the sweep — RAW buffers have no per-cell mark; they are freed
-     * EXPLICITLY by owner finalizers (gc_free_raw), so the list persists across
-     * collections like a malloc free list. The allocator reuses it before
-     * bumping a fresh RAW cell, which is what bounds RAW footprint (without it,
-     * RAW allocation only ever bumped forward → a permanent leak of every freed
-     * buffer). */
-    void *raw_free[MAL_GC_NUM_SIZE_CLASSES];
+    /** Per-size-class list of RAW blocks that hold at least one reclaimable cell
+     * (a doubly-linked intrusive list threaded through MalGcBlock.next_free /
+     * prev_free). Unlike cell_free this is NOT rebuilt by the sweep — RAW buffers
+     * have no per-cell mark; they are freed EXPLICITLY by owner finalizers
+     * (gc_free_raw) onto their OWN block's free list, never a global cell list.
+     * Keeping freed cells per-block (rather than on one global chain) is what lets
+     * a block whose every cell has been freed be handed back to the OS (madvised +
+     * recycled) like an empty CELL block, instead of pinning its pages forever. The
+     * allocator pops a cell from a partial block before bumping a fresh one, which
+     * bounds RAW footprint. */
+    MalGcBlock *raw_partial[MAL_GC_NUM_SIZE_CLASSES];
     /** Monotonic total of handed-out cell sizes (never decremented); the
      * auto-collection trigger compares it against mal_gc_next_at. */
     usize bytes_allocated;
@@ -348,9 +350,19 @@ void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size);
 /**
  * Free a raw buffer previously returned by mal_heap_alloc_raw. Returns an
  * in-block cell to its block's free list, or releases its LOS record. Used by
- * the GC's owner finalizers.
+ * the GC's owner finalizers. A RAW block whose every cell has been freed is
+ * returned to the OS (madvised) and recycled for any size class / kind.
  */
 void gc_free_raw(MalHeap *heap, void *ptr);
+
+/**
+ * Grow (or shrink) a raw buffer previously returned by mal_heap_alloc_raw,
+ * preserving its contents. RAW cells have no realloc, so a grow that outgrows the
+ * current cell's size class is alloc-new / copy / free-old; a request that still
+ * fits the current cell returns it unchanged. `ptr == nullptr` allocates fresh.
+ * Copies the smaller of the old and new sizes. Owner-held only (no header).
+ */
+void *gc_realloc_raw(MalHeap *heap, void *ptr, usize new_size);
 
 /** Finalizer applied to a dead cell during the sweep (frees owned buffers). */
 typedef void (*MalHeapFinalizeFn)(MalHeapHeader *cell);

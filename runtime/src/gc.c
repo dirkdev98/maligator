@@ -231,6 +231,10 @@ static MalGcState *g_gc = nullptr;
 static MalGcState g_gc_stats_snapshot;
 static MalGcState *g_gc_stats_state = nullptr;
 
+MalHeap *mal_gc_current_heap(void) {
+    return &g_gc_vm->heap;
+}
+
 static void mal_gc_grey_push(MalHeapHeader *cell) {
     if (g_gc->grey_count == g_gc->grey_capacity) {
         g_gc->grey_capacity = g_gc->grey_capacity == 0 ? 4096 : g_gc->grey_capacity * 2;
@@ -927,7 +931,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         case MAL_HEAP_ARRAY_OBJECT: {
             MalArrayObject *array = (MalArrayObject *) cell;
             if (array->elements != nullptr) {
-                free(array->elements);
+                gc_free_raw(&g_gc_vm->heap, array->elements); // RAW-space dense vector
                 array->elements = nullptr;
                 array->capacity = 0;
                 array->dense_count = 0;
