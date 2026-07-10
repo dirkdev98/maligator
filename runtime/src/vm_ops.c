@@ -625,6 +625,7 @@ MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index) 
 void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, MalValue value) {
     for (; env != nullptr; env = env->parent) {
         if (env->function_index == owner_function_index) {
+            mal_gc_write_barrier(env->slots[index]); // SATB: shade the replaced capture
             env->slots[index] = value;
             mal_gc_card(&env->header, value); // old closure env -> young capture
             return;
@@ -4003,12 +4004,16 @@ void mal_vm_op_store_private(MalVm *vm, MalValue object_value, MalValue key_valu
 
     MalObject *object = mal_value_to_object(object_value);
     MalKey key = {.kind = MAL_KEY_SYMBOL, .value = key_value};
-    if (!mal_object_get_own(object, key).present) {
+    MalPropertyLookup lookup = mal_object_get_own(object, key);
+    if (!lookup.present) {
         // PrivateSet requires the private name to already be installed.
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
         return;
     }
 
+    // SATB: PrivateSet overwrites an already-installed data field (checked above),
+    // so shade the old value that mal_property_set_value is about to replace.
+    mal_gc_write_barrier(lookup.desc.value);
     mal_property_set_value(mal_object_properties(object), key, value);
     mal_gc_card(&object->header, value); // old instance -> young private field value
 }
@@ -4157,6 +4162,10 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
 void mal_vm_op_yield_compiled(
     MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
     i32 mode_dst, i32 resume_ip, MalEnv *env) {
+    // SATB: yielded_value + frame.env are traced heap fields being overwritten;
+    // shade the previous contents (the register buffer is mutated in place, so its
+    // slots are root state until suspend and need no shade here).
+    mal_gc_write_barrier(generator->yielded_value);
     generator->yielded_value = yielded;
     generator->resume_value_register = value_dst;
     generator->resume_mode_register = mode_dst;
@@ -4164,6 +4173,9 @@ void mal_vm_op_yield_compiled(
     // The register buffer is mutated in place (it is gen->frame.registers), so only
     // the resume point and the current env need saving for a later resume.
     generator->frame.instruction_pointer = resume_ip;
+    if (generator->frame.env != nullptr) {
+        mal_gc_write_barrier(mal_value_from_heap(&generator->frame.env->header));
+    }
     generator->frame.env = env;
     mal_gc_remember_if_old(&generator->object.header);
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
@@ -4197,6 +4209,11 @@ void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generato
     // compiled frame's root frame is still linked over this buffer until the caller
     // unlinks it — freeing first would expose a freed buffer to a collection there.
     // The freed frame.registers is then left dangling, exactly as the interpreter.
+    // SATB: the frame just went COMPLETED (tracer now skips it) and its buffer is
+    // freed here, so shade the activation's live edges before they leave the graph.
+    if (mal_gc_marking_active) {
+        mal_gc_satb_shade_frame(&generator->frame);
+    }
     free(generator->frame.registers);
 }
 
@@ -4232,6 +4249,10 @@ void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator
 
     // Free after routing (see mal_vm_op_coroutine_return_compiled) — the root frame
     // is still linked over this buffer during the settle above.
+    // SATB: shade the completed activation's edges before its buffer leaves the graph.
+    if (mal_gc_marking_active) {
+        mal_gc_satb_shade_frame(&generator->frame);
+    }
     free(generator->frame.registers);
 }
 
@@ -4288,6 +4309,10 @@ void mal_vm_op_await_compiled(
     state->resume_mode_register = mode_dst;
     state->state = MAL_GENERATOR_SUSPENDED_YIELD;
     state->frame.instruction_pointer = resume_ip;
+    // SATB: frame.env is a traced heap field being overwritten; shade the previous env.
+    if (state->frame.env != nullptr) {
+        mal_gc_write_barrier(mal_value_from_heap(&state->frame.env->header));
+    }
     state->frame.env = env;
     mal_gc_remember_if_old(&state->object.header);
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};

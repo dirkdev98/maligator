@@ -50,6 +50,13 @@ void mal_promise_append_reaction(
 void mal_promise_free_reactions(MalPromiseReaction *list) {
     while (list != nullptr) {
         MalPromiseReaction *next = list->next;
+        // SATB: settling discards the opposite-outcome reactions; their handler /
+        // capability refs (traced via the promise) are dropped from the heap graph,
+        // so shade them. Inert when this runs from the promise finalizer (marking is
+        // inactive during sweep).
+        mal_gc_write_barrier(list->handler);
+        mal_gc_write_barrier(list->cap_resolve);
+        mal_gc_write_barrier(list->cap_reject);
         free(list);
         list = next;
     }

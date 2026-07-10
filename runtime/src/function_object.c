@@ -1,5 +1,6 @@
 #include "function_object.h"
 
+#include "gc.h"
 #include "heap_string.h"
 #include "object_ops.h"
 #include "value.h"
@@ -150,6 +151,13 @@ MalValue mal_native_function_object_get_slot(const MalNativeFunctionObject *func
 
 void mal_native_function_object_set_slot(MalNativeFunctionObject *function, i32 index, MalValue value) {
     if (index >= 0 && index < function->slot_count) {
+        // SATB: internal-slot closures (promise combinators, from-async step
+        // machine, proxy revoke) re-store their slots; all slots are initialized at
+        // construction, so shade the dropped value. Folds out off-cycle.
+        mal_gc_write_barrier(function->slots[index]);
         function->slots[index] = value;
+        // Generational: an old internal-slot closure gaining a young slot value
+        // needs a remembered-set entry or a minor sweep frees the young target.
+        mal_gc_card(&function->object.header, value);
     }
 }

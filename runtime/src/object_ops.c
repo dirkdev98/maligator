@@ -197,6 +197,12 @@ bool mal_object_set_prototype(MalObject *object, MalObject *prototype) {
         mal_primitive_method_protector = false;
     }
 
+    // SATB: reparenting overwrites the traced prototype edge; shade the old
+    // prototype (boxed, since prototype is a MalObject* not a MalValue) before it
+    // is dropped. Early-returned above when unchanged, so this is a real overwrite.
+    if (object->prototype != nullptr) {
+        mal_gc_write_barrier(mal_value_from_heap(&object->prototype->header));
+    }
     object->prototype = prototype;
     // Old object reparented onto a young prototype: remember it (the prototype is a
     // MalObject*, not a MalValue, so card on its boxed form).

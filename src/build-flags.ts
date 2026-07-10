@@ -85,9 +85,25 @@ export function gcGenerational(): boolean {
 	return envOn("MAL_GC_GENERATIONAL");
 }
 
+/**
+ * Whether to build the concurrent collector (`MAL_GC_CONCURRENT=1`): activates the
+ * SATB (snapshot-at-the-beginning) deletion write-barrier half. Off by default —
+ * the barrier folds out entirely when off (the day-one barrier sites compile to
+ * nothing, §2). Under this build the barrier is compiled ACTIVE-but-inert until the
+ * concurrent marker exists: `mal_gc_marking_active` is a real global (false at
+ * runtime) and `mal_gc_satb_record` is still a no-op, so it is behaviour-identical
+ * while proving every barrier site reads a valid `old_value` on live paths.
+ */
+export function gcConcurrent(): boolean {
+	return envOn("MAL_GC_CONCURRENT");
+}
+
 /** Preprocessor defines selecting GC build dimensions. */
 export function gcDefines(): Array<string> {
-	return gcGenerational() ? ["-DMAL_GC_GENERATIONAL=1"] : [];
+	return [
+		...(gcGenerational() ? ["-DMAL_GC_GENERATIONAL=1"] : []),
+		...(gcConcurrent() ? ["-DMAL_GC_CONCURRENT=1"] : []),
+	];
 }
 
 /**
@@ -106,6 +122,9 @@ export function buildSuffix(cacheSuffix = ""): string {
 	let suffix = mode === "none" ? "" : `-${mode}`;
 	if (gcGenerational()) {
 		suffix += "-gen";
+	}
+	if (gcConcurrent()) {
+		suffix += "-conc";
 	}
 	if (cacheSuffix) {
 		suffix += `-${cacheSuffix}`;

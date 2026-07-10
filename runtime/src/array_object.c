@@ -171,6 +171,12 @@ void mal_array_object_set_length(MalArrayObject *array, u32 length) {
         // they never block — just truncate the dense region to the achieved length.
         length = mal_array_object_shrink(array, length);
         if (array->elements != nullptr && array->dense_count > length) {
+            // SATB: shrinking dense_count drops elements [length, dense_count) from
+            // the traced region (trace walks only [0, dense_count)); shade each
+            // dropped reference. Folds out off-cycle.
+            for (u32 i = length; i < array->dense_count; i++) {
+                mal_gc_write_barrier(array->elements[i]);
+            }
             array->dense_count = length;
         }
     }

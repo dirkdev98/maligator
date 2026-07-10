@@ -89,6 +89,11 @@ void mal_async_function_await(MalVm *vm, MalGeneratorObject *state, MalValue awa
     if (mal_value_is_promise_object(promise)) {
         MalGeneratorObject *owner = mal_value_to_promise_object(promise)->async_owner;
         if (owner != nullptr) {
+            // SATB: awaited_by is a traced edge (gc.c shades it); a second awaiter of
+            // the same result promise overwrites it, so shade the previous awaiter.
+            if (owner->awaited_by != nullptr) {
+                mal_gc_write_barrier(mal_value_from_object((MalObject *) owner->awaited_by));
+            }
             owner->awaited_by = state;
             // An old awaitee gaining a young awaiter: remember it (trace shades
             // awaited_by) so the minor keeps the awaiter's async chain alive.

@@ -31,6 +31,12 @@ static bool mal_agen_dequeue(MalGeneratorObject *agen, MalValue *out_resolve, Ma
     *out_reject = req->reject;
     *out_mode = req->mode;
     *out_value = req->value;
+    // SATB: the request node (traced via the async generator) is freed here; its
+    // settle capability + resume value are dropped from the heap graph, so shade
+    // them before the node goes away. Folds out off-cycle.
+    mal_gc_write_barrier(req->resolve);
+    mal_gc_write_barrier(req->reject);
+    mal_gc_write_barrier(req->value);
     free(req);
     return true;
 }

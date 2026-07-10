@@ -51,6 +51,16 @@ extern usize mal_gc_next_at;
  * the concurrent collector (Phase 3/5) drains a real SATB buffer. */
 void mal_gc_satb_record(MalValue old_value);
 
+typedef struct MalVmFrame MalVmFrame;
+
+/* SATB teardown shade for a coroutine activation whose frame is about to leave the
+ * traced graph. At completion the tracer stops following the frame (a COMPLETED
+ * generator's frame is skipped) AND the register buffer is freed as the frame is
+ * popped, so a value held only by the dying frame would vanish from an in-flight
+ * snapshot. Shades exactly what a frame trace keeps. Call BEFORE freeing the
+ * buffers, guarded by `mal_gc_marking_active` so the call folds out off-cycle. */
+void mal_gc_satb_shade_frame(MalVmFrame *frame);
+
 /* A GC-consistent point where this mutator's roots are enumerable. No-op until
  * the collector (Phase 3) runs a step here / parks for the handshake (Phase 5). */
 void mal_gc_safepoint(MalVm *vm);

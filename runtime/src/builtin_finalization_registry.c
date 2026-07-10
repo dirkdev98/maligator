@@ -142,6 +142,10 @@ static MalValue mal_builtin_fin_reg_unregister(
         MalFinRegCell *cell = *link;
         if (cell->has_token && cell->unregister_token == token) {
             *link = cell->next;
+            // SATB: unregister drops this cell (traced via the registry). Shade only
+            // the STRONG held_value; target and unregister_token are weak edges the
+            // collector's weak pass owns, so shading them would wrongly strengthen.
+            mal_gc_write_barrier(cell->held_value);
             free(cell);
             removed = true;
         } else {

@@ -653,6 +653,14 @@ void mal_vm_free_callable(MalCallable *callable) {
  * suspension does NOT use this — it transfers the heap buffers to the generator.
  */
 static void mal_vm_pop_frame_storage(MalVm *vm, MalVmFrame *frame) {
+    // SATB: a heap-resident (coroutine) activation frees its register/argument/with
+    // buffers here — they leave both the heap trace (a COMPLETED coroutine's frame
+    // is skipped) and the root set (frame pop), so shade the live edges first. A
+    // value-stack frame keeps its window on the (root, re-scanned) value stack, so
+    // it needs no shade. Folds out off-cycle.
+    if (mal_gc_marking_active && frame->stack_base < 0) {
+        mal_gc_satb_shade_frame(frame);
+    }
     // The with-object stack is heap-allocated independent of the register window,
     // so release it on every teardown (it is null unless the frame entered a with).
     free(frame->with_objects);
@@ -1066,11 +1074,19 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 // instruction pointer was already advanced past the yield, so a
                 // resume continues with the dispatch that follows it.
                 MalGeneratorObject *generator = frame->generator;
+                // SATB: yielded_value + frame.env are traced heap fields overwritten
+                // here; shade the previous contents (a re-suspend replaces the env
+                // from the last suspend). The register buffer is mutated in place
+                // (root state until this suspend), so its slots need no shade.
+                mal_gc_write_barrier(generator->yielded_value);
                 generator->yielded_value = frame->registers[instruction.as.yield.yielded_src];
                 generator->resume_value_register = instruction.as.yield.value_dst;
                 generator->resume_mode_register = instruction.as.yield.mode_dst;
                 generator->state = MAL_GENERATOR_SUSPENDED_YIELD;
 
+                if (generator->frame.env != nullptr) {
+                    mal_gc_write_barrier(mal_value_from_heap(&generator->frame.env->header));
+                }
                 generator->frame = *frame;
                 // Re-suspend: an old generator re-acquires its frame + yielded value,
                 // both potentially holding young objects produced since it last ran.
@@ -1109,6 +1125,10 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 state->resume_mode_register = instruction.as.await.mode_dst;
                 state->state = MAL_GENERATOR_SUSPENDED_YIELD;
 
+                // SATB: frame.env is a traced heap field overwritten by the re-suspend.
+                if (state->frame.env != nullptr) {
+                    mal_gc_write_barrier(mal_value_from_heap(&state->frame.env->header));
+                }
                 state->frame = *frame;
                 // Re-suspend at await: old async state re-acquires its frame.
                 mal_gc_remember_if_old(&state->object.header);

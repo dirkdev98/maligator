@@ -218,6 +218,11 @@ static MalValue mal_ih_step_flatmap(MalVm *vm, MalIteratorHelperObject *self) {
             if (!done) {
                 return mal_vm_create_iter_result(vm, value, false);
             }
+            // SATB: the exhausted inner iterator (traced via this helper) is being
+            // dropped; shade the old refs before clearing. The re-arm sites store
+            // into a slot just cleared to undefined, so they need no shade.
+            mal_gc_write_barrier(self->inner_iterator);
+            mal_gc_write_barrier(self->inner_next);
             self->inner_iterator = mal_value_new_undefined();
             self->inner_next = mal_value_new_undefined();
         }
@@ -269,6 +274,11 @@ static MalValue mal_ih_step_concat(MalVm *vm, MalIteratorHelperObject *self) {
             if (!done) {
                 return mal_vm_create_iter_result(vm, value, false);
             }
+            // SATB: the exhausted inner iterator (traced via this helper) is being
+            // dropped; shade the old refs before clearing. The re-arm sites store
+            // into a slot just cleared to undefined, so they need no shade.
+            mal_gc_write_barrier(self->inner_iterator);
+            mal_gc_write_barrier(self->inner_next);
             self->inner_iterator = mal_value_new_undefined();
             self->inner_next = mal_value_new_undefined();
         }

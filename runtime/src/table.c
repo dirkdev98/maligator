@@ -314,6 +314,11 @@ MalValue mal_table_entry_value(const MalTable *table, void *entry) {
 }
 
 void mal_table_entry_set_value(MalTable *table, void *entry, MalValue value) {
+    // SATB: replacing a live entry's value (e.g. Map.set on an existing key) drops
+    // the old value. Every handle comes from upsert/lookup/iter, so the slot is
+    // always initialized (upsert seeds it undefined), making this safe to shade
+    // unconditionally. Folds out off-cycle.
+    mal_gc_write_barrier(table->entries[mal_table_handle_index(entry)].value);
     table->entries[mal_table_handle_index(entry)].value = value;
 }
 

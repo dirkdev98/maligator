@@ -408,6 +408,31 @@ static void mal_gc_trace_frame(MalVmFrame *frame) {
     mal_gc_trace_env(frame->env);
 }
 
+/* SATB teardown shade: see gc.h. Mirrors mal_gc_trace_frame but records each edge
+ * into the SATB snapshot instead of marking. Only reached while marking is active
+ * (call sites gate on mal_gc_marking_active); the env is boxed as a heap value so
+ * the deletion barrier keeps the activation's captured-slot env too. */
+void mal_gc_satb_shade_frame(MalVmFrame *frame) {
+    if (frame->function != nullptr) {
+        for (i32 i = 0; i < frame->function->register_count; ++i) {
+            mal_gc_satb_record(frame->registers[i]);
+        }
+    }
+    for (i32 i = 0; i < frame->argument_count; ++i) {
+        mal_gc_satb_record(frame->arguments[i]);
+    }
+    mal_gc_satb_record(frame->this_value);
+    mal_gc_satb_record(frame->arguments_object);
+    mal_gc_satb_record(frame->callee);
+    mal_gc_satb_record(frame->new_target);
+    for (i32 i = 0; i < frame->with_count; ++i) {
+        mal_gc_satb_record(frame->with_objects[i]);
+    }
+    if (frame->env != nullptr) {
+        mal_gc_satb_record(mal_value_from_heap(&frame->env->header));
+    }
+}
+
 /** Common edges of every MalObject-based cell: prototype, inline slots, overflow.
  * The shape is not a GC cell, but its property keys can be heap strings (a
  * computed/concatenated key), so they are marked here through the owning object. */

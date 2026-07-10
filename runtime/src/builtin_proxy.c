@@ -47,6 +47,9 @@ static MalValue mal_builtin_proxy_revoke(MalVm *vm, MalValue this_value, const M
     if (mal_value_is_proxy_object(proxy_value)) {
         MalProxyObject *proxy = mal_value_to_proxy_object(proxy_value);
         proxy->revoked = true;
+        // SATB: revoke drops the traced target/handler edges; shade the old values.
+        mal_gc_write_barrier(proxy->target);
+        mal_gc_write_barrier(proxy->handler);
         proxy->target = mal_value_new_null();
         proxy->handler = mal_value_new_null();
         mal_native_function_object_set_slot(self, MAL_PROXY_REVOKE_SLOT_PROXY, mal_value_new_undefined());
