@@ -32,6 +32,8 @@ interface GcFixture {
 	name: string;
 	tag: string;
 	mainFile?: string;
+	/** Extra run env merged into every run of this fixture (both plain and stress). */
+	env?: NodeJS.ProcessEnv;
 }
 
 const FIXTURES: Array<GcFixture> = [
@@ -57,6 +59,17 @@ const FIXTURES: Array<GcFixture> = [
 	},
 	// RAW-table delete/clear barrier: Map/Set/dictionary deletes interleaved with GC.
 	{ fixture: "tests/local/gctable.js", name: "gctable", tag: "gctable" },
+	// Concurrent incremental collector under AUTO-triggered cycles: a small threshold
+	// + major-every-1 drive many auto cycles so the mark/sweep slices interleave with
+	// live mutation (SATB + card barriers, coroutine-resume shade, weak refs). In a
+	// non-concurrent build it runs the same program under STW auto-collection.
+	{
+		fixture: "tests/local/gcconc.js",
+		name: "gcconc",
+		tag: "gcconc",
+		mainFile: HOST_MAIN,
+		env: { MAL_GC_THRESHOLD: "1048576", MAL_GC_MAJOR_EVERY: "1" },
+	},
 ];
 
 describe("targeted GC unit tests", () => {
@@ -84,23 +97,23 @@ describe("targeted GC unit tests", () => {
 			});
 
 			it("compiled backend", () => {
-				assertPassLine(runToStdout(compiled, { env: HOST_GC }), spec.tag);
+				assertPassLine(runToStdout(compiled, { env: { ...HOST_GC, ...spec.env } }), spec.tag);
 			});
 
 			it("compiled + MAL_GC_STRESS + MAL_GC_VERIFY", () => {
 				assertPassLine(
-					runToStdout(compiled, { env: { ...HOST_GC, ...STRESS_ENV } }),
+					runToStdout(compiled, { env: { ...HOST_GC, ...spec.env, ...STRESS_ENV } }),
 					spec.tag,
 				);
 			});
 
 			it("interpreter backend (Tier B root walk)", () => {
-				assertPassLine(runToStdout(interp, { env: HOST_GC }), spec.tag);
+				assertPassLine(runToStdout(interp, { env: { ...HOST_GC, ...spec.env } }), spec.tag);
 			});
 
 			it("interpreter + MAL_GC_STRESS + MAL_GC_VERIFY", () => {
 				assertPassLine(
-					runToStdout(interp, { env: { ...HOST_GC, ...STRESS_ENV } }),
+					runToStdout(interp, { env: { ...HOST_GC, ...spec.env, ...STRESS_ENV } }),
 					spec.tag,
 				);
 			});

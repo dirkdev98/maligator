@@ -22,8 +22,6 @@ int main(void) {
     // seen. Line buffering flushes each console.log promptly.
     setvbuf(stdout, nullptr, _IOLBF, 0);
 
-    mal_gc_init();
-
     MalVm vm;
     mal_vm_init(&vm, &mal_vm_definition);
 

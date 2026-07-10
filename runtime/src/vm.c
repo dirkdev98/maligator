@@ -120,7 +120,7 @@ static uptr mal_vm_compute_stack_limit(void) {
 }
 
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
-    mal_gc_init();
+    mal_gc_init(vm);
 
     // Relocate the program's function / string / bigint constant tables into
     // VM-owned growable storage behind a mutable `live_definition` (see vm.h), so
@@ -412,6 +412,7 @@ void mal_vm_free(MalVm *vm) {
     // chunks + frees LOS records; it does not run per-cell finalizers).
     mal_gc_finalize_all(vm);
     mal_heap_free(&vm->heap);
+    mal_gc_state_free(vm);
 
     vm->definition = nullptr;
     vm->globals = nullptr;
@@ -1490,6 +1491,19 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
     // Re-resolve in case a runtime-eval splice moved the function table while
     // this generator was suspended (function_index is the source of truth).
     const MalFunction *function = &vm->live_definition.functions[generator->frame.function_index];
+
+    // SATB resume seam (concurrent cycle): a suspended coroutine's frame is heap
+    // state (traced via the generator cell); resuming migrates it to root state.
+    // Shade its current register/arg values into the snapshot BEFORE the resume
+    // delivers the sent value / runs the body, or a value published from a
+    // coroutine register into an already-black object would be lost (the
+    // root-migration window; gc_todo §1). Mirrors the tracer: null-check the frame
+    // function before re-resolving (splice-safe) so register_count is read fresh.
+    // Folds out off-cycle (mal_gc_marking_active is compile-time 0 non-concurrent).
+    if (mal_gc_marking_active && generator->frame.function != nullptr) {
+        generator->frame.function = function;
+        mal_gc_satb_shade_frame(&generator->frame);
+    }
 
     if (function->compiled != nullptr) {
         // Compiled coroutine: no interpreter frame is pushed and no dispatch loop

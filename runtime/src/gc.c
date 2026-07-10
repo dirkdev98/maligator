@@ -40,6 +40,15 @@
 
 #if MAL_GC_CONCURRENT
 bool mal_gc_marking_active = false;
+/* Black allocation: while true, freshly allocated managed cells are born BLACK
+ * (see mal_heap_header_init) so a cell created mid-cycle is never swept this
+ * cycle. On for the WHOLE cycle (init-mark through sweep-complete), not just the
+ * mark phase — a WHITE cell created during the incremental sweep would otherwise
+ * be reclaimed while still reachable. Under generational this over-tenures those
+ * cells (they read as sticky-old); accepted for v1, counted in MAL_GC_STATS. */
+bool mal_gc_black_alloc = false;
+/* Bytes born BLACK (over-tenured) since process start; see mal_gc_black_alloc. */
+usize mal_gc_black_alloc_bytes = 0;
 #endif
 
 volatile bool mal_gc_poll = false;
@@ -56,7 +65,9 @@ void (*mal_gc_preempt_hook)(MalVm *vm) = nullptr;
 /* External root sources: how the host/runtime layers contribute GC roots to the
  * engine without the engine knowing their types (e.g. pending setTimeout
  * callbacks). Each is invoked during root scanning and calls mal_gc_mark_value on
- * its live values. TODO: per-isolate registry once SMP runs multiple isolates. */
+ * its live values. Process-global (host installs them once, shared across the
+ * process); NOT part of the per-isolate MalGcState. TODO: per-isolate registry
+ * once SMP runs multiple isolates. */
 #define MAL_GC_MAX_ROOT_SOURCES 8
 static struct {
     MalGcRootSourceFn fn;
@@ -72,7 +83,8 @@ void mal_gc_register_root_source(MalGcRootSourceFn fn, void *data) {
     }
 }
 
-/* Per-type finalizers registered by the host/runtime for types they own. */
+/* Per-type finalizers/tracers registered by the host/runtime for types they own.
+ * Process-global (installed once), like the root sources above. */
 static MalGcFinalizer g_type_finalizers[MAL_HEAP_TYPE_COUNT];
 
 void mal_gc_register_finalizer(MalHeapType type, MalGcFinalizer fn) {
@@ -81,7 +93,6 @@ void mal_gc_register_finalizer(MalHeapType type, MalGcFinalizer fn) {
     }
 }
 
-/* Per-type tracers registered by the host/runtime for types they own. */
 static MalGcTracer g_type_tracers[MAL_HEAP_TYPE_COUNT];
 
 void mal_gc_register_tracer(MalHeapType type, MalGcTracer fn) {
@@ -90,40 +101,198 @@ void mal_gc_register_tracer(MalHeapType type, MalGcTracer fn) {
     }
 }
 
-void mal_gc_satb_record(MalValue old_value) {
-    (void) old_value;
-}
+// ---------------------------------------------------------------------------
+// Per-isolate collector state (MalGcState).
+//
+// The mutable working state of the collector — grey worklist, weak lists,
+// remembered set, per-collection stats, stress counters, and (concurrent build)
+// the SATB buffer + incremental-cycle state — hangs off MalVm as vm->gc. The
+// registered root-source / per-type hook tables stay process-global above (host
+// installs them once). A single file-static `g_gc` caches vm->gc so the marking
+// helpers (mal_gc_mark_value, called by the public tracer API without a vm) reach
+// the worklist through one global deref, exactly as the pre-refactor `g_grey`
+// did; C2 makes it _Thread_local. Single mutator / single thread for now.
+// ---------------------------------------------------------------------------
 
-/* Stress mode (MAL_GC_STRESS=N): collect every N gated safepoints to shake out
- * missing roots / trace edges. =1 collects at every dispatch (most aggressive);
- * larger N is faster for running broad suites under collection. Works on both
- * backends now that compiled frames publish root frames.
- * MAL_GC_VERIFY: after each sweep, assert no survivor/root points at a freed cell
- * (catches a missing root/edge that swept a still-reachable cell). */
-static i32 g_gc_stress_interval = 0;
-static i32 g_gc_stress_counter = 0;
-static bool g_gc_verify_enabled = false;
-static bool g_gc_verifying = false;
+#if MAL_GC_CONCURRENT
+typedef enum MalGcPhase {
+    MAL_GC_PHASE_IDLE, // no cycle in flight
+    MAL_GC_PHASE_MARK, // incremental grey/SATB draining
+    MAL_GC_PHASE_SWEEP, // incremental block sweep
+} MalGcPhase;
+#endif
 
-/* Per-collection statistics (MAL_GC_STATS=1): accumulated each collection and
- * printed to stderr at process exit. Drives the GC tuning harness (bench/gc +
- * scripts/gcbench.ts). Collected for both collectors; the minor/major split is
- * only meaningful under the generational build (a non-gen collection is always a
- * full mark-sweep, counted as a major). */
-static bool g_gc_stats_enabled = false;
-static u64 g_gc_collections = 0;
-static u64 g_gc_minor_count = 0;
-static u64 g_gc_major_count = 0;
-static u64 g_gc_total_ns = 0;
-static u64 g_gc_max_pause_ns = 0;
-static usize g_gc_peak_live_bytes = 0;
+struct MalGcState {
+    // Grey worklist (explicit, no recursion): shaded-but-not-yet-traced cells.
+    MalHeapHeader **grey;
+    usize grey_count;
+    usize grey_capacity;
+
+    // Weak collections (WeakMap/WeakSet) reached during the main mark. Their entry
+    // key/value edges are NOT traced there; the ephemeron pass after the mark marks
+    // each value whose key is live (a fixpoint) and drops entries with dead keys.
+    MalMapObject **weak_maps;
+    usize weak_maps_count;
+    usize weak_maps_capacity;
+
+    // WeakRefs reached during the main mark: their target edge is weak, so it is not
+    // followed here; the weak pass nulls the target if it did not otherwise survive.
+    MalWeakRefObject **weak_refs;
+    usize weak_refs_count;
+    usize weak_refs_capacity;
+
+    // FinalizationRegistries reached during the main mark; the weak pass enqueues a
+    // cleanup job for each reclaimed target and unlinks that cell.
+    MalFinalizationRegistryObject **fin_regs;
+    usize fin_regs_count;
+    usize fin_regs_capacity;
+
+    // Scratch list of dead keys to delete from a weak collection after its pass
+    // (deleting mid-iteration is avoided).
+    MalKey *dead_keys;
+    usize dead_keys_count;
+    usize dead_keys_capacity;
 
 #if MAL_GC_GENERATIONAL
-/* Major-collection cadence: one in every g_gc_major_every collections (and the
- * first) is a full major that reclaims the old generation; the rest are minors.
- * Default 8, overridable at runtime via MAL_GC_MAJOR_EVERY for tuning. */
-static u32 g_gc_major_every = 8;
+    // Remembered set: old (sticky-BLACK) cells written with a young pointer since
+    // the last collection (the card barrier records them). Rebuilt every collection.
+    MalHeapHeader **remembered;
+    usize remembered_count;
+    usize remembered_capacity;
+    // One in every major_every collections (and the first) is a full major.
+    u32 collection_index;
 #endif
+
+#if MAL_GC_CONCURRENT
+    // SATB (snapshot-at-the-beginning) buffer: references handed over by the
+    // deletion barrier / frame shades while marking is active. Grown, never
+    // dropped; a mark step drains [satb_drained, satb_count) into the grey
+    // worklist. The buffer may grow during a drain (a shade fired by tracing),
+    // so draining reads satb_count each iteration.
+    MalValue *satb;
+    usize satb_count;
+    usize satb_capacity;
+    usize satb_drained;
+
+    // Incremental-cycle state machine (driven from mal_gc_safepoint).
+    MalGcPhase phase;
+    // bytes_allocated at which an in-flight cycle must finish synchronously (the
+    // hard backstop = the old STW trigger). Degrade-to-STW, never OOM.
+    usize backstop_at;
+    // bytes_allocated at the previous mark step, for the assist budget.
+    usize bytes_at_last_step;
+#endif
+
+    // --- Config (read once from env in mal_gc_init) ---------------------------
+    // Stress mode (MAL_GC_STRESS=N): collect every N gated safepoints.
+    i32 stress_interval;
+    i32 stress_counter;
+    bool verify_enabled;
+    bool stats_enabled;
+#if MAL_GC_GENERATIONAL
+    u32 major_every; // MAL_GC_MAJOR_EVERY
+#endif
+#if MAL_GC_CONCURRENT
+    // MAL_GC_MODE=stw: force every cycle synchronous (the backstop path).
+    bool mode_stw;
+    // Assist ratio (MAL_GC_ASSIST): grey/SATB entries traced per byte allocated
+    // since the last mark step, so marking outruns allocation.
+    u32 assist;
+#endif
+
+    // --- Per-collection statistics (MAL_GC_STATS=1) ---------------------------
+    u64 collections;
+    u64 minor_count;
+    u64 major_count;
+    u64 total_ns;
+    u64 max_pause_ns;
+    usize peak_live_bytes;
+#if MAL_GC_CONCURRENT
+    u64 cycles; // concurrent cycles started
+    u64 sync_backstop; // cycles that had to finish synchronously
+    u64 init_mark_ns; // last init-mark pause
+    u64 remark_ns; // last remark pause
+    u64 max_mark_step_ns; // largest single mark step
+    u64 max_sweep_step_ns; // largest single sweep step
+#endif
+};
+
+/* The vm whose collector is currently active + a cache of its state. Both are set
+ * once at mal_gc_init and live for the vm's lifetime (single mutator); the SATB
+ * barrier and the marking helpers read g_gc between collections too, so — unlike
+ * the pre-concurrent code that scoped g_gc_vm to a single mal_gc_collect call —
+ * they must stay valid the whole time. Becomes _Thread_local in C2. */
+static MalVm *g_gc_vm = nullptr;
+static MalGcState *g_gc = nullptr;
+/* Captured for the atexit stats printer (which has no vm handle). Points at the
+ * live vm->gc while the vm exists, and at g_gc_stats_snapshot after teardown so the
+ * exit report survives an explicit mal_vm_free. The printer reads only scalar stat
+ * fields, so the snapshot's stale buffer pointers are never dereferenced. */
+static MalGcState g_gc_stats_snapshot;
+static MalGcState *g_gc_stats_state = nullptr;
+
+static void mal_gc_grey_push(MalHeapHeader *cell) {
+    if (g_gc->grey_count == g_gc->grey_capacity) {
+        g_gc->grey_capacity = g_gc->grey_capacity == 0 ? 4096 : g_gc->grey_capacity * 2;
+        g_gc->grey = realloc(g_gc->grey, g_gc->grey_capacity * sizeof(MalHeapHeader *));
+    }
+    g_gc->grey[g_gc->grey_count++] = cell;
+}
+
+static void mal_gc_register_weak_map(MalMapObject *map) {
+    if (g_gc->weak_maps_count == g_gc->weak_maps_capacity) {
+        g_gc->weak_maps_capacity = g_gc->weak_maps_capacity == 0 ? 64 : g_gc->weak_maps_capacity * 2;
+        g_gc->weak_maps = realloc(g_gc->weak_maps, g_gc->weak_maps_capacity * sizeof(MalMapObject *));
+    }
+    g_gc->weak_maps[g_gc->weak_maps_count++] = map;
+}
+
+static void mal_gc_register_weak_ref(MalWeakRefObject *ref) {
+    if (g_gc->weak_refs_count == g_gc->weak_refs_capacity) {
+        g_gc->weak_refs_capacity = g_gc->weak_refs_capacity == 0 ? 64 : g_gc->weak_refs_capacity * 2;
+        g_gc->weak_refs = realloc(g_gc->weak_refs, g_gc->weak_refs_capacity * sizeof(MalWeakRefObject *));
+    }
+    g_gc->weak_refs[g_gc->weak_refs_count++] = ref;
+}
+
+static void mal_gc_register_fin_reg(MalFinalizationRegistryObject *reg) {
+    if (g_gc->fin_regs_count == g_gc->fin_regs_capacity) {
+        g_gc->fin_regs_capacity = g_gc->fin_regs_capacity == 0 ? 32 : g_gc->fin_regs_capacity * 2;
+        g_gc->fin_regs = realloc(g_gc->fin_regs, g_gc->fin_regs_capacity * sizeof(MalFinalizationRegistryObject *));
+    }
+    g_gc->fin_regs[g_gc->fin_regs_count++] = reg;
+}
+
+static void mal_gc_dead_key_push(MalKey key) {
+    if (g_gc->dead_keys_count == g_gc->dead_keys_capacity) {
+        g_gc->dead_keys_capacity = g_gc->dead_keys_capacity == 0 ? 64 : g_gc->dead_keys_capacity * 2;
+        g_gc->dead_keys = realloc(g_gc->dead_keys, g_gc->dead_keys_capacity * sizeof(MalKey));
+    }
+    g_gc->dead_keys[g_gc->dead_keys_count++] = key;
+}
+
+void mal_gc_satb_record(MalValue old_value) {
+#if MAL_GC_CONCURRENT
+    // Filter: only heap-pointer values that are not already marked need to enter
+    // the snapshot (marking is idempotent, but this trims the common no-op). Never
+    // drop a qualifying entry — the buffer grows as needed; a dropped deletion
+    // barrier value is a lost live object.
+    if (!mal_value_is_heap(old_value)) {
+        return;
+    }
+    MalHeapHeader *cell = mal_value_to_heap(old_value);
+    if (cell->storage == MAL_HEAP_STORAGE_IMMORTAL || cell->mark == MAL_MARK_BLACK) {
+        return;
+    }
+    if (g_gc->satb_count == g_gc->satb_capacity) {
+        g_gc->satb_capacity = g_gc->satb_capacity == 0 ? 4096 : g_gc->satb_capacity * 2;
+        g_gc->satb = realloc(g_gc->satb, g_gc->satb_capacity * sizeof(MalValue));
+    }
+    g_gc->satb[g_gc->satb_count++] = old_value;
+#else
+    (void) old_value;
+#endif
+}
 
 static u64 mal_gc_now_ns(void) {
     struct timespec ts;
@@ -132,12 +301,26 @@ static u64 mal_gc_now_ns(void) {
 }
 
 static void mal_gc_print_stats(void) {
+    MalGcState *g = g_gc_stats_state;
+    if (g == nullptr) {
+        return;
+    }
     fprintf(stderr,
             "[gc-stats] collections=%llu minor=%llu major=%llu total_ms=%.3f "
-            "max_pause_ms=%.3f peak_live_bytes=%llu\n",
-            (unsigned long long) g_gc_collections, (unsigned long long) g_gc_minor_count,
-            (unsigned long long) g_gc_major_count, (double) g_gc_total_ns / 1.0e6,
-            (double) g_gc_max_pause_ns / 1.0e6, (unsigned long long) g_gc_peak_live_bytes);
+            "max_pause_ms=%.3f peak_live_bytes=%llu",
+            (unsigned long long) g->collections, (unsigned long long) g->minor_count,
+            (unsigned long long) g->major_count, (double) g->total_ns / 1.0e6,
+            (double) g->max_pause_ns / 1.0e6, (unsigned long long) g->peak_live_bytes);
+#if MAL_GC_CONCURRENT
+    fprintf(stderr,
+            " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "
+            "init_mark_ms=%.3f remark_ms=%.3f max_mark_step_ms=%.3f max_sweep_step_ms=%.3f",
+            (unsigned long long) g->cycles, (unsigned long long) g->sync_backstop,
+            (unsigned long long) mal_gc_black_alloc_bytes,
+            (double) g->init_mark_ns / 1.0e6, (double) g->remark_ns / 1.0e6,
+            (double) g->max_mark_step_ns / 1.0e6, (double) g->max_sweep_step_ns / 1.0e6);
+#endif
+    fprintf(stderr, "\n");
 }
 
 /* Auto-collection heap-growth policy: the first collection fires once this many
@@ -148,12 +331,34 @@ static void mal_gc_print_stats(void) {
 
 usize mal_gc_next_at = (usize) -1;
 
-void mal_gc_init(void) {
+void mal_gc_init(MalVm *vm) {
+    MalGcState *g = calloc(1, sizeof(MalGcState));
+    vm->gc = g;
+    g_gc = g;
+    g_gc_vm = vm;
+    g_gc_stats_state = g;
+#if MAL_GC_GENERATIONAL
+    g->major_every = 8;
+#endif
+#if MAL_GC_CONCURRENT
+    g->phase = MAL_GC_PHASE_IDLE;
+    g->assist = 4; // grey/SATB entries traced per byte allocated since the last step
+    const char *assist = getenv("MAL_GC_ASSIST");
+    if (assist != nullptr && assist[0] != '\0') {
+        unsigned long v = strtoul(assist, nullptr, 10);
+        if (v >= 1) {
+            g->assist = (u32) v;
+        }
+    }
+    const char *mode = getenv("MAL_GC_MODE");
+    g->mode_stw = mode != nullptr && (mode[0] == 's' || mode[0] == 'S');
+#endif
+
     const char *stress = getenv("MAL_GC_STRESS");
     if (stress != nullptr && stress[0] != '\0' && stress[0] != '0') {
-        g_gc_stress_interval = atoi(stress);
-        if (g_gc_stress_interval < 1) {
-            g_gc_stress_interval = 1;
+        g->stress_interval = atoi(stress);
+        if (g->stress_interval < 1) {
+            g->stress_interval = 1;
         }
         mal_gc_poll = true; // make the interpreter poll fire at every dispatch
     } else if (getenv("MAL_GC_OFF") == nullptr) {
@@ -166,13 +371,13 @@ void mal_gc_init(void) {
             mal_gc_next_at = 1;
         }
     }
-    g_gc_verify_enabled = getenv("MAL_GC_VERIFY") != nullptr;
+    g->verify_enabled = getenv("MAL_GC_VERIFY") != nullptr;
     // Poisoning dead cells makes a use-after-free of a missed root crash loudly
     // rather than silently alias a recycled cell; pair it with verification.
-    mal_heap_poison_on_free = g_gc_verify_enabled;
+    mal_heap_poison_on_free = g->verify_enabled;
 
     if (getenv("MAL_GC_STATS") != nullptr) {
-        g_gc_stats_enabled = true;
+        g->stats_enabled = true;
         atexit(mal_gc_print_stats);
     }
 
@@ -181,123 +386,23 @@ void mal_gc_init(void) {
     if (major_every != nullptr) {
         unsigned long v = strtoul(major_every, nullptr, 10);
         if (v >= 1) {
-            g_gc_major_every = (u32) v;
+            g->major_every = (u32) v;
         }
     }
 #endif
 }
 
-void mal_gc_safepoint(MalVm *vm) {
-    // Only safe to collect when no native builtin is active: its C-local scratch
-    // is not enumerable as a root, so collecting inside one could free values it
-    // still holds. Compiled frames are fine (they publish root frames); all other
-    // live state is in the interpreter frames + value stack, covered by the scan.
-    if (vm->gc_native_frames != 0) {
-        return;
-    }
-    if (g_gc_stress_interval != 0) {
-        if (++g_gc_stress_counter >= g_gc_stress_interval) {
-            g_gc_stress_counter = 0;
-            mal_gc_collect(vm);
-        }
-    } else if (mal_gc_poll) {
-        // Auto mode: collect only if actually due. The poll may also have been
-        // raised purely to force a preemption safepoint (below), so don't assume a
-        // collection is owed just because we were polled.
-        if (vm->heap.bytes_allocated >= mal_gc_next_at) {
-            mal_gc_collect(vm); // advances mal_gc_next_at past the surviving set
-        }
-        mal_gc_poll = false;
-    }
-    // Preemption: this is a safe point to switch fibers (roots are precise here and
-    // no un-rooted native frame is live — the gate above). The scheduler's hook
-    // yields the running fiber if its budget is spent, and returns here on resume.
-    if (mal_gc_preempt_hook != nullptr) {
-        mal_gc_preempt_hook(vm);
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Stop-the-world mark/sweep collector.
+// Non-moving mark/sweep collector.
 //
 // Tri-color marking with an explicit grey worklist (no recursion): roots are
 // shaded grey, then drained, tracing each cell's outgoing edges. The header mark
 // field is the colour. A non-moving sweep then finalizes and reclaims unreached
-// cells. Single mutator, single thread: the whole thing runs to completion at
-// the call site. Shapes and closure environments are not GC cells yet (they are
-// malloc'd directly), so they are traced through but never marked or swept.
+// cells. Shapes and closure environments are traced through; shapes are not GC
+// cells (malloc'd directly), so they are never marked or swept. Under
+// MAL_GC_CONCURRENT the mark + sweep are sliced across safepoints; see the cycle
+// state machine at the bottom of the file.
 // ---------------------------------------------------------------------------
-
-static MalVm *g_gc_vm = nullptr;
-static MalHeapHeader **g_grey = nullptr;
-static usize g_grey_count = 0;
-static usize g_grey_capacity = 0;
-
-static void mal_gc_grey_push(MalHeapHeader *cell) {
-    if (g_grey_count == g_grey_capacity) {
-        g_grey_capacity = g_grey_capacity == 0 ? 4096 : g_grey_capacity * 2;
-        g_grey = realloc(g_grey, g_grey_capacity * sizeof(MalHeapHeader *));
-    }
-    g_grey[g_grey_count++] = cell;
-}
-
-// Weak collections (WeakMap/WeakSet) reached during the main mark. Their entry
-// key/value edges are NOT traced there; the ephemeron pass after the mark marks
-// each value whose key is live (a fixpoint) and drops entries with dead keys.
-static MalMapObject **g_weak_maps = nullptr;
-static usize g_weak_maps_count = 0;
-static usize g_weak_maps_capacity = 0;
-
-static void mal_gc_register_weak_map(MalMapObject *map) {
-    if (g_weak_maps_count == g_weak_maps_capacity) {
-        g_weak_maps_capacity = g_weak_maps_capacity == 0 ? 64 : g_weak_maps_capacity * 2;
-        g_weak_maps = realloc(g_weak_maps, g_weak_maps_capacity * sizeof(MalMapObject *));
-    }
-    g_weak_maps[g_weak_maps_count++] = map;
-}
-
-// WeakRefs reached during the main mark: their target edge is weak, so it is not
-// followed here; the weak pass nulls the target if it did not otherwise survive.
-static MalWeakRefObject **g_weak_refs = nullptr;
-static usize g_weak_refs_count = 0;
-static usize g_weak_refs_capacity = 0;
-
-static void mal_gc_register_weak_ref(MalWeakRefObject *ref) {
-    if (g_weak_refs_count == g_weak_refs_capacity) {
-        g_weak_refs_capacity = g_weak_refs_capacity == 0 ? 64 : g_weak_refs_capacity * 2;
-        g_weak_refs = realloc(g_weak_refs, g_weak_refs_capacity * sizeof(MalWeakRefObject *));
-    }
-    g_weak_refs[g_weak_refs_count++] = ref;
-}
-
-// FinalizationRegistries reached during the main mark. Their cells' target +
-// unregister_token are weak edges; the weak pass enqueues a cleanup job for each
-// reclaimed target and unlinks that cell.
-static MalFinalizationRegistryObject **g_fin_regs = nullptr;
-static usize g_fin_regs_count = 0;
-static usize g_fin_regs_capacity = 0;
-
-static void mal_gc_register_fin_reg(MalFinalizationRegistryObject *reg) {
-    if (g_fin_regs_count == g_fin_regs_capacity) {
-        g_fin_regs_capacity = g_fin_regs_capacity == 0 ? 32 : g_fin_regs_capacity * 2;
-        g_fin_regs = realloc(g_fin_regs, g_fin_regs_capacity * sizeof(MalFinalizationRegistryObject *));
-    }
-    g_fin_regs[g_fin_regs_count++] = reg;
-}
-
-// Scratch list of dead keys to delete from a weak collection after its pass
-// (deleting mid-iteration is avoided).
-static MalKey *g_dead_keys = nullptr;
-static usize g_dead_keys_count = 0;
-static usize g_dead_keys_capacity = 0;
-
-static void mal_gc_dead_key_push(MalKey key) {
-    if (g_dead_keys_count == g_dead_keys_capacity) {
-        g_dead_keys_capacity = g_dead_keys_capacity == 0 ? 64 : g_dead_keys_capacity * 2;
-        g_dead_keys = realloc(g_dead_keys, g_dead_keys_capacity * sizeof(MalKey));
-    }
-    g_dead_keys[g_dead_keys_count++] = key;
-}
 
 /** Shade a cell grey: a managed, non-immortal cell reached for the first time.
  * In verify mode it instead asserts the cell is already marked — a reachable but
@@ -306,6 +411,13 @@ static void mal_gc_dead_key_push(MalKey key) {
  * lets a freed-target abort name the OWNER whose edge was missed, not just the
  * swept target. -1 while scanning roots (no owning cell). */
 static i32 g_gc_verify_source = -1;
+static bool g_gc_verifying = false;
+
+/* Route EVERY mark-byte write to BLACK through one helper so C2 can atomicize it
+ * in a single place (relaxed store; marking is idempotent). */
+static inline void mal_gc_set_black(MalHeapHeader *cell) {
+    cell->mark = MAL_MARK_BLACK;
+}
 
 static void mal_gc_shade(MalHeapHeader *cell) {
     if (cell == nullptr || cell->storage == MAL_HEAP_STORAGE_IMMORTAL) {
@@ -323,7 +435,7 @@ static void mal_gc_shade(MalHeapHeader *cell) {
     if (cell->mark == MAL_MARK_BLACK) {
         return;
     }
-    cell->mark = MAL_MARK_BLACK;
+    mal_gc_set_black(cell);
     mal_gc_grey_push(cell);
 }
 
@@ -408,25 +520,34 @@ static void mal_gc_trace_frame(MalVmFrame *frame) {
     mal_gc_trace_env(frame->env);
 }
 
-/* SATB teardown shade: see gc.h. Mirrors mal_gc_trace_frame but records each edge
- * into the SATB snapshot instead of marking. Only reached while marking is active
- * (call sites gate on mal_gc_marking_active); the env is boxed as a heap value so
- * the deletion barrier keeps the activation's captured-slot env too. */
+/* SATB teardown/resume shade: see gc.h. Mirrors mal_gc_trace_frame but records
+ * each edge into the SATB snapshot instead of marking. Only reached while marking
+ * is active (call sites gate on mal_gc_marking_active); the env is boxed as a heap
+ * value so the deletion barrier keeps the activation's captured-slot env too. */
 void mal_gc_satb_shade_frame(MalVmFrame *frame) {
-    if (frame->function != nullptr) {
+    // Null-safe on the register/argument/with buffers, mirroring mal_gc_trace_frame
+    // (which routes through mal_gc_mark_values, itself null-guarded): a frame can
+    // have a non-null function yet a not-yet-allocated register buffer (a coroutine
+    // frame captured before its buffer is adopted), so shading must skip a null
+    // buffer rather than deref it.
+    if (frame->function != nullptr && frame->registers != nullptr) {
         for (i32 i = 0; i < frame->function->register_count; ++i) {
             mal_gc_satb_record(frame->registers[i]);
         }
     }
-    for (i32 i = 0; i < frame->argument_count; ++i) {
-        mal_gc_satb_record(frame->arguments[i]);
+    if (frame->arguments != nullptr) {
+        for (i32 i = 0; i < frame->argument_count; ++i) {
+            mal_gc_satb_record(frame->arguments[i]);
+        }
     }
     mal_gc_satb_record(frame->this_value);
     mal_gc_satb_record(frame->arguments_object);
     mal_gc_satb_record(frame->callee);
     mal_gc_satb_record(frame->new_target);
-    for (i32 i = 0; i < frame->with_count; ++i) {
-        mal_gc_satb_record(frame->with_objects[i]);
+    if (frame->with_objects != nullptr) {
+        for (i32 i = 0; i < frame->with_count; ++i) {
+            mal_gc_satb_record(frame->with_objects[i]);
+        }
     }
     if (frame->env != nullptr) {
         mal_gc_satb_record(mal_value_from_heap(&frame->env->header));
@@ -943,7 +1064,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
     }
 }
 
-// --- Entry point -----------------------------------------------------------
+// --- Mark / weak / verify --------------------------------------------------
 
 /** Verify visitor: re-trace a survivor's edges (in verify mode shading aborts on
  * a freed target). FREE cells are dead this cycle and are skipped. */
@@ -960,7 +1081,8 @@ static void mal_gc_verify_cell(MalHeapHeader *cell) {
  * A freed target means marking missed a live cell (a missing root or trace edge)
  * and swept it from under a still-reachable reference — the exact corruption that
  * later reads as a use-after-free. Runs right after the sweep, before any new
- * allocation can recycle a freed cell, so MAL_MARK_FREE is unambiguous. */
+ * allocation can recycle a freed cell, so MAL_MARK_FREE is unambiguous. Under the
+ * concurrent collector it runs at CYCLE END (after the incremental sweep drains). */
 static void mal_gc_verify(MalVm *vm) {
     g_gc_verifying = true;
     mal_gc_scan_roots(vm);
@@ -970,10 +1092,22 @@ static void mal_gc_verify(MalVm *vm) {
 
 /** Drain the grey worklist, tracing each cell's strong edges. */
 static void mal_gc_drain(void) {
-    while (g_grey_count > 0) {
-        mal_gc_trace_cell(g_grey[--g_grey_count]);
+    while (g_gc->grey_count > 0) {
+        mal_gc_trace_cell(g_gc->grey[--g_gc->grey_count]);
     }
 }
+
+#if MAL_GC_CONCURRENT
+/** Drain the SATB buffer into the grey worklist: re-shade every recorded snapshot
+ * reference. The buffer can grow while draining (tracing a shaded cell may fire a
+ * barrier / another shade), so re-read satb_count each pass; never drop an entry. */
+static void mal_gc_drain_satb(void) {
+    while (g_gc->satb_drained < g_gc->satb_count) {
+        MalValue v = g_gc->satb[g_gc->satb_drained++];
+        mal_gc_mark_value(v);
+    }
+}
+#endif
 
 /** Weak-reference processing, after the main mark has drained. Today: the
  * WeakMap/WeakSet ephemeron pass. A weak entry's value is live iff its key is
@@ -984,8 +1118,8 @@ static void mal_gc_weak_pass(void) {
     bool changed = true;
     while (changed) {
         changed = false;
-        for (usize i = 0; i < g_weak_maps_count; ++i) {
-            MalTable *entries = g_weak_maps[i]->entries;
+        for (usize i = 0; i < g_gc->weak_maps_count; ++i) {
+            MalTable *entries = g_gc->weak_maps[i]->entries;
             if (entries == nullptr) {
                 continue;
             }
@@ -1009,12 +1143,12 @@ static void mal_gc_weak_pass(void) {
 
     // Drop entries whose key did not survive (collected first; deleting mid-
     // iteration is avoided). The values, if dead, are reclaimed by the sweep.
-    for (usize i = 0; i < g_weak_maps_count; ++i) {
-        MalTable *entries = g_weak_maps[i]->entries;
+    for (usize i = 0; i < g_gc->weak_maps_count; ++i) {
+        MalTable *entries = g_gc->weak_maps[i]->entries;
         if (entries == nullptr) {
             continue;
         }
-        g_dead_keys_count = 0;
+        g_gc->dead_keys_count = 0;
         MalTableIter iter;
         mal_table_iter_init(&iter, entries, MAL_TABLE_ITER_STORAGE);
         MalKey key;
@@ -1024,30 +1158,30 @@ static void mal_gc_weak_pass(void) {
                 mal_gc_dead_key_push(key);
             }
         }
-        for (usize d = 0; d < g_dead_keys_count; ++d) {
-            mal_table_delete(entries, g_dead_keys[d]);
+        for (usize d = 0; d < g_gc->dead_keys_count; ++d) {
+            mal_table_delete(entries, g_gc->dead_keys[d]);
         }
         // mal_table_delete only tombstones; without compaction a churning weak
         // collection's order array grows without bound. Weak collections have no
         // JS iteration surface, so compacting (which renumbers storage) is safe.
-        if (g_dead_keys_count > 0) {
+        if (g_gc->dead_keys_count > 0) {
             mal_table_compact(entries);
         }
     }
 
     // WeakRef: null any target that did not otherwise survive, so a later deref()
     // sees undefined rather than a reclaimed cell.
-    for (usize i = 0; i < g_weak_refs_count; ++i) {
-        if (!mal_gc_is_marked(g_weak_refs[i]->target)) {
-            g_weak_refs[i]->target = mal_value_new_undefined();
+    for (usize i = 0; i < g_gc->weak_refs_count; ++i) {
+        if (!mal_gc_is_marked(g_gc->weak_refs[i]->target)) {
+            g_gc->weak_refs[i]->target = mal_value_new_undefined();
         }
     }
 
     // FinalizationRegistry: for each cell whose target was reclaimed, enqueue a
     // cleanup job (callback(heldValue) — never the dead target) and unlink the
     // cell. The held value was marked strongly above, so it survives to the job.
-    for (usize i = 0; i < g_fin_regs_count; ++i) {
-        MalFinalizationRegistryObject *reg = g_fin_regs[i];
+    for (usize i = 0; i < g_gc->fin_regs_count; ++i) {
+        MalFinalizationRegistryObject *reg = g_gc->fin_regs[i];
         MalFinRegCell **link = &reg->cells;
         while (*link != nullptr) {
             MalFinRegCell *fc = *link;
@@ -1072,26 +1206,22 @@ static void mal_gc_weak_pass(void) {
 // its young children, WITHOUT re-marking the old generation — that is the work it
 // saves over a full mark. The set is rebuilt every collection.
 
-static MalHeapHeader **g_remembered = nullptr;
-static usize g_remembered_count = 0;
-static usize g_remembered_capacity = 0;
-
 void mal_gc_remember(MalHeapHeader *owner) {
     owner->dirty = 1;
-    if (g_remembered_count == g_remembered_capacity) {
-        g_remembered_capacity = g_remembered_capacity == 0 ? 256 : g_remembered_capacity * 2;
-        g_remembered = realloc(g_remembered, g_remembered_capacity * sizeof(MalHeapHeader *));
+    if (g_gc->remembered_count == g_gc->remembered_capacity) {
+        g_gc->remembered_capacity = g_gc->remembered_capacity == 0 ? 256 : g_gc->remembered_capacity * 2;
+        g_gc->remembered = realloc(g_gc->remembered, g_gc->remembered_capacity * sizeof(MalHeapHeader *));
     }
-    g_remembered[g_remembered_count++] = owner;
+    g_gc->remembered[g_gc->remembered_count++] = owner;
 }
 
 // Clear the remembered set after a collection: drop the dirty flag on each member
 // (a later write re-records it) and empty the list.
 static void mal_gc_clear_remembered(void) {
-    for (usize i = 0; i < g_remembered_count; ++i) {
-        g_remembered[i]->dirty = 0;
+    for (usize i = 0; i < g_gc->remembered_count; ++i) {
+        g_gc->remembered[i]->dirty = 0;
     }
-    g_remembered_count = 0;
+    g_gc->remembered_count = 0;
 }
 
 // Major-collection pre-pass visitor: demote every live cell to WHITE so the
@@ -1103,30 +1233,60 @@ static void mal_gc_reset_marks_cell(MalHeapHeader *cell) {
     }
     cell->dirty = 0;
 }
-
-// One in every g_gc_major_every collections (and the first) is a full major
-// collection that reclaims the old generation; the rest are minors that only
-// touch roots + the remembered set + young cells. (g_gc_major_every is declared
-// up top so mal_gc_init can read MAL_GC_MAJOR_EVERY into it.)
-static u32 g_gc_collection_index = 0;
 #endif
 
-void mal_gc_collect(MalVm *vm) {
-    u64 start_ns = g_gc_stats_enabled ? mal_gc_now_ns() : 0;
-    g_gc_vm = vm;
-    g_grey_count = 0;
-    g_weak_maps_count = 0;
-    g_weak_refs_count = 0;
-    g_fin_regs_count = 0;
+// --- Statistics helpers ----------------------------------------------------
+
+/* Fold one pause/step duration into the stats: total time, the global max pause,
+ * and (concurrent build) the caller-specified per-phase slot. */
+static void mal_gc_stat_record(u64 elapsed_ns) {
+    if (!g_gc->stats_enabled) {
+        return;
+    }
+    g_gc->total_ns += elapsed_ns;
+    if (elapsed_ns > g_gc->max_pause_ns) {
+        g_gc->max_pause_ns = elapsed_ns;
+    }
+}
+
+static void mal_gc_stat_peak_live(MalVm *vm) {
+    if (g_gc->stats_enabled && vm->heap.live_bytes > g_gc->peak_live_bytes) {
+        g_gc->peak_live_bytes = vm->heap.live_bytes;
+    }
+}
+
+// --- Synchronous (stop-the-world) collection -------------------------------
+
+/* Advance the auto-collection trigger past the surviving set (heap doubling with a
+ * floor): collect again only after another ~live-set of allocation. Shared by the
+ * STW path and the concurrent cycle's completion. Returns the chosen `grow`. */
+static usize mal_gc_advance_trigger(MalVm *vm) {
+    usize grow = vm->heap.live_bytes * 2;
+    if (grow < MAL_GC_MIN_INCREMENT) {
+        grow = MAL_GC_MIN_INCREMENT;
+    }
+    if (mal_gc_next_at != (usize) -1) {
+        mal_gc_next_at = vm->heap.bytes_allocated + grow;
+    }
+    return grow;
+}
+
+/* One synchronous mark-sweep collection. `major` demotes the whole heap to WHITE
+ * (gen) so old garbage + cross-generation cycles are reclaimed; a minor leaves old
+ * cells BLACK and finds young survivors via roots + the remembered set. This is
+ * today's mal_gc_collect body, factored so the concurrent build can reuse it for
+ * STW minors and for finishing a cycle synchronously (backstop / MODE=stw). */
+static void mal_gc_collect_sync(MalVm *vm, bool major) {
+    u64 start_ns = g_gc->stats_enabled ? mal_gc_now_ns() : 0;
+    g_gc->grey_count = 0;
+    g_gc->weak_maps_count = 0;
+    g_gc->weak_refs_count = 0;
+    g_gc->fin_regs_count = 0;
 
 #if MAL_GC_GENERATIONAL
-    // A major collection demotes the whole heap to WHITE and forgets the
-    // remembered set, so the full mark below collects old garbage too. A minor
-    // leaves old cells BLACK and finds young survivors via roots + remembered set.
-    bool major = (g_gc_collection_index++ % g_gc_major_every) == 0;
     if (major) {
         mal_heap_walk_cells(&vm->heap, mal_gc_reset_marks_cell);
-        g_remembered_count = 0; // dirty flags cleared by the reset walk above
+        g_gc->remembered_count = 0; // dirty flags cleared by the reset walk above
     }
     // Survivors of BOTH minor and (gen) major stay BLACK = old (sticky promotion).
     mal_heap_sweep_sticky = true;
@@ -1140,8 +1300,8 @@ void mal_gc_collect(MalVm *vm) {
         // generation is not re-marked. mal_gc_trace_cell also (re-)registers weak
         // collections it reaches, so a dirtied old WeakMap's dead young keys are
         // still cleaned this cycle.
-        for (usize i = 0; i < g_remembered_count; ++i) {
-            mal_gc_trace_cell(g_remembered[i]);
+        for (usize i = 0; i < g_gc->remembered_count; ++i) {
+            mal_gc_trace_cell(g_gc->remembered[i]);
         }
     }
 #endif
@@ -1156,46 +1316,391 @@ void mal_gc_collect(MalVm *vm) {
     mal_gc_clear_remembered();
 #endif
 
-    if (g_gc_verify_enabled) {
-        // Re-scans roots and walks every survivor's edges, aborting if any points
-        // at a just-freed cell. Under a minor this also validates remembered-set
-        // completeness: a missed old->young edge swept the young target, so the
-        // old cell now points at a FREE cell and the walk catches it.
+    if (g_gc->verify_enabled) {
         mal_gc_verify(vm);
     }
 
-    // Advance the auto-collection trigger past the surviving set (heap doubling
-    // with a floor): collect again only after another ~live-set of allocation.
-    if (mal_gc_next_at != (usize) -1) {
-        usize grow = vm->heap.live_bytes * 2;
-        if (grow < MAL_GC_MIN_INCREMENT) {
-            grow = MAL_GC_MIN_INCREMENT;
-        }
-        mal_gc_next_at = vm->heap.bytes_allocated + grow;
-    }
+    mal_gc_advance_trigger(vm);
 
-    if (g_gc_stats_enabled) {
+    if (g_gc->stats_enabled) {
         u64 elapsed = mal_gc_now_ns() - start_ns;
-        g_gc_collections++;
-        g_gc_total_ns += elapsed;
-        if (elapsed > g_gc_max_pause_ns) {
-            g_gc_max_pause_ns = elapsed;
-        }
-        if (vm->heap.live_bytes > g_gc_peak_live_bytes) {
-            g_gc_peak_live_bytes = vm->heap.live_bytes;
-        }
+        g_gc->collections++;
+        mal_gc_stat_record(elapsed);
+        mal_gc_stat_peak_live(vm);
 #if MAL_GC_GENERATIONAL
         if (major) {
-            g_gc_major_count++;
+            g_gc->major_count++;
         } else {
-            g_gc_minor_count++;
+            g_gc->minor_count++;
         }
 #else
-        g_gc_major_count++; // a non-generational collection is always a full mark-sweep
+        g_gc->major_count++; // a non-generational collection is always a full mark-sweep
+        (void) major;
 #endif
     }
+}
 
-    g_gc_vm = nullptr;
+#if !MAL_GC_CONCURRENT
+void mal_gc_collect(MalVm *vm) {
+    g_gc_vm = vm;
+#if MAL_GC_GENERATIONAL
+    bool major = (g_gc->collection_index++ % g_gc->major_every) == 0;
+#else
+    bool major = true;
+#endif
+    mal_gc_collect_sync(vm, major);
+}
+#endif
+
+// ===========================================================================
+// Concurrent incremental collector (MAL_GC_CONCURRENT).
+//
+// The whole cycle runs on the mutator thread, sliced at safepoints — no atomics,
+// no races (C2 adds the marker thread). Composition with generational: minors
+// stay STW-inline (short by construction); only the periodic MAJOR runs as a
+// concurrent cycle, and no minor starts while a cycle is in flight (the safepoint
+// advances the cycle instead). Black allocation over-tenures mid-cycle allocations
+// (accepted, counted). Roots are SATB-exempt: init-mark and remark re-scan them,
+// so both pauses are O(roots), never O(heap).
+// ===========================================================================
+#if MAL_GC_CONCURRENT
+
+/* Begin a concurrent MAJOR cycle: the init-mark pause. Scan roots, enable marking
+ * (SATB barrier) + black allocation, and — under generational — demote the whole
+ * heap to WHITE first (as today's STW major does) so old garbage and
+ * cross-generation cycles are reclaimed this cycle. O(roots + heap-reset); the
+ * heap-reset walk is the one O(heap) step of a pause, unavoidable for a sticky
+ * major and identical to the STW major's pre-pass. */
+static void mal_gc_cycle_begin(MalVm *vm) {
+    u64 start_ns = g_gc->stats_enabled ? mal_gc_now_ns() : 0;
+    g_gc->grey_count = 0;
+    g_gc->weak_maps_count = 0;
+    g_gc->weak_refs_count = 0;
+    g_gc->fin_regs_count = 0;
+    g_gc->satb_count = 0;
+    g_gc->satb_drained = 0;
+
+#if MAL_GC_GENERATIONAL
+    mal_heap_walk_cells(&vm->heap, mal_gc_reset_marks_cell);
+    g_gc->remembered_count = 0; // dirty flags cleared by the reset walk above
+    mal_heap_sweep_sticky = true; // survivors stay BLACK = old
+#endif
+
+    // Enable the SATB deletion barrier + black allocation, THEN snapshot the roots.
+    // Ordering: with marking active, any store the mutator makes after this shades
+    // its old value; the root scan captures the current roots. A cell reachable at
+    // this instant is either marked now (root-reachable) or preserved by the
+    // barrier / black allocation for the rest of the cycle.
+    mal_gc_marking_active = true;
+    mal_gc_black_alloc = true;
+    mal_gc_scan_roots(vm);
+
+    g_gc->phase = MAL_GC_PHASE_MARK;
+    g_gc->bytes_at_last_step = vm->heap.bytes_allocated;
+
+    if (g_gc->stats_enabled) {
+        u64 elapsed = mal_gc_now_ns() - start_ns;
+        g_gc->cycles++;
+        g_gc->init_mark_ns = elapsed;
+        mal_gc_stat_record(elapsed);
+    }
+}
+
+/* The remark pause: drain the remaining SATB + grey to empty, re-scan roots (they
+ * are SATB-exempt), run the weak/ephemeron pass, then clear marking and hand off
+ * to the incremental sweep. O(roots + floating snapshot), not O(heap). */
+static void mal_gc_cycle_remark(MalVm *vm) {
+    u64 start_ns = g_gc->stats_enabled ? mal_gc_now_ns() : 0;
+
+    // Re-scan roots: a value that moved from a (SATB-exempt) root into an already
+    // black object during marking is caught here.
+    mal_gc_scan_roots(vm);
+    // Drain to a joint fixpoint: draining grey can append to SATB (a shaded frame),
+    // and draining SATB shades new grey. Loop until both are empty.
+    do {
+        mal_gc_drain();
+        mal_gc_drain_satb();
+    } while (g_gc->grey_count > 0);
+
+    mal_gc_weak_pass();
+
+    // Marking is complete: stop the barrier (further stores need no snapshot) and
+    // hand off to the sweep. Black allocation stays ON through the sweep so a cell
+    // born during sweeping is not reclaimed as WHITE garbage.
+    mal_gc_marking_active = false;
+    g_gc->satb_count = 0;
+    g_gc->satb_drained = 0;
+
+    // Bump the epoch BEFORE any cell can be reused (the sweep reclaims cells): the
+    // call-site caches treat a changed epoch as an invalidation (ABA guard).
+    mal_heap_sweep_begin(&vm->heap);
+    g_gc->phase = MAL_GC_PHASE_SWEEP;
+
+    if (g_gc->stats_enabled) {
+        u64 elapsed = mal_gc_now_ns() - start_ns;
+        g_gc->remark_ns = elapsed;
+        mal_gc_stat_record(elapsed);
+    }
+}
+
+/* Finish an in-flight cycle's sweep and close it out: reset the sticky flag,
+ * clear the remembered set, disable black allocation, run verify (cycle end), and
+ * advance the trigger. Called both by the incremental sweep on completion and by
+ * the synchronous-finish path (which sweeps everything remaining first). */
+static void mal_gc_cycle_finish_sweep(MalVm *vm) {
+#if MAL_GC_GENERATIONAL
+    mal_heap_sweep_sticky = false;
+    mal_gc_clear_remembered();
+#endif
+    mal_gc_black_alloc = false;
+    g_gc->phase = MAL_GC_PHASE_IDLE;
+
+    if (g_gc->verify_enabled) {
+        mal_gc_verify(vm);
+    }
+    mal_gc_advance_trigger(vm);
+
+    if (g_gc->stats_enabled) {
+        g_gc->collections++;
+        g_gc->major_count++; // a concurrent cycle is always a major
+        mal_gc_stat_peak_live(vm);
+    }
+}
+
+/* One incremental mark step: drain up to `budget` grey/SATB entries. Returns true
+ * when marking is drained to empty (time to remark). */
+static bool mal_gc_mark_step(MalVm *vm, usize budget) {
+    u64 start_ns = g_gc->stats_enabled ? mal_gc_now_ns() : 0;
+    usize worked = 0;
+    while (worked < budget) {
+        if (g_gc->grey_count > 0) {
+            mal_gc_trace_cell(g_gc->grey[--g_gc->grey_count]);
+            worked++;
+        } else if (g_gc->satb_drained < g_gc->satb_count) {
+            mal_gc_mark_value(g_gc->satb[g_gc->satb_drained++]);
+            worked++;
+        } else {
+            break; // nothing left to do this step
+        }
+    }
+    bool drained = g_gc->grey_count == 0 && g_gc->satb_drained >= g_gc->satb_count;
+    g_gc->bytes_at_last_step = vm->heap.bytes_allocated;
+    if (g_gc->stats_enabled) {
+        u64 elapsed = mal_gc_now_ns() - start_ns;
+        if (elapsed > g_gc->max_mark_step_ns) {
+            g_gc->max_mark_step_ns = elapsed;
+        }
+        mal_gc_stat_record(elapsed);
+    }
+    return drained;
+}
+
+/* Number of CELL blocks to sweep per incremental sweep step. */
+#define MAL_GC_SWEEP_BLOCKS_PER_STEP 16
+
+/* One incremental sweep step: reclaim up to N blocks. Returns true when the whole
+ * heap is swept (the cycle is done). */
+static bool mal_gc_sweep_step(MalVm *vm) {
+    u64 start_ns = g_gc->stats_enabled ? mal_gc_now_ns() : 0;
+    bool done = mal_heap_sweep_step(&vm->heap, mal_gc_finalize_cell, MAL_GC_SWEEP_BLOCKS_PER_STEP);
+    if (g_gc->stats_enabled) {
+        u64 elapsed = mal_gc_now_ns() - start_ns;
+        if (elapsed > g_gc->max_sweep_step_ns) {
+            g_gc->max_sweep_step_ns = elapsed;
+        }
+        mal_gc_stat_record(elapsed);
+    }
+    return done;
+}
+
+/* Finish whatever remains of the in-flight cycle synchronously, then leave it
+ * IDLE. The one function behind the three synchronous callers: the hard backstop
+ * (allocation reached mal_gc_next_at mid-cycle), MAL_GC_MODE=stw, and the explicit
+ * mal_gc_collect entry (host gc() / teardown). Degrade-to-STW, never OOM. */
+static void mal_gc_cycle_finish_sync(MalVm *vm) {
+    if (g_gc->phase == MAL_GC_PHASE_MARK) {
+        mal_gc_cycle_remark(vm); // drains SATB+grey, weak pass, opens the sweep
+    }
+    if (g_gc->phase == MAL_GC_PHASE_SWEEP) {
+        // Sweep everything remaining in one shot.
+        while (!mal_heap_sweep_step(&vm->heap, mal_gc_finalize_cell, (usize) -1)) {
+            // loop until the whole heap is swept
+        }
+        mal_gc_cycle_finish_sweep(vm);
+    }
+}
+
+/* The explicit "collect now, completely and synchronously" entry (host gc() hook,
+ * teardown). A complete collection is what the caller expects: if a cycle is
+ * mid-flight, finish it synchronously FIRST — but that cycle's snapshot may retain
+ * objects that died after it began (SATB floating garbage) — and then run a fresh
+ * synchronous major, which snapshots the CURRENT roots and reclaims that floating
+ * garbage too. So gc() matches the STW collector's "reclaim everything dead now". */
+void mal_gc_collect(MalVm *vm) {
+    g_gc_vm = vm;
+    if (g_gc->phase != MAL_GC_PHASE_IDLE) {
+        mal_gc_cycle_finish_sync(vm);
+    }
+    mal_gc_collect_sync(vm, true); // fresh full major over the current snapshot
+}
+
+/* Advance an in-flight cycle by one step, or (if idle) decide whether a collection
+ * is due and start one. Returns having done at most one bounded unit of GC work.
+ * The pacer: the assist budget is proportional to bytes allocated since the last
+ * mark step, so marking outruns allocation; the hard backstop finishes the cycle
+ * synchronously if allocation reaches mal_gc_next_at first. */
+static void mal_gc_cycle_advance(MalVm *vm, usize mark_budget) {
+    switch (g_gc->phase) {
+        case MAL_GC_PHASE_MARK: {
+            // Hard backstop: if allocation has reached the old STW trigger before the
+            // cycle finished, finish it synchronously rather than float garbage.
+            if (vm->heap.bytes_allocated >= g_gc->backstop_at) {
+                u64 s = g_gc->stats_enabled ? mal_gc_now_ns() : 0;
+                mal_gc_cycle_finish_sync(vm);
+                if (g_gc->stats_enabled) {
+                    g_gc->sync_backstop++;
+                    mal_gc_stat_record(mal_gc_now_ns() - s);
+                }
+                return;
+            }
+            if (mal_gc_mark_step(vm, mark_budget)) {
+                mal_gc_cycle_remark(vm); // marking drained → remark + open the sweep
+            }
+            return;
+        }
+        case MAL_GC_PHASE_SWEEP: {
+            if (mal_gc_sweep_step(vm)) {
+                mal_gc_cycle_finish_sweep(vm);
+            }
+            return;
+        }
+        default:
+            return;
+    }
+}
+
+/* The assist budget for the next mark step: grey/SATB entries to trace, ∝ bytes
+ * allocated since the last step (so a faster mutator does proportionally more
+ * marking). A floor keeps progress even under a quiet mutator. */
+static usize mal_gc_mark_budget(MalVm *vm) {
+    usize delta = vm->heap.bytes_allocated - g_gc->bytes_at_last_step;
+    usize budget = (delta / 64) * g_gc->assist;
+    if (budget < 4096) {
+        budget = 4096; // floor: always make real progress per gated safepoint
+    }
+    return budget;
+}
+
+/* Concurrent-build safepoint: drive the cycle state machine. */
+static void mal_gc_concurrent_safepoint(MalVm *vm) {
+    g_gc_vm = vm;
+
+    // Stress-for-concurrency: force a cycle start every N gated safepoints with a
+    // tiny mark budget to maximize mutator/marker interleavings; advance an
+    // in-flight cycle a tiny step at every safepoint. MODE=stw recovers today's
+    // behaviour (each forced collection is fully synchronous).
+    if (g_gc->stress_interval != 0) {
+        if (g_gc->mode_stw) {
+            if (++g_gc->stress_counter >= g_gc->stress_interval) {
+                g_gc->stress_counter = 0;
+                mal_gc_collect(vm);
+            }
+            return;
+        }
+        if (g_gc->phase != MAL_GC_PHASE_IDLE) {
+            mal_gc_cycle_advance(vm, 64); // tiny budget → many interleavings
+        } else if (++g_gc->stress_counter >= g_gc->stress_interval) {
+            g_gc->stress_counter = 0;
+            g_gc->backstop_at = (usize) -1; // stress: no byte backstop, run to completion
+            mal_gc_cycle_begin(vm);
+        }
+        return;
+    }
+
+    // Auto mode.
+    if (g_gc->phase != MAL_GC_PHASE_IDLE) {
+        // A cycle is in flight: advance it. Any auto-trigger poll raised meanwhile
+        // ADVANCES this cycle (a mark/sweep step) rather than starting a collection.
+        mal_gc_cycle_advance(vm, mal_gc_mark_budget(vm));
+        mal_gc_poll = false;
+        return;
+    }
+
+    if (!mal_gc_poll) {
+        return;
+    }
+    mal_gc_poll = false;
+    if (vm->heap.bytes_allocated < mal_gc_next_at) {
+        return; // polled for preemption only; nothing owed
+    }
+
+    // A collection is due. Decide minor vs. major by the generational cadence.
+#if MAL_GC_GENERATIONAL
+    bool major = (g_gc->collection_index % g_gc->major_every) == 0;
+#else
+    bool major = true;
+#endif
+    if (!major) {
+        // Minor: STW-inline, exactly as today (short by construction).
+#if MAL_GC_GENERATIONAL
+        g_gc->collection_index++;
+#endif
+        mal_gc_collect_sync(vm, false);
+        return;
+    }
+
+    // Major turn. MODE=stw forces it synchronous (the backstop path).
+#if MAL_GC_GENERATIONAL
+    g_gc->collection_index++;
+#endif
+    if (g_gc->mode_stw) {
+        mal_gc_collect_sync(vm, true);
+        return;
+    }
+    // Start a concurrent major cycle. The backstop is one more growth increment of
+    // headroom (a full ~live-set of allocation) in which to finish incrementally;
+    // reaching it forces a synchronous finish.
+    usize grow = vm->heap.live_bytes * 2;
+    if (grow < MAL_GC_MIN_INCREMENT) {
+        grow = MAL_GC_MIN_INCREMENT;
+    }
+    g_gc->backstop_at = vm->heap.bytes_allocated + grow;
+    mal_gc_cycle_begin(vm);
+}
+#endif // MAL_GC_CONCURRENT
+
+void mal_gc_safepoint(MalVm *vm) {
+    // Only safe to collect when no native builtin is active: its C-local scratch
+    // is not enumerable as a root, so collecting inside one could free values it
+    // still holds. Compiled frames are fine (they publish root frames); all other
+    // live state is in the interpreter frames + value stack, covered by the scan.
+    if (vm->gc_native_frames != 0) {
+        return;
+    }
+#if MAL_GC_CONCURRENT
+    mal_gc_concurrent_safepoint(vm);
+#else
+    if (g_gc->stress_interval != 0) {
+        if (++g_gc->stress_counter >= g_gc->stress_interval) {
+            g_gc->stress_counter = 0;
+            mal_gc_collect(vm);
+        }
+    } else if (mal_gc_poll) {
+        // Auto mode: collect only if actually due. The poll may also have been
+        // raised purely to force a preemption safepoint (below), so don't assume a
+        // collection is owed just because we were polled.
+        if (vm->heap.bytes_allocated >= mal_gc_next_at) {
+            mal_gc_collect(vm); // advances mal_gc_next_at past the surviving set
+        }
+        mal_gc_poll = false;
+    }
+#endif
+    // Preemption: this is a safe point to switch fibers (roots are precise here and
+    // no un-rooted native frame is live — the gate above). The scheduler's hook
+    // yields the running fiber if its budget is spent, and returns here on resume.
+    if (mal_gc_preempt_hook != nullptr) {
+        mal_gc_preempt_hook(vm);
+    }
 }
 
 /** Finalize-all visitor: free a live cell's owned side allocations regardless of
@@ -1221,5 +1726,38 @@ static void mal_gc_finalize_live_cell(MalHeapHeader *cell) {
 void mal_gc_finalize_all(MalVm *vm) {
     g_gc_vm = vm; // mal_gc_finalize_cell reaches the heap through g_gc_vm
     mal_heap_walk_cells(&vm->heap, mal_gc_finalize_live_cell);
-    g_gc_vm = nullptr;
+}
+
+/* Free the per-isolate collector state's growable buffers + the struct itself.
+ * Call at VM teardown (after mal_gc_finalize_all, before/after mal_heap_free — the
+ * buffers are plain malloc'd, independent of the heap). */
+void mal_gc_state_free(MalVm *vm) {
+    MalGcState *g = vm->gc;
+    if (g == nullptr) {
+        return;
+    }
+    free(g->grey);
+    free(g->weak_maps);
+    free(g->weak_refs);
+    free(g->fin_regs);
+    free(g->dead_keys);
+#if MAL_GC_GENERATIONAL
+    free(g->remembered);
+#endif
+#if MAL_GC_CONCURRENT
+    free(g->satb);
+#endif
+    // Snapshot the stats before freeing so the atexit printer (MAL_GC_STATS) still
+    // reports after an explicit teardown; the snapshot's buffer pointers are stale
+    // but the printer touches only scalar counters.
+    if (g_gc_stats_state == g) {
+        g_gc_stats_snapshot = *g;
+        g_gc_stats_state = &g_gc_stats_snapshot;
+    }
+    free(g);
+    vm->gc = nullptr;
+    if (g_gc == g) {
+        g_gc = nullptr;
+        g_gc_vm = nullptr;
+    }
 }

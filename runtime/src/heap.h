@@ -71,6 +71,19 @@ typedef struct MalHeap {
      * (the native backend's call-site cache) tag it with the epoch and treat a
      * changed epoch as an invalidation — closing the ABA hole without rooting. */
     u32 epoch;
+#if MAL_GC_CONCURRENT
+    /** Incremental-sweep cursor (concurrent build): the chunk + in-chunk block
+     * index the lazy per-safepoint sweep has reached, and the survivor-byte total
+     * accumulated so far this sweep. Set by mal_heap_sweep_begin; advanced by
+     * mal_heap_sweep_step until the cursor is exhausted (the cycle is done). Only
+     * the chunks that existed at begin are walked — chunks prepended during the
+     * sweep hold only black-allocated (mid-cycle) cells, which are never garbage
+     * this cycle, so skipping them is correct. */
+    MalGcChunk *sweep_chunk;
+    usize sweep_block;
+    usize sweep_live_bytes;
+    bool sweeping;
+#endif
 } MalHeap;
 
 /**
@@ -365,6 +378,25 @@ extern bool mal_heap_sweep_sticky;
  * mark phase first. Large-object cells are not yet swept.
  */
 void mal_heap_sweep(MalHeap *heap, MalHeapFinalizeFn finalize);
+
+#if MAL_GC_CONCURRENT
+/**
+ * Begin an incremental sweep (concurrent collector): bump the epoch (before any
+ * cell can be reused), clear the reclaimed-cell free lists (rebuilt as blocks are
+ * swept), and point the cursor at the first block. Call once at the remark→sweep
+ * transition, then drive mal_heap_sweep_step until it returns true.
+ */
+void mal_heap_sweep_begin(MalHeap *heap);
+
+/**
+ * Sweep up to `max_blocks` managed (CELL) blocks from the cursor, reclaiming their
+ * WHITE cells (finalize + free list) and recycling fully-dead blocks. Returns true
+ * once the whole heap is swept (cursor exhausted) — the caller then closes the
+ * cycle. `max_blocks == (usize)-1` sweeps everything remaining (the synchronous
+ * finish). Requires a prior mal_heap_sweep_begin.
+ */
+bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_blocks);
+#endif
 
 /** Call `visit` on every managed (CELL) cell, in any state. Used by the heap
  * verifier to re-examine each cell's edges after marking. */

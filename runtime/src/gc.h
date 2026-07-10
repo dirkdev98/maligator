@@ -23,12 +23,21 @@ typedef struct MalVm MalVm;
  * never disagree on the default. Off => the SATB / generational-card halves of the
  * write barrier fold out, so that build pays nothing. */
 
+typedef struct MalGcState MalGcState;
+
 #if MAL_GC_CONCURRENT
-/* Set during a concurrent mark cycle; gates the SATB barrier. */
+/* Set during a concurrent mark cycle (init-mark → remark); gates the SATB barrier. */
 extern bool mal_gc_marking_active;
+/* Set for the WHOLE concurrent cycle (init-mark → sweep-complete): while true a
+ * freshly allocated managed cell is born BLACK (mal_heap_header_init) so it is
+ * never swept this cycle. Read by the allocator; folds to a compile-time 0 off. */
+extern bool mal_gc_black_alloc;
+/* Bytes born BLACK (over-tenured under generational) since process start. */
+extern usize mal_gc_black_alloc_bytes;
 #else
-/* Compile-time false so the SATB barrier dead-code-eliminates. */
+/* Compile-time false so the SATB barrier / black-allocation path dead-code-eliminate. */
 #define mal_gc_marking_active 0
+#define mal_gc_black_alloc 0
 #endif
 
 /* Raised by the collector to request that mutators reach a safepoint; polled at
@@ -101,8 +110,13 @@ void mal_gc_register_tracer(MalHeapType type, MalGcTracer fn);
  * Invoked explicitly (the gc() host hook); never from the allocator. */
 void mal_gc_collect(MalVm *vm);
 
-/* Read GC environment configuration (MAL_GC_STRESS). Call once at VM startup. */
-void mal_gc_init(void);
+/* Allocate the per-isolate collector state (vm->gc) and read GC environment
+ * configuration (MAL_GC_STRESS, MAL_GC_MODE, …). Call once at VM startup. */
+void mal_gc_init(MalVm *vm);
+
+/* Free the per-isolate collector state (vm->gc) and its growable buffers. Call
+ * once at VM teardown. */
+void mal_gc_state_free(MalVm *vm);
 
 /* Free every cell's owned side allocations regardless of liveness, for a clean
  * VM teardown (no shutdown leak of overflow tables, Map entries, ArrayBuffer

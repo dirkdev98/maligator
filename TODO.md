@@ -122,11 +122,11 @@ in. `OFF buys` = what dropping the feature gets you.
 
 ### GC (`gc_todo.md`)
 
-- [ ] Concurrent collector, incremental-first: C1 mutator-thread incremental
-      mark/sweep (SATB buffer, black allocation, pacer + STW backstop, per-isolate
-      `MalGcState`, `MAL_GC_MODE=stw`) → C2 marker thread (atomic mark byte,
-      handshake; sweep stays on the mutator) → C3 parallel mark workers. Then AOT
-      write-barrier elision (T2.6).
+- [ ] Concurrent collector: **C1 (incremental mutator-thread mark/sweep) DONE
+      2026-07-10** — desktop max pause 4.8→0.95 ms, server 3.3→1.28 ms. Remaining:
+      AOT write-barrier elision (T2.6, now measurable); C2 marker thread + C3
+      parallel workers deferred until a big-heap workload demands them (design
+      accounted for).
 - [ ] Deterministic FFI free at scope end (T4.4); return empty RAW blocks to the OS.
 
 ### Isolate / reactor / actors (`isolate_todo.md`)

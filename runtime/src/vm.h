@@ -887,6 +887,10 @@ typedef struct MalVm {
     struct MalStubEntry *load_stub;
 
     MalHeap heap;
+    /** Per-isolate collector working state (grey worklist, weak lists, remembered
+     * set, stats, and — concurrent build — the SATB buffer + incremental-cycle
+     * state). Allocated by mal_gc_init, freed by mal_gc_state_free. See gc.c. */
+    MalGcState *gc;
     MalValue *globals;
     MalValue intrinsics[MAL_INTRINSIC_COUNT];
     MalCompletion completion;

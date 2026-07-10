@@ -79,8 +79,6 @@ static void client_fiber(void *arg) {
 }
 
 int main(void) {
-    mal_gc_init();
-
     MalVm vm;
     mal_vm_init(&vm, &mal_vm_definition);
     mal_host_attach(&vm);
