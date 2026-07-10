@@ -127,8 +127,7 @@ in. `OFF buys` = what dropping the feature gets you.
       barrier elision measured and CLOSED NO-GO (~0% realistic tax; see
       `gc_todo.md`). Remaining: C2 marker thread + C3 parallel workers, deferred
       until a big-heap workload demands them (design accounted for).
-- [ ] Deterministic FFI free at scope end (T4.4); `MalTable` trigger-accounting
-      migration (property tables / Map-Set backing are invisible to the GC trigger).
+- [ ] Deterministic FFI free at scope end (T4.4, gated behind the escape work).
 
 ### Isolate / reactor / actors (`isolate_todo.md`)
 

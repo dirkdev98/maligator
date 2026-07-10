@@ -405,6 +405,9 @@ void mal_vm_free(MalVm *vm) {
     vm->captured_trace_count = 0;
     vm->captured_trace_capacity = 0;
 
+    // These VM-global tables (unlike cell-owned tables, freed by finalizers) are
+    // torn down here. Their buffers live in the heap's RAW space, so mal_table_free
+    // now reaches the allocator (gc_free_raw): both frees MUST precede mal_heap_free.
     mal_table_free(vm->symbol_registry);
     mal_table_free(vm->atoms);
     // Free every live cell's owned side allocations before releasing the heap,

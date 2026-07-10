@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include "./gc.h"
+#include "./heap.h"
 #include "./heap_string.h"
 
 #define MAL_TABLE_MIN_CAPACITY 16
@@ -112,7 +113,8 @@ static usize mal_table_find_slot(const MalTable *table, MalValue key) {
 }
 
 static void mal_table_rehash(MalTable *table, u32 capacity) {
-    i32 *slots = malloc(capacity * sizeof(i32));
+    MalHeap *heap = mal_gc_current_heap();
+    i32 *slots = mal_heap_alloc_raw(heap, capacity * sizeof(i32));
     for (u32 i = 0; i < capacity; i++) {
         slots[i] = MAL_TABLE_EMPTY;
     }
@@ -129,7 +131,7 @@ static void mal_table_rehash(MalTable *table, u32 capacity) {
         slots[index] = (i32) e;
     }
 
-    free(table->slots);
+    gc_free_raw(heap, table->slots);
     table->slots = slots;
     table->slot_capacity = capacity;
 }
@@ -144,19 +146,31 @@ static void mal_table_grow_slots_if_needed(MalTable *table) {
     mal_table_rehash(table, table->slot_capacity * 2);
 }
 
-// Grows `entries` when the append cursor reaches capacity. The realloc may move
-// the buffer, but handles/iterators are indices, so they stay valid.
+// Grows `entries` when the append cursor reaches capacity. The grow may move the
+// buffer, but handles/iterators are indices, so they stay valid. Routed through the
+// RAW space (gc_realloc_raw: alloc-new / copy / free-old) so the bytes count toward
+// the GC trigger; no safepoint runs inside the allocator, so the detached old buffer
+// is never observed by the collector (the entries it holds are copied forward and
+// traced via the owner at the new address).
 static void mal_table_grow_entries_if_needed(MalTable *table) {
     if (table->entry_count < table->entry_capacity) {
         return;
     }
 
     table->entry_capacity *= 2;
-    table->entries = realloc(table->entries, sizeof(MalTableEntry) * table->entry_capacity);
+    table->entries =
+        gc_realloc_raw(mal_gc_current_heap(), table->entries, sizeof(MalTableEntry) * table->entry_capacity);
 }
 
+// All four allocations owned by a table (the struct, `slots`, `entries`, and each
+// entry's `data` descriptor blob) live in the GC RAW space so their bytes count
+// toward the collection trigger (big Maps/dictionaries used to under-trigger) and so
+// an emptied RAW block returns to the OS. The table is not a GC cell; it is traced
+// via its owner and freed explicitly by the owner's finalizer (or, for the VM-global
+// symbol/atom tables, by mal_vm_free BEFORE mal_heap_free — see mal_table_free).
 MalTable *mal_table_new(MalTableMode mode) {
-    MalTable *table = malloc(sizeof(MalTable));
+    MalHeap *heap = mal_gc_current_heap();
+    MalTable *table = mal_heap_alloc_raw(heap, sizeof(MalTable));
 
     table->mode = mode;
     table->size = 0;
@@ -164,25 +178,30 @@ MalTable *mal_table_new(MalTableMode mode) {
     table->slot_capacity = MAL_TABLE_MIN_CAPACITY;
     table->entry_count = 0;
     table->entry_capacity = MAL_TABLE_MIN_CAPACITY;
-    table->slots = malloc(table->slot_capacity * sizeof(i32));
+    table->slots = mal_heap_alloc_raw(heap, table->slot_capacity * sizeof(i32));
     for (u32 i = 0; i < table->slot_capacity; i++) {
         table->slots[i] = MAL_TABLE_EMPTY;
     }
-    table->entries = malloc(table->entry_capacity * sizeof(MalTableEntry));
+    table->entries = mal_heap_alloc_raw(heap, table->entry_capacity * sizeof(MalTableEntry));
 
     return table;
 }
 
 void mal_table_free(MalTable *table) {
+    // RAW frees touch the heap via mal_gc_current_heap(); the VM-global symbol/atom
+    // tables must therefore be freed (mal_vm_free) before mal_heap_free tears the
+    // heap down. Cell-owned tables are freed from finalizers, where the heap is live.
+    MalHeap *heap = mal_gc_current_heap();
+
     // Owned descriptor data is held by every occupied cell (live or tombstoned)
     // until compact/free, so release all of them.
     for (u32 e = 0; e < table->entry_count; e++) {
-        free(table->entries[e].data);
+        gc_free_raw(heap, table->entries[e].data);
     }
 
-    free(table->slots);
-    free(table->entries);
-    free(table);
+    gc_free_raw(heap, table->slots);
+    gc_free_raw(heap, table->entries);
+    gc_free_raw(heap, table);
 }
 
 MalTableMode mal_table_mode(const MalTable *table) {
@@ -282,7 +301,7 @@ void mal_table_compact(MalTable *table) {
         MalTableEntry *entry = &table->entries[read_index];
 
         if (!entry->live) {
-            free(entry->data);
+            gc_free_raw(mal_gc_current_heap(), entry->data);
             continue;
         }
 

@@ -3,12 +3,15 @@
 #include <stdlib.h>
 
 #include "./gc.h"
+#include "./heap.h"
 
 static MalPropertyDesc *mal_property_entry_data(MalTable *table, void *entry) {
     MalPropertyDesc *desc = mal_table_entry_data(table, entry);
 
     if (desc == nullptr) {
-        desc = malloc(sizeof(MalPropertyDesc));
+        // Owned by the table entry, freed by mal_table_free/compact via gc_free_raw:
+        // this blob lives in the RAW space (counted toward the GC trigger) too.
+        desc = mal_heap_alloc_raw(mal_gc_current_heap(), sizeof(MalPropertyDesc));
         mal_table_entry_set_owned_data(table, entry, desc);
     }
 
