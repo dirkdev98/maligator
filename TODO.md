@@ -123,10 +123,10 @@ in. `OFF buys` = what dropping the feature gets you.
 ### GC (`gc_todo.md`)
 
 - [ ] Concurrent collector: **C1 (incremental mutator-thread mark/sweep) DONE
-      2026-07-10** — desktop max pause 4.8→0.95 ms, server 3.3→1.28 ms. Remaining:
-      AOT write-barrier elision (T2.6, now measurable); C2 marker thread + C3
-      parallel workers deferred until a big-heap workload demands them (design
-      accounted for).
+      2026-07-10** — desktop max pause 4.8→0.95 ms, server 3.3→1.28 ms. T2.6
+      barrier elision measured and CLOSED NO-GO (~0% realistic tax; see
+      `gc_todo.md`). Remaining: C2 marker thread + C3 parallel workers, deferred
+      until a big-heap workload demands them (design accounted for).
 - [ ] Deterministic FFI free at scope end (T4.4); `MalTable` trigger-accounting
       migration (property tables / Map-Set backing are invisible to the GC trigger).
 
