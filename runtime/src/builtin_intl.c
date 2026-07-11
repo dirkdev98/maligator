@@ -7,6 +7,7 @@
 #include "array_object.h"
 #include "builtin_date.h"
 #include "builtin_iterator.h"
+#include "builtin_object.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "intl_object.h"
@@ -894,6 +895,80 @@ static MalValue intl_resolved_copy(MalVm *vm, MalValue template_value, const cha
     return mal_value_from_object(out);
 }
 
+#if MAL_INTL_HAS_NUMBER_FORMAT
+/** CoerceOptionsToObject: undefined creates a null-prototype bag; all other
+ * non-null values pass through ToObject. */
+static bool intl_number_format_options(MalVm *vm, MalValue options, MalValue *out) {
+    if (mal_value_is_undefined(options)) {
+        *out = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+        return true;
+    }
+    if (mal_value_is_null(options)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "options must not be null");
+        return false;
+    }
+    *out = mal_value_is_object(options) ? options : mal_builtin_object_box_primitive(vm, options);
+    return true;
+}
+
+/** DefaultNumberOption for the integer digit options supported by the backend. */
+static bool intl_number_option(MalVm *vm, MalValue value, i32 minimum, i32 maximum, i32 *out, bool *present) {
+    if (mal_value_is_undefined(value)) {
+        *present = false;
+        return true;
+    }
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) {
+        return false;
+    }
+    if (!isfinite(number) || number < minimum || number > maximum) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "number option out of range");
+        return false;
+    }
+    *present = true;
+    *out = (i32) floor(number);
+    return true;
+}
+
+static bool intl_number_format_digits(
+    MalVm *vm, MalValue options, bool percent, i32 *minimum_integer, i32 *minimum_fraction, i32 *maximum_fraction
+) {
+    MalValue value;
+    bool present;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "minimumIntegerDigits"), &value) ||
+        !intl_number_option(vm, value, 1, 21, minimum_integer, &present)) {
+        return false;
+    }
+    if (!present) {
+        *minimum_integer = 1;
+    }
+
+    MalValue minimum_value;
+    MalValue maximum_value;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "minimumFractionDigits"), &minimum_value) ||
+        !mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "maximumFractionDigits"), &maximum_value)) {
+        return false;
+    }
+    bool minimum_present;
+    bool maximum_present;
+    if (!intl_number_option(vm, minimum_value, 0, 100, minimum_fraction, &minimum_present) ||
+        !intl_number_option(vm, maximum_value, 0, 100, maximum_fraction, &maximum_present)) {
+        return false;
+    }
+    i32 maximum_default = percent ? 0 : 3;
+    if (!minimum_present) {
+        *minimum_fraction = 0;
+    }
+    if (!maximum_present) {
+        *maximum_fraction = *minimum_fraction > maximum_default ? *minimum_fraction : maximum_default;
+    } else if (*minimum_fraction > *maximum_fraction) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "minimumFractionDigits exceeds maximumFractionDigits");
+        return false;
+    }
+    return true;
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // Intl.Collator
 // ---------------------------------------------------------------------------
@@ -1121,15 +1196,15 @@ static void intl_install_collator(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "Collator", vm->intrinsics[MAL_INTRINSIC_INTL_COLLATOR_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
+#endif // MAL_INTL_HAS_COLLATOR — install
+
 // ---------------------------------------------------------------------------
 // Intl.PluralRules
 // ---------------------------------------------------------------------------
 
+#if MAL_INTL_HAS_PLURAL_RULES
 static const char *const PLURAL_CATEGORIES[6] = {"zero", "one", "two", "few", "many", "other"};
 
-#endif // MAL_INTL_HAS_COLLATOR — install
-
-#if MAL_INTL_HAS_PLURAL_RULES
 static MalValue intl_plural_rules_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -1237,22 +1312,17 @@ static void intl_install_plural_rules(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "PluralRules", vm->intrinsics[MAL_INTRINSIC_INTL_PLURAL_RULES_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
+#endif // MAL_INTL_HAS_PLURAL_RULES
+
 // ---------------------------------------------------------------------------
 // Intl.NumberFormat — style "decimal" + "percent" (currency/unit/compact TODO).
 // ---------------------------------------------------------------------------
 
+#if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DATE_TIME_FORMAT
 static i32 intl_data_int(MalVm *vm, MalValue data, const char *key, i32 fallback) {
     MalValue value;
     if (mal_vm_get_property(vm, data, mal_intrinsic_string_key(vm, key), &value) && mal_ops_is_number(value)) {
         return (i32) mal_ops_number_as_f64(value);
-    }
-    return fallback;
-}
-
-static bool intl_data_bool(MalVm *vm, MalValue data, const char *key, bool fallback) {
-    MalValue value;
-    if (mal_vm_get_property(vm, data, mal_intrinsic_string_key(vm, key), &value) && !mal_value_is_undefined(value)) {
-        return mal_value_is_truthy(value);
     }
     return fallback;
 }
@@ -1263,6 +1333,16 @@ static MalString *intl_data_string(MalVm *vm, MalValue data, const char *key) {
         return mal_value_to_string(value);
     }
     return nullptr;
+}
+#endif
+
+#if MAL_INTL_HAS_NUMBER_FORMAT
+static bool intl_data_bool(MalVm *vm, MalValue data, const char *key, bool fallback) {
+    MalValue value;
+    if (mal_vm_get_property(vm, data, mal_intrinsic_string_key(vm, key), &value) && !mal_value_is_undefined(value)) {
+        return mal_value_is_truthy(value);
+    }
+    return fallback;
 }
 
 /** Locale-agnostic ±∞ / NaN rendering for non-finite inputs (en symbols). */
@@ -1315,9 +1395,6 @@ static MalValue intl_number_format_value(MalVm *vm, MalIntlObject *nf, f64 numbe
     return result;
 }
 
-#endif // MAL_INTL_HAS_PLURAL_RULES
-
-#if MAL_INTL_HAS_NUMBER_FORMAT
 static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -1328,50 +1405,22 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
     if (locale == nullptr) {
         return mal_value_new_undefined();
     }
-    bool present;
-    MalString *style = nullptr;
-    if (!intl_option_string(vm, options, "style", &style, &present)) {
+    if (!intl_number_format_options(vm, options, &options)) {
         return mal_value_new_undefined();
     }
-    bool percent = style != nullptr && intl_string_eq_ascii(style, "percent");
-    if (style == nullptr) {
-        style = mal_intrinsic_ascii(vm, "decimal");
+    static const char *const STYLES[] = {"decimal", "percent", "currency", "unit"};
+    bool ok;
+    MalString *style = intl_option_enum(vm, options, "style", STYLES, countof(STYLES), "decimal", &ok);
+    if (!ok) {
+        return mal_value_new_undefined();
     }
+    bool percent = intl_string_eq_ascii(style, "percent");
 
-    // SetNumberFormatDigitOptions (decimal/percent subset).
-    i32 min_integer = 1;
-    i32 min_fraction = 0;
-    i32 max_fraction = percent ? 0 : 3;
-    if (mal_value_is_object(options)) {
-        MalValue value;
-        if (mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "minimumIntegerDigits"), &value) && !mal_value_is_undefined(value)) {
-            f64 d;
-            if (!mal_vm_to_number(vm, value, &d)) {
-                return mal_value_new_undefined();
-            }
-            min_integer = d < 1 ? 1 : (d > 21 ? 21 : (i32) d);
-        }
-        bool min_frac_set = false;
-        if (mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "minimumFractionDigits"), &value) && !mal_value_is_undefined(value)) {
-            f64 d;
-            if (!mal_vm_to_number(vm, value, &d)) {
-                return mal_value_new_undefined();
-            }
-            min_fraction = d < 0 ? 0 : (d > 100 ? 100 : (i32) d);
-            min_frac_set = true;
-        }
-        if (mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "maximumFractionDigits"), &value) && !mal_value_is_undefined(value)) {
-            f64 d;
-            if (!mal_vm_to_number(vm, value, &d)) {
-                return mal_value_new_undefined();
-            }
-            max_fraction = d < 0 ? 0 : (d > 100 ? 100 : (i32) d);
-        } else if (min_frac_set && min_fraction > max_fraction) {
-            max_fraction = min_fraction;
-        }
-    }
-    if (max_fraction < min_fraction) {
-        max_fraction = min_fraction;
+    i32 min_integer;
+    i32 min_fraction;
+    i32 max_fraction;
+    if (!intl_number_format_digits(vm, options, percent, &min_integer, &min_fraction, &max_fraction)) {
+        return mal_value_new_undefined();
     }
     bool grouping = true;
     bool grouping_present;
@@ -1495,10 +1544,13 @@ static void intl_install_number_format(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "NumberFormat", vm->intrinsics[MAL_INTRINSIC_INTL_NUMBER_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
+#endif // MAL_INTL_HAS_NUMBER_FORMAT
+
 // ---------------------------------------------------------------------------
 // Intl.DateTimeFormat — dateStyle / timeStyle (component options are TODO).
 // ---------------------------------------------------------------------------
 
+#if MAL_INTL_HAS_DATE_TIME_FORMAT
 /** Map a style string to a code: 0 full, 1 long, 2 medium, 3 short; -1 none; -2 invalid. */
 static i32 intl_date_style_code(const MalString *style) {
     if (style == nullptr) {
@@ -1546,9 +1598,6 @@ static MalValue intl_datetime_format_epoch(MalVm *vm, MalString *locale, f64 epo
     return result;
 }
 
-#endif // MAL_INTL_HAS_NUMBER_FORMAT — install
-
-#if MAL_INTL_HAS_DATE_TIME_FORMAT
 static MalValue intl_date_time_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -1828,10 +1877,13 @@ static void intl_install_date_time_format(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_data(vm, intl_object, "DateTimeFormat", vm->intrinsics[MAL_INTRINSIC_INTL_DATE_TIME_FORMAT_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
+#endif // MAL_INTL_HAS_DATE_TIME_FORMAT
+
 // ---------------------------------------------------------------------------
 // Intl.ListFormat — icu::list (conjunction/disjunction/unit; long/short/narrow).
 // ---------------------------------------------------------------------------
 
+#if MAL_INTL_HAS_LIST_FORMAT
 static i32 intl_list_type_code(const MalString *type) {
     if (type != nullptr && intl_string_eq_ascii(type, "disjunction")) {
         return 1;
@@ -1852,9 +1904,6 @@ static i32 intl_list_length_code(const MalString *style) {
     return 0; // long
 }
 
-#endif // MAL_INTL_HAS_DATE_TIME_FORMAT — install
-
-#if MAL_INTL_HAS_LIST_FORMAT
 static MalValue intl_list_format_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;

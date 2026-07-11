@@ -267,6 +267,14 @@ interface IRClassContext {
 	 */
 	classBinding?: Binding;
 
+	/**
+	 * Object-literal methods/accessors: the [[HomeObject]] is the object literal
+	 * itself, held in a captured binding. `super.x` resolves to
+	 * GetPrototypeOf(homeObject).x (ECMA-262 GetSuperBase). Distinct from a
+	 * class home (there is no `prototype` indirection and never static).
+	 */
+	homeObjectBinding?: Binding;
+
 	isStatic: boolean;
 
 	/**
@@ -775,6 +783,13 @@ export type IRInstruction =
 
 			// [destination, object, key]
 			registers: [number, number, number];
+	  }
+	| {
+			type: "loadSuperProperty";
+
+			// [destination, base, key, receiver] — lookup starts at base while
+			// accessors are invoked with receiver (the super reference's thisValue).
+			registers: [number, number, number, number];
 	  }
 	| {
 			type: "storeProperty";
@@ -2142,6 +2157,44 @@ export function referencesArguments(node: unknown): boolean {
 }
 
 /**
+ * Whether `node` contains a `super` reference that binds to the nearest
+ * enclosing method — i.e. descends through arrow functions (which inherit
+ * super lexically) but stops at nested non-arrow functions, methods, and
+ * classes, which establish their own [[HomeObject]]. Used to decide whether an
+ * object literal's methods need a home-object binding threaded to them.
+ */
+function referencesSuper(node: unknown): boolean {
+	if (!node || typeof node !== "object") {
+		return false;
+	}
+	if (Array.isArray(node)) {
+		return node.some((item) => referencesSuper(item));
+	}
+	if (!("type" in node)) {
+		return false;
+	}
+	const typed = node as ESTree.Node;
+	if (typed.type === "Super") {
+		return true;
+	}
+	// A non-arrow function / class body establishes its own super; do not descend.
+	if (
+		typed.type === "FunctionExpression" ||
+		typed.type === "FunctionDeclaration" ||
+		typed.type === "ClassExpression" ||
+		typed.type === "ClassDeclaration"
+	) {
+		return false;
+	}
+	for (const key of Object.keys(typed)) {
+		if (referencesSuper((typed as unknown as Record<string, unknown>)[key])) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/**
  * The lexical class environment a nested function inherits from its enclosing
  * class. PrivateEnvironment and super binding are lexical (ECMA-262): any code
  * textually inside a class member — nested functions, arrows, functions in field
@@ -2164,9 +2217,10 @@ function inheritedPrivateEnvironment(
 	// also inherits super/home-object bindings (super is lexical in arrows).
 	const superBinding = isArrow ? context.superBinding : undefined;
 	const classBinding = isArrow ? context.classBinding : undefined;
+	const homeObjectBinding = isArrow ? context.homeObjectBinding : undefined;
 	const instanceBrandBinding = isArrow ? context.instanceBrandBinding : undefined;
 	const staticBrandBinding = isArrow ? context.staticBrandBinding : undefined;
-	if (!hasPrivateNames && !superBinding && !classBinding) {
+	if (!hasPrivateNames && !superBinding && !classBinding && !homeObjectBinding) {
 		return undefined;
 	}
 	return {
@@ -2174,6 +2228,7 @@ function inheritedPrivateEnvironment(
 		privateNames: context.privateNames,
 		superBinding,
 		classBinding,
+		homeObjectBinding,
 		instanceBrandBinding,
 		staticBrandBinding,
 	};
@@ -2615,7 +2670,6 @@ function compileClass(
 	const classId = program.functions.length;
 
 	let superBinding: Binding | undefined;
-	let classBinding: Binding | undefined;
 	let parent = -1;
 	if (classNode.superClass) {
 		parent = compileExpression(program, fn, cursor, classNode.superClass);
@@ -2638,11 +2692,10 @@ function compileClass(
 			getOrCreateBindingLocation(program, fn, superBinding),
 			parent,
 		);
-	} else {
-		// Heritage-less classes stash themselves so super references can walk
-		// the home object's live prototype chain.
-		classBinding = createCapturedBinding(program, fn, `__class_${classId}`);
 	}
+	// Every class method has the constructor/prototype as its home object. Keep
+	// that live object available so setPrototypeOf mutations affect super reads.
+	const classBinding = createCapturedBinding(program, fn, `__class_${classId}`);
 
 	// Scan the body once to build the private environment and field plans. The
 	// symbols are minted at class definition (below); here we only allocate the
@@ -3622,14 +3675,11 @@ function compilePatternTarget(
 			break;
 		}
 		case "MemberExpression": {
-			const { object, key } = compileMemberObjectAndKey(program, fn, cursor, target);
-			if (object === -1 || key === -1) {
+			const member = compileMemberObjectAndKey(program, fn, cursor, target);
+			if (member.object === -1 || member.key === -1) {
 				break;
 			}
-			cursor.block.instructions.push({
-				type: "storeProperty",
-				registers: [object, key, value],
-			});
+			compileMemberStore(cursor, member, value);
 			break;
 		}
 		case "AssignmentPattern": {
@@ -7074,6 +7124,13 @@ function compileChainElement(
 	shortCircuits: Array<Extract<IRInstruction, { type: "jumpIf" }>>,
 ): number {
 	if (node.type === "MemberExpression") {
+		if (node.object.type === "Super") {
+			return compileMemberLoad(
+				fn,
+				cursor,
+				compileMemberObjectAndKey(program, fn, cursor, node),
+			);
+		}
 		const object = compileChainElement(program, fn, cursor, node.object, shortCircuits);
 		if (object === -1) {
 			return -1;
@@ -7119,42 +7176,48 @@ function compileChainElement(
 		let callee: number;
 		let thisRegister: number;
 		if (calleeNode.type === "MemberExpression") {
-			const object = compileChainElement(
-				program,
-				fn,
-				cursor,
-				calleeNode.object,
-				shortCircuits,
-			);
-			if (object === -1) {
-				return -1;
-			}
-
-			if (calleeNode.optional) {
-				emitOptionalGuard(fn, cursor, object, shortCircuits);
-			}
-
-			thisRegister = object;
-			if (calleeNode.property.type === "PrivateIdentifier") {
-				// `obj?.#m()` / `(chain).#m()`: brand-checked private method/getter.
-				callee = compilePrivateMemberLoad(
+			if (calleeNode.object.type === "Super") {
+				const member = compileMemberObjectAndKey(program, fn, cursor, calleeNode);
+				thisRegister = member.receiver!;
+				callee = compileMemberLoad(fn, cursor, member);
+			} else {
+				const object = compileChainElement(
 					program,
 					fn,
 					cursor,
-					object,
-					`#${calleeNode.property.name}`,
+					calleeNode.object,
+					shortCircuits,
 				);
-			} else {
-				const key = calleeNode.computed
-					? compileExpression(program, fn, cursor, calleeNode.property)
-					: calleeNode.property.type === "Identifier"
-						? compileStaticString(program, fn, cursor, calleeNode.property.name)
-						: -1;
-				callee = nextRegisterDestination(fn);
-				cursor.block.instructions.push({
-					type: "loadProperty",
-					registers: [callee, object, key],
-				});
+				if (object === -1) {
+					return -1;
+				}
+
+				if (calleeNode.optional) {
+					emitOptionalGuard(fn, cursor, object, shortCircuits);
+				}
+
+				thisRegister = object;
+				if (calleeNode.property.type === "PrivateIdentifier") {
+					// `obj?.#m()` / `(chain).#m()`: brand-checked private method/getter.
+					callee = compilePrivateMemberLoad(
+						program,
+						fn,
+						cursor,
+						object,
+						`#${calleeNode.property.name}`,
+					);
+				} else {
+					const key = calleeNode.computed
+						? compileExpression(program, fn, cursor, calleeNode.property)
+						: calleeNode.property.type === "Identifier"
+							? compileStaticString(program, fn, cursor, calleeNode.property.name)
+							: -1;
+					callee = nextRegisterDestination(fn);
+					cursor.block.instructions.push({
+						type: "loadProperty",
+						registers: [callee, object, key],
+					});
+				}
 			}
 		} else {
 			callee = compileChainElement(
@@ -7292,12 +7355,13 @@ function compileAssignment(
 		return value;
 	}
 
-	const { object, key } = compileMemberObjectAndKey(
+	const member = compileMemberObjectAndKey(
 		program,
 		fn,
 		cursor,
 		assignmentExpression.left,
 	);
+	const { object, key } = member;
 
 	// A compound assignment to a computed member both loads and stores at the
 	// same key, so convert the key to a property key once (running its
@@ -7309,11 +7373,7 @@ function compileAssignment(
 		assignmentExpression.left.computed &&
 		key >= 0
 	) {
-		effectiveKey = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "toPropertyKey",
-			registers: [effectiveKey, object, key],
-		});
+		effectiveKey = compileMemberKeyOnce(fn, cursor, member);
 	}
 
 	let value: number;
@@ -7324,10 +7384,14 @@ function compileAssignment(
 			assignmentExpression.operator,
 		);
 		const current = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "loadProperty",
-			registers: [current, object, effectiveKey],
-		});
+		cursor.block.instructions.push(
+			member.receiver === undefined
+				? { type: "loadProperty", registers: [current, object, effectiveKey] }
+				: {
+						type: "loadSuperProperty",
+						registers: [current, object, effectiveKey, member.receiver],
+					},
+		);
 
 		const right = compileExpression(program, fn, cursor, assignmentExpression.right);
 		value = nextRegisterDestination(fn);
@@ -7338,26 +7402,7 @@ function compileAssignment(
 		});
 	}
 
-	if (assignmentExpression.left.object.type === "Super") {
-		// super.x = v looks the property up on the super base but writes to
-		// the current instance.
-		const receiver = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "loadThis",
-			registers: [receiver],
-		});
-		cursor.block.instructions.push({
-			type: "storeSuperProperty",
-			registers: [object, effectiveKey, value, receiver],
-		});
-
-		return value;
-	}
-
-	cursor.block.instructions.push({
-		type: "storeProperty",
-		registers: [object, effectiveKey, value],
-	});
+	compileMemberStore(cursor, { ...member, key: effectiveKey }, value);
 
 	return value;
 }
@@ -7535,7 +7580,7 @@ function compileLogicalAssignment(
 
 	let location: BindingLocation | undefined;
 	let nameHint: string | undefined;
-	let member: { object: number; key: number; isSuper: boolean } | undefined;
+	let member: CompiledMemberReference | undefined;
 	let privateMember: { object: number; name: string } | undefined;
 	let current: number;
 
@@ -7568,17 +7613,13 @@ function compileLogicalAssignment(
 		privateMember = { object, name: `#${left.property.name}` };
 		current = compilePrivateMemberLoad(program, fn, cursor, object, privateMember.name);
 	} else if (left.type === "MemberExpression") {
-		const compiled = compileMemberObjectAndKey(program, fn, cursor, left);
-		member = {
-			object: compiled.object,
-			key: compiled.key,
-			isSuper: left.object.type === "Super",
-		};
-		current = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "loadProperty",
-			registers: [current, member.object, member.key],
-		});
+		let compiled = compileMemberObjectAndKey(program, fn, cursor, left);
+		if (left.computed && compiled.key >= 0) {
+			const key = compileMemberKeyOnce(fn, cursor, compiled);
+			compiled = { ...compiled, key };
+		}
+		member = compiled;
+		current = compileMemberLoad(fn, cursor, member);
 	} else {
 		return -1;
 	}
@@ -7636,19 +7677,7 @@ function compileLogicalAssignment(
 			right,
 		);
 	} else if (member) {
-		if (member.isSuper) {
-			const receiver = nextRegisterDestination(fn);
-			cursor.block.instructions.push({ type: "loadThis", registers: [receiver] });
-			cursor.block.instructions.push({
-				type: "storeSuperProperty",
-				registers: [member.object, member.key, right, receiver],
-			});
-		} else {
-			cursor.block.instructions.push({
-				type: "storeProperty",
-				registers: [member.object, member.key, right],
-			});
-		}
+		compileMemberStore(cursor, member, right);
 	}
 
 	const assignJoinJump: Extract<IRInstruction, { type: "jump" }> = {
@@ -7883,12 +7912,8 @@ function compileTaggedTemplate(
 		);
 	} else if (tagNode.type === "MemberExpression") {
 		const member = compileMemberObjectAndKey(program, fn, cursor, tagNode);
-		thisRegister = member.object;
-		callee = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "loadProperty",
-			registers: [callee, member.object, member.key],
-		});
+		thisRegister = member.receiver ?? member.object;
+		callee = compileMemberLoad(fn, cursor, member);
 	} else {
 		callee = compileExpression(program, fn, cursor, expression.tag);
 		thisRegister = compileUndefined(fn, cursor);
@@ -8232,7 +8257,7 @@ function compileUpdateExpression(
 			: "";
 
 		const object = isPrivate ? compileExpression(program, fn, cursor, member.object) : -1;
-		const resolved = isPrivate
+		const resolved: CompiledMemberReference = isPrivate
 			? { object, key: -1 }
 			: compileMemberObjectAndKey(program, fn, cursor, member);
 
@@ -8240,26 +8265,12 @@ function compileUpdateExpression(
 		// to a property key once (running its coercion a single time) and reused.
 		const effectiveKey =
 			!isPrivate && member.computed && resolved.key >= 0
-				? (() => {
-						const pk = nextRegisterDestination(fn);
-						cursor.block.instructions.push({
-							type: "toPropertyKey",
-							registers: [pk, resolved.object, resolved.key],
-						});
-						return pk;
-					})()
+				? compileMemberKeyOnce(fn, cursor, resolved)
 				: resolved.key;
 
 		const current = isPrivate
 			? compilePrivateMemberLoad(program, fn, cursor, object, privateName)
-			: (() => {
-					const reg = nextRegisterDestination(fn);
-					cursor.block.instructions.push({
-						type: "loadProperty",
-						registers: [reg, resolved.object, effectiveKey],
-					});
-					return reg;
-				})();
+			: compileMemberLoad(fn, cursor, { ...resolved, key: effectiveKey });
 
 		const oldValue = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
@@ -8279,10 +8290,7 @@ function compileUpdateExpression(
 		if (isPrivate) {
 			compilePrivateMemberStore(program, fn, cursor, object, privateName, newValue);
 		} else {
-			cursor.block.instructions.push({
-				type: "storeProperty",
-				registers: [resolved.object, effectiveKey, newValue],
-			});
+			compileMemberStore(cursor, { ...resolved, key: effectiveKey }, newValue);
 		}
 
 		return expression.prefix ? newValue : oldValue;
@@ -8426,6 +8434,43 @@ function isAnonymousFunctionDefinition(node: ESTree.Node | null | undefined): bo
 	return false;
 }
 
+/**
+ * Compile an object-literal method/accessor value with its [[HomeObject]] bound,
+ * so `super.x` inside it (and inside nested arrows) resolves against the object.
+ * Private names from a lexically enclosing class are inherited; isMethod strips
+ * the erroneous `prototype` that a plain function value would carry.
+ */
+function compileObjectMemberFunction(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	valueNode: ESTree.FunctionExpression | ESTree.ArrowFunctionExpression,
+	homeObjectBinding: Binding | undefined,
+	nameHint: string | undefined,
+): number {
+	const inherited = inheritedPrivateEnvironment(fn, false);
+	const classContext: IRClassContext = {
+		isStatic: false,
+		privateNames: inherited?.privateNames,
+		homeObjectBinding,
+	};
+	const functionIndex = compileNewFunctionExpression(
+		program,
+		fn,
+		valueNode,
+		classContext,
+		nameHint,
+		true,
+	);
+	const destination = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createFunction",
+		registers: [destination],
+		functionIndex,
+	});
+	return destination;
+}
+
 function compileObjectExpression(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -8455,6 +8500,36 @@ function compileObjectExpression(
 		type: "createObject",
 		registers: [object],
 	});
+
+	// If any method/accessor references `super`, the object literal is the
+	// [[HomeObject]] for those definitions. Stash the object in a captured binding
+	// the methods close over; `super.x` reads GetPrototypeOf(homeObject).x.
+	let homeObjectBinding: Binding | undefined;
+	const usesSuper = objectExpression.properties.some((property) => {
+		if (
+			property.type !== "Property" ||
+			!(property.method || property.kind === "get" || property.kind === "set")
+		) {
+			return false;
+		}
+		// Scan inside the method (its body and parameter defaults), descending
+		// through arrows but stopping at nested non-arrow functions — not the
+		// method FunctionExpression node itself, which is a super boundary.
+		const value = property.value as ESTree.FunctionExpression;
+		return referencesSuper(value.body) || referencesSuper(value.params);
+	});
+	if (usesSuper) {
+		homeObjectBinding = createCapturedBinding(
+			program,
+			fn,
+			`__home_${program.functions.length}`,
+		);
+		storeRegisterAtLocation(
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, homeObjectBinding),
+			object,
+		);
+	}
 
 	for (const property of objectExpression.properties) {
 		if (property.type === "SpreadElement") {
@@ -8500,12 +8575,15 @@ function compileObjectExpression(
 		const key = compilePropertyKey(program, fn, cursor, property);
 
 		if (property.kind === "get" || property.kind === "set") {
-			const accessor = compileExpression(
+			const accessorNameHint =
+				name !== undefined ? `${property.kind} ${name}` : undefined;
+			const accessor = compileObjectMemberFunction(
 				program,
 				fn,
 				cursor,
-				property.value as ESTree.Expression,
-				name !== undefined ? `${property.kind} ${name}` : undefined,
+				property.value as ESTree.FunctionExpression,
+				homeObjectBinding,
+				accessorNameHint,
 			);
 			cursor.block.instructions.push({
 				type: "defineAccessor",
@@ -8518,13 +8596,16 @@ function compileObjectExpression(
 
 		// PropertyDefinitionEvaluation uses CreateDataProperty: own defines
 		// that never run setters inherited from Object.prototype.
-		const value = compileExpression(
-			program,
-			fn,
-			cursor,
-			property.value as ESTree.Expression,
-			name,
-		);
+		const value = property.method
+			? compileObjectMemberFunction(
+					program,
+					fn,
+					cursor,
+					property.value as ESTree.FunctionExpression,
+					homeObjectBinding,
+					name,
+				)
+			: compileExpression(program, fn, cursor, property.value as ESTree.Expression, name);
 		// A computed key (no compile-time `name`) whose value is an anonymous
 		// function definition takes its name from the key at runtime (a static key
 		// was already handled by the `name` nameHint passed above).
@@ -8667,19 +8748,74 @@ function compileMemberExpression(
 		);
 	}
 
-	const { object, key } = compileMemberObjectAndKey(
-		program,
-		fn,
-		cursor,
-		memberExpression,
-	);
-	const destination = nextRegisterDestination(fn);
-	cursor.block.instructions.push({
-		type: "loadProperty",
-		registers: [destination, object, key],
-	});
+	const member = compileMemberObjectAndKey(program, fn, cursor, memberExpression);
+	return compileMemberLoad(fn, cursor, member);
+}
 
+interface CompiledMemberReference {
+	object: number;
+	key: number;
+	receiver?: number;
+}
+
+function compileMemberLoad(
+	fn: IRFunction,
+	cursor: IRCursor,
+	member: CompiledMemberReference,
+): number {
+	const destination = nextRegisterDestination(fn);
+	cursor.block.instructions.push(
+		member.receiver === undefined
+			? {
+					type: "loadProperty",
+					registers: [destination, member.object, member.key],
+				}
+			: {
+					type: "loadSuperProperty",
+					registers: [destination, member.object, member.key, member.receiver],
+				},
+	);
 	return destination;
+}
+
+function compileMemberKeyOnce(
+	fn: IRFunction,
+	cursor: IRCursor,
+	member: CompiledMemberReference,
+): number {
+	let coercibleBase = member.object;
+	if (member.receiver !== undefined) {
+		// TO_PROPERTY_KEY also checks its ordinary member base. A super reference
+		// checks its (possibly null) base only when GetValue runs, after key
+		// conversion, so use an inert coercible value for this conversion step.
+		coercibleBase = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createBoolean",
+			registers: [coercibleBase],
+			value: true,
+		});
+	}
+	const key = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "toPropertyKey",
+		registers: [key, coercibleBase, member.key],
+	});
+	return key;
+}
+
+function compileMemberStore(
+	cursor: IRCursor,
+	member: CompiledMemberReference,
+	value: number,
+): void {
+	cursor.block.instructions.push(
+		member.receiver === undefined
+			? { type: "storeProperty", registers: [member.object, member.key, value] }
+			: {
+					type: "storeSuperProperty",
+					registers: [member.object, member.key, value, member.receiver],
+				},
+	);
 }
 
 function compileMemberObjectAndKey(
@@ -8687,13 +8823,15 @@ function compileMemberObjectAndKey(
 	fn: IRFunction,
 	cursor: IRCursor,
 	memberExpression: ESTree.MemberExpression,
-) {
-	let object: number;
+): CompiledMemberReference {
+	let object = -1;
+	let receiver: number | undefined;
 	if (memberExpression.object.type === "Super") {
-		object = compileSuperObject(program, fn, cursor);
-		if (object === -1) {
-			return { object: -1, key: -1 };
-		}
+		// SuperProperty evaluation obtains the this binding before evaluating a
+		// computed key. Keep it in the reference so reads and later writes use the
+		// same receiver even if evaluation invokes arbitrary code.
+		receiver = nextRegisterDestination(fn);
+		cursor.block.instructions.push({ type: "loadThis", registers: [receiver] });
 	} else {
 		object = compileExpression(program, fn, cursor, memberExpression.object);
 	}
@@ -8703,8 +8841,14 @@ function compileMemberObjectAndKey(
 		: memberExpression.property.type === "Identifier"
 			? compileStaticString(program, fn, cursor, memberExpression.property.name)
 			: -1;
+	if (memberExpression.object.type === "Super") {
+		object = compileSuperObject(program, fn, cursor);
+		if (object === -1) {
+			return { object: -1, key: -1, receiver };
+		}
+	}
 
-	return { object, key };
+	return { object, key, receiver };
 }
 
 /**
@@ -8721,13 +8865,26 @@ function compileSuperObject(
 		return -1;
 	}
 
-	if (!classContext.superBinding) {
-		if (!classContext.classBinding) {
-			return -1;
-		}
+	// Object-literal method: the [[HomeObject]] is the object literal itself, and
+	// the super base is its (live) prototype — GetPrototypeOf(homeObject).
+	if (classContext.homeObjectBinding) {
+		const location = getOrCreateBindingLocation(
+			program,
+			fn,
+			classContext.homeObjectBinding,
+		);
+		const home = loadRegisterFromLocation(fn, cursor.block, location);
+		const object = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadPrototype",
+			registers: [object, home],
+		});
+		return object;
+	}
 
-		// Heritage-less classes resolve super through the home object's live
-		// prototype chain, so setPrototypeOf mutations are observed.
+	if (classContext.classBinding) {
+		// Class methods resolve through their live [[HomeObject]] rather than the
+		// originally evaluated heritage value.
 		const location = getOrCreateBindingLocation(program, fn, classContext.classBinding);
 		let home = loadRegisterFromLocation(fn, cursor.block, location);
 
@@ -8748,6 +8905,10 @@ function compileSuperObject(
 		});
 
 		return object;
+	}
+
+	if (!classContext.superBinding) {
+		return -1;
 	}
 
 	const location = getOrCreateBindingLocation(program, fn, classContext.superBinding);
@@ -9185,21 +9346,8 @@ function compileCall(
 		);
 	} else if (calleeNode.type === "MemberExpression") {
 		const member = compileMemberObjectAndKey(program, fn, cursor, calleeNode);
-		thisRegister = member.object;
-		if (calleeNode.object.type === "Super") {
-			// Super method calls run on the current instance, not the parent
-			// prototype the method was looked up on.
-			thisRegister = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
-				type: "loadThis",
-				registers: [thisRegister],
-			});
-		}
-		callee = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "loadProperty",
-			registers: [callee, member.object, member.key],
-		});
+		thisRegister = member.receiver ?? member.object;
+		callee = compileMemberLoad(fn, cursor, member);
 	} else {
 		callee = compileExpression(
 			program,

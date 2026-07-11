@@ -16,7 +16,7 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-export const WIRE_VERSION = 1;
+export const WIRE_VERSION = 2;
 
 /**
  * Canonical opcode order = the wire tag (a u8 index into this array). The C
@@ -109,6 +109,7 @@ export const WIRE_OPCODES = [
 	"CHECK_SUPER_CLASS",
 	"LOAD_CALLEE",
 	"GUARD_FUNCTION_INDEX",
+	"LOAD_SUPER_PROPERTY",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -673,6 +674,12 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.value);
 			w.i32(i.receiver);
 			return;
+		case "LOAD_SUPER_PROPERTY":
+			w.i32(i.dst);
+			w.i32(i.object);
+			w.i32(i.key);
+			w.i32(i.receiver);
+			return;
 		case "LOAD_PROTOTYPE":
 			w.i32(i.dst);
 			w.i32(i.object);
@@ -1112,6 +1119,8 @@ function readInstruction(r: Reader): VmInstruction {
 			return { opcode, object: r.i32(), key: r.i32(), value: r.i32() };
 		case "STORE_SUPER_PROPERTY":
 			return { opcode, object: r.i32(), key: r.i32(), value: r.i32(), receiver: r.i32() };
+		case "LOAD_SUPER_PROPERTY":
+			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32(), receiver: r.i32() };
 		case "LOAD_PROTOTYPE":
 			return { opcode, dst: r.i32(), object: r.i32() };
 		case "GET_ITERATOR":

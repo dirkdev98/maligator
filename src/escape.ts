@@ -328,7 +328,8 @@ export function escapeOfRegister(
 				break;
 			}
 			switch (instruction.type) {
-				case "loadProperty": {
+				case "loadProperty":
+				case "loadSuperProperty": {
 					// [dst, object, key]; object read = no escape, used as key = retained.
 					raise(position === 1 ? "none" : "retained");
 					break;
@@ -765,7 +766,10 @@ export interface StackAllocCandidate {
 
 /** The constant string-key index a key register holds, if its sole definition is a
  * `createString`; undefined for a dynamic (computed) key. */
-function constKeyStringIndex(ctx: FunctionContext, keyRegister: number): number | undefined {
+function constKeyStringIndex(
+	ctx: FunctionContext,
+	keyRegister: number,
+): number | undefined {
 	const def = ctx.singleDefs.get(keyRegister);
 	return def?.type === "createString" ? def.stringIndex : undefined;
 }
@@ -791,7 +795,8 @@ function classifyShapedStackAlloc(
 		const alias = worklist.pop()!;
 		for (const { instruction, position } of ctx.usesOf.get(alias) ?? []) {
 			switch (instruction.type) {
-				case "loadProperty": {
+				case "loadProperty":
+				case "loadSuperProperty": {
 					// [dst, object, key]; object read at pos 1. A dynamic key observes the
 					// shape at runtime → not scalar-replaceable, but still stack-allocatable
 					// (a real MalObject answers the MOP read).
@@ -862,7 +867,13 @@ export function stackAllocCandidates(
 			if (ctx.defCount.get(register) !== 1) {
 				continue;
 			}
-			const kind = escapeOfRegister(analysis.program, fn, ctx, register, analysis.summaries);
+			const kind = escapeOfRegister(
+				analysis.program,
+				fn,
+				ctx,
+				register,
+				analysis.summaries,
+			);
 			if (escapesFrame(kind)) {
 				continue;
 			}

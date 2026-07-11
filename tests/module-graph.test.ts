@@ -180,3 +180,64 @@ test("does not treat require() as a dependency in ESM/script modules", () => {
 		);
 	}
 });
+
+test("records unresolved dynamic imports without adding graph nodes", () => {
+	write(
+		"unresolved-dynamic.mjs",
+		`import("./missing.mjs");\nconst name = "./also-missing.mjs";\nimport(name);\n`,
+	);
+	const graph = buildModuleGraph(path.join(root, "unresolved-dynamic.mjs"));
+
+	expect(depSummary(graph, "unresolved-dynamic.mjs")).toEqual([
+		{ specifier: "./missing.mjs", kind: "dynamic", resolved: null },
+		{ specifier: null, kind: "dynamic", resolved: null },
+	]);
+	expect([...graph.modules.keys()].map(rel)).toEqual(["unresolved-dynamic.mjs"]);
+});
+
+test("still rejects an unresolved static import", () => {
+	write("unresolved-static.mjs", `import "./missing.mjs";\n`);
+	expect(() => buildModuleGraph(path.join(root, "unresolved-static.mjs"))).toThrow(
+		SyntaxError,
+	);
+});
+
+test("uses package exports condition declaration order", () => {
+	write(
+		"node_modules/ordered/package.json",
+		JSON.stringify({
+			type: "module",
+			exports: { node: "./node.mjs", import: "./import.mjs" },
+		}),
+	);
+	write("node_modules/ordered/node.mjs", `export const selected = "node";\n`);
+	write("node_modules/ordered/import.mjs", `export const selected = "import";\n`);
+	write("ordered-entry.mjs", `import { selected } from "ordered";\n`);
+
+	const graph = buildModuleGraph(path.join(root, "ordered-entry.mjs"));
+	expect(depSummary(graph, "ordered-entry.mjs")).toEqual([
+		{
+			specifier: "ordered",
+			kind: "import",
+			resolved: path.join("node_modules", "ordered", "node.mjs"),
+		},
+	]);
+});
+
+test("does not fall back to main when package exports blocks the root", () => {
+	write(
+		"node_modules/blocked/package.json",
+		JSON.stringify({
+			type: "module",
+			exports: { "./feature": "./feature.mjs" },
+			main: "./main.mjs",
+		}),
+	);
+	write("node_modules/blocked/feature.mjs", `export const feature = 1;\n`);
+	write("node_modules/blocked/main.mjs", `export const fallback = 1;\n`);
+	write("blocked-entry.mjs", `import "blocked";\n`);
+
+	expect(() => buildModuleGraph(path.join(root, "blocked-entry.mjs"))).toThrow(
+		/not exported by blocked/,
+	);
+});

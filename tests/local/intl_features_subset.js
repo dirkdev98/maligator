@@ -16,6 +16,133 @@ check(
 	"NumberFormat localized",
 	new Intl.NumberFormat("de-DE").format(1234.5) === "1.234,5",
 );
+
+function throws(errorType, callback) {
+	try {
+		callback();
+	} catch (error) {
+		return error instanceof errorType;
+	}
+	return false;
+}
+
+check(
+	"NumberFormat null options",
+	throws(TypeError, () => new Intl.NumberFormat(undefined, null)),
+);
+check(
+	"NumberFormat getter error",
+	throws(
+		SyntaxError,
+		() =>
+			new Intl.NumberFormat(undefined, {
+				get minimumIntegerDigits() {
+					throw new SyntaxError("digit getter");
+				},
+			}),
+	),
+);
+check(
+	"NumberFormat digit ranges",
+	throws(
+		RangeError,
+		() => new Intl.NumberFormat(undefined, { minimumIntegerDigits: Infinity }),
+	) &&
+		throws(
+			RangeError,
+			() => new Intl.NumberFormat(undefined, { minimumFractionDigits: NaN }),
+		) &&
+		throws(
+			RangeError,
+			() => new Intl.NumberFormat(undefined, { maximumFractionDigits: -1 }),
+		) &&
+		throws(
+			RangeError,
+			() =>
+				new Intl.NumberFormat(undefined, {
+					minimumFractionDigits: 3,
+					maximumFractionDigits: 2,
+				}),
+		),
+);
+
+const decimalDigits = new Intl.NumberFormat("en", {
+	minimumFractionDigits: 5,
+}).resolvedOptions();
+const percentDigits = new Intl.NumberFormat("en", {
+	style: "percent",
+	minimumFractionDigits: 2,
+}).resolvedOptions();
+check(
+	"NumberFormat digit defaults",
+	decimalDigits.minimumFractionDigits === 5 &&
+		decimalDigits.maximumFractionDigits === 5 &&
+		percentDigits.minimumFractionDigits === 2 &&
+		percentDigits.maximumFractionDigits === 2,
+);
+const supportedDigitsFormat = new Intl.NumberFormat("en", {
+	minimumFractionDigits: 2,
+	maximumFractionDigits: 2,
+	useGrouping: false,
+}).format(7);
+check("NumberFormat supported fraction format", supportedDigitsFormat === "7.00");
+check(
+	"NumberFormat unsupported style rejected",
+	throws(RangeError, () => new Intl.NumberFormat(undefined, { style: "invalid" })),
+);
+
+let optionOrder = "";
+new Intl.NumberFormat(undefined, {
+	get style() {
+		optionOrder += "s";
+		return "decimal";
+	},
+	get minimumIntegerDigits() {
+		optionOrder += "i";
+		return 1;
+	},
+	get minimumFractionDigits() {
+		optionOrder += "n";
+		return 0;
+	},
+	get maximumFractionDigits() {
+		optionOrder += "x";
+		return 3;
+	},
+	get useGrouping() {
+		optionOrder += "g";
+		return true;
+	},
+});
+check("NumberFormat option order", optionOrder === "sinxg");
+
+Object.defineProperty(Number.prototype, "minimumIntegerDigits", {
+	configurable: true,
+	get() {
+		return this instanceof Number ? 4 : 5;
+	},
+});
+check(
+	"NumberFormat primitive options",
+	new Intl.NumberFormat(undefined, 0).resolvedOptions().minimumIntegerDigits === 4,
+);
+delete Number.prototype.minimumIntegerDigits;
+
+Object.defineProperty(Object.prototype, "minimumIntegerDigits", {
+	configurable: true,
+	get() {
+		throw new Error("undefined options observed Object.prototype");
+	},
+});
+let undefinedOptionsWork = true;
+try {
+	new Intl.NumberFormat(undefined, undefined);
+} catch {
+	undefinedOptionsWork = false;
+}
+delete Object.prototype.minimumIntegerDigits;
+check("NumberFormat undefined options bag", undefinedOptionsWork);
+
 check("Collator present", typeof Intl.Collator === "function");
 check("localeCompare (collator)", "b".localeCompare("a") === 1);
 check("DateTimeFormat present", typeof Intl.DateTimeFormat === "function");

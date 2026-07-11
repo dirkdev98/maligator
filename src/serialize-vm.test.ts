@@ -20,6 +20,7 @@ const instructions: Array<VmInstruction> = [
 	{ opcode: "LOAD_INTRINSIC", dst: 5, intrinsic: "Math" },
 	{ opcode: "LOAD_INTRINSIC", dst: 6, intrinsic: "__arrayFlatMapAppend" },
 	{ opcode: "MOVE", dst: 7, src: 0 },
+	{ opcode: "LOAD_SUPER_PROPERTY", dst: 7, object: 10, key: 3, receiver: 10 },
 	{ opcode: "BINARY", dst: 8, left: 0, right: 1, operator: ">>>" },
 	{ opcode: "UNARY", dst: 9, src: 8, operator: "typeof" },
 	{ opcode: "TRY_BEGIN", handlerIp: 0 },

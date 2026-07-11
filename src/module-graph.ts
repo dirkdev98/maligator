@@ -55,8 +55,9 @@ export interface ModuleDependency {
 	kind: ModuleDependencyKind;
 	/**
 	 * Absolute path the specifier resolved to, or null when it could not be
-	 * resolved (a computed dynamic import). Unresolved *static* specifiers throw
-	 * during graph construction rather than landing here.
+	 * resolved (a computed dependency or a dynamic import whose literal target
+	 * cannot be found). Unresolved static imports/exports and literal `require()`
+	 * calls throw during graph construction rather than landing here.
 	 */
 	resolvedPath: string | null;
 }
@@ -115,8 +116,8 @@ export interface BuildModuleGraphOptions {
 	dependencyGoalOverride?: ModuleGoal;
 }
 
-/** Conditions used when resolving a package's `exports` field. ESM-preferring. */
-const EXPORT_CONDITIONS = ["maligator", "import", "node", "default"];
+/** Conditions recognized when resolving a package's `exports` field. */
+const EXPORT_CONDITIONS = new Set(["maligator", "import", "node", "default"]);
 
 /** Extensions probed when a specifier omits one. */
 const RESOLVE_EXTENSIONS = [".js", ".ts", ".mjs", ".mts", ".cjs", ".cts", ".json"];
@@ -146,15 +147,22 @@ export function buildModuleGraph(
 		const dependencies = extractDependencies(parsed.ast, goal).map(
 			(dependency): ModuleDependency => {
 				if (dependency.specifier === null) {
-					// A computed `import(expr)` — unresolvable statically. Per the
-					// design this is a build error, surfaced by a later validation
-					// step; the graph just records it as unresolved for now.
+					// A computed import/require cannot be resolved while building the
+					// graph. Preserve the edge for later lowering/runtime handling.
 					return { ...dependency, resolvedPath: null };
 				}
 
 				const resolved = resolveSpecifier(dependency.specifier, filePath);
 				if ("error" in resolved) {
-					throw new Error(
+					if (dependency.kind === "dynamic") {
+						// Dynamic resolution failure is represented on the graph rather than
+						// turning a deferred import into a static build failure. Runtime
+						// rejection semantics belong to later lowering/runtime work.
+						return { ...dependency, resolvedPath: null };
+					}
+					// A static import that cannot resolve fails the graph — the
+					// resolution-phase SyntaxError of 16.2.1.6.1.
+					throw new SyntaxError(
 						`Cannot resolve '${dependency.specifier}' from ${filePath}: ${resolved.error}`,
 					);
 				}
@@ -439,10 +447,9 @@ function loadAsDirectory(dir: string): string | null {
 	const pkg = readPackageJson(path.join(dir, "package.json"));
 
 	if (pkg?.exports !== undefined) {
-		const resolved = resolveExports(pkg.exports, ".", dir);
-		if (resolved) {
-			return resolved;
-		}
+		// The presence of `exports` encapsulates the package. A missing or invalid
+		// root target must not fall through to legacy `main`/index resolution.
+		return resolveExports(pkg.exports, ".", dir);
 	}
 
 	if (pkg && typeof pkg.main === "string") {
@@ -510,10 +517,7 @@ function resolveInPackage(packageDir: string, subpath: string): string | null {
 
 	if (subpath === "") {
 		if (pkg?.exports !== undefined) {
-			const resolved = resolveExports(pkg.exports, ".", packageDir);
-			if (resolved) {
-				return resolved;
-			}
+			return resolveExports(pkg.exports, ".", packageDir);
 		}
 		return loadAsDirectory(packageDir);
 	}
@@ -564,10 +568,11 @@ function resolveExports(
 		return target === undefined ? null : resolveExports(target, ".", packageDir);
 	}
 
-	// A conditions object: pick the first condition we honor.
-	for (const condition of EXPORT_CONDITIONS) {
-		if (condition in exportsField) {
-			const resolved = resolveExports(exportsField[condition]!, subpath, packageDir);
+	// A conditions object: object declaration order determines precedence. Skip
+	// unknown conditions, as Node does, rather than imposing our own priority.
+	for (const [condition, target] of Object.entries(exportsField)) {
+		if (EXPORT_CONDITIONS.has(condition)) {
+			const resolved = resolveExports(target, subpath, packageDir);
 			if (resolved) {
 				return resolved;
 			}

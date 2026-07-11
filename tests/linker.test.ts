@@ -97,6 +97,51 @@ test("throws on an import the target module does not export", () => {
 	expect(() => linkModules(program)).toThrow(/does not export 'nope'/);
 });
 
+test("throws for an invalid indirect re-export even when it is not imported", () => {
+	const root = tree({
+		"a.mjs": `export const x = 1;\n`,
+		"main.mjs": `export { nope } from "./a.mjs";\n`,
+	});
+
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"));
+	expect(() => linkModules(program)).toThrow(SyntaxError);
+	expect(() => linkModules(program)).toThrow(/does not export 'nope'/);
+});
+
+test("rejects conflicting export-star names but de-duplicates the same binding", () => {
+	const ambiguousRoot = tree({
+		"a.mjs": `export const x = 1;\n`,
+		"b.mjs": `export const x = 2;\n`,
+		"barrel.mjs": `export * from "./a.mjs";\nexport * from "./b.mjs";\n`,
+		"main.mjs": `import { x } from "./barrel.mjs";\nglobalThis.sink = x;\n`,
+	});
+	const ambiguous = loadEntrypointAndRunSemanticAnalysis(
+		path.join(ambiguousRoot, "main.mjs"),
+	);
+	expect(() => linkModules(ambiguous)).toThrow(/ambiguous import 'x'/);
+
+	const sharedRoot = tree({
+		"a.mjs": `export const x = 1;\n`,
+		"b.mjs": `export { x } from "./a.mjs";\n`,
+		"barrel.mjs": `export * from "./a.mjs";\nexport * from "./b.mjs";\n`,
+		"main.mjs": `import { x } from "./barrel.mjs";\nglobalThis.sink = x;\n`,
+	});
+	const shared = loadEntrypointAndRunSemanticAnalysis(path.join(sharedRoot, "main.mjs"));
+	expect(() => linkModules(shared)).not.toThrow();
+});
+
+test("treats namespace re-exports of the same module as unambiguous", () => {
+	const root = tree({
+		"empty.mjs": `export {};\n`,
+		"a.mjs": `import * as foo from "./empty.mjs";\nexport { foo };\n`,
+		"b.mjs": `import * as foo from "./empty.mjs";\nexport { foo };\n`,
+		"barrel.mjs": `export * from "./a.mjs";\nexport * from "./b.mjs";\n`,
+		"main.mjs": `import { foo } from "./barrel.mjs";\nglobalThis.sink = foo;\n`,
+	});
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"));
+	expect(() => linkModules(program)).not.toThrow();
+});
+
 test("resolves a namespace import to the module's (sorted) exports", () => {
 	const root = tree({
 		"a.mjs": `export const y = 2;\nexport const x = 1;\nexport default 9;\n`,
@@ -153,4 +198,32 @@ test("re-exporting from a CommonJS module records cjs imports for it", () => {
 		true,
 	);
 	expect(cjsImports?.map((entry) => entry.name).sort()).toEqual(["x", "x", "y"]);
+});
+
+test("records export-star-as namespaces for ESM and CommonJS sources", () => {
+	const root = tree({
+		"esm.mjs": `export const x = 1;\n`,
+		"lib.cjs": `exports.z = 2;\nexports.a = 1;\n`,
+		"main.mjs": `export * as esm from "./esm.mjs";\nexport * as cjs from "./lib.cjs";\n`,
+	});
+
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"));
+	const linkage = linkModules(program);
+	const mainPath = path.join(root, "main.mjs");
+
+	expect(
+		linkage.namespaceImports
+			.get(mainPath)
+			?.map((entry) => entry.exports.map((item) => item.name)),
+	).toEqual([["x"]]);
+	expect(
+		linkage.cjsImports.get(mainPath)?.map((entry) => ({
+			kind: entry.kind,
+			names: entry.names,
+		})),
+	).toEqual([{ kind: "namespace", names: ["a", "z"] }]);
+	expect(linkage.moduleNamespaces.get(mainPath)?.map((entry) => entry.name)).toEqual([
+		"cjs",
+		"esm",
+	]);
 });

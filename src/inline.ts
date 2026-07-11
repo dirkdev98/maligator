@@ -605,6 +605,7 @@ function methodDisqualifies(instruction: IRInstruction): boolean {
 		case "definePrivate":
 		case "createPrivateName":
 		case "storeSuperProperty":
+		case "loadSuperProperty":
 		case "checkSuperClass":
 			return true;
 		default:

@@ -53,7 +53,7 @@ Use https://tc39.es/ecma262/multipage/ when looking up parts of the spec.
 - Pre-1.0: freely change any API/internal contract when it improves the design or contracts (engine/host/runtime layering: see `isolate_todo.md`).
 
 - Prefer root-cause, correct, performant fixes over narrow test-specific workarounds.
-- Ask for explicit approval before running full or otherwise expensive Test262 suites.
+- Ask for explicit approval before running the full Test262 suite.
 - Use targeted single-test or small-batch verification during development.
 - Never use git worktrees.
 - When asked to commit, create unsigned local commits and do not push unless explicitly asked.

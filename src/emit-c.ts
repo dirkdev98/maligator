@@ -333,8 +333,12 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 				// arguments are neutral boundary reads
 				break;
 			case "LOAD_PROPERTY":
+			case "LOAD_SUPER_PROPERTY":
 				disqualUse.add(instruction.object);
 				disqualUse.add(instruction.key);
+				if (instruction.opcode === "LOAD_SUPER_PROPERTY") {
+					disqualUse.add(instruction.receiver);
+				}
 				break;
 			case "STORE_PROPERTY":
 				disqualUse.add(instruction.object);
@@ -1921,6 +1925,11 @@ function emitInstruction(
 			// Reads the internal [[Prototype]] slot directly (no proxy trap) — never throws.
 			return [
 				`r${instruction.dst} = mal_vm_op_load_prototype(vm, ${boxed(instruction.object)});`,
+			];
+		case "LOAD_SUPER_PROPERTY":
+			return [
+				`r${instruction.dst} = mal_vm_op_load_super_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.receiver)});`,
+				throwCheck,
 			];
 		case "SET_FUNCTION_NAME":
 			// Installs the "name" data property from an already-evaluated key; no user code.

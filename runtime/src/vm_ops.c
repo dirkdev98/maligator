@@ -1221,15 +1221,24 @@ MalValue mal_vm_op_get_this(MalVm *vm, MalValue this_value) {
 // ReferenceError. Mirrors the interpreter's construct-frame RETURN handling; sets
 // vm->completion on the TDZ error (caller checks it).
 MalValue mal_vm_op_derived_construct_return(MalVm *vm, MalValue value, MalValue this_value) {
-    if (!mal_value_is_object(value)) {
-        if (mal_value_is_empty(this_value)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
-                "Must call super constructor in derived class before returning from derived constructor");
-            return mal_value_new_undefined();
-        }
-        return this_value;
+    // ECMA-262 [[Construct]] step 13 for a derived constructor: an Object return
+    // is used as-is (13.a); undefined falls through to GetThisBinding (15), a
+    // ReferenceError if super() has not bound `this`; any other value is a
+    // TypeError (13.c).
+    if (mal_value_is_object(value)) {
+        return value;
     }
-    return value;
+    if (!mal_value_is_undefined(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Derived constructors may only return an object or undefined");
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_empty(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+            "Must call super constructor in derived class before returning from derived constructor");
+        return mal_value_new_undefined();
+    }
+    return this_value;
 }
 
 void mal_op_throw(MalCallable *callable, MalInstruction *instruction) {
@@ -3028,13 +3037,12 @@ void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
 void mal_vm_op_store_super_property(
     MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, MalValue receiver, bool strict
 ) {
-    if (mal_value_is_nil(object_value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set properties of null or undefined");
-        return;
-    }
-
     MalKey key;
     if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+        return;
+    }
+    if (mal_value_is_nil(object_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set properties of null or undefined");
         return;
     }
 
@@ -3103,6 +3111,36 @@ void mal_vm_op_store_super_property(
     MalPropertyDesc desc = mal_intrinsic_data_desc(
         value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(receiver_object, key, &desc);
+}
+
+MalValue mal_vm_op_load_super_property(
+    MalVm *vm, MalValue base, MalValue key_value, MalValue receiver
+) {
+    MalKey key;
+    if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+        return mal_value_new_undefined();
+    }
+    // GetSuperBase may be null (extends null), but only after the computed key
+    // has been converted as part of SuperProperty evaluation.
+    if (mal_value_is_nil(base)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Cannot read properties of null or undefined");
+        return mal_value_new_undefined();
+    }
+    MalValue out = mal_value_new_undefined();
+    if (!mal_vm_get_property_with_receiver(vm, base, key, receiver, &out)) {
+        return mal_value_new_undefined();
+    }
+    return out;
+}
+
+void mal_op_load_super_property(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.load_super_property.dst] =
+        mal_vm_op_load_super_property(
+            callable->vm,
+            callable->registers[instruction->as.load_super_property.object],
+            callable->registers[instruction->as.load_super_property.key],
+            callable->registers[instruction->as.load_super_property.receiver]);
 }
 
 void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruction) {

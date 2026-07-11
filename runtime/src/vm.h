@@ -43,6 +43,7 @@ typedef enum MalOpcode {
     MAL_OP_STORE_PROPERTY,
     MAL_OP_TO_PROPERTY_KEY,
     MAL_OP_STORE_SUPER_PROPERTY,
+    MAL_OP_LOAD_SUPER_PROPERTY,
     MAL_OP_LOAD_PROTOTYPE,
     MAL_OP_GET_ITERATOR,
     MAL_OP_GET_ASYNC_ITERATOR,
@@ -347,6 +348,14 @@ typedef struct MalInstruction {
         struct {
             i32 object, key, value, receiver;
         } store_super_property;
+
+        /**
+         * super.x: read from object (the super base) but call any getter with
+         * receiver (this) — the thisValue of the Super Reference.
+         */
+        struct {
+            i32 dst, object, key, receiver;
+        } load_super_property;
 
         /**
          * The object's [[Prototype]]; null for non-objects and chain ends.

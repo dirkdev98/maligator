@@ -791,6 +791,15 @@ void mal_vm_op_store_super_property(
 );
 
 /**
+ * `super.p` / `super[k]`: read from the super base but call any getter with the
+ * caller's `this` (GetThisValue), not the base — ECMA-262 SuperProperty
+ * evaluation (the thisValue component of the Super Reference is used).
+ */
+MalValue mal_vm_op_load_super_property(
+    MalVm *vm, MalValue base, MalValue key_value, MalValue receiver
+);
+
+/**
  * `super(...args)`: construct `parent` with the derived new.target and BindThisValue
  * the result. `current_this` is the (EMPTY) binding; on success *this_out is the
  * bound `this`. Returns the completion (a throw on double-super / no new.target /
@@ -828,6 +837,8 @@ bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue 
 MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 
 void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruction);
+
+void mal_op_load_super_property(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction);
 

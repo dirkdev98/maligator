@@ -13,7 +13,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 1u
+#define WIRE_VERSION 2u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -96,13 +96,14 @@ typedef enum WireOp {
     WIRE_COPY_DATA_PROPERTIES,
     WIRE_BINARY,
     WIRE_UNARY,
-    /* Appended last; mirrors the trailing WITH_RESOLVE_BASE / SET_FUNCTION_NAME in
-     * WIRE_OPCODES (serialize-vm.ts). APPEND-ONLY. */
+    /* Appended last; mirrors the trailing opcodes in WIRE_OPCODES
+     * (serialize-vm.ts). APPEND-ONLY. */
     WIRE_WITH_RESOLVE_BASE,
     WIRE_SET_FUNCTION_NAME,
     WIRE_CHECK_SUPER_CLASS,
     WIRE_LOAD_CALLEE,
     WIRE_GUARD_FUNCTION_INDEX,
+    WIRE_LOAD_SUPER_PROPERTY,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -619,6 +620,13 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
             o->as.store_super_property.key = rd_i32(r);
             o->as.store_super_property.value = rd_i32(r);
             o->as.store_super_property.receiver = rd_i32(r);
+            return;
+        case WIRE_LOAD_SUPER_PROPERTY:
+            o->opcode = MAL_OP_LOAD_SUPER_PROPERTY;
+            o->as.load_super_property.dst = rd_i32(r);
+            o->as.load_super_property.object = rd_i32(r);
+            o->as.load_super_property.key = rd_i32(r);
+            o->as.load_super_property.receiver = rd_i32(r);
             return;
         case WIRE_LOAD_PROTOTYPE:
             o->opcode = MAL_OP_LOAD_PROTOTYPE;

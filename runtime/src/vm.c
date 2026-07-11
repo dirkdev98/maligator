@@ -999,6 +999,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_STORE_SUPER_PROPERTY:
                 mal_op_store_super_property(frame, &instruction);
                 break;
+            case MAL_OP_LOAD_SUPER_PROPERTY:
+                mal_op_load_super_property(frame, &instruction);
+                break;
             case MAL_OP_LOAD_PROTOTYPE:
                 mal_op_load_prototype(frame, &instruction);
                 break;
@@ -1247,15 +1250,25 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             case MAL_OP_RETURN: {
                 MalValue return_value = frame->registers[instruction.as.ret.value];
                 if (frame->is_construct && !mal_value_is_object(return_value)) {
-                    // GetThisBinding: a derived constructor that returns a
-                    // non-object without having bound `this` (no super() call) is
-                    // a ReferenceError. The frame stays on the stack so the
-                    // post-switch unwind propagates the throw.
-                    if (mal_value_is_empty(frame->this_value)) {
-                        mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
-                            "Must call super constructor in derived class before returning from derived constructor");
-                        break;
+                    // ECMA-262 [[Construct]] step 13: a return statement whose value
+                    // is not an Object is governed by the constructor kind.
+                    if (frame->function->is_derived_constructor) {
+                        // Derived: a non-undefined value is a TypeError (13.c); an
+                        // undefined value falls through to GetThisBinding (15), which
+                        // is a ReferenceError if super() has not bound `this`. The
+                        // frame stays on the stack so the unwind propagates the throw.
+                        if (!mal_value_is_undefined(return_value)) {
+                            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                                "Derived constructors may only return an object or undefined");
+                            break;
+                        }
+                        if (mal_value_is_empty(frame->this_value)) {
+                            mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+                                "Must call super constructor in derived class before returning from derived constructor");
+                            break;
+                        }
                     }
+                    // Base (13.b) or derived-returning-undefined: substitute `this`.
                     return_value = frame->this_value;
                 }
 

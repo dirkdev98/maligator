@@ -18,11 +18,9 @@ import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis
  * export share one slot: this is Rollup-style scope hoisting, and live bindings
  * fall out for free (a reassignment in the exporter is observed by importers).
  *
- * ESM → CommonJS interop is also resolved
- * here: an `import` from a CJS module is recorded in `cjsImports` (not aliased)
- * for ir.ts to initialize from `require(...)`. Deferred: re-exporting from CJS
- * (`export … from "cjs"`), `export * as ns`, `export *` ambiguity de-dup, and
- * cycle TDZ.
+ * ESM → CommonJS interop is also resolved here: an `import` or re-export from a
+ * CJS module is recorded in `cjsImports` (not aliased) for lowering to
+ * initialize from `require(...)`. Cycle TDZ remains deferred.
  */
 
 export interface ModuleLinkage {
@@ -204,6 +202,22 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		binding: Binding;
 		module: string;
 	}> = [];
+	// ResolveExport compares namespace re-exports by their target module, not by
+	// each importing module's local binding identity. Canonicalize those bindings
+	// so two `import * as ns` declarations for the same module remain unambiguous.
+	const namespaceTarget = new Map<Binding, string>();
+	const canonicalNamespaceBinding = new Map<string, Binding>();
+	const recordNamespaceImport = (
+		file: SemanticFile,
+		binding: Binding,
+		module: string,
+	) => {
+		namespaceToResolve.push({ file, binding, module });
+		namespaceTarget.set(binding, module);
+		if (!canonicalNamespaceBinding.has(module)) {
+			canonicalNamespaceBinding.set(module, binding);
+		}
+	};
 
 	const exportsByModule = new Map<string, ModuleExports>();
 
@@ -228,10 +242,10 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 								if (moduleIsCommonJs) {
 									recordCjsImport(file, binding, module, {
 										kind: "namespace",
-										names: [...cjsExportInfo(module).names],
+										names: [...cjsExportInfo(module).names].sort(),
 									});
 								} else {
-									namespaceToResolve.push({ file, binding, module });
+									recordNamespaceImport(file, binding, module);
 								}
 							}
 							continue;
@@ -303,13 +317,32 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 					break;
 				}
 				case "ExportAllDeclaration": {
-					if (statement.exported) {
-						throw new Error(
-							`Linker: \`export * as ${specifierName(statement.exported)}\` ` +
-								`is not supported yet (${file.path})`,
-						);
-					}
 					const module = resolveDependency(file, literalValue(statement.source), true);
+					if (statement.exported) {
+						// `export * as ns from "mod"` (16.2.3.7): `ns` is a local export
+						// bound to mod's module namespace object. Synthesize a global
+						// binding, build the namespace into it in this module's prologue
+						// (reusing the `import * as` machinery), and register `ns` as a
+						// local export of it.
+						const nsName = specifierName(statement.exported);
+						const nsBinding: Binding = {
+							kind: "const",
+							name: `*star-as:${nsName}*`,
+							declarationNode: statement,
+							usageNodes: [],
+							scopedTo: "global",
+						};
+						if (goalOf(module) === "cjs") {
+							recordCjsImport(file, nsBinding, module, {
+								kind: "namespace",
+								names: [...cjsExportInfo(module).names].sort(),
+							});
+						} else {
+							recordNamespaceImport(file, nsBinding, module);
+						}
+						moduleExports.named.set(nsName, { kind: "local", binding: nsBinding });
+						break;
+					}
 					if (goalOf(module) === "cjs") {
 						// `export * from "cjs"`: re-export each statically-detected name
 						// (default is excluded, as for ESM `export *`).
@@ -330,12 +363,15 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		}
 	}
 
-	// --- resolveExport: follow named/indirect/re-exported-import/star to a binding ---
+	// --- resolveExport: follow named/indirect/re-exported-import/star to a binding
+	// (16.2.1.6). Returns the resolved exporter binding, null when there is no such
+	// export, or "ambiguous" when two `export *` re-exports resolve the same name to
+	// different bindings. ---
 	const resolveExport = (
 		modulePath: string,
 		name: string,
 		visited = new Set<string>(),
-	): Binding | null => {
+	): Binding | null | "ambiguous" => {
 		const key = `${modulePath}\0${name}`;
 		if (visited.has(key)) {
 			return null;
@@ -352,6 +388,10 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			if (entry.kind === "indirect") {
 				return resolveExport(entry.module, entry.name, visited);
 			}
+			const namespaceModule = namespaceTarget.get(entry.binding);
+			if (namespaceModule) {
+				return canonicalNamespaceBinding.get(namespaceModule) ?? entry.binding;
+			}
 			// A local export whose binding is itself imported re-exports the source.
 			const imported = importInfo.get(entry.binding);
 			return imported
@@ -359,15 +399,24 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 				: entry.binding;
 		}
 
-		// `export *` re-exports every name except default. First match wins;
-		// proper ambiguity handling is deferred.
+		// `export *` re-exports every name except default. A name found in more than
+		// one star-exported module, resolving to different bindings, is ambiguous.
 		if (name !== "default") {
+			let starResolution: Binding | null = null;
 			for (const starModule of moduleExports.stars) {
-				const resolved = resolveExport(starModule, name, visited);
-				if (resolved) {
-					return resolved;
+				const resolved = resolveExport(starModule, name, new Set(visited));
+				if (resolved === "ambiguous") {
+					return "ambiguous";
+				}
+				if (resolved !== null) {
+					if (starResolution === null) {
+						starResolution = resolved;
+					} else if (starResolution !== resolved) {
+						return "ambiguous";
+					}
 				}
 			}
+			return starResolution;
 		}
 
 		return null;
@@ -386,8 +435,13 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 
 	for (const { file, binding, module, name } of importsToAlias) {
 		const exporter = resolveExport(module, name);
+		if (exporter === "ambiguous") {
+			throw new SyntaxError(
+				`Linker: ambiguous import '${name}' from ${module} (imported by ${file.path})`,
+			);
+		}
 		if (!exporter) {
-			throw new Error(
+			throw new SyntaxError(
 				`Linker: ${module} does not export '${name}' (imported by ${file.path})`,
 			);
 		}
@@ -404,6 +458,31 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			// exported-but-locally-unused declaration. A truly unimported export
 			// still has no usages and is shaken.
 			exporter.usageNodes.push(usage);
+		}
+	}
+
+	// --- Validate every indirect re-export (16.2.1.6.2: module.Link resolves
+	// every indirect export entry; an unresolvable or ambiguous name is a
+	// SyntaxError even when nothing imports it). ---
+	for (const [modulePath, moduleExports] of exportsByModule) {
+		if (goalOf(modulePath) === "cjs") {
+			continue;
+		}
+		for (const [name, entry] of moduleExports.named) {
+			if (entry.kind !== "indirect") {
+				continue;
+			}
+			const resolved = resolveExport(entry.module, entry.name);
+			if (resolved === "ambiguous") {
+				throw new SyntaxError(
+					`Linker: ambiguous re-export '${name}' from ${entry.module} (re-exported by ${modulePath})`,
+				);
+			}
+			if (resolved === null) {
+				throw new SyntaxError(
+					`Linker: ${entry.module} does not export '${entry.name}' (re-exported by ${modulePath})`,
+				);
+			}
 		}
 	}
 
@@ -444,7 +523,9 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		const nsExports: Array<{ name: string; exporter: Binding }> = [];
 		for (const name of exportNamesOf(file.path)) {
 			const exporter = resolveExport(file.path, name);
-			if (exporter) {
+			// An ambiguous star-exported name is omitted from the namespace (not an
+			// error): 16.2.1.6.3 GetExportedNames keeps it but ResolveExport → ambiguous.
+			if (exporter && exporter !== "ambiguous") {
 				nsExports.push({ name, exporter });
 				exporter.usageNodes.push(file.ast);
 			}
@@ -456,7 +537,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		const nsExports: Array<{ name: string; exporter: Binding }> = [];
 		for (const name of exportNamesOf(module)) {
 			const exporter = resolveExport(module, name);
-			if (exporter) {
+			if (exporter && exporter !== "ambiguous") {
 				nsExports.push({ name, exporter });
 				// The namespace's getters read each exporter's slot directly (no
 				// usage node), so mark the exporter used or the exporting module's
