@@ -13,7 +13,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 2u
+#define WIRE_VERSION 3u         // bumped for the host-install manifest section
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1002,6 +1002,15 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
         def->files = files;
         def->source_position_count = (i32) source_pos_count;
         def->source_positions = source_positions;
+    }
+
+    // Wire v3 has a host-install count, but a portable definition cannot resolve
+    // native installer pointers without a registry. Reject instead of silently
+    // loading null installers that leave host globals undefined.
+    u32 host_install_count = rd_u32(&r);
+    if (r.ok && host_install_count > 0) {
+        err = "host installs are not supported in portable wire definitions";
+        goto fail;
     }
 
     if (!r.ok) {

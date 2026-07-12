@@ -168,7 +168,9 @@ export function optFlags(): Array<string> {
  * call sites (kept in lockstep with the Rust `intl` Cargo feature).
  * `webPlatformEnabled: false` adds `-DMAL_WEB_PLATFORM=0`, which compiles url.c away
  * so no ada FFI symbols are referenced (in lockstep with the Rust `web-platform`
- * feature, which drops the C++ ada parser + `-lc++`).
+ * feature, which drops the C++ ada parser + `-lc++`). `nodeEnabled: true` adds
+ * `-DMAL_NODE=1`, opting the node host built-in surface in (it defaults off, so —
+ * unlike the default-on features above — only the ON case emits a define).
  */
 export interface FeatureDefineOpts {
 	evalEnabled?: boolean;
@@ -177,6 +179,8 @@ export interface FeatureDefineOpts {
 	intlServiceDefines?: Array<string>;
 	webPlatformEnabled?: boolean;
 	regexpEnabled?: boolean;
+	/** `-DMAL_NODE=1` when the node host built-in surface is enabled (default off). */
+	nodeEnabled?: boolean;
 }
 
 /**
@@ -196,7 +200,9 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 		opts.intlEnabled === false ? ["-DMAL_INTL=0"] : (opts.intlServiceDefines ?? []);
 	const webFlag = opts.webPlatformEnabled === false ? ["-DMAL_WEB_PLATFORM=0"] : [];
 	const regexpFlag = opts.regexpEnabled === false ? ["-DMAL_REGEXP=0"] : [];
-	return [...evalFlag, ...intlFlags, ...webFlag, ...regexpFlag];
+	// node defaults OFF (C default MAL_NODE=0), so only the ON case emits a flag.
+	const nodeFlag = opts.nodeEnabled === true ? ["-DMAL_NODE=1"] : [];
+	return [...evalFlag, ...intlFlags, ...webFlag, ...regexpFlag, ...nodeFlag];
 }
 
 export function cmakeCFlags(opts: FeatureDefineOpts = {}): string {

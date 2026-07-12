@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { hash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { DisallowedEvalUsage, DisallowedRegexpUsage } from "./semantic-analysis.ts";
@@ -354,7 +354,10 @@ export function loadBuildConfig(
 }
 
 function shortHash(value: unknown): string {
-	return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 8);
+	// One-shot node:crypto.hash (not createHash) so the compiler dogfoods the same
+	// native `hash` export the node surface ships — byte-identical to the streaming
+	// digest (see the build-cache parity test). SHA-256 of the JSON, first 8 hex.
+	return hash("sha256", JSON.stringify(value), "hex").slice(0, 8);
 }
 
 /**
@@ -362,27 +365,33 @@ function shortHash(value: unknown): string {
  * C build-directory suffix (build-flags.ts) so binaries built under different
  * capabilities do not clobber each other's cached archives. The C archive depends
  * on `engine.eval` (flips `-DMAL_EVAL` + whether the 1.6 MB compiler is embedded),
- * `engine.intl` (flips `-DMAL_INTL` + the locale-sensitive fallbacks), and
- * `surface.webPlatform` (flips `-DMAL_WEB_PLATFORM` + whether url.c compiles).
- * Not-yet-wired fields (host) are excluded so unrelated edits do not needlessly
+ * `engine.intl` (flips `-DMAL_INTL` + the locale-sensitive fallbacks),
+ * `surface.webPlatform` (flips `-DMAL_WEB_PLATFORM` + whether url.c compiles), and
+ * `surface.node` (flips `-DMAL_NODE` + the node host built-in surface). Not-yet-wired
+ * fields (host.scheduler) are excluded so unrelated edits do not needlessly
  * invalidate the cache. Returns "" for the canonical build (eval on, Intl on, all
- * locales, web on) so it keeps the unsuffixed build dir.
+ * locales, web on, node OFF) so it keeps the unsuffixed build dir — node defaults
+ * off and every internal-tooling build is node-off, so node-off stays canonical.
  */
 export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 	// The C archive depends on eval, whether Intl is on, which services are selected
-	// (each flips a -DMAL_INTL_HAS_* define), web-platform (url.c gating), and regexp
-	// (builtin_regexp/regexp_object/gc/string gating), but NOT on the locale set (that
-	// only changes the Rust/ICU datagen). Empty services = all; eval + Intl +
-	// all-services + web + regexp all on = canonical.
+	// (each flips a -DMAL_INTL_HAS_* define), web-platform (url.c gating), regexp
+	// (builtin_regexp/regexp_object/gc/string gating), and node (the host built-in
+	// surface), but NOT on the locale set (that only changes the Rust/ICU datagen) or
+	// on node in the Rust archive (node adds no Rust deps — see rustConfigCacheSuffix).
+	// Empty services = all; eval + Intl + all-services + web + regexp on and node off
+	// = canonical.
 	const services = selectedIntlServices(config).sort();
 	const web = config.surface.webPlatform;
 	const regexp = config.engine.regexp;
+	const node = config.surface.node;
 	if (
 		config.engine.eval &&
 		config.engine.intl.enabled &&
 		services.length === 0 &&
 		web &&
-		regexp
+		regexp &&
+		!node
 	) {
 		return "";
 	}
@@ -392,6 +401,7 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 		services,
 		web,
 		regexp,
+		node,
 	});
 }
 
@@ -427,6 +437,12 @@ export interface BuildDerivation {
 	intlFeatures: Array<string>;
 	webPlatformEnabled: boolean;
 	regexpEnabled: boolean;
+	/**
+	 * Whether the node host built-in surface (`surface.node`) is on. Flips
+	 * `-DMAL_NODE` on the C side and folds into the C archive cache suffix, but NOT
+	 * the Rust one (node adds no Rust deps). Defaults off (product default).
+	 */
+	nodeEnabled: boolean;
 	cacheSuffix: string;
 	rustCacheSuffix: string;
 }
@@ -440,6 +456,7 @@ export function buildDerivationFromConfig(config: ResolvedBuildConfig): BuildDer
 		intlFeatures: intlCargoFeatures(config),
 		webPlatformEnabled: config.surface.webPlatform,
 		regexpEnabled: config.engine.regexp,
+		nodeEnabled: config.surface.node,
 		cacheSuffix: buildConfigCacheSuffix(config),
 		rustCacheSuffix: rustConfigCacheSuffix(config),
 	};

@@ -1,0 +1,121 @@
+// Native `process` global acceptance fixture (node surface). Built + run by
+// tests/native/node-process.test.ts on the host entry, which invokes it with a
+// controlled OS argv / environment and asserts the machine-readable lines below.
+//
+// It prints, in order: the forwarded argv, a few env probes (direct read, key
+// enumeration, spread), and the working directory — then a `RESULT p/t` line for
+// the structural self-checks. When NODE_PROCESS_EXIT is set it finally calls
+// process.exit(<that number>) so the runner can assert the exit status.
+//
+// `process` is a free global here (no node:process import), resolved through the
+// global object property installed under the node surface.
+
+const MARKER = "NODE_PROCESS_MARKER";
+const UNDEF = "__undef__";
+
+function show(value: unknown): string {
+	return value === undefined ? UNDEF : String(value);
+}
+
+// --- argv forwarding ---
+const argv = process.argv;
+console.log("ARGV_LEN " + argv.length);
+for (let i = 0; i < argv.length; i++) {
+	console.log("ARGV " + i + " " + argv[i]);
+}
+
+// --- env: read / enumerate / spread ---
+const env = process.env;
+const keys = Object.keys(env);
+console.log("ENV_READ " + show(env[MARKER]));
+console.log("ENV_KEYS_LEN " + keys.length);
+console.log("ENV_HAS_MARKER " + (keys.indexOf(MARKER) >= 0));
+const spread = { ...env };
+console.log("ENV_SPREAD_READ " + show(spread[MARKER]));
+console.log("ENV_SPREAD_KEYS_LEN " + Object.keys(spread).length);
+
+// --- cwd ---
+console.log("CWD " + process.cwd());
+
+// --- structural self-checks (RESULT line) ---
+const results: Array<[string, boolean]> = [];
+function check(name: string, ok: boolean): void {
+	results.push([name, !!ok]);
+}
+
+check("process is object", typeof process === "object" && process !== null);
+check("process has global identity", globalThis.process === process);
+check("argv is array", Array.isArray(process.argv));
+check("argv has argv0 + placeholder", process.argv.length >= 2);
+check("argv[1] is <compiled> placeholder", process.argv[1] === "<compiled>");
+check(
+	"argv0 is a non-empty string",
+	typeof process.argv[0] === "string" && process.argv[0].length > 0,
+);
+check("env is object", typeof process.env === "object" && process.env !== null);
+check(
+	"env values are strings",
+	typeof env[MARKER] === "string" || env[MARKER] === undefined,
+);
+check("spread preserves keys", Object.keys(spread).length === keys.length);
+check("cwd is a function", typeof process.cwd === "function");
+check(
+	"cwd returns a non-empty string",
+	typeof process.cwd() === "string" && process.cwd().length > 0,
+);
+check("exit is a function", typeof process.exit === "function");
+
+function checkExitRangeError(name: string, code: number): void {
+	try {
+		process.exit(code);
+		check(name, false);
+	} catch (error) {
+		check(name, error instanceof RangeError);
+	}
+}
+
+checkExitRangeError("exit rejects fractional status", 1.5);
+checkExitRangeError("exit rejects NaN status", NaN);
+checkExitRangeError("exit rejects positive infinity status", Infinity);
+checkExitRangeError("exit rejects negative infinity status", -Infinity);
+checkExitRangeError("exit rejects status above safe-integer range", 9007199254740992);
+checkExitRangeError("exit rejects status below safe-integer range", -9007199254740992);
+try {
+	process.exit("1" as unknown as number);
+	check("exit rejects non-number status", false);
+} catch (error) {
+	check("exit rejects non-number status", error instanceof TypeError);
+}
+console.log("EXIT_INVALID_CONTINUED true");
+
+const originalProcess = process;
+const replacement = { marker: "replacement" } as unknown as typeof process;
+process = replacement;
+check(
+	"process assignment updates the global property",
+	process === replacement && globalThis.process === replacement,
+);
+process = originalProcess;
+check("process assignment restores global identity", globalThis.process === process);
+
+let passed = 0;
+for (const [name, ok] of results) {
+	if (ok) {
+		passed++;
+	} else {
+		console.log("FAIL: " + name);
+	}
+}
+console.log("RESULT " + passed + "/" + results.length);
+
+// --- exit status (opt-in) ---
+const exitRequest = process.env.NODE_PROCESS_EXIT;
+if (exitRequest !== undefined) {
+	if (exitRequest === "default") {
+		process.exit();
+	} else if (exitRequest === "undefined") {
+		process.exit(undefined);
+	} else {
+		process.exit(Number(exitRequest));
+	}
+}

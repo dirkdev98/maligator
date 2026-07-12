@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { buildSuffix, ccExtraFlags, cmakeCFlags, featureDefines } from "./build-flags.ts";
 import { ensureCompilerWire } from "./compiler-bake.ts";
+import type { CompilerBakeOptions } from "./compiler-bake.ts";
 import { ensureRustLibrary, RUST_INCLUDE_DIR, rustLinkArgs } from "./rust-build.ts";
 
 const LOCAL_DIR = ".cache/local";
@@ -31,10 +32,14 @@ interface RuntimeBuildDimensions {
 	webPlatformEnabled?: boolean;
 	/** Whether to compile the RegExp engine (regress / `regexp` feature). Default true. */
 	regexpEnabled?: boolean;
+	/** Whether to enable the node host built-in surface (`-DMAL_NODE=1`). Default false. */
+	nodeEnabled?: boolean;
 	/** C-build-config hash suffix (build-config.ts). Default "" (canonical archive). */
 	cacheSuffix?: string;
 	/** Rust/Intl-config hash suffix selecting the ICU archive. Default "" (all services). */
 	rustCacheSuffix?: string;
+	/** Explicit eval compiler input; required when the checked-in wire is stale. */
+	compilerBake?: CompilerBakeOptions;
 }
 
 export interface LocalBuildOptions {
@@ -112,6 +117,14 @@ export interface LocalBuildOptions {
 	regexpEnabled?: boolean;
 
 	/**
+	 * Whether this binary includes the node host built-in surface (`surface.node`).
+	 * Defaults to FALSE (product default) — unlike the features above, node is
+	 * opt-in: `-DMAL_NODE=1` on the C side and its own cached archive keyed by
+	 * {@link cacheSuffix}. No Rust dimension (node adds no Rust deps).
+	 */
+	nodeEnabled?: boolean;
+
+	/**
 	 * C-build-config hash (build-config.ts `buildConfigCacheSuffix`) selecting the
 	 * C build dir / archive. Defaults to "" (canonical). Consistent with
 	 * {@link evalEnabled} + {@link intlEnabled}.
@@ -124,9 +137,11 @@ export interface LocalBuildOptions {
 	 * axis only, so toggling eval does not rebuild ICU.
 	 */
 	rustCacheSuffix?: string;
+
+	/** Explicit eval compiler bytes or a Node-hosted in-process bake callback. */
+	compilerBake?: CompilerBakeOptions;
 }
 
-/**
 /**
  * The three runtime archives in link order (dependents first: runtime, host,
  * engine — so a later archive resolves an earlier one's references), WITHOUT
@@ -172,6 +187,7 @@ export function ensureRuntimeLibrary(
 	const intlFeatures = dimensions.intlFeatures ?? [];
 	const webPlatformEnabled = dimensions.webPlatformEnabled ?? true;
 	const regexpEnabled = dimensions.regexpEnabled ?? true;
+	const nodeEnabled = dimensions.nodeEnabled ?? false;
 	const cacheSuffix = dimensions.cacheSuffix ?? "";
 	const rustCacheSuffix = dimensions.rustCacheSuffix ?? "";
 	const buildDir = buildDirFor(cacheSuffix);
@@ -184,7 +200,7 @@ export function ensureRuntimeLibrary(
 	// Skipped for an eval-disabled build — the `#embed` is guarded out by
 	// `-DMAL_EVAL=0`, so the file is never referenced (faster build, no bake).
 	if (evalEnabled) {
-		ensureCompilerWire(verbose);
+		ensureCompilerWire(dimensions.compilerBake);
 	}
 
 	// Re-running configure with unchanged cache variables is cheap.
@@ -195,7 +211,7 @@ export function ensureRuntimeLibrary(
 			"runtime",
 			"-B",
 			buildDir,
-			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, intlEnabled, intlServiceDefines, webPlatformEnabled, regexpEnabled })}`,
+			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, intlEnabled, intlServiceDefines, webPlatformEnabled, regexpEnabled, nodeEnabled })}`,
 		],
 		{
 			stdio,
@@ -231,8 +247,11 @@ export function ensureRuntimeLibrary(
  * the C loader (mal_vm_load_definition) against the C-baked path. Returns the
  * binary path.
  */
-export function buildLoadDriver(verbose: boolean): string {
-	const libs = ensureRuntimeLibrary(verbose);
+export function buildLoadDriver(
+	verbose: boolean,
+	compilerBake?: CompilerBakeOptions,
+): string {
+	const libs = ensureRuntimeLibrary(verbose, { compilerBake });
 	const binPath = path.join(LOCAL_DIR, `MaligatorLoad${buildSuffix()}`);
 
 	execFileSync(
@@ -270,6 +289,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 	const intlEnabled = options.intlEnabled ?? true;
 	const webPlatformEnabled = options.webPlatformEnabled ?? true;
 	const regexpEnabled = options.regexpEnabled ?? true;
+	const nodeEnabled = options.nodeEnabled ?? false;
 	const cacheSuffix = options.cacheSuffix ?? "";
 	const rustCacheSuffix = options.rustCacheSuffix ?? "";
 	const libs = options.skipRuntimeBuild
@@ -281,8 +301,10 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 				intlFeatures: options.intlFeatures,
 				webPlatformEnabled,
 				regexpEnabled,
+				nodeEnabled,
 				cacheSuffix,
 				rustCacheSuffix,
+				compilerBake: options.compilerBake,
 			});
 
 	// Suffix the artifacts under a sanitizer / eval-disabled build so they do not
@@ -307,6 +329,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 				intlServiceDefines: options.intlServiceDefines,
 				webPlatformEnabled,
 				regexpEnabled,
+				nodeEnabled,
 			}),
 			"-I",
 			"runtime/src",

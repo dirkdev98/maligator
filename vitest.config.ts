@@ -21,7 +21,7 @@ export default defineConfig({
 				// Pure-TS compiler tests: no C build, instant, the watch loop.
 				test: {
 					name: "unit",
-					include: ["tests/*.test.ts"],
+					include: ["tests/*.test.ts", "src/serialize-vm.test.ts"],
 					pool: "threads",
 					isolate: false,
 					sequence: {

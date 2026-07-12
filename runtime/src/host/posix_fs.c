@@ -1,0 +1,354 @@
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
+
+#include "posix_fs.h"
+
+#if MAL_NODE
+
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static u32 mal_posix_ft_from_mode(mode_t m) {
+    if (S_ISREG(m)) {
+        return MAL_POSIX_FT_FILE;
+    }
+    if (S_ISDIR(m)) {
+        return MAL_POSIX_FT_DIR;
+    }
+    return MAL_POSIX_FT_OTHER;
+}
+
+/* Classify a directory entry by lstat on the joined "dir/name" path (the entry's
+ * own type — symlinks are not followed). Used only when the readdir d_type is
+ * unavailable or DT_UNKNOWN. Any failure degrades to OTHER. */
+static u32 mal_posix_lstat_type(const char *dir, const char *name) {
+    usize dl = strlen(dir);
+    usize nl = strlen(name);
+    if (dl > SIZE_MAX - nl - 2) {
+        return MAL_POSIX_FT_OTHER;
+    }
+    char *full = malloc(dl + 1 + nl + 1);
+    if (full == nullptr) {
+        return MAL_POSIX_FT_OTHER;
+    }
+    memcpy(full, dir, dl);
+    usize o = dl;
+    if (dl == 0 || dir[dl - 1] != '/') {
+        full[o++] = '/';
+    }
+    memcpy(full + o, name, nl);
+    o += nl;
+    full[o] = '\0';
+    struct stat st;
+    u32 type = MAL_POSIX_FT_OTHER;
+    if (lstat(full, &st) == 0) {
+        type = mal_posix_ft_from_mode(st.st_mode);
+    }
+    free(full);
+    return type;
+}
+
+static u32 mal_posix_dirent_type(const char *dir, const struct dirent *de) {
+#ifdef DT_DIR
+    switch (de->d_type) {
+        case DT_DIR:
+            return MAL_POSIX_FT_DIR;
+        case DT_REG:
+            return MAL_POSIX_FT_FILE;
+        case DT_UNKNOWN:
+            break; // some filesystems don't fill d_type — fall back to lstat
+        default:
+            return MAL_POSIX_FT_OTHER; // symlink / fifo / socket / device
+    }
+#endif
+    return mal_posix_lstat_type(dir, de->d_name);
+}
+
+bool mal_posix_fs_exists(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
+int mal_posix_fs_read_file(const char *path, byte **out_data, usize *out_len) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return errno;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        int err = errno;
+        close(fd);
+        return err;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        close(fd);
+        return EISDIR;
+    }
+    // Size is a hint only (a growing file / proc entry may exceed it), so the read
+    // loop grows the buffer until EOF rather than trusting st_size.
+    usize cap = 4096;
+    if (st.st_size > 0) {
+        if ((uintmax_t) st.st_size >= (uintmax_t) SIZE_MAX) {
+            close(fd);
+            return EFBIG;
+        }
+        cap = (usize) st.st_size + 1;
+    }
+    byte *buf = malloc(cap);
+    if (buf == nullptr) {
+        close(fd);
+        return ENOMEM;
+    }
+    usize len = 0;
+    for (;;) {
+        if (len == cap) {
+            if (cap > SIZE_MAX / 2) {
+                free(buf);
+                close(fd);
+                return EFBIG;
+            }
+            cap *= 2;
+            byte *grown = realloc(buf, cap);
+            if (grown == nullptr) {
+                free(buf);
+                close(fd);
+                return ENOMEM;
+            }
+            buf = grown;
+        }
+        ssize_t n = read(fd, buf + len, cap - len);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            int err = errno;
+            free(buf);
+            close(fd);
+            return err;
+        }
+        if (n == 0) {
+            break;
+        }
+        len += (usize) n;
+    }
+    if (close(fd) != 0) {
+        int err = errno;
+        free(buf);
+        return err;
+    }
+    *out_data = buf;
+    *out_len = len;
+    return 0;
+}
+
+int mal_posix_fs_write_file(const char *path, const byte *data, usize len) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0) {
+        return errno;
+    }
+    usize off = 0;
+    while (off < len) {
+        ssize_t n = write(fd, data + off, len - off);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            int err = errno;
+            close(fd);
+            return err;
+        }
+        if (n == 0) {
+            close(fd);
+            return EIO;
+        }
+        off += (usize) n;
+    }
+    if (close(fd) < 0) {
+        return errno;
+    }
+    return 0;
+}
+
+int mal_posix_fs_stat(const char *path, MalPosixStat *out) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return errno;
+    }
+    out->type = mal_posix_ft_from_mode(st.st_mode);
+#if defined(__APPLE__)
+    out->mtime_ms = (f64) st.st_mtimespec.tv_sec * 1000.0 + (f64) st.st_mtimespec.tv_nsec / 1.0e6;
+#else
+    out->mtime_ms = (f64) st.st_mtim.tv_sec * 1000.0 + (f64) st.st_mtim.tv_nsec / 1.0e6;
+#endif
+    return 0;
+}
+
+void mal_posix_fs_free_dirents(MalPosixDirent *entries, usize count) {
+    if (entries == nullptr) {
+        return;
+    }
+    for (usize i = 0; i < count; i++) {
+        free(entries[i].name);
+    }
+    free(entries);
+}
+
+int mal_posix_fs_readdir(const char *path, MalPosixDirent **out_entries, usize *out_count) {
+    DIR *dir = opendir(path);
+    if (dir == nullptr) {
+        return errno;
+    }
+    usize cap = 16;
+    usize count = 0;
+    MalPosixDirent *arr = malloc(sizeof(MalPosixDirent) * cap);
+    if (arr == nullptr) {
+        closedir(dir);
+        return ENOMEM;
+    }
+    errno = 0; // readdir returns null both at end-of-stream and on error
+    struct dirent *de;
+    while ((de = readdir(dir)) != nullptr) {
+        const char *nm = de->d_name;
+        if (nm[0] == '.' && (nm[1] == '\0' || (nm[1] == '.' && nm[2] == '\0'))) {
+            continue; // skip "." and ".."
+        }
+        if (count == cap) {
+            if (cap > SIZE_MAX / 2 / sizeof(MalPosixDirent)) {
+                mal_posix_fs_free_dirents(arr, count);
+                closedir(dir);
+                return ENOMEM;
+            }
+            cap *= 2;
+            MalPosixDirent *grown = realloc(arr, sizeof(MalPosixDirent) * cap);
+            if (grown == nullptr) {
+                mal_posix_fs_free_dirents(arr, count);
+                closedir(dir);
+                return ENOMEM;
+            }
+            arr = grown;
+        }
+        usize nlen = strlen(nm);
+        char *name = malloc(nlen + 1);
+        if (name == nullptr) {
+            mal_posix_fs_free_dirents(arr, count);
+            closedir(dir);
+            return ENOMEM;
+        }
+        memcpy(name, nm, nlen + 1);
+        arr[count].name = name;
+        arr[count].type = mal_posix_dirent_type(path, de);
+        count++;
+        errno = 0;
+    }
+    int err = errno;
+    if (closedir(dir) != 0 && err == 0) {
+        err = errno;
+    }
+    if (err != 0) {
+        mal_posix_fs_free_dirents(arr, count);
+        return err;
+    }
+    *out_entries = arr;
+    *out_count = count;
+    return 0;
+}
+
+int mal_posix_fs_mkdir(const char *path, bool recursive) {
+    if (!recursive) {
+        if (mkdir(path, 0777) != 0) {
+            return errno;
+        }
+        return 0;
+    }
+    usize len = strlen(path);
+    if (len == 0) {
+        return ENOENT;
+    }
+    char *buf = malloc(len + 1);
+    if (buf == nullptr) {
+        return ENOMEM;
+    }
+    memcpy(buf, path, len + 1);
+    // A trailing slash would make the final component empty; trim it.
+    while (len > 1 && buf[len - 1] == '/') {
+        buf[--len] = '\0';
+    }
+    // Create each prefix in turn. EEXIST is success only when that prefix really
+    // is a directory; accepting a regular file would incorrectly make the final
+    // component of mkdirSync(file, { recursive: true }) succeed.
+    for (usize i = 1; i <= len; i++) {
+        if (buf[i] == '/' || buf[i] == '\0') {
+            char saved = buf[i];
+            buf[i] = '\0';
+            if (mkdir(buf, 0777) != 0) {
+                int err = errno;
+                struct stat st;
+                if (err == EEXIST && stat(buf, &st) != 0) {
+                    err = errno;
+                } else if (err == EEXIST && S_ISDIR(st.st_mode)) {
+                    buf[i] = saved;
+                    continue;
+                }
+                free(buf);
+                return err;
+            }
+            buf[i] = saved;
+        }
+    }
+    free(buf);
+    return 0;
+}
+
+const char *mal_posix_fs_errno_name(int err) {
+    switch (err) {
+        case EACCES:
+            return "EACCES";
+        case EEXIST:
+            return "EEXIST";
+        case EFBIG:
+            return "EFBIG";
+        case EBADF:
+            return "EBADF";
+        case EINVAL:
+            return "EINVAL";
+        case EISDIR:
+            return "EISDIR";
+        case EIO:
+            return "EIO";
+        case ELOOP:
+            return "ELOOP";
+        case EMFILE:
+            return "EMFILE";
+        case ENAMETOOLONG:
+            return "ENAMETOOLONG";
+        case ENFILE:
+            return "ENFILE";
+        case ENOENT:
+            return "ENOENT";
+        case ENOMEM:
+            return "ENOMEM";
+        case ENOSPC:
+            return "ENOSPC";
+        case ENOTDIR:
+            return "ENOTDIR";
+        case ENOTEMPTY:
+            return "ENOTEMPTY";
+        case EPERM:
+            return "EPERM";
+        case EROFS:
+            return "EROFS";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+#endif /* MAL_NODE */

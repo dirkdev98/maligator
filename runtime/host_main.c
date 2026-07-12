@@ -16,7 +16,7 @@
 // uses, as opposed to test262_main which only runs the synchronous body.
 extern const MalVmDefinition mal_vm_definition;
 
-int main(void) {
+int main(int argc, char **argv) {
     // Line-buffer stdout: a server logs then blocks in the event loop indefinitely,
     // so fully-buffered output (the default when stdout is a pipe) would never be
     // seen. Line buffering flushes each console.log promptly.
@@ -42,6 +42,13 @@ int main(void) {
     mal_url_install(&vm, global_this);            // URL / URLSearchParams (ada)
     mal_events_install(&vm, global_this);         // EventTarget / Event
 #endif
+
+    // Fill the reached host built-in / `process` global slots before execution
+    // (a no-op for a program that imports none). After host attach so an installer
+    // may lean on the reactor/timers; before run so LOAD_GLOBAL sees the values.
+    // The launch context carries the process command line (for `process.argv`).
+    MalHostLaunchContext launch = {.argc = argc, .argv = argv};
+    mal_vm_run_host_installs(&vm, &launch);
 
     MalCallable *callable = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, callable);      // synchronous top level + its microtask drain

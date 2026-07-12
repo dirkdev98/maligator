@@ -9,10 +9,9 @@ import type { SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
  * module in evaluation order (dependencies before dependents). A program with no
  * imports is a single-node graph, so this matches analyzing the one file.
  *
- * This lives apart from semantic-analysis.ts on purpose: it value-imports
- * `buildModuleGraph` (→ ts-blank-space → typescript), which is fine on Node but
- * not self-hostable. The string-based `analyzeSourceAndRunSemanticAnalysis` (the
- * eval / self-host entry) stays in semantic-analysis.ts, free of that chain.
+ * This lives apart from semantic-analysis.ts because it value-imports the
+ * disk-backed module graph. TypeScript stripping is injected by the caller, so
+ * this pipeline is usable by both the Node and native-hosted front ends.
  */
 export function loadEntrypointAndRunSemanticAnalysis(
 	entrypointPath: string,
@@ -26,15 +25,22 @@ export function loadEntrypointAndRunSemanticAnalysis(
 		graph,
 	};
 
+	// Host virtual modules (node:* built-ins) carry no user source — the linker
+	// binds their exports later — so they are skipped here rather than analyzed.
 	const analyzed = new Set<string>();
 	for (const modulePath of graph.evaluationOrder) {
-		program.files.push(analyzeModuleRecord(graph.modules.get(modulePath)!));
+		const record = graph.modules.get(modulePath)!;
+		if (record.host) {
+			continue;
+		}
+		program.files.push(analyzeModuleRecord(record));
 		analyzed.add(modulePath);
 	}
 	for (const [modulePath, record] of graph.modules) {
-		if (!analyzed.has(modulePath)) {
-			program.files.push(analyzeModuleRecord(record));
+		if (record.host || analyzed.has(modulePath)) {
+			continue;
 		}
+		program.files.push(analyzeModuleRecord(record));
 	}
 
 	debugSemanticProgram(program);

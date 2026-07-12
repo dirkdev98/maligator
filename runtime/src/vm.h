@@ -735,6 +735,61 @@ typedef struct MalFunction {
     const MalLineEntry *positions;
 } MalFunction;
 
+/**
+ * One host export's destination: the export/global name and the global slot the
+ * installer writes its value into. The engine-neutral installer ABI (below): an
+ * installer receives its slot table and matches names to decide what to build
+ * where, keeping Node-specific names out of the shared intrinsic tables.
+ */
+typedef struct MalHostInstallSlot {
+    const char *name;
+    i32 slot;
+} MalHostInstallSlot;
+
+/**
+ * Engine-neutral launch context threaded to every host installer: the process
+ * command line exactly as `main` received it (argc/argv). A host built-in that
+ * needs it — currently only `process`, for `process.argv` / `process.argc` —
+ * reads it; the others ignore it. Engine-only embeddings (the test262 runner)
+ * and from-wire runs still pass one, but their manifests are empty or carry
+ * unresolved installers, so it is never consulted there.
+ *
+ * Deliberately only the command line, no compiled-entry field: `process.argv[1]`
+ * (the "script" slot) is a compile-time artifact the runtime driver knows nothing
+ * about — the fixed driver `main` cannot see the entry module baked into
+ * `mal_vm_definition`. The `process` installer therefore synthesizes a stable
+ * placeholder for that slot itself rather than the driver threading one through
+ * here, keeping this ABI to argc/argv alone and engine-neutral.
+ */
+typedef struct MalHostLaunchContext {
+    int argc;
+    char **argv;
+} MalHostLaunchContext;
+
+/**
+ * A host installer fills the given global slots for one `node:*` built-in (or
+ * the global `process`). Engine-neutral: it takes the VM, the slot table, and
+ * the launch context (the process command line). Defined in the native
+ * host-module layer; the compiler emits a direct reference to it for each
+ * reached built-in. A null pointer (an unresolved installer in a from-wire
+ * definition) is skipped, leaving the slots at their init value (undefined).
+ */
+typedef void (*MalHostInstaller)(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
+);
+
+/**
+ * One entry of a program's host-install manifest: the installer to run and the
+ * slots it fills. Emitted only for host built-ins / `process` actually reached
+ * (dead-code elimination), so an ordinary program's manifest is empty and no
+ * host symbol is referenced.
+ */
+typedef struct MalHostInstall {
+    MalHostInstaller installer;
+    const MalHostInstallSlot *slots;
+    i32 slot_count;
+} MalHostInstall;
+
 typedef struct MalVmDefinition {
     i32 function_count;
     const MalFunction *functions;
@@ -778,6 +833,15 @@ typedef struct MalVmDefinition {
     const char *const *files;
     i32 source_position_count;
     const MalSourcePos *source_positions;
+
+    /**
+     * Host-install manifest (see MalHostInstall). Run by mal_vm_run_host_installs
+     * after VM init / host attach and before execution. Zero/null for an ordinary
+     * program and for a from-wire definition (whose installer pointers are
+     * unresolved), so both run no installers.
+     */
+    i32 host_install_count;
+    const MalHostInstall *host_installs;
 } MalVmDefinition;
 
 /**
@@ -1284,6 +1348,26 @@ typedef struct MalVmFrame {
 typedef MalVmFrame MalCallable;
 
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition);
+
+/**
+ * Run the definition's host-install manifest: for each reached `node:*` built-in
+ * / `process`, call its installer to fill the export global slots. Call after
+ * mal_vm_init (and, for a host program, after mal_host_attach) and before running
+ * the entry — the compiled program reads those slots via LOAD_GLOBAL. `launch`
+ * carries the process command line for the installers that need it (`process`);
+ * pass the driver's own argc/argv. A no-op when the manifest is empty (every
+ * ordinary program) or an installer is unresolved (a from-wire definition), so it
+ * is safe to call unconditionally.
+ */
+static inline void mal_vm_run_host_installs(MalVm *vm, const MalHostLaunchContext *launch) {
+    const MalVmDefinition *definition = vm->definition;
+    for (i32 i = 0; i < definition->host_install_count; i++) {
+        const MalHostInstall *install = &definition->host_installs[i];
+        if (install->installer != nullptr) {
+            install->installer(vm, install->slots, install->slot_count, launch);
+        }
+    }
+}
 
 void mal_vm_free(MalVm *vm);
 

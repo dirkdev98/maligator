@@ -1,6 +1,7 @@
 import type { ESTree } from "meriyah";
 import { detectCjsExports } from "./cjs-exports.ts";
 import type { CjsExportInfo } from "./cjs-exports.ts";
+import { PROCESS_INSTALLER_SYMBOL } from "./host-modules.ts";
 import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 
 /**
@@ -63,6 +64,31 @@ export interface ModuleLinkage {
 			names?: Array<string>;
 		}>
 	>;
+
+	/**
+	 * Host built-in (`node:*`) modules reachable in the graph, each with the
+	 * synthetic immutable global bindings backing its declared exports. Importers
+	 * alias to these bindings like any exporter, so host reads compile to ordinary
+	 * LOAD_GLOBAL slots (no new opcode); ir.ts resolves the bindings that ended up
+	 * used to their slots to build the per-program install manifest. Empty unless
+	 * a `node:*` module is imported. `default` is present only for a module whose
+	 * spec declares a default export.
+	 */
+	hostModules: Array<{
+		specifier: string;
+		installer: string;
+		exports: Array<{ name: string; binding: Binding }>;
+	}>;
+
+	/**
+	 * The global `process` object, when the program reads it as a free (unresolved)
+	 * global and the build enables the node surface (`graph.nodeEnabled`). The
+	 * binding remains unresolved so reads and writes retain ordinary global-object
+	 * semantics; this marker only statically retains the native installer.
+	 * Undefined when `process` is unused, shadowed by a local, or the node surface
+	 * is off. See {@link PROCESS_INSTALLER_SYMBOL}.
+	 */
+	hostProcess?: { installer: string };
 }
 
 type ExportEntry =
@@ -88,6 +114,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		namespaceImports: new Map(),
 		moduleNamespaces: new Map(),
 		cjsImports: new Map(),
+		hostModules: [],
 	};
 
 	const graph = program.graph;
@@ -220,6 +247,47 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 	};
 
 	const exportsByModule = new Map<string, ModuleExports>();
+
+	// Host virtual modules (`node:*`) carry no user source, so Phase A (which scans
+	// program.files) never sees them. Register their declared exports here as
+	// synthetic immutable global bindings: importers alias to these like any
+	// exporter — so a host read compiles to an ordinary LOAD_GLOBAL, no new opcode —
+	// and ir.ts resolves the bindings that survive dead-code elimination to their
+	// slots to build the per-program install manifest. Only host modules actually
+	// reached by the graph are present, so an unimported built-in adds nothing.
+	for (const [modulePath, record] of graph.modules) {
+		if (!record.host) {
+			continue;
+		}
+		const spec = record.host;
+		const moduleExports: ModuleExports = { named: new Map(), stars: [] };
+		const exportBindings: Array<{ name: string; binding: Binding }> = [];
+		const declareHostExport = (name: string) => {
+			const binding: Binding = {
+				kind: "const",
+				name: `*host:${spec.id}:${name}*`,
+				usageNodes: [],
+				scopedTo: "global",
+				// Aliased-to like an import: no TDZ slot of its own — the installer
+				// fills the slot before execution (unfilled reads see undefined).
+				imported: true,
+			};
+			moduleExports.named.set(name, { kind: "local", binding });
+			exportBindings.push({ name, binding });
+		};
+		for (const name of spec.named) {
+			declareHostExport(name);
+		}
+		if (spec.hasDefault) {
+			declareHostExport("default");
+		}
+		exportsByModule.set(modulePath, moduleExports);
+		linkage.hostModules.push({
+			specifier: spec.id,
+			installer: spec.installer,
+			exports: exportBindings,
+		});
+	}
 
 	// --- Phase A: scan exports + imports of every module ---
 	for (const file of program.files) {
@@ -551,6 +619,24 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		const list = linkage.namespaceImports.get(file.path) ?? [];
 		list.push({ binding, exports: nsExports });
 		linkage.namespaceImports.set(file.path, list);
+	}
+
+	// --- Free global `process` (node surface only) ---
+	// A free `process` reference statically retains the installer under the node
+	// surface. Do not rebind it: the installed value is a property of globalThis,
+	// and identifier reads/writes must observe that same mutable property.
+	if (graph.nodeEnabled) {
+		const used = program.files.some((file) =>
+			file.scopes[0]?.bindings.some(
+				(binding) =>
+					binding.name === "process" &&
+					binding.undeclared &&
+					binding.usageNodes.length > 0,
+			),
+		);
+		if (used) {
+			linkage.hostProcess = { installer: PROCESS_INSTALLER_SYMBOL };
+		}
 	}
 
 	return linkage;

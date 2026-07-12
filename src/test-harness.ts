@@ -18,6 +18,8 @@ import type { ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
+import { compileEntrypointToBuffer } from "./compile-program.ts";
+import type { CompilerBakeOptions } from "./compiler-bake.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
@@ -25,6 +27,7 @@ import { buildLocalBinary } from "./local-build.ts";
 import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";
 import { allocateRegisters } from "./register-alloc.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
+import { stripTypesWithTypeScript } from "./typescript-strip.ts";
 
 /** Entry-point C drivers linked with the emitted definition. */
 export const HOST_MAIN = "runtime/host_main.c";
@@ -77,6 +80,8 @@ export interface BuildOptions {
 	 * no `-lc++`).
 	 */
 	webPlatformEnabled?: boolean;
+	/** Include the Node compatibility surface. Defaults to false. */
+	nodeEnabled?: boolean;
 	/**
 	 * Include the RegExp engine (regress). Defaults to true. Set false to build the
 	 * `engine.regexp: false` archive (no regress; RegExp uninstalled, String regex
@@ -85,11 +90,14 @@ export interface BuildOptions {
 	regexpEnabled?: boolean;
 	/**
 	 * A fully-resolved build config to build under. When provided it wins over the
-	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` / `webPlatformEnabled`
+	 * flat `evalEnabled` / `intlEnabled` / `intlFeatures` / `webPlatformEnabled` /
+	 * `nodeEnabled`
 	 * fields (used by the size bench to build a matrix of real config profiles);
 	 * otherwise a config is reconstructed from those flags.
 	 */
 	config?: ResolvedBuildConfig;
+	/** Override the eval compiler source, primarily for explicit prebuilt-wire checks. */
+	compilerBake?: CompilerBakeOptions;
 }
 
 /**
@@ -97,16 +105,8 @@ export interface BuildOptions {
  * lower → emit) and link it into a runnable binary. Returns the binary path.
  */
 export function buildNativeBinary(options: BuildOptions): string {
-	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
-		path.resolve(options.fixture),
-	);
-	const ir = compileSemanticProgramToIr(semanticProgram);
-	executeIROptimizations(ir);
-	allocateRegisters(ir);
-	const definition = lowerIrProgramToVmDefinition(ir);
-	const cSource = emitVmDefinition(definition, { compiled: options.compiled ?? true });
-	// Reuse the real build-config resolution so cache suffixes / cargo features / C
-	// defines match the CLI exactly (canonical build → "" suffix → shared archives).
+	// Reuse the real build-config resolution so semantic graph capabilities and
+	// cache suffixes / cargo features / C defines match the CLI exactly.
 	const config =
 		options.config ??
 		resolveBuildConfig({
@@ -118,8 +118,20 @@ export function buildNativeBinary(options: BuildOptions): string {
 					features: options.intlFeatures ?? [],
 				},
 			},
-			surface: { webPlatform: options.webPlatformEnabled ?? true },
+			surface: {
+				webPlatform: options.webPlatformEnabled ?? true,
+				node: options.nodeEnabled ?? false,
+			},
 		});
+	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
+		path.resolve(options.fixture),
+		{ buildConfig: config, stripTypes: stripTypesWithTypeScript },
+	);
+	const ir = compileSemanticProgramToIr(semanticProgram);
+	executeIROptimizations(ir);
+	allocateRegisters(ir);
+	const definition = lowerIrProgramToVmDefinition(ir);
+	const cSource = emitVmDefinition(definition, { compiled: options.compiled ?? true });
 	return buildLocalBinary({
 		name: options.name,
 		cSource,
@@ -128,6 +140,12 @@ export function buildNativeBinary(options: BuildOptions): string {
 		outDir: options.outDir,
 		skipRuntimeBuild: options.skipRuntimeBuild,
 		...buildDerivationFromConfig(config),
+		compilerBake: options.compilerBake ?? {
+			bake: () =>
+				compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
+					stripTypes: stripTypesWithTypeScript,
+				}),
+		},
 	});
 }
 

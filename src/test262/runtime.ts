@@ -11,6 +11,7 @@ import {
 	runEnv,
 	sanitizerCcFlags,
 } from "../build-flags.ts";
+import { compileEntrypointToBuffer } from "../compile-program.ts";
 import { ensureCompilerWire } from "../compiler-bake.ts";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
@@ -22,6 +23,7 @@ import { allocateRegisters } from "../register-alloc.ts";
 import { ensureRustLibrary, rustLinkArgs } from "../rust-build.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../semantic-program.ts";
+import { stripTypesWithTypeScript } from "../typescript-strip.ts";
 import {
 	batchCacheKey,
 	buildFingerprint,
@@ -242,10 +244,17 @@ export function test262PrepareBuild() {
 	rmSync(BUILD_PATH, { recursive: true, force: true });
 	mkdirSync(BUILD_PATH, { recursive: true });
 
-	test262Log(`Building LibMaligator${gcGenerational() ? " (generational)" : " (non-generational)"}...`);
+	test262Log(
+		`Building LibMaligator${gcGenerational() ? " (generational)" : " (non-generational)"}...`,
+	);
 	// Generate the baked compiler wire (runtime/src/compiler.malw) before cmake:
 	// the GLOB pulls in compiler_wire.c, whose `#embed` needs the file present.
-	ensureCompilerWire(false);
+	ensureCompilerWire({
+		bake: () =>
+			compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
+				stripTypes: stripTypesWithTypeScript,
+			}),
+	});
 	// The default (generational) build dir (runtime/build) is configured out-of-band
 	// and relies on gc.h's MAL_GC_GENERATIONAL default (a stale pre-flip non-gen
 	// archive is rebuilt by cmake's header-dependency tracking); a suffixed dimension

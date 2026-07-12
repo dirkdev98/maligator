@@ -71,6 +71,13 @@ int main(int argc, char **argv) {
     }
     mal_vm_init(&vm, mal_loaded_definition_get(base));
 
+    // A from-wire definition's installers are unresolved (null), so this is a
+    // no-op here; the call site stays uniform with the C-baked entry points. The
+    // launch context carries the loader's own command line (never consulted, as
+    // the installers are null).
+    MalHostLaunchContext launch = {.argc = argc, .argv = argv};
+    mal_vm_run_host_installs(&vm, &launch);
+
     MalCallable *callable = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, callable);
     int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;

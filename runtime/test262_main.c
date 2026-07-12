@@ -6,9 +6,15 @@
 // program and report uncaught throws through the exit code.
 extern const MalVmDefinition mal_vm_definition;
 
-int main(void) {
+int main(int argc, char **argv) {
     MalVm vm;
     mal_vm_init(&vm, &mal_vm_definition);
+
+    // Fill any reached host built-in / `process` global slots before execution.
+    // A no-op for test262 (no node surface), kept uniform with the other entries;
+    // the launch context is still constructed so the call site matches the ABI.
+    MalHostLaunchContext launch = {.argc = argc, .argv = argv};
+    mal_vm_run_host_installs(&vm, &launch);
 
     MalCallable *callable = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, callable);

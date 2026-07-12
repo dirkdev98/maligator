@@ -2,8 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { buildModuleGraph } from "../src/module-graph.ts";
 import type { ModuleGraph } from "../src/module-graph.ts";
+import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
+
+/** A resolved config with the node host surface enabled. */
+const nodeOn = resolveBuildConfig({ surface: { node: true } });
 
 let root: string;
 
@@ -116,6 +121,27 @@ test("detects goals by extension (.mjs => module)", () => {
 	expect(graph.modules.get(path.join(root, pkgIndex))!.goal).toBe("module");
 });
 
+test("requires an explicit stripper for TypeScript and applies it across the graph", () => {
+	write("typed-entry.mts", `import { value } from "./typed-dep.ts";\nvalue;\n`);
+	write("typed-dep.ts", `export const value: number = 1;\n`);
+
+	expect(() => buildModuleGraph(path.join(root, "typed-entry.mts"))).toThrow(
+		/BuildModuleGraphOptions\.stripTypes/,
+	);
+	const seen: Array<string> = [];
+	const graph = buildModuleGraph(path.join(root, "typed-entry.mts"), {
+		dependencyGoalOverride: "module",
+		stripTypes(source, filePath) {
+			seen.push(path.basename(filePath));
+			return stripTypesWithTypeScript(source, filePath);
+		},
+	});
+	expect(seen).toEqual(["typed-entry.mts", "typed-dep.ts"]);
+	expect(
+		graph.modules.get(path.join(root, "typed-dep.ts"))!.parsed.ast.body,
+	).toHaveLength(1);
+});
+
 test("records dependency specifiers, kinds, and resolutions", () => {
 	const graph = buildModuleGraph(path.join(root, "entry.mjs"));
 
@@ -172,6 +198,20 @@ test("extracts require() dependencies from a CommonJS module", () => {
 	expect(order.indexOf("cjs-b.cjs")).toBeLessThan(order.indexOf("cjs-entry.cjs"));
 });
 
+test("rejects require('node:*') clearly at graph time", () => {
+	write("cjs-node.cjs", `module.exports = require("node:path");\n`);
+	expect(() =>
+		buildModuleGraph(path.join(root, "cjs-node.cjs"), { buildConfig: nodeOn }),
+	).toThrow(/Cannot require node built-in 'node:path'.*static import only/);
+});
+
+test("a bare CommonJS builtin name remains package resolution", () => {
+	write("cjs-bare-path.cjs", `module.exports = require("path");\n`);
+	expect(() =>
+		buildModuleGraph(path.join(root, "cjs-bare-path.cjs"), { buildConfig: nodeOn }),
+	).toThrow(/cannot find package 'path'/);
+});
+
 test("does not treat require() as a dependency in ESM/script modules", () => {
 	const graph = buildModuleGraph(path.join(root, "entry.mjs"));
 	for (const record of graph.modules.values()) {
@@ -202,7 +242,8 @@ test("still rejects an unresolved static import", () => {
 	);
 });
 
-test("uses package exports condition declaration order", () => {
+test("the node export condition is gated on surface.node", () => {
+	// Declaration order lists `node` before `import`, so `node` wins WHEN active.
 	write(
 		"node_modules/ordered/package.json",
 		JSON.stringify({
@@ -214,7 +255,24 @@ test("uses package exports condition declaration order", () => {
 	write("node_modules/ordered/import.mjs", `export const selected = "import";\n`);
 	write("ordered-entry.mjs", `import { selected } from "ordered";\n`);
 
-	const graph = buildModuleGraph(path.join(root, "ordered-entry.mjs"));
+	// Default (surface.node off): the `node` condition is inactive, so `import` wins.
+	expect(
+		depSummary(
+			buildModuleGraph(path.join(root, "ordered-entry.mjs")),
+			"ordered-entry.mjs",
+		),
+	).toEqual([
+		{
+			specifier: "ordered",
+			kind: "import",
+			resolved: path.join("node_modules", "ordered", "import.mjs"),
+		},
+	]);
+
+	// surface.node on: the `node` condition is active and wins by declaration order.
+	const graph = buildModuleGraph(path.join(root, "ordered-entry.mjs"), {
+		buildConfig: nodeOn,
+	});
 	expect(depSummary(graph, "ordered-entry.mjs")).toEqual([
 		{
 			specifier: "ordered",
@@ -240,4 +298,111 @@ test("does not fall back to main when package exports blocks the root", () => {
 	expect(() => buildModuleGraph(path.join(root, "blocked-entry.mjs"))).toThrow(
 		/not exported by blocked/,
 	);
+});
+
+test("resolves supported node:* imports to virtual host modules (no disk read) when surface.node is on", () => {
+	write(
+		"node-host.mjs",
+		`import { join } from "node:path";\nimport { readFileSync } from "node:fs";\nglobalThis.sink = [join, readFileSync];\n`,
+	);
+	const graph = buildModuleGraph(path.join(root, "node-host.mjs"), {
+		buildConfig: nodeOn,
+	});
+
+	// The importer's edges carry the canonical specifier as the resolved identity.
+	const entry = graph.modules.get(path.join(root, "node-host.mjs"))!;
+	expect(entry.dependencies).toEqual([
+		{ specifier: "node:path", kind: "import", resolvedPath: "node:path" },
+		{ specifier: "node:fs", kind: "import", resolvedPath: "node:fs" },
+	]);
+
+	// Virtual records keyed by specifier, marked host, with no on-disk source.
+	const pathMod = graph.modules.get("node:path")!;
+	expect(pathMod.host?.id).toBe("node:path");
+	expect(pathMod.goal).toBe("module");
+	expect(pathMod.source).toBe("");
+	expect(pathMod.dependencies).toEqual([]);
+
+	// Static host imports still order before their dependent (entry last).
+	expect(graph.evaluationOrder).toContain("node:path");
+	expect(graph.evaluationOrder.indexOf("node:path")).toBeLessThan(
+		graph.evaluationOrder.indexOf(path.join(root, "node-host.mjs")),
+	);
+});
+
+test("host catalog: path carries relative + a default export; crypto is hash-only", () => {
+	write("catalog.mjs", `import "node:path";\nimport "node:crypto";\n`);
+	const graph = buildModuleGraph(path.join(root, "catalog.mjs"), {
+		buildConfig: nodeOn,
+	});
+
+	const pathSpec = graph.modules.get("node:path")!.host!;
+	expect(pathSpec.named).toContain("relative");
+	expect(pathSpec.hasDefault).toBe(true);
+
+	const cryptoSpec = graph.modules.get("node:crypto")!.host!;
+	expect(cryptoSpec.named).toEqual(["hash"]);
+	expect(cryptoSpec.hasDefault).toBe(false);
+});
+
+test("rejects a node:* import clearly when surface.node is off (the default)", () => {
+	write("node-off.mjs", `import { join } from "node:path";\n`);
+	expect(() => buildModuleGraph(path.join(root, "node-off.mjs"))).toThrow(
+		/node built-in modules are disabled/,
+	);
+});
+
+test("rejects an unknown node:* built-in clearly even when surface.node is on", () => {
+	write("node-unknown.mjs", `import "node:zlib";\n`);
+	expect(() =>
+		buildModuleGraph(path.join(root, "node-unknown.mjs"), { buildConfig: nodeOn }),
+	).toThrow(/unknown node built-in module 'node:zlib'/);
+});
+
+test("a bare 'path' specifier is package resolution, not a host built-in", () => {
+	write("bare-path.mjs", `import { join } from "path";\njoin;\n`);
+	// Even with the node surface on, built-ins require the explicit node: prefix;
+	// a bare name falls through to (here, failing) package resolution.
+	expect(() =>
+		buildModuleGraph(path.join(root, "bare-path.mjs"), { buildConfig: nodeOn }),
+	).toThrow(/cannot find package 'path'/);
+});
+
+test("a literal dynamic import of a supported node:* is rejected (static import only)", () => {
+	write(
+		"dyn-node.mjs",
+		`async function f() {\n\treturn import("node:crypto");\n}\nglobalThis.sink = f;\n`,
+	);
+	// Host exports are synthesized into global slots and filled by a native
+	// installer before execution; there is no runtime module object for `import()`
+	// to resolve to a namespace in this slice, so a literal dynamic import of a
+	// supported built-in is rejected rather than left half-wired.
+	expect(() =>
+		buildModuleGraph(path.join(root, "dyn-node.mjs"), { buildConfig: nodeOn }),
+	).toThrow(/Cannot dynamically import node built-in 'node:crypto'/);
+});
+
+test("a literal dynamic import of an unknown node:* is rejected, not deferred", () => {
+	write("dyn-unknown.mjs", `import("node:zlib");\n`);
+	expect(() =>
+		buildModuleGraph(path.join(root, "dyn-unknown.mjs"), { buildConfig: nodeOn }),
+	).toThrow(/unknown node built-in module 'node:zlib'/);
+});
+
+test("a literal dynamic import of node:* is rejected when surface.node is off", () => {
+	write("dyn-off.mjs", `import("node:path");\n`);
+	expect(() => buildModuleGraph(path.join(root, "dyn-off.mjs"))).toThrow(
+		/node built-in modules are disabled/,
+	);
+});
+
+test("a computed dynamic import of a node: string is deferred (only literals are checked)", () => {
+	write("dyn-computed.mjs", `const m = "node:zlib";\nimport(m);\n`);
+	const graph = buildModuleGraph(path.join(root, "dyn-computed.mjs"), {
+		buildConfig: nodeOn,
+	});
+	const entry = graph.modules.get(path.join(root, "dyn-computed.mjs"))!;
+	expect(entry.dependencies).toEqual([
+		{ specifier: null, kind: "dynamic", resolvedPath: null },
+	]);
 });

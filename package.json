@@ -18,6 +18,8 @@
 		"gate": "node ./scripts/gate.ts",
 		"lint": "eslint . --concurrency=auto --fix --cache --cache-location .cache/eslint/ && oxfmt",
 		"lint:ci": "eslint . --concurrency=auto && oxfmt --check",
+		"selfhost:frontend": "node ./scripts/selfhost-frontend-check.ts",
+		"selfhost:native": "node ./scripts/selfhost-native-build-check.ts",
 		"test": "vitest",
 		"test262": "node ./scripts/test262.ts",
 		"test262:regressions": "node ./scripts/test262.ts --manifest tests/test262-regressions.txt --check",

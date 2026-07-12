@@ -1,5 +1,6 @@
 import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
 import { computeFunctionLiveness } from "./liveness.ts";
+import type { Binding } from "./semantic-analysis.ts";
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
 type IRUnaryOperator = Extract<IRInstruction, { type: "unary" }>["operator"];
@@ -39,6 +40,19 @@ export interface VmDefinition {
 	 * for programs with no CommonJS modules.
 	 */
 	cjsModuleFunctionIndices: Array<number>;
+
+	/**
+	 * Host-install manifest: for each `node:*` built-in whose exports the program
+	 * uses, plus the slot-free global `process` installer, the native installer's C
+	 * symbol and any global slots it fills. Dead-code elimination drops unused
+	 * entries, so an ordinary program's manifest is empty. Installers run after VM
+	 * init / host attach and before execution; a definition decoded from the wire
+	 * keeps the same name/slot entries but its installer pointer is unresolved (null).
+	 */
+	hostInstalls: Array<{
+		installer: string;
+		exports: Array<{ name: string; slot: number }>;
+	}>;
 }
 
 /**
@@ -622,19 +636,74 @@ export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDe
 		fileToIndex.set(path, index);
 		return index;
 	};
+	const functions = program.functions.map((fn) =>
+		lowerFunctionToVmFunction(fn, fileIndexFor(fn.semanticFile.path)),
+	);
 
 	return {
 		functionCount: program.functions.length,
-		functions: program.functions.map((fn) =>
-			lowerFunctionToVmFunction(fn, fileIndexFor(fn.semanticFile.path)),
-		),
+		functions,
 		stringConstants: program.stringConstants,
 		bigintConstants: program.bigintConstants,
 		globalCount: program.nextGlobalIndex,
 		cjsModuleFunctionIndices: program.cjsWrapperFunctionIndex,
+		hostInstalls: buildHostInstalls(program, functions),
 		files,
 		sourcePositions: program.sourcePositions,
 	};
+}
+
+/**
+ * Resolve the linker's host built-in bindings to global slots read by the final
+ * VM instruction stream. Slot assignment can outlive an optimized-away read, so
+ * the emitted functions, rather than bindingToStorage alone, determine export
+ * retention. Process remains statically retained from global-property analysis.
+ */
+function buildHostInstalls(
+	program: IntermediateProgram,
+	functions: Array<VmFunction>,
+): VmDefinition["hostInstalls"] {
+	const readGlobalSlots = new Set<number>();
+	for (const fn of functions) {
+		for (const instruction of fn.instructions) {
+			if (instruction.opcode === "LOAD_GLOBAL") {
+				readGlobalSlots.add(instruction.index);
+			} else if (instruction.opcode === "CREATE_MODULE_NAMESPACE") {
+				for (const slot of instruction.slots) {
+					readGlobalSlots.add(slot);
+				}
+			} else if (instruction.opcode === "CREATE_TEMPLATE_OBJECT") {
+				readGlobalSlots.add(instruction.cacheSlot);
+			}
+		}
+	}
+
+	const globalSlotOf = (binding: Binding): number | null => {
+		const location = program.bindingToStorage.get(binding);
+		return location?.type === "global" && readGlobalSlots.has(location.index)
+			? location.index
+			: null;
+	};
+
+	const manifest: VmDefinition["hostInstalls"] = [];
+	for (const hostModule of program.hostModules) {
+		const usedExports: Array<{ name: string; slot: number }> = [];
+		for (const { name, binding } of hostModule.exports) {
+			const slot = globalSlotOf(binding);
+			if (slot !== null) {
+				usedExports.push({ name, slot });
+			}
+		}
+		if (usedExports.length > 0) {
+			manifest.push({ installer: hostModule.installer, exports: usedExports });
+		}
+	}
+
+	if (program.hostProcess?.retained) {
+		manifest.push({ installer: program.hostProcess.installer, exports: [] });
+	}
+
+	return manifest;
 }
 
 /**

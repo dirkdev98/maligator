@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,12 +8,14 @@ import {
 	assertRegexpPolicy,
 	BuildConfigError,
 	buildConfigCacheSuffix,
+	buildDerivationFromConfig,
 	intlCargoFeatures,
 	intlDisabledDefines,
 	loadBuildConfig,
 	resolveBuildConfig,
 	rustConfigCacheSuffix,
 } from "../src/build-config.ts";
+import type { ResolvedBuildConfig } from "../src/build-config.ts";
 import { parseScript } from "../src/parser.ts";
 import {
 	analyzeSourceAndRunSemanticAnalysis,
@@ -235,6 +238,125 @@ describe("buildConfigCacheSuffix", () => {
 		expect(buildConfigCacheSuffix(noRegexp)).not.toBe(buildConfigCacheSuffix(canonical));
 		// The Rust archive changes too (regress in/out), so its suffix must differ.
 		expect(rustConfigCacheSuffix(noRegexp)).not.toBe(rustConfigCacheSuffix(canonical));
+	});
+});
+
+describe("surface.node build derivation + cache", () => {
+	const canonical = resolveBuildConfig({
+		engine: { eval: true, intl: { enabled: true } },
+		surface: { webPlatform: true },
+	});
+	const nodeOn = resolveBuildConfig({
+		engine: { eval: true, intl: { enabled: true } },
+		surface: { webPlatform: true, node: true },
+	});
+
+	it("defaults node OFF and threads surface.node into the build derivation", () => {
+		expect(buildDerivationFromConfig(resolveBuildConfig({})).nodeEnabled).toBe(false);
+		expect(buildDerivationFromConfig(nodeOn).nodeEnabled).toBe(true);
+	});
+
+	it("node-on gets a distinct non-empty C cache suffix; node-off stays canonical", () => {
+		// node defaults off and all internal-tooling builds are node-off, so node-off
+		// keeps the unsuffixed (canonical) archive; node-on gets its own C archive.
+		expect(buildConfigCacheSuffix(canonical)).toBe("");
+		expect(buildConfigCacheSuffix(nodeOn)).toMatch(/^[0-9a-f]{8}$/);
+		expect(buildConfigCacheSuffix(nodeOn)).not.toBe(buildConfigCacheSuffix(canonical));
+	});
+
+	it("node does NOT change the Rust cache suffix (node adds no Rust deps)", () => {
+		expect(rustConfigCacheSuffix(nodeOn)).toBe(rustConfigCacheSuffix(canonical));
+	});
+});
+
+// The cache suffix moved from a streaming createHash("sha256").update(...).digest()
+// to the one-shot node:crypto.hash(...) so the compiler dogfoods the native `hash`
+// export. Both compute the same SHA-256 hex, so every suffix must be byte-identical
+// to the pre-swap value — a drift here would silently orphan already-cached C/Rust
+// archives. These tests pin that parity (against the legacy digest and a literal).
+describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
+	// The exact build-affecting projection the module hashes (key order matters for
+	// JSON.stringify), reconstructed here so parity is checked against the legacy
+	// streaming digest independent of build-config.ts's own hashing.
+	function legacyShortHash(value: unknown): string {
+		return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 8);
+	}
+	// Full reimplementations of the two suffix functions using the legacy streaming
+	// digest — canonical-"" shortcuts included — so the swap is proven byte-identical
+	// across every axis (a canonical archive still yields "", a non-canonical one the
+	// same hash as before).
+	function legacyCSuffix(c: ResolvedBuildConfig): string {
+		const services = [...new Set(c.engine.intl.features)].sort();
+		if (
+			c.engine.eval &&
+			c.engine.intl.enabled &&
+			services.length === 0 &&
+			c.surface.webPlatform &&
+			c.engine.regexp &&
+			!c.surface.node
+		) {
+			return "";
+		}
+		return legacyShortHash({
+			eval: c.engine.eval,
+			intl: c.engine.intl.enabled,
+			services,
+			web: c.surface.webPlatform,
+			regexp: c.engine.regexp,
+			node: c.surface.node,
+		});
+	}
+	function legacyRustSuffix(c: ResolvedBuildConfig): string {
+		const services = [...new Set(c.engine.intl.features)].sort();
+		if (
+			c.engine.intl.enabled &&
+			services.length === 0 &&
+			c.surface.webPlatform &&
+			c.engine.regexp
+		) {
+			return "";
+		}
+		return legacyShortHash({
+			intl: c.engine.intl.enabled,
+			services,
+			web: c.surface.webPlatform,
+			regexp: c.engine.regexp,
+		});
+	}
+
+	const configs: Array<[string, ResolvedBuildConfig]> = [
+		["eval-off", resolveBuildConfig({ engine: { eval: false } })],
+		[
+			"node-on",
+			resolveBuildConfig({
+				engine: { eval: true, intl: { enabled: true } },
+				surface: { webPlatform: true, node: true },
+			}),
+		],
+		[
+			"intl-subset + web-off",
+			resolveBuildConfig({
+				engine: {
+					eval: true,
+					regexp: false,
+					intl: { enabled: true, features: ["segmenter"] },
+				},
+				surface: { webPlatform: false },
+			}),
+		],
+	];
+
+	it.each(configs)("%s suffixes match the legacy streaming digest", (_name, config) => {
+		expect(buildConfigCacheSuffix(config)).toBe(legacyCSuffix(config));
+		expect(rustConfigCacheSuffix(config)).toBe(legacyRustSuffix(config));
+	});
+
+	it("pins the node-on C suffix to its pre-swap literal", () => {
+		const nodeOn = resolveBuildConfig({
+			engine: { eval: true, intl: { enabled: true } },
+			surface: { webPlatform: true, node: true },
+		});
+		expect(buildConfigCacheSuffix(nodeOn)).toBe("7b87e0b6");
 	});
 });
 

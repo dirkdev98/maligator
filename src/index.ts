@@ -10,6 +10,7 @@ import {
 } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { gmallocEnabled, runEnv } from "./build-flags.ts";
+import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
 import {
@@ -30,6 +31,7 @@ import {
 } from "./semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
 import { serializeVmDefinition } from "./serialize-vm.ts";
+import { stripTypesWithTypeScript } from "./typescript-strip.ts";
 import { log } from "./utils.ts";
 
 const FLAGS_WITH_VALUES = new Set(["--name", "--serialize", "--config"]);
@@ -83,7 +85,12 @@ try {
 }
 
 const semTiming = log.time("semantic analysis");
-const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypointPath);
+// Pass the resolved build config into graph construction: it gates the `node`
+// package export condition and `node:*` host built-in imports on surface.node.
+const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypointPath, {
+	buildConfig,
+	stripTypes: stripTypesWithTypeScript,
+});
 semTiming();
 
 // Compile-time half of `engine.eval: false` enforcement (the runtime gate in
@@ -204,6 +211,12 @@ const binaryPath = buildLocalBinary({
 	cSource: output,
 	verbose,
 	...buildDerivationFromConfig(buildConfig),
+	compilerBake: {
+		bake: () =>
+			compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
+				stripTypes: stripTypesWithTypeScript,
+			}),
+	},
 });
 buildTiming();
 log.info(`Binary: ${binaryPath}`);

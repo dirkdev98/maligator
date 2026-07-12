@@ -2,9 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, expect, test } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { linkModules } from "../src/linker.ts";
 import type { Binding, SemanticFile, SemanticProgram } from "../src/semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
+
+/** A resolved config with the node host surface enabled. */
+const nodeOn = resolveBuildConfig({ surface: { node: true } });
 
 const roots: Array<string> = [];
 
@@ -226,4 +230,118 @@ test("records export-star-as namespaces for ESM and CommonJS sources", () => {
 		"cjs",
 		"esm",
 	]);
+});
+
+test("aliases host built-in imports to synthetic global bindings and records them", () => {
+	const root = tree({
+		"main.mjs": `import { join } from "node:path";\nimport { hash } from "node:crypto";\nglobalThis.sink = [join, hash];\n`,
+	});
+
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"), {
+		buildConfig: nodeOn,
+	});
+	const mainFile = fileFor(program, path.join(root, "main.mjs"));
+	const joinUsages = [...topBinding(mainFile, "join").usageNodes];
+
+	const linkage = linkModules(program);
+
+	const pathModule = linkage.hostModules.find((m) => m.specifier === "node:path");
+	expect(pathModule?.installer).toBe("mal_host_install_node_path");
+	const joinBinding = pathModule?.exports.find((e) => e.name === "join")?.binding;
+	expect(joinBinding).toBeDefined();
+	// The importer's `join` reads alias to the one synthetic host binding (shared
+	// storage → a single LOAD_GLOBAL slot).
+	expect(joinUsages.length).toBeGreaterThan(0);
+	for (const node of joinUsages) {
+		expect(mainFile.nodeToBinding.get(node)).toBe(joinBinding);
+	}
+	// Every reached built-in is registered, path carries its default export.
+	expect(new Set(linkage.hostModules.map((m) => m.specifier))).toEqual(
+		new Set(["node:path", "node:crypto"]),
+	);
+	expect(pathModule?.exports.some((e) => e.name === "default")).toBe(true);
+});
+
+test("throws on an import a host built-in does not export", () => {
+	const root = tree({
+		"main.mjs": `import { nope } from "node:path";\nglobalThis.sink = nope;\n`,
+	});
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(() => linkModules(program)).toThrow(/node:path does not export 'nope'/);
+});
+
+test("resolves a namespace import of a host built-in to its (sorted) exports", () => {
+	const root = tree({
+		"main.mjs": `import * as p from "node:path";\nglobalThis.sink = p;\n`,
+	});
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"), {
+		buildConfig: nodeOn,
+	});
+	const linkage = linkModules(program);
+	const nsImports = linkage.namespaceImports.get(path.join(root, "main.mjs"));
+	expect(nsImports?.[0]?.exports.map((e) => e.name)).toEqual([
+		"default",
+		"dirname",
+		"extname",
+		"isAbsolute",
+		"join",
+		"relative",
+		"resolve",
+	]);
+});
+
+test("detects a free global `process` without rebinding its references", () => {
+	const root = tree({
+		"main.mjs": `globalThis.sink = process.argv;\nif (typeof process !== "undefined") {\n\tglobalThis.other = process;\n}\n`,
+	});
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"), {
+		buildConfig: nodeOn,
+	});
+	const mainFile = fileFor(program, path.join(root, "main.mjs"));
+	const undeclared = mainFile.scopes[0]!.bindings.find(
+		(b) => b.name === "process" && b.undeclared,
+	)!;
+	const usages = [...undeclared.usageNodes];
+
+	const linkage = linkModules(program);
+
+	expect(linkage.hostProcess?.installer).toBe("mal_host_install_process");
+	// Reads (including `typeof`) remain on the undeclared binding so they resolve
+	// through the same global object property as globalThis.process.
+	expect(usages.length).toBeGreaterThan(0);
+	for (const node of usages) {
+		expect(mainFile.nodeToBinding.get(node)).toBe(undeclared);
+	}
+});
+
+test("detects assignment to a free global `process` under the node surface", () => {
+	const root = tree({ "main.mjs": `process = globalThis.replacement;\n` });
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(linkModules(program).hostProcess?.installer).toBe("mal_host_install_process");
+});
+
+test("does not treat `process` as a host global without the node surface", () => {
+	const root = tree({
+		"main.mjs": `globalThis.sink = process.argv;\n`,
+	});
+	// Default config: node surface off.
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"));
+	const linkage = linkModules(program);
+	expect(linkage.hostProcess).toBeUndefined();
+});
+
+test("does not treat a locally-declared `process` as the host global", () => {
+	const root = tree({
+		"main.mjs": `const process = { argv: [] };\nglobalThis.sink = process.argv;\n`,
+	});
+	const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs"), {
+		buildConfig: nodeOn,
+	});
+	const linkage = linkModules(program);
+	// `process` resolves to the top-level const, never an undeclared global.
+	expect(linkage.hostProcess).toBeUndefined();
 });

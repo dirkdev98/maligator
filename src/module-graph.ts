@@ -1,28 +1,18 @@
 import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
-import tsBlankSpace from "ts-blank-space";
+import type { ResolvedBuildConfig } from "./build-config.ts";
+import type { HostModuleSpec } from "./host-modules.ts";
+import {
+	isNodeSpecifier,
+	lookupHostModule,
+	supportedHostModuleIds,
+} from "./host-modules.ts";
 import { parseModule, parseScript } from "./parser.ts";
 import type { SemanticFile } from "./semantic-analysis.ts";
 
 /** TypeScript source extensions stripped to JS before parsing. */
 const TS_EXTENSIONS = new Set([".ts", ".mts", ".cts"]);
-
-/**
- * Erase TypeScript type syntax from a `.ts`/`.mts`/`.cts` source, leaving
- * runnable JavaScript for Meriyah. ts-blank-space replaces type spans with
- * whitespace IN PLACE — every other byte and all newlines keep their original
- * offset — so the AST's positions are identical to the original source and
- * stack traces point at the real `.ts` line/column (no source map needed).
- * Non-TS files pass through untouched. (Runtime eval-of-TS will use a native
- * stripper instead, since ts-blank-space needs the Node `typescript` package.)
- */
-function stripTypeAnnotations(source: string, filePath: string): string {
-	if (!TS_EXTENSIONS.has(path.extname(filePath))) {
-		return source;
-	}
-	return tsBlankSpace(source);
-}
 
 /**
  * The loader/graph phase: the bundler front-end that sits *above* semantic
@@ -63,17 +53,33 @@ export interface ModuleDependency {
 }
 
 export interface ModuleRecord {
-	/** Absolute, resolved path. */
+	/**
+	 * Absolute, resolved path — or, for a host virtual module, its canonical
+	 * specifier (e.g. `"node:path"`).
+	 */
 	path: string;
 	goal: ModuleGoal;
 	source: string;
 	parsed: Pick<SemanticFile, "type" | "strict" | "ast">;
 	dependencies: Array<ModuleDependency>;
+	/**
+	 * Set for a `node:*` host built-in resolved from the static catalog
+	 * (host-modules.ts) rather than read from disk. Carries the planned export
+	 * surface the linker will bind once host exports land; until then the record
+	 * has no user source (empty parse) and is skipped by semantic analysis.
+	 */
+	host?: HostModuleSpec;
 }
 
 export interface ModuleGraph {
 	/** Absolute path of the entrypoint. */
 	entry: string;
+	/**
+	 * Whether the node host built-in surface (`surface.node`) is on for this
+	 * build. Recorded so downstream stages (linker/ir) gate host-module export
+	 * binding + `process` retention on it without re-reading the build config.
+	 */
+	nodeEnabled: boolean;
 	modules: Map<string, ModuleRecord>;
 	/**
 	 * Post-order over the static-import edges: dependencies precede dependents,
@@ -90,6 +96,12 @@ export interface ModuleGraph {
 }
 
 export interface BuildModuleGraphOptions {
+	/**
+	 * Blank TypeScript syntax in place. Required when any `.ts`, `.mts`, or
+	 * `.cts` module is loaded; JavaScript-only graphs do not need a callback.
+	 */
+	stripTypes?: (source: string, filePath: string) => string;
+
 	/** Force the entrypoint's goal, bypassing extension-based detection. */
 	entryGoal?: ModuleGoal;
 
@@ -114,10 +126,38 @@ export interface BuildModuleGraphOptions {
 	 * sibling `*_FIXTURE.js` dynamic-import targets are Module Records.
 	 */
 	dependencyGoalOverride?: ModuleGoal;
+
+	/**
+	 * The resolved build config, which gates surface-dependent resolution: the
+	 * `node` package export condition and `node:*` host built-in imports are active
+	 * only under `surface.node`. Defaults to the product defaults (node OFF).
+	 */
+	buildConfig?: ResolvedBuildConfig;
 }
 
-/** Conditions recognized when resolving a package's `exports` field. */
-const EXPORT_CONDITIONS = new Set(["maligator", "import", "node", "default"]);
+/**
+ * Package `exports` conditions recognized regardless of surface. The `node`
+ * condition is added only under `surface.node` (see {@link exportConditions}),
+ * so a package's `node`-specific entry is inert unless the build opts into the
+ * node surface.
+ */
+const BASE_EXPORT_CONDITIONS = ["maligator", "import", "default"];
+
+/** The active `exports` conditions for a build (adds `node` only when enabled). */
+function exportConditions(nodeEnabled: boolean): ReadonlySet<string> {
+	return new Set(
+		nodeEnabled ? [...BASE_EXPORT_CONDITIONS, "node"] : BASE_EXPORT_CONDITIONS,
+	);
+}
+
+/**
+ * Surface-dependent resolution inputs threaded through the resolver: the active
+ * `exports` conditions and whether `node:*` host built-ins resolve.
+ */
+interface ResolveContext {
+	conditions: ReadonlySet<string>;
+	nodeEnabled: boolean;
+}
 
 /** Extensions probed when a specifier omits one. */
 const RESOLVE_EXTENSIONS = [".js", ".ts", ".mjs", ".mts", ".cjs", ".cts", ".json"];
@@ -133,16 +173,28 @@ export function buildModuleGraph(
 	const modules = new Map<string, ModuleRecord>();
 	const packageTypeCache = new Map<string, ModuleGoal | undefined>();
 
+	const nodeEnabled = options.buildConfig?.surface.node ?? false;
+	const ctx: ResolveContext = {
+		nodeEnabled,
+		conditions: exportConditions(nodeEnabled),
+	};
+
 	const load = (filePath: string, goal: ModuleGoal, sourceOverride?: string) => {
 		if (modules.has(filePath)) {
 			return;
 		}
 
 		const source = sourceOverride ?? readFileSync(filePath, "utf-8");
-		const parsed = parseWithGoal(
-			stripTypeAnnotations(blankHashbang(source), filePath),
-			goal,
-		);
+		let parseSource = blankHashbang(source);
+		if (TS_EXTENSIONS.has(path.extname(filePath))) {
+			if (!options.stripTypes) {
+				throw new Error(
+					`TypeScript module '${filePath}' requires BuildModuleGraphOptions.stripTypes`,
+				);
+			}
+			parseSource = options.stripTypes(parseSource, filePath);
+		}
+		const parsed = parseWithGoal(parseSource, goal);
 
 		const dependencies = extractDependencies(parsed.ast, goal).map(
 			(dependency): ModuleDependency => {
@@ -151,13 +203,36 @@ export function buildModuleGraph(
 					// graph. Preserve the edge for later lowering/runtime handling.
 					return { ...dependency, resolvedPath: null };
 				}
+				if (dependency.kind === "require" && isNodeSpecifier(dependency.specifier)) {
+					throw new SyntaxError(
+						`Cannot require node built-in '${dependency.specifier}' from ${filePath}: ` +
+							`node built-ins support static import only`,
+					);
+				}
 
-				const resolved = resolveSpecifier(dependency.specifier, filePath);
-				if ("error" in resolved) {
+				const resolved = resolveSpecifier(dependency.specifier, filePath, ctx);
+				if ("host" in resolved) {
 					if (dependency.kind === "dynamic") {
-						// Dynamic resolution failure is represented on the graph rather than
-						// turning a deferred import into a static build failure. Runtime
-						// rejection semantics belong to later lowering/runtime work.
+						// A host built-in's exports are synthesized into global slots at link
+						// time and filled by a native installer before execution — there is
+						// no runtime module object for `import()` to resolve to a namespace in
+						// this slice. Reject a literal dynamic import rather than resolve it to
+						// a namespace that cannot be built; a static import is the supported
+						// form.
+						throw new SyntaxError(
+							`Cannot dynamically import node built-in '${resolved.host.id}' from ${filePath}: ` +
+								`node built-ins support static import only`,
+						);
+					}
+					// A supported `node:*` built-in: identity is its canonical specifier.
+					return { ...dependency, resolvedPath: resolved.host.id };
+				}
+				if ("error" in resolved) {
+					// A `node:*` error (surface disabled / unknown built-in) is `hard`: it
+					// rejects even a literal dynamic import rather than silently deferring,
+					// so an unsupported host import fails loudly at build time. A plain
+					// dynamic resolution failure (missing file) still defers to the graph.
+					if (dependency.kind === "dynamic" && !resolved.hard) {
 						return { ...dependency, resolvedPath: null };
 					}
 					// A static import that cannot resolve fails the graph — the
@@ -176,14 +251,23 @@ export function buildModuleGraph(
 		modules.set(filePath, { path: filePath, goal, source, parsed, dependencies });
 
 		for (const dependency of dependencies) {
-			if (dependency.resolvedPath && !modules.has(dependency.resolvedPath)) {
-				load(
-					dependency.resolvedPath,
-					options.goalOverride ??
-						options.dependencyGoalOverride ??
-						detectDependencyGoal(dependency.resolvedPath, packageTypeCache),
-				);
+			const resolvedPath = dependency.resolvedPath;
+			if (!resolvedPath || modules.has(resolvedPath)) {
+				continue;
 			}
+			// A `node:*` host built-in resolves to a virtual record from the catalog —
+			// no disk read, no recursion (it has no dependencies of its own).
+			const host = lookupHostModule(resolvedPath);
+			if (host) {
+				modules.set(resolvedPath, hostModuleRecord(host));
+				continue;
+			}
+			load(
+				resolvedPath,
+				options.goalOverride ??
+					options.dependencyGoalOverride ??
+					detectDependencyGoal(resolvedPath, packageTypeCache),
+			);
 		}
 	};
 
@@ -195,6 +279,7 @@ export function buildModuleGraph(
 
 	return {
 		entry,
+		nodeEnabled: ctx.nodeEnabled,
 		modules,
 		evaluationOrder: computeEvaluationOrder(entry, modules),
 		cycles: detectCycles(modules),
@@ -390,14 +475,60 @@ function literalString(node: ESTree.Node | null | undefined): string | null {
 	return null;
 }
 
-type ResolveResult = { path: string } | { error: string };
+type ResolveResult =
+	| { path: string }
+	// A supported `node:*` host built-in (from the static catalog).
+	| { host: HostModuleSpec }
+	// `hard` marks a `node:*` error that must reject even a literal dynamic import
+	// (not defer): the surface is off, or the built-in is unknown.
+	| { error: string; hard?: boolean };
 
 /**
- * Resolve a specifier to an absolute on-disk path, Node-style.
+ * A minimal virtual record for a supported `node:*` host built-in. It carries no
+ * user source (empty parse, so it is inert under semantic analysis) — the linker
+ * will read {@link HostModuleSpec} to synthesize the host exports later.
  */
-function resolveSpecifier(specifier: string, importerPath: string): ResolveResult {
-	if (specifier.startsWith("node:")) {
-		return { error: `host module '${specifier}' is not supported yet` };
+function hostModuleRecord(host: HostModuleSpec): ModuleRecord {
+	return {
+		path: host.id,
+		goal: "module",
+		source: "",
+		parsed: parseModule(""),
+		dependencies: [],
+		host,
+	};
+}
+
+/**
+ * Resolve a specifier to an absolute on-disk path (Node-style) or a `node:*` host
+ * built-in. Only the `node:`-prefixed form reaches the catalog; a bare `path`/`fs`
+ * falls through to package resolution (and fails as a missing package), matching
+ * Node's requirement that built-ins carry the explicit `node:` prefix.
+ */
+function resolveSpecifier(
+	specifier: string,
+	importerPath: string,
+	ctx: ResolveContext,
+): ResolveResult {
+	if (isNodeSpecifier(specifier)) {
+		if (!ctx.nodeEnabled) {
+			return {
+				error:
+					`node built-in modules are disabled — set "surface": { "node": true } in ` +
+					`maligator.build.json to import '${specifier}'`,
+				hard: true,
+			};
+		}
+		const host = lookupHostModule(specifier);
+		if (host) {
+			return { host };
+		}
+		return {
+			error:
+				`unknown node built-in module '${specifier}' ` +
+				`(supported: ${supportedHostModuleIds().join(", ")})`,
+			hard: true,
+		};
 	}
 
 	const importerDir = path.dirname(importerPath);
@@ -410,18 +541,18 @@ function resolveSpecifier(specifier: string, importerPath: string): ResolveResul
 		const base = path.isAbsolute(specifier)
 			? specifier
 			: path.resolve(importerDir, specifier);
-		const resolved = probePath(base);
+		const resolved = probePath(base, ctx);
 		return resolved ? { path: resolved } : { error: "no such file or directory" };
 	}
 
-	return resolveBareSpecifier(specifier, importerDir);
+	return resolveBareSpecifier(specifier, importerDir, ctx);
 }
 
 /**
  * Resolve a path-like target: exact file, then extension probing, then as a
  * directory (package.json `exports`/`main` or an index file).
  */
-function probePath(target: string): string | null {
+function probePath(target: string, ctx: ResolveContext): string | null {
 	if (isFile(target)) {
 		return target;
 	}
@@ -433,7 +564,7 @@ function probePath(target: string): string | null {
 	}
 
 	if (isDirectory(target)) {
-		return loadAsDirectory(target);
+		return loadAsDirectory(target, ctx);
 	}
 
 	return null;
@@ -443,17 +574,17 @@ function probePath(target: string): string | null {
  * Resolve a directory to its entry file: `exports["."]`, then `main`, then an
  * index file.
  */
-function loadAsDirectory(dir: string): string | null {
+function loadAsDirectory(dir: string, ctx: ResolveContext): string | null {
 	const pkg = readPackageJson(path.join(dir, "package.json"));
 
 	if (pkg?.exports !== undefined) {
 		// The presence of `exports` encapsulates the package. A missing or invalid
 		// root target must not fall through to legacy `main`/index resolution.
-		return resolveExports(pkg.exports, ".", dir);
+		return resolveExports(pkg.exports, ".", dir, ctx);
 	}
 
 	if (pkg && typeof pkg.main === "string") {
-		const resolved = probePath(path.resolve(dir, pkg.main));
+		const resolved = probePath(path.resolve(dir, pkg.main), ctx);
 		if (resolved) {
 			return resolved;
 		}
@@ -473,14 +604,18 @@ function loadAsDirectory(dir: string): string | null {
  * Resolve a bare specifier (`pkg` or `pkg/subpath`, scoped or not) by walking
  * `node_modules` upward from the importing directory.
  */
-function resolveBareSpecifier(specifier: string, importerDir: string): ResolveResult {
+function resolveBareSpecifier(
+	specifier: string,
+	importerDir: string,
+	ctx: ResolveContext,
+): ResolveResult {
 	const { packageName, subpath } = splitBareSpecifier(specifier);
 
 	let dir = importerDir;
 	for (;;) {
 		const packageDir = path.join(dir, "node_modules", packageName);
 		if (isDirectory(packageDir)) {
-			const resolved = resolveInPackage(packageDir, subpath);
+			const resolved = resolveInPackage(packageDir, subpath, ctx);
 			if (resolved) {
 				return { path: resolved };
 			}
@@ -512,21 +647,25 @@ function splitBareSpecifier(specifier: string): { packageName: string; subpath: 
  * Resolve a (possibly empty) subpath within an already-located package
  * directory.
  */
-function resolveInPackage(packageDir: string, subpath: string): string | null {
+function resolveInPackage(
+	packageDir: string,
+	subpath: string,
+	ctx: ResolveContext,
+): string | null {
 	const pkg = readPackageJson(path.join(packageDir, "package.json"));
 
 	if (subpath === "") {
 		if (pkg?.exports !== undefined) {
-			return resolveExports(pkg.exports, ".", packageDir);
+			return resolveExports(pkg.exports, ".", packageDir, ctx);
 		}
-		return loadAsDirectory(packageDir);
+		return loadAsDirectory(packageDir, ctx);
 	}
 
 	if (pkg?.exports !== undefined) {
-		return resolveExports(pkg.exports, `./${subpath}`, packageDir);
+		return resolveExports(pkg.exports, `./${subpath}`, packageDir, ctx);
 	}
 
-	return probePath(path.resolve(packageDir, subpath));
+	return probePath(path.resolve(packageDir, subpath), ctx);
 }
 
 type ExportsField = string | Array<ExportsField> | { [key: string]: ExportsField };
@@ -544,6 +683,7 @@ function resolveExports(
 	exportsField: ExportsField,
 	subpath: string,
 	packageDir: string,
+	ctx: ResolveContext,
 ): string | null {
 	if (typeof exportsField === "string") {
 		return subpath === "." ? resolveExportTarget(exportsField, packageDir) : null;
@@ -551,7 +691,7 @@ function resolveExports(
 
 	if (Array.isArray(exportsField)) {
 		for (const candidate of exportsField) {
-			const resolved = resolveExports(candidate, subpath, packageDir);
+			const resolved = resolveExports(candidate, subpath, packageDir, ctx);
 			if (resolved) {
 				return resolved;
 			}
@@ -565,14 +705,15 @@ function resolveExports(
 	if (isSubpathMap) {
 		const target = exportsField[subpath];
 		// Resolve the matched target's conditions/string against the "." root.
-		return target === undefined ? null : resolveExports(target, ".", packageDir);
+		return target === undefined ? null : resolveExports(target, ".", packageDir, ctx);
 	}
 
 	// A conditions object: object declaration order determines precedence. Skip
-	// unknown conditions, as Node does, rather than imposing our own priority.
+	// unknown conditions, as Node does, rather than imposing our own priority. The
+	// `node` condition is only in ctx.conditions under surface.node.
 	for (const [condition, target] of Object.entries(exportsField)) {
-		if (EXPORT_CONDITIONS.has(condition)) {
-			const resolved = resolveExports(target, subpath, packageDir);
+		if (ctx.conditions.has(condition)) {
+			const resolved = resolveExports(target, subpath, packageDir, ctx);
 			if (resolved) {
 				return resolved;
 			}

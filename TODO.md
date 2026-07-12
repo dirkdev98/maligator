@@ -23,19 +23,19 @@ A lean AOT-compiled JS engine. Priorities, in order:
 Whole-program DCE means a program that never references a feature must not link it
 in. `OFF buys` = what dropping the feature gets you.
 
-| Feature            | Mechanism                                     | OFF buys                                                                               |
-| ------------------ | --------------------------------------------- | -------------------------------------------------------------------------------------- |
-| eval / Function    | baked self-hosted compiler (`eval_todo.md`)   | drops the baked compiler **and re-enables whole-program DCE** (eval forces retain-all) |
-| Intl               | ICU4X data via Rust                           | biggest single size win — today ~11 MB binaries; also locale-splitting                 |
-| RegExp             | regress (Rust staticlib, `-lc++`)             | drops the Rust regex engine                                                            |
-| Date / Temporal    | temporal_rs / jiff (Rust)                     | drops tz + calendar data                                                               |
-| WinterTC runtime   | fetch/Response/Headers/URL/web globals/timers | drops the web personality (already host-entry-install gated)                           |
-| Reactor / host I/O | sockets / timers / TLS / DNS                  | pure-compute programs link no reactor                                                  |
-| Actors / SMP       | fibers + schedulers                           | single-context programs skip it                                                        |
+| Feature            | Mechanism                                     | OFF buys                                                                                |
+| ------------------ | --------------------------------------------- | --------------------------------------------------------------------------------------- |
+| eval / Function    | baked self-hosted compiler (`eval_todo.md`)   | drops the baked compiler **and re-enables whole-program DCE** (eval forces retain-all)  |
+| Intl               | ICU4X data via Rust                           | biggest single size win — today ~11 MB binaries; also locale-splitting                  |
+| RegExp             | regress (Rust staticlib, `-lc++`)             | drops the Rust regex engine                                                             |
+| Date / Temporal    | temporal_rs / jiff (Rust)                     | drops tz + calendar data                                                                |
+| WinterTC runtime   | fetch/Response/Headers/URL/web globals/timers | drops the web personality (already host-entry-install gated)                            |
+| Reactor / host I/O | sockets / timers / TLS / DNS                  | pure-compute programs link no reactor                                                   |
+| Actors / SMP       | fibers + schedulers                           | single-context programs skip it                                                         |
 | GC generational    | default ON; `MAL_GC_GENERATIONAL=0` opts out  | opt-out drops the card barrier (~1.3% median store tax) for minimal/bare-metal profiles |
-| GC concurrent      | `MAL_GC_CONCURRENT`                           | STW-only collector — drops the SATB barrier + incremental-cycle machinery              |
-| bytecode overlay   | fallback `MalInstruction` table               | drop for always-compiled/no-bail fns → smaller image                                   |
-| debug symbols      | position tables + stack traces                | strip mode = zero overhead                                                             |
+| GC concurrent      | `MAL_GC_CONCURRENT`                           | STW-only collector — drops the SATB barrier + incremental-cycle machinery               |
+| bytecode overlay   | fallback `MalInstruction` table               | drop for always-compiled/no-bail fns → smaller image                                    |
+| debug symbols      | position tables + stack traces                | strip mode = zero overhead                                                              |
 
 - [ ] **Design the feature-configuration DX.** How a user selects the above —
       build profiles / target presets (`--profile bare-metal`) vs. auto-detect from the
@@ -74,7 +74,7 @@ in. `OFF buys` = what dropping the feature gets you.
       (`guardFunctionIndex` op + the splice/deopt machinery); and guarded method inlining
       (`obj.m()` inlined behind the same index guard on the proto-resolved callee, `this` =
       receiver). Residual: method inlining's win is bounded by the per-call `loadProperty(recv,
-    "m")` **proto-chain walk** — proto-method loads aren't IC-cached, and the guard still
+"m")` **proto-chain walk** — proto-method loads aren't IC-cached, and the guard still
       needs the loaded callee. The bigger method win needs a **cached proto-method load** (a
       shape→method IC, which needs prototype-validity cells — none exist yet) so the resolution
       itself is skipped. `enter_compiled` micro-opts (skip the native-frame push when a trace
@@ -160,9 +160,6 @@ in. `OFF buys` = what dropping the feature gets you.
 - [ ] WinterTC surface (opt-in): remaining fetch/Headers bits (`AbortSignal.any`,
       DOMException, `Set-Cookie`, live `url.searchParams`, `request.json()` parse-error);
       WPT harness.
-- [ ] A small, curated Node-compat subset for usability only (leaf stdlib for writing
-      new programs — not for running arbitrary npm). Scope TBD; keep binary impact
-      proportional.
 
 ## Conformance (`test262-todo.md`)
 

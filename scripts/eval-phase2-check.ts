@@ -2,13 +2,15 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { compileEntrypointToBuffer } from "../src/compile-program.ts";
 import { buildLoadDriver } from "../src/local-build.ts";
+import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 /**
  * Differential validation for the definition wire format + C loader (eval Phase
  * 2, slice 2). Each fixture is compiled two ways and must produce byte-identical
  * stdout + exit code:
- *   - C-baked:  node src/index.ts <fixture> --name X  →  run .cache/local/X
+ *   - C-baked:  node src/index.ts <fixture> --name X  →  run its printed binary
  *   - loaded:   node src/index.ts <fixture> --serialize X.malw  →  MaligatorLoad X.malw
  * Both run the same lowered definition — once compiled into C, once decoded from
  * the buffer — so identical behavior proves the serializer + loader are faithful.
@@ -80,6 +82,7 @@ const BASE_FIXTURE = `
 interface RunResult {
 	stdout: string;
 	code: number;
+	error?: string;
 }
 
 function run(cmd: string, args: Array<string>): RunResult {
@@ -90,12 +93,34 @@ function run(cmd: string, args: Array<string>): RunResult {
 		});
 		return { stdout, code: 0 };
 	} catch (error) {
-		const e = error as { stdout?: string; status?: number };
-		return { stdout: e.stdout ?? "", code: e.status ?? 1 };
+		const e = error as { code?: string; stdout?: string; status?: number };
+		return {
+			stdout: e.stdout ?? "",
+			code: e.status ?? 1,
+			error: e.code === "ENOENT" ? `command not found: ${cmd}` : undefined,
+		};
 	}
 }
 
-const driver = buildLoadDriver(false);
+function build(jsPath: string, name: string): string {
+	const output = execFileSync("node", ["src/index.ts", jsPath, "--name", name], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+	});
+	// buildLocalBinary appends a content hash to --name, so read the path it printed.
+	const match = output.match(/^Binary: (.+)$/m);
+	if (match === null) {
+		throw new Error(`no binary path in build output:\n${output}`);
+	}
+	return path.resolve(match[1]!);
+}
+
+const driver = buildLoadDriver(false, {
+	bake: () =>
+		compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
+			stripTypes: stripTypesWithTypeScript,
+		}),
+});
 const dir = mkdtempSync(path.join(tmpdir(), "mal-eval-"));
 
 // Serialize the silent base once for the splice check.
@@ -111,8 +136,18 @@ for (const [name, source] of Object.entries(FIXTURES)) {
 	writeFileSync(jsPath, source);
 
 	// C-baked path (the reference).
-	run("node", ["src/index.ts", jsPath, "--name", `evalchk_${name}`]);
-	const baked = run(path.join(".cache/local", `evalchk_${name}`), []);
+	let baked: RunResult;
+	try {
+		const binary = build(jsPath, `evalchk_${name}`);
+		baked = run(binary, []);
+	} catch (error) {
+		const e = error as { message?: string; status?: number };
+		baked = {
+			stdout: "",
+			code: -1,
+			error: `build failed${e.status === undefined ? "" : ` (exit ${e.status})`}: ${e.message ?? String(error)}`,
+		};
+	}
 
 	// Loaded path (wire format, base 0) and spliced path (nonzero bases).
 	run("node", ["src/index.ts", jsPath, "--serialize", malwPath]);
@@ -120,6 +155,7 @@ for (const [name, source] of Object.entries(FIXTURES)) {
 	const spliced = run(driver, ["--splice", baseMalw, malwPath]);
 
 	const ok =
+		baked.error === undefined &&
 		baked.stdout === loaded.stdout &&
 		baked.code === loaded.code &&
 		baked.stdout === spliced.stdout &&
@@ -129,7 +165,9 @@ for (const [name, source] of Object.entries(FIXTURES)) {
 	} else {
 		failures++;
 		console.log(`  FAIL ${name}`);
-		console.log(`    baked   (exit ${baked.code}): ${JSON.stringify(baked.stdout)}`);
+		console.log(
+			`    baked   (exit ${baked.code}): ${JSON.stringify(baked.stdout)}${baked.error === undefined ? "" : ` (${baked.error})`}`,
+		);
 		console.log(`    loaded  (exit ${loaded.code}): ${JSON.stringify(loaded.stdout)}`);
 		console.log(`    spliced (exit ${spliced.code}): ${JSON.stringify(spliced.stdout)}`);
 	}

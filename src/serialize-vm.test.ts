@@ -125,6 +125,24 @@ const definition: VmDefinition = {
 		{ line: 3, column: 8, inlinedFunctionIndex: 1, callerPosId: 0 },
 	],
 	cjsModuleFunctionIndices: [1],
+	hostInstalls: [],
+};
+
+const hostDefinition: VmDefinition = {
+	...definition,
+	hostInstalls: [
+		{
+			installer: "mal_host_install_node_path",
+			exports: [
+				{ name: "join", slot: 3 },
+				{ name: "default", slot: 4 },
+			],
+		},
+		{
+			installer: "mal_host_install_process",
+			exports: [{ name: "process", slot: 5 }],
+		},
+	],
 };
 
 describe("serialize-vm", () => {
@@ -187,6 +205,7 @@ describe("serialize-vm", () => {
 			files: [],
 			sourcePositions: [],
 			cjsModuleFunctionIndices: [],
+			hostInstalls: [],
 		};
 		const restored = deserializeVmDefinition(serializeVmDefinition(probe));
 		expect(restored.functions[0]!.instructions[0]).toEqual({
@@ -199,5 +218,34 @@ describe("serialize-vm", () => {
 		const buf = serializeVmDefinition(definition);
 		buf[0] = 0;
 		expect(() => deserializeVmDefinition(buf)).toThrow(/bad magic/);
+	});
+
+	it("rejects definitions with host installs", () => {
+		expect(() => serializeVmDefinition(hostDefinition)).toThrow(
+			/host installs are not supported in portable wire definitions/,
+		);
+	});
+
+	it("rejects host installs before producing a stripped wire definition", () => {
+		expect(() => serializeVmDefinition(hostDefinition, { debugInfo: false })).toThrow(
+			/host installs are not supported in portable wire definitions/,
+		);
+	});
+
+	it("rejects a wire v3 buffer with a nonzero host-install count", () => {
+		const buffer = serializeVmDefinition(definition);
+		new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).setUint32(
+			buffer.byteLength - 4,
+			1,
+			true,
+		);
+		expect(() => deserializeVmDefinition(buffer)).toThrow(
+			/host installs are not supported in portable wire definitions/,
+		);
+	});
+
+	it("round-trips an ordinary wire v3 definition with an empty manifest", () => {
+		const restored = deserializeVmDefinition(serializeVmDefinition(definition));
+		expect(restored.hostInstalls).toEqual([]);
 	});
 });

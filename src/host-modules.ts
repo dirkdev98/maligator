@@ -1,0 +1,129 @@
+/**
+ * The central catalog of supported `node:*` host built-in modules (the first
+ * Node-compatibility slice, behind `surface.node`). It is the single source of
+ * truth for which `node:*` specifiers resolve and what each is planned to
+ * export, shared by the module graph (resolution → virtual module records)
+ * and, later, the linker (host export binding synthesis).
+ *
+ * Only the `node:`-prefixed form is recognized: a bare `path` / `fs` import is
+ * left to ordinary package resolution (and fails as "cannot find package" when
+ * no such package exists), matching Node's requirement that built-ins be
+ * imported with the explicit `node:` prefix.
+ *
+ * The named lists are deliberately narrow — only the built-in APIs the compiler
+ * itself needs today, not the full Node surface. They are the *planned* exports
+ * the linker will eventually bind; host exports are not implemented yet, so the
+ * catalog currently only drives resolution (supported vs unknown) and marks the
+ * virtual module record.
+ */
+
+export interface HostModuleSpec {
+	/** Canonical specifier and virtual module identity, e.g. `"node:path"`. */
+	id: string;
+	/** Planned named exports the linker will bind once host exports land. */
+	named: ReadonlyArray<string>;
+	/** Whether `import x from "<id>"` (a default export) is planned. */
+	hasDefault: boolean;
+	/**
+	 * The C symbol of this module's native installer — the function the emitted
+	 * install manifest references to fill each declared export's global slot. The
+	 * engine-neutral installer ABI ({@link
+	 * ../runtime/src/vm.h#MalHostModuleInstall}) keeps Node names out of the
+	 * intrinsic table; the name only ever appears as a string here and as an
+	 * `extern` decl in emitted C. Derived from the specifier via
+	 * {@link hostInstallerSymbol}, so the mapping has one source of truth.
+	 */
+	installer: string;
+}
+
+/**
+ * The C installer symbol for a `node:*` specifier: `mal_host_install_` followed
+ * by the specifier with every non-alphanumeric run collapsed to `_` (so
+ * `node:path` → `mal_host_install_node_path`, `node:child_process` →
+ * `mal_host_install_node_child_process`). A pure naming convention shared by the
+ * catalog and the C emitter; the function itself is defined in the (not-yet-
+ * implemented) native host-module layer.
+ */
+export function hostInstallerSymbol(specifier: string): string {
+	let suffix = "";
+	let separator = false;
+	for (const char of specifier) {
+		const alphanumeric =
+			(char >= "a" && char <= "z") ||
+			(char >= "A" && char <= "Z") ||
+			(char >= "0" && char <= "9");
+		if (alphanumeric) {
+			suffix += char;
+			separator = false;
+		} else if (!separator) {
+			suffix += "_";
+			separator = true;
+		}
+	}
+	return `mal_host_install_${suffix}`;
+}
+
+/**
+ * The C installer symbol for the global `process` object. Distinct from a module
+ * installer because `process` is a free global, not a module import; it fills a
+ * single global slot (see {@link ../runtime/src/vm.h#MalHostProcessInstaller}).
+ */
+export const PROCESS_INSTALLER_SYMBOL = "mal_host_install_process";
+
+// path is the one module with a planned default export (`import path from
+// "node:path"`) alongside its named functions — `relative` included.
+const PATH: HostModuleSpec = {
+	id: "node:path",
+	named: ["dirname", "extname", "isAbsolute", "join", "relative", "resolve"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:path"),
+};
+
+const FS: HostModuleSpec = {
+	id: "node:fs",
+	named: [
+		"existsSync",
+		"mkdirSync",
+		"readFileSync",
+		"readdirSync",
+		"statSync",
+		"writeFileSync",
+	],
+	hasDefault: false,
+	installer: hostInstallerSymbol("node:fs"),
+};
+
+const CHILD_PROCESS: HostModuleSpec = {
+	id: "node:child_process",
+	named: ["execFileSync"],
+	hasDefault: false,
+	installer: hostInstallerSymbol("node:child_process"),
+};
+
+// crypto exposes only the one-shot `hash` helper for this slice.
+const CRYPTO: HostModuleSpec = {
+	id: "node:crypto",
+	named: ["hash"],
+	hasDefault: false,
+	installer: hostInstallerSymbol("node:crypto"),
+};
+
+/** Supported `node:*` built-ins, keyed by canonical specifier. */
+export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
+	[PATH, FS, CHILD_PROCESS, CRYPTO].map((spec) => [spec.id, spec]),
+);
+
+/** True for any `node:`-prefixed specifier, supported or not. */
+export function isNodeSpecifier(specifier: string): boolean {
+	return specifier.startsWith("node:");
+}
+
+/** The catalog entry for a specifier, or undefined when it is not a supported built-in. */
+export function lookupHostModule(specifier: string): HostModuleSpec | undefined {
+	return HOST_MODULES.get(specifier);
+}
+
+/** Sorted list of supported specifiers, for clear "unknown module" diagnostics. */
+export function supportedHostModuleIds(): Array<string> {
+	return [...HOST_MODULES.keys()];
+}

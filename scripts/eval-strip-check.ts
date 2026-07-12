@@ -11,21 +11,50 @@ import * as path from "node:path";
  * that a thrown error's stack trace reports the ORIGINAL `.ts` line/column.
  */
 
-function buildAndRun(tsPath: string, name: string): { stdout: string; code: number } {
+interface RunResult {
+	stdout: string;
+	code: number;
+	error?: string;
+}
+
+function buildAndRun(tsPath: string, name: string): RunResult {
+	let buildOutput: string;
 	try {
-		execFileSync("node", ["src/index.ts", tsPath, "--name", name], { stdio: "ignore" });
-	} catch {
-		return { stdout: "", code: -1 };
+		buildOutput = execFileSync("node", ["src/index.ts", tsPath, "--name", name], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+	} catch (error) {
+		const e = error as { status?: number };
+		return {
+			stdout: "",
+			code: -1,
+			error: `build failed${e.status === undefined ? "" : ` (exit ${e.status})`}`,
+		};
 	}
+	// buildLocalBinary appends a content hash to --name, so read the path it printed.
+	const match = buildOutput.match(/^Binary: (.+)$/m);
+	if (match === null) {
+		return {
+			stdout: "",
+			code: -1,
+			error: `build produced no binary path:\n${buildOutput}`,
+		};
+	}
+	const binary = path.resolve(match[1]!);
 	try {
-		const stdout = execFileSync(path.join(".cache/local", name), [], {
+		const stdout = execFileSync(binary, [], {
 			encoding: "utf8",
 			stdio: ["ignore", "pipe", "ignore"],
 		});
 		return { stdout, code: 0 };
 	} catch (error) {
-		const e = error as { stdout?: string; status?: number };
-		return { stdout: e.stdout ?? "", code: e.status ?? 1 };
+		const e = error as { code?: string; stdout?: string; status?: number };
+		return {
+			stdout: e.stdout ?? "",
+			code: e.status ?? 1,
+			error: e.code === "ENOENT" ? `binary not found: ${binary}` : undefined,
+		};
 	}
 }
 
@@ -47,7 +76,7 @@ console.log(f({ x: 21 } as Id<P>), xs.map((n: number): number => n + 1).join(","
 	console.log(
 		ok
 			? "  ok   strips + runs"
-			: `  FAIL strips + runs: exit ${r.code} ${JSON.stringify(r.stdout)}`,
+			: `  FAIL strips + runs: exit ${r.code} ${JSON.stringify(r.stdout)}${r.error === undefined ? "" : ` (${r.error})`}`,
 	);
 	if (!ok) {
 		failures++;
@@ -74,7 +103,7 @@ try {
 	console.log(
 		ok
 			? "  ok   stack lines match source"
-			: `  FAIL stack lines: ${JSON.stringify(r.stdout)}`,
+			: `  FAIL stack lines: ${JSON.stringify(r.stdout)}${r.error === undefined ? "" : ` (${r.error})`}`,
 	);
 	if (!ok) {
 		failures++;

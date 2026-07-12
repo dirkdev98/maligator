@@ -16,7 +16,9 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-export const WIRE_VERSION = 2;
+// Bumped to 3 for the host-install manifest section (host built-in / `process`
+// installers + their global slots) appended after the debug tables.
+export const WIRE_VERSION = 3;
 
 /**
  * Canonical opcode order = the wire tag (a u8 index into this array). The C
@@ -405,6 +407,11 @@ export function serializeVmDefinition(
 	def: VmDefinition,
 	options: { debugInfo?: boolean } = {},
 ): Uint8Array {
+	if (def.hostInstalls.length > 0) {
+		throw new Error(
+			"serialize-vm: host installs are not supported in portable wire definitions",
+		);
+	}
 	const debug = options.debugInfo !== false;
 	const w = new Writer();
 
@@ -460,6 +467,10 @@ export function serializeVmDefinition(
 		w.u32(0); // files
 		w.u32(0); // source positions
 	}
+
+	// Wire v3 reserves this section for host installs, but portable definitions
+	// cannot resolve native installer pointers without a registry.
+	w.u32(0);
 
 	return w.finish();
 }
@@ -897,12 +908,20 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 	}
 	void debug;
 
+	const hostInstallCount = r.u32();
+	if (hostInstallCount > 0) {
+		throw new Error(
+			"serialize-vm: host installs are not supported in portable wire definitions",
+		);
+	}
+
 	return {
 		functionCount,
 		functions,
 		stringConstants,
 		bigintConstants,
 		globalCount,
+		hostInstalls: [],
 		files,
 		sourcePositions,
 		cjsModuleFunctionIndices,

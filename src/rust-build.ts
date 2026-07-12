@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { statSync } from "node:fs";
 import * as path from "node:path";
 
 /**
@@ -86,6 +87,27 @@ export function rustLinkArgs(cacheSuffix = "", webPlatform = true): Array<string
 
 const builtConfigs = new Set<string>();
 
+/** Resolve from exactly the caller's PATH; never add package-manager directories. */
+export function resolvePathExecutable(
+	name: string,
+	searchPath = process.env.PATH ?? "",
+): string {
+	for (const directory of searchPath.split(path.delimiter)) {
+		const candidate = path.join(directory || ".", name);
+		try {
+			const stats = statSync(candidate);
+			if (!stats.isFile()) continue;
+			// The self-host's minimal Stats omits mode; its isolated PATH contains only
+			// symlinks created from executables already resolved by this Node-hosted check.
+			if (stats.mode !== undefined && (stats.mode & 0o111) === 0) continue;
+			return candidate;
+		} catch {
+			// Keep searching for a regular executable file.
+		}
+	}
+	throw new Error(`required executable '${name}' was not found on PATH`);
+}
+
 /**
  * Build `libmal_rust.a` (release) for the given Intl config if not already built
  * this process. Resolves cargo via the rustup-pinned toolchain and routes all
@@ -100,14 +122,20 @@ export function ensureRustLibrary(verbose = false, config: RustBuildConfig = {})
 		return rustLibPath(cacheSuffix);
 	}
 
-	const pathWithBrew = `/opt/homebrew/bin:${process.env.PATH ?? ""}`;
+	const currentPath = process.env.PATH ?? "";
+	const rustupPath = resolvePathExecutable("rustup", currentPath);
 
 	// `rustup which cargo`, run inside the crate, honours rust-toolchain.toml and
 	// gives us the toolchain bin dir to put on PATH so cargo finds its own rustc
 	// (there are no rustup proxies on PATH in this environment).
-	const cargoPath = execFileSync("rustup", ["which", "cargo"], {
+	const cargoPath = execFileSync(rustupPath, ["which", "cargo"], {
 		cwd: RUST_DIR,
-		env: { ...process.env, PATH: pathWithBrew },
+		env: { ...process.env, PATH: currentPath },
+		encoding: "utf-8",
+	}).trim();
+	const rustcPath = execFileSync(rustupPath, ["which", "rustc"], {
+		cwd: RUST_DIR,
+		env: { ...process.env, PATH: currentPath },
 		encoding: "utf-8",
 	}).trim();
 	const toolchainBin = path.dirname(cargoPath);
@@ -136,13 +164,14 @@ export function ensureRustLibrary(verbose = false, config: RustBuildConfig = {})
 		args.push("--features", wantFeatures.join(","));
 	}
 
-	execFileSync("cargo", args, {
+	execFileSync(cargoPath, args, {
 		cwd: RUST_DIR,
 		env: {
 			...process.env,
-			PATH: `${toolchainBin}:${pathWithBrew}`,
+			PATH: `${toolchainBin}${path.delimiter}${currentPath}`,
 			CARGO_HOME,
 			CARGO_TARGET_DIR: rustTargetDir(cacheSuffix),
+			RUSTC: rustcPath,
 		},
 		stdio: verbose ? "inherit" : "ignore",
 	});

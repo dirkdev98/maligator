@@ -33,10 +33,13 @@ export interface EmitOptions {
 }
 
 /** Escape a string for a C string literal. */
-function cEscapeString(value: string): string {
+export function cEscapeString(value: string): string {
 	let out = "";
+	const appendByte = (byte: number): void => {
+		out += `\\${byte.toString(8).padStart(3, "0")}`;
+	};
 	for (const ch of value) {
-		const code = ch.codePointAt(0)!;
+		let code = ch.codePointAt(0)!;
 		if (ch === "\\") {
 			out += "\\\\";
 		} else if (ch === '"') {
@@ -49,8 +52,23 @@ function cEscapeString(value: string): string {
 			out += "\\t";
 		} else {
 			// Emit as UTF-8 octal escapes so the C literal is plain bytes.
-			for (const byte of Buffer.from(ch, "utf8")) {
-				out += `\\${byte.toString(8).padStart(3, "0")}`;
+			// Lone surrogates encode as U+FFFD, matching UTF-8 encoders including
+			// Node's Buffer.from. Iteration has already combined valid pairs.
+			if (code >= 0xd800 && code <= 0xdfff) code = 0xfffd;
+			if (code <= 0x7f) {
+				appendByte(code);
+			} else if (code <= 0x7ff) {
+				appendByte(0xc0 | (code >> 6));
+				appendByte(0x80 | (code & 0x3f));
+			} else if (code <= 0xffff) {
+				appendByte(0xe0 | (code >> 12));
+				appendByte(0x80 | ((code >> 6) & 0x3f));
+				appendByte(0x80 | (code & 0x3f));
+			} else {
+				appendByte(0xf0 | (code >> 18));
+				appendByte(0x80 | ((code >> 12) & 0x3f));
+				appendByte(0x80 | ((code >> 6) & 0x3f));
+				appendByte(0x80 | (code & 0x3f));
 			}
 		}
 	}
@@ -307,6 +325,40 @@ function malVmDefinitionStruct(
 		lines.push("};", "");
 	}
 
+	// Host-install manifest: direct references to the native installers of the
+	// host built-ins (and `process`) the program actually reached. Only reachable
+	// ones are emitted, so an ordinary program references no host symbol and the
+	// extern decls / arrays below are absent — nothing to resolve at link.
+	const hasHostInstalls = definition.hostInstalls.length > 0;
+	if (hasHostInstalls) {
+		const declared = new Set<string>();
+		for (const install of definition.hostInstalls) {
+			if (!declared.has(install.installer)) {
+				declared.add(install.installer);
+				lines.push(
+					`extern void ${install.installer}(MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch);`,
+				);
+			}
+		}
+		lines.push("");
+		definition.hostInstalls.forEach((install, i) => {
+			lines.push(
+				`static const MalHostInstallSlot mal_host_install_${i}_slots${suffix}[] = {`,
+			);
+			for (const { name, slot } of install.exports) {
+				lines.push(`    { .name = "${cEscapeString(name)}", .slot = ${slot} },`);
+			}
+			lines.push("};", "");
+		});
+		lines.push(`static const MalHostInstall mal_host_installs${suffix}[] = {`);
+		definition.hostInstalls.forEach((install, i) => {
+			lines.push(
+				`    { .installer = ${install.installer}, .slots = mal_host_install_${i}_slots${suffix}, .slot_count = ${install.exports.length} },`,
+			);
+		});
+		lines.push("};", "");
+	}
+
 	lines.push(
 		`const MalVmDefinition mal_vm_definition${suffix} = {`,
 		`    .function_count = ${definition.functionCount},`,
@@ -322,6 +374,8 @@ function malVmDefinitionStruct(
 		`    .files = ${hasFiles ? `mal_files${suffix}` : "nullptr"},`,
 		`    .source_position_count = ${hasPositions ? definition.sourcePositions.length : 0},`,
 		`    .source_positions = ${hasPositions ? `mal_source_positions${suffix}` : "nullptr"},`,
+		`    .host_install_count = ${definition.hostInstalls.length},`,
+		`    .host_installs = ${hasHostInstalls ? `mal_host_installs${suffix}` : "nullptr"},`,
 		"};",
 	);
 

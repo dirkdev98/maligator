@@ -185,6 +185,26 @@ export interface IntermediateProgram {
 	 * call. See isPureDataCjsModule.
 	 */
 	cjsEagerSlot: Map<string, number>;
+
+	/**
+	 * Host built-in (`node:*`) modules reachable in the graph, each with the
+	 * synthetic global bindings backing its exports (see src/linker.ts). After
+	 * compilation lower-vm resolves the bindings that got a global slot to build the
+	 * install manifest; an imported-but-unused export never gets a slot and drops
+	 * out (dead-code elimination). Empty unless a `node:*` module is imported.
+	 */
+	hostModules: Array<{
+		specifier: string;
+		installer: string;
+		exports: Array<{ name: string; binding: Binding }>;
+	}>;
+
+	/**
+	 * The free global `process` when the node surface is on (see src/linker.ts).
+	 * `retained` becomes true when reachable compilation encounters it; lower-vm
+	 * then emits its slot-free installer manifest. Null otherwise.
+	 */
+	hostProcess: { installer: string; retained: boolean } | null;
 }
 
 type BindingLocation =
@@ -1432,6 +1452,9 @@ export function compileSemanticProgramToIr(
 		cjsWrapperFunctionIndex: [],
 		cjsImports: new Map(),
 		cjsEagerSlot: new Map(),
+
+		hostModules: [],
+		hostProcess: null,
 	};
 
 	// Cross-module linking: aliases imported names to their exporter bindings (a
@@ -1450,6 +1473,12 @@ export function compileSemanticProgramToIr(
 	for (const [path, imports] of linkage.cjsImports) {
 		program.cjsImports.set(path, imports);
 	}
+	// Host-module bindings resolve to slots as reachable code compiles. Process
+	// instead records reachable compilation without allocating a private slot.
+	program.hostModules = linkage.hostModules;
+	program.hostProcess = linkage.hostProcess
+		? { installer: linkage.hostProcess.installer, retained: false }
+		: null;
 
 	const initFile = program.semantic.files.find(
 		(it) => it.path === program.semantic.entrypointPath,
@@ -3974,6 +4003,9 @@ function compileStaticIdentifierTarget(
 	if (!binding) {
 		throw new Error(`No binding found for pattern target ${identifier.name}`);
 	}
+	const hostGlobalLocation = retainHostProcess(program, binding)
+		? globalPropertyLocation(program, binding.name)
+		: null;
 
 	if (isAssign && binding.kind === "const" && !binding.undeclared) {
 		// Destructuring assignment to a const binding is a TypeError, matching the
@@ -3984,7 +4016,7 @@ function compileStaticIdentifierTarget(
 	}
 
 	if (binding.undeclared && !isIRIntrinsic(binding.name)) {
-		if (isSloppyFunction(fn)) {
+		if (hostGlobalLocation || isSloppyFunction(fn)) {
 			// Sloppy assignment to an unresolved name creates/sets a global property.
 			emitGlobalPropertyStore(program, fn, cursor, binding.name, value);
 			return;
@@ -3999,7 +4031,7 @@ function compileStaticIdentifierTarget(
 		return;
 	}
 
-	const location = getOrCreateBindingLocation(program, fn, binding);
+	const location = hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
 	storeRegisterAtLocation(cursor.block, location, value);
 }
 
@@ -7463,7 +7495,10 @@ function compileIdentifierAssignment(
 		return -1;
 	}
 
-	if (binding.undeclared && !isIRIntrinsic(binding.name)) {
+	const hostGlobalLocation = retainHostProcess(program, binding)
+		? globalPropertyLocation(program, binding.name)
+		: null;
+	if (binding.undeclared && !isIRIntrinsic(binding.name) && !hostGlobalLocation) {
 		// Sloppy `x = v` for an unresolved x creates/sets a global property and
 		// evaluates to v. (Compound forms read first, so an absent global still
 		// throws below — correct.)
@@ -7527,7 +7562,7 @@ function compileIdentifierAssignment(
 		return emitThrowTypeError(program, fn, cursor, "Assignment to constant variable.");
 	}
 
-	const location = getOrCreateBindingLocation(program, fn, binding);
+	const location = hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
 
 	let value: number;
 	if (assignmentExpression.operator === "=") {
@@ -7590,7 +7625,10 @@ function compileLogicalAssignment(
 			return -1;
 		}
 
-		if (binding.undeclared && !isIRIntrinsic(binding.name)) {
+		const hostGlobalLocation = retainHostProcess(program, binding)
+			? globalPropertyLocation(program, binding.name)
+			: null;
+		if (binding.undeclared && !isIRIntrinsic(binding.name) && !hostGlobalLocation) {
 			// GetValue on an unresolvable reference throws ReferenceError before
 			// the operator can short-circuit.
 			const destination = nextRegisterDestination(fn);
@@ -7602,7 +7640,7 @@ function compileLogicalAssignment(
 			return destination;
 		}
 
-		location = getOrCreateBindingLocation(program, fn, binding);
+		location = hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
 		nameHint = binding.name;
 		current = loadRegisterFromLocation(fn, cursor.block, location);
 	} else if (
@@ -7971,6 +8009,9 @@ function compileUnaryExpression(
 	if (expression.operator === "typeof" && expression.argument.type === "Identifier") {
 		const argument = expression.argument;
 		const binding = fn.semanticFile.nodeToBinding.get(argument);
+		if (binding) {
+			retainHostProcess(program, binding);
+		}
 		if (binding?.undeclared && !isIRIntrinsic(argument.name)) {
 			if (
 				fn.semanticFile.withDynamicNodes.has(argument) ||
@@ -8088,6 +8129,7 @@ function compileStaticIdentifierDelete(
 ): number {
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
 	if (binding?.undeclared) {
+		retainHostProcess(program, binding);
 		const global = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
 			type: "loadIntrinsic",
@@ -8201,6 +8243,9 @@ function compileUpdateExpression(
 		if (!binding) {
 			return -1;
 		}
+		const hostGlobalLocation = retainHostProcess(program, binding)
+			? globalPropertyLocation(program, binding.name)
+			: null;
 
 		if (binding.kind === "const") {
 			// `x++` / `--x` on a const or imported binding is a TypeError.
@@ -8228,7 +8273,8 @@ function compileUpdateExpression(
 			return expression.prefix ? newValue : oldValue;
 		}
 
-		const location = getOrCreateBindingLocation(program, fn, binding);
+		const location =
+			hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
 		const current = loadRegisterFromLocation(fn, cursor.block, location);
 		const oldValue = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
@@ -9666,6 +9712,7 @@ function compileStaticIdentifier(
 	if (!binding) {
 		return -1;
 	}
+	retainHostProcess(program, binding);
 
 	if (binding.undeclared && isIRIntrinsic(identifier.name)) {
 		const destination = nextRegisterDestination(fn);
@@ -9735,6 +9782,25 @@ function compileStaticIdentifier(
 	}
 
 	return destination;
+}
+
+/** Mark a reachable free `process` reference and keep it on globalThis storage. */
+function retainHostProcess(program: IntermediateProgram, binding: Binding): boolean {
+	if (program.hostProcess && binding.undeclared && binding.name === "process") {
+		program.hostProcess.retained = true;
+		return true;
+	}
+	return false;
+}
+
+function globalPropertyLocation(
+	program: IntermediateProgram,
+	name: string,
+): BindingLocation {
+	return {
+		type: "globalProperty",
+		nameStringIndex: getOrCreateStringConstant(program, name),
+	};
 }
 
 /**
