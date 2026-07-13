@@ -218,9 +218,9 @@ type BindingLocation =
 			index: number;
 	  }
 	| {
-			// A sloppy-script top-level `var`/`function`: a property of the global
-			// object (read/written by name), so it is observable as `globalThis.x`.
-			// Strict scripts and modules keep the fast flat-slot `global` storage.
+			// A script top-level `var`/`function`: a property of the global object
+			// (read/written by name), so it is observable as `globalThis.x`.
+			// Modules keep the fast flat-slot `global` storage.
 			type: "globalProperty";
 			nameStringIndex: number;
 	  };
@@ -3468,6 +3468,7 @@ function isSloppyFunction(fn: IRFunction): boolean {
 function isScriptGlobalProperty(file: SemanticFile, binding: Binding): boolean {
 	return (
 		file.type === "script" &&
+		binding.scopedTo === "global" &&
 		(binding.kind === "var" || binding.declarationNode?.type === "FunctionDeclaration")
 	);
 }
@@ -3554,15 +3555,12 @@ function compileFunctionParams(
 			registers: [destination],
 		});
 
-		// When a nested arrow reads this function's `arguments` lexically, the
-		// implicit `arguments` binding is marked captured. Snapshot the object into
-		// its captured slot at entry (owner is this function) so the arrow's
-		// `loadCaptured` walks to it — mirroring the lexical-`this` capture above.
-		// Direct reads in this function still use `argumentsObjectRegister`.
-		if (argumentsBinding.scopedTo === "captured") {
-			const location = getOrCreateBindingLocation(program, fn, argumentsBinding);
-			storeRegisterAtLocation(block, location, destination);
-		}
+		// `arguments` is mutable, so both direct reads and lexical reads from an
+		// arrow must use its normal binding storage. Keep argumentsObjectRegister as
+		// metadata that prevents optimizations from treating this as an ordinary
+		// inlinable function.
+		const location = getOrCreateBindingLocation(program, fn, argumentsBinding);
+		storeRegisterAtLocation(block, location, destination);
 	}
 
 	// When a nested arrow captures this function's `this` lexically, semantic
@@ -4674,11 +4672,11 @@ function compileFunctionDeclaration(
 		return;
 	}
 
-	if (
+	const onlyUsedByDeclaration =
 		binding.usageNodes.length === 0 ||
 		(binding.usageNodes.length === 1 &&
-			(binding.usageNodes[0] === statement || binding.usageNodes[0] === statement.id))
-	) {
+			(binding.usageNodes[0] === statement || binding.usageNodes[0] === statement.id));
+	if (onlyUsedByDeclaration && !isScriptGlobalProperty(fn.semanticFile, binding)) {
 		// Function is only used in its declaration, so we can skip it.
 		return;
 	}
@@ -9725,26 +9723,11 @@ function compileStaticIdentifier(
 	}
 
 	if (binding.implicit === "arguments") {
-		// An arrow reads its enclosing function's `arguments` lexically: the binding
-		// lives on that function's scope (never the arrow's) and is marked captured,
-		// so read it through the closure env. Arrows never reserve their own
-		// arguments object, so `argumentsObjectRegister` is undefined here.
-		if (fn.argumentsObjectRegister === undefined && binding.scopedTo === "captured") {
-			const location = getOrCreateBindingLocation(program, fn, binding);
-			return loadRegisterFromLocation(fn, cursor.block, location);
-		}
-
-		if (fn.argumentsObjectRegister === undefined) {
-			throw new Error("Missing reserved arguments object register");
-		}
-
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "move",
-			registers: [destination, fn.argumentsObjectRegister],
-		});
-
-		return destination;
+		// The owning function initializes this mutable binding from its arguments
+		// object. Direct reads use the local slot and arrow reads use the captured
+		// slot, so assignment is observed consistently in both cases.
+		const location = getOrCreateBindingLocation(program, fn, binding);
+		return loadRegisterFromLocation(fn, cursor.block, location);
 	}
 
 	if (binding.undeclared) {

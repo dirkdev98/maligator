@@ -142,7 +142,9 @@ in. `OFF buys` = what dropping the feature gets you.
 - [ ] Direct-eval Slice 3: enclosing-function locals, caller `this`/`new.target`/
       `arguments`, async-eval-in-default-param cluster.
 - [x] Realms: `$262.createRealm` with fresh globals/intrinsics on a shared heap.
-- [ ] `ShadowRealm` and residual cross-realm correctness clusters.
+- [x] `ShadowRealm` constructor, `evaluate`, and callable boundary wrappers.
+- [ ] `ShadowRealm.prototype.importValue` runtime module loading and residual
+      cross-realm correctness clusters.
 
 ## Priority 3 — General-purpose usability
 
@@ -153,7 +155,7 @@ in. `OFF buys` = what dropping the feature gets you.
 ## Conformance (`test262-todo.md`)
 
 - [ ] Cross-cutting feature builds: dynamic `import()` (502), Atomics agents /
-      `$262.agent`, and `ShadowRealm`.
+      `$262.agent`, and `ShadowRealm.prototype.importValue` module loading.
 - [ ] RegExp `@@split`/`@@match`/`@@replace`/`@@search` (unblocks much of String).
 - [ ] Class clusters, compound-assignment, for-of, arguments-object, super.
 - [ ] Long tail per-area filters — see the doc's ranked list.

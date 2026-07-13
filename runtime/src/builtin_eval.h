@@ -21,12 +21,32 @@ void mal_intrinsics_init_eval(MalVm *vm, MalObject *global_this);
 MalValue mal_vm_eval_source(MalVm *vm, MalValue source);
 
 #if MAL_REALMS
+typedef enum {
+    MAL_SHADOW_REALM_EVAL_FAILURE_NONE,
+    MAL_SHADOW_REALM_EVAL_FAILURE_CALLER_PARSE,
+    MAL_SHADOW_REALM_EVAL_FAILURE_CALLER_POLICY,
+    MAL_SHADOW_REALM_EVAL_FAILURE_SANITIZE,
+} MalShadowRealmEvalFailure;
+
 /**
  * Evaluate a script in `realm`, returning its normal or throw completion. The
  * caller's realm is restored before return, and vm->completion matches the
  * returned completion.
  */
 MalCompletion mal_realm_eval_script(MalVm *vm, MalRealm *realm, MalValue source);
+
+/**
+ * Compile and splice primitive string `source` while `caller_realm` is current,
+ * then create and run its entry closure in `target_realm`. Parse/early compiler
+ * failures become a fresh caller-realm SyntaxError; a disabled-eval policy error
+ * remains the caller-realm EvalError produced by the runtime gate. Other abrupt
+ * completions are returned for the ShadowRealm builtin to sanitize. `failure_out`
+ * explicitly identifies those cases without inspecting error prototypes. The
+ * caller realm is restored and vm->completion matches the result on every exit.
+ */
+MalCompletion mal_shadow_realm_eval_script(MalVm *vm, MalRealm *caller_realm,
+                                           MalRealm *target_realm, MalValue source,
+                                           MalShadowRealmEvalFailure *failure_out);
 #endif
 
 /**

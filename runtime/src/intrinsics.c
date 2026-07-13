@@ -34,6 +34,9 @@
 #include "builtin_weak_ref.h"
 #include "builtin_string.h"
 #include "builtin_symbol.h"
+#if MAL_REALMS
+#include "builtin_shadow_realm.h"
+#endif
 #include "builtin_uri.h"
 #include "heap_string.h"
 #include "table.h"
@@ -245,6 +248,13 @@ void mal_intrinsics_init(MalVm *vm) {
     mal_builtin_symbol_install(vm);
     mal_builtin_bigint_install(vm);
     mal_builtin_function_install(vm);
+#if MAL_REALMS
+    mal_builtin_shadow_realm_install(
+        vm,
+        MAL_INTRINSIC_SHADOW_REALM_CONSTRUCTOR,
+        MAL_INTRINSIC_SHADOW_REALM_PROTOTYPE
+    );
+#endif
     mal_builtin_iterator_install(vm);
     mal_builtin_iterator_helpers_install(vm);
     mal_builtin_generator_install(vm);
@@ -504,6 +514,9 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     mal_intrinsic_define_data(vm, global_this, "AggregateError", vm->intrinsics[MAL_INTRINSIC_AGGREGATE_ERROR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "Iterator", vm->intrinsics[MAL_INTRINSIC_ITERATOR_CONSTRUCTOR], flags);
     mal_intrinsic_define_data(vm, global_this, "AsyncIterator", vm->intrinsics[MAL_INTRINSIC_ASYNC_ITERATOR_CONSTRUCTOR], flags);
+#if MAL_REALMS
+    mal_intrinsic_define_data(vm, global_this, "ShadowRealm", vm->intrinsics[MAL_INTRINSIC_SHADOW_REALM_CONSTRUCTOR], flags);
+#endif
     mal_intrinsic_define_data(vm, global_this, "decodeURI", vm->intrinsics[MAL_INTRINSIC_DECODE_URI], flags);
     mal_intrinsic_define_data(vm, global_this, "decodeURIComponent", vm->intrinsics[MAL_INTRINSIC_DECODE_URI_COMPONENT], flags);
     mal_intrinsic_define_data(vm, global_this, "encodeURI", vm->intrinsics[MAL_INTRINSIC_ENCODE_URI], flags);

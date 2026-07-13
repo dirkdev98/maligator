@@ -121,6 +121,13 @@ typedef enum MalHeapType : u8 {
      */
     MAL_HEAP_BIGINT,
     MAL_HEAP_OBJECT,
+#if MAL_REALMS
+    /**
+     * ShadowRealm instances (MalShadowRealmObject): an ordinary object holding a
+     * raw pointer to its VM-owned shadow realm. See shadow_realm_object.h.
+     */
+    MAL_HEAP_SHADOW_REALM_OBJECT,
+#endif
     MAL_HEAP_FUNCTION_OBJECT,
     MAL_HEAP_NATIVE_FUNCTION_OBJECT,
     MAL_HEAP_BOUND_FUNCTION_OBJECT,

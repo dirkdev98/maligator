@@ -163,6 +163,65 @@ MalCompletion mal_realm_eval_script(MalVm *vm, MalRealm *realm, MalValue source)
     vm->completion = completion;
     return completion;
 }
+
+MalCompletion mal_shadow_realm_eval_script(MalVm *vm, MalRealm *caller_realm,
+                                            MalRealm *target_realm, MalValue source,
+                                            MalShadowRealmEvalFailure *failure_out) {
+    // ShadowRealm parses in the caller realm, but creates and runs the script's
+    // entry closure in the target realm. This may be called without a native
+    // frame, so keep every transient heap value visible to the collector.
+    MalValue roots[3] = {
+        source,
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 3);
+
+    MalCompletion completion = {
+        .kind = MAL_COMPLETION_NORMAL,
+        .value = mal_value_new_undefined(),
+    };
+    *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_NONE;
+    mal_vm_realm_switch_to(vm, caller_realm);
+
+    MalLoadedDefinition *loaded = compile_source(vm, source, false, false, false, false);
+    if (loaded == nullptr) {
+#if MAL_EVAL
+        // The baked compiler's errors can belong to the realm in which it was
+        // first installed. Parse/early errors must instead be fresh caller errors.
+        mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
+                           "ShadowRealm evaluate: invalid source text");
+        *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_CALLER_PARSE;
+#else
+        *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_CALLER_POLICY;
+#endif
+        completion = vm->completion;
+        goto done;
+    }
+
+    retain_loaded(vm, loaded);
+    i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
+    if (entry < 0) {
+        *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_SANITIZE;
+        completion = vm->completion;
+        goto done;
+    }
+
+    mal_vm_realm_switch_to(vm, target_realm);
+    roots[1] = mal_vm_op_create_function(vm, entry, nullptr);
+    completion = mal_vm_call_value(vm, roots[1], mal_value_new_undefined(), nullptr, 0);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_SANITIZE;
+    }
+
+done:
+    roots[2] = completion.value;
+    mal_vm_realm_switch_to(vm, caller_realm);
+    vm->completion = completion;
+    mal_gc_unroot(&root_span);
+    return completion;
+}
 #endif
 
 // Direct eval: compile in direct mode, then run the entry with `scope_object`
