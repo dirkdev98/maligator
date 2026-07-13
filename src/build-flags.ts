@@ -174,6 +174,7 @@ export function optFlags(): Array<string> {
  */
 export interface FeatureDefineOpts {
 	evalEnabled?: boolean;
+	realmsEnabled?: boolean;
 	intlEnabled?: boolean;
 	/** `-DMAL_INTL_HAS_<SERVICE>=0` for each dropped service (subset Intl build). */
 	intlServiceDefines?: Array<string>;
@@ -194,6 +195,7 @@ export interface FeatureDefineOpts {
  */
 export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 	const evalFlag = opts.evalEnabled === false ? ["-DMAL_EVAL=0"] : [];
+	const realmsFlag = opts.realmsEnabled === false ? ["-DMAL_REALMS=0"] : [];
 	// Intl off → -DMAL_INTL=0 (per-service gates default to MAL_INTL, so all off).
 	// Intl on → per-service disable defines (empty for the full build).
 	const intlFlags =
@@ -202,7 +204,14 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 	const regexpFlag = opts.regexpEnabled === false ? ["-DMAL_REGEXP=0"] : [];
 	// node defaults OFF (C default MAL_NODE=0), so only the ON case emits a flag.
 	const nodeFlag = opts.nodeEnabled === true ? ["-DMAL_NODE=1"] : [];
-	return [...evalFlag, ...intlFlags, ...webFlag, ...regexpFlag, ...nodeFlag];
+	return [
+		...evalFlag,
+		...realmsFlag,
+		...intlFlags,
+		...webFlag,
+		...regexpFlag,
+		...nodeFlag,
+	];
 }
 
 export function cmakeCFlags(opts: FeatureDefineOpts = {}): string {

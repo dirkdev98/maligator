@@ -625,6 +625,21 @@ static bool mal_builtin_array_species_create(MalVm *vm, MalValue original, f64 l
         if (!mal_vm_get_property(vm, original, mal_intrinsic_string_key(vm, "constructor"), &constructor)) {
             return false;
         }
+#if MAL_REALMS
+        // A foreign realm's intrinsic %Array% defaults to the current realm's
+        // ArrayCreate, without observing either realm's @@species property.
+        if (constructor != vm->intrinsics[MAL_INTRINSIC_ARRAY_CONSTRUCTOR]
+            && mal_vm_is_constructor(vm, constructor)) {
+            MalRealm *constructor_realm;
+            if (!mal_vm_get_function_realm(vm, constructor, &constructor_realm)) {
+                return false;
+            }
+            if (constructor_realm != vm->current_realm
+                && constructor == constructor_realm->intrinsics[MAL_INTRINSIC_ARRAY_CONSTRUCTOR]) {
+                constructor = mal_value_new_undefined();
+            }
+        }
+#endif
         if (mal_value_is_object(constructor)) {
             if (!mal_vm_get_property(vm, constructor, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_SPECIES), &constructor)) {
                 return false;

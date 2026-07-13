@@ -13,46 +13,40 @@
 #include "vm.h"
 #include "vm_ops.h"
 
-/**
- * Unforgeable marker that stands in for the spec [[ErrorData]] internal slot.
- * Error instances carry it as a hidden private-symbol own property; Error.isError
- * tests for its presence. A module-level static is sufficient because the test
- * harness runs a single VM per process and the symbol is GC-rooted by the
- * instances (and the Error prototype) that hold it.
- */
+/** Unforgeable markers backing the [[ErrorData]] and captured-stack slots. */
+#if MAL_REALMS
+#define MAL_ERROR_DATA_MARKER(vm) ((vm)->error_data_marker)
+#define MAL_ERROR_STACK_MARKER(vm) ((vm)->error_stack_marker)
+#else
 static MalValue mal_error_data_marker = MAL_VALUE_UNDEFINED;
+static MalValue mal_error_stack_marker = MAL_VALUE_UNDEFINED;
+#define MAL_ERROR_DATA_MARKER(vm) ((void) (vm), mal_error_data_marker)
+#define MAL_ERROR_STACK_MARKER(vm) ((void) (vm), mal_error_stack_marker)
+#endif
 
-static MalKey mal_error_data_key(void) {
-    return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = mal_error_data_marker};
+static MalKey mal_error_data_key(MalVm *vm) {
+    return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = MAL_ERROR_DATA_MARKER(vm)};
 }
 
-/**
- * A second private-symbol marker: the property on each error that holds the id
- * (an i32 into the VM's captured_traces) of its captured stack trace. Minted in
- * mal_builtin_error_install alongside the [[ErrorData]] marker.
- */
-static MalValue mal_error_stack_marker = MAL_VALUE_UNDEFINED;
-
-static MalKey mal_error_stack_key(void) {
-    return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = mal_error_stack_marker};
+static MalKey mal_error_stack_key(MalVm *vm) {
+    return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = MAL_ERROR_STACK_MARKER(vm)};
 }
 
 static void mal_error_mark_error_data(MalVm *vm, MalObject *error) {
-    (void) vm;
     MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_new_boolean(true), MAL_PROPERTY_NONE);
-    mal_object_define_own(error, mal_error_data_key(), &desc);
+    mal_object_define_own(error, mal_error_data_key(vm), &desc);
 }
 
-static bool mal_error_has_error_data(MalObject *object) {
-    if (mal_value_is_undefined(mal_error_data_marker)) {
+static bool mal_error_has_error_data(MalVm *vm, MalObject *object) {
+    if (mal_value_is_undefined(MAL_ERROR_DATA_MARKER(vm))) {
         return false;
     }
-    MalPropertyLookup lookup = mal_object_get_own(object, mal_error_data_key());
+    MalPropertyLookup lookup = mal_object_get_own(object, mal_error_data_key(vm));
     return lookup.present;
 }
 
-bool mal_builtin_value_has_error_data(MalValue value) {
-    return mal_value_is_object(value) && mal_error_has_error_data(mal_value_to_object(value));
+bool mal_builtin_value_has_error_data(MalVm *vm, MalValue value) {
+    return mal_value_is_object(value) && mal_error_has_error_data(vm, mal_value_to_object(value));
 }
 
 /**
@@ -63,13 +57,13 @@ bool mal_builtin_value_has_error_data(MalValue value) {
  * marker is minted (errors created during early intrinsics init).
  */
 static void mal_error_capture_stack(MalVm *vm, MalObject *error) {
-    if (mal_value_is_undefined(mal_error_stack_marker) || vm->definition->file_count == 0) {
+    if (mal_value_is_undefined(MAL_ERROR_STACK_MARKER(vm)) || vm->definition->file_count == 0) {
         return;
     }
     MalStackTrace *trace = mal_vm_capture_stack(vm);
     i32 id = mal_vm_store_stack_trace(vm, trace);
     MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_from_i32(id), MAL_PROPERTY_CONFIGURABLE);
-    mal_object_define_own(error, mal_error_stack_key(), &desc);
+    mal_object_define_own(error, mal_error_stack_key(vm), &desc);
 }
 
 /**
@@ -312,7 +306,6 @@ MalValue mal_builtin_new_aggregate_error(MalVm *vm, MalValue errors) {
  * that merely inherits from Error.prototype is not an error.
  */
 static MalValue mal_builtin_error_is_error(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
     (void) new_target;
     (void) callee;
@@ -320,7 +313,7 @@ static MalValue mal_builtin_error_is_error(MalVm *vm, MalValue this_value, const
     if (!mal_value_is_object(arg)) {
         return mal_value_new_boolean(false);
     }
-    return mal_value_new_boolean(mal_error_has_error_data(mal_value_to_object(arg)));
+    return mal_value_new_boolean(mal_error_has_error_data(vm, mal_value_to_object(arg)));
 }
 
 /**
@@ -407,13 +400,13 @@ static MalValue mal_builtin_error_stack_getter(MalVm *vm, MalValue this_value, c
         return mal_value_new_undefined();
     }
     MalObject *error = mal_value_to_object(this_value);
-    if (!mal_error_has_error_data(error)) {
+    if (!mal_error_has_error_data(vm, error)) {
         return mal_value_new_undefined();
     }
 
     // The trace id stashed at construction (absent when debug info was stripped,
     // or for errors created before the marker was minted).
-    MalPropertyLookup lookup = mal_object_get_own(error, mal_error_stack_key());
+    MalPropertyLookup lookup = mal_object_get_own(error, mal_error_stack_key(vm));
     MalStackTrace *trace =
         lookup.present ? mal_vm_stored_stack_trace(vm, mal_value_to_i32(lookup.desc.value)) : nullptr;
 
@@ -524,9 +517,18 @@ static MalObject *mal_builtin_error_install_kind(
 
 void mal_builtin_error_install(MalVm *vm) {
     // Mint the [[ErrorData]] and captured-stack markers before any error object
-    // is created.
+    // is created. A realms build reuses the VM-owned pair for every realm.
+#if MAL_REALMS
+    if (mal_value_is_undefined(vm->error_data_marker)) {
+        vm->error_data_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    }
+    if (mal_value_is_undefined(vm->error_stack_marker)) {
+        vm->error_stack_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    }
+#else
     mal_error_data_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
     mal_error_stack_marker = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+#endif
 
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
 

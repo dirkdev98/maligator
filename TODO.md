@@ -96,14 +96,6 @@ in. `OFF buys` = what dropping the feature gets you.
 
 ## Priority 2 — Binary size
 
-- [ ] Don't link ICU4X data when Intl is unused; split locales (today: 11 MB binaries).
-- [ ] Drop the bytecode overlay for always-compiled, no-bail functions (kills the
-      dead `MalInstruction` table; forces a clean overlay contract). While the table
-      still exists: `MalInstruction` is 40 B, forced by the three pointer-carrying
-      union arms (`create_object_shaped`/`create_template_object`/
-      `create_module_namespace`) + a 4-B `MalOpcode`. Moving those arms' pointers
-      behind index tables lets `MalOpcode` be `u8` and the union pack to ~24, shrinking
-      the baked image + icache.
 - [ ] **Production build mode** — keeps `-O2` (do NOT trade perf for size in prod) but
       strips the symbol table (post-link `strip`, or `-Wl,-x`) off by default only in
       this mode. Measured ~11% (~210 KB) off `minimal`; it drops native symbolication
@@ -116,8 +108,6 @@ in. `OFF buys` = what dropping the feature gets you.
       emitted TU's calls into the runtime archives; the single biggest speed lever
       measured (language ratio 2.05× → 1.77×). Cost is link time, so it stays
       opt-in / prod-only, not on dev builds.
-- [ ] Size-focused build profile (`-Os`/LTO/`--gc-sections`/musl-static/strip);
-      measure per-feature bytes; feed the size gate above.
 
 ## Substrate roadmap
 
@@ -151,9 +141,8 @@ in. `OFF buys` = what dropping the feature gets you.
       needs no Node in the deployed binary.
 - [ ] Direct-eval Slice 3: enclosing-function locals, caller `this`/`new.target`/
       `arguments`, async-eval-in-default-param cluster.
-- [ ] Realms: `$262.createRealm` → unblock `ShadowRealm` + cross-realm tests.
-- [ ] (optional) Tier hot eval'd fns through emit-c when a toolchain is present;
-      reuse the wire format as a source-keyed bytecode cache.
+- [x] Realms: `$262.createRealm` with fresh globals/intrinsics on a shared heap.
+- [ ] `ShadowRealm` and residual cross-realm correctness clusters.
 
 ## Priority 3 — General-purpose usability
 
@@ -164,19 +153,16 @@ in. `OFF buys` = what dropping the feature gets you.
 ## Conformance (`test262-todo.md`)
 
 - [ ] Cross-cutting feature builds: dynamic `import()` (502), Atomics agents /
-      `$262.agent`, realms/ShadowRealm.
+      `$262.agent`, and `ShadowRealm`.
 - [ ] RegExp `@@split`/`@@match`/`@@replace`/`@@search` (unblocks much of String).
 - [ ] Class clusters, compound-assignment, for-of, arguments-object, super.
 - [ ] Long tail per-area filters — see the doc's ranked list.
 
 ## Testing / tooling
 
-- [ ] **Clean up the test suite** so `npm test` + `npm run lint:ci` go green: the
-      2 pre-existing `liveness.test.ts` failures, the stale `sema.test.ts` inline
-      snapshot (hardcoded absolute path — see its `TODO: handle local paths for CI`),
-      and the lint debt gating oxfmt (`no-eq-null` errors + `no-console` warnings in
-      `scripts/*.ts`). Prune the `tests/local/*.js` grab-bag while there.
-- [ ] **Quick regression test262 selection** — a small curated subset (a few
+- [ ] **Clean up the test suite:** unit/native/lint lanes are green; prune the
+      `tests/local/*.js` grab-bag.
+- [x] **Quick regression test262 selection** — a small curated subset (a few
       hundred tests across areas) that runs in seconds for a fast pre-commit signal,
       complementing the full gate (~48 min on compiler changes). Keep it in sync with
       the gate's committed verdicts.

@@ -33,19 +33,6 @@ static bool mal_builtin_set_can_be_held_weakly(MalValue value) {
     return mal_value_is_symbol(value) && !mal_value_to_symbol(value)->registered;
 }
 
-static MalObject *mal_builtin_set_resolve_prototype(MalVm *vm, MalValue new_target, MalIntrinsic fallback_slot) {
-    MalValue prototype;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
-        return nullptr;
-    }
-
-    if (mal_value_is_object(prototype)) {
-        return mal_value_to_object(prototype);
-    }
-
-    return mal_value_to_object(vm->intrinsics[fallback_slot]);
-}
-
 /**
  * Shared Set/WeakSet constructor tail: populate the fresh set from an
  * optional iterable through this.add, closing the iterator on abrupt
@@ -65,8 +52,8 @@ static MalValue mal_builtin_set_construct(
         return mal_value_new_undefined();
     }
 
-    MalObject *prototype = mal_builtin_set_resolve_prototype(vm, new_target, prototype_slot);
-    if (prototype == nullptr) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(vm, new_target, prototype_slot, &prototype)) {
         return mal_value_new_undefined();
     }
 

@@ -114,7 +114,10 @@ const turns = [
 	// probe target must now be reclaimable (nothing strong holds it).
 	function collect() {
 		gc();
-		ok("weakref-live-target-survives", liveRef.deref() === liveTarget && liveRef.deref().tag === "live");
+		ok(
+			"weakref-live-target-survives",
+			liveRef.deref() === liveTarget && liveRef.deref().tag === "live",
+		);
 		ok("clearkept-reclaimed-next-turn", keptRef.deref() === undefined);
 	},
 

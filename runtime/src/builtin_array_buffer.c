@@ -81,14 +81,6 @@ static bool mal_array_buffer_max_option(MalVm *vm, const MalValue *args, i32 arg
     return true;
 }
 
-static MalObject *mal_array_buffer_resolve_prototype(MalVm *vm, MalValue new_target, MalIntrinsic fallback) {
-    MalValue prototype;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
-        return nullptr;
-    }
-    return mal_value_is_object(prototype) ? mal_value_to_object(prototype) : mal_value_to_object(vm->intrinsics[fallback]);
-}
-
 static MalValue mal_builtin_array_buffer_construct(MalVm *vm, const MalValue *args, i32 arg_count, MalValue new_target, bool shared) {
     if (mal_value_is_undefined(new_target)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Constructor requires 'new'");
@@ -116,8 +108,8 @@ static MalValue mal_builtin_array_buffer_construct(MalVm *vm, const MalValue *ar
     // AllocateArrayBuffer step 1: OrdinaryCreateFromConstructor reads
     // new_target.prototype (which may be a throwing getter) before allocating.
     MalIntrinsic fallback = shared ? MAL_INTRINSIC_SHARED_ARRAY_BUFFER_PROTOTYPE : MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE;
-    MalObject *prototype = mal_array_buffer_resolve_prototype(vm, new_target, fallback);
-    if (prototype == nullptr) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(vm, new_target, fallback, &prototype)) {
         return mal_value_new_undefined();
     }
 

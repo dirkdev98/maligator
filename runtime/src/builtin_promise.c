@@ -252,17 +252,6 @@ bool mal_promise_new_capability(MalVm *vm, MalValue constructor, MalValue *out_p
 
 // --- Constructor -------------------------------------------------------------
 
-static MalObject *mal_promise_resolve_prototype(MalVm *vm, MalValue new_target) {
-    MalValue prototype;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
-        return nullptr;
-    }
-    if (mal_value_is_object(prototype)) {
-        return mal_value_to_object(prototype);
-    }
-    return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]);
-}
-
 static MalValue mal_promise_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -278,8 +267,9 @@ static MalValue mal_promise_constructor(MalVm *vm, MalValue this_value, const Ma
         return mal_value_new_undefined();
     }
 
-    MalObject *prototype = mal_promise_resolve_prototype(vm, new_target);
-    if (prototype == nullptr) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_PROMISE_PROTOTYPE, &prototype)) {
         return mal_value_new_undefined();
     }
 

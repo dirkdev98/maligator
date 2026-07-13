@@ -864,8 +864,19 @@ static void mal_gc_scan_roots(MalVm *vm) {
     }
 
     // Isolate-shared roots (one per isolate, not per fiber).
+#if MAL_REALMS
+    mal_gc_mark_value(vm->error_data_marker);
+    mal_gc_mark_value(vm->error_stack_marker);
+    // Every realm's globals and intrinsics are roots. The VM aliases point into the
+    // current realm, which this loop already covers.
+    for (MalRealm *realm = vm->realms; realm != nullptr; realm = realm->next) {
+        mal_gc_mark_values(realm->globals, vm->definition->global_count);
+        mal_gc_mark_values(realm->intrinsics, MAL_INTRINSIC_COUNT);
+    }
+#else
     mal_gc_mark_values(vm->globals, vm->definition->global_count);
     mal_gc_mark_values(vm->intrinsics, MAL_INTRINSIC_COUNT);
+#endif
     mal_gc_mark_values(vm->unhandled_rejections, vm->unhandled_count);
     mal_gc_mark_value(vm->entry_async_promise);
     mal_gc_trace_table(vm->symbol_registry);

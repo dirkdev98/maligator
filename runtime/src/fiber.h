@@ -69,6 +69,13 @@ typedef struct MalFiberExec {
      * the globals mal_root_frame_head / mal_root_span_head while it runs. */
     MalRootFrame *root_frame_head;
     MalRootSpan *root_span_head;
+
+#if MAL_REALMS
+    /* The realm current when this fiber last ran. Restored on load through
+     * mal_realm_switch so vm->current_realm, vm->intrinsics, and the heap's realm
+     * cache all move together with the rest of the swapped-in execution slice. */
+    MalRealm *current_realm;
+#endif
 } MalFiberExec;
 
 typedef struct MalFiber {

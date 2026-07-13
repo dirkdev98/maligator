@@ -6,6 +6,9 @@
 typedef struct MalVm MalVm;
 typedef struct MalString MalString;
 typedef struct MalEnv MalEnv;
+#if MAL_REALMS
+typedef struct MalRealm MalRealm;
+#endif
 
 typedef struct MalFunctionObject {
     MalObject object;
@@ -15,6 +18,15 @@ typedef struct MalFunctionObject {
      * Captured-variable chain of the activation this closure was created in.
      */
     MalEnv *creation_env;
+
+#if MAL_REALMS
+    /**
+     * The realm this closure was created in, stamped at init from
+     * heap->current_realm. A back-pointer to malloc-owned realm metadata (not a GC
+     * cell), so the collector never traces it — realms are scanned via vm->realms.
+     */
+    MalRealm *realm;
+#endif
 } MalFunctionObject;
 
 /**
@@ -68,6 +80,15 @@ typedef struct MalNativeFunctionObject {
      */
     MalValue *slots;
     i32 slot_count;
+
+#if MAL_REALMS
+    /**
+     * The realm this native function was created in, stamped at init from
+     * heap->current_realm. Back-pointer to malloc-owned realm metadata (not a GC
+     * cell); the collector never traces it (realms are scanned via vm->realms).
+     */
+    MalRealm *realm;
+#endif
 } MalNativeFunctionObject;
 
 /**

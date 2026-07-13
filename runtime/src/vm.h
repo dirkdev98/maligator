@@ -924,6 +924,52 @@ typedef struct MalStackTrace {
 // runtime for `eval` so their arenas outlive the spliced functions.
 typedef struct MalLoadedDefinition MalLoadedDefinition;
 
+#if MAL_REALMS
+/**
+ * A realm: isolated global slots and intrinsics (%Object.prototype%, the error
+ * prototypes, …). Realms are plain malloc-owned metadata, NOT GC cells. Every
+ * realm is linked into the VM's singly linked `realms` list so the collector can
+ * scan each realm's roots and teardown can free its globals buffer and metadata.
+ * The VM's `globals` and `intrinsics` pointers alias the current realm, keeping
+ * the engine-wide indexed access paths unchanged. Created via mal_realm_new; the
+ * whole list is freed by mal_realm_free_all.
+ */
+typedef struct MalRealm {
+    MalValue *globals;
+    MalValue intrinsics[MAL_INTRINSIC_COUNT];
+    struct MalRealm *next;
+} MalRealm;
+
+// Allocate a realm's globals at the VM's shared global capacity, pre-fill its
+// active globals and intrinsics to `undefined` (so it is safe to scan the instant
+// it is linked), and link it into vm->realms. Internal to the engine's own realm
+// bookkeeping — this is not the language-level createRealm.
+MalRealm *mal_realm_new(MalVm *vm);
+
+// Free every realm's globals and metadata and null the list head. Call at teardown
+// once the collector can no longer scan these roots.
+void mal_realm_free_all(MalVm *vm);
+
+// Make `realm` the current realm, updating the four views of "current" together:
+// vm->current_realm, the globals/intrinsics aliases, and vm->heap.current_realm
+// (the cache function-object init stamps from). The single choke point for
+// entering a realm — no caller should assign these fields independently.
+void mal_realm_switch(MalVm *vm, MalRealm *realm);
+
+/** Called while a newly created realm is current so an embedding can install it. */
+typedef void (*MalRealmInstaller)(MalVm *vm, void *data);
+
+/**
+ * Create a fresh realm in `vm`, optionally running an embedding installer while
+ * it is current. The caller's realm is current again when this returns, including
+ * when intrinsic initialization or the installer leaves a pending throw.
+ */
+MalRealm *mal_realm_create(MalVm *vm, MalRealmInstaller installer, void *data);
+
+/** Return the realm's global object. */
+MalValue mal_realm_global(const MalRealm *realm);
+#endif
+
 typedef struct MalVm {
     const MalVmDefinition *definition;
 
@@ -964,8 +1010,32 @@ typedef struct MalVm {
      * set, stats, and — concurrent build — the SATB buffer + incremental-cycle
      * state). Allocated by mal_gc_init, freed by mal_gc_state_free. See gc.c. */
     MalGcState *gc;
+#if MAL_REALMS
+    /** Isolate-wide private symbols backing Error internal slots. Shared by every
+     * realm and rooted directly because a realm may temporarily hold no errors. */
+    MalValue error_data_marker;
+    MalValue error_stack_marker;
+    /** Current-realm globals; aliases current_realm->globals and is not owned here. */
+    MalValue *globals;
+    /**
+     * Intrinsics of the current realm. Aliases current_realm->intrinsics (which
+     * lives inline in the realm), so `vm->intrinsics[slot]` reads/writes the
+     * active realm's table unchanged. Not owned here.
+     */
+    MalValue *intrinsics;
+    // The realm created at init, before intrinsic initialization; owns the
+    // initial globals and intrinsics. Held so teardown and default-realm logic
+    // can find it directly.
+    MalRealm *initial_realm;
+    // The realm the globals and intrinsics pointers currently alias.
+    MalRealm *current_realm;
+    // Head of the singly linked list of all realms, for GC root scanning and
+    // teardown (see mal_realm_new / mal_realm_free_all).
+    MalRealm *realms;
+#else
     MalValue *globals;
     MalValue intrinsics[MAL_INTRINSIC_COUNT];
+#endif
     MalCompletion completion;
 
     /**
@@ -1142,6 +1212,54 @@ typedef struct MalVm {
      */
     void *host;
 } MalVm;
+
+#if MAL_REALMS
+/**
+ * Enter `target` realm if it is not already current. The predicted same-realm
+ * comparison makes an in-realm call (the overwhelming common case) a single branch
+ * with no switch; the actual switch runs only at a genuine realm boundary. `nullptr`
+ * is treated as "no change" so a stamp that was never assigned cannot null out the
+ * active realm. This is the one lever call/construct seams pull to cross into (and
+ * back out of) a callee's realm.
+ */
+static inline void mal_vm_realm_switch_to(MalVm *vm, MalRealm *target) {
+    if (target != nullptr && target != vm->current_realm) {
+        mal_realm_switch(vm, target);
+    }
+}
+
+/**
+ * The realm to enter for a resolved (post-bound) callee — its stamped owning realm.
+ * Only plain script and native function objects carry one; a value that reaches a
+ * call seam without resolving to one of those (a proxy forwarded here, say) stays in
+ * the caller's realm until its own target/trap runs, so this returns the current
+ * realm for it. Deliberately NOT GetFunctionRealm: no bound/proxy unwrapping (bound
+ * targets are already resolved before this is consulted) and no exotic fallback.
+ */
+MalRealm *mal_vm_callee_realm(MalVm *vm, MalValue callee);
+
+/**
+ * GetFunctionRealm (ECMA-262 10.2.2): resolve a callable's owning realm through
+ * any interleaved bound-function and Proxy wrappers. A revoked Proxy fails with
+ * a pending TypeError created in the current realm. Values without a stamped
+ * function realm fall back to the current realm.
+ */
+bool mal_vm_get_function_realm(MalVm *vm, MalValue callable, MalRealm **realm_out);
+#endif
+
+/**
+ * GetPrototypeFromConstructor (ECMA-262 10.1.14): read constructor.prototype
+ * through the normal MOP and return it when it is an object. Otherwise use the
+ * named intrinsic from the constructor's realm. In a realms-disabled build the
+ * fallback remains the current VM intrinsic, preserving the former behavior.
+ * The helper never switches the current realm.
+ */
+bool mal_vm_get_prototype_from_constructor(
+    MalVm *vm,
+    MalValue constructor,
+    MalIntrinsic intrinsic_default_proto,
+    MalObject **prototype_out
+);
 
 /**
  * Lift this native builtin's GC suppression once it has made every MalValue it
@@ -1321,6 +1439,17 @@ typedef struct MalVmFrame {
      * enters a `with`. Freed on frame teardown.
      */
     MalValue *with_objects;
+
+#if MAL_REALMS
+    /**
+     * The realm this activation runs in, stamped when the frame is pushed (from the
+     * callee's owning realm, via the current realm at push time). The shared
+     * interpreter loop re-enters this frame's realm at the top of every dispatch, so
+     * a RETURN or exception unwind that exposes a caller/handler frame automatically
+     * restores that frame's realm — no separate save/restore in the loop body.
+     */
+    MalRealm *realm;
+#endif
 
     i32 function_index;
     i32 argument_count;

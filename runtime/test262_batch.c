@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "vm.h"
+#include "test262_host.h"
 
 // Batch driver for generated test262 translation units: every test runs in a
 // forked child for crash and timeout isolation, while the process image
@@ -17,6 +18,7 @@ extern const int mal_test262_definition_count;
 static int mal_test262_run_single(int index) {
     MalVm vm;
     mal_vm_init(&vm, mal_test262_definitions[index]);
+    mal_test262_install(&vm);
 
     MalCallable *callable = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, callable);

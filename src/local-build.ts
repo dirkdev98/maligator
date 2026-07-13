@@ -22,6 +22,8 @@ function buildDirFor(cacheSuffix: string): string {
 interface RuntimeBuildDimensions {
 	/** Whether to embed the baked compiler + allow eval/Function. Default true. */
 	evalEnabled?: boolean;
+	/** Whether to compile the Realm surface (`-DMAL_REALMS`). Default true. */
+	realmsEnabled?: boolean;
 	/** Whether to link the Intl (ICU4X) surface. Default true. */
 	intlEnabled?: boolean;
 	/** `-DMAL_INTL_HAS_<SERVICE>=0` cc defines for dropped Intl services (subset build). */
@@ -86,6 +88,13 @@ export interface LocalBuildOptions {
 	 * cached archive keyed by {@link cacheSuffix}.
 	 */
 	evalEnabled?: boolean;
+
+	/**
+	 * Whether this binary compiles the Realm surface. Defaults to true. Set false for
+	 * an `engine.realms: false` build: `-DMAL_REALMS=0` on the C side and its own
+	 * cached archive keyed by {@link cacheSuffix}.
+	 */
+	realmsEnabled?: boolean;
 
 	/**
 	 * Whether this binary includes the Intl (ICU4X) surface. Defaults to true. Set
@@ -182,6 +191,7 @@ export function ensureRuntimeLibrary(
 	dimensions: RuntimeBuildDimensions = {},
 ): Array<string> {
 	const evalEnabled = dimensions.evalEnabled ?? true;
+	const realmsEnabled = dimensions.realmsEnabled ?? true;
 	const intlEnabled = dimensions.intlEnabled ?? true;
 	const intlServiceDefines = dimensions.intlServiceDefines ?? [];
 	const intlFeatures = dimensions.intlFeatures ?? [];
@@ -211,7 +221,7 @@ export function ensureRuntimeLibrary(
 			"runtime",
 			"-B",
 			buildDir,
-			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, intlEnabled, intlServiceDefines, webPlatformEnabled, regexpEnabled, nodeEnabled })}`,
+			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, realmsEnabled, intlEnabled, intlServiceDefines, webPlatformEnabled, regexpEnabled, nodeEnabled })}`,
 		],
 		{
 			stdio,
@@ -286,6 +296,7 @@ export function buildLoadDriver(
  */
 export function buildLocalBinary(options: LocalBuildOptions): string {
 	const evalEnabled = options.evalEnabled ?? true;
+	const realmsEnabled = options.realmsEnabled ?? true;
 	const intlEnabled = options.intlEnabled ?? true;
 	const webPlatformEnabled = options.webPlatformEnabled ?? true;
 	const regexpEnabled = options.regexpEnabled ?? true;
@@ -296,6 +307,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 		? runtimeArchivePaths(buildDirFor(cacheSuffix))
 		: ensureRuntimeLibrary(options.verbose, {
 				evalEnabled,
+				realmsEnabled,
 				intlEnabled,
 				intlServiceDefines: options.intlServiceDefines,
 				intlFeatures: options.intlFeatures,
@@ -325,6 +337,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 			// it must compile with the same feature defines as the archive it links.
 			...featureDefines({
 				evalEnabled,
+				realmsEnabled,
 				intlEnabled,
 				intlServiceDefines: options.intlServiceDefines,
 				webPlatformEnabled,

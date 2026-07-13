@@ -79,7 +79,10 @@ const turns = [
 		// Chain liveness is observable immediately (still-live targets).
 		ok("chain-k2-alive-via-k1", wmA.get(k1) !== undefined && wmA.get(k1).id === "k2");
 		ok("chain-marker-alive-via-fixpoint", wmB.get(wmA.get(k1)) !== undefined);
-		ok("chain-marker-weakref-alive", markerRef.deref() !== undefined && markerRef.deref().id === "chain-marker");
+		ok(
+			"chain-marker-weakref-alive",
+			markerRef.deref() !== undefined && markerRef.deref().id === "chain-marker",
+		);
 		ok("chain-k2-weakref-alive", k2Ref.deref() !== undefined);
 	},
 
@@ -92,7 +95,10 @@ const turns = [
 		ok("keyinvalue-value-reclaimed", cycValRef.deref() === undefined);
 		// Chain still alive after another collection (k1 still held).
 		gc();
-		ok("chain-still-alive-after-second-gc", markerRef.deref() !== undefined && k2Ref.deref() !== undefined);
+		ok(
+			"chain-still-alive-after-second-gc",
+			markerRef.deref() !== undefined && k2Ref.deref() !== undefined,
+		);
 	},
 ];
 

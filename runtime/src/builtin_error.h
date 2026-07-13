@@ -19,4 +19,4 @@ MalValue mal_builtin_new_aggregate_error(MalVm *vm, MalValue errors);
  * True if `value` is an object carrying the [[ErrorData]] marker. Backs
  * Error.isError and Object.prototype.toString's "[object Error]" tag.
  */
-bool mal_builtin_value_has_error_data(MalValue value);
+bool mal_builtin_value_has_error_data(MalVm *vm, MalValue value);

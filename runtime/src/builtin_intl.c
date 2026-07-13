@@ -264,14 +264,8 @@ static MalObject *intl_resolve_prototype(MalVm *vm, MalValue new_target, MalIntr
     if (mal_value_is_undefined(new_target)) {
         return mal_value_to_object(vm->intrinsics[fallback]);
     }
-    MalValue prototype;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
-        return nullptr;
-    }
-    if (mal_value_is_object(prototype)) {
-        return mal_value_to_object(prototype);
-    }
-    return mal_value_to_object(vm->intrinsics[fallback]);
+    MalObject *prototype;
+    return mal_vm_get_prototype_from_constructor(vm, new_target, fallback, &prototype) ? prototype : nullptr;
 }
 
 // ---------------------------------------------------------------------------

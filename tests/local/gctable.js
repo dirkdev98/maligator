@@ -58,7 +58,10 @@ for (let i = 0; i < 60; i += 2) {
 	dict["k" + i] = val(i + 1000);
 }
 gc();
-ok("dict-readd-after-delete-intact", intact(dict.k0, 1000) && intact(dict.k58, 1058) && intact(dict.k59, 59));
+ok(
+	"dict-readd-after-delete-intact",
+	intact(dict.k0, 1000) && intact(dict.k58, 1058) && intact(dict.k59, 59),
+);
 
 // --- Shaped object delete (transitions the shape, not the dictionary path). ---
 let shaped = { a: val(1), b: val(2), c: val(3), d: val(4) };
@@ -95,7 +98,10 @@ ok("map-clear-empties", m.size === 0);
 m.set("x", val(99));
 m.set("y", val(100));
 gc();
-ok("map-reuse-after-clear-intact", m.size === 2 && intact(m.get("x"), 99) && intact(m.get("y"), 100));
+ok(
+	"map-reuse-after-clear-intact",
+	m.size === 2 && intact(m.get("x"), 99) && intact(m.get("y"), 100),
+);
 
 // --- Set delete + clear + reuse (object elements so the entries hold cells). ---
 let s = new Set();

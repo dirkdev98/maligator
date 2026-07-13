@@ -47,7 +47,9 @@ function assertNoLeaks(fixture: string, name: string): void {
 	if (leaks !== 0 || bytes !== 0) {
 		// Surface the grouped report so the failure names the leaking kind directly.
 		const detail = output.slice(output.indexOf("leaks for") - 40).slice(0, 4000);
-		throw new Error(`${name}: expected 0 leaks, got ${leaks} (${bytes} bytes):\n${detail}`);
+		throw new Error(
+			`${name}: expected 0 leaks, got ${leaks} (${bytes} bytes):\n${detail}`,
+		);
 	}
 }
 

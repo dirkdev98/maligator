@@ -120,22 +120,6 @@ static f64 mal_builtin_parse_float_units(const c16 *code_units, usize length) {
 }
 
 /**
- * Resolve the prototype for a construct call (OrdinaryCreateFromConstructor
- * flavored): new_target's prototype property when it is an object, the given
- * intrinsic slot otherwise.
- */
-static MalObject *mal_builtin_number_resolve_prototype(MalVm *vm, MalValue new_target, MalIntrinsic fallback) {
-    MalValue prototype;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
-        return nullptr;
-    }
-    if (mal_value_is_object(prototype)) {
-        return mal_value_to_object(prototype);
-    }
-    return mal_value_to_object(vm->intrinsics[fallback]);
-}
-
-/**
  * Number(value): ToNumeric the argument (BigInt folds to its numeric value,
  * Symbol throws), boxing into a wrapper when constructed with new.
  */
@@ -166,8 +150,9 @@ static MalValue mal_builtin_number_constructor(MalVm *vm, MalValue this_value, c
         return number;
     }
 
-    MalObject *prototype = mal_builtin_number_resolve_prototype(vm, new_target, MAL_INTRINSIC_NUMBER_PROTOTYPE);
-    if (prototype == nullptr) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_NUMBER_PROTOTYPE, &prototype)) {
         return mal_value_new_undefined();
     }
 

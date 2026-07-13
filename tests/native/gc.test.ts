@@ -41,7 +41,12 @@ const FIXTURES: Array<GcFixture> = [
 	{ fixture: "tests/local/gctest.js", name: "gctest", tag: "gctest" },
 	// WeakRef / FinalizationRegistry / ClearKeptObjects + cycle reclamation observed
 	// via the weak pass.
-	{ fixture: "tests/local/gcweak.js", name: "gcweak", tag: "gcweak", mainFile: HOST_MAIN },
+	{
+		fixture: "tests/local/gcweak.js",
+		name: "gcweak",
+		tag: "gcweak",
+		mainFile: HOST_MAIN,
+	},
 	// WeakMap ephemeron fixpoint: plain death, chained revival, key-in-own-value.
 	{
 		fixture: "tests/local/gcephemeron.js",
@@ -97,7 +102,10 @@ describe("targeted GC unit tests", () => {
 			});
 
 			it("compiled backend", () => {
-				assertPassLine(runToStdout(compiled, { env: { ...HOST_GC, ...spec.env } }), spec.tag);
+				assertPassLine(
+					runToStdout(compiled, { env: { ...HOST_GC, ...spec.env } }),
+					spec.tag,
+				);
 			});
 
 			it("compiled + MAL_GC_STRESS + MAL_GC_VERIFY", () => {
@@ -108,7 +116,10 @@ describe("targeted GC unit tests", () => {
 			});
 
 			it("interpreter backend (Tier B root walk)", () => {
-				assertPassLine(runToStdout(interp, { env: { ...HOST_GC, ...spec.env } }), spec.tag);
+				assertPassLine(
+					runToStdout(interp, { env: { ...HOST_GC, ...spec.env } }),
+					spec.tag,
+				);
 			});
 
 			it("interpreter + MAL_GC_STRESS + MAL_GC_VERIFY", () => {

@@ -237,13 +237,11 @@ static MalValue mal_builtin_data_view_constructor(MalVm *vm, MalValue this_value
     // user getter that detaches or resizes the buffer. The spec re-validates the
     // detached state and the offset/length bounds against the post-access buffer
     // length before installing the view.
-    MalValue prototype_value;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype_value)) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_DATA_VIEW_PROTOTYPE, &prototype)) {
         return mal_value_new_undefined();
     }
-    MalObject *prototype = mal_value_is_object(prototype_value)
-        ? mal_value_to_object(prototype_value)
-        : mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DATA_VIEW_PROTOTYPE]);
 
     if (buffer->detached) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot construct DataView over a detached ArrayBuffer");

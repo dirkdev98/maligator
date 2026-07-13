@@ -185,22 +185,6 @@ static bool mal_builtin_string_is_whitespace(c16 code_unit) {
     }
 }
 
-/**
- * Resolve the prototype for a construct call (OrdinaryCreateFromConstructor
- * flavored): new_target's prototype property when it is an object, the given
- * intrinsic slot otherwise.
- */
-static MalObject *mal_builtin_string_resolve_prototype(MalVm *vm, MalValue new_target, MalIntrinsic fallback) {
-    MalValue prototype;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
-        return nullptr;
-    }
-    if (mal_value_is_object(prototype)) {
-        return mal_value_to_object(prototype);
-    }
-    return mal_value_to_object(vm->intrinsics[fallback]);
-}
-
 static MalValue mal_builtin_string_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -225,8 +209,9 @@ static MalValue mal_builtin_string_constructor(MalVm *vm, MalValue this_value, c
         return mal_value_from_string(string);
     }
 
-    MalObject *prototype = mal_builtin_string_resolve_prototype(vm, new_target, MAL_INTRINSIC_STRING_PROTOTYPE);
-    if (prototype == nullptr) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_STRING_PROTOTYPE, &prototype)) {
         return mal_value_new_undefined();
     }
 

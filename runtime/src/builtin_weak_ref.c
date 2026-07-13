@@ -24,17 +24,6 @@ static bool mal_can_be_held_weakly(MalValue value) {
     return mal_value_is_symbol(value) && !mal_value_to_symbol(value)->registered;
 }
 
-static MalObject *mal_weak_ref_resolve_prototype(MalVm *vm, MalValue new_target) {
-    MalValue prototype;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
-        return nullptr;
-    }
-    if (mal_value_is_object(prototype)) {
-        return mal_value_to_object(prototype);
-    }
-    return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_WEAK_REF_PROTOTYPE]);
-}
-
 static MalValue mal_builtin_weak_ref_constructor(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee
 ) {
@@ -52,8 +41,9 @@ static MalValue mal_builtin_weak_ref_constructor(
         return mal_value_new_undefined();
     }
 
-    MalObject *prototype = mal_weak_ref_resolve_prototype(vm, new_target);
-    if (prototype == nullptr) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_WEAK_REF_PROTOTYPE, &prototype)) {
         return mal_value_new_undefined();
     }
     // AddToKeptObjects: a freshly constructed WeakRef must not see its target die

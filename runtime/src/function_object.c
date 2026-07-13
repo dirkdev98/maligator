@@ -43,6 +43,9 @@ void mal_function_object_init(
     mal_object_init(heap, &function->object, MAL_HEAP_FUNCTION_OBJECT, prototype);
     function->function_index = function_index;
     function->creation_env = nullptr;
+#if MAL_REALMS
+    function->realm = heap->current_realm;
+#endif
 }
 
 MalFunctionObject *mal_function_object_new(
@@ -75,6 +78,9 @@ void mal_native_function_object_init(
     function->is_constructor = false;
     function->slots = nullptr;
     function->slot_count = 0;
+#if MAL_REALMS
+    function->realm = heap->current_realm;
+#endif
     // Per spec (CreateBuiltinFunction / SetFunctionLength then SetFunctionName),
     // `length` is the earlier own property and `name` follows it.
     mal_native_function_define_length(heap, &function->object, length);

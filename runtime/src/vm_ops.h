@@ -289,8 +289,10 @@ typedef struct MalInlineCache {
     //  - watched-intrinsic own property: `prim_kind` 0 and `slot == MAL_IC_VALUE_SLOT`
     //    — `value` is `key`'s own value on a watched intrinsic (String, Math, …),
     //    which lives in the overflow table (no shape slot).
-    // Both are valid only while `mal_primitive_method_protector` holds. A plain
-    // object-shape entry has `prim_kind` 0 and a real `slot` (uses object->slots).
+    // Both are valid only while `mal_primitive_method_protector` holds. Under
+    // MAL_REALMS a primitive-method entry is additionally tagged with its realm.
+    // A plain object-shape entry has `prim_kind` 0 and a real `slot` (uses
+    // object->slots).
     MalValue value;
     // For a value-slot entry (`slot == MAL_IC_VALUE_SLOT`), the exact watched
     // object the value belongs to. Shape is NOT a unique discriminator — the
@@ -298,8 +300,17 @@ typedef struct MalInlineCache {
     // shape yet hold different overflow-table values (e.g. BYTES_PER_ELEMENT), so
     // a polymorphic site reading `.BYTES_PER_ELEMENT` off different constructors
     // would false-hit on shape+key alone. Watched intrinsics are immortal, so this
-    // pointer is stable (never freed/reused — no ABA). NULL for non-value entries.
+    // pointer is stable (never freed/reused — no ABA). Under MAL_REALMS this
+    // storage is the realm tag for primitive-method entries; the modes are
+    // mutually exclusive. NULL for other entries.
+#if MAL_REALMS
+    union {
+        const struct MalObject *obj;
+        const MalRealm *realm;
+    };
+#else
     const struct MalObject *obj;
+#endif
     // Polymorphic overflow, stored SoA (parallel `poly_shape[i]` / `poly_slot[i]`):
     // plain-object data-slot alternates for `key` beyond the primary. `poly_count`
     // entries are live. `poly_count == 0` is a monomorphic site; `megamorphic` marks

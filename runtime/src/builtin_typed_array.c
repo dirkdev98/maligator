@@ -174,14 +174,6 @@ static bool mal_ta_relative(MalVm *vm, MalValue value, u32 length, u32 fallback,
     return true;
 }
 
-static MalObject *mal_ta_resolve_prototype(MalVm *vm, MalValue new_target, MalTypedArrayKind kind) {
-    MalValue prototype;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
-        return nullptr;
-    }
-    return mal_value_is_object(prototype) ? mal_value_to_object(prototype) : mal_ta_kind_prototype(vm, kind);
-}
-
 // Copy `count` elements from src[src_start..] into dst[dst_start..], converting
 // through boxed values so cross-kind copies coerce. Returns false on a throw.
 static bool mal_ta_copy_elements(MalVm *vm, MalTypedArrayObject *dst, u32 dst_start, MalTypedArrayObject *src, u32 src_start, u32 count) {
@@ -201,8 +193,11 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
         return mal_value_new_undefined();
     }
 
-    MalObject *prototype = mal_ta_resolve_prototype(vm, new_target, kind);
-    if (prototype == nullptr) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target,
+            (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind),
+            &prototype)) {
         return mal_value_new_undefined();
     }
 

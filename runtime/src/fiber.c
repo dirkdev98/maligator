@@ -189,6 +189,10 @@ MalFiber *mal_fiber_create(
         .kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
     f->exec.root_frame_head = nullptr;
     f->exec.root_span_head = nullptr;
+#if MAL_REALMS
+    /* A spawned fiber begins in whatever realm was active where it was spawned. */
+    f->exec.current_realm = vm->current_realm;
+#endif
 
     /* Register on the isolate's fiber list (for GC root enumeration). */
     f->next = vm->fibers_head;
@@ -257,6 +261,9 @@ void mal_fiber_save_exec(MalFiber *f, MalVm *vm) {
     f->exec.completion = vm->completion;
     f->exec.root_frame_head = mal_root_frame_head;
     f->exec.root_span_head = mal_root_span_head;
+#if MAL_REALMS
+    f->exec.current_realm = vm->current_realm;
+#endif
 }
 
 void mal_fiber_load_exec(MalFiber *f, MalVm *vm) {
@@ -276,6 +283,11 @@ void mal_fiber_load_exec(MalFiber *f, MalVm *vm) {
     vm->completion = f->exec.completion;
     mal_root_frame_head = f->exec.root_frame_head;
     mal_root_span_head = f->exec.root_span_head;
+#if MAL_REALMS
+    /* Re-enter the fiber's realm through the one choke point so vm->current_realm,
+     * vm->intrinsics, and heap.current_realm are restored together with the slice. */
+    mal_realm_switch(vm, f->exec.current_realm);
+#endif
     vm->current_fiber = f;
     mal_current_fiber = f;
 }

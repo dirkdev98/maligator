@@ -120,6 +120,10 @@ static uptr mal_vm_compute_stack_limit(void) {
 }
 
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
+#if MAL_REALMS
+    vm->error_data_marker = mal_value_new_undefined();
+    vm->error_stack_marker = mal_value_new_undefined();
+#endif
     mal_gc_init(vm);
 
     // Relocate the program's function / string / bigint constant tables into
@@ -172,7 +176,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->interp_ic = calloc((usize) vm->function_capacity, sizeof(struct MalInlineCache *));
     vm->load_stub = calloc((usize) MAL_STUB_CACHE_SIZE, sizeof(MalStubEntry));
     vm->global_capacity = definition->global_count > 0 ? definition->global_count : 1;
+#if !MAL_REALMS
     vm->globals = malloc(sizeof(MalValue) * (usize) vm->global_capacity);
+#endif
     // Fixed-capacity, never reallocated (see MAL_MAX_CALL_FRAMES): keeps every
     // live frame pointer stable across re-entrant calls.
     vm->frame_capacity = MAL_MAX_CALL_FRAMES;
@@ -220,9 +226,19 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->entry_async_promise = mal_value_new_undefined();
 
     mal_heap_init(&vm->heap, 0);
+#if MAL_REALMS
+    // global_capacity is already established above, so the initial realm can own
+    // both its absolute globals array and intrinsics before intrinsic initialization.
+    // mal_realm_new links only after all active root slots are safe to scan.
+    vm->realms = nullptr;
+    vm->initial_realm = mal_realm_new(vm);
+    // Enter the initial realm: sets both VM aliases and primes heap.current_realm.
+    mal_realm_switch(vm, vm->initial_realm);
+#else
     for (i32 i = 0; i < definition->global_count; i++) {
         vm->globals[i] = mal_value_new_undefined();
     }
+#endif
     for (i32 i = 0; i < MAL_INTRINSIC_COUNT; i++) {
         vm->intrinsics[i] = mal_value_new_undefined();
     }
@@ -367,7 +383,9 @@ void mal_vm_free(MalVm *vm) {
 
     free(vm->frames);
     free(vm->value_stack);
+#if !MAL_REALMS
     free(vm->globals);
+#endif
     free(vm->cjs_registry);
 
     // The VM-owned constant tables (the rows; the instruction/code-unit data they
@@ -416,6 +434,15 @@ void mal_vm_free(MalVm *vm) {
     mal_gc_finalize_all(vm);
     mal_heap_free(&vm->heap);
     mal_gc_state_free(vm);
+
+#if MAL_REALMS
+    // Realm globals and metadata are malloc-owned. Free the list now that the
+    // collector is gone, then null the pointers that aliased its current member.
+    mal_realm_free_all(vm);
+    vm->initial_realm = nullptr;
+    vm->current_realm = nullptr;
+    vm->intrinsics = nullptr;
+#endif
 
     vm->definition = nullptr;
     vm->globals = nullptr;
@@ -557,8 +584,22 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
     }
     live->bigint_constant_count = new_bigints;
 
-    // Globals: grow and undefined-initialize the spliced range.
+    // Globals: grow and undefined-initialize the same absolute range in every realm.
     i32 new_globals = global_base + loaded->global_count;
+#if MAL_REALMS
+    if (new_globals > vm->global_capacity) {
+        for (MalRealm *realm = vm->realms; realm != nullptr; realm = realm->next) {
+            realm->globals = realloc(realm->globals, sizeof(MalValue) * (usize) new_globals);
+        }
+        vm->global_capacity = new_globals;
+    }
+    for (MalRealm *realm = vm->realms; realm != nullptr; realm = realm->next) {
+        for (i32 i = global_base; i < new_globals; i++) {
+            realm->globals[i] = mal_value_new_undefined();
+        }
+    }
+    vm->globals = vm->current_realm->globals;
+#else
     if (new_globals > vm->global_capacity) {
         vm->global_capacity = new_globals;
         vm->globals = realloc(vm->globals, sizeof(MalValue) * (usize) new_globals);
@@ -566,6 +607,7 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
     for (i32 i = global_base; i < new_globals; i++) {
         vm->globals[i] = mal_value_new_undefined();
     }
+#endif
     live->global_count = new_globals;
 
     // Functions: append rebased copies. The instruction/handler data is referenced
@@ -680,6 +722,16 @@ static void mal_vm_pop_frame_storage(MalVm *vm, MalVmFrame *frame) {
     }
 }
 
+#if MAL_REALMS
+/** Restore the realm of the frame exposed by a pop, or the enclosing C seam. */
+static void mal_vm_restore_surviving_realm(MalVm *vm, MalRealm *outer_realm) {
+    MalRealm *realm = vm->frame_count > 0
+        ? vm->frames[vm->frame_count - 1].realm
+        : outer_realm;
+    mal_vm_realm_switch_to(vm, realm);
+}
+#endif
+
 /**
  * The `this` value a callee actually sees. A non-strict (sloppy) function called
  * with `undefined`/`null` this substitutes the global object (OrdinaryCallBindThis
@@ -699,6 +751,80 @@ MalValue mal_vm_callee_this(MalVm *vm, const MalFunction *function, MalValue thi
         return mal_builtin_object_box_primitive(vm, this_value);
     }
     return this_value;
+}
+
+#if MAL_REALMS
+MalRealm *mal_vm_callee_realm(MalVm *vm, MalValue callee) {
+    if (mal_value_is_function_object(callee)) {
+        MalRealm *realm = mal_value_to_function_object(callee)->realm;
+        return realm != nullptr ? realm : vm->current_realm;
+    }
+    if (mal_value_is_native_function_object(callee)) {
+        MalRealm *realm = mal_value_to_native_function_object(callee)->realm;
+        return realm != nullptr ? realm : vm->current_realm;
+    }
+    return vm->current_realm;
+}
+
+bool mal_vm_get_function_realm(MalVm *vm, MalValue callable, MalRealm **realm_out) {
+    while (true) {
+        if (mal_value_is_function_object(callable)) {
+            MalRealm *realm = mal_value_to_function_object(callable)->realm;
+            *realm_out = realm != nullptr ? realm : vm->current_realm;
+            return true;
+        }
+        if (mal_value_is_native_function_object(callable)) {
+            MalRealm *realm = mal_value_to_native_function_object(callable)->realm;
+            *realm_out = realm != nullptr ? realm : vm->current_realm;
+            return true;
+        }
+        if (mal_value_is_bound_function_object(callable)) {
+            callable = mal_value_to_bound_function_object(callable)->target;
+            continue;
+        }
+        if (mal_value_is_proxy_object(callable)) {
+            MalProxyObject *proxy = mal_value_to_proxy_object(callable);
+            if (proxy->revoked || mal_value_is_null(proxy->handler)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Cannot get the realm of a revoked proxy");
+                return false;
+            }
+            callable = proxy->target;
+            continue;
+        }
+
+        *realm_out = vm->current_realm;
+        return true;
+    }
+}
+#endif
+
+bool mal_vm_get_prototype_from_constructor(
+    MalVm *vm,
+    MalValue constructor,
+    MalIntrinsic intrinsic_default_proto,
+    MalObject **prototype_out
+) {
+    MalValue prototype;
+    if (!mal_vm_get_property(
+            vm, constructor, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
+        return false;
+    }
+    if (mal_value_is_object(prototype)) {
+        *prototype_out = mal_value_to_object(prototype);
+        return true;
+    }
+
+#if MAL_REALMS
+    MalRealm *realm;
+    if (!mal_vm_get_function_realm(vm, constructor, &realm)) {
+        return false;
+    }
+    *prototype_out = mal_value_to_object(realm->intrinsics[intrinsic_default_proto]);
+#else
+    *prototype_out = mal_value_to_object(vm->intrinsics[intrinsic_default_proto]);
+#endif
+    return true;
 }
 
 bool mal_vm_push_function_frame(
@@ -825,6 +951,12 @@ bool mal_vm_push_function_frame(
     frame->with_objects = nullptr;
     frame->with_count = 0;
     frame->with_capacity = 0;
+#if MAL_REALMS
+    // Default stamp: the realm current at push time. Call/construct seams that cross
+    // into a callee's realm switch to it BEFORE pushing (so this captures the callee
+    // realm); same-realm pushes capture the caller realm unchanged.
+    frame->realm = vm->current_realm;
+#endif
 
     return true;
 }
@@ -867,13 +999,24 @@ static bool mal_vm_unwind_to_handler(MalVm *vm, i32 target_frame_count) {
 
         vm->frame_count = frame_index + 1;
         frame->instruction_pointer = innermost->handler_ip;
+#if MAL_REALMS
+        // The handler can belong to a caller realm after the frames above it were
+        // discarded. Enter it before the catch body performs any work.
+        mal_vm_realm_switch_to(vm, frame->realm);
+#endif
         return true;
     }
 
     return false;
 }
 
-static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
+static void mal_vm_run_until_frame_count(
+    MalVm *vm,
+    i32 target_frame_count
+#if MAL_REALMS
+    , MalRealm *outer_realm
+#endif
+) {
     while (vm->frame_count > target_frame_count) {
         // GC safepoint poll. Polling once per dispatched
         // instruction covers both loop back-edges and call returns. Near-free
@@ -881,7 +1024,6 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
         if (mal_gc_poll) {
             mal_gc_safepoint(vm);
         }
-
         MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
         auto instruction = frame->function->instructions[frame->instruction_pointer++];
 
@@ -1066,6 +1208,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
 
                 // Pop without freeing: the storage now belongs to the generator.
                 vm->frame_count--;
+#if MAL_REALMS
+                mal_vm_restore_surviving_realm(vm, outer_realm);
+#endif
 
                 MalValue generator_value = mal_value_from_object((MalObject *) generator);
                 if (caller_frame_index >= 0) {
@@ -1110,6 +1255,11 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 if (generator->is_async_generator) {
                     mal_async_generator_yield(vm, generator);
                 }
+#if MAL_REALMS
+                // Yield settlement and any queued-request drain are part of the
+                // suspended generator execution; leave its realm only afterwards.
+                mal_vm_restore_surviving_realm(vm, outer_realm);
+#endif
                 break;
             }
 
@@ -1143,6 +1293,11 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                 vm->frame_count--;
                 vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
                 mal_async_function_await(vm, state, awaited);
+#if MAL_REALMS
+                // PromiseResolve and the await reactions belong to the suspended
+                // async execution; restore the resumer only after they are installed.
+                mal_vm_restore_surviving_realm(vm, outer_realm);
+#endif
                 break;
             }
             case MAL_OP_DELETE_PROPERTY:
@@ -1255,16 +1410,32 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                     if (frame->function->is_derived_constructor) {
                         // Derived: a non-undefined value is a TypeError (13.c); an
                         // undefined value falls through to GetThisBinding (15), which
-                        // is a ReferenceError if super() has not bound `this`. The
-                        // frame stays on the stack so the unwind propagates the throw.
+                        // is a ReferenceError if super() has not bound `this`.
+                        MalIntrinsic error_prototype = MAL_INTRINSIC_COUNT;
+                        const byte *error_message = nullptr;
                         if (!mal_value_is_undefined(return_value)) {
-                            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                                "Derived constructors may only return an object or undefined");
-                            break;
+                            error_prototype = MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE;
+                            error_message = "Derived constructors may only return an object or undefined";
+                        } else if (mal_value_is_empty(frame->this_value)) {
+                            error_prototype = MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE;
+                            error_message = "Must call super constructor in derived class before returning from derived constructor";
                         }
-                        if (mal_value_is_empty(frame->this_value)) {
-                            mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
-                                "Must call super constructor in derived class before returning from derived constructor");
+                        if (error_message != nullptr) {
+#if MAL_REALMS
+                            // [[Construct]] performs these checks after removing the
+                            // constructor execution context. Allocate the error from
+                            // the surviving caller/C-seam realm, then restore the
+                            // frame realm for the existing unwind path.
+                            MalRealm *frame_realm = vm->current_realm;
+                            MalRealm *error_realm = frame->caller_frame_index >= 0
+                                ? vm->frames[frame->caller_frame_index].realm
+                                : outer_realm;
+                            mal_vm_realm_switch_to(vm, error_realm);
+#endif
+                            mal_vm_throw_error(vm, error_prototype, error_message);
+#if MAL_REALMS
+                            mal_vm_realm_switch_to(vm, frame_realm);
+#endif
                             break;
                         }
                     }
@@ -1291,14 +1462,26 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                     // An async generator's return completes it and settles the
                     // front request with { value, done: true }.
                     mal_async_generator_return(vm, coroutine, return_value);
+#if MAL_REALMS
+                    mal_vm_restore_surviving_realm(vm, outer_realm);
+#endif
                 } else if (coroutine != nullptr && coroutine->is_async) {
                     // Resolving the result promise is the async function's return.
                     mal_async_function_settle_return(vm, coroutine, return_value);
-                } else if (caller_frame_index >= 0) {
-                    vm->frames[caller_frame_index].registers[return_register] = return_value;
-                    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = return_value};
+#if MAL_REALMS
+                    mal_vm_restore_surviving_realm(vm, outer_realm);
+#endif
                 } else {
-                    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = return_value};
+#if MAL_REALMS
+                    // Ordinary returns expose the caller before writing its register.
+                    mal_vm_restore_surviving_realm(vm, outer_realm);
+#endif
+                    if (caller_frame_index >= 0) {
+                        vm->frames[caller_frame_index].registers[return_register] = return_value;
+                        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = return_value};
+                    } else {
+                        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = return_value};
+                    }
                 }
                 break;
             }
@@ -1320,10 +1503,18 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             if (async_index >= 0) {
                 MalValue reason = vm->completion.value;
                 MalGeneratorObject *state = vm->frames[async_index].generator;
+#if MAL_REALMS
+                MalRealm *async_realm = vm->frames[async_index].realm;
+#endif
                 for (i32 i = vm->frame_count - 1; i >= async_index; i--) {
                     mal_vm_pop_frame_storage(vm, &vm->frames[i]);
                 }
                 vm->frame_count = async_index;
+#if MAL_REALMS
+                // A synchronous callee may have thrown from another realm. Reject in
+                // the completing async execution's realm, matching compiled bodies.
+                mal_vm_realm_switch_to(vm, async_realm);
+#endif
                 vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
                 if (state->is_async_generator) {
                     // An uncaught throw completes the async generator and rejects
@@ -1333,6 +1524,9 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
                     state->state = MAL_GENERATOR_COMPLETED;
                     mal_async_function_settle_throw(vm, state, reason);
                 }
+#if MAL_REALMS
+                mal_vm_restore_surviving_realm(vm, outer_realm);
+#endif
                 continue;
             }
 
@@ -1343,9 +1537,16 @@ static void mal_vm_run_until_frame_count(MalVm *vm, i32 target_frame_count) {
             }
 
             vm->frame_count = target_frame_count;
+#if MAL_REALMS
+            mal_vm_restore_surviving_realm(vm, outer_realm);
+#endif
             return;
         }
     }
+#if MAL_REALMS
+    // Also cover a normal loop exit at a C seam with no surviving interpreter frame.
+    mal_vm_restore_surviving_realm(vm, outer_realm);
+#endif
 }
 
 /**
@@ -1472,7 +1673,13 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
     } else {
         // The entry function takes no arguments, so the marshaling region is empty.
         mal_vm_push_function_frame(vm, entry_index, nullptr, mal_value_new_undefined(), 0, -1, -1);
-        mal_vm_run_until_frame_count(vm, 0);
+        mal_vm_run_until_frame_count(
+            vm,
+            0
+#if MAL_REALMS
+            , vm->current_realm
+#endif
+        );
         script_completion = vm->completion;
     }
 
@@ -1521,6 +1728,17 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
         mal_gc_satb_shade_frame(&generator->frame);
     }
 
+#if MAL_REALMS
+    // A resume has no caller seam to cross into the coroutine's realm, so enter it
+    // here from the frame's stamped realm. The compiled body never passes through the
+    // interpreter's per-dispatch realm re-entry, and the interpreted path must still
+    // restore the resumer's realm once the body suspends or completes. Every early
+    // return/throw below restores `saved_realm`, so control returns to the driver
+    // (a .next() caller, an awaiting microtask) in the realm it drove from.
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, generator->frame.realm);
+#endif
+
     if (function->compiled != nullptr) {
         // Compiled coroutine: no interpreter frame is pushed and no dispatch loop
         // runs. Deliver the sent value + resume mode into the heap register buffer
@@ -1530,6 +1748,9 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
         // the mode. The C-stack / depth guard lives in mal_vm_enter_compiled.
         if (!mal_vm_enter_compiled(vm, generator->frame.function_index)) {
             generator->state = MAL_GENERATOR_COMPLETED;
+#if MAL_REALMS
+            mal_vm_realm_switch_to(vm, saved_realm);
+#endif
             return;
         }
         generator->frame.function = function;
@@ -1549,11 +1770,17 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             generator->state = MAL_GENERATOR_COMPLETED;
         }
+#if MAL_REALMS
+        mal_vm_realm_switch_to(vm, saved_realm);
+#endif
         return;
     }
 
     if (vm->frame_count >= vm->frame_capacity) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+#if MAL_REALMS
+        mal_vm_realm_switch_to(vm, saved_realm);
+#endif
         return;
     }
 
@@ -1582,13 +1809,22 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
     generator->state = MAL_GENERATOR_EXECUTING;
     vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
-    mal_vm_run_until_frame_count(vm, target_frame_count);
+    mal_vm_run_until_frame_count(
+        vm,
+        target_frame_count
+#if MAL_REALMS
+        , saved_realm
+#endif
+    );
 
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         // The body threw past its own handlers; the run loop already popped and
         // freed the frame, so the generator is finished.
         generator->state = MAL_GENERATOR_COMPLETED;
     }
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
 }
 
 bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
@@ -1910,6 +2146,14 @@ MalValue mal_vm_interpret_function(
     bool returns_promise = function->kind == MAL_FUNCTION_KIND_ASYNC;
     MalValue saved_entry_async_promise = vm->entry_async_promise;
 
+#if MAL_REALMS
+    // Re-entrant / native->JS entry: this run loop has no caller frame to restore
+    // from, so bracket the callee's realm at this outer C seam. Entering before the
+    // push stamps the frame with the callee realm; restoring after the nested loop
+    // drains covers both the normal return and a throw that propagated out of it.
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
     i32 target_frame_count = vm->frame_count;
     if (mal_vm_push_function_frame(vm, function_index, env, this_value, arg_count, -1, -1)) {
         MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
@@ -1920,10 +2164,19 @@ MalValue mal_vm_interpret_function(
             frame->is_construct = true;
             frame->new_target = new_target;
         }
-        mal_vm_run_until_frame_count(vm, target_frame_count);
+        mal_vm_run_until_frame_count(
+            vm,
+            target_frame_count
+#if MAL_REALMS
+            , saved_realm
+#endif
+        );
     } else {
         vm->value_stack_size = base;
     }
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
 
     if (returns_promise) {
         MalValue result_promise = vm->entry_async_promise;
@@ -1959,7 +2212,13 @@ MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue sco
     // a with object environment record on the frame's env chain (WITH_GET walks it).
     frame->env = mal_env_new_with_object(vm, frame->env, scope_object);
 
-    mal_vm_run_until_frame_count(vm, baseline);
+    mal_vm_run_until_frame_count(
+        vm,
+        baseline
+#if MAL_REALMS
+        , vm->current_realm
+#endif
+    );
     return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
                                                        : vm->completion.value;
 }
@@ -1984,6 +2243,17 @@ MalCompletion mal_vm_call_value(
 
     MalBoundResolution resolution = mal_bound_function_object_resolve(callee, this_value, args, arg_count, true);
     MalCompletion completion = {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+
+#if MAL_REALMS
+    // Enter the resolved callee's realm for the whole body invocation — the native
+    // callback, the compiled body, or the nested interpreter loop below — and restore
+    // it before returning on both normal completion and a pending throw. Bound
+    // resolution above ran in the caller's realm (the proxy path returned earlier, so
+    // a proxy stays in the caller realm until its trap runs). Same-realm calls skip
+    // the switch entirely.
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, resolution.callee));
+#endif
 
     if (mal_value_is_native_function_object(resolution.callee)) {
         MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
@@ -2043,6 +2313,9 @@ MalCompletion mal_vm_call_value(
         completion = vm->completion;
     }
 
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
     free(resolution.owned_args);
     return completion;
 }
@@ -2076,11 +2349,20 @@ MalCompletion mal_vm_call_cached(
             if (!mal_vm_enter_compiled(vm, cc->function_index[v])) {
                 return vm->completion;
             }
+#if MAL_REALMS
+            // The cached callee is a plain compiled function object; enter its realm
+            // for the body and restore before returning (this arm bypasses call_value).
+            MalRealm *saved_realm = vm->current_realm;
+            mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
             MalValue tv = mal_vm_callee_this(vm, function, this_value);
             MalValue value = function->compiled(
                 vm, tv, args, arg_count, mal_value_new_undefined(), cc->env[v], callee, nullptr
             );
             mal_vm_leave_compiled(vm);
+#if MAL_REALMS
+            mal_vm_realm_switch_to(vm, saved_realm);
+#endif
             return vm->completion.kind == MAL_COMPLETION_THROW
                 ? vm->completion
                 : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
@@ -2134,13 +2416,26 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
     // resolved constructor for the default `new callee()` case.
     MalValue effective_new_target = new_target == callee ? resolution.callee : new_target;
 
+    // EvaluateNew's IsConstructor failure belongs to the caller's running
+    // execution context. Validate before crossing into a stamped callee realm.
+    if (!mal_vm_is_constructor(vm, resolution.callee)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
+        free(resolution.owned_args);
+        return vm->completion;
+    }
+
+#if MAL_REALMS
+    // Enter the target constructor's realm before any default allocation (the `this`
+    // object built from %Object.prototype%, or a native's own instance) or body
+    // invocation, so the instance and the intrinsics it draws on come from the
+    // constructor's realm. Restored at every exit below. Bound resolution and the
+    // proxy path (returned earlier) ran in the caller realm; a non-constructor callee
+    // resolves to the current realm here, making this a no-op on the throwing paths.
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, resolution.callee));
+#endif
+
     if (mal_value_is_native_function_object(resolution.callee)) {
-        // A native that does not implement [[Construct]] is not new-able.
-        if (!mal_native_function_object_is_constructor(mal_value_to_native_function_object(resolution.callee))) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a constructor");
-            free(resolution.owned_args);
-            return vm->completion;
-        }
         // Native constructors allocate their own this; new_target signals construct.
         MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
         MalCalleeRoots ncr;
@@ -2150,23 +2445,61 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
         vm->gc_native_frames--;
         mal_gc_callee_roots_end(&ncr);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
+#if MAL_REALMS
+            mal_vm_realm_switch_to(vm, saved_realm);
+#endif
             free(resolution.owned_args);
             return vm->completion;
         }
 
-        // OrdinaryCreateFromConstructor: when subclassing a native (new.target is
-        // a derived class, not the native itself), the instance's [[Prototype]]
-        // is new.target.prototype. Native constructors build with their own
-        // prototype, so reparent here for `class X extends <native>`.
+        // Native constructors currently allocate internally. Reapply
+        // OrdinaryCreateFromConstructor to their object result when new.target
+        // differs. The prototype the native selected identifies its intrinsic
+        // default slot; this also handles a primitive newTarget.prototype by
+        // selecting that slot from newTarget's realm.
         if (mal_value_is_object(value) && effective_new_target != resolution.callee &&
             mal_value_is_object(effective_new_target)) {
-            MalValue derived_prototype;
-            if (!mal_vm_get_property(vm, effective_new_target, mal_intrinsic_string_key(vm, "prototype"), &derived_prototype)) {
-                free(resolution.owned_args);
-                return vm->completion;
+            MalObject *value_object = mal_value_to_object(value);
+            MalObject *native_prototype = mal_object_get_prototype(value_object);
+            MalIntrinsic default_proto = MAL_INTRINSIC_OBJECT_PROTOTYPE;
+            bool found_default = false;
+            if (native_prototype != nullptr) {
+                MalValue native_prototype_value = mal_value_from_object(native_prototype);
+                for (i32 slot = 0; slot < MAL_INTRINSIC_COUNT; slot++) {
+                    if (vm->intrinsics[slot] == native_prototype_value) {
+                        default_proto = (MalIntrinsic) slot;
+                        found_default = true;
+                        break;
+                    }
+                }
             }
-            if (mal_value_is_object(derived_prototype)) {
-                mal_object_set_prototype(mal_value_to_object(value), mal_value_to_object(derived_prototype));
+
+            MalObject *derived_prototype;
+            if (found_default) {
+                if (!mal_vm_get_prototype_from_constructor(
+                        vm, effective_new_target, default_proto, &derived_prototype)) {
+#if MAL_REALMS
+                    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+                    free(resolution.owned_args);
+                    return vm->completion;
+                }
+                mal_object_set_prototype(value_object, derived_prototype);
+            } else {
+                // Preserve support for embedding-provided native constructors
+                // whose allocation prototype is not an engine intrinsic.
+                MalValue prototype;
+                if (!mal_vm_get_property(vm, effective_new_target,
+                        mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
+#if MAL_REALMS
+                    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+                    free(resolution.owned_args);
+                    return vm->completion;
+                }
+                if (mal_value_is_object(prototype)) {
+                    mal_object_set_prototype(value_object, mal_value_to_object(prototype));
+                }
             }
         }
         completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
@@ -2191,24 +2524,22 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                 this_value = mal_value_new_empty();
             } else {
                 // OrdinaryCreateFromConstructor: allocate `this` from new.target's
-                // `.prototype` (falling back to %Object.prototype% when absent).
-                MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-                if (mal_value_is_object(effective_new_target)) {
-                    MalValue prototype_value;
-                    if (!mal_vm_get_property(vm, effective_new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype_value)) {
-                        free(resolution.owned_args);
-                        return vm->completion;
-                    }
-                    if (mal_value_is_object(prototype_value)) {
-                        prototype = mal_value_to_object(prototype_value);
-                    }
+                // `.prototype`, with the fallback taken from new.target's realm.
+                MalObject *prototype;
+                if (!mal_vm_get_prototype_from_constructor(
+                        vm, effective_new_target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
+#if MAL_REALMS
+                    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+                    free(resolution.owned_args);
+                    return vm->completion;
                 }
                 this_value = mal_value_from_object(mal_object_new(&vm->heap, prototype));
             }
 
             if (function->compiled != nullptr) {
-                // Native-backend constructor: the compiled body applies the
-                // non-object→this substitution at its RETURN, so use the result.
+                // Native-backend constructor: the compiled body returns enough raw
+                // state for the post-body derived-result checks below.
                 if (!mal_vm_enter_compiled(vm, function_index)) {
                     completion = vm->completion;
                 } else {
@@ -2220,9 +2551,22 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                     MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, effective_new_target, env, resolution.callee, nullptr);
                     mal_gc_callee_roots_end(&ncr);
                     mal_vm_leave_compiled(vm);
-                    completion = vm->completion.kind == MAL_COMPLETION_THROW
-                        ? vm->completion
-                        : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+#if MAL_REALMS
+                    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+                    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                        completion = vm->completion;
+                    } else if (function->is_derived_constructor && mal_value_is_empty(value)) {
+                        mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+                            "Must call super constructor in derived class before returning from derived constructor");
+                        completion = vm->completion;
+                    } else if (function->is_derived_constructor && !mal_value_is_object(value)) {
+                        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                            "Derived constructors may only return an object or undefined");
+                        completion = vm->completion;
+                    } else {
+                        completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+                    }
                 }
             } else if (vm->value_stack_size + resolution.arg_count > vm->value_stack_capacity) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
@@ -2240,7 +2584,13 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                 if (mal_vm_push_function_frame(vm, function_index, env, this_value, resolution.arg_count, -1, -1)) {
                     vm->frames[vm->frame_count - 1].is_construct = true;
                     vm->frames[vm->frame_count - 1].new_target = effective_new_target;
-                    mal_vm_run_until_frame_count(vm, target_frame_count);
+                    mal_vm_run_until_frame_count(
+                        vm,
+                        target_frame_count
+#if MAL_REALMS
+                        , saved_realm
+#endif
+                    );
                 } else {
                     vm->value_stack_size = base;
                 }
@@ -2252,6 +2602,9 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
         completion = vm->completion;
     }
 
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
     free(resolution.owned_args);
     return completion;
 }

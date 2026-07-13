@@ -349,41 +349,6 @@ function loadHarnessFile(file: string) {
 }
 
 /**
- * The host-provided `$262` object (test262's realm/agent hook). We implement
- * what the runtime can already back: `global`, a real `gc` (forces a full
- * collection — the runtime installs a `__mal_collect_garbage` hook on globalThis
- * under MAL_HOST_GC, which we capture into the `gc` closure and then delete so it
- * never pollutes a test body's global), and `detachArrayBuffer` via
- * ArrayBuffer.prototype.transfer (which detaches the original). evalScript/
- * createRealm require eval/realms we do not have, so they are present (so
- * `typeof` checks pass) but throw when invoked.
- */
-const TEST262_HOST_PRELUDE = `var $262 = {
-  global: globalThis,
-  gc: (function () {
-    var collect = typeof globalThis.__mal_collect_garbage === "function"
-      ? globalThis.__mal_collect_garbage
-      : function () {};
-    try { delete globalThis.__mal_collect_garbage; } catch (e) {}
-    try { delete globalThis.__mal_gc_live_bytes; } catch (e) {}
-    return function gc() { collect(); };
-  })(),
-  detachArrayBuffer: function detachArrayBuffer(buffer) {
-    if (buffer !== null && buffer !== undefined && typeof buffer.transfer === "function") {
-      buffer.transfer();
-    }
-    return null;
-  },
-  evalScript: function evalScript() {
-    throw new TypeError("$262.evalScript is not supported");
-  },
-  createRealm: function createRealm() {
-    throw new TypeError("$262.createRealm is not supported");
-  },
-};
-`;
-
-/**
  * `flags: [async]` tests signal completion by calling `$DONE`, defined in
  * `harness/doneprintHandle.js`, which writes a `Test262:AsyncTestComplete` /
  * `:AsyncTestFailure` sentinel through a host-provided `print`. We back `print`
@@ -411,7 +376,7 @@ function composeSource(file: Test262File) {
 	}
 	harnessFiles.push(...(file.frontmatter.includes ?? []).map((it) => `harness/${it}`));
 
-	const prelude = TEST262_HOST_PRELUDE + (isAsyncTest(file) ? TEST262_ASYNC_PRELUDE : "");
+	const prelude = isAsyncTest(file) ? TEST262_ASYNC_PRELUDE : "";
 	return `${prelude}${harnessFiles.map(loadHarnessFile).join("\n")}\n${file.content}`;
 }
 
@@ -691,10 +656,10 @@ async function runBatchBinary(
 		const result = await execFileAsync(binPath, ["--all", String(runTimeoutMs)], {
 			timeout: entries.length * runTimeoutMs + 15_000,
 			maxBuffer: 64 * 1024 * 1024,
-			// MAL_HOST_GC backs the host `$262.gc()`. MAL_GMALLOC=1 (folded in by
-			// runEnv) runs every forked test under Guard Malloc (a broad
+			// MAL_GMALLOC=1 (folded in by runEnv) runs every forked test under Guard
+			// Malloc (a broad
 			// use-after-free / overflow net across the suite); a no-op otherwise.
-			env: { ...runEnv(), MAL_HOST_GC: "1" },
+			env: runEnv(),
 		});
 		stdout = result.stdout;
 	} catch (e) {
@@ -1051,7 +1016,7 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 		const { stdout } = await execFileAsync(`${baseName}.bin`, [], {
 			timeout: TEST262_METADATA.runTimeoutMs,
 			maxBuffer: 1024 * 1024,
-			env: { ...runEnv(), MAL_HOST_GC: "1" },
+			env: { ...runEnv(), MAL_TEST262: "1" },
 		});
 		if (isAsyncTest(file)) {
 			applyAsyncVerdict(file, stdout);

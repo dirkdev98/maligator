@@ -342,6 +342,11 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->sweep_live_bytes = 0;
     heap->sweeping = false;
 #endif
+#if MAL_REALMS
+    // Set once the VM creates its initial realm (mal_realm_switch). Null until then,
+    // and no function object is allocated before that point.
+    heap->current_realm = nullptr;
+#endif
 }
 
 void mal_heap_free(MalHeap *heap) {

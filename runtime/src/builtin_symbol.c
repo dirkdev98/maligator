@@ -208,8 +208,9 @@ static MalValue mal_builtin_symbol_prototype_description_getter(MalVm *vm, MalVa
 }
 
 /**
- * Create a well-known symbol, store it in its intrinsic slot, and expose it
- * as a non-writable non-configurable property on the Symbol constructor.
+ * Ensure a well-known symbol exists in its agent-shared intrinsic slot, then
+ * expose it as a non-writable non-configurable property on this realm's fresh
+ * Symbol constructor.
  */
 static void mal_builtin_symbol_well_known(
     MalVm *vm,
@@ -218,8 +219,10 @@ static void mal_builtin_symbol_well_known(
     const byte *property_name,
     const byte *description
 ) {
-    MalSymbol *symbol = mal_symbol_new(&vm->heap, mal_intrinsic_ascii(vm, description));
-    vm->intrinsics[slot] = mal_value_from_symbol(symbol);
+    if (mal_value_is_undefined(vm->intrinsics[slot])) {
+        MalSymbol *symbol = mal_symbol_new(&vm->heap, mal_intrinsic_ascii(vm, description));
+        vm->intrinsics[slot] = mal_value_from_symbol(symbol);
+    }
     mal_intrinsic_define_data(vm, constructor, property_name, vm->intrinsics[slot], MAL_PROPERTY_NONE);
 }
 

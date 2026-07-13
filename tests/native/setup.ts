@@ -21,7 +21,12 @@ const compilerBake = {
 export function setup(): void {
 	ensureRuntimeLibrary(false, { compilerBake });
 	const nodeConfig = resolveBuildConfig({
-		engine: { eval: true, regexp: true, intl: { enabled: true, features: [] } },
+		engine: {
+			eval: true,
+			regexp: true,
+			realms: true,
+			intl: { enabled: true, features: [] },
+		},
 		surface: { webPlatform: true, node: true },
 	});
 	ensureRuntimeLibrary(false, { ...buildDerivationFromConfig(nodeConfig), compilerBake });

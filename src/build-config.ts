@@ -21,6 +21,8 @@ export interface MaligatorBuildConfig {
 	entry?: string;
 	engine?: {
 		eval?: boolean;
+		/** The Realm surface (Realm global / callable boundary). Defaults OFF. */
+		realms?: boolean;
 		/** WHATWG RegExp (the regress engine). Core language, so defaults ON. */
 		regexp?: boolean;
 		intl?: {
@@ -45,6 +47,7 @@ export interface ResolvedBuildConfig {
 	entry: string | undefined;
 	engine: {
 		eval: boolean;
+		realms: boolean;
 		regexp: boolean;
 		intl: { enabled: boolean; features: Array<string>; languages: Array<string> };
 	};
@@ -172,6 +175,7 @@ const CONFIG_SCHEMA: ObjectSchema = {
 		engine: {
 			object: {
 				eval: booleanLeaf,
+				realms: booleanLeaf,
 				regexp: booleanLeaf,
 				intl: {
 					object: {
@@ -218,6 +222,7 @@ export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildC
 		entry: config.entry,
 		engine: {
 			eval: config.engine?.eval ?? false,
+			realms: config.engine?.realms ?? false,
 			// RegExp is core ECMAScript, so it defaults ON (unlike eval/Intl/web) —
 			// power users disable it explicitly for size-critical builds.
 			regexp: config.engine?.regexp ?? true,
@@ -379,14 +384,16 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 	// (builtin_regexp/regexp_object/gc/string gating), and node (the host built-in
 	// surface), but NOT on the locale set (that only changes the Rust/ICU datagen) or
 	// on node in the Rust archive (node adds no Rust deps — see rustConfigCacheSuffix).
-	// Empty services = all; eval + Intl + all-services + web + regexp on and node off
-	// = canonical.
+	// Empty services = all; eval + realms + Intl + all-services + web + regexp on and
+	// node off = canonical.
 	const services = selectedIntlServices(config).sort();
 	const web = config.surface.webPlatform;
 	const regexp = config.engine.regexp;
 	const node = config.surface.node;
+	const realms = config.engine.realms;
 	if (
 		config.engine.eval &&
+		realms &&
 		config.engine.intl.enabled &&
 		services.length === 0 &&
 		web &&
@@ -402,6 +409,7 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 		web,
 		regexp,
 		node,
+		realms,
 	});
 }
 
@@ -432,6 +440,7 @@ export function rustConfigCacheSuffix(config: ResolvedBuildConfig): string {
  */
 export interface BuildDerivation {
 	evalEnabled: boolean;
+	realmsEnabled: boolean;
 	intlEnabled: boolean;
 	intlServiceDefines: Array<string>;
 	intlFeatures: Array<string>;
@@ -451,6 +460,7 @@ export interface BuildDerivation {
 export function buildDerivationFromConfig(config: ResolvedBuildConfig): BuildDerivation {
 	return {
 		evalEnabled: config.engine.eval,
+		realmsEnabled: config.engine.realms,
 		intlEnabled: config.engine.intl.enabled,
 		intlServiceDefines: intlDisabledDefines(config),
 		intlFeatures: intlCargoFeatures(config),

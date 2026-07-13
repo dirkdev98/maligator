@@ -144,6 +144,27 @@ MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
     return run.value;
 }
 
+#if MAL_REALMS
+MalCompletion mal_realm_eval_script(MalVm *vm, MalRealm *realm, MalValue source) {
+    // Unlike the eval builtin, an embedding call has no native frame suppressing
+    // collection while the compiler and generated script run.
+    MalRootSpan source_root;
+    mal_gc_root(&source_root, &source, 1);
+
+    MalRealm *caller_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, realm);
+    MalValue value = mal_vm_eval_source(vm, source);
+    MalCompletion completion = vm->completion.kind == MAL_COMPLETION_THROW
+        ? vm->completion
+        : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+    mal_vm_realm_switch_to(vm, caller_realm);
+
+    mal_gc_unroot(&source_root);
+    vm->completion = completion;
+    return completion;
+}
+#endif
+
 // Direct eval: compile in direct mode, then run the entry with `scope_object`
 // injected into its with-stack so the eval'd code's free identifiers (compiled
 // as with-dynamic reads) resolve against the caller's marshaled scope before the

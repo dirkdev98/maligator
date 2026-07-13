@@ -103,7 +103,9 @@ const turns = [
 
 		// Kick off async coroutines; they run to their `await gate` and suspend.
 		asyncHolder(asyncGate).then((v) => (asyncResult = v));
-		agenHolder(agenGate).next().then((r) => (agenResult = r.value));
+		agenHolder(agenGate)
+			.next()
+			.then((r) => (agenResult = r.value));
 	},
 
 	// Turn 1: collect while the async frames are suspended (traces them), then open

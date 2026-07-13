@@ -16,6 +16,7 @@ import {
 	rustConfigCacheSuffix,
 } from "../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
+import { featureDefines } from "../src/build-flags.ts";
 import { parseScript } from "../src/parser.ts";
 import {
 	analyzeSourceAndRunSemanticAnalysis,
@@ -176,7 +177,7 @@ describe("intl feature → cargo features + C defines", () => {
 
 	it("distinct feature sets get distinct cache suffixes; all-services is canonical", () => {
 		const all = resolveBuildConfig({
-			engine: { eval: true, intl: { enabled: true } },
+			engine: { eval: true, realms: true, intl: { enabled: true } },
 			surface: { webPlatform: true },
 		});
 		const subset = resolveBuildConfig({
@@ -192,11 +193,11 @@ describe("intl feature → cargo features + C defines", () => {
 });
 
 describe("buildConfigCacheSuffix", () => {
-	it("is empty for the canonical (eval-on, Intl-on, web-on) archive", () => {
+	it("is empty for the canonical (eval-on, realms-on, Intl-on, web-on) archive", () => {
 		expect(
 			buildConfigCacheSuffix(
 				resolveBuildConfig({
-					engine: { eval: true, intl: { enabled: true } },
+					engine: { eval: true, realms: true, intl: { enabled: true } },
 					surface: { webPlatform: true },
 				}),
 			),
@@ -243,11 +244,11 @@ describe("buildConfigCacheSuffix", () => {
 
 describe("surface.node build derivation + cache", () => {
 	const canonical = resolveBuildConfig({
-		engine: { eval: true, intl: { enabled: true } },
+		engine: { eval: true, realms: true, intl: { enabled: true } },
 		surface: { webPlatform: true },
 	});
 	const nodeOn = resolveBuildConfig({
-		engine: { eval: true, intl: { enabled: true } },
+		engine: { eval: true, realms: true, intl: { enabled: true } },
 		surface: { webPlatform: true, node: true },
 	});
 
@@ -266,6 +267,39 @@ describe("surface.node build derivation + cache", () => {
 
 	it("node does NOT change the Rust cache suffix (node adds no Rust deps)", () => {
 		expect(rustConfigCacheSuffix(nodeOn)).toBe(rustConfigCacheSuffix(canonical));
+	});
+});
+
+describe("engine.realms build plumbing", () => {
+	const canonical = resolveBuildConfig({
+		engine: { eval: true, realms: true, intl: { enabled: true } },
+		surface: { webPlatform: true },
+	});
+	const realmsOff = resolveBuildConfig({
+		engine: { eval: true, realms: false, intl: { enabled: true } },
+		surface: { webPlatform: true },
+	});
+
+	it("defaults realms OFF (product default), honors explicit true", () => {
+		expect(resolveBuildConfig({}).engine.realms).toBe(false);
+		expect(resolveBuildConfig({ engine: { realms: true } }).engine.realms).toBe(true);
+	});
+
+	it("threads engine.realms into the build derivation", () => {
+		expect(buildDerivationFromConfig(canonical).realmsEnabled).toBe(true);
+		expect(buildDerivationFromConfig(realmsOff).realmsEnabled).toBe(false);
+	});
+
+	it("emits -DMAL_REALMS=0 only when realms is disabled", () => {
+		expect(featureDefines({ realmsEnabled: false })).toContain("-DMAL_REALMS=0");
+		expect(featureDefines({ realmsEnabled: true })).not.toContain("-DMAL_REALMS=0");
+		expect(featureDefines({})).not.toContain("-DMAL_REALMS=0");
+	});
+
+	it("realms-on is canonical (C suffix ''); realms-off gets a distinct C hash", () => {
+		expect(buildConfigCacheSuffix(canonical)).toBe("");
+		expect(buildConfigCacheSuffix(realmsOff)).toMatch(/^[0-9a-f]{8}$/);
+		expect(buildConfigCacheSuffix(realmsOff)).not.toBe(buildConfigCacheSuffix(canonical));
 	});
 });
 
@@ -289,6 +323,7 @@ describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
 		const services = [...new Set(c.engine.intl.features)].sort();
 		if (
 			c.engine.eval &&
+			c.engine.realms &&
 			c.engine.intl.enabled &&
 			services.length === 0 &&
 			c.surface.webPlatform &&
@@ -304,6 +339,7 @@ describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
 			web: c.surface.webPlatform,
 			regexp: c.engine.regexp,
 			node: c.surface.node,
+			realms: c.engine.realms,
 		});
 	}
 	function legacyRustSuffix(c: ResolvedBuildConfig): string {
@@ -356,7 +392,7 @@ describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
 			engine: { eval: true, intl: { enabled: true } },
 			surface: { webPlatform: true, node: true },
 		});
-		expect(buildConfigCacheSuffix(nodeOn)).toBe("7b87e0b6");
+		expect(buildConfigCacheSuffix(nodeOn)).toBe("8ed6ee64");
 	});
 });
 

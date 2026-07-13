@@ -226,11 +226,10 @@ static MalValue mal_async_iterator_constructor(MalVm *vm, MalValue this_value, c
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Abstract class AsyncIterator not directly constructable");
         return mal_value_new_undefined();
     }
-    MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ASYNC_ITERATOR_PROTOTYPE]);
-    MalValue prototype_value;
-    if (mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype_value) &&
-        mal_value_is_object(prototype_value)) {
-        prototype = mal_value_to_object(prototype_value);
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_ASYNC_ITERATOR_PROTOTYPE, &prototype)) {
+        return mal_value_new_undefined();
     }
     return mal_value_from_object(mal_object_new(&vm->heap, prototype));
 }

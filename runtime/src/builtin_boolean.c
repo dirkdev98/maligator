@@ -7,22 +7,6 @@
 #include "vm_ops.h"
 
 /**
- * Resolve the prototype for a construct call: new_target's prototype property
- * when it is an object, the given intrinsic slot otherwise
- * (OrdinaryCreateFromConstructor flavored).
- */
-static MalObject *mal_builtin_boolean_resolve_prototype(MalVm *vm, MalValue new_target, MalIntrinsic fallback) {
-    MalValue prototype;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
-        return nullptr;
-    }
-    if (mal_value_is_object(prototype)) {
-        return mal_value_to_object(prototype);
-    }
-    return mal_value_to_object(vm->intrinsics[fallback]);
-}
-
-/**
  * Spec thisBooleanValue: unwrap a Boolean primitive or Boolean wrapper receiver,
  * throwing a TypeError on a foreign receiver.
  */
@@ -45,8 +29,9 @@ static MalValue mal_builtin_boolean_constructor(MalVm *vm, MalValue this_value, 
         return mal_value_new_boolean(value);
     }
 
-    MalObject *prototype = mal_builtin_boolean_resolve_prototype(vm, new_target, MAL_INTRINSIC_BOOLEAN_PROTOTYPE);
-    if (prototype == nullptr) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_BOOLEAN_PROTOTYPE, &prototype)) {
         return mal_value_new_undefined();
     }
 

@@ -20,6 +20,15 @@ void mal_intrinsics_init_eval(MalVm *vm, MalObject *global_this);
  */
 MalValue mal_vm_eval_source(MalVm *vm, MalValue source);
 
+#if MAL_REALMS
+/**
+ * Evaluate a script in `realm`, returning its normal or throw completion. The
+ * caller's realm is restored before return, and vm->completion matches the
+ * returned completion.
+ */
+MalCompletion mal_realm_eval_script(MalVm *vm, MalRealm *realm, MalValue source);
+#endif
+
 /**
  * Direct eval: compile `source` so free identifiers resolve against the caller's
  * scope, then run it with `scope_object` (the caller's marshaled bindings)

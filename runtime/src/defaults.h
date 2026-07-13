@@ -41,6 +41,15 @@ typedef size_t usize;
 #define MAL_EVAL 1
 #endif
 
+// Whether this build includes the Realm surface (the `Realm` global / callable
+// boundary). Default on; the build config sets `-DMAL_REALMS=0` (see
+// build-flags.ts) when `engine.realms` is false. Kept in lockstep with the
+// build-config `engine.realms` knob so the C archive fingerprint
+// (buildConfigCacheSuffix) and the realm installs agree on the axis.
+#ifndef MAL_REALMS
+#define MAL_REALMS 1
+#endif
+
 // Whether this build includes the Intl (ECMA-402 / ICU4X) surface and its ~9 MB
 // of baked CLDR data. Default on; the build config sets `-DMAL_INTL=0` (see
 // build-flags.ts) when `engine.intl` is disabled, which makes builtin_intl.c

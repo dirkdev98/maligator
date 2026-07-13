@@ -777,17 +777,6 @@ static MalValue date_string_value(MalVm *vm, const byte *buf, usize length) {
 // Constructor
 // ---------------------------------------------------------------------------
 
-static MalObject *date_resolve_prototype(MalVm *vm, MalValue new_target) {
-    MalValue prototype;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
-        return nullptr;
-    }
-    if (mal_value_is_object(prototype)) {
-        return mal_value_to_object(prototype);
-    }
-    return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DATE_PROTOTYPE]);
-}
-
 static MalValue date_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) callee;
@@ -839,8 +828,9 @@ static MalValue date_constructor(MalVm *vm, MalValue this_value, const MalValue 
         date_value = date_time_clip(date_utc_from_local(final_date));
     }
 
-    MalObject *prototype = date_resolve_prototype(vm, new_target);
-    if (prototype == nullptr) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_DATE_PROTOTYPE, &prototype)) {
         return mal_value_new_undefined();
     }
     return mal_value_from_date_object(mal_date_object_new(&vm->heap, prototype, date_value));

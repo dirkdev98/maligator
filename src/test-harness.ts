@@ -64,6 +64,11 @@ export interface BuildOptions {
 	 */
 	evalEnabled?: boolean;
 	/**
+	 * Include the Realm surface. Defaults to true — internal tooling opts in. Set
+	 * false to build the `engine.realms: false` archive (`-DMAL_REALMS=0`).
+	 */
+	realmsEnabled?: boolean;
+	/**
 	 * Include the Intl (ICU4X) surface. Defaults to true. Set false to build the
 	 * `engine.intl: false` archive (no ICU crates / baked CLDR data, no Intl global).
 	 */
@@ -112,6 +117,7 @@ export function buildNativeBinary(options: BuildOptions): string {
 		resolveBuildConfig({
 			engine: {
 				eval: options.evalEnabled ?? true,
+				realms: options.realmsEnabled ?? true,
 				regexp: options.regexpEnabled ?? true,
 				intl: {
 					enabled: options.intlEnabled ?? true,

@@ -27,17 +27,6 @@ static bool mal_can_be_held_weakly(MalValue value) {
     return mal_value_is_symbol(value) && !mal_value_to_symbol(value)->registered;
 }
 
-static MalObject *mal_fin_reg_resolve_prototype(MalVm *vm, MalValue new_target) {
-    MalValue prototype;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
-        return nullptr;
-    }
-    if (mal_value_is_object(prototype)) {
-        return mal_value_to_object(prototype);
-    }
-    return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FINALIZATION_REGISTRY_PROTOTYPE]);
-}
-
 static MalFinalizationRegistryObject *mal_fin_reg_this(MalVm *vm, MalValue this_value) {
     if (!mal_value_is_heap_type(this_value, MAL_HEAP_FINALIZATION_REGISTRY_OBJECT)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -65,8 +54,9 @@ static MalValue mal_builtin_fin_reg_constructor(
         return mal_value_new_undefined();
     }
 
-    MalObject *prototype = mal_fin_reg_resolve_prototype(vm, new_target);
-    if (prototype == nullptr) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_FINALIZATION_REGISTRY_PROTOTYPE, &prototype)) {
         return mal_value_new_undefined();
     }
     return mal_value_from_finalization_registry_object(

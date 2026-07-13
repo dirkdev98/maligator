@@ -89,7 +89,11 @@ console.log(`[gate] modes: ${modes.map((m) => m.name).join(", ")}\n`);
 const failed: Array<string> = [];
 for (const mode of modes) {
 	const label = `${mode.name}${
-		Object.keys(mode.env).length ? ` (${Object.entries(mode.env).map(([k, v]) => `${k}=${v}`).join(" ")})` : ""
+		Object.keys(mode.env).length
+			? ` (${Object.entries(mode.env)
+					.map(([k, v]) => `${k}=${v}`)
+					.join(" ")})`
+			: ""
 	}`;
 	console.log(`\n[gate] === mode: ${label} ===`);
 	const result = spawnSync("node", ["./scripts/test262.ts", ...passthrough], {

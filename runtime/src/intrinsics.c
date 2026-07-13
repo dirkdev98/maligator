@@ -228,8 +228,14 @@ void mal_intrinsics_init(MalVm *vm) {
     // installing them below does not trip the protector.
     object_prototype->fast_elements_proto = true;
     array_prototype->fast_elements_proto = true;
-    // Cache %Array.prototype% for the inline array store fast path (default-proto check).
+    // Cache %Array.prototype% for the inline array store fast path (default-proto
+    // check). The cache is process-global, so it cannot identify the default
+    // prototype after a second realm is initialized; disable that fast path then.
+#if MAL_REALMS
+    mal_array_prototype_object = vm->current_realm == vm->initial_realm ? array_prototype : nullptr;
+#else
     mal_array_prototype_object = array_prototype;
+#endif
 
     mal_builtin_object_install(vm);
     // Well-known symbols install before any pass that defines symbol-keyed
@@ -349,8 +355,10 @@ void mal_intrinsics_init(MalVm *vm) {
 
     // All builtin prototypes/constructors are now fully populated. Watch the objects
     // the primitive-method + intrinsic-own-property inline cache reads from, so any
-    // later user mutation invalidates the cache; the protector holds until then. Set
-    // last so the init-time method installs above do not trip it.
+    // later user mutation invalidates the cache; the protector holds until then. Do
+    // this after the init-time method installs above so they do not trip it. The
+    // process-global protector is monotonic: initialization of a later realm must not
+    // re-enable it after an earlier realm invalidated it.
     //   - the primitive prototypes + %Object.prototype% (the chain a primitive
     //     receiver walks) — for `str.method()` / `num.method()`;
     //   - the namespaces Math/JSON/Reflect/Atomics and every builtin constructor —
@@ -388,7 +396,6 @@ void mal_intrinsics_init(MalVm *vm) {
             mal_value_to_object(value)->watched_method_proto = true;
         }
     }
-    mal_primitive_method_protector = true;
 }
 
 /**

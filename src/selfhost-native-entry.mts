@@ -29,6 +29,7 @@ const targetConfig = {
 	entry: undefined,
 	engine: {
 		eval: evalEnabled,
+		realms: false,
 		regexp: false,
 		intl: { enabled: false, features: [], languages: [] },
 	},
@@ -46,6 +47,7 @@ const binary = buildLocalBinary({
 	cSource: emitVmDefinition(definition),
 	verbose: true,
 	evalEnabled,
+	realmsEnabled: false,
 	intlEnabled: false,
 	webPlatformEnabled: false,
 	regexpEnabled: false,

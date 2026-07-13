@@ -1,4 +1,5 @@
 #include "vm.h"
+#include "test262_host.h"
 
 #include <stdlib.h> // getenv
 
@@ -15,6 +16,9 @@ int main(int argc, char **argv) {
     // the launch context is still constructed so the call site matches the ABI.
     MalHostLaunchContext launch = {.argc = argc, .argv = argv};
     mal_vm_run_host_installs(&vm, &launch);
+    if (getenv("MAL_TEST262") != nullptr) {
+        mal_test262_install(&vm);
+    }
 
     MalCallable *callable = mal_vm_create_callable(&vm, 0);
     mal_vm_run(&vm, callable);

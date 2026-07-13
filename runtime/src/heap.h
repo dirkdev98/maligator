@@ -25,6 +25,13 @@ typedef struct MalGcChunk MalGcChunk;
 typedef struct MalGcBlock MalGcBlock;
 typedef struct MalGcLarge MalGcLarge;
 
+#if MAL_REALMS
+/* Realm metadata is defined in vm.h; the heap caches only a back-pointer to the
+ * current realm so function-object init can stamp the active realm without
+ * threading the VM through every allocation choke point. */
+typedef struct MalRealm MalRealm;
+#endif
+
 /**
  * Block-based, segregated-size-class, non-moving allocator.
  *
@@ -85,6 +92,14 @@ typedef struct MalHeap {
     usize sweep_block;
     usize sweep_live_bytes;
     bool sweeping;
+#endif
+#if MAL_REALMS
+    /** Cached back-pointer to the VM's current realm, kept in lockstep with
+     * vm->current_realm by mal_realm_switch. Lets function-object init stamp a new
+     * closure's owning realm from the heap alone (the init choke points already hold
+     * a MalHeap*, not a MalVm*). Not owned here — realms are freed by
+     * mal_realm_free_all. */
+    MalRealm *current_realm;
 #endif
 } MalHeap;
 

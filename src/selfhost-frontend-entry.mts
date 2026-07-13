@@ -14,6 +14,7 @@ const bytes = compileEntrypointToBuffer(inputPath, {
 		entry: undefined,
 		engine: {
 			eval: false,
+			realms: false,
 			regexp: true,
 			intl: { enabled: false, features: [], languages: [] },
 		},

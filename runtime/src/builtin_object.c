@@ -1673,7 +1673,7 @@ MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, 
     } else if (mal_value_is_regexp_object(this_value)) {
         // The builtin tag tracks the [[RegExpMatcher]] internal slot.
         tag = "[object RegExp]";
-    } else if (mal_builtin_value_has_error_data(this_value)) {
+    } else if (mal_builtin_value_has_error_data(vm, this_value)) {
         // The builtin tag tracks the [[ErrorData]] internal slot.
         tag = "[object Error]";
     } else if (mal_value_is_primitive_wrapper(this_value)) {

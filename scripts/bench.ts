@@ -6,9 +6,9 @@
  *
  * Benches (default: all):
  *   - size      linked binary + per-archive bytes across a build-config matrix
- *               (full / no-eval / no-intl / no-web / no-regexp / minimal) — the
- *               "small binary" goal, one row per config so each feature flag's
- *               marginal bytes are tracked. No V8 compare.
+ *               (full / no-eval / no-realms / no-intl / no-web / no-regexp /
+ *               minimal) — the "small binary" goal, one row per config so each
+ *               feature flag's marginal bytes are tracked. No V8 compare.
  *   - language  bench/language.js wall time vs Node/V8 (wide instruction coverage).
  *   - module    bench/module-alloc.mjs: an ES module whose top-level const-bound
  *               helpers are composed in a hot allocation loop. Wall time vs V8 plus
@@ -126,30 +126,38 @@ const SIZE_FIXTURE = "bench/hello-world.js";
  * The build-config matrix the size bench measures. Each is a real
  * {@link MaligatorBuildConfig} resolved through the exact path a user build hits,
  * so a profile's numbers reflect what shipping that config actually costs. `full`
- * is the canonical dev build (eval + Intl on → the unsuffixed archives); `minimal`
- * is the product default (eval + Intl off). The `no-*` rows isolate one axis so a
- * feature's marginal bytes are directly readable. New feature flags (RegExp, URL,
- * …) add rows here as they land, keeping each flag's win a tracked number.
+ * is the canonical dev build (eval + Realms + Intl on → the unsuffixed archives);
+ * `minimal` is the product default (eval + Realms + Intl off). The `no-*` rows
+ * isolate one axis so a feature's marginal bytes are directly readable. New
+ * feature flags (RegExp, URL, …) add rows here as they land, keeping each flag's
+ * win a tracked number.
  */
 const SIZE_PROFILES: Array<{ name: string; config: MaligatorBuildConfig }> = [
 	{
 		name: "full",
 		config: {
-			engine: { eval: true, intl: { enabled: true } },
+			engine: { eval: true, realms: true, intl: { enabled: true } },
 			surface: { webPlatform: true },
 		},
 	},
 	{
 		name: "no-eval",
 		config: {
-			engine: { eval: false, intl: { enabled: true } },
+			engine: { eval: false, realms: true, intl: { enabled: true } },
+			surface: { webPlatform: true },
+		},
+	},
+	{
+		name: "no-realms",
+		config: {
+			engine: { eval: true, realms: false, intl: { enabled: true } },
 			surface: { webPlatform: true },
 		},
 	},
 	{
 		name: "no-intl",
 		config: {
-			engine: { eval: true, intl: { enabled: false } },
+			engine: { eval: true, realms: true, intl: { enabled: false } },
 			surface: { webPlatform: true },
 		},
 	},
@@ -157,7 +165,7 @@ const SIZE_PROFILES: Array<{ name: string; config: MaligatorBuildConfig }> = [
 		// Isolates the WHATWG URL (ada C++ parser) + `-lc++`.
 		name: "no-web",
 		config: {
-			engine: { eval: true, intl: { enabled: true } },
+			engine: { eval: true, realms: true, intl: { enabled: true } },
 			surface: { webPlatform: false },
 		},
 	},
@@ -166,13 +174,13 @@ const SIZE_PROFILES: Array<{ name: string; config: MaligatorBuildConfig }> = [
 		// ON (core language), so minimal keeps it — this row shows its cost.
 		name: "no-regexp",
 		config: {
-			engine: { eval: true, regexp: false, intl: { enabled: true } },
+			engine: { eval: true, realms: true, regexp: false, intl: { enabled: true } },
 			surface: { webPlatform: true },
 		},
 	},
-	// Product defaults (eval + Intl + web off; regexp ON — core language). The
-	// realistic deployed floor.
-	{ name: "minimal", config: {} },
+	// Product defaults (eval + Realms + Intl + web off; regexp ON — core language).
+	// The realistic deployed floor.
+	{ name: "minimal", config: { engine: { realms: false } } },
 ];
 
 function benchSize(): Record<string, SizeMetrics> {

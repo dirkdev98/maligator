@@ -511,17 +511,6 @@ static bool regexp_is_regexp(MalVm *vm, MalValue arg, bool *out) {
 // Constructor
 // ---------------------------------------------------------------------------
 
-static MalObject *regexp_resolve_prototype(MalVm *vm, MalValue new_target) {
-    MalValue prototype;
-    if (!mal_vm_get_property(vm, new_target, mal_intrinsic_string_key(vm, (const byte *) "prototype"), &prototype)) {
-        return nullptr;
-    }
-    if (mal_value_is_object(prototype)) {
-        return mal_value_to_object(prototype);
-    }
-    return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE]);
-}
-
 static MalValue regexp_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     MalValue pattern = arg_count >= 1 ? args[0] : mal_value_new_undefined();
@@ -589,8 +578,9 @@ static MalValue regexp_constructor(MalVm *vm, MalValue this_value, const MalValu
         }
     }
 
-    MalObject *prototype = regexp_resolve_prototype(vm, used_new_target);
-    if (prototype == nullptr) {
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, used_new_target, MAL_INTRINSIC_REGEXP_PROTOTYPE, &prototype)) {
         return mal_value_new_undefined();
     }
     MalRegExpObject *re = mal_regexp_object_new(&vm->heap, prototype);
