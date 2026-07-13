@@ -1176,6 +1176,97 @@
         "malP99Ms": 0.914416,
         "nodeP99Ms": 0.885917
       }
+    },
+    {
+      "commit": "7c0f071",
+      "dirty": false,
+      "size": {
+        "full": {
+          "binaryBytes": 14982528,
+          "runtimeArchiveBytes": 109064,
+          "hostArchiveBytes": 21920,
+          "engineArchiveBytes": 2798016,
+          "rustArchiveBytes": 21746656
+        },
+        "no-eval": {
+          "binaryBytes": 13166072,
+          "runtimeArchiveBytes": 109064,
+          "hostArchiveBytes": 21920,
+          "engineArchiveBytes": 988320,
+          "rustArchiveBytes": 21746656
+        },
+        "no-realms": {
+          "binaryBytes": 14981888,
+          "runtimeArchiveBytes": 108768,
+          "hostArchiveBytes": 21920,
+          "engineArchiveBytes": 2788032,
+          "rustArchiveBytes": 21746656
+        },
+        "no-intl": {
+          "binaryBytes": 4451032,
+          "runtimeArchiveBytes": 109064,
+          "hostArchiveBytes": 21920,
+          "engineArchiveBytes": 2694344,
+          "rustArchiveBytes": 8344256
+        },
+        "no-web": {
+          "binaryBytes": 14415832,
+          "runtimeArchiveBytes": 81184,
+          "hostArchiveBytes": 21920,
+          "engineArchiveBytes": 2798016,
+          "rustArchiveBytes": 21106552
+        },
+        "no-regexp": {
+          "binaryBytes": 14395008,
+          "runtimeArchiveBytes": 109064,
+          "hostArchiveBytes": 21920,
+          "engineArchiveBytes": 2758616,
+          "rustArchiveBytes": 20761016
+        },
+        "minimal": {
+          "binaryBytes": 2050360,
+          "runtimeArchiveBytes": 80952,
+          "hostArchiveBytes": 21920,
+          "engineArchiveBytes": 874968,
+          "rustArchiveBytes": 7703680
+        }
+      },
+      "language": {
+        "malMs": 242.364917,
+        "nodeMs": 110.133625,
+        "ratio": 2.200644144783212
+      },
+      "module": {
+        "malMs": 249.811375,
+        "nodeMs": 112.711459,
+        "ratio": 2.2163795697117186,
+        "collections": 0,
+        "peakLiveKb": 0
+      },
+      "gc": {
+        "cli": {
+          "wallMs": 86.115958,
+          "rssMb": 22.34375,
+          "maxPauseMs": 4.361
+        },
+        "desktop": {
+          "wallMs": 2208.569833,
+          "rssMb": 20.734375,
+          "maxPauseMs": 3.164
+        },
+        "server": {
+          "wallMs": 4864.466209,
+          "rssMb": 20.109375,
+          "maxPauseMs": 3.262
+        }
+      },
+      "http": {
+        "malRps": 129940.39529989756,
+        "nodeRps": 109472.45447759556,
+        "ratio": 1.1869688673737642,
+        "malP99Ms": 0.8985,
+        "nodeP99Ms": 0.8861249999999999
+      }
     }
   ]
 }
