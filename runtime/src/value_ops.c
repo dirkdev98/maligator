@@ -349,6 +349,12 @@ MalValue mal_ops_add(MalHeap *heap, MalValue left, MalValue right) {
         MalString *right_string = mal_ops_to_string(heap, right);
         usize left_length = mal_string_length(left_string);
         usize right_length = mal_string_length(right_string);
+        if (left_length == 0) {
+            return mal_value_from_string(right_string);
+        }
+        if (right_length == 0) {
+            return mal_value_from_string(left_string);
+        }
         usize length = left_length + right_length;
         c16 *code_units = mal_heap_alloc_raw(heap, sizeof(c16) * length);
 

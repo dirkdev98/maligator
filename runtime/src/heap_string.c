@@ -25,7 +25,7 @@ void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_unit
 
     mal_heap_header_init(&string->header, MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_OWNED;
-    string->hash = mal_string_hash_code_units(code_units, length);
+    string->hash_valid = false;
     string->length = length;
     string->code_units = owned_code_units;
 }
@@ -33,7 +33,7 @@ void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_unit
 void mal_string_init_external(MalString *string, const c16 *code_units, usize length) {
     mal_heap_header_init(&string->header, MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_EXTERNAL;
-    string->hash = mal_string_hash_code_units(code_units, length);
+    string->hash_valid = false;
     string->length = length;
     string->code_units = code_units;
 }
@@ -59,7 +59,7 @@ MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize leng
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
     mal_heap_header_init(&string->header, MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_OWNED;
-    string->hash = mal_string_hash_code_units(code_units, length);
+    string->hash_valid = false;
     string->length = length;
     string->code_units = code_units;
 
@@ -76,7 +76,7 @@ MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length) 
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
     mal_heap_header_init(&string->header, MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_OWNED;
-    string->hash = mal_string_hash_code_units(code_units, length);
+    string->hash_valid = false;
     string->length = length;
     string->code_units = code_units;
 
@@ -92,7 +92,12 @@ usize mal_string_length(const MalString *string) {
 }
 
 u64 mal_string_hash(const MalString *string) {
-    return string->hash;
+    MalString *mutable = (MalString *) string;
+    if (!mutable->hash_valid) {
+        mutable->hash = mal_string_hash_code_units(string->code_units, string->length);
+        mutable->hash_valid = true;
+    }
+    return mutable->hash;
 }
 
 MalStringStorage mal_string_storage(const MalString *string) {
@@ -104,7 +109,7 @@ bool mal_string_equals(const MalString *left, const MalString *right) {
         return true;
     }
 
-    if (left->hash != right->hash || left->length != right->length) {
+    if (left->length != right->length || mal_string_hash(left) != mal_string_hash(right)) {
         return false;
     }
 

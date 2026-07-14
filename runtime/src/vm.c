@@ -144,16 +144,6 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->live_definition.functions = functions;
 
     i32 string_count = definition->string_constant_count;
-    // Baked string constants ship with a zero hash (a static initializer cannot
-    // run the hash function); fill them on the SOURCE rows before relocating.
-    // The compiled backend (emit-c) references the static mal_strings[] array
-    // directly while the interpreter uses the copy below, so the source must be
-    // hashed too — and filling it first means the memcpy carries the hashes into
-    // the copy. Idempotent across re-inits.
-    for (i32 i = 0; i < string_count; i++) {
-        MalString *string = &definition->string_constants[i];
-        string->hash = mal_string_hash_code_units(mal_string_code_units(string), mal_string_length(string));
-    }
     // Fixed capacity, never reallocated (see MAL_MAX_STRING_CONSTANTS): string
     // cells must keep stable addresses because values point at them.
     vm->string_capacity = string_count > MAL_MAX_STRING_CONSTANTS ? string_count : MAL_MAX_STRING_CONSTANTS;

@@ -942,9 +942,9 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
         strings[s].header.type = MAL_HEAP_STRING;
         strings[s].header.storage = MAL_HEAP_STORAGE_IMMORTAL;
         strings[s].storage = MAL_STRING_STORAGE_EXTERNAL;
+        strings[s].hash_valid = false;
         strings[s].length = length;
         strings[s].code_units = units;
-        strings[s].hash = mal_string_hash_code_units(units, length);
     }
 
     // BigInts: immortal, 128-bit value (low u64 then high u64).

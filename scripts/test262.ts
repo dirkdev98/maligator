@@ -38,6 +38,10 @@ const random = process.argv.includes("--random");
 // flaky verdicts clobbering the committed baseline.
 const checkMode = process.argv.includes("--check");
 const filter = argValue("--filter");
+// Run tests quarantined only for suite speed. This remains a partial/debug run
+// even without --filter so it cannot rewrite the committed suite baseline.
+const includeSlow = process.argv.includes("--include-slow");
+process.env.T262_INCLUDE_SLOW = includeSlow ? "1" : "0";
 // Restrict the run to an explicit newline-separated list of test paths (the
 // committed regression manifest). Like --filter, it is a partial run: it never
 // rewrites the committed results and does not prune the artifact cache.
@@ -67,7 +71,8 @@ const compileWorkers = Math.max(
 	Math.min(TEST262_METADATA.compileWorkers, os.availableParallelism()),
 );
 const preflightMode = process.env.T262_PREFLIGHT === "1";
-const isFullRunRequest = !filter && !manifestPath && !random && !onlyVariant;
+const isFullRunRequest =
+	!filter && !manifestPath && !random && !onlyVariant && !includeSlow;
 const preflightPath = TEST262_METADATA.preflightFile;
 
 if (isFullRunRequest && process.env.T262_ORCHESTRATED !== "1") {
@@ -156,7 +161,7 @@ if (random) {
 
 // A manifest/filter/random run is partial: it must not rewrite the committed
 // results or prune the artifact cache (it never visits every key).
-const isPartialRun = Boolean(filter) || Boolean(manifestPath) || random;
+const isPartialRun = Boolean(filter) || Boolean(manifestPath) || random || includeSlow;
 const batchSize = isPartialRun
 	? Math.min(
 			TEST262_METADATA.batchSize,

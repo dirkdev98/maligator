@@ -105,7 +105,8 @@ function interpreterOnly(): boolean {
 // halves the generated C and cuts cc ~25% on a cold run, content-addressed so it
 // cannot change behaviour. Folded into the cache key.
 function emitMode(): string {
-	return interpreterOnly() ? "shared-harness-nocompiled" : "shared-harness";
+	const backend = interpreterOnly() ? "shared-harness-nocompiled" : "shared-harness";
+	return process.env.T262_INCLUDE_SLOW === "1" ? `${backend}-include-slow` : backend;
 }
 
 /** Keys touched this run, so stale cache entries can be pruned at the end. */
@@ -128,17 +129,18 @@ const SKIPPED_PATHS = ["annexB"];
 
 /**
  * Tests quarantined purely for suite speed: each is already failing AND pays a
- * disproportionate cost (a ~10s run timeout, or pathological codegen volume).
+ * disproportionate cost (a full run timeout, or pathological codegen volume).
  * Skipping them trims wall time without hiding a passing test. Substring match.
  *
- * The Array-method entries all share one root cause: on an array-like with a
- * length near 2^32 we iterate it instead of throwing RangeError early, so each
- * spins for the full run timeout. (Every matching corpus test already fails,
- * so the substrings cannot mask a passing test.)
+ * The Array-method entries all share one root cause: generic array-like lengths
+ * are clamped to u32 instead of the spec's 2^53-1. Methods then either iterate
+ * billions of indices or cannot address the expected large property keys. Every
+ * matching corpus test already fails, so the substrings cannot mask a pass.
  *
- * - string-upper-lower-mapping emits ~77MB of C (a giant case-mapping table),
- *   ~1.5s of serial compile plus a ~4s cc, and still fails.
- * - array-iterator-close runs to the timeout.
+ * - string-upper-lower-mapping lowers a giant case-mapping table to ~1.2M VM
+ *   instructions; its generated C exceeds the 60s cc timeout.
+ * - array-iterator-close infinitely drains a rest assignment's iterator before
+ *   evaluating its throwing assignment target.
  */
 const SKIPPED_SLOW_PATHS = [
 	"length-exceeding-array-length-limit",
@@ -154,14 +156,6 @@ const SKIPPED_SLOW_PATHS = [
 	"Array/prototype/map/15.4.4.19-3-8",
 	"staging/sm/String/string-upper-lower-mapping",
 	"staging/sm/destructuring/array-iterator-close",
-	// RegExp CharacterClassEscapes + property-escapes brute-force the harness's
-	// buildString over Unicode-scale ranges (up to ~1.1M code points) with `+=`,
-	// which is O(n²) on this engine's immutable strings (no rope) and times out
-	// building the test string — before regex even runs. The regex semantics they
-	// cover (regress's \p{} data + character classes) are exercised by
-	// smaller-scale tests; these are a string-perf limitation, not a regex gap.
-	"built-ins/RegExp/CharacterClassEscapes",
-	"built-ins/RegExp/property-escapes",
 ];
 
 const HARNESS_CACHE: Record<string, string> = {};
@@ -346,9 +340,11 @@ export function test262ShouldSkip(file: Test262File): boolean {
 		}
 	}
 
-	for (const part of SKIPPED_SLOW_PATHS) {
-		if (file.path.includes(part)) {
-			return true;
+	if (process.env.T262_INCLUDE_SLOW !== "1") {
+		for (const part of SKIPPED_SLOW_PATHS) {
+			if (file.path.includes(part)) {
+				return true;
+			}
 		}
 	}
 

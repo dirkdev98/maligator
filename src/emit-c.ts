@@ -637,7 +637,9 @@ export function emitCompiledFunction(
 		);
 	}
 
-	lines.push(...body);
+	for (const line of body) {
+		lines.push(line);
+	}
 
 	// Falling off the end returns undefined — or `this` for a constructor with no
 	// explicit object return. A derived constructor routes through the checked
@@ -780,7 +782,9 @@ function emitResumableFunction(
 	}
 	lines.push(`    }`);
 
-	lines.push(...body);
+	for (const line of body) {
+		lines.push(line);
+	}
 
 	// Falling off the end is an implicit `return undefined` — complete the coroutine.
 	const fallReturn = isAsyncFunction ? "__async_result_promise" : "MAL_VALUE_UNDEFINED";

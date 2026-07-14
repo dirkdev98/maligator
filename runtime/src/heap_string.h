@@ -14,6 +14,7 @@ typedef enum MalStringStorage : u8 {
 typedef struct MalString {
     MalHeapHeader header;
     MalStringStorage storage;
+    bool hash_valid;
     u64 hash;
     usize length;
     const c16 *code_units;
@@ -70,7 +71,7 @@ const c16 *mal_string_code_units(const MalString *string);
 usize mal_string_length(const MalString *string);
 
 /**
- * Return the cached string hash.
+ * Return the string hash, computing and caching it on first use.
  */
 u64 mal_string_hash(const MalString *string);
 
