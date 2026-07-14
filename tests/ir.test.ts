@@ -70,6 +70,24 @@ test("eval-completion scripts retain global functions but DCE private declaratio
 	).toBe(true);
 });
 
+test("declared script-global reads use the dedicated global property opcode", () => {
+	const program = compileScript(
+		"var observed = 1; function read() { return observed } read()",
+	);
+	const read = functionNamed(program, "read");
+	const instructions = instructionsOf(read);
+
+	expect(instructions).toContainEqual(
+		expect.objectContaining({ type: "loadGlobalProperty" }),
+	);
+	expect(instructions.some((instruction) => instruction.type === "loadProperty")).toBe(
+		false,
+	);
+	expect(instructions.some((instruction) => instruction.type === "loadIntrinsic")).toBe(
+		false,
+	);
+});
+
 test("static nested data literals lower to one packed template instruction", () => {
 	const program = compileScript(
 		'const value = [1, "text", { foo: [, -0, true, null, 9n] }, 2, 3, 4, 5, 6, 7, 8];',

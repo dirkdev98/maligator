@@ -323,6 +323,11 @@ typedef struct MalInlineCache {
     u32 poly_slot[MAL_IC_POLY_EXTRA];
     u8 prim_kind;
     u8 poly_count;
+    // MAL_IC_MODE_INHERITED_VALUE: an exotic/ordinary receiver whose exact heap
+    // type, own shape, empty overflow state, and direct watched prototype guard a
+    // resolved inherited data value. `obj` is that direct prototype.
+    u8 mode;
+    u8 receiver_type;
     bool megamorphic;
 } MalInlineCache;
 
@@ -332,6 +337,9 @@ static_assert(sizeof(MalInlineCache) <= 80, "MalInlineCache outgrew 80 bytes");
 // `slot` sentinel marking a protector-gated value entry (`value` holds the result,
 // there is no object slot). A real shape slot is a small inline index.
 #define MAL_IC_VALUE_SLOT UINT32_MAX
+
+#define MAL_IC_MODE_SHAPE 0u
+#define MAL_IC_MODE_INHERITED_VALUE 1u
 
 // Megamorphic stub cache: a shared, per-VM, direct-mapped (shape, key) -> data slot
 // table consulted when a per-site cache has gone megamorphic (saw more shapes than
@@ -437,6 +445,28 @@ static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key,
         return true;
     }
     return false;
+}
+
+/**
+ * Guarded inherited data-property value hit. The fill path admits only immortal
+ * exact keys and a watched prototype chain, and only receivers with no overflow
+ * table. Thus shape + null-overflow prove no own shadow, exact prototype proves
+ * realm/chain identity, and the monotonic protector proves the holder and chain
+ * have not been patched or reparented. Proxy receivers are never filled.
+ */
+static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
+                                             const MalInlineCache *ic, MalValue *out) {
+    if (ic->mode != MAL_IC_MODE_INHERITED_VALUE || !mal_primitive_method_protector ||
+        key != ic->key || !mal_value_is_object(receiver)) {
+        return false;
+    }
+    const MalObject *object = mal_value_to_object(receiver);
+    if ((u8) object->header.type != ic->receiver_type || object->shape != ic->shape ||
+        object->prototype != ic->obj || object->overflow != nullptr) {
+        return false;
+    }
+    *out = ic->value;
+    return true;
 }
 
 /**
@@ -745,7 +775,9 @@ void mal_vm_op_set_prototype(MalVm *vm, MalValue object_value, MalValue prototyp
 MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index);
 
 /** Write `value` to the global object property `name_string_index` (creating it). */
-void mal_vm_op_store_global_property(MalVm *vm, i32 name_string_index, MalValue value);
+void mal_vm_op_store_global_property(
+    MalVm *vm, i32 name_string_index, MalValue value, bool strict
+);
 
 /** Read `object`'s internal [[Prototype]] slot (null if none); never throws. */
 MalValue mal_vm_op_load_prototype(MalVm *vm, MalValue object_value);

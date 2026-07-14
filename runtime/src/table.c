@@ -40,6 +40,7 @@ static_assert(sizeof(MalTableEntry) <= 32, "MalTableEntry outgrew its 32-byte si
  */
 typedef struct MalTable {
     MalTableMode mode;
+    u64 handle_epoch;     // advanced whenever compaction renumbers entry handles
     u32 size;            // live entries
     u32 tombstone_count; // dead entries still occupying an `entries` cell
     u32 slot_capacity;   // hash array length (power of two)
@@ -173,6 +174,7 @@ MalTable *mal_table_new(MalTableMode mode) {
     MalTable *table = mal_heap_alloc_raw(heap, sizeof(MalTable));
 
     table->mode = mode;
+    table->handle_epoch = 1;
     table->size = 0;
     table->tombstone_count = 0;
     table->slot_capacity = MAL_TABLE_MIN_CAPACITY;
@@ -313,6 +315,10 @@ void mal_table_compact(MalTable *table) {
 
     table->entry_count = write_index;
     table->tombstone_count = 0;
+    table->handle_epoch++;
+    if (table->handle_epoch == 0) {
+        table->handle_epoch = 1;
+    }
     mal_table_rehash(table, table->slot_capacity);
 }
 
@@ -343,6 +349,24 @@ void mal_table_entry_set_value(MalTable *table, void *entry, MalValue value) {
 
 bool mal_table_entry_is_live(const MalTable *table, const void *entry) {
     return table->entries[mal_table_handle_index(entry)].live;
+}
+
+u64 mal_table_handle_epoch(const MalTable *table) {
+    return table->handle_epoch;
+}
+
+bool mal_table_entry_matches(
+    const MalTable *table, const void *entry, u64 handle_epoch, MalKey key
+) {
+    if (entry == nullptr || handle_epoch != table->handle_epoch) {
+        return false;
+    }
+    u32 index = mal_table_handle_index(entry);
+    if (index >= table->entry_count) {
+        return false;
+    }
+    const MalTableEntry *candidate = &table->entries[index];
+    return candidate->live && mal_table_value_equals(candidate->key, key.value);
 }
 
 void mal_table_iter_init(MalTableIter *iter, MalTable *table, MalTableIterKind kind) {

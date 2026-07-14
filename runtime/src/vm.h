@@ -994,6 +994,23 @@ MalRealm *mal_realm_create(MalVm *vm, MalRealmInstaller installer, void *data);
 MalValue mal_realm_global(const MalRealm *realm);
 #endif
 
+#define MAL_GLOBAL_PROPERTY_CACHE_BITS 10
+#define MAL_GLOBAL_PROPERTY_CACHE_SIZE (1u << MAL_GLOBAL_PROPERTY_CACHE_BITS)
+
+/**
+ * A VM-owned direct-mapped cache for global-object own dictionary entries. It
+ * retains entry identity, never a property value; users validate every field and
+ * re-read the descriptor before taking a fast path.
+ */
+typedef struct MalGlobalPropertyCacheEntry {
+    const MalValue *realm_intrinsics;
+    const struct MalObject *global_object;
+    MalTable *table;
+    void *entry;
+    u64 table_handle_epoch;
+    i32 string_index;
+} MalGlobalPropertyCacheEntry;
+
 typedef struct MalVm {
     const MalVmDefinition *definition;
 
@@ -1030,6 +1047,9 @@ typedef struct MalVm {
      * See MalStubEntry / mal_stub_hash in vm_ops.h.
      */
     struct MalStubEntry *load_stub;
+
+    /** Bounded cache indexed by definition string index; see vm_ops.c. */
+    MalGlobalPropertyCacheEntry *global_property_cache;
 
     MalHeap heap;
     /** Per-isolate collector working state (grey worklist, weak lists, remembered
@@ -1314,7 +1334,7 @@ static inline void mal_gc_native_rooted_end(MalVm *vm) {
 }
 
 /**
- * Roots the receiver, new.target, and argument buffer handed to a callee across a
+ * Roots the receiver, new.target, callee, and argument buffer handed to a callee across a
  * GC-able call so a collection inside it cannot reclaim them. Two cases need this:
  *
  *  - native builtins: the receiver and new.target arrive as plain C locals (the
@@ -1332,15 +1352,17 @@ static inline void mal_gc_native_rooted_end(MalVm *vm) {
 typedef struct MalCalleeRoots {
     MalRootSpan receiver_span;
     MalRootSpan args_span;
-    MalValue receiver_slots[2];
+    MalValue receiver_slots[3];
 } MalCalleeRoots;
 
 static inline void mal_gc_callee_roots_begin(
-    MalCalleeRoots *roots, MalValue this_value, MalValue new_target, const MalValue *args, i32 arg_count
+    MalCalleeRoots *roots, MalValue this_value, MalValue new_target, MalValue callee,
+    const MalValue *args, i32 arg_count
 ) {
     roots->receiver_slots[0] = this_value;
     roots->receiver_slots[1] = new_target;
-    mal_gc_root(&roots->receiver_span, roots->receiver_slots, 2);
+    roots->receiver_slots[2] = callee;
+    mal_gc_root(&roots->receiver_span, roots->receiver_slots, 3);
     // Cast away const: the collector only reads (shades) these slots.
     mal_gc_root(&roots->args_span, (MalValue *) args, arg_count);
 }
@@ -1630,11 +1652,18 @@ MalCompletion mal_vm_call_value(
  */
 typedef struct MalCallCache {
     MalValue callee[MAL_CALL_CACHE_WAYS];
-    MalEnv *env[MAL_CALL_CACHE_WAYS];
+    union {
+        MalEnv *env;
+        MalNativeFunctionCallback native;
+    } target[MAL_CALL_CACHE_WAYS];
     i32 function_index[MAL_CALL_CACHE_WAYS];
+    u8 kind[MAL_CALL_CACHE_WAYS];
     u32 count;
     u32 epoch;
 } MalCallCache;
+
+#define MAL_CALL_CACHE_COMPILED 0u
+#define MAL_CALL_CACHE_NATIVE 1u
 
 MalCompletion mal_vm_call_cached(
     MalVm *vm,

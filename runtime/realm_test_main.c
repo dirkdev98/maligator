@@ -5,10 +5,12 @@
 #include "builtin_eval.h"
 #include "function_object.h"
 #include "gc.h"
+#include "heap_string.h"
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
 #include "value.h"
+#include "vm_ops.h"
 
 #if !MAL_REALMS
 #error "realm_test_main.c requires MAL_REALMS"
@@ -319,6 +321,37 @@ int main(void) {
         !has_own_property(&vm, global_one, "realmTwoCalls") &&
         realm_is_current(&vm, realm_one);
 
+    MalValue dates[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan dates_root;
+    mal_gc_root(&dates_root, dates, 2);
+    MalCompletion date_one = mal_vm_construct_value(
+        &vm, realm_one->intrinsics[MAL_INTRINSIC_DATE_CONSTRUCTOR], nullptr, 0);
+    dates[0] = date_one.value;
+    MalCompletion date_two = mal_vm_construct_value(
+        &vm, realm_two->intrinsics[MAL_INTRINSIC_DATE_CONSTRUCTOR], nullptr, 0);
+    dates[1] = date_two.value;
+    MalString *to_string_name = mal_intrinsic_ascii(&vm, "toString");
+    MalValue to_string_key = mal_value_new_undefined();
+    for (i32 i = 0; i < vm.definition->string_constant_count; i++) {
+        if (mal_string_equals(&vm.definition->string_constants[i], to_string_name)) {
+            to_string_key = mal_value_from_string(&vm.definition->string_constants[i]);
+            break;
+        }
+    }
+    MalInlineCache date_method_cache = {0};
+    MalValue date_method_one = mal_vm_op_load_property_ic(
+        &vm, dates[0], to_string_key, &date_method_cache);
+    MalValue date_method_one_hit = mal_vm_op_load_property_ic(
+        &vm, dates[0], to_string_key, &date_method_cache);
+    MalValue date_method_two = mal_vm_op_load_property_ic(
+        &vm, dates[1], to_string_key, &date_method_cache);
+    bool cross_realm_date_cache = date_one.kind == MAL_COMPLETION_NORMAL &&
+        date_two.kind == MAL_COMPLETION_NORMAL && mal_value_is_string(to_string_key) &&
+        date_method_cache.mode == MAL_IC_MODE_INHERITED_VALUE &&
+        date_method_one == date_method_one_hit && date_method_one != date_method_two &&
+        date_method_two == own_data_property(
+            &vm, realm_two->intrinsics[MAL_INTRINSIC_DATE_PROTOTYPE], "toString");
+
     struct {
         const char *name;
         bool ok;
@@ -359,8 +392,11 @@ int main(void) {
          eval_functions_use_target_realms},
         {"evaluated cross-realm call enters, creates, and restores",
          evaluated_cross_realm_call},
+        {"inherited Date method cache separates direct prototypes by realm",
+         cross_realm_date_cache},
     };
 
+    mal_gc_unroot(&dates_root);
     mal_gc_unroot(&evaluated_call_root);
     mal_gc_unroot(&eval_sources_root);
     mal_gc_collect(&vm);

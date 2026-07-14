@@ -10302,22 +10302,10 @@ function loadRegisterFromLocation(
 			break;
 		}
 		case "globalProperty": {
-			// `globalThis[name]` — undefined when not yet assigned (a hoisted var).
-			const global = nextRegisterDestination(fn);
 			block.instructions.push({
-				type: "loadIntrinsic",
-				registers: [global],
-				intrinsic: "globalThis",
-			});
-			const key = nextRegisterDestination(fn);
-			block.instructions.push({
-				type: "createString",
-				registers: [key],
-				stringIndex: location.nameStringIndex,
-			});
-			block.instructions.push({
-				type: "loadProperty",
-				registers: [destination, global, key],
+				type: "loadGlobalProperty",
+				registers: [destination],
+				nameStringIndex: location.nameStringIndex,
 			});
 			break;
 		}

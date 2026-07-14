@@ -44,10 +44,9 @@ typedef struct MalObject {
      */
     bool immutable_prototype : 1;
     /**
-     * Set on the primitive prototypes (%String/Number/Boolean/Symbol/BigInt.prototype%)
-     * and %Object.prototype% at intrinsics init. Any define/set/delete/reparent of one
-     * breaks `mal_primitive_method_protector`, disabling the primitive-method inline
-     * cache (which assumes those prototypes are unmodified).
+     * Set on built-in prototypes and watched namespace/constructor objects at
+     * intrinsics init. Any define/set/delete/reparent breaks the monotonic method
+     * protector, disabling cached values that assume those objects are unmodified.
      */
     bool watched_method_proto : 1;
     MalShape *shape;

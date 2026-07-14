@@ -174,6 +174,20 @@ void mal_table_entry_set_value(MalTable *table, void *entry, MalValue value);
 bool mal_table_entry_is_live(const MalTable *table, const void *entry);
 
 /**
+ * Generation of entry handles. Growth preserves handles; compaction renumbers
+ * them and advances this generation.
+ */
+u64 mal_table_handle_epoch(const MalTable *table);
+
+/**
+ * Validate a cached entry handle against its generation and exact key. Safe for
+ * stale handles, including handles retained across compaction.
+ */
+bool mal_table_entry_matches(
+    const MalTable *table, const void *entry, u64 handle_epoch, MalKey key
+);
+
+/**
  * Initialize a live storage-order iterator.
  */
 void mal_table_iter_init(MalTableIter *iter, MalTable *table, MalTableIterKind kind);

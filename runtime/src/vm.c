@@ -174,6 +174,8 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
 
     vm->interp_ic = calloc((usize) vm->function_capacity, sizeof(struct MalInlineCache *));
     vm->load_stub = calloc((usize) MAL_STUB_CACHE_SIZE, sizeof(MalStubEntry));
+    vm->global_property_cache = calloc(
+        (usize) MAL_GLOBAL_PROPERTY_CACHE_SIZE, sizeof(MalGlobalPropertyCacheEntry));
     vm->global_capacity = definition->global_count > 0 ? definition->global_count : 1;
 #if !MAL_REALMS
     vm->globals = malloc(sizeof(MalValue) * (usize) vm->global_capacity);
@@ -371,6 +373,7 @@ void mal_vm_free(MalVm *vm) {
         free(vm->interp_ic);
     }
     free(vm->load_stub);
+    free(vm->global_property_cache);
     // Only heap-resident (generator/async) leftover frames own their buffers;
     // value-stack frames live in vm->value_stack, freed below.
     for (i32 i = 0; i < vm->frame_count; i++) {
@@ -2332,7 +2335,8 @@ MalCompletion mal_vm_call_value(
         // its scratch lifts that suppression itself; the receiver/args/new.target
         // are rooted here so they survive such a collection.
         MalCalleeRoots ncr;
-        mal_gc_callee_roots_begin(&ncr, resolution.this_value, mal_value_new_undefined(), resolution.args, resolution.arg_count);
+        mal_gc_callee_roots_begin(&ncr, resolution.this_value, mal_value_new_undefined(),
+                                  resolution.callee, resolution.args, resolution.arg_count);
         vm->gc_native_frames++;
         MalValue value = callback(vm, resolution.this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), resolution.callee);
         vm->gc_native_frames--;
@@ -2399,16 +2403,34 @@ MalCompletion mal_vm_call_cached(
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return vm->completion;
     }
-    // Hit: a previously-seen plain compiled callee, in the same heap epoch (so `callee`'s cell
-    // can't have been freed + its address reused — see the ABA note on MalCallCache). Its index
-    // / body / env are immutable, so this skips the whole dispatch chain and enters the body
-    // directly (mirrors the compiled-callee arm of mal_vm_call_value). env[v] stays alive:
-    // within the epoch the callee object lives, and a live function object keeps its
-    // creation_env reachable.
+    // Hit in the same heap epoch, so the exact callee cell cannot have been freed
+    // and reused (see MalCallCache). Native ways enter the cached callback with the
+    // full native frame/root/realm protocol; compiled ways enter the immutable body
+    // and environment directly.
     if (cc->epoch == vm->heap.epoch) {
         for (u32 v = 0; v < cc->count; v++) {
             if (callee != cc->callee[v]) {
                 continue;
+            }
+            if (cc->kind[v] == MAL_CALL_CACHE_NATIVE) {
+#if MAL_REALMS
+                MalRealm *saved_realm = vm->current_realm;
+                mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
+                MalCalleeRoots ncr;
+                mal_gc_callee_roots_begin(&ncr, this_value, mal_value_new_undefined(),
+                                          callee, args, arg_count);
+                vm->gc_native_frames++;
+                MalValue value = cc->target[v].native(
+                    vm, this_value, args, arg_count, mal_value_new_undefined(), callee);
+                vm->gc_native_frames--;
+                mal_gc_callee_roots_end(&ncr);
+#if MAL_REALMS
+                mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+                return vm->completion.kind == MAL_COMPLETION_THROW
+                    ? vm->completion
+                    : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
             }
             // Re-derive the MalFunction from the (stable) index rather than caching a pointer:
             // eval/new Function grows vm->definition->functions (a realloc'd C array, not a GC
@@ -2425,7 +2447,7 @@ MalCompletion mal_vm_call_cached(
 #endif
             MalValue tv = mal_vm_callee_this(vm, function, this_value);
             MalValue value = function->compiled(
-                vm, tv, args, arg_count, mal_value_new_undefined(), cc->env[v], callee, nullptr
+                vm, tv, args, arg_count, mal_value_new_undefined(), cc->target[v].env, callee, nullptr
             );
             mal_vm_leave_compiled(vm);
 #if MAL_REALMS
@@ -2438,10 +2460,9 @@ MalCompletion mal_vm_call_cached(
     }
 
     MalCompletion completion = mal_vm_call_value(vm, callee, this_value, args, arg_count);
-    // Add a way when the callee is a plain compiled user function — the only case the fast
-    // path handles. Bound/native/proxy/interpreted callees are left uncached (the identity
-    // guard keeps missing for them). A stale epoch (a sweep since the ways were filled) clears
-    // them first; once the ways fill, the overflow stays on the dispatch path.
+    // Add a way for an exact plain compiled or native function. Bound/proxy/
+    // interpreted callees stay on the dispatch path. A stale epoch clears all ways;
+    // once they fill, polymorphic overflow remains on full dispatch.
     if (mal_value_is_function_object(callee)) {
         i32 index = mal_function_object_function_index(mal_value_to_function_object(callee));
         const MalFunction *function = &vm->definition->functions[index];
@@ -2453,9 +2474,23 @@ MalCompletion mal_vm_call_cached(
             if (cc->count < MAL_CALL_CACHE_WAYS) {
                 u32 v = cc->count++;
                 cc->callee[v] = callee;
-                cc->env[v] = mal_value_to_function_object(callee)->creation_env;
+                cc->target[v].env = mal_value_to_function_object(callee)->creation_env;
                 cc->function_index[v] = index;
+                cc->kind[v] = MAL_CALL_CACHE_COMPILED;
             }
+        }
+    } else if (mal_value_is_native_function_object(callee)) {
+        if (cc->epoch != vm->heap.epoch) {
+            cc->count = 0;
+            cc->epoch = vm->heap.epoch;
+        }
+        if (cc->count < MAL_CALL_CACHE_WAYS) {
+            u32 v = cc->count++;
+            cc->callee[v] = callee;
+            cc->target[v].native = mal_native_function_object_callback(
+                mal_value_to_native_function_object(callee));
+            cc->function_index[v] = -1;
+            cc->kind[v] = MAL_CALL_CACHE_NATIVE;
         }
     }
     return completion;
@@ -2507,7 +2542,8 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
         // Native constructors allocate their own this; new_target signals construct.
         MalNativeFunctionCallback callback = mal_native_function_object_callback(mal_value_to_native_function_object(resolution.callee));
         MalCalleeRoots ncr;
-        mal_gc_callee_roots_begin(&ncr, mal_value_new_undefined(), effective_new_target, resolution.args, resolution.arg_count);
+        mal_gc_callee_roots_begin(&ncr, mal_value_new_undefined(), effective_new_target,
+                                  resolution.callee, resolution.args, resolution.arg_count);
         vm->gc_native_frames++;
         MalValue value = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, effective_new_target, resolution.callee);
         vm->gc_native_frames--;
@@ -2615,7 +2651,9 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                     // it, so root it (plus new.target/args) for the call: a
                     // collection inside the constructor would otherwise sweep it.
                     MalCalleeRoots ncr;
-                    mal_gc_callee_roots_begin(&ncr, this_value, effective_new_target, resolution.args, resolution.arg_count);
+                    mal_gc_callee_roots_begin(&ncr, this_value, effective_new_target,
+                                              resolution.callee, resolution.args,
+                                              resolution.arg_count);
                     MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, effective_new_target, env, resolution.callee, nullptr);
                     mal_gc_callee_roots_end(&ncr);
                     mal_vm_leave_compiled(vm);

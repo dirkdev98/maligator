@@ -1482,7 +1482,7 @@ function emitInstruction(
 						: []),
 					`static MalInlineCache __ic_${ip};`,
 					`MalValue __v_${ip};`,
-					`if (${reg.name} && mal_vm_object_try_load(${reg.name}, ${boxed(instruction.key)}, &__ic_${ip}, &__v_${ip})) {`,
+					`if ((${reg.name} && mal_vm_object_try_load(${reg.name}, ${boxed(instruction.key)}, &__ic_${ip}, &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip}, &__v_${ip})) {`,
 					`  r${instruction.dst} = __v_${ip};`,
 					`} else {`,
 					`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
@@ -1572,7 +1572,7 @@ function emitInstruction(
 		case "STORE_GLOBAL_PROPERTY":
 			// A var/function declaration that becomes a property of globalThis.
 			return [
-				`mal_vm_op_store_global_property(vm, ${instruction.nameStringIndex}, ${boxed(instruction.src)});`,
+				`mal_vm_op_store_global_property(vm, ${instruction.nameStringIndex}, ${boxed(instruction.src)}, ${strict});`,
 				throwCheck,
 			];
 		case "CREATE_ARGUMENTS_OBJECT":

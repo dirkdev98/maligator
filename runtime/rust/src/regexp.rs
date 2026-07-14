@@ -17,6 +17,10 @@
 //! (`find_from_ucs2`). Positions are code-unit indices in both. g/y/d never
 //! reach here — the C side drives them.
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::sync::Arc;
+
 use regress::{Flags, Match, Regex};
 
 /// ABI version, mirrored by MAL_REGEXP_ABI_VERSION in mal_regexp.h.
@@ -30,6 +34,31 @@ const FLAG_MULTILINE: u32 = 1 << 1; // m
 const FLAG_DOT_ALL: u32 = 1 << 2; // s
 const FLAG_UNICODE: u32 = 1 << 3; // u
 const FLAG_UNICODE_SETS: u32 = 1 << 4; // v
+const COMPILE_FLAGS: u32 = FLAG_IGNORE_CASE
+    | FLAG_MULTILINE
+    | FLAG_DOT_ALL
+    | FLAG_UNICODE
+    | FLAG_UNICODE_SETS;
+
+const PATTERN_CACHE_CAPACITY: usize = 24;
+
+#[derive(PartialEq, Eq)]
+struct PatternCacheKey {
+    pattern: Box<[u16]>,
+    compile_flags: u32,
+}
+
+struct PatternCacheEntry {
+    key: PatternCacheKey,
+    re: Arc<Regex>,
+}
+
+thread_local! {
+    /// RegExp construction is thread-confined by the runtime, so a small local
+    /// cache avoids synchronization while bounding retained patterns.
+    static PATTERN_CACHE: RefCell<VecDeque<PatternCacheEntry>> =
+        const { RefCell::new(VecDeque::new()) };
+}
 
 /// A compiled pattern plus its most recent match. The C runtime drives one exec
 /// at a time on a single thread and fully consumes each result (captures + named
@@ -38,7 +67,7 @@ const FLAG_UNICODE_SETS: u32 = 1 << 4; // v
 /// owns all of its data (it does not borrow the subject), so it is safe to
 /// retain past the exec call.
 struct CompiledPattern {
-    re: Regex,
+    re: Arc<Regex>,
     /// `u`/`v` patterns match over code points; everything else over code units.
     unicode_mode: bool,
     last: Option<Match>,
@@ -84,6 +113,51 @@ fn utf16_to_codepoints(units: &[u16]) -> Vec<u32> {
     out
 }
 
+fn regress_flags(bits: u32) -> Flags {
+    let mut flags = Flags::default();
+    flags.icase = bits & FLAG_IGNORE_CASE != 0;
+    flags.multiline = bits & FLAG_MULTILINE != 0;
+    flags.dot_all = bits & FLAG_DOT_ALL != 0;
+    flags.unicode = bits & FLAG_UNICODE != 0;
+    flags.unicode_sets = bits & FLAG_UNICODE_SETS != 0;
+    flags
+}
+
+fn compile_pattern(units: &[u16], flags: u32) -> Option<(Arc<Regex>, bool)> {
+    let semantic_flags = flags & COMPILE_FLAGS;
+    let cached = PATTERN_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let index = cache.iter().position(|entry| {
+            entry.key.compile_flags == semantic_flags && entry.key.pattern.as_ref() == units
+        })?;
+        let entry = cache.remove(index)?;
+        let re = Arc::clone(&entry.re);
+        cache.push_front(entry);
+        Some(re)
+    });
+
+    let flags = regress_flags(semantic_flags);
+    let unicode_mode = flags.unicode || flags.unicode_sets;
+    if let Some(re) = cached {
+        return Some((re, unicode_mode));
+    }
+
+    let codepoints = utf16_to_codepoints(units);
+    let re = Arc::new(Regex::from_unicode(codepoints.into_iter(), flags).ok()?);
+    PATTERN_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.push_front(PatternCacheEntry {
+            key: PatternCacheKey {
+                pattern: units.into(),
+                compile_flags: semantic_flags,
+            },
+            re: Arc::clone(&re),
+        });
+        cache.truncate(PATTERN_CACHE_CAPACITY);
+    });
+    Some((re, unicode_mode))
+}
+
 /// Compile a pattern (UTF-16) with the given flag bitmask. Returns an opaque,
 /// leaked handle (a boxed `CompiledPattern`), or NULL if the pattern is invalid
 /// — the C side maps NULL to a SyntaxError. Freed by the C side via mal_regexp_free.
@@ -95,17 +169,8 @@ pub unsafe extern "C" fn mal_regexp_compile(
 ) -> *mut core::ffi::c_void {
     let units = unsafe { slice_u16(pattern, pattern_len) };
 
-    let mut f = Flags::default();
-    f.icase = flags & FLAG_IGNORE_CASE != 0;
-    f.multiline = flags & FLAG_MULTILINE != 0;
-    f.dot_all = flags & FLAG_DOT_ALL != 0;
-    f.unicode = flags & FLAG_UNICODE != 0;
-    f.unicode_sets = flags & FLAG_UNICODE_SETS != 0;
-    let unicode_mode = f.unicode || f.unicode_sets;
-
-    let codepoints = utf16_to_codepoints(units);
-    match Regex::from_unicode(codepoints.into_iter(), f) {
-        Ok(re) => {
+    match compile_pattern(units, flags) {
+        Some((re, unicode_mode)) => {
             let boxed = Box::new(CompiledPattern {
                 re,
                 unicode_mode,
@@ -113,7 +178,7 @@ pub unsafe extern "C" fn mal_regexp_compile(
             });
             Box::into_raw(boxed) as *mut core::ffi::c_void
         }
-        Err(_) => core::ptr::null_mut(),
+        None => core::ptr::null_mut(),
     }
 }
 
@@ -269,4 +334,149 @@ pub unsafe extern "C" fn mal_regexp_named_group(
         unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), name_out, n) };
     }
     bytes.len() as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn utf16(value: &str) -> Vec<u16> {
+        value.encode_utf16().collect()
+    }
+
+    fn clear_cache() {
+        PATTERN_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+
+    fn cache_len() -> usize {
+        PATTERN_CACHE.with(|cache| cache.borrow().len())
+    }
+
+    unsafe fn handle(pattern: &[u16], flags: u32) -> *mut core::ffi::c_void {
+        unsafe { mal_regexp_compile(pattern.as_ptr(), pattern.len(), flags) }
+    }
+
+    #[test]
+    fn repeated_compilation_shares_only_the_regex() {
+        clear_cache();
+        let pattern = utf16("(a)(b)?");
+        let first = unsafe { handle(&pattern, 0) };
+        let second = unsafe { handle(&pattern, 0) };
+
+        assert!(!first.is_null());
+        assert!(!second.is_null());
+        assert_ne!(first, second);
+        let first_pattern = unsafe { &*(first as *const CompiledPattern) };
+        let second_pattern = unsafe { &*(second as *const CompiledPattern) };
+        assert!(Arc::ptr_eq(&first_pattern.re, &second_pattern.re));
+        assert!(first_pattern.last.is_none());
+        assert!(second_pattern.last.is_none());
+
+        unsafe {
+            mal_regexp_free(first);
+            mal_regexp_free(second);
+        }
+    }
+
+    #[test]
+    fn shared_regex_handles_retain_independent_captures() {
+        clear_cache();
+        let pattern = utf16("(a)(b)?");
+        let first = unsafe { handle(&pattern, 0) };
+        let second = unsafe { handle(&pattern, 0) };
+        let first_subject = utf16("ab");
+        let second_subject = utf16("a");
+        let mut first_caps = [-1; 6];
+        let mut second_caps = [-1; 6];
+
+        assert_eq!(
+            unsafe {
+                mal_regexp_exec(
+                    first,
+                    first_subject.as_ptr(),
+                    first_subject.len(),
+                    0,
+                    first_caps.as_mut_ptr(),
+                    first_caps.len() as i32,
+                )
+            },
+            3
+        );
+        assert_eq!(
+            unsafe {
+                mal_regexp_exec(
+                    second,
+                    second_subject.as_ptr(),
+                    second_subject.len(),
+                    0,
+                    second_caps.as_mut_ptr(),
+                    second_caps.len() as i32,
+                )
+            },
+            3
+        );
+        assert_eq!(first_caps, [0, 2, 0, 1, 1, 2]);
+        assert_eq!(second_caps, [0, 1, 0, 1, -1, -1]);
+
+        let mut retained = [-1; 6];
+        assert_eq!(
+            unsafe {
+                mal_regexp_copy_captures(
+                    first,
+                    retained.as_mut_ptr(),
+                    retained.len() as i32,
+                )
+            },
+            3
+        );
+        assert_eq!(retained, first_caps);
+
+        unsafe {
+            mal_regexp_free(first);
+            mal_regexp_free(second);
+        }
+    }
+
+    #[test]
+    fn compile_flags_are_part_of_the_cache_key() {
+        clear_cache();
+        let pattern = utf16("a");
+        let (plain, _) = compile_pattern(&pattern, 0).unwrap();
+        let (ignore_case, _) = compile_pattern(&pattern, FLAG_IGNORE_CASE).unwrap();
+
+        assert!(!Arc::ptr_eq(&plain, &ignore_case));
+        assert_eq!(cache_len(), 2);
+        assert!(plain.find_from_ucs2(&utf16("A"), 0).next().is_none());
+        assert!(ignore_case
+            .find_from_ucs2(&utf16("A"), 0)
+            .next()
+            .is_some());
+    }
+
+    #[test]
+    fn invalid_patterns_are_not_cached() {
+        clear_cache();
+        let pattern = utf16("(");
+
+        assert!(compile_pattern(&pattern, 0).is_none());
+        assert!(compile_pattern(&pattern, 0).is_none());
+        assert_eq!(cache_len(), 0);
+    }
+
+    #[test]
+    fn cache_is_bounded_and_evicts_the_least_recent_pattern() {
+        clear_cache();
+        let first_pattern = utf16("pattern-0");
+        let (first, _) = compile_pattern(&first_pattern, 0).unwrap();
+
+        for index in 1..=PATTERN_CACHE_CAPACITY {
+            let pattern = utf16(&format!("pattern-{index}"));
+            assert!(compile_pattern(&pattern, 0).is_some());
+        }
+        assert_eq!(cache_len(), PATTERN_CACHE_CAPACITY);
+
+        let (recompiled, _) = compile_pattern(&first_pattern, 0).unwrap();
+        assert!(!Arc::ptr_eq(&first, &recompiled));
+        assert_eq!(cache_len(), PATTERN_CACHE_CAPACITY);
+    }
 }

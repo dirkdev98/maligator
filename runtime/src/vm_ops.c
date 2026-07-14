@@ -1115,7 +1115,8 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
         // The receiver/args/new.target are rooted so a builtin that lifts that
         // suppression itself cannot lose them to a collection.
         MalCalleeRoots ncr;
-        mal_gc_callee_roots_begin(&ncr, resolution.this_value, mal_value_new_undefined(), resolution.args, resolution.arg_count);
+        mal_gc_callee_roots_begin(&ncr, resolution.this_value, mal_value_new_undefined(),
+                                  resolution.callee, resolution.args, resolution.arg_count);
 #if MAL_REALMS
         MalRealm *saved_realm = vm->current_realm;
         mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, resolution.callee));
@@ -1222,7 +1223,8 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
                 // so root it (plus new.target/args) for the call: a collection
                 // inside the constructor would otherwise sweep it.
                 MalCalleeRoots ncr;
-                mal_gc_callee_roots_begin(&ncr, this_value, resolution.callee, &vm->value_stack[base], resolution.arg_count);
+                mal_gc_callee_roots_begin(&ncr, this_value, resolution.callee,
+                                          resolution.callee, &vm->value_stack[base], resolution.arg_count);
                 result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, resolution.callee, env, resolution.callee, nullptr);
                 mal_gc_callee_roots_end(&ncr);
                 mal_vm_leave_compiled(vm);
@@ -1271,7 +1273,8 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
         );
         i32 caller_frame_index = vm->frame_count - 1;
         MalCalleeRoots ncr;
-        mal_gc_callee_roots_begin(&ncr, mal_value_new_undefined(), resolution.callee, resolution.args, resolution.arg_count);
+        mal_gc_callee_roots_begin(&ncr, mal_value_new_undefined(), resolution.callee,
+                                  resolution.callee, resolution.args, resolution.arg_count);
 #if MAL_REALMS
         // Native constructors allocate their own instance; enter their realm so those
         // default allocations come from it, and restore after.
@@ -2821,6 +2824,7 @@ static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue ke
         ic->key = key;
         ic->slot = slot;
         ic->prim_kind = 0;
+        ic->mode = MAL_IC_MODE_SHAPE;
 #if MAL_REALMS
         ic->realm = nullptr;
 #endif
@@ -2845,7 +2849,61 @@ static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue ke
     }
 }
 
+static void mal_ic_try_record_inherited_value(
+    MalVm *vm, MalValue receiver, MalValue key_value, MalValue result, MalInlineCache *ic
+) {
+    if (!mal_primitive_method_protector || !mal_value_is_object(receiver) ||
+        mal_value_is_proxy_object(receiver) || !mal_value_is_heap(key_value) ||
+        mal_value_to_heap(key_value)->storage != MAL_HEAP_STORAGE_IMMORTAL) {
+        return;
+    }
+
+    MalObject *object = mal_value_to_object(receiver);
+    if (object->overflow != nullptr || object->prototype == nullptr) {
+        return;
+    }
+    MalKey key;
+    if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+        return;
+    }
+    MalPropertyResolution resolution = mal_object_resolve_property(object, key);
+    if (!resolution.found || resolution.own ||
+        (resolution.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+        resolution.desc.value != result) {
+        return;
+    }
+
+    bool stable_chain = false;
+    for (MalObject *cursor = object->prototype; cursor != nullptr; cursor = cursor->prototype) {
+        if (!cursor->watched_method_proto) {
+            break;
+        }
+        if (cursor == resolution.holder) {
+            stable_chain = true;
+            break;
+        }
+    }
+    if (!stable_chain) {
+        return;
+    }
+
+    ic->shape = object->shape;
+    ic->key = key_value;
+    ic->value = result;
+    ic->obj = object->prototype;
+    ic->slot = MAL_IC_VALUE_SLOT;
+    ic->prim_kind = 0;
+    ic->poly_count = 0;
+    ic->megamorphic = false;
+    ic->mode = MAL_IC_MODE_INHERITED_VALUE;
+    ic->receiver_type = (u8) object->header.type;
+}
+
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
+    MalValue inherited_value;
+    if (mal_vm_inherited_try_load(object_value, key_value, ic, &inherited_value)) {
+        return inherited_value;
+    }
     // Array `.length`: an exotic own field (not a shape slot, and arrays are not
     // MAL_HEAP_OBJECT), so read it directly instead of the generic keyed resolver.
     // Out of line rather than in the inline fast path: keeping the length check off
@@ -2859,7 +2917,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         // Hit needs the same shape AND the same key: a computed-key site (o[k])
         // reuses one cache entry across different keys, so the key must match too.
         if (object->shape == ic->shape && key_value == ic->key) {
-            if (ic->slot == MAL_IC_VALUE_SLOT) {
+            if (ic->slot == MAL_IC_VALUE_SLOT && ic->mode == MAL_IC_MODE_SHAPE) {
                 // Watched-intrinsic own overflow property, cached by value. The
                 // shape gate above is NOT sufficient (same-layout intrinsics share
                 // a shape but differ in overflow values), so require exact object
@@ -2938,6 +2996,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                     ic->value = own.desc.value;
                     ic->obj = object;
                     ic->prim_kind = 0;
+                    ic->mode = MAL_IC_MODE_SHAPE;
                     return own.desc.value;
                 }
             }
@@ -2981,6 +3040,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                     ic->key = key_value;
                     ic->value = result; // == res.desc.value (non-shadowed data method)
                     ic->shape = nullptr; // not an object-shape entry — avoid a false store/load hit
+                    ic->mode = MAL_IC_MODE_SHAPE;
 #if MAL_REALMS
                     ic->realm = vm->current_realm;
 #endif
@@ -3003,7 +3063,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
             // constructors share one shape yet differ in overflow values
             // (BYTES_PER_ELEMENT, name, …); shape+key alone would false-hit at a
             // polymorphic site iterating over constructors.
-            if (ic->slot == MAL_IC_VALUE_SLOT
+            if (ic->slot == MAL_IC_VALUE_SLOT && ic->mode == MAL_IC_MODE_SHAPE
 #if MAL_REALMS
                 && ic->prim_kind == 0
 #endif
@@ -3021,12 +3081,17 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                     ic->value = own.desc.value;
                     ic->obj = object;
                     ic->prim_kind = 0;
+                    ic->mode = MAL_IC_MODE_SHAPE;
                     return own.desc.value;
                 }
             }
         }
     }
-    return mal_vm_op_load_property(vm, object_value, key_value);
+    MalValue result = mal_vm_op_load_property(vm, object_value, key_value);
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        mal_ic_try_record_inherited_value(vm, object_value, key_value, result, ic);
+    }
+    return result;
 }
 
 void mal_vm_op_store_property_ic(
@@ -3801,11 +3866,65 @@ void mal_op_load_undeclared(MalCallable *callable, MalInstruction *instruction) 
     mal_vm_op_load_undeclared(callable->vm, instruction->as.load_undeclared.name_string_index);
 }
 
+static MalPropertyLookup mal_vm_global_dictionary_lookup(
+    MalVm *vm, i32 name_string_index, MalObject **global_object_out, MalKey *key_out
+) {
+    MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+    *global_object_out = nullptr;
+    *key_out = (MalKey) {
+        .kind = MAL_KEY_STRING,
+        .value = mal_value_from_string(&vm->definition->string_constants[name_string_index]),
+    };
+
+    // The global object is ordinarily a plain object. Proxies/exotics, shaped
+    // properties, and absent own tables stay on the generic MOP path.
+    if (!mal_value_is_heap_type(global, MAL_HEAP_OBJECT)) {
+        return (MalPropertyLookup) {.present = false, .entry = nullptr};
+    }
+    MalObject *global_object = (MalObject *) mal_value_to_heap(global);
+    MalTable *table = global_object->overflow;
+    if (table == nullptr) {
+        return (MalPropertyLookup) {.present = false, .entry = nullptr};
+    }
+
+    MalGlobalPropertyCacheEntry *cache = &vm->global_property_cache[
+        (u32) name_string_index & (MAL_GLOBAL_PROPERTY_CACHE_SIZE - 1u)];
+    if (cache->string_index == name_string_index
+        && cache->realm_intrinsics == vm->intrinsics
+        && cache->global_object == global_object
+        && cache->table == table
+        && mal_table_entry_matches(
+            table, cache->entry, cache->table_handle_epoch, *key_out)) {
+        *global_object_out = global_object;
+        return (MalPropertyLookup) {
+            .present = true,
+            .entry = cache->entry,
+            .desc = mal_property_entry_desc(table, cache->entry),
+        };
+    }
+
+    MalPropertyLookup lookup = mal_property_lookup(table, *key_out);
+    if (lookup.present) {
+        *cache = (MalGlobalPropertyCacheEntry) {
+            .realm_intrinsics = vm->intrinsics,
+            .global_object = global_object,
+            .table = table,
+            .entry = lookup.entry,
+            .table_handle_epoch = mal_table_handle_epoch(table),
+            .string_index = name_string_index,
+        };
+        *global_object_out = global_object;
+    }
+    return lookup;
+}
+
 MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index) {
-    MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
+    MalObject *global_object;
     MalKey key;
-    if (!mal_vm_value_to_property_key(vm, name, &key)) {
-        return mal_value_new_undefined();
+    MalPropertyLookup own = mal_vm_global_dictionary_lookup(
+        vm, name_string_index, &global_object, &key);
+    if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+        return own.desc.value;
     }
 
     MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
@@ -3825,21 +3944,32 @@ void mal_op_load_global_property(MalCallable *callable, MalInstruction *instruct
         mal_vm_op_load_global_property(callable->vm, instruction->as.load_global_property.name_string_index);
 }
 
-void mal_vm_op_store_global_property(MalVm *vm, i32 name_string_index, MalValue value) {
-    MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
+void mal_vm_op_store_global_property(
+    MalVm *vm, i32 name_string_index, MalValue value, bool strict
+) {
+    MalObject *global_object;
     MalKey key;
-    if (!mal_vm_value_to_property_key(vm, name, &key)) {
+    MalPropertyLookup own = mal_vm_global_dictionary_lookup(
+        vm, name_string_index, &global_object, &key);
+    if (own.present
+        && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)
+        && (own.desc.flags & MAL_PROPERTY_WRITABLE)) {
+        own.desc.value = value;
+        mal_property_write_entry(global_object->overflow, own.entry, &own.desc);
+        mal_gc_card(&global_object->header, value);
         return;
     }
+
     MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
-    mal_vm_set_property(vm, global, key, value, global);
+    mal_vm_op_store_property(vm, global, key.value, value, strict);
 }
 
 void mal_op_store_global_property(MalCallable *callable, MalInstruction *instruction) {
     mal_vm_op_store_global_property(
         callable->vm,
         instruction->as.store_global_property.name_string_index,
-        callable->registers[instruction->as.store_global_property.src]
+        callable->registers[instruction->as.store_global_property.src],
+        callable->function->strict
     );
 }
 

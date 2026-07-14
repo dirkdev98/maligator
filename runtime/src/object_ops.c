@@ -18,11 +18,9 @@
 bool mal_array_elements_protector = true;
 
 /**
- * Holds while none of the watched primitive prototypes (String/Number/Boolean/
- * Symbol/BigInt.prototype + Object.prototype) has been mutated. The primitive-method
- * inline cache (mal_vm_op_load_property_ic) caches resolved methods only while this
- * is true; any define/set/delete/reparent of a watched prototype clears it (see the
- * `watched_method_proto` object flag). Read on the primitive property-load hot path.
+ * Holds while no watched built-in prototype/lookup object has been mutated. Property
+ * inline caches retain resolved data values only while this is true; any
+ * define/set/delete/reparent clears it (see `watched_method_proto`).
  */
 bool mal_primitive_method_protector = true;
 
