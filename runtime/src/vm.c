@@ -126,7 +126,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
 #endif
     mal_gc_init(vm);
 
-    // Relocate the program's function / string / bigint constant tables into
+    // Relocate the program's function / string / bigint / literal-template tables into
     // VM-owned growable storage behind a mutable `live_definition` (see vm.h), so
     // runtime eval can splice more in later while the const access paths keep
     // working. The instruction/handler/code-unit data the rows point at is left
@@ -162,6 +162,15 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
         memcpy(bigints, definition->bigint_constants, sizeof(MalBigInt) * (usize) bigint_count);
     }
     vm->live_definition.bigint_constants = bigints;
+
+    i32 literal_template_count = definition->literal_template_data_count;
+    vm->literal_template_capacity = literal_template_count > 0 ? literal_template_count : 1;
+    u32 *literal_templates = malloc(sizeof(u32) * (usize) vm->literal_template_capacity);
+    if (literal_template_count > 0) {
+        memcpy(literal_templates, definition->literal_template_data,
+               sizeof(u32) * (usize) literal_template_count);
+    }
+    vm->live_definition.literal_template_data = literal_templates;
 
     vm->interp_ic = calloc((usize) vm->function_capacity, sizeof(struct MalInlineCache *));
     vm->load_stub = calloc((usize) MAL_STUB_CACHE_SIZE, sizeof(MalStubEntry));
@@ -378,11 +387,12 @@ void mal_vm_free(MalVm *vm) {
 #endif
     free(vm->cjs_registry);
 
-    // The VM-owned constant tables (the rows; the instruction/code-unit data they
-    // point at is owned elsewhere — static, or the caller's loaded definition).
+    // The VM-owned constant/template tables (the instruction/code-unit data their
+    // rows point at is owned elsewhere — static, or the caller's loaded definition).
     free((MalFunction *) vm->live_definition.functions);
     free((MalString *) vm->live_definition.string_constants);
     free((MalBigInt *) vm->live_definition.bigint_constants);
+    free((u32 *) vm->live_definition.literal_template_data);
 
     // Free any microtasks left queued (e.g. the program exited with pending
     // jobs). The MalValues they hold live in the heap, freed below.
@@ -450,7 +460,8 @@ void mal_vm_free(MalVm *vm) {
 // untouched. Operand arrays live in the loaded arena (mutable); cast away const
 // to rewrite them in place. Mirrors the reference list in src/serialize-vm.ts.
 static void mal_vm_rebase_instruction(
-    MalInstruction *in, i32 fn_base, i32 global_base, i32 string_base, i32 bigint_base
+    MalInstruction *in, i32 fn_base, i32 global_base, i32 string_base, i32 bigint_base,
+    i32 template_base
 ) {
     switch (in->opcode) {
         case MAL_OP_CREATE_FUNCTION:
@@ -484,6 +495,9 @@ static void mal_vm_rebase_instruction(
             break;
         case MAL_OP_CREATE_BIGINT:
             in->as.create_bigint.bigint_index += bigint_base;
+            break;
+        case MAL_OP_INSTANTIATE_LITERAL_TEMPLATE:
+            in->as.instantiate_literal_template.template_offset += template_base;
             break;
         case MAL_OP_LOAD_UNDECLARED:
             in->as.load_undeclared.name_string_index += string_base;
@@ -539,12 +553,51 @@ static void mal_vm_rebase_instruction(
     }
 }
 
+static bool mal_vm_rebase_literal_templates(
+    u32 *data, i32 count, i32 string_base, i32 bigint_base
+) {
+    i32 pos = 0;
+    while (pos < count) {
+        u32 tag = data[pos++];
+        switch ((MalLiteralTemplateTag) tag) {
+            case MAL_LITERAL_NULL:
+            case MAL_LITERAL_FALSE:
+            case MAL_LITERAL_TRUE:
+            case MAL_LITERAL_HOLE:
+                break;
+            case MAL_LITERAL_I32:
+            case MAL_LITERAL_ARRAY:
+            case MAL_LITERAL_OBJECT:
+                if (pos >= count) return false;
+                pos++;
+                break;
+            case MAL_LITERAL_F64:
+                if (pos + 1 >= count) return false;
+                pos += 2;
+                break;
+            case MAL_LITERAL_STRING:
+            case MAL_LITERAL_KEY:
+                if (pos >= count) return false;
+                data[pos++] += (u32) string_base;
+                break;
+            case MAL_LITERAL_BIGINT:
+                if (pos >= count) return false;
+                data[pos++] += (u32) bigint_base;
+                break;
+            default:
+                return false;
+        }
+    }
+    return true;
+}
+
 i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
     MalVmDefinition *live = &vm->live_definition;
     i32 fn_base = live->function_count;
     i32 global_base = live->global_count;
     i32 string_base = live->string_constant_count;
     i32 bigint_base = live->bigint_constant_count;
+    i32 template_base = live->literal_template_data_count;
 
     // String/BigInt constant cells must not move (values point at them), so their
     // arrays are fixed-capacity and never reallocated. Refuse a splice that would
@@ -573,6 +626,28 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
                sizeof(MalBigInt) * (usize) loaded->bigint_constant_count);
     }
     live->bigint_constant_count = new_bigints;
+
+    // Literal templates are index-addressed immutable words. Append a rebased
+    // copy so spliced instructions can use one merged definition table.
+    i32 new_template_count = template_base + loaded->literal_template_data_count;
+    if (new_template_count > vm->literal_template_capacity) {
+        vm->literal_template_capacity = new_template_count;
+        live->literal_template_data = realloc(
+            (u32 *) live->literal_template_data, sizeof(u32) * (usize) new_template_count);
+    }
+    u32 *templates = (u32 *) live->literal_template_data;
+    if (loaded->literal_template_data_count > 0) {
+        memcpy(templates + template_base, loaded->literal_template_data,
+               sizeof(u32) * (usize) loaded->literal_template_data_count);
+        if (!mal_vm_rebase_literal_templates(
+                templates + template_base, loaded->literal_template_data_count,
+                string_base, bigint_base)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "eval: invalid literal template");
+            return -1;
+        }
+    }
+    live->literal_template_data_count = new_template_count;
 
     // Globals: grow and undefined-initialize the same absolute range in every realm.
     i32 new_globals = global_base + loaded->global_count;
@@ -621,7 +696,7 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
         }
         for (i32 k = 0; k < fn.instruction_count; k++) {
             mal_vm_rebase_instruction((MalInstruction *) &fn.instructions[k], fn_base, global_base,
-                                      string_base, bigint_base);
+                                       string_base, bigint_base, template_base);
         }
         functions[fn_base + f] = fn;
     }
@@ -1045,6 +1120,9 @@ static void mal_vm_run_until_frame_count(
                 break;
             case MAL_OP_CREATE_ARRAY:
                 mal_op_create_array(frame, &instruction);
+                break;
+            case MAL_OP_INSTANTIATE_LITERAL_TEMPLATE:
+                mal_op_instantiate_literal_template(frame, &instruction);
                 break;
             case MAL_OP_CREATE_MODULE_NAMESPACE:
                 mal_op_create_module_namespace(frame, &instruction);

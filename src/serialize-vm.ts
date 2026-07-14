@@ -16,9 +16,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 3 for the host-install manifest section (host built-in / `process`
-// installers + their global slots) appended after the debug tables.
-export const WIRE_VERSION = 3;
+// Bumped to 4 for the packed literal-template definition section.
+export const WIRE_VERSION = 4;
 
 /**
  * Canonical opcode order = the wire tag (a u8 index into this array). The C
@@ -112,6 +111,7 @@ export const WIRE_OPCODES = [
 	"LOAD_CALLEE",
 	"GUARD_FUNCTION_INDEX",
 	"LOAD_SUPER_PROPERTY",
+	"INSTANTIATE_LITERAL_TEMPLATE",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -260,7 +260,7 @@ class Writer {
 	}
 	u32(value: number): void {
 		this.ensure(4);
-		this.view.setUint32(this.pos, value >>> 0, true);
+		this.view.setUint32(this.pos, value, true);
 		this.pos += 4;
 	}
 	i32(value: number): void {
@@ -438,6 +438,10 @@ export function serializeVmDefinition(
 		w.u64((value >> 64n) & mask);
 	}
 
+	// Packed static-data literal templates. Tags and operands are all u32 words.
+	w.u32(def.literalTemplateData.length);
+	for (const word of def.literalTemplateData) w.u32(word);
+
 	w.i32Array(def.cjsModuleFunctionIndices);
 
 	// Functions.
@@ -468,7 +472,7 @@ export function serializeVmDefinition(
 		w.u32(0); // source positions
 	}
 
-	// Wire v3 reserves this section for host installs, but portable definitions
+	// The wire reserves this section for host installs, but portable definitions
 	// cannot resolve native installer pointers without a registry.
 	w.u32(0);
 
@@ -577,6 +581,10 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 		case "CREATE_ARRAY":
 			w.i32(i.dst);
 			w.i32(i.length);
+			return;
+		case "INSTANTIATE_LITERAL_TEMPLATE":
+			w.i32(i.dst);
+			w.i32(i.templateOffset);
 			return;
 		case "CREATE_MODULE_NAMESPACE":
 			w.i32(i.dst);
@@ -872,6 +880,12 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		bigintConstants.push((hi << 64n) | lo);
 	}
 
+	const literalTemplateWordCount = r.u32();
+	const literalTemplateData = new Array<number>(literalTemplateWordCount);
+	for (let i = 0; i < literalTemplateWordCount; ++i) {
+		literalTemplateData[i] = r.u32();
+	}
+
 	const cjsModuleFunctionIndices = r.i32Array();
 
 	const functionCount = r.u32();
@@ -920,6 +934,7 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		functions,
 		stringConstants,
 		bigintConstants,
+		literalTemplateData,
 		globalCount,
 		hostInstalls: [],
 		files,
@@ -1053,6 +1068,8 @@ function readInstruction(r: Reader): VmInstruction {
 			};
 		case "CREATE_ARRAY":
 			return { opcode, dst: r.i32(), length: r.i32() };
+		case "INSTANTIATE_LITERAL_TEMPLATE":
+			return { opcode, dst: r.i32(), templateOffset: r.i32() };
 		case "CREATE_MODULE_NAMESPACE":
 			return { opcode, dst: r.i32(), nameIndices: r.i32Array(), slots: r.i32Array() };
 		case "CREATE_TEMPLATE_OBJECT":

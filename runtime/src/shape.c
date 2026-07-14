@@ -101,3 +101,15 @@ MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
 
     return child;
 }
+
+static void mal_shape_visit_child_keys(MalShape *shape, void (*visit)(MalValue)) {
+    for (MalShapeTransition *transition = shape->transitions;
+         transition != nullptr; transition = transition->next) {
+        visit(transition->key);
+        mal_shape_visit_child_keys(transition->child, visit);
+    }
+}
+
+void mal_shape_visit_transition_keys(void (*visit)(MalValue)) {
+    mal_shape_visit_child_keys(&g_empty_shape, visit);
+}

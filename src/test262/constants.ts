@@ -8,12 +8,11 @@ export const TEST262_METADATA = {
 
 	/**
 	 * Per-test binary run timeout. Loops are compilable now, so runaway tests
-	 * are a real possibility. Kept tight (7s) so a hung test stalls its worker
-	 * only briefly — a handful of genuinely slow tests (heavy Unicode/4-byte-UTF-8
-	 * loops) may TIMEOUT under full-run contention, which is accepted (they pass in
-	 * isolation; see the never-overwrite-flaky-verdicts memory).
+	 * are a real possibility. Unicode-scale string construction and pathological
+	 * generic Array lengths are optimized/validated before execution, so one second
+	 * is enough for conforming cases while keeping a hung worker inexpensive.
 	 */
-	runTimeoutMs: 7_000,
+	runTimeoutMs: 1_000,
 	compileTimeoutMs: 60_000,
 
 	/**

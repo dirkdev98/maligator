@@ -17,8 +17,44 @@
 #include "vm.h"
 #include "vm_ops.h"
 
+#define MAL_ARRAY_MAX_SAFE_INTEGER 9007199254740991.0
+
 static MalKey mal_builtin_array_index_key(u32 index) {
     return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
+}
+
+static bool mal_builtin_array_numeric_key(MalVm *vm, f64 index, MalKey *key_out) {
+    return mal_vm_value_to_property_key(vm, mal_ops_number_value(index), key_out);
+}
+
+static bool mal_builtin_array_try_get_wide(MalVm *vm, MalValue this_value, f64 index, MalValue *out) {
+    if (mal_value_is_string(this_value)) {
+        MalString *string = mal_value_to_string(this_value);
+        if (index < 0 || index >= (f64) mal_string_length(string)) {
+            return false;
+        }
+
+        *out = mal_value_from_string(mal_string_new_external(&vm->heap, mal_string_code_units(string) + (usize) index, 1));
+        return true;
+    }
+
+    if (!mal_value_is_object(this_value)) {
+        return false;
+    }
+
+    MalKey index_key;
+    if (!mal_builtin_array_numeric_key(vm, index, &index_key)
+        || !mal_vm_has_property(vm, this_value, index_key)) {
+        return false;
+    }
+
+    return mal_vm_get_property(vm, this_value, index_key, out);
+}
+
+static MalValue mal_builtin_array_get_wide(MalVm *vm, MalValue this_value, f64 index) {
+    MalValue element = mal_value_new_undefined();
+    mal_builtin_array_try_get_wide(vm, this_value, index, &element);
+    return element;
 }
 
 /**
@@ -144,12 +180,24 @@ static bool mal_builtin_array_delete_or_throw(MalVm *vm, MalValue receiver, MalK
     return true;
 }
 
+static bool mal_builtin_array_set_index_or_throw(MalVm *vm, MalValue receiver, f64 index, MalValue value) {
+    MalKey key;
+    return mal_builtin_array_numeric_key(vm, index, &key)
+        && mal_builtin_array_set_or_throw(vm, receiver, key, value);
+}
+
+static bool mal_builtin_array_delete_index_or_throw(MalVm *vm, MalValue receiver, f64 index) {
+    MalKey key;
+    return mal_builtin_array_numeric_key(vm, index, &key)
+        && mal_builtin_array_delete_or_throw(vm, receiver, key);
+}
+
 /**
  * Call a (element, index, array) style callback on the given this, propagating
  * abnormal completions to the VM.
  */
 static bool mal_builtin_array_invoke(MalVm *vm, MalValue callback, MalValue this_arg, MalValue element, u32 index, MalValue this_value, MalValue *out) {
-    MalValue args[] = {element, mal_value_from_i32((i32) index), this_value};
+    MalValue args[] = {element, mal_ops_number_value((f64) index), this_value};
     // The callback can trigger a collection (directly, or via a getter/coercion
     // it performs); `element` may be a fresh getter result the caller no longer
     // roots, so make the argument buffer a scanned root across the call.
@@ -166,25 +214,41 @@ static bool mal_builtin_array_invoke(MalVm *vm, MalValue callback, MalValue this
     return true;
 }
 
+static bool mal_builtin_array_invoke_wide(MalVm *vm, MalValue callback, MalValue this_arg, MalValue element, f64 index, MalValue this_value, MalValue *out) {
+    MalValue args[] = {element, mal_ops_number_value(index), this_value};
+    MalRootSpan span;
+    mal_gc_root(&span, args, 3);
+    MalCompletion completion = mal_vm_call_value(vm, callback, this_arg, args, 3);
+    mal_gc_unroot(&span);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        vm->completion = completion;
+        return false;
+    }
+
+    *out = completion.value;
+    return true;
+}
+
 /**
  * Spec-shaped prologue for the generic Array.prototype methods: any receiver
  * except null and undefined is accepted, and the iteration length is read
- * from its length property through a u32-clamped ToLength. Strings answer
- * with their code unit count, other primitives carry no elements.
+ * from its length property through ToLength, clamped to 2^53-1. Strings answer
+ * with their code unit count, other primitives carry no elements. The public
+ * u32 wrapper below preserves the storage-width contract for unaffected callers.
  */
-bool mal_builtin_array_this_length(MalVm *vm, MalValue this_value, u32 *length_out) {
+static bool mal_builtin_array_length_of_array_like(MalVm *vm, MalValue this_value, f64 *length_out) {
     if (mal_value_is_nil(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Array.prototype method called on null or undefined");
         return false;
     }
 
     if (mal_value_is_array_object(this_value)) {
-        *length_out = mal_array_object_length(mal_value_to_array_object(this_value));
+        *length_out = (f64) mal_array_object_length(mal_value_to_array_object(this_value));
         return true;
     }
 
     if (mal_value_is_string(this_value)) {
-        *length_out = (u32) mal_string_length(mal_value_to_string(this_value));
+        *length_out = (f64) mal_string_length(mal_value_to_string(this_value));
         return true;
     }
 
@@ -201,7 +265,7 @@ bool mal_builtin_array_this_length(MalVm *vm, MalValue this_value, u32 *length_o
             mal_intrinsic_string_key(vm, "length"),
             &string_exotic
         )) {
-        *length_out = (u32) mal_value_to_i32(string_exotic.value);
+        *length_out = (f64) mal_value_to_i32(string_exotic.value);
         return true;
     }
 
@@ -213,7 +277,7 @@ bool mal_builtin_array_this_length(MalVm *vm, MalValue this_value, u32 *length_o
     }
 
     // ToLength: ToNumber (full ToPrimitive for objects, throwing on a Symbol or
-    // BigInt length) then clamp to [0, 2^32-1] for our u32 length model.
+    // BigInt length), truncate, then clamp to [0, 2^53-1].
     f64 raw;
     if (!mal_vm_to_number(vm, length_value, &raw)) {
         return false;
@@ -221,12 +285,21 @@ bool mal_builtin_array_this_length(MalVm *vm, MalValue this_value, u32 *length_o
     if (!(raw > 0)) {
         // NaN and negative lengths clamp to zero.
         *length_out = 0;
-    } else if (raw >= (f64) UINT32_MAX) {
-        *length_out = UINT32_MAX;
+    } else if (raw >= MAL_ARRAY_MAX_SAFE_INTEGER) {
+        *length_out = MAL_ARRAY_MAX_SAFE_INTEGER;
     } else {
-        *length_out = (u32) raw;
+        *length_out = floor(raw);
     }
 
+    return true;
+}
+
+bool mal_builtin_array_this_length(MalVm *vm, MalValue this_value, u32 *length_out) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
+        return false;
+    }
+    *length_out = length >= (f64) UINT32_MAX ? UINT32_MAX : (u32) length;
     return true;
 }
 
@@ -270,7 +343,7 @@ static bool mal_builtin_array_to_object(MalVm *vm, MalValue *this_value) {
  * ToIntegerOrInfinity-flavored relative index handling: negative values count
  * back from length, the result is clamped to [0, length].
  */
-static u32 mal_builtin_array_clamp_relative(MalVm *vm, MalValue value, f64 fallback, u32 length) {
+static f64 mal_builtin_array_clamp_relative_wide(MalVm *vm, MalValue value, f64 fallback, f64 length) {
     // A pending throw from an earlier argument's coercion short-circuits the
     // rest: spec ToIntegerOrInfinity on later arguments never runs once one
     // throws, so callers can compute every index and check the completion once.
@@ -287,7 +360,7 @@ static u32 mal_builtin_array_clamp_relative(MalVm *vm, MalValue value, f64 fallb
         if (!mal_vm_to_number(vm, value, &number)) {
             return 0;
         }
-        relative = number != number ? 0 : (f64) (i64) number;
+        relative = number != number ? 0 : trunc(number);
     }
 
     if (relative < 0) {
@@ -300,7 +373,11 @@ static u32 mal_builtin_array_clamp_relative(MalVm *vm, MalValue value, f64 fallb
         return length;
     }
 
-    return (u32) relative;
+    return relative;
+}
+
+static u32 mal_builtin_array_clamp_relative(MalVm *vm, MalValue value, f64 fallback, u32 length) {
+    return (u32) mal_builtin_array_clamp_relative_wide(vm, value, fallback, (f64) length);
 }
 
 static bool mal_builtin_array_same_value_zero(MalValue left, MalValue right) {
@@ -357,6 +434,7 @@ static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalVa
     return mal_value_from_array_object(array);
 }
 
+static bool mal_builtin_array_create_data_property_wide(MalVm *vm, MalValue target, f64 index, MalValue value);
 static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u32 index, MalValue value);
 
 /**
@@ -585,7 +663,7 @@ done:
  * species-constructed object) goes through [[DefineOwnProperty]], throwing
  * (returns false with a pending TypeError) when it refuses the property.
  */
-static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u32 index, MalValue value) {
+static bool mal_builtin_array_create_data_property_wide(MalVm *vm, MalValue target, f64 index, MalValue value) {
     // [[DefineOwnProperty]] (not [[Set]]): overwrites a configurable property and
     // ignores the prototype chain, but rejects an incompatible (e.g. non-writable
     // non-configurable) existing one.
@@ -595,19 +673,26 @@ static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u
         .getter = mal_value_new_undefined(),
         .setter = mal_value_new_undefined(),
     };
-    MalKey key = mal_builtin_array_index_key(index);
+    MalKey key;
+    if (!mal_builtin_array_numeric_key(vm, index, &key)) {
+        return false;
+    }
     if (mal_object_define_own(mal_value_to_object(target), key, &desc) != MAL_DEFINE_OWN_APPLIED) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot define array index property");
         return false;
     }
     // Array exotic [[DefineOwnProperty]]: an index at or past length grows length.
-    if (mal_value_is_array_object(target)) {
+    if (mal_value_is_array_object(target) && index < (f64) UINT32_MAX) {
         MalArrayObject *array = mal_value_to_array_object(target);
-        if (index >= mal_array_object_length(array)) {
-            mal_array_object_set_length(array, index + 1);
+        if (index >= (f64) mal_array_object_length(array)) {
+            mal_array_object_set_length(array, (u32) index + 1);
         }
     }
     return true;
+}
+
+static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u32 index, MalValue value) {
+    return mal_builtin_array_create_data_property_wide(vm, target, (f64) index, value);
 }
 
 /**
@@ -679,8 +764,8 @@ static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalV
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
     }
     MalValue result;
@@ -697,19 +782,22 @@ static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalV
     mal_gc_native_rooted_begin(vm);
     MalValue ret = mal_value_new_undefined();
 
-    for (u32 index = 0; index < length; index++) {
+    for (f64 index = 0; index < length; index++) {
         MalValue element;
-        if (!mal_builtin_array_try_get(vm, this_value, index, &element)) {
+        if (!mal_builtin_array_try_get_wide(vm, this_value, index, &element)) {
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                goto done;
+            }
             continue;
         }
 
         MalValue mapped;
-        if (!mal_builtin_array_invoke(vm, args[0], mal_builtin_array_this_arg(args, arg_count), element, index, this_value, &mapped)) {
+        if (!mal_builtin_array_invoke_wide(vm, args[0], mal_builtin_array_this_arg(args, arg_count), element, index, this_value, &mapped)) {
             goto done;
         }
         roots[1] = mapped;
 
-        if (!mal_builtin_array_create_data_property(vm, result, index, mapped)) {
+        if (!mal_builtin_array_create_data_property_wide(vm, result, index, mapped)) {
             goto done;
         }
     }
@@ -913,8 +1001,8 @@ static MalValue mal_builtin_array_reduce_right(MalVm *vm, MalValue this_value, c
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         return mal_value_new_undefined();
     }
 
@@ -935,9 +1023,9 @@ static MalValue mal_builtin_array_reduce_right(MalVm *vm, MalValue this_value, c
     mal_gc_native_rooted_begin(vm);
     MalValue ret = mal_value_new_undefined();
 
-    for (u32 index = length; index-- > 0;) {
+    for (f64 index = length; index-- > 0;) {
         MalValue element;
-        if (!mal_builtin_array_try_get(vm, this_value, index, &element)) {
+        if (!mal_builtin_array_try_get_wide(vm, this_value, index, &element)) {
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
                 goto done;
             }
@@ -952,7 +1040,7 @@ static MalValue mal_builtin_array_reduce_right(MalVm *vm, MalValue this_value, c
         }
         roots[1] = element;
 
-        MalValue callback_args[] = {accumulator, element, mal_value_from_i32((i32) index), this_value};
+        MalValue callback_args[] = {accumulator, element, mal_ops_number_value(index), this_value};
         MalCompletion completion = mal_vm_call_value(vm, args[0], mal_value_new_undefined(), callback_args, 4);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
@@ -1124,8 +1212,8 @@ static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
     // Spec returns -1 for an empty array *before* ToIntegerOrInfinity(fromIndex),
@@ -1134,19 +1222,22 @@ static MalValue mal_builtin_array_index_of(MalVm *vm, MalValue this_value, const
         return mal_value_from_i32(-1);
     }
     MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(vm, args[1], 0, length) : 0;
+    f64 start = arg_count >= 2 ? mal_builtin_array_clamp_relative_wide(vm, args[1], 0, length) : 0;
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
 
-    for (u32 index = start; index < length; index++) {
+    for (f64 index = start; index < length; index++) {
         MalValue element;
-        if (!mal_builtin_array_try_get(vm, this_value, index, &element)) {
+        if (!mal_builtin_array_try_get_wide(vm, this_value, index, &element)) {
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return mal_value_new_undefined();
+            }
             continue;
         }
 
         if (mal_value_to_boolean(mal_ops_strict_equal(element, search))) {
-            return mal_value_from_i32((i32) index);
+            return mal_ops_number_value(index);
         }
     }
 
@@ -1157,8 +1248,8 @@ static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, 
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
     if (length == 0) {
@@ -1166,7 +1257,7 @@ static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, 
     }
 
     MalValue search = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    u32 start = length - 1;
+    f64 start = length - 1;
     if (arg_count >= 2) {
         // fromIndex present (even as undefined) goes through ToIntegerOrInfinity;
         // ToNumber throws on a Symbol/BigInt. A present-but-undefined fromIndex
@@ -1183,14 +1274,17 @@ static MalValue mal_builtin_array_last_index_of(MalVm *vm, MalValue this_value, 
             return mal_value_from_i32(-1);
         }
 
-        start = relative >= (f64) (length - 1) ? length - 1 : (u32) relative;
+        start = relative >= length - 1 ? length - 1 : relative;
     }
 
-    for (u32 index = start;; index--) {
+    for (f64 index = start;; index--) {
         MalValue element;
-        if (mal_builtin_array_try_get(vm, this_value, index, &element) &&
+        if (mal_builtin_array_try_get_wide(vm, this_value, index, &element) &&
             mal_value_to_boolean(mal_ops_strict_equal(element, search))) {
-            return mal_value_from_i32((i32) index);
+            return mal_ops_number_value(index);
+        }
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
         }
 
         if (index == 0) {
@@ -1239,19 +1333,24 @@ static MalValue mal_builtin_array_push(MalVm *vm, MalValue this_value, const Mal
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
     MalValue ret = mal_value_new_undefined();
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
+        goto done;
+    }
+    f64 new_length = length + (f64) arg_count;
+    if (new_length > MAL_ARRAY_MAX_SAFE_INTEGER) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid array length");
         goto done;
     }
     for (i32 i = 0; i < arg_count; i++) {
-        if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(length + (u32) i), args[i])) {
+        if (!mal_builtin_array_set_index_or_throw(vm, this_value, length + (f64) i, args[i])) {
             goto done;
         }
     }
-    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_value_from_f64((f64) length + (f64) arg_count))) {
+    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_ops_number_value(new_length))) {
         goto done;
     }
-    ret = mal_value_from_f64((f64) length + (f64) arg_count);
+    ret = mal_ops_number_value(new_length);
 done:
     mal_gc_unroot(&this_span);
     return ret;
@@ -1267,8 +1366,8 @@ static MalValue mal_builtin_array_pop(MalVm *vm, MalValue this_value, const MalV
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
     MalValue ret = mal_value_new_undefined();
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
         goto done;
     }
     if (length == 0) {
@@ -1278,14 +1377,14 @@ static MalValue mal_builtin_array_pop(MalVm *vm, MalValue this_value, const MalV
         goto done;
     }
 
-    MalValue element = mal_builtin_array_get(vm, this_value, length - 1);
+    MalValue element = mal_builtin_array_get_wide(vm, this_value, length - 1);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         goto done;
     }
-    if (!mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(length - 1))) {
+    if (!mal_builtin_array_delete_index_or_throw(vm, this_value, length - 1)) {
         goto done;
     }
-    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_value_from_i32((i32) (length - 1)))) {
+    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_ops_number_value(length - 1))) {
         goto done;
     }
     ret = element;
@@ -1362,43 +1461,48 @@ static MalValue mal_builtin_array_unshift(MalVm *vm, MalValue this_value, const 
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
     MalValue ret = mal_value_new_undefined();
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
+        goto done;
+    }
+    f64 new_length = length + (f64) arg_count;
+    if (new_length > MAL_ARRAY_MAX_SAFE_INTEGER) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid array length");
         goto done;
     }
 
     if (arg_count > 0) {
-        for (u32 moved = length; moved > 0; moved--) {
-            u32 from = moved - 1;
-            u32 to = from + (u32) arg_count;
+        for (f64 moved = length; moved > 0; moved--) {
+            f64 from = moved - 1;
+            f64 to = from + (f64) arg_count;
 
             MalValue element;
-            bool present = mal_builtin_array_try_get(vm, this_value, from, &element);
+            bool present = mal_builtin_array_try_get_wide(vm, this_value, from, &element);
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
                 goto done;
             }
             if (present) {
-                if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(to), element)) {
+                if (!mal_builtin_array_set_index_or_throw(vm, this_value, to, element)) {
                     goto done;
                 }
             } else {
-                if (!mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(to))) {
+                if (!mal_builtin_array_delete_index_or_throw(vm, this_value, to)) {
                     goto done;
                 }
             }
         }
 
         for (i32 i = 0; i < arg_count; i++) {
-            if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key((u32) i), args[i])) {
+            if (!mal_builtin_array_set_index_or_throw(vm, this_value, (f64) i, args[i])) {
                 goto done;
             }
         }
     }
 
-    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_value_from_f64((f64) length + (f64) arg_count))) {
+    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_ops_number_value(new_length))) {
         goto done;
     }
-    ret = mal_value_from_f64((f64) length + (f64) arg_count);
+    ret = mal_ops_number_value(new_length);
 done:
     mal_gc_unroot(&this_span);
     return ret;
@@ -1409,30 +1513,32 @@ static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const Ma
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
-    u32 start = arg_count >= 1 ? mal_builtin_array_clamp_relative(vm, args[0], 0, length) : 0;
-    u32 end = arg_count >= 2 && !mal_value_is_undefined(args[1])
-        ? mal_builtin_array_clamp_relative(vm, args[1], (f64) length, length)
+    f64 start = arg_count >= 1 ? mal_builtin_array_clamp_relative_wide(vm, args[0], 0, length) : 0;
+    f64 end = arg_count >= 2 && !mal_value_is_undefined(args[1])
+        ? mal_builtin_array_clamp_relative_wide(vm, args[1], length, length)
         : length;
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
 
-    u32 result_length = end > start ? end - start : 0;
+    f64 result_length = end > start ? end - start : 0;
     MalValue result;
     if (!mal_builtin_array_species_create(vm, this_value, result_length, &result)) {
         return mal_value_new_undefined();
     }
 
-    for (u32 index = 0; index < result_length; index++) {
+    for (f64 index = 0; index < result_length; index++) {
         MalValue element;
-        if (mal_builtin_array_try_get(vm, this_value, start + index, &element)) {
-            if (!mal_builtin_array_create_data_property(vm, result, index, element)) {
+        if (mal_builtin_array_try_get_wide(vm, this_value, start + index, &element)) {
+            if (!mal_builtin_array_create_data_property_wide(vm, result, index, element)) {
                 return mal_value_new_undefined();
             }
+        } else if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
         }
     }
 
@@ -1449,13 +1555,21 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
     if (!mal_builtin_array_species_create(vm, this_value, 0, &result)) {
         return mal_value_new_undefined();
     }
-    u32 result_length = 0;
+    f64 result_length = 0;
 
     for (i32 i = -1; i < arg_count; i++) {
         MalValue source = i < 0 ? this_value : args[i];
 
         // A defined @@isConcatSpreadable overrides the IsArray default.
-        bool spreadable = mal_value_is_array_object(source);
+        MalValue spread_target = source;
+        if (mal_value_is_proxy_object(spread_target)) {
+            spread_target = mal_proxy_unwrap_target(spread_target);
+            if (mal_value_is_proxy_object(spread_target)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot perform IsArray on a revoked Proxy");
+                return mal_value_new_undefined();
+            }
+        }
+        bool spreadable = mal_value_is_array_object(spread_target);
         if (mal_value_is_object(source)) {
             MalValue spreadable_value;
             if (!mal_vm_get_property(vm, source, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_IS_CONCAT_SPREADABLE), &spreadable_value)) {
@@ -1470,31 +1584,41 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
         if (spreadable) {
             // Spreading non-arrays approximates with the generic array-like
             // length read.
-            u32 source_length = 0;
+            f64 source_length = 0;
             if (mal_value_is_array_object(source)) {
-                source_length = mal_array_object_length(mal_value_to_array_object(source));
-            } else if (!mal_builtin_array_this_length(vm, source, &source_length)) {
+                source_length = (f64) mal_array_object_length(mal_value_to_array_object(source));
+            } else if (!mal_builtin_array_length_of_array_like(vm, source, &source_length)) {
                 return mal_value_new_undefined();
             }
-            for (u32 index = 0; index < source_length; index++) {
+            if (result_length + source_length > MAL_ARRAY_MAX_SAFE_INTEGER) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid array length");
+                return mal_value_new_undefined();
+            }
+            for (f64 index = 0; index < source_length; index++) {
                 MalValue element;
-                if (mal_builtin_array_try_get(vm, source, index, &element)) {
-                    if (!mal_builtin_array_create_data_property(vm, result, result_length + index, element)) {
+                if (mal_builtin_array_try_get_wide(vm, source, index, &element)) {
+                    if (!mal_builtin_array_create_data_property_wide(vm, result, result_length + index, element)) {
                         return mal_value_new_undefined();
                     }
+                } else if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                    return mal_value_new_undefined();
                 }
             }
 
             result_length += source_length;
         } else {
-            if (!mal_builtin_array_create_data_property(vm, result, result_length, source)) {
+            if (result_length >= MAL_ARRAY_MAX_SAFE_INTEGER) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid array length");
+                return mal_value_new_undefined();
+            }
+            if (!mal_builtin_array_create_data_property_wide(vm, result, result_length, source)) {
                 return mal_value_new_undefined();
             }
             result_length++;
         }
     }
 
-    if (!mal_builtin_array_set_or_throw(vm, result, mal_intrinsic_string_key(vm, "length"), mal_value_from_f64(result_length))) {
+    if (!mal_builtin_array_set_or_throw(vm, result, mal_intrinsic_string_key(vm, "length"), mal_ops_number_value(result_length))) {
         return mal_value_new_undefined();
     }
     return result;
@@ -1635,21 +1759,21 @@ static MalValue mal_builtin_array_fill(MalVm *vm, MalValue this_value, const Mal
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
     MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(vm, args[1], 0, length) : 0;
-    u32 end = arg_count >= 3 && !mal_value_is_undefined(args[2])
-        ? mal_builtin_array_clamp_relative(vm, args[2], (f64) length, length)
+    f64 start = arg_count >= 2 ? mal_builtin_array_clamp_relative_wide(vm, args[1], 0, length) : 0;
+    f64 end = arg_count >= 3 && !mal_value_is_undefined(args[2])
+        ? mal_builtin_array_clamp_relative_wide(vm, args[2], length, length)
         : length;
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
 
-    for (u32 index = start; index < end; index++) {
-        if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(index), value)) {
+    for (f64 index = start; index < end; index++) {
+        if (!mal_builtin_array_set_index_or_throw(vm, this_value, index, value)) {
             return mal_value_new_undefined();
         }
     }
@@ -2128,10 +2252,15 @@ static MalValue mal_builtin_array_to_sorted(MalVm *vm, MalValue this_value, cons
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
     MalValue ret = mal_value_new_undefined();
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 wide_length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &wide_length)) {
         goto done;
     }
+    if (wide_length > (f64) UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
+        goto done;
+    }
+    u32 length = (u32) wide_length;
     MalBuiltinArraySorted sorted = mal_builtin_array_sorted_elements(vm, this_value, length, comparator);
     if (!sorted.ok) {
         goto done;
@@ -2142,7 +2271,10 @@ static MalValue mal_builtin_array_to_sorted(MalVm *vm, MalValue this_value, cons
     MalArrayObject *result = mal_intrinsic_new_array(vm, length);
     for (u32 index = 0; index < length; index++) {
         MalValue element = index < sorted.defined_count ? sorted.values[index] : mal_value_new_undefined();
-        mal_object_set((MalObject *) result, mal_builtin_array_index_key(index), element);
+        if (!mal_builtin_array_create_data_property_wide(vm, mal_value_from_array_object(result), (f64) index, element)) {
+            free(sorted.values);
+            goto done;
+        }
     }
 
     free(sorted.values);
@@ -2156,7 +2288,7 @@ done:
  * Shared splice/toSpliced delete-count handling: absent means "to the end",
  * otherwise the count clamps to [0, length - start].
  */
-static u32 mal_builtin_array_delete_count(MalVm *vm, const MalValue *args, i32 arg_count, u32 start, u32 length) {
+static f64 mal_builtin_array_delete_count(MalVm *vm, const MalValue *args, i32 arg_count, f64 start, f64 length) {
     if (arg_count == 0) {
         return 0;
     }
@@ -2172,7 +2304,7 @@ static u32 mal_builtin_array_delete_count(MalVm *vm, const MalValue *args, i32 a
         return length - start;
     }
 
-    return (u32) raw;
+    return raw;
 }
 
 static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2182,18 +2314,22 @@ static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const M
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
     MalValue ret = mal_value_new_undefined();
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
         goto done;
     }
 
-    u32 start = arg_count >= 1 ? mal_builtin_array_clamp_relative(vm, args[0], 0, length) : 0;
-    u32 delete_count = mal_builtin_array_delete_count(vm, args, arg_count, start, length);
+    f64 start = arg_count >= 1 ? mal_builtin_array_clamp_relative_wide(vm, args[0], 0, length) : 0;
+    f64 delete_count = mal_builtin_array_delete_count(vm, args, arg_count, start, length);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         goto done;
     }
-    u32 insert_count = arg_count > 2 ? (u32) (arg_count - 2) : 0;
-    u32 new_length = length - delete_count + insert_count;
+    f64 insert_count = arg_count > 2 ? (f64) (arg_count - 2) : 0;
+    f64 new_length = length - delete_count + insert_count;
+    if (new_length > MAL_ARRAY_MAX_SAFE_INTEGER) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid array length");
+        goto done;
+    }
 
     // ArraySpeciesCreate(O, deleteCount) for the removed-elements array.
     MalValue removed;
@@ -2202,10 +2338,10 @@ static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const M
     }
     MalRootSpan removed_span;
     mal_gc_root(&removed_span, &removed, 1);
-    for (u32 index = 0; index < delete_count; index++) {
+    for (f64 index = 0; index < delete_count; index++) {
         MalValue element;
-        if (mal_builtin_array_try_get(vm, this_value, start + index, &element)) {
-            if (!mal_builtin_array_create_data_property(vm, removed, index, element)) {
+        if (mal_builtin_array_try_get_wide(vm, this_value, start + index, &element)) {
+            if (!mal_builtin_array_create_data_property_wide(vm, removed, index, element)) {
                 goto removed_done;
             }
         } else if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -2214,56 +2350,56 @@ static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const M
     }
 
     if (insert_count < delete_count) {
-        for (u32 from = start + delete_count; from < length; from++) {
-            u32 to = from - delete_count + insert_count;
+        for (f64 from = start + delete_count; from < length; from++) {
+            f64 to = from - delete_count + insert_count;
             MalValue element;
-            bool present = mal_builtin_array_try_get(vm, this_value, from, &element);
+            bool present = mal_builtin_array_try_get_wide(vm, this_value, from, &element);
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
                 goto removed_done;
             }
             if (present
-                    ? !mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(to), element)
-                    : !mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(to))) {
+                    ? !mal_builtin_array_set_index_or_throw(vm, this_value, to, element)
+                    : !mal_builtin_array_delete_index_or_throw(vm, this_value, to)) {
                 goto removed_done;
             }
         }
-        for (u32 index = new_length; index < length; index++) {
-            if (!mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(index))) {
+        for (f64 index = new_length; index < length; index++) {
+            if (!mal_builtin_array_delete_index_or_throw(vm, this_value, index)) {
                 goto removed_done;
             }
         }
     } else if (insert_count > delete_count) {
         // Shift the tail upwards back-to-front so sources are read before
         // they are overwritten.
-        for (u32 from = length; from-- > start + delete_count;) {
-            u32 to = from - delete_count + insert_count;
+        for (f64 from = length; from-- > start + delete_count;) {
+            f64 to = from - delete_count + insert_count;
             MalValue element;
-            bool present = mal_builtin_array_try_get(vm, this_value, from, &element);
+            bool present = mal_builtin_array_try_get_wide(vm, this_value, from, &element);
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
                 goto removed_done;
             }
             if (present
-                    ? !mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(to), element)
-                    : !mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(to))) {
+                    ? !mal_builtin_array_set_index_or_throw(vm, this_value, to, element)
+                    : !mal_builtin_array_delete_index_or_throw(vm, this_value, to)) {
                 goto removed_done;
             }
         }
     }
 
-    for (u32 index = 0; index < insert_count; index++) {
-        if (!mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(start + index), args[2 + (i32) index])) {
+    for (i32 index = 0; (f64) index < insert_count; index++) {
+        if (!mal_builtin_array_set_index_or_throw(vm, this_value, start + (f64) index, args[2 + index])) {
             goto removed_done;
         }
     }
 
     // The final length write honors non-writable array lengths and plain
     // receivers whose length is a getter-only accessor.
-    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_value_from_i32((i32) new_length))) {
+    if (!mal_builtin_array_set_or_throw(vm, this_value, mal_intrinsic_string_key(vm, "length"), mal_ops_number_value(new_length))) {
         goto removed_done;
     }
 
     // Set the removed array's length (matters for a species-constructed receiver).
-    if (!mal_builtin_array_set_or_throw(vm, removed, mal_intrinsic_string_key(vm, "length"), mal_value_from_f64(delete_count))) {
+    if (!mal_builtin_array_set_or_throw(vm, removed, mal_intrinsic_string_key(vm, "length"), mal_ops_number_value(delete_count))) {
         goto removed_done;
     }
     ret = removed;
@@ -2281,37 +2417,57 @@ static MalValue mal_builtin_array_to_spliced(MalVm *vm, MalValue this_value, con
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
     MalValue ret = mal_value_new_undefined();
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
         goto done;
     }
 
-    u32 start = arg_count >= 1 ? mal_builtin_array_clamp_relative(vm, args[0], 0, length) : 0;
-    u32 skip_count = mal_builtin_array_delete_count(vm, args, arg_count, start, length);
+    f64 start = arg_count >= 1 ? mal_builtin_array_clamp_relative_wide(vm, args[0], 0, length) : 0;
+    f64 skip_count = mal_builtin_array_delete_count(vm, args, arg_count, start, length);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         goto done;
     }
     u32 insert_count = arg_count > 2 ? (u32) (arg_count - 2) : 0;
+    f64 new_length = length - skip_count + (f64) insert_count;
+    if (new_length > MAL_ARRAY_MAX_SAFE_INTEGER) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid array length");
+        goto done;
+    }
+    if (new_length > (f64) UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
+        goto done;
+    }
 
-    MalArrayObject *result = mal_intrinsic_new_array(vm, length - skip_count + insert_count);
+    MalArrayObject *result = mal_intrinsic_new_array(vm, (u32) new_length);
     MalValue result_value = mal_value_from_array_object(result);
     MalRootSpan result_span;
     mal_gc_root(&result_span, &result_value, 1);
     u32 out = 0;
 
-    for (u32 index = 0; index < start; index++) {
-        mal_object_set((MalObject *) result, mal_builtin_array_index_key(out++), mal_builtin_array_get(vm, this_value, index));
+    for (f64 index = 0; index < start; index++) {
+        MalValue element = mal_builtin_array_get_wide(vm, this_value, index);
+        if (vm->completion.kind == MAL_COMPLETION_THROW
+            || !mal_builtin_array_create_data_property_wide(vm, result_value, (f64) out++, element)) {
+            goto result_done;
+        }
     }
     for (u32 index = 0; index < insert_count; index++) {
-        mal_object_set((MalObject *) result, mal_builtin_array_index_key(out++), args[2 + (i32) index]);
+        if (!mal_builtin_array_create_data_property_wide(vm, result_value, (f64) out++, args[2 + (i32) index])) {
+            goto result_done;
+        }
     }
-    for (u32 index = start + skip_count; index < length; index++) {
-        mal_object_set((MalObject *) result, mal_builtin_array_index_key(out++), mal_builtin_array_get(vm, this_value, index));
+    for (f64 index = start + skip_count; index < length; index++) {
+        MalValue element = mal_builtin_array_get_wide(vm, this_value, index);
+        if (vm->completion.kind == MAL_COMPLETION_THROW
+            || !mal_builtin_array_create_data_property_wide(vm, result_value, (f64) out++, element)) {
+            goto result_done;
+        }
     }
 
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         ret = result_value;
     }
+result_done:
     mal_gc_unroot(&result_span);
 done:
     mal_gc_unroot(&this_span);
@@ -2325,38 +2481,38 @@ static MalValue mal_builtin_array_copy_within(MalVm *vm, MalValue this_value, co
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
     MalValue ret = mal_value_new_undefined();
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
         goto done;
     }
 
-    u32 target = arg_count >= 1 ? mal_builtin_array_clamp_relative(vm, args[0], 0, length) : 0;
-    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(vm, args[1], 0, length) : 0;
-    u32 end = arg_count >= 3 && !mal_value_is_undefined(args[2])
-        ? mal_builtin_array_clamp_relative(vm, args[2], (f64) length, length)
+    f64 target = arg_count >= 1 ? mal_builtin_array_clamp_relative_wide(vm, args[0], 0, length) : 0;
+    f64 start = arg_count >= 2 ? mal_builtin_array_clamp_relative_wide(vm, args[1], 0, length) : 0;
+    f64 end = arg_count >= 3 && !mal_value_is_undefined(args[2])
+        ? mal_builtin_array_clamp_relative_wide(vm, args[2], length, length)
         : length;
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         goto done;
     }
 
-    u32 count = end > start ? end - start : 0;
+    f64 count = end > start ? end - start : 0;
     if (count > length - target) {
         count = length - target;
     }
 
-    for (u32 step = 0; step < count; step++) {
+    for (f64 step = 0; step < count; step++) {
         // Overlapping regions copy back-to-front so sources are read before
         // they are overwritten.
-        u32 moved = target > start ? count - 1 - step : step;
+        f64 moved = target > start ? count - 1 - step : step;
 
         MalValue element;
-        bool present = mal_builtin_array_try_get(vm, this_value, start + moved, &element);
+        bool present = mal_builtin_array_try_get_wide(vm, this_value, start + moved, &element);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             goto done;
         }
         if (present
-                ? !mal_builtin_array_set_or_throw(vm, this_value, mal_builtin_array_index_key(target + moved), element)
-                : !mal_builtin_array_delete_or_throw(vm, this_value, mal_builtin_array_index_key(target + moved))) {
+                ? !mal_builtin_array_set_index_or_throw(vm, this_value, target + moved, element)
+                : !mal_builtin_array_delete_index_or_throw(vm, this_value, target + moved)) {
             goto done;
         }
     }
@@ -2373,8 +2529,8 @@ static MalValue mal_builtin_array_with(MalVm *vm, MalValue this_value, const Mal
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
     MalValue ret = mal_value_new_undefined();
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
         goto done;
     }
 
@@ -2383,19 +2539,26 @@ static MalValue mal_builtin_array_with(MalVm *vm, MalValue this_value, const Mal
         goto done;
     }
     if (relative < 0) {
-        relative += (f64) length;
+        relative += length;
     }
-    if (relative < 0 || relative >= (f64) length) {
+    if (relative < 0 || relative >= length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid index");
         goto done;
     }
+    if (length > (f64) UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
+        goto done;
+    }
 
-    MalArrayObject *result = mal_intrinsic_new_array(vm, length);
-    for (u32 index = 0; index < length; index++) {
-        MalValue element = index == (u32) relative
+    MalArrayObject *result = mal_intrinsic_new_array(vm, (u32) length);
+    for (u32 index = 0; (f64) index < length; index++) {
+        MalValue element = (f64) index == relative
             ? (arg_count >= 2 ? args[1] : mal_value_new_undefined())
-            : mal_builtin_array_get(vm, this_value, index);
-        mal_object_set((MalObject *) result, mal_builtin_array_index_key(index), element);
+            : mal_builtin_array_get_wide(vm, this_value, (f64) index);
+        if (vm->completion.kind == MAL_COMPLETION_THROW
+            || !mal_builtin_array_create_data_property_wide(vm, mal_value_from_array_object(result), (f64) index, element)) {
+            goto done;
+        }
     }
 
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
@@ -2415,18 +2578,28 @@ static MalValue mal_builtin_array_to_reversed(MalVm *vm, MalValue this_value, co
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
     MalValue ret = mal_value_new_undefined();
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 wide_length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &wide_length)) {
         goto done;
     }
+    if (wide_length > (f64) UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
+        goto done;
+    }
+    u32 length = (u32) wide_length;
 
     MalArrayObject *result = mal_intrinsic_new_array(vm, length);
     for (u32 index = 0; index < length; index++) {
-        mal_object_set(
-            (MalObject *) result,
-            mal_builtin_array_index_key(index),
-            mal_builtin_array_get(vm, this_value, length - 1 - index)
-        );
+        MalValue element = mal_builtin_array_get_wide(vm, this_value, (f64) length - 1 - (f64) index);
+        if (vm->completion.kind == MAL_COMPLETION_THROW
+            || !mal_builtin_array_create_data_property_wide(
+                vm,
+                mal_value_from_array_object(result),
+                (f64) index,
+                element
+            )) {
+            goto done;
+        }
     }
 
     if (vm->completion.kind != MAL_COMPLETION_THROW) {

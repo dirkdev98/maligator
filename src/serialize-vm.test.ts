@@ -17,6 +17,7 @@ const instructions: Array<VmInstruction> = [
 	{ opcode: "CREATE_BOOLEAN", dst: 2, value: true },
 	{ opcode: "CREATE_STRING", dst: 3, stringIndex: 1 },
 	{ opcode: "CREATE_BIGINT", dst: 4, bigintIndex: 0 },
+	{ opcode: "INSTANTIATE_LITERAL_TEMPLATE", dst: 4, templateOffset: 0 },
 	{ opcode: "LOAD_INTRINSIC", dst: 5, intrinsic: "Math" },
 	{ opcode: "LOAD_INTRINSIC", dst: 6, intrinsic: "__arrayFlatMapAppend" },
 	{ opcode: "MOVE", dst: 7, src: 0 },
@@ -117,6 +118,7 @@ const definition: VmDefinition = {
 		[0xd83d, 0xde00], // astral pair
 	],
 	bigintConstants: [42n, (1n << 100n) + 7n],
+	literalTemplateData: [8, 2, 5, 1, 4, 0, 0x80000000],
 	globalCount: 6,
 	files: ["compiled://a.js", "compiled://b.ts"],
 	sourcePositions: [
@@ -201,6 +203,7 @@ describe("serialize-vm", () => {
 			],
 			stringConstants: [],
 			bigintConstants: [],
+			literalTemplateData: [],
 			globalCount: 0,
 			files: [],
 			sourcePositions: [],
@@ -232,7 +235,7 @@ describe("serialize-vm", () => {
 		);
 	});
 
-	it("rejects a wire v3 buffer with a nonzero host-install count", () => {
+	it("rejects a wire v4 buffer with a nonzero host-install count", () => {
 		const buffer = serializeVmDefinition(definition);
 		new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).setUint32(
 			buffer.byteLength - 4,
@@ -244,7 +247,7 @@ describe("serialize-vm", () => {
 		);
 	});
 
-	it("round-trips an ordinary wire v3 definition with an empty manifest", () => {
+	it("round-trips an ordinary wire v4 definition with an empty manifest", () => {
 		const restored = deserializeVmDefinition(serializeVmDefinition(definition));
 		expect(restored.hostInstalls).toEqual([]);
 	});

@@ -104,8 +104,8 @@ function stringCodeUnitsBody(constant: Array<number>): string {
 }
 
 function malStringRow(symbol: string, length: number): string {
-	// Immortal, pre-hashed string constant. The hash is filled once in
-	// mal_vm_init (a static initializer can't run it), so the row is mutable.
+	// Immortal string constant. The row stays mutable because its hash is cached
+	// lazily on first use (a static initializer cannot compute it).
 	return `    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = ${length}, .code_units = ${symbol} },`;
 }
 
@@ -294,8 +294,19 @@ function malVmDefinitionStruct(
 	definition: VmDefinition,
 	suffix: string,
 	debug: boolean,
+	sharedLiteralTemplates?: string,
 ): Array<string> {
 	const lines: Array<string> = [];
+	const hasLiteralTemplates = definition.literalTemplateData.length > 0;
+	const literalTemplatesSymbol = hasLiteralTemplates
+		? (sharedLiteralTemplates ?? `mal_literal_templates${suffix}`)
+		: "nullptr";
+	if (hasLiteralTemplates && sharedLiteralTemplates === undefined) {
+		lines.push(
+			`static const u32 ${literalTemplatesSymbol}[] = { ${definition.literalTemplateData.join(", ")} };`,
+			"",
+		);
+	}
 
 	const hasCjs = definition.cjsModuleFunctionIndices.length > 0;
 	if (hasCjs) {
@@ -367,6 +378,8 @@ function malVmDefinitionStruct(
 		`    .string_constants = ${definition.stringConstants.length > 0 ? `mal_strings${suffix}` : "nullptr"},`,
 		`    .bigint_constant_count = ${definition.bigintConstants.length},`,
 		`    .bigint_constants = ${definition.bigintConstants.length > 0 ? `mal_bigints${suffix}` : "nullptr"},`,
+		`    .literal_template_data_count = ${definition.literalTemplateData.length},`,
+		`    .literal_template_data = ${literalTemplatesSymbol},`,
 		`    .global_count = ${definition.globalCount},`,
 		`    .cjs_module_count = ${definition.cjsModuleFunctionIndices.length},`,
 		`    .cjs_module_function_indices = ${hasCjs ? `mal_cjs_modules${suffix}` : "nullptr"},`,
@@ -421,12 +434,16 @@ export function emitBatch(
 	for (let d = 0; d < definitions.length; ++d) {
 		const definition = definitions[d]!;
 		const suffix = `_${d}`;
+		const literalTemplatesSymbol =
+			definition.literalTemplateData.length > 0
+				? intern("literals", "u32", `    ${definition.literalTemplateData.join(", ")}`)
+				: undefined;
 
 		const stringSymbols = definition.stringConstants.map((constant) =>
 			intern("cu", "c16", `    ${constant.length > 0 ? constant.join(", ") : "0"}`),
 		);
 		if (stringSymbols.length > 0) {
-			// MalString rows are mutable (hashes filled at init) so each definition
+			// MalString rows are mutable (hashes are cached lazily), so each definition
 			// keeps its own table; only the code-unit arrays are shared.
 			lines.push(`static MalString mal_strings${suffix}[] = {`);
 			for (let i = 0; i < stringSymbols.length; ++i) {
@@ -496,7 +513,9 @@ export function emitBatch(
 		}
 		lines.push("};", "");
 
-		lines.push(...malVmDefinitionStruct(definition, suffix, false));
+		lines.push(
+			...malVmDefinitionStruct(definition, suffix, false, literalTemplatesSymbol),
+		);
 		lines.push("");
 	}
 
@@ -534,6 +553,8 @@ function emitInstruction(instruction: VmInstruction) {
 			return `{ .opcode = MAL_OP_CREATE_OBJECT_SHAPED, .as.create_object_shaped = { .dst = ${instruction.dst}, .count = ${instruction.count}, .key_indices = ${emitCallArguments(instruction.keyStringIndices)}, .value_registers = ${emitCallArguments(instruction.valueRegisters)} } }`;
 		case "CREATE_ARRAY":
 			return `{ .opcode = MAL_OP_CREATE_ARRAY, .as.create_array = { .dst = ${instruction.dst}, .length = ${instruction.length} } }`;
+		case "INSTANTIATE_LITERAL_TEMPLATE":
+			return `{ .opcode = MAL_OP_INSTANTIATE_LITERAL_TEMPLATE, .as.instantiate_literal_template = { .dst = ${instruction.dst}, .template_offset = ${instruction.templateOffset} } }`;
 		case "CREATE_MODULE_NAMESPACE": {
 			const count = instruction.nameIndices.length;
 			const names =

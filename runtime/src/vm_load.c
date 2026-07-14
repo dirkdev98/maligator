@@ -13,7 +13,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 3u         // bumped for the host-install manifest section
+#define WIRE_VERSION 4u         // bumped for the packed literal-template section
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -104,6 +104,7 @@ typedef enum WireOp {
     WIRE_LOAD_CALLEE,
     WIRE_GUARD_FUNCTION_INDEX,
     WIRE_LOAD_SUPER_PROPERTY,
+    WIRE_INSTANTIATE_LITERAL_TEMPLATE,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -412,6 +413,11 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
             o->opcode = MAL_OP_CREATE_ARRAY;
             o->as.create_array.dst = rd_i32(r);
             o->as.create_array.length = rd_i32(r);
+            return;
+        case WIRE_INSTANTIATE_LITERAL_TEMPLATE:
+            o->opcode = MAL_OP_INSTANTIATE_LITERAL_TEMPLATE;
+            o->as.instantiate_literal_template.dst = rd_i32(r);
+            o->as.instantiate_literal_template.template_offset = rd_i32(r);
             return;
         case WIRE_CREATE_MODULE_NAMESPACE: {
             o->opcode = MAL_OP_CREATE_MODULE_NAMESPACE;
@@ -959,6 +965,16 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
         bigints[b].header.storage = MAL_HEAP_STORAGE_IMMORTAL;
         bigints[b].value = (i128) (((u128) hi << 64) | (u128) lo);
     }
+
+    // Packed literal-template u32 stream.
+    u32 literal_template_count = rd_count(&r, sizeof(u32));
+    u32 *literal_templates = arena(
+        L, &r, (usize) literal_template_count * sizeof(u32), alignof(u32));
+    for (u32 i = 0; r.ok && i < literal_template_count; i++) {
+        literal_templates[i] = rd_u32(&r);
+    }
+    def->literal_template_data_count = (i32) literal_template_count;
+    def->literal_template_data = literal_templates;
 
     // CommonJS module table.
     i32 cjs_count;

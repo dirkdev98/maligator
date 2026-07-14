@@ -157,6 +157,7 @@ void mal_op_create_object(MalCallable *callable, MalInstruction *instruction);
 void mal_op_create_object_shaped(MalCallable *callable, MalInstruction *instruction);
 
 void mal_op_create_array(MalCallable *callable, MalInstruction *instruction);
+void mal_op_instantiate_literal_template(MalCallable *callable, MalInstruction *instruction);
 void mal_op_create_module_namespace(MalCallable *callable, MalInstruction *instruction);
 void mal_op_create_template_object(MalCallable *callable, MalInstruction *instruction);
 void mal_op_with_enter(MalCallable *callable, MalInstruction *instruction);
@@ -686,6 +687,7 @@ MalValue mal_vm_op_create_object(MalVm *vm);
 MalValue mal_vm_create_object_shaped(MalVm *vm, struct MalShape *shape, const MalValue *values, u32 count);
 
 MalValue mal_vm_op_create_array(MalVm *vm, i32 length);
+MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset);
 
 MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env);
 

@@ -473,6 +473,7 @@ const ALLOC_TYPES: ReadonlySet<string> = new Set([
 	"createObject",
 	"createObjectShaped",
 	"createArray",
+	"instantiateLiteralTemplate",
 	"createFunction",
 	"createArgumentsObject",
 	"createRestArguments",

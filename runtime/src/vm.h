@@ -100,10 +100,26 @@ typedef enum MalOpcode {
     MAL_OP_ENV_COPY,
     MAL_OP_ENV_POP,
     // Speculative-call-inlining guard: dst = (callee is a function object with the cached
-    // function index). Appended last to keep every prior opcode's numeric value stable for
-    // the serialized wire format. Must stay in lockstep with serialize-vm's opcode list.
+    // function index). Opcode additions are append-only to keep prior numeric values stable
+    // for the serialized wire format. Must stay in lockstep with serialize-vm's opcode list.
     MAL_OP_GUARD_FUNCTION_INDEX,
+    MAL_OP_INSTANTIATE_LITERAL_TEMPLATE,
 } MalOpcode;
+
+/** Packed literal-template stream tags; mirrored by src/ir.ts. */
+typedef enum MalLiteralTemplateTag {
+    MAL_LITERAL_NULL,
+    MAL_LITERAL_FALSE,
+    MAL_LITERAL_TRUE,
+    MAL_LITERAL_I32,
+    MAL_LITERAL_F64,
+    MAL_LITERAL_STRING,
+    MAL_LITERAL_BIGINT,
+    MAL_LITERAL_HOLE,
+    MAL_LITERAL_ARRAY,
+    MAL_LITERAL_OBJECT,
+    MAL_LITERAL_KEY,
+} MalLiteralTemplateTag;
 
 typedef enum MalBinaryOp {
     MAL_BIN_ADD,
@@ -211,6 +227,10 @@ typedef struct MalInstruction {
         struct {
             i32 dst, length;
         } create_array;
+
+        struct {
+            i32 dst, template_offset;
+        } instantiate_literal_template;
 
         struct {
             // Build a module namespace object: `count` exports whose names are
@@ -796,9 +816,9 @@ typedef struct MalVmDefinition {
 
     /**
      * Immortal string constants baked into the program image (static storage,
-     * EXTERNAL code units). Their hashes are computed once in mal_vm_init, so
-     * the array is not const. CREATE_STRING and property-key loads hand back a
-     * pointer to one of these instead of allocating per execution.
+     * EXTERNAL code units). Hashes are computed lazily by mal_string_hash, so the
+     * array is not const. CREATE_STRING and property-key loads hand back a pointer
+     * to one of these instead of allocating per execution.
      */
     i32 string_constant_count;
     MalString *string_constants;
@@ -809,6 +829,10 @@ typedef struct MalVmDefinition {
      */
     i32 bigint_constant_count;
     MalBigInt *bigint_constants;
+
+    /** Packed immutable static-data literal templates (MalLiteralTemplateTag). */
+    i32 literal_template_data_count;
+    const u32 *literal_template_data;
 
     i32 global_count;
 
@@ -976,7 +1000,8 @@ typedef struct MalVm {
     /**
      * VM-owned, mutable definition that `definition` points at. Initialized as a
      * shallow copy of the program definition with its function / string-constant /
-     * bigint-constant tables relocated into growable VM-owned storage (the
+     * bigint-constant / literal-template tables relocated into growable VM-owned
+     * storage (the
      * instruction, handler, and code-unit data the rows point at stays in place —
      * static, or a loader arena). Runtime eval splices more functions, globals,
      * and constants in via mal_vm_splice_definition without disturbing the const
@@ -986,6 +1011,7 @@ typedef struct MalVm {
     i32 function_capacity;
     i32 string_capacity;
     i32 bigint_capacity;
+    i32 literal_template_capacity;
     i32 global_capacity;
 
     /**

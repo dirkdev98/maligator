@@ -1,6 +1,7 @@
 #include "vm_ops.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "array_object.h"
 #include "async_function.h"
@@ -237,6 +238,231 @@ MalValue mal_vm_op_create_array(MalVm *vm, i32 length) {
 void mal_op_create_array(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_array.dst] =
         mal_vm_op_create_array(callable->vm, instruction->as.create_array.length);
+}
+
+typedef struct MalLiteralBuildFrame {
+    MalValue container;
+    u32 remaining;
+    u32 next_index;
+    bool is_object;
+} MalLiteralBuildFrame;
+
+typedef struct MalLiteralCursor {
+    const u32 *data;
+    u32 count;
+    u32 pos;
+} MalLiteralCursor;
+
+static bool mal_literal_read(MalLiteralCursor *cursor, u32 *out) {
+    if (cursor->pos >= cursor->count) {
+        return false;
+    }
+    *out = cursor->data[cursor->pos++];
+    return true;
+}
+
+static bool mal_literal_decode_value(
+    MalVm *vm, MalLiteralCursor *cursor, MalValue *out, bool *is_container,
+    bool *is_object, u32 *child_count
+) {
+    u32 tag;
+    if (!mal_literal_read(cursor, &tag)) {
+        return false;
+    }
+    *is_container = false;
+    *is_object = false;
+    *child_count = 0;
+    switch ((MalLiteralTemplateTag) tag) {
+        case MAL_LITERAL_NULL:
+            *out = mal_value_new_null();
+            return true;
+        case MAL_LITERAL_FALSE:
+            *out = mal_value_new_boolean(false);
+            return true;
+        case MAL_LITERAL_TRUE:
+            *out = mal_value_new_boolean(true);
+            return true;
+        case MAL_LITERAL_I32: {
+            u32 bits;
+            if (!mal_literal_read(cursor, &bits)) return false;
+            *out = mal_value_from_i32((i32) bits);
+            return true;
+        }
+        case MAL_LITERAL_F64: {
+            u32 lo, hi;
+            if (!mal_literal_read(cursor, &lo) || !mal_literal_read(cursor, &hi)) return false;
+            u64 bits = (u64) lo | ((u64) hi << 32);
+            f64 value;
+            memcpy(&value, &bits, sizeof(value));
+            *out = mal_value_from_f64_convert_nan(value);
+            return true;
+        }
+        case MAL_LITERAL_STRING: {
+            u32 index;
+            if (!mal_literal_read(cursor, &index) || index >= (u32) vm->definition->string_constant_count) {
+                return false;
+            }
+            *out = mal_value_from_string(&vm->definition->string_constants[index]);
+            return true;
+        }
+        case MAL_LITERAL_BIGINT: {
+            u32 index;
+            if (!mal_literal_read(cursor, &index) || index >= (u32) vm->definition->bigint_constant_count) {
+                return false;
+            }
+            *out = mal_value_from_bigint(&vm->definition->bigint_constants[index]);
+            return true;
+        }
+        case MAL_LITERAL_HOLE:
+            *out = mal_value_new_array_hole();
+            return true;
+        case MAL_LITERAL_ARRAY: {
+            u32 count;
+            if (!mal_literal_read(cursor, &count)) return false;
+            *out = mal_value_from_array_object(mal_intrinsic_new_array(vm, count));
+            *is_container = true;
+            *child_count = count;
+            return true;
+        }
+        case MAL_LITERAL_OBJECT: {
+            u32 count;
+            if (!mal_literal_read(cursor, &count)) return false;
+            *out = mal_vm_op_create_object(vm);
+            *is_container = true;
+            *is_object = true;
+            *child_count = count;
+            return true;
+        }
+        case MAL_LITERAL_KEY:
+            return false;
+    }
+    return false;
+}
+
+MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset) {
+    MalValue result = mal_value_new_undefined();
+    MalRootSpan result_root;
+    mal_gc_root(&result_root, &result, 1);
+
+    MalLiteralBuildFrame *frames = nullptr;
+    MalValue *active = nullptr;
+    u32 depth = 0;
+    u32 capacity = 0;
+    MalRootSpan active_root;
+    mal_gc_root(&active_root, active, 0);
+
+    const u32 data_count = (u32) vm->definition->literal_template_data_count;
+    MalLiteralCursor cursor = {
+        .data = vm->definition->literal_template_data,
+        .count = data_count,
+        .pos = template_offset >= 0 ? (u32) template_offset : data_count,
+    };
+    bool root_container, root_object;
+    u32 root_children;
+    bool ok = cursor.pos < data_count && mal_literal_decode_value(
+        vm, &cursor, &result, &root_container, &root_object, &root_children);
+
+    if (ok && root_container) {
+        capacity = 8;
+        frames = malloc(sizeof(MalLiteralBuildFrame) * capacity);
+        active = malloc(sizeof(MalValue) * capacity);
+        active_root.slots = active;
+        frames[0] = (MalLiteralBuildFrame) {
+            .container = result,
+            .remaining = root_children,
+            .next_index = 0,
+            .is_object = root_object,
+        };
+        active[0] = result;
+        depth = 1;
+        active_root.count = 1;
+    }
+
+    u32 built = 0;
+    while (ok && depth > 0) {
+        MalLiteralBuildFrame *parent = &frames[depth - 1];
+        if (parent->remaining == 0) {
+            depth--;
+            active_root.count = (i32) depth;
+            continue;
+        }
+
+        u32 key_index = 0;
+        if (parent->is_object) {
+            u32 key_tag;
+            ok = mal_literal_read(&cursor, &key_tag) && key_tag == MAL_LITERAL_KEY &&
+                 mal_literal_read(&cursor, &key_index) &&
+                 key_index < (u32) vm->definition->string_constant_count;
+            if (!ok) break;
+        }
+
+        MalValue child;
+        bool child_container, child_object;
+        u32 child_count;
+        ok = mal_literal_decode_value(
+            vm, &cursor, &child, &child_container, &child_object, &child_count);
+        if (!ok || (!parent->is_object && parent->next_index >= mal_value_to_array_object(parent->container)->length)) {
+            ok = false;
+            break;
+        }
+
+        if (parent->is_object) {
+            MalKey key = {
+                .kind = MAL_KEY_STRING,
+                .value = mal_value_from_string(&vm->definition->string_constants[key_index]),
+            };
+            MalPropertyDesc desc = {
+                .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+                .value = child,
+            };
+            ok = mal_object_define_own(mal_value_to_object(parent->container), key, &desc) ==
+                 MAL_DEFINE_OWN_APPLIED;
+        } else {
+            MalArrayObject *array = mal_value_to_array_object(parent->container);
+            ok = mal_array_object_dense_store(array, parent->next_index, child) == MAL_ARRAY_DENSE_APPLIED;
+            parent->next_index++;
+        }
+        if (!ok) break;
+        parent->remaining--;
+
+        if (child_container) {
+            if (depth == capacity) {
+                capacity *= 2;
+                frames = realloc(frames, sizeof(MalLiteralBuildFrame) * capacity);
+                active = realloc(active, sizeof(MalValue) * capacity);
+                active_root.slots = active;
+            }
+            frames[depth] = (MalLiteralBuildFrame) {
+                .container = child,
+                .remaining = child_count,
+                .next_index = 0,
+                .is_object = child_object,
+            };
+            active[depth] = child;
+            depth++;
+            active_root.count = (i32) depth;
+        }
+
+        if ((++built & 1023u) == 0 && mal_gc_poll) {
+            mal_gc_safepoint(vm);
+        }
+    }
+
+    if (!ok) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "invalid literal template");
+        result = mal_value_new_undefined();
+    }
+    mal_gc_unroot(&active_root);
+    mal_gc_unroot(&result_root);
+    free(active);
+    free(frames);
+    return result;
+}
+
+void mal_op_instantiate_literal_template(MalCallable *callable, MalInstruction *instruction) {
+    callable->registers[instruction->as.instantiate_literal_template.dst] =
+        mal_vm_instantiate_literal_template(
+            callable->vm, instruction->as.instantiate_literal_template.template_offset);
 }
 
 // Shared by the interpreter op and the native backend: build a module namespace

@@ -311,6 +311,7 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 			case "CREATE_BIGINT":
 			case "CREATE_OBJECT":
 			case "CREATE_ARRAY":
+			case "INSTANTIATE_LITERAL_TEMPLATE":
 			case "CREATE_FUNCTION":
 			case "CREATE_ARGUMENTS_OBJECT": // reads the raw args, no register operand
 			case "CREATE_REST_ARGUMENTS": // reads the raw args, no register operand
@@ -1347,6 +1348,11 @@ function emitInstruction(
 		}
 		case "CREATE_ARRAY":
 			return [`r${instruction.dst} = mal_vm_op_create_array(vm, ${instruction.length});`];
+		case "INSTANTIATE_LITERAL_TEMPLATE":
+			return [
+				`r${instruction.dst} = mal_vm_instantiate_literal_template(vm, ${instruction.templateOffset});`,
+				throwCheck,
+			];
 		case "CREATE_FUNCTION":
 			// The closure captures this frame's environment. Only reachable when
 			// the enclosing function has no captured slots of its own (see the

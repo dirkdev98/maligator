@@ -92,3 +92,6 @@ bool mal_shape_attrs_are_default(u8 attrs);
  * final shape in one step so the literal need not transition property-by-property.
  */
 MalShape *mal_shape_from_string_keys(struct MalString **keys, u32 count);
+
+/** Visit keys retained by the immortal transition tree during GC root scanning. */
+void mal_shape_visit_transition_keys(void (*visit)(MalValue));

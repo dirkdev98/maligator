@@ -75,6 +75,12 @@ export interface IntermediateProgram {
 	bigintConstantToIndex: Map<bigint, number>;
 
 	/**
+	 * Prefix-encoded immutable data-literal templates. Instructions reference an
+	 * offset in this flat u32 stream; evaluation instantiates a fresh mutable graph.
+	 */
+	literalTemplateData: Array<number>;
+
+	/**
 	 * For a `const f = <function/arrow>` declaration, maps f's binding to the
 	 * function node it is initialized with. Used to recognize a self-recursive
 	 * tail call reached through that binding — the binding's declarationNode is
@@ -626,6 +632,15 @@ export type IRInstruction =
 			registers: [number];
 
 			length: number;
+	  }
+	| {
+			type: "instantiateLiteralTemplate";
+
+			// [destination]
+			registers: [number];
+
+			// Offset into IntermediateProgram.literalTemplateData.
+			templateOffset: number;
 	  }
 	| {
 			// Build an `import * as ns` module namespace exotic object. Each export
@@ -1432,6 +1447,7 @@ export function compileSemanticProgramToIr(
 
 		bigintConstants: [],
 		bigintConstantToIndex: new Map(),
+		literalTemplateData: [],
 
 		bindingFunctionNode: new Map(),
 
@@ -4229,6 +4245,126 @@ function compileIteratorRest(
 	return rest;
 }
 
+/**
+ * Run assignment-target evaluation in a protected range. Iterator steps stay
+ * outside this helper: a throw from next() must not close the iterator.
+ */
+function compileWithIteratorCloseOnThrow(
+	fn: IRFunction,
+	cursor: IRCursor,
+	iteratorRegister: number,
+	compileTarget: () => void,
+	doneRegister?: number,
+): void {
+	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> = {
+		type: "tryBegin",
+		blocks: [-1, -1],
+	};
+	cursor.block.instructions.push(tryBegin);
+
+	compileTarget();
+
+	const tryExit: IRBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryExitIdx = fn.blocks.push(tryExit) - 1;
+	tryBegin.blocks[1] = tryExitIdx;
+	cursor.block.instructions.push({ type: "jump", blocks: [tryExitIdx] });
+
+	const handler: IRBlock = { instructions: [] };
+	tryBegin.blocks[0] = fn.blocks.push(handler) - 1;
+	const caught = nextRegisterDestination(fn);
+	handler.instructions.push({ type: "catch", registers: [caught] });
+
+	let rethrowJump: Extract<IRInstruction, { type: "jumpIf" }> | undefined;
+	if (doneRegister !== undefined) {
+		rethrowJump = {
+			type: "jumpIf",
+			registers: [doneRegister],
+			blocks: [-1],
+		};
+		handler.instructions.push(rethrowJump);
+	}
+	handler.instructions.push(
+		{ type: "iteratorClose", registers: [iteratorRegister] },
+		{ type: "throw", registers: [caught] },
+	);
+
+	if (rethrowJump) {
+		const rethrowIdx =
+			fn.blocks.push({ instructions: [{ type: "throw", registers: [caught] }] }) - 1;
+		rethrowJump.blocks[0] = rethrowIdx;
+	}
+
+	const continuationIdx = fn.blocks.push({ instructions: [] }) - 1;
+	tryExit.instructions.push({ type: "jump", blocks: [continuationIdx] });
+	cursor.block = fn.blocks[continuationIdx]!;
+}
+
+/**
+ * Evaluate an assignment element's member reference before consuming its
+ * iterator. The raw key is deliberately not coerced here; PutValue performs
+ * ToPropertyKey later. Locals carry the reference across tryEnd's invisible edge.
+ */
+function compileCapturedMemberReference(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	target: ESTree.MemberExpression,
+	iteratorRegister: number,
+): CompiledMemberReference {
+	let compiled: CompiledMemberReference = { object: -1, key: -1 };
+	let slots: { object: number; key: number; receiver?: number } | undefined;
+
+	compileWithIteratorCloseOnThrow(fn, cursor, iteratorRegister, () => {
+		compiled = compileMemberObjectAndKey(program, fn, cursor, target);
+		if (compiled.object === -1 || compiled.key === -1) {
+			return;
+		}
+
+		slots = {
+			object: fn.nextLocalIndex++,
+			key: fn.nextLocalIndex++,
+			receiver: compiled.receiver === undefined ? undefined : fn.nextLocalIndex++,
+		};
+		cursor.block.instructions.push(
+			{
+				type: "storeLocal",
+				registers: [compiled.object],
+				index: slots.object,
+			},
+			{ type: "storeLocal", registers: [compiled.key], index: slots.key },
+		);
+		if (compiled.receiver !== undefined && slots.receiver !== undefined) {
+			cursor.block.instructions.push({
+				type: "storeLocal",
+				registers: [compiled.receiver],
+				index: slots.receiver,
+			});
+		}
+	});
+
+	if (!slots) {
+		return compiled;
+	}
+
+	const object = nextRegisterDestination(fn);
+	const key = nextRegisterDestination(fn);
+	cursor.block.instructions.push(
+		{ type: "loadLocal", registers: [object], index: slots.object },
+		{ type: "loadLocal", registers: [key], index: slots.key },
+	);
+	if (slots.receiver === undefined) {
+		return { object, key };
+	}
+
+	const receiver = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadLocal",
+		registers: [receiver],
+		index: slots.receiver,
+	});
+	return { object, key, receiver };
+}
+
 function compileArrayPatternTarget(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -4249,11 +4385,56 @@ function compileArrayPatternTarget(
 	let lastDoneRegister = -1;
 	for (const element of pattern.elements) {
 		if (element?.type === "RestElement") {
-			// Rest is last by grammar and exhausts the iterator: no close.
+			// Assignment rest evaluates its reference before it starts draining. Keep
+			// its raw base/key/receiver, then PutValue only after exhaustion.
+			const capturedMember =
+				isAssign && element.argument.type === "MemberExpression"
+					? compileCapturedMemberReference(
+							program,
+							fn,
+							cursor,
+							element.argument,
+							iteratorRegister,
+						)
+					: undefined;
+
+			// Rest is last by grammar and exhausts the iterator: next() and the
+			// eventual store are outside the close-on-reference-abrupt range.
 			const rest = compileIteratorRest(fn, cursor, iteratorRegister, nextRegister);
-			compilePatternTarget(program, fn, cursor, element.argument, rest, isAssign);
+			if (capturedMember) {
+				if (capturedMember.object !== -1 && capturedMember.key !== -1) {
+					compileMemberStore(cursor, capturedMember, rest);
+				}
+			} else {
+				compilePatternTarget(program, fn, cursor, element.argument, rest, isAssign);
+			}
 			return;
 		}
+
+		// A simple assignment element evaluates its reference before advancing the
+		// iterator. AssignmentPattern only delays its initializer and PutValue.
+		const assignmentPattern = element as unknown as
+			| ESTree.AssignmentPattern
+			| null
+			| undefined;
+		const defaultTarget = assignmentPattern?.left as unknown as ESTree.Node | undefined;
+		const memberTarget =
+			isAssign && element?.type === "MemberExpression"
+				? element
+				: isAssign &&
+					  assignmentPattern?.type === "AssignmentPattern" &&
+					  defaultTarget?.type === "MemberExpression"
+					? defaultTarget
+					: undefined;
+		const capturedMember = memberTarget
+			? compileCapturedMemberReference(
+					program,
+					fn,
+					cursor,
+					memberTarget,
+					iteratorRegister,
+				)
+			: undefined;
 
 		// Holes consume a step without binding. An exhausted iterator steps
 		// to undefined; the extra next() calls past done are a known
@@ -4267,14 +4448,46 @@ function compileArrayPatternTarget(
 		lastDoneRegister = doneRegister;
 
 		if (element) {
-			compilePatternTarget(program, fn, cursor, element, elementValue, isAssign);
+			if (capturedMember) {
+				compileWithIteratorCloseOnThrow(
+					fn,
+					cursor,
+					iteratorRegister,
+					() => {
+						const assignedValue =
+							assignmentPattern?.type === "AssignmentPattern" && assignmentPattern.right
+								? compileDefaultedValue(
+										program,
+										fn,
+										cursor,
+										elementValue,
+										assignmentPattern.right,
+									)
+								: elementValue;
+						if (capturedMember.object !== -1 && capturedMember.key !== -1) {
+							compileMemberStore(cursor, capturedMember, assignedValue);
+						}
+					},
+					doneRegister,
+				);
+			} else if (isAssign) {
+				compileWithIteratorCloseOnThrow(
+					fn,
+					cursor,
+					iteratorRegister,
+					() => compilePatternTarget(program, fn, cursor, element, elementValue, true),
+					doneRegister,
+				);
+			} else {
+				compilePatternTarget(program, fn, cursor, element, elementValue, false);
+			}
 		}
 	}
 
 	// IteratorClose when the pattern did not exhaust the iterator. With no
 	// elements the iterator is trivially unexhausted; otherwise the last
-	// step's done flag decides. Throws during element binding skip the close
-	// (TODO(iterators): spec closes on abrupt completions too).
+	// step's done flag decides. Assignment-target abrupt completions have already
+	// closed through their protected ranges above.
 	if (lastDoneRegister === -1) {
 		cursor.block.instructions.push({
 			type: "iteratorClose",
@@ -8425,6 +8638,207 @@ function staticPropertyName(property: ESTree.Property): string | undefined {
 	return undefined;
 }
 
+// Must stay in lockstep with MalLiteralTemplateTag in runtime/src/vm.h.
+const LITERAL_TEMPLATE_NULL = 0;
+const LITERAL_TEMPLATE_FALSE = 1;
+const LITERAL_TEMPLATE_TRUE = 2;
+const LITERAL_TEMPLATE_I32 = 3;
+const LITERAL_TEMPLATE_F64 = 4;
+const LITERAL_TEMPLATE_STRING = 5;
+const LITERAL_TEMPLATE_BIGINT = 6;
+const LITERAL_TEMPLATE_HOLE = 7;
+const LITERAL_TEMPLATE_ARRAY = 8;
+const LITERAL_TEMPLATE_OBJECT = 9;
+const LITERAL_TEMPLATE_KEY = 10;
+const MIN_LITERAL_TEMPLATE_WORDS = 32;
+const literalNumberBits = new DataView(new ArrayBuffer(8));
+
+function isArrayIndexName(name: string): boolean {
+	if (!/^(?:0|[1-9][0-9]*)$/.test(name)) {
+		return false;
+	}
+	const index = Number(name);
+	return index <= 0xffff_fffe;
+}
+
+function isRegexLiteral(literal: ESTree.Literal): boolean {
+	return "regex" in literal && literal.regex !== undefined && literal.regex !== null;
+}
+
+function staticNegativeNumber(node: ESTree.Expression): number | undefined {
+	if (
+		node.type !== "UnaryExpression" ||
+		node.operator !== "-" ||
+		node.argument.type !== "Literal" ||
+		isRegexLiteral(node.argument) ||
+		typeof node.argument.value !== "number"
+	) {
+		return undefined;
+	}
+	return -node.argument.value;
+}
+
+/** First template slice: recursively static arrays and plain data objects only. */
+function isStaticLiteralTemplate(
+	root: ESTree.ArrayExpression | ESTree.ObjectExpression,
+): boolean {
+	const pending: Array<ESTree.Expression> = [root];
+	while (pending.length > 0) {
+		const node = pending.pop()!;
+		if (node.type === "ArrayExpression") {
+			for (const element of node.elements) {
+				if (element?.type === "SpreadElement") return false;
+				if (element) pending.push(element);
+			}
+			continue;
+		}
+		if (node.type === "ObjectExpression") {
+			const seen = new Set<string>();
+			for (const property of node.properties) {
+				if (
+					property.type !== "Property" ||
+					property.computed ||
+					property.method ||
+					property.kind !== "init"
+				) {
+					return false;
+				}
+				const name = staticPropertyName(property);
+				if (
+					name === undefined ||
+					name === "__proto__" ||
+					isArrayIndexName(name) ||
+					seen.has(name)
+				) {
+					return false;
+				}
+				seen.add(name);
+				pending.push(property.value as ESTree.Expression);
+			}
+			continue;
+		}
+		if (node.type === "Literal") {
+			if (isRegexLiteral(node)) return false;
+			const value = node.value;
+			if (
+				value === null ||
+				typeof value === "boolean" ||
+				typeof value === "number" ||
+				typeof value === "string" ||
+				typeof value === "bigint"
+			) {
+				continue;
+			}
+		}
+		if (staticNegativeNumber(node) !== undefined) continue;
+		return false;
+	}
+	return true;
+}
+
+function appendTemplateNumber(out: Array<number>, value: number): void {
+	if (
+		Number.isInteger(value) &&
+		!Object.is(value, -0) &&
+		value >= -2147483648 &&
+		value <= 2147483647
+	) {
+		out.push(LITERAL_TEMPLATE_I32, value >>> 0);
+		return;
+	}
+	literalNumberBits.setFloat64(0, value, true);
+	out.push(
+		LITERAL_TEMPLATE_F64,
+		literalNumberBits.getUint32(0, true),
+		literalNumberBits.getUint32(4, true),
+	);
+}
+
+function compileLiteralTemplate(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	root: ESTree.ArrayExpression | ESTree.ObjectExpression,
+): number | null {
+	if (!isStaticLiteralTemplate(root)) return null;
+
+	type Action =
+		| { type: "node"; node: ESTree.Expression }
+		| { type: "word"; word: number };
+	const encoded: Array<number> = [];
+	const actions: Array<Action> = [{ type: "node", node: root }];
+	while (actions.length > 0) {
+		const action = actions.pop()!;
+		if (action.type === "word") {
+			encoded.push(action.word);
+			continue;
+		}
+		const node = action.node;
+		if (node.type === "ArrayExpression") {
+			encoded.push(LITERAL_TEMPLATE_ARRAY, node.elements.length);
+			for (let i = node.elements.length - 1; i >= 0; --i) {
+				const element = node.elements[i];
+				actions.push(
+					element === null || element === undefined
+						? { type: "word", word: LITERAL_TEMPLATE_HOLE }
+						: { type: "node", node: element },
+				);
+			}
+			continue;
+		}
+		if (node.type === "ObjectExpression") {
+			encoded.push(LITERAL_TEMPLATE_OBJECT, node.properties.length);
+			for (let i = node.properties.length - 1; i >= 0; --i) {
+				const property = node.properties[i] as ESTree.Property;
+				const name = staticPropertyName(property)!;
+				actions.push({ type: "node", node: property.value as ESTree.Expression });
+				actions.push({
+					type: "word",
+					word: getOrCreateStringConstant(program, name),
+				});
+				actions.push({ type: "word", word: LITERAL_TEMPLATE_KEY });
+			}
+			continue;
+		}
+		const negative = staticNegativeNumber(node);
+		if (negative !== undefined) {
+			appendTemplateNumber(encoded, negative);
+			continue;
+		}
+		const literal = node as ESTree.Literal;
+		if (literal.value === null) encoded.push(LITERAL_TEMPLATE_NULL);
+		else if (literal.value === false) encoded.push(LITERAL_TEMPLATE_FALSE);
+		else if (literal.value === true) encoded.push(LITERAL_TEMPLATE_TRUE);
+		else if (typeof literal.value === "number")
+			appendTemplateNumber(encoded, literal.value);
+		else if (typeof literal.value === "string") {
+			encoded.push(
+				LITERAL_TEMPLATE_STRING,
+				getOrCreateStringConstant(program, literal.value),
+			);
+		} else {
+			encoded.push(
+				LITERAL_TEMPLATE_BIGINT,
+				getOrCreateBigintConstant(program, literal.value as bigint),
+			);
+		}
+	}
+
+	// Small literals are cheaper on the ordinary IR path and remain visible to
+	// scalar replacement. Templates target data large enough to reduce code size.
+	if (encoded.length < MIN_LITERAL_TEMPLATE_WORDS) return null;
+
+	const templateOffset = program.literalTemplateData.length;
+	for (const word of encoded) program.literalTemplateData.push(word);
+	const destination = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "instantiateLiteralTemplate",
+		registers: [destination],
+		templateOffset,
+	});
+	return destination;
+}
+
 /**
  * If every member is a static, non-index data property (no spread, computed key,
  * accessor, method, __proto__, duplicate, or index-like name, and at most
@@ -8521,6 +8935,9 @@ function compileObjectExpression(
 	cursor: IRCursor,
 	objectExpression: ESTree.ObjectExpression,
 ): number {
+	const template = compileLiteralTemplate(program, fn, cursor, objectExpression);
+	if (template !== null) return template;
+
 	const staticShape = staticObjectShape(objectExpression);
 	if (staticShape !== null) {
 		// Evaluate the values left-to-right (keys are constants, so no key
@@ -8675,6 +9092,9 @@ function compileArrayExpression(
 	cursor: IRCursor,
 	arrayExpression: ESTree.ArrayExpression,
 ): number {
+	const template = compileLiteralTemplate(program, fn, cursor, arrayExpression);
+	if (template !== null) return template;
+
 	const hasSpread = arrayExpression.elements.some(
 		(element) => element?.type === "SpreadElement",
 	);

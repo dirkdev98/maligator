@@ -105,8 +105,7 @@ function interpreterOnly(): boolean {
 // halves the generated C and cuts cc ~25% on a cold run, content-addressed so it
 // cannot change behaviour. Folded into the cache key.
 function emitMode(): string {
-	const backend = interpreterOnly() ? "shared-harness-nocompiled" : "shared-harness";
-	return process.env.T262_INCLUDE_SLOW === "1" ? `${backend}-include-slow` : backend;
+	return interpreterOnly() ? "shared-harness-nocompiled" : "shared-harness";
 }
 
 /** Keys touched this run, so stale cache entries can be pruned at the end. */
@@ -126,37 +125,6 @@ const SKIPPED_FEATURES = [
 	"Temporal",
 ];
 const SKIPPED_PATHS = ["annexB"];
-
-/**
- * Tests quarantined purely for suite speed: each is already failing AND pays a
- * disproportionate cost (a full run timeout, or pathological codegen volume).
- * Skipping them trims wall time without hiding a passing test. Substring match.
- *
- * The Array-method entries all share one root cause: generic array-like lengths
- * are clamped to u32 instead of the spec's 2^53-1. Methods then either iterate
- * billions of indices or cannot address the expected large property keys. Every
- * matching corpus test already fails, so the substrings cannot mask a pass.
- *
- * - string-upper-lower-mapping lowers a giant case-mapping table to ~1.2M VM
- *   instructions; its generated C exceeds the 60s cc timeout.
- * - array-iterator-close infinitely drains a rest assignment's iterator before
- *   evaluating its throwing assignment target.
- */
-const SKIPPED_SLOW_PATHS = [
-	"length-exceeding-array-length-limit",
-	"arg-length-exceeding-integer-limit",
-	"arg-length-near-integer-limit",
-	"length-near-integer-limit",
-	"throws-if-integer-limit-exceeded",
-	"create-non-array-invalid-len",
-	"Array/prototype/lastIndexOf/15.4.4.15-3-28",
-	"Array/prototype/map/15.4.4.19-3-14",
-	"Array/prototype/map/15.4.4.19-3-28",
-	"Array/prototype/map/15.4.4.19-3-29",
-	"Array/prototype/map/15.4.4.19-3-8",
-	"staging/sm/String/string-upper-lower-mapping",
-	"staging/sm/destructuring/array-iterator-close",
-];
 
 const HARNESS_CACHE: Record<string, string> = {};
 
@@ -337,14 +305,6 @@ export function test262ShouldSkip(file: Test262File): boolean {
 	for (const part of SKIPPED_PATHS) {
 		if (file.path.includes(part)) {
 			return true;
-		}
-	}
-
-	if (process.env.T262_INCLUDE_SLOW !== "1") {
-		for (const part of SKIPPED_SLOW_PATHS) {
-			if (file.path.includes(part)) {
-				return true;
-			}
 		}
 	}
 

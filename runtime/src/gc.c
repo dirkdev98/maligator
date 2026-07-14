@@ -836,6 +836,10 @@ static void mal_gc_scan_fiber_exec(
 }
 
 static void mal_gc_scan_roots(MalVm *vm) {
+    // Shapes are process-lifetime interned, so every transition key they retain is
+    // also a root even when no live object currently owns an intermediate shape.
+    mal_shape_visit_transition_keys(mal_gc_mark_value);
+
     // The running fiber's execution slice lives in the live MalVm fields + the
     // global root-chain heads.
     mal_gc_scan_fiber_exec(

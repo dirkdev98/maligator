@@ -14,6 +14,7 @@ export interface VmDefinition {
 	functions: Array<VmFunction>;
 	stringConstants: Array<Array<number>>;
 	bigintConstants: Array<bigint>;
+	literalTemplateData: Array<number>;
 	globalCount: number;
 
 	/**
@@ -198,6 +199,11 @@ export type VmInstruction =
 			opcode: "CREATE_ARRAY";
 			dst: number;
 			length: number;
+	  }
+	| {
+			opcode: "INSTANTIATE_LITERAL_TEMPLATE";
+			dst: number;
+			templateOffset: number;
 	  }
 	| {
 			opcode: "CREATE_MODULE_NAMESPACE";
@@ -645,6 +651,7 @@ export function lowerIrProgramToVmDefinition(program: IntermediateProgram): VmDe
 		functions,
 		stringConstants: program.stringConstants,
 		bigintConstants: program.bigintConstants,
+		literalTemplateData: program.literalTemplateData,
 		globalCount: program.nextGlobalIndex,
 		cjsModuleFunctionIndices: program.cjsWrapperFunctionIndex,
 		hostInstalls: buildHostInstalls(program, functions),
@@ -908,6 +915,12 @@ function lowerInstructionToVmInstruction(
 				opcode: "CREATE_ARRAY",
 				dst: instruction.registers[0],
 				length: instruction.length,
+			};
+		case "instantiateLiteralTemplate":
+			return {
+				opcode: "INSTANTIATE_LITERAL_TEMPLATE",
+				dst: instruction.registers[0],
+				templateOffset: instruction.templateOffset,
 			};
 		case "createModuleNamespace":
 			return {
