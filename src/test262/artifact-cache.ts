@@ -26,15 +26,16 @@ import * as path from "node:path";
  * always execute the binary - so flakes and behavioural changes still surface.
  */
 
-// Each pass (T262_VARIANT) keeps its own cache so the strict and sloppy builds
-// never collide: their composed source is byte-identical (the strict pass adds no
-// `"use strict"` directive - strictness flows through the parser), so a shared
-// cache would alias the two different `.o`s under one key. Read lazily: the
-// variant env var is set by runVariant() after this module is imported.
+// Each strictness pass and backend keeps its own cache. Strict and sloppy source
+// is byte-identical (strictness flows through the parser), while compiled and
+// interpreted objects differ by emit mode. Separate directories also let a full
+// interpreted preflight prune stale entries without deleting warm compiled
+// artifacts, and vice versa. Read lazily because runVariant sets strictness after
+// this module is imported.
 function cacheDir(): string {
-	return process.env.T262_VARIANT
-		? `.cache/test262-artifacts-${process.env.T262_VARIANT}`
-		: ".cache/test262-artifacts";
+	const variant = process.env.T262_VARIANT ?? "unknown";
+	const backend = process.env.MAL_INTERP === "1" ? "interpreted" : "compiled";
+	return `.cache/test262-artifacts-${variant}-${backend}`;
 }
 
 /**

@@ -128,6 +128,9 @@ export function gcDefines(): Array<string> {
 export function buildSuffix(cacheSuffix = ""): string {
 	const mode = sanitizerMode();
 	let suffix = mode === "none" ? "" : `-${mode}`;
+	if (envOn("MAL_LTO")) {
+		suffix += "-lto";
+	}
 	// Generational is the default (2026-07-10 flip), so it is UNSUFFIXED; the
 	// opt-out (`MAL_GC_GENERATIONAL=0`) gets its own `-nongen` dir so the two
 	// dimensions never share an archive/cache (header layout + barrier code differ).

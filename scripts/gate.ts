@@ -6,10 +6,13 @@
  * or under forced per-safepoint collection shows up here.
  *
  * The modes (each a `node scripts/test262.ts --check` run — never rewrites the
- * committed baseline, exits non-zero on a regression):
+ * committed baseline):
+ *   - interp     MAL_INTERP=1  (bytecode interpreter, Tier B root walk; runs first)
  *   - compiled   native codegen, default collector          (the committed baseline)
- *   - interp     MAL_INTERP=1  (bytecode interpreter, Tier B root walk)
  *   - stress     MAL_GC_STRESS=1 (collect at every safepoint, compiled)
+ * A full interpreted run writes a preflight report. Above the 5% regression
+ * limit, compiled/stress are skipped; below it, any regression still fails the
+ * gate after the remaining modes run.
  *
  * Each mode is threaded purely through env vars the test262 machinery already
  * reads (MAL_INTERP folds into the artifact-cache key; MAL_GC_STRESS reaches the
@@ -20,10 +23,10 @@
  * (→ `runtime/build-nongen`). Add a mode here by adding an entry to MODES; a
  * future concurrent build is `MAL_GC_CONCURRENT=1`.
  *
- * COST: a full unscoped gate is ~3× a full test262 run, and the stress mode is
- * several× slower again (it collects constantly). DO NOT run it unscoped without
- * intent. For routine validation pass a partial selection — those never rewrite
- * the committed baseline:
+ * COST: a full unscoped gate adds the stress backend to the normal interpreted +
+ * compiled sequence, and stress is several times slower because it collects
+ * constantly. DO NOT run it unscoped without intent. For routine validation pass
+ * a partial selection — those never rewrite the committed baseline:
  *
  *   node scripts/gate.ts --manifest tests/test262-regressions.txt   # fast, default CI gate
  *   node scripts/gate.ts --filter built-ins/WeakMap                 # a subsuite
@@ -32,6 +35,9 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { TEST262_METADATA } from "../src/test262/constants.ts";
+import type { Test262PreflightSummary } from "../src/test262/preflight.ts";
 
 interface Mode {
 	name: string;
@@ -39,8 +45,8 @@ interface Mode {
 }
 
 const ALL_MODES: Array<Mode> = [
-	{ name: "compiled", env: {} },
 	{ name: "interp", env: { MAL_INTERP: "1" } },
+	{ name: "compiled", env: {} },
 	{ name: "stress", env: { MAL_GC_STRESS: "1" } },
 ];
 
@@ -51,7 +57,6 @@ function argValue(name: string): string | undefined {
 
 const filter = argValue("--filter");
 const manifest = argValue("--manifest");
-const jobs = argValue("--jobs");
 const modesArg = argValue("--modes");
 
 const modes = modesArg
@@ -74,20 +79,34 @@ if (filter) {
 if (manifest) {
 	passthrough.push("--manifest", manifest);
 }
-if (jobs) {
-	passthrough.push("--jobs", jobs);
-}
-
 const scope = manifest
 	? `manifest ${manifest}`
 	: filter
 		? `filter '${filter}'`
 		: "FULL SUITE (expensive)";
+const fullScope = !manifest && !filter;
+if (fullScope) {
+	modes.sort((a, b) => Number(b.name === "interp") - Number(a.name === "interp"));
+}
 console.log(`[gate] three-way test262 gate — scope: ${scope}`);
 console.log(`[gate] modes: ${modes.map((m) => m.name).join(", ")}\n`);
 
 const failed: Array<string> = [];
+const skipped: Array<string> = [];
+let abortCompiled = false;
 for (const mode of modes) {
+	if (abortCompiled && mode.name !== "interp") {
+		skipped.push(mode.name);
+		console.log(
+			`\n[gate] mode ${mode.name}: SKIPPED (interpreted regressions exceeded limit)`,
+		);
+		continue;
+	}
+
+	const interpretedPreflight = fullScope && mode.name === "interp";
+	if (interpretedPreflight) {
+		rmSync(TEST262_METADATA.preflightFile, { force: true });
+	}
 	const label = `${mode.name}${
 		Object.keys(mode.env).length
 			? ` (${Object.entries(mode.env)
@@ -98,8 +117,38 @@ for (const mode of modes) {
 	console.log(`\n[gate] === mode: ${label} ===`);
 	const result = spawnSync("node", ["./scripts/test262.ts", ...passthrough], {
 		stdio: "inherit",
-		env: { ...process.env, ...mode.env },
+		env: {
+			...process.env,
+			...mode.env,
+			T262_ORCHESTRATED: "1",
+			T262_PREFLIGHT: interpretedPreflight ? "1" : "0",
+		},
 	});
+	if (
+		interpretedPreflight &&
+		result.status === 0 &&
+		existsSync(TEST262_METADATA.preflightFile)
+	) {
+		const preflight = JSON.parse(
+			readFileSync(TEST262_METADATA.preflightFile, "utf8"),
+		) as Test262PreflightSummary;
+		abortCompiled = preflight.abortCompiled;
+		if (preflight.regressions.length > 0) {
+			failed.push(mode.name);
+			console.log(
+				`[gate] mode ${mode.name}: FAIL (${preflight.regressions.length}/${preflight.ranTests} regressions)`,
+			);
+		} else {
+			console.log(`[gate] mode ${mode.name}: PASS (no new FAILED)`);
+		}
+		continue;
+	}
+	if (interpretedPreflight) {
+		abortCompiled = true;
+		failed.push(mode.name);
+		console.log(`[gate] mode ${mode.name}: FAIL (preflight report unavailable)`);
+		continue;
+	}
 	// test262.ts --check sets a non-zero exit code on a PASSED→FAILED regression.
 	if (result.status !== 0) {
 		failed.push(mode.name);
@@ -111,9 +160,14 @@ for (const mode of modes) {
 
 console.log("\n[gate] ================ summary ================");
 for (const mode of modes) {
-	console.log(`[gate]   ${mode.name}: ${failed.includes(mode.name) ? "FAIL" : "PASS"}`);
+	const status = skipped.includes(mode.name)
+		? "SKIPPED"
+		: failed.includes(mode.name)
+			? "FAIL"
+			: "PASS";
+	console.log(`[gate]   ${mode.name}: ${status}`);
 }
-if (failed.length > 0) {
+if (failed.length > 0 || skipped.length > 0) {
 	console.log(`[gate] RESULT: FAIL — regressions in: ${failed.join(", ")}`);
 	process.exit(1);
 }

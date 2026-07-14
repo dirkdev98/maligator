@@ -41,26 +41,37 @@ import type { Test262File, Test262Result } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
 
+if (
+	process.env.MAL_LTO !== undefined &&
+	process.env.MAL_LTO !== "" &&
+	process.env.MAL_LTO !== "0"
+) {
+	throw new Error(
+		"Test262 fixes LTO off; change the documented code-level tuning to benchmark it",
+	);
+}
+
 /**
  * cc invocation split into compile and link. Compiling the generated C is ~97%
  * of the cost; linking against the (always freshly built) library is ~3%. The
  * split lets the artifact cache reuse the compiled object across runs whenever
  * only the runtime implementation changed.
  */
-// The -O0 stays for fast compiles, but sanitizerCcFlags() must reach the
+// The default -O0 stays for fast compiles, but sanitizerCcFlags() must reach the
 // generated-C object, the harness mains, AND the final link: under MAL_ASAN /
 // MAL_UBSAN the archive is built instrumented (cmakeCFlags), so every consumer
 // needs the matching `-fsanitize=…` or the link pulls in undefined
 // sanitizer-runtime symbols. Empty for a normal build.
+const GENERATED_C_OPT_FLAGS = ["-O0"];
 const CC_COMPILE_FLAGS = [
 	"-std=c2x",
-	"-O0",
+	...GENERATED_C_OPT_FLAGS,
 	"-I",
 	"runtime/src",
 	...gcDefines(),
 	...sanitizerCcFlags(),
 ];
-const CC_LINK_FLAGS = ["-std=c2x", "-O0", ...sanitizerCcFlags()];
+const CC_LINK_FLAGS = ["-std=c2x", ...GENERATED_C_OPT_FLAGS, ...sanitizerCcFlags()];
 
 /**
  * The runtime build dir + library, and the harness-main object dir, all suffixed
@@ -74,6 +85,10 @@ const CC_LINK_FLAGS = ["-std=c2x", "-O0", ...sanitizerCcFlags()];
 const RUNTIME_BUILD_DIR = `runtime/build${buildSuffix()}`;
 const LIB_ARCHIVE = `${RUNTIME_BUILD_DIR}/libLibMaligator.a`;
 const BUILD_PATH = `${TEST262_METADATA.buildPath}${buildSuffix()}`;
+
+export function test262ReportPath(variant: "strict" | "sloppy"): string {
+	return `${BUILD_PATH}/report-${variant}.json`;
+}
 
 /**
  * Force every test function through the bytecode interpreter (no emit-c bodies).
@@ -255,18 +270,15 @@ export function test262PrepareBuild() {
 				stripTypes: stripTypesWithTypeScript,
 			}),
 	});
-	// The default (generational) build dir (runtime/build) is configured out-of-band
-	// and relies on gc.h's MAL_GC_GENERATIONAL default (a stale pre-flip non-gen
-	// archive is rebuilt by cmake's header-dependency tracking); a suffixed dimension
-	// (nongen opt-out / sanitizer) is configured here with its explicit defines.
-	if (buildSuffix() !== "") {
-		execSync(
-			`cmake -S runtime -B ${RUNTIME_BUILD_DIR} -DCMAKE_C_FLAGS=${JSON.stringify(cmakeCFlags())}`,
-			{
-				stdio: "ignore",
-			},
-		);
-	}
+	// Configure every build dimension, including the unsuffixed default. Relying on
+	// an out-of-band initial configuration can leave runtime/build with empty C flags
+	// even though the normal runtime contract is -O2.
+	execSync(
+		`cmake -S runtime -B ${RUNTIME_BUILD_DIR} -DCMAKE_C_FLAGS=${JSON.stringify(cmakeCFlags())}`,
+		{
+			stdio: "ignore",
+		},
+	);
 	execSync(`cmake --build ${RUNTIME_BUILD_DIR}`, { stdio: "ignore" });
 
 	// Build the Rust shim once per pass; cheap when cached. Date tz + Intl
@@ -989,7 +1001,7 @@ export async function test262RunSingle(file: Test262File, workerId: number) {
 			"cc",
 			[
 				"-std=c2x",
-				"-O0",
+				...GENERATED_C_OPT_FLAGS,
 				"-I",
 				"runtime/src",
 				...sanitizerCcFlags(),

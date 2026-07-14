@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as nodePath from "node:path";
 import { Worker } from "node:worker_threads";
@@ -10,6 +11,8 @@ import {
 	test262ListFiles,
 } from "../src/test262/files.ts";
 import { test262Log } from "../src/test262/log.ts";
+import { summarizeTest262Preflight } from "../src/test262/preflight.ts";
+import type { Test262PreflightSummary } from "../src/test262/preflight.ts";
 import {
 	getCodeStats,
 	getFailuresWithSamples,
@@ -17,8 +20,8 @@ import {
 	test262MergeStats,
 	test262PrepareBuild,
 	test262PruneArtifactCache,
+	test262ReportPath,
 	test262ResetStats,
-	test262RunBatch,
 } from "../src/test262/runtime.ts";
 import type { StatsSnapshot } from "../src/test262/runtime.ts";
 import type { Test262File, Test262Output } from "../src/test262/types.ts";
@@ -39,17 +42,15 @@ const filter = argValue("--filter");
 // committed regression manifest). Like --filter, it is a partial run: it never
 // rewrites the committed results and does not prune the artifact cache.
 const manifestPath = argValue("--manifest");
-// Default to roughly half the cores (battery-friendly); was cpus-1 (near-full
-// utilization). Override with --jobs for a faster plugged-in run.
-const jobs = Number(argValue("--jobs") ?? Math.max(1, Math.floor(os.cpus().length / 2)));
-
 /**
- * Run mode. By default a run executes the full test262 spec as two passes: a
+ * A full invocation first runs an interpreted preflight, then starts the
+ * authoritative compiled backend unless more than 5% of non-skipped tests
+ * regressed against the committed baseline. Each backend executes the spec as a
  * strict pass (default + onlyStrict + module + raw, skipping noStrict) and a
  * sloppy pass (default + noStrict scripts), each with its own artifact cache
- * (`.cache/test262-artifacts-<variant>`), driven through the T262_VARIANT env var
- * (which also reaches worker threads and the runtime's strictness/skip logic). The
- * two passes are folded per test - spec-compliant: a "default" test runs in both
+ * namespace per backend/variant, driven through the T262_VARIANT env var (which
+ * also reaches worker threads and the runtime's strictness/skip logic). The two
+ * passes are folded per test - spec-compliant: a "default" test runs in both
  * modes and passes only if it passes in each - into the single committed
  * scripts/test262.json (see {@link combineRuns}).
  *
@@ -61,14 +62,62 @@ if (onlyVariant !== undefined && onlyVariant !== "strict" && onlyVariant !== "sl
 	throw new Error(`--variant only supports 'strict' or 'sloppy', got '${onlyVariant}'`);
 }
 
-/**
- * When > 0, run the JS->C compile (plus its cc/run) across this many worker
- * threads instead of the single-threaded queue. The compile is otherwise the
- * run's serial bottleneck; parallelizing it lets cc/run saturate every core.
- */
-const compileWorkers = Number(
-	argValue("--compile-workers") ?? process.env.T262_COMPILE_WORKERS ?? 0,
+const compileWorkers = Math.max(
+	1,
+	Math.min(TEST262_METADATA.compileWorkers, os.availableParallelism()),
 );
+const preflightMode = process.env.T262_PREFLIGHT === "1";
+const isFullRunRequest = !filter && !manifestPath && !random && !onlyVariant;
+const preflightPath = TEST262_METADATA.preflightFile;
+
+if (isFullRunRequest && process.env.T262_ORCHESTRATED !== "1") {
+	const entrypoint = process.argv[1];
+	if (!entrypoint) {
+		throw new Error("Unable to resolve the Test262 runner entrypoint");
+	}
+	const args = [entrypoint, ...process.argv.slice(2)];
+	rmSync(preflightPath, { force: true });
+
+	test262Log("=== backend: interpreted preflight ===");
+	const interpreted = spawnSync(process.execPath, args, {
+		stdio: "inherit",
+		env: {
+			...process.env,
+			MAL_INTERP: "1",
+			T262_ORCHESTRATED: "1",
+			T262_PREFLIGHT: "1",
+		},
+	});
+	if (interpreted.status !== 0 || !existsSync(preflightPath)) {
+		test262Log("Interpreted preflight did not complete; skipping compiled mode.");
+		process.exit(interpreted.status ?? 1);
+	}
+
+	const preflight = JSON.parse(
+		readFileSync(preflightPath, "utf8"),
+	) as Test262PreflightSummary;
+	if (preflight.abortCompiled) {
+		test262Log(
+			`Interpreted preflight regressed ${preflight.regressions.length}/${preflight.ranTests} tests (${(preflight.regressionRate * 100).toFixed(2)}%); limit is ${(TEST262_METADATA.preflightRegressionLimit * 100).toFixed(0)}%. Skipping compiled mode.`,
+		);
+		process.exit(1);
+	}
+
+	test262Log(
+		`Interpreted preflight regressed ${preflight.regressions.length}/${preflight.ranTests} tests (${(preflight.regressionRate * 100).toFixed(2)}%); continuing to compiled mode.`,
+	);
+	test262Log("=== backend: compiled ===");
+	const compiled = spawnSync(process.execPath, args, {
+		stdio: "inherit",
+		env: {
+			...process.env,
+			MAL_INTERP: "0",
+			T262_ORCHESTRATED: "1",
+			T262_PREFLIGHT: "0",
+		},
+	});
+	process.exit(compiled.status ?? 1);
+}
 
 const cacheContext = test262LoadCache();
 
@@ -108,6 +157,17 @@ if (random) {
 // A manifest/filter/random run is partial: it must not rewrite the committed
 // results or prune the artifact cache (it never visits every key).
 const isPartialRun = Boolean(filter) || Boolean(manifestPath) || random;
+const batchSize = isPartialRun
+	? Math.min(
+			TEST262_METADATA.batchSize,
+			Math.max(
+				TEST262_METADATA.minimumBatchSize,
+				Math.ceil(
+					selection.length / (compileWorkers * TEST262_METADATA.targetBatchesPerWorker),
+				),
+			),
+		)
+	: TEST262_METADATA.batchSize;
 
 // Reset per pass by runVariant() so the two passes time and report
 // independently; the worker/progress closures below read these live.
@@ -120,18 +180,6 @@ function reportProgress(processed: number) {
 	if (Math.floor(completed / 2500) > Math.floor(previous / 2500)) {
 		const elapsed = ((Date.now() - startedAt) / 1000).toFixed(0);
 		test262Log(`Progress: ${completed} / ${selection.length} (${elapsed}s)`);
-	}
-}
-
-async function worker(workerId: number, queue: Array<Array<Test262File>>) {
-	while (true) {
-		const batch = queue.pop();
-		if (!batch) {
-			return;
-		}
-
-		await test262RunBatch(batch, workerId);
-		reportProgress(batch.length);
 	}
 }
 
@@ -258,21 +306,16 @@ async function runVariant(variant: "strict" | "sloppy"): Promise<VariantRun> {
 
 	startedAt = Date.now();
 	completed = 0;
+	test262Log(
+		`Throughput: batch ${batchSize}, ${compileWorkers} compile workers, generated C -O0, runtime -O2, full IR, LTO off.`,
+	);
 
 	const batches: Array<Array<Test262File>> = [];
-	for (let i = 0; i < selection.length; i += TEST262_METADATA.batchSize) {
-		batches.push(selection.slice(i, i + TEST262_METADATA.batchSize));
+	for (let i = 0; i < selection.length; i += batchSize) {
+		batches.push(selection.slice(i, i + batchSize));
 	}
 
-	if (compileWorkers > 0) {
-		test262Log(`Compiling with ${compileWorkers} worker threads.`);
-		await runWithWorkers(compileWorkers, batches);
-	} else {
-		const queue = [...batches].reverse();
-		await Promise.all(
-			Array.from({ length: Math.max(1, jobs) }, (_, workerId) => worker(workerId, queue)),
-		);
-	}
+	await runWithWorkers(compileWorkers, batches);
 
 	// A full, unfiltered run touches every current-fingerprint cache key, so any
 	// untouched entry is stale and safe to drop. Skip pruning on partial runs - they
@@ -288,7 +331,9 @@ async function runVariant(variant: "strict" | "sloppy"): Promise<VariantRun> {
 
 	const codeStats = getCodeStats();
 
-	test262Log(`Took ${((Date.now() - startedAt) / 1000).toFixed(0)}s with ${jobs} jobs.`);
+	test262Log(
+		`Took ${((Date.now() - startedAt) / 1000).toFixed(0)}s with ${compileWorkers} compile workers.`,
+	);
 	test262Log(`Result:`, summary);
 	test262Log(
 		`Code: ${codeStats.functionCount} functions, ${codeStats.instructionCount} instructions across ${codeStats.compiledFiles} compiled files.`,
@@ -299,7 +344,7 @@ async function runVariant(variant: "strict" | "sloppy"): Promise<VariantRun> {
 	// The console output is easy to lose; keep the full granular report (all raw
 	// categories, timings, failure buckets) next to the cache. Not committed.
 	writeFileSync(
-		`${TEST262_METADATA.buildPath}/report-${variant}.json`,
+		test262ReportPath(variant),
 		JSON.stringify(
 			{ summary, code: codeStats, timings: getTimings(), ...getFailuresWithSamples() },
 			null,
@@ -348,20 +393,24 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 
 	const outputFile = TEST262_METADATA.outputFile;
 	const isFullRun = !isPartialRun;
+	let preflightSummary: Test262PreflightSummary | undefined;
 
 	// Compare against the committed results to surface regressions, even on
 	// partial runs.
 	if (existsSync(outputFile)) {
 		const previous = JSON.parse(readFileSync(outputFile, "utf-8")) as Test262Output;
 
-		const regressions: Array<string> = [];
+		preflightSummary = summarizeTest262Preflight(
+			combined,
+			previous.results,
+			TEST262_METADATA.preflightRegressionLimit,
+		);
+		const regressions = preflightSummary.regressions;
 		const improvements: Array<string> = [];
 		for (const file of selection) {
 			const before = previous.results[file.path];
 			const after = combined.get(file.path);
-			if (before === "PASSED" && after === "FAILED") {
-				regressions.push(file.path);
-			} else if (before === "FAILED" && after === "PASSED") {
+			if (before === "FAILED" && after === "PASSED") {
 				improvements.push(file.path);
 			}
 		}
@@ -385,10 +434,23 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 			// Gate mode surfaces a regression as a non-zero exit so a wrapper can
 			// fail the build. (Mind the known async/dynamic-import flakiness floor —
 			// see scripts/gate.ts.)
-			if (checkMode) {
+			if (checkMode && !preflightMode) {
 				process.exitCode = 1;
 			}
 		}
+	}
+
+	if (preflightMode) {
+		preflightSummary ??= summarizeTest262Preflight(
+			combined,
+			{},
+			TEST262_METADATA.preflightRegressionLimit,
+		);
+		writeFileSync(preflightPath, JSON.stringify(preflightSummary, null, 2));
+		test262Log(
+			`Preflight: ${preflightSummary.regressions.length}/${preflightSummary.ranTests} regressions (${(preflightSummary.regressionRate * 100).toFixed(2)}%).`,
+		);
+		return;
 	}
 
 	if (checkMode) {
