@@ -44,14 +44,14 @@ add_library(MalRuntime STATIC ${RUNTIME_SOURCES})
 target_include_directories(MalRuntime PUBLIC "src/runtime")
 target_link_libraries(MalRuntime PUBLIC MalHost)
 
-# The cargo-built Rust staticlib (mal_rust: Intl + RegExp + later Temporal),
-# referenced by name. Built out-of-band (src/rust-build.ts) into .cache.
-add_library(mal_rust STATIC IMPORTED)
-set_target_properties(mal_rust PROPERTIES
-    IMPORTED_LOCATION "${CMAKE_SOURCE_DIR}/../.cache/cargo-target/release/libmal_rust.a")
-
 # Dev-only harness (AGENTS.md local-verification flow). EXCLUDE_FROM_ALL so a
 # plain `cmake --build` (used by the test262 runner) builds only the libraries.
-# Links all three layers + rust (+ libc++, which ada-url's bundled C++ needs).
-add_executable(MaligatorTest EXCLUDE_FROM_ALL test.c)
-target_link_libraries(MaligatorTest MalRuntime MalHost LibMaligator mal_rust c++)
+# The content-addressed Rust archive can be supplied explicitly when this manual
+# target is needed: `cmake -DMAL_RUST_LIBRARY=/path/to/libmal_rust.a ...`.
+set(MAL_RUST_LIBRARY "" CACHE FILEPATH "Path to the cached mal_rust static library")
+if(MAL_RUST_LIBRARY)
+    add_library(mal_rust STATIC IMPORTED)
+    set_target_properties(mal_rust PROPERTIES IMPORTED_LOCATION "${MAL_RUST_LIBRARY}")
+    add_executable(MaligatorTest EXCLUDE_FROM_ALL test.c)
+    target_link_libraries(MaligatorTest MalRuntime MalHost LibMaligator mal_rust c++)
+endif()

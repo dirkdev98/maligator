@@ -1,5 +1,9 @@
 import { execFileSync } from "node:child_process";
+import { hash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
+import { selectNativeBuildPlan } from "./build-flags.ts";
+import type { NativeBuildPlan } from "./build-flags.ts";
 import { requireToolchain } from "./toolchain.ts";
 import type { Toolchain } from "./toolchain.ts";
 
@@ -26,9 +30,9 @@ const RUST_DIR = "runtime/rust";
 /** Passed to cc as `-I` so runtime/src/*.c can `#include "mal_i18n.h"` / "mal_regexp.h". */
 export const RUST_INCLUDE_DIR = path.join(RUST_DIR, "include");
 
-/** Project-local cargo home + target dir, both under the gitignored `.cache`. */
-const CARGO_HOME = path.resolve(".cache/cargo");
-const CARGO_TARGET_DIR = path.resolve(".cache/cargo-target");
+/** Project-local Cargo downloads and reusable build artifacts. */
+const CARGO_HOME = path.resolve(".cache/mal-cache/cargo");
+const RUST_CACHE_DIR = path.resolve(".cache/mal-cache/rust");
 
 /**
  * The Intl build axis for the Rust crate. `intlEnabled: false` builds
@@ -59,14 +63,65 @@ export interface RustBuildConfig {
 	cacheSuffix?: string;
 }
 
-/** Per-config cargo target dir; the canonical ("") config keeps the base dir. */
-function rustTargetDir(cacheSuffix: string): string {
-	return cacheSuffix ? `${CARGO_TARGET_DIR}-${cacheSuffix}` : CARGO_TARGET_DIR;
+let rustSourcesHash: string | undefined;
+
+function rustSourceHash(): string {
+	if (rustSourcesHash !== undefined) return rustSourcesHash;
+	const parts: Array<string> = [];
+	const walk = (directory: string): void => {
+		for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
+			a.name.localeCompare(b.name),
+		)) {
+			const full = path.join(directory, entry.name);
+			if (entry.isDirectory()) walk(full);
+			else if (/\.(?:rs|toml|lock)$/.test(entry.name)) {
+				parts.push(
+					path.relative(RUST_DIR, full),
+					"\0",
+					readFileSync(full, "utf-8"),
+					"\0",
+				);
+			}
+		}
+	};
+	walk(RUST_DIR);
+	rustSourcesHash = hash("sha256", parts.join(""), "hex");
+	return rustSourcesHash;
+}
+
+function rustTargetDir(
+	cacheSuffix: string,
+	toolchain: Toolchain,
+	plan: NativeBuildPlan,
+): string {
+	const key = hash(
+		"sha256",
+		JSON.stringify({
+			schema: 1,
+			cacheSuffix,
+			mode: plan.mode,
+			toolchain: toolchain.fingerprint,
+			target: toolchain.rustTarget,
+			sources: rustSourceHash(),
+		}),
+		"hex",
+	).slice(0, 24);
+	return path.join(RUST_CACHE_DIR, key, "target");
 }
 
 /** Where cargo drops the staticlib for the given Intl-config suffix. */
-export function rustLibPath(cacheSuffix = ""): string {
-	return path.join(rustTargetDir(cacheSuffix), "release", "libmal_rust.a");
+export function rustLibPath(
+	cacheSuffix = "",
+	selectedToolchain?: Toolchain,
+	selectedPlan?: NativeBuildPlan,
+): string {
+	const toolchain = selectedToolchain ?? requireToolchain({ needsCxx: true });
+	const plan = selectedPlan ?? selectNativeBuildPlan(toolchain, false);
+	return path.join(
+		rustTargetDir(cacheSuffix, toolchain, plan),
+		"release",
+		"libmal_rust.a",
+	);
 }
 
 /**
@@ -88,10 +143,11 @@ export function rustLinkArgs(
 	cxxLinkArgs: Array<string> = webPlatform
 		? requireToolchain({ needsCxx: true }).probes.cxxLinkArgs
 		: [],
+	selectedToolchain?: Toolchain,
+	selectedPlan?: NativeBuildPlan,
 ): Array<string> {
-	return webPlatform
-		? [rustLibPath(cacheSuffix), ...cxxLinkArgs]
-		: [rustLibPath(cacheSuffix)];
+	const library = rustLibPath(cacheSuffix, selectedToolchain, selectedPlan);
+	return webPlatform ? [library, ...cxxLinkArgs] : [library];
 }
 
 const builtConfigs = new Set<string>();
@@ -107,15 +163,22 @@ export function ensureRustLibrary(
 	verbose = false,
 	config: RustBuildConfig = {},
 	selectedToolchain?: Toolchain,
+	selectedPlan?: NativeBuildPlan,
+	onCacheEvent?: (event: { artifact: "rust"; hit: boolean; path: string }) => void,
 ): string {
 	const intlEnabled = config.intlEnabled ?? true;
 	const cacheSuffix = config.cacheSuffix ?? "";
-	if (builtConfigs.has(cacheSuffix)) {
-		return rustLibPath(cacheSuffix);
-	}
-
 	const toolchain =
 		selectedToolchain ?? requireToolchain({ needsCxx: config.webPlatform ?? true });
+	const plan = selectedPlan ?? selectNativeBuildPlan(toolchain, false);
+	const libraryPath = rustLibPath(cacheSuffix, toolchain, plan);
+	const buildKey = libraryPath;
+	if (builtConfigs.has(buildKey) || existsSync(libraryPath)) {
+		builtConfigs.add(buildKey);
+		onCacheEvent?.({ artifact: "rust", hit: true, path: libraryPath });
+		return libraryPath;
+	}
+	onCacheEvent?.({ artifact: "rust", hit: false, path: libraryPath });
 	const currentPath = process.env.PATH ?? "";
 	const cargoPath = toolchain.tools.cargo.path;
 	const rustcPath = toolchain.tools.rustc.path;
@@ -153,12 +216,12 @@ export function ensureRustLibrary(
 			CC: toolchain.tools.cc.path,
 			...(toolchain.tools.cxx === undefined ? {} : { CXX: toolchain.tools.cxx.path }),
 			CARGO_HOME,
-			CARGO_TARGET_DIR: rustTargetDir(cacheSuffix),
+			CARGO_TARGET_DIR: rustTargetDir(cacheSuffix, toolchain, plan),
 			RUSTC: rustcPath,
 		},
-		stdio: verbose ? "inherit" : "ignore",
+		stdio: verbose ? "inherit" : "pipe",
 	});
 
-	builtConfigs.add(cacheSuffix);
-	return rustLibPath(cacheSuffix);
+	builtConfigs.add(buildKey);
+	return libraryPath;
 }

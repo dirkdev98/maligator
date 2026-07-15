@@ -35,7 +35,7 @@ import { requireToolchain } from "../toolchain.ts";
 function cacheDir(): string {
 	const variant = process.env.T262_VARIANT ?? "unknown";
 	const backend = process.env.MAL_INTERP === "1" ? "interpreted" : "compiled";
-	return `.cache/test262-artifacts-${variant}-${backend}`;
+	return `.cache/mal-cache/test262-artifacts/${variant}-${backend}`;
 }
 
 /**

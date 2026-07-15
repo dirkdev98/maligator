@@ -1,7 +1,7 @@
 export const TEST262_METADATA = {
 	path: ".cache/test262",
 	repository: "tc39/test262",
-	buildPath: ".cache/test262-build",
+	buildPath: ".cache/mal-build/test262",
 	cacheFile: ".cache/test262-cache.json",
 	outputFile: "scripts/test262.json",
 	preflightFile: ".cache/test262-preflight.json",

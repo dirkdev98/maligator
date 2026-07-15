@@ -53,6 +53,14 @@ describe("parseCliArgs", () => {
 		});
 	});
 
+	it("parses verbose doctor output", () => {
+		expect(parseCliArgs(["doctor"])).toEqual({ kind: "doctor", verbose: false });
+		expect(parseCliArgs(["doctor", "--verbose"])).toEqual({
+			kind: "doctor",
+			verbose: true,
+		});
+	});
+
 	it("accepts the internal build diagnostics through the strict parser", () => {
 		const command = parseCliArgs([
 			"build",

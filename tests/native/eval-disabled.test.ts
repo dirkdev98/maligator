@@ -15,7 +15,7 @@ import {
 // archive (no compiler embed, -DMAL_EVAL=0); every dynamic-code path must throw
 // EvalError at runtime, including the aliased indirect eval the static check can't
 // see. This lane does NOT skipRuntimeBuild — the eval-off archive is not the one
-// globalSetup prebuilt, so this builds its own under `.cache/local/lib-noeval`.
+// globalSetup prebuilt, so this builds its own content-addressed runtime archive.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-eval-off-"));
 
 describe("engine.eval: false runtime gate", () => {

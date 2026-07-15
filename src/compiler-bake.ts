@@ -1,7 +1,9 @@
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { hash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 
-const WIRE = "runtime/src/compiler.malw";
+const CACHE_DIR = ".cache/mal-cache/compiler-wire";
+const LEGACY_WIRE = "runtime/src/compiler.malw";
 
 export interface CompilerBakeOptions {
 	/** Fresh serialized compiler bytes supplied by any host. */
@@ -18,18 +20,32 @@ function isCompilerSource(name: string): boolean {
 	);
 }
 
-function newestSourceMtime(): number {
-	let newest = 0;
+function compilerSourceHash(): string {
+	const parts: Array<string> = [];
 	const walk = (dir: string): void => {
-		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+			a.name.localeCompare(b.name),
+		)) {
 			const full = path.join(dir, entry.name);
 			if (entry.isDirectory()) walk(full);
-			else if (isCompilerSource(entry.name))
-				newest = Math.max(newest, statSync(full).mtimeMs);
+			else if (isCompilerSource(entry.name)) {
+				parts.push(full, "\0", readFileSync(full, "utf-8"), "\0");
+			}
 		}
 	};
 	walk("src");
-	return newest;
+	return hash("sha256", parts.join(""), "hex");
+}
+
+function cachedWire(key: string): string {
+	return path.resolve(CACHE_DIR, key, "compiler.malw");
+}
+
+function writeCachedWire(key: string, bytes: Uint8Array): string {
+	const wirePath = cachedWire(key);
+	mkdirSync(path.dirname(wirePath), { recursive: true });
+	writeFileSync(wirePath, bytes);
+	return wirePath;
 }
 
 /**
@@ -38,23 +54,22 @@ function newestSourceMtime(): number {
  */
 export function ensureCompilerWire(options: CompilerBakeOptions = {}): string {
 	if (options.prebuiltPath !== undefined) {
-		const source = path.resolve(options.prebuiltPath);
-		const destination = path.resolve(WIRE);
-		if (source !== destination) writeFileSync(destination, readFileSync(source));
-		return WIRE;
+		const bytes = readFileSync(path.resolve(options.prebuiltPath));
+		return writeCachedWire(hash("sha256", bytes, "hex"), bytes);
 	}
 	if (options.bytes !== undefined) {
-		writeFileSync(WIRE, options.bytes);
-		return WIRE;
+		return writeCachedWire(hash("sha256", options.bytes, "hex"), options.bytes);
 	}
-	const exists = existsSync(WIRE);
-	if (exists && process.env.MAL_BAKE === "skip") return WIRE;
-	if (exists && statSync(WIRE).mtimeMs >= newestSourceMtime()) return WIRE;
+	const sourceHash = compilerSourceHash();
+	const wirePath = cachedWire(sourceHash);
+	if (existsSync(wirePath)) return wirePath;
+	if (process.env.MAL_BAKE === "skip" && existsSync(LEGACY_WIRE)) {
+		return writeCachedWire(sourceHash, readFileSync(LEGACY_WIRE));
+	}
 	if (options.bake === undefined) {
 		throw new Error(
 			"eval-enabled build needs compiler wire bytes, a prebuilt wire path, or an in-process bake callback",
 		);
 	}
-	writeFileSync(WIRE, options.bake());
-	return WIRE;
+	return writeCachedWire(sourceHash, options.bake());
 }

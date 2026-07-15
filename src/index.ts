@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { existsSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import {
@@ -9,7 +11,8 @@ import {
 	resolveOutputName,
 } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
-import { gmallocEnabled, runEnv } from "./build-flags.ts";
+import { gmallocEnabled, runEnv, selectNativeBuildPlan } from "./build-flags.ts";
+import type { NativeBuildPlan } from "./build-flags.ts";
 import { initProject, InitError } from "./cli-init.ts";
 import { executeBinary } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
@@ -70,7 +73,7 @@ try {
 	}
 	if (parsed.kind === "doctor") {
 		const report = inspectToolchain();
-		log.info(formatToolchainReport(report));
+		log.info(formatToolchainReport(report, process.platform, parsed.verbose));
 		process.exit(report.toolchain === undefined ? 1 : 0);
 	}
 	command = parsed;
@@ -83,11 +86,6 @@ try {
 		process.exit(2);
 	}
 	throw error;
-}
-
-if (command.kind === "build" && command.production) {
-	log.info("error: '--production' is not implemented yet");
-	process.exit(1);
 }
 
 // The build config (maligator.build.ts) is the source of truth for engine
@@ -123,9 +121,17 @@ if (!existsSync(entrypoint)) {
 const entrypointPath = path.resolve(entrypoint);
 
 let toolchain: Toolchain | undefined;
+let buildPlan: NativeBuildPlan | undefined;
 if (!(command.kind === "build" && command.internal.serializePath !== undefined)) {
 	try {
 		toolchain = requireToolchain({ needsCxx: buildConfig.surface.webPlatform });
+		buildPlan = selectNativeBuildPlan(
+			toolchain,
+			command.kind === "build" && command.production,
+		);
+		log.info(`Toolchain: ${toolchain.tools.cc.path} (${toolchain.target})`);
+		log.info(`Toolchain cache: ${toolchain.cacheHit ? "hit" : "miss"}`);
+		for (const warning of buildPlan.warnings) log.info(`warning: ${warning}`);
 	} catch (error) {
 		if (error instanceof ToolchainError) {
 			log.info(error.message);
@@ -266,6 +272,10 @@ const binaryPath = buildLocalBinary({
 	cSource: output,
 	verbose,
 	toolchain,
+	plan: buildPlan,
+	onCacheEvent: (event) =>
+		log.info(`Cache ${event.artifact}: ${event.hit ? "hit" : "miss"} (${event.path})`),
+	onWarning: (warning) => log.info(`warning: ${warning}`),
 	...buildDerivationFromConfig(buildConfig),
 	compilerBake: {
 		bake: () =>

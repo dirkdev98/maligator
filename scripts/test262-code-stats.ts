@@ -104,7 +104,7 @@ function recoverVariant(
 	legacyHelperObject: string,
 	executable: string,
 ): Array<CodeStats> {
-	const directory = `.cache/test262-artifacts-${variant}-interpreted`;
+	const directory = `.cache/mal-cache/test262-artifacts/${variant}-interpreted`;
 	if (!existsSync(directory)) {
 		throw new Error(`Missing interpreted artifact cache: ${directory}`);
 	}

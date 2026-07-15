@@ -124,20 +124,20 @@ explicit entry with no config uses the conservative product defaults.
 
 ### C4 — Build/cache layout + production mode
 
-- [ ] Move reusable runtime, Rust/Cargo, compiler-wire, and toolchain artifacts to
+- [x] Move reusable runtime, Rust/Cargo, compiler-wire, and toolchain artifacts to
       `.cache/mal-cache/`; keep generated C and final project binaries under
       `.cache/mal-build/`.
-- [ ] Key reusable artifacts on compiler/build identity, resolved config, relevant
+- [x] Key reusable artifacts on compiler/build identity, resolved config, relevant
       source content, target, toolchain fingerprint, supported flags, and build mode.
-- [ ] Stop hardcoding `cc`; pass the selected compiler consistently to CMake and the
+- [x] Stop hardcoding `cc`; pass the selected compiler consistently to CMake and the
       emitted-program compile/link step.
-- [ ] Make normal builds stay at `-O2` with symbols and no LTO.
-- [ ] Implement `--production` as `-O2` plus supported LTO and post-link stripping.
+- [x] Make normal builds stay at `-O2` with symbols and no LTO.
+- [x] Implement `--production` as `-O2` plus supported LTO and post-link stripping.
       Warn and continue at `-O2` when an optional production optimization is not
       supported; fail only when a required compiler capability is absent.
-- [ ] Print concise cache hit/miss, selected toolchain, output path, and remediation
+- [x] Print concise cache hit/miss, selected toolchain, output path, and remediation
       diagnostics; reserve full subprocess output for verbose/error reporting.
-- [ ] Add cache correctness tests covering source/config/toolchain/mode changes and
+- [x] Add cache correctness tests covering source/config/toolchain/mode changes and
       production tests for LTO/strip support and fallback behavior.
 
 ### C5 — End-to-end self-hosted CLI

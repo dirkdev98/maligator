@@ -11,6 +11,9 @@
 		"type": "git",
 		"url": "git+https://github.com/dirkdev98/maligator.git"
 	},
+	"bin": {
+		"maligator": "./src/index.ts"
+	},
 	"type": "module",
 	"exports": {
 		".": {

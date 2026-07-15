@@ -1,23 +1,65 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { hash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import { buildSuffix, ccExtraFlags, cmakeCFlags, featureDefines } from "./build-flags.ts";
+import {
+	buildSuffix,
+	ccExtraFlags,
+	cmakeCFlags,
+	featureDefines,
+	selectNativeBuildPlan,
+} from "./build-flags.ts";
+import type { NativeBuildPlan } from "./build-flags.ts";
 import { ensureCompilerWire } from "./compiler-bake.ts";
 import type { CompilerBakeOptions } from "./compiler-bake.ts";
 import { ensureRustLibrary, RUST_INCLUDE_DIR, rustLinkArgs } from "./rust-build.ts";
 import { requireToolchain } from "./toolchain.ts";
 import type { Toolchain } from "./toolchain.ts";
 
-const LOCAL_DIR = ".cache/local";
+const BUILD_DIR = ".cache/mal-build";
+const RUNTIME_CACHE_DIR = ".cache/mal-cache/runtime";
 
-/**
- * A sanitizer / generational / eval-disabled build gets its own build dir +
- * binaries so toggling a dimension does not force a full reconfigure/rebuild of
- * the normal -O2 archive (CMAKE_C_FLAGS is cached per build dir). `cacheSuffix` is
- * the build-config hash (build-config.ts); empty == the default eval-on build.
- */
-function buildDirFor(cacheSuffix: string): string {
-	return path.join(LOCAL_DIR, `lib${buildSuffix(cacheSuffix)}`);
+export interface BuildCacheEvent {
+	artifact: "runtime" | "rust";
+	hit: boolean;
+	path: string;
+}
+
+let runtimeSourcesHash: string | undefined;
+const runtimeBuildDirs = new Map<string, string>();
+
+function runtimeSourceHash(): string {
+	if (runtimeSourcesHash !== undefined) return runtimeSourcesHash;
+	const parts: Array<string> = [];
+	const collect = (filePath: string): void => {
+		parts.push(filePath, "\0", readFileSync(filePath, "utf-8"), "\0");
+	};
+	const walk = (directory: string): void => {
+		for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
+			a.name.localeCompare(b.name),
+		)) {
+			const full = path.join(directory, entry.name);
+			if (entry.isDirectory()) walk(full);
+			else if (/\.[ch]$/.test(entry.name)) collect(full);
+		}
+	};
+	collect("runtime/CMakeLists.txt");
+	walk("runtime/src");
+	walk("runtime/rust/include");
+	runtimeSourcesHash = hash("sha256", parts.join(""), "hex");
+	return runtimeSourcesHash;
+}
+
+export function runtimeArtifactKey(inputs: {
+	cacheSuffix: string;
+	compilerWire?: string;
+	flags: string;
+	mode: NativeBuildPlan["mode"];
+	sourceHash: string;
+	toolchainFingerprint: string;
+	target: string;
+}): string {
+	return hash("sha256", JSON.stringify({ schema: 1, ...inputs }), "hex").slice(0, 24);
 }
 
 /** The build dimensions that select a distinct cached archive. */
@@ -46,13 +88,16 @@ interface RuntimeBuildDimensions {
 	rustCacheSuffix?: string;
 	/** Explicit eval compiler input; required when the checked-in wire is stale. */
 	compilerBake?: CompilerBakeOptions;
+	/** One plan shared by archive compilation and the final compile/link. */
+	plan?: NativeBuildPlan;
+	onCacheEvent?: (event: BuildCacheEvent) => void;
 }
 
 export interface LocalBuildOptions {
 	/** Preflighted native toolchain; discovered automatically when omitted. */
 	toolchain?: Toolchain;
 	/**
-	 * Base name for the emitted `.c` and the linked binary under `.cache/local`.
+	 * Base name for the emitted `.c` and linked binary under `.cache/mal-build`.
 	 */
 	name: string;
 
@@ -73,10 +118,10 @@ export interface LocalBuildOptions {
 	mainFile?: string;
 
 	/**
-	 * Directory for the emitted `.c` and linked binary. Defaults to `.cache/local`.
+	 * Directory for the emitted `.c` and linked binary. Defaults to `.cache/mal-build`.
 	 * The vitest native lane passes a per-test temp dir so parallel workers do not
 	 * clobber each other's artifacts (the shared runtime archives stay cached under
-	 * `.cache/local/lib` regardless).
+	 * `.cache/mal-cache/runtime` regardless).
 	 */
 	outDir?: string;
 
@@ -155,6 +200,10 @@ export interface LocalBuildOptions {
 
 	/** Explicit eval compiler bytes or a Node-hosted in-process bake callback. */
 	compilerBake?: CompilerBakeOptions;
+	/** One plan shared by archive compilation and the final compile/link. */
+	plan?: NativeBuildPlan;
+	onCacheEvent?: (event: BuildCacheEvent) => void;
+	onWarning?: (message: string) => void;
 }
 
 /**
@@ -172,6 +221,53 @@ function runtimeArchivePaths(buildDir: string): Array<string> {
 	];
 }
 
+function runtimeLayout(dimensions: RuntimeBuildDimensions): {
+	buildDir: string;
+	flags: string;
+	toolchain: Toolchain;
+	plan: NativeBuildPlan;
+} {
+	const evalEnabled = dimensions.evalEnabled ?? true;
+	const webPlatformEnabled = dimensions.webPlatformEnabled ?? true;
+	const toolchain =
+		dimensions.toolchain ?? requireToolchain({ needsCxx: webPlatformEnabled });
+	const plan = dimensions.plan ?? selectNativeBuildPlan(toolchain, false);
+	const compilerWire = evalEnabled
+		? ensureCompilerWire(dimensions.compilerBake)
+		: undefined;
+	const flags = [
+		cmakeCFlags(
+			{
+				evalEnabled,
+				realmsEnabled: dimensions.realmsEnabled ?? true,
+				intlEnabled: dimensions.intlEnabled ?? true,
+				intlServiceDefines: dimensions.intlServiceDefines ?? [],
+				webPlatformEnabled,
+				regexpEnabled: dimensions.regexpEnabled ?? true,
+				nodeEnabled: dimensions.nodeEnabled ?? false,
+			},
+			plan,
+		),
+		...(compilerWire === undefined ? [] : [`-DMAL_COMPILER_WIRE=\\"${compilerWire}\\"`]),
+	].join(" ");
+	const key = runtimeArtifactKey({
+		cacheSuffix: dimensions.cacheSuffix ?? "",
+		compilerWire:
+			compilerWire === undefined ? undefined : path.basename(path.dirname(compilerWire)),
+		flags,
+		mode: plan.mode,
+		sourceHash: runtimeSourceHash(),
+		toolchainFingerprint: toolchain.fingerprint,
+		target: toolchain.target,
+	});
+	return {
+		buildDir: path.join(RUNTIME_CACHE_DIR, key),
+		flags,
+		toolchain,
+		plan,
+	};
+}
+
 /**
  * The three runtime archive paths for a C-build-config suffix, named so the size
  * bench can stat the archives matching each matrix config ("" = the canonical
@@ -182,7 +278,10 @@ export function localRuntimeArchivePaths(cacheSuffix = ""): {
 	host: string;
 	engine: string;
 } {
-	const [runtime, host, engine] = runtimeArchivePaths(buildDirFor(cacheSuffix));
+	const buildDir =
+		runtimeBuildDirs.get(`development:${cacheSuffix}`) ??
+		runtimeLayout({ cacheSuffix }).buildDir;
+	const [runtime, host, engine] = runtimeArchivePaths(buildDir);
 	return { runtime: runtime!, host: host!, engine: engine! };
 }
 
@@ -196,56 +295,42 @@ export function ensureRuntimeLibrary(
 	verbose: boolean,
 	dimensions: RuntimeBuildDimensions = {},
 ): Array<string> {
-	const evalEnabled = dimensions.evalEnabled ?? true;
-	const realmsEnabled = dimensions.realmsEnabled ?? true;
 	const intlEnabled = dimensions.intlEnabled ?? true;
-	const intlServiceDefines = dimensions.intlServiceDefines ?? [];
 	const intlFeatures = dimensions.intlFeatures ?? [];
 	const webPlatformEnabled = dimensions.webPlatformEnabled ?? true;
 	const regexpEnabled = dimensions.regexpEnabled ?? true;
-	const nodeEnabled = dimensions.nodeEnabled ?? false;
-	const toolchain =
-		dimensions.toolchain ?? requireToolchain({ needsCxx: webPlatformEnabled });
-	const cacheSuffix = dimensions.cacheSuffix ?? "";
 	const rustCacheSuffix = dimensions.rustCacheSuffix ?? "";
-	const buildDir = buildDirFor(cacheSuffix);
-	const stdio = verbose ? "inherit" : "ignore";
+	const { buildDir, flags, toolchain, plan } = runtimeLayout(dimensions);
+	runtimeBuildDirs.set(`${plan.mode}:${dimensions.cacheSuffix ?? ""}`, buildDir);
+	const stdio = verbose ? "inherit" : "pipe";
+	const archives = runtimeArchivePaths(buildDir);
+	const cacheHit = archives.every((archive) => existsSync(archive));
+	dimensions.onCacheEvent?.({ artifact: "runtime", hit: cacheHit, path: buildDir });
+	if (!cacheHit) {
+		mkdirSync(buildDir, { recursive: true });
+		execFileSync(
+			toolchain.tools.cmake.path,
+			[
+				"-S",
+				"runtime",
+				"-B",
+				buildDir,
+				`-DCMAKE_C_COMPILER=${toolchain.tools.cc.path}`,
+				`-DCMAKE_AR=${toolchain.tools.ar.path}`,
+				...(toolchain.tools.cxx === undefined
+					? []
+					: [`-DCMAKE_CXX_COMPILER=${toolchain.tools.cxx.path}`]),
+				`-DCMAKE_C_FLAGS=${flags}`,
+			],
+			{ stdio },
+		);
 
-	mkdirSync(LOCAL_DIR, { recursive: true });
-
-	// Generate the baked compiler wire (runtime/src/compiler.malw) before cmake:
-	// the GLOB pulls in compiler_wire.c, whose `#embed` needs the file to exist.
-	// Skipped for an eval-disabled build — the `#embed` is guarded out by
-	// `-DMAL_EVAL=0`, so the file is never referenced (faster build, no bake).
-	if (evalEnabled) {
-		ensureCompilerWire(dimensions.compilerBake);
+		execFileSync(
+			toolchain.tools.cmake.path,
+			["--build", buildDir, "--target", "LibMaligator", "MalHost", "MalRuntime"],
+			{ stdio },
+		);
 	}
-
-	// Re-running configure with unchanged cache variables is cheap.
-	execFileSync(
-		toolchain.tools.cmake.path,
-		[
-			"-S",
-			"runtime",
-			"-B",
-			buildDir,
-			`-DCMAKE_C_COMPILER=${toolchain.tools.cc.path}`,
-			`-DCMAKE_AR=${toolchain.tools.ar.path}`,
-			...(toolchain.tools.cxx === undefined
-				? []
-				: [`-DCMAKE_CXX_COMPILER=${toolchain.tools.cxx.path}`]),
-			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, realmsEnabled, intlEnabled, intlServiceDefines, webPlatformEnabled, regexpEnabled, nodeEnabled })}`,
-		],
-		{
-			stdio,
-		},
-	);
-
-	execFileSync(
-		toolchain.tools.cmake.path,
-		["--build", buildDir, "--target", "LibMaligator", "MalHost", "MalRuntime"],
-		{ stdio },
-	);
 
 	// Build the Rust shim the runtime links against: Date tz (jiff) + the RegExp
 	// engine (regress), always; Intl (ICU4X) and the URL (ada) parser by feature.
@@ -261,11 +346,13 @@ export function ensureRuntimeLibrary(
 			cacheSuffix: rustCacheSuffix,
 		},
 		toolchain,
+		plan,
+		(event) => dimensions.onCacheEvent?.(event),
 	);
 
 	// Link order: runtime -> host -> engine (dependents first). rustLinkArgs() is
 	// appended after these by the caller (the engine references its symbols).
-	return runtimeArchivePaths(buildDir);
+	return archives;
 }
 
 /**
@@ -279,14 +366,16 @@ export function buildLoadDriver(
 	compilerBake?: CompilerBakeOptions,
 ): string {
 	const toolchain = requireToolchain({ needsCxx: true });
-	const libs = ensureRuntimeLibrary(verbose, { compilerBake, toolchain });
-	const binPath = path.join(LOCAL_DIR, `MaligatorLoad${buildSuffix()}`);
+	const plan = selectNativeBuildPlan(toolchain, false);
+	const libs = ensureRuntimeLibrary(verbose, { compilerBake, toolchain, plan });
+	const binPath = path.join(BUILD_DIR, plan.mode, `MaligatorLoad${buildSuffix()}`);
+	mkdirSync(path.dirname(binPath), { recursive: true });
 
 	execFileSync(
 		toolchain.tools.cc.path,
 		[
 			"-std=c2x",
-			...ccExtraFlags(),
+			...ccExtraFlags(plan),
 			"-I",
 			"runtime/src",
 			"-I",
@@ -297,11 +386,11 @@ export function buildLoadDriver(
 			RUST_INCLUDE_DIR,
 			"runtime/load_main.c",
 			...libs,
-			...rustLinkArgs("", true, toolchain.probes.cxxLinkArgs),
+			...rustLinkArgs("", true, toolchain.probes.cxxLinkArgs, toolchain, plan),
 			"-o",
 			binPath,
 		],
-		{ stdio: verbose ? "inherit" : "ignore" },
+		{ stdio: verbose ? "inherit" : "pipe" },
 	);
 
 	return binPath;
@@ -309,7 +398,7 @@ export function buildLoadDriver(
 
 /**
  * Compile and link an emitted definition into a standalone runnable binary at
- * `.cache/local/<name>`, reusing the test262 harness main as the entry point.
+ * `.cache/mal-build/<mode>/<name>`, reusing the test262 harness main as the entry point.
  * Returns the path to the binary.
  */
 export function buildLocalBinary(options: LocalBuildOptions): string {
@@ -321,29 +410,35 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 	const nodeEnabled = options.nodeEnabled ?? false;
 	const toolchain =
 		options.toolchain ?? requireToolchain({ needsCxx: webPlatformEnabled });
+	const plan = options.plan ?? selectNativeBuildPlan(toolchain, false);
 	const cacheSuffix = options.cacheSuffix ?? "";
 	const rustCacheSuffix = options.rustCacheSuffix ?? "";
+	const dimensions: RuntimeBuildDimensions = {
+		evalEnabled,
+		realmsEnabled,
+		intlEnabled,
+		intlServiceDefines: options.intlServiceDefines,
+		intlFeatures: options.intlFeatures,
+		webPlatformEnabled,
+		regexpEnabled,
+		nodeEnabled,
+		toolchain,
+		cacheSuffix,
+		rustCacheSuffix,
+		compilerBake: options.compilerBake,
+		plan,
+		onCacheEvent: options.onCacheEvent,
+	};
 	const libs = options.skipRuntimeBuild
-		? runtimeArchivePaths(buildDirFor(cacheSuffix))
+		? runtimeArchivePaths(runtimeLayout(dimensions).buildDir)
 		: ensureRuntimeLibrary(options.verbose, {
-				evalEnabled,
-				realmsEnabled,
-				intlEnabled,
-				intlServiceDefines: options.intlServiceDefines,
-				intlFeatures: options.intlFeatures,
-				webPlatformEnabled,
-				regexpEnabled,
-				nodeEnabled,
-				toolchain,
-				cacheSuffix,
-				rustCacheSuffix,
-				compilerBake: options.compilerBake,
+				...dimensions,
 			});
 
 	// Suffix the artifacts under a sanitizer / eval-disabled build so they do not
 	// clobber the normal binary (and vice-versa).
 	const artifactName = `${options.name}${buildSuffix(cacheSuffix)}`;
-	const outDir = options.outDir ?? LOCAL_DIR;
+	const outDir = options.outDir ?? path.join(BUILD_DIR, plan.mode);
 	mkdirSync(outDir, { recursive: true });
 	const cPath = path.join(outDir, `${artifactName}.c`);
 	const binPath = path.join(outDir, artifactName);
@@ -353,7 +448,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 		toolchain.tools.cc.path,
 		[
 			"-std=c2x",
-			...ccExtraFlags(),
+			...ccExtraFlags(plan),
 			// The entry driver (host_main.c) gates its web installs on MAL_WEB_PLATFORM;
 			// it must compile with the same feature defines as the archive it links.
 			...featureDefines({
@@ -376,12 +471,29 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 			cPath,
 			options.mainFile ?? "runtime/test262_main.c",
 			...libs,
-			...rustLinkArgs(rustCacheSuffix, webPlatformEnabled, toolchain.probes.cxxLinkArgs),
+			...rustLinkArgs(
+				rustCacheSuffix,
+				webPlatformEnabled,
+				toolchain.probes.cxxLinkArgs,
+				toolchain,
+				plan,
+			),
 			"-o",
 			binPath,
 		],
-		{ stdio: options.verbose ? "inherit" : "ignore" },
+		{ stdio: options.verbose ? "inherit" : "pipe" },
 	);
+	if (plan.strip && toolchain.tools.strip !== undefined) {
+		try {
+			execFileSync(toolchain.tools.strip.path, [...toolchain.probes.stripArgs, binPath], {
+				stdio: options.verbose ? "inherit" : "pipe",
+			});
+		} catch (error) {
+			options.onWarning?.(
+				`production symbol stripping failed after a successful probe; leaving the binary unstripped: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
 
 	return binPath;
 }

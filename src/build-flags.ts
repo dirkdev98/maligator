@@ -39,7 +39,43 @@
  *   MAL_GMALLOC=1 MAL_GC_STRESS=2 npm run test262:regressions     # libc-buffer UAF
  */
 
+import type { Toolchain } from "./toolchain.ts";
+
 export type SanitizerMode = "none" | "asan" | "ubsan";
+
+export interface NativeBuildPlan {
+	mode: "development" | "production";
+	lto: boolean;
+	strip: boolean;
+	warnings: Array<string>;
+}
+
+/** Select optional production capabilities once, before any native build step. */
+export function selectNativeBuildPlan(
+	toolchain: Toolchain,
+	production: boolean,
+): NativeBuildPlan {
+	if (!production) {
+		return { mode: "development", lto: false, strip: false, warnings: [] };
+	}
+	const warnings: Array<string> = [];
+	if (!toolchain.probes.lto) {
+		warnings.push(
+			"production LTO is unsupported; continuing at -O2 (run 'maligator doctor --verbose' to inspect the probe)",
+		);
+	}
+	if (!toolchain.probes.strip || toolchain.tools.strip === undefined) {
+		warnings.push(
+			"production symbol stripping is unsupported; leaving the binary unstripped (run 'maligator doctor --verbose' to inspect the probe)",
+		);
+	}
+	return {
+		mode: "production",
+		lto: toolchain.probes.lto,
+		strip: toolchain.probes.strip && toolchain.tools.strip !== undefined,
+		warnings,
+	};
+}
 
 /** True when `name` is set to a non-empty, non-"0" value. */
 function envOn(name: string): boolean {
@@ -128,9 +164,6 @@ export function gcDefines(): Array<string> {
 export function buildSuffix(cacheSuffix = ""): string {
 	const mode = sanitizerMode();
 	let suffix = mode === "none" ? "" : `-${mode}`;
-	if (envOn("MAL_LTO")) {
-		suffix += "-lto";
-	}
 	// Generational is the default (2026-07-10 flip), so it is UNSUFFIXED; the
 	// opt-out (`MAL_GC_GENERATIONAL=0`) gets its own `-nongen` dir so the two
 	// dimensions never share an archive/cache (header layout + barrier code differ).
@@ -150,17 +183,11 @@ export function buildSuffix(cacheSuffix = ""): string {
  * Optimisation/debug flags for the current mode. Normal: -O2. Under a sanitizer:
  * -O1 -g (the sanitizer is slow, and -g + a non-zero -O keeps frames + symbols).
  */
-export function optFlags(): Array<string> {
+export function optFlags(plan?: NativeBuildPlan): Array<string> {
 	if (sanitizerMode() !== "none") {
 		return ["-O1", "-g"];
 	}
-	// Opt-in link-time optimization (`MAL_LTO=1`): compiles the runtime archives and
-	// the emitted TU with `-flto` so the C compiler inlines across translation units
-	// (the emitted native-C backend's calls into the runtime — mal_vm_binary_op, the
-	// IC ops, value helpers) and dead-strips unreachable code at link. Off by default
-	// (it lengthens the link); the flag must reach both the archive (CMAKE_C_FLAGS)
-	// and the final cc, which optFlags feeds via cmakeCFlags/ccExtraFlags.
-	return envOn("MAL_LTO") ? ["-O2", "-flto"] : ["-O2"];
+	return plan?.lto === true ? ["-O2", "-flto"] : ["-O2"];
 }
 
 /**
@@ -217,9 +244,12 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 	];
 }
 
-export function cmakeCFlags(opts: FeatureDefineOpts = {}): string {
+export function cmakeCFlags(
+	opts: FeatureDefineOpts = {},
+	plan?: NativeBuildPlan,
+): string {
 	return [
-		...optFlags(),
+		...optFlags(plan),
 		...SANITIZER_FLAGS[sanitizerMode()],
 		...gcDefines(),
 		...featureDefines(opts),
@@ -227,8 +257,8 @@ export function cmakeCFlags(opts: FeatureDefineOpts = {}): string {
 }
 
 /** Extra cc flags (compile + link) for an emitted translation unit. */
-export function ccExtraFlags(): Array<string> {
-	return [...optFlags(), ...SANITIZER_FLAGS[sanitizerMode()], ...gcDefines()];
+export function ccExtraFlags(plan?: NativeBuildPlan): Array<string> {
+	return [...optFlags(plan), ...SANITIZER_FLAGS[sanitizerMode()], ...gcDefines()];
 }
 
 /**

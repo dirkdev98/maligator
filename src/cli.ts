@@ -34,7 +34,7 @@ export type CliCommand =
 	| { kind: "help" }
 	| { kind: "version" }
 	| { kind: "init" }
-	| { kind: "doctor" }
+	| { kind: "doctor"; verbose: boolean }
 	| BuildCommand
 	| RunCommand;
 
@@ -76,10 +76,13 @@ function unexpectedArgument(command: string, argument: string): never {
 
 function parseSimpleCommand(kind: "init" | "doctor", args: Array<string>): CliCommand {
 	if (args.length === 1) {
-		return { kind };
+		return kind === "doctor" ? { kind, verbose: false } : { kind };
 	}
 	if (args.length === 2 && (args[1] === "--help" || args[1] === "-h")) {
 		return { kind: "help" };
+	}
+	if (kind === "doctor" && args.length === 2 && args[1] === "--verbose") {
+		return { kind, verbose: true };
 	}
 	return unexpectedArgument(kind, args[1]!);
 }

@@ -610,8 +610,40 @@ function installationSuggestions(
 export function formatToolchainReport(
 	report: ToolchainReport,
 	platform: NodeJS.Platform = process.platform,
+	verbose = false,
 ): string {
 	const lines = ["Maligator native toolchain:"];
+	if (!verbose) {
+		const nativeReady =
+			report.tools.cmake !== undefined &&
+			report.tools.cc !== undefined &&
+			report.tools.cxx !== undefined &&
+			report.tools.ar !== undefined &&
+			report.tools.strip !== undefined &&
+			report.probes?.c2x === true &&
+			report.probes.cxxLink &&
+			report.probes.lto &&
+			report.probes.strip;
+		const rustReady =
+			report.tools.rustup !== undefined &&
+			report.tools.cargo !== undefined &&
+			report.tools.rustc !== undefined;
+		if (nativeReady) lines.push("[ok] C compiler");
+		if (rustReady) lines.push("[ok] Rust compiler");
+		for (const issue of report.issues) {
+			lines.push(
+				`[${issue.required ? "missing" : "optional"}] ${issue.tool}: ${issue.message}`,
+			);
+		}
+		const suggestions = installationSuggestions(report, platform);
+		if (suggestions.length > 0)
+			lines.push("", "Suggested fixes:", ...suggestions.map((item) => `  ${item}`));
+		lines.push(
+			"",
+			report.toolchain === undefined ? "Toolchain is not ready." : "Toolchain is ready.",
+		);
+		return lines.join("\n");
+	}
 	for (const name of [
 		"cmake",
 		"cc",

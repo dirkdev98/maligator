@@ -6,7 +6,7 @@
  *
  * Two responsibilities beyond deduplication:
  *   - the expensive part (the three runtime archives) is built once by
- *     {@link buildNativeBinary}'s callee and cached under `.cache/local/lib`; only
+ *     {@link buildNativeBinary}'s callee and cached under `.cache/mal-cache/runtime`; only
  *     the per-test emitted `.c` + final link land in the caller-chosen `outDir`, so
  *     parallel vitest workers never clobber each other.
  *   - the plain + MAL_GC_STRESS+MAL_GC_VERIFY re-run that every runner used to
@@ -53,7 +53,7 @@ export interface BuildOptions {
 	compiled?: boolean;
 	/** C driver to link; defaults to the test262 harness main. */
 	mainFile?: string;
-	/** Artifact directory; defaults to `.cache/local`. Pass a temp dir under vitest. */
+	/** Artifact directory; defaults to `.cache/mal-build`. Pass a temp dir under vitest. */
 	outDir?: string;
 	/** Link against pre-built archives (set by the vitest native lane's globalSetup). */
 	skipRuntimeBuild?: boolean;

@@ -4,7 +4,6 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import {
 	buildSuffix,
-	cmakeCFlags,
 	gcDefines,
 	gcGenerational,
 	gmallocEnabled,
@@ -12,15 +11,15 @@ import {
 	sanitizerCcFlags,
 } from "../build-flags.ts";
 import { compileEntrypointToBuffer } from "../compile-program.ts";
-import { ensureCompilerWire } from "../compiler-bake.ts";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
 import { compileSemanticProgramToIr } from "../ir.ts";
+import { ensureRuntimeLibrary } from "../local-build.ts";
 import { lowerIrProgramToVmDefinition } from "../lower-vm.ts";
 import type { VmDefinition } from "../lower-vm.ts";
 import { parseModule, parseScript } from "../parser.ts";
 import { allocateRegisters } from "../register-alloc.ts";
-import { ensureRustLibrary, rustLinkArgs } from "../rust-build.ts";
+import { rustLinkArgs } from "../rust-build.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../semantic-program.ts";
 import { requireToolchain } from "../toolchain.ts";
@@ -55,16 +54,6 @@ function test262Toolchain(): Toolchain {
 	return selectedToolchain;
 }
 
-if (
-	process.env.MAL_LTO !== undefined &&
-	process.env.MAL_LTO !== "" &&
-	process.env.MAL_LTO !== "0"
-) {
-	throw new Error(
-		"Test262 fixes LTO off; change the documented code-level tuning to benchmark it",
-	);
-}
-
 /**
  * cc invocation split into compile and link. Compiling the generated C is ~97%
  * of the cost; linking against the (always freshly built) library is ~3%. The
@@ -88,16 +77,10 @@ const CC_COMPILE_FLAGS = [
 const CC_LINK_FLAGS = ["-std=c2x", ...GENERATED_C_OPT_FLAGS, ...sanitizerCcFlags()];
 
 /**
- * The runtime build dir + library, and the harness-main object dir, all suffixed
- * per GC/sanitizer build dimension (`buildSuffix()`). Generational is the default
- * (unsuffixed → `runtime/build`, `.cache/test262-build`); the opt-out build
- * (`MAL_GC_GENERATIONAL=0` → `runtime/build-nongen`, `.cache/test262-build-nongen`)
- * gets its own archive + mains and never clobbers the default gen artifacts. The
- * generated-C TU + the mains all see the same `gcDefines()` (folded into
- * CC_COMPILE_FLAGS, so the artifact-cache fingerprint separates gen/non-gen too).
+ * The generated objects and binaries are suffixed per GC/sanitizer build
+ * dimension. Reusable runtime archives are content-addressed by local-build.ts.
  */
-const RUNTIME_BUILD_DIR = `runtime/build${buildSuffix()}`;
-const LIB_ARCHIVE = `${RUNTIME_BUILD_DIR}/libLibMaligator.a`;
+let libArchive = "";
 const BUILD_PATH = `${TEST262_METADATA.buildPath}${buildSuffix()}`;
 
 export function test262ReportPath(variant: "strict" | "sloppy"): string {
@@ -241,37 +224,16 @@ export function test262PrepareBuild() {
 	test262Log(
 		`Building LibMaligator${gcGenerational() ? " (generational)" : " (non-generational)"}...`,
 	);
-	// Generate the baked compiler wire (runtime/src/compiler.malw) before cmake:
-	// the GLOB pulls in compiler_wire.c, whose `#embed` needs the file present.
-	ensureCompilerWire({
-		bake: () =>
-			compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
-				stripTypes: stripTypesWithTypeScript,
-			}),
+	const archives = ensureRuntimeLibrary(false, {
+		toolchain,
+		compilerBake: {
+			bake: () =>
+				compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
+					stripTypes: stripTypesWithTypeScript,
+				}),
+		},
 	});
-	// Configure every build dimension, including the unsuffixed default. Relying on
-	// an out-of-band initial configuration can leave runtime/build with empty C flags
-	// even though the normal runtime contract is -O2.
-	execFileSync(
-		toolchain.tools.cmake.path,
-		[
-			"-S",
-			"runtime",
-			"-B",
-			RUNTIME_BUILD_DIR,
-			`-DCMAKE_C_COMPILER=${toolchain.tools.cc.path}`,
-			`-DCMAKE_AR=${toolchain.tools.ar.path}`,
-			`-DCMAKE_C_FLAGS=${cmakeCFlags()}`,
-		],
-		{ stdio: "ignore" },
-	);
-	execFileSync(toolchain.tools.cmake.path, ["--build", RUNTIME_BUILD_DIR], {
-		stdio: "ignore",
-	});
-
-	// Build the Rust shim once per pass; cheap when cached. Date tz + Intl
-	// (ICU4X) and the RegExp engine (regress), both in libmal_rust.a.
-	ensureRustLibrary(false, {}, toolchain);
+	libArchive = archives[2]!;
 
 	// The mains include gc.h, whose header layout + barrier code differ under
 	// MAL_GC_GENERATIONAL, so they must compile with the same defines as the lib;
@@ -689,7 +651,7 @@ async function linkBatch(objectPath: string, binPath: string) {
 			...CC_LINK_FLAGS,
 			objectPath,
 			`${BUILD_PATH}/test262_batch.o`,
-			LIB_ARCHIVE,
+			libArchive,
 			...rustLinkArgs("", true, test262Toolchain().probes.cxxLinkArgs),
 			"-o",
 			binPath,
@@ -1036,7 +998,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 					...CC_COMPILE_FLAGS,
 					`${baseName}.c`,
 					`${BUILD_PATH}/test262_batch.o`,
-					LIB_ARCHIVE,
+					libArchive,
 					...rustLinkArgs("", true, test262Toolchain().probes.cxxLinkArgs),
 					"-o",
 					`${baseName}.bin`,
@@ -1181,7 +1143,7 @@ export async function test262RunSingle(
 				...sanitizerCcFlags(),
 				`${baseName}.c`,
 				`${BUILD_PATH}/test262_main.o`,
-				LIB_ARCHIVE,
+				libArchive,
 				...rustLinkArgs("", true, test262Toolchain().probes.cxxLinkArgs),
 				"-o",
 				`${baseName}.bin`,

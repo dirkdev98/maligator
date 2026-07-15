@@ -1,5 +1,6 @@
 import {
 	chmodSync,
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -9,7 +10,13 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildLocalBinary, ensureRuntimeLibrary } from "../src/local-build.ts";
+import { selectNativeBuildPlan } from "../src/build-flags.ts";
+import { ensureCompilerWire } from "../src/compiler-bake.ts";
+import {
+	buildLocalBinary,
+	ensureRuntimeLibrary,
+	runtimeArtifactKey,
+} from "../src/local-build.ts";
 import { formatToolchainReport, inspectToolchain } from "../src/toolchain.ts";
 
 interface FakeToolchain {
@@ -25,11 +32,12 @@ function executable(filePath: string, body: string): void {
 	chmodSync(filePath, 0o755);
 }
 
-function compilerScript(version: string, logPath: string): string {
+function compilerScript(version: string, logPath: string, lto = true): string {
 	return `
 printf '%s\n' "$*" >> '${logPath}'
 if [ "$1" = "--version" ]; then printf '%s\n' '${version}'; exit 0; fi
 if [ "$1" = "-dumpmachine" ]; then printf '%s\n' 'fake-target'; exit 0; fi
+${lto ? "" : 'case " $* " in *" -flto "*) exit 1;; esac'}
 out=''
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-o" ]; then shift; out="$1"; fi
@@ -40,7 +48,9 @@ exit 0
 `;
 }
 
-function createFakeToolchain(): FakeToolchain {
+function createFakeToolchain(
+	options: { lto?: boolean; strip?: boolean } = {},
+): FakeToolchain {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-toolchain-"));
 	const bin = path.join(root, "bin");
 	const rustDir = path.join(root, "runtime/rust");
@@ -49,11 +59,19 @@ function createFakeToolchain(): FakeToolchain {
 	mkdirSync(rustDir, { recursive: true });
 	writeFileSync(logPath, "");
 
-	executable(path.join(bin, "fake-cc"), compilerScript("fake cc 1", logPath));
+	executable(
+		path.join(bin, "fake-cc"),
+		compilerScript("fake cc 1", logPath, options.lto ?? true),
+	);
 	executable(path.join(bin, "fake-cxx"), compilerScript("fake cxx 1", logPath));
 	executable(
 		path.join(bin, "cmake"),
-		`printf 'cmake %s\\n' "$*" >> '${logPath}'\nif [ "$1" = "--version" ]; then printf '%s\\n' "cmake version 4.1"; fi\n`,
+		`printf 'cmake %s\\n' "$*" >> '${logPath}'
+if [ "$1" = "--version" ]; then printf '%s\\n' "cmake version 4.1"; exit 0; fi
+if [ "$1" = "--build" ]; then
+	/usr/bin/touch "$2/libMalRuntime.a" "$2/libMalHost.a" "$2/libLibMaligator.a"
+fi
+`,
 	);
 	executable(
 		path.join(bin, "ar"),
@@ -73,7 +91,10 @@ function createFakeToolchain(): FakeToolchain {
 	);
 	executable(
 		path.join(bin, "strip"),
-		'if [ "$1" = "--version" ]; then printf \'%s\\n\' "fake strip 1"; fi\n',
+		`if [ "$1" = "--version" ]; then printf '%s\\n' "fake strip 1"; exit 0; fi
+printf 'strip %s\\n' "$*" >> '${logPath}'
+${options.strip === false ? "exit 1" : "exit 0"}
+`,
 	);
 	return {
 		root,
@@ -114,6 +135,11 @@ describe("native toolchain discovery", () => {
 			strip: true,
 			cxxLink: true,
 		});
+		const summary = formatToolchainReport(report, "linux");
+		expect(summary).toContain("[ok] C compiler");
+		expect(summary).toContain("[ok] Rust compiler");
+		expect(summary).not.toContain("cmake version 4.1");
+		expect(formatToolchainReport(report, "linux", true)).toContain("cmake version 4.1");
 	});
 
 	it("caches probes and invalidates when an executable identity/version changes", () => {
@@ -201,6 +227,160 @@ describe("native toolchain discovery", () => {
 		expect(invocations).toContain(`-DCMAKE_C_COMPILER=${toolchain.tools.cc.path}`);
 		expect(invocations).toContain(`${binary}.c`);
 		expect(invocations).toContain(`-o ${binary}`);
+		expect(existsSync(`${binary}.c`)).toBe(true);
+	});
+
+	it("uses one production plan for archive/final LTO and post-link stripping", () => {
+		const fake = createFakeToolchain();
+		const report = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		});
+		expect(report.toolchain).toBeDefined();
+		const toolchain = report.toolchain!;
+		const production = selectNativeBuildPlan(toolchain, true);
+		const suffix = `production-${path.basename(fake.root)}`;
+
+		ensureRuntimeLibrary(false, {
+			toolchain,
+			plan: production,
+			evalEnabled: false,
+			webPlatformEnabled: false,
+			cacheSuffix: suffix,
+			rustCacheSuffix: suffix,
+		});
+		const binary = buildLocalBinary({
+			toolchain,
+			plan: production,
+			name: "production-output",
+			cSource: "int value;",
+			verbose: false,
+			outDir: fake.root,
+			skipRuntimeBuild: true,
+			evalEnabled: false,
+			webPlatformEnabled: false,
+			cacheSuffix: suffix,
+			rustCacheSuffix: suffix,
+		});
+
+		const invocations = readFileSync(fake.logPath, "utf-8");
+		expect(invocations).toMatch(/-DCMAKE_C_FLAGS=.*-O2 -flto/);
+		expect(invocations).toContain(`-O2 -flto`);
+		expect(invocations).toContain(`strip --strip-all ${binary}`);
+	});
+
+	it("keeps development at O2 unstripped and falls back when production options fail probes", () => {
+		const fake = createFakeToolchain({ lto: false, strip: false });
+		const report = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		});
+		expect(report.toolchain).toBeDefined();
+		const toolchain = report.toolchain!;
+		const development = selectNativeBuildPlan(toolchain, false);
+		const production = selectNativeBuildPlan(toolchain, true);
+		expect(development).toMatchObject({ lto: false, strip: false, warnings: [] });
+		expect(production).toMatchObject({ lto: false, strip: false });
+		expect(production.warnings.join("\n")).toMatch(/LTO.*unsupported/);
+		expect(production.warnings.join("\n")).toMatch(/stripping.*unsupported/);
+
+		writeFileSync(fake.logPath, "");
+		buildLocalBinary({
+			toolchain,
+			plan: development,
+			name: "development-output",
+			cSource: "int value;",
+			verbose: false,
+			outDir: fake.root,
+			skipRuntimeBuild: true,
+			evalEnabled: false,
+			webPlatformEnabled: false,
+			cacheSuffix: `development-${path.basename(fake.root)}`,
+			rustCacheSuffix: `development-${path.basename(fake.root)}`,
+		});
+		const developmentInvocation = readFileSync(fake.logPath, "utf-8");
+		expect(developmentInvocation).toContain("-O2");
+		expect(developmentInvocation).not.toContain("-flto");
+		expect(developmentInvocation).not.toContain("strip ");
+
+		writeFileSync(fake.logPath, "");
+		buildLocalBinary({
+			toolchain,
+			plan: production,
+			name: "fallback-output",
+			cSource: "int value;",
+			verbose: false,
+			outDir: fake.root,
+			skipRuntimeBuild: true,
+			evalEnabled: false,
+			webPlatformEnabled: false,
+			cacheSuffix: `fallback-${path.basename(fake.root)}`,
+			rustCacheSuffix: `fallback-${path.basename(fake.root)}`,
+		});
+		const invocation = readFileSync(fake.logPath, "utf-8");
+		expect(invocation).toContain("-O2");
+		expect(invocation).not.toContain("-flto");
+		expect(invocation).not.toContain("strip ");
+	});
+
+	it("separates runtime cache keys by source, config, toolchain, and mode", () => {
+		const base = {
+			cacheSuffix: "config-a",
+			flags: "-O2",
+			mode: "development" as const,
+			sourceHash: "source-a",
+			toolchainFingerprint: "toolchain-a",
+			target: "target-a",
+		};
+		const key = runtimeArtifactKey(base);
+		expect(runtimeArtifactKey({ ...base, sourceHash: "source-b" })).not.toBe(key);
+		expect(runtimeArtifactKey({ ...base, cacheSuffix: "config-b" })).not.toBe(key);
+		expect(runtimeArtifactKey({ ...base, toolchainFingerprint: "toolchain-b" })).not.toBe(
+			key,
+		);
+		expect(runtimeArtifactKey({ ...base, mode: "production" })).not.toBe(key);
+	});
+
+	it("reports reusable runtime cache misses and hits", () => {
+		const fake = createFakeToolchain();
+		const report = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		});
+		const toolchain = report.toolchain!;
+		const suffix = `cache-events-${path.basename(fake.root)}`;
+		const runtimeEvents: Array<boolean> = [];
+		const dimensions = {
+			toolchain,
+			evalEnabled: false,
+			webPlatformEnabled: false,
+			cacheSuffix: suffix,
+			rustCacheSuffix: suffix,
+			onCacheEvent: (event: { artifact: "runtime" | "rust"; hit: boolean }) => {
+				if (event.artifact === "runtime") runtimeEvents.push(event.hit);
+			},
+		};
+		ensureRuntimeLibrary(false, dimensions);
+		ensureRuntimeLibrary(false, dimensions);
+		expect(runtimeEvents).toEqual([false, true]);
+	});
+
+	it("stores compiler wires under the reusable cache", () => {
+		const bytes = new Uint8Array([0x4d, 0x41, 0x4c]);
+		const wirePath = ensureCompilerWire({ bytes });
+		expect(wirePath).toContain(
+			`${path.sep}.cache${path.sep}mal-cache${path.sep}compiler-wire`,
+		);
+		expect(readFileSync(wirePath)).toEqual(Buffer.from(bytes));
 	});
 
 	it("reports all missing tools with platform-specific installation suggestions", () => {
