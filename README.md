@@ -10,7 +10,7 @@ A lean AOT-compiled JS engine — a JS-to-C compiler and runtime.
 npm install
 
 # Local development script when working on the compiler.
-node ./src/index.ts
+node ./src/index.ts build path/to/entry.ts
 
 # Tests (Vitest: `unit` = pure-TS/fast, `native` = builds + runs isolate binaries)
 npm test run          # everything, once

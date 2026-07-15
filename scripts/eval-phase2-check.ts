@@ -10,8 +10,8 @@ import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
  * Differential validation for the definition wire format + C loader (eval Phase
  * 2, slice 2). Each fixture is compiled two ways and must produce byte-identical
  * stdout + exit code:
- *   - C-baked:  node src/index.ts <fixture> --name X  →  run its printed binary
- *   - loaded:   node src/index.ts <fixture> --serialize X.malw  →  MaligatorLoad X.malw
+ *   - C-baked:  node src/index.ts build <fixture> --name X  →  run its printed binary
+ *   - loaded:   node src/index.ts build <fixture> --serialize X.malw  →  MaligatorLoad X.malw
  * Both run the same lowered definition — once compiled into C, once decoded from
  * the buffer — so identical behavior proves the serializer + loader are faithful.
  */
@@ -103,7 +103,7 @@ function run(cmd: string, args: Array<string>): RunResult {
 }
 
 function build(jsPath: string, name: string): string {
-	const output = execFileSync("node", ["src/index.ts", jsPath, "--name", name], {
+	const output = execFileSync("node", ["src/index.ts", "build", jsPath, "--name", name], {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "ignore"],
 	});
@@ -127,7 +127,7 @@ const dir = mkdtempSync(path.join(tmpdir(), "mal-eval-"));
 const baseJs = path.join(dir, "_base.js");
 const baseMalw = path.join(dir, "_base.malw");
 writeFileSync(baseJs, BASE_FIXTURE);
-run("node", ["src/index.ts", baseJs, "--serialize", baseMalw]);
+run("node", ["src/index.ts", "build", baseJs, "--serialize", baseMalw]);
 
 let failures = 0;
 for (const [name, source] of Object.entries(FIXTURES)) {
@@ -150,7 +150,7 @@ for (const [name, source] of Object.entries(FIXTURES)) {
 	}
 
 	// Loaded path (wire format, base 0) and spliced path (nonzero bases).
-	run("node", ["src/index.ts", jsPath, "--serialize", malwPath]);
+	run("node", ["src/index.ts", "build", jsPath, "--serialize", malwPath]);
 	const loaded = run(driver, [malwPath]);
 	const spliced = run(driver, ["--splice", baseMalw, malwPath]);
 

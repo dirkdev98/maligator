@@ -31,7 +31,7 @@
 ## Code Style
 
 - Use TypeScript with strict mode enabled, using erasable syntax only. This allows us to
-  directly execute TS files with Node.js. E.g `node ./src/index.ts`.
+  directly execute TS files with Node.js. E.g `node ./src/index.ts build entry.ts`.
 - Import extensions: `.ts` for TypeScript files
 - Use `@lightbase/eslint-config` for linting rules
 - Vitest for testing
@@ -42,7 +42,7 @@
 
 ```
 # Run the compiler on a tmp local file exercising the new feature
-MAL_DEBUG=true node ./src/index.ts ./tests/local/tmp2.js
+MAL_DEBUG=true node ./src/index.ts build ./tests/local/tmp2.js
 # Take the output and replace the current definitions in `test.c` and run it.
 ```
 

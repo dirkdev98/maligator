@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import {
@@ -10,6 +9,9 @@ import {
 } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { gmallocEnabled, runEnv } from "./build-flags.ts";
+import { executeBinary } from "./cli-run.ts";
+import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
+import type { BuildCommand, RunCommand } from "./cli.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
@@ -34,48 +36,44 @@ import { serializeVmDefinition } from "./serialize-vm.ts";
 import { stripTypesWithTypeScript } from "./typescript-strip.ts";
 import { log } from "./utils.ts";
 
-const FLAGS_WITH_VALUES = new Set(["--name", "--serialize", "--config"]);
-
-function argValue(name: string) {
-	const index = process.argv.indexOf(name);
-	return index >= 0 ? process.argv[index + 1] : undefined;
-}
-
-function argFlag(name: string) {
-	return process.argv.includes(name);
-}
-
-// The first non-flag argument is the entrypoint; flags may appear before it.
-const positionals: Array<string> = [];
-const argv = process.argv.slice(2);
-for (let i = 0; i < argv.length; i++) {
-	const arg = argv[i]!;
-	if (arg.startsWith("--")) {
-		if (FLAGS_WITH_VALUES.has(arg)) {
-			i++;
-		}
-		continue;
+let command: BuildCommand | RunCommand;
+try {
+	const parsed = parseCliArgs(process.argv.slice(2));
+	if (parsed.kind === "help") {
+		log.info(CLI_HELP);
+		process.exit(0);
 	}
-	positionals.push(arg);
+	if (parsed.kind === "version") {
+		log.info(MALIGATOR_VERSION);
+		process.exit(0);
+	}
+	if (parsed.kind === "init" || parsed.kind === "doctor") {
+		log.info(`error: 'maligator ${parsed.kind}' is not implemented yet`);
+		process.exit(1);
+	}
+	command = parsed;
+} catch (error) {
+	if (error instanceof CliUsageError) {
+		// eslint-disable-next-line no-console -- usage failures belong on stderr.
+		console.error(`error: ${error.message}`);
+		// eslint-disable-next-line no-console -- usage failures belong on stderr.
+		console.error("Run 'maligator --help' for usage.");
+		process.exit(2);
+	}
+	throw error;
 }
 
-const entrypoint = positionals[0];
-
-if (!entrypoint || !existsSync(entrypoint)) {
-	log.info(
-		`Usage: maligator <entrypoint.js> [--name out] [--run] [--emit-c] [--verbose]`,
-	);
+if (command.kind === "build" && command.production) {
+	log.info("error: '--production' is not implemented yet");
 	process.exit(1);
 }
-
-const entrypointPath = path.resolve(entrypoint);
 
 // The build config (maligator.build.json) is the source of truth for engine
 // capabilities. Absent → product defaults (eval OFF). A malformed / mistyped file
 // fails fast with a clean message rather than a stack trace.
 let buildConfig: ResolvedBuildConfig;
 try {
-	buildConfig = loadBuildConfig(argValue("--config"));
+	buildConfig = loadBuildConfig(command.configPath);
 } catch (error) {
 	if (error instanceof BuildConfigError) {
 		log.info(`error: ${error.message}`);
@@ -83,6 +81,20 @@ try {
 	}
 	throw error;
 }
+
+const entrypoint = command.entry ?? buildConfig.entry;
+if (entrypoint === undefined) {
+	log.info(
+		"error: no entrypoint was provided and the build config has no 'entry'; " +
+			"pass an entry or run 'maligator init'",
+	);
+	process.exit(1);
+}
+if (!existsSync(entrypoint)) {
+	log.info(`error: entrypoint does not exist: ${path.resolve(entrypoint)}`);
+	process.exit(1);
+}
+const entrypointPath = path.resolve(entrypoint);
 
 const semTiming = log.time("semantic analysis");
 // Pass the resolved build config into graph construction: it gates the `node`
@@ -97,7 +109,7 @@ semTiming();
 // builtin_eval.c is the other). Skipped for `--serialize`, which emits the wire
 // definition for the baked compiler / eval tooling itself — internal, not a
 // user build subject to the policy.
-if (!argFlag("--serialize")) {
+if (!(command.kind === "build" && command.internal.serializePath !== undefined)) {
 	try {
 		assertEvalPolicy(buildConfig, collectDisallowedEvalUsage(semanticProgram));
 		assertRegexpPolicy(buildConfig, collectDisallowedRegexpUsage(semanticProgram));
@@ -124,14 +136,14 @@ irOptTiming();
 // pre-allocation virtual registers — handy for inspecting the safepoint map at the
 // IR level, though the numbering differs from the post-allocation set the backend
 // actually roots.
-if (argFlag("--dump-liveness")) {
+if (command.kind === "build" && command.internal.dumpLiveness) {
 	log.info(debugProgramLiveness(irProgram));
 }
 
 // Inliner eligibility analysis (task #6, foundation). Detection only — no
 // transformation yet. `--dump-inline` lists the statically-known, inlinable direct
 // `call` sites the substitution pass will consume.
-if (argFlag("--dump-inline")) {
+if (command.kind === "build" && command.internal.dumpInline) {
 	debugInlinableCalls(irProgram);
 }
 
@@ -139,7 +151,7 @@ if (argFlag("--dump-inline")) {
 // transformation yet. `--dump-hof` lists `arr.forEach(cb)`-style array-iteration
 // sites whose callback resolves to an inlinable local function (the guarded
 // substitution pass will consume these).
-if (argFlag("--dump-hof")) {
+if (command.kind === "build" && command.internal.dumpHof) {
 	debugHofInlineSites(irProgram);
 }
 
@@ -147,14 +159,14 @@ if (argFlag("--dump-hof")) {
 // only — no transformation yet. `--dump-speculative` lists direct calls whose callee is a
 // reassignable global with a known top-level function declaration, which a runtime
 // function-index guard makes inlinable.
-if (argFlag("--dump-speculative")) {
+if (command.kind === "build" && command.internal.dumpSpeculative) {
 	debugSpeculativeInlineSites(irProgram);
 }
 
 // Shape-guarded method inlining eligibility (call-opt phase C). Detection only.
 // `--dump-methods` lists `obj.m()` sites whose method name uniquely resolves to an inlinable
 // candidate — the sites a receiver-shape guard will make inlinable.
-if (argFlag("--dump-methods")) {
+if (command.kind === "build" && command.internal.dumpMethods) {
 	debugMethodInlineSites(irProgram);
 }
 
@@ -162,7 +174,7 @@ if (argFlag("--dump-methods")) {
 // transformation. `--dump-escape` lists each function's parameter/receiver escape
 // lattice, return provenance, effect flags, and the per-allocation escape kind the
 // scalar-replacement (T7.4) and write-barrier-elision (T2.6) passes consume.
-if (argFlag("--dump-escape")) {
+if (command.kind === "build" && command.internal.dumpEscape) {
 	dumpProgramEscape(irProgram);
 }
 
@@ -170,7 +182,7 @@ if (argFlag("--dump-escape")) {
 // lists each single-assignment, non-escaping, shape-fixed shaped-object allocation
 // and whether it is stack-only (identity observed) or also scalar-replaceable — the
 // set emit-c places in the C root frame under MAL_STACK_ALLOC.
-if (argFlag("--dump-stack-alloc")) {
+if (command.kind === "build" && command.internal.dumpStackAlloc) {
 	dumpStackAlloc(irProgram);
 }
 
@@ -187,7 +199,8 @@ log.info(`Functions: ${stats.functionCount}, instructions: ${stats.instructionCo
 
 // Emit the binary wire format (consumed by mal_vm_load_definition / runtime
 // eval) instead of building a C binary. Interpreter-only — no compiled bodies.
-const serializePath = argValue("--serialize");
+const serializePath =
+	command.kind === "build" ? command.internal.serializePath : undefined;
 if (serializePath !== undefined) {
 	const buffer = serializeVmDefinition(vmDefinition);
 	writeFileSync(serializePath, buffer);
@@ -196,14 +209,14 @@ if (serializePath !== undefined) {
 }
 
 const output = emitVmDefinition(vmDefinition, {
-	compiled: !argFlag("--no-compiled"),
+	compiled: command.kind === "run" || command.internal.compiled,
 });
-if (argFlag("--emit-c") || argFlag("--print")) {
+if (command.kind === "build" && command.internal.emitC) {
 	log.info(output);
 }
 
-const name = argValue("--name") ?? "out";
-const verbose = argFlag("--verbose");
+const name = command.kind === "build" ? (command.internal.name ?? "out") : "out";
+const verbose = command.kind === "build" && command.internal.verbose;
 
 const buildTiming = log.time("build binary");
 const binaryPath = buildLocalBinary({
@@ -221,16 +234,20 @@ const binaryPath = buildLocalBinary({
 buildTiming();
 log.info(`Binary: ${binaryPath}`);
 
-if (argFlag("--run")) {
+if (command.kind === "run") {
 	if (gmallocEnabled()) {
 		log.info("Running under Guard Malloc (MAL_GMALLOC).");
 	}
-	try {
-		execFileSync(binaryPath, { stdio: "inherit", env: runEnv() });
+	const outcome = executeBinary(binaryPath, command.programArgs, runEnv());
+	if (outcome.status === 0) {
 		log.info("Exit: 0");
-	} catch (error) {
-		const status = (error as { status?: number; signal?: string }).status;
-		const signal = (error as { signal?: string }).signal;
-		log.info(`Exit: ${signal ? `signal ${signal}` : (status ?? "error")}`);
+	} else {
+		log.info(
+			`Exit: ${outcome.signal ? `signal ${outcome.signal}` : (outcome.status ?? "error")}`,
+		);
+		if (outcome.signal !== undefined) {
+			process.kill(process.pid, outcome.signal);
+		}
+		process.exit(outcome.status ?? 1);
 	}
 }

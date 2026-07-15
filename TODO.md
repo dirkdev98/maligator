@@ -47,6 +47,110 @@ in. `OFF buys` = what dropping the feature gets you.
 - [ ] **Binary-size gate.** Track `hello-world` + `kitchen-sink` binary bytes per
       commit, the way the test262 gate tracks conformance, so size regressions are
       visible. Prerequisite for the size pass.
+- [ ] **Self-contained compiler assets via `Mal.embed("...")`.** Add the embed
+      primitive, then use it to package the runtime C sources and Rust crate with
+      the self-hosted CLI. Deferred for the first end-user CLI pass, which may keep
+      using repository-relative assets.
+
+## End-user CLI / build DX (GitHub #2)
+
+Agreed command surface:
+
+```text
+maligator init
+maligator doctor
+maligator build [entry] [--production] [--config path]
+maligator run [entry] [--config path] [-- args...]
+```
+
+The working directory is the project root. `--config` is resolved from it; there
+is no ancestor config search. An explicit entry overrides `config.entry`, and an
+explicit entry with no config uses the conservative product defaults.
+
+### C1 — Command shell
+
+- [x] Replace the flat `src/index.ts` argument scan with strict command parsing and
+      dispatch for `init`, `doctor`, `build`, and `run`.
+- [x] Add `--help` / `--version`, reject unknown options and extra positionals, and
+      diagnose missing option values without a stack trace.
+- [x] Let `build [entry]` and `run [entry]` override the configured entry; require
+      one of those sources and suggest `maligator init` when neither exists.
+- [x] Make `run -- args...` preserve arguments and propagate the child exit status
+      or signal instead of swallowing failures.
+- [x] Add parser/dispatch unit tests and subprocess tests for help, malformed input,
+      argument forwarding, and exit-code propagation.
+
+### C2 — Executable TypeScript config + init
+
+- [ ] Replace `maligator.build.json` with `maligator.build.ts`; do not retain a
+      compatibility loader before 1.0.
+- [ ] Export `defineBuild` from `maligator`; it is an identity function whose type
+      supplies the editor contract for `MaligatorBuildConfig`.
+- [ ] Load config by stripping erasable TypeScript, parsing it as a module, binding
+      `import { defineBuild } from "maligator"`, capturing the default export, and
+      direct-evaluating the transformed body. Preserve source locations in errors.
+- [ ] Permit ordinary config logic (locals, functions, conditions, environment
+      reads), evaluate it on every invocation, then validate the returned object
+      with the existing strict schema/defaulting rules.
+- [ ] Add top-level `outputName`; resolve the binary name as `outputName`, then the
+      unscoped part of `package.json#name`, then the working-directory basename.
+      Reject values that are not safe single path components.
+- [ ] Resolve `entry` and explicit config paths from the working directory, not the
+      config file's directory.
+- [ ] Implement `maligator init`: refuse to overwrite an existing config; select
+      `src/index.ts`, `src/main.ts`, `index.ts`, or `main.ts` when present; otherwise
+      emit the documented `src/index.ts` fallback.
+- [ ] Add config tests for logic, TypeScript stripping, malformed/missing exports,
+      schema failures, entry overrides, output naming, and generated init output.
+
+### C3 — Toolchain discovery + doctor
+
+- [ ] Introduce one toolchain model shared by `doctor` and native builds; honor
+      `CC` / `CXX`, then resolve executables from `PATH`.
+- [ ] Detect CMake, the C compiler, the conditional C++ linker requirement, rustup,
+      and the `cargo` / `rustc` selected by `runtime/rust/rust-toolchain.toml`.
+- [ ] Probe required compile/link behavior and optional flags with tiny artifacts
+      instead of inferring support from compiler names or version strings.
+- [ ] Probe at least C2x, LTO across compile + archive + link, and the host's symbol
+      stripping mechanism. Record resolved paths, versions, target, and results.
+- [ ] Cache probe results under `.cache/mal-cache/toolchains/`; invalidate on the
+      executable identity/version, target, or tested flag set.
+- [ ] Implement `maligator doctor` with actionable macOS and supported Linux
+      installation suggestions and a non-zero exit when required tools are absent.
+- [ ] Route `build` through the same diagnostics automatically; `doctor` is never a
+      prerequisite.
+- [ ] Add tests using isolated fake toolchains for selection, probe caching,
+      invalidation, missing tools, and platform-specific suggestions.
+
+### C4 — Build/cache layout + production mode
+
+- [ ] Move reusable runtime, Rust/Cargo, compiler-wire, and toolchain artifacts to
+      `.cache/mal-cache/`; keep generated C and final project binaries under
+      `.cache/mal-build/`.
+- [ ] Key reusable artifacts on compiler/build identity, resolved config, relevant
+      source content, target, toolchain fingerprint, supported flags, and build mode.
+- [ ] Stop hardcoding `cc`; pass the selected compiler consistently to CMake and the
+      emitted-program compile/link step.
+- [ ] Make normal builds stay at `-O2` with symbols and no LTO.
+- [ ] Implement `--production` as `-O2` plus supported LTO and post-link stripping.
+      Warn and continue at `-O2` when an optional production optimization is not
+      supported; fail only when a required compiler capability is absent.
+- [ ] Print concise cache hit/miss, selected toolchain, output path, and remediation
+      diagnostics; reserve full subprocess output for verbose/error reporting.
+- [ ] Add cache correctness tests covering source/config/toolchain/mode changes and
+      production tests for LTO/strip support and fallback behavior.
+
+### C5 — End-to-end self-hosted CLI
+
+- [ ] Refactor the existing compile/emit/native-build sequence behind reusable
+      `build` and `run` command functions; remove the duplicate flat CLI pipeline.
+- [ ] Extend only the minimal Node compatibility APIs required by the implementation
+      (initial candidates: `path.delimiter`, `process.platform`, `process.arch`, and
+      executable/file cache operations).
+- [ ] Compile the product CLI with the required eval and Node surfaces and run the
+      command/config/doctor/build/run integration suite with Node absent from `PATH`.
+- [ ] Update the README with init-to-run examples, config reference, cache layout,
+      production behavior, toolchain requirements, and troubleshooting.
 
 ## Priority 1 — Performance
 
@@ -157,6 +261,9 @@ in. `OFF buys` = what dropping the feature gets you.
 - [ ] WinterTC surface (opt-in): remaining fetch/Headers bits (`AbortSignal.any`,
       DOMException, `Set-Cookie`, live `url.searchParams`, `request.json()` parse-error);
       WPT harness.
+- [ ] Complete `package.json#exports` resolution. Exact entries, condition objects,
+      arrays, and explicit subpaths work; add wildcard/pattern subpaths, null targets,
+      and the remaining target-validation / encapsulation behavior.
 
 ## Conformance (`test262-todo.md`)
 

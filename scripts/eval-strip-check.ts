@@ -20,10 +20,14 @@ interface RunResult {
 function buildAndRun(tsPath: string, name: string): RunResult {
 	let buildOutput: string;
 	try {
-		buildOutput = execFileSync("node", ["src/index.ts", tsPath, "--name", name], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "ignore"],
-		});
+		buildOutput = execFileSync(
+			"node",
+			["src/index.ts", "build", tsPath, "--name", name],
+			{
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+			},
+		);
 	} catch (error) {
 		const e = error as { status?: number };
 		return {

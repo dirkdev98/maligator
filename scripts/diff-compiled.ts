@@ -24,6 +24,7 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 function build(name: string, extraArgs: Array<string>): string {
 	const args = [
 		path.join(repoRoot, "src/index.ts"),
+		"build",
 		path.resolve(fixture!),
 		"--name",
 		name,

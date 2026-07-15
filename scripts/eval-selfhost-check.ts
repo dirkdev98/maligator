@@ -60,7 +60,7 @@ console.log(buf.length + " " + a + " " + b + " " + buf[0] + " " + buf[buf.length
 	);
 	const buildOutput = execFileSync(
 		"node",
-		["src/index.ts", entry, "--name", "selfhost_check", "--config", config],
+		["src/index.ts", "build", entry, "--name", "selfhost_check", "--config", config],
 		{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
 	);
 	const binaryMatch = buildOutput.match(/^Binary: (.+)$/m);
