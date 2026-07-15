@@ -1573,6 +1573,27 @@
         "jobAllocations": 22008,
         "reactionAllocations": 40010
       }
+    },
+    {
+      "commit": "74ddc6c",
+      "dirty": false,
+      "coroutine": {
+        "compiled": {
+          "wallMs": 78.068084,
+          "collections": 10,
+          "allocatedMb": 99.8807373046875,
+          "frameAllocations": 24002,
+          "frameReuses": 0
+        },
+        "interpreted": {
+          "wallMs": 92.227292,
+          "collections": 10,
+          "allocatedMb": 99.8807373046875,
+          "frameAllocations": 44002,
+          "frameReuses": 0
+        },
+        "nodeMs": 32.094583
+      }
     }
   ]
 }
