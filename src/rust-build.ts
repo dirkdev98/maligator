@@ -78,7 +78,7 @@ function rustSourceHash(): string {
 				parts.push(
 					path.relative(RUST_DIR, full),
 					"\0",
-					readFileSync(full, "utf-8"),
+					hash("sha256", readFileSync(full, "utf-8"), "hex"),
 					"\0",
 				);
 			}
@@ -97,7 +97,7 @@ function rustTargetDir(
 	const key = hash(
 		"sha256",
 		JSON.stringify({
-			schema: 1,
+			schema: 2,
 			cacheSuffix,
 			mode: plan.mode,
 			toolchain: toolchain.fingerprint,

@@ -64,6 +64,13 @@ check(
 	typeof process.cwd() === "string" && process.cwd().length > 0,
 );
 check("exit is a function", typeof process.exit === "function");
+check("kill is a function", typeof process.kill === "function");
+check("pid is positive", typeof process.pid === "number" && process.pid > 0);
+check(
+	"platform is supported",
+	process.platform === "darwin" || process.platform === "linux",
+);
+check("arch is supported", process.arch === "arm64" || process.arch === "x64");
 
 function checkExitRangeError(name: string, code: number): void {
 	try {

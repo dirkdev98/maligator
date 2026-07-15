@@ -184,6 +184,10 @@ int mal_posix_fs_stat(const char *path, MalPosixStat *out) {
         return errno;
     }
     out->type = mal_posix_ft_from_mode(st.st_mode);
+    out->dev = (f64) st.st_dev;
+    out->ino = (f64) st.st_ino;
+    out->size = (f64) st.st_size;
+    out->mode = (u32) st.st_mode;
 #if defined(__APPLE__)
     out->mtime_ms = (f64) st.st_mtimespec.tv_sec * 1000.0 + (f64) st.st_mtimespec.tv_nsec / 1.0e6;
 #else
@@ -306,6 +310,125 @@ int mal_posix_fs_mkdir(const char *path, bool recursive) {
     }
     free(buf);
     return 0;
+}
+
+int mal_posix_fs_copy_file(const char *source, const char *destination) {
+    int source_fd = open(source, O_RDONLY);
+    if (source_fd < 0) {
+        return errno;
+    }
+    struct stat st;
+    if (fstat(source_fd, &st) != 0) {
+        int err = errno;
+        close(source_fd);
+        return err;
+    }
+    int destination_fd = open(destination, O_WRONLY | O_CREAT | O_TRUNC, st.st_mode & 0777);
+    if (destination_fd < 0) {
+        int err = errno;
+        close(source_fd);
+        return err;
+    }
+    byte buffer[16384];
+    int result = 0;
+    for (;;) {
+        ssize_t read_count = read(source_fd, buffer, sizeof buffer);
+        if (read_count < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            result = errno;
+            break;
+        }
+        if (read_count == 0) {
+            break;
+        }
+        ssize_t offset = 0;
+        while (offset < read_count) {
+            ssize_t written = write(destination_fd, buffer + offset, (usize) (read_count - offset));
+            if (written < 0 && errno == EINTR) {
+                continue;
+            }
+            if (written <= 0) {
+                result = written < 0 ? errno : EIO;
+                break;
+            }
+            offset += written;
+        }
+        if (result != 0) {
+            break;
+        }
+    }
+    if (close(source_fd) != 0 && result == 0) result = errno;
+    if (close(destination_fd) != 0 && result == 0) result = errno;
+    return result;
+}
+
+int mal_posix_fs_realpath(const char *path, char **out_path) {
+    char *resolved = realpath(path, nullptr);
+    if (resolved == nullptr) {
+        return errno;
+    }
+    *out_path = resolved;
+    return 0;
+}
+
+int mal_posix_fs_mkdtemp(const char *prefix, char **out_path) {
+    usize len = strlen(prefix);
+    char *template = malloc(len + 7);
+    if (template == nullptr) {
+        return ENOMEM;
+    }
+    memcpy(template, prefix, len);
+    memcpy(template + len, "XXXXXX", 7);
+    if (mkdtemp(template) == nullptr) {
+        int err = errno;
+        free(template);
+        return err;
+    }
+    *out_path = template;
+    return 0;
+}
+
+static int mal_posix_fs_rm_recursive(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return errno;
+    if (!S_ISDIR(st.st_mode)) return unlink(path) == 0 ? 0 : errno;
+
+    DIR *dir = opendir(path);
+    if (dir == nullptr) return errno;
+    int result = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        if (entry->d_name[0] == '.'
+            && (entry->d_name[1] == '\0'
+                || (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
+            continue;
+        }
+        usize path_len = strlen(path);
+        usize name_len = strlen(entry->d_name);
+        char *child = malloc(path_len + name_len + 2);
+        if (child == nullptr) {
+            result = ENOMEM;
+            break;
+        }
+        memcpy(child, path, path_len);
+        child[path_len] = '/';
+        memcpy(child + path_len + 1, entry->d_name, name_len + 1);
+        result = mal_posix_fs_rm_recursive(child);
+        free(child);
+        if (result != 0) break;
+    }
+    if (closedir(dir) != 0 && result == 0) result = errno;
+    if (result == 0 && rmdir(path) != 0) result = errno;
+    return result;
+}
+
+int mal_posix_fs_rm(const char *path, bool recursive, bool force) {
+    int result;
+    if (recursive) result = mal_posix_fs_rm_recursive(path);
+    else result = unlink(path) == 0 ? 0 : errno;
+    return force && result == ENOENT ? 0 : result;
 }
 
 const char *mal_posix_fs_errno_name(int err) {

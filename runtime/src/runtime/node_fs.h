@@ -9,8 +9,9 @@
  * rejecting embedded NUL in paths before delegating syscalls to the host layer
  * (posix_fs.c). Only the *Sync methods
  * this slice needs: existsSync, readFileSync (UTF-8), writeFileSync (string or
- * Uint8Array), statSync, readdirSync ({ withFileTypes }) and mkdirSync
- * ({ recursive }). No async / fd / stream API.
+ * Uint8Array), statSync, readdirSync ({ withFileTypes }), mkdirSync, and the
+ * copy/realpath/mkdtemp/rm operations used by compiler caches. No async / fd /
+ * stream API.
  *
  * Keeping the whole surface in one translation unit preserves module dead-code
  * elimination: nothing else references this object, so unless a program imports

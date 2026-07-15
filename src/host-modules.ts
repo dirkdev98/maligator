@@ -74,7 +74,17 @@ export const PROCESS_INSTALLER_SYMBOL = "mal_host_install_process";
 // "node:path"`) alongside its named functions — `relative` included.
 const PATH: HostModuleSpec = {
 	id: "node:path",
-	named: ["dirname", "extname", "isAbsolute", "join", "relative", "resolve"],
+	named: [
+		"basename",
+		"delimiter",
+		"dirname",
+		"extname",
+		"isAbsolute",
+		"join",
+		"relative",
+		"resolve",
+		"sep",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:path"),
 };
@@ -82,10 +92,14 @@ const PATH: HostModuleSpec = {
 const FS: HostModuleSpec = {
 	id: "node:fs",
 	named: [
+		"copyFileSync",
 		"existsSync",
 		"mkdirSync",
+		"mkdtempSync",
 		"readFileSync",
 		"readdirSync",
+		"realpathSync",
+		"rmSync",
 		"statSync",
 		"writeFileSync",
 	],

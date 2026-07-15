@@ -142,14 +142,14 @@ explicit entry with no config uses the conservative product defaults.
 
 ### C5 — End-to-end self-hosted CLI
 
-- [ ] Refactor the existing compile/emit/native-build sequence behind reusable
+- [x] Refactor the existing compile/emit/native-build sequence behind reusable
       `build` and `run` command functions; remove the duplicate flat CLI pipeline.
-- [ ] Extend only the minimal Node compatibility APIs required by the implementation
+- [x] Extend only the minimal Node compatibility APIs required by the implementation
       (initial candidates: `path.delimiter`, `process.platform`, `process.arch`, and
       executable/file cache operations).
-- [ ] Compile the product CLI with the required eval and Node surfaces and run the
+- [x] Compile the product CLI with the required eval and Node surfaces and run the
       command/config/doctor/build/run integration suite with Node absent from `PATH`.
-- [ ] Update the README with init-to-run examples, config reference, cache layout,
+- [x] Update the README with init-to-run examples, config reference, cache layout,
       production behavior, toolchain requirements, and troubleshooting.
 
 ## Priority 1 — Performance

@@ -26,6 +26,10 @@ typedef enum MalPosixFileType {
 
 typedef struct MalPosixStat {
     f64 mtime_ms; // modification time in milliseconds since the epoch
+    f64 dev;
+    f64 ino;
+    f64 size;
+    u32 mode;
     u32 type;     // MalPosixFileType (follows symlinks, like stat(2))
 } MalPosixStat;
 
@@ -65,6 +69,13 @@ void mal_posix_fs_free_dirents(MalPosixDirent *entries, usize count);
  * missing parent and treat an already-existing directory as success (mkdir -p /
  * fs.mkdirSync({recursive:true})). Returns 0 or an errno. */
 int mal_posix_fs_mkdir(const char *path, bool recursive);
+
+/* The additional synchronous operations used by native compiler caches. String
+ * results are malloc-owned and must be freed by the caller. */
+int mal_posix_fs_copy_file(const char *source, const char *destination);
+int mal_posix_fs_realpath(const char *path, char **out_path);
+int mal_posix_fs_mkdtemp(const char *prefix, char **out_path);
+int mal_posix_fs_rm(const char *path, bool recursive, bool force);
 
 /* The symbolic name of an errno ("ENOENT", ...) for Node-shaped error `.code`.
  * Returns "UNKNOWN" for codes outside the mapped set. */

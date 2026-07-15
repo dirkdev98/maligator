@@ -19,6 +19,7 @@ export const log = {
 		}
 	},
 	time(label: string) {
+		if (!debug) return () => {};
 		console.time(label);
 		return () => console.timeEnd(label);
 	},

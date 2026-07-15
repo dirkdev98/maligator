@@ -1,4 +1,4 @@
-// Native `node:path` (POSIX) acceptance fixture. Exercises the six exports and
+// Native `node:path` (POSIX) acceptance fixture. Exercises the narrow exports and
 // the default object against known Node posix outputs (differential: the `want`
 // values are exactly what Node's path.posix produces). Prints one line per check
 // and a final "RESULT <passed>/<total>" the native harness asserts.
@@ -6,7 +6,17 @@
 // resolve()/relative() depend on process.cwd(); those checks are written to be
 // cwd-independent (absolute inputs, or relations verified against resolve('.')).
 
-import path, { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import path, {
+	basename,
+	delimiter,
+	dirname,
+	extname,
+	isAbsolute,
+	join,
+	relative,
+	resolve,
+	sep,
+} from "node:path";
 
 const results: Array<[string, boolean]> = [];
 function check(name: string, ok: boolean): void {
@@ -36,6 +46,16 @@ function throwsRangeError(name: string, fn: () => unknown): void {
 	}
 	check(name, threw);
 }
+
+// --- bootstrap additions ---
+eq("basename-nested", basename("/foo/bar.txt"), "bar.txt");
+eq("basename-trailing", basename("/foo/bar/"), "bar");
+eq("basename-root", basename("/"), "");
+eq("delimiter-posix", delimiter, ":");
+eq("sep-posix", sep, "/");
+eq("default-basename-identity", path.basename === basename, true);
+eq("default-delimiter", path.delimiter, ":");
+eq("default-sep", path.sep, "/");
 
 // --- dirname ---
 eq("dirname-nested", dirname("/foo/bar/baz"), "/foo/bar");

@@ -1,8 +1,12 @@
 import {
+	copyFileSync,
 	existsSync,
 	mkdirSync,
+	mkdtempSync,
 	readFileSync,
 	readdirSync,
+	realpathSync,
+	rmSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
@@ -28,6 +32,7 @@ const root = `/tmp/maligator-node-fs-${Date.now()}`;
 const nested = `${root}/a/b`;
 const textFile = `${nested}/utf8.txt`;
 const byteFile = `${nested}/bytes.bin`;
+const copiedFile = `${nested}/copied.txt`;
 
 eq("missing does not exist", existsSync(textFile), false);
 mkdirSync(nested, { recursive: true });
@@ -46,6 +51,9 @@ const fileStat = statSync(textFile);
 check("stat file isFile", fileStat.isFile());
 eq("stat file isDirectory", fileStat.isDirectory(), false);
 check("stat exposes finite mtimeMs", fileStat.mtimeMs > 0 && fileStat.mtimeMs < Infinity);
+check("stat exposes mode", fileStat.mode > 0);
+check("stat exposes size", fileStat.size > 0);
+check("stat exposes identity", fileStat.dev >= 0 && fileStat.ino > 0);
 const dirStat = statSync(nested);
 check("stat directory isDirectory", dirStat.isDirectory());
 eq("stat directory isFile", dirStat.isFile(), false);
@@ -63,6 +71,20 @@ for (const entry of entries) {
 }
 check("readdirSync returns text-file Dirent", sawText);
 check("readdirSync returns byte-file Dirent", sawBytes);
+
+copyFileSync(textFile, copiedFile);
+eq("copyFileSync copies contents", readFileSync(copiedFile, "utf8"), "héllo 😀");
+check(
+	"realpathSync resolves an existing path",
+	realpathSync(copiedFile).endsWith("/a/b/copied.txt"),
+);
+const temporary = mkdtempSync(`${root}/temporary-`);
+check("mkdtempSync creates a unique directory", statSync(temporary).isDirectory());
+rmSync(temporary, { recursive: true, force: true });
+eq("rmSync recursively removes a directory", existsSync(temporary), false);
+rmSync(`${root}/already-missing`, { recursive: true, force: true });
+rmSync(copiedFile);
+eq("rmSync removes a file", existsSync(copiedFile), false);
 
 let missingCode = "";
 let missingSyscall = "";

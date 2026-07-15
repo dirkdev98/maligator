@@ -29,7 +29,7 @@ function compilerSourceHash(): string {
 			const full = path.join(dir, entry.name);
 			if (entry.isDirectory()) walk(full);
 			else if (isCompilerSource(entry.name)) {
-				parts.push(full, "\0", readFileSync(full, "utf-8"), "\0");
+				parts.push(full, "\0", hash("sha256", readFileSync(full, "utf-8"), "hex"), "\0");
 			}
 		}
 	};

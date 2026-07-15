@@ -630,7 +630,7 @@ export function rustConfigCacheSuffix(config: ResolvedBuildConfig): string {
  * The build inputs a resolved config maps to: the C `#if` gates (evalEnabled /
  * intlEnabled / per-service disable defines), the Rust Cargo features, and the
  * cache suffixes selecting the matching C + ICU archives. This is the single
- * config → {@link LocalBuildOptions} projection shared by the CLI (index.ts), the
+ * config → {@link LocalBuildOptions} projection shared by the CLI command layer, the
  * native test harness, and the size bench, so all three build the exact same
  * archives for a given config.
  */

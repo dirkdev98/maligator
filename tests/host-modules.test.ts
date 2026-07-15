@@ -117,12 +117,15 @@ describe("host-install manifest", () => {
 		}
 		expect(def.hostInstalls).toHaveLength(1);
 		expect(def.hostInstalls[0]!.exports.map((entry) => entry.name)).toEqual([
+			"basename",
+			"delimiter",
 			"dirname",
 			"extname",
 			"isAbsolute",
 			"join",
 			"relative",
 			"resolve",
+			"sep",
 			"default",
 		]);
 		expect(new Set(def.hostInstalls[0]!.exports.map((entry) => entry.slot))).toEqual(

@@ -282,13 +282,16 @@ test("resolves a namespace import of a host built-in to its (sorted) exports", (
 	const linkage = linkModules(program);
 	const nsImports = linkage.namespaceImports.get(path.join(root, "main.mjs"));
 	expect(nsImports?.[0]?.exports.map((e) => e.name)).toEqual([
+		"basename",
 		"default",
+		"delimiter",
 		"dirname",
 		"extname",
 		"isAbsolute",
 		"join",
 		"relative",
 		"resolve",
+		"sep",
 	]);
 });
 

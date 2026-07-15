@@ -427,6 +427,23 @@ static MalValue mal_node_path_dirname(
     return path_units(vm, p, (usize) end);
 }
 
+static MalValue mal_node_path_basename(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) this_value;
+    (void) nt;
+    (void) callee;
+    MalString *s;
+    if (!path_require_string(vm, argc >= 1 ? args[0] : mal_value_new_undefined(), "path", &s)) {
+        return mal_value_new_undefined();
+    }
+    const c16 *p = mal_string_code_units(s);
+    i64 end = (i64) mal_string_length(s);
+    while (end > 0 && p[end - 1] == PATH_SEP) end--;
+    i64 start = end;
+    while (start > 0 && p[start - 1] != PATH_SEP) start--;
+    return path_units(vm, p + start, (usize) (end - start));
+}
+
 static MalValue mal_node_path_extname(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) this_value;
@@ -603,9 +620,10 @@ typedef struct {
     MalNativeFunctionCallback callback;
 } MalNodePathExport;
 
-#define MAL_NODE_PATH_EXPORT_COUNT 6
+#define MAL_NODE_PATH_FUNCTION_COUNT 7
 
-static const MalNodePathExport mal_node_path_exports[MAL_NODE_PATH_EXPORT_COUNT] = {
+static const MalNodePathExport mal_node_path_exports[MAL_NODE_PATH_FUNCTION_COUNT] = {
+    {"basename", 1, mal_node_path_basename},
     {"dirname", 1, mal_node_path_dirname},
     {"extname", 1, mal_node_path_extname},
     {"isAbsolute", 1, mal_node_path_is_absolute},
@@ -619,17 +637,15 @@ void mal_host_install_node_path(
     (void) launch;
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
 
-    // vals[0..5] are the six functions; vals[6] is the `default` object. Rooted as
-    // one span across the object + property allocations so a collection mid-install
-    // cannot reclaim a value held only in this frame before it reaches a slot.
-    MalValue vals[MAL_NODE_PATH_EXPORT_COUNT + 1];
+    // Function values plus the default namespace object and two constant strings.
+    MalValue vals[MAL_NODE_PATH_FUNCTION_COUNT + 3];
     for (usize i = 0; i < countof(vals); ++i) {
         vals[i] = mal_value_new_undefined();
     }
     MalRootSpan rs;
     mal_gc_root(&rs, vals, (i32) countof(vals));
 
-    for (usize i = 0; i < MAL_NODE_PATH_EXPORT_COUNT; ++i) {
+    for (usize i = 0; i < MAL_NODE_PATH_FUNCTION_COUNT; ++i) {
         const MalNodePathExport *e = &mal_node_path_exports[i];
         MalNativeFunctionObject *fn = mal_native_function_object_new_arity(
             &vm->heap, fn_proto, mal_intrinsic_ascii(vm, (const byte *) e->name), e->length,
@@ -638,17 +654,25 @@ void mal_host_install_node_path(
     }
 
     MalObject *def = mal_intrinsic_new_object(vm);
-    vals[MAL_NODE_PATH_EXPORT_COUNT] = mal_value_from_object(def);
-    for (usize i = 0; i < MAL_NODE_PATH_EXPORT_COUNT; ++i) {
+    vals[MAL_NODE_PATH_FUNCTION_COUNT] = mal_value_from_object(def);
+    vals[MAL_NODE_PATH_FUNCTION_COUNT + 1] = path_ascii(vm, ":");
+    vals[MAL_NODE_PATH_FUNCTION_COUNT + 2] = path_ascii(vm, "/");
+    for (usize i = 0; i < MAL_NODE_PATH_FUNCTION_COUNT; ++i) {
         mal_intrinsic_define_data(vm, def, (const byte *) mal_node_path_exports[i].name, vals[i],
             MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     }
+    mal_intrinsic_define_data(vm, def, (const byte *) "delimiter",
+        vals[MAL_NODE_PATH_FUNCTION_COUNT + 1],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, def, (const byte *) "sep",
+        vals[MAL_NODE_PATH_FUNCTION_COUNT + 2],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
 
     for (i32 s = 0; s < count; ++s) {
         const char *name = slots[s].name;
         MalValue value = mal_value_new_undefined();
         bool matched = false;
-        for (usize i = 0; i < MAL_NODE_PATH_EXPORT_COUNT; ++i) {
+        for (usize i = 0; i < MAL_NODE_PATH_FUNCTION_COUNT; ++i) {
             if (strcmp(name, mal_node_path_exports[i].name) == 0) {
                 value = vals[i];
                 matched = true;
@@ -656,7 +680,13 @@ void mal_host_install_node_path(
             }
         }
         if (!matched && strcmp(name, "default") == 0) {
-            value = vals[MAL_NODE_PATH_EXPORT_COUNT];
+            value = vals[MAL_NODE_PATH_FUNCTION_COUNT];
+            matched = true;
+        } else if (!matched && strcmp(name, "delimiter") == 0) {
+            value = vals[MAL_NODE_PATH_FUNCTION_COUNT + 1];
+            matched = true;
+        } else if (!matched && strcmp(name, "sep") == 0) {
+            value = vals[MAL_NODE_PATH_FUNCTION_COUNT + 2];
             matched = true;
         }
         if (matched) {

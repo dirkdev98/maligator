@@ -32,7 +32,12 @@ function runtimeSourceHash(): string {
 	if (runtimeSourcesHash !== undefined) return runtimeSourcesHash;
 	const parts: Array<string> = [];
 	const collect = (filePath: string): void => {
-		parts.push(filePath, "\0", readFileSync(filePath, "utf-8"), "\0");
+		parts.push(
+			filePath,
+			"\0",
+			hash("sha256", readFileSync(filePath, "utf-8"), "hex"),
+			"\0",
+		);
 	};
 	const walk = (directory: string): void => {
 		for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
@@ -59,7 +64,7 @@ export function runtimeArtifactKey(inputs: {
 	toolchainFingerprint: string;
 	target: string;
 }): string {
-	return hash("sha256", JSON.stringify({ schema: 1, ...inputs }), "hex").slice(0, 24);
+	return hash("sha256", JSON.stringify({ schema: 2, ...inputs }), "hex").slice(0, 24);
 }
 
 /** The build dimensions that select a distinct cached archive. */

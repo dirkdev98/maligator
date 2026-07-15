@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -194,6 +195,60 @@ static MalValue mal_process_exit(
     exit(code);
 }
 
+static int mal_process_signal_number(const MalString *signal) {
+    const c16 *units = mal_string_code_units(signal);
+    usize len = mal_string_length(signal);
+#define MAL_SIGNAL(name) \
+    if (len == sizeof(#name) - 1) { \
+        bool equal = true; \
+        for (usize i = 0; i < len; i++) equal = equal && units[i] == (c16) (u8) #name[i]; \
+        if (equal) return name; \
+    }
+    MAL_SIGNAL(SIGABRT)
+    MAL_SIGNAL(SIGINT)
+    MAL_SIGNAL(SIGKILL)
+    MAL_SIGNAL(SIGTERM)
+#undef MAL_SIGNAL
+    return 0;
+}
+
+static MalValue mal_process_kill(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    if (argc < 1 || !mal_ops_is_number(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "The \"pid\" argument must be of type number");
+        return mal_value_new_undefined();
+    }
+    f64 pid_number = mal_ops_number_as_f64(args[0]);
+    if (!isfinite(pid_number) || trunc(pid_number) != pid_number || pid_number <= 0
+        || pid_number > INT_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "The value of \"pid\" is out of range");
+        return mal_value_new_undefined();
+    }
+    int signal_number = SIGTERM;
+    if (argc >= 2 && !mal_value_is_undefined(args[1])) {
+        if (!mal_value_is_string(args[1])) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "The \"signal\" argument must be a string");
+            return mal_value_new_undefined();
+        }
+        signal_number = mal_process_signal_number(mal_value_to_string(args[1]));
+        if (signal_number == 0) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Unknown signal");
+            return mal_value_new_undefined();
+        }
+    }
+    if (kill((pid_t) pid_number, signal_number) != 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "process.kill failed");
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(true);
+}
+
 void mal_host_install_process(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     (void) slots;
@@ -222,6 +277,31 @@ void mal_host_install_process(
 
     mal_intrinsic_define_method_n(vm, process, (const byte *) "cwd", 0, mal_process_cwd);
     mal_intrinsic_define_method_n(vm, process, (const byte *) "exit", 1, mal_process_exit);
+    mal_intrinsic_define_method_n(vm, process, (const byte *) "kill", 2, mal_process_kill);
+    mal_intrinsic_define_data(
+        vm, process, (const byte *) "pid", mal_value_from_f64((f64) getpid()), data_flags);
+#if defined(__APPLE__)
+    MalValue platform = mal_process_utf8_string(vm, "darwin");
+#elif defined(__linux__)
+    MalValue platform = mal_process_utf8_string(vm, "linux");
+#else
+    MalValue platform = mal_process_utf8_string(vm, "unknown");
+#endif
+    MalRootSpan platform_root;
+    mal_gc_root(&platform_root, &platform, 1);
+    mal_intrinsic_define_data(vm, process, (const byte *) "platform", platform, data_flags);
+    mal_gc_unroot(&platform_root);
+#if defined(__aarch64__) || defined(__arm64__)
+    MalValue arch = mal_process_utf8_string(vm, "arm64");
+#elif defined(__x86_64__)
+    MalValue arch = mal_process_utf8_string(vm, "x64");
+#else
+    MalValue arch = mal_process_utf8_string(vm, "unknown");
+#endif
+    MalRootSpan arch_root;
+    mal_gc_root(&arch_root, &arch, 1);
+    mal_intrinsic_define_data(vm, process, (const byte *) "arch", arch, data_flags);
+    mal_gc_unroot(&arch_root);
 
     // A free `process` identifier resolves through the ordinary global object, so
     // publish the same writable/configurable property observed by globalThis.process.

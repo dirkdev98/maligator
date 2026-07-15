@@ -175,6 +175,14 @@ static MalValue node_fs_make_stats(MalVm *vm, MalObject *proto, const MalPosixSt
     mal_gc_root(&rs, &v, 1);
     mal_intrinsic_define_data(
         vm, stats, (const byte *) "mtimeMs", mal_value_from_f64(st->mtime_ms), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "dev", mal_value_from_f64(st->dev), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "ino", mal_value_from_f64(st->ino), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "size", mal_value_from_f64(st->size), NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(
+        vm, stats, (const byte *) "mode", mal_value_from_f64((f64) st->mode), NODE_FS_VISIBLE);
     mal_intrinsic_define_data(vm, stats, (const byte *) NODE_FS_TYPE_KEY,
         mal_value_from_i32((i32) st->type), MAL_PROPERTY_NONE);
     mal_gc_unroot(&rs);
@@ -381,6 +389,95 @@ static MalValue node_fs_mkdir_sync(
     return mal_value_new_undefined();
 }
 
+static MalValue node_fs_copy_file_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *source = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (source == nullptr) return mal_value_new_undefined();
+    char *destination = node_fs_path_cstr(vm, argc >= 2 ? args[1] : mal_value_new_undefined());
+    if (destination == nullptr) {
+        free(source);
+        return mal_value_new_undefined();
+    }
+    int err = mal_posix_fs_copy_file(source, destination);
+    if (err != 0) node_fs_throw_errno(vm, err, "copyfile", source);
+    free(destination);
+    free(source);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_realpath_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *input = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (input == nullptr) return mal_value_new_undefined();
+    char *resolved;
+    int err = mal_posix_fs_realpath(input, &resolved);
+    if (err != 0) {
+        node_fs_throw_errno(vm, err, "realpath", input);
+        free(input);
+        return mal_value_new_undefined();
+    }
+    MalValue result = node_fs_string_from_cstr(vm, resolved);
+    free(resolved);
+    free(input);
+    return result;
+}
+
+static MalValue node_fs_mkdtemp_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *prefix = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (prefix == nullptr) return mal_value_new_undefined();
+    char *created;
+    int err = mal_posix_fs_mkdtemp(prefix, &created);
+    if (err != 0) {
+        node_fs_throw_errno(vm, err, "mkdtemp", prefix);
+        free(prefix);
+        return mal_value_new_undefined();
+    }
+    MalValue result = node_fs_string_from_cstr(vm, created);
+    free(created);
+    free(prefix);
+    return result;
+}
+
+static MalValue node_fs_rm_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (path == nullptr) return mal_value_new_undefined();
+    bool recursive = false;
+    bool force = false;
+    if (argc >= 2 && mal_value_is_object(args[1])) {
+        MalValue option;
+        if (!mal_vm_get_property(
+                vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "recursive"), &option)) {
+            free(path);
+            return mal_value_new_undefined();
+        }
+        recursive = mal_value_is_truthy(option);
+        if (!mal_vm_get_property(
+                vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "force"), &option)) {
+            free(path);
+            return mal_value_new_undefined();
+        }
+        force = mal_value_is_truthy(option);
+    }
+    int err = mal_posix_fs_rm(path, recursive, force);
+    if (err != 0) node_fs_throw_errno(vm, err, recursive ? "rm" : "unlink", path);
+    free(path);
+    return mal_value_new_undefined();
+}
+
 /* ---------------------------------------------------------------------------
  * Installation.
  * --------------------------------------------------------------------------- */
@@ -452,6 +549,14 @@ void mal_host_install_node_fs(
                 vm, fn_proto, "readdirSync", 1, node_fs_readdir_sync, protos[1]);
         } else if (strcmp(name, "mkdirSync") == 0) {
             fn = node_fs_make_fn(vm, fn_proto, "mkdirSync", 1, node_fs_mkdir_sync);
+        } else if (strcmp(name, "copyFileSync") == 0) {
+            fn = node_fs_make_fn(vm, fn_proto, "copyFileSync", 2, node_fs_copy_file_sync);
+        } else if (strcmp(name, "realpathSync") == 0) {
+            fn = node_fs_make_fn(vm, fn_proto, "realpathSync", 1, node_fs_realpath_sync);
+        } else if (strcmp(name, "mkdtempSync") == 0) {
+            fn = node_fs_make_fn(vm, fn_proto, "mkdtempSync", 1, node_fs_mkdtemp_sync);
+        } else if (strcmp(name, "rmSync") == 0) {
+            fn = node_fs_make_fn(vm, fn_proto, "rmSync", 1, node_fs_rm_sync);
         } else {
             continue; // unknown export: leave the slot at its undefined init
         }

@@ -17,8 +17,8 @@
  *   - env: an enumerable snapshot of the process environment (reads / Object.keys
  *     / spread), taken once at install.
  *   - cwd(): the current working directory.
- *   - exit(code): terminate with a safe-integer status (default 0); invalid types
- *     and non-integral, non-finite, or unsafe numbers throw before termination.
+ *   - exit(code), plus pid/kill for child-signal propagation.
+ *   - platform/arch metadata used by native toolchain diagnostics.
  *
  * No node:process module, signals, streams, or metadata — only the four members
  * above. `launch` carries the OS command line (argc/argv) the driver's `main`
