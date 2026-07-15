@@ -25,6 +25,20 @@
 #include "vm_load.h"
 #include "vm_ops.h"
 
+static u64 g_coroutine_buffer_allocations = 0;
+
+u64 mal_coroutine_buffer_allocation_count(void) {
+    return g_coroutine_buffer_allocations;
+}
+
+u64 mal_coroutine_buffer_reuse_count(void) {
+    return 0;
+}
+
+void mal_coroutine_note_buffer_allocation(void) {
+    g_coroutine_buffer_allocations++;
+}
+
 /**
  * Capacity of the contiguous value stack, in MalValue slots. Recursion deeper
  * than this throws a RangeError, matching engines that cap the call stack. A
@@ -958,7 +972,11 @@ bool mal_vm_push_function_frame(
         // Copy parameters (and arguments, if read) out of the marshaling area
         // into owned heap storage, then release the area.
         registers = malloc(sizeof(MalValue) * register_count);
+        mal_coroutine_note_buffer_allocation();
         arguments = (wants_args && arg_count > 0) ? malloc(sizeof(MalValue) * arg_count) : nullptr;
+        if (arguments != nullptr) {
+            mal_coroutine_note_buffer_allocation();
+        }
         for (i32 i = 0; i < register_count; i++) {
             registers[i] = mal_value_new_undefined();
         }

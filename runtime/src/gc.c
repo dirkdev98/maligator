@@ -334,11 +334,14 @@ static void mal_gc_print_stats(void) {
         fprintf(
             stderr,
             "[promise-stats] job_allocations=%llu job_reuses=%llu "
-            "reaction_allocations=%llu reaction_reuses=%llu\n",
+            "reaction_allocations=%llu reaction_reuses=%llu "
+            "frame_allocations=%llu frame_reuses=%llu\n",
             (unsigned long long) mal_promise_job_allocation_count(),
             (unsigned long long) mal_promise_job_reuse_count(),
             (unsigned long long) mal_promise_reaction_allocation_count(),
-            (unsigned long long) mal_promise_reaction_reuse_count()
+            (unsigned long long) mal_promise_reaction_reuse_count(),
+            (unsigned long long) mal_coroutine_buffer_allocation_count(),
+            (unsigned long long) mal_coroutine_buffer_reuse_count()
         );
     }
 }

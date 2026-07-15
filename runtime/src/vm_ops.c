@@ -4729,6 +4729,7 @@ void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction) {
 
 MalValue *mal_coroutine_alloc_registers(i32 slot_count) {
     MalValue *registers = malloc(sizeof(MalValue) * (usize) slot_count);
+    mal_coroutine_note_buffer_allocation();
     for (i32 i = 0; i < slot_count; i++) {
         registers[i] = mal_value_new_undefined();
     }

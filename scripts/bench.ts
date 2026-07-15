@@ -21,6 +21,9 @@
  *   - promise   bench/promise.js: chains, pending fan-out, combinators, thenables,
  *               rejection, and await. Wall time vs V8 plus managed and native
  *               promise-bookkeeping allocation signals.
+ *   - coroutine bench/coroutine.js: generator, async, and async-generator frame
+ *               churn in compiled and interpreted backends. Wall time and native
+ *               support-buffer allocations.
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
  *               wall, peak RSS, max GC pause (macOS: RSS/pauses via /usr/bin/time -l
  *               + MAL_GC_STATS). No V8 compare.
@@ -93,6 +96,18 @@ interface PromiseMetrics {
 	reactionAllocations: number;
 	reactionReuses: number;
 }
+interface CoroutineBackendMetrics {
+	wallMs: number;
+	collections: number;
+	allocatedMb: number;
+	frameAllocations: number;
+	frameReuses: number;
+}
+interface CoroutineMetrics {
+	compiled: CoroutineBackendMetrics;
+	interpreted: CoroutineBackendMetrics;
+	nodeMs: number;
+}
 interface GcWorkload {
 	wallMs: number;
 	rssMb: number;
@@ -114,6 +129,7 @@ interface Entry {
 	module?: ModuleMetrics;
 	string?: StringMetrics;
 	promise?: PromiseMetrics;
+	coroutine?: CoroutineMetrics;
 	gc?: Record<string, GcWorkload>;
 	http?: HttpMetrics | null;
 }
@@ -335,6 +351,43 @@ function benchPromise(runs: number): PromiseMetrics {
 		jobReuses: parsePromiseStat(stderr, "job_reuses"),
 		reactionAllocations: parsePromiseStat(stderr, "reaction_allocations"),
 		reactionReuses: parsePromiseStat(stderr, "reaction_reuses"),
+	};
+}
+
+// ---- coroutine (suspendable frames; compiled + interpreted) ----------------
+
+function benchCoroutineBackend(binary: string, runs: number): CoroutineBackendMetrics {
+	const wallMs = timeCommand(binary, [], runs);
+	const result = spawnSync(binary, [], {
+		env: { ...process.env, MAL_GC_STATS: "1", MAL_PROMISE_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	const stderr = result.stderr ?? "";
+	return {
+		wallMs,
+		collections: parseGcStat(stderr, "collections"),
+		allocatedMb: parseGcStat(stderr, "allocated_bytes") / (1024 * 1024),
+		frameAllocations: parsePromiseStat(stderr, "frame_allocations"),
+		frameReuses: parsePromiseStat(stderr, "frame_reuses"),
+	};
+}
+
+function benchCoroutine(runs: number): CoroutineMetrics {
+	const compiled = buildNativeBinary({
+		fixture: "bench/coroutine.js",
+		name: "bench-coroutine",
+		compiled: true,
+	});
+	const interpreted = buildNativeBinary({
+		fixture: "bench/coroutine.js",
+		name: "bench-coroutine-ni",
+		compiled: false,
+	});
+	return {
+		compiled: benchCoroutineBackend(compiled, runs),
+		interpreted: benchCoroutineBackend(interpreted, runs),
+		nodeMs: timeCommand("node", ["bench/coroutine.js"], runs),
 	};
 }
 
@@ -592,6 +645,21 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			`            ${entry.promise.reactionAllocations} reaction allocations${delta(entry.promise.reactionAllocations, p?.reactionAllocations)}, ${entry.promise.reactionReuses} reused`,
 		);
 	}
+	if (entry.coroutine) {
+		const p = previous?.coroutine;
+		console.log("coroutine (suspendable frames; vs V8):");
+		for (const name of ["compiled", "interpreted"] as const) {
+			const current = entry.coroutine[name];
+			const prior = p?.[name];
+			console.log(
+				`  ${name.padEnd(11)} ${current.wallMs.toFixed(1)}ms${delta(current.wallMs, prior?.wallMs)}  ${current.frameAllocations} allocations${delta(current.frameAllocations, prior?.frameAllocations)}, ${current.frameReuses} reused`,
+			);
+			console.log(
+				`               ${current.collections} collections, ${current.allocatedMb.toFixed(1)}MB managed`,
+			);
+		}
+		console.log(`  node        ${entry.coroutine.nodeMs.toFixed(1)}ms`);
+	}
 	if (entry.gc) {
 		console.log("gc (generational):");
 		for (const [name, w] of Object.entries(entry.gc)) {
@@ -626,7 +694,7 @@ const selected = args.filter((a) => !a.startsWith("--") && !/^\d+$/.test(a));
 const which =
 	selected.length > 0
 		? selected
-		: ["size", "language", "module", "string", "promise", "gc", "http"];
+		: ["size", "language", "module", "string", "promise", "coroutine", "gc", "http"];
 
 const { commit, dirty } = gitInfo();
 const entry: Entry = { commit, dirty };
@@ -636,6 +704,7 @@ if (which.includes("language")) entry.language = benchLanguage(runs);
 if (which.includes("module")) entry.module = benchModule(runs);
 if (which.includes("string")) entry.string = benchString(runs);
 if (which.includes("promise")) entry.promise = benchPromise(runs);
+if (which.includes("coroutine")) entry.coroutine = benchCoroutine(runs);
 if (which.includes("gc")) entry.gc = benchGc(runs);
 if (which.includes("http")) entry.http = benchHttp("10s", 50);
 

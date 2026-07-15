@@ -1579,6 +1579,11 @@ typedef MalVmFrame MalCallable;
 
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition);
 
+/** Native suspendable-frame allocation counters used by benchmark telemetry. */
+u64 mal_coroutine_buffer_allocation_count(void);
+u64 mal_coroutine_buffer_reuse_count(void);
+void mal_coroutine_note_buffer_allocation(void);
+
 /**
  * Run the definition's host-install manifest: for each reached `node:*` built-in
  * / `process`, call its installer to fill the export global slots. Call after
