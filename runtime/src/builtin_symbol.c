@@ -127,10 +127,13 @@ static MalValue mal_builtin_symbol_prototype_to_string(MalVm *vm, MalValue this_
     MalString *description = mal_symbol_description(symbol);
     MalValue text = mal_value_from_string(mal_intrinsic_ascii(vm, "Symbol("));
     if (description != nullptr) {
-        text = mal_ops_add(&vm->heap, text, mal_value_from_string(description));
+        text = mal_vm_add(vm, text, mal_value_from_string(description));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
     }
 
-    return mal_ops_add(&vm->heap, text, mal_value_from_string(mal_intrinsic_ascii(vm, ")")));
+    return mal_vm_add(vm, text, mal_value_from_string(mal_intrinsic_ascii(vm, ")")));
 }
 
 static MalValue mal_builtin_symbol_prototype_value_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

@@ -3,7 +3,8 @@
 Top-level roadmap. The working docs are the source of truth for detail:
 `gc_todo.md` (GC + compiled throughput), `isolate_todo.md` (isolate / reactor /
 actors / SMP / GUI / bare-metal), `eval_todo.md` (eval / Function / realms),
-`test262-todo.md` (conformance).
+`test262-todo.md` (conformance), `test262-perf-todo.md` (ranked suite/compiler
+performance work).
 
 ## Goal
 
@@ -67,6 +68,8 @@ in. `OFF buys` = what dropping the feature gets you.
       with a clearer win or once (b)'s deopt machinery exists for another reason.
 - [ ] **String optimizations** — ropes/cons-strings + dependent (slice) strings so
       `+` is O(1)-amortized and substring is zero-copy (GC trace-edge to parent).
+      Cons strings and traced dependent storage are implemented; public substring
+      producers still need conversion from copying to dependent slices.
 - [ ] **String/key interning (atom table)** — pointer-identity key compares, wider
       IC coverage, substrate for faster dict/Map lookup + symbol fast path.
 - [ ] **Call-site inlining — residual.** Landed: a polymorphic call-target cache (identity +
@@ -93,6 +96,9 @@ in. `OFF buys` = what dropping the feature gets you.
         only once the isolate work multiplies `MalVm` instances (one per scheduler thread).
 - [ ] Generate ops from a single op-descriptor list (kills the ~6-file opcode path).
 - [ ] Effect-summary table for builtins (T7.3) — unlocks functional-style inlining.
+- [ ] **Test262/compiler throughput queue** — address the ranked safety,
+      algorithmic-compile, generated-code, and measurement tasks in
+      `test262-perf-todo.md`.
 
 ## Priority 2 — Binary size
 

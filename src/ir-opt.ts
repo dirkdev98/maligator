@@ -157,67 +157,90 @@ function optDropUnreferencedBlocks(program: IntermediateProgram): boolean {
 	let changed = false;
 
 	for (const fn of program.functions) {
-		const blockIndices = new Set(
-			// Note the slice. Our first block is our function entrypoint. If we skip that, we skip
-			// everything.
-			Array.from({ length: fn.blocks.length }, (_, i) => i).slice(1),
-		);
-
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if ("blocks" in instruction) {
-					for (const blockIdx of instruction.blocks) {
-						blockIndices.delete(blockIdx);
-					}
-				}
-
-				if (blockIndices.size === 0) {
-					// 'Early' return if all blocks are referenced.
-					break;
-				}
-			}
-
-			if (blockIndices.size === 0) {
-				// 'Early' return if all blocks are referenced.
-				break;
-			}
-		}
-
-		const indicesToPatch = [...blockIndices].sort((a, b) => a - b);
-		if (indicesToPatch.length > 0) {
-			changed = true;
-		}
-
-		for (let patchIndex = 0; patchIndex < indicesToPatch.length; patchIndex++) {
-			const blockIdx = indicesToPatch[patchIndex]!;
-
-			// Remove the block
-			fn.blocks.splice(blockIdx, 1);
-
-			// Patch up subsequent patch targets, since they refer to the block index before
-			// removing a block.
-			for (let i = patchIndex + 1; i < indicesToPatch.length; ++i) {
-				indicesToPatch[i]!--;
-			}
-
-			// Patch up any blocks that reference blocks after the jumpTarget
-			for (let i = 0; i < fn.blocks.length; ++i) {
-				const block = fn.blocks[i]!;
-				for (let j = 0; j < block.instructions.length; ++j) {
-					const instruction = block.instructions[j]!;
-					if ("blocks" in instruction) {
-						for (let k = 0; k < instruction.blocks.length; ++k) {
-							if (instruction.blocks[k]! > blockIdx) {
-								instruction.blocks[k]!--;
-							}
-						}
-					}
-				}
-			}
-		}
+		changed = dropUnreferencedBlocksInFunction(fn) || changed;
 	}
 
 	return changed;
+}
+
+function dropUnreferencedBlocksInFunction(fn: IRFunction): boolean {
+	const blockCount = fn.blocks.length;
+	if (blockCount <= 1) {
+		return false;
+	}
+
+	// Count explicit target and positional fall-through occurrences, not just
+	// distinct source blocks. Peeling a block removes all of its outgoing
+	// occurrences and can expose further zero-indegree blocks. Block zero remains
+	// the function entry; cycles retain one another, matching the old behavior.
+	const incoming = new Array<number>(blockCount).fill(0);
+	for (let blockIndex = 0; blockIndex < blockCount; blockIndex++) {
+		const block = fn.blocks[blockIndex]!;
+		for (const instruction of block.instructions) {
+			if ("blocks" in instruction) {
+				for (const target of instruction.blocks) {
+					incoming[target]!++;
+				}
+			}
+		}
+		const last = block.instructions.at(-1);
+		const endsControlFlow =
+			last?.type === "jump" || last?.type === "return" || last?.type === "throw";
+		if (!endsControlFlow && blockIndex + 1 < blockCount) {
+			incoming[blockIndex + 1]!++;
+		}
+	}
+
+	const removed = new Array<boolean>(blockCount).fill(false);
+	const worklist: Array<number> = [];
+	for (let blockIndex = 1; blockIndex < blockCount; blockIndex++) {
+		if (incoming[blockIndex] === 0) {
+			worklist.push(blockIndex);
+		}
+	}
+	const decrementIncoming = (target: number) => {
+		incoming[target]!--;
+		if (target !== 0 && incoming[target] === 0) {
+			worklist.push(target);
+		}
+	};
+
+	for (let cursor = 0; cursor < worklist.length; cursor++) {
+		const blockIndex = worklist[cursor]!;
+		removed[blockIndex] = true;
+		const block = fn.blocks[blockIndex]!;
+		for (const instruction of block.instructions) {
+			if (!("blocks" in instruction)) {
+				continue;
+			}
+			for (const target of instruction.blocks) {
+				decrementIncoming(target);
+			}
+		}
+		const last = block.instructions.at(-1);
+		const endsControlFlow =
+			last?.type === "jump" || last?.type === "return" || last?.type === "throw";
+		if (!endsControlFlow && blockIndex + 1 < blockCount) {
+			decrementIncoming(blockIndex + 1);
+		}
+	}
+
+	if (worklist.length === 0) {
+		return false;
+	}
+
+	const oldToNew = new Array<number | undefined>(blockCount);
+	const blocks: IRFunction["blocks"] = [];
+	for (let oldIndex = 0; oldIndex < blockCount; oldIndex++) {
+		if (!removed[oldIndex]) {
+			oldToNew[oldIndex] = blocks.length;
+			blocks.push(fn.blocks[oldIndex]!);
+		}
+	}
+	fn.blocks = blocks;
+	patchBlockTargets(fn, oldToNew);
+	patchBodyEntryBlock(fn, oldToNew);
+	return true;
 }
 
 /**
@@ -228,11 +251,27 @@ function optLocalsToRegister(program: IntermediateProgram): boolean {
 
 	for (const fn of program.functions) {
 		const localMap = new Map<number, number>();
+		const storedLocals = new Set<number>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type === "storeLocal") {
+					storedLocals.add(instruction.index);
+				}
+			}
+		}
 
 		for (const block of fn.blocks) {
 			for (let i = 0; i < block.instructions.length; ++i) {
 				const instruction = block.instructions[i];
 				if (instruction?.type !== "storeLocal" && instruction?.type !== "loadLocal") {
+					continue;
+				}
+				if (instruction.type === "loadLocal" && !storedLocals.has(instruction.index)) {
+					block.instructions[i] = {
+						type: "createUndefined",
+						registers: [instruction.registers[0]],
+					};
+					changed = true;
 					continue;
 				}
 
@@ -270,105 +309,101 @@ function optCombineLinearBlocks(program: IntermediateProgram): boolean {
 	let changed = false;
 
 	for (const fn of program.functions) {
-		const jumpTargetToSources = new Map<number, Array<number>>();
+		changed = combineLinearBlocksInFunction(fn) || changed;
+	}
 
-		// Scan every block (including the last) so a target's source count is
-		// accurate. A back-edge from the final block — e.g. a self-recursive
-		// tail-call loop — still makes its target multi-sourced, which must
-		// prevent the wrong merge below. (The last block can never be a merge
-		// source itself: that needs jumpSource + 1 === jumpTarget.)
-		for (let jumpSource = 0; jumpSource < fn.blocks.length; ++jumpSource) {
-			const block = fn.blocks[jumpSource]!;
+	return changed;
+}
 
-			for (const instr of block.instructions) {
-				if ("blocks" in instr) {
-					for (const targetBlock of instr.blocks) {
-						const jumpSourceList =
-							jumpTargetToSources.get(targetBlock) ??
-							jumpTargetToSources.set(targetBlock, []).get(targetBlock)!;
+function combineLinearBlocksInFunction(fn: IRFunction): boolean {
+	const blockCount = fn.blocks.length;
+	if (blockCount <= 1) {
+		return false;
+	}
 
-						jumpSourceList.push(jumpSource);
-					}
-				}
-			}
-		}
-
-		// Normalize to a sorted array from source to target.
-		//
-		// This allows us to patch up consequent block indices and thus combine multiple blocks in
-		// one run.
-		const pairsToEvaluate = jumpTargetToSources
-			.entries()
-			.filter(
-				([jumpTarget, jumpSources]) =>
-					// Excludes multiple sources to a single target. And only
-					// support handling consequent blocks.
-					jumpSources.length === 1 && jumpSources[0]! + 1 === jumpTarget,
-			)
-			.map(
-				([jumpTarget, jumpSources]) => [jumpSources[0], jumpTarget] as [number, number],
-			)
-			.toArray()
-			.sort((a, b) => a[0] - b[0]);
-
-		for (
-			let evaluationIndex = 0;
-			evaluationIndex < pairsToEvaluate.length;
-			evaluationIndex++
-		) {
-			const [jumpSource, jumpTarget] = pairsToEvaluate[evaluationIndex]!;
-
-			const sourceBlock = fn.blocks[jumpSource]!;
-			const targetBlock = fn.blocks[jumpTarget]!;
-
-			const lastSourceInstruction = sourceBlock.instructions.at(-1)!;
-			if (
-				lastSourceInstruction.type !== "jump" ||
-				lastSourceInstruction.blocks[0] !== jumpTarget
-			) {
-				// Only combine the last instruction of the source block is the jump if it is the jump to
-				// the consequent block.
-				continue;
-			}
-
-			// Drop the target block.
-			fn.blocks.splice(jumpTarget, 1);
-			changed = true;
-
-			// Patch up all other found pairs. Note that these are sorted in source ascending order
-			// and we can't have multiple sources to a single target since we only check the last
-			// jump instruction.
-			for (
-				let patchIdx = evaluationIndex + 1;
-				patchIdx < pairsToEvaluate.length;
-				++patchIdx
-			) {
-				const [patchSource, patchTarget] = pairsToEvaluate[patchIdx]!;
-				pairsToEvaluate[patchIdx] = [patchSource - 1, patchTarget - 1];
-			}
-
-			// Add instruction to the previous block, while removing the last jump instruction
-			sourceBlock.instructions.splice(sourceBlock.instructions.length - 1, 1);
-			sourceBlock.instructions.push(...targetBlock.instructions);
-
-			// Patch up blocks that reference blocks after the jumpTarget
-			for (let i = 0; i < fn.blocks.length; ++i) {
-				const block = fn.blocks[i]!;
-				for (let j = 0; j < block.instructions.length; ++j) {
-					const instruction = block.instructions[j]!;
-					if ("blocks" in instruction) {
-						for (let k = 0; k < instruction.blocks.length; ++k) {
-							if (instruction.blocks[k]! > jumpTarget) {
-								instruction.blocks[k]!--;
-							}
-						}
-					}
+	// Every occurrence matters: a jump plus either tryBegin target, two identical
+	// tryBegin targets, or a backedge all make the target multi-referenced.
+	const incoming = new Array<number>(blockCount).fill(0);
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if ("blocks" in instruction) {
+				for (const target of instruction.blocks) {
+					incoming[target]!++;
 				}
 			}
 		}
 	}
 
-	return changed;
+	// mergeNext[i] means old block i+1 is folded into old block i. Eligible
+	// edges can form chains; all decisions use the original CFG and indices.
+	const mergeNext = new Array<boolean>(blockCount - 1).fill(false);
+	let mergeCount = 0;
+	for (let source = 0; source + 1 < blockCount; source++) {
+		const lastInstruction = fn.blocks[source]!.instructions.at(-1);
+		if (
+			incoming[source + 1] === 1 &&
+			lastInstruction?.type === "jump" &&
+			lastInstruction.blocks[0] === source + 1
+		) {
+			mergeNext[source] = true;
+			mergeCount++;
+		}
+	}
+	if (mergeCount === 0) {
+		return false;
+	}
+
+	const oldToNew = new Array<number | undefined>(blockCount);
+	const blocks: IRFunction["blocks"] = [];
+	for (let chainStart = 0; chainStart < blockCount; ) {
+		const mergedInstructions: Array<IRInstruction> = [];
+		let chainEnd = chainStart;
+		while (chainEnd + 1 < blockCount && mergeNext[chainEnd]) {
+			const instructions = fn.blocks[chainEnd]!.instructions;
+			mergedInstructions.push(...instructions.slice(0, -1));
+			chainEnd++;
+		}
+		mergedInstructions.push(...fn.blocks[chainEnd]!.instructions);
+
+		const newIndex = blocks.length;
+		for (let oldIndex = chainStart; oldIndex <= chainEnd; oldIndex++) {
+			oldToNew[oldIndex] = newIndex;
+		}
+		const block = fn.blocks[chainStart]!;
+		block.instructions = mergedInstructions;
+		blocks.push(block);
+		chainStart = chainEnd + 1;
+	}
+
+	fn.blocks = blocks;
+	patchBlockTargets(fn, oldToNew);
+	patchBodyEntryBlock(fn, oldToNew);
+	return true;
+}
+
+function patchBlockTargets(fn: IRFunction, oldToNew: Array<number | undefined>) {
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!("blocks" in instruction)) {
+				continue;
+			}
+			for (let i = 0; i < instruction.blocks.length; i++) {
+				instruction.blocks[i] = oldToNew[instruction.blocks[i]!]!;
+			}
+		}
+	}
+}
+
+function patchBodyEntryBlock(fn: IRFunction, oldToNew: Array<number | undefined>) {
+	if (fn.bodyEntryBlock === undefined) {
+		return;
+	}
+	const newBodyEntry = oldToNew[fn.bodyEntryBlock];
+	if (newBodyEntry === undefined) {
+		delete fn.bodyEntryBlock;
+	} else {
+		fn.bodyEntryBlock = newBodyEntry;
+	}
 }
 
 /**
@@ -401,6 +436,13 @@ function eliminateRedundantTdzChecksInFunction(fn: IRFunction) {
 	if (blocks.length === 0) {
 		return;
 	}
+	if (
+		!blocks.some((block) =>
+			block.instructions.some((instr) => instr.type === "throwIfTdz"),
+		)
+	) {
+		return;
+	}
 
 	// `with` (sloppy mode) introduces the empty sentinel through `withGet`, which
 	// would defeat the empty-value tracking below. Such functions are never
@@ -420,28 +462,34 @@ function eliminateRedundantTdzChecksInFunction(fn: IRFunction) {
 	// Blocks reached by a non-local edge (exception handler / tryEnd marker) are
 	// pinned to "nothing initialized": a throw can arrive before any store ran.
 	const pinnedEmpty = new Set<number>();
-	const allSlots = new Set<number>();
+	const checkedSlots = new Set<number>();
 	for (const block of blocks) {
+		const regToSlot = new Map<number, number>();
 		for (const instr of block.instructions) {
 			if (instr.type === "tryBegin") {
 				for (const target of instr.blocks) {
 					pinnedEmpty.add(target);
 				}
-			} else if (instr.type === "storeLocal" || instr.type === "loadLocal") {
-				allSlots.add(instr.index);
+			} else if (instr.type === "loadLocal") {
+				regToSlot.set(instr.registers[0], instr.index);
+			} else if (instr.type === "throwIfTdz") {
+				const slot = regToSlot.get(instr.registers[0]);
+				if (slot !== undefined) {
+					checkedSlots.add(slot);
+				}
 			}
 		}
 	}
-	if (allSlots.size === 0) {
+	if (checkedSlots.size === 0) {
 		return;
 	}
 
 	// Forward must-analysis: inSets[b] = local slots definitely initialized on
 	// entry to b. Entry/exception blocks start empty; the rest start at top (all
-	// slots) and are intersected down to a fixpoint. A `jumpIf` continues in-block
-	// when not taken, so it is a branch — not a terminator.
+	// checked slots) and are intersected down to a fixpoint. A `jumpIf` continues
+	// in-block when not taken, so it is a branch — not a terminator.
 	const inSets: Array<Set<number>> = blocks.map((_, b) =>
-		b === 0 || pinnedEmpty.has(b) ? new Set<number>() : new Set(allSlots),
+		b === 0 || pinnedEmpty.has(b) ? new Set<number>() : new Set(checkedSlots),
 	);
 
 	const startSet = (b: number): Set<number> =>
@@ -472,7 +520,7 @@ function eliminateRedundantTdzChecksInFunction(fn: IRFunction) {
 			for (const instr of blocks[b]!.instructions) {
 				if (instr.type === "createEmpty") {
 					empties.add(instr.registers[0]);
-				} else if (instr.type === "storeLocal") {
+				} else if (instr.type === "storeLocal" && checkedSlots.has(instr.index)) {
 					if (empties.has(instr.registers[0])) {
 						cur.delete(instr.index);
 					} else {
@@ -510,6 +558,9 @@ function eliminateRedundantTdzChecksInFunction(fn: IRFunction) {
 					empties.add(instr.registers[0]);
 					break;
 				case "storeLocal":
+					if (!checkedSlots.has(instr.index)) {
+						break;
+					}
 					if (empties.has(instr.registers[0])) {
 						cur.delete(instr.index);
 					} else {
@@ -565,6 +616,12 @@ function eliminateRedundantTdzChecksInFunction(fn: IRFunction) {
 		block.instructions = next;
 	}
 }
+
+export const irOptTestHooks = {
+	dropUnreferencedBlocksInFunction,
+	combineLinearBlocksInFunction,
+	eliminateRedundantTdzChecksInFunction,
+};
 
 /**
  * IR instruction kinds whose `registers[0]` is a SOURCE (read), not a freshly

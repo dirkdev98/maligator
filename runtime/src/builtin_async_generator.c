@@ -213,7 +213,14 @@ static MalValue mal_agen_function_constructor(MalVm *vm, MalValue this_value, co
     (void) this_value;
     (void) new_target;
     (void) callee;
-    return mal_vm_construct_function(vm, args, arg_count, MAL_DYNAMIC_FUNCTION_ASYNC_GENERATOR);
+    MalRootSpan args_span;
+    mal_gc_root(&args_span, (MalValue *) args, arg_count);
+    mal_gc_native_rooted_begin(vm);
+    MalValue result = mal_vm_construct_function(
+        vm, args, arg_count, MAL_DYNAMIC_FUNCTION_ASYNC_GENERATOR);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&args_span);
+    return result;
 }
 
 static MalValue mal_async_iterator_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -241,7 +248,13 @@ static MalValue mal_async_function_constructor(MalVm *vm, MalValue this_value, c
     (void) this_value;
     (void) new_target;
     (void) callee;
-    return mal_vm_construct_function(vm, args, arg_count, MAL_DYNAMIC_FUNCTION_ASYNC);
+    MalRootSpan args_span;
+    mal_gc_root(&args_span, (MalValue *) args, arg_count);
+    mal_gc_native_rooted_begin(vm);
+    MalValue result = mal_vm_construct_function(vm, args, arg_count, MAL_DYNAMIC_FUNCTION_ASYNC);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&args_span);
+    return result;
 }
 
 static void mal_agen_define_tag(MalVm *vm, MalObject *object, const byte *tag) {

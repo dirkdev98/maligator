@@ -1057,10 +1057,14 @@ export type IRInstruction =
 	  }
 	| {
 			// Write [src] to a global object property (created if absent): a
-			// sloppy-script top-level `var`/`function` binding store.
+			// script top-level `var`/`function` binding store. A declaration-only
+			// write creates a missing non-configurable var property but preserves an
+			// existing property's value and descriptor.
 			type: "storeGlobalProperty";
 			registers: [number];
 			nameStringIndex: number;
+			declaration?: boolean;
+			declarationConfigurable?: boolean;
 	  }
 	| {
 			// Throw ReferenceError if [source] holds the uninitialized sentinel:
@@ -2030,6 +2034,151 @@ function emitTdzHoleInits(
 		const register = nextRegisterDestination(fn);
 		block.instructions.push({ type: "createEmpty", registers: [register] });
 		storeRegisterAtLocation(block, location, register);
+	}
+}
+
+/**
+ * DeclarationInstantiation: create each canonical `var` binding once before
+ * body execution. Parameters, function declarations, and CommonJS wrapper
+ * parameters already have their entry value and must not be reset.
+ */
+function emitVarDeclarationInits(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	scope: Scope,
+	functionNames: ReadonlySet<string>,
+) {
+	const seen = new Set<string>();
+	const functionNode = scope.node.type.includes("Function")
+		? scope.node
+		: scope.parent?.node.type.includes("Function")
+			? scope.parent.node
+			: undefined;
+	const parameterNodes = new Set<ESTree.Node>(
+		functionNode && "params" in functionNode ? functionNode.params : [],
+	);
+	const argumentsBinding =
+		functionNode &&
+		(functionNode.type === "FunctionDeclaration" ||
+			functionNode.type === "FunctionExpression" ||
+			functionNode.type === "ArrowFunctionExpression")
+			? getArgumentsBinding(fn, functionNode)
+			: undefined;
+
+	for (const binding of scope.bindings) {
+		if (seen.has(binding.name)) {
+			continue;
+		}
+		seen.add(binding.name);
+
+		if (
+			binding.kind !== "var" ||
+			functionNames.has(binding.name) ||
+			binding.undeclared ||
+			binding.implicit ||
+			binding === argumentsBinding ||
+			binding.declarationNode === functionNode ||
+			(binding.declarationNode && parameterNodes.has(binding.declarationNode)) ||
+			(fn.semanticFile.commonjs &&
+				COMMONJS_BINDINGS.some((name) => name === binding.name))
+		) {
+			continue;
+		}
+
+		const location = getOrCreateBindingLocation(program, fn, binding);
+		if (location.type === "globalProperty") {
+			const value = nextRegisterDestination(fn);
+			block.instructions.push({
+				type:
+					binding.declarationNode?.type === "FunctionDeclaration"
+						? "createEmpty"
+						: "createUndefined",
+				registers: [value],
+			});
+			block.instructions.push({
+				type: "storeGlobalProperty",
+				registers: [value],
+				nameStringIndex: location.nameStringIndex,
+				declaration: true,
+				declarationConfigurable: program.evalCompletion,
+			});
+		} else {
+			const parameterBinding = scope.parent?.bindings.find(
+				(candidate) =>
+					candidate !== binding &&
+					candidate.kind === "var" &&
+					candidate.name === binding.name &&
+					candidate.declarationNode !== undefined &&
+					parameterNodes.has(candidate.declarationNode),
+			);
+			if (parameterBinding) {
+				const parameterLocation = getOrCreateBindingLocation(
+					program,
+					fn,
+					parameterBinding,
+				);
+				const value = loadRegisterFromLocation(fn, block, parameterLocation);
+				storeRegisterAtLocation(block, location, value);
+			}
+		}
+	}
+}
+
+function emitGlobalDeclarationChecks(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	scope: Scope,
+	functionDeclarations: ReadonlyArray<ESTree.FunctionDeclaration>,
+	functionNames: ReadonlySet<string>,
+) {
+	for (const declaration of functionDeclarations) {
+		const binding = fn.semanticFile.nodeToBinding.get(declaration);
+		if (!binding || !isScriptGlobalProperty(fn.semanticFile, binding)) {
+			continue;
+		}
+		const location = getOrCreateBindingLocation(program, fn, binding);
+		if (location.type !== "globalProperty") {
+			continue;
+		}
+		const check = nextRegisterDestination(fn);
+		block.instructions.push({ type: "createEmpty", registers: [check] });
+		block.instructions.push({
+			type: "storeGlobalProperty",
+			registers: [check],
+			nameStringIndex: location.nameStringIndex,
+			declaration: true,
+			declarationConfigurable: program.evalCompletion,
+		});
+	}
+
+	const seen = new Set<string>();
+	for (const binding of scope.bindings) {
+		if (
+			seen.has(binding.name) ||
+			functionNames.has(binding.name) ||
+			binding.kind !== "var" ||
+			binding.undeclared ||
+			binding.implicit ||
+			!isScriptGlobalProperty(fn.semanticFile, binding)
+		) {
+			continue;
+		}
+		seen.add(binding.name);
+		const location = getOrCreateBindingLocation(program, fn, binding);
+		if (location.type !== "globalProperty") {
+			continue;
+		}
+		const check = nextRegisterDestination(fn);
+		block.instructions.push({ type: "createNull", registers: [check] });
+		block.instructions.push({
+			type: "storeGlobalProperty",
+			registers: [check],
+			nameStringIndex: location.nameStringIndex,
+			declaration: true,
+			declarationConfigurable: program.evalCompletion,
+		});
 	}
 }
 
@@ -4561,6 +4710,42 @@ function compileStatementsToBlock(
 	// loop below can skip re-emitting them at their textual position.
 	const hoistedDeclarations = new Set<ESTree.Node>();
 	if (hoistFunctions) {
+		const functionDeclarations = statements.flatMap((statement) => {
+			const declaration =
+				statement.type === "FunctionDeclaration"
+					? statement
+					: statement.type === "ExportNamedDeclaration" &&
+						  statement.declaration?.type === "FunctionDeclaration"
+						? statement.declaration
+						: undefined;
+			return declaration ? [declaration] : [];
+		});
+		const functionNames = new Set(
+			functionDeclarations.flatMap((declaration) =>
+				declaration.id ? [declaration.id.name] : [],
+			),
+		);
+		const firstStatement = statements[0];
+		const firstScope = firstStatement
+			? fn.semanticFile.nodeToScope.get(firstStatement)
+			: undefined;
+		// Function/class declarations map to their own nested scope; declaration
+		// instantiation belongs to the surrounding body.
+		const enclosingScope =
+			firstScope && firstScope.node === firstStatement
+				? (firstScope.parent ?? undefined)
+				: firstScope;
+		if (enclosingScope) {
+			emitGlobalDeclarationChecks(
+				program,
+				fn,
+				block,
+				enclosingScope,
+				functionDeclarations,
+				functionNames,
+			);
+		}
+
 		// Reserve this function's own captured-binding slots before compiling any
 		// hoisted function body. getOrCreateBindingLocation charges a captured slot
 		// to whichever IR function first *requests* it; hoisting lets a nested
@@ -4584,22 +4769,20 @@ function compileStatementsToBlock(
 			break;
 		}
 
-		for (const statement of statements) {
-			const declaration =
-				statement.type === "FunctionDeclaration"
-					? statement
-					: statement.type === "ExportNamedDeclaration" &&
-						  statement.declaration?.type === "FunctionDeclaration"
-						? statement.declaration
-						: undefined;
-			if (declaration) {
-				compileFunctionDeclaration(program, fn, block, declaration);
-				hoistedDeclarations.add(declaration);
-			}
+		for (const declaration of functionDeclarations) {
+			compileFunctionDeclaration(program, fn, block, declaration);
+			hoistedDeclarations.add(declaration);
+		}
+		if (enclosingScope) {
+			emitVarDeclarationInits(program, fn, block, enclosingScope, functionNames);
 		}
 	}
 
 	for (const statement of statements) {
+		if (statement.type === "BlockStatement" && statement.body.length === 0) {
+			continue;
+		}
+
 		const lastBlock = fn.blocks.at(-1);
 		if (lastBlock !== block) {
 			// Any statement may create new blocks. The following logic detects this and starts a new
@@ -4910,7 +5093,17 @@ function compileFunctionDeclaration(
 		functionIndex: fnIndex,
 	});
 
-	storeRegisterAtLocation(block, location, destination);
+	if (location.type === "globalProperty") {
+		block.instructions.push({
+			type: "storeGlobalProperty",
+			registers: [destination],
+			nameStringIndex: location.nameStringIndex,
+			declaration: true,
+			declarationConfigurable: program.evalCompletion,
+		});
+	} else {
+		storeRegisterAtLocation(block, location, destination);
+	}
 }
 
 /**
@@ -6580,6 +6773,12 @@ function compileVariableDeclaration(
 			if (binding) {
 				program.bindingFunctionNode.set(binding, decl.init);
 			}
+		}
+
+		// `var` bindings are initialized once by DeclarationInstantiation. A bare
+		// declaration has no runtime assignment at its textual position.
+		if (statement.kind === "var" && !decl.init) {
+			continue;
 		}
 
 		const source = compileExpression(
@@ -10326,7 +10525,42 @@ function getArgumentsBinding(
 	}
 
 	const scope = fn.semanticFile.nodeToScope.get(node);
-	return scope?.bindings.find((binding) => binding.implicit === "arguments");
+	const implicit = scope?.bindings.find((binding) => binding.implicit === "arguments");
+	if (implicit) {
+		return implicit;
+	}
+
+	// An explicit `var arguments` reuses the function's arguments-object binding;
+	// a parameter or named-function self binding named arguments shadows it.
+	const parameterNodes = new Set<ESTree.Node>(node.params);
+	if (
+		scope?.bindings.some(
+			(binding) =>
+				binding.name === "arguments" &&
+				binding.declarationNode !== undefined &&
+				parameterNodes.has(binding.declarationNode),
+		)
+	) {
+		return undefined;
+	}
+	const explicit = scope?.bindings.find(
+		(binding) =>
+			binding.name === "arguments" &&
+			binding.kind === "var" &&
+			binding.declarationNode !== node &&
+			(!binding.declarationNode || !parameterNodes.has(binding.declarationNode)),
+	);
+	if (explicit) {
+		return explicit;
+	}
+
+	const bodyScope =
+		node.body?.type === "BlockStatement"
+			? fn.semanticFile.nodeToScope.get(node.body)
+			: undefined;
+	return bodyScope?.bindings.find(
+		(binding) => binding.name === "arguments" && binding.kind === "var",
+	);
 }
 
 /**

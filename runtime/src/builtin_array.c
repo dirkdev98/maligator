@@ -19,6 +19,11 @@
 
 #define MAL_ARRAY_MAX_SAFE_INTEGER 9007199254740991.0
 
+static bool mal_builtin_array_throw_string_length(MalVm *vm) {
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+    return false;
+}
+
 static MalKey mal_builtin_array_index_key(u32 index) {
     return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
 }
@@ -34,7 +39,7 @@ static bool mal_builtin_array_try_get_wide(MalVm *vm, MalValue this_value, f64 i
             return false;
         }
 
-        *out = mal_value_from_string(mal_string_new_external(&vm->heap, mal_string_code_units(string) + (usize) index, 1));
+        *out = mal_value_from_string(mal_string_new_dependent(&vm->heap, string, (usize) index, 1));
         return true;
     }
 
@@ -71,7 +76,7 @@ bool mal_builtin_array_try_get(MalVm *vm, MalValue this_value, u32 index, MalVal
             return false;
         }
 
-        *out = mal_value_from_string(mal_string_new_external(&vm->heap, mal_string_code_units(string) + index, 1));
+        *out = mal_value_from_string(mal_string_new_dependent(&vm->heap, string, index, 1));
         return true;
     }
 
@@ -1648,31 +1653,95 @@ static MalValue mal_builtin_array_join(MalVm *vm, MalValue this_value, const Mal
         return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
     }
 
-    MalString **parts = malloc(sizeof(MalString *) * length);
-    usize total_length = mal_string_length(separator) * (length - 1);
+    usize parts_bytes;
+    usize part_values_bytes;
+    usize total_length;
+    if (!mal_checked_size_multiply(sizeof(MalString *), length, SIZE_MAX, &parts_bytes) ||
+        !mal_checked_size_multiply(sizeof(MalValue), length, SIZE_MAX, &part_values_bytes) ||
+        !mal_checked_size_multiply(
+            mal_string_length(separator), length - 1,
+            MAL_STRING_MAX_CODE_UNITS, &total_length)) {
+        mal_builtin_array_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
+    MalString **parts = malloc(parts_bytes);
+    MalValue *part_values = malloc(part_values_bytes);
+    if (parts == nullptr || part_values == nullptr) {
+        free(part_values);
+        free(parts);
+        mal_builtin_array_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
+    MalValue roots[2] = {this_value, mal_value_from_string(separator)};
+    MalRootSpan roots_span;
+    MalRootSpan parts_span;
+    mal_gc_root(&roots_span, roots, 2);
+    mal_gc_root(&parts_span, part_values, 0);
+    mal_gc_native_rooted_begin(vm);
 
     for (u32 index = 0; index < length; index++) {
         // Holes, undefined and null join as empty strings; other elements go
         // through ToString, whose user code may throw.
         MalValue element = mal_builtin_array_get(vm, this_value, index);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_gc_native_rooted_end(vm);
+            mal_gc_unroot(&parts_span);
+            mal_gc_unroot(&roots_span);
+            free(part_values);
             free(parts);
             return mal_value_new_undefined();
         }
         if (mal_value_is_nil(element)) {
             parts[index] = nullptr;
+            part_values[index] = mal_value_new_undefined();
+            parts_span.count = (i32) index + 1;
             continue;
         }
         MalString *part;
         if (!mal_vm_to_string(vm, element, &part)) {
+            mal_gc_native_rooted_end(vm);
+            mal_gc_unroot(&parts_span);
+            mal_gc_unroot(&roots_span);
+            free(part_values);
             free(parts);
             return mal_value_new_undefined();
         }
         parts[index] = part;
-        total_length += mal_string_length(part);
+        part_values[index] = mal_value_from_string(part);
+        parts_span.count = (i32) index + 1;
+        if (!mal_checked_size_add(
+                total_length, mal_string_length(part),
+                MAL_STRING_MAX_CODE_UNITS, &total_length)) {
+            mal_gc_native_rooted_end(vm);
+            mal_gc_unroot(&parts_span);
+            mal_gc_unroot(&roots_span);
+            free(part_values);
+            free(parts);
+            mal_builtin_array_throw_string_length(vm);
+            return mal_value_new_undefined();
+        }
     }
 
-    c16 *code_units = malloc(sizeof(c16) * total_length);
+    usize code_units_bytes;
+    if (!mal_checked_size_multiply(sizeof(c16), total_length, SIZE_MAX, &code_units_bytes)) {
+        mal_gc_native_rooted_end(vm);
+        mal_gc_unroot(&parts_span);
+        mal_gc_unroot(&roots_span);
+        free(part_values);
+        free(parts);
+        mal_builtin_array_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
+    c16 *code_units = total_length == 0 ? nullptr : malloc(code_units_bytes);
+    if (total_length != 0 && code_units == nullptr) {
+        mal_gc_native_rooted_end(vm);
+        mal_gc_unroot(&parts_span);
+        mal_gc_unroot(&roots_span);
+        free(part_values);
+        free(parts);
+        mal_builtin_array_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
     usize offset = 0;
     for (u32 index = 0; index < length; index++) {
         if (index > 0 && mal_string_length(separator) > 0) {
@@ -1687,7 +1756,11 @@ static MalValue mal_builtin_array_join(MalVm *vm, MalValue this_value, const Mal
     }
 
     MalString *result = mal_string_new_copy(&vm->heap, code_units, total_length);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&parts_span);
+    mal_gc_unroot(&roots_span);
     free(code_units);
+    free(part_values);
     free(parts);
     return mal_value_from_string(result);
 }
@@ -2666,8 +2739,28 @@ static MalValue mal_builtin_array_to_locale_string(MalVm *vm, MalValue this_valu
     }
 
     MalKey to_locale_key = mal_intrinsic_string_key(vm, "toLocaleString");
-    MalString **parts = malloc(sizeof(MalString *) * length);
-    usize total_length = mal_string_length(separator) * (length - 1);
+    usize parts_bytes;
+    usize part_values_bytes;
+    usize total_length;
+    if (!mal_checked_size_multiply(sizeof(MalString *), length, SIZE_MAX, &parts_bytes) ||
+        !mal_checked_size_multiply(sizeof(MalValue), length, SIZE_MAX, &part_values_bytes) ||
+        !mal_checked_size_multiply(
+            mal_string_length(separator), length - 1,
+            MAL_STRING_MAX_CODE_UNITS, &total_length)) {
+        mal_builtin_array_throw_string_length(vm);
+        goto done;
+    }
+    MalString **parts = malloc(parts_bytes);
+    MalValue *part_values = malloc(part_values_bytes);
+    if (parts == nullptr || part_values == nullptr) {
+        free(part_values);
+        free(parts);
+        mal_builtin_array_throw_string_length(vm);
+        goto done;
+    }
+    MalRootSpan parts_span;
+    mal_gc_root(&parts_span, part_values, 0);
+    mal_gc_native_rooted_begin(vm);
 
     for (u32 index = 0; index < length; index++) {
         MalValue element = mal_builtin_array_get(vm, this_value, index);
@@ -2676,6 +2769,8 @@ static MalValue mal_builtin_array_to_locale_string(MalVm *vm, MalValue this_valu
         }
         if (mal_value_is_nil(element)) {
             parts[index] = nullptr;
+            part_values[index] = mal_value_new_undefined();
+            parts_span.count = (i32) index + 1;
             continue;
         }
 
@@ -2694,10 +2789,26 @@ static MalValue mal_builtin_array_to_locale_string(MalVm *vm, MalValue this_valu
             goto parts_done;
         }
         parts[index] = part;
-        total_length += mal_string_length(part);
+        part_values[index] = mal_value_from_string(part);
+        parts_span.count = (i32) index + 1;
+        if (!mal_checked_size_add(
+                total_length, mal_string_length(part),
+                MAL_STRING_MAX_CODE_UNITS, &total_length)) {
+            mal_builtin_array_throw_string_length(vm);
+            goto parts_done;
+        }
     }
 
-    c16 *code_units = malloc(sizeof(c16) * total_length);
+    usize code_units_bytes;
+    if (!mal_checked_size_multiply(sizeof(c16), total_length, SIZE_MAX, &code_units_bytes)) {
+        mal_builtin_array_throw_string_length(vm);
+        goto parts_done;
+    }
+    c16 *code_units = total_length == 0 ? nullptr : malloc(code_units_bytes);
+    if (total_length != 0 && code_units == nullptr) {
+        mal_builtin_array_throw_string_length(vm);
+        goto parts_done;
+    }
     usize offset = 0;
     for (u32 index = 0; index < length; index++) {
         if (index > 0 && mal_string_length(separator) > 0) {
@@ -2714,6 +2825,9 @@ static MalValue mal_builtin_array_to_locale_string(MalVm *vm, MalValue this_valu
     free(code_units);
     ret = mal_value_from_string(result);
 parts_done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&parts_span);
+    free(part_values);
     free(parts);
 done:
     mal_gc_unroot(&this_span);

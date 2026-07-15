@@ -4,6 +4,8 @@ import type { IRFunction } from "../src/ir.ts";
 import {
 	computeFunctionLiveness,
 	computeProgramLiveness,
+	computeSafepointRoots,
+	estimateLivenessComplexity,
 	findBackEdges,
 	isSafepoint,
 } from "../src/liveness.ts";
@@ -35,9 +37,13 @@ function instructionsOf(fn: IRFunction) {
  * only reads `fn.blocks`, so this lets us assert the dataflow on hand-crafted CFGs
  * (loops, exception edges) without fighting the IR generator's slot choices.
  */
-function fakeFn(blocks: Array<Array<unknown>>): IRFunction {
+function fakeFn(
+	blocks: Array<Array<unknown>>,
+	nextRegisterDestination?: number,
+): IRFunction {
 	return {
 		blocks: blocks.map((instructions) => ({ instructions })),
+		nextRegisterDestination,
 	} as unknown as IRFunction;
 }
 
@@ -45,6 +51,7 @@ test("isSafepoint: allocations and calls are safepoints, scalar/moves are not", 
 	expect(isSafepoint({ type: "createObject", registers: [0] } as never)).toBe(true);
 	expect(isSafepoint({ type: "call", registers: [0, 1] } as never)).toBe(true);
 	expect(isSafepoint({ type: "loadProperty", registers: [0, 1, 2] } as never)).toBe(true);
+	expect(isSafepoint({ type: "loadThis", registers: [0] } as never)).toBe(true);
 	expect(isSafepoint({ type: "createNumber", registers: [0], value: 1 } as never)).toBe(
 		false,
 	);
@@ -186,6 +193,227 @@ test("exception edges keep a try-body value live for the handler (soundness)", (
 	);
 	expect(callSafepoint).toBeDefined();
 	expect(callSafepoint!.live.has(5)).toBe(true);
+});
+
+test("exception ranges use only the handler target and respect same-block markers", () => {
+	// r5 is defined after the first safepoint, used only by the handler, and dead
+	// after tryEnd. Only the safepoint between the markers may therefore contain it.
+	// r12 is used only in blocks[1], the try-end retention target, which is never an
+	// exceptional successor.
+	const fn = fakeFn([
+		[
+			{ type: "createObject", registers: [0] },
+			{ type: "createNumber", registers: [5], value: 1 },
+			{ type: "tryBegin", blocks: [1, 2] },
+			{ type: "createObject", registers: [6] },
+			{ type: "tryEnd" },
+			{ type: "createObject", registers: [7] },
+			{ type: "createUndefined", registers: [8] },
+			{ type: "return", registers: [8] },
+		],
+		[
+			{ type: "catch", registers: [9] },
+			{ type: "binary", registers: [10, 9, 5], operator: "+" },
+			{ type: "return", registers: [10] },
+		],
+		[
+			{ type: "move", registers: [13, 12] },
+			{ type: "return", registers: [13] },
+		],
+	]);
+	const liveness = computeFunctionLiveness(fn);
+	const at = (instructionIndex: number) =>
+		liveness.safepoints.find(
+			(safepoint) =>
+				safepoint.blockIndex === 0 && safepoint.instructionIndex === instructionIndex,
+		)!.live;
+
+	expect(at(0).has(5)).toBe(false);
+	expect(at(3).has(5)).toBe(true);
+	expect(at(5).has(5)).toBe(false);
+	expect(at(3).has(12)).toBe(false);
+});
+
+test("nested ranges select the innermost handler and restore the outer handler", () => {
+	const fn = fakeFn([
+		[
+			{ type: "tryBegin", blocks: [2, 3] },
+			{ type: "createNumber", registers: [10], value: 10 },
+			{ type: "tryBegin", blocks: [1, 4] },
+			{ type: "createObject", registers: [0] },
+			{ type: "tryEnd" },
+			{ type: "createNumber", registers: [11], value: 11 },
+			{ type: "createObject", registers: [1] },
+			{ type: "tryEnd" },
+			{ type: "createUndefined", registers: [2] },
+			{ type: "return", registers: [2] },
+		],
+		[
+			{ type: "catch", registers: [3] },
+			{ type: "binary", registers: [4, 3, 10], operator: "+" },
+			{ type: "return", registers: [4] },
+		],
+		[
+			{ type: "catch", registers: [5] },
+			{ type: "binary", registers: [6, 5, 11], operator: "+" },
+			{ type: "return", registers: [6] },
+		],
+		[{ type: "return", registers: [2] }],
+		[{ type: "return", registers: [2] }],
+	]);
+	const liveness = computeFunctionLiveness(fn);
+	const inner = liveness.safepoints.find(
+		(safepoint) => safepoint.blockIndex === 0 && safepoint.instructionIndex === 3,
+	)!.live;
+	const outer = liveness.safepoints.find(
+		(safepoint) => safepoint.blockIndex === 0 && safepoint.instructionIndex === 6,
+	)!.live;
+
+	expect(inner.has(10)).toBe(true);
+	expect(inner.has(11)).toBe(false);
+	expect(outer.has(10)).toBe(false);
+	expect(outer.has(11)).toBe(true);
+});
+
+test("an IteratorClose handler keeps the iterator live in its protected range", () => {
+	const fn = fakeFn([
+		[
+			{ type: "createObject", registers: [5] },
+			{ type: "tryBegin", blocks: [1, 2] },
+			{ type: "call", registers: [8, 6, 7] },
+			{ type: "tryEnd" },
+			{ type: "return", registers: [8] },
+		],
+		[
+			{ type: "catch", registers: [9] },
+			{ type: "iteratorClose", registers: [5] },
+			{ type: "throw", registers: [9] },
+		],
+		[{ type: "return", registers: [8] }],
+	]);
+	const liveness = computeFunctionLiveness(fn);
+	const protectedCall = liveness.safepoints.find(
+		(safepoint) => safepoint.blockIndex === 0 && safepoint.instructionIndex === 2,
+	);
+
+	expect(protectedCall!.live.has(5)).toBe(true);
+});
+
+test("source-only safepoints root every operand", () => {
+	for (const [type, registers] of [
+		["storeGlobalProperty", [5]],
+		["mergeDataProperties", [5, 6]],
+		["defineAccessor", [5, 6, 7]],
+		["defineProperty", [5, 6, 7]],
+		["definePrivate", [5, 6, 7]],
+		["storePrivate", [5, 6, 7]],
+		["iteratorClose", [5]],
+		["withEnter", [5]],
+		["checkSuperClass", [5]],
+	] as const) {
+		const roots = computeSafepointRoots(
+			fakeFn([
+				[
+					{ type, registers: [...registers] },
+					{ type: "createUndefined", registers: [8] },
+					{ type: "return", registers: [8] },
+				],
+			]),
+		);
+		for (const register of registers) {
+			expect(roots.registers.has(register), `${type} must root r${register}`).toBe(true);
+		}
+	}
+});
+
+test("storeLocal propagates its source through earlier safepoints", () => {
+	const roots = computeSafepointRoots(
+		fakeFn([
+			[
+				{ type: "createObject", registers: [5] },
+				{ type: "storeLocal", registers: [5], index: 0 },
+				{ type: "createUndefined", registers: [6] },
+				{ type: "return", registers: [6] },
+			],
+		]),
+	);
+
+	expect(roots.registers.has(5)).toBe(true);
+});
+
+test("loadThis can throw to a handler and roots handler-live values", () => {
+	const fn = fakeFn([
+		[
+			{ type: "createObject", registers: [5] },
+			{ type: "tryBegin", blocks: [1, 2] },
+			{ type: "loadThis", registers: [6] },
+			{ type: "tryEnd" },
+			{ type: "return", registers: [6] },
+		],
+		[
+			{ type: "catch", registers: [7] },
+			{ type: "binary", registers: [8, 7, 5], operator: "+" },
+			{ type: "return", registers: [8] },
+		],
+		[{ type: "return", registers: [6] }],
+	]);
+	const liveness = computeFunctionLiveness(fn);
+	const loadThis = liveness.safepoints.find(
+		(safepoint) => safepoint.blockIndex === 0 && safepoint.instructionIndex === 2,
+	);
+
+	expect(loadThis).toBeDefined();
+	expect(loadThis!.live.has(5)).toBe(true);
+});
+
+test("aggregate safepoint roots equal detailed roots for structured exceptions", () => {
+	for (const source of [
+		`try { try { f(); } catch (e) { g(e); } } finally { h(); }`,
+		`for (const [value] of values) { consume(value); }`,
+	]) {
+		for (const fn of buildIr(source).functions) {
+			const detailed = computeFunctionLiveness(fn);
+			const aggregate = computeSafepointRoots(fn);
+			expect(aggregate.usedFallback).toBe(false);
+			expect([...aggregate.registers].sort()).toEqual(
+				[...detailed.liveOrUsedAtSafepoint].sort(),
+			);
+		}
+	}
+});
+
+test("complexity fallback reports itself and roots every physical register", () => {
+	const fn = fakeFn(
+		[
+			[
+				{ type: "tryBegin", blocks: [1, 0] },
+				{ type: "createObject", registers: [0] },
+				{ type: "tryEnd" },
+				{ type: "return", registers: [0] },
+			],
+			[
+				{ type: "catch", registers: [1] },
+				{ type: "return", registers: [1] },
+			],
+		],
+		4,
+	);
+	const roots = computeSafepointRoots(fn, { complexityLimit: 7 });
+
+	expect(roots.complexityEstimate).toBe(8);
+	expect(roots.usedFallback).toBe(true);
+	expect([...roots.registers]).toEqual([0, 1, 2, 3]);
+});
+
+test("complexity estimation detects unsafe multiplication", () => {
+	const fn = fakeFn(
+		[
+			[{ type: "tryBegin", blocks: [1, 0] }, { type: "tryEnd" }],
+			[{ type: "return", registers: [0] }],
+		],
+		Number.MAX_SAFE_INTEGER,
+	);
+	expect(estimateLivenessComplexity(fn)).toBeNull();
 });
 
 test("safepoints list: union of per-safepoint live sets equals liveAcrossSafepoint", () => {

@@ -1709,8 +1709,12 @@ MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, 
 
         if (mal_value_is_string(tag_value)) {
             MalValue text = mal_value_from_string(mal_intrinsic_ascii(vm, "[object "));
-            text = mal_ops_add(&vm->heap, text, tag_value);
-            return mal_ops_add(&vm->heap, text, mal_value_from_string(mal_intrinsic_ascii(vm, "]")));
+            text = mal_vm_add(vm, text, tag_value);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return mal_value_new_undefined();
+            }
+            return mal_vm_add(
+                vm, text, mal_value_from_string(mal_intrinsic_ascii(vm, "]")));
         }
     }
 

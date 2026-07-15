@@ -1572,7 +1572,7 @@ function emitInstruction(
 		case "STORE_GLOBAL_PROPERTY":
 			// A var/function declaration that becomes a property of globalThis.
 			return [
-				`mal_vm_op_store_global_property(vm, ${instruction.nameStringIndex}, ${boxed(instruction.src)}, ${strict});`,
+				`mal_vm_op_store_global_property(vm, ${instruction.nameStringIndex}, ${boxed(instruction.src)}, ${strict}, ${instruction.declaration}, ${instruction.declarationConfigurable});`,
 				throwCheck,
 			];
 		case "CREATE_ARGUMENTS_OBJECT":

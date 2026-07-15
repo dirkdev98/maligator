@@ -576,7 +576,16 @@ static void mal_gc_trace_object_common(MalObject *object) {
 /** Trace a cell's outgoing edges (the cell is already BLACK). */
 static void mal_gc_trace_cell(MalHeapHeader *cell) {
     switch (cell->type) {
-        case MAL_HEAP_STRING:
+        case MAL_HEAP_STRING: {
+            MalString *string = (MalString *) cell;
+            if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
+                mal_gc_mark_string(string->parent);
+            } else if (string->storage == MAL_STRING_STORAGE_CONS) {
+                mal_gc_mark_string(string->left);
+                mal_gc_mark_string(string->right);
+            }
+            return;
+        }
         case MAL_HEAP_BIGINT:
             return; // leaves (code_units / digits are non-pointer payload)
         case MAL_HEAP_SYMBOL:
@@ -923,6 +932,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
                 gc_free_raw(&g_gc_vm->heap, (void *) string->code_units);
                 string->code_units = nullptr;
             }
+            // External, dependent, and cons strings do not own code-unit buffers.
             return;
         }
         case MAL_HEAP_SYMBOL:

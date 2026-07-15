@@ -115,6 +115,10 @@ static MalValue path_units(MalVm *vm, const c16 *units, usize n) {
     if (n == 0) {
         return path_ascii(vm, "");
     }
+    if (n > MAL_STRING_MAX_CODE_UNITS) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return mal_value_new_undefined();
+    }
     return mal_value_from_string(mal_string_new_copy(&vm->heap, units, n));
 }
 

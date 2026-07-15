@@ -16,13 +16,11 @@
 #include "vm_load.h"
 #include "vm_ops.h"
 
-// Runtime `eval` / `new Function` (eval Phase 4). A native builtin, so the
-// collector is suppressed for its whole duration (gc_native_frames >= 1; see the
-// gate in mal_gc_safepoint): the transient values it holds in C locals across
-// the nested compile + run — the source string, the returned wire buffer, the
-// entry closure — cannot be swept, so no explicit rooting is needed. The baked
-// compiler's `__compile` closure and the eval'd functions, which must outlive
-// this call, are kept by vm->compiler_fn (a traced root) and vm->loaded_defs.
+// Runtime `eval` / `new Function` (eval Phase 4). Runtime compilation can collect,
+// so public helpers explicitly root every transient MalValue. Native entry points
+// lift only their own suppression once those roots are installed. The baked
+// compiler's `__compile` closure and eval'd functions that outlive a call remain
+// owned by vm->compiler_fn (a traced root) and vm->loaded_defs.
 
 // Retain a runtime-spliced definition so its arena outlives the spliced
 // functions, which reference their instruction data in-place within it.
@@ -52,36 +50,48 @@ static bool ensure_compiler(MalVm *vm) {
     if (vm->compiler_installed) {
         return true;
     }
+    MalValue roots[3] = {
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 3);
+    bool installed = false;
+
     usize len = 0;
     const u8 *bytes = mal_compiler_wire_bytes(&len);
     const char *err = "ok";
     MalLoadedDefinition *loaded = mal_vm_load_definition(bytes, len, &err);
     if (loaded == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE, "eval: baked compiler failed to load");
-        return false;
+        goto done;
     }
     retain_loaded(vm, loaded);
     i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
     if (entry < 0) {
-        return false; // splice set a pending RangeError (constant-table overflow)
+        goto done; // splice set a pending RangeError (constant-table overflow)
     }
-    MalValue closure = mal_vm_op_create_function(vm, entry, nullptr);
-    MalCompletion run = mal_vm_call_value(vm, closure, mal_value_new_undefined(), nullptr, 0);
+    roots[0] = mal_vm_op_create_function(vm, entry, nullptr);
+    MalCompletion run = mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), nullptr, 0);
     if (run.kind == MAL_COMPLETION_THROW) {
         vm->completion = run;
-        return false;
+        goto done;
     }
 
-    MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+    roots[1] = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
     MalKey key = mal_intrinsic_string_key(vm, "__compile");
-    MalValue fn = mal_value_new_undefined();
-    if (!mal_vm_get_property(vm, global, key, &fn)) {
-        return false;
+    if (!mal_vm_get_property(vm, roots[1], key, &roots[2])) {
+        goto done;
     }
-    vm->compiler_fn = fn;
-    mal_vm_delete_property(vm, global, key);
+    vm->compiler_fn = roots[2];
+    mal_vm_delete_property(vm, roots[1], key);
     vm->compiler_installed = true;
-    return true;
+    installed = true;
+
+done:
+    mal_gc_unroot(&root_span);
+    return installed;
 #endif
 }
 
@@ -90,64 +100,81 @@ static bool ensure_compiler(MalVm *vm) {
 // the caller scope). Returns nullptr with a pending throw on a compile or load
 // failure.
 static MalLoadedDefinition *compile_source(MalVm *vm, MalValue source, bool direct, bool caller_strict,
-                                           bool in_param_expr, bool in_field_initializer) {
+                                            bool in_param_expr, bool in_field_initializer) {
+    MalValue roots[6] = {source, mal_value_new_boolean(direct),
+                         mal_value_new_boolean(caller_strict),
+                         mal_value_new_boolean(in_param_expr),
+                         mal_value_new_boolean(in_field_initializer),
+                         mal_value_new_undefined()};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 6);
+    MalLoadedDefinition *loaded = nullptr;
+
     if (!ensure_compiler(vm)) {
-        return nullptr;
+        goto done;
     }
-    MalValue compile_args[5] = {source, mal_value_new_boolean(direct),
-                                mal_value_new_boolean(caller_strict),
-                                mal_value_new_boolean(in_param_expr),
-                                mal_value_new_boolean(in_field_initializer)};
     MalCompletion compiled =
-        mal_vm_call_value(vm, vm->compiler_fn, mal_value_new_undefined(), compile_args, 5);
+        mal_vm_call_value(vm, vm->compiler_fn, mal_value_new_undefined(), roots, 5);
+    roots[5] = compiled.value;
     if (compiled.kind == MAL_COMPLETION_THROW) {
         vm->completion = compiled;
-        return nullptr;
+        goto done;
     }
-    if (!mal_value_is_typed_array_object(compiled.value)) {
+    if (!mal_value_is_typed_array_object(roots[5])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,
-                           "eval: compiler did not return a byte buffer");
-        return nullptr;
+                            "eval: compiler did not return a byte buffer");
+        goto done;
     }
-    MalTypedArrayObject *buffer = mal_value_to_typed_array_object(compiled.value);
+    MalTypedArrayObject *buffer = mal_value_to_typed_array_object(roots[5]);
     usize len = mal_typed_array_object_byte_length(buffer);
     const u8 *data = buffer->buffer->data + buffer->byte_offset;
     const char *err = "ok";
     // A parse error surfaces as a compiler throw above; a load failure here means
     // the wire buffer itself is malformed, which is an internal error.
-    MalLoadedDefinition *loaded = mal_vm_load_definition(data, len, &err);
+    loaded = mal_vm_load_definition(data, len, &err);
     if (loaded == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, err);
-        return nullptr;
     }
+
+done:
+    mal_gc_unroot(&root_span);
     return loaded;
 }
 
 MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
+    MalValue roots[2] = {source, mal_value_new_undefined()};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 2);
+    MalValue result = mal_value_new_undefined();
+
     // Indirect eval: always sloppy (no containing strict context), never a
     // parameter-expression or field-initializer context.
-    MalLoadedDefinition *loaded = compile_source(vm, source, false, false, false, false);
+    MalLoadedDefinition *loaded = compile_source(vm, roots[0], false, false, false, false);
     if (loaded == nullptr) {
-        return mal_value_new_undefined();
+        goto done;
     }
     retain_loaded(vm, loaded);
     i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
     if (entry < 0) {
-        return mal_value_new_undefined(); // splice set a pending RangeError
+        goto done; // splice set a pending RangeError
     }
-    MalValue closure = mal_vm_op_create_function(vm, entry, nullptr);
-    MalCompletion run = mal_vm_call_value(vm, closure, mal_value_new_undefined(), nullptr, 0);
+    roots[1] = mal_vm_op_create_function(vm, entry, nullptr);
+    MalCompletion run = mal_vm_call_value(vm, roots[1], mal_value_new_undefined(), nullptr, 0);
     if (run.kind == MAL_COMPLETION_THROW) {
         vm->completion = run;
-        return mal_value_new_undefined();
+        goto done;
     }
-    return run.value;
+    result = run.value;
+
+done:
+    mal_gc_unroot(&root_span);
+    return result;
 }
 
 #if MAL_REALMS
 MalCompletion mal_realm_eval_script(MalVm *vm, MalRealm *realm, MalValue source) {
-    // Unlike the eval builtin, an embedding call has no native frame suppressing
-    // collection while the compiler and generated script run.
+    // Embedding calls have no native-frame contribution to lift. The $262 native
+    // wrapper lifts its own contribution before entering this neutral helper.
     MalRootSpan source_root;
     mal_gc_root(&source_root, &source, 1);
 
@@ -230,20 +257,30 @@ done:
 // global. Run via push + run_until_frame_count (not call_value) so the injection
 // lands between pushing the frame and executing its body.
 MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, bool caller_strict,
-                            bool in_param_expr, bool in_field_initializer, MalValue caller_this,
-                            MalValue caller_new_target) {
-    MalLoadedDefinition *loaded = compile_source(vm, source, true, caller_strict, in_param_expr, in_field_initializer);
+                             bool in_param_expr, bool in_field_initializer, MalValue caller_this,
+                             MalValue caller_new_target) {
+    MalValue roots[4] = {source, scope_object, caller_this, caller_new_target};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 4);
+    MalValue result = mal_value_new_undefined();
+
+    MalLoadedDefinition *loaded = compile_source(vm, roots[0], true, caller_strict, in_param_expr,
+                                                  in_field_initializer);
     if (loaded == nullptr) {
-        return mal_value_new_undefined();
+        goto done;
     }
     retain_loaded(vm, loaded);
     i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
     if (entry < 0) {
-        return mal_value_new_undefined();
+        goto done;
     }
     // Runs the entry with the caller scope injected into its with-stack and the
     // caller's this/new.target bound; leaves the completion in vm->completion.
-    return mal_vm_run_entry_with_scope(vm, entry, scope_object, caller_this, caller_new_target);
+    result = mal_vm_run_entry_with_scope(vm, entry, roots[1], roots[2], roots[3]);
+
+done:
+    mal_gc_unroot(&root_span);
+    return result;
 }
 
 // A small ASCII source fragment as a string value (for the Function wrapper).
@@ -252,7 +289,7 @@ static MalValue eval_ascii(MalVm *vm, const char *text) {
 }
 
 MalValue mal_vm_construct_function(MalVm *vm, const MalValue *args, i32 arg_count,
-                                   MalDynamicFunctionKind kind) {
+                                    MalDynamicFunctionKind kind) {
     // CreateDynamicFunction: the last argument is the body, the rest are the
     // parameter list (each ToString'd, joined by ","). Assemble the source
     // `(<kind> anonymous(<params>\n) {\n<body>\n})` — the wrapping parens make
@@ -260,26 +297,45 @@ MalValue mal_vm_construct_function(MalVm *vm, const MalValue *args, i32 arg_coun
     // The `kind` selects the leading keyword so `yield`/`await` parse in the
     // right context; the resulting function is created by the normal compiled
     // path, so it inherits the matching %GeneratorFunction/AsyncFunction% wiring.
-    // GC is suppressed for this native frame, so the intermediate string values
-    // held here survive the concatenations without explicit rooting.
-    MalValue params = eval_ascii(vm, "");
-    MalValue body = eval_ascii(vm, "");
+    MalRootSpan args_span;
+    mal_gc_root(&args_span, (MalValue *) args, arg_count);
+    MalValue roots[5] = {
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 5);
+    MalValue result = mal_value_new_undefined();
+
+    roots[0] = eval_ascii(vm, ""); // params
+    roots[1] = eval_ascii(vm, ""); // body
     if (arg_count > 0) {
         for (i32 i = 0; i < arg_count - 1; i++) {
             MalString *part = nullptr;
             if (!mal_vm_to_string(vm, args[i], &part)) {
-                return mal_value_new_undefined(); // ToString threw (e.g. a Symbol)
+                goto done; // ToString threw (e.g. a Symbol)
             }
+            roots[3] = mal_value_from_string(part);
             if (i > 0) {
-                params = mal_vm_binary_op(vm, MAL_BIN_ADD, params, eval_ascii(vm, ","));
+                roots[4] = eval_ascii(vm, ",");
+                roots[0] = mal_vm_binary_op(vm, MAL_BIN_ADD, roots[0], roots[4]);
+                if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                    goto done;
+                }
             }
-            params = mal_vm_binary_op(vm, MAL_BIN_ADD, params, mal_value_from_string(part));
+            roots[0] = mal_vm_binary_op(vm, MAL_BIN_ADD, roots[0], roots[3]);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                goto done;
+            }
         }
         MalString *body_string = nullptr;
         if (!mal_vm_to_string(vm, args[arg_count - 1], &body_string)) {
-            return mal_value_new_undefined();
+            goto done;
         }
-        body = mal_value_from_string(body_string);
+        roots[1] = mal_value_from_string(body_string);
     }
 
     const char *prefix;
@@ -298,13 +354,32 @@ MalValue mal_vm_construct_function(MalVm *vm, const MalValue *args, i32 arg_coun
         break;
     }
 
-    MalValue source = eval_ascii(vm, prefix);
-    source = mal_vm_binary_op(vm, MAL_BIN_ADD, source, params);
-    source = mal_vm_binary_op(vm, MAL_BIN_ADD, source, eval_ascii(vm, "\n) {\n"));
-    source = mal_vm_binary_op(vm, MAL_BIN_ADD, source, body);
-    source = mal_vm_binary_op(vm, MAL_BIN_ADD, source, eval_ascii(vm, "\n})"));
+    roots[2] = eval_ascii(vm, prefix); // source
+    roots[2] = mal_vm_binary_op(vm, MAL_BIN_ADD, roots[2], roots[0]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        goto done;
+    }
+    roots[3] = eval_ascii(vm, "\n) {\n");
+    roots[2] = mal_vm_binary_op(vm, MAL_BIN_ADD, roots[2], roots[3]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        goto done;
+    }
+    roots[2] = mal_vm_binary_op(vm, MAL_BIN_ADD, roots[2], roots[1]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        goto done;
+    }
+    roots[3] = eval_ascii(vm, "\n})");
+    roots[2] = mal_vm_binary_op(vm, MAL_BIN_ADD, roots[2], roots[3]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        goto done;
+    }
 
-    return mal_vm_eval_source(vm, source);
+    result = mal_vm_eval_source(vm, roots[2]);
+
+done:
+    mal_gc_unroot(&roots_span);
+    mal_gc_unroot(&args_span);
+    return result;
 }
 
 static MalValue mal_builtin_eval(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
@@ -317,7 +392,13 @@ static MalValue mal_builtin_eval(MalVm *vm, MalValue this_value, const MalValue 
     if (!mal_value_is_string(arg)) {
         return arg;
     }
-    return mal_vm_eval_source(vm, arg);
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, &arg, 1);
+    mal_gc_native_rooted_begin(vm);
+    MalValue result = mal_vm_eval_source(vm, arg);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&root_span);
+    return result;
 }
 
 // The direct-eval intrinsic (compiler-emitted callee for `eval(...)`). args[0] is
@@ -340,8 +421,15 @@ static MalValue mal_builtin_direct_eval(MalVm *vm, MalValue this_value, const Ma
     MalValue caller_this = arg_count >= 5 ? args[4] : mal_value_new_undefined();
     MalValue caller_new_target = arg_count >= 6 ? args[5] : mal_value_new_undefined();
     bool in_field_initializer = arg_count >= 7 && mal_value_is_truthy(args[6]);
-    return mal_vm_eval_direct(vm, source, scope, caller_strict, in_param_expr, in_field_initializer,
-                              caller_this, caller_new_target);
+    MalValue roots[4] = {source, scope, caller_this, caller_new_target};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 4);
+    mal_gc_native_rooted_begin(vm);
+    MalValue result = mal_vm_eval_direct(vm, roots[0], roots[1], caller_strict, in_param_expr,
+                                          in_field_initializer, roots[2], roots[3]);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&root_span);
+    return result;
 }
 
 static MalValue mal_dynamic_import_promise(MalVm *vm) {

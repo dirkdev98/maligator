@@ -628,6 +628,44 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 	recurseAst(node, collectBindingsForNode, file);
 }
 
+function hasParameterExpressions(
+	node:
+		| ESTree.FunctionDeclaration
+		| ESTree.FunctionExpression
+		| ESTree.ArrowFunctionExpression,
+): boolean {
+	const bindingPatternContainsExpression = (value: unknown): boolean => {
+		if (typeof value !== "object" || value === null || !("type" in value)) {
+			return false;
+		}
+		const pattern = value as ESTree.Node;
+		switch (pattern.type) {
+			case "AssignmentPattern":
+				return true;
+			case "ArrayPattern":
+				return pattern.elements.some(
+					(element) => element && bindingPatternContainsExpression(element),
+				);
+			case "ObjectPattern":
+				return pattern.properties.some((property) => {
+					if ("argument" in property) {
+						return bindingPatternContainsExpression(property.argument);
+					}
+					if ("computed" in property && "value" in property) {
+						return property.computed || bindingPatternContainsExpression(property.value);
+					}
+					return false;
+				});
+			case "RestElement":
+				return bindingPatternContainsExpression(pattern.argument);
+			default:
+				return false;
+		}
+	};
+
+	return node.params.some(bindingPatternContainsExpression);
+}
+
 /**
  * Extract bindings for all function and class id's, params and variable declarations.
  */
@@ -687,24 +725,56 @@ function extractBindingsAndRegister(
 
 	let bindingScope = scope;
 
-	if (kind === "var" && !bindingScope.node.type.includes("Function")) {
-		// Hoist var bindings to their nearest function scope or the module root.
+	if (
+		kind === "var" &&
+		!bindingScope.node.type.includes("Function") &&
+		bindingScope.node.type !== "StaticBlock"
+	) {
+		// Hoist var bindings to the function body scope, static block, or program.
+		// Keeping the body scope distinct from the function/parameter scope models
+		// the separate environment required when parameter expressions are present.
 		while (bindingScope.parent) {
 			const parentType = bindingScope.parent.node.type;
-
 			if (
 				parentType !== "FunctionDeclaration" &&
 				parentType !== "FunctionExpression" &&
-				parentType !== "ArrowFunctionExpression"
+				parentType !== "ArrowFunctionExpression" &&
+				parentType !== "StaticBlock"
 			) {
 				bindingScope = bindingScope.parent;
 			} else {
+				const collidesWithImmutableFunctionName =
+					parentType === "FunctionExpression" &&
+					bindingScope.parent.bindings.some(
+						(binding) => binding.immutableSelfReference && names.includes(binding.name),
+					);
+				if (
+					parentType !== "StaticBlock" &&
+					!collidesWithImmutableFunctionName &&
+					!hasParameterExpressions(bindingScope.parent.node)
+				) {
+					bindingScope = bindingScope.parent;
+				}
 				break;
 			}
 		}
 	}
 
 	for (const name of names) {
+		const existingVarBinding =
+			kind === "var"
+				? bindingScope.bindings.find(
+						(binding) =>
+							binding.kind === "var" &&
+							binding.name === name &&
+							!binding.immutableSelfReference,
+					)
+				: undefined;
+		if (existingVarBinding) {
+			file.nodeToBinding.set(node, existingVarBinding);
+			continue;
+		}
+
 		const binding: Binding = {
 			kind,
 
@@ -717,7 +787,18 @@ function extractBindingsAndRegister(
 			binding.immutableSelfReference = true;
 		}
 
-		bindingScope.bindings.push(binding);
+		const immutableSelfIndex = bindingScope.bindings.findIndex(
+			(candidate) =>
+				candidate.name === name &&
+				candidate.immutableSelfReference &&
+				bindingScope.node.type === "FunctionExpression" &&
+				bindingScope.node.params.includes(node as ESTree.Parameter),
+		);
+		if (immutableSelfIndex === -1) {
+			bindingScope.bindings.push(binding);
+		} else {
+			bindingScope.bindings.splice(immutableSelfIndex, 0, binding);
+		}
 		file.nodeToBinding.set(node, binding);
 	}
 }

@@ -174,6 +174,8 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
 
     vm->interp_ic = calloc((usize) vm->function_capacity, sizeof(struct MalInlineCache *));
     vm->load_stub = calloc((usize) MAL_STUB_CACHE_SIZE, sizeof(MalStubEntry));
+    vm->interp_call_cache = calloc(
+        (usize) MAL_INTERP_CALL_CACHE_SIZE, sizeof(MalInterpCallCacheEntry));
     vm->global_property_cache = calloc(
         (usize) MAL_GLOBAL_PROPERTY_CACHE_SIZE, sizeof(MalGlobalPropertyCacheEntry));
     vm->global_capacity = definition->global_count > 0 ? definition->global_count : 1;
@@ -373,6 +375,7 @@ void mal_vm_free(MalVm *vm) {
         free(vm->interp_ic);
     }
     free(vm->load_stub);
+    free(vm->interp_call_cache);
     free(vm->global_property_cache);
     // Only heap-resident (generator/async) leftover frames own their buffers;
     // value-stack frames live in vm->value_stack, freed below.

@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 import {
 	deserializeVmDefinition,
+	MAX_STRING_CODE_UNITS,
 	serializeVmDefinition,
 	WIRE_OPCODES,
+	WIRE_VERSION,
 } from "./serialize-vm.ts";
 
 // A definition exercising the tricky encodings: variable-length operand arrays
@@ -168,6 +170,18 @@ describe("serialize-vm", () => {
 		expect(Array.from(buf2)).toEqual(Array.from(buf1));
 	});
 
+	it("rejects stale wire versions", () => {
+		const buffer = serializeVmDefinition(definition);
+		new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).setUint32(
+			4,
+			WIRE_VERSION - 1,
+			true,
+		);
+		expect(() => deserializeVmDefinition(buffer)).toThrow(
+			`version ${WIRE_VERSION - 1}, expected ${WIRE_VERSION}`,
+		);
+	});
+
 	it("drops debug tables when debugInfo is false", () => {
 		const restored = deserializeVmDefinition(
 			serializeVmDefinition(definition, { debugInfo: false }),
@@ -226,6 +240,16 @@ describe("serialize-vm", () => {
 	it("rejects definitions with host installs", () => {
 		expect(() => serializeVmDefinition(hostDefinition)).toThrow(
 			/host installs are not supported in portable wire definitions/,
+		);
+	});
+
+	it("rejects string constants above the runtime UTF-16 limit", () => {
+		const oversized: VmDefinition = {
+			...definition,
+			stringConstants: [new Array<number>(MAX_STRING_CODE_UNITS + 1)],
+		};
+		expect(() => serializeVmDefinition(oversized)).toThrow(
+			/string constant has .* UTF-16 code units/,
 		);
 	});
 

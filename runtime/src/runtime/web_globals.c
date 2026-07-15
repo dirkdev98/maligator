@@ -341,8 +341,18 @@ static MalValue mal_web_btoa(
             return mal_value_new_undefined();
         }
     }
-    usize out_len = ((n + 2) / 3) * 4;
+    usize groups;
+    usize out_len;
+    if (!mal_checked_size_add(n, 2, SIZE_MAX, &groups) ||
+        !mal_checked_size_multiply(groups / 3, 4, MAL_STRING_MAX_CODE_UNITS, &out_len)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return mal_value_new_undefined();
+    }
     c16 *out = malloc(sizeof(c16) * (out_len == 0 ? 1 : out_len));
+    if (out == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return mal_value_new_undefined();
+    }
     usize o = 0;
     for (usize i = 0; i < n; i += 3) {
         u32 b0 = (u8) u[i];
@@ -396,6 +406,10 @@ static MalValue mal_web_atob(
 
     // Strip ASCII whitespace (spec: remove \t \n \f \r space) into a compact buffer.
     c16 *cleaned = malloc(sizeof(c16) * (in_len == 0 ? 1 : in_len));
+    if (cleaned == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return mal_value_new_undefined();
+    }
     usize m = 0;
     for (usize i = 0; i < in_len; i++) {
         c16 c = in[i];
@@ -417,6 +431,11 @@ static MalValue mal_web_atob(
     }
 
     c16 *out = malloc(sizeof(c16) * (m == 0 ? 1 : m)); // decoded bytes <= input length
+    if (out == nullptr) {
+        free(cleaned);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return mal_value_new_undefined();
+    }
     usize o = 0;
     u32 acc = 0;
     i32 bits = 0;

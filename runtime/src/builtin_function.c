@@ -13,6 +13,11 @@
 #include "vm.h"
 #include "vm_ops.h"
 
+static bool mal_builtin_function_throw_string_length(MalVm *vm) {
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+    return false;
+}
+
 static MalValue mal_builtin_function_forward_completion(MalVm *vm, MalCompletion completion) {
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
@@ -28,7 +33,13 @@ static MalValue mal_builtin_function_constructor(MalVm *vm, MalValue this_value,
     (void) callee;
     // `Function(...)` and `new Function(...)` both produce the dynamically
     // compiled function (the result is the function, not an instance).
-    return mal_vm_construct_function(vm, args, arg_count, MAL_DYNAMIC_FUNCTION_NORMAL);
+    MalRootSpan args_span;
+    mal_gc_root(&args_span, (MalValue *) args, arg_count);
+    mal_gc_native_rooted_begin(vm);
+    MalValue result = mal_vm_construct_function(vm, args, arg_count, MAL_DYNAMIC_FUNCTION_NORMAL);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&args_span);
+    return result;
 }
 
 // %ThrowTypeError%: rejects any get/set of the poisoned `caller`/`arguments`
@@ -192,8 +203,11 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     }
     MalValue prefix = mal_value_from_string(mal_intrinsic_ascii(vm, "bound "));
     MalValue name_value = mal_value_is_string(target_name)
-        ? mal_ops_add(&vm->heap, prefix, target_name)
+        ? mal_vm_add(vm, prefix, target_name)
         : prefix;
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
     MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own((MalObject *) bound, mal_intrinsic_string_key(vm, "name"), &name_desc);
 
@@ -220,9 +234,22 @@ static MalValue mal_builtin_function_prototype_to_string(MalVm *vm, MalValue thi
     static const byte suffix[] = "() { [native code] }";
     MalString *name = mal_vm_callable_name(vm, this_value);
     usize name_length = name != nullptr ? mal_string_length(name) : 0;
-    usize total_length = lengthof(prefix) + name_length + lengthof(suffix);
+    usize total_length;
+    usize bytes;
+    if (!mal_checked_size_add(
+            lengthof(prefix), name_length, MAL_STRING_MAX_CODE_UNITS, &total_length) ||
+        !mal_checked_size_add(
+            total_length, lengthof(suffix), MAL_STRING_MAX_CODE_UNITS, &total_length) ||
+        !mal_checked_size_multiply(sizeof(c16), total_length, SIZE_MAX, &bytes)) {
+        mal_builtin_function_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
 
-    c16 *code_units = malloc(sizeof(c16) * total_length);
+    c16 *code_units = malloc(bytes);
+    if (code_units == nullptr) {
+        mal_builtin_function_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
     usize offset = 0;
     for (usize i = 0; i < lengthof(prefix); i++) {
         code_units[offset++] = (c16) prefix[i];

@@ -49,15 +49,14 @@ bool mal_primitive_wrapper_string_exotic_own(
     }
 
     // An in-bounds integer index is a non-writable, enumerable, non-configurable
-    // single-code-unit data property. The borrowed code unit stays alive with
-    // the wrapper's [[StringData]] string.
+    // single-code-unit data property.
     if (key.kind == MAL_KEY_INDEX) {
         i32 index = mal_value_to_i32(key.value);
         if (index >= 0 && (usize) index < mal_string_length(data)) {
             *desc_out = (MalPropertyDesc) {
                 .flags = MAL_PROPERTY_ENUMERABLE,
                 .value = mal_value_from_string(
-                    mal_string_new_external(heap, mal_string_code_units(data) + index, 1)
+                    mal_string_new_dependent(heap, data, (usize) index, 1)
                 ),
                 .getter = mal_value_new_undefined(),
                 .setter = mal_value_new_undefined(),

@@ -13,7 +13,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 4u         // bumped for the packed literal-template section
+#define WIRE_VERSION 5u         // STORE_GLOBAL_PROPERTY declaration flags
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -753,6 +753,8 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
             o->opcode = MAL_OP_STORE_GLOBAL_PROPERTY;
             o->as.store_global_property.src = rd_i32(r);
             o->as.store_global_property.name_string_index = rd_i32(r);
+            o->as.store_global_property.declaration = rd_u8(r) != 0;
+            o->as.store_global_property.declaration_configurable = rd_u8(r) != 0;
             return;
         case WIRE_THROW_IF_TDZ:
             o->opcode = MAL_OP_THROW_IF_TDZ;
@@ -938,6 +940,13 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
     def->string_constants = strings;
     for (u32 s = 0; r.ok && s < string_count; s++) {
         u32 length = rd_count(&r, sizeof(c16));
+        if (!r.ok) {
+            break;
+        }
+        if ((usize) length > MAL_STRING_MAX_CODE_UNITS) {
+            err = "string constant exceeds engine limit";
+            goto fail;
+        }
         c16 *units = arena(L, &r, (usize) length * sizeof(c16), alignof(c16));
         for (u32 u = 0; r.ok && u < length; u++) {
             units[u] = rd_u16(&r);

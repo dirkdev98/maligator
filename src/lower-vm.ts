@@ -1,5 +1,5 @@
 import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
-import { computeFunctionLiveness } from "./liveness.ts";
+import { computeSafepointRoots } from "./liveness.ts";
 import type { Binding } from "./semantic-analysis.ts";
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
@@ -127,7 +127,7 @@ export interface VmFunction {
 	/**
 	 * COMPILE-ONLY (not part of the C `MalFunction` struct): the registers the
 	 * native backend must spill into this function's GC root frame — those live at
-	 * or used by a GC safepoint (`FunctionLiveness.liveOrUsedAtSafepoint`), already
+	 * or used by a GC safepoint (`computeSafepointRoots`), already
 	 * in this function's post-allocation register numbering. emit-c roots exactly
 	 * the boxed registers in this set; a register absent from it never holds a live
 	 * value at a collection point. Undefined for generator/async functions (the
@@ -512,6 +512,8 @@ export type VmInstruction =
 			opcode: "STORE_GLOBAL_PROPERTY";
 			src: number;
 			nameStringIndex: number;
+			declaration: boolean;
+			declarationConfigurable: boolean;
 	  }
 	| {
 			opcode: "THROW_IF_TDZ";
@@ -756,14 +758,14 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 	);
 
 	// GC root-frame minimization (C1): the native backend spills only registers
-	// live at a safepoint, not every boxed register. Computed on the
-	// post-allocation IR (this runs after `allocateRegisters`), so the indices match
-	// the backend's `r<i>`. Skipped for generator/async functions, which the native
-	// backend does not compile.
+	// live at a safepoint, not every boxed register. The aggregate-only API avoids
+	// constructing diagnostic per-safepoint Sets. This runs post-allocation, so a
+	// complexity fallback safely returns every physical register. Skipped for
+	// generator/async functions, which the native backend does not compile.
 	const isResumable = (fn.isGenerator ?? false) || (fn.isAsync ?? false);
 	const gcRootRegisters = isResumable
 		? undefined
-		: [...computeFunctionLiveness(fn).liveOrUsedAtSafepoint];
+		: [...computeSafepointRoots(fn).registers];
 
 	return {
 		nameStringIndex: fn.nameStringIndex,
@@ -1302,6 +1304,8 @@ function lowerInstructionToVmInstruction(
 				opcode: "STORE_GLOBAL_PROPERTY",
 				src: instruction.registers[0],
 				nameStringIndex: instruction.nameStringIndex,
+				declaration: instruction.declaration ?? false,
+				declarationConfigurable: instruction.declarationConfigurable ?? false,
 			};
 		case "throwIfTdz":
 			return {

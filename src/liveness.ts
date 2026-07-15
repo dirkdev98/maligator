@@ -4,8 +4,8 @@
  *
  *   - C1 root frames: a compiled function must spill to its root frame only the
  *     registers that are *live across a safepoint* (a point where GC can run).
- *     `liveAcrossSafepoint` is exactly that set; the conservative fallback is
- *     "every register live anywhere", which this pass strictly improves on.
+ *     `liveAcrossSafepoint` is exactly that set; the conservative complexity
+ *     fallback roots every physical register.
  *   - C2 safepoint placement: GC may poll at loop back-edges and call returns;
  *     `findBackEdges` locates the loop back-edges.
  *
@@ -66,7 +66,6 @@ const GC_FREE_INSTRUCTION_TYPES = new Set<IRInstruction["type"]>([
 	"storeCaptured",
 	"loadGlobal",
 	"storeGlobal",
-	"loadThis",
 	"loadNewTarget",
 	"loadIntrinsic",
 ]);
@@ -113,6 +112,77 @@ function jumpTargets(instruction: IRInstruction): ReadonlyArray<number> {
 	return [];
 }
 
+/** Default bound for the conservative pre-analysis complexity estimate. */
+export const DEFAULT_LIVENESS_COMPLEXITY_LIMIT = 10_000_000;
+
+export interface LivenessOptions {
+	/** Primarily useful for diagnostics/tests; production uses the default bound. */
+	complexityLimit?: number;
+}
+
+interface AnalysisStats {
+	handlerCount: number;
+	registerCount: number;
+}
+
+function analysisStats(fn: IRFunction): AnalysisStats {
+	let handlerCount = 0;
+	let highestRegister = -1;
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (instruction.type === "tryBegin") {
+				handlerCount += 1;
+			}
+			if ("registers" in instruction) {
+				for (const register of instruction.registers) {
+					if (register > highestRegister) {
+						highestRegister = register;
+					}
+				}
+			}
+		}
+	}
+
+	const declaredCount = fn.nextRegisterDestination;
+	const registerCount =
+		Number.isSafeInteger(declaredCount) && declaredCount >= 0
+			? Math.max(declaredCount, highestRegister + 1)
+			: highestRegister + 1;
+	return { handlerCount, registerCount };
+}
+
+function checkedProduct(values: ReadonlyArray<number>): number | null {
+	for (const value of values) {
+		if (!Number.isSafeInteger(value) || value < 0) {
+			return null;
+		}
+	}
+	let product = 1;
+	for (const value of values) {
+		if (value !== 0 && product > Number.MAX_SAFE_INTEGER / value) {
+			return null;
+		}
+		product *= value;
+	}
+	return product;
+}
+
+function complexityEstimateFor(fn: IRFunction, stats: AnalysisStats): number | null {
+	return checkedProduct([
+		fn.blocks.length,
+		Math.max(stats.handlerCount, 1),
+		Math.max(stats.registerCount, 1),
+	]);
+}
+
+/**
+ * Checked estimate for the potentially expensive set propagation. `null` means
+ * the product is not safely representable and therefore requires fallback.
+ */
+export function estimateLivenessComplexity(fn: IRFunction): number | null {
+	return complexityEstimateFor(fn, analysisStats(fn));
+}
+
 export interface BackEdge {
 	/** Block index of the branch instruction's block. */
 	from: number;
@@ -145,29 +215,13 @@ export function findBackEdges(fn: IRFunction): {
 }
 
 /**
- * Control-flow successors of every block. Normal edges: branch targets plus a
- * fall-through to block i+1 unless the block ends in an unconditional leave
- * (jump / return / throw). Exception edges: in any function containing a try, the
- * handler and try-end blocks of every `tryBegin` are added as successors of every
- * block — a sound over-approximation (a throw can reach a handler from anywhere
- * in the protected region; modeling the exact region precisely is deferred).
+ * Normal control-flow successors of every block. Exceptional edges are applied
+ * at their exact instruction positions by `transferBlock`, rather than at block
+ * granularity, so markers in the middle of a block retain precise boundaries.
  */
-function computeSuccessors(fn: IRFunction): Array<Array<number>> {
+function computeNormalSuccessors(fn: IRFunction): Array<Array<number>> {
 	const blockCount = fn.blocks.length;
 	const isValid = (index: number) => index >= 0 && index < blockCount;
-
-	const exceptionalSuccessors: Array<number> = [];
-	for (const block of fn.blocks) {
-		for (const instruction of block.instructions) {
-			if (instruction.type === "tryBegin") {
-				for (const target of instruction.blocks) {
-					if (isValid(target)) {
-						exceptionalSuccessors.push(target);
-					}
-				}
-			}
-		}
-	}
 
 	return fn.blocks.map((block, index) => {
 		const successors = new Set<number>();
@@ -185,11 +239,72 @@ function computeSuccessors(fn: IRFunction): Array<Array<number>> {
 		if (!leavesUnconditionally && isValid(index + 1)) {
 			successors.add(index + 1);
 		}
-		for (const target of exceptionalSuccessors) {
-			successors.add(target);
-		}
 		return [...successors];
 	});
+}
+
+/** Instructions that can transfer to an active exception handler. */
+function canThrow(instruction: IRInstruction): boolean {
+	return instruction.type === "throw" || isSafepoint(instruction);
+}
+
+interface ExceptionalControlFlow {
+	/** Innermost applicable handler per block/instruction, or null. */
+	handlerByInstruction: Array<Array<number | null>>;
+	/** Distinct handler blocks on which each block's transfer depends. */
+	handlerDependencies: Array<Set<number>>;
+}
+
+/**
+ * Interpret try markers in the same flattened block/instruction order used by
+ * VM lowering. A begin takes effect after its marker and an end stops protecting
+ * instructions after its marker. Only blocks[0] is an exception destination;
+ * blocks[1] merely keeps the end-marker block reachable through IR cleanup.
+ */
+function deriveExceptionalControlFlow(fn: IRFunction): ExceptionalControlFlow {
+	const handlerByInstruction: Array<Array<number | null>> = [];
+	const handlerDependencies = fn.blocks.map(() => new Set<number>());
+	const activeHandlers: Array<number> = [];
+
+	for (let blockIndex = 0; blockIndex < fn.blocks.length; ++blockIndex) {
+		const instructions = fn.blocks[blockIndex]!.instructions;
+		const handlers = new Array<number | null>(instructions.length).fill(null);
+		handlerByInstruction.push(handlers);
+
+		for (
+			let instructionIndex = 0;
+			instructionIndex < instructions.length;
+			++instructionIndex
+		) {
+			const instruction = instructions[instructionIndex]!;
+			if (instruction.type === "tryBegin") {
+				const handler = instruction.blocks[0];
+				if (handler < 0 || handler >= fn.blocks.length) {
+					throw new Error(`Unknown handler target block ${handler}`);
+				}
+				activeHandlers.push(handler);
+				continue;
+			}
+			if (instruction.type === "tryEnd") {
+				if (activeHandlers.pop() === undefined) {
+					throw new Error("Unbalanced tryEnd marker in liveness analysis");
+				}
+				continue;
+			}
+
+			const handler = activeHandlers[activeHandlers.length - 1];
+			if (handler !== undefined && canThrow(instruction)) {
+				handlers[instructionIndex] = handler;
+				handlerDependencies[blockIndex]!.add(handler);
+			}
+		}
+	}
+
+	if (activeHandlers.length > 0) {
+		throw new Error("Unbalanced tryBegin marker in liveness analysis");
+	}
+
+	return { handlerByInstruction, handlerDependencies };
 }
 
 /** Apply a block's backward transfer to a live-out set, returning its live-in. */
@@ -197,6 +312,8 @@ function transferBlock(
 	fn: IRFunction,
 	blockIndex: number,
 	liveOut: Set<number>,
+	liveInByBlock: Array<Set<number>>,
+	handlerByInstruction: Array<Array<number | null>>,
 ): Set<number> {
 	const live = new Set(liveOut);
 	const instructions = fn.blocks[blockIndex]!.instructions;
@@ -205,6 +322,12 @@ function transferBlock(
 		const def = definedRegister(instruction);
 		if (def !== null) {
 			live.delete(def);
+		}
+		const handler = handlerByInstruction[blockIndex]![i];
+		if (handler !== null && handler !== undefined) {
+			for (const register of liveInByBlock[handler]!) {
+				live.add(register);
+			}
 		}
 		for (const use of usedRegisters(instruction)) {
 			live.add(use);
@@ -238,9 +361,8 @@ export interface Safepoint {
 	instructionIndex: number;
 	kind: "alloc-call" | "loop-poll";
 	/**
-	 * Registers live across this point: `liveOut \ def`. These are the values that
-	 * must be reachable (rooted) through a collection here — the exact per-safepoint
-	 * root set a compiled frame populates.
+	 * Registers live across this point on either the normal or exceptional edge.
+	 * These are the values that must be reachable through a collection here.
 	 */
 	live: Set<number>;
 }
@@ -274,6 +396,19 @@ export interface FunctionLiveness {
 	safepoints: Array<Safepoint>;
 	backEdges: Array<BackEdge>;
 	headerBlocks: Set<number>;
+	/** Whether detailed propagation was skipped in favor of rooting all registers. */
+	usedFallback: boolean;
+	/** Checked pre-analysis estimate; null means arithmetic overflow. */
+	complexityEstimate: number | null;
+}
+
+export interface SafepointRoots {
+	/** Aggregate roots needed by all safepoints, in current register numbering. */
+	registers: Set<number>;
+	/** True when `registers` conservatively contains every physical register. */
+	usedFallback: boolean;
+	/** Checked pre-analysis estimate; null means arithmetic overflow. */
+	complexityEstimate: number | null;
 }
 
 /** Whether this instruction is a loop back-edge branch out of `blockIndex`. */
@@ -286,44 +421,97 @@ function isBackEdgeBranch(instruction: IRInstruction, blockIndex: number): boole
 	return false;
 }
 
-/** Live-variable analysis + back-edge identification for one IR function. */
-export function computeFunctionLiveness(fn: IRFunction): FunctionLiveness {
+interface SolvedLiveness {
+	liveInByBlock: Array<Set<number>>;
+	liveOutByBlock: Array<Set<number>>;
+	handlerByInstruction: Array<Array<number | null>>;
+}
+
+function solveLiveness(fn: IRFunction): SolvedLiveness {
 	const blockCount = fn.blocks.length;
-	const successors = computeSuccessors(fn);
+	const successors = computeNormalSuccessors(fn);
+	const { handlerByInstruction, handlerDependencies } = deriveExceptionalControlFlow(fn);
 	const liveInByBlock: Array<Set<number>> = fn.blocks.map(() => new Set<number>());
 	const liveOutByBlock: Array<Set<number>> = fn.blocks.map(() => new Set<number>());
 
-	// Backward dataflow to a fixpoint. Iterating blocks in reverse index order
-	// propagates most liveness in one sweep (the IR is largely forward-laid-out).
-	let changed = true;
-	while (changed) {
-		changed = false;
-		for (let index = blockCount - 1; index >= 0; --index) {
-			const liveOut = new Set<number>();
-			for (const successor of successors[index]!) {
-				for (const register of liveInByBlock[successor]!) {
-					liveOut.add(register);
-				}
+	const predecessors = fn.blocks.map(() => new Set<number>());
+	for (let index = 0; index < blockCount; ++index) {
+		for (const successor of successors[index]!) {
+			predecessors[successor]!.add(index);
+		}
+		for (const handler of handlerDependencies[index]!) {
+			predecessors[handler]!.add(index);
+		}
+	}
+
+	// Start in block order and pop from the end, preserving the useful reverse
+	// layout bias. Thereafter only predecessors of a changed live-in are revisited.
+	const worklist = fn.blocks.map((_, index) => index);
+	const queued = fn.blocks.map(() => true);
+	while (worklist.length > 0) {
+		const index = worklist.pop()!;
+		queued[index] = false;
+		const liveOut = new Set<number>();
+		for (const successor of successors[index]!) {
+			for (const register of liveInByBlock[successor]!) {
+				liveOut.add(register);
 			}
-			const liveIn = transferBlock(fn, index, liveOut);
-			if (
-				!setsEqual(liveOut, liveOutByBlock[index]!) ||
-				!setsEqual(liveIn, liveInByBlock[index]!)
-			) {
-				liveOutByBlock[index] = liveOut;
-				liveInByBlock[index] = liveIn;
-				changed = true;
+		}
+		const liveIn = transferBlock(fn, index, liveOut, liveInByBlock, handlerByInstruction);
+		liveOutByBlock[index] = liveOut;
+		if (setsEqual(liveIn, liveInByBlock[index]!)) {
+			continue;
+		}
+
+		liveInByBlock[index] = liveIn;
+		for (const predecessor of predecessors[index]!) {
+			if (!queued[predecessor]) {
+				queued[predecessor] = true;
+				worklist.push(predecessor);
 			}
 		}
 	}
 
+	return { liveInByBlock, liveOutByBlock, handlerByInstruction };
+}
+
+function allRegisters(registerCount: number): Set<number> {
+	const registers = new Set<number>();
+	for (let register = 0; register < registerCount; ++register) {
+		registers.add(register);
+	}
+	return registers;
+}
+
+function fallbackRequired(
+	complexityEstimate: number | null,
+	options: LivenessOptions,
+): boolean {
+	const limit = options.complexityLimit ?? DEFAULT_LIVENESS_COMPLEXITY_LIMIT;
+	if (!Number.isFinite(limit) || limit < 0) {
+		throw new Error(`Invalid liveness complexity limit ${limit}`);
+	}
+	return complexityEstimate === null || complexityEstimate > limit;
+}
+
+interface CollectedSafepoints {
+	liveAcrossSafepoint: Set<number>;
+	liveOrUsedAtSafepoint: Set<number>;
+	safepoints: Array<Safepoint>;
+}
+
+function collectSafepoints(
+	fn: IRFunction,
+	solved: SolvedLiveness,
+	detailed: boolean,
+): CollectedSafepoints {
 	// Re-walk each block backward, seeded by its live-out, to record every
 	// safepoint and the registers live across it.
 	const liveAcrossSafepoint = new Set<number>();
 	const liveOrUsedAtSafepoint = new Set<number>();
 	const safepoints: Array<Safepoint> = [];
-	for (let index = 0; index < blockCount; ++index) {
-		const live = new Set(liveOutByBlock[index]);
+	for (let index = 0; index < fn.blocks.length; ++index) {
+		const live = new Set(solved.liveOutByBlock[index]);
 		const instructions = fn.blocks[index]!.instructions;
 		for (let i = instructions.length - 1; i >= 0; --i) {
 			const instruction = instructions[i]!;
@@ -343,11 +531,19 @@ export function computeFunctionLiveness(fn: IRFunction): FunctionLiveness {
 				// caller, crashing only under MAL_GC_STRESS.) Keeping the def when it is
 				// live-out is sound for every safepoint (rooting a value never hurts); a
 				// def dead immediately after the op is simply absent from `live`.
-				const across = new Set<number>();
+				const across = detailed ? new Set<number>() : null;
 				for (const register of live) {
-					across.add(register);
+					across?.add(register);
 					liveAcrossSafepoint.add(register);
 					liveOrUsedAtSafepoint.add(register);
+				}
+				const handler = solved.handlerByInstruction[index]![i];
+				if (handler !== null && handler !== undefined) {
+					for (const register of solved.liveInByBlock[handler]!) {
+						across?.add(register);
+						liveAcrossSafepoint.add(register);
+						liveOrUsedAtSafepoint.add(register);
+					}
 				}
 				// The safepoint's own operands are consumed by an operation that can
 				// collect, so they must survive it even when dead immediately after
@@ -356,18 +552,26 @@ export function computeFunctionLiveness(fn: IRFunction): FunctionLiveness {
 				for (const use of usedRegisters(instruction)) {
 					liveOrUsedAtSafepoint.add(use);
 				}
-				safepoints.push({
-					blockIndex: index,
-					instructionIndex: i,
-					// A back-edge can only be a jump/jumpIf, which never allocates, so
-					// the two kinds are disjoint; alloc-call wins if both somehow held.
-					kind: allocOrCall ? "alloc-call" : "loop-poll",
-					live: across,
-				});
+				if (across !== null) {
+					safepoints.push({
+						blockIndex: index,
+						instructionIndex: i,
+						// A back-edge can only be a jump/jumpIf, which never allocates, so
+						// the two kinds are disjoint; alloc-call wins if both somehow held.
+						kind: allocOrCall ? "alloc-call" : "loop-poll",
+						live: across,
+					});
+				}
 			}
 			const def = definedRegister(instruction);
 			if (def !== null) {
 				live.delete(def);
+			}
+			const handler = solved.handlerByInstruction[index]![i];
+			if (handler !== null && handler !== undefined) {
+				for (const register of solved.liveInByBlock[handler]!) {
+					live.add(register);
+				}
 			}
 			for (const use of usedRegisters(instruction)) {
 				live.add(use);
@@ -381,16 +585,76 @@ export function computeFunctionLiveness(fn: IRFunction): FunctionLiveness {
 			? a.blockIndex - b.blockIndex
 			: a.instructionIndex - b.instructionIndex,
 	);
+	return { liveAcrossSafepoint, liveOrUsedAtSafepoint, safepoints };
+}
+
+/**
+ * Aggregate-only production API. Unlike `computeFunctionLiveness`, this does
+ * not allocate a Set for every safepoint.
+ */
+export function computeSafepointRoots(
+	fn: IRFunction,
+	options: LivenessOptions = {},
+): SafepointRoots {
+	const stats = analysisStats(fn);
+	const complexityEstimate = complexityEstimateFor(fn, stats);
+	if (fallbackRequired(complexityEstimate, options)) {
+		return {
+			registers: allRegisters(stats.registerCount),
+			usedFallback: true,
+			complexityEstimate,
+		};
+	}
+
+	const solved = solveLiveness(fn);
+	return {
+		registers: collectSafepoints(fn, solved, false).liveOrUsedAtSafepoint,
+		usedFallback: false,
+		complexityEstimate,
+	};
+}
+
+/** Live-variable analysis + back-edge identification for one IR function. */
+export function computeFunctionLiveness(
+	fn: IRFunction,
+	options: LivenessOptions = {},
+): FunctionLiveness {
+	const stats = analysisStats(fn);
+	const complexityEstimate = complexityEstimateFor(fn, stats);
+	if (fallbackRequired(complexityEstimate, options)) {
+		const registers = allRegisters(stats.registerCount);
+		const { backEdges, headerBlocks } = findBackEdges(fn);
+		return {
+			liveInByBlock: fn.blocks.map(() => new Set<number>()),
+			liveOutByBlock: fn.blocks.map(() => new Set<number>()),
+			liveAcrossSafepoint: new Set(registers),
+			liveOrUsedAtSafepoint: registers,
+			safepoints: [],
+			backEdges,
+			headerBlocks,
+			usedFallback: true,
+			complexityEstimate,
+		};
+	}
+
+	const solved = solveLiveness(fn);
+	const { liveAcrossSafepoint, liveOrUsedAtSafepoint, safepoints } = collectSafepoints(
+		fn,
+		solved,
+		true,
+	);
 
 	const { backEdges, headerBlocks } = findBackEdges(fn);
 	return {
-		liveInByBlock,
-		liveOutByBlock,
+		liveInByBlock: solved.liveInByBlock,
+		liveOutByBlock: solved.liveOutByBlock,
 		liveAcrossSafepoint,
 		liveOrUsedAtSafepoint,
 		safepoints,
 		backEdges,
 		headerBlocks,
+		usedFallback: false,
+		complexityEstimate,
 	};
 }
 
@@ -422,6 +686,9 @@ export function debugProgramLiveness(program: IntermediateProgram): string {
 	for (const fn of program.functions) {
 		const fl = liveness.byFunction.get(fn.functionIndex)!;
 		output += `fn#${fn.functionIndex} (${fn.blocks.length} blocks)\n`;
+		output +=
+			`  fallback: ${fl.usedFallback ? "all-registers" : "none"} ` +
+			`(estimate=${fl.complexityEstimate ?? "overflow"})\n`;
 		output += `  liveAcrossSafepoint:   ${formatSet(fl.liveAcrossSafepoint)}\n`;
 		output += `  liveOrUsedAtSafepoint: ${formatSet(fl.liveOrUsedAtSafepoint)}\n`;
 		output += `  backEdges: ${fl.backEdges.map((e) => `${e.from}->${e.to}`).join(", ") || "none"}\n`;

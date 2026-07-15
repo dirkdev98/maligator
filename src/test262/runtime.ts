@@ -37,7 +37,13 @@ import {
 import type { BatchManifest } from "./artifact-cache.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
+import {
+	planTest262SharedHelpers,
+	test262SourcePlanCacheInput,
+} from "./shared-helper-plan.ts";
+import type { Test262SharedHelper, Test262SourcePlan } from "./shared-helper-plan.ts";
 import type { Test262File, Test262Result } from "./types.ts";
+import { mergeVmDefinitions } from "./vm-definition-merge.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -105,7 +111,9 @@ function interpreterOnly(): boolean {
 // halves the generated C and cuts cc ~25% on a cold run, content-addressed so it
 // cannot change behaviour. Folded into the cache key.
 function emitMode(): string {
-	return interpreterOnly() ? "shared-harness-nocompiled" : "shared-harness";
+	return interpreterOnly()
+		? "merged-helper-plans-nocompiled-v2"
+		: "merged-helper-plans-v2";
 }
 
 /** Keys touched this run, so stale cache entries can be pruned at the end. */
@@ -445,13 +453,59 @@ interface CompileOutcome {
 		| undefined;
 }
 
+type DefinitionStats = NonNullable<CompileOutcome["stats"]>;
+
+function definitionStats(definition: VmDefinition): DefinitionStats {
+	const opcodes: Record<string, number> = {};
+	let instructionCount = 0;
+	for (const fn of definition.functions) {
+		instructionCount += fn.instructions.length;
+		for (const instruction of fn.instructions) {
+			opcodes[instruction.opcode] = (opcodes[instruction.opcode] ?? 0) + 1;
+		}
+	}
+	return {
+		functionCount: definition.functions.length,
+		instructionCount,
+		opcodes,
+	};
+}
+
+function combineDefinitionStats(stats: Array<DefinitionStats>): DefinitionStats {
+	const combined: DefinitionStats = {
+		functionCount: 0,
+		instructionCount: 0,
+		opcodes: {},
+	};
+	for (const entry of stats) {
+		combined.functionCount += entry.functionCount;
+		combined.instructionCount += entry.instructionCount;
+		for (const [opcode, count] of Object.entries(entry.opcodes)) {
+			combined.opcodes[opcode] = (combined.opcodes[opcode] ?? 0) + count;
+		}
+	}
+	return combined;
+}
+
+function strictForTest262File(file: Test262File): boolean {
+	return process.env.T262_VARIANT === "strict"
+		? true
+		: process.env.T262_VARIANT === "sloppy"
+			? false
+			: !(file.frontmatter.flags?.includes("noStrict") ?? false);
+}
+
 /**
  * Compile a test to a VM definition, resolving the SKIPPED and
  * COMPILE_FAILED verdicts along the way. `source` is the pre-composed
  * harness+test (also the cache-key input), passed in so it is built exactly once
  * per test.
  */
-function test262CompileToC(file: Test262File, source: string): CompileOutcome {
+function test262CompileToC(
+	file: Test262File,
+	source: string,
+	preParsed?: ReturnType<typeof parseScript>,
+): CompileOutcome {
 	const outcome: CompileOutcome = {
 		definition: undefined,
 		result: "UNKNOWN",
@@ -470,12 +524,7 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 	// a script runs with no variant set. A sloppy parse just relaxes the
 	// early-error surface (octal, `with`, …); the sloppy runtime behaviors gate on
 	// the per-scope strict flag sema derives from it.
-	const strict =
-		process.env.T262_VARIANT === "strict"
-			? true
-			: process.env.T262_VARIANT === "sloppy"
-				? false
-				: !(file.frontmatter.flags?.includes("noStrict") ?? false);
+	const strict = strictForTest262File(file);
 
 	// A parse/early/resolution negative test must be REJECTED at compile: a
 	// SyntaxError thrown below is the pass; compiling successfully is the fail.
@@ -491,7 +540,9 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 		// Parse and scan before any further work. Module-flagged tests parse
 		// as modules; the harness is still prepended (its functions become
 		// module-scoped, which the test references in the same scope).
-		const parsed = isModule ? parseModule(source) : parseScript(source, { strict });
+		const parsed = isModule
+			? parseModule(source)
+			: (preParsed ?? parseScript(source, { strict }));
 
 		const hasDynamicImport =
 			file.frontmatter.features?.includes("dynamic-import") ?? false;
@@ -533,19 +584,7 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
 			return outcome;
 		}
 
-		const opcodes: Record<string, number> = {};
-		let instructionCount = 0;
-		for (const fn of vmDefinition.functions) {
-			instructionCount += fn.instructions.length;
-			for (const instruction of fn.instructions) {
-				opcodes[instruction.opcode] = (opcodes[instruction.opcode] ?? 0) + 1;
-			}
-		}
-		outcome.stats = {
-			functionCount: vmDefinition.functions.length,
-			instructionCount,
-			opcodes,
-		};
+		outcome.stats = definitionStats(vmDefinition);
 
 		outcome.definition = vmDefinition;
 		return outcome;
@@ -571,12 +610,12 @@ function test262CompileToC(file: Test262File, source: string): CompileOutcome {
  * accumulators. Shared by the compile path and by cache-hit replay so both
  * produce identical reports.
  */
-function applyOutcome(file: Test262File, outcome: CompileOutcome) {
+function applyOutcome(file: Test262File, outcome: CompileOutcome, includeStats = true) {
 	file.result = outcome.result;
 	if (outcome.failure !== undefined) {
 		countReason(FAILURE_COUNTS, FAILURE_CACHE, outcome.failure, file);
 	}
-	if (outcome.stats !== undefined) {
+	if (includeStats && outcome.stats !== undefined) {
 		CODE_STATS.compiledFiles++;
 		CODE_STATS.functionCount += outcome.stats.functionCount;
 		CODE_STATS.instructionCount += outcome.stats.instructionCount;
@@ -589,6 +628,16 @@ function applyOutcome(file: Test262File, outcome: CompileOutcome) {
 interface BatchEntry {
 	file: Test262File;
 	index: number;
+}
+
+interface RunnableBatchEntry extends BatchEntry {
+	definition: VmDefinition;
+	mode: "shared" | "legacy";
+	helperIds: Array<string>;
+	logicalStats: DefinitionStats;
+	definitionIndex: number;
+	entryFunctionIndex: number;
+	helperFunctionIndices: Array<number>;
 }
 
 /** Link a compiled batch object against the freshly built library. Cheap (~3% of cc). */
@@ -647,7 +696,8 @@ async function runBatchBinary(
 	}
 	for (const entry of unreported) {
 		entry.file.result = "UNKNOWN";
-		await test262RunSingle(entry.file, workerId);
+		// The batch or cached manifest already attributed this logical test's code.
+		await test262RunSingle(entry.file, workerId, false);
 	}
 }
 
@@ -709,13 +759,21 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 
 	// Compose every test once: it feeds both the cache key and the compiler.
 	const composed = files.map((file) => composeSource(file));
+	const plans: Array<Test262SourcePlan> = files.map(
+		(file): Test262SourcePlan =>
+			test262ShouldSkip(file)
+				? { kind: "legacy", reason: "skipped" }
+				: planTest262SharedHelpers(file, strictForTest262File(file), (name) =>
+						loadHarnessFile(`harness/${name}`),
+					),
+	);
 
 	let cacheKey = "";
 	if (useCache) {
 		cacheKey = batchCacheKey(
 			buildFingerprint([...CC_COMPILE_FLAGS, ...CC_LINK_FLAGS]),
 			emitMode(),
-			composed,
+			plans.map((plan, index) => test262SourcePlanCacheInput(plan, composed[index]!)),
 		);
 		USED_CACHE_KEYS.add(cacheKey);
 
@@ -730,8 +788,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		}
 	}
 
-	const entries: Array<BatchEntry> = [];
-	const definitions: Array<VmDefinition> = [];
+	const entries: Array<RunnableBatchEntry> = [];
 	const resolved: BatchManifest["resolved"] = [];
 	const stats = {
 		compiledFiles: 0,
@@ -739,11 +796,62 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		instructionCount: 0,
 		opcodes: {} as Record<string, number>,
 	};
+	const helpers = new Map<string, Test262SharedHelper>();
+	for (const plan of plans) {
+		if (plan.kind === "shared") {
+			for (const helper of plan.helpers) helpers.set(helper.id, helper);
+		}
+	}
+	const helperOutcomes = new Map<string, CompileOutcome>();
+	for (const helper of helpers.values()) {
+		const helperFile: Test262File = {
+			path: helper.path,
+			frontmatter: {},
+			content: helper.source,
+			result: "UNKNOWN",
+		};
+		helperOutcomes.set(
+			helper.id,
+			test262CompileToC(helperFile, helper.source, helper.parsed),
+		);
+	}
 
 	for (let i = 0; i < files.length; i++) {
 		const file = files[i]!;
-		const outcome = test262CompileToC(file, composed[i]!);
-		applyOutcome(file, outcome);
+		const plan = plans[i]!;
+		const canShare =
+			plan.kind === "shared" &&
+			plan.helpers.every(
+				(helper) => helperOutcomes.get(helper.id)?.definition !== undefined,
+			);
+		let mode: "shared" | "legacy" = canShare ? "shared" : "legacy";
+		let outcome =
+			plan.kind === "shared" && canShare
+				? test262CompileToC(file, plan.testSource, plan.parsedTest)
+				: test262CompileToC(file, composed[i]!);
+
+		// A standalone fragment that reaches an unsupported compiler edge must not
+		// turn sharing into a new failure mode. Retry the exact legacy source.
+		if (mode === "shared" && outcome.result === "COMPILE_FAILED") {
+			mode = "legacy";
+			outcome = test262CompileToC(file, composed[i]!);
+		}
+
+		const helperIds =
+			mode === "shared" && plan.kind === "shared"
+				? plan.helpers.map((helper) => helper.id)
+				: [];
+		const logicalStats =
+			outcome.stats === undefined
+				? undefined
+				: combineDefinitionStats([
+						...(mode === "shared"
+							? helperIds.map((id) => helperOutcomes.get(id)!.stats!)
+							: []),
+						outcome.stats,
+					]);
+		const logicalOutcome = { ...outcome, stats: logicalStats };
+		applyOutcome(file, logicalOutcome);
 
 		if (outcome.definition === undefined) {
 			resolved.push({
@@ -754,24 +862,79 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 			continue;
 		}
 
-		if (outcome.stats !== undefined) {
+		if (logicalStats !== undefined) {
 			stats.compiledFiles++;
-			stats.functionCount += outcome.stats.functionCount;
-			stats.instructionCount += outcome.stats.instructionCount;
-			for (const [opcode, count] of Object.entries(outcome.stats.opcodes)) {
+			stats.functionCount += logicalStats.functionCount;
+			stats.instructionCount += logicalStats.instructionCount;
+			for (const [opcode, count] of Object.entries(logicalStats.opcodes)) {
 				stats.opcodes[opcode] = (stats.opcodes[opcode] ?? 0) + count;
 			}
 		}
 
-		entries.push({ file, index: entries.length });
-		definitions.push(outcome.definition);
+		entries.push({
+			file,
+			index: entries.length,
+			definition: outcome.definition,
+			mode,
+			helperIds,
+			logicalStats: logicalStats!,
+			definitionIndex: -1,
+			entryFunctionIndex: -1,
+			helperFunctionIndices: [],
+		});
 	}
 
+	const physicalDefinitions: Array<VmDefinition> = [];
+	const sharedEntries = entries.filter((entry) => entry.mode === "shared");
+	const usedHelperIds = new Set(sharedEntries.flatMap((entry) => entry.helperIds));
+	const usedHelpers = [...helpers.values()].filter((helper) =>
+		usedHelperIds.has(helper.id),
+	);
+	if (sharedEntries.length > 0) {
+		const sharedComponents = [
+			...usedHelpers.map((helper) => helperOutcomes.get(helper.id)!.definition!),
+			...sharedEntries.map((entry) => entry.definition),
+		];
+		const merged = mergeVmDefinitions(sharedComponents);
+		physicalDefinitions.push(merged.definition);
+		const helperBases = new Map(
+			usedHelpers.map(
+				(helper, index) => [helper.id, merged.functionBases[index]!] as const,
+			),
+		);
+		sharedEntries.forEach((entry, index) => {
+			entry.definitionIndex = 0;
+			entry.entryFunctionIndex = merged.functionBases[usedHelpers.length + index]!;
+			entry.helperFunctionIndices = entry.helperIds.map((id) => helperBases.get(id)!);
+		});
+	}
+	for (const entry of entries) {
+		if (entry.mode === "legacy") {
+			entry.definitionIndex = physicalDefinitions.length;
+			entry.entryFunctionIndex = 0;
+			physicalDefinitions.push(entry.definition);
+		}
+	}
+	const physicalStats = combineDefinitionStats(
+		physicalDefinitions.map((definition) => definitionStats(definition)),
+	);
+
 	const manifest: BatchManifest = {
+		schemaVersion: 2,
 		hasBinary: entries.length > 0,
-		entries: entries.map((entry) => ({ path: entry.file.path, index: entry.index })),
+		entries: entries.map((entry) => ({
+			path: entry.file.path,
+			index: entry.index,
+			mode: entry.mode,
+			stats: entry.logicalStats,
+		})),
 		resolved,
 		stats,
+		physical: {
+			definitionCount: physicalDefinitions.length,
+			sharedHelperCount: usedHelpers.length,
+			...physicalStats,
+		},
 	};
 
 	if (entries.length === 0) {
@@ -784,7 +947,12 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 	// Emit the batch's C as one shared translation unit (deduping the harness),
 	// headers prepended once.
 	const compiled = !interpreterOnly();
-	const body = emitBatch(definitions, { compiled });
+	const body = emitBatch(physicalDefinitions, { compiled });
+	const helperIndices = entries.flatMap((entry) => entry.helperFunctionIndices);
+	const helperOffsets = [0];
+	for (const entry of entries) {
+		helperOffsets.push(helperOffsets.at(-1)! + entry.helperFunctionIndices.length);
+	}
 
 	const sources: Array<string> = [
 		'#include "vm.h"',
@@ -797,10 +965,15 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		"",
 		body,
 		"",
-		"const MalVmDefinition *const mal_test262_definitions[] = {",
-		...entries.map((entry) => `    &mal_vm_definition_${entry.index},`),
+		"const MalVmDefinition *const mal_test262_artifact_definitions[] = {",
+		...physicalDefinitions.map((_, index) => `    &mal_vm_definition_${index},`),
 		"};",
-		`const int mal_test262_definition_count = ${entries.length};`,
+		`const int mal_test262_artifact_definition_count = ${physicalDefinitions.length};`,
+		`const int mal_test262_plan_definition_indices[] = { ${entries.map((entry) => entry.definitionIndex).join(", ")} };`,
+		`const int mal_test262_plan_entry_indices[] = { ${entries.map((entry) => entry.entryFunctionIndex).join(", ")} };`,
+		`const int mal_test262_plan_helper_offsets[] = { ${helperOffsets.join(", ")} };`,
+		`const int mal_test262_plan_helper_indices[] = { ${helperIndices.length > 0 ? helperIndices.join(", ") : "0"} };`,
+		`const int mal_test262_plan_count = ${entries.length};`,
 		"",
 	];
 
@@ -846,7 +1019,8 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		);
 		for (const entry of entries) {
 			entry.file.result = "UNKNOWN";
-			await test262RunSingle(entry.file, workerId);
+			// Compilation above already attributed this logical test's code.
+			await test262RunSingle(entry.file, workerId, false);
 		}
 		return;
 	}
@@ -937,9 +1111,13 @@ function parseBatchOutput(stdout: string, entries: Array<BatchEntry>): Set<numbe
  * Single-test execution, used as the fallback when a batch cannot be
  * compiled or its driver died before reporting.
  */
-export async function test262RunSingle(file: Test262File, workerId: number) {
+export async function test262RunSingle(
+	file: Test262File,
+	workerId: number,
+	includeStats = true,
+) {
 	const outcome = test262CompileToC(file, composeSource(file));
-	applyOutcome(file, outcome);
+	applyOutcome(file, outcome, includeStats);
 	if (outcome.definition === undefined) {
 		return;
 	}

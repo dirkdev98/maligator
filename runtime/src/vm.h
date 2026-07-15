@@ -530,8 +530,12 @@ typedef struct MalInstruction {
 
         struct {
             // Write `src` to the global object property `name_string_index`
-            // (created if absent) — a sloppy-script `var`/`function` binding.
+            // (created if absent) — a script `var`/`function` binding. Declaration
+            // mode preserves an existing property and creates a non-configurable
+            // var property when absent.
             i32 src, name_string_index;
+            bool declaration;
+            bool declaration_configurable;
         } store_global_property;
 
         struct {
@@ -997,6 +1001,24 @@ MalValue mal_realm_global(const MalRealm *realm);
 #define MAL_GLOBAL_PROPERTY_CACHE_BITS 10
 #define MAL_GLOBAL_PROPERTY_CACHE_SIZE (1u << MAL_GLOBAL_PROPERTY_CACHE_BITS)
 
+#define MAL_INTERP_CALL_CACHE_BITS 10
+#define MAL_INTERP_CALL_CACHE_SIZE (1u << MAL_INTERP_CALL_CACHE_BITS)
+
+/**
+ * One entry in the interpreter's bounded direct-mapped call cache. The callee
+ * value is an unrooted identity guard, not an owning reference: heap_epoch must
+ * match before it is trusted, closing the freed-cell/reuse ABA hole. Function
+ * rows are always re-derived from callee_function_index because eval can realloc
+ * the definition's function table.
+ */
+typedef struct MalInterpCallCacheEntry {
+    MalValue callee;
+    i32 caller_function_index;
+    i32 call_ip;
+    i32 callee_function_index;
+    u32 heap_epoch;
+} MalInterpCallCacheEntry;
+
 /**
  * A VM-owned direct-mapped cache for global-object own dictionary entries. It
  * retains entry identity, never a property value; users validate every field and
@@ -1047,6 +1069,9 @@ typedef struct MalVm {
      * See MalStubEntry / mal_stub_hash in vm_ops.h.
      */
     struct MalStubEntry *load_stub;
+
+    /** Bounded plain interpreted-function call cache; see vm_ops.c. */
+    MalInterpCallCacheEntry *interp_call_cache;
 
     /** Bounded cache indexed by definition string index; see vm_ops.c. */
     MalGlobalPropertyCacheEntry *global_property_cache;

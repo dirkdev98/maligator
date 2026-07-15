@@ -16,8 +16,10 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 4 for the packed literal-template definition section.
-export const WIRE_VERSION = 4;
+// Bumped to 5 for STORE_GLOBAL_PROPERTY declaration flags.
+export const WIRE_VERSION = 5;
+// Keep in sync with runtime/src/heap_string.h.
+export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
 /**
  * Canonical opcode order = the wire tag (a u8 index into this array). The C
@@ -423,6 +425,11 @@ export function serializeVmDefinition(
 	// Strings: each is a length-prefixed UTF-16 code-unit run.
 	w.u32(def.stringConstants.length);
 	for (const units of def.stringConstants) {
+		if (units.length > MAX_STRING_CODE_UNITS) {
+			throw new RangeError(
+				`serialize-vm: string constant has ${units.length} UTF-16 code units; maximum is ${MAX_STRING_CODE_UNITS}`,
+			);
+		}
 		w.u32(units.length);
 		for (const unit of units) {
 			w.u16(unit);
@@ -779,6 +786,11 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.nameStringIndex);
 			return;
 		case "STORE_GLOBAL_PROPERTY":
+			w.i32(i.src);
+			w.i32(i.nameStringIndex);
+			w.u8(i.declaration ? 1 : 0);
+			w.u8(i.declarationConfigurable ? 1 : 0);
+			return;
 		case "THROW_IF_TDZ":
 			w.i32(i.src);
 			w.i32(i.nameStringIndex);
@@ -865,6 +877,11 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 	const stringConstants: Array<Array<number>> = [];
 	for (let s = 0; s < stringCount; ++s) {
 		const len = r.u32();
+		if (len > MAX_STRING_CODE_UNITS) {
+			throw new RangeError(
+				`serialize-vm: string constant has ${len} UTF-16 code units; maximum is ${MAX_STRING_CODE_UNITS}`,
+			);
+		}
 		const units = new Array<number>(len);
 		for (let u = 0; u < len; ++u) {
 			units[u] = r.u16();
@@ -1219,7 +1236,13 @@ function readInstruction(r: Reader): VmInstruction {
 		case "WITH_GET":
 			return { opcode, dst: r.i32(), nameStringIndex: r.i32() };
 		case "STORE_GLOBAL_PROPERTY":
-			return { opcode, src: r.i32(), nameStringIndex: r.i32() };
+			return {
+				opcode,
+				src: r.i32(),
+				nameStringIndex: r.i32(),
+				declaration: r.u8() !== 0,
+				declarationConfigurable: r.u8() !== 0,
+			};
 		case "THROW_IF_TDZ":
 			return { opcode, src: r.i32(), nameStringIndex: r.i32() };
 		case "WITH_ENTER":

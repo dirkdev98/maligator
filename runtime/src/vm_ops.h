@@ -125,6 +125,12 @@ bool mal_vm_to_string(MalVm *vm, MalValue value, MalString **out);
 bool mal_vm_to_numeric(MalVm *vm, MalValue value, MalValue *out);
 
 /**
+ * Add already-coerced primitives, throwing RangeError when a string result would
+ * exceed the engine's UTF-16 length limit. Preserves an existing pending throw.
+ */
+MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right);
+
+/**
  * Spec OrdinaryHasInstance: non-callable targets answer false, bound
  * functions unwrap to their target, then the value's prototype chain is
  * walked looking for target.prototype. Shared by the instanceof operator
@@ -774,9 +780,10 @@ void mal_vm_op_set_prototype(MalVm *vm, MalValue object_value, MalValue prototyp
  */
 MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index);
 
-/** Write `value` to the global object property `name_string_index` (creating it). */
+/** Write or declaration-initialize a global object property. */
 void mal_vm_op_store_global_property(
-    MalVm *vm, i32 name_string_index, MalValue value, bool strict
+    MalVm *vm, i32 name_string_index, MalValue value, bool strict,
+    bool declaration, bool declaration_configurable
 );
 
 /** Read `object`'s internal [[Prototype]] slot (null if none); never throws. */

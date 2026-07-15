@@ -27,6 +27,15 @@ function throwsTypeError(name: string, fn: () => unknown): void {
 	}
 	check(name, threw);
 }
+function throwsRangeError(name: string, fn: () => unknown): void {
+	let threw = false;
+	try {
+		fn();
+	} catch (e) {
+		threw = e instanceof RangeError;
+	}
+	check(name, threw);
+}
 
 // --- dirname ---
 eq("dirname-nested", dirname("/foo/bar/baz"), "/foo/bar");
@@ -77,6 +86,8 @@ eq("join-above-root", join("a", "..", "..", "b"), "../b");
 eq("join-trailing-separator", join("a", "b/"), "a/b/");
 eq("join-unicode", join("/alpha", "\u{1f40a}", "..", "beta.txt"), "/alpha/beta.txt");
 eq("join-embedded-nul", join("a\0b", "c"), "a\0b/c");
+const halfStringLimit = "x".repeat(1 << 23);
+throwsRangeError("join-string-limit", () => join(halfStringLimit, halfStringLimit));
 
 // --- relative (absolute inputs => cwd-independent) ---
 eq(

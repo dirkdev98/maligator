@@ -216,8 +216,7 @@ static bool mal_builtin_iterator_string_advance(
 
     iterator->index += count;
     *done_out = false;
-    // The borrowed code units stay alive with the source string.
-    *value_out = mal_value_from_string(mal_string_new_external(&vm->heap, code_units + index, count));
+    *value_out = mal_value_from_string(mal_string_new_dependent(&vm->heap, string, index, count));
     return true;
 }
 

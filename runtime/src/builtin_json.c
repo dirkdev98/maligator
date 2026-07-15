@@ -15,88 +15,176 @@
 #include "vm_ops.h"
 
 typedef struct MalJsonBuilder {
+    MalVm *vm;
     c16 *code_units;
     usize length;
     usize capacity;
 } MalJsonBuilder;
 
-static void mal_json_builder_push(MalJsonBuilder *builder, c16 code_unit) {
-    if (builder->length == builder->capacity) {
-        builder->capacity = builder->capacity == 0 ? 64 : builder->capacity * 2;
-        builder->code_units = realloc(builder->code_units, sizeof(c16) * builder->capacity);
-    }
+static bool mal_json_throw_string_length(MalVm *vm) {
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+    return false;
+}
 
+static bool mal_json_builder_reserve(MalJsonBuilder *builder, usize extra) {
+    usize required;
+    if (!mal_checked_size_add(
+            builder->length, extra, MAL_STRING_MAX_CODE_UNITS, &required)) {
+        return mal_json_throw_string_length(builder->vm);
+    }
+    if (required <= builder->capacity) {
+        return true;
+    }
+    usize capacity;
+    usize bytes;
+    if (!mal_checked_size_growth(
+            builder->capacity, required, 64, MAL_STRING_MAX_CODE_UNITS, &capacity) ||
+        !mal_checked_size_multiply(sizeof(c16), capacity, SIZE_MAX, &bytes)) {
+        return mal_json_throw_string_length(builder->vm);
+    }
+    c16 *grown = realloc(builder->code_units, bytes);
+    if (grown == nullptr) {
+        return mal_json_throw_string_length(builder->vm);
+    }
+    builder->code_units = grown;
+    builder->capacity = capacity;
+    return true;
+}
+
+static bool mal_json_builder_push(MalJsonBuilder *builder, c16 code_unit) {
+    if (!mal_json_builder_reserve(builder, 1)) {
+        return false;
+    }
     builder->code_units[builder->length++] = code_unit;
+    return true;
 }
 
-static void mal_json_builder_push_ascii(MalJsonBuilder *builder, const byte *text) {
-    for (usize i = 0; text[i] != '\0'; i++) {
-        mal_json_builder_push(builder, (c16) text[i]);
+static bool mal_json_builder_push_ascii(MalJsonBuilder *builder, const byte *text) {
+    usize length = strlen((const char *) text);
+    if (!mal_json_builder_reserve(builder, length)) {
+        return false;
     }
-}
-
-static void mal_json_builder_push_string(MalJsonBuilder *builder, const MalString *string) {
-    const c16 *code_units = mal_string_code_units(string);
-    for (usize i = 0; i < mal_string_length(string); i++) {
-        mal_json_builder_push(builder, code_units[i]);
+    for (usize i = 0; i < length; i++) {
+        builder->code_units[builder->length++] = (c16) text[i];
     }
+    return true;
 }
 
-static void mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalString *string) {
-    mal_json_builder_push(builder, '"');
+static bool mal_json_builder_push_units(
+    MalJsonBuilder *builder, const c16 *code_units, usize length
+) {
+    if (length == 0) {
+        return true;
+    }
+    if (!mal_json_builder_reserve(builder, length)) {
+        return false;
+    }
+    memcpy(builder->code_units + builder->length, code_units, sizeof(c16) * length);
+    builder->length += length;
+    return true;
+}
 
+static bool mal_json_builder_push_string(MalJsonBuilder *builder, const MalString *string) {
+    return mal_json_builder_push_units(
+        builder, mal_string_code_units(string), mal_string_length(string));
+}
+
+static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalString *string) {
     const c16 *code_units = mal_string_code_units(string);
-    for (usize i = 0; i < mal_string_length(string); i++) {
+    usize string_length = mal_string_length(string);
+    usize quoted_length = 2;
+    for (usize i = 0; i < string_length; i++) {
+        c16 code_unit = code_units[i];
+        usize width = 1;
+        if (code_unit == '"' || code_unit == '\\' ||
+            code_unit == '\b' || code_unit == '\f' || code_unit == '\n' ||
+            code_unit == '\r' || code_unit == '\t') {
+            width = 2;
+        } else if (code_unit < 0x20) {
+            width = 6;
+        } else if (code_unit >= 0xD800 && code_unit <= 0xDFFF) {
+            bool paired = code_unit <= 0xDBFF && i + 1 < string_length &&
+                code_units[i + 1] >= 0xDC00 && code_units[i + 1] <= 0xDFFF;
+            if (paired) {
+                width = 2;
+                i++;
+            } else {
+                width = 6;
+            }
+        }
+        if (!mal_checked_size_add(
+                quoted_length, width, MAL_STRING_MAX_CODE_UNITS, &quoted_length)) {
+            return mal_json_throw_string_length(builder->vm);
+        }
+    }
+    if (!mal_json_builder_reserve(builder, quoted_length)) {
+        return false;
+    }
+
+    builder->code_units[builder->length++] = '"';
+    for (usize i = 0; i < string_length; i++) {
         c16 code_unit = code_units[i];
         switch (code_unit) {
             case '"':
-                mal_json_builder_push_ascii(builder, "\\\"");
+                builder->code_units[builder->length++] = '\\';
+                builder->code_units[builder->length++] = '"';
                 break;
             case '\\':
-                mal_json_builder_push_ascii(builder, "\\\\");
+                builder->code_units[builder->length++] = '\\';
+                builder->code_units[builder->length++] = '\\';
                 break;
             case '\b':
-                mal_json_builder_push_ascii(builder, "\\b");
+                builder->code_units[builder->length++] = '\\';
+                builder->code_units[builder->length++] = 'b';
                 break;
             case '\f':
-                mal_json_builder_push_ascii(builder, "\\f");
+                builder->code_units[builder->length++] = '\\';
+                builder->code_units[builder->length++] = 'f';
                 break;
             case '\n':
-                mal_json_builder_push_ascii(builder, "\\n");
+                builder->code_units[builder->length++] = '\\';
+                builder->code_units[builder->length++] = 'n';
                 break;
             case '\r':
-                mal_json_builder_push_ascii(builder, "\\r");
+                builder->code_units[builder->length++] = '\\';
+                builder->code_units[builder->length++] = 'r';
                 break;
             case '\t':
-                mal_json_builder_push_ascii(builder, "\\t");
+                builder->code_units[builder->length++] = '\\';
+                builder->code_units[builder->length++] = 't';
                 break;
             default:
                 if (code_unit < 0x20) {
                     byte buffer[8];
                     snprintf(buffer, sizeof(buffer), "\\u%04x", code_unit);
-                    mal_json_builder_push_ascii(builder, buffer);
+                    for (usize j = 0; j < 6; j++) {
+                        builder->code_units[builder->length++] = buffer[j];
+                    }
                 } else if (code_unit >= 0xD800 && code_unit <= 0xDFFF) {
                     // QuoteJSONString escapes lone surrogates; a valid pair (high
                     // followed by low) passes through unescaped as the two units.
                     bool high = code_unit <= 0xDBFF;
-                    bool paired = high && i + 1 < mal_string_length(string) &&
+                    bool paired = high && i + 1 < string_length &&
                         code_units[i + 1] >= 0xDC00 && code_units[i + 1] <= 0xDFFF;
                     if (paired) {
-                        mal_json_builder_push(builder, code_unit);
-                        mal_json_builder_push(builder, code_units[++i]);
+                        builder->code_units[builder->length++] = code_unit;
+                        builder->code_units[builder->length++] = code_units[++i];
                     } else {
                         byte buffer[8];
                         snprintf(buffer, sizeof(buffer), "\\u%04x", code_unit);
-                        mal_json_builder_push_ascii(builder, buffer);
+                        for (usize j = 0; j < 6; j++) {
+                            builder->code_units[builder->length++] = buffer[j];
+                        }
                     }
                 } else {
-                    mal_json_builder_push(builder, code_unit);
+                    builder->code_units[builder->length++] = code_unit;
                 }
                 break;
         }
     }
 
-    mal_json_builder_push(builder, '"');
+    builder->code_units[builder->length++] = '"';
+    return true;
 }
 
 /**
@@ -135,16 +223,27 @@ static bool mal_json_is_number(MalValue value) {
 static MalJsonResult mal_json_serialize_property(MalJsonState *state, MalJsonBuilder *builder, MalKey get_key, MalValue key_string, MalValue holder, usize depth);
 
 /** Push "\n" followed by `depth` copies of the gap, when the gap is non-empty. */
-static void mal_json_push_indent(MalJsonState *state, MalJsonBuilder *builder, usize depth) {
+static bool mal_json_push_indent(MalJsonState *state, MalJsonBuilder *builder, usize depth) {
     if (state->gap_length == 0) {
-        return;
+        return true;
     }
-    mal_json_builder_push(builder, '\n');
+    usize gap_units;
+    usize extra;
+    if (!mal_checked_size_multiply(
+            depth, state->gap_length, MAL_STRING_MAX_CODE_UNITS, &gap_units) ||
+        !mal_checked_size_add(gap_units, 1, MAL_STRING_MAX_CODE_UNITS, &extra)) {
+        return mal_json_throw_string_length(state->vm);
+    }
+    if (!mal_json_builder_reserve(builder, extra)) {
+        return false;
+    }
+    builder->code_units[builder->length++] = '\n';
     for (usize i = 0; i < depth; i++) {
         for (usize j = 0; j < state->gap_length; j++) {
-            mal_json_builder_push(builder, state->gap[j]);
+            builder->code_units[builder->length++] = state->gap[j];
         }
     }
+    return true;
 }
 
 /** IsArray (7.2.2): unwrap a Proxy to its target; a revoked Proxy throws. */
@@ -189,12 +288,16 @@ static MalJsonResult mal_json_serialize_array(MalJsonState *state, MalJsonBuilde
         return MAL_JSON_THROW;
     }
 
-    mal_json_builder_push(builder, '[');
+    if (!mal_json_builder_push(builder, '[')) {
+        return MAL_JSON_THROW;
+    }
     for (u32 index = 0; index < length; index++) {
-        if (index > 0) {
-            mal_json_builder_push(builder, ',');
+        if (index > 0 && !mal_json_builder_push(builder, ',')) {
+            return MAL_JSON_THROW;
         }
-        mal_json_push_indent(state, builder, depth + 1);
+        if (!mal_json_push_indent(state, builder, depth + 1)) {
+            return MAL_JSON_THROW;
+        }
 
         MalKey get_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
         MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) index)));
@@ -204,13 +307,17 @@ static MalJsonResult mal_json_serialize_array(MalJsonState *state, MalJsonBuilde
         }
         if (result == MAL_JSON_OMITTED) {
             // undefined / function / symbol elements serialize as null.
-            mal_json_builder_push_ascii(builder, "null");
+            if (!mal_json_builder_push_ascii(builder, "null")) {
+                return MAL_JSON_THROW;
+            }
         }
     }
-    if (length > 0) {
-        mal_json_push_indent(state, builder, depth);
+    if (length > 0 && !mal_json_push_indent(state, builder, depth)) {
+        return MAL_JSON_THROW;
     }
-    mal_json_builder_push(builder, ']');
+    if (!mal_json_builder_push(builder, ']')) {
+        return MAL_JSON_THROW;
+    }
 
     state->stack_count--;
     return MAL_JSON_WROTE;
@@ -223,7 +330,9 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
         return MAL_JSON_THROW;
     }
 
-    mal_json_builder_push(builder, '{');
+    if (!mal_json_builder_push(builder, '{')) {
+        return MAL_JSON_THROW;
+    }
     bool any = false;
 
     bool ok = true;
@@ -234,7 +343,7 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
             // integer-indexed property rather than a missing string key.
             MalKey get_key;
             mal_vm_value_to_property_key(vm, key, &get_key);
-            MalJsonBuilder member = {0};
+            MalJsonBuilder member = {.vm = vm};
             MalJsonResult result = mal_json_serialize_property(state, &member, get_key, key, value, depth + 1);
             if (result == MAL_JSON_THROW) {
                 free(member.code_units);
@@ -245,20 +354,18 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
                 free(member.code_units);
                 continue;
             }
-            if (any) {
-                mal_json_builder_push(builder, ',');
-            }
-            mal_json_push_indent(state, builder, depth + 1);
-            any = true;
-            mal_json_builder_push_quoted(builder, mal_value_to_string(key));
-            mal_json_builder_push(builder, ':');
-            if (state->gap_length > 0) {
-                mal_json_builder_push(builder, ' ');
-            }
-            for (usize j = 0; j < member.length; j++) {
-                mal_json_builder_push(builder, member.code_units[j]);
-            }
+            bool appended = (!any || mal_json_builder_push(builder, ',')) &&
+                mal_json_push_indent(state, builder, depth + 1) &&
+                mal_json_builder_push_quoted(builder, mal_value_to_string(key)) &&
+                mal_json_builder_push(builder, ':') &&
+                (state->gap_length == 0 || mal_json_builder_push(builder, ' ')) &&
+                mal_json_builder_push_units(builder, member.code_units, member.length);
             free(member.code_units);
+            if (!appended) {
+                ok = false;
+                break;
+            }
+            any = true;
         }
     } else {
         // EnumerableOwnPropertyNames snapshots the key list before any value is
@@ -284,7 +391,7 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
 
         for (usize i = 0; i < key_count; i++) {
             MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, keys[i].value));
-            MalJsonBuilder member = {0};
+            MalJsonBuilder member = {.vm = vm};
             MalJsonResult result = mal_json_serialize_property(state, &member, keys[i], key_string, value, depth + 1);
             if (result == MAL_JSON_THROW) {
                 free(member.code_units);
@@ -295,20 +402,18 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
                 free(member.code_units);
                 continue;
             }
-            if (any) {
-                mal_json_builder_push(builder, ',');
-            }
-            mal_json_push_indent(state, builder, depth + 1);
-            any = true;
-            mal_json_builder_push_quoted(builder, mal_value_to_string(key_string));
-            mal_json_builder_push(builder, ':');
-            if (state->gap_length > 0) {
-                mal_json_builder_push(builder, ' ');
-            }
-            for (usize j = 0; j < member.length; j++) {
-                mal_json_builder_push(builder, member.code_units[j]);
-            }
+            bool appended = (!any || mal_json_builder_push(builder, ',')) &&
+                mal_json_push_indent(state, builder, depth + 1) &&
+                mal_json_builder_push_quoted(builder, mal_value_to_string(key_string)) &&
+                mal_json_builder_push(builder, ':') &&
+                (state->gap_length == 0 || mal_json_builder_push(builder, ' ')) &&
+                mal_json_builder_push_units(builder, member.code_units, member.length);
             free(member.code_units);
+            if (!appended) {
+                ok = false;
+                break;
+            }
+            any = true;
         }
         free(keys);
     }
@@ -317,10 +422,12 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
         return MAL_JSON_THROW;
     }
 
-    if (any) {
-        mal_json_push_indent(state, builder, depth);
+    if (any && !mal_json_push_indent(state, builder, depth)) {
+        return MAL_JSON_THROW;
     }
-    mal_json_builder_push(builder, '}');
+    if (!mal_json_builder_push(builder, '}')) {
+        return MAL_JSON_THROW;
+    }
 
     state->stack_count--;
     return MAL_JSON_WROTE;
@@ -392,21 +499,22 @@ static MalJsonResult mal_json_serialize_property(MalJsonState *state, MalJsonBui
         if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, "rawJSON"), &raw)) {
             return MAL_JSON_THROW;
         }
-        mal_json_builder_push_string(builder, mal_value_to_string(raw));
-        return MAL_JSON_WROTE;
+        return mal_json_builder_push_string(builder, mal_value_to_string(raw))
+            ? MAL_JSON_WROTE : MAL_JSON_THROW;
     }
 
     if (mal_value_is_null(value)) {
-        mal_json_builder_push_ascii(builder, "null");
-        return MAL_JSON_WROTE;
+        return mal_json_builder_push_ascii(builder, "null")
+            ? MAL_JSON_WROTE : MAL_JSON_THROW;
     }
     if (mal_value_is_boolean(value)) {
-        mal_json_builder_push_ascii(builder, mal_value_to_boolean(value) ? "true" : "false");
-        return MAL_JSON_WROTE;
+        return mal_json_builder_push_ascii(
+            builder, mal_value_to_boolean(value) ? "true" : "false")
+            ? MAL_JSON_WROTE : MAL_JSON_THROW;
     }
     if (mal_value_is_string(value)) {
-        mal_json_builder_push_quoted(builder, mal_value_to_string(value));
-        return MAL_JSON_WROTE;
+        return mal_json_builder_push_quoted(builder, mal_value_to_string(value))
+            ? MAL_JSON_WROTE : MAL_JSON_THROW;
     }
     if (mal_value_is_bigint(value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Do not know how to serialize a BigInt");
@@ -415,9 +523,13 @@ static MalJsonResult mal_json_serialize_property(MalJsonState *state, MalJsonBui
     if (mal_json_is_number(value)) {
         f64 number = mal_ops_to_number(value);
         if (isfinite(number)) {
-            mal_json_builder_push_string(builder, mal_ops_to_string(&vm->heap, value));
+            if (!mal_json_builder_push_string(builder, mal_ops_to_string(&vm->heap, value))) {
+                return MAL_JSON_THROW;
+            }
         } else {
-            mal_json_builder_push_ascii(builder, "null");
+            if (!mal_json_builder_push_ascii(builder, "null")) {
+                return MAL_JSON_THROW;
+            }
         }
         return MAL_JSON_WROTE;
     }
@@ -566,7 +678,7 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
     MalValue empty_key = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
     mal_intrinsic_define_data(vm, wrapper, "", value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    MalJsonBuilder builder = {0};
+    MalJsonBuilder builder = {.vm = vm};
     MalKey root_key = {.kind = MAL_KEY_STRING, .value = empty_key};
     MalJsonResult result = mal_json_serialize_property(&state, &builder, root_key, empty_key, mal_value_from_object(wrapper), 0);
 
@@ -636,7 +748,7 @@ static bool mal_json_consume_keyword(MalJsonParser *parser, const byte *keyword)
 
 static MalValue mal_json_parse_string(MalJsonParser *parser) {
     // The opening quote was already consumed.
-    MalJsonBuilder builder = {0};
+    MalJsonBuilder builder = {.vm = parser->vm};
 
     while (parser->position < parser->length) {
         c16 code_unit = parser->code_units[parser->position++];
@@ -656,7 +768,10 @@ static MalValue mal_json_parse_string(MalJsonParser *parser) {
         }
 
         if (code_unit != '\\') {
-            mal_json_builder_push(&builder, code_unit);
+            if (!mal_json_builder_push(&builder, code_unit)) {
+                free(builder.code_units);
+                return mal_value_new_undefined();
+            }
             continue;
         }
 
@@ -669,22 +784,22 @@ static MalValue mal_json_parse_string(MalJsonParser *parser) {
             case '"':
             case '\\':
             case '/':
-                mal_json_builder_push(&builder, escape);
+                if (!mal_json_builder_push(&builder, escape)) goto length_error;
                 break;
             case 'b':
-                mal_json_builder_push(&builder, '\b');
+                if (!mal_json_builder_push(&builder, '\b')) goto length_error;
                 break;
             case 'f':
-                mal_json_builder_push(&builder, '\f');
+                if (!mal_json_builder_push(&builder, '\f')) goto length_error;
                 break;
             case 'n':
-                mal_json_builder_push(&builder, '\n');
+                if (!mal_json_builder_push(&builder, '\n')) goto length_error;
                 break;
             case 'r':
-                mal_json_builder_push(&builder, '\r');
+                if (!mal_json_builder_push(&builder, '\r')) goto length_error;
                 break;
             case 't':
-                mal_json_builder_push(&builder, '\t');
+                if (!mal_json_builder_push(&builder, '\t')) goto length_error;
                 break;
             case 'u': {
                 if (parser->position + 4 > parser->length) {
@@ -709,7 +824,7 @@ static MalValue mal_json_parse_string(MalJsonParser *parser) {
                         return mal_value_new_undefined();
                     }
                 }
-                mal_json_builder_push(&builder, value);
+                if (!mal_json_builder_push(&builder, value)) goto length_error;
                 break;
             }
             default:
@@ -721,6 +836,10 @@ static MalValue mal_json_parse_string(MalJsonParser *parser) {
 
     free(builder.code_units);
     mal_json_parse_error(parser);
+    return mal_value_new_undefined();
+
+length_error:
+    free(builder.code_units);
     return mal_value_new_undefined();
 }
 

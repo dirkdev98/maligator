@@ -31,10 +31,13 @@ static MalValue mal_test262_eval_script(
     (void) new_target;
 
     MalValue source = arg_count > 0 ? args[0] : mal_value_new_undefined();
-    MalCompletion completion = mal_realm_eval_script(
-        vm,
-        mal_vm_callee_realm(vm, callee),
-        source);
+    MalRealm *realm = mal_vm_callee_realm(vm, callee);
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, &source, 1);
+    mal_gc_native_rooted_begin(vm);
+    MalCompletion completion = mal_realm_eval_script(vm, realm, source);
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&root_span);
     return completion.value;
 }
 

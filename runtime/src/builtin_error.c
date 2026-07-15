@@ -24,6 +24,11 @@ static MalValue mal_error_stack_marker = MAL_VALUE_UNDEFINED;
 #define MAL_ERROR_STACK_MARKER(vm) ((void) (vm), mal_error_stack_marker)
 #endif
 
+static bool mal_builtin_error_throw_string_length(MalVm *vm) {
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+    return false;
+}
+
 static MalKey mal_error_data_key(MalVm *vm) {
     return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = MAL_ERROR_DATA_MARKER(vm)};
 }
@@ -371,8 +376,20 @@ static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_v
 
     usize name_length = mal_string_length(name);
     usize message_length = mal_string_length(message);
-    usize total_length = name_length + 2 + message_length;
-    c16 *code_units = malloc(sizeof(c16) * total_length);
+    usize total_length;
+    usize bytes;
+    if (!mal_checked_size_add(name_length, 2, MAL_STRING_MAX_CODE_UNITS, &total_length) ||
+        !mal_checked_size_add(
+            total_length, message_length, MAL_STRING_MAX_CODE_UNITS, &total_length) ||
+        !mal_checked_size_multiply(sizeof(c16), total_length, SIZE_MAX, &bytes)) {
+        mal_builtin_error_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
+    c16 *code_units = malloc(bytes);
+    if (code_units == nullptr) {
+        mal_builtin_error_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
 
     memcpy(code_units, mal_string_code_units(name), (usize) sizeof(c16) * name_length);
     code_units[name_length] = ':';
@@ -421,7 +438,10 @@ static MalValue mal_builtin_error_stack_getter(MalVm *vm, MalValue this_value, c
     MalValue result = header;
     if (trace != nullptr) {
         MalString *frames = mal_vm_format_stack_frames(vm, trace);
-        result = mal_ops_add(&vm->heap, header, mal_value_from_string(frames));
+        result = mal_vm_add(vm, header, mal_value_from_string(frames));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
     }
 
     // The getter has no observable side effect (it does not install an own

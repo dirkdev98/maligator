@@ -797,10 +797,17 @@ static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args
     MalValue result = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
     for (u32 i = 0; i < length; i++) {
         if (i > 0) {
-            result = mal_ops_add(&vm->heap, result, mal_value_from_string(separator));
+            result = mal_vm_add(vm, result, mal_value_from_string(separator));
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return mal_value_new_undefined();
+            }
         }
         MalValue element = mal_typed_array_object_get(vm, array, i);
-        result = mal_ops_add(&vm->heap, result, mal_value_from_string(mal_ops_to_string(&vm->heap, element)));
+        result = mal_vm_add(
+            vm, result, mal_value_from_string(mal_ops_to_string(&vm->heap, element)));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
     }
     return result;
 }
@@ -827,7 +834,10 @@ static MalValue mal_ta_to_locale_string(MalVm *vm, MalValue this_value, const Ma
     MalValue result = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
     for (u32 i = 0; i < length; i++) {
         if (i > 0) {
-            result = mal_ops_add(&vm->heap, result, mal_value_from_string(separator));
+            result = mal_vm_add(vm, result, mal_value_from_string(separator));
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return mal_value_new_undefined();
+            }
         }
         MalValue element = mal_typed_array_object_get(vm, array, i);
         MalValue method;
@@ -843,7 +853,10 @@ static MalValue mal_ta_to_locale_string(MalVm *vm, MalValue this_value, const Ma
         if (!mal_vm_to_string(vm, completion.value, &part)) {
             return mal_value_new_undefined();
         }
-        result = mal_ops_add(&vm->heap, result, mal_value_from_string(part));
+        result = mal_vm_add(vm, result, mal_value_from_string(part));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
     }
     return result;
 }
@@ -1942,8 +1955,22 @@ static bool mal_hex_decode(MalVm *vm, const c16 *s, usize len, byte *out, usize 
 /** Encode `bytes` as base64 into a fresh String. */
 static MalValue mal_b64_encode(MalVm *vm, const byte *bytes, usize length, bool url, bool omit_padding) {
     const byte *alphabet = url ? mal_b64_alphabet_url : mal_b64_alphabet_std;
-    usize cap = (length + 2) / 3 * 4 + 1;
-    byte *out = malloc(cap);
+    usize full_length;
+    if (!mal_checked_size_multiply(length / 3, 4, MAL_STRING_MAX_CODE_UNITS, &full_length)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return mal_value_new_undefined();
+    }
+    usize tail_length = length % 3 == 0 ? 0 : (omit_padding ? length % 3 + 1 : 4);
+    usize out_length;
+    if (!mal_checked_size_add(full_length, tail_length, MAL_STRING_MAX_CODE_UNITS, &out_length)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return mal_value_new_undefined();
+    }
+    byte *out = malloc(out_length == 0 ? 1 : out_length);
+    if (out == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return mal_value_new_undefined();
+    }
     usize w = 0;
     usize i = 0;
     while (i + 3 <= length) {
@@ -1980,13 +2007,22 @@ static MalValue mal_b64_encode(MalVm *vm, const byte *bytes, usize length, bool 
 /** Encode `bytes` as lowercase hex into a fresh String. */
 static MalValue mal_hex_encode(MalVm *vm, const byte *bytes, usize length) {
     static const byte digits[] = "0123456789abcdef";
-    byte *out = malloc(length * 2 + 1);
+    usize out_length;
+    if (!mal_checked_size_multiply(length, 2, MAL_STRING_MAX_CODE_UNITS, &out_length)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return mal_value_new_undefined();
+    }
+    byte *out = malloc(out_length == 0 ? 1 : out_length);
+    if (out == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return mal_value_new_undefined();
+    }
     for (usize i = 0; i < length; i++) {
         u32 b = (u32) bytes[i] & 0xFF;
         out[i * 2] = digits[b >> 4];
         out[i * 2 + 1] = digits[b & 0x0F];
     }
-    MalValue result = mal_value_from_string(mal_string_new_ascii(&vm->heap, out, length * 2));
+    MalValue result = mal_value_from_string(mal_string_new_ascii(&vm->heap, out, out_length));
     free(out);
     return result;
 }

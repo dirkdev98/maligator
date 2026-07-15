@@ -28,10 +28,38 @@ var cachedObject = { index: 0 };
 for (let i = 0; i < 100; i++) cachedObject = { index: i };
 ok("object-valued writes preserve barriers", cachedObject.index === 99);
 
+const namedSelfShadow = function namedSelfShadow() {
+	var namedSelfShadow;
+	return namedSelfShadow;
+};
+ok("var shadows named function expression self binding", namedSelfShadow() === undefined);
+const namedSelfParameter = function namedSelfParameter(namedSelfParameter) {
+	namedSelfParameter = 1;
+	return namedSelfParameter;
+};
+ok(
+	"parameter shadows named function expression self binding",
+	namedSelfParameter() === 1,
+);
+const argumentsParameterResult = (0, eval)(
+	"(function(arguments = 1){ var arguments; return arguments; })()",
+);
+ok("body var copies default parameter value", argumentsParameterResult === 1);
+
+function readInheritedValue(object) {
+	return object.cached;
+}
+const inheritedReceiver = Object.create({ cached: 1 });
+const missingReceiver = {};
+ok("inherited IC hit", readInheritedValue(inheritedReceiver) === 1);
+ok(
+	"inherited IC mode does not alias an own-shape cache",
+	readInheritedValue(missingReceiver) === undefined,
+);
+
 Object.defineProperty(globalThis, "cachedGlobal", {
 	value: 7,
 	writable: false,
-	configurable: true,
 });
 ok("descriptor value changes are re-read", cachedGlobal === 7);
 function strictStore() {
@@ -45,55 +73,6 @@ ok(
 		cachedGlobal = 8;
 	}) instanceof TypeError,
 );
-
-let accessorValue = 11;
-Object.defineProperty(globalThis, "cachedGlobal", {
-	configurable: true,
-	get() {
-		return accessorValue;
-	},
-	set(value) {
-		accessorValue = value + 1;
-	},
-});
-ok("accessor replacement runs getter", cachedGlobal === 11);
-cachedGlobal = 20;
-ok("accessor replacement runs setter", accessorValue === 21 && cachedGlobal === 21);
-
-Object.defineProperty(globalThis, "cachedGlobal", {
-	value: 30,
-	writable: true,
-	configurable: true,
-});
-ok("data replacement is observed", cachedGlobal === 30);
-delete globalThis.cachedGlobal;
-Object.defineProperty(globalThis, "cachedGlobal", {
-	value: 31,
-	writable: true,
-	configurable: true,
-});
-ok("deletion and recreation refreshes entry identity", cachedGlobal === 31);
-
-delete globalThis.cachedGlobal;
-let inheritedSet = 0;
-Object.defineProperty(Object.prototype, "cachedGlobal", {
-	configurable: true,
-	get() {
-		return 40;
-	},
-	set(value) {
-		inheritedSet = value;
-	},
-});
-ok("missing own property falls back to prototype getter", cachedGlobal === 40);
-cachedGlobal = 41;
-ok("missing own property falls back to prototype setter", inheritedSet === 41);
-delete Object.prototype.cachedGlobal;
-Object.defineProperty(globalThis, "cachedGlobal", {
-	value: 42,
-	writable: true,
-	configurable: true,
-});
 
 const evalResult = eval(
 	"var evalAddedGlobal = 1;" +
@@ -109,6 +88,103 @@ const sloppyStoreResult = (0, eval)(
 		"sloppyCachedGlobal",
 );
 ok("sloppy non-writable store is ignored", sloppyStoreResult === 5);
+
+let functionSetterCalls = 0;
+Object.defineProperty(globalThis, "evalFunctionGlobal", {
+	configurable: true,
+	set() {
+		functionSetterCalls++;
+	},
+});
+(0, eval)("function evalFunctionGlobal(){ return 42 }");
+const evalFunctionDesc = Object.getOwnPropertyDescriptor(
+	globalThis,
+	"evalFunctionGlobal",
+);
+ok(
+	"eval function replaces configurable accessor",
+	functionSetterCalls === 0 &&
+		typeof evalFunctionDesc.value === "function" &&
+		evalFunctionDesc.configurable === true &&
+		evalFunctionGlobal() === 42,
+);
+
+Object.defineProperty(globalThis, "blockedFunctionGlobal", {
+	value: 1,
+	writable: false,
+	enumerable: true,
+	configurable: false,
+});
+delete globalThis.uninstalledFunctionGlobal;
+const blockedDeclaration = caught(() =>
+	(0, eval)("function uninstalledFunctionGlobal(){} function blockedFunctionGlobal(){}"),
+);
+ok(
+	"invalid global function declaration throws",
+	blockedDeclaration instanceof SyntaxError,
+);
+ok(
+	"global function checks precede installation",
+	!("uninstalledFunctionGlobal" in globalThis),
+);
+delete globalThis.leakedVarGlobal;
+const blockedAfterVar = caught(() =>
+	(0, eval)("var leakedVarGlobal; function blockedFunctionGlobal(){}"),
+);
+ok(
+	"invalid function prevents earlier var creation",
+	blockedAfterVar instanceof SyntaxError,
+);
+ok("failed declaration does not leak var", !("leakedVarGlobal" in globalThis));
+const mixedBlocked = caught(() =>
+	(0, eval)("var blockedFunctionGlobal; function blockedFunctionGlobal(){}"),
+);
+ok("same-name var does not suppress function check", mixedBlocked instanceof SyntaxError);
+
+Object.defineProperty(globalThis, "cacheMutationGlobal", {
+	value: 11,
+	writable: true,
+	configurable: true,
+});
+function readMutationGlobal() {
+	return cacheMutationGlobal;
+}
+ok("configurable cache property reads", readMutationGlobal() === 11);
+delete globalThis.cacheMutationGlobal;
+globalThis.cacheMutationGlobal = 12;
+ok("delete and recreate invalidates cache", readMutationGlobal() === 12);
+
+Object.defineProperty(globalThis, "cacheAccessorGlobal", {
+	configurable: true,
+	get() {
+		return 21;
+	},
+});
+function readAccessorGlobal() {
+	return cacheAccessorGlobal;
+}
+ok("accessor global reads", readAccessorGlobal() === 21);
+Object.defineProperty(globalThis, "cacheAccessorGlobal", {
+	value: 22,
+	writable: true,
+	configurable: true,
+});
+ok("accessor replacement invalidates cache", readAccessorGlobal() === 22);
+
+let inheritedSetterValue = 0;
+Object.defineProperty(Object.prototype, "inheritedSetterGlobal", {
+	configurable: true,
+	set(value) {
+		inheritedSetterValue = value;
+	},
+});
+(0, eval)("inheritedSetterGlobal = 33");
+ok(
+	"inherited setter handles global store",
+	inheritedSetterValue === 33 &&
+		!Object.prototype.hasOwnProperty.call(globalThis, "inheritedSetterGlobal"),
+);
+delete Object.prototype.inheritedSetterGlobal;
 
 const firstRealm = new ShadowRealm();
 const secondRealm = new ShadowRealm();

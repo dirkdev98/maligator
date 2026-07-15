@@ -53,6 +53,106 @@ test("implicit arguments reads observe assignment through binding storage", () =
 	});
 });
 
+test("var declarations initialize once in the owning prologue", () => {
+	const program = compileScript("before = x; var x; function f(){ return y; var y; }");
+	const xNameIndex = program.stringConstants.findIndex(
+		(codeUnits) => String.fromCharCode(...codeUnits) === "x",
+	);
+	const entryStores = instructionsOf(program.functions[0]!).filter(
+		(instruction) =>
+			instruction.type === "storeGlobalProperty" &&
+			instruction.declaration &&
+			instruction.nameStringIndex === xNameIndex,
+	);
+	expect(entryStores).toHaveLength(2);
+	for (const store of entryStores) {
+		expect(store).toMatchObject({
+			type: "storeGlobalProperty",
+			declaration: true,
+			declarationConfigurable: false,
+		});
+	}
+
+	const functionStores = instructionsOf(functionNamed(program, "f")).filter(
+		(instruction) => instruction.type === "storeLocal",
+	);
+	expect(functionStores).toHaveLength(0);
+});
+
+test("eval var declarations create configurable globals", () => {
+	const program = compileScript("var x;", true);
+	expect(instructionsOf(program.functions[0]!)).toContainEqual(
+		expect.objectContaining({
+			type: "storeGlobalProperty",
+			declaration: true,
+			declarationConfigurable: true,
+		}),
+	);
+});
+
+test("strict global function declarations check properties before initialization", () => {
+	const program = compileScript('"use strict"; function first(){} function second(){}');
+	const instructions = instructionsOf(program.functions[0]!);
+	const firstFunction = instructions.findIndex(
+		(instruction) => instruction.type === "createFunction",
+	);
+	const declarationChecks = instructions
+		.slice(0, firstFunction)
+		.filter(
+			(instruction) =>
+				instruction.type === "storeGlobalProperty" && instruction.declaration,
+		);
+	const declarationInitializations = instructions
+		.slice(firstFunction)
+		.filter(
+			(instruction) =>
+				instruction.type === "storeGlobalProperty" && instruction.declaration,
+		);
+
+	expect(declarationChecks).toHaveLength(2);
+	expect(declarationInitializations).toHaveLength(2);
+	for (const store of [...declarationChecks, ...declarationInitializations]) {
+		expect(store).toMatchObject({
+			type: "storeGlobalProperty",
+			declarationConfigurable: false,
+		});
+	}
+	const lastDeclarationStore = instructions.lastIndexOf(declarationChecks[1]!);
+	expect(lastDeclarationStore).toBeLessThan(firstFunction);
+	expect(
+		instructions.filter((instruction) => instruction.type === "createEmpty"),
+	).toHaveLength(2);
+});
+
+test("explicit var arguments preserves the arguments object", () => {
+	const program = compileScript(
+		"function f(){ return typeof arguments; var arguments; } f(1)",
+	);
+	const instructions = instructionsOf(functionNamed(program, "f"));
+	expect(
+		instructions.filter((instruction) => instruction.type === "createArgumentsObject"),
+	).toHaveLength(1);
+	expect(
+		instructions.filter((instruction) => instruction.type === "storeLocal"),
+	).toHaveLength(1);
+});
+
+test("a default arguments parameter suppresses the arguments object", () => {
+	const program = compileScript(
+		"function f(arguments = 1){ var arguments; return arguments; } f()",
+	);
+	const instructions = instructionsOf(functionNamed(program, "f"));
+	expect(
+		instructions.filter((instruction) => instruction.type === "createArgumentsObject"),
+	).toHaveLength(0);
+	expect(
+		instructions.filter((instruction) => instruction.type === "loadLocal"),
+	).not.toHaveLength(0);
+	expect(
+		instructions.filter((instruction) => instruction.type === "storeLocal"),
+	).not.toHaveLength(0);
+});
+
 test("eval-completion scripts retain global functions but DCE private declarations", () => {
 	const program = compileScript(
 		"function exposed(){ function privateFn(){} return 1 } 42",
@@ -67,6 +167,74 @@ test("eval-completion scripts retain global functions but DCE private declaratio
 	).toBe(true);
 	expect(
 		entryInstructions.some((instruction) => instruction.type === "storeGlobalProperty"),
+	).toBe(true);
+});
+
+test("bare empty blocks do not grow raw IR or disturb eval completion positions", () => {
+	const emptyBlocks = Array.from({ length: 256 }, () => "{}").join("\n");
+	const program = compileScript(`7;\n${emptyBlocks}\n42;\n{}`, true);
+	const fn = program.functions[0]!;
+	const instructions = instructionsOf(fn);
+
+	expect(fn.blocks).toHaveLength(1);
+	expect(program.sourcePositions).toEqual([
+		{ line: 1, column: 0 },
+		{ line: 258, column: 0 },
+	]);
+	expect(instructions.filter((instruction) => instruction.type === "sourcePos")).toEqual([
+		{ type: "sourcePos", pos: 0 },
+		{ type: "sourcePos", pos: 1 },
+	]);
+
+	const completionRegister = fn.completionRegister;
+	expect(completionRegister).toBeDefined();
+	if (completionRegister === undefined) {
+		return;
+	}
+	const finalValue = instructions.find(
+		(instruction) => instruction.type === "createNumber" && instruction.value === 42,
+	);
+	expect(finalValue?.type).toBe("createNumber");
+	if (finalValue?.type !== "createNumber") {
+		return;
+	}
+	expect(instructions).toContainEqual({
+		type: "move",
+		registers: [completionRegister, finalValue.registers[0]],
+	});
+	expect(instructions.at(-1)).toEqual({
+		type: "return",
+		registers: [completionRegister],
+	});
+});
+
+test("structural empty loop and if bodies retain raw CFG blocks", () => {
+	const program = compileScript("while (false) {}\nif (true) {}");
+	const fn = program.functions[0]!;
+	const branchBlocks = fn.blocks.flatMap((block, blockIndex) =>
+		block.instructions.flatMap((instruction) =>
+			instruction.type === "jumpIf" ? [{ blockIndex, instruction }] : [],
+		),
+	);
+
+	expect(branchBlocks).toHaveLength(2);
+	for (const { blockIndex, instruction } of branchBlocks) {
+		expect(instruction.blocks[0]).toBeGreaterThanOrEqual(0);
+		expect(instruction.blocks[0]).toBeLessThan(fn.blocks.length);
+		const fallthrough = fn.blocks[blockIndex]!.instructions.find(
+			(candidate) => candidate.type === "jump",
+		);
+		expect(fallthrough?.type).toBe("jump");
+		if (fallthrough?.type === "jump") {
+			expect(fallthrough.blocks[0]).not.toBe(instruction.blocks[0]);
+		}
+	}
+	expect(
+		branchBlocks.some(({ blockIndex, instruction }) =>
+			fn.blocks[instruction.blocks[0]]!.instructions.some(
+				(candidate) => candidate.type === "jump" && candidate.blocks[0] === blockIndex,
+			),
+		),
 	).toBe(true);
 });
 

@@ -131,7 +131,8 @@ static inline MalValue mal_ops_number_value(f64 value) {
     return mal_value_from_f64_convert_nan(value);
 }
 
-MalValue mal_ops_add(MalHeap *heap, MalValue left, MalValue right);
+/** Returns false without allocating when string concatenation exceeds the engine limit. */
+bool mal_ops_add_checked(MalHeap *heap, MalValue left, MalValue right, MalValue *out);
 
 MalValue mal_ops_subtract(MalValue left, MalValue right);
 

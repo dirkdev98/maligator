@@ -85,6 +85,7 @@ test/built-ins/SharedArrayBuffer/prototype/growable/return-growable.js
 test/built-ins/String/prototype/endsWith/endsWith.js
 test/built-ins/String/prototype/padStart/fill-string-omitted.js
 test/built-ins/String/prototype/replaceAll/this-is-null-throws.js
+test/staging/sm/String/replace-math.js
 test/built-ins/String/prototype/split/call-split-1-void-0-instance-is-number.js
 test/built-ins/String/prototype/toUpperCase/S15.5.4.18_A1_T13.js
 test/built-ins/StringIteratorPrototype/next/name.js
@@ -409,3 +410,18 @@ test/built-ins/ShadowRealm/WrappedFunction/length.js
 test/built-ins/ShadowRealm/WrappedFunction/name-throws-typeerror.js
 test/built-ins/ShadowRealm/WrappedFunction/name.js
 test/built-ins/ShadowRealm/WrappedFunction/throws-typeerror-on-revoked-proxy.js
+test/built-ins/Boolean/S15.6.1.1_A1_T4.js
+test/built-ins/String/prototype/concat/S15.5.4.6_A1_T6.js
+test/language/statements/function/S13_A15_T4.js
+test/language/statements/with/S12.10_A1.4_T1.js
+test/language/eval-code/direct/var-env-var-init-global-new.js
+test/language/eval-code/indirect/var-env-var-init-global-new.js
+test/staging/sm/misc/redeclare-var-non-writable-property.js
+test/staging/sm/Function/function-call.js
+test/staging/sm/expressions/octal-literals.js
+test/language/expressions/function/scope-paramsbody-var-open.js
+test/language/expressions/call/scope-var-open.js
+test/harness/deepEqual-array.js
+test/intl402/Collator/prototype/resolvedOptions/basic.js
+test/built-ins/RegExp/match-indices/indices-array-non-unicode-match.js
+test/staging/sm/Array/concat-spreadable-basic.js

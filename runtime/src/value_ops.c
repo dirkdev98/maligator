@@ -343,38 +343,37 @@ static i32 mal_ops_to_i32(MalValue value) {
 // mal_ops_number_value is now static inline in value_ops.h (inlined into the
 // emitted native-C backend's boundary boxing).
 
-MalValue mal_ops_add(MalHeap *heap, MalValue left, MalValue right) {
+bool mal_ops_add_checked(MalHeap *heap, MalValue left, MalValue right, MalValue *out) {
     if (mal_value_is_string(left) || mal_value_is_string(right)) {
         MalString *left_string = mal_ops_to_string(heap, left);
         MalString *right_string = mal_ops_to_string(heap, right);
         usize left_length = mal_string_length(left_string);
         usize right_length = mal_string_length(right_string);
         if (left_length == 0) {
-            return mal_value_from_string(right_string);
+            *out = mal_value_from_string(right_string);
+            return true;
         }
         if (right_length == 0) {
-            return mal_value_from_string(left_string);
+            *out = mal_value_from_string(left_string);
+            return true;
         }
-        usize length = left_length + right_length;
-        c16 *code_units = mal_heap_alloc_raw(heap, sizeof(c16) * length);
-
-        memcpy(code_units, mal_string_code_units(left_string), sizeof(c16) * left_length);
-        memcpy(code_units + left_length, mal_string_code_units(right_string), sizeof(c16) * right_length);
-
-        // Adopt the buffer we just built (no redundant alloc+copy). Previously this
-        // called mal_string_new_copy, which allocated a SECOND buffer and copied
-        // into it, leaking this `code_units` temporary on every concatenation.
-        MalString *result = mal_string_new_owned(heap, code_units, length);
-        return mal_value_from_string(result);
+        MalString *result;
+        if (!mal_string_new_cons_checked(heap, left_string, right_string, &result)) {
+            return false;
+        }
+        *out = mal_value_from_string(result);
+        return true;
     }
 
     if (mal_value_is_int32(left) && mal_value_is_int32(right)) {
         // f64 sum keeps the result exact in int32 range and promotes to double
         // on overflow (spec ToNumber arithmetic), instead of wrapping.
-        return mal_ops_number_value((f64) mal_value_to_i32(left) + (f64) mal_value_to_i32(right));
+        *out = mal_ops_number_value((f64) mal_value_to_i32(left) + (f64) mal_value_to_i32(right));
+        return true;
     }
 
-    return mal_ops_number_value(mal_ops_to_number(left) + mal_ops_to_number(right));
+    *out = mal_ops_number_value(mal_ops_to_number(left) + mal_ops_to_number(right));
+    return true;
 }
 
 static bool mal_ops_strict_equal_bool(MalValue left, MalValue right) {

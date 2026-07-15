@@ -32,6 +32,18 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 
 static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *value_out);
 
+MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    MalValue result;
+    if (!mal_ops_add_checked(&vm->heap, left, right, &result)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        return mal_value_new_undefined();
+    }
+    return result;
+}
+
 static bool mal_vm_string_to_array_index(MalString *string, i32 *index_out) {
     usize length = mal_string_length(string);
     const c16 *code_units = mal_string_code_units(string);
@@ -707,15 +719,17 @@ void mal_op_create_empty(MalCallable *callable, MalInstruction *instruction) {
 void mal_vm_op_throw_if_tdz(MalVm *vm, MalValue value, i32 name_string_index) {
     if (mal_value_is_empty(value)) {
         MalString *constant = &vm->definition->string_constants[name_string_index];
-        MalValue message = mal_ops_add(
-            &vm->heap,
-            mal_value_from_string(mal_intrinsic_ascii(vm, "Cannot access '")),
-            mal_ops_add(
-                &vm->heap,
-                mal_value_from_string(constant),
-                mal_value_from_string(mal_intrinsic_ascii(vm, "' before initialization"))
-            )
-        );
+        MalValue message = mal_vm_add(
+            vm, mal_value_from_string(constant),
+            mal_value_from_string(mal_intrinsic_ascii(vm, "' before initialization")));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return;
+        }
+        message = mal_vm_add(
+            vm, mal_value_from_string(mal_intrinsic_ascii(vm, "Cannot access '")), message);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return;
+        }
         mal_vm_throw_error_value(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, message);
     }
 }
@@ -791,7 +805,8 @@ void mal_op_create_function(MalCallable *callable, MalInstruction *instruction) 
 // (configurable), matching { writable:false, enumerable:false, configurable:true }.
 // Shared by the interpreter op and the native backend: SetFunctionName(func, key,
 // prefix) — install the "name" own data property. `key` is an already-evaluated
-// property key (string/number/symbol), so no @@toPrimitive re-entry; never throws.
+// property key (string/number/symbol), so no @@toPrimitive re-entry; only an
+// over-limit assembled name can throw.
 void mal_vm_op_set_function_name(MalVm *vm, MalValue func, MalValue key, u8 prefix) {
     if (!mal_value_is_object(func)) {
         return;
@@ -803,12 +818,17 @@ void mal_vm_op_set_function_name(MalVm *vm, MalValue func, MalValue key, u8 pref
         if (description == nullptr) {
             name_value = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
         } else {
-            name_value = mal_ops_add(
-                &vm->heap,
-                mal_value_from_string(mal_intrinsic_ascii(vm, "[")),
-                mal_ops_add(&vm->heap, mal_value_from_string(description),
-                    mal_value_from_string(mal_intrinsic_ascii(vm, "]")))
-            );
+            name_value = mal_vm_add(
+                vm, mal_value_from_string(description),
+                mal_value_from_string(mal_intrinsic_ascii(vm, "]")));
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return;
+            }
+            name_value = mal_vm_add(
+                vm, mal_value_from_string(mal_intrinsic_ascii(vm, "[")), name_value);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                return;
+            }
         }
     } else {
         // String / numeric-index key: its string form (the key is already an
@@ -820,7 +840,11 @@ void mal_vm_op_set_function_name(MalVm *vm, MalValue func, MalValue key, u8 pref
     // prefix), so `get [sym]` names the function "get [desc]".
     if (prefix != 0) {
         const char *text = prefix == 1 ? "get " : "set ";
-        name_value = mal_ops_add(&vm->heap, mal_value_from_string(mal_intrinsic_ascii(vm, text)), name_value);
+        name_value = mal_vm_add(
+            vm, mal_value_from_string(mal_intrinsic_ascii(vm, text)), name_value);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return;
+        }
     }
 
     MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
@@ -1037,6 +1061,79 @@ static void mal_vm_remarshal_bound_args(MalVm *vm, i32 base, const MalBoundResol
         vm->value_stack[base + i] = resolution->args[i];
     }
     vm->value_stack_size = base + resolution->arg_count;
+}
+
+static MalInterpCallCacheEntry *mal_vm_interp_call_cache_entry(
+    MalVm *vm, i32 caller_function_index, i32 call_ip
+) {
+    u32 hash = (u32) caller_function_index * 2654435761u ^ (u32) call_ip;
+    hash ^= hash >> 16;
+    return &vm->interp_call_cache[hash & (MAL_INTERP_CALL_CACHE_SIZE - 1u)];
+}
+
+/**
+ * Enter a cached plain interpreted function through the same realm/frame seam as
+ * the generic dispatcher. No collectable pointer is retained by the cache: the
+ * closure environment is read from the exact live callee after the epoch guard.
+ */
+static bool mal_vm_try_interp_call_cached(
+    MalVm *vm, i32 caller_function_index, i32 call_ip, MalValue callee,
+    MalValue this_value, i32 base, i32 argument_count, i32 dst
+) {
+    u32 heap_epoch = vm->heap.epoch;
+    MalInterpCallCacheEntry *entry = mal_vm_interp_call_cache_entry(
+        vm, caller_function_index, call_ip);
+    if (entry->heap_epoch != heap_epoch ||
+        entry->caller_function_index != caller_function_index ||
+        entry->call_ip != call_ip || entry->callee != callee ||
+        entry->callee_function_index < 0) {
+        return false;
+    }
+
+    // Fill admits only a direct interpreted function. Exact identity in the same
+    // epoch means this is still that live function object and its index is immutable.
+    i32 function_index = entry->callee_function_index;
+    MalFunctionObject *function_object = mal_value_to_function_object(callee);
+
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
+    if (mal_vm_push_function_frame(
+            vm, function_index, function_object->creation_env, this_value,
+            argument_count, dst, vm->frame_count - 1)) {
+        vm->frames[vm->frame_count - 1].callee = callee;
+    } else {
+        vm->value_stack_size = base;
+#if MAL_REALMS
+        mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+    }
+    return true;
+}
+
+static void mal_vm_fill_interp_call_cache(
+    MalVm *vm, i32 caller_function_index, i32 call_ip, MalValue callee
+) {
+    if (!mal_value_is_function_object(callee)) {
+        return;
+    }
+    i32 function_index = mal_function_object_function_index(mal_value_to_function_object(callee));
+    if (function_index < 0 || function_index >= vm->definition->function_count ||
+        vm->definition->functions[function_index].compiled != nullptr) {
+        return;
+    }
+
+    u32 heap_epoch = vm->heap.epoch;
+    MalInterpCallCacheEntry *entry = mal_vm_interp_call_cache_entry(
+        vm, caller_function_index, call_ip);
+    *entry = (MalInterpCallCacheEntry) {
+        .callee = callee,
+        .caller_function_index = caller_function_index,
+        .call_ip = call_ip,
+        .callee_function_index = function_index,
+        .heap_epoch = heap_epoch,
+    };
 }
 
 /**
@@ -1326,6 +1423,8 @@ static i32 mal_vm_marshal_spread(MalVm *vm, MalValue array_value) {
 
 void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
     MalVm *vm = callable->vm;
+    i32 caller_function_index = callable->function_index;
+    i32 call_ip = callable->instruction_pointer - 1;
     MalValue callee = callable->registers[instruction->as.call.callee];
     MalValue this_value = callable->registers[instruction->as.call.this_value];
     i32 dst = instruction->as.call.dst;
@@ -1343,7 +1442,13 @@ void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
     }
     vm->value_stack_size = base + argument_count;
 
+    if (mal_vm_try_interp_call_cached(
+            vm, caller_function_index, call_ip, callee, this_value,
+            base, argument_count, dst)) {
+        return;
+    }
     mal_vm_call_dispatch(vm, callee, this_value, base, argument_count, dst);
+    mal_vm_fill_interp_call_cache(vm, caller_function_index, call_ip, callee);
 }
 
 void mal_op_call_spread(MalCallable *callable, MalInstruction *instruction) {
@@ -1568,7 +1673,7 @@ static bool mal_vm_op_is_bigint_arith(MalBinaryOp op) {
 // the spec's refusal to implicitly convert.
 static MalValue mal_vm_bigint_arith(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right) {
     if (op == MAL_BIN_ADD && (mal_value_is_string(left) || mal_value_is_string(right))) {
-        return mal_ops_add(&vm->heap, left, right);
+        return mal_vm_add(vm, left, right);
     }
 
     if (!mal_value_is_bigint(left) || !mal_value_is_bigint(right)) {
@@ -1694,7 +1799,7 @@ MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue rig
         // No coercion needed; fall through to the dispatch switch below.
     } else if (op == MAL_BIN_ADD) {
         // Spec EvaluateStringOrNumericBinaryExpression: ToPrimitive(no hint) on
-        // both, in order. mal_ops_add / mal_vm_bigint_arith then decide string
+        // both, in order. mal_vm_add / mal_vm_bigint_arith then decide string
         // concat vs numeric add on the resulting primitives.
         if (!mal_vm_to_primitive(vm, left, MAL_TO_PRIMITIVE_DEFAULT, &left) ||
             !mal_vm_to_primitive(vm, right, MAL_TO_PRIMITIVE_DEFAULT, &right)) {
@@ -1758,7 +1863,7 @@ MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue rig
 
     switch (op) {
         case MAL_BIN_ADD:
-            return mal_ops_add(&vm->heap, left, right);
+            return mal_vm_add(vm, left, right);
         case MAL_BIN_SUB:
             return mal_ops_subtract(left, right);
         case MAL_BIN_MUL:
@@ -2329,9 +2434,8 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
             if (key.kind == MAL_KEY_INDEX) {
                 i32 index = mal_value_to_i32(key.value);
                 if (index >= 0 && (usize) index < mal_string_length(string)) {
-                    // The borrowed code units stay alive with the source string.
                     *out = mal_value_from_string(
-                        mal_string_new_external(&vm->heap, mal_string_code_units(string) + index, 1)
+                        mal_string_new_dependent(&vm->heap, string, (usize) index, 1)
                     );
                 }
                 return true;
@@ -2916,8 +3020,8 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         MalObject *object = (MalObject *) mal_value_to_heap(object_value);
         // Hit needs the same shape AND the same key: a computed-key site (o[k])
         // reuses one cache entry across different keys, so the key must match too.
-        if (object->shape == ic->shape && key_value == ic->key) {
-            if (ic->slot == MAL_IC_VALUE_SLOT && ic->mode == MAL_IC_MODE_SHAPE) {
+        if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key_value == ic->key) {
+            if (ic->slot == MAL_IC_VALUE_SLOT) {
                 // Watched-intrinsic own overflow property, cached by value. The
                 // shape gate above is NOT sufficient (same-layout intrinsics share
                 // a shape but differ in overflow values), so require exact object
@@ -3854,11 +3958,11 @@ void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction) 
 void mal_vm_op_load_undeclared(MalVm *vm, i32 name_string_index) {
     MalString *constant = &vm->definition->string_constants[name_string_index];
     MalValue name = mal_value_from_string(constant);
-    MalValue message = mal_ops_add(
-        &vm->heap,
-        name,
-        mal_value_from_string(mal_intrinsic_ascii(vm, " is not defined"))
-    );
+    MalValue message = mal_vm_add(
+        vm, name, mal_value_from_string(mal_intrinsic_ascii(vm, " is not defined")));
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return;
+    }
     mal_vm_throw_error_value(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, message);
 }
 
@@ -3945,12 +4049,73 @@ void mal_op_load_global_property(MalCallable *callable, MalInstruction *instruct
 }
 
 void mal_vm_op_store_global_property(
-    MalVm *vm, i32 name_string_index, MalValue value, bool strict
+    MalVm *vm, i32 name_string_index, MalValue value, bool strict,
+    bool declaration, bool declaration_configurable
 ) {
     MalObject *global_object;
     MalKey key;
     MalPropertyLookup own = mal_vm_global_dictionary_lookup(
         vm, name_string_index, &global_object, &key);
+
+    if (declaration) {
+        // The compiler uses the unobservable EMPTY sentinel for a global function
+        // declaration check. GlobalDeclarationInstantiation performs every check
+        // before function objects are installed, and configurable accessors must
+        // be replaced without invoking their setters.
+        bool function_check = mal_value_is_empty(value);
+        bool var_check = mal_value_is_null(value);
+        bool function_initialization = !function_check && !var_check && !mal_value_is_undefined(value);
+        if (function_check) {
+            if (!own.present) {
+                global_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
+                if (!mal_object_is_extensible(global_object)) {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Cannot declare global function");
+                }
+                return;
+            }
+            if ((own.desc.flags & MAL_PROPERTY_CONFIGURABLE)
+                || (!(own.desc.flags & MAL_PROPERTY_ACCESSOR)
+                    && (own.desc.flags & MAL_PROPERTY_WRITABLE)
+                    && (own.desc.flags & MAL_PROPERTY_ENUMERABLE))) {
+                return;
+            }
+            mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Cannot declare global function");
+            return;
+        }
+        if (var_check) {
+            if (!own.present) {
+                global_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
+                if (!mal_object_is_extensible(global_object)) {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Cannot declare global variable");
+                }
+            }
+            return;
+        }
+        if (own.present && !function_initialization) {
+            return;
+        }
+        if (own.present && !(own.desc.flags & MAL_PROPERTY_CONFIGURABLE)) {
+            own.desc.value = value;
+            mal_property_write_entry(global_object->overflow, own.entry, &own.desc);
+            mal_gc_card(&global_object->header, value);
+            return;
+        }
+        global_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
+        MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE;
+        if (declaration_configurable) {
+            flags |= MAL_PROPERTY_CONFIGURABLE;
+        }
+        MalPropertyDesc desc = mal_intrinsic_data_desc(
+            function_initialization ? value : mal_value_new_undefined(), flags);
+        if (mal_object_define_own(global_object, key, &desc) != MAL_DEFINE_OWN_APPLIED) {
+            mal_vm_throw_error(
+                vm,
+                MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
+                function_initialization ? "Cannot declare global function" : "Cannot declare global variable");
+        }
+        return;
+    }
+
     if (own.present
         && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)
         && (own.desc.flags & MAL_PROPERTY_WRITABLE)) {
@@ -3969,7 +4134,9 @@ void mal_op_store_global_property(MalCallable *callable, MalInstruction *instruc
         callable->vm,
         instruction->as.store_global_property.name_string_index,
         callable->registers[instruction->as.store_global_property.src],
-        callable->function->strict
+        callable->function->strict,
+        instruction->as.store_global_property.declaration,
+        instruction->as.store_global_property.declaration_configurable
     );
 }
 
@@ -4158,7 +4325,7 @@ MalValue mal_vm_op_copy_data_properties(
             mal_object_set(
                 copy,
                 key,
-                mal_value_from_string(mal_string_new_external(&vm->heap, mal_string_code_units(string) + i, 1))
+                mal_value_from_string(mal_string_new_dependent(&vm->heap, string, i, 1))
             );
         }
     } else if (mal_value_is_object(source)) {
@@ -4222,7 +4389,7 @@ void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue 
         MalString *string = mal_value_to_string(source);
         for (usize i = 0; i < mal_string_length(string); i++) {
             MalPropertyDesc desc = mal_intrinsic_data_desc(
-                mal_value_from_string(mal_string_new_external(&vm->heap, mal_string_code_units(string) + i, 1)),
+                mal_value_from_string(mal_string_new_dependent(&vm->heap, string, i, 1)),
                 MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
             );
             mal_object_define_own(target, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &desc);

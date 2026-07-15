@@ -12,18 +12,34 @@
 // Batch driver for generated test262 translation units: every test runs in a
 // forked child for crash and timeout isolation, while the process image
 // (code signature, dyld work) is paid for only once per batch.
-extern const MalVmDefinition *const mal_test262_definitions[];
-extern const int mal_test262_definition_count;
+extern const MalVmDefinition *const mal_test262_artifact_definitions[];
+extern const int mal_test262_plan_definition_indices[];
+extern const int mal_test262_plan_entry_indices[];
+extern const int mal_test262_plan_helper_offsets[];
+extern const int mal_test262_plan_helper_indices[];
+extern const int mal_test262_plan_count;
+
+static int mal_test262_run_entry(MalVm *vm, int function_index) {
+    MalCallable *callable = mal_vm_create_callable(vm, function_index);
+    mal_vm_run(vm, callable);
+    mal_vm_free_callable(callable);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
+}
 
 static int mal_test262_run_single(int index) {
     MalVm vm;
-    mal_vm_init(&vm, mal_test262_definitions[index]);
+    mal_vm_init(&vm, mal_test262_artifact_definitions[mal_test262_plan_definition_indices[index]]);
     mal_test262_install(&vm);
 
-    MalCallable *callable = mal_vm_create_callable(&vm, 0);
-    mal_vm_run(&vm, callable);
+    int helper_start = mal_test262_plan_helper_offsets[index];
+    int helper_end = mal_test262_plan_helper_offsets[index + 1];
+    for (int i = helper_start; i < helper_end; i++) {
+        if (mal_test262_run_entry(&vm, mal_test262_plan_helper_indices[i]) != 0) {
+            return 1;
+        }
+    }
 
-    return vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
+    return mal_test262_run_entry(&vm, mal_test262_plan_entry_indices[index]);
 }
 
 static long mal_test262_now_ms(void) {
@@ -43,7 +59,7 @@ int main(int argc, char **argv) {
     // One ordered stream so per-test output can be attributed by markers.
     dup2(STDOUT_FILENO, STDERR_FILENO);
 
-    for (int i = 0; i < mal_test262_definition_count; i++) {
+    for (int i = 0; i < mal_test262_plan_count; i++) {
         printf("\n##TEST %d\n", i);
         fflush(stdout);
 

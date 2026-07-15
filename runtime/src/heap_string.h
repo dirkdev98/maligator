@@ -9,18 +9,42 @@
 typedef enum MalStringStorage : u8 {
     MAL_STRING_STORAGE_OWNED,
     MAL_STRING_STORAGE_EXTERNAL,
+    MAL_STRING_STORAGE_DEPENDENT,
+    MAL_STRING_STORAGE_CONS,
 } MalStringStorage;
 
 typedef struct MalString {
     MalHeapHeader header;
     MalStringStorage storage;
     bool hash_valid;
-    u64 hash;
+    union {
+        /** Cached only for flat (owned/external) strings. */
+        u64 hash;
+        /** Ultimate flat parent retaining a dependent string's backing store. */
+        struct MalString *parent;
+        /** Left child of a lazy concatenation. */
+        struct MalString *left;
+    };
     usize length;
-    const c16 *code_units;
+    union {
+        const c16 *code_units;
+        /** Right child of a lazy concatenation. */
+        struct MalString *right;
+    };
 } MalString;
 
 static_assert(sizeof(MalString) <= 32, "MalString outgrew its 32-byte size class");
+
+/** Engine string lengths are measured in UTF-16 code units. */
+#define MAL_STRING_MAX_CODE_UNITS ((usize) 16 * 1024 * 1024)
+static_assert(MAL_STRING_MAX_CODE_UNITS <= INT32_MAX, "string length must fit regexp/i32 indices");
+
+/** Checked size arithmetic bounded by an explicit caller-provided limit. */
+bool mal_checked_size_add(usize left, usize right, usize limit, usize *out);
+
+bool mal_checked_size_multiply(usize left, usize right, usize limit, usize *out);
+
+bool mal_checked_size_growth(usize current, usize required, usize initial, usize limit, usize *out);
 
 /**
  * Hash a UTF-16 code unit sequence.
@@ -48,6 +72,19 @@ MalString *mal_string_new_copy(MalHeap *heap, const c16 *code_units, usize lengt
 MalString *mal_string_new_external(MalHeap *heap, const c16 *code_units, usize length);
 
 /**
+ * Allocate a contiguous slice that retains its parent's ultimate flat backing
+ * string. The offset and length are measured against `parent` in UTF-16 code
+ * units and must describe an in-bounds range.
+ */
+MalString *mal_string_new_dependent(MalHeap *heap, MalString *parent, usize offset, usize length);
+
+/**
+ * Allocate a lazy concatenation after checking its combined UTF-16 length.
+ * Returns false without allocating when the engine string limit would be exceeded.
+ */
+bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out);
+
+/**
  * Allocate a string that TAKES OWNERSHIP of an existing heap-raw buffer (one
  * returned by `mal_heap_alloc_raw`), freeing it on finalization — no copy. Use
  * when the caller has already built the exact code-unit buffer (e.g. string
@@ -61,7 +98,8 @@ MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize leng
 MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length);
 
 /**
- * Return the raw UTF-16 code units referenced by the string.
+ * Return contiguous UTF-16 code units, flattening a lazy concatenation once on
+ * first access.
  */
 const c16 *mal_string_code_units(const MalString *string);
 
@@ -71,7 +109,9 @@ const c16 *mal_string_code_units(const MalString *string);
 usize mal_string_length(const MalString *string);
 
 /**
- * Return the string hash, computing and caching it on first use.
+ * Return the string hash, caching it on flat strings and recomputing it for
+ * dependent strings whose storage-specific word retains their parent. Lazy
+ * concatenations are flattened before hashing.
  */
 u64 mal_string_hash(const MalString *string);
 

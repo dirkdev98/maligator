@@ -30,6 +30,11 @@ static bool regexp_threw(MalVm *vm) {
     return vm->completion.kind == MAL_COMPLETION_THROW;
 }
 
+static bool regexp_throw_string_length(MalVm *vm) {
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Strings + flags
 // ---------------------------------------------------------------------------
@@ -43,7 +48,19 @@ static MalValue regexp_substring(MalVm *vm, MalString *s, i32 start, i32 end) {
 // Decode UTF-8 (regress group names) into a heap MalString of UTF-16 units.
 static MalString *regexp_string_from_utf8(MalVm *vm, const uint8_t *bytes, usize len) {
     c16 stack_units[128];
-    c16 *units = len <= 128 ? stack_units : malloc(sizeof(c16) * len);
+    // UTF-8 can use up to four bytes for two UTF-16 code units. Cap scratch at
+    // the output limit and enforce that limit while decoding, not against bytes.
+    usize capacity = len < MAL_STRING_MAX_CODE_UNITS ? len : MAL_STRING_MAX_CODE_UNITS;
+    usize units_bytes;
+    if (!mal_checked_size_multiply(sizeof(c16), capacity, SIZE_MAX, &units_bytes)) {
+        regexp_throw_string_length(vm);
+        return mal_intrinsic_ascii(vm, (const byte *) "");
+    }
+    c16 *units = capacity <= 128 ? stack_units : malloc(units_bytes);
+    if (units == nullptr) {
+        regexp_throw_string_length(vm);
+        return mal_intrinsic_ascii(vm, (const byte *) "");
+    }
     usize count = 0;
     usize i = 0;
     while (i < len) {
@@ -52,13 +69,13 @@ static MalString *regexp_string_from_utf8(MalVm *vm, const uint8_t *bytes, usize
         if (b < 0x80) {
             cp = b;
             i += 1;
-        } else if ((b & 0xE0) == 0xC0 && i + 1 < len) {
+        } else if ((b & 0xE0) == 0xC0 && len - i >= 2) {
             cp = ((u32) (b & 0x1F) << 6) | (bytes[i + 1] & 0x3F);
             i += 2;
-        } else if ((b & 0xF0) == 0xE0 && i + 2 < len) {
+        } else if ((b & 0xF0) == 0xE0 && len - i >= 3) {
             cp = ((u32) (b & 0x0F) << 12) | ((u32) (bytes[i + 1] & 0x3F) << 6) | (bytes[i + 2] & 0x3F);
             i += 3;
-        } else if ((b & 0xF8) == 0xF0 && i + 3 < len) {
+        } else if ((b & 0xF8) == 0xF0 && len - i >= 4) {
             cp = ((u32) (b & 0x07) << 18) | ((u32) (bytes[i + 1] & 0x3F) << 12) |
                  ((u32) (bytes[i + 2] & 0x3F) << 6) | (bytes[i + 3] & 0x3F);
             i += 4;
@@ -66,7 +83,15 @@ static MalString *regexp_string_from_utf8(MalVm *vm, const uint8_t *bytes, usize
             cp = 0xFFFD;
             i += 1;
         }
-        if (cp <= 0xFFFF) {
+        usize width = cp <= 0xFFFF ? 1 : 2;
+        if (count > MAL_STRING_MAX_CODE_UNITS - width) {
+            if (units != stack_units) {
+                free(units);
+            }
+            regexp_throw_string_length(vm);
+            return mal_intrinsic_ascii(vm, (const byte *) "");
+        }
+        if (width == 1) {
             units[count++] = (c16) cp;
         } else {
             cp -= 0x10000;
@@ -132,9 +157,30 @@ static MalValue regexp_escape_pattern(MalVm *vm, MalString *src) {
         return mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "(?:)"));
     }
     const c16 *u = mal_string_code_units(src);
-    c16 *buf = malloc(sizeof(c16) * n * 6);
-    usize out = 0;
+    usize capacity = 0;
+    usize bytes;
     bool prev_backslash = false;
+    for (usize i = 0; i < n; i++) {
+        c16 c = u[i];
+        usize extra = (c == 0x2028 || c == 0x2029) ? 6 :
+            (c == '\n' || c == '\r' || (c == '/' && !prev_backslash)) ? 2 : 1;
+        if (!mal_checked_size_add(capacity, extra, MAL_STRING_MAX_CODE_UNITS, &capacity)) {
+            regexp_throw_string_length(vm);
+            return mal_value_new_undefined();
+        }
+        prev_backslash = (c == '\\') && !prev_backslash;
+    }
+    if (!mal_checked_size_multiply(sizeof(c16), capacity, SIZE_MAX, &bytes)) {
+        regexp_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
+    c16 *buf = malloc(bytes);
+    if (buf == nullptr) {
+        regexp_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
+    usize out = 0;
+    prev_backslash = false;
     for (usize i = 0; i < n; i++) {
         c16 c = u[i];
         if (c == '\n') {
@@ -262,6 +308,10 @@ static MalValue regexp_build_groups(MalVm *vm, MalRegExpObject *re, MalString *s
         uint8_t *nb = name_buf;
         if (name_len > (int32_t) sizeof(name_buf)) {
             nb = malloc((usize) name_len);
+            if (nb == nullptr) {
+                regexp_throw_string_length(vm);
+                return mal_value_new_undefined();
+            }
             mal_regexp_named_group(re->matcher, i, nb, name_len, range);
         }
         MalString *name = regexp_string_from_utf8(vm, nb, (usize) name_len);
@@ -312,6 +362,10 @@ static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *
             uint8_t *nb = name_buf;
             if (name_len > (int32_t) sizeof(name_buf)) {
                 nb = malloc((usize) name_len);
+                if (nb == nullptr) {
+                    regexp_throw_string_length(vm);
+                    return mal_value_new_undefined();
+                }
                 mal_regexp_named_group(re->matcher, i, nb, name_len, range);
             }
             MalString *name = regexp_string_from_utf8(vm, nb, (usize) name_len);
@@ -389,9 +443,20 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
     }
 
     bool heap_caps = false;
-    if (ngroups * 2 > 64) {
-        caps = malloc(sizeof(int32_t) * (usize) ngroups * 2);
-        mal_regexp_copy_captures(re->matcher, caps, ngroups * 2);
+    if (ngroups > 32) {
+        usize capture_count;
+        usize capture_bytes;
+        if (!mal_checked_size_multiply((usize) ngroups, 2, MAL_STRING_MAX_CODE_UNITS, &capture_count) ||
+            !mal_checked_size_multiply(sizeof(int32_t), capture_count, SIZE_MAX, &capture_bytes)) {
+            regexp_throw_string_length(vm);
+            return mal_value_new_undefined();
+        }
+        caps = malloc(capture_bytes);
+        if (caps == nullptr) {
+            regexp_throw_string_length(vm);
+            return mal_value_new_undefined();
+        }
+        mal_regexp_copy_captures(re->matcher, caps, (int32_t) capture_count);
         heap_caps = true;
     }
 
@@ -760,8 +825,19 @@ static MalValue regexp_proto_to_string(MalVm *vm, MalValue this_value, const Mal
     }
     usize source_len = mal_string_length(source);
     usize flags_len = mal_string_length(flags);
-    usize total = 2 + source_len + flags_len;
-    c16 *buf = malloc(sizeof(c16) * total);
+    usize total;
+    usize bytes;
+    if (!mal_checked_size_add(source_len, flags_len, MAL_STRING_MAX_CODE_UNITS, &total) ||
+        !mal_checked_size_add(total, 2, MAL_STRING_MAX_CODE_UNITS, &total) ||
+        !mal_checked_size_multiply(sizeof(c16), total, SIZE_MAX, &bytes)) {
+        regexp_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
+    c16 *buf = malloc(bytes);
+    if (buf == nullptr) {
+        regexp_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
     usize out = 0;
     buf[out++] = '/';
     for (usize i = 0; i < source_len; i++) {
@@ -787,27 +863,41 @@ typedef struct {
     usize cap;
 } RegexpBuilder;
 
-static void regexp_builder_reserve(RegexpBuilder *b, usize extra) {
-    if (b->len + extra <= b->cap) {
-        return;
+static bool regexp_builder_reserve(MalVm *vm, RegexpBuilder *b, usize extra) {
+    usize required;
+    if (!mal_checked_size_add(b->len, extra, MAL_STRING_MAX_CODE_UNITS, &required)) {
+        return regexp_throw_string_length(vm);
     }
-    usize cap = b->cap == 0 ? 16 : b->cap;
-    while (b->len + extra > cap) {
-        cap *= 2;
+    if (required <= b->cap) {
+        return true;
     }
-    b->data = realloc(b->data, sizeof(c16) * cap);
+    usize cap;
+    usize bytes;
+    if (!mal_checked_size_growth(b->cap, required, 16, MAL_STRING_MAX_CODE_UNITS, &cap) ||
+        !mal_checked_size_multiply(sizeof(c16), cap, SIZE_MAX, &bytes)) {
+        return regexp_throw_string_length(vm);
+    }
+    c16 *grown = realloc(b->data, bytes);
+    if (grown == nullptr) {
+        return regexp_throw_string_length(vm);
+    }
+    b->data = grown;
     b->cap = cap;
+    return true;
 }
 
-static void regexp_builder_append_units(RegexpBuilder *b, const c16 *units, usize n) {
-    regexp_builder_reserve(b, n);
+static bool regexp_builder_append_units(MalVm *vm, RegexpBuilder *b, const c16 *units, usize n) {
+    if (!regexp_builder_reserve(vm, b, n)) {
+        return false;
+    }
     for (usize i = 0; i < n; i++) {
         b->data[b->len++] = units[i];
     }
+    return true;
 }
 
-static void regexp_builder_append_string(RegexpBuilder *b, const MalString *s) {
-    regexp_builder_append_units(b, mal_string_code_units(s), mal_string_length(s));
+static bool regexp_builder_append_string(MalVm *vm, RegexpBuilder *b, const MalString *s) {
+    return regexp_builder_append_units(vm, b, mal_string_code_units(s), mal_string_length(s));
 }
 
 static MalValue regexp_builder_finish(MalVm *vm, RegexpBuilder *b) {
@@ -1083,24 +1173,24 @@ static bool regexp_get_substitution(
     while (i < rlen) {
         c16 c = r[i];
         if (c != '$' || i + 1 >= rlen) {
-            regexp_builder_append_units(out, &r[i], 1);
+            if (!regexp_builder_append_units(vm, out, &r[i], 1)) return false;
             i++;
             continue;
         }
         c16 next = r[i + 1];
         if (next == '$') {
-            regexp_builder_append_units(out, &(c16){'$'}, 1);
+            if (!regexp_builder_append_units(vm, out, &(c16){'$'}, 1)) return false;
             i += 2;
         } else if (next == '&') {
-            regexp_builder_append_string(out, matched);
+            if (!regexp_builder_append_string(vm, out, matched)) return false;
             i += 2;
         } else if (next == '`') {
-            regexp_builder_append_units(out, mal_string_code_units(str), (usize) position);
+            if (!regexp_builder_append_units(vm, out, mal_string_code_units(str), (usize) position)) return false;
             i += 2;
         } else if (next == '\'') {
             usize tail = (usize) position + match_len;
             if (tail < str_len) {
-                regexp_builder_append_units(out, mal_string_code_units(str) + tail, str_len - tail);
+                if (!regexp_builder_append_units(vm, out, mal_string_code_units(str) + tail, str_len - tail)) return false;
             }
             i += 2;
         } else if (next >= '0' && next <= '9') {
@@ -1120,12 +1210,12 @@ static bool regexp_get_substitution(
                 consumed = 2;
             }
             if (n < 0) {
-                regexp_builder_append_units(out, &r[i], 1);
+                if (!regexp_builder_append_units(vm, out, &r[i], 1)) return false;
                 i++;
             } else {
                 MalValue capture = captures[n - 1];
                 if (!mal_value_is_undefined(capture)) {
-                    regexp_builder_append_string(out, mal_value_to_string(capture));
+                    if (!regexp_builder_append_string(vm, out, mal_value_to_string(capture))) return false;
                 }
                 i += consumed;
             }
@@ -1141,7 +1231,7 @@ static bool regexp_get_substitution(
                 }
             }
             if (!found) {
-                regexp_builder_append_units(out, &r[i], 1);
+                if (!regexp_builder_append_units(vm, out, &r[i], 1)) return false;
                 i++;
             } else {
                 MalString *name = mal_string_new_copy(&vm->heap, &r[i + 2], close - (i + 2));
@@ -1154,12 +1244,12 @@ static bool regexp_get_substitution(
                     if (!mal_vm_to_string(vm, value, &value_str)) {
                         return false;
                     }
-                    regexp_builder_append_string(out, value_str);
+                    if (!regexp_builder_append_string(vm, out, value_str)) return false;
                 }
                 i = close + 1;
             }
         } else {
-            regexp_builder_append_units(out, &r[i], 1);
+            if (!regexp_builder_append_units(vm, out, &r[i], 1)) return false;
             i++;
         }
     }
@@ -1235,8 +1325,22 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
             break;
         }
         if (results_len == results_cap) {
-            results_cap = results_cap == 0 ? 8 : results_cap * 2;
-            results = realloc(results, sizeof(MalValue) * results_cap);
+            usize required;
+            usize new_cap;
+            usize bytes;
+            if (!mal_checked_size_add(results_len, 1, MAL_STRING_MAX_CODE_UNITS, &required) ||
+                !mal_checked_size_growth(results_cap, required, 8, MAL_STRING_MAX_CODE_UNITS, &new_cap) ||
+                !mal_checked_size_multiply(sizeof(MalValue), new_cap, SIZE_MAX, &bytes)) {
+                regexp_throw_string_length(vm);
+                goto done;
+            }
+            MalValue *grown = realloc(results, bytes);
+            if (grown == nullptr) {
+                regexp_throw_string_length(vm);
+                goto done;
+            }
+            results = grown;
+            results_cap = new_cap;
             results_span.slots = results;
         }
         results[results_len++] = result;
@@ -1271,6 +1375,10 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         if (n_captures < 0) {
             n_captures = 0;
         }
+        if ((u64) n_captures > MAL_STRING_MAX_CODE_UNITS) {
+            regexp_throw_string_length(vm);
+            goto done;
+        }
         MalString *matched;
         if (!regexp_get_index_string(vm, result, 0, &matched)) {
             goto done;
@@ -1295,7 +1403,16 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         }
 
         // Captures 1..n_captures, each ToString'd or undefined.
-        captures = n_captures > 0 ? malloc(sizeof(MalValue) * (usize) n_captures) : nullptr;
+        usize capture_bytes;
+        if (!mal_checked_size_multiply(sizeof(MalValue), (usize) n_captures, SIZE_MAX, &capture_bytes)) {
+            regexp_throw_string_length(vm);
+            goto done;
+        }
+        captures = n_captures > 0 ? malloc(capture_bytes) : nullptr;
+        if (n_captures > 0 && captures == nullptr) {
+            regexp_throw_string_length(vm);
+            goto done;
+        }
         caps_span.slots = captures;
         caps_span.count = 0;
         bool capture_error = false;
@@ -1331,9 +1448,21 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         MalString *replacement_str = nullptr;
         if (functional) {
             // Args: matched, captures..., position, S, [named].
-            i64 argc = 3 + n_captures + (mal_value_is_undefined(named_captures) ? 0 : 1);
-            MalValue *call_args = malloc(sizeof(MalValue) * (usize) argc);
-            i64 ai = 0;
+            usize argc;
+            usize call_bytes;
+            if (!mal_checked_size_add((usize) n_captures, 3, MAL_STRING_MAX_CODE_UNITS, &argc) ||
+                (!mal_value_is_undefined(named_captures) &&
+                    !mal_checked_size_add(argc, 1, MAL_STRING_MAX_CODE_UNITS, &argc)) ||
+                !mal_checked_size_multiply(sizeof(MalValue), argc, SIZE_MAX, &call_bytes)) {
+                regexp_throw_string_length(vm);
+                goto done;
+            }
+            MalValue *call_args = malloc(call_bytes);
+            if (call_args == nullptr) {
+                regexp_throw_string_length(vm);
+                goto done;
+            }
+            usize ai = 0;
             call_args[ai++] = mal_value_from_string(matched);
             for (i64 ci = 0; ci < n_captures; ci++) {
                 call_args[ai++] = captures[ci];
@@ -1358,9 +1487,15 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         }
 
         if (position >= next_source_position) {
-            regexp_builder_append_units(&accumulated, mal_string_code_units(s) + next_source_position, (usize) (position - next_source_position));
+            if (!regexp_builder_append_units(
+                    vm, &accumulated, mal_string_code_units(s) + next_source_position,
+                    (usize) (position - next_source_position))) {
+                goto done;
+            }
             if (functional) {
-                regexp_builder_append_string(&accumulated, replacement_str);
+                if (!regexp_builder_append_string(vm, &accumulated, replacement_str)) {
+                    goto done;
+                }
             } else {
                 if (!regexp_get_substitution(vm, matched, s, position, captures, n_captures, named_captures, replace_string, &accumulated)) {
                     goto done;
@@ -1376,10 +1511,14 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
     }
 
     if (next_source_position < (i64) length_s) {
-        regexp_builder_append_units(&accumulated, mal_string_code_units(s) + next_source_position, length_s - (usize) next_source_position);
+        if (!regexp_builder_append_units(
+                vm, &accumulated, mal_string_code_units(s) + next_source_position,
+                length_s - (usize) next_source_position)) {
+            goto done;
+        }
     }
     ret = regexp_builder_finish(vm, &accumulated);
-    accumulated.data = nullptr; // ownership transferred into the result string
+    accumulated.data = nullptr; // regexp_builder_finish copied and freed it
 
 done:
     mal_gc_native_rooted_end(vm);
@@ -1425,12 +1564,23 @@ static MalValue regexp_proto_split(MalVm *vm, MalValue this_value, const MalValu
     MalString *new_flags = flags;
     if (!regexp_flags_has(flags, 'y')) {
         usize fl = mal_string_length(flags);
-        c16 *buf = malloc(sizeof(c16) * (fl + 1));
+        usize new_length;
+        usize bytes;
+        if (!mal_checked_size_add(fl, 1, MAL_STRING_MAX_CODE_UNITS, &new_length) ||
+            !mal_checked_size_multiply(sizeof(c16), new_length, SIZE_MAX, &bytes)) {
+            regexp_throw_string_length(vm);
+            return mal_value_new_undefined();
+        }
+        c16 *buf = malloc(bytes);
+        if (buf == nullptr) {
+            regexp_throw_string_length(vm);
+            return mal_value_new_undefined();
+        }
         for (usize i = 0; i < fl; i++) {
             buf[i] = mal_string_code_units(flags)[i];
         }
         buf[fl] = 'y';
-        new_flags = mal_string_new_copy(&vm->heap, buf, fl + 1);
+        new_flags = mal_string_new_copy(&vm->heap, buf, new_length);
         free(buf);
     }
     MalValue ctor_args[2] = {this_value, mal_value_from_string(new_flags)};
@@ -1670,14 +1820,14 @@ static void regexp_define_symbol_method_n(MalVm *vm, MalObject *object, MalIntri
 // RegExp.escape (EncodeForRegExpEscape)
 // ---------------------------------------------------------------------------
 
-static void regexp_escape_hex(RegexpBuilder *b, u32 c) {
+static bool regexp_escape_hex(MalVm *vm, RegexpBuilder *b, u32 c) {
     static const char *hex = "0123456789abcdef";
     if (c <= 0xFF) {
         c16 units[4] = {'\\', 'x', (c16) hex[(c >> 4) & 0xF], (c16) hex[c & 0xF]};
-        regexp_builder_append_units(b, units, 4);
+        return regexp_builder_append_units(vm, b, units, 4);
     } else {
         c16 units[6] = {'\\', 'u', (c16) hex[(c >> 12) & 0xF], (c16) hex[(c >> 8) & 0xF], (c16) hex[(c >> 4) & 0xF], (c16) hex[c & 0xF]};
-        regexp_builder_append_units(b, units, 6);
+        return regexp_builder_append_units(vm, b, units, 6);
     }
 }
 
@@ -1727,23 +1877,30 @@ static MalValue regexp_escape(MalVm *vm, MalValue this_value, const MalValue *ar
         // The first code point, if an ASCII alphanumeric, is hex-escaped so the
         // result can't combine with a preceding character into an identifier.
         if (i == 0 && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
-            regexp_escape_hex(&builder, c);
+            if (!regexp_escape_hex(vm, &builder, c)) {
+                free(builder.data);
+                return mal_value_new_undefined();
+            }
             continue;
         }
         if (regexp_is_syntax_char(c) || c == '/') {
             c16 units[2] = {'\\', c};
-            regexp_builder_append_units(&builder, units, 2);
+            if (!regexp_builder_append_units(vm, &builder, units, 2)) goto fail;
         } else if (c == 0x09 || c == 0x0A || c == 0x0B || c == 0x0C || c == 0x0D) {
             char letter = c == 0x09 ? 't' : c == 0x0A ? 'n' : c == 0x0B ? 'v' : c == 0x0C ? 'f' : 'r';
             c16 units[2] = {'\\', (c16) letter};
-            regexp_builder_append_units(&builder, units, 2);
+            if (!regexp_builder_append_units(vm, &builder, units, 2)) goto fail;
         } else if (regexp_is_punctuator_or_space(c)) {
-            regexp_escape_hex(&builder, c);
+            if (!regexp_escape_hex(vm, &builder, c)) goto fail;
         } else {
-            regexp_builder_append_units(&builder, &c, 1);
+            if (!regexp_builder_append_units(vm, &builder, &c, 1)) goto fail;
         }
     }
     return regexp_builder_finish(vm, &builder);
+
+fail:
+    free(builder.data);
+    return mal_value_new_undefined();
 }
 
 void mal_builtin_regexp_install(MalVm *vm) {

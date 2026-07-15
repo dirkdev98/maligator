@@ -20,10 +20,10 @@ import * as path from "node:path";
  * reused; we only re-link against the freshly built library.
  *
  * Correctness rests entirely on the cache key being conservative: it folds in a
- * fingerprint of the whole compiler (`src/**`) and of every runtime header
- * (`runtime/src/**.h`) plus the cc flags and version, so any change that could
- * alter the emitted `.o` changes the key. Run results are never cached - we
- * always execute the binary - so flakes and behavioural changes still surface.
+ * fingerprint of the whole compiler (`src/**`), its package metadata, and every
+ * runtime header (`runtime/src/**.h`) plus the cc flags and version, so any change
+ * that could alter the emitted `.o` changes the key. Run results are never cached
+ * - we always execute the binary - so flakes and behavioural changes still surface.
  */
 
 // Each strictness pass and backend keeps its own cache. Strict and sloppy source
@@ -44,9 +44,19 @@ function cacheDir(): string {
  * verdicts, failure buckets and code-size stats without re-compiling.
  */
 export interface BatchManifest {
+	schemaVersion: 2;
 	hasBinary: boolean;
 	/** Tests that produced C, in driver index order. */
-	entries: Array<{ path: string; index: number }>;
+	entries: Array<{
+		path: string;
+		index: number;
+		mode: "shared" | "legacy";
+		stats: {
+			functionCount: number;
+			instructionCount: number;
+			opcodes: Record<string, number>;
+		};
+	}>;
 	/** Tests resolved during compile (skipped / compile-failed). */
 	resolved: Array<{
 		path: string;
@@ -54,7 +64,15 @@ export interface BatchManifest {
 		failure?: string;
 	}>;
 	stats: {
+		/** Logical totals, attributing each test's helper code to that test. */
 		compiledFiles: number;
+		functionCount: number;
+		instructionCount: number;
+		opcodes: Record<string, number>;
+	};
+	physical: {
+		definitionCount: number;
+		sharedHelperCount: number;
 		functionCount: number;
 		instructionCount: number;
 		opcodes: Record<string, number>;
@@ -88,10 +106,10 @@ let cachedFingerprint: string | undefined;
 
 /**
  * A stable hash of every input that can change a batch's `.o`: the whole
- * compiler (`src/**.ts`), every runtime header, and the cc flags/version. The
- * runtime `.c` files are deliberately excluded - they compile into the library
- * we always re-link, not into the batch object - which is exactly what makes the
- * implementation-edit loop a cache hit.
+ * compiler (`src/**.ts` plus package metadata), every runtime header, and the cc
+ * flags/version. The runtime `.c` files are deliberately excluded - they compile
+ * into the library we always re-link, not into the batch object - which is
+ * exactly what makes the implementation-edit loop a cache hit.
  */
 export function buildFingerprint(ccFlags: Array<string>): string {
 	if (cachedFingerprint !== undefined) {
@@ -99,9 +117,15 @@ export function buildFingerprint(ccFlags: Array<string>): string {
 	}
 
 	const hash = createHash("sha256");
-	hash.update("v1\n");
+	hash.update("v2-shared-test262-helpers\n");
 	hashDirectory(hash, "src", [".ts"]);
 	hashDirectory(hash, "runtime/src", [".h"]);
+	for (const file of ["package.json", "package-lock.json"]) {
+		if (existsSync(file)) {
+			hash.update(file);
+			hash.update(readFileSync(file));
+		}
+	}
 	hash.update(ccFlags.join(" "));
 
 	try {
@@ -126,6 +150,7 @@ export function batchCacheKey(
 	composedSources: Array<string>,
 ): string {
 	const hash = createHash("sha256");
+	hash.update("batch-schema-v2\n");
 	hash.update(fingerprint);
 	hash.update("\n");
 	hash.update(emitMode);
@@ -178,6 +203,9 @@ export function loadArtifact(key: string): CachedArtifact | undefined {
 	try {
 		manifest = JSON.parse(readFileSync(manifestFile, "utf-8")) as BatchManifest;
 	} catch {
+		return undefined;
+	}
+	if (manifest.schemaVersion !== 2 || manifest.physical === undefined) {
 		return undefined;
 	}
 
