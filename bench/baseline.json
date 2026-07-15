@@ -1560,6 +1560,19 @@
         "malP99Ms": 0.849459,
         "nodeP99Ms": 0.871708
       }
+    },
+    {
+      "commit": "e2429f1",
+      "dirty": false,
+      "promise": {
+        "malMs": 63.799333,
+        "nodeMs": 34.278583,
+        "ratio": 1.8612010012199163,
+        "collections": 7,
+        "allocatedMb": 68.60369873046875,
+        "jobAllocations": 22008,
+        "reactionAllocations": 40010
+      }
     }
   ]
 }
