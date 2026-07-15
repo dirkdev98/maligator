@@ -16,6 +16,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import * as path from "node:path";
+import { includeConfiguredAssets } from "./assets.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
@@ -137,7 +138,11 @@ export function buildNativeBinary(options: BuildOptions): string {
 	executeIROptimizations(ir);
 	allocateRegisters(ir);
 	const definition = lowerIrProgramToVmDefinition(ir);
-	const cSource = emitVmDefinition(definition, { compiled: options.compiled ?? true });
+	const cSource = emitVmDefinition(definition, {
+		compiled: options.compiled ?? true,
+		assets: includeConfiguredAssets(config.assets),
+		maligatorSurface: config.surface.maligator,
+	});
 	return buildLocalBinary({
 		name: options.name,
 		cSource,

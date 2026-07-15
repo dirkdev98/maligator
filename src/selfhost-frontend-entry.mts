@@ -13,6 +13,7 @@ const bytes = compileEntrypointToBuffer(inputPath, {
 	buildConfig: {
 		entry: undefined,
 		outputName: undefined,
+		assets: {},
 		engine: {
 			eval: false,
 			realms: false,

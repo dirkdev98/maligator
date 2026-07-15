@@ -87,6 +87,7 @@ All fields are optional. Product defaults are:
 | ----------------------- | ---------- | ------------------------------------------------------------------------- |
 | `entry`                 | none       | Project-relative entry module                                             |
 | `outputName`            | inferred   | Safe single-component executable name                                     |
+| `assets`                | `{}`       | Unconditionally embedded file and directory resources                     |
 | `engine.eval`           | `false`    | Include `eval`, `Function`, and the baked compiler                        |
 | `engine.realms`         | `false`    | Include Realm support                                                     |
 | `engine.regexp`         | `true`     | Include the RegExp engine                                                 |
@@ -103,6 +104,42 @@ Supported Intl feature names are `collator`, `number-format`, `date-time-format`
 `relative-time-format`, and `duration-format`. Unknown fields and values fail rather
 than being ignored. A non-empty `engine.intl.languages` currently fails with an
 actionable unsupported-feature diagnostic.
+
+Configured assets are captured unconditionally in the native executable after the
+trusted configuration has run. File paths resolve from the project root; directory
+assets require explicit include patterns (`*`, `?`, and whole-segment `**`):
+
+```typescript
+export default defineBuild({
+	assets: {
+		compilerWire: { type: "file", path: "runtime/src/compiler.malw" },
+		runtime: {
+			type: "directory",
+			path: "runtime",
+			include: [
+				"CMakeLists.txt",
+				"src/**",
+				"rust/Cargo.toml",
+				"rust/Cargo.lock",
+				"rust/rust-toolchain.toml",
+				"rust/src/**",
+				"rust/include/**",
+			],
+		},
+	},
+});
+```
+
+Every include pattern must match at least one regular file; symlinks and other
+non-regular entries are rejected. At runtime, `mal.assets.materialize(name,
+{ baseDirectory? })` writes the captured file or tree atomically and returns its
+absolute path. `baseDirectory` defaults to the operating-system temporary directory.
+The immediate child is `<content-hash>-<asset-format-version>` and a completion
+marker makes repeat calls a cheap cache hit. A configured file returns its path
+inside that directory; a configured directory returns the directory itself.
+
+Assets require `surface.maligator` (enabled by default). They are native-executable
+resources and are intentionally unsupported by portable `--serialize` output.
 
 The output name is selected from `outputName`, then the unscoped portion of
 `package.json#name`, then the working-directory basename. Names cannot be empty,

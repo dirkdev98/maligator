@@ -24,6 +24,7 @@ import type { DisallowedEvalUsage, DisallowedRegexpUsage } from "./semantic-anal
 export interface MaligatorBuildConfig {
 	entry?: string;
 	outputName?: string;
+	assets?: Record<string, AssetInclusion>;
 	engine?: {
 		eval?: boolean;
 		/** The Realm surface (Realm global / callable boundary). Defaults OFF. */
@@ -47,10 +48,15 @@ export interface MaligatorBuildConfig {
 	};
 }
 
+export type AssetInclusion =
+	| { type: "file"; path: string }
+	| { type: "directory"; path: string; include: Array<string> };
+
 /** A build config with every default applied — what the compiler consumes. */
 export interface ResolvedBuildConfig {
 	entry: string | undefined;
 	outputName: string | undefined;
+	assets: Record<string, AssetInclusion>;
 	engine: {
 		eval: boolean;
 		realms: boolean;
@@ -175,10 +181,61 @@ const schedulerLeaf: Leaf = {
 		),
 };
 
+const assetsLeaf: Leaf = {
+	leaf: (value, at) => {
+		expect(
+			typeof value === "object" && value !== null && !Array.isArray(value),
+			at,
+			"an object",
+		);
+		for (const [name, entry] of Object.entries(value as Record<string, unknown>)) {
+			const entryAt = `${at}.${name}`;
+			expect(name.length > 0 && !name.includes("\0"), entryAt, "a non-empty asset name");
+			expect(
+				typeof entry === "object" && entry !== null && !Array.isArray(entry),
+				entryAt,
+				"an object",
+			);
+			const object = entry as Record<string, unknown>;
+			for (const key of Object.keys(object)) {
+				if (key !== "type" && key !== "path" && key !== "include") {
+					throw new BuildConfigError(
+						`maligator.build.ts: unknown key '${entryAt}.${key}' (allowed: type, path, include)`,
+					);
+				}
+			}
+			expect(
+				object.type === "file" || object.type === "directory",
+				`${entryAt}.type`,
+				`"file" or "directory"`,
+			);
+			expect(
+				typeof object.path === "string" && object.path.length > 0,
+				`${entryAt}.path`,
+				"a non-empty string",
+			);
+			if (object.type === "directory") {
+				expect(
+					Array.isArray(object.include) &&
+						object.include.length > 0 &&
+						object.include.every((item) => typeof item === "string"),
+					`${entryAt}.include`,
+					"a non-empty array of strings",
+				);
+			} else if (object.include !== undefined) {
+				throw new BuildConfigError(
+					`maligator.build.ts: '${entryAt}.include' is only valid for directory assets`,
+				);
+			}
+		}
+	},
+};
+
 const CONFIG_SCHEMA: ObjectSchema = {
 	object: {
 		entry: stringLeaf,
 		outputName: stringLeaf,
+		assets: assetsLeaf,
 		engine: {
 			object: {
 				eval: booleanLeaf,
@@ -225,9 +282,18 @@ function validate(value: unknown, schema: SchemaNode, at: string): void {
 
 /** Apply defaults over a validated config. Absent fields take the product default. */
 export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildConfig {
+	if (
+		Object.keys(config.assets ?? {}).length > 0 &&
+		config.surface?.maligator === false
+	) {
+		throw new BuildConfigError(
+			"maligator.build.ts: configured assets require surface.maligator to be enabled",
+		);
+	}
 	return {
 		entry: config.entry,
 		outputName: config.outputName,
+		assets: { ...(config.assets ?? {}) },
 		engine: {
 			eval: config.engine?.eval ?? false,
 			realms: config.engine?.realms ?? false,

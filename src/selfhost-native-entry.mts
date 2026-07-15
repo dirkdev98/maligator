@@ -28,6 +28,7 @@ const evalEnabled = compilerWire !== undefined;
 const targetConfig = {
 	entry: undefined,
 	outputName: undefined,
+	assets: {},
 	engine: {
 		eval: evalEnabled,
 		realms: false,
@@ -45,7 +46,7 @@ const definition = compileEntrypoint(path.resolve(inputPath), {
 const binary = buildLocalBinary({
 	name: outputName,
 	outDir: path.resolve(outputDirectory),
-	cSource: emitVmDefinition(definition),
+	cSource: emitVmDefinition(definition, { maligatorSurface: true }),
 	verbose: true,
 	evalEnabled,
 	realmsEnabled: false,

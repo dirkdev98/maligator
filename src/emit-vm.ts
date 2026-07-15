@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { IncludedAsset } from "./assets.ts";
 import { cF64Literal, emitCompiledFunction } from "./emit-c.ts";
 import type { CompiledFunction } from "./emit-c.ts";
 import { compressPositions } from "./lower-vm.ts";
@@ -30,6 +31,12 @@ export interface EmitOptions {
 	 * interpreter path against the native overlay.
 	 */
 	compiled?: boolean;
+
+	/** Assets captured by the resolved build config and baked into this executable. */
+	assets?: Array<IncludedAsset>;
+
+	/** Install the lowercase `mal` host surface. */
+	maligatorSurface?: boolean;
 }
 
 /** Escape a string for a C string literal. */
@@ -285,7 +292,7 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 	}
 	lines.push("};", "");
 
-	lines.push(...malVmDefinitionStruct(definition, suffix, debug));
+	lines.push(...malVmDefinitionStruct(definition, suffix, debug, undefined, options));
 
 	return lines.join("\n");
 }
@@ -295,8 +302,10 @@ function malVmDefinitionStruct(
 	suffix: string,
 	debug: boolean,
 	sharedLiteralTemplates?: string,
+	options: Pick<EmitOptions, "assets" | "maligatorSurface"> = {},
 ): Array<string> {
 	const lines: Array<string> = [];
+	const assets = options.assets ?? [];
 	const hasLiteralTemplates = definition.literalTemplateData.length > 0;
 	const literalTemplatesSymbol = hasLiteralTemplates
 		? (sharedLiteralTemplates ?? `mal_literal_templates${suffix}`)
@@ -336,14 +345,56 @@ function malVmDefinitionStruct(
 		lines.push("};", "");
 	}
 
+	for (let assetIndex = 0; assetIndex < assets.length; assetIndex++) {
+		const asset = assets[assetIndex]!;
+		for (let fileIndex = 0; fileIndex < asset.files.length; fileIndex++) {
+			const file = asset.files[fileIndex]!;
+			const symbol = `mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}`;
+			if (file.size === 0) {
+				lines.push(`static const u8 ${symbol}[] = { 0 };`);
+			} else {
+				lines.push(
+					`static const u8 ${symbol}[] = {`,
+					`#embed "${cEscapeString(file.sourcePath)}"`,
+					"};",
+				);
+			}
+		}
+		lines.push(`static const MalAssetFile mal_asset_${assetIndex}_files${suffix}[] = {`);
+		for (let fileIndex = 0; fileIndex < asset.files.length; fileIndex++) {
+			const file = asset.files[fileIndex]!;
+			lines.push(
+				`    { .path = "${cEscapeString(file.path)}", .data = mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}, .length = ${file.size} },`,
+			);
+		}
+		lines.push("};", "");
+	}
+	if (assets.length > 0) {
+		lines.push(`static const MalAsset mal_assets${suffix}[] = {`);
+		for (let assetIndex = 0; assetIndex < assets.length; assetIndex++) {
+			const asset = assets[assetIndex]!;
+			lines.push(
+				`    { .name = "${cEscapeString(asset.name)}", .hash = "${asset.hash}", .version = "${asset.version}", .directory = ${asset.type === "directory"}, .file_count = ${asset.files.length}, .files = mal_asset_${assetIndex}_files${suffix} },`,
+			);
+		}
+		lines.push("};", "");
+	}
+
 	// Host-install manifest: direct references to the native installers of the
 	// host built-ins (and `process`) the program actually reached. Only reachable
 	// ones are emitted, so an ordinary program references no host symbol and the
 	// extern decls / arrays below are absent — nothing to resolve at link.
-	const hasHostInstalls = definition.hostInstalls.length > 0;
+	const hostInstalls = [...definition.hostInstalls];
+	if (
+		options.maligatorSurface === true &&
+		!hostInstalls.some((install) => install.installer === "mal_host_install_maligator")
+	) {
+		hostInstalls.push({ installer: "mal_host_install_maligator", exports: [] });
+	}
+	const hasHostInstalls = hostInstalls.length > 0;
 	if (hasHostInstalls) {
 		const declared = new Set<string>();
-		for (const install of definition.hostInstalls) {
+		for (const install of hostInstalls) {
 			if (!declared.has(install.installer)) {
 				declared.add(install.installer);
 				lines.push(
@@ -352,7 +403,7 @@ function malVmDefinitionStruct(
 			}
 		}
 		lines.push("");
-		definition.hostInstalls.forEach((install, i) => {
+		hostInstalls.forEach((install, i) => {
 			lines.push(
 				`static const MalHostInstallSlot mal_host_install_${i}_slots${suffix}[] = {`,
 			);
@@ -362,7 +413,7 @@ function malVmDefinitionStruct(
 			lines.push("};", "");
 		});
 		lines.push(`static const MalHostInstall mal_host_installs${suffix}[] = {`);
-		definition.hostInstalls.forEach((install, i) => {
+		hostInstalls.forEach((install, i) => {
 			lines.push(
 				`    { .installer = ${install.installer}, .slots = mal_host_install_${i}_slots${suffix}, .slot_count = ${install.exports.length} },`,
 			);
@@ -387,7 +438,9 @@ function malVmDefinitionStruct(
 		`    .files = ${hasFiles ? `mal_files${suffix}` : "nullptr"},`,
 		`    .source_position_count = ${hasPositions ? definition.sourcePositions.length : 0},`,
 		`    .source_positions = ${hasPositions ? `mal_source_positions${suffix}` : "nullptr"},`,
-		`    .host_install_count = ${definition.hostInstalls.length},`,
+		`    .asset_count = ${assets.length},`,
+		`    .assets = ${assets.length > 0 ? `mal_assets${suffix}` : "nullptr"},`,
+		`    .host_install_count = ${hostInstalls.length},`,
 		`    .host_installs = ${hasHostInstalls ? `mal_host_installs${suffix}` : "nullptr"},`,
 		"};",
 	);

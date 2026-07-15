@@ -814,6 +814,23 @@ typedef struct MalHostInstall {
     i32 slot_count;
 } MalHostInstall;
 
+/** One immutable regular file in a configured executable asset. */
+typedef struct MalAssetFile {
+    const char *path;
+    const u8 *data;
+    usize length;
+} MalAssetFile;
+
+/** A named file or directory captured by maligator.build.ts. */
+typedef struct MalAsset {
+    const char *name;
+    const char *hash;
+    const char *version;
+    bool directory;
+    i32 file_count;
+    const MalAssetFile *files;
+} MalAsset;
+
 typedef struct MalVmDefinition {
     i32 function_count;
     const MalFunction *functions;
@@ -861,6 +878,10 @@ typedef struct MalVmDefinition {
     const char *const *files;
     i32 source_position_count;
     const MalSourcePos *source_positions;
+
+    /** Immutable configured assets baked into this native executable. */
+    i32 asset_count;
+    const MalAsset *assets;
 
     /**
      * Host-install manifest (see MalHostInstall). Run by mal_vm_run_host_installs

@@ -43,6 +43,7 @@ describe("resolveBuildConfig defaults", () => {
 		expect(config.engine.intl.enabled).toBe(false);
 		expect(config.host.scheduler).toBe("single");
 		expect(config.surface).toEqual({ webPlatform: false, node: false, maligator: true });
+		expect(config.assets).toEqual({});
 	});
 
 	it("defaults RegExp ON (core language, unlike eval/Intl/web)", () => {
@@ -79,6 +80,58 @@ describe("loadBuildConfig", () => {
 			}),
 		);
 		expect(loadBuildConfig(undefined, dir).engine.eval).toBe(false);
+	});
+
+	it("accepts strict file and directory asset entries", () => {
+		const dir = tmpdir();
+		writeConfig(
+			dir,
+			JSON.stringify({
+				assets: {
+					wire: { type: "file", path: "compiler.malw" },
+					runtime: {
+						type: "directory",
+						path: "runtime",
+						include: ["CMakeLists.txt", "src/**"],
+					},
+				},
+			}),
+		);
+		expect(loadBuildConfig(undefined, dir).assets.runtime).toEqual({
+			type: "directory",
+			path: "runtime",
+			include: ["CMakeLists.txt", "src/**"],
+		});
+	});
+
+	it("rejects malformed asset entries and unknown fields", () => {
+		const dir = tmpdir();
+		writeConfig(
+			dir,
+			JSON.stringify({ assets: { runtime: { type: "directory", path: "runtime" } } }),
+		);
+		expect(() => loadBuildConfig(undefined, dir)).toThrow(
+			/'assets\.runtime\.include' must be a non-empty array of strings/,
+		);
+
+		writeConfig(
+			dir,
+			JSON.stringify({
+				assets: { runtime: { type: "file", path: "runtime", exclude: [] } },
+			}),
+		);
+		expect(() => loadBuildConfig(undefined, dir)).toThrow(
+			/unknown key 'assets\.runtime\.exclude'/,
+		);
+	});
+
+	it("requires the Maligator surface when assets are configured", () => {
+		expect(() =>
+			resolveBuildConfig({
+				assets: { data: { type: "file", path: "data.bin" } },
+				surface: { maligator: false },
+			}),
+		).toThrow(/assets require surface\.maligator/);
 	});
 
 	it("throws when an explicit --config path is missing", () => {
@@ -476,6 +529,15 @@ describe("build-cache parity (createHash → node:crypto.hash swap)", () => {
 			surface: { webPlatform: true, node: true },
 		});
 		expect(buildConfigCacheSuffix(nodeOn)).toBe("8ed6ee64");
+	});
+
+	it("does not include executable assets in reusable runtime cache keys", () => {
+		const plain = resolveBuildConfig({});
+		const withAssets = resolveBuildConfig({
+			assets: { data: { type: "file", path: "data.bin" } },
+		});
+		expect(buildConfigCacheSuffix(withAssets)).toBe(buildConfigCacheSuffix(plain));
+		expect(rustConfigCacheSuffix(withAssets)).toBe(rustConfigCacheSuffix(plain));
 	});
 });
 

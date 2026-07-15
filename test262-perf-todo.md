@@ -32,76 +32,6 @@ or executing Test262.
    remaining string producers need the same fallible allocation contract plus a
    non-allocating emergency exception path.
 
-2. [x] **Make runtime compilation GC-safe instead of suppressing collection.** The
-       self-hosted compiler retains 4+ GB while compiling large eval inputs because
-       the whole native compiler frame suppresses GC. Root source, arguments,
-       compiler results, scope values, wire buffers, and temporary definitions in
-       `compile_source`, `mal_vm_eval_source`, and `mal_vm_eval_direct`; then permit
-       collections during compilation. Verify eval/Function under GC stress and
-       large generated class/block sources.
-
-## P1 — Highest-impact compiler throughput
-
-3. [x] **Represent precise exceptional CFG edges in liveness.** `computeSuccessors`
-       currently adds every `tryBegin` target to every block. This creates ~130K
-       artificial edges for `destructuring-array-done.js` and ~20M for
-       `regress-561031.js`, producing cubic practical behavior. Track active
-       protected ranges and add only the applicable handler edge. Preserve nested
-       try/catch/finally, abrupt completion, and IteratorClose behavior.
-
-4. [x] **Replace full-sweep liveness with a predecessor worklist and an
-       aggregate-only safepoint mode.** Revisit a block only when a successor's live
-       set changes, and avoid materializing every per-safepoint `Set` when lowering
-       only consumes the union. Until precise edges land, add a conservative
-       complexity fallback that roots all physical registers when estimated
-       `blocks * handlers * registers` is excessive.
-
-5. [x] **Make IR block cleanup linear.** `optCombineLinearBlocks` and
-       `optDropUnreferencedBlocks` remove one block and rescan/reindex all remaining
-       targets each time. Compute merges/removals first, rebuild once, and patch
-       targets through one old-to-new map. `regress-561031.js` exposes the current
-       quadratic scaling across ~1,821 try/catch statements.
-
-6. [x] **Skip or narrow TDZ analysis when no checked slots exist.** Return early
-       from `eliminateRedundantTdzChecksInFunction` when there is no `throwIfTdz`,
-       and otherwise track only slots that are checked. The repeated-catch test has
-       1,821 catch locals but zero TDZ checks and currently pays full set-copy/
-       intersection cost.
-
-7. [x] **Compile standard and included Test262 helpers once per batch/artifact.**
-       Standard `assert.js`/`sta.js` contributes roughly 28M logical instructions
-       across strict definitions (~50%). Repeated includes add an estimated 9.5M
-       for `propertyHelper.js`, 3.6M for `testTypedArray.js`, and 0.87M for
-       `testIntl.js`. Share immutable helper definitions/native bodies while
-       preserving per-test globals, realms, mutable harness state, source positions,
-       and independent failure attribution. Measure front-end, generated-C, object,
-       and link reductions separately.
-
-8. [x] **Use amortized strings in the self-hosted compiler.** Large eval class tests
-       spend most sampled CPU in `mal_ops_add`/`memmove` while repeatedly rebuilding
-       flat strings. Land the ropes/cons-string task from `TODO.md`, with bounded
-       flattening and GC tracing, then remeasure `class/methDefn.js` and
-       `class/compPropNames.js`.
-
-   Progress: dependent strings trace their flat parent and replace unsafe borrowed
-   dynamic slices. Concatenation now creates checked O(1) cons nodes; contiguous
-   access flattens iteratively once, and GC traces both children with publication
-   and deletion barriers. Serialized strict compiled probes pass: `methDefn.js`
-   ran in 920ms and `compPropNames.js` in 473ms on 2026-07-14.
-
-9. [x] **Run the baked compiler through compiled code or add interpreter call-site
-       caching.** Runtime compilation currently executes the compiler through
-       `mal_vm_interpret_function`; existing native/compiled call caches do not help
-       this path. Compare AOT self-host execution with interpreter call/property
-       caches before choosing the smaller production design.
-
-10. [x] **Elide semantically empty blocks before CFG/source-position emission.**
-        `regress-610026.js` creates roughly two million empty blocks and remains in
-        its first runtime compile after minutes. Filter empty block statements before
-        `compileStatementsToBlock`/`compileBlockStatement` creates positions and CFG
-        nodes, while preserving directives, lexical scopes, declarations, and debug
-        stepping contracts.
-
 ## P2 — VM instruction and generated-C reduction
 
 11. [ ] **Bulk-lower private names and instance fields.** Unicode class generators
@@ -149,11 +79,6 @@ or executing Test262.
         changing the global threshold; prefer a cost model over a test-specific rule.
 
 ## P3 — Measurement and suite scheduling
-
-18. [x] **Recover exact per-test code statistics from cached artifacts.**
-        `scripts/test262-code-stats.ts` links a read-only inspector against interpreted
-        batch objects, validates batch totals, deduplicates partial-run artifacts, and
-        ranks definitions without executing tests.
 
 19. [ ] **Persist per-entry code statistics in future artifact manifests.** Add
         function/instruction/opcode counts beside each manifest entry so ranking does

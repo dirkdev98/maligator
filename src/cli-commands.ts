@@ -1,5 +1,6 @@
 import { existsSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { includeConfiguredAssets } from "./assets.ts";
 import {
 	assertEvalPolicy,
 	assertRegexpPolicy,
@@ -124,6 +125,20 @@ function compileAndBuild(
 ): BuildCommandResult {
 	const buildConfig = loadCommandConfig(command, context.stripTypes);
 	const entrypointPath = resolveEntrypoint(command, buildConfig);
+	if (
+		command.kind === "build" &&
+		command.internal.serializePath !== undefined &&
+		Object.keys(buildConfig.assets).length > 0
+	) {
+		commandError("error: configured assets are not supported by portable wire output");
+	}
+	let assets: ReturnType<typeof includeConfiguredAssets>;
+	try {
+		assets = includeConfiguredAssets(buildConfig.assets);
+	} catch (error) {
+		if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
+		throw error;
+	}
 	const { toolchain, plan } = selectToolchain(command, buildConfig);
 
 	const semTiming = log.time("semantic analysis");
@@ -195,6 +210,8 @@ function compileAndBuild(
 
 	const output = emitVmDefinition(vmDefinition, {
 		compiled: command.kind === "run" || command.internal.compiled,
+		assets,
+		maligatorSurface: buildConfig.surface.maligator,
 	});
 	if (command.kind === "build" && command.internal.emitC) log.info(output);
 

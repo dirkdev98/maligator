@@ -7,11 +7,10 @@
 
 #include "posix_fs.h"
 
-#if MAL_NODE
-
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -390,6 +389,19 @@ int mal_posix_fs_mkdtemp(const char *prefix, char **out_path) {
     return 0;
 }
 
+int mal_posix_fs_private_directory(const char *path, bool *out_private) {
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        return errno;
+    }
+    *out_private = S_ISDIR(st.st_mode) && st.st_uid == geteuid() && (st.st_mode & 0077) == 0;
+    return 0;
+}
+
+int mal_posix_fs_rename(const char *source, const char *destination) {
+    return rename(source, destination) == 0 ? 0 : errno;
+}
+
 static int mal_posix_fs_rm_recursive(const char *path) {
     struct stat st;
     if (lstat(path, &st) != 0) return errno;
@@ -473,5 +485,3 @@ const char *mal_posix_fs_errno_name(int err) {
             return "UNKNOWN";
     }
 }
-
-#endif /* MAL_NODE */
