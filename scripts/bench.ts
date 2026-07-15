@@ -18,6 +18,9 @@
  *   - string    bench/string.js: broad String + RegExp tokenization, plus an
  *               adversarial tiny-slice retention phase. Wall time vs V8 and GC
  *               allocation/live-set signals.
+ *   - promise   bench/promise.js: chains, pending fan-out, combinators, thenables,
+ *               rejection, and await. Wall time vs V8 plus managed and native
+ *               promise-bookkeeping allocation signals.
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
  *               wall, peak RSS, max GC pause (macOS: RSS/pauses via /usr/bin/time -l
  *               + MAL_GC_STATS). No V8 compare.
@@ -79,6 +82,15 @@ interface StringMetrics {
 	allocatedMb: number;
 	peakLiveKb: number;
 }
+interface PromiseMetrics {
+	malMs: number;
+	nodeMs: number;
+	ratio: number;
+	collections: number;
+	allocatedMb: number;
+	jobAllocations: number;
+	reactionAllocations: number;
+}
 interface GcWorkload {
 	wallMs: number;
 	rssMb: number;
@@ -99,6 +111,7 @@ interface Entry {
 	language?: LanguageMetrics;
 	module?: ModuleMetrics;
 	string?: StringMetrics;
+	promise?: PromiseMetrics;
 	gc?: Record<string, GcWorkload>;
 	http?: HttpMetrics | null;
 }
@@ -286,6 +299,38 @@ function benchString(runs: number): StringMetrics {
 		collections: parseGcStat(stderr, "collections"),
 		allocatedMb: parseGcStat(stderr, "allocated_bytes") / (1024 * 1024),
 		peakLiveKb: parseGcStat(stderr, "peak_live_bytes") / 1024,
+	};
+}
+
+// ---- promise (wide Promise + microtask surface; vs V8) ---------------------
+
+function parsePromiseStat(stderr: string, field: string): number {
+	const line = stderr.split("\n").find((value) => value.includes("[promise-stats]"));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
+}
+
+function benchPromise(runs: number): PromiseMetrics {
+	const binary = buildNativeBinary({
+		fixture: "bench/promise.js",
+		name: "bench-promise",
+	});
+	const malMs = timeCommand(binary, [], runs);
+	const nodeMs = timeCommand("node", ["bench/promise.js"], runs);
+	const result = spawnSync(binary, [], {
+		env: { ...process.env, MAL_GC_STATS: "1", MAL_PROMISE_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	const stderr = result.stderr ?? "";
+	return {
+		malMs,
+		nodeMs,
+		ratio: malMs / nodeMs,
+		collections: parseGcStat(stderr, "collections"),
+		allocatedMb: parseGcStat(stderr, "allocated_bytes") / (1024 * 1024),
+		jobAllocations: parsePromiseStat(stderr, "job_allocations"),
+		reactionAllocations: parsePromiseStat(stderr, "reaction_allocations"),
 	};
 }
 
@@ -523,6 +568,23 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			`  gc        ${entry.string.collections} collections, ${entry.string.allocatedMb.toFixed(1)}MB allocated${delta(entry.string.allocatedMb, p?.allocatedMb)}, ${entry.string.peakLiveKb.toFixed(1)}KB peak live`,
 		);
 	}
+	if (entry.promise) {
+		const p = previous?.promise;
+		console.log("promise (Promise + microtasks; vs V8):");
+		console.log(
+			`  maligator ${entry.promise.malMs.toFixed(1)}ms${delta(entry.promise.malMs, p?.malMs)}`,
+		);
+		console.log(`  node      ${entry.promise.nodeMs.toFixed(1)}ms`);
+		console.log(
+			`  ratio     ${entry.promise.ratio.toFixed(2)}x${delta(entry.promise.ratio, p?.ratio)}`,
+		);
+		console.log(
+			`  managed   ${entry.promise.collections} collections, ${entry.promise.allocatedMb.toFixed(1)}MB allocated${delta(entry.promise.allocatedMb, p?.allocatedMb)}`,
+		);
+		console.log(
+			`  native    ${entry.promise.jobAllocations} jobs${delta(entry.promise.jobAllocations, p?.jobAllocations)}, ${entry.promise.reactionAllocations} reactions${delta(entry.promise.reactionAllocations, p?.reactionAllocations)}`,
+		);
+	}
 	if (entry.gc) {
 		console.log("gc (generational):");
 		for (const [name, w] of Object.entries(entry.gc)) {
@@ -555,7 +617,9 @@ const runsIdx = args.indexOf("--runs");
 const runs = runsIdx >= 0 ? Number(args[runsIdx + 1]) : 5;
 const selected = args.filter((a) => !a.startsWith("--") && !/^\d+$/.test(a));
 const which =
-	selected.length > 0 ? selected : ["size", "language", "module", "string", "gc", "http"];
+	selected.length > 0
+		? selected
+		: ["size", "language", "module", "string", "promise", "gc", "http"];
 
 const { commit, dirty } = gitInfo();
 const entry: Entry = { commit, dirty };
@@ -564,6 +628,7 @@ if (which.includes("size")) entry.size = benchSize();
 if (which.includes("language")) entry.language = benchLanguage(runs);
 if (which.includes("module")) entry.module = benchModule(runs);
 if (which.includes("string")) entry.string = benchString(runs);
+if (which.includes("promise")) entry.promise = benchPromise(runs);
 if (which.includes("gc")) entry.gc = benchGc(runs);
 if (which.includes("http")) entry.http = benchHttp("10s", 50);
 

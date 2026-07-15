@@ -330,6 +330,14 @@ static void mal_gc_print_stats(void) {
             (double) g->max_mark_step_ns / 1.0e6, (double) g->max_sweep_step_ns / 1.0e6);
 #endif
     fprintf(stderr, "\n");
+    if (getenv("MAL_PROMISE_STATS") != nullptr) {
+        fprintf(
+            stderr,
+            "[promise-stats] job_allocations=%llu reaction_allocations=%llu\n",
+            (unsigned long long) mal_promise_job_allocation_count(),
+            (unsigned long long) mal_promise_reaction_allocation_count()
+        );
+    }
 }
 
 /* Auto-collection heap-growth policy: the first collection fires once this many

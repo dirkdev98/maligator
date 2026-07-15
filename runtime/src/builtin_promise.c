@@ -312,8 +312,8 @@ void mal_promise_perform_then(
 
     switch (promise->state) {
         case MAL_PROMISE_PENDING:
-            mal_promise_append_reaction(promise, false, fulfill_handler, cap_resolve, cap_reject);
-            mal_promise_append_reaction(promise, true, reject_handler, cap_resolve, cap_reject);
+            mal_promise_append_reaction(vm, promise, false, fulfill_handler, cap_resolve, cap_reject);
+            mal_promise_append_reaction(vm, promise, true, reject_handler, cap_resolve, cap_reject);
             break;
         case MAL_PROMISE_FULFILLED:
             mal_vm_enqueue_reaction_job(vm, fulfill_handler, false, cap_resolve, cap_reject, promise->result);

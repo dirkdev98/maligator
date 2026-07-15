@@ -4,12 +4,28 @@
 
 #include "vm.h"
 
+static u64 g_job_allocations = 0;
+static u64 g_reaction_allocations = 0;
+
+u64 mal_promise_job_allocation_count(void) {
+    return g_job_allocations;
+}
+
+u64 mal_promise_reaction_allocation_count(void) {
+    return g_reaction_allocations;
+}
+
+void mal_promise_note_reaction_allocation(void) {
+    g_reaction_allocations++;
+}
+
 static MalCompletion mal_completion_normal(void) {
     return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
 
-static MalJob *mal_job_new(MalJobKind kind) {
+static MalJob *mal_job_new(MalVm *vm, MalJobKind kind) {
     MalJob *job = malloc(sizeof(MalJob));
+    g_job_allocations++;
     job->next = nullptr;
     job->kind = kind;
     job->handler = mal_value_new_undefined();
@@ -41,7 +57,7 @@ void mal_vm_enqueue_reaction_job(
     MalValue cap_reject,
     MalValue argument
 ) {
-    MalJob *job = mal_job_new(MAL_JOB_PROMISE_REACTION);
+    MalJob *job = mal_job_new(vm, MAL_JOB_PROMISE_REACTION);
     job->handler = handler;
     job->is_reject = is_reject;
     job->cap_resolve = cap_resolve;
@@ -57,7 +73,7 @@ void mal_vm_enqueue_thenable_job(
     MalValue resolve_fn,
     MalValue reject_fn
 ) {
-    MalJob *job = mal_job_new(MAL_JOB_PROMISE_RESOLVE_THENABLE);
+    MalJob *job = mal_job_new(vm, MAL_JOB_PROMISE_RESOLVE_THENABLE);
     job->then = then;
     job->thenable = thenable;
     job->resolve_fn = resolve_fn;

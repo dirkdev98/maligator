@@ -64,6 +64,7 @@ MalPromiseObject *mal_promise_object_new(MalHeap *heap, MalObject *prototype);
  * promise must be pending; settled promises schedule a job directly instead.
  */
 void mal_promise_append_reaction(
+    MalVm *vm,
     MalPromiseObject *promise,
     bool on_reject,
     MalValue handler,

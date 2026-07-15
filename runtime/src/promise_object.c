@@ -20,6 +20,7 @@ MalPromiseObject *mal_promise_object_new(MalHeap *heap, MalObject *prototype) {
 }
 
 void mal_promise_append_reaction(
+    MalVm *vm,
     MalPromiseObject *promise,
     bool on_reject,
     MalValue handler,
@@ -27,6 +28,7 @@ void mal_promise_append_reaction(
     MalValue cap_reject
 ) {
     MalPromiseReaction *reaction = malloc(sizeof(MalPromiseReaction));
+    mal_promise_note_reaction_allocation();
     reaction->next = nullptr;
     reaction->handler = handler;
     reaction->cap_resolve = cap_resolve;

@@ -45,6 +45,11 @@ typedef struct MalJob {
     MalValue reject_fn;
 } MalJob;
 
+/** Process-wide native allocation counters used by the benchmark tracker. */
+u64 mal_promise_job_allocation_count(void);
+u64 mal_promise_reaction_allocation_count(void);
+void mal_promise_note_reaction_allocation(void);
+
 /** Append a promise-reaction job to the microtask queue. */
 void mal_vm_enqueue_reaction_job(
     MalVm *vm,
