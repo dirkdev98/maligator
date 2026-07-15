@@ -89,7 +89,9 @@ interface PromiseMetrics {
 	collections: number;
 	allocatedMb: number;
 	jobAllocations: number;
+	jobReuses: number;
 	reactionAllocations: number;
+	reactionReuses: number;
 }
 interface GcWorkload {
 	wallMs: number;
@@ -330,7 +332,9 @@ function benchPromise(runs: number): PromiseMetrics {
 		collections: parseGcStat(stderr, "collections"),
 		allocatedMb: parseGcStat(stderr, "allocated_bytes") / (1024 * 1024),
 		jobAllocations: parsePromiseStat(stderr, "job_allocations"),
+		jobReuses: parsePromiseStat(stderr, "job_reuses"),
 		reactionAllocations: parsePromiseStat(stderr, "reaction_allocations"),
+		reactionReuses: parsePromiseStat(stderr, "reaction_reuses"),
 	};
 }
 
@@ -582,7 +586,10 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			`  managed   ${entry.promise.collections} collections, ${entry.promise.allocatedMb.toFixed(1)}MB allocated${delta(entry.promise.allocatedMb, p?.allocatedMb)}`,
 		);
 		console.log(
-			`  native    ${entry.promise.jobAllocations} jobs${delta(entry.promise.jobAllocations, p?.jobAllocations)}, ${entry.promise.reactionAllocations} reactions${delta(entry.promise.reactionAllocations, p?.reactionAllocations)}`,
+			`  native    ${entry.promise.jobAllocations} job allocations${delta(entry.promise.jobAllocations, p?.jobAllocations)}, ${entry.promise.jobReuses} reused`,
+		);
+		console.log(
+			`            ${entry.promise.reactionAllocations} reaction allocations${delta(entry.promise.reactionAllocations, p?.reactionAllocations)}, ${entry.promise.reactionReuses} reused`,
 		);
 	}
 	if (entry.gc) {

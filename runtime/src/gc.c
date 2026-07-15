@@ -333,9 +333,12 @@ static void mal_gc_print_stats(void) {
     if (getenv("MAL_PROMISE_STATS") != nullptr) {
         fprintf(
             stderr,
-            "[promise-stats] job_allocations=%llu reaction_allocations=%llu\n",
+            "[promise-stats] job_allocations=%llu job_reuses=%llu "
+            "reaction_allocations=%llu reaction_reuses=%llu\n",
             (unsigned long long) mal_promise_job_allocation_count(),
-            (unsigned long long) mal_promise_reaction_allocation_count()
+            (unsigned long long) mal_promise_job_reuse_count(),
+            (unsigned long long) mal_promise_reaction_allocation_count(),
+            (unsigned long long) mal_promise_reaction_reuse_count()
         );
     }
 }
@@ -792,15 +795,11 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
         case MAL_HEAP_PROMISE_OBJECT: {
             MalPromiseObject *promise = (MalPromiseObject *) cell;
             mal_gc_mark_value(promise->result);
-            for (MalPromiseReaction *r = promise->fulfill_reactions; r != nullptr; r = r->next) {
+            for (MalPromiseReaction *r = promise->reactions_head; r != nullptr; r = r->next) {
                 mal_gc_mark_value(r->cap_resolve);
                 mal_gc_mark_value(r->cap_reject);
-                mal_gc_mark_value(r->handler);
-            }
-            for (MalPromiseReaction *r = promise->reject_reactions; r != nullptr; r = r->next) {
-                mal_gc_mark_value(r->cap_resolve);
-                mal_gc_mark_value(r->cap_reject);
-                mal_gc_mark_value(r->handler);
+                mal_gc_mark_value(r->on_fulfilled);
+                mal_gc_mark_value(r->on_rejected);
             }
             if (promise->async_owner != nullptr) {
                 mal_gc_shade(&promise->async_owner->object.header);
@@ -817,14 +816,17 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
 
 /** Trace a microtask job's live MalValue fields (queued or currently running). */
 static void mal_gc_mark_job(MalJob *job) {
-    mal_gc_mark_value(job->handler);
-    mal_gc_mark_value(job->cap_resolve);
-    mal_gc_mark_value(job->cap_reject);
-    mal_gc_mark_value(job->argument);
-    mal_gc_mark_value(job->then);
-    mal_gc_mark_value(job->thenable);
-    mal_gc_mark_value(job->resolve_fn);
-    mal_gc_mark_value(job->reject_fn);
+    if (job->kind == MAL_JOB_PROMISE_REACTION) {
+        mal_gc_mark_value(job->as.reaction.handler);
+        mal_gc_mark_value(job->as.reaction.cap_resolve);
+        mal_gc_mark_value(job->as.reaction.cap_reject);
+        mal_gc_mark_value(job->as.reaction.argument);
+    } else {
+        mal_gc_mark_value(job->as.thenable.then);
+        mal_gc_mark_value(job->as.thenable.thenable);
+        mal_gc_mark_value(job->as.thenable.resolve_fn);
+        mal_gc_mark_value(job->as.thenable.reject_fn);
+    }
 }
 
 /*
@@ -1062,14 +1064,11 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
             break;
         }
         case MAL_HEAP_PROMISE_OBJECT: {
-            // A promise collected while still pending owns its fulfill/reject
-            // reaction nodes (settling frees + nulls them). Release any that
-            // remain; a settled promise's lists are already null (free no-op).
+            // A promise collected while still pending owns its reaction nodes.
             MalPromiseObject *promise = (MalPromiseObject *) cell;
-            mal_promise_free_reactions(promise->fulfill_reactions);
-            mal_promise_free_reactions(promise->reject_reactions);
-            promise->fulfill_reactions = nullptr;
-            promise->reject_reactions = nullptr;
+            mal_promise_free_reactions(promise->reactions_head);
+            promise->reactions_head = nullptr;
+            promise->reactions_tail = nullptr;
             break;
         }
         case MAL_HEAP_GENERATOR_OBJECT: {

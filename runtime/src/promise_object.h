@@ -18,16 +18,15 @@ typedef enum MalPromiseState {
 } MalPromiseState;
 
 /**
- * A pending PromiseReaction: the dependent promise's capability plus an
- * optional handler. Fulfill and reject reactions live in separate lists on the
- * promise; which list a reaction is in encodes its [[Type]], so no type field
- * is needed. Nodes are malloc'd and freed when the promise settles.
+ * A paired pending PromiseReaction: one registration's two optional handlers and
+ * shared dependent capability. The promise owns a FIFO list of these nodes.
  */
 typedef struct MalPromiseReaction {
     struct MalPromiseReaction *next;
     MalValue cap_resolve;
     MalValue cap_reject;
-    MalValue handler;
+    MalValue on_fulfilled;
+    MalValue on_rejected;
 } MalPromiseReaction;
 
 typedef struct MalPromiseObject {
@@ -43,9 +42,9 @@ typedef struct MalPromiseObject {
     /** Fulfillment value or rejection reason; undefined while pending. */
     MalValue result;
 
-    /** Reactions awaiting settlement; both are consumed and freed on settle. */
-    MalPromiseReaction *fulfill_reactions;
-    MalPromiseReaction *reject_reactions;
+    /** Paired reactions awaiting settlement, kept in registration order. */
+    MalPromiseReaction *reactions_head;
+    MalPromiseReaction *reactions_tail;
 
     /**
      * Async stack stitching: the async function state whose result this promise
@@ -60,14 +59,14 @@ typedef struct MalPromiseObject {
 MalPromiseObject *mal_promise_object_new(MalHeap *heap, MalObject *prototype);
 
 /**
- * Append a reaction to the fulfill (on_reject=false) or reject list. The
- * promise must be pending; settled promises schedule a job directly instead.
+ * Append one paired reaction. The promise must be pending; settled promises
+ * schedule a job directly instead.
  */
 void mal_promise_append_reaction(
     MalVm *vm,
     MalPromiseObject *promise,
-    bool on_reject,
-    MalValue handler,
+    MalValue on_fulfilled,
+    MalValue on_rejected,
     MalValue cap_resolve,
     MalValue cap_reject
 );
@@ -85,8 +84,10 @@ void mal_promise_fulfill(MalVm *vm, MalPromiseObject *promise, MalValue value);
 void mal_promise_reject(MalVm *vm, MalPromiseObject *promise, MalValue reason);
 
 /**
- * Free a fulfill/reject reaction linked list. Settling frees + nulls a promise's
- * lists; the GC finalizer uses this to release the reactions of a promise that
- * is collected while still pending.
+ * Free a pending reaction list directly. The GC finalizer uses this for a promise
+ * collected while still pending.
  */
 void mal_promise_free_reactions(MalPromiseReaction *list);
+
+/** Free the VM's cleared, untraced reaction freelist at teardown. */
+void mal_promise_free_reaction_pool(MalVm *vm);

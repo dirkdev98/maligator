@@ -1137,6 +1137,9 @@ typedef struct MalVm {
      */
     struct MalJob *job_head;
     struct MalJob *job_tail;
+    /** Cleared, untraced jobs retained for reuse; bounded by the microtask layer. */
+    struct MalJob *job_pool;
+    u32 job_pool_count;
 
     /**
      * The job currently being run by the microtask drain, unlinked from the queue
@@ -1145,6 +1148,10 @@ typedef struct MalVm {
      * values survive a GC triggered while the handler runs. Null when idle.
      */
     struct MalJob *active_job;
+
+    /** Cleared, untraced pending-reaction nodes retained for reuse. */
+    struct MalPromiseReaction *reaction_pool;
+    u32 reaction_pool_count;
 
     /**
      * [[KeptObjects]]: WeakRef targets observed (constructed or deref'd) since the

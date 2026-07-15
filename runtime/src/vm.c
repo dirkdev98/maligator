@@ -223,6 +223,10 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
 
     vm->job_head = nullptr;
     vm->job_tail = nullptr;
+    vm->job_pool = nullptr;
+    vm->job_pool_count = 0;
+    vm->reaction_pool = nullptr;
+    vm->reaction_pool_count = 0;
     vm->unhandled_rejections = nullptr;
     vm->unhandled_count = 0;
     vm->unhandled_capacity = 0;
@@ -438,6 +442,8 @@ void mal_vm_free(MalVm *vm) {
     // so a teardown leaves no shutdown leak (mal_heap_free only munmaps the
     // chunks + frees LOS records; it does not run per-cell finalizers).
     mal_gc_finalize_all(vm);
+    mal_vm_free_job_pool(vm);
+    mal_promise_free_reaction_pool(vm);
     // Snapshot allocation statistics while the heap counters are still intact.
     mal_gc_state_free(vm);
     mal_heap_free(&vm->heap);

@@ -2,10 +2,13 @@
 
 #include <stdlib.h>
 
+#include "gc.h"
 #include "vm.h"
 
 static u64 g_job_allocations = 0;
 static u64 g_reaction_allocations = 0;
+static u64 g_job_reuses = 0;
+static u64 g_reaction_reuses = 0;
 
 u64 mal_promise_job_allocation_count(void) {
     return g_job_allocations;
@@ -15,8 +18,20 @@ u64 mal_promise_reaction_allocation_count(void) {
     return g_reaction_allocations;
 }
 
+u64 mal_promise_job_reuse_count(void) {
+    return g_job_reuses;
+}
+
+u64 mal_promise_reaction_reuse_count(void) {
+    return g_reaction_reuses;
+}
+
 void mal_promise_note_reaction_allocation(void) {
     g_reaction_allocations++;
+}
+
+void mal_promise_note_reaction_reuse(void) {
+    g_reaction_reuses++;
 }
 
 static MalCompletion mal_completion_normal(void) {
@@ -24,20 +39,64 @@ static MalCompletion mal_completion_normal(void) {
 }
 
 static MalJob *mal_job_new(MalVm *vm, MalJobKind kind) {
-    MalJob *job = malloc(sizeof(MalJob));
-    g_job_allocations++;
+    MalJob *job = vm->job_pool;
+    if (job == nullptr) {
+        job = malloc(sizeof(MalJob));
+        g_job_allocations++;
+    } else {
+        vm->job_pool = job->next;
+        vm->job_pool_count--;
+        g_job_reuses++;
+    }
     job->next = nullptr;
     job->kind = kind;
-    job->handler = mal_value_new_undefined();
     job->is_reject = false;
-    job->cap_resolve = mal_value_new_undefined();
-    job->cap_reject = mal_value_new_undefined();
-    job->argument = mal_value_new_undefined();
-    job->then = mal_value_new_undefined();
-    job->thenable = mal_value_new_undefined();
-    job->resolve_fn = mal_value_new_undefined();
-    job->reject_fn = mal_value_new_undefined();
     return job;
+}
+
+static void mal_job_recycle(MalVm *vm, MalJob *job) {
+    if (job->kind == MAL_JOB_PROMISE_REACTION) {
+        mal_gc_write_barrier(job->as.reaction.handler);
+        mal_gc_write_barrier(job->as.reaction.cap_resolve);
+        mal_gc_write_barrier(job->as.reaction.cap_reject);
+        mal_gc_write_barrier(job->as.reaction.argument);
+        job->as.reaction.handler = mal_value_new_undefined();
+        job->as.reaction.cap_resolve = mal_value_new_undefined();
+        job->as.reaction.cap_reject = mal_value_new_undefined();
+        job->as.reaction.argument = mal_value_new_undefined();
+    } else {
+        mal_gc_write_barrier(job->as.thenable.then);
+        mal_gc_write_barrier(job->as.thenable.thenable);
+        mal_gc_write_barrier(job->as.thenable.resolve_fn);
+        mal_gc_write_barrier(job->as.thenable.reject_fn);
+        job->as.thenable.then = mal_value_new_undefined();
+        job->as.thenable.thenable = mal_value_new_undefined();
+        job->as.thenable.resolve_fn = mal_value_new_undefined();
+        job->as.thenable.reject_fn = mal_value_new_undefined();
+    }
+
+    // The deleted root edges are shaded and cleared; stop publishing the node
+    // before it can be freed by the bounded-pool overflow path.
+    vm->active_job = nullptr;
+
+    if (vm->job_pool_count >= MAL_PROMISE_JOB_POOL_LIMIT) {
+        free(job);
+        return;
+    }
+    job->next = vm->job_pool;
+    vm->job_pool = job;
+    vm->job_pool_count++;
+}
+
+void mal_vm_free_job_pool(MalVm *vm) {
+    MalJob *job = vm->job_pool;
+    while (job != nullptr) {
+        MalJob *next = job->next;
+        free(job);
+        job = next;
+    }
+    vm->job_pool = nullptr;
+    vm->job_pool_count = 0;
 }
 
 static void mal_vm_enqueue(MalVm *vm, MalJob *job) {
@@ -58,11 +117,11 @@ void mal_vm_enqueue_reaction_job(
     MalValue argument
 ) {
     MalJob *job = mal_job_new(vm, MAL_JOB_PROMISE_REACTION);
-    job->handler = handler;
+    job->as.reaction.handler = handler;
     job->is_reject = is_reject;
-    job->cap_resolve = cap_resolve;
-    job->cap_reject = cap_reject;
-    job->argument = argument;
+    job->as.reaction.cap_resolve = cap_resolve;
+    job->as.reaction.cap_reject = cap_reject;
+    job->as.reaction.argument = argument;
     mal_vm_enqueue(vm, job);
 }
 
@@ -74,10 +133,10 @@ void mal_vm_enqueue_thenable_job(
     MalValue reject_fn
 ) {
     MalJob *job = mal_job_new(vm, MAL_JOB_PROMISE_RESOLVE_THENABLE);
-    job->then = then;
-    job->thenable = thenable;
-    job->resolve_fn = resolve_fn;
-    job->reject_fn = reject_fn;
+    job->as.thenable.then = then;
+    job->as.thenable.thenable = thenable;
+    job->as.thenable.resolve_fn = resolve_fn;
+    job->as.thenable.reject_fn = reject_fn;
     mal_vm_enqueue(vm, job);
 }
 
@@ -100,31 +159,38 @@ static void mal_vm_settle_capability(MalVm *vm, MalValue cap_fn, MalValue argume
 /** PromiseReactionJob: run the handler (or default), then settle the dependent. */
 static void mal_vm_run_reaction_job(MalVm *vm, MalJob *job) {
     MalCompletion result;
-    if (mal_value_is_callable(job->handler)) {
+    if (mal_value_is_callable(job->as.reaction.handler)) {
         vm->completion = mal_completion_normal();
-        result = mal_vm_call_value(vm, job->handler, mal_value_new_undefined(), &job->argument, 1);
+        result = mal_vm_call_value(
+            vm,
+            job->as.reaction.handler,
+            mal_value_new_undefined(),
+            &job->as.reaction.argument,
+            1
+        );
     } else if (job->is_reject) {
         // Default reject handler rethrows the reason.
-        result = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = job->argument};
+        result = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = job->as.reaction.argument};
     } else {
         // Default fulfill handler passes the value through.
-        result = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = job->argument};
+        result = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = job->as.reaction.argument};
     }
 
     if (result.kind == MAL_COMPLETION_THROW) {
-        mal_vm_settle_capability(vm, job->cap_reject, result.value);
+        mal_vm_settle_capability(vm, job->as.reaction.cap_reject, result.value);
     } else {
-        mal_vm_settle_capability(vm, job->cap_resolve, result.value);
+        mal_vm_settle_capability(vm, job->as.reaction.cap_resolve, result.value);
     }
 }
 
 /** PromiseResolveThenableJob: call then(thenable, resolve, reject), routing a throw to reject. */
 static void mal_vm_run_thenable_job(MalVm *vm, MalJob *job) {
-    MalValue args[2] = {job->resolve_fn, job->reject_fn};
+    MalValue args[2] = {job->as.thenable.resolve_fn, job->as.thenable.reject_fn};
     vm->completion = mal_completion_normal();
-    MalCompletion result = mal_vm_call_value(vm, job->then, job->thenable, args, 2);
+    MalCompletion result = mal_vm_call_value(
+        vm, job->as.thenable.then, job->as.thenable.thenable, args, 2);
     if (result.kind == MAL_COMPLETION_THROW) {
-        mal_vm_settle_capability(vm, job->reject_fn, result.value);
+        mal_vm_settle_capability(vm, job->as.thenable.reject_fn, result.value);
     }
 }
 
@@ -144,9 +210,7 @@ void mal_vm_drain_microtasks(MalVm *vm) {
         } else {
             mal_vm_run_thenable_job(vm, job);
         }
-        vm->active_job = nullptr;
-
-        free(job);
+        mal_job_recycle(vm, job);
 
         // A job must not leave a pending throw behind to poison the next job's
         // calls; settlement of dependents has already captured anything it
