@@ -102,7 +102,16 @@ MalString *mal_string_new_external(MalHeap *heap, const c16 *code_units, usize l
     return string;
 }
 
-MalString *mal_string_new_dependent(MalHeap *heap, MalString *parent, usize offset, usize length) {
+#define MAL_STRING_SLICE_SMALL_PARENT_CODE_UNITS ((usize) 4096)
+#define MAL_STRING_SLICE_MAX_RETAINED_RATIO ((usize) 8)
+
+static void mal_string_resolve_slice(
+    MalString *parent,
+    usize offset,
+    usize length,
+    const c16 **code_units_out,
+    MalString **flat_parent_out
+) {
     mal_string_require_valid_length(length);
     if (parent == nullptr) {
         abort();
@@ -140,12 +149,22 @@ MalString *mal_string_new_dependent(MalHeap *heap, MalString *parent, usize offs
             abort();
     }
 
+    *code_units_out = offset == 0 ? parent_code_units : parent_code_units + offset;
+    *flat_parent_out = flat_parent;
+}
+
+static MalString *mal_string_new_dependent_resolved(
+    MalHeap *heap,
+    MalString *flat_parent,
+    const c16 *code_units,
+    usize length
+) {
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_DEPENDENT;
     string->hash_valid = false;
     string->parent = flat_parent;
     string->length = length;
-    string->code_units = offset == 0 ? parent_code_units : parent_code_units + offset;
+    string->code_units = code_units;
 
     mal_gc_card(&string->header, mal_value_from_string(flat_parent));
     if (mal_gc_marking_active) {
@@ -153,6 +172,34 @@ MalString *mal_string_new_dependent(MalHeap *heap, MalString *parent, usize offs
     }
 
     return string;
+}
+
+MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, usize length) {
+    const c16 *code_units;
+    MalString *flat_parent;
+    mal_string_resolve_slice(parent, offset, length, &code_units, &flat_parent);
+
+    // Empty strings retain no useful backing data. Copying also keeps a zero-length
+    // slice from pinning an otherwise unreachable parent.
+    if (length == 0) {
+        return mal_string_new_copy(heap, code_units, 0);
+    }
+
+    usize minimum_dependent_length =
+        (flat_parent->length + MAL_STRING_SLICE_MAX_RETAINED_RATIO - 1) /
+        MAL_STRING_SLICE_MAX_RETAINED_RATIO;
+    bool use_dependent =
+        flat_parent->storage == MAL_STRING_STORAGE_EXTERNAL ||
+        flat_parent->length <= MAL_STRING_SLICE_SMALL_PARENT_CODE_UNITS ||
+        length >= minimum_dependent_length;
+
+    if (!use_dependent) {
+        return mal_string_new_copy(heap, code_units, length);
+    }
+    if (offset == 0 && length == parent->length) {
+        return parent;
+    }
+    return mal_string_new_dependent_resolved(heap, flat_parent, code_units, length);
 }
 
 bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out) {

@@ -15,9 +15,10 @@ roadmaps for everything else. Test262 verdict counts live only in
 
 ## Compiler and runtime performance
 
-- [ ] Convert public substring producers to dependent slices. Cover String and
-      RegExp producers, add a retention heuristic so tiny slices do not pin large
-      parents, and verify both backends under GC stress.
+- [x] Convert public String, RegExp, and Intl substring producers to dependent
+      slices. Tiny slices copy instead of pinning disproportionate owned parents;
+      the broad string benchmark tracks allocation and wall time, and both backends
+      run the producer coverage under GC stress.
 - [ ] Generalize property-key interning beyond the intrinsic atom table. Define
       lifetime and GC policy before using pointer identity in shapes, dictionaries,
       Maps, and inline caches.

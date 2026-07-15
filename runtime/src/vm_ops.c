@@ -2435,7 +2435,7 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
                 i32 index = mal_value_to_i32(key.value);
                 if (index >= 0 && (usize) index < mal_string_length(string)) {
                     *out = mal_value_from_string(
-                        mal_string_new_dependent(&vm->heap, string, (usize) index, 1)
+                        mal_string_new_slice(&vm->heap, string, (usize) index, 1)
                     );
                 }
                 return true;
@@ -4325,7 +4325,7 @@ MalValue mal_vm_op_copy_data_properties(
             mal_object_set(
                 copy,
                 key,
-                mal_value_from_string(mal_string_new_dependent(&vm->heap, string, i, 1))
+                mal_value_from_string(mal_string_new_slice(&vm->heap, string, i, 1))
             );
         }
     } else if (mal_value_is_object(source)) {
@@ -4389,7 +4389,7 @@ void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue 
         MalString *string = mal_value_to_string(source);
         for (usize i = 0; i < mal_string_length(string); i++) {
             MalPropertyDesc desc = mal_intrinsic_data_desc(
-                mal_value_from_string(mal_string_new_dependent(&vm->heap, string, i, 1)),
+                mal_value_from_string(mal_string_new_slice(&vm->heap, string, i, 1)),
                 MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
             );
             mal_object_define_own(target, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &desc);

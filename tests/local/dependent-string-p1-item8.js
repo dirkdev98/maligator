@@ -52,6 +52,55 @@ function objectRest() {
 	return { omitted, rest };
 }
 
+function directStringSlices() {
+	const source = "  " + ("alpha-" + "beta") + "  ";
+	return {
+		charAt: source.charAt(2),
+		at: source.at(-3),
+		slice: source.slice(2, 7),
+		substring: source.substring(8, 12),
+		substr: source.substr(2, 10),
+		trim: source.trim(),
+		trimStart: source.trimStart(),
+		trimEnd: source.trimEnd(),
+		split: source.split("-"),
+		full: source.slice(0),
+		empty: source.substring(4, 4),
+	};
+}
+
+function regexpSlices() {
+	const source = "prefix:" + "id=alpha,value=12345" + ":suffix";
+	const exec = /id=(?<name>[a-z]+),value=([0-9]+)/.exec(source);
+	const all = [];
+	for (const match of source.matchAll(/([a-z]+)=([a-z0-9]+)/g)) {
+		all.push(match);
+	}
+	return {
+		exec,
+		global: source.match(/[a-z]+/g),
+		all,
+		split: source.split(/([,:])/),
+		empty: /^/.exec(source),
+		optional: /(z)?prefix/.exec(source),
+	};
+}
+
+function retainedTinySlices() {
+	const source = "x".repeat(8192) + "-kept";
+	return [source.slice(-4), source[0]];
+}
+
+function nestedNonzeroSlice() {
+	const first = makeSource("abcdef").slice(5, 11);
+	return first.slice(2, 5);
+}
+
+function substantialLargeSlice() {
+	const source = "a".repeat(8192) + "b".repeat(8192);
+	return source.slice(4096, 12288);
+}
+
 const indexed = indexedCharacter();
 const nestedIndexed = nestedIndexedCharacter();
 const boxed = boxedCharacter();
@@ -60,6 +109,11 @@ const extracted = arrayExtract();
 const spreadArray = arraySpread();
 const spreadObject = objectSpread();
 const restObject = objectRest();
+const direct = directStringSlices();
+const regexp = regexpSlices();
+const tiny = retainedTinySlices();
+const nestedSlice = nestedNonzeroSlice();
+const largeSlice = substantialLargeSlice();
 
 let deep = "x";
 for (let i = 0; i < 4096; i++) deep = deep + String.fromCharCode(97 + (i % 26));
@@ -120,6 +174,62 @@ ok("rope property key", keyed["rope-key"] === 42);
 ok("rope regexp boundary", /^rope-key$/.test(propertyRope));
 ok("rope JSON boundary", JSON.stringify(splitSurrogate) === '"\ud83d\ude00"');
 ok("shared DAG flatten", doubled.length === 4096 && doubled[4095] === "z");
-ok("all dependent and cons paths ran", passed === 17);
+ok("String.prototype.charAt slice", direct.charAt === "a");
+ok("String.prototype.at slice", direct.at === "a");
+ok("String.prototype.slice", direct.slice === "alpha");
+ok("String.prototype.substring", direct.substring === "beta");
+ok("String.prototype.substr", direct.substr === "alpha-beta");
+ok(
+	"String.prototype trim variants",
+	direct.trim === "alpha-beta" &&
+		direct.trimStart === "alpha-beta  " &&
+		direct.trimEnd === "  alpha-beta",
+);
+ok(
+	"String.prototype.split slices",
+	direct.split.length === 2 &&
+		direct.split[0] === "  alpha" &&
+		direct.split[1] === "beta  ",
+);
+ok(
+	"String full and empty slices",
+	direct.full === "  alpha-beta  " && direct.empty === "",
+);
+ok(
+	"RegExp exec full and numbered captures",
+	regexp.exec[0] === "id=alpha,value=12345" &&
+		regexp.exec[1] === "alpha" &&
+		regexp.exec[2] === "12345",
+);
+ok("RegExp named capture", regexp.exec.groups.name === "alpha");
+ok(
+	"RegExp global match slices",
+	regexp.global.join("|") === "prefix|id|alpha|value|suffix",
+);
+ok(
+	"RegExp matchAll capture slices",
+	regexp.all.length === 2 &&
+		regexp.all[0][1] === "id" &&
+		regexp.all[0][2] === "alpha" &&
+		regexp.all[1][1] === "value" &&
+		regexp.all[1][2] === "12345",
+);
+ok(
+	"RegExp split gap and capture slices",
+	regexp.split.join("|") === "prefix|:|id=alpha|,|value=12345|:|suffix",
+);
+ok(
+	"RegExp empty and unmatched captures",
+	regexp.empty[0] === "" &&
+		regexp.optional[0] === "prefix" &&
+		regexp.optional[1] === undefined,
+);
+ok("tiny slice values", tiny[0] === "kept" && tiny[1] === "x");
+ok("nested dependent nonzero offset", nestedSlice === "cde");
+ok(
+	"substantial large slice",
+	largeSlice.length === 8192 && largeSlice.charAt(0) === "a" && largeSlice.at(-1) === "b",
+);
+ok("all dependent, copied-slice, and cons paths ran", passed === 34);
 
 console.log("dependent-string-p1-item8 PASS");

@@ -2075,8 +2075,8 @@ static void intl_parts_push(MalVm *vm, MalArrayObject *parts, u32 *index, const 
     intl_array_push(vm, parts, (*index)++, mal_value_from_object(part));
 }
 
-static MalValue intl_substring(MalVm *vm, const MalString *s, usize start, usize end) {
-    return mal_value_from_string(mal_string_new_copy(&vm->heap, mal_string_code_units(s) + start, end - start));
+static MalValue intl_substring(MalVm *vm, MalString *s, usize start, usize end) {
+    return mal_value_from_string(mal_string_new_slice(&vm->heap, s, start, end - start));
 }
 
 static MalValue intl_list_format_format_to_parts(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
@@ -2631,7 +2631,9 @@ static i32 intl_segment_bounds(MalString *input, i32 gran, i32 **bounds_out, u8 
 /** Build a segment data object: { segment, index, input, [isWordLike] }. */
 static MalValue intl_make_segment_data(MalVm *vm, MalString *input, i32 start, i32 end, i32 gran, bool word_like) {
     MalObject *data = mal_intrinsic_new_object(vm);
-    MalValue segment = mal_value_from_string(mal_string_new_copy(&vm->heap, mal_string_code_units(input) + start, (usize) (end - start)));
+    MalValue segment = mal_value_from_string(
+        mal_string_new_slice(&vm->heap, input, (usize) start, (usize) (end - start))
+    );
     intl_resolved_set(vm, data, "segment", segment);
     intl_resolved_set(vm, data, "index", mal_value_from_i32(start));
     intl_resolved_set(vm, data, "input", mal_value_from_string(input));

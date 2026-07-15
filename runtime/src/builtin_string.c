@@ -113,6 +113,13 @@ static MalValue mal_builtin_string_empty(MalVm *vm) {
     return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
 }
 
+static MalValue mal_builtin_string_slice(MalVm *vm, MalString *string, usize offset, usize length) {
+    if (length == 0) {
+        return mal_builtin_string_empty(vm);
+    }
+    return mal_value_from_string(mal_string_new_slice(&vm->heap, string, offset, length));
+}
+
 /**
  * ToIntegerOrInfinity-flavored index handling clamped to [0, length], with
  * negative values counting back from the end.
@@ -439,7 +446,7 @@ static MalValue mal_builtin_string_prototype_char_at(MalVm *vm, MalValue this_va
         return mal_builtin_string_empty(vm);
     }
 
-    return mal_builtin_string_from_units(vm, mal_string_code_units(string) + (usize) position, 1);
+    return mal_builtin_string_slice(vm, string, (usize) position, 1);
 }
 
 static MalValue mal_builtin_string_prototype_char_code_at(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -467,7 +474,7 @@ static MalValue mal_builtin_string_prototype_at(MalVm *vm, MalValue this_value, 
         return mal_value_new_undefined();
     }
 
-    return mal_builtin_string_from_units(vm, mal_string_code_units(string) + (usize) relative, 1);
+    return mal_builtin_string_slice(vm, string, (usize) relative, 1);
 }
 
 static MalValue mal_builtin_string_prototype_index_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -586,7 +593,7 @@ static MalValue mal_builtin_string_prototype_slice(MalVm *vm, MalValue this_valu
         return mal_builtin_string_empty(vm);
     }
 
-    return mal_builtin_string_from_units(vm, mal_string_code_units(string) + start, end - start);
+    return mal_builtin_string_slice(vm, string, start, end - start);
 }
 
 static MalValue mal_builtin_string_prototype_substring(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -612,7 +619,7 @@ static MalValue mal_builtin_string_prototype_substring(MalVm *vm, MalValue this_
         end = swap;
     }
 
-    return mal_builtin_string_from_units(vm, mal_string_code_units(string) + start, end - start);
+    return mal_builtin_string_slice(vm, string, start, end - start);
 }
 
 /**
@@ -646,7 +653,7 @@ static MalValue mal_builtin_string_prototype_substr(MalVm *vm, MalValue this_val
     usize remaining = source_length - start;
     usize count = raw_length > (f64) remaining ? remaining : (usize) raw_length;
 
-    return mal_builtin_string_from_units(vm, mal_string_code_units(string) + start, count);
+    return mal_builtin_string_slice(vm, string, start, count);
 }
 
 /**
@@ -843,7 +850,7 @@ static MalValue mal_builtin_string_trim_impl(MalVm *vm, MalValue this_value, boo
         end--;
     }
 
-    return mal_builtin_string_from_units(vm, code_units + start, end - start);
+    return mal_builtin_string_slice(vm, string, start, end - start);
 }
 
 static MalValue mal_builtin_string_prototype_trim(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1214,7 +1221,7 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
             mal_array_object_store(
                 result,
                 (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) result_length++)},
-                mal_builtin_string_from_units(vm, mal_string_code_units(string) + i, 1)
+                mal_builtin_string_slice(vm, string, i, 1)
             );
         }
         return mal_value_from_array_object(result);
@@ -1231,7 +1238,7 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
         mal_array_object_store(
             result,
             (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) result_length++)},
-            mal_builtin_string_from_units(vm, mal_string_code_units(string) + segment_start, position - segment_start)
+            mal_builtin_string_slice(vm, string, segment_start, position - segment_start)
         );
         if (result_length == lim) {
             return mal_value_from_array_object(result);
@@ -1243,7 +1250,7 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
     mal_array_object_store(
         result,
         (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) result_length)},
-        mal_builtin_string_from_units(vm, mal_string_code_units(string) + segment_start, length - segment_start)
+        mal_builtin_string_slice(vm, string, segment_start, length - segment_start)
     );
     return mal_value_from_array_object(result);
 }

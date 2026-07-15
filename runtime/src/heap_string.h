@@ -72,11 +72,11 @@ MalString *mal_string_new_copy(MalHeap *heap, const c16 *code_units, usize lengt
 MalString *mal_string_new_external(MalHeap *heap, const c16 *code_units, usize length);
 
 /**
- * Allocate a contiguous slice that retains its parent's ultimate flat backing
- * string. The offset and length are measured against `parent` in UTF-16 code
- * units and must describe an in-bounds range.
+ * Allocate a substring using dependent storage when doing so will not retain a
+ * disproportionate owned backing buffer. Offset and length are UTF-16 code units;
+ * the range must be in bounds. Full-range slices may return `parent`.
  */
-MalString *mal_string_new_dependent(MalHeap *heap, MalString *parent, usize offset, usize length);
+MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, usize length);
 
 /**
  * Allocate a lazy concatenation after checking its combined UTF-16 length.

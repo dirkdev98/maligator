@@ -41,7 +41,7 @@ static bool regexp_throw_string_length(MalVm *vm) {
 
 static MalValue regexp_substring(MalVm *vm, MalString *s, i32 start, i32 end) {
     return mal_value_from_string(
-        mal_string_new_copy(&vm->heap, mal_string_code_units(s) + (usize) start, (usize) (end - start))
+        mal_string_new_slice(&vm->heap, s, (usize) start, (usize) (end - start))
     );
 }
 

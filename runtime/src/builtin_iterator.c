@@ -216,7 +216,7 @@ static bool mal_builtin_iterator_string_advance(
 
     iterator->index += count;
     *done_out = false;
-    *value_out = mal_value_from_string(mal_string_new_dependent(&vm->heap, string, index, count));
+    *value_out = mal_value_from_string(mal_string_new_slice(&vm->heap, string, index, count));
     return true;
 }
 

@@ -56,7 +56,7 @@ bool mal_primitive_wrapper_string_exotic_own(
             *desc_out = (MalPropertyDesc) {
                 .flags = MAL_PROPERTY_ENUMERABLE,
                 .value = mal_value_from_string(
-                    mal_string_new_dependent(heap, data, (usize) index, 1)
+                    mal_string_new_slice(heap, data, (usize) index, 1)
                 ),
                 .getter = mal_value_new_undefined(),
                 .setter = mal_value_new_undefined(),
