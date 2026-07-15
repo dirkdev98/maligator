@@ -22,6 +22,7 @@ import {
 	test262PruneArtifactCache,
 	test262ReportPath,
 	test262ResetStats,
+	test262RuntimeArchive,
 } from "../src/test262/runtime.ts";
 import type { StatsSnapshot } from "../src/test262/runtime.ts";
 import type { Test262File, Test262Output } from "../src/test262/types.ts";
@@ -203,7 +204,9 @@ async function runWithWorkers(
 			{ length: workerCount },
 			(_unused, workerId) =>
 				new Promise<void>((resolve, reject) => {
-					const thread = new Worker(workerUrl);
+					const thread = new Worker(workerUrl, {
+						workerData: { runtimeArchive: test262RuntimeArchive() },
+					});
 
 					const sendNext = () => {
 						if (nextBatch < allBatches.length) {

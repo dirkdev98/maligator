@@ -65,17 +65,11 @@ function createFakeToolchain(
 	);
 	executable(path.join(bin, "fake-cxx"), compilerScript("fake cxx 1", logPath));
 	executable(
-		path.join(bin, "cmake"),
-		`printf 'cmake %s\\n' "$*" >> '${logPath}'
-if [ "$1" = "--version" ]; then printf '%s\\n' "cmake version 4.1"; exit 0; fi
-if [ "$1" = "--build" ]; then
-	/usr/bin/touch "$2/libMalRuntime.a" "$2/libMalHost.a" "$2/libLibMaligator.a"
-fi
-`,
-	);
-	executable(
 		path.join(bin, "ar"),
-		'if [ "$1" = "--version" ]; then printf \'%s\\n\' "fake ar 1"; exit 0; fi\n/usr/bin/touch "$2"\n',
+		`if [ "$1" = "--version" ]; then printf '%s\\n' "fake ar 1"; exit 0; fi
+printf 'ar %s\\n' "$*" >> '${logPath}'
+/usr/bin/touch "$2"
+`,
 	);
 	executable(
 		path.join(bin, "cargo"),
@@ -138,8 +132,7 @@ describe("native toolchain discovery", () => {
 		const summary = formatToolchainReport(report, "linux");
 		expect(summary).toContain("[ok] C compiler");
 		expect(summary).toContain("[ok] Rust compiler");
-		expect(summary).not.toContain("cmake version 4.1");
-		expect(formatToolchainReport(report, "linux", true)).toContain("cmake version 4.1");
+		expect(formatToolchainReport(report, "linux", true)).toContain("fake cc 1");
 	});
 
 	it("caches probes and invalidates when an executable identity/version changes", () => {
@@ -190,7 +183,7 @@ describe("native toolchain discovery", () => {
 		);
 	});
 
-	it("passes the selected compiler to CMake and the final native link", () => {
+	it("passes the selected compiler to runtime compilation and the final native link", () => {
 		const fake = createFakeToolchain();
 		const report = inspectToolchain({
 			rootDir: fake.root,
@@ -224,7 +217,8 @@ describe("native toolchain discovery", () => {
 		});
 
 		const invocations = readFileSync(fake.logPath, "utf-8");
-		expect(invocations).toContain(`-DCMAKE_C_COMPILER=${toolchain.tools.cc.path}`);
+		expect(invocations).toContain("runtime/src/vm.c");
+		expect(invocations).toContain("ar rcs");
 		expect(invocations).toContain(`${binary}.c`);
 		expect(invocations).toContain(`-o ${binary}`);
 		expect(existsSync(`${binary}.c`)).toBe(true);
@@ -267,7 +261,7 @@ describe("native toolchain discovery", () => {
 		});
 
 		const invocations = readFileSync(fake.logPath, "utf-8");
-		expect(invocations).toMatch(/-DCMAKE_C_FLAGS=.*-O2 -flto/);
+		expect(invocations).toMatch(/-O2 -flto .*runtime\/src\/vm\.c/);
 		expect(invocations).toContain(`-O2 -flto`);
 		expect(invocations).toContain(`strip --strip-all ${binary}`);
 	});
@@ -397,11 +391,10 @@ describe("native toolchain discovery", () => {
 		expect(report.toolchain).toBeUndefined();
 		expect(
 			report.issues.filter((issue) => issue.required).map((issue) => issue.tool),
-		).toEqual(expect.arrayContaining(["cmake", "cc", "cxx", "ar", "rustup"]));
+		).toEqual(expect.arrayContaining(["cc", "cxx", "ar", "rustup"]));
 		expect(formatToolchainReport(report, "linux")).toContain(
 			"sudo apt install build-essential",
 		);
 		expect(formatToolchainReport(report, "darwin")).toContain("xcode-select --install");
-		expect(formatToolchainReport(report, "darwin")).toContain("brew install cmake");
 	});
 });

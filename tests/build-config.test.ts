@@ -92,7 +92,7 @@ describe("loadBuildConfig", () => {
 					runtime: {
 						type: "directory",
 						path: "runtime",
-						include: ["CMakeLists.txt", "src/**"],
+						include: ["rust/Cargo.toml", "src/**"],
 					},
 				},
 			}),
@@ -100,7 +100,7 @@ describe("loadBuildConfig", () => {
 		expect(loadBuildConfig(undefined, dir).assets.runtime).toEqual({
 			type: "directory",
 			path: "runtime",
-			include: ["CMakeLists.txt", "src/**"],
+			include: ["rust/Cargo.toml", "src/**"],
 		});
 	});
 

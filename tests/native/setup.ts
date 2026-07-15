@@ -2,7 +2,7 @@
  * vitest globalSetup for the native lane. Builds the canonical and Node-enabled
  * runtime archive sets before any native test runs, so parallel workers only emit
  * + link their fixtures (they pass `skipRuntimeBuild`) and never race a shared
- * `cmake` on either build dir.
+ * the archive build on either build directory.
  */
 
 import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";

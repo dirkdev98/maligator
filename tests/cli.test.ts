@@ -123,7 +123,7 @@ describe("command shell", () => {
 	it("returns nonzero and actionable diagnostics when doctor cannot find tools", () => {
 		const result = invokeCli(["doctor"], repoRoot, { ...process.env, PATH: "" });
 		expect(result.status).toBe(1);
-		expect(result.stdout).toContain("[missing] cmake");
+		expect(result.stdout).toContain("[missing] cc");
 		expect(result.stdout).toContain("Install Rustup");
 		if (process.platform === "darwin") {
 			expect(result.stdout).toContain("xcode-select --install");

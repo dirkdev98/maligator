@@ -44,10 +44,9 @@ in. `OFF buys` = what dropping the feature gets you.
       coherent knob surface + docs. Decide the interaction between manual flags and
       automatic reachability (eval-off is the case where they compound). This is also
       where the "is WinterTC excluded from the default binary?" call gets made.
-- [ ] **Self-contained compiler assets.** Config-based asset inclusion and
-      `mal.assets.materialize()` are implemented; use them to package the runtime C
-      sources and Rust crate with the self-hosted CLI. Deferred for the first
-      end-user CLI pass, which may keep using repository-relative assets.
+- [x] **Self-contained compiler assets.** The distributed self-hosted CLI embeds and
+      materializes the runtime C sources, Rust crate, and prebuilt compiler wire, then
+      runs the full native pipeline outside the repository without Node.js.
 
 ## Priority 1 — Performance
 

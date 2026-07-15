@@ -48,6 +48,10 @@ import { log } from "./utils.ts";
 
 export interface CommandContext {
 	stripTypes: BuildConfigTypeStripper;
+	/** Materialized runtime source tree used by a distributed self-hosted compiler. */
+	runtimeDirectory?: string;
+	/** Materialized eval compiler wire used by a distributed self-hosted compiler. */
+	compilerWirePath?: string;
 }
 
 export interface BuildCommandResult {
@@ -101,10 +105,16 @@ function resolveEntrypoint(
 function selectToolchain(
 	command: BuildCommand | RunCommand,
 	config: ResolvedBuildConfig,
+	context: CommandContext,
 ): { toolchain?: Toolchain; plan?: NativeBuildPlan } {
 	if (command.kind === "build" && command.internal.serializePath !== undefined) return {};
 	try {
-		const toolchain = requireToolchain({ needsCxx: config.surface.webPlatform });
+		const toolchain = requireToolchain({
+			needsCxx: config.surface.webPlatform,
+			...(context.runtimeDirectory === undefined
+				? {}
+				: { rustDir: path.join(context.runtimeDirectory, "rust") }),
+		});
 		const plan = selectNativeBuildPlan(
 			toolchain,
 			command.kind === "build" && command.production,
@@ -139,7 +149,7 @@ function compileAndBuild(
 		if (error instanceof BuildConfigError) commandError(`error: ${error.message}`);
 		throw error;
 	}
-	const { toolchain, plan } = selectToolchain(command, buildConfig);
+	const { toolchain, plan } = selectToolchain(command, buildConfig, context);
 
 	const semTiming = log.time("semantic analysis");
 	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(entrypointPath, {
@@ -230,13 +240,17 @@ function compileAndBuild(
 		onCacheEvent: (event) =>
 			log.info(`Cache ${event.artifact}: ${event.hit ? "hit" : "miss"} (${event.path})`),
 		onWarning: (warning) => log.info(`warning: ${warning}`),
+		runtimeDirectory: context.runtimeDirectory,
 		...buildDerivationFromConfig(buildConfig),
-		compilerBake: {
-			bake: () =>
-				compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
-					stripTypes: context.stripTypes,
-				}),
-		},
+		compilerBake:
+			context.compilerWirePath === undefined
+				? {
+						bake: () =>
+							compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
+								stripTypes: context.stripTypes,
+							}),
+					}
+				: { prebuiltPath: context.compilerWirePath },
 	});
 	buildTiming();
 	log.info(`Binary: ${binaryPath}`);
@@ -290,7 +304,11 @@ export function runCli(args: Array<string>, context: CommandContext): void {
 			}
 		}
 		if (command.kind === "doctor") {
-			const report = inspectToolchain();
+			const report = inspectToolchain(
+				context.runtimeDirectory === undefined
+					? {}
+					: { rustDir: path.join(context.runtimeDirectory, "rust") },
+			);
 			log.info(formatToolchainReport(report, process.platform, command.verbose));
 			if (report.toolchain === undefined) process.exit(1);
 			return;

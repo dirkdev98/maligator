@@ -1,14 +1,27 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { compileEntrypointToBuffer } from "../src/compile-program.ts";
 import { buildNativeBinary, HOST_MAIN } from "../src/test-harness.ts";
 import { resolvePathExecutable } from "../src/toolchain.ts";
+import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 const root = path.resolve(".cache/mal-build/selfhost-cli-product");
 const tools = path.join(root, "tools");
-const configPath = path.resolve("maligator.build.ts");
-const fixture = "tests/fixtures/selfhost-cli/entry.mts";
+const project = path.join(root, "isolated-project");
+const distribution = path.join(root, "distribution");
+const configPath = path.join(project, "maligator.build.ts");
+const fixture = "entry.mts";
+const compilerWire = path.join(root, "compiler.malw");
 const originalPath = process.env.PATH ?? "";
 
 if (spawnSync(process.execPath, ["--version"]).status !== 0) {
@@ -16,6 +29,8 @@ if (spawnSync(process.execPath, ["--version"]).status !== 0) {
 }
 rmSync(root, { recursive: true, force: true });
 mkdirSync(tools, { recursive: true });
+mkdirSync(project, { recursive: true });
+mkdirSync(distribution, { recursive: true });
 
 const rustup = resolvePathExecutable("rustup", originalPath);
 const selectedCargo = execFileSync(rustup, ["which", "cargo"], {
@@ -27,7 +42,6 @@ const selectedRustc = execFileSync(rustup, ["which", "rustc"], {
 	encoding: "utf-8",
 }).trim();
 const requestedTools: Array<[string, string, boolean]> = [
-	["cmake", "cmake", true],
 	["cc", process.env.CC?.trim() || "cc", true],
 	["c++", process.env.CXX?.trim() || "c++", true],
 	["ar", "ar", true],
@@ -69,21 +83,47 @@ if (
 console.log(`ok   node does not resolve on isolated PATH (${tools})`);
 
 const cliConfig = resolveBuildConfig({
+	assets: {
+		compilerWire: { type: "file", path: compilerWire },
+		runtime: {
+			type: "directory",
+			path: "runtime",
+			include: [
+				"test262_main.c",
+				"src/**",
+				"rust/Cargo.toml",
+				"rust/Cargo.lock",
+				"rust/rust-toolchain.toml",
+				"rust/src/**",
+				"rust/include/**",
+			],
+		},
+	},
 	engine: { eval: true, realms: false, regexp: true, intl: { enabled: false } },
-	surface: { webPlatform: false, node: true },
+	surface: { webPlatform: false, node: true, maligator: true },
 });
+writeFileSync(
+	compilerWire,
+	compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
+		stripTypes: stripTypesWithTypeScript,
+	}),
+);
 const cli = buildNativeBinary({
 	fixture: "src/product-cli-entry.mts",
 	name: "maligator-product",
 	outDir: root,
 	mainFile: HOST_MAIN,
 	config: cliConfig,
+	compilerBake: { prebuiltPath: compilerWire },
 });
-console.log(`ok   compiled product CLI (${cli})`);
+const distributedCli = path.join(distribution, "maligator");
+copyFileSync(cli, distributedCli);
+chmodSync(distributedCli, 0o755);
+console.log(`ok   compiled self-contained product CLI (${distributedCli})`);
 
 function invoke(args: Array<string>): string {
-	return execFileSync(cli, args, {
-		cwd: process.cwd(),
+	return execFileSync(distributedCli, args, {
+		cwd: project,
 		env: isolatedEnv,
 		encoding: "utf-8",
 		stdio: ["ignore", "pipe", "pipe"],
@@ -104,7 +144,15 @@ try {
 
 	writeFileSync(
 		configPath,
-		`import { defineBuild } from "maligator";\n\nconst nodeSurface: boolean = process.env.SELFHOST_CLI_NODE === "1";\nexport default defineBuild({\n\tentry: ${JSON.stringify(fixture)},\n\toutputName: "selfhost-cli-app",\n\tengine: { eval: false, regexp: false, intl: { enabled: false } },\n\tsurface: { webPlatform: false, node: nodeSurface },\n});\n`,
+		`import { defineBuild } from "maligator";\n\nconst nodeSurface: boolean = process.env.SELFHOST_CLI_NODE === "1";\nexport default defineBuild({\n\tentry: ${JSON.stringify(fixture)},\n\toutputName: "selfhost-cli-app",\n\tassets: { payload: { type: "file", path: "payload.bin" } },\n\tengine: { eval: true, regexp: false, intl: { enabled: false } },\n\tsurface: { webPlatform: false, node: nodeSurface, maligator: true },\n});\n`,
+	);
+	writeFileSync(
+		path.join(project, "payload.bin"),
+		new Uint8Array([0, 0xff, 0xc3, 0x28, 65]),
+	);
+	writeFileSync(
+		path.join(project, fixture),
+		`import { readFileSync } from "node:fs";\n\nconst expected = [0, 255, 195, 40, 65];\nconst payload = readFileSync(globalThis.mal.assets.materialize("payload"));\nif (payload.length !== expected.length || payload.some((value, index) => value !== expected[index])) process.exit(18);\nif (eval("20 + 22") !== 42) process.exit(19);\nconst actual = process.argv.slice(2);\nconsole.log(\`selfhost-cli \${actual.join("|")}\`);\n`,
 	);
 
 	const doctorOutput = invoke(["doctor", "--verbose"]);
@@ -117,7 +165,7 @@ try {
 	if (!buildOutput.includes("Binary:") || !buildOutput.includes("selfhost-cli-app")) {
 		throw new Error(`build did not report its output:\n${buildOutput}`);
 	}
-	console.log("ok   build compiled the configured application");
+	console.log("ok   distributed compiler built the configured application");
 
 	const runOutput = invoke(["run", "--", "alpha", "two words", "--flag"]);
 	if (!runOutput.includes("selfhost-cli alpha|two words|--flag")) {
@@ -126,7 +174,9 @@ try {
 	if (!runOutput.includes("Exit: 0")) {
 		throw new Error(`run did not report success:\n${runOutput}`);
 	}
-	console.log("ok   run forwarded arguments and returned success");
+	console.log(
+		"ok   target materialized binary assets, executed eval, and forwarded arguments",
+	);
 } finally {
 	if (createdConfig) rmSync(configPath, { force: true });
 }

@@ -14,8 +14,8 @@ rmSync(root, { recursive: true, force: true });
 mkdirSync(tools, { recursive: true });
 
 const originalPath = process.env.PATH ?? "";
-const required = ["cmake", "cc", "rustup", "cargo"];
-const optional = ["c++", "clang", "ar", "ranlib", "make", "ninja", "vm_stat"];
+const required = ["cc", "ar", "rustup", "cargo"];
+const optional = ["c++", "clang", "ranlib", "make", "ninja", "vm_stat"];
 const rustup = resolvePathExecutable("rustup", originalPath);
 for (const name of [...required, ...optional]) {
 	let source: string;

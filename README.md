@@ -112,12 +112,12 @@ assets require explicit include patterns (`*`, `?`, and whole-segment `**`):
 ```typescript
 export default defineBuild({
 	assets: {
-		compilerWire: { type: "file", path: "runtime/src/compiler.malw" },
+		compilerWire: { type: "file", path: "compiler.malw" },
 		runtime: {
 			type: "directory",
 			path: "runtime",
 			include: [
-				"CMakeLists.txt",
+				"test262_main.c",
 				"src/**",
 				"rust/Cargo.toml",
 				"rust/Cargo.lock",
@@ -148,9 +148,10 @@ The output name is selected from `outputName`, then the unscoped portion of
 ## Native Toolchain
 
 Every native build performs the same discovery and capability checks used by
-`doctor`; running `doctor` first is optional. Maligator requires:
+`doctor`; running `doctor` first is optional. Runtime translation units are compiled
+directly with `CC` and collected into three static archives with `ar`. Maligator
+requires:
 
-- CMake
 - A C compiler and archive tool with C2x compile/link support
 - Rustup and the `cargo`/`rustc` selected by `runtime/rust/rust-toolchain.toml`
 - A C++ compiler/runtime only when `surface.webPlatform` is enabled
@@ -159,11 +160,15 @@ Every native build performs the same discovery and capability checks used by
 from `PATH`. `maligator doctor --verbose` reports resolved paths, versions, C and
 Rust targets, tested capabilities, and probe-cache status.
 
-On macOS, install Apple build tools with `xcode-select --install` and CMake with
-Homebrew if needed. On Debian/Ubuntu, install `build-essential` and `cmake`; on
-Fedora/RHEL, install `gcc`, `gcc-c++`, `binutils`, and `cmake`. Install Rust through
-Rustup, then enter `runtime/rust` and run `rustup show` to install/select the pinned
-toolchain.
+On macOS, install Apple build tools with `xcode-select --install`. On Debian/Ubuntu,
+install `build-essential`; on Fedora/RHEL, install `gcc`, `gcc-c++`, and `binutils`.
+Install Rust through Rustup, then enter `runtime/rust` and run `rustup show` to
+install/select the pinned toolchain.
+
+The distributed self-hosted CLI embeds the runtime C sources, Rust crate, and a
+prebuilt eval compiler wire. It materializes those content-addressed assets on
+startup, so the copied compiler can run the full native pipeline outside a Maligator
+checkout and without Node.js. `npm run selfhost:cli` exercises that transfer path.
 
 ## Build Modes
 
@@ -206,7 +211,7 @@ toolchain and cache hit/miss status plus the final executable path. Removing
 - `RegExp is disabled`: remove `engine.regexp: false` or avoid regular expressions.
 - `Toolchain is not ready`: run `maligator doctor --verbose`, check `CC`/`CXX`, `PATH`, and the platform-specific installation suggestions.
 - A stale or suspect native artifact: remove the relevant directory under `.cache/mal-cache` and rebuild; cache identity changes normally invalidate it automatically.
-- A pre-embed source-built CLI cannot find `runtime/CMakeLists.txt` or compiler sources: run from a Maligator checkout containing the repository-relative assets described above.
+- A custom self-hosted CLI reports a missing `runtime` or `compilerWire` asset: build it with the source-tree and prebuilt-wire asset set shown above.
 
 ## Development
 

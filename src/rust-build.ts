@@ -25,11 +25,6 @@ export { resolvePathExecutable } from "./toolchain.ts";
  * not the cc link sites that consume it.
  */
 
-const RUST_DIR = "runtime/rust";
-
-/** Passed to cc as `-I` so runtime/src/*.c can `#include "mal_i18n.h"` / "mal_regexp.h". */
-export const RUST_INCLUDE_DIR = path.join(RUST_DIR, "include");
-
 /** Project-local Cargo downloads and reusable build artifacts. */
 const CARGO_HOME = path.resolve(".cache/mal-cache/cargo");
 const RUST_CACHE_DIR = path.resolve(".cache/mal-cache/rust");
@@ -42,6 +37,8 @@ const RUST_CACHE_DIR = path.resolve(".cache/mal-cache/rust");
  * eval never rebuilds ICU); "" is the canonical Intl-on/all-locales archive.
  */
 export interface RustBuildConfig {
+	/** Runtime source tree containing rust/. Defaults to ./runtime. */
+	runtimeDirectory?: string;
 	intlEnabled?: boolean;
 	/**
 	 * Per-service Cargo features (`intl-collator`, …) for a subset Intl build. Empty
@@ -63,10 +60,12 @@ export interface RustBuildConfig {
 	cacheSuffix?: string;
 }
 
-let rustSourcesHash: string | undefined;
+const rustSourceHashes = new Map<string, string>();
 
-function rustSourceHash(): string {
-	if (rustSourcesHash !== undefined) return rustSourcesHash;
+function rustSourceHash(rustDirectory: string): string {
+	const rustRoot = path.resolve(rustDirectory);
+	const cached = rustSourceHashes.get(rustRoot);
+	if (cached !== undefined) return cached;
 	const parts: Array<string> = [];
 	const walk = (directory: string): void => {
 		for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
@@ -76,7 +75,7 @@ function rustSourceHash(): string {
 			if (entry.isDirectory()) walk(full);
 			else if (/\.(?:rs|toml|lock)$/.test(entry.name)) {
 				parts.push(
-					path.relative(RUST_DIR, full),
+					path.relative(rustRoot, full),
 					"\0",
 					hash("sha256", readFileSync(full, "utf-8"), "hex"),
 					"\0",
@@ -84,16 +83,19 @@ function rustSourceHash(): string {
 			}
 		}
 	};
-	walk(RUST_DIR);
-	rustSourcesHash = hash("sha256", parts.join(""), "hex");
-	return rustSourcesHash;
+	walk(rustRoot);
+	const sourceHash = hash("sha256", parts.join(""), "hex");
+	rustSourceHashes.set(rustRoot, sourceHash);
+	return sourceHash;
 }
 
 function rustTargetDir(
 	cacheSuffix: string,
 	toolchain: Toolchain,
 	plan: NativeBuildPlan,
+	runtimeDirectory = "runtime",
 ): string {
+	const rustDirectory = path.join(runtimeDirectory, "rust");
 	const key = hash(
 		"sha256",
 		JSON.stringify({
@@ -102,7 +104,7 @@ function rustTargetDir(
 			mode: plan.mode,
 			toolchain: toolchain.fingerprint,
 			target: toolchain.rustTarget,
-			sources: rustSourceHash(),
+			sources: rustSourceHash(rustDirectory),
 		}),
 		"hex",
 	).slice(0, 24);
@@ -114,11 +116,12 @@ export function rustLibPath(
 	cacheSuffix = "",
 	selectedToolchain?: Toolchain,
 	selectedPlan?: NativeBuildPlan,
+	runtimeDirectory = "runtime",
 ): string {
 	const toolchain = selectedToolchain ?? requireToolchain({ needsCxx: true });
 	const plan = selectedPlan ?? selectNativeBuildPlan(toolchain, false);
 	return path.join(
-		rustTargetDir(cacheSuffix, toolchain, plan),
+		rustTargetDir(cacheSuffix, toolchain, plan, runtimeDirectory),
 		"release",
 		"libmal_rust.a",
 	);
@@ -145,8 +148,14 @@ export function rustLinkArgs(
 		: [],
 	selectedToolchain?: Toolchain,
 	selectedPlan?: NativeBuildPlan,
+	runtimeDirectory = "runtime",
 ): Array<string> {
-	const library = rustLibPath(cacheSuffix, selectedToolchain, selectedPlan);
+	const library = rustLibPath(
+		cacheSuffix,
+		selectedToolchain,
+		selectedPlan,
+		runtimeDirectory,
+	);
 	return webPlatform ? [library, ...cxxLinkArgs] : [library];
 }
 
@@ -168,10 +177,16 @@ export function ensureRustLibrary(
 ): string {
 	const intlEnabled = config.intlEnabled ?? true;
 	const cacheSuffix = config.cacheSuffix ?? "";
+	const runtimeDirectory = path.resolve(config.runtimeDirectory ?? "runtime");
+	const rustDirectory = path.join(runtimeDirectory, "rust");
 	const toolchain =
-		selectedToolchain ?? requireToolchain({ needsCxx: config.webPlatform ?? true });
+		selectedToolchain ??
+		requireToolchain({
+			needsCxx: config.webPlatform ?? true,
+			rustDir: rustDirectory,
+		});
 	const plan = selectedPlan ?? selectNativeBuildPlan(toolchain, false);
-	const libraryPath = rustLibPath(cacheSuffix, toolchain, plan);
+	const libraryPath = rustLibPath(cacheSuffix, toolchain, plan, runtimeDirectory);
 	const buildKey = libraryPath;
 	if (builtConfigs.has(buildKey) || existsSync(libraryPath)) {
 		builtConfigs.add(buildKey);
@@ -209,14 +224,14 @@ export function ensureRustLibrary(
 	}
 
 	execFileSync(cargoPath, args, {
-		cwd: RUST_DIR,
+		cwd: rustDirectory,
 		env: {
 			...process.env,
 			PATH: `${toolchainBin}${path.delimiter}${currentPath}`,
 			CC: toolchain.tools.cc.path,
 			...(toolchain.tools.cxx === undefined ? {} : { CXX: toolchain.tools.cxx.path }),
 			CARGO_HOME,
-			CARGO_TARGET_DIR: rustTargetDir(cacheSuffix, toolchain, plan),
+			CARGO_TARGET_DIR: rustTargetDir(cacheSuffix, toolchain, plan, runtimeDirectory),
 			RUSTC: rustcPath,
 		},
 		stdio: verbose ? "inherit" : "pipe",

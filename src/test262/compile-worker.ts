@@ -1,6 +1,10 @@
-import { parentPort } from "node:worker_threads";
+import { parentPort, workerData } from "node:worker_threads";
 import { test262LoadCache } from "./cache.ts";
-import { test262DrainStats, test262RunBatch } from "./runtime.ts";
+import {
+	test262DrainStats,
+	test262RunBatch,
+	test262SetRuntimeArchive,
+} from "./runtime.ts";
 import type { Test262File } from "./types.ts";
 
 /**
@@ -16,6 +20,7 @@ if (!parentPort) {
 	throw new Error("compile-worker must run as a worker thread");
 }
 const port = parentPort;
+test262SetRuntimeArchive((workerData as { runtimeArchive: string }).runtimeArchive);
 
 // Each worker holds its own copy of the corpus, indexed by path. Loading it here
 // (rather than shipping file contents per message) keeps messages tiny.

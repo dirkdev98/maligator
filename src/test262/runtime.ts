@@ -62,7 +62,7 @@ function test262Toolchain(): Toolchain {
  */
 // The default -O0 stays for fast compiles, but sanitizerCcFlags() must reach the
 // generated-C object, the harness mains, AND the final link: under MAL_ASAN /
-// MAL_UBSAN the archive is built instrumented (cmakeCFlags), so every consumer
+// MAL_UBSAN the archive is built instrumented (runtimeCcFlags), so every consumer
 // needs the matching `-fsanitize=…` or the link pulls in undefined
 // sanitizer-runtime symbols. Empty for a normal build.
 const GENERATED_C_OPT_FLAGS = ["-O0"];
@@ -82,6 +82,15 @@ const CC_LINK_FLAGS = ["-std=c2x", ...GENERATED_C_OPT_FLAGS, ...sanitizerCcFlags
  */
 let libArchive = "";
 const BUILD_PATH = `${TEST262_METADATA.buildPath}${buildSuffix()}`;
+
+export function test262RuntimeArchive(): string {
+	if (libArchive === "") throw new Error("test262 runtime archive has not been prepared");
+	return libArchive;
+}
+
+export function test262SetRuntimeArchive(archive: string): void {
+	libArchive = archive;
+}
 
 export function test262ReportPath(variant: "strict" | "sloppy"): string {
 	return `${BUILD_PATH}/report-${variant}.json`;

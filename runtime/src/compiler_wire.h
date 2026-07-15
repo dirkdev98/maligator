@@ -8,7 +8,7 @@
  * `eval-compiler-entry.mts` (the `compileSourceToBuffer` cone + meriyah) is
  * AOT-compiled by maligator into the serialize-vm.ts wire format and `#embed`ded
  * here at build time (src/compiler-bake.ts generates compiler.malw before the
- * cmake build). The eval intrinsic splices this definition on first use and runs
+ * runtime archive build). The eval intrinsic splices this definition on first use and runs
  * its top level to publish `__compile`. Returns the embedded bytes and writes
  * the length to *len.
  */

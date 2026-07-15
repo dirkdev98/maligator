@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 
-const CACHE_SCHEMA = 1;
+const CACHE_SCHEMA = 2;
 const C2X_FLAGS = ["-std=c2x"];
 const LTO_FLAGS = ["-flto"];
 
@@ -22,7 +22,6 @@ export interface ToolExecutable {
 }
 
 export interface ToolchainTools {
-	cmake: ToolExecutable;
 	cc: ToolExecutable;
 	cxx?: ToolExecutable;
 	ar: ToolExecutable;
@@ -399,11 +398,6 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 	const issues: Array<ToolchainIssue> = [];
 	const tools: Partial<ToolchainTools> = {};
 
-	const cmake = inspectExecutable("cmake", searchPath, rootDir, env);
-	if (cmake === undefined)
-		addMissingIssue(issues, "cmake", "CMake was not found on PATH");
-	else tools.cmake = cmake;
-
 	const ccName = env.CC?.trim() || "cc";
 	const cc = inspectExecutable(ccName, searchPath, rootDir, env);
 	if (cc === undefined) {
@@ -465,7 +459,6 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 
 	const report: ToolchainReport = { tools, cacheHit: false, issues };
 	if (
-		tools.cmake === undefined ||
 		tools.cc === undefined ||
 		tools.ar === undefined ||
 		tools.rustup === undefined ||
@@ -477,7 +470,6 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 	}
 
 	const completeTools: ToolchainTools = {
-		cmake: tools.cmake,
 		cc: tools.cc,
 		ar: tools.ar,
 		rustup: tools.rustup,
@@ -589,13 +581,6 @@ function installationSuggestions(
 			suggestions.push("Fedora/RHEL: sudo dnf install gcc gcc-c++ binutils");
 		}
 	}
-	if (missing.has("cmake")) {
-		if (platform === "darwin") suggestions.push("Install CMake: brew install cmake");
-		else if (platform === "linux") {
-			suggestions.push("Debian/Ubuntu: sudo apt install cmake");
-			suggestions.push("Fedora/RHEL: sudo dnf install cmake");
-		}
-	}
 	if (["rustup", "cargo", "rustc"].some((tool) => missing.has(tool))) {
 		suggestions.push(
 			"Install Rustup: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh",
@@ -615,7 +600,6 @@ export function formatToolchainReport(
 	const lines = ["Maligator native toolchain:"];
 	if (!verbose) {
 		const nativeReady =
-			report.tools.cmake !== undefined &&
 			report.tools.cc !== undefined &&
 			report.tools.cxx !== undefined &&
 			report.tools.ar !== undefined &&
@@ -644,16 +628,7 @@ export function formatToolchainReport(
 		);
 		return lines.join("\n");
 	}
-	for (const name of [
-		"cmake",
-		"cc",
-		"cxx",
-		"ar",
-		"rustup",
-		"cargo",
-		"rustc",
-		"strip",
-	] as const) {
+	for (const name of ["cc", "cxx", "ar", "rustup", "cargo", "rustc", "strip"] as const) {
 		const tool = report.tools[name];
 		if (tool !== undefined) lines.push(`[ok] ${name}: ${tool.path} (${tool.version})`);
 		else {

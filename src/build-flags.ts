@@ -152,9 +152,8 @@ export function gcDefines(): Array<string> {
 
 /**
  * Build-directory / binary suffix for the current mode, so toggling a sanitizer or
- * the generational collector does not thrash the normal -O2 archive (CMAKE_C_FLAGS
- * is cached per build dir, and the header layout / barrier code differs). Empty for
- * the normal build.
+ * the generational collector does not thrash the normal -O2 archive (the header
+ * layout / barrier code differs). Empty for the normal build.
  *
  * `cacheSuffix` folds in a hash of the build-affecting build config
  * (build-config.ts `buildConfigCacheSuffix`), so an eval-disabled binary (which
@@ -191,7 +190,7 @@ export function optFlags(plan?: NativeBuildPlan): Array<string> {
 }
 
 /**
- * The single `-DCMAKE_C_FLAGS=...` value for configuring LibMaligator. Passing
+ * Compiler flags for the runtime archives. Passing
  * `evalEnabled: false` adds `-DMAL_EVAL=0`, which drops the `#embed` of the 1.6 MB
  * baked compiler and turns the eval/Function runtime path into an EvalError throw.
  * `intlEnabled: false` adds `-DMAL_INTL=0`, which drops the Intl global + the ICU
@@ -216,7 +215,7 @@ export interface FeatureDefineOpts {
 
 /**
  * The `-D…=0` feature defines a build config projects onto the C preprocessor.
- * These MUST be passed identically to the cmake archive build AND to the final cc
+ * These MUST be passed identically to the runtime archive build AND to the final cc
  * that compiles the entry driver (host_main.c / test262_main.c) + the emitted
  * program: the entry driver has `#if MAL_WEB_PLATFORM` gates around the web
  * installs, so if it compiled with the default (all-on) values while the archive
@@ -244,16 +243,16 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 	];
 }
 
-export function cmakeCFlags(
+export function runtimeCcFlags(
 	opts: FeatureDefineOpts = {},
 	plan?: NativeBuildPlan,
-): string {
+): Array<string> {
 	return [
 		...optFlags(plan),
 		...SANITIZER_FLAGS[sanitizerMode()],
 		...gcDefines(),
 		...featureDefines(opts),
-	].join(" ");
+	];
 }
 
 /** Extra cc flags (compile + link) for an emitted translation unit. */

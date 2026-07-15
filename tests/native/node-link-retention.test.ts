@@ -49,14 +49,20 @@ describe("node host installer link retention", () => {
 	});
 
 	it("retains only the node:path installer for a path-only program", () => {
-		expect(retainedHostInstallers(pathOnly)).toEqual(["mal_host_install_node_path"]);
+		expect(retainedHostInstallers(pathOnly)).toEqual([
+			"mal_host_install_maligator",
+			"mal_host_install_node_path",
+		]);
 	});
 
 	it("retains only the process installer for a process-only program", () => {
-		expect(retainedHostInstallers(processOnly)).toEqual(["mal_host_install_process"]);
+		expect(retainedHostInstallers(processOnly)).toEqual([
+			"mal_host_install_maligator",
+			"mal_host_install_process",
+		]);
 	});
 
 	it("omits the path installer when its only read is optimized away", () => {
-		expect(retainedHostInstallers(deadPath)).toEqual([]);
+		expect(retainedHostInstallers(deadPath)).toEqual(["mal_host_install_maligator"]);
 	});
 });

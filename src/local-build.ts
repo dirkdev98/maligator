@@ -5,14 +5,14 @@ import * as path from "node:path";
 import {
 	buildSuffix,
 	ccExtraFlags,
-	cmakeCFlags,
 	featureDefines,
+	runtimeCcFlags,
 	selectNativeBuildPlan,
 } from "./build-flags.ts";
 import type { NativeBuildPlan } from "./build-flags.ts";
 import { ensureCompilerWire } from "./compiler-bake.ts";
 import type { CompilerBakeOptions } from "./compiler-bake.ts";
-import { ensureRustLibrary, RUST_INCLUDE_DIR, rustLinkArgs } from "./rust-build.ts";
+import { ensureRustLibrary, rustLinkArgs } from "./rust-build.ts";
 import { requireToolchain } from "./toolchain.ts";
 import type { Toolchain } from "./toolchain.ts";
 
@@ -25,15 +25,17 @@ export interface BuildCacheEvent {
 	path: string;
 }
 
-let runtimeSourcesHash: string | undefined;
+const runtimeSourceHashes = new Map<string, string>();
 const runtimeBuildDirs = new Map<string, string>();
 
-function runtimeSourceHash(): string {
-	if (runtimeSourcesHash !== undefined) return runtimeSourcesHash;
+function runtimeSourceHash(runtimeDirectory: string): string {
+	const root = path.resolve(runtimeDirectory);
+	const cached = runtimeSourceHashes.get(root);
+	if (cached !== undefined) return cached;
 	const parts: Array<string> = [];
 	const collect = (filePath: string): void => {
 		parts.push(
-			filePath,
+			path.relative(root, filePath),
 			"\0",
 			hash("sha256", readFileSync(filePath, "utf-8"), "hex"),
 			"\0",
@@ -48,11 +50,11 @@ function runtimeSourceHash(): string {
 			else if (/\.[ch]$/.test(entry.name)) collect(full);
 		}
 	};
-	collect("runtime/CMakeLists.txt");
-	walk("runtime/src");
-	walk("runtime/rust/include");
-	runtimeSourcesHash = hash("sha256", parts.join(""), "hex");
-	return runtimeSourcesHash;
+	walk(path.join(root, "src"));
+	walk(path.join(root, "rust/include"));
+	const sourceHash = hash("sha256", parts.join(""), "hex");
+	runtimeSourceHashes.set(root, sourceHash);
+	return sourceHash;
 }
 
 export function runtimeArtifactKey(inputs: {
@@ -64,11 +66,13 @@ export function runtimeArtifactKey(inputs: {
 	toolchainFingerprint: string;
 	target: string;
 }): string {
-	return hash("sha256", JSON.stringify({ schema: 2, ...inputs }), "hex").slice(0, 24);
+	return hash("sha256", JSON.stringify({ schema: 3, ...inputs }), "hex").slice(0, 24);
 }
 
 /** The build dimensions that select a distinct cached archive. */
 interface RuntimeBuildDimensions {
+	/** Runtime source tree, including src/ and rust/. Defaults to ./runtime. */
+	runtimeDirectory?: string;
 	/** Preflighted native toolchain shared with doctor. */
 	toolchain?: Toolchain;
 	/** Whether to embed the baked compiler + allow eval/Function. Default true. */
@@ -112,7 +116,7 @@ export interface LocalBuildOptions {
 	cSource: string;
 
 	/**
-	 * Surface cmake/cc output instead of swallowing it.
+	 * Surface compiler/archive output instead of swallowing it.
 	 */
 	verbose: boolean;
 
@@ -133,7 +137,7 @@ export interface LocalBuildOptions {
 	/**
 	 * Link against already-built runtime archives instead of (re)building them.
 	 * The vitest native lane sets this after globalSetup has built them once, so
-	 * parallel workers only emit + link and never race a shared `cmake`.
+	 * parallel workers only emit + link and never race a shared archive build.
 	 */
 	skipRuntimeBuild?: boolean;
 
@@ -205,6 +209,8 @@ export interface LocalBuildOptions {
 
 	/** Explicit eval compiler bytes or a Node-hosted in-process bake callback. */
 	compilerBake?: CompilerBakeOptions;
+	/** Runtime source tree, including src/ and rust/. Defaults to ./runtime. */
+	runtimeDirectory?: string;
 	/** One plan shared by archive compilation and the final compile/link. */
 	plan?: NativeBuildPlan;
 	onCacheEvent?: (event: BuildCacheEvent) => void;
@@ -216,7 +222,7 @@ export interface LocalBuildOptions {
  * engine — so a later archive resolves an earlier one's references), WITHOUT
  * building them. Callers that pass `skipRuntimeBuild` (the vitest native lane,
  * after globalSetup has built them once) link against these directly; a
- * concurrent `cmake` would otherwise race on the shared build dir.
+ * concurrent archive builds would otherwise race on the shared build dir.
  */
 function runtimeArchivePaths(buildDir: string): Array<string> {
 	return [
@@ -228,20 +234,26 @@ function runtimeArchivePaths(buildDir: string): Array<string> {
 
 function runtimeLayout(dimensions: RuntimeBuildDimensions): {
 	buildDir: string;
-	flags: string;
+	flags: Array<string>;
+	runtimeDirectory: string;
 	toolchain: Toolchain;
 	plan: NativeBuildPlan;
 } {
 	const evalEnabled = dimensions.evalEnabled ?? true;
 	const webPlatformEnabled = dimensions.webPlatformEnabled ?? true;
+	const runtimeDirectory = path.resolve(dimensions.runtimeDirectory ?? "runtime");
 	const toolchain =
-		dimensions.toolchain ?? requireToolchain({ needsCxx: webPlatformEnabled });
+		dimensions.toolchain ??
+		requireToolchain({
+			needsCxx: webPlatformEnabled,
+			rustDir: path.join(runtimeDirectory, "rust"),
+		});
 	const plan = dimensions.plan ?? selectNativeBuildPlan(toolchain, false);
 	const compilerWire = evalEnabled
 		? ensureCompilerWire(dimensions.compilerBake)
 		: undefined;
 	const flags = [
-		cmakeCFlags(
+		...runtimeCcFlags(
 			{
 				evalEnabled,
 				realmsEnabled: dimensions.realmsEnabled ?? true,
@@ -253,21 +265,22 @@ function runtimeLayout(dimensions: RuntimeBuildDimensions): {
 			},
 			plan,
 		),
-		...(compilerWire === undefined ? [] : [`-DMAL_COMPILER_WIRE=\\"${compilerWire}\\"`]),
-	].join(" ");
+		...(compilerWire === undefined ? [] : [`-DMAL_COMPILER_WIRE="${compilerWire}"`]),
+	];
 	const key = runtimeArtifactKey({
 		cacheSuffix: dimensions.cacheSuffix ?? "",
 		compilerWire:
 			compilerWire === undefined ? undefined : path.basename(path.dirname(compilerWire)),
-		flags,
+		flags: flags.join(" "),
 		mode: plan.mode,
-		sourceHash: runtimeSourceHash(),
+		sourceHash: runtimeSourceHash(runtimeDirectory),
 		toolchainFingerprint: toolchain.fingerprint,
 		target: toolchain.target,
 	});
 	return {
 		buildDir: path.join(RUNTIME_CACHE_DIR, key),
 		flags,
+		runtimeDirectory,
 		toolchain,
 		plan,
 	};
@@ -284,7 +297,7 @@ export function localRuntimeArchivePaths(cacheSuffix = ""): {
 	engine: string;
 } {
 	const buildDir =
-		runtimeBuildDirs.get(`development:${cacheSuffix}`) ??
+		runtimeBuildDirs.get(`${path.resolve("runtime")}:development:${cacheSuffix}`) ??
 		runtimeLayout({ cacheSuffix }).buildDir;
 	const [runtime, host, engine] = runtimeArchivePaths(buildDir);
 	return { runtime: runtime!, host: host!, engine: engine! };
@@ -305,36 +318,67 @@ export function ensureRuntimeLibrary(
 	const webPlatformEnabled = dimensions.webPlatformEnabled ?? true;
 	const regexpEnabled = dimensions.regexpEnabled ?? true;
 	const rustCacheSuffix = dimensions.rustCacheSuffix ?? "";
-	const { buildDir, flags, toolchain, plan } = runtimeLayout(dimensions);
-	runtimeBuildDirs.set(`${plan.mode}:${dimensions.cacheSuffix ?? ""}`, buildDir);
+	const { buildDir, flags, runtimeDirectory, toolchain, plan } =
+		runtimeLayout(dimensions);
+	runtimeBuildDirs.set(
+		`${runtimeDirectory}:${plan.mode}:${dimensions.cacheSuffix ?? ""}`,
+		buildDir,
+	);
 	const stdio = verbose ? "inherit" : "pipe";
 	const archives = runtimeArchivePaths(buildDir);
 	const cacheHit = archives.every((archive) => existsSync(archive));
 	dimensions.onCacheEvent?.({ artifact: "runtime", hit: cacheHit, path: buildDir });
 	if (!cacheHit) {
 		mkdirSync(buildDir, { recursive: true });
-		execFileSync(
-			toolchain.tools.cmake.path,
-			[
-				"-S",
-				"runtime",
-				"-B",
-				buildDir,
-				`-DCMAKE_C_COMPILER=${toolchain.tools.cc.path}`,
-				`-DCMAKE_AR=${toolchain.tools.ar.path}`,
-				...(toolchain.tools.cxx === undefined
-					? []
-					: [`-DCMAKE_CXX_COMPILER=${toolchain.tools.cxx.path}`]),
-				`-DCMAKE_C_FLAGS=${flags}`,
-			],
-			{ stdio },
-		);
-
-		execFileSync(
-			toolchain.tools.cmake.path,
-			["--build", buildDir, "--target", "LibMaligator", "MalHost", "MalRuntime"],
-			{ stdio },
-		);
+		const sourceRoot = path.join(runtimeDirectory, "src");
+		const includeArgs = [
+			"-I",
+			sourceRoot,
+			"-I",
+			path.join(sourceRoot, "host"),
+			"-I",
+			path.join(sourceRoot, "runtime"),
+			"-I",
+			path.join(runtimeDirectory, "rust/include"),
+		];
+		const layers = [
+			{ name: "engine", source: sourceRoot, archive: archives[2]! },
+			{ name: "host", source: path.join(sourceRoot, "host"), archive: archives[1]! },
+			{
+				name: "runtime",
+				source: path.join(sourceRoot, "runtime"),
+				archive: archives[0]!,
+			},
+		];
+		for (const layer of layers) {
+			const objectDirectory = path.join(buildDir, "objects", layer.name);
+			mkdirSync(objectDirectory, { recursive: true });
+			const objects = readdirSync(layer.source)
+				.filter((name) => name.endsWith(".c"))
+				.sort()
+				.map((name) => {
+					const objectPath = path.join(objectDirectory, `${name.slice(0, -2)}.o`);
+					execFileSync(
+						toolchain.tools.cc.path,
+						[
+							"-std=c2x",
+							...flags,
+							...includeArgs,
+							"-I",
+							layer.source,
+							"-c",
+							path.join(layer.source, name),
+							"-o",
+							objectPath,
+						],
+						{ stdio },
+					);
+					return objectPath;
+				});
+			execFileSync(toolchain.tools.ar.path, ["rcs", layer.archive, ...objects], {
+				stdio,
+			});
+		}
 	}
 
 	// Build the Rust shim the runtime links against: Date tz (jiff) + the RegExp
@@ -349,6 +393,7 @@ export function ensureRuntimeLibrary(
 			webPlatform: webPlatformEnabled,
 			regexp: regexpEnabled,
 			cacheSuffix: rustCacheSuffix,
+			runtimeDirectory,
 		},
 		toolchain,
 		plan,
@@ -370,7 +415,11 @@ export function buildLoadDriver(
 	verbose: boolean,
 	compilerBake?: CompilerBakeOptions,
 ): string {
-	const toolchain = requireToolchain({ needsCxx: true });
+	const runtimeDirectory = path.resolve("runtime");
+	const toolchain = requireToolchain({
+		needsCxx: true,
+		rustDir: path.join(runtimeDirectory, "rust"),
+	});
 	const plan = selectNativeBuildPlan(toolchain, false);
 	const libs = ensureRuntimeLibrary(verbose, { compilerBake, toolchain, plan });
 	const binPath = path.join(BUILD_DIR, plan.mode, `MaligatorLoad${buildSuffix()}`);
@@ -382,16 +431,23 @@ export function buildLoadDriver(
 			"-std=c2x",
 			...ccExtraFlags(plan),
 			"-I",
-			"runtime/src",
+			path.join(runtimeDirectory, "src"),
 			"-I",
-			"runtime/src/host",
+			path.join(runtimeDirectory, "src/host"),
 			"-I",
-			"runtime/src/runtime",
+			path.join(runtimeDirectory, "src/runtime"),
 			"-I",
-			RUST_INCLUDE_DIR,
-			"runtime/load_main.c",
+			path.join(runtimeDirectory, "rust/include"),
+			path.join(runtimeDirectory, "load_main.c"),
 			...libs,
-			...rustLinkArgs("", true, toolchain.probes.cxxLinkArgs, toolchain, plan),
+			...rustLinkArgs(
+				"",
+				true,
+				toolchain.probes.cxxLinkArgs,
+				toolchain,
+				plan,
+				runtimeDirectory,
+			),
 			"-o",
 			binPath,
 		],
@@ -413,8 +469,13 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 	const webPlatformEnabled = options.webPlatformEnabled ?? true;
 	const regexpEnabled = options.regexpEnabled ?? true;
 	const nodeEnabled = options.nodeEnabled ?? false;
+	const runtimeDirectory = path.resolve(options.runtimeDirectory ?? "runtime");
 	const toolchain =
-		options.toolchain ?? requireToolchain({ needsCxx: webPlatformEnabled });
+		options.toolchain ??
+		requireToolchain({
+			needsCxx: webPlatformEnabled,
+			rustDir: path.join(runtimeDirectory, "rust"),
+		});
 	const plan = options.plan ?? selectNativeBuildPlan(toolchain, false);
 	const cacheSuffix = options.cacheSuffix ?? "";
 	const rustCacheSuffix = options.rustCacheSuffix ?? "";
@@ -433,6 +494,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 		compilerBake: options.compilerBake,
 		plan,
 		onCacheEvent: options.onCacheEvent,
+		runtimeDirectory,
 	};
 	const libs = options.skipRuntimeBuild
 		? runtimeArchivePaths(runtimeLayout(dimensions).buildDir)
@@ -466,15 +528,15 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 				nodeEnabled,
 			}),
 			"-I",
-			"runtime/src",
+			path.join(runtimeDirectory, "src"),
 			"-I",
-			"runtime/src/host",
+			path.join(runtimeDirectory, "src/host"),
 			"-I",
-			"runtime/src/runtime",
+			path.join(runtimeDirectory, "src/runtime"),
 			"-I",
-			RUST_INCLUDE_DIR,
+			path.join(runtimeDirectory, "rust/include"),
 			cPath,
-			options.mainFile ?? "runtime/test262_main.c",
+			options.mainFile ?? path.join(runtimeDirectory, "test262_main.c"),
 			...libs,
 			...rustLinkArgs(
 				rustCacheSuffix,
@@ -482,6 +544,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 				toolchain.probes.cxxLinkArgs,
 				toolchain,
 				plan,
+				runtimeDirectory,
 			),
 			"-o",
 			binPath,

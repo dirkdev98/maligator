@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "array_buffer_object.h"
 #include "array_object.h"
 #include "function_object.h"
 #include "gc.h"
@@ -42,6 +43,30 @@ static MalValue node_fs_string_from_utf8(MalVm *vm, const byte *bytes, usize len
     MalValue s = mal_value_from_string(mal_string_new_copy(&vm->heap, units, count));
     free(units);
     return s;
+}
+
+static MalValue node_fs_uint8_array(MalVm *vm, const byte *bytes, usize len) {
+    if (len > UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            (const byte *) "readFileSync file is too large");
+        return mal_value_new_undefined();
+    }
+    MalObject *buffer_proto =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
+    MalArrayBufferObject *buffer = mal_array_buffer_object_new(
+        &vm->heap, buffer_proto, (u32) len, (u32) len, false, false);
+    if (len > 0) {
+        memcpy(buffer->data, bytes, len);
+    }
+    MalValue buffer_value = mal_value_from_array_buffer_object(buffer);
+    MalRootSpan roots;
+    mal_gc_root(&roots, &buffer_value, 1);
+    MalObject *view_proto =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]);
+    MalTypedArrayObject *view = mal_typed_array_object_new(
+        &vm->heap, view_proto, buffer, MAL_TA_UINT8, 0, (u32) len, false);
+    mal_gc_unroot(&roots);
+    return mal_value_from_typed_array_object(view);
 }
 
 static MalValue node_fs_string_from_cstr(MalVm *vm, const char *cstr) {
@@ -212,8 +237,6 @@ static MalValue node_fs_read_file_sync(
     (void) self;
     (void) nt;
     (void) callee;
-    // Any encoding argument is accepted but ignored: this slice returns a UTF-8
-    // string (there is no Buffer to hand back the raw bytes).
     char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
     if (path == nullptr) {
         return mal_value_new_undefined();
@@ -227,7 +250,9 @@ static MalValue node_fs_read_file_sync(
         return mal_value_new_undefined();
     }
     free(path);
-    MalValue result = node_fs_string_from_utf8(vm, data, len);
+    MalValue result = argc >= 2 && !mal_value_is_undefined(args[1])
+        ? node_fs_string_from_utf8(vm, data, len)
+        : node_fs_uint8_array(vm, data, len);
     free(data);
     return result;
 }
