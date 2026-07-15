@@ -1,10 +1,14 @@
 import { hash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
+import type { ESTree } from "meriyah";
+import { defineBuild as defineBuildIdentity } from "./build.ts";
+import { stripCompactTypes } from "./compact-type-strip.ts";
+import { parseModule } from "./parser.ts";
 import type { DisallowedEvalUsage, DisallowedRegexpUsage } from "./semantic-analysis.ts";
 
 /**
- * The `maligator.build.json` build configuration (GitHub issue #2). The file is
+ * The `maligator.build.ts` build configuration (GitHub issue #2). The file is
  * the source of truth for engine capabilities, host execution mode, and the API
  * surface exposed to user code. Only `engine.eval` is acted on today; the rest of
  * the shape is parsed and validated (so the format is stable and typos are caught)
@@ -19,6 +23,7 @@ import type { DisallowedEvalUsage, DisallowedRegexpUsage } from "./semantic-anal
  */
 export interface MaligatorBuildConfig {
 	entry?: string;
+	outputName?: string;
 	engine?: {
 		eval?: boolean;
 		/** The Realm surface (Realm global / callable boundary). Defaults OFF. */
@@ -45,6 +50,7 @@ export interface MaligatorBuildConfig {
 /** A build config with every default applied — what the compiler consumes. */
 export interface ResolvedBuildConfig {
 	entry: string | undefined;
+	outputName: string | undefined;
 	engine: {
 		eval: boolean;
 		realms: boolean;
@@ -55,7 +61,7 @@ export interface ResolvedBuildConfig {
 	surface: { webPlatform: boolean; node: boolean; maligator: boolean };
 }
 
-/** Thrown for a malformed / mistyped `maligator.build.json`, with a clear reason. */
+/** Thrown for a malformed / mistyped `maligator.build.ts`, with a clear reason. */
 export class BuildConfigError extends Error {
 	constructor(message: string) {
 		super(message);
@@ -142,7 +148,7 @@ function isObjectSchema(node: SchemaNode): node is ObjectSchema {
 
 function expect(condition: boolean, at: string, expected: string): void {
 	if (!condition) {
-		throw new BuildConfigError(`maligator.build.json: '${at}' must be ${expected}`);
+		throw new BuildConfigError(`maligator.build.ts: '${at}' must be ${expected}`);
 	}
 }
 
@@ -172,6 +178,7 @@ const schedulerLeaf: Leaf = {
 const CONFIG_SCHEMA: ObjectSchema = {
 	object: {
 		entry: stringLeaf,
+		outputName: stringLeaf,
 		engine: {
 			object: {
 				eval: booleanLeaf,
@@ -206,7 +213,7 @@ function validate(value: unknown, schema: SchemaNode, at: string): void {
 			if (!childSchema) {
 				const allowed = Object.keys(schema.object).join(", ");
 				throw new BuildConfigError(
-					`maligator.build.json: unknown key '${at === "" ? key : `${at}.${key}`}' (allowed: ${allowed})`,
+					`maligator.build.ts: unknown key '${at === "" ? key : `${at}.${key}`}' (allowed: ${allowed})`,
 				);
 			}
 			validate(child, childSchema, at === "" ? key : `${at}.${key}`);
@@ -220,6 +227,7 @@ function validate(value: unknown, schema: SchemaNode, at: string): void {
 export function resolveBuildConfig(config: MaligatorBuildConfig): ResolvedBuildConfig {
 	return {
 		entry: config.entry,
+		outputName: config.outputName,
 		engine: {
 			eval: config.engine?.eval ?? false,
 			realms: config.engine?.realms ?? false,
@@ -263,7 +271,7 @@ export function assertEvalPolicy(
 		.join("\n");
 	throw new BuildConfigError(
 		`eval is disabled by your build config (engine.eval is false):\n${sites}\n` +
-			`Enable it with { "engine": { "eval": true } } in maligator.build.json to use eval / new Function.`,
+			`Enable it with { engine: { eval: true } } in maligator.build.ts to use eval / new Function.`,
 	);
 }
 
@@ -289,22 +297,166 @@ export function assertRegexpPolicy(
 		.join("\n");
 	throw new BuildConfigError(
 		`RegExp is disabled by your build config (engine.regexp is false):\n${sites}\n` +
-			`Remove { "engine": { "regexp": false } } from maligator.build.json to use RegExp (it is on by default).`,
+			`Remove { engine: { regexp: false } } from maligator.build.ts to use RegExp (it is on by default).`,
 	);
 }
 
-const DEFAULT_CONFIG_NAME = "maligator.build.json";
+const DEFAULT_CONFIG_NAME = "maligator.build.ts";
+
+export type BuildConfigTypeStripper = (source: string, filePath: string) => string;
+
+function sourceOffset(
+	source: string,
+	location: { line: number; column: number },
+): number {
+	let line = 1;
+	let offset = 0;
+	while (line < location.line) {
+		const newline = source.indexOf("\n", offset);
+		if (newline < 0) {
+			return source.length;
+		}
+		offset = newline + 1;
+		line++;
+	}
+	return offset + location.column;
+}
+
+function overwritePreservingLines(
+	output: Array<string>,
+	start: number,
+	end: number,
+	replacement = "",
+): void {
+	let replacementIndex = 0;
+	for (let index = start; index < end; index++) {
+		if (output[index] === "\n" || output[index] === "\r") {
+			continue;
+		}
+		output[index] = replacement[replacementIndex++] ?? " ";
+	}
+	if (replacementIndex < replacement.length) {
+		throw new BuildConfigError("maligator.build.ts: unsupported default export layout");
+	}
+}
+
+function configStatementRange(
+	source: string,
+	statement: ESTree.Node,
+): { start: number; end: number } {
+	if (statement.loc === undefined || statement.loc === null) {
+		throw new BuildConfigError("maligator.build.ts: parser omitted source locations");
+	}
+	return {
+		start: sourceOffset(source, statement.loc.start),
+		end: sourceOffset(source, statement.loc.end),
+	};
+}
+
+function evaluateBuildConfig(
+	source: string,
+	configPath: string,
+	stripTypes: BuildConfigTypeStripper,
+): unknown {
+	let stripped: string;
+	let ast: ESTree.Program;
+	try {
+		stripped = stripTypes(source, configPath);
+		ast = parseModule(stripped).ast;
+	} catch (error) {
+		throw new BuildConfigError(
+			`maligator.build.ts: cannot parse ${configPath}: ${(error as Error).message}`,
+		);
+	}
+
+	if (stripped.includes("$cfg")) {
+		throw new BuildConfigError(
+			"maligator.build.ts: '$cfg' is reserved by the configuration loader",
+		);
+	}
+
+	const output = stripped.split("");
+	let defaultExport: ESTree.ExportDefaultDeclaration | undefined;
+	for (const statement of ast.body) {
+		if (statement.type === "ImportDeclaration") {
+			const validImport =
+				statement.source.value === "maligator" &&
+				statement.specifiers.length === 1 &&
+				statement.specifiers[0]?.type === "ImportSpecifier" &&
+				statement.specifiers[0].imported.type === "Identifier" &&
+				statement.specifiers[0].imported.name === "defineBuild" &&
+				statement.specifiers[0].local.name === "defineBuild";
+			if (!validImport) {
+				throw new BuildConfigError(
+					'maligator.build.ts: only `import { defineBuild } from "maligator"` is supported',
+				);
+			}
+			const range = configStatementRange(stripped, statement);
+			overwritePreservingLines(output, range.start, range.end);
+			continue;
+		}
+		if (statement.type === "ExportDefaultDeclaration") {
+			if (defaultExport !== undefined) {
+				throw new BuildConfigError("maligator.build.ts: multiple default exports");
+			}
+			if (
+				statement.declaration.type === "FunctionDeclaration" ||
+				statement.declaration.type === "ClassDeclaration"
+			) {
+				throw new BuildConfigError(
+					"maligator.build.ts: the default export must be a configuration value",
+				);
+			}
+			defaultExport = statement;
+			const statementRange = configStatementRange(stripped, statement);
+			const declarationRange = configStatementRange(stripped, statement.declaration);
+			overwritePreservingLines(
+				output,
+				statementRange.start,
+				declarationRange.start,
+				"$cfg=",
+			);
+			continue;
+		}
+		if (statement.type.startsWith("Export")) {
+			throw new BuildConfigError(
+				"maligator.build.ts: only a default configuration export is supported",
+			);
+		}
+	}
+
+	if (defaultExport === undefined) {
+		throw new BuildConfigError("maligator.build.ts: missing default export");
+	}
+
+	let $cfg: unknown;
+	const defineBuild = defineBuildIdentity;
+	void defineBuild;
+	try {
+		// Direct eval gives trusted project configuration ordinary JS control flow and
+		// access to the CLI's host globals without a compile/link subprocess.
+		eval(`${output.join("")}\n//# sourceURL=${configPath}`);
+	} catch (error) {
+		const detail = (error as Error).stack ?? (error as Error).message;
+		throw new BuildConfigError(
+			`maligator.build.ts: evaluation failed in ${configPath}:\n${detail}`,
+		);
+	}
+	return $cfg;
+}
 
 /**
  * Load and resolve the build config. With `configPath`, that file must exist;
- * otherwise `maligator.build.json` in `cwd` is used if present. When no config
+ * otherwise `maligator.build.ts` in `cwd` is used if present. When no config
  * exists at all, the product defaults apply (eval OFF). Throws
- * {@link BuildConfigError} on a missing explicit path, invalid JSON, an unknown
- * key, or a wrong value type.
+ * {@link BuildConfigError} on a missing explicit path, invalid source, an unknown
+ * key, or a wrong value type. The compact stripper default keeps this loader
+ * self-hostable; the Node CLI supplies its full blank-space stripper.
  */
 export function loadBuildConfig(
 	configPath?: string,
 	cwd: string = process.cwd(),
+	stripTypes: BuildConfigTypeStripper = stripCompactTypes,
 ): ResolvedBuildConfig {
 	let resolvedPath: string | undefined;
 	if (configPath !== undefined) {
@@ -323,15 +475,11 @@ export function loadBuildConfig(
 		return resolveBuildConfig({});
 	}
 
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(readFileSync(resolvedPath, "utf-8"));
-	} catch (error) {
-		throw new BuildConfigError(
-			`maligator.build.json: invalid JSON in ${resolvedPath}: ${(error as Error).message}`,
-		);
-	}
-
+	const parsed = evaluateBuildConfig(
+		readFileSync(resolvedPath, "utf-8"),
+		resolvedPath,
+		stripTypes,
+	);
 	validate(parsed, CONFIG_SCHEMA, "");
 	const config = resolveBuildConfig(parsed as MaligatorBuildConfig);
 
@@ -356,6 +504,54 @@ export function loadBuildConfig(
 		);
 	}
 	return config;
+}
+
+function assertSafeOutputName(name: string, source: string): string {
+	if (
+		name.length === 0 ||
+		name === "." ||
+		name === ".." ||
+		name.includes("/") ||
+		name.includes("\\") ||
+		name.includes("\0")
+	) {
+		throw new BuildConfigError(
+			`${source} must be a non-empty binary name without path separators`,
+		);
+	}
+	return name;
+}
+
+export function resolveOutputName(
+	config: ResolvedBuildConfig,
+	cwd: string = process.cwd(),
+): string {
+	if (config.outputName !== undefined) {
+		return assertSafeOutputName(config.outputName, "maligator.build.ts: 'outputName'");
+	}
+
+	const packagePath = path.join(cwd, "package.json");
+	if (existsSync(packagePath)) {
+		let packageJson: unknown;
+		try {
+			packageJson = JSON.parse(readFileSync(packagePath, "utf-8"));
+		} catch (error) {
+			throw new BuildConfigError(
+				`cannot read package name from ${packagePath}: ${(error as Error).message}`,
+			);
+		}
+		if (
+			typeof packageJson === "object" &&
+			packageJson !== null &&
+			typeof (packageJson as { name?: unknown }).name === "string"
+		) {
+			const packageName = (packageJson as { name: string }).name;
+			const unscopedName = packageName.slice(packageName.lastIndexOf("/") + 1);
+			return assertSafeOutputName(unscopedName, "package.json#name");
+		}
+	}
+
+	return assertSafeOutputName(path.basename(path.resolve(cwd)), "working directory name");
 }
 
 function shortHash(value: unknown): string {

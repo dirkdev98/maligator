@@ -13,6 +13,7 @@ import {
 	intlDisabledDefines,
 	loadBuildConfig,
 	resolveBuildConfig,
+	resolveOutputName,
 	rustConfigCacheSuffix,
 } from "../src/build-config.ts";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
@@ -29,7 +30,10 @@ function tmpdir(): string {
 }
 
 function writeConfig(dir: string, contents: string): void {
-	writeFileSync(path.join(dir, "maligator.build.json"), contents);
+	writeFileSync(
+		path.join(dir, "maligator.build.ts"),
+		`import { defineBuild } from "maligator";\nexport default defineBuild(${contents});\n`,
+	);
 }
 
 describe("resolveBuildConfig defaults", () => {
@@ -57,7 +61,7 @@ describe("loadBuildConfig", () => {
 		expect(loadBuildConfig(undefined, tmpdir()).engine.eval).toBe(false);
 	});
 
-	it("reads maligator.build.json from cwd", () => {
+	it("reads maligator.build.ts from cwd", () => {
 		const dir = tmpdir();
 		writeConfig(dir, JSON.stringify({ engine: { eval: true } }));
 		expect(loadBuildConfig(undefined, dir).engine.eval).toBe(true);
@@ -97,7 +101,7 @@ describe("loadBuildConfig", () => {
 
 	it("hard-errors on invalid JSON", () => {
 		const dir = tmpdir();
-		writeConfig(dir, "{ not json");
+		writeConfig(dir, "{ not valid TypeScript");
 		expect(() => loadBuildConfig(undefined, dir)).toThrow(BuildConfigError);
 	});
 
@@ -144,6 +148,85 @@ describe("loadBuildConfig", () => {
 			"number-format",
 		]);
 	});
+
+	it("evaluates ordinary TypeScript configuration logic", () => {
+		const dir = tmpdir();
+		writeFileSync(
+			path.join(dir, "maligator.build.ts"),
+			`import { defineBuild } from "maligator";
+const enabled: boolean = [1, 2, 3].length === 3;
+function entry(): string { return "src/main.ts"; }
+export default defineBuild({ entry: entry(), engine: { eval: enabled } });
+`,
+		);
+		const config = loadBuildConfig(undefined, dir);
+		expect(config.entry).toBe("src/main.ts");
+		expect(config.engine.eval).toBe(true);
+	});
+
+	it("requires a default export", () => {
+		const dir = tmpdir();
+		writeFileSync(path.join(dir, "maligator.build.ts"), "const config = {};\n");
+		expect(() => loadBuildConfig(undefined, dir)).toThrow(/missing default export/);
+	});
+
+	it("rejects imports other than defineBuild from maligator", () => {
+		const dir = tmpdir();
+		writeFileSync(
+			path.join(dir, "maligator.build.ts"),
+			`import { readFileSync } from "node:fs";\nexport default {};\n`,
+		);
+		expect(() => loadBuildConfig(undefined, dir)).toThrow(/only.*defineBuild.*supported/);
+	});
+
+	it("preserves config source lines in evaluation errors", () => {
+		const dir = tmpdir();
+		writeFileSync(
+			path.join(dir, "maligator.build.ts"),
+			`import { defineBuild } from "maligator";
+const message = "broken";
+throw new Error(message);
+export default defineBuild({});
+`,
+		);
+		expect(() => loadBuildConfig(undefined, dir)).toThrow(/maligator\.build\.ts:3/);
+	});
+});
+
+describe("resolveOutputName", () => {
+	it("prefers outputName over package.json and the directory", () => {
+		const dir = tmpdir();
+		writeFileSync(
+			path.join(dir, "package.json"),
+			JSON.stringify({ name: "package-name" }),
+		);
+		expect(resolveOutputName(resolveBuildConfig({ outputName: "configured" }), dir)).toBe(
+			"configured",
+		);
+	});
+
+	it("uses the unscoped portion of package.json#name", () => {
+		const dir = tmpdir();
+		writeFileSync(
+			path.join(dir, "package.json"),
+			JSON.stringify({ name: "@scope/tool" }),
+		);
+		expect(resolveOutputName(resolveBuildConfig({}), dir)).toBe("tool");
+	});
+
+	it("falls back to the working-directory basename", () => {
+		const dir = tmpdir();
+		expect(resolveOutputName(resolveBuildConfig({}), dir)).toBe(path.basename(dir));
+	});
+
+	it.each(["", ".", "..", "nested/name", "nested\\name"])(
+		"rejects unsafe configured output name %j",
+		(outputName) => {
+			expect(() =>
+				resolveOutputName(resolveBuildConfig({ outputName }), tmpdir()),
+			).toThrow(/non-empty binary name/);
+		},
+	);
 });
 
 describe("intl feature → cargo features + C defines", () => {

@@ -82,25 +82,25 @@ explicit entry with no config uses the conservative product defaults.
 
 ### C2 — Executable TypeScript config + init
 
-- [ ] Replace `maligator.build.json` with `maligator.build.ts`; do not retain a
+- [x] Replace `maligator.build.json` with `maligator.build.ts`; do not retain a
       compatibility loader before 1.0.
-- [ ] Export `defineBuild` from `maligator`; it is an identity function whose type
+- [x] Export `defineBuild` from `maligator`; it is an identity function whose type
       supplies the editor contract for `MaligatorBuildConfig`.
-- [ ] Load config by stripping erasable TypeScript, parsing it as a module, binding
+- [x] Load config by stripping erasable TypeScript, parsing it as a module, binding
       `import { defineBuild } from "maligator"`, capturing the default export, and
       direct-evaluating the transformed body. Preserve source locations in errors.
-- [ ] Permit ordinary config logic (locals, functions, conditions, environment
+- [x] Permit ordinary config logic (locals, functions, conditions, environment
       reads), evaluate it on every invocation, then validate the returned object
       with the existing strict schema/defaulting rules.
-- [ ] Add top-level `outputName`; resolve the binary name as `outputName`, then the
+- [x] Add top-level `outputName`; resolve the binary name as `outputName`, then the
       unscoped part of `package.json#name`, then the working-directory basename.
       Reject values that are not safe single path components.
-- [ ] Resolve `entry` and explicit config paths from the working directory, not the
+- [x] Resolve `entry` and explicit config paths from the working directory, not the
       config file's directory.
-- [ ] Implement `maligator init`: refuse to overwrite an existing config; select
+- [x] Implement `maligator init`: refuse to overwrite an existing config; select
       `src/index.ts`, `src/main.ts`, `index.ts`, or `main.ts` when present; otherwise
       emit the documented `src/index.ts` fallback.
-- [ ] Add config tests for logic, TypeScript stripping, malformed/missing exports,
+- [x] Add config tests for logic, TypeScript stripping, malformed/missing exports,
       schema failures, entry overrides, output naming, and generated init output.
 
 ### C3 — Toolchain discovery + doctor

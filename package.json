@@ -12,6 +12,12 @@
 		"url": "git+https://github.com/dirkdev98/maligator.git"
 	},
 	"type": "module",
+	"exports": {
+		".": {
+			"types": "./src/build.ts",
+			"import": "./src/build.ts"
+		}
+	},
 	"scripts": {
 		"bench": "node ./scripts/bench.ts",
 		"format": "oxfmt",

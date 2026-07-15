@@ -515,7 +515,7 @@ function resolveSpecifier(
 			return {
 				error:
 					`node built-in modules are disabled — set "surface": { "node": true } in ` +
-					`maligator.build.json to import '${specifier}'`,
+					`maligator.build.ts to import '${specifier}'`,
 				hard: true,
 			};
 		}

@@ -1,16 +1,24 @@
 import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { BUILD_CONFIG_NAME, detectInitialEntry, initProject } from "../src/cli-init.ts";
 import { executeBinary } from "../src/cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "../src/cli.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
+const cliEntry = path.join(repoRoot, "src/index.ts");
 
-function invokeCli(args: Array<string>) {
-	return spawnSync(process.execPath, ["src/index.ts", ...args], {
-		cwd: repoRoot,
+function invokeCli(args: Array<string>, cwd = repoRoot) {
+	return spawnSync(process.execPath, [cliEntry, ...args], {
+		cwd,
 		encoding: "utf-8",
 	});
+}
+
+function tmpdir(): string {
+	return mkdtempSync(path.join(os.tmpdir(), "mal-cli-"));
 }
 
 describe("parseCliArgs", () => {
@@ -132,5 +140,34 @@ describe("executeBinary", () => {
 			"ignore",
 		);
 		expect(outcome).toEqual({ status: undefined, signal: "SIGTERM" });
+	});
+});
+
+describe("maligator init", () => {
+	it("selects the first existing conventional entry", () => {
+		const dir = tmpdir();
+		mkdirSync(path.join(dir, "src"));
+		writeFileSync(path.join(dir, "src/main.ts"), "");
+		writeFileSync(path.join(dir, "index.ts"), "");
+		expect(detectInitialEntry(dir)).toBe("src/main.ts");
+	});
+
+	it("creates an executable build config from the command", () => {
+		const dir = tmpdir();
+		const result = invokeCli(["init"], dir);
+		expect(result.status).toBe(0);
+		const configPath = path.join(dir, BUILD_CONFIG_NAME);
+		expect(result.stdout).toContain(configPath);
+		expect(readFileSync(configPath, "utf-8")).toBe(
+			`import { defineBuild } from "maligator";\n\nexport default defineBuild({\n\tentry: "src/index.ts",\n});\n`,
+		);
+	});
+
+	it("refuses to overwrite an existing config", () => {
+		const dir = tmpdir();
+		initProject(dir);
+		const result = invokeCli(["init"], dir);
+		expect(result.status).toBe(1);
+		expect(result.stdout).toContain("build config already exists");
 	});
 });

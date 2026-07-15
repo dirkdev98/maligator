@@ -12,6 +12,7 @@ const bytes = compileEntrypointToBuffer(inputPath, {
 	stripTypes: stripCompactTypes,
 	buildConfig: {
 		entry: undefined,
+		outputName: undefined,
 		engine: {
 			eval: false,
 			realms: false,

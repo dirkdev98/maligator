@@ -6,9 +6,11 @@ import {
 	BuildConfigError,
 	buildDerivationFromConfig,
 	loadBuildConfig,
+	resolveOutputName,
 } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { gmallocEnabled, runEnv } from "./build-flags.ts";
+import { initProject, InitError } from "./cli-init.ts";
 import { executeBinary } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
 import type { BuildCommand, RunCommand } from "./cli.ts";
@@ -47,8 +49,20 @@ try {
 		log.info(MALIGATOR_VERSION);
 		process.exit(0);
 	}
-	if (parsed.kind === "init" || parsed.kind === "doctor") {
-		log.info(`error: 'maligator ${parsed.kind}' is not implemented yet`);
+	if (parsed.kind === "init") {
+		try {
+			log.info(`Created ${initProject()}`);
+			process.exit(0);
+		} catch (error) {
+			if (error instanceof InitError) {
+				log.info(`error: ${error.message}`);
+				process.exit(1);
+			}
+			throw error;
+		}
+	}
+	if (parsed.kind === "doctor") {
+		log.info("error: 'maligator doctor' is not implemented yet");
 		process.exit(1);
 	}
 	command = parsed;
@@ -68,12 +82,16 @@ if (command.kind === "build" && command.production) {
 	process.exit(1);
 }
 
-// The build config (maligator.build.json) is the source of truth for engine
+// The build config (maligator.build.ts) is the source of truth for engine
 // capabilities. Absent → product defaults (eval OFF). A malformed / mistyped file
 // fails fast with a clean message rather than a stack trace.
 let buildConfig: ResolvedBuildConfig;
 try {
-	buildConfig = loadBuildConfig(command.configPath);
+	buildConfig = loadBuildConfig(
+		command.configPath,
+		process.cwd(),
+		stripTypesWithTypeScript,
+	);
 } catch (error) {
 	if (error instanceof BuildConfigError) {
 		log.info(`error: ${error.message}`);
@@ -215,7 +233,10 @@ if (command.kind === "build" && command.internal.emitC) {
 	log.info(output);
 }
 
-const name = command.kind === "build" ? (command.internal.name ?? "out") : "out";
+const name =
+	command.kind === "build"
+		? (command.internal.name ?? resolveOutputName(buildConfig))
+		: resolveOutputName(buildConfig);
 const verbose = command.kind === "build" && command.internal.verbose;
 
 const buildTiming = log.time("build binary");

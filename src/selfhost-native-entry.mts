@@ -27,6 +27,7 @@ if (compilerWire !== undefined && !existsSync(compilerWire)) {
 const evalEnabled = compilerWire !== undefined;
 const targetConfig = {
 	entry: undefined,
+	outputName: undefined,
 	engine: {
 		eval: evalEnabled,
 		realms: false,

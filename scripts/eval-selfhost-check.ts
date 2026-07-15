@@ -32,7 +32,7 @@ const reference = digest(compileSourceToBuffer(SRC));
 // maligator (which strips + bundles the compiler cone) and run as a binary.
 const tempDir = mkdtempSync(path.resolve(".selfhost-check-"));
 const entry = path.join(tempDir, "entry.mts");
-const config = path.join(tempDir, "maligator.build.json");
+const config = path.join(tempDir, "maligator.build.ts");
 
 let out = "";
 try {
@@ -47,16 +47,18 @@ console.log(buf.length + " " + a + " " + b + " " + buf[0] + " " + buf[buf.length
 	);
 	writeFileSync(
 		config,
-		JSON.stringify({
-			engine: {
-				eval: true,
-				realms: true,
-				regexp: true,
-				intl: { enabled: true, features: [], languages: [] },
-			},
-			host: { scheduler: "single" },
-			surface: { webPlatform: true, node: false, maligator: true },
-		}),
+		`import { defineBuild } from "maligator";
+export default defineBuild({
+	engine: {
+		eval: true,
+		realms: true,
+		regexp: true,
+		intl: { enabled: true, features: [], languages: [] },
+	},
+	host: { scheduler: "single" },
+	surface: { webPlatform: true, node: false, maligator: true },
+});
+`,
 	);
 	const buildOutput = execFileSync(
 		"node",
