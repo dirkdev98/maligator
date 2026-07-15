@@ -15,6 +15,9 @@
  *               the GC collection count — the tripwire for the const/module-scope
  *               inlining + scalar-replacement class (0 collections when the loop's
  *               transients are fully eliminated), which language.js does not cover.
+ *   - string    bench/string.js: broad String + RegExp tokenization, plus an
+ *               adversarial tiny-slice retention phase. Wall time vs V8 and GC
+ *               allocation/live-set signals.
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
  *               wall, peak RSS, max GC pause (macOS: RSS/pauses via /usr/bin/time -l
  *               + MAL_GC_STATS). No V8 compare.
@@ -68,6 +71,14 @@ interface ModuleMetrics {
 	/** Peak live heap (KB); tiny when the transients are eliminated. */
 	peakLiveKb: number;
 }
+interface StringMetrics {
+	malMs: number;
+	nodeMs: number;
+	ratio: number;
+	collections: number;
+	allocatedMb: number;
+	peakLiveKb: number;
+}
 interface GcWorkload {
 	wallMs: number;
 	rssMb: number;
@@ -87,6 +98,7 @@ interface Entry {
 	size?: Record<string, SizeMetrics>;
 	language?: LanguageMetrics;
 	module?: ModuleMetrics;
+	string?: StringMetrics;
 	gc?: Record<string, GcWorkload>;
 	http?: HttpMetrics | null;
 }
@@ -248,6 +260,31 @@ function benchModule(runs: number): ModuleMetrics {
 		nodeMs,
 		ratio: malMs / nodeMs,
 		collections: parseGcStat(stderr, "collections"),
+		peakLiveKb: parseGcStat(stderr, "peak_live_bytes") / 1024,
+	};
+}
+
+// ---- string (wide String + RegExp surface; vs V8) --------------------------
+
+function benchString(runs: number): StringMetrics {
+	const binary = buildNativeBinary({
+		fixture: "bench/string.js",
+		name: "bench-string",
+	});
+	const malMs = timeCommand(binary, [], runs);
+	const nodeMs = timeCommand("node", ["bench/string.js"], runs);
+	const r = spawnSync(binary, [], {
+		env: { ...process.env, MAL_GC_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	const stderr = r.stderr ?? "";
+	return {
+		malMs,
+		nodeMs,
+		ratio: malMs / nodeMs,
+		collections: parseGcStat(stderr, "collections"),
+		allocatedMb: parseGcStat(stderr, "allocated_bytes") / (1024 * 1024),
 		peakLiveKb: parseGcStat(stderr, "peak_live_bytes") / 1024,
 	};
 }
@@ -472,6 +509,20 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			`  gc        ${entry.module.collections} collections${regressed}, ${entry.module.peakLiveKb.toFixed(1)}KB peak live`,
 		);
 	}
+	if (entry.string) {
+		const p = previous?.string;
+		console.log("string (String + RegExp; vs V8):");
+		console.log(
+			`  maligator ${entry.string.malMs.toFixed(1)}ms${delta(entry.string.malMs, p?.malMs)}`,
+		);
+		console.log(`  node      ${entry.string.nodeMs.toFixed(1)}ms`);
+		console.log(
+			`  ratio     ${entry.string.ratio.toFixed(2)}x${delta(entry.string.ratio, p?.ratio)}`,
+		);
+		console.log(
+			`  gc        ${entry.string.collections} collections, ${entry.string.allocatedMb.toFixed(1)}MB allocated${delta(entry.string.allocatedMb, p?.allocatedMb)}, ${entry.string.peakLiveKb.toFixed(1)}KB peak live`,
+		);
+	}
 	if (entry.gc) {
 		console.log("gc (generational):");
 		for (const [name, w] of Object.entries(entry.gc)) {
@@ -504,7 +555,7 @@ const runsIdx = args.indexOf("--runs");
 const runs = runsIdx >= 0 ? Number(args[runsIdx + 1]) : 5;
 const selected = args.filter((a) => !a.startsWith("--") && !/^\d+$/.test(a));
 const which =
-	selected.length > 0 ? selected : ["size", "language", "module", "gc", "http"];
+	selected.length > 0 ? selected : ["size", "language", "module", "string", "gc", "http"];
 
 const { commit, dirty } = gitInfo();
 const entry: Entry = { commit, dirty };
@@ -512,6 +563,7 @@ const entry: Entry = { commit, dirty };
 if (which.includes("size")) entry.size = benchSize();
 if (which.includes("language")) entry.language = benchLanguage(runs);
 if (which.includes("module")) entry.module = benchModule(runs);
+if (which.includes("string")) entry.string = benchString(runs);
 if (which.includes("gc")) entry.gc = benchGc(runs);
 if (which.includes("http")) entry.http = benchHttp("10s", 50);
 

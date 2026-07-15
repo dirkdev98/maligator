@@ -438,8 +438,9 @@ void mal_vm_free(MalVm *vm) {
     // so a teardown leaves no shutdown leak (mal_heap_free only munmaps the
     // chunks + frees LOS records; it does not run per-cell finalizers).
     mal_gc_finalize_all(vm);
-    mal_heap_free(&vm->heap);
+    // Snapshot allocation statistics while the heap counters are still intact.
     mal_gc_state_free(vm);
+    mal_heap_free(&vm->heap);
 
 #if MAL_REALMS
     // Realm globals and metadata are malloc-owned. Free the list now that the

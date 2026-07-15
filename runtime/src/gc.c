@@ -207,6 +207,7 @@ struct MalGcState {
     u64 total_ns;
     u64 max_pause_ns;
     usize peak_live_bytes;
+    usize allocated_bytes;
 #if MAL_GC_CONCURRENT
     u64 cycles; // concurrent cycles started
     u64 sync_backstop; // cycles that had to finish synchronously
@@ -309,12 +310,16 @@ static void mal_gc_print_stats(void) {
     if (g == nullptr) {
         return;
     }
+    usize allocated_bytes = g_gc_vm != nullptr && g_gc_vm->gc == g
+        ? g_gc_vm->heap.bytes_allocated
+        : g->allocated_bytes;
     fprintf(stderr,
             "[gc-stats] collections=%llu minor=%llu major=%llu total_ms=%.3f "
-            "max_pause_ms=%.3f peak_live_bytes=%llu",
+            "max_pause_ms=%.3f peak_live_bytes=%llu allocated_bytes=%llu",
             (unsigned long long) g->collections, (unsigned long long) g->minor_count,
             (unsigned long long) g->major_count, (double) g->total_ns / 1.0e6,
-            (double) g->max_pause_ns / 1.0e6, (unsigned long long) g->peak_live_bytes);
+            (double) g->max_pause_ns / 1.0e6, (unsigned long long) g->peak_live_bytes,
+            (unsigned long long) allocated_bytes);
 #if MAL_GC_CONCURRENT
     fprintf(stderr,
             " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "
@@ -1279,8 +1284,11 @@ static void mal_gc_stat_record(u64 elapsed_ns) {
 }
 
 static void mal_gc_stat_peak_live(MalVm *vm) {
-    if (g_gc->stats_enabled && vm->heap.live_bytes > g_gc->peak_live_bytes) {
-        g_gc->peak_live_bytes = vm->heap.live_bytes;
+    if (g_gc->stats_enabled) {
+        g_gc->allocated_bytes = vm->heap.bytes_allocated;
+        if (vm->heap.live_bytes > g_gc->peak_live_bytes) {
+            g_gc->peak_live_bytes = vm->heap.live_bytes;
+        }
     }
 }
 
@@ -1780,6 +1788,9 @@ void mal_gc_state_free(MalVm *vm) {
     // reports after an explicit teardown; the snapshot's buffer pointers are stale
     // but the printer touches only scalar counters.
     if (g_gc_stats_state == g) {
+        if (vm->heap.bytes_allocated > g->allocated_bytes) {
+            g->allocated_bytes = vm->heap.bytes_allocated;
+        }
         g_gc_stats_snapshot = *g;
         g_gc_stats_state = &g_gc_stats_snapshot;
     }
