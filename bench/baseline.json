@@ -1449,6 +1449,18 @@
         "malP99Ms": 0.797917,
         "nodeP99Ms": 0.8695
       }
+    },
+    {
+      "commit": "4cf2b94",
+      "dirty": false,
+      "string": {
+        "malMs": 237.852125,
+        "nodeMs": 43.62225,
+        "ratio": 5.452541420949172,
+        "collections": 32,
+        "allocatedMb": 140.15195655822754,
+        "peakLiveKb": 127.015625
+      }
     }
   ]
 }
