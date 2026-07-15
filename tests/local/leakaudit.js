@@ -1,5 +1,5 @@
 // GC leak-audit exerciser (T6.3). Touches every §A–D allocation category from
-// gc_todo.md, dropping most allocations and keeping a sample. Run it under the
+// docs/roadmaps/gc.md, dropping most allocations and keeping a sample. Run it under the
 // teardown + `leaks` tool via `node scripts/leakcheck.ts` (or by hand:
 // `MAL_GC_AT_EXIT=1 leaks --atExit --groupByType -- .cache/local/<bin>`), which
 // expects ZERO leaks at shutdown. A non-zero count names the leaking category in

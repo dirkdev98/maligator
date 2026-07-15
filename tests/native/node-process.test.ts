@@ -73,7 +73,6 @@ describe("native process global", () => {
 			mainFile: HOST_MAIN,
 			outDir,
 			nodeEnabled: true,
-			skipRuntimeBuild: true,
 		});
 	});
 

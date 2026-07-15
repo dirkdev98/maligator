@@ -299,7 +299,7 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
     slot->loaded = true;
 
     // Run the wrapper: (module, exports, require, __filename, __dirname), this = exports.
-    // __filename/__dirname are undefined for now (TODO: bake the module path).
+    // __filename/__dirname are undefined until module paths are baked.
     MalValue args[5] = {
         module_value,
         exports_value,
@@ -2724,7 +2724,8 @@ MalString *mal_vm_callable_name(MalVm *vm, MalValue callee) {
     }
 
     if (mal_value_is_bound_function_object(callee)) {
-        // TODO(functions): the spec prefixes bound function names with "bound ".
+        // The bound function's initial display name is not preserved separately;
+        // the configurable public `name` property is not a stable substitute.
         return mal_vm_callable_name(vm, mal_value_to_bound_function_object(callee)->target);
     }
 
@@ -2742,21 +2743,4 @@ MalString *mal_vm_callable_name(MalVm *vm, MalValue callee) {
     }
 
     return nullptr;
-}
-
-i32 mal_vm_callable_length(MalVm *vm, MalValue callee) {
-    if (mal_value_is_bound_function_object(callee)) {
-        MalBoundFunctionObject *bound = mal_value_to_bound_function_object(callee);
-        i32 target_length = mal_vm_callable_length(vm, bound->target);
-        return target_length > bound->bound_count ? target_length - bound->bound_count : 0;
-    }
-
-    if (mal_value_is_function_object(callee)) {
-        return vm->definition->functions[
-            mal_function_object_function_index(mal_value_to_function_object(callee))
-        ].length;
-    }
-
-    // TODO(functions): native functions don't carry an arity yet.
-    return 0;
 }

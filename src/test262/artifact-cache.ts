@@ -8,7 +8,6 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
-import { requireToolchain } from "../toolchain.ts";
 
 /**
  * Content-addressed cache for the expensive build artifact in the test262
@@ -111,7 +110,10 @@ let cachedFingerprint: string | undefined;
  * into the library we always re-link, not into the batch object - which is
  * exactly what makes the implementation-edit loop a cache hit.
  */
-export function buildFingerprint(ccFlags: Array<string>): string {
+export function buildFingerprint(
+	ccFlags: Array<string>,
+	toolchainFingerprint: string,
+): string {
 	if (cachedFingerprint !== undefined) {
 		return cachedFingerprint;
 	}
@@ -128,7 +130,7 @@ export function buildFingerprint(ccFlags: Array<string>): string {
 	}
 	hash.update(ccFlags.join(" "));
 
-	hash.update(requireToolchain({ needsCxx: true }).fingerprint);
+	hash.update(toolchainFingerprint);
 
 	cachedFingerprint = hash.digest("hex");
 	return cachedFingerprint;

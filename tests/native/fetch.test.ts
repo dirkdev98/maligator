@@ -25,14 +25,12 @@ describe("Mal.serve fetch server", () => {
 			name: "fetchtest",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 		syncBin = buildNativeBinary({
 			fixture: "tests/local/fetch_server_sync.js",
 			name: "fetchtest-sync",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

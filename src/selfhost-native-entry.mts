@@ -1,9 +1,11 @@
 import { existsSync } from "node:fs";
 import * as path from "node:path";
+import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import { stripCompactTypes } from "./compact-type-strip.ts";
 import { compileEntrypoint } from "./compile-program.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
+import { resolveNativeBuildContext } from "./native-build-context.ts";
 
 const inputPath = process.argv[2];
 const outputName = process.argv[3];
@@ -24,41 +26,36 @@ if (compilerWire !== undefined && !existsSync(compilerWire)) {
 	throw new Error(`prebuilt compiler wire does not exist: ${compilerWire}`);
 }
 
-const evalEnabled = compilerWire !== undefined;
-const targetConfig = {
-	entry: undefined,
-	outputName: undefined,
-	assets: {},
+const targetConfig = resolveBuildConfig({
 	engine: {
-		eval: evalEnabled,
+		eval: compilerWire !== undefined,
 		realms: false,
 		regexp: false,
-		intl: { enabled: false, features: [], languages: [] },
+		intl: { enabled: false },
 	},
-	host: { scheduler: "single" as const },
 	surface: { webPlatform: false, node: false, maligator: true },
-};
+});
+const derivation = buildDerivationFromConfig(targetConfig);
 
 const definition = compileEntrypoint(path.resolve(inputPath), {
 	stripTypes: stripCompactTypes,
 	buildConfig: targetConfig,
 });
-const binary = buildLocalBinary({
+const context = resolveNativeBuildContext({
+	features: derivation.features,
+	compilerBake:
+		compilerWire === undefined
+			? undefined
+			: { kind: "prebuilt", path: path.resolve(compilerWire) },
+});
+const result = buildLocalBinary({
+	context,
 	name: outputName,
 	outDir: path.resolve(outputDirectory),
 	cSource: emitVmDefinition(definition, { maligatorSurface: true }),
 	verbose: true,
-	evalEnabled,
-	realmsEnabled: false,
-	intlEnabled: false,
-	webPlatformEnabled: false,
-	regexpEnabled: false,
-	nodeEnabled: false,
-	cacheSuffix: evalEnabled ? "selfhost-native-eval" : "selfhost-native-minimal",
-	rustCacheSuffix: "selfhost-native-minimal",
-	compilerBake:
-		compilerWire === undefined ? undefined : { prebuiltPath: path.resolve(compilerWire) },
+	cacheSuffix: derivation.cacheSuffix,
 });
 
 // eslint-disable-next-line no-console -- CLI result consumed by the bootstrap check.
-console.log(binary);
+console.log(result.binaryPath);

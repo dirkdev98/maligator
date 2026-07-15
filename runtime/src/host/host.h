@@ -5,8 +5,8 @@
 #include "vm.h"
 
 /*
- * The host context (isolate_todo.md — the "host" layer). Holds the platform
- * services an embedder provides: the I/O reactor now, threads/clock later. It is
+ * The host context (the "host" layer in docs/roadmaps/isolate-reactor.md). Holds
+ * the platform services an embedder provides: the I/O reactor now, threads/clock later. It is
  * attached to an isolate via `vm->host` (an opaque `void *` on the engine side, so
  * the engine has no host/reactor type dependency), letting host-layer code and
  * runtime native functions reach platform services from just a `MalVm *`.

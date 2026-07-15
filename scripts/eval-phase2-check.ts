@@ -116,6 +116,9 @@ function build(jsPath: string, name: string): string {
 }
 
 const driver = buildLoadDriver(false, {
+	kind: "source",
+	sourceDirectory: path.resolve("src"),
+	entrypoint: path.resolve("src/eval-compiler-entry.mts"),
 	bake: () =>
 		compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
 			stripTypes: stripTypesWithTypeScript,

@@ -10,13 +10,13 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-// node:crypto.hash is behind surface.node, so the fixture is linked against the
-// node-on archive (-DMAL_NODE=1) prebuilt by globalSetup. The fixture self-reports
-// "RESULT N/N" (no "FAIL:" lines) over SHA-256 vectors, strict argument
-// validation, and detached/resizable buffer-view safety checks.
+// node:crypto is behind surface.node, so the fixture is linked against the
+// node-on artifacts (-DMAL_NODE=1) prewarmed by globalSetup. The fixture self-reports
+// "RESULT N/N" (no "FAIL:" lines) over SHA-256 vectors, UUID v4 format / variant /
+// uniqueness, strict argument validation, and detached/resizable buffer safety.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-crypto-"));
 
-describe("node:crypto one-shot hash (surface.node)", () => {
+describe("node:crypto (surface.node)", () => {
 	let bin: string;
 	beforeAll(() => {
 		bin = buildNativeBinary({
@@ -24,16 +24,15 @@ describe("node:crypto one-shot hash (surface.node)", () => {
 			name: "node-crypto",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 			nodeEnabled: true,
 		});
 	});
 
-	it("hashes supported inputs and rejects unsupported forms compiled", () => {
+	it("passes compiled", () => {
 		assertResultPass(runToStdout(bin));
 	});
 
-	it("hashes supported inputs and rejects unsupported forms under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
+	it("passes under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
 		assertResultPass(runToStdout(bin, { env: STRESS_ENV }));
 	});
 });

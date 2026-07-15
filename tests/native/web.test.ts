@@ -32,7 +32,6 @@ describe.each(FIXTURES)("$name", ({ name, fixture }) => {
 			name: `webtest-${name.replace(/\W+/g, "-")}`,
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

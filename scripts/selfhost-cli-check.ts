@@ -9,19 +9,16 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
-import { resolveBuildConfig } from "../src/build-config.ts";
-import { compileEntrypointToBuffer } from "../src/compile-program.ts";
-import { buildNativeBinary, HOST_MAIN } from "../src/test-harness.ts";
+import { buildProductCli } from "../src/product-builder.ts";
 import { resolvePathExecutable } from "../src/toolchain.ts";
-import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
-const root = path.resolve(".cache/mal-build/selfhost-cli-product");
+const repositoryRoot = path.resolve(import.meta.dirname, "..");
+const root = path.join(repositoryRoot, ".cache/mal-build/selfhost-cli-product");
 const tools = path.join(root, "tools");
 const project = path.join(root, "isolated-project");
 const distribution = path.join(root, "distribution");
 const configPath = path.join(project, "maligator.build.ts");
 const fixture = "entry.mts";
-const compilerWire = path.join(root, "compiler.malw");
 const originalPath = process.env.PATH ?? "";
 
 if (spawnSync(process.execPath, ["--version"]).status !== 0) {
@@ -34,11 +31,11 @@ mkdirSync(distribution, { recursive: true });
 
 const rustup = resolvePathExecutable("rustup", originalPath);
 const selectedCargo = execFileSync(rustup, ["which", "cargo"], {
-	cwd: "runtime/rust",
+	cwd: path.join(repositoryRoot, "runtime/rust"),
 	encoding: "utf-8",
 }).trim();
 const selectedRustc = execFileSync(rustup, ["which", "rustc"], {
-	cwd: "runtime/rust",
+	cwd: path.join(repositoryRoot, "runtime/rust"),
 	encoding: "utf-8",
 }).trim();
 const requestedTools: Array<[string, string, boolean]> = [
@@ -82,39 +79,9 @@ if (
 }
 console.log(`ok   node does not resolve on isolated PATH (${tools})`);
 
-const cliConfig = resolveBuildConfig({
-	assets: {
-		compilerWire: { type: "file", path: compilerWire },
-		runtime: {
-			type: "directory",
-			path: "runtime",
-			include: [
-				"test262_main.c",
-				"src/**",
-				"rust/Cargo.toml",
-				"rust/Cargo.lock",
-				"rust/rust-toolchain.toml",
-				"rust/src/**",
-				"rust/include/**",
-			],
-		},
-	},
-	engine: { eval: true, realms: false, regexp: true, intl: { enabled: false } },
-	surface: { webPlatform: false, node: true, maligator: true },
-});
-writeFileSync(
-	compilerWire,
-	compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
-		stripTypes: stripTypesWithTypeScript,
-	}),
-);
-const cli = buildNativeBinary({
-	fixture: "src/product-cli-entry.mts",
-	name: "maligator-product",
+const cli = buildProductCli({
+	repositoryRoot,
 	outDir: root,
-	mainFile: HOST_MAIN,
-	config: cliConfig,
-	compilerBake: { prebuiltPath: compilerWire },
 });
 const distributedCli = path.join(distribution, "maligator");
 copyFileSync(cli, distributedCli);

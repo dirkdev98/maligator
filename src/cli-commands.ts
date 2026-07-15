@@ -16,6 +16,7 @@ import { initProject, InitError } from "./cli-init.ts";
 import { executeBinary } from "./cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "./cli.ts";
 import type { BuildCommand, RunCommand } from "./cli.ts";
+import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { dumpProgramEscape, dumpStackAlloc } from "./escape.ts";
@@ -25,12 +26,10 @@ import {
 	debugMethodInlineSites,
 	debugSpeculativeInlineSites,
 } from "./inline.ts";
-import { executeIROptimizations } from "./ir-opt.ts";
-import { compileSemanticProgramToIr } from "./ir.ts";
 import { debugProgramLiveness } from "./liveness.ts";
 import { buildLocalBinary } from "./local-build.ts";
-import { lowerIrProgramToVmDefinition, vmDefinitionStats } from "./lower-vm.ts";
-import { allocateRegisters } from "./register-alloc.ts";
+import { vmDefinitionStats } from "./lower-vm.ts";
+import { resolveNativeBuildContext } from "./native-build-context.ts";
 import {
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
@@ -48,10 +47,39 @@ import { log } from "./utils.ts";
 
 export interface CommandContext {
 	stripTypes: BuildConfigTypeStripper;
-	/** Materialized runtime source tree used by a distributed self-hosted compiler. */
-	runtimeDirectory?: string;
-	/** Materialized eval compiler wire used by a distributed self-hosted compiler. */
-	compilerWirePath?: string;
+	installation: CompilerInstallation;
+}
+
+export interface CompilerInstallation {
+	/** Absolute runtime source tree owned by this compiler installation. */
+	runtimeDirectory: string;
+	evalCompiler:
+		| { kind: "source"; sourceDirectory: string; entrypoint: string }
+		| { kind: "prebuilt"; wirePath: string };
+}
+
+export function developmentCompilerInstallation(
+	moduleDirectory: string,
+): CompilerInstallation {
+	const sourceDirectory = path.resolve(moduleDirectory);
+	return {
+		runtimeDirectory: path.resolve(sourceDirectory, "../runtime"),
+		evalCompiler: {
+			kind: "source",
+			sourceDirectory,
+			entrypoint: path.join(sourceDirectory, "eval-compiler-entry.mts"),
+		},
+	};
+}
+
+export function productCompilerInstallation(
+	runtimeDirectory: string,
+	compilerWirePath: string,
+): CompilerInstallation {
+	return {
+		runtimeDirectory: path.resolve(runtimeDirectory),
+		evalCompiler: { kind: "prebuilt", wirePath: path.resolve(compilerWirePath) },
+	};
 }
 
 export interface BuildCommandResult {
@@ -111,9 +139,7 @@ function selectToolchain(
 	try {
 		const toolchain = requireToolchain({
 			needsCxx: config.surface.webPlatform,
-			...(context.runtimeDirectory === undefined
-				? {}
-				: { rustDir: path.join(context.runtimeDirectory, "rust") }),
+			rustDir: path.join(context.installation.runtimeDirectory, "rust"),
 		});
 		const plan = selectNativeBuildPlan(
 			toolchain,
@@ -127,6 +153,16 @@ function selectToolchain(
 		if (error instanceof ToolchainError) commandError(error.message);
 		throw error;
 	}
+}
+
+export function applicationDriverPath(
+	installation: CompilerInstallation,
+	webPlatform: boolean,
+): string {
+	return path.join(
+		installation.runtimeDirectory,
+		webPlatform ? "host_main.c" : "test262_main.c",
+	);
 }
 
 function compileAndBuild(
@@ -168,43 +204,39 @@ function compileAndBuild(
 		}
 	}
 
-	const irTiming = log.time("compile to ir");
-	const irProgram = compileSemanticProgramToIr(semanticProgram);
-	irTiming();
-
-	const irOptTiming = log.time("ir optimizations");
-	executeIROptimizations(irProgram);
-	irOptTiming();
-
-	if (command.kind === "build" && command.internal.dumpLiveness) {
-		log.info(debugProgramLiveness(irProgram));
-	}
-	if (command.kind === "build" && command.internal.dumpInline) {
-		debugInlinableCalls(irProgram);
-	}
-	if (command.kind === "build" && command.internal.dumpHof) {
-		debugHofInlineSites(irProgram);
-	}
-	if (command.kind === "build" && command.internal.dumpSpeculative) {
-		debugSpeculativeInlineSites(irProgram);
-	}
-	if (command.kind === "build" && command.internal.dumpMethods) {
-		debugMethodInlineSites(irProgram);
-	}
-	if (command.kind === "build" && command.internal.dumpEscape) {
-		dumpProgramEscape(irProgram);
-	}
-	if (command.kind === "build" && command.internal.dumpStackAlloc) {
-		dumpStackAlloc(irProgram);
-	}
-
-	const registerAllocTiming = log.time("register allocation");
-	allocateRegisters(irProgram);
-	registerAllocTiming();
-
-	const lowerTiming = log.time("lower to vm");
-	const vmDefinition = lowerIrProgramToVmDefinition(irProgram);
-	lowerTiming();
+	const vmDefinition = compileSemanticProgramToVmDefinition(semanticProgram, {
+		runPhase: (phase, run) => {
+			const endTiming = log.time(phase);
+			try {
+				return run();
+			} finally {
+				endTiming();
+			}
+		},
+		afterOptimization: (irProgram) => {
+			if (command.kind === "build" && command.internal.dumpLiveness) {
+				log.info(debugProgramLiveness(irProgram));
+			}
+			if (command.kind === "build" && command.internal.dumpInline) {
+				debugInlinableCalls(irProgram);
+			}
+			if (command.kind === "build" && command.internal.dumpHof) {
+				debugHofInlineSites(irProgram);
+			}
+			if (command.kind === "build" && command.internal.dumpSpeculative) {
+				debugSpeculativeInlineSites(irProgram);
+			}
+			if (command.kind === "build" && command.internal.dumpMethods) {
+				debugMethodInlineSites(irProgram);
+			}
+			if (command.kind === "build" && command.internal.dumpEscape) {
+				dumpProgramEscape(irProgram);
+			}
+			if (command.kind === "build" && command.internal.dumpStackAlloc) {
+				dumpStackAlloc(irProgram);
+			}
+		},
+	});
 
 	const stats = vmDefinitionStats(vmDefinition);
 	log.info(`Functions: ${stats.functionCount}, instructions: ${stats.instructionCount}`);
@@ -231,26 +263,40 @@ function compileAndBuild(
 			: resolveOutputName(buildConfig);
 	const verbose = command.kind === "build" && command.internal.verbose;
 	const buildTiming = log.time("build binary");
-	const binaryPath = buildLocalBinary({
+	const evalCompiler = context.installation.evalCompiler;
+	const compilerBake =
+		evalCompiler.kind === "source"
+			? {
+					kind: "source" as const,
+					sourceDirectory: evalCompiler.sourceDirectory,
+					entrypoint: evalCompiler.entrypoint,
+					bake: () =>
+						compileEntrypointToBuffer(evalCompiler.entrypoint, {
+							stripTypes: context.stripTypes,
+						}),
+				}
+			: { kind: "prebuilt" as const, path: evalCompiler.wirePath };
+	const derivation = buildDerivationFromConfig(buildConfig);
+	const nativeContext = resolveNativeBuildContext({
+		toolchain,
+		plan,
+		runtimeDirectory: context.installation.runtimeDirectory,
+		features: derivation.features,
+		compilerBake,
+		onCacheEvent: (event) =>
+			log.info(`Cache ${event.artifact}: ${event.hit ? "hit" : "miss"} (${event.path})`),
+	});
+	const { binaryPath } = buildLocalBinary({
+		context: nativeContext,
 		name,
 		cSource: output,
 		verbose,
-		toolchain,
-		plan,
-		onCacheEvent: (event) =>
-			log.info(`Cache ${event.artifact}: ${event.hit ? "hit" : "miss"} (${event.path})`),
 		onWarning: (warning) => log.info(`warning: ${warning}`),
-		runtimeDirectory: context.runtimeDirectory,
-		...buildDerivationFromConfig(buildConfig),
-		compilerBake:
-			context.compilerWirePath === undefined
-				? {
-						bake: () =>
-							compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
-								stripTypes: context.stripTypes,
-							}),
-					}
-				: { prebuiltPath: context.compilerWirePath },
+		mainFile: applicationDriverPath(
+			context.installation,
+			buildConfig.surface.webPlatform,
+		),
+		cacheSuffix: derivation.cacheSuffix,
 	});
 	buildTiming();
 	log.info(`Binary: ${binaryPath}`);
@@ -304,11 +350,9 @@ export function runCli(args: Array<string>, context: CommandContext): void {
 			}
 		}
 		if (command.kind === "doctor") {
-			const report = inspectToolchain(
-				context.runtimeDirectory === undefined
-					? {}
-					: { rustDir: path.join(context.runtimeDirectory, "rust") },
-			);
+			const report = inspectToolchain({
+				rustDir: path.join(context.installation.runtimeDirectory, "rust"),
+			});
 			log.info(formatToolchainReport(report, process.platform, command.verbose));
 			if (report.toolchain === undefined) process.exit(1);
 			return;

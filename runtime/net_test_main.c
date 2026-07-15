@@ -10,7 +10,7 @@
 #include "scheduler.h"
 
 /*
- * Host TCP socket acceptance test (isolate_todo.md — fetch-server groundwork).
+ * Host TCP socket acceptance test for fetch-server groundwork.
  * A server fiber and a client fiber do a full loopback round-trip on the reactor:
  * the client connects (non-blocking), sends a message; the server accepts, reads,
  * echoes; the client reads the echo back and checks it. This exercises

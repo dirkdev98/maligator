@@ -461,6 +461,8 @@ const char *mal_posix_fs_errno_name(int err) {
             return "EIO";
         case ELOOP:
             return "ELOOP";
+        case EXDEV:
+            return "EXDEV";
         case EMFILE:
             return "EMFILE";
         case ENAMETOOLONG:

@@ -29,7 +29,6 @@ describe("GC-traced dependent strings", () => {
 			name: "dependent-string-p1-item8-ni",
 			compiled: false,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

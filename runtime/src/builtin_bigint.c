@@ -263,7 +263,7 @@ static MalValue mal_builtin_bigint_as_uint_n(MalVm *vm, MalValue this_value, con
     if (bits == 0) {
         result = 0;
     } else if (bits >= 128) {
-        // TODO(bigint): widths beyond the 128-bit backing are approximated.
+        // Widths beyond the 128-bit backing are approximated.
         result = value;
     } else {
         u128 mask = ((u128) 1 << bits) - 1;

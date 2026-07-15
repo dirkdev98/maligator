@@ -7,7 +7,7 @@
 
 /*
  * Minimal cooperative + preemptive round-robin scheduler for one isolate
- * (isolate_todo.md Phase 0). It runs on the main fiber: mal_sched_run drains a
+ * (see docs/roadmaps/isolate-reactor.md). It runs on the main fiber: mal_sched_run drains a
  * FIFO of runnable fibers, switching into each until it yields, blocks, or
  * finishes, then round-robins the runnable ones. Preemption is via the GC
  * safepoint hook: each fiber gets a reduction budget, and a safepoint (a
@@ -39,7 +39,7 @@ typedef struct MalScheduler {
 } MalScheduler;
 
 /* The active scheduler (isolate-local). Read by the preempt hook and yield.
- * TODO(SMP): _Thread_local per scheduler thread. */
+ * SMP requires _Thread_local storage per scheduler thread. */
 extern MalScheduler *mal_current_scheduler;
 
 /* Initialize `s` over an already-initialized isolate `vm` (whose main fiber

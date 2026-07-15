@@ -13,7 +13,7 @@
 #include "value.h"
 
 /*
- * Phase 0 acceptance test (isolate_todo.md). Drives the fiber scheduler on a real
+ * Fiber-foundation acceptance test. Drives the fiber scheduler on a real
  * isolate and asserts the three properties Phase 0 must deliver:
  *
  *   1. Fibers actually interleave under preemption (a CPU loop that only hits

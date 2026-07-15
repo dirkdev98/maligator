@@ -1,7 +1,5 @@
-import { executeIROptimizations } from "./ir-opt.ts";
-import { compileSemanticProgramToIr, referencesArguments } from "./ir.ts";
-import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";
-import { allocateRegisters } from "./register-alloc.ts";
+import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
+import { referencesArguments } from "./ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "./semantic-analysis.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
 import { serializeVmDefinition } from "./serialize-vm.ts";
@@ -73,12 +71,11 @@ export function compileSourceToBuffer(
 	if (options.inFieldInitializer && referencesArguments(semantic.files[0]?.ast.body)) {
 		throw new SyntaxError("'arguments' is not allowed in a class field initializer");
 	}
-	const ir = compileSemanticProgramToIr(semantic, {
-		evalCompletion: options.completionValue,
-		evalDirect: options.direct,
+	const definition = compileSemanticProgramToVmDefinition(semantic, {
+		ir: {
+			evalCompletion: options.completionValue,
+			evalDirect: options.direct,
+		},
 	});
-	executeIROptimizations(ir);
-	allocateRegisters(ir);
-	const definition = lowerIrProgramToVmDefinition(ir);
 	return serializeVmDefinition(definition, { debugInfo: options.debugInfo });
 }

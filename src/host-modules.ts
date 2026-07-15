@@ -3,26 +3,25 @@
  * Node-compatibility slice, behind `surface.node`). It is the single source of
  * truth for which `node:*` specifiers resolve and what each is planned to
  * export, shared by the module graph (resolution → virtual module records)
- * and, later, the linker (host export binding synthesis).
+ * and the linker (host export binding synthesis).
  *
  * Only the `node:`-prefixed form is recognized: a bare `path` / `fs` import is
  * left to ordinary package resolution (and fails as "cannot find package" when
  * no such package exists), matching Node's requirement that built-ins be
  * imported with the explicit `node:` prefix.
  *
- * The named lists are deliberately narrow — only the built-in APIs the compiler
- * itself needs today, not the full Node surface. They are the *planned* exports
- * the linker will eventually bind; host exports are not implemented yet, so the
- * catalog currently only drives resolution (supported vs unknown) and marks the
- * virtual module record.
+ * The named lists are deliberately narrow: only the built-in APIs the compiler
+ * and supported applications need today, not the full Node surface. The linker
+ * binds used exports to global slots filled by each native module installer; unused
+ * exports and installers remain eligible for dead-code elimination.
  */
 
 export interface HostModuleSpec {
 	/** Canonical specifier and virtual module identity, e.g. `"node:path"`. */
 	id: string;
-	/** Planned named exports the linker will bind once host exports land. */
+	/** Curated named exports the linker can bind. */
 	named: ReadonlyArray<string>;
-	/** Whether `import x from "<id>"` (a default export) is planned. */
+	/** Whether `import x from "<id>"` provides a default export. */
 	hasDefault: boolean;
 	/**
 	 * The C symbol of this module's native installer — the function the emitted
@@ -41,8 +40,8 @@ export interface HostModuleSpec {
  * by the specifier with every non-alphanumeric run collapsed to `_` (so
  * `node:path` → `mal_host_install_node_path`, `node:child_process` →
  * `mal_host_install_node_child_process`). A pure naming convention shared by the
- * catalog and the C emitter; the function itself is defined in the (not-yet-
- * implemented) native host-module layer.
+ * catalog and the C emitter; the function itself is defined in the native
+ * host-module layer.
  */
 export function hostInstallerSymbol(specifier: string): string {
 	let suffix = "";
@@ -81,6 +80,7 @@ const PATH: HostModuleSpec = {
 		"extname",
 		"isAbsolute",
 		"join",
+		"normalize",
 		"relative",
 		"resolve",
 		"sep",
@@ -99,6 +99,7 @@ const FS: HostModuleSpec = {
 		"readFileSync",
 		"readdirSync",
 		"realpathSync",
+		"renameSync",
 		"rmSync",
 		"statSync",
 		"writeFileSync",
@@ -114,10 +115,10 @@ const CHILD_PROCESS: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:child_process"),
 };
 
-// crypto exposes only the one-shot `hash` helper for this slice.
+// crypto exposes the one-shot hash helper and RFC 4122 v4 UUID generation.
 const CRYPTO: HostModuleSpec = {
 	id: "node:crypto",
-	named: ["hash"],
+	named: ["hash", "randomUUID"],
 	hasDefault: false,
 	installer: hostInstallerSymbol("node:crypto"),
 };

@@ -3,8 +3,9 @@ import { test262LoadCache } from "./cache.ts";
 import {
 	test262DrainStats,
 	test262RunBatch,
-	test262SetRuntimeArchive,
+	test262SetNativeBuildInputs,
 } from "./runtime.ts";
+import type { Test262NativeBuildInputs } from "./runtime.ts";
 import type { Test262File } from "./types.ts";
 
 /**
@@ -20,7 +21,9 @@ if (!parentPort) {
 	throw new Error("compile-worker must run as a worker thread");
 }
 const port = parentPort;
-test262SetRuntimeArchive((workerData as { runtimeArchive: string }).runtimeArchive);
+test262SetNativeBuildInputs(
+	(workerData as { nativeBuildInputs: Test262NativeBuildInputs }).nativeBuildInputs,
+);
 
 // Each worker holds its own copy of the corpus, indexed by path. Loading it here
 // (rather than shipping file contents per message) keeps messages tiny.

@@ -1,4 +1,4 @@
-// WinterTC "Minimum Common API" acceptance fixture (isolate_todo.md). Exercises
+// WinterTC "Minimum Common API" acceptance fixture. Exercises
 // the self-contained globals installed by mal_web_globals_install + the interval
 // timers. Runs on the host entry (event loop drives the async checks). Prints one
 // line per check and a final "RESULT <passed>/<total>" line the runner asserts.
@@ -112,6 +112,8 @@ for (let i = 0; i < rnd.length; i++) {
 	if (rnd[i] !== 0) anyNonZero = true;
 }
 check("getRandomValues fills", anyNonZero);
+const maxRnd = new Uint8Array(65536);
+check("getRandomValues accepts 65536 bytes", crypto.getRandomValues(maxRnd) === maxRnd);
 let grvThrew = false;
 try {
 	crypto.getRandomValues(new Float64Array(4));
@@ -119,6 +121,13 @@ try {
 	grvThrew = true;
 }
 check("getRandomValues rejects float", grvThrew);
+let grvTooLargeThrew = false;
+try {
+	crypto.getRandomValues(new Uint8Array(65537));
+} catch (e) {
+	grvTooLargeThrew = e instanceof RangeError;
+}
+check("getRandomValues rejects more than 65536 bytes", grvTooLargeThrew);
 
 // --- queueMicrotask ordering (runs after sync, before timers) ---
 let order = "";

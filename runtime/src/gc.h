@@ -71,7 +71,7 @@ void mal_gc_satb_shade_frame(MalVmFrame *frame);
  * the collector (Phase 3) runs a step here / parks for the handshake (Phase 5). */
 void mal_gc_safepoint(MalVm *vm);
 
-/* Preemption hook (isolate_todo.md Phase 0). Null in a plain run; the scheduler
+/* Preemption hook (docs/roadmaps/isolate-reactor.md). Null in a plain run; the scheduler
  * installs one so a safepoint can yield the running fiber (a context switch is
  * safe exactly where a collection is — same gate). Called at the end of
  * mal_gc_safepoint. */

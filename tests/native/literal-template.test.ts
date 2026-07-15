@@ -33,14 +33,12 @@ describe("static data literal templates", () => {
 			fixture,
 			name: "literal-template",
 			outDir,
-			skipRuntimeBuild: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "literal-template-ni",
 			compiled: false,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

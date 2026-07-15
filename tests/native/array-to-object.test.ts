@@ -19,14 +19,12 @@ describe("generic Array.prototype ToObject", () => {
 			fixture: "tests/local/array-to-object.js",
 			name: "array-to-object",
 			outDir,
-			skipRuntimeBuild: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/array-to-object.js",
 			name: "array-to-object-ni",
 			compiled: false,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

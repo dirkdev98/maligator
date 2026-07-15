@@ -17,8 +17,7 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-gc-"));
 // build-dimension-parametric: the default `npm run test:native` runs the
 // generational collector (the 2026-07-10 default), while `MAL_GC_GENERATIONAL=0
 // npm run test:native` (or an MAL_UBSAN=1 build) re-runs every fixture under that
-// dimension — globalSetup builds the matching archive and the fixtures link
-// against it unchanged.
+// dimension; each fixture ensures and links the matching artifacts.
 const HOST_GC: NodeJS.ProcessEnv = { MAL_HOST_GC: "1" };
 
 /**
@@ -89,7 +88,6 @@ describe("targeted GC unit tests", () => {
 					compiled: true,
 					mainFile: spec.mainFile,
 					outDir,
-					skipRuntimeBuild: true,
 				});
 				interp = buildNativeBinary({
 					fixture: spec.fixture,
@@ -97,7 +95,6 @@ describe("targeted GC unit tests", () => {
 					compiled: false,
 					mainFile: spec.mainFile,
 					outDir,
-					skipRuntimeBuild: true,
 				});
 			});
 

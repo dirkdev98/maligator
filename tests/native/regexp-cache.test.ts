@@ -21,7 +21,6 @@ describe("compiled RegExp pattern cache", () => {
 			name: "regexp-cache",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

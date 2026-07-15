@@ -560,7 +560,6 @@ export type IRInstruction =
 			blocks: [number];
 	  }
 	| {
-			// TODO(opt): strip any jump or jumpIf instruction after a previous jump instruction.
 			type: "jump";
 
 			// [jumpTarget]
@@ -803,8 +802,6 @@ export type IRInstruction =
 			registers: [number];
 	  }
 	| {
-			// TODO(opt): there is an optimization opportunity when a store is 'immediately'
-			// followed by a load.
 			type: `store${"Local" | "Captured" | "Global"}`;
 
 			// [source]
@@ -3559,8 +3556,6 @@ function compileDefaultConstructor(
  */
 function endFunction(fn: IRFunction) {
 	for (const block of fn.blocks) {
-		// TODO(opt): once optimized we can probably do with scanning the whole block, since there
-		//  might be earlier returns happening.
 		const lastInstruction = block.instructions.at(-1);
 		if (
 			lastInstruction?.type === "return" ||
@@ -4587,7 +4582,7 @@ function compileArrayPatternTarget(
 
 		// Holes consume a step without binding. An exhausted iterator steps
 		// to undefined; the extra next() calls past done are a known
-		// deviation from the spec's [[Done]] tracking (TODO(iterators)).
+		// deviation from the spec's [[Done]] tracking.
 		const elementValue = nextRegisterDestination(fn);
 		const doneRegister = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
@@ -4735,12 +4730,21 @@ function compileStatementsToBlock(
 			firstScope && firstScope.node === firstStatement
 				? (firstScope.parent ?? undefined)
 				: firstScope;
-		if (enclosingScope) {
+		const declarationScopes: Array<Scope> = [];
+		for (
+			let scope: Scope | null | undefined = enclosingScope;
+			scope;
+			scope = scope.parent
+		) {
+			declarationScopes.push(scope);
+			if (FUNCTION_UNIT_NODE_TYPES.has(scope.node.type)) break;
+		}
+		for (const scope of declarationScopes) {
 			emitGlobalDeclarationChecks(
 				program,
 				fn,
 				block,
-				enclosingScope,
+				scope,
 				functionDeclarations,
 				functionNames,
 			);
@@ -4753,28 +4757,20 @@ function compileStatementsToBlock(
 		// closure would wrongly claim ownership (wrong owner functionIndex + slot)
 		// of a binding that actually lives in this activation. Touching them here
 		// makes `fn` the owner, and the nested closure then resolves to that slot.
-		for (const statement of statements) {
-			const scope = fn.semanticFile.nodeToScope.get(statement);
-			if (!scope) {
-				continue;
-			}
-			// A FunctionDeclaration/ClassDeclaration node maps to its *own* scope,
-			// so step up to the containing scope to reach this function's bindings.
-			const ownerScope = scope.node === statement ? scope.parent : scope;
-			for (const binding of ownerScope?.bindings ?? []) {
+		for (const scope of declarationScopes) {
+			for (const binding of scope.bindings) {
 				if (binding.scopedTo === "captured") {
 					getOrCreateBindingLocation(program, fn, binding);
 				}
 			}
-			break;
 		}
 
 		for (const declaration of functionDeclarations) {
 			compileFunctionDeclaration(program, fn, block, declaration);
 			hoistedDeclarations.add(declaration);
 		}
-		if (enclosingScope) {
-			emitVarDeclarationInits(program, fn, block, enclosingScope, functionNames);
+		for (const scope of declarationScopes) {
+			emitVarDeclarationInits(program, fn, block, scope, functionNames);
 		}
 	}
 

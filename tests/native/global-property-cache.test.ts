@@ -21,7 +21,6 @@ describe("script global property cache", () => {
 			compiled: true,
 			outDir,
 			realmsEnabled: true,
-			skipRuntimeBuild: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/global-property-cache.js",
@@ -29,7 +28,6 @@ describe("script global property cache", () => {
 			compiled: false,
 			outDir,
 			realmsEnabled: true,
-			skipRuntimeBuild: true,
 		});
 	});
 

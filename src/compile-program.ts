@@ -1,10 +1,7 @@
 import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
-import { executeIROptimizations } from "./ir-opt.ts";
-import { compileSemanticProgramToIr } from "./ir.ts";
-import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";
+import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import type { VmDefinition } from "./lower-vm.ts";
 import type { BuildModuleGraphOptions } from "./module-graph.ts";
-import { allocateRegisters } from "./register-alloc.ts";
 import {
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
@@ -22,10 +19,7 @@ export function compileEntrypoint(
 		assertEvalPolicy(options.buildConfig, collectDisallowedEvalUsage(semantic));
 		assertRegexpPolicy(options.buildConfig, collectDisallowedRegexpUsage(semantic));
 	}
-	const ir = compileSemanticProgramToIr(semantic);
-	executeIROptimizations(ir);
-	allocateRegisters(ir);
-	return lowerIrProgramToVmDefinition(ir);
+	return compileSemanticProgramToVmDefinition(semantic);
 }
 
 /** Compile an on-disk entrypoint and its module graph to the portable wire format. */

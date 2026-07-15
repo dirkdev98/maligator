@@ -14,7 +14,7 @@ static void mal_builtin_console_print_string(FILE *stream, const MalString *stri
         if (code_unit <= 0x7F) {
             fputc((char) code_unit, stream);
         } else {
-            // TODO(console): encode non-ASCII output as UTF-8.
+            // Non-ASCII output is not encoded as UTF-8 yet.
             fprintf(stream, "\\u%04x", code_unit);
         }
     }

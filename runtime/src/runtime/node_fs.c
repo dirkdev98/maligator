@@ -107,13 +107,19 @@ static void node_fs_define_str(MalVm *vm, MalObject *object, const char *key, co
 
 /* Throw a Node-shaped Error for `err` ("CODE: description, syscall 'path'") and
  * attach the `errno` / `code` / `syscall` / `path` diagnostics Node callers read. */
-static void node_fs_throw_errno(MalVm *vm, int err, const char *syscall, const char *path) {
+static void node_fs_throw_errno_with_dest(
+    MalVm *vm, int err, const char *syscall, const char *path, const char *dest) {
     const char *code = mal_posix_fs_errno_name(err);
     const char *desc = strerror(err);
-    usize cap = strlen(code) + strlen(desc) + strlen(syscall) + strlen(path) + 16;
+    usize cap = strlen(code) + strlen(desc) + strlen(syscall) + strlen(path)
+        + (dest == nullptr ? 0 : strlen(dest)) + 24;
     char *message = malloc(cap);
     if (message != nullptr) {
-        snprintf(message, cap, "%s: %s, %s '%s'", code, desc, syscall, path);
+        if (dest == nullptr) {
+            snprintf(message, cap, "%s: %s, %s '%s'", code, desc, syscall, path);
+        } else {
+            snprintf(message, cap, "%s: %s, %s '%s' -> '%s'", code, desc, syscall, path, dest);
+        }
     }
     MalValue msg = node_fs_string_from_cstr(vm, message != nullptr ? message : code);
     free(message);
@@ -131,7 +137,12 @@ static void node_fs_throw_errno(MalVm *vm, int err, const char *syscall, const c
         node_fs_define_str(vm, error, "code", code);
         node_fs_define_str(vm, error, "syscall", syscall);
         node_fs_define_str(vm, error, "path", path);
+        if (dest != nullptr) node_fs_define_str(vm, error, "dest", dest);
     }
+}
+
+static void node_fs_throw_errno(MalVm *vm, int err, const char *syscall, const char *path) {
+    node_fs_throw_errno_with_dest(vm, err, syscall, path, nullptr);
 }
 
 static MalKey node_fs_index_key(u32 index) {
@@ -453,6 +464,25 @@ static MalValue node_fs_realpath_sync(
     return result;
 }
 
+static MalValue node_fs_rename_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *source = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (source == nullptr) return mal_value_new_undefined();
+    char *destination = node_fs_path_cstr(vm, argc >= 2 ? args[1] : mal_value_new_undefined());
+    if (destination == nullptr) {
+        free(source);
+        return mal_value_new_undefined();
+    }
+    int err = mal_posix_fs_rename(source, destination);
+    if (err != 0) node_fs_throw_errno_with_dest(vm, err, "rename", source, destination);
+    free(destination);
+    free(source);
+    return mal_value_new_undefined();
+}
+
 static MalValue node_fs_mkdtemp_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
@@ -578,6 +608,8 @@ void mal_host_install_node_fs(
             fn = node_fs_make_fn(vm, fn_proto, "copyFileSync", 2, node_fs_copy_file_sync);
         } else if (strcmp(name, "realpathSync") == 0) {
             fn = node_fs_make_fn(vm, fn_proto, "realpathSync", 1, node_fs_realpath_sync);
+        } else if (strcmp(name, "renameSync") == 0) {
+            fn = node_fs_make_fn(vm, fn_proto, "renameSync", 2, node_fs_rename_sync);
         } else if (strcmp(name, "mkdtempSync") == 0) {
             fn = node_fs_make_fn(vm, fn_proto, "mkdtempSync", 1, node_fs_mkdtemp_sync);
         } else if (strcmp(name, "rmSync") == 0) {

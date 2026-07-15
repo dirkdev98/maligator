@@ -18,11 +18,11 @@ import {
 	getFailuresWithSamples,
 	getTimings,
 	test262MergeStats,
+	test262NativeBuildInputs,
 	test262PrepareBuild,
 	test262PruneArtifactCache,
 	test262ReportPath,
 	test262ResetStats,
-	test262RuntimeArchive,
 } from "../src/test262/runtime.ts";
 import type { StatsSnapshot } from "../src/test262/runtime.ts";
 import type { Test262File, Test262Output } from "../src/test262/types.ts";
@@ -205,7 +205,7 @@ async function runWithWorkers(
 			(_unused, workerId) =>
 				new Promise<void>((resolve, reject) => {
 					const thread = new Worker(workerUrl, {
-						workerData: { runtimeArchive: test262RuntimeArchive() },
+						workerData: { nativeBuildInputs: test262NativeBuildInputs() },
 					});
 
 					const sendNext = () => {

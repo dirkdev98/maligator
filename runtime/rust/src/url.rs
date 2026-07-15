@@ -2,7 +2,7 @@
 //! library). Lives in the single `mal_rust` staticlib like the regexp/i18n halves
 //! (two Rust staticlibs cannot co-link). Because `ada-url` pulls in a C++ library,
 //! the final link of every binary needs the C++ stdlib (`-lc++`/`-lstdc++`); that
-//! flag is added in `src/rust-build.ts` (`rustLinkArgs`). C ABI is `mal_url.h`.
+//! flag is added by `src/rust-build.ts` artifact resolution. C ABI is `mal_url.h`.
 //!
 //! Design contract (same as the other halves): the C runtime owns all JS-spec glue
 //! (the URL/URLSearchParams objects, the Symbol protocol, error shaping). This

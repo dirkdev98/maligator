@@ -3,9 +3,18 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+	applicationDriverPath,
+	developmentCompilerInstallation,
+	productCompilerInstallation,
+} from "../src/cli-commands.ts";
 import { BUILD_CONFIG_NAME, detectInitialEntry, initProject } from "../src/cli-init.ts";
 import { executeBinary } from "../src/cli-run.ts";
 import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "../src/cli.ts";
+import {
+	PRODUCT_RUNTIME_ASSET_INCLUDE,
+	productCliConfig,
+} from "../src/product-builder.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliEntry = path.join(repoRoot, "src/index.ts");
@@ -94,6 +103,48 @@ describe("parseCliArgs", () => {
 });
 
 describe("command shell", () => {
+	it("resolves development compiler resources from the CLI module", () => {
+		const installation = developmentCompilerInstallation(path.join(repoRoot, "src"));
+		expect(installation).toEqual({
+			runtimeDirectory: path.join(repoRoot, "runtime"),
+			evalCompiler: {
+				kind: "source",
+				sourceDirectory: path.join(repoRoot, "src"),
+				entrypoint: path.join(repoRoot, "src/eval-compiler-entry.mts"),
+			},
+		});
+		expect(path.isAbsolute(installation.runtimeDirectory)).toBe(true);
+	});
+
+	it("normalizes materialized product compiler resources to absolute paths", () => {
+		const installation = productCompilerInstallation("relative-runtime", "compiler.malw");
+		expect(installation.runtimeDirectory).toBe(path.resolve("relative-runtime"));
+		expect(installation.evalCompiler).toEqual({
+			kind: "prebuilt",
+			wirePath: path.resolve("compiler.malw"),
+		});
+	});
+
+	it("selects the web host driver while retaining the lean synchronous driver", () => {
+		const installation = developmentCompilerInstallation(path.join(repoRoot, "src"));
+		expect(applicationDriverPath(installation, true)).toBe(
+			path.join(repoRoot, "runtime/host_main.c"),
+		);
+		expect(applicationDriverPath(installation, false)).toBe(
+			path.join(repoRoot, "runtime/test262_main.c"),
+		);
+		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("host_main.c");
+		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("test262_main.c");
+		const productConfig = productCliConfig(
+			repoRoot,
+			path.join(repoRoot, "compiler.malw"),
+		);
+		expect(productConfig.assets.runtime).toMatchObject({
+			path: path.join(repoRoot, "runtime"),
+			include: PRODUCT_RUNTIME_ASSET_INCLUDE,
+		});
+	});
+
 	it("prints help without entering the compiler", () => {
 		const result = invokeCli(["--help"]);
 		expect(result.status).toBe(0);
@@ -118,6 +169,20 @@ describe("command shell", () => {
 		const result = invokeCli(["build"]);
 		expect(result.status).toBe(1);
 		expect(result.stdout).toContain("run 'maligator init'");
+	});
+
+	it("skips disabled-feature policy for portable serialization", () => {
+		const dir = tmpdir();
+		const entry = path.join(dir, "entry.js");
+		const config = path.join(dir, "maligator.build.ts");
+		const output = path.join(dir, "entry.malw");
+		writeFileSync(entry, 'eval("1 + 1"); /a/.test("a");');
+		writeFileSync(config, "export default { engine: { eval: false, regexp: false } };\n");
+
+		const result = invokeCli(["build", entry, "--config", config, "--serialize", output]);
+
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		expect(readFileSync(output).length).toBeGreaterThan(0);
 	});
 
 	it("returns nonzero and actionable diagnostics when doctor cannot find tools", () => {

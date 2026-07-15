@@ -46,7 +46,6 @@ describe("engine.regexp: false runtime gate", () => {
 			name: "regexp-enabled",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true, // regexp-on archive was prebuilt by globalSetup
 		});
 		const offSize = statSync(regexpOffBin).size;
 		const onSize = statSync(regexpOnBin).size;

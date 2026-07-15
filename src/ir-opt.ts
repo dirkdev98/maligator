@@ -42,14 +42,7 @@ const SIDE_EFFECT_FREE_OPS = new Set<IRInstruction["type"]>([
 	"loadNewTarget",
 ]);
 
-/**
- * Naively execute a few IR optimizations.
- *
- * TODO: We should probably do better optimizations ;)
- *
- * TODO: We should do various verifications on optimizations. i.e does the code actually
- * behave the same?
- */
+/** Execute the ordered IR optimization pipeline. */
 export function executeIROptimizations(program: IntermediateProgram) {
 	// Eliminate provably-redundant temporal-dead-zone checks before the main
 	// fixpoint. It needs to see the original `loadLocal`/`storeLocal` form
@@ -763,7 +756,7 @@ function optCopyPropagation(program: IntermediateProgram): boolean {
 
 /**
  * Scalar-replace non-escaping object literals — the first slice of escape
- * analysis (gc_todo.md §N.7 / Phase 7 T7.1).
+ * analysis (see docs/roadmaps/gc.md).
  *
  * A `createObjectShaped` builds an immutable record with statically-known, unique,
  * non-index string keys (`staticObjectShape` already excludes spread, computed
@@ -1028,7 +1021,7 @@ const PROTOTYPE_POLLUTING_KEYS = new Set<string>([
 
 /**
  * Scalar-replace a non-escaping object that IS mutated — the general (mutable)
- * extension of `optScalarReplaceObjectLiterals` (gc_todo.md §N.7 / Phase 7 T7.4).
+ * extension of `optScalarReplaceObjectLiterals` (see docs/roadmaps/gc.md).
  *
  * The immutable pass above eliminates records that are only ever read. This pass
  * handles records that are also *written* (`storeProperty`), the builder /

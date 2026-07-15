@@ -56,7 +56,7 @@ volatile bool mal_gc_poll = false;
 MalRootFrame *mal_root_frame_head = nullptr;
 MalRootSpan *mal_root_span_head = nullptr;
 
-/* Preemption hook (isolate_todo.md Phase 0). Null in a plain run; the scheduler
+/* Preemption hook (docs/roadmaps/isolate-reactor.md). Null in a plain run; the scheduler
  * installs one so a safepoint can yield the running fiber when its reduction
  * budget is exhausted. Called from mal_gc_safepoint, i.e. only where a context
  * switch is safe (roots precise, no un-rooted native frame). */
@@ -66,7 +66,7 @@ void (*mal_gc_preempt_hook)(MalVm *vm) = nullptr;
  * engine without the engine knowing their types (e.g. pending setTimeout
  * callbacks). Each is invoked during root scanning and calls mal_gc_mark_value on
  * its live values. Process-global (host installs them once, shared across the
- * process); NOT part of the per-isolate MalGcState. TODO: per-isolate registry
+ * process); NOT part of the per-isolate MalGcState. SMP requires a per-isolate registry
  * once SMP runs multiple isolates. */
 #define MAL_GC_MAX_ROOT_SOURCES 8
 static struct {

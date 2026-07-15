@@ -28,7 +28,6 @@ describe("ShadowRealm", () => {
 			compiled: true,
 			outDir,
 			realmsEnabled: true,
-			skipRuntimeBuild: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/shadow-realm.js",
@@ -36,7 +35,6 @@ describe("ShadowRealm", () => {
 			compiled: false,
 			outDir,
 			realmsEnabled: true,
-			skipRuntimeBuild: true,
 		});
 		evalDisabled = buildNativeBinary({
 			fixture: "tests/local/shadow-realm-eval-disabled.js",

@@ -5,10 +5,9 @@
  * the tests stay declarative.
  *
  * Two responsibilities beyond deduplication:
- *   - the expensive part (the three runtime archives) is built once by
- *     {@link buildNativeBinary}'s callee and cached under `.cache/mal-cache/runtime`; only
- *     the per-test emitted `.c` + final link land in the caller-chosen `outDir`, so
- *     parallel vitest workers never clobber each other.
+ *   - the expensive C and Rust archives are atomically cached under
+ *     `.cache/mal-cache`; only the per-test emitted `.c` + final link land in the
+ *     caller-chosen `outDir`, so parallel vitest workers never clobber each other.
  *   - the plain + MAL_GC_STRESS+MAL_GC_VERIFY re-run that every runner used to
  *     copy-paste is one constant ({@link STRESS_ENV}) plus small assert helpers.
  */
@@ -19,14 +18,13 @@ import * as path from "node:path";
 import { includeConfiguredAssets } from "./assets.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
+import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
 import { compileEntrypointToBuffer } from "./compile-program.ts";
-import type { CompilerBakeOptions } from "./compiler-bake.ts";
+import type { CompilerBakeInput } from "./compiler-bake.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
-import { executeIROptimizations } from "./ir-opt.ts";
-import { compileSemanticProgramToIr } from "./ir.ts";
 import { buildLocalBinary } from "./local-build.ts";
-import { lowerIrProgramToVmDefinition } from "./lower-vm.ts";
-import { allocateRegisters } from "./register-alloc.ts";
+import type { LocalBuildResult } from "./local-build.ts";
+import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
 import { stripTypesWithTypeScript } from "./typescript-strip.ts";
 
@@ -56,8 +54,6 @@ export interface BuildOptions {
 	mainFile?: string;
 	/** Artifact directory; defaults to `.cache/mal-build`. Pass a temp dir under vitest. */
 	outDir?: string;
-	/** Link against pre-built archives (set by the vitest native lane's globalSetup). */
-	skipRuntimeBuild?: boolean;
 	/**
 	 * Include runtime eval / new Function (embed the baked compiler). Defaults to
 	 * true — internal tooling opts in. Set false to build the `engine.eval: false`
@@ -103,16 +99,23 @@ export interface BuildOptions {
 	 */
 	config?: ResolvedBuildConfig;
 	/** Override the eval compiler source, primarily for explicit prebuilt-wire checks. */
-	compilerBake?: CompilerBakeOptions;
+	compilerBake?: CompilerBakeInput;
 }
+
+export type BuildNativeBinaryResult = LocalBuildResult;
 
 /**
  * Compile a fixture through the full pipeline (semantic → ir → opt → regalloc →
  * lower → emit) and link it into a runnable binary. Returns the binary path.
  */
 export function buildNativeBinary(options: BuildOptions): string {
+	return buildNativeBinaryResult(options).binaryPath;
+}
+
+/** Compile and link a fixture, retaining the exact context and linked artifacts. */
+export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinaryResult {
 	// Reuse the real build-config resolution so semantic graph capabilities and
-	// cache suffixes / cargo features / C defines match the CLI exactly.
+	// output suffix, Cargo features, and C defines match the CLI exactly.
 	const config =
 		options.config ??
 		resolveBuildConfig({
@@ -134,29 +137,35 @@ export function buildNativeBinary(options: BuildOptions): string {
 		path.resolve(options.fixture),
 		{ buildConfig: config, stripTypes: stripTypesWithTypeScript },
 	);
-	const ir = compileSemanticProgramToIr(semanticProgram);
-	executeIROptimizations(ir);
-	allocateRegisters(ir);
-	const definition = lowerIrProgramToVmDefinition(ir);
+	// Tests intentionally bypass build policy so disabled-feature fixtures can
+	// compile and assert the runtime behavior of the reduced engine.
+	const definition = compileSemanticProgramToVmDefinition(semanticProgram);
 	const cSource = emitVmDefinition(definition, {
 		compiled: options.compiled ?? true,
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,
 	});
-	return buildLocalBinary({
-		name: options.name,
-		cSource,
-		verbose: false,
-		mainFile: options.mainFile,
-		outDir: options.outDir,
-		skipRuntimeBuild: options.skipRuntimeBuild,
-		...buildDerivationFromConfig(config),
+	const derivation = buildDerivationFromConfig(config);
+	const context = resolveNativeBuildContext({
+		features: derivation.features,
 		compilerBake: options.compilerBake ?? {
+			kind: "source",
+			sourceDirectory: path.resolve("src"),
+			entrypoint: path.resolve("src/eval-compiler-entry.mts"),
 			bake: () =>
 				compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
 					stripTypes: stripTypesWithTypeScript,
 				}),
 		},
+	});
+	return buildLocalBinary({
+		context,
+		name: options.name,
+		cSource,
+		verbose: false,
+		mainFile: options.mainFile,
+		outDir: options.outDir,
+		cacheSuffix: derivation.cacheSuffix,
 	});
 }
 

@@ -345,6 +345,19 @@ static MalValue mal_node_path_resolve(
     return result;
 }
 
+static MalValue mal_node_path_normalize(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) this_value;
+    (void) nt;
+    (void) callee;
+    MalString *s;
+    if (!path_require_string(vm, argc >= 1 ? args[0] : mal_value_new_undefined(), "path", &s)) {
+        return mal_value_new_undefined();
+    }
+    return posix_normalize_units(
+        vm, mal_string_code_units(s), (i64) mal_string_length(s));
+}
+
 static MalValue mal_node_path_is_absolute(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) this_value;
@@ -620,7 +633,7 @@ typedef struct {
     MalNativeFunctionCallback callback;
 } MalNodePathExport;
 
-#define MAL_NODE_PATH_FUNCTION_COUNT 7
+#define MAL_NODE_PATH_FUNCTION_COUNT 8
 
 static const MalNodePathExport mal_node_path_exports[MAL_NODE_PATH_FUNCTION_COUNT] = {
     {"basename", 1, mal_node_path_basename},
@@ -628,6 +641,7 @@ static const MalNodePathExport mal_node_path_exports[MAL_NODE_PATH_FUNCTION_COUN
     {"extname", 1, mal_node_path_extname},
     {"isAbsolute", 1, mal_node_path_is_absolute},
     {"join", 0, mal_node_path_join},
+    {"normalize", 1, mal_node_path_normalize},
     {"relative", 2, mal_node_path_relative},
     {"resolve", 0, mal_node_path_resolve},
 };

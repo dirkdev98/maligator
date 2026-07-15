@@ -308,7 +308,7 @@ function parseWithGoal(source: string, goal: ModuleGoal) {
  * reached through `import` get full detection (detectDependencyGoal); no
  * current fixture exercises that path.
  *
- * TODO(bundler): apply full Node entry detection once fixtures declare their
+ * Full Node entry detection remains once fixtures declare their
  * goal and the CJS milestone gives `.js`-as-CommonJS a real lowering.
  */
 function detectEntryGoal(filePath: string, explicit?: ModuleGoal): ModuleGoal {
@@ -677,7 +677,7 @@ type ExportsField = string | Array<ExportsField> | { [key: string]: ExportsField
  * EXPORT_CONDITIONS), and flat subpath maps. Subpath *patterns* (wildcards like
  * `./*`) are not handled yet.
  *
- * TODO(bundler): wildcard/pattern subpaths in `exports`.
+ * Wildcard/pattern subpaths in `exports` remain unsupported.
  */
 function resolveExports(
 	exportsField: ExportsField,

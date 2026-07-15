@@ -1,25 +1,42 @@
 /**
- * vitest globalSetup for the native lane. Builds the canonical and Node-enabled
- * runtime archive sets before any native test runs, so parallel workers only emit
- * + link their fixtures (they pass `skipRuntimeBuild`) and never race a shared
- * the archive build on either build directory.
+ * vitest globalSetup for the native lane. Prewarms the canonical and Node-enabled
+ * runtime artifact sets; individual builds still call the atomic ensure path.
  */
 
+import * as path from "node:path";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../../src/build-config.ts";
 import { compileEntrypointToBuffer } from "../../src/compile-program.ts";
-import { ensureRuntimeLibrary } from "../../src/local-build.ts";
+import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
+import { ensureNativeArtifacts } from "../../src/runtime-build.ts";
 import { stripTypesWithTypeScript } from "../../src/typescript-strip.ts";
 
 const compilerBake = {
+	kind: "source" as const,
+	sourceDirectory: path.resolve("src"),
+	entrypoint: path.resolve("src/eval-compiler-entry.mts"),
 	bake: () =>
-		compileEntrypointToBuffer("src/eval-compiler-entry.mts", {
+		compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
 			stripTypes: stripTypesWithTypeScript,
 		}),
 };
 
 // vitest globalSetup supports a named `setup` export (avoids a default export).
 export function setup(): void {
-	ensureRuntimeLibrary(false, { compilerBake });
+	const config = resolveBuildConfig({
+		engine: {
+			eval: true,
+			regexp: true,
+			realms: true,
+			intl: { enabled: true, features: [] },
+		},
+		surface: { webPlatform: true, node: false },
+	});
+	ensureNativeArtifacts(
+		resolveNativeBuildContext({
+			features: buildDerivationFromConfig(config).features,
+			compilerBake,
+		}),
+	);
 	const nodeConfig = resolveBuildConfig({
 		engine: {
 			eval: true,
@@ -29,5 +46,10 @@ export function setup(): void {
 		},
 		surface: { webPlatform: true, node: true },
 	});
-	ensureRuntimeLibrary(false, { ...buildDerivationFromConfig(nodeConfig), compilerBake });
+	ensureNativeArtifacts(
+		resolveNativeBuildContext({
+			features: buildDerivationFromConfig(nodeConfig).features,
+			compilerBake,
+		}),
+	);
 }

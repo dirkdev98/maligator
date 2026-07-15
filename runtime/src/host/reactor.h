@@ -3,7 +3,7 @@
 #include "./defaults.h"
 
 /*
- * The I/O reactor (isolate_todo.md Phase 1). Completion-oriented core: a caller
+ * The I/O reactor (see docs/roadmaps/isolate-reactor.md). Completion-oriented core: a caller
  * registers interest (an fd becoming ready, or a deadline passing) together with a
  * *waker* — "make my task runnable again" — and when the event occurs the reactor
  * fires the waker. The scheduler's run loop drains runnable fibers, then blocks in

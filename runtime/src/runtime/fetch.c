@@ -867,14 +867,14 @@ static MalValue mal_serve(
     (void) callee;
 
     if (arg_count < 1 || !mal_value_is_object(args[0])) {
-        return mal_value_new_undefined(); // TODO: throw TypeError
+        return mal_value_new_undefined(); // The required TypeError remains unsupported.
     }
     MalValue opts = args[0];
 
     MalValue fetch_val;
     if (!mal_vm_get_property(vm, opts, mal_intrinsic_string_key(vm, (const byte *) "fetch"), &fetch_val)
         || !mal_value_is_callable(fetch_val)) {
-        return mal_value_new_undefined(); // TODO: throw TypeError
+        return mal_value_new_undefined(); // The required TypeError remains unsupported.
     }
 
     u16 port = 0;
@@ -905,7 +905,7 @@ static MalValue mal_serve(
 
     MalHttpServer *server = mal_http_server_start(vm, host, port);
     if (server == nullptr) {
-        return mal_value_new_undefined(); // TODO: throw
+        return mal_value_new_undefined(); // The required exception remains unsupported.
     }
 
     MalObject *handle = mal_intrinsic_new_object(vm);

@@ -31,11 +31,13 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
-import { buildDerivationFromConfig, resolveBuildConfig } from "../src/build-config.ts";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import type { MaligatorBuildConfig } from "../src/build-config.ts";
-import { localRuntimeArchivePaths } from "../src/local-build.ts";
-import { rustLibPath } from "../src/rust-build.ts";
-import { buildNativeBinary, HOST_MAIN } from "../src/test-harness.ts";
+import {
+	buildNativeBinary,
+	buildNativeBinaryResult,
+	HOST_MAIN,
+} from "../src/test-harness.ts";
 
 const BASELINE_FILE = "bench/baseline.json";
 const HISTORY_LIMIT = 50;
@@ -187,20 +189,18 @@ function benchSize(): Record<string, SizeMetrics> {
 	const result: Record<string, SizeMetrics> = {};
 	for (const profile of SIZE_PROFILES) {
 		const config = resolveBuildConfig(profile.config);
-		const { cacheSuffix, rustCacheSuffix } = buildDerivationFromConfig(config);
-		// Building the fixture also (re)builds the archives for this config's suffix.
-		const binary = buildNativeBinary({
+		const build = buildNativeBinaryResult({
 			fixture: SIZE_FIXTURE,
 			name: `bench-size-${profile.name}`,
 			config,
 		});
-		const archives = localRuntimeArchivePaths(cacheSuffix);
+		const { binaryPath, artifacts } = build;
 		result[profile.name] = {
-			binaryBytes: fileBytes(binary),
-			runtimeArchiveBytes: fileBytes(archives.runtime),
-			hostArchiveBytes: fileBytes(archives.host),
-			engineArchiveBytes: fileBytes(archives.engine),
-			rustArchiveBytes: fileBytes(rustLibPath(rustCacheSuffix)),
+			binaryBytes: fileBytes(binaryPath),
+			runtimeArchiveBytes: fileBytes(artifacts.c.runtime),
+			hostArchiveBytes: fileBytes(artifacts.c.host),
+			engineArchiveBytes: fileBytes(artifacts.c.engine),
+			rustArchiveBytes: fileBytes(artifacts.rust.library),
 		};
 	}
 	return result;

@@ -6,6 +6,7 @@
 #include "array_buffer_object.h"
 #include "builtin_data_view.h"
 #include "function_object.h"
+#include "entropy.h"
 #include "heap_string.h"
 #include "intrinsics.h"
 #include "text_encoding.h"
@@ -303,17 +304,53 @@ static MalValue mal_node_crypto_hash(
     return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) hex, 64));
 }
 
+/* RFC 4122 version 4 UUID using the engine-neutral host entropy boundary. */
+static MalValue mal_node_crypto_random_uuid(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue new_target,
+    MalValue callee) {
+    (void) this_value;
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+
+    u8 bytes[16];
+    if (mal_host_entropy(bytes, sizeof(bytes)) != 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            (const byte *) "crypto.randomUUID: host entropy unavailable");
+        return mal_value_new_undefined();
+    }
+    bytes[6] = (u8) ((bytes[6] & 0x0f) | 0x40);
+    bytes[8] = (u8) ((bytes[8] & 0x3f) | 0x80);
+
+    static const char HEX[] = "0123456789abcdef";
+    char uuid[36];
+    usize out = 0;
+    for (usize i = 0; i < countof(bytes); i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) {
+            uuid[out++] = '-';
+        }
+        uuid[out++] = HEX[bytes[i] >> 4];
+        uuid[out++] = HEX[bytes[i] & 0x0f];
+    }
+    return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) uuid, out));
+}
+
 void mal_host_install_node_crypto(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     (void) launch;
     MalObject *function_prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     for (i32 i = 0; i < count; i++) {
-        // Only `hash` is exported; any other requested slot is left undefined.
         if (strcmp(slots[i].name, "hash") == 0) {
             MalNativeFunctionObject *fn = mal_native_function_object_new_arity(&vm->heap,
                 function_prototype, mal_intrinsic_ascii(vm, (const byte *) "hash"), 2,
                 mal_node_crypto_hash);
+            vm->globals[slots[i].slot] = mal_value_from_native_function_object(fn);
+        } else if (strcmp(slots[i].name, "randomUUID") == 0) {
+            MalNativeFunctionObject *fn = mal_native_function_object_new_arity(&vm->heap,
+                function_prototype, mal_intrinsic_ascii(vm, (const byte *) "randomUUID"), 0,
+                mal_node_crypto_random_uuid);
             vm->globals[slots[i].slot] = mal_value_from_native_function_object(fn);
         }
     }

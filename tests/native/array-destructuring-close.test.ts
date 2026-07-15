@@ -19,14 +19,12 @@ describe("array destructuring assignment IteratorClose", () => {
 			fixture: "tests/local/array-destructuring-close.js",
 			name: "array-destructuring-close",
 			outDir,
-			skipRuntimeBuild: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/array-destructuring-close.js",
 			name: "array-destructuring-close-ni",
 			compiled: false,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

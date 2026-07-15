@@ -1,12 +1,12 @@
-// node:crypto one-shot `hash` acceptance fixture (behind surface.node). Exercises
-// the module's single native export against known SHA-256 vectors over string,
+// node:crypto acceptance fixture (behind surface.node). Exercises `hash` against
+// known SHA-256 vectors over string,
 // UTF-8, and byte-source (TypedArray / DataView / ArrayBuffer) inputs, plus the
 // compiler-shaped `hash("sha256", JSON.stringify(x), "hex")` call, lowercase-hex
 // output shape, and explicit TypeErrors for every unsupported argument form.
 // Runs on the host entry; prints one line per check and a final "RESULT
 // <passed>/<total>" line the native runner asserts.
 
-import { hash } from "node:crypto";
+import { hash, randomUUID } from "node:crypto";
 
 const results: Array<[string, boolean]> = [];
 function check(name: string, ok: boolean): void {
@@ -85,6 +85,25 @@ const digest = hash("sha256", "abc", "hex");
 check("output is 64 lowercase hex chars", /^[0-9a-f]{64}$/.test(digest));
 check("output has no uppercase", digest === digest.toLowerCase());
 check("omitted output encoding defaults to hex", hash("sha256", "abc") === digest);
+
+// --- RFC 4122 version 4 UUIDs ---
+const uuid = randomUUID();
+check(
+	"randomUUID lowercase canonical format",
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid) &&
+		uuid === uuid.toLowerCase(),
+);
+check("randomUUID version 4", uuid[14] === "4");
+check("randomUUID RFC 4122 variant", "89ab".includes(uuid[19] ?? ""));
+check("randomUUID metadata", randomUUID.name === "randomUUID" && randomUUID.length === 0);
+const uuids: Array<string> = [];
+let allUnique = true;
+for (let i = 0; i < 64; i++) {
+	const next = randomUUID();
+	if (uuids.indexOf(next) !== -1) allUnique = false;
+	uuids.push(next);
+}
+check("randomUUID unique sample", allUnique);
 
 // --- rejections: unsupported forms fail without ToString coercion ---
 const hashUnchecked = hash as (...args: unknown[]) => string;

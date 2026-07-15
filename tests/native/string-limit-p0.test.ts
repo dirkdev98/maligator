@@ -29,7 +29,6 @@ describe("engine string length limit", () => {
 			mainFile: HOST_MAIN,
 			compiled: false,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

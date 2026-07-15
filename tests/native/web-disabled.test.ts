@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -16,8 +17,7 @@ import {
 // built without the `web-platform` feature, so the ada C++ parser AND the `-lc++`
 // link are dropped. That this binary LINKS at all — with the URL install gated out
 // of host_main and no `mal_url_*` symbols in the archive — is the core assertion.
-// This lane does NOT skipRuntimeBuild — the web-off archive is not the one
-// globalSetup prebuilt, so it builds its own under a `-<hash>` suffixed dir.
+// The web-off build selects its own content-addressed artifacts.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-web-off-"));
 
 describe("surface.webPlatform: false runtime gate", () => {
@@ -40,13 +40,17 @@ describe("surface.webPlatform: false runtime gate", () => {
 		assertResultPass(runToStdout(webOffBin, { env: STRESS_ENV }));
 	});
 
+	it("does not retain the host entropy archive member", () => {
+		const symbols = execFileSync("nm", ["-g", webOffBin], { encoding: "utf-8" });
+		expect(symbols).not.toContain("mal_host_entropy");
+	});
+
 	it("drops the ada URL parser (smaller than the web-on binary)", () => {
 		const webOnBin = buildNativeBinary({
 			fixture: "tests/local/web_disabled.js",
 			name: "web-enabled",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true, // web-on archive was prebuilt by globalSetup
 		});
 		const offSize = statSync(webOffBin).size;
 		const onSize = statSync(webOnBin).size;

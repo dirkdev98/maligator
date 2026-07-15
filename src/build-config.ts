@@ -2,6 +2,8 @@ import { hash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
+import { INTL_SERVICE_FEATURES, normalizeNativeFeatures } from "./build-flags.ts";
+import type { NativeFeatureSpec } from "./build-flags.ts";
 import { defineBuild as defineBuildIdentity } from "./build.ts";
 import { stripCompactTypes } from "./compact-type-strip.ts";
 import { parseModule } from "./parser.ts";
@@ -10,9 +12,9 @@ import type { DisallowedEvalUsage, DisallowedRegexpUsage } from "./semantic-anal
 /**
  * The `maligator.build.ts` build configuration (GitHub issue #2). The file is
  * the source of truth for engine capabilities, host execution mode, and the API
- * surface exposed to user code. Only `engine.eval` is acted on today; the rest of
- * the shape is parsed and validated (so the format is stable and typos are caught)
- * but does not yet change compilation.
+ * surface exposed to user code. The resolved configuration controls native feature
+ * selection and host-module policy; unsupported combinations are rejected before
+ * compilation.
  *
  * Every field is optional in the file — {@link resolveBuildConfig} fills defaults.
  * Defaults are deliberately conservative (the "product" defaults): eval OFF, Intl
@@ -82,26 +84,7 @@ export class BuildConfigError extends Error {
  * services (the canonical `intl-full` build). Selecting a subset drops the rest's
  * icu sub-crate + baked data — Segmenter alone is ~12 MB.
  */
-export const INTL_SERVICES: Record<string, { cargo: string; define: string }> = {
-	collator: { cargo: "intl-collator", define: "MAL_INTL_HAS_COLLATOR" },
-	"number-format": { cargo: "intl-number-format", define: "MAL_INTL_HAS_NUMBER_FORMAT" },
-	"date-time-format": {
-		cargo: "intl-date-time-format",
-		define: "MAL_INTL_HAS_DATE_TIME_FORMAT",
-	},
-	"plural-rules": { cargo: "intl-plural-rules", define: "MAL_INTL_HAS_PLURAL_RULES" },
-	"list-format": { cargo: "intl-list-format", define: "MAL_INTL_HAS_LIST_FORMAT" },
-	segmenter: { cargo: "intl-segmenter", define: "MAL_INTL_HAS_SEGMENTER" },
-	"display-names": { cargo: "intl-display-names", define: "MAL_INTL_HAS_DISPLAY_NAMES" },
-	"relative-time-format": {
-		cargo: "intl-relative-time-format",
-		define: "MAL_INTL_HAS_RELATIVE_TIME_FORMAT",
-	},
-	"duration-format": {
-		cargo: "intl-duration-format",
-		define: "MAL_INTL_HAS_DURATION_FORMAT",
-	},
-};
+export const INTL_SERVICES = INTL_SERVICE_FEATURES;
 
 /** Deduped selected Intl services; [] means all services (the default). */
 function selectedIntlServices(config: ResolvedBuildConfig): Array<string> {
@@ -629,23 +612,23 @@ function shortHash(value: unknown): string {
 
 /**
  * A short stable hash of the build-affecting projection of the config, used as the
- * C build-directory suffix (build-flags.ts) so binaries built under different
- * capabilities do not clobber each other's cached archives. The C archive depends
+ * output-name suffix (build-flags.ts) so binaries built under different
+ * capabilities do not clobber each other. Native archives are content-addressed
+ * from their exact inputs. The output depends
  * on `engine.eval` (flips `-DMAL_EVAL` + whether the 1.6 MB compiler is embedded),
  * `engine.intl` (flips `-DMAL_INTL` + the locale-sensitive fallbacks),
  * `surface.webPlatform` (flips `-DMAL_WEB_PLATFORM` + whether url.c compiles), and
  * `surface.node` (flips `-DMAL_NODE` + the node host built-in surface). Not-yet-wired
- * fields (host.scheduler) are excluded so unrelated edits do not needlessly
- * invalidate the cache. Returns "" for the canonical build (eval on, Intl on, all
- * locales, web on, node OFF) so it keeps the unsuffixed build dir — node defaults
+ * fields (host.scheduler) are excluded so unrelated edits do not change the name.
+ * Returns "" for the canonical build (eval on, Intl on, all
+ * locales, web on, node OFF) so it keeps the unsuffixed binary name — node defaults
  * off and every internal-tooling build is node-off, so node-off stays canonical.
  */
 export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
-	// The C archive depends on eval, whether Intl is on, which services are selected
+	// The generated binary depends on eval, whether Intl is on, which services are selected
 	// (each flips a -DMAL_INTL_HAS_* define), web-platform (url.c gating), regexp
 	// (builtin_regexp/regexp_object/gc/string gating), and node (the host built-in
-	// surface), but NOT on the locale set (that only changes the Rust/ICU datagen) or
-	// on node in the Rust archive (node adds no Rust deps — see rustConfigCacheSuffix).
+	// surface), but NOT on the locale set (that only changes Rust/ICU datagen).
 	// Empty services = all; eval + realms + Intl + all-services + web + regexp on and
 	// node off = canonical.
 	const services = selectedIntlServices(config).sort();
@@ -676,60 +659,35 @@ export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 }
 
 /**
- * The Rust archive's cache suffix. It depends on the Intl axis (which icu
- * sub-crates + baked data compile), `surface.webPlatform` (whether the ada URL
- * parser compiles), and `engine.regexp` (whether regress compiles), but NOT on
- * `engine.eval` — so toggling eval does not trigger a multi-minute ICU rebuild. ""
- * for the canonical Intl-on / all-services / web-on / regexp-on archive.
- */
-export function rustConfigCacheSuffix(config: ResolvedBuildConfig): string {
-	const services = selectedIntlServices(config).sort();
-	const web = config.surface.webPlatform;
-	const regexp = config.engine.regexp;
-	if (config.engine.intl.enabled && services.length === 0 && web && regexp) {
-		return "";
-	}
-	return shortHash({ intl: config.engine.intl.enabled, services, web, regexp });
-}
-
-/**
- * The build inputs a resolved config maps to: the C `#if` gates (evalEnabled /
- * intlEnabled / per-service disable defines), the Rust Cargo features, and the
- * cache suffixes selecting the matching C + ICU archives. This is the single
+ * The build inputs a resolved config maps to: one normalized feature specification
+ * shared by C and Rust, plus a human-facing output suffix. This is the single
  * config → {@link LocalBuildOptions} projection shared by the CLI command layer, the
  * native test harness, and the size bench, so all three build the exact same
  * archives for a given config.
  */
 export interface BuildDerivation {
-	evalEnabled: boolean;
-	realmsEnabled: boolean;
-	intlEnabled: boolean;
-	intlServiceDefines: Array<string>;
-	intlFeatures: Array<string>;
-	webPlatformEnabled: boolean;
-	regexpEnabled: boolean;
-	/**
-	 * Whether the node host built-in surface (`surface.node`) is on. Flips
-	 * `-DMAL_NODE` on the C side and folds into the C archive cache suffix, but NOT
-	 * the Rust one (node adds no Rust deps). Defaults off (product default).
-	 */
-	nodeEnabled: boolean;
+	/** Canonical native backend feature specification. */
+	features: NativeFeatureSpec;
+	/** Human-facing binary filename decoration; not part of native artifact identity. */
 	cacheSuffix: string;
-	rustCacheSuffix: string;
 }
 
 /** Project a resolved config onto the {@link BuildDerivation} the build layer consumes. */
 export function buildDerivationFromConfig(config: ResolvedBuildConfig): BuildDerivation {
-	return {
+	const intlFeatures = intlCargoFeatures(config);
+	const intlServiceDefines = intlDisabledDefines(config);
+	const features = normalizeNativeFeatures({
 		evalEnabled: config.engine.eval,
 		realmsEnabled: config.engine.realms,
 		intlEnabled: config.engine.intl.enabled,
-		intlServiceDefines: intlDisabledDefines(config),
-		intlFeatures: intlCargoFeatures(config),
+		intlServiceDefines,
+		intlFeatures,
 		webPlatformEnabled: config.surface.webPlatform,
 		regexpEnabled: config.engine.regexp,
 		nodeEnabled: config.surface.node,
+	});
+	return {
+		features,
 		cacheSuffix: buildConfigCacheSuffix(config),
-		rustCacheSuffix: rustConfigCacheSuffix(config),
 	};
 }

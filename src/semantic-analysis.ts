@@ -32,7 +32,7 @@ export interface SemanticFile {
 	 */
 	commonjs?: boolean;
 
-	// TODO: We ain't fully compliant here yet. Scripts evaluate to the same global scope, so
+	// Scripts do not yet fully share the global environment record, so
 	//  bindings might reference outside of this semantic file.
 	scopes: Array<Scope>;
 	nodeToScope: Map<ESTree.Node, Scope>;
@@ -830,7 +830,7 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 			(recurseScope.node.type === "FunctionDeclaration" ||
 				recurseScope.node.type === "FunctionExpression")
 		) {
-			// TODO(arguments): Have sema classify static arguments usages so IR can avoid
+			// Semantic analysis does not yet classify static arguments usage, so IR cannot avoid
 			// materializing the arguments object for direct non-escaping reads like
 			// arguments.length and arguments[0].
 			const binding: Binding = {

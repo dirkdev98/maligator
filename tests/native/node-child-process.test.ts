@@ -27,7 +27,6 @@ describe("node:child_process execFileSync (POSIX)", () => {
 			name: "node-child-process-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 			nodeEnabled: true,
 		});
 		interpreted = buildNativeBinary({
@@ -35,7 +34,6 @@ describe("node:child_process execFileSync (POSIX)", () => {
 			name: "node-child-process-interpreted",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 			nodeEnabled: true,
 			compiled: false,
 		});

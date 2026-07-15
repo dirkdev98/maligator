@@ -12,9 +12,8 @@ import {
 
 // `engine.intl: false`: no ICU crates, no `Intl` global. The fixture asserts Intl
 // is absent and the locale-sensitive methods (localeCompare / toLocaleString) use
-// the locale-insensitive fallbacks. Builds its own archives (the intl-off C +
-// ICU-less Rust archives are not the ones globalSetup prebuilt), so no
-// skipRuntimeBuild.
+// the locale-insensitive fallbacks. The build selects the Intl-off C and ICU-less
+// Rust artifacts.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-intl-off-"));
 
 describe("engine.intl: false", () => {
@@ -43,7 +42,6 @@ describe("engine.intl: false", () => {
 			name: "intl-enabled",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true, // Intl-on archives were prebuilt by globalSetup
 		});
 		const offSize = statSync(intlOffBin).size;
 		const onSize = statSync(intlOnBin).size;

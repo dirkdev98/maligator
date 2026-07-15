@@ -1,6 +1,5 @@
 /**
- * Effect / escape summaries — the N.7 "linchpin" analysis (gc_todo.md §N.7 step 3,
- * task #3 / T7.3).
+ * Effect / escape summaries for allocation elimination (docs/roadmaps/gc.md).
  *
  * Two products, both pure analysis (no IR mutation → cannot miscompile):
  *
@@ -740,7 +739,7 @@ export function registerEscapesFrame(
 // removes the object entirely; stack allocation keeps a real object for the cases
 // that flow through a real call or a dynamic-key read.
 //
-// Safety rests on three runtime facts (gc_todo.md §N.7; verified in gc.c):
+// Safety rests on three runtime facts (verified in gc.c):
 //  - the container is a C-stack MalObject with storage=IMMORTAL, so mal_gc_shade
 //    always skips it (gc.c:311) → it is never marked BLACK → no stale-mark
 //    use-after-free even when a callee roots the boxed pointer across a GC;

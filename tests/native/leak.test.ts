@@ -29,7 +29,7 @@ function parseLeaks(output: string): { leaks: number; bytes: number } {
  * (e.g. `MalMapEntry`, `MalModuleNamespaceExport`, the owned-concat `malloc`).
  */
 function assertNoLeaks(fixture: string, name: string): void {
-	const binary = buildNativeBinary({ fixture, name, outDir, skipRuntimeBuild: true });
+	const binary = buildNativeBinary({ fixture, name, outDir });
 
 	let output = "";
 	try {

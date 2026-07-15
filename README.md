@@ -19,11 +19,12 @@ maligator run -- first-argument "two words"
 the first entry that exists from `src/index.ts`, `src/main.ts`, `index.ts`, and
 `main.ts`; if none exists, it writes `src/index.ts` as the starting point.
 
-Until compiler assets are packaged with `Mal.embed`, the source-built CLI expects
-the Maligator checkout's repository-relative `runtime/` and `src/` assets to be
-available from the working directory. The self-host integration runs from this
-checkout for that reason. This restriction will be removed when compiler assets
-become self-contained.
+The source-built CLI resolves its runtime tree and eval compiler from its own module
+installation, not from the working directory. The distributed product CLI instead
+embeds and materializes those resources, so it is self-contained. In both cases the
+working directory remains the application project root for config, entries, assets,
+and output caches. Compiler installation roots are explicit absolute paths passed into
+the command layer; native stages do not infer runtime ownership from the application.
 
 ## Commands
 
@@ -117,6 +118,7 @@ export default defineBuild({
 			type: "directory",
 			path: "runtime",
 			include: [
+				"host_main.c",
 				"test262_main.c",
 				"src/**",
 				"rust/Cargo.toml",
@@ -160,6 +162,13 @@ requires:
 from `PATH`. `maligator doctor --verbose` reports resolved paths, versions, C and
 Rust targets, tested capabilities, and probe-cache status.
 
+Discovery, normalized feature booleans, build plan, installation roots, environment
+snapshot, and cache root are frozen into one `NativeBuildContext`. The C archive,
+Rust archive, and final linker consume that same context. The final linker returns a
+typed result containing the executable path, exact artifact bundle, and context, so
+callers such as size tracking cannot accidentally resolve and measure a different
+build.
+
 On macOS, install Apple build tools with `xcode-select --install`. On Debian/Ubuntu,
 install `build-essential`; on Fedora/RHEL, install `gcc`, `gcc-c++`, and `binutils`.
 Install Rust through Rustup, then enter `runtime/rust` and run `rustup show` to
@@ -169,6 +178,11 @@ The distributed self-hosted CLI embeds the runtime C sources, Rust crate, and a
 prebuilt eval compiler wire. It materializes those content-addressed assets on
 startup, so the copied compiler can run the full native pipeline outside a Maligator
 checkout and without Node.js. `npm run selfhost:cli` exercises that transfer path.
+
+Applications with `surface.webPlatform: true` link `host_main.c`, which installs the
+web globals and drives the host event loop. Non-web applications retain the lean
+synchronous `test262_main.c` driver; the product CLI itself uses `host_main.c` for its
+hosted command surface.
 
 ## Build Modes
 
@@ -196,11 +210,18 @@ Maligator keeps reusable inputs separate from project outputs:
 .cache/mal-build/production/    generated C and production executables
 ```
 
-Cache keys include relevant source content, resolved feature config, build mode,
-target, selected toolchain identity, and supported flags. Normal output reports
-toolchain and cache hit/miss status plus the final executable path. Removing
-`.cache/mal-build` forces project output regeneration; removing a specific
-`.cache/mal-cache` subtree forces that reusable artifact to be reprobed or rebuilt.
+Cache keys include relevant source content, normalized feature config, target,
+selected toolchain identity, build environment, and exact compile or Cargo arguments.
+Normal output reports toolchain and cache hit/miss status plus the final executable
+path. Removing `.cache/mal-build` forces project output regeneration; removing a
+specific `.cache/mal-cache` subtree forces that reusable artifact to be reprobed or
+rebuilt.
+
+C and Rust artifacts are published only after validation and an atomic completion
+manifest. Invalid C archive bundles are quarantined before rebuilding, and incomplete
+Rust outputs are rebuilt before their completion manifest is replaced. Generated C
+and the final executable remain project outputs, while reusable compiler-wire and
+native artifacts remain under the explicitly selected cache root.
 
 ## Troubleshooting
 
@@ -242,7 +263,11 @@ npm run test262
 
 - `docs/decisions`: architecture decisions
 - `runtime`: C runtime and Rust FFI shim
-- `src`: compiler, CLI, and build tooling
+- `src/compile-core.ts`: host-independent semantic-program to VM-definition compiler core
+- `src/compile-program.ts`: module loading and compiler entrypoint orchestration
+- `src/native-build-context.ts`, `src/runtime-build.ts`, `src/local-build.ts`: explicit native context, atomic reusable artifacts, and final linking
+- `src/cli-commands.ts`: installation-aware command orchestration and web/non-web driver selection
+- `src`: remaining compiler, CLI, and build tooling
 - `tests`: unit and native integration coverage
 
 ECMAScript reference: [ECMA-262](https://tc39.es/ecma262/multipage/).

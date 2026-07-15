@@ -27,14 +27,12 @@ describe("runtime compilation GC roots", () => {
 			name: "eval-gc-runtime-compilation-p0",
 			compiled: true,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/eval-gc-runtime-compilation-p0.js",
 			name: "eval-gc-runtime-compilation-p0-ni",
 			compiled: false,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

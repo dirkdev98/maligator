@@ -5,8 +5,9 @@
 #include "vm.h"
 
 /*
- * Fibers — the stackful execution unit of the isolate scheduler (isolate_todo.md
- * Phase 0). Each fiber owns its own C stack, so a running fiber can be preempted
+ * Fibers — the stackful execution unit of the isolate scheduler (see
+ * docs/roadmaps/isolate-reactor.md). Each fiber owns its own C stack, so a running
+ * fiber can be preempted
  * at any safepoint (mal_gc_poll site) by switching stacks back to the scheduler,
  * and resumed later. This is what makes actors "preemptively fair, CPU-bound
  * friendly": a tight compute loop still hits the poll sites the compiler already
@@ -115,7 +116,7 @@ typedef struct MalFiber {
  * Right-sizing / pooling this is a documented Phase-3 follow-up. */
 #define MAL_FIBER_DEFAULT_VALUE_STACK 8192
 
-/* The running fiber (isolate-local; set on every switch-in). TODO(SMP): make
+/* The running fiber (isolate-local; set on every switch-in). SMP must make
  * _Thread_local when schedulers run on OS threads. */
 extern MalFiber *mal_current_fiber;
 

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import {
 	chmodSync,
 	existsSync,
@@ -5,18 +6,21 @@ import {
 	mkdtempSync,
 	readFileSync,
 	realpathSync,
+	rmSync,
 	writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { selectNativeBuildPlan } from "../src/build-flags.ts";
+import { normalizeNativeFeatures, selectNativeBuildPlan } from "../src/build-flags.ts";
 import { ensureCompilerWire } from "../src/compiler-bake.ts";
+import { buildLocalBinary } from "../src/local-build.ts";
 import {
-	buildLocalBinary,
-	ensureRuntimeLibrary,
-	runtimeArtifactKey,
-} from "../src/local-build.ts";
+	nativeBuildEnvironmentFingerprint,
+	resolveNativeBuildContext,
+} from "../src/native-build-context.ts";
+import { ensureNativeArtifacts, runtimeArtifactKey } from "../src/runtime-build.ts";
+import { ensureRustArtifacts, resolveRustArtifacts } from "../src/rust-build.ts";
 import { formatToolchainReport, inspectToolchain } from "../src/toolchain.ts";
 
 interface FakeToolchain {
@@ -35,6 +39,7 @@ function executable(filePath: string, body: string): void {
 function compilerScript(version: string, logPath: string, lto = true): string {
 	return `
 printf '%s\n' "$*" >> '${logPath}'
+printf 'cc-env %s\n' "$MAL_TEST_BUILD_ENV" >> '${logPath}'
 if [ "$1" = "--version" ]; then printf '%s\n' '${version}'; exit 0; fi
 if [ "$1" = "-dumpmachine" ]; then printf '%s\n' 'fake-target'; exit 0; fi
 ${lto ? "" : 'case " $* " in *" -flto "*) exit 1;; esac'}
@@ -68,12 +73,19 @@ function createFakeToolchain(
 		path.join(bin, "ar"),
 		`if [ "$1" = "--version" ]; then printf '%s\\n' "fake ar 1"; exit 0; fi
 printf 'ar %s\\n' "$*" >> '${logPath}'
-/usr/bin/touch "$2"
+printf 'ar-env %s\\n' "$MAL_TEST_BUILD_ENV" >> '${logPath}'
+printf '!<arch>\\n' > "$2"
 `,
 	);
 	executable(
 		path.join(bin, "cargo"),
-		'if [ "$1" = "--version" ]; then printf \'%s\\n\' "cargo 1.96.0"; fi\n',
+		`if [ "$1" = "--version" ]; then printf '%s\\n' "cargo 1.96.0"; exit 0; fi
+printf 'cargo %s\\n' "$*" >> '${logPath}'
+printf 'cargo-home %s\\n' "$CARGO_HOME" >> '${logPath}'
+printf 'cargo-env %s\\n' "$MAL_TEST_BUILD_ENV" >> '${logPath}'
+/bin/mkdir -p "$CARGO_TARGET_DIR/release"
+printf '!<arch>\\n' > "$CARGO_TARGET_DIR/release/libmal_rust.a"
+`,
 	);
 	executable(
 		path.join(bin, "rustc"),
@@ -97,6 +109,34 @@ ${options.strip === false ? "exit 1" : "exit 0"}
 		logPath,
 		env: { PATH: bin, CC: "fake-cc", CXX: "fake-cxx" },
 	};
+}
+
+function createMinimalRuntime(fake: FakeToolchain): string {
+	const runtimeDirectory = path.join(fake.root, "runtime");
+	for (const directory of [
+		path.join(runtimeDirectory, "src/host"),
+		path.join(runtimeDirectory, "src/runtime"),
+		path.join(runtimeDirectory, "rust/include"),
+		path.join(runtimeDirectory, "rust/src"),
+	]) {
+		mkdirSync(directory, { recursive: true });
+	}
+	writeFileSync(path.join(runtimeDirectory, "src/engine.c"), "int engine_value = 1;\n");
+	writeFileSync(path.join(runtimeDirectory, "src/host/host.c"), "int host_value = 1;\n");
+	writeFileSync(
+		path.join(runtimeDirectory, "src/runtime/runtime.c"),
+		"int runtime_value = 1;\n",
+	);
+	writeFileSync(path.join(runtimeDirectory, "rust/include/mal.h"), "#pragma once\n");
+	writeFileSync(
+		path.join(runtimeDirectory, "rust/Cargo.toml"),
+		'[package]\nname = "mal_rust"\nversion = "0.0.0"\n',
+	);
+	writeFileSync(
+		path.join(runtimeDirectory, "rust/src/lib.rs"),
+		"pub fn value() -> i32 { 1 }\n",
+	);
+	return runtimeDirectory;
 }
 
 function compileInvocationCount(logPath: string): number {
@@ -194,29 +234,29 @@ describe("native toolchain discovery", () => {
 		});
 		expect(report.toolchain).toBeDefined();
 		const toolchain = report.toolchain!;
-		const suffix = `fake-${path.basename(fake.root)}`;
-
-		ensureRuntimeLibrary(false, {
+		const context = resolveNativeBuildContext({
 			toolchain,
-			evalEnabled: false,
-			webPlatformEnabled: false,
-			cacheSuffix: suffix,
-			rustCacheSuffix: suffix,
+			cacheDirectory: path.join(fake.root, "cache"),
+			features: {
+				evalEnabled: false,
+				webPlatformEnabled: false,
+			},
 		});
-		const binary = buildLocalBinary({
-			toolchain,
+		const result = buildLocalBinary({
+			context,
 			name: "fake-output",
 			cSource: "int value;",
 			verbose: false,
 			outDir: fake.root,
-			skipRuntimeBuild: true,
-			evalEnabled: false,
-			webPlatformEnabled: false,
-			cacheSuffix: suffix,
-			rustCacheSuffix: suffix,
 		});
+		const { binaryPath: binary, artifacts } = result;
 
 		const invocations = readFileSync(fake.logPath, "utf-8");
+		expect(result.context).toBe(context);
+		expect(artifacts.linkArgs).toEqual([
+			...artifacts.c.linkArgs,
+			...artifacts.rust.linkArgs,
+		]);
 		expect(invocations).toContain("runtime/src/vm.c");
 		expect(invocations).toContain("ar rcs");
 		expect(invocations).toContain(`${binary}.c`);
@@ -236,28 +276,18 @@ describe("native toolchain discovery", () => {
 		expect(report.toolchain).toBeDefined();
 		const toolchain = report.toolchain!;
 		const production = selectNativeBuildPlan(toolchain, true);
-		const suffix = `production-${path.basename(fake.root)}`;
-
-		ensureRuntimeLibrary(false, {
+		const context = resolveNativeBuildContext({
 			toolchain,
 			plan: production,
-			evalEnabled: false,
-			webPlatformEnabled: false,
-			cacheSuffix: suffix,
-			rustCacheSuffix: suffix,
+			cacheDirectory: path.join(fake.root, "cache"),
+			features: { evalEnabled: false, webPlatformEnabled: false },
 		});
-		const binary = buildLocalBinary({
-			toolchain,
-			plan: production,
+		const { binaryPath: binary } = buildLocalBinary({
+			context,
 			name: "production-output",
 			cSource: "int value;",
 			verbose: false,
 			outDir: fake.root,
-			skipRuntimeBuild: true,
-			evalEnabled: false,
-			webPlatformEnabled: false,
-			cacheSuffix: suffix,
-			rustCacheSuffix: suffix,
 		});
 
 		const invocations = readFileSync(fake.logPath, "utf-8");
@@ -285,18 +315,18 @@ describe("native toolchain discovery", () => {
 		expect(production.warnings.join("\n")).toMatch(/stripping.*unsupported/);
 
 		writeFileSync(fake.logPath, "");
-		buildLocalBinary({
+		const developmentContext = resolveNativeBuildContext({
 			toolchain,
 			plan: development,
+			cacheDirectory: path.join(fake.root, "development-cache"),
+			features: { evalEnabled: false, webPlatformEnabled: false },
+		});
+		buildLocalBinary({
+			context: developmentContext,
 			name: "development-output",
 			cSource: "int value;",
 			verbose: false,
 			outDir: fake.root,
-			skipRuntimeBuild: true,
-			evalEnabled: false,
-			webPlatformEnabled: false,
-			cacheSuffix: `development-${path.basename(fake.root)}`,
-			rustCacheSuffix: `development-${path.basename(fake.root)}`,
 		});
 		const developmentInvocation = readFileSync(fake.logPath, "utf-8");
 		expect(developmentInvocation).toContain("-O2");
@@ -304,18 +334,18 @@ describe("native toolchain discovery", () => {
 		expect(developmentInvocation).not.toContain("strip ");
 
 		writeFileSync(fake.logPath, "");
-		buildLocalBinary({
+		const productionContext = resolveNativeBuildContext({
 			toolchain,
 			plan: production,
+			cacheDirectory: path.join(fake.root, "production-cache"),
+			features: { evalEnabled: false, webPlatformEnabled: false },
+		});
+		buildLocalBinary({
+			context: productionContext,
 			name: "fallback-output",
 			cSource: "int value;",
 			verbose: false,
 			outDir: fake.root,
-			skipRuntimeBuild: true,
-			evalEnabled: false,
-			webPlatformEnabled: false,
-			cacheSuffix: `fallback-${path.basename(fake.root)}`,
-			rustCacheSuffix: `fallback-${path.basename(fake.root)}`,
 		});
 		const invocation = readFileSync(fake.logPath, "utf-8");
 		expect(invocation).toContain("-O2");
@@ -323,54 +353,440 @@ describe("native toolchain discovery", () => {
 		expect(invocation).not.toContain("strip ");
 	});
 
-	it("separates runtime cache keys by source, config, toolchain, and mode", () => {
+	it("separates runtime cache keys by source, config, toolchain, and environment", () => {
 		const base = {
-			cacheSuffix: "config-a",
-			flags: "-O2",
-			mode: "development" as const,
+			compileArguments: ["-std=c2x", "-O2", "-c", "<source>"],
+			environmentFingerprint: "environment-a",
+			layerSourceDirectories: ["/runtime/src"],
 			sourceHash: "source-a",
 			toolchainFingerprint: "toolchain-a",
 			target: "target-a",
 		};
 		const key = runtimeArtifactKey(base);
 		expect(runtimeArtifactKey({ ...base, sourceHash: "source-b" })).not.toBe(key);
-		expect(runtimeArtifactKey({ ...base, cacheSuffix: "config-b" })).not.toBe(key);
+		expect(
+			runtimeArtifactKey({
+				...base,
+				compileArguments: [...base.compileArguments, "-DOTHER"],
+			}),
+		).not.toBe(key);
 		expect(runtimeArtifactKey({ ...base, toolchainFingerprint: "toolchain-b" })).not.toBe(
 			key,
 		);
-		expect(runtimeArtifactKey({ ...base, mode: "production" })).not.toBe(key);
+		expect(
+			runtimeArtifactKey({ ...base, environmentFingerprint: "environment-b" }),
+		).not.toBe(key);
+		const development = { ...base, mode: "development" };
+		const production = { ...base, mode: "production" };
+		expect(runtimeArtifactKey(development)).toBe(runtimeArtifactKey(production));
 	});
 
-	it("reports reusable runtime cache misses and hits", () => {
+	it("fingerprints only build environment and snapshots it for native subprocesses", () => {
 		const fake = createFakeToolchain();
-		const report = inspectToolchain({
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const toolchain = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: path.join(runtimeDirectory, "rust"),
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		}).toolchain!;
+		const baseFingerprint = nativeBuildEnvironmentFingerprint({
+			...fake.env,
+			CFLAGS: "-DVALUE=1",
+			CARGO_REGISTRIES_PRIVATE_TOKEN: "first-token",
+			UNRELATED_SECRET: "first",
+		});
+		expect(
+			nativeBuildEnvironmentFingerprint({
+				...fake.env,
+				CFLAGS: "-DVALUE=1",
+				CARGO_REGISTRIES_PRIVATE_TOKEN: "second-token",
+				UNRELATED_SECRET: "second",
+			}),
+		).toBe(baseFingerprint);
+		expect(
+			nativeBuildEnvironmentFingerprint({ ...fake.env, CFLAGS: "-DVALUE=2" }),
+		).not.toBe(baseFingerprint);
+
+		const environment = { ...fake.env, MAL_TEST_BUILD_ENV: "snapshot" };
+		const context = resolveNativeBuildContext({
+			toolchain,
+			runtimeDirectory,
+			cacheDirectory: path.join(fake.root, "snapshot-cache"),
+			environment,
+			features: { evalEnabled: false, webPlatformEnabled: false },
+		});
+		environment.MAL_TEST_BUILD_ENV = "mutated";
+		ensureNativeArtifacts(context);
+		const invocations = readFileSync(fake.logPath, "utf-8");
+		expect(invocations).toContain("cc-env snapshot");
+		expect(invocations).toContain("ar-env snapshot");
+		expect(invocations).toContain("cargo-env snapshot");
+	});
+
+	it("invalidates C and Rust keys for relevant environment changes", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const toolchain = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: path.join(runtimeDirectory, "rust"),
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		}).toolchain!;
+		const context = (rustflags: string) =>
+			resolveNativeBuildContext({
+				toolchain,
+				runtimeDirectory,
+				cacheDirectory: path.join(fake.root, "environment-cache"),
+				environment: { ...fake.env, RUSTFLAGS: rustflags },
+				features: { evalEnabled: false, webPlatformEnabled: false },
+			});
+		const first = context("-Copt-level=1");
+		const second = context("-Copt-level=2");
+		expect(first.environmentFingerprint).not.toBe(second.environmentFingerprint);
+		expect(resolveRustArtifacts(first).library).not.toBe(
+			resolveRustArtifacts(second).library,
+		);
+	});
+
+	it("keys Rust artifacts from normalized Cargo inputs", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const toolchain = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: path.join(runtimeDirectory, "rust"),
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		}).toolchain!;
+		const plan = selectNativeBuildPlan(toolchain, false);
+		const cacheDirectory = path.join(fake.root, "native-cache");
+		const first = resolveRustArtifacts(
+			resolveNativeBuildContext({
+				runtimeDirectory,
+				cacheDirectory,
+				toolchain,
+				plan,
+				features: {
+					intlFeatures: ["intl-segmenter", "intl-collator", "intl-segmenter"],
+					webPlatformEnabled: false,
+					regexpEnabled: true,
+				},
+			}),
+		);
+		const reordered = resolveRustArtifacts(
+			resolveNativeBuildContext({
+				runtimeDirectory,
+				cacheDirectory,
+				toolchain,
+				plan,
+				features: {
+					intlFeatures: ["intl-collator", "intl-segmenter"],
+					webPlatformEnabled: false,
+					regexpEnabled: true,
+				},
+			}),
+		);
+		const different = resolveRustArtifacts(
+			resolveNativeBuildContext({
+				runtimeDirectory,
+				cacheDirectory,
+				toolchain,
+				plan,
+				features: {
+					intlFeatures: ["intl-collator"],
+					webPlatformEnabled: false,
+					regexpEnabled: true,
+				},
+			}),
+		);
+
+		expect(first.library).toBe(reordered.library);
+		expect(first.library).not.toBe(different.library);
+		expect(first.library).toContain(cacheDirectory);
+		expect(first.cargoFeatures).toEqual(["intl-collator", "intl-segmenter", "regexp"]);
+		expect(first.cargoArguments).toEqual([
+			"build",
+			"--release",
+			"--no-default-features",
+			"--features",
+			"intl-collator,intl-segmenter,regexp",
+		]);
+
+		writeFileSync(
+			path.join(runtimeDirectory, "rust/src/lib.rs"),
+			"pub fn value() -> i32 { 2 }\n",
+		);
+		expect(
+			resolveRustArtifacts(
+				resolveNativeBuildContext({
+					runtimeDirectory,
+					cacheDirectory,
+					toolchain,
+					plan,
+					features: {
+						intlFeatures: ["intl-collator", "intl-segmenter"],
+						webPlatformEnabled: false,
+						regexpEnabled: true,
+					},
+				}),
+			).library,
+		).not.toBe(first.library);
+	});
+
+	it("derives coherent C defines and Cargo features from one feature spec", () => {
+		const features = normalizeNativeFeatures({
+			intlFeatures: ["intl-segmenter"],
+			webPlatformEnabled: false,
+			regexpEnabled: false,
+		});
+		expect(features.cargoFeatures).toEqual(["intl-segmenter"]);
+		expect(features.cDefines).toContain("-DMAL_INTL_HAS_COLLATOR=0");
+		expect(features.cDefines).toContain("-DMAL_WEB_PLATFORM=0");
+		expect(features.cDefines).toContain("-DMAL_REGEXP=0");
+		expect(() =>
+			normalizeNativeFeatures({
+				intlFeatures: ["intl-segmenter"],
+				intlServiceDefines: ["-DMAL_INTL_HAS_NUMBER_FORMAT=0"],
+			}),
+		).toThrow(/different services/);
+	});
+
+	it("re-derives backend arrays supplied on a native feature spec", () => {
+		const fake = createFakeToolchain();
+		const toolchain = inspectToolchain({
 			rootDir: fake.root,
 			rustDir: fake.rustDir,
 			env: fake.env,
 			needsCxx: false,
 			platform: "linux",
+		}).toolchain!;
+		const context = resolveNativeBuildContext({
+			toolchain,
+			features: {
+				evalEnabled: false,
+				realmsEnabled: false,
+				intlEnabled: false,
+				webPlatformEnabled: false,
+				regexpEnabled: false,
+				nodeEnabled: true,
+				intlFeatures: [],
+				cDefines: ["-DMAL_EVAL=1"],
+				cargoFeatures: ["web-platform"],
+			},
+		});
+
+		expect(context.features.cDefines).toEqual([
+			"-DMAL_EVAL=0",
+			"-DMAL_REALMS=0",
+			"-DMAL_INTL=0",
+			"-DMAL_WEB_PLATFORM=0",
+			"-DMAL_REGEXP=0",
+			"-DMAL_NODE=1",
+		]);
+		expect(context.features.cargoFeatures).toEqual([]);
+	});
+
+	it("invalidates changed and incomplete runtime artifacts", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const toolchain = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: path.join(runtimeDirectory, "rust"),
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		}).toolchain!;
+		const events: Array<boolean> = [];
+		const cacheDirectory = path.join(fake.root, "native-cache");
+		const context = resolveNativeBuildContext({
+			toolchain,
+			runtimeDirectory,
+			cacheDirectory,
+			features: {
+				evalEnabled: false,
+				webPlatformEnabled: false,
+			},
+			compilerBake: {
+				kind: "source",
+				sourceDirectory: path.resolve("src"),
+				entrypoint: path.resolve("src/eval-compiler-entry.mts"),
+				bake: () => {
+					throw new Error("eval-off build baked the compiler wire");
+				},
+			},
+			onCacheEvent: (event: { artifact: "runtime" | "rust"; hit: boolean }) => {
+				if (event.artifact === "runtime") events.push(event.hit);
+			},
+		});
+		const first = ensureNativeArtifacts(context);
+		expect(first.c.runtime).toContain(cacheDirectory);
+		expect(readFileSync(fake.logPath, "utf-8")).toContain(
+			`cargo-home ${path.join(cacheDirectory, "cargo")}`,
+		);
+		const afterFirst = compileInvocationCount(fake.logPath);
+		writeFileSync(path.join(path.dirname(first.c.runtime), "artifact.json"), "{}");
+		const rebuilt = ensureNativeArtifacts(context);
+		expect(rebuilt.c.runtime).toBe(first.c.runtime);
+		expect(compileInvocationCount(fake.logPath)).toBeGreaterThan(afterFirst);
+		const afterManifestRecovery = compileInvocationCount(fake.logPath);
+		writeFileSync(rebuilt.c.runtime, "corrupt\n");
+		expect(ensureNativeArtifacts(context).c.runtime).toBe(first.c.runtime);
+		expect(compileInvocationCount(fake.logPath)).toBeGreaterThan(afterManifestRecovery);
+
+		writeFileSync(path.join(runtimeDirectory, "src/engine.c"), "int engine_value = 2;\n");
+		const changed = ensureNativeArtifacts(context);
+		expect(changed.c.runtime).not.toBe(first.c.runtime);
+		expect(events).toEqual([false, false, false, false]);
+	});
+
+	it("runs Cargo when the Rust completion manifest is missing or corrupt", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const toolchain = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: path.join(runtimeDirectory, "rust"),
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		}).toolchain!;
+		const context = resolveNativeBuildContext({
+			toolchain,
+			runtimeDirectory,
+			cacheDirectory: path.join(fake.root, "rust-manifest-cache"),
+			environment: fake.env,
+			features: { evalEnabled: false, webPlatformEnabled: false },
+		});
+		const cargoBuildCount = (): number =>
+			readFileSync(fake.logPath, "utf-8")
+				.split("\n")
+				.filter((line) => line.startsWith("cargo build ")).length;
+		const first = ensureRustArtifacts(context);
+		expect(cargoBuildCount()).toBe(1);
+		const manifestPath = path.join(path.dirname(first.targetDirectory), "artifact.json");
+		rmSync(manifestPath);
+		ensureRustArtifacts(context);
+		expect(cargoBuildCount()).toBe(2);
+		writeFileSync(manifestPath, "{}");
+		ensureRustArtifacts(context);
+		expect(cargoBuildCount()).toBe(3);
+		expect(JSON.parse(readFileSync(manifestPath, "utf-8"))).toMatchObject({
+			schema: 1,
+			cacheKey: first.cacheKey,
+		});
+	});
+
+	it("publishes concurrent runtime builds as one complete cache entry", async () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const toolchain = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: path.join(runtimeDirectory, "rust"),
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		}).toolchain!;
+		const code = `
+			import { resolveNativeBuildContext } from "./src/native-build-context.ts";
+			import { ensureNativeArtifacts } from "./src/runtime-build.ts";
+			const context = resolveNativeBuildContext({
+				toolchain: JSON.parse(process.env.MAL_TEST_TOOLCHAIN),
+				runtimeDirectory: process.env.MAL_TEST_RUNTIME,
+				cacheDirectory: process.env.MAL_TEST_CACHE,
+				features: {
+					evalEnabled: false,
+					webPlatformEnabled: false,
+				},
+			});
+			ensureNativeArtifacts(context);
+		`;
+		const cacheDirectory = path.join(fake.root, "concurrent-cache");
+		const run = (): Promise<void> =>
+			new Promise((resolve, reject) => {
+				const child = spawn(process.execPath, ["--input-type=module", "--eval", code], {
+					cwd: path.resolve("."),
+					env: {
+						...process.env,
+						MAL_TEST_TOOLCHAIN: JSON.stringify(toolchain),
+						MAL_TEST_RUNTIME: runtimeDirectory,
+						MAL_TEST_CACHE: cacheDirectory,
+					},
+					stdio: ["ignore", "ignore", "pipe"],
+				});
+				let stderr = "";
+				child.stderr.setEncoding("utf-8");
+				child.stderr.on("data", (chunk: string) => (stderr += chunk));
+				child.on("error", reject);
+				child.on("exit", (status) => {
+					if (status === 0) resolve();
+					else reject(new Error(`concurrent build exited ${status}: ${stderr}`));
+				});
+			});
+		await Promise.all([run(), run()]);
+
+		const runtimeEvents: Array<boolean> = [];
+		const artifacts = ensureNativeArtifacts(
+			resolveNativeBuildContext({
+				toolchain,
+				runtimeDirectory,
+				cacheDirectory,
+				features: {
+					evalEnabled: false,
+					webPlatformEnabled: false,
+				},
+				onCacheEvent: (event) => {
+					if (event.artifact === "runtime") runtimeEvents.push(event.hit);
+				},
+			}),
+		);
+		expect(runtimeEvents).toEqual([true]);
+		expect(artifacts.c.linkArgs).toEqual([
+			artifacts.c.runtime,
+			artifacts.c.host,
+			artifacts.c.engine,
+		]);
+		expect(artifacts.rust.linkArgs[0]).toBe(artifacts.rust.library);
+		expect(artifacts.linkArgs).toEqual([
+			...artifacts.c.linkArgs,
+			...artifacts.rust.linkArgs,
+		]);
+		expect(artifacts.linkArgs.every((artifact) => existsSync(artifact))).toBe(true);
+	});
+
+	it("reports reusable runtime cache misses and hits", () => {
+		const fake = createFakeToolchain();
+		const runtimeDirectory = createMinimalRuntime(fake);
+		const report = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: path.join(runtimeDirectory, "rust"),
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
 		});
 		const toolchain = report.toolchain!;
-		const suffix = `cache-events-${path.basename(fake.root)}`;
 		const runtimeEvents: Array<boolean> = [];
-		const dimensions = {
+		const context = resolveNativeBuildContext({
 			toolchain,
-			evalEnabled: false,
-			webPlatformEnabled: false,
-			cacheSuffix: suffix,
-			rustCacheSuffix: suffix,
+			runtimeDirectory,
+			cacheDirectory: path.join(fake.root, "event-cache"),
+			features: {
+				evalEnabled: false,
+				webPlatformEnabled: false,
+			},
 			onCacheEvent: (event: { artifact: "runtime" | "rust"; hit: boolean }) => {
 				if (event.artifact === "runtime") runtimeEvents.push(event.hit);
 			},
-		};
-		ensureRuntimeLibrary(false, dimensions);
-		ensureRuntimeLibrary(false, dimensions);
+		});
+		ensureNativeArtifacts(context);
+		ensureNativeArtifacts(context);
 		expect(runtimeEvents).toEqual([false, true]);
 	});
 
 	it("stores compiler wires under the reusable cache", () => {
 		const bytes = new Uint8Array([0x4d, 0x41, 0x4c]);
-		const wirePath = ensureCompilerWire({ bytes });
+		const wirePath = ensureCompilerWire({ kind: "bytes", bytes });
 		expect(wirePath).toContain(
 			`${path.sep}.cache${path.sep}mal-cache${path.sep}compiler-wire`,
 		);

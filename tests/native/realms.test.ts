@@ -21,7 +21,6 @@ describe("generic realm runtime API", () => {
 			mainFile: "runtime/realm_test_main.c",
 			outDir,
 			realmsEnabled: true,
-			skipRuntimeBuild: true,
 		});
 	});
 

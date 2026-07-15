@@ -18,9 +18,8 @@ import {
 // ignores realms, so the canonical ICU/regress/ada archive is reused). That this
 // binary LINKS at all with `-DMAL_REALMS=0` — the Realm surface compiled away, the
 // host entry's realm install gated out, no dangling `mal_realm_*` symbols — is the
-// core assertion. Not the archive globalSetup prebuilt, so no skipRuntimeBuild; we
-// build the realms-off C archive here and prove core intrinsics still run on it via
-// an existing generic Array-intrinsics fixture.
+// core assertion. The test also proves core intrinsics run on the selected
+// realms-off artifacts via an existing generic Array-intrinsics fixture.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-realms-off-"));
 const cleanFixture = path.join(outDir, "default-driver-clean.js");
 writeFileSync(
@@ -49,14 +48,12 @@ describe("engine.realms: false runtime gate", () => {
 			name: "realms-disabled-default",
 			outDir,
 			realmsEnabled: false,
-			skipRuntimeBuild: true,
 		});
 		realmsOnDefaultBin = buildNativeBinary({
 			fixture: cleanFixture,
 			name: "realms-enabled-default",
 			outDir,
 			realmsEnabled: true,
-			skipRuntimeBuild: true,
 		});
 	});
 

@@ -400,7 +400,7 @@ static MalValue intl_get_canonical_locales(MalVm *vm, MalValue this_value, const
 }
 
 // ---------------------------------------------------------------------------
-// Intl.supportedValuesOf — curated, sorted value lists (TODO #12: enumerate via ICU).
+// Intl.supportedValuesOf uses curated, sorted lists rather than ICU enumeration.
 // ---------------------------------------------------------------------------
 
 static const char *const SUPPORTED_CALENDARS[] = {
@@ -523,7 +523,7 @@ static MalValue intl_locale_constructor(MalVm *vm, MalValue this_value, const Ma
 
     // Build a BCP-47 tag with any -u- keyword options, then canonicalize (which
     // validates structure and normalizes ordering/case). Structural overrides
-    // (language/script/region options) are a TODO.
+    // Language/script/region options remain unsupported.
     byte buf[400];
     usize len;
     if (!intl_tag_utf8(base_tag, buf, sizeof(buf), &len)) {
@@ -1309,7 +1309,7 @@ static void intl_install_plural_rules(MalVm *vm, MalObject *intl_object) {
 #endif // MAL_INTL_HAS_PLURAL_RULES
 
 // ---------------------------------------------------------------------------
-// Intl.NumberFormat — style "decimal" + "percent" (currency/unit/compact TODO).
+// Intl.NumberFormat supports decimal and percent; currency, unit, and compact remain.
 // ---------------------------------------------------------------------------
 
 #if MAL_INTL_HAS_NUMBER_FORMAT || MAL_INTL_HAS_DATE_TIME_FORMAT
@@ -1541,7 +1541,7 @@ static void intl_install_number_format(MalVm *vm, MalObject *intl_object) {
 #endif // MAL_INTL_HAS_NUMBER_FORMAT
 
 // ---------------------------------------------------------------------------
-// Intl.DateTimeFormat — dateStyle / timeStyle (component options are TODO).
+// Intl.DateTimeFormat supports dateStyle/timeStyle; component options remain.
 // ---------------------------------------------------------------------------
 
 #if MAL_INTL_HAS_DATE_TIME_FORMAT
@@ -1713,7 +1713,7 @@ static bool intl_date_range_arg(MalVm *vm, MalValue arg, f64 *out) {
 }
 
 /** PartitionDateTimeRangePattern (approximate): format both endpoints and join
- * them. ICU's smart interval collapsing is a TODO; this produces a correct,
+ * them. ICU smart interval collapsing remains unsupported; this produces a correct,
  * readable range string and the right argument-validation behavior. */
 static MalValue intl_date_time_format_range_string(MalVm *vm, MalIntlObject *dtf, MalValue start_arg, MalValue end_arg) {
     if (mal_value_is_undefined(start_arg) || mal_value_is_undefined(end_arg)) {

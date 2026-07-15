@@ -103,7 +103,7 @@ test("a value living in a frame-local slot is NOT held in a register across the 
 	// `keep` is a named local: the IR holds it in a local slot (storeLocal /
 	// loadLocal), which is already a frame root scanned by the GC. So no register
 	// temporary spans the `g()` call — its safepoint live set is empty. This is the
-	// liveness-minimization the GC design wants (gc_todo.md Step 9 C1). (Registers
+	// liveness minimization the GC design requires. (Registers
 	// produced by OTHER safepoints and consumed downstream — e.g. the reloaded
 	// `keep` before `return` — are still rooted at those safepoints under the
 	// def-when-live-out rule, so we assert the call site itself, not the whole set.)

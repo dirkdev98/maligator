@@ -289,6 +289,7 @@ test("resolves a namespace import of a host built-in to its (sorted) exports", (
 		"extname",
 		"isAbsolute",
 		"join",
+		"normalize",
 		"relative",
 		"resolve",
 		"sep",

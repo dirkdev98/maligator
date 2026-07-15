@@ -66,7 +66,6 @@ try { mal.assets.materialize("missing"); } catch (error) { console.log(error.mes
 			fixture: entry,
 			name: "mal-assets",
 			outDir,
-			skipRuntimeBuild: true,
 			config,
 		});
 	});

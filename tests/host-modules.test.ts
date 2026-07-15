@@ -123,6 +123,7 @@ describe("host-install manifest", () => {
 			"extname",
 			"isAbsolute",
 			"join",
+			"normalize",
 			"relative",
 			"resolve",
 			"sep",
@@ -131,6 +132,23 @@ describe("host-install manifest", () => {
 		expect(new Set(def.hostInstalls[0]!.exports.map((entry) => entry.slot))).toEqual(
 			new Set(namespace.slots),
 		);
+	});
+
+	it("binds newly curated path and crypto exports", () => {
+		const def = compile(
+			`import { normalize } from "node:path";\nimport { randomUUID } from "node:crypto";\nglobalThis.sink = [normalize, randomUUID];\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_path",
+				exports: [expect.objectContaining({ name: "normalize" })],
+			}),
+			expect.objectContaining({
+				installer: "mal_host_install_node_crypto",
+				exports: [expect.objectContaining({ name: "randomUUID" })],
+			}),
+		]);
 	});
 
 	it("binds a host default import through the manifest", () => {

@@ -1,120 +1,60 @@
-# Test262 performance backlog
+# Test262 performance roadmap
 
-Ranked tasks from the 2026-07-14 full-suite run and follow-up profiling. The run
-compiled 43K tests per variant and showed that compiled-mode C compilation, not
-test execution, dominates wall time:
+The 2026-07-14 full-suite profile showed compiled-mode C compilation dominating
+wall time. It predates later shared-helper emission, so capture a new cold baseline
+before re-ranking work. Artifact manifests already persist per-entry function,
+instruction, and opcode statistics.
 
-| Strict pass | Front end | C compile | Link | Execute | Wall |
-| ----------- | --------: | --------: | ---: | ------: | ---: |
-| interpreted |    1,149s |      190s |  31s |    236s | 228s |
-| compiled    |    1,289s |    3,521s |  54s |    229s | 675s |
+## P0 - Safety and bounded resources
 
-Phase totals sum work across eight workers. Use
-`node scripts/test262-code-stats.ts --variant strict --limit 50` to recover exact
-per-test function/instruction counts from interpreted artifacts without compiling
-or executing Test262.
+The maximum string length and checked string-builder/encoder arithmetic are
+implemented. Impossible lengths are catchable and the original replacement-growth
+reproducer passes.
 
-## P0 — Safety and bounded resource use
+1. [ ] Design recoverable allocation failure for CELL, RAW, LOS, and direct native
+       allocations. Add a preallocated/non-allocating emergency exception and
+       deterministic fault-injection tests that prove OOM is catchable without GC
+       corruption or recursive allocation.
 
-1. [ ] **Enforce an engine-wide maximum string length and checked builder
-       arithmetic.** `String/replace-math.js` expands repeated `$1` substitutions
-       until the process consumes ~8 GB and is OS-terminated. Check add/multiply/
-       geometric-growth overflow before allocation in `regexp_builder_reserve`,
-       `regexp_get_substitution`, `regexp_proto_replace`, `mal_ops_add`, and every
-       `mal_string_new_*` entry; convert impossible lengths/allocation failures into
-       a catchable JS error. Cover concatenation, replacement, UTF-8/UTF-16 width,
-       and boundary values.
+## P1 - Generated code reduction
 
-   Progress: the UTF-16 limit, constructor invariants, checked concat/repeat/
-   pad/replace builders, and catchable impossible-length errors are implemented;
-   URI encoding, web base64, and typed-array base64/hex expansion are now bounded
-   too, and `replace-math.js` passes. Core heap allocation failure still aborts and
-   remaining string producers need the same fallible allocation contract plus a
-   non-allocating emergency exception path.
+2. [ ] Bulk-lower private names and instance fields while preserving identity,
+       declaration order, initializer effects, abrupt completion, and brand checks.
+3. [ ] Bulk-lower contiguous uninitialized global declarations while preserving
+       declaration-instantiation checks and global observability.
+4. [ ] Add primitive constant folding and dead-branch cleanup with exact JavaScript
+       NaN, negative-zero, integer, BigInt, overflow, and throwing semantics.
+5. [ ] Add tagged immediate and static-key operands to avoid standalone constant
+       creation for calls, property operations, and construction.
+6. [ ] Evaluate resumable static call tables only after item 5 is measured; add them
+       only if they materially reduce generated C/object size further.
+7. [ ] Intern byte-identical immutable definitions, function bodies, constants, and
+       debug tables without merging JavaScript identity or mutable state.
+8. [ ] Measure a lower literal-template threshold and static property opcodes on
+       medium definitions; use a cost model rather than fixture-specific rules.
 
-## P2 — VM instruction and generated-C reduction
+## P2 - Measurement and scheduling
 
-11. [ ] **Bulk-lower private names and instance fields.** Unicode class generators
-        emit about six VM instructions per private field; the Unicode 10 pair reaches
-        50,877 instructions each. Add static private-layout descriptors plus bulk
-        create/install operations that preserve unique private-name identities,
-        declaration order, initializer effects, abrupt completion, and brand checks.
-        Target >90% instruction/C reduction on the 8,327-field probe.
+9. [ ] Give C batches stable IDs and persist member paths, generated-C bytes,
+       logical/physical code totals, object bytes, cache state, worker, and phase
+       timings in each variant report.
+10. [ ] Preserve both strict and sloppy reports across an unfiltered dual run.
+        Acceptance: both report files remain available with their pass summaries.
+11. [ ] After item 9, measure C compile/link contention at controlled worker counts
+        and limit concurrent links only if attribution confirms contention.
+12. [ ] Add bounded targeted profiling flags, valid only with `--filter` or
+        `--manifest`, for timeout, RSS, CPU, GC statistics, and phase markers. Keep the
+        normal watchdog and an outer kill deadline.
 
-12. [ ] **Bulk-lower contiguous uninitialized global declarations.** Unicode plain
-        generators emit two instructions for each of 6K-8K `var` names. Store the
-        string indices as static data and execute one declaration operation while
-        preserving global declaration-instantiation checks, property descriptors,
-        redeclaration semantics, and realm-global observability.
+## P3 - Compiler cleanup
 
-13. [ ] **Add primitive constant folding plus dead-branch cleanup.** Twelve ES5 shift
-        truth-table tests contribute ~122K instructions for constant comparisons and
-        unreachable throw branches. Fold arithmetic/bitwise/comparison operations
-        with exact JS `NaN`, `-0`, int32/uint32, overflow, BigInt, and throwing
-        semantics; differential-test folded results against runtime operators.
+13. [ ] Avoid constructing semantic and IR debug renderings when `MAL_DEBUG` is
+        disabled; gate construction rather than only the logger call.
+14. [ ] Replace compiled C emission's per-instruction handler scan with an interval
+        cursor/index. Preserve innermost-handler selection and add a generated
+        many-handler regression.
 
-14. [ ] **Add tagged immediate/static-key operands.** Avoid separate `CREATE_STRING`,
-        `CREATE_NUMBER`, and intrinsic-load instructions when call/property/construct
-        operations can carry immutable operands. `dataview.js` has ~1,074 static-key
-        property loads; `unicode-ignoreCase.js` has ~6K numeric-constant operations.
-        Keep dynamic-key evaluation order and exceptions unchanged.
+## Revisit trigger
 
-15. [ ] **Add resumable static call tables for generated data-driven tests.**
-        `unicode-ignoreCase.js` contains ~2,938 calls to one helper. Encode arguments
-        as static rows and execute them through a resumable loop that performs callee
-        lookup and each call in original order, preserving reassignment, throws, GC,
-        and source attribution. Compare this with the smaller tagged-immediate design
-        before adding a specialized opcode.
-
-16. [ ] **Intern byte-identical definitions and function bodies.** Escaped and
-        unescaped Unicode identifier variants produce identical lowered definitions;
-        many DataView callbacks also share bodies. Content-address immutable
-        definitions/functions/constants/debug tables so physical C/object data is
-        shared without merging JS function identity, realm, environment, or mutable
-        runtime state.
-
-17. [ ] **Evaluate a lower literal-template threshold and static property opcodes on
-        medium definitions.** In `dataview.js`, 28 static array literals remain below
-        the current 32-word template threshold. Benchmark code size and runtime before
-        changing the global threshold; prefer a cost model over a test-specific rule.
-
-## P3 — Measurement and suite scheduling
-
-19. [ ] **Persist per-entry code statistics in future artifact manifests.** Add
-        function/instruction/opcode counts beside each manifest entry so ranking does
-        not require object inspection. Preserve fast batch aggregate replay and avoid
-        invalidating artifacts solely for reporting-schema changes if possible.
-
-20. [ ] **Give C batches stable identities and attributable metrics.** Current timing
-        output labels every batch only as `batch(n)`, so 40-55s clang outliers cannot
-        be mapped to tests. Record artifact key, member paths, generated C bytes,
-        function/instruction totals, object bytes, cache-hit state, worker, and phase
-        timings in the report.
-
-21. [ ] **Preserve both strict and sloppy reports.** `test262PrepareBuild()` deletes
-        the build directory before each variant, removing `report-strict.json` when
-        sloppy starts. Separate ephemeral build artifacts from report output or clean
-        once before the dual run.
-
-22. [ ] **Persist full-run slow lists as a durable report.** Keep top-N per-test
-        front-end/runtime timings and attributable C/link batches in a repository-
-        ignored JSON artifact. The committed verdict baseline should remain compact.
-
-23. [ ] **Measure and schedule C compile/link contention.** Reproduce compiled batches
-        with controlled worker counts and stable IDs. Compiled-sloppy link spikes up
-        to 18s appeared to be scheduling/I/O noise; if confirmed, limit concurrent
-        links or separate linking from peak clang activity without reducing compile
-        parallelism.
-
-24. [ ] **Add an uncensored targeted profiling mode.** Keep the normal 1s conformance
-        watchdog, but allow explicit diagnostic runs to collect completion time, CPU,
-        RSS, GC, and phase markers for known slow tests without editing constants or
-        allowing runaway processes by default.
-
-## P4 — Lower-return cleanup
-
-25. [ ] Avoid constructing semantic/IR debug renderings when `MAL_DEBUG` is disabled.
-26. [ ] Replace compiled C emission's per-instruction linear handler scan with an
-        interval cursor/index (`handlerForIp` is currently `O(instructions * handlers)`).
-27. [ ] Revisit exact timezone-offset caching only after higher-impact Date work;
-        direct `jiff` lookup measured about 2% of the DST shard runtime.
+- Exact timezone-offset caching measured at about 2% of the DST shard. Reconsider
+  only if Date profiling makes offset lookup a top-five self-time contributor.

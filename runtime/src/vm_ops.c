@@ -1636,7 +1636,7 @@ void mal_op_catch(MalCallable *callable, MalInstruction *instruction) {
 
 // BigInt `<<` semantics: a positive count shifts left (a * 2^count), a negative
 // count is an arithmetic right shift. Beyond the 128-bit backing width the value
-// saturates (TODO(bigint): arbitrary precision).
+// saturates until BigInt uses arbitrary-precision digits.
 static i128 mal_vm_bigint_shift_left(i128 value, i128 count) {
     if (count >= 0) {
         return count >= 128 ? 0 : value << count;
@@ -4224,8 +4224,8 @@ MalValue mal_array_rest(MalVm *vm, MalValue source, u32 start) {
         return mal_value_new_undefined();
     }
 
-    // Index-read approximation of the spec's iterator protocol, mirroring the
-    // pattern's positional element reads (TODO(iterators)).
+    // Legacy index-read implementation retained for the arrayRest opcode. Current
+    // destructuring lowering uses the iterator protocol directly.
     u32 length;
     if (!mal_builtin_array_this_length(vm, source, &length)) {
         return mal_value_new_undefined();

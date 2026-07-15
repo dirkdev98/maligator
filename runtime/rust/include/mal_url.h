@@ -8,7 +8,7 @@
  * itself); this header exposes only a parsed-URL handle + flat component accessors.
  *
  * Because `ada-url` links a C++ library, every final link needs the C++ stdlib
- * (`-lc++`/`-lstdc++`), added in src/rust-build.ts (rustLinkArgs).
+ * (`-lc++`/`-lstdc++`), added by src/rust-build.ts artifact resolution.
  *
  * Inputs are UTF-16 (`const uint16_t *` + length) — MalString's native storage,
  * decoded lossily to scalar values. Outputs are UTF-8 via the probe-then-fill

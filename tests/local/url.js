@@ -1,4 +1,4 @@
-// WHATWG URL / URLSearchParams acceptance fixture (isolate_todo.md, task #17).
+// WHATWG URL / URLSearchParams acceptance fixture.
 // Exercises the ada-url-backed URL class + the pure-C URLSearchParams. Runs on the
 // host entry; prints one line per check and a final "RESULT <passed>/<total>" the
 // runner asserts. Written before the implementation (TDD) to pin exact behavior.

@@ -49,7 +49,6 @@ describe("engine.intl.features (service subset)", () => {
 			name: "intl-features-full",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true, // full Intl archives were prebuilt by globalSetup
 		});
 		const subsetSize = statSync(subsetBin).size;
 		const fullSize = statSync(fullBin).size;

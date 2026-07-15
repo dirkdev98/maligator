@@ -1,4 +1,4 @@
-import { runCli } from "./cli-commands.ts";
+import { productCompilerInstallation, runCli } from "./cli-commands.ts";
 import { stripCompactTypes } from "./compact-type-strip.ts";
 
 const { assets } = Reflect.get(globalThis, "mal") as {
@@ -7,6 +7,8 @@ const { assets } = Reflect.get(globalThis, "mal") as {
 
 runCli(process.argv.slice(2), {
 	stripTypes: stripCompactTypes,
-	runtimeDirectory: assets.materialize("runtime"),
-	compilerWirePath: assets.materialize("compilerWire"),
+	installation: productCompilerInstallation(
+		assets.materialize("runtime"),
+		assets.materialize("compilerWire"),
+	),
 });

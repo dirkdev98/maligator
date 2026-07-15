@@ -15,7 +15,6 @@ describe("HTTP server loop", () => {
 			name: "servertest",
 			mainFile: SERVER_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

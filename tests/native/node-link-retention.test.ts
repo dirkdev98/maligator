@@ -27,7 +27,6 @@ describe("node host installer link retention", () => {
 			name: "node-link-path",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 			nodeEnabled: true,
 		});
 		processOnly = buildNativeBinary({
@@ -35,7 +34,6 @@ describe("node host installer link retention", () => {
 			name: "node-link-process",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 			nodeEnabled: true,
 		});
 		deadPath = buildNativeBinary({
@@ -43,7 +41,6 @@ describe("node host installer link retention", () => {
 			name: "node-link-dead-path",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 			nodeEnabled: true,
 		});
 	});

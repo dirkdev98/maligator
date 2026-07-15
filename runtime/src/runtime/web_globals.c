@@ -7,6 +7,7 @@
 #include "array_buffer_object.h"
 #include "array_object.h"
 #include "date_object.h"
+#include "entropy.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap.h"
@@ -510,7 +511,11 @@ static MalValue mal_web_crypto_random_uuid(
     (void) nt;
     (void) callee;
     u8 b[16];
-    arc4random_buf(b, sizeof(b));
+    if (mal_host_entropy(b, sizeof(b)) != 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "crypto.randomUUID: host entropy unavailable");
+        return mal_value_new_undefined();
+    }
     b[6] = (u8) ((b[6] & 0x0F) | 0x40); // version 4
     b[8] = (u8) ((b[8] & 0x3F) | 0x80); // variant 10xx
     static const char hex[] = "0123456789abcdef";
@@ -549,7 +554,11 @@ static MalValue mal_web_crypto_get_random_values(
         return mal_value_new_undefined();
     }
     if (byte_len > 0 && ta->buffer != nullptr) {
-        arc4random_buf((byte *) ta->buffer->data + ta->byte_offset, byte_len);
+        if (mal_host_entropy((byte *) ta->buffer->data + ta->byte_offset, byte_len) != 0) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                "crypto.getRandomValues: host entropy unavailable");
+            return mal_value_new_undefined();
+        }
     }
     return args[0];
 }

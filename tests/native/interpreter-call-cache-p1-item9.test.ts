@@ -24,14 +24,12 @@ describe("bounded interpreter call-site cache", () => {
 			name: "interpreter-call-cache-p1-item9-ni",
 			compiled: false,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 		mixed = buildNativeBinary({
 			fixture: "tests/local/interpreter-call-cache-p1-item9.js",
 			name: "interpreter-call-cache-p1-item9-mixed",
 			compiled: true,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

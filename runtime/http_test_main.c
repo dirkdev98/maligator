@@ -4,7 +4,7 @@
 #include "http.h"
 
 /*
- * Unit test for the HTTP/1.1 request parser (isolate_todo.md — fetch-server). Pure
+ * Unit test for the HTTP/1.1 request parser. Pure
  * function over byte fixtures; no sockets or VM. Verifies request-line parsing,
  * headers (incl. case-insensitive lookup), Content-Length / chunked framing,
  * keep-alive semantics, and the INCOMPLETE / ERROR verdicts.

@@ -330,18 +330,19 @@ test("resolves supported node:* imports to virtual host modules (no disk read) w
 	);
 });
 
-test("host catalog: path carries relative + a default export; crypto is hash-only", () => {
+test("host catalog includes path normalize and crypto randomUUID", () => {
 	write("catalog.mjs", `import "node:path";\nimport "node:crypto";\n`);
 	const graph = buildModuleGraph(path.join(root, "catalog.mjs"), {
 		buildConfig: nodeOn,
 	});
 
 	const pathSpec = graph.modules.get("node:path")!.host!;
+	expect(pathSpec.named).toContain("normalize");
 	expect(pathSpec.named).toContain("relative");
 	expect(pathSpec.hasDefault).toBe(true);
 
 	const cryptoSpec = graph.modules.get("node:crypto")!.host!;
-	expect(cryptoSpec.named).toEqual(["hash"]);
+	expect(cryptoSpec.named).toEqual(["hash", "randomUUID"]);
 	expect(cryptoSpec.hasDefault).toBe(false);
 });
 

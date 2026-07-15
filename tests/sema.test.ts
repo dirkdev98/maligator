@@ -8,7 +8,7 @@ test("snapshot sema changes", () => {
 		path.join(import.meta.dirname, "./local/semantic-analysis.js"),
 	);
 
-	// TODO: handle local paths for CI runs
+	// This local absolute path still needs a CI-portable fixture.
 	expect(debugSemanticProgram(semantic)).toMatchInlineSnapshot(`
 		"/Users/dirk/projects/maligator/tests/local/semantic-analysis.js
 		  Scope(0 Program (parent: -1)

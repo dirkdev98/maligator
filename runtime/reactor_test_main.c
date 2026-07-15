@@ -11,7 +11,7 @@
 #include "scheduler.h"
 
 /*
- * Phase 1 acceptance test (isolate_todo.md). Drives the I/O reactor through the
+ * Reactor-core acceptance test. Drives the I/O reactor through the
  * scheduler and asserts:
  *
  *   1. Timers wake sleeping fibers, in deadline order, and the fibers sleep

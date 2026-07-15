@@ -13,6 +13,7 @@ import path, {
 	extname,
 	isAbsolute,
 	join,
+	normalize,
 	relative,
 	resolve,
 	sep,
@@ -109,6 +110,22 @@ eq("join-embedded-nul", join("a\0b", "c"), "a\0b/c");
 const halfStringLimit = "x".repeat(1 << 23);
 throwsRangeError("join-string-limit", () => join(halfStringLimit, halfStringLimit));
 
+// --- normalize ---
+eq("normalize-empty", normalize(""), ".");
+eq("normalize-dot", normalize("."), ".");
+eq("normalize-dot-trailing", normalize("./"), "./");
+eq("normalize-repeated-separators", normalize("a//b///c"), "a/b/c");
+eq("normalize-dot-segments", normalize("a/./b/../c"), "a/c");
+eq("normalize-relative-leading-dotdot", normalize("../../a"), "../../a");
+eq("normalize-relative-above-start", normalize("a/../../b"), "../b");
+eq("normalize-absolute-root", normalize("///"), "/");
+eq("normalize-no-cross-root", normalize("/../../a"), "/a");
+eq("normalize-trailing-separator", normalize("a//b/./c/../"), "a/b/");
+eq("normalize-relative-root-trailing", normalize("foo/..//"), "./");
+eq("normalize-dotdot-trailing", normalize("../"), "../");
+eq("normalize-three-dots", normalize("a/..."), "a/...");
+eq("normalize-embedded-nul", normalize("a\0b//c/.."), "a\0b");
+
 // --- relative (absolute inputs => cwd-independent) ---
 eq(
 	"relative-doc",
@@ -157,6 +174,7 @@ eq("relative-cwd-roundtrip", relative(cwd, resolve("sub/dir")), "sub/dir");
 // --- default object: same identities and behavior as named exports ---
 eq("default-dirname-identity", path.dirname === dirname, true);
 eq("default-join-identity", path.join === join, true);
+eq("default-normalize-identity", path.normalize === normalize, true);
 eq("default-resolve-identity", path.resolve === resolve, true);
 eq("default-typeof-join", typeof path.join, "function");
 eq("default-behaves", path.join("/a", "b", "..", "c"), "/a/c");
@@ -171,6 +189,8 @@ eq("dirname-length", dirname.length, 1);
 eq("extname-length", extname.length, 1);
 eq("isAbsolute-length", isAbsolute.length, 1);
 eq("join-length", join.length, 0);
+eq("normalize-name", normalize.name, "normalize");
+eq("normalize-length", normalize.length, 1);
 eq("relative-length", relative.length, 2);
 eq("resolve-length", resolve.length, 0);
 
@@ -180,6 +200,8 @@ throwsTypeError("dirname-missing", () => (dirname as (p?: string) => string)());
 throwsTypeError("extname-null", () => extname(null as unknown as string));
 throwsTypeError("isAbsolute-undefined", () => isAbsolute(undefined as unknown as string));
 throwsTypeError("join-nonstring", () => join("ok", 5 as unknown as string));
+throwsTypeError("normalize-nonstring", () => normalize(5 as unknown as string));
+throwsTypeError("normalize-missing", () => (normalize as (p?: string) => string)());
 throwsTypeError("relative-from-nonstring", () => relative(1 as unknown as string, "/x"));
 throwsTypeError("relative-to-nonstring", () => relative("/x", {} as unknown as string));
 throwsTypeError("resolve-visited-nonstring", () =>

@@ -67,12 +67,12 @@ const reference = buildNativeBinary({
 	config: targetConfig,
 });
 
-execFileSync(compiler, [fixture, "native-output", root], {
+const nativeOutput = execFileSync(compiler, [fixture, "native-output", root], {
 	env: isolatedEnv,
-	stdio: "inherit",
+	encoding: "utf-8",
+	stdio: ["ignore", "pipe", "inherit"],
 	timeout: 180000,
-});
-const nativeOutput = path.join(root, "native-output-selfhost-native-minimal");
+}).trim();
 
 function run(binary: string): { status: number | null; stdout: string; stderr: string } {
 	const result = spawnSync(binary, [], { encoding: "utf-8", timeout: 20000 });
@@ -111,14 +111,19 @@ const evalReference = buildNativeBinary({
 	name: "node-reference-eval",
 	outDir: root,
 	config: evalConfig,
-	compilerBake: { prebuiltPath: prebuiltWire },
+	compilerBake: { kind: "prebuilt", path: prebuiltWire },
 });
-execFileSync(compiler, [fixture, "native-output", root, prebuiltWire], {
-	env: isolatedEnv,
-	stdio: "inherit",
-	timeout: 180000,
-});
-const evalActual = run(path.join(root, "native-output-selfhost-native-eval"));
+const evalOutput = execFileSync(
+	compiler,
+	[fixture, "native-output", root, prebuiltWire],
+	{
+		env: isolatedEnv,
+		encoding: "utf-8",
+		stdio: ["ignore", "pipe", "inherit"],
+		timeout: 180000,
+	},
+).trim();
+const evalActual = run(evalOutput);
 const evalExpected = run(evalReference);
 if (
 	evalActual.status !== evalExpected.status ||

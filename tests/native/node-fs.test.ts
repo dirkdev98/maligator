@@ -20,7 +20,6 @@ describe("node:fs synchronous POSIX surface", () => {
 			name: "node-fs",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 			nodeEnabled: true,
 		});
 	});

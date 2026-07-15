@@ -6,6 +6,7 @@ import {
 	readFileSync,
 	readdirSync,
 	realpathSync,
+	renameSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -33,6 +34,8 @@ const nested = `${root}/a/b`;
 const textFile = `${nested}/utf8.txt`;
 const byteFile = `${nested}/bytes.bin`;
 const copiedFile = `${nested}/copied.txt`;
+const renameSource = `${nested}/rename-source.txt`;
+const renameDestination = `${nested}/rename-destination.txt`;
 
 eq("missing does not exist", existsSync(textFile), false);
 mkdirSync(nested, { recursive: true });
@@ -92,6 +95,46 @@ check(
 );
 const temporary = mkdtempSync(`${root}/temporary-`);
 check("mkdtempSync creates a unique directory", statSync(temporary).isDirectory());
+
+writeFileSync(renameSource, "replacement");
+writeFileSync(renameDestination, "old");
+renameSync(renameSource, renameDestination);
+eq("renameSync removes source", existsSync(renameSource), false);
+eq(
+	"renameSync overwrites destination",
+	readFileSync(renameDestination, "utf8"),
+	"replacement",
+);
+
+let renameCode = "";
+let renameSyscall = "";
+let renamePath = "";
+let renameDest = "";
+let renameMessage = "";
+try {
+	renameSync(renameSource, renameDestination);
+} catch (error) {
+	const fsError = error as Error & {
+		code?: string;
+		syscall?: string;
+		path?: string;
+		dest?: string;
+	};
+	renameCode = fsError.code ?? "";
+	renameSyscall = fsError.syscall ?? "";
+	renamePath = fsError.path ?? "";
+	renameDest = fsError.dest ?? "";
+	renameMessage = fsError.message;
+}
+eq("renameSync missing source code", renameCode, "ENOENT");
+eq("renameSync missing source syscall", renameSyscall, "rename");
+eq("renameSync missing source path", renamePath, renameSource);
+eq("renameSync missing source dest", renameDest, renameDestination);
+check(
+	"renameSync missing source message includes both paths",
+	renameMessage.includes(renameSource) && renameMessage.includes(renameDestination),
+);
+
 rmSync(temporary, { recursive: true, force: true });
 eq("rmSync recursively removes a directory", existsSync(temporary), false);
 rmSync(`${root}/already-missing`, { recursive: true, force: true });

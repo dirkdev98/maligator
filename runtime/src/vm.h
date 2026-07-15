@@ -1285,7 +1285,7 @@ typedef struct MalVm {
     MalCjsModuleSlot *cjs_registry;
 
     /**
-     * Fibers (isolate_todo.md Phase 0). This MalVm is the *isolate*: it owns the
+     * Fibers (see docs/roadmaps/isolate-reactor.md). This MalVm is the *isolate*: it owns the
      * heap + globals, and one or more fibers execute on it (one at a time on this
      * thread). `current_fiber` is the running one — its per-execution slice
      * (value stack, frames, completion, GC root chains, stack limit) is live in
@@ -1788,8 +1788,3 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
  * Resolve the display name of a callable, or null for non-callables.
  */
 MalString *mal_vm_callable_name(MalVm *vm, MalValue callee);
-
-/**
- * Resolve the parameter count of a callable.
- */
-i32 mal_vm_callable_length(MalVm *vm, MalValue callee);

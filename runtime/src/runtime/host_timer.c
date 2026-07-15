@@ -162,7 +162,7 @@ void mal_host_timers_free(MalVm *vm) {
  * the timer takes ownership of. */
 static i64 mal_host_schedule_native(MalVm *vm, const MalValue *args, i32 arg_count, bool repeat) {
     if (arg_count < 1 || !mal_value_is_callable(args[0])) {
-        return 0; // TODO(spec): throw TypeError on non-callable
+        return 0; // Required TypeError for a non-callable callback remains unsupported.
     }
     i64 delay = 0;
     if (arg_count >= 2) {

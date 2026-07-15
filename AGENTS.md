@@ -50,7 +50,7 @@ Use https://tc39.es/ecma262/multipage/ when looking up parts of the spec.
 
 ## Working Preferences
 
-- Pre-1.0: freely change any API/internal contract when it improves the design or contracts (engine/host/runtime layering: see `isolate_todo.md`).
+- Pre-1.0: freely change any API/internal contract when it improves the design or contracts (engine/host/runtime layering: see `docs/roadmaps/isolate-reactor.md`).
 
 - Prefer root-cause, correct, performant fixes over narrow test-specific workarounds.
 - Ask for explicit approval before running the full Test262 suite.

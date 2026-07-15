@@ -2,6 +2,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import { buildDerivationFromConfig, resolveBuildConfig } from "../build-config.ts";
 import {
 	buildSuffix,
 	gcDefines,
@@ -14,12 +15,13 @@ import { compileEntrypointToBuffer } from "../compile-program.ts";
 import { emitBatch, emitVmDefinition } from "../emit-vm.ts";
 import { executeIROptimizations } from "../ir-opt.ts";
 import { compileSemanticProgramToIr } from "../ir.ts";
-import { ensureRuntimeLibrary } from "../local-build.ts";
 import { lowerIrProgramToVmDefinition } from "../lower-vm.ts";
 import type { VmDefinition } from "../lower-vm.ts";
+import { resolveNativeBuildContext } from "../native-build-context.ts";
 import { parseModule, parseScript } from "../parser.ts";
 import { allocateRegisters } from "../register-alloc.ts";
-import { rustLinkArgs } from "../rust-build.ts";
+import { ensureNativeArtifacts } from "../runtime-build.ts";
+import type { NativeArtifacts } from "../runtime-build.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../semantic-program.ts";
 import { requireToolchain } from "../toolchain.ts";
@@ -50,13 +52,12 @@ const execFileAsync = promisify(execFile);
 let selectedToolchain: Toolchain | undefined;
 
 function test262Toolchain(): Toolchain {
-	selectedToolchain ??= requireToolchain({ needsCxx: true });
-	return selectedToolchain;
+	return test262NativeBuildInputs().toolchain;
 }
 
 /**
  * cc invocation split into compile and link. Compiling the generated C is ~97%
- * of the cost; linking against the (always freshly built) library is ~3%. The
+ * of the cost; linking against the exact parent-selected library is ~3%. The
  * split lets the artifact cache reuse the compiled object across runs whenever
  * only the runtime implementation changed.
  */
@@ -78,18 +79,41 @@ const CC_LINK_FLAGS = ["-std=c2x", ...GENERATED_C_OPT_FLAGS, ...sanitizerCcFlags
 
 /**
  * The generated objects and binaries are suffixed per GC/sanitizer build
- * dimension. Reusable runtime archives are content-addressed by local-build.ts.
+ * dimension. Reusable runtime archives are content-addressed by runtime-build.ts.
  */
-let libArchive = "";
+export type Test262NativeArtifactPaths = {
+	c: Pick<NativeArtifacts["c"], "engine">;
+	rust: Pick<NativeArtifacts["rust"], "linkArgs">;
+};
+
+/** Structured-clone-safe native inputs selected once by the parent thread. */
+export type Test262NativeBuildInputs = {
+	toolchain: Toolchain;
+	artifacts: Test262NativeArtifactPaths;
+};
+
+let nativeBuildInputs: Test262NativeBuildInputs | undefined;
 const BUILD_PATH = `${TEST262_METADATA.buildPath}${buildSuffix()}`;
 
-export function test262RuntimeArchive(): string {
-	if (libArchive === "") throw new Error("test262 runtime archive has not been prepared");
-	return libArchive;
+export function test262NativeBuildInputs(): Test262NativeBuildInputs {
+	if (nativeBuildInputs === undefined) {
+		throw new Error("test262 native build inputs have not been prepared");
+	}
+	return nativeBuildInputs;
 }
 
-export function test262SetRuntimeArchive(archive: string): void {
-	libArchive = archive;
+export function test262SetNativeBuildInputs(inputs: Test262NativeBuildInputs): void {
+	nativeBuildInputs = {
+		toolchain: inputs.toolchain,
+		artifacts: {
+			c: { engine: inputs.artifacts.c.engine },
+			rust: { linkArgs: [...inputs.artifacts.rust.linkArgs] },
+		},
+	};
+}
+
+export function test262NativeArtifacts(): Test262NativeArtifactPaths {
+	return test262NativeBuildInputs().artifacts;
 }
 
 export function test262ReportPath(variant: "strict" | "sloppy"): string {
@@ -226,23 +250,37 @@ export function test262ResetStats() {
 }
 
 export function test262PrepareBuild() {
-	const toolchain = test262Toolchain();
+	const toolchain = (selectedToolchain ??= requireToolchain({ needsCxx: true }));
 	rmSync(BUILD_PATH, { recursive: true, force: true });
 	mkdirSync(BUILD_PATH, { recursive: true });
 
 	test262Log(
 		`Building LibMaligator${gcGenerational() ? " (generational)" : " (non-generational)"}...`,
 	);
-	const archives = ensureRuntimeLibrary(false, {
+	const config = resolveBuildConfig({
+		engine: {
+			eval: true,
+			realms: true,
+			regexp: true,
+			intl: { enabled: true },
+		},
+		surface: { webPlatform: true, node: false },
+	});
+	const nativeContext = resolveNativeBuildContext({
 		toolchain,
+		features: buildDerivationFromConfig(config).features,
 		compilerBake: {
+			kind: "source",
+			sourceDirectory: path.resolve("src"),
+			entrypoint: path.resolve("src/eval-compiler-entry.mts"),
 			bake: () =>
 				compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
 					stripTypes: stripTypesWithTypeScript,
 				}),
 		},
 	});
-	libArchive = archives[2]!;
+	const artifacts = ensureNativeArtifacts(nativeContext);
+	test262SetNativeBuildInputs({ toolchain, artifacts });
 
 	// The mains include gc.h, whose header layout + barrier code differ under
 	// MAL_GC_GENERATIONAL, so they must compile with the same defines as the lib;
@@ -262,7 +300,7 @@ export function test262PrepareBuild() {
 			"-o",
 			`${BUILD_PATH}/test262_main.o`,
 		],
-		{ stdio: "inherit" },
+		{ env: nativeContext.environment, stdio: "inherit" },
 	);
 	execFileSync(
 		toolchain.tools.cc.path,
@@ -277,7 +315,7 @@ export function test262PrepareBuild() {
 			"-o",
 			`${BUILD_PATH}/test262_batch.o`,
 		],
-		{ stdio: "inherit" },
+		{ env: nativeContext.environment, stdio: "inherit" },
 	);
 }
 
@@ -651,17 +689,18 @@ interface RunnableBatchEntry extends BatchEntry {
 	helperFunctionIndices: Array<number>;
 }
 
-/** Link a compiled batch object against the freshly built library. Cheap (~3% of cc). */
+/** Link a compiled batch object against the parent-selected artifacts. Cheap (~3% of cc). */
 async function linkBatch(objectPath: string, binPath: string) {
 	const startedAt = performance.now();
+	const artifacts = test262NativeArtifacts();
 	await execFileAsync(
 		test262Toolchain().tools.cc.path,
 		[
 			...CC_LINK_FLAGS,
 			objectPath,
 			`${BUILD_PATH}/test262_batch.o`,
-			libArchive,
-			...rustLinkArgs("", true, test262Toolchain().probes.cxxLinkArgs),
+			artifacts.c.engine,
+			...artifacts.rust.linkArgs,
 			"-o",
 			binPath,
 		],
@@ -782,7 +821,10 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 	let cacheKey = "";
 	if (useCache) {
 		cacheKey = batchCacheKey(
-			buildFingerprint([...CC_COMPILE_FLAGS, ...CC_LINK_FLAGS]),
+			buildFingerprint(
+				[...CC_COMPILE_FLAGS, ...CC_LINK_FLAGS],
+				test262Toolchain().fingerprint,
+			),
 			emitMode(),
 			plans.map((plan, index) => test262SourcePlanCacheInput(plan, composed[index]!)),
 		);
@@ -990,6 +1032,7 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 
 	const ccStartedAt = performance.now();
 	try {
+		const artifacts = test262NativeArtifacts();
 		writeFileSync(`${baseName}.c`, sources.join("\n"));
 		if (useCache) {
 			// Compile straight into the cache so a hit needs only a re-link.
@@ -1007,8 +1050,8 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 					...CC_COMPILE_FLAGS,
 					`${baseName}.c`,
 					`${BUILD_PATH}/test262_batch.o`,
-					libArchive,
-					...rustLinkArgs("", true, test262Toolchain().probes.cxxLinkArgs),
+					artifacts.c.engine,
+					...artifacts.rust.linkArgs,
 					"-o",
 					`${baseName}.bin`,
 				],
@@ -1138,12 +1181,13 @@ export async function test262RunSingle(
 
 	const ccStartedAt = performance.now();
 	try {
+		const artifacts = test262NativeArtifacts();
 		writeFileSync(
 			`${baseName}.c`,
 			`#include "vm.h"\n#include "vm_ops.h"\n#include "value_ops.h"\n#include "builtin_iterator.h"\n#include "builtin_async_iterator.h"\n#include "generator_object.h"\n\n${cSource}`,
 		);
 		await execFileAsync(
-			"cc",
+			test262Toolchain().tools.cc.path,
 			[
 				"-std=c2x",
 				...GENERATED_C_OPT_FLAGS,
@@ -1152,8 +1196,8 @@ export async function test262RunSingle(
 				...sanitizerCcFlags(),
 				`${baseName}.c`,
 				`${BUILD_PATH}/test262_main.o`,
-				libArchive,
-				...rustLinkArgs("", true, test262Toolchain().probes.cxxLinkArgs),
+				artifacts.c.engine,
+				...artifacts.rust.linkArgs,
 				"-o",
 				`${baseName}.bin`,
 			],

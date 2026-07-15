@@ -34,7 +34,6 @@ describe("host event loop (setTimeout ordering)", () => {
 			name: "hosttest",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

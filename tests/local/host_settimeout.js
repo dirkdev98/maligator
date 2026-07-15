@@ -1,4 +1,4 @@
-// End-to-end host event-loop test (isolate_todo.md Phase 1 JS surface). Exercises
+// End-to-end host event-loop test. Exercises
 // setTimeout ordering (by delay), clearTimeout, extra-arg forwarding, microtask vs
 // macrotask ordering, and a timer that schedules another timer. The runner
 // (scripts/hosttest.ts) asserts the exact stdout sequence.

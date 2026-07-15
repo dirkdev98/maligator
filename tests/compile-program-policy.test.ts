@@ -22,6 +22,12 @@ function entrypoint(source: string): string {
 }
 
 describe("compileEntrypoint build policy", () => {
+	test("allows disabled-feature usage when no build config is supplied", () => {
+		expect(() =>
+			compileEntrypointToBuffer(entrypoint('eval("1 + 1"); /a/.test("a");')),
+		).not.toThrow();
+	});
+
 	test("rejects eval when a resolved config disables it", () => {
 		expect(() =>
 			compileEntrypointToBuffer(entrypoint('eval("1 + 1");'), {

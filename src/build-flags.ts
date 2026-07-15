@@ -1,7 +1,7 @@
 /**
  * Shared C build-flag + run-env selection for the native backends. Centralises
- * the GC validation instruments so the local build (`local-build.ts`) and the
- * test262 runner agree on flags and on the build directory they use.
+ * the GC validation instruments so local builds and the test262 runner agree on
+ * build-affecting flags without sharing output directories.
  *
  * ## The instruments (and why ASAN is not the default here)
  *
@@ -50,6 +50,131 @@ export interface NativeBuildPlan {
 	warnings: Array<string>;
 }
 
+/** One source of truth for each selectable Intl service's C and Cargo gates. */
+export const INTL_SERVICE_FEATURES: Record<string, { cargo: string; define: string }> = {
+	collator: { cargo: "intl-collator", define: "MAL_INTL_HAS_COLLATOR" },
+	"number-format": { cargo: "intl-number-format", define: "MAL_INTL_HAS_NUMBER_FORMAT" },
+	"date-time-format": {
+		cargo: "intl-date-time-format",
+		define: "MAL_INTL_HAS_DATE_TIME_FORMAT",
+	},
+	"plural-rules": { cargo: "intl-plural-rules", define: "MAL_INTL_HAS_PLURAL_RULES" },
+	"list-format": { cargo: "intl-list-format", define: "MAL_INTL_HAS_LIST_FORMAT" },
+	segmenter: { cargo: "intl-segmenter", define: "MAL_INTL_HAS_SEGMENTER" },
+	"display-names": { cargo: "intl-display-names", define: "MAL_INTL_HAS_DISPLAY_NAMES" },
+	"relative-time-format": {
+		cargo: "intl-relative-time-format",
+		define: "MAL_INTL_HAS_RELATIVE_TIME_FORMAT",
+	},
+	"duration-format": {
+		cargo: "intl-duration-format",
+		define: "MAL_INTL_HAS_DURATION_FORMAT",
+	},
+};
+
+export interface NativeFeatureInput extends FeatureDefineOpts {
+	/** Selected per-service Intl Cargo features; empty means the full Intl surface. */
+	intlFeatures?: Array<string>;
+}
+
+/**
+ * Normalized feature identity shared by C compilation and the Rust Cargo build.
+ * `cDefines` and `cargoFeatures` are the exact, sorted arguments used by each
+ * backend and are always derived together.
+ */
+export interface NativeFeatureSpec {
+	evalEnabled: boolean;
+	realmsEnabled: boolean;
+	intlEnabled: boolean;
+	webPlatformEnabled: boolean;
+	regexpEnabled: boolean;
+	nodeEnabled: boolean;
+	intlFeatures: Array<string>;
+	cDefines: Array<string>;
+	cargoFeatures: Array<string>;
+}
+
+function sortedUnique(values: Array<string>): Array<string> {
+	return [...new Set(values)].sort();
+}
+
+/** Normalize legacy feature fields into the single native backend specification. */
+export function normalizeNativeFeatures(
+	input: NativeFeatureInput = {},
+): NativeFeatureSpec {
+	const evalEnabled = input.evalEnabled ?? true;
+	const realmsEnabled = input.realmsEnabled ?? true;
+	const intlEnabled = input.intlEnabled ?? true;
+	const webPlatformEnabled = input.webPlatformEnabled ?? true;
+	const regexpEnabled = input.regexpEnabled ?? true;
+	const nodeEnabled = input.nodeEnabled ?? false;
+	const services = Object.values(INTL_SERVICE_FEATURES);
+	const knownCargoFeatures = new Set(services.map(({ cargo }) => cargo));
+	const knownDisableDefines = new Set(services.map(({ define }) => `-D${define}=0`));
+	let intlFeatures = sortedUnique(input.intlFeatures ?? []);
+	const suppliedDefines = sortedUnique(input.intlServiceDefines ?? []);
+
+	if (intlEnabled) {
+		for (const feature of intlFeatures) {
+			if (!knownCargoFeatures.has(feature)) {
+				throw new Error(`unknown Intl Cargo feature: ${feature}`);
+			}
+		}
+		for (const define of suppliedDefines) {
+			if (!knownDisableDefines.has(define)) {
+				throw new Error(`unknown Intl service define: ${define}`);
+			}
+		}
+		if (intlFeatures.length === 0 && suppliedDefines.length > 0) {
+			const disabled = new Set(suppliedDefines);
+			intlFeatures = sortedUnique(
+				services
+					.filter(({ define }) => !disabled.has(`-D${define}=0`))
+					.map(({ cargo }) => cargo),
+			);
+		}
+	}
+
+	const intlDefines =
+		!intlEnabled || intlFeatures.length === 0
+			? []
+			: sortedUnique(
+					services
+						.filter(({ cargo }) => !intlFeatures.includes(cargo))
+						.map(({ define }) => `-D${define}=0`),
+				);
+	if (intlEnabled && suppliedDefines.length > 0) {
+		if (JSON.stringify(suppliedDefines) !== JSON.stringify(intlDefines)) {
+			throw new Error("Intl C defines and Cargo features select different services");
+		}
+	}
+
+	const cDefines = [
+		...(evalEnabled ? [] : ["-DMAL_EVAL=0"]),
+		...(realmsEnabled ? [] : ["-DMAL_REALMS=0"]),
+		...(intlEnabled ? intlDefines : ["-DMAL_INTL=0"]),
+		...(webPlatformEnabled ? [] : ["-DMAL_WEB_PLATFORM=0"]),
+		...(regexpEnabled ? [] : ["-DMAL_REGEXP=0"]),
+		...(nodeEnabled ? ["-DMAL_NODE=1"] : []),
+	];
+	const cargoFeatures = sortedUnique([
+		...(intlEnabled ? (intlFeatures.length > 0 ? intlFeatures : ["intl-full"]) : []),
+		...(webPlatformEnabled ? ["web-platform"] : []),
+		...(regexpEnabled ? ["regexp"] : []),
+	]);
+	return {
+		evalEnabled,
+		realmsEnabled,
+		intlEnabled,
+		webPlatformEnabled,
+		regexpEnabled,
+		nodeEnabled,
+		intlFeatures,
+		cDefines,
+		cargoFeatures,
+	};
+}
+
 /** Select optional production capabilities once, before any native build step. */
 export function selectNativeBuildPlan(
 	toolchain: Toolchain,
@@ -78,8 +203,8 @@ export function selectNativeBuildPlan(
 }
 
 /** True when `name` is set to a non-empty, non-"0" value. */
-function envOn(name: string): boolean {
-	const value = process.env[name];
+function envOn(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
+	const value = env[name];
 	return value !== undefined && value !== "" && value !== "0";
 }
 
@@ -88,11 +213,11 @@ function envOn(name: string): boolean {
  * (ASAN already implies UBSan in our flag set). Off by default so normal builds
  * stay at -O2 with no overhead or extra build directory.
  */
-export function sanitizerMode(): SanitizerMode {
-	if (envOn("MAL_ASAN")) {
+export function sanitizerMode(env: NodeJS.ProcessEnv = process.env): SanitizerMode {
+	if (envOn("MAL_ASAN", env)) {
 		return "asan";
 	}
-	if (envOn("MAL_UBSAN")) {
+	if (envOn("MAL_UBSAN", env)) {
 		return "ubsan";
 	}
 	return "none";
@@ -119,8 +244,8 @@ const SANITIZER_FLAGS: Record<SanitizerMode, Array<string>> = {
  * card-barrier sites then compile to nothing, §5.4a) for minimal/bare-metal
  * profiles; any other value (incl. unset) keeps it on.
  */
-export function gcGenerational(): boolean {
-	return process.env.MAL_GC_GENERATIONAL !== "0";
+export function gcGenerational(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env.MAL_GC_GENERATIONAL !== "0";
 }
 
 /**
@@ -132,8 +257,8 @@ export function gcGenerational(): boolean {
  * runtime) and `mal_gc_satb_record` is still a no-op, so it is behaviour-identical
  * while proving every barrier site reads a valid `old_value` on live paths.
  */
-export function gcConcurrent(): boolean {
-	return envOn("MAL_GC_CONCURRENT");
+export function gcConcurrent(env: NodeJS.ProcessEnv = process.env): boolean {
+	return envOn("MAL_GC_CONCURRENT", env);
 }
 
 /**
@@ -143,22 +268,19 @@ export function gcConcurrent(): boolean {
  * every cc flag set also changes the test262 artifact-cache fingerprint so the
  * 2026-07-10 default flip cannot silently reuse pre-flip (non-gen) objects.
  */
-export function gcDefines(): Array<string> {
+export function gcDefines(env: NodeJS.ProcessEnv = process.env): Array<string> {
 	return [
-		`-DMAL_GC_GENERATIONAL=${gcGenerational() ? 1 : 0}`,
-		...(gcConcurrent() ? ["-DMAL_GC_CONCURRENT=1"] : []),
+		`-DMAL_GC_GENERATIONAL=${gcGenerational(env) ? 1 : 0}`,
+		...(gcConcurrent(env) ? ["-DMAL_GC_CONCURRENT=1"] : []),
 	];
 }
 
 /**
- * Build-directory / binary suffix for the current mode, so toggling a sanitizer or
- * the generational collector does not thrash the normal -O2 archive (the header
- * layout / barrier code differs). Empty for the normal build.
+ * Binary suffix for the current sanitizer/GC mode. Native archives carry these
+ * exact compiler flags in their content-addressed identity. Empty for the normal build.
  *
- * `cacheSuffix` folds in a hash of the build-affecting build config
- * (build-config.ts `buildConfigCacheSuffix`), so an eval-disabled binary (which
- * embeds no compiler and defines `-DMAL_EVAL=0`) gets its own archive rather than
- * clobbering the default eval-on one. Empty (the default) keeps the unsuffixed dir.
+ * `cacheSuffix` is a human-facing build-config decoration only. It does not select
+ * or identify C/Rust archives. Empty (the default) keeps the unsuffixed binary name.
  */
 export function buildSuffix(cacheSuffix = ""): string {
 	const mode = sanitizerMode();
@@ -182,8 +304,11 @@ export function buildSuffix(cacheSuffix = ""): string {
  * Optimisation/debug flags for the current mode. Normal: -O2. Under a sanitizer:
  * -O1 -g (the sanitizer is slow, and -g + a non-zero -O keeps frames + symbols).
  */
-export function optFlags(plan?: NativeBuildPlan): Array<string> {
-	if (sanitizerMode() !== "none") {
+export function optFlags(
+	plan?: NativeBuildPlan,
+	env: NodeJS.ProcessEnv = process.env,
+): Array<string> {
+	if (sanitizerMode(env) !== "none") {
 		return ["-O1", "-g"];
 	}
 	return plan?.lto === true ? ["-O2", "-flto"] : ["-O2"];
@@ -246,18 +371,26 @@ export function featureDefines(opts: FeatureDefineOpts = {}): Array<string> {
 export function runtimeCcFlags(
 	opts: FeatureDefineOpts = {},
 	plan?: NativeBuildPlan,
+	env: NodeJS.ProcessEnv = process.env,
 ): Array<string> {
 	return [
-		...optFlags(plan),
-		...SANITIZER_FLAGS[sanitizerMode()],
-		...gcDefines(),
+		...optFlags(plan, env),
+		...SANITIZER_FLAGS[sanitizerMode(env)],
+		...gcDefines(env),
 		...featureDefines(opts),
 	];
 }
 
 /** Extra cc flags (compile + link) for an emitted translation unit. */
-export function ccExtraFlags(plan?: NativeBuildPlan): Array<string> {
-	return [...optFlags(plan), ...SANITIZER_FLAGS[sanitizerMode()], ...gcDefines()];
+export function ccExtraFlags(
+	plan?: NativeBuildPlan,
+	env: NodeJS.ProcessEnv = process.env,
+): Array<string> {
+	return [
+		...optFlags(plan, env),
+		...SANITIZER_FLAGS[sanitizerMode(env)],
+		...gcDefines(env),
+	];
 }
 
 /**

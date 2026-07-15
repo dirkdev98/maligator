@@ -282,9 +282,17 @@ function allocateRegistersForFunction(fn: IRFunction) {
 	// Use referential equality to track last use of virtual registers
 	const registerLastUsedIn = new Map<number, IRInstruction>();
 	const registerUsedInMultipleBlocks = new Map<number, Set<IRBlock>>();
+	const registerDefinitionCounts = new Map<number, number>();
 
 	for (const block of orderedBlocks) {
 		for (const instruction of block.instructions) {
+			const defined = definedRegister(instruction);
+			if (defined !== null) {
+				registerDefinitionCounts.set(
+					defined,
+					(registerDefinitionCounts.get(defined) ?? 0) + 1,
+				);
+			}
 			if (!("registers" in instruction)) {
 				continue;
 			}
@@ -310,12 +318,19 @@ function allocateRegistersForFunction(fn: IRFunction) {
 		boolean: [],
 	};
 	let highestUsedRegister = -1;
+	// Last-static-use reuse is only sound for SSA-like functions. Locals become
+	// multi-defined registers (declaration initialization plus later assignments),
+	// whose disjoint CFG live ranges require interference analysis we do not yet do.
+	const hasMultipleDefinitions = [...registerDefinitionCounts.values()].some(
+		(count) => count > 1,
+	);
 
 	// A register used in multiple blocks may be live across a loop back edge,
 	// which the last-static-use model cannot see; those are never freed. Nor are
 	// parameter registers, whose physical register holds a boxed incoming
 	// argument and must not be reused for, say, a numeric literal.
 	const isFreeable = (virtualRegister: number, instruction: IRInstruction) =>
+		!hasMultipleDefinitions &&
 		virtualRegister >= fn.parameterCount &&
 		instruction === registerLastUsedIn.get(virtualRegister) &&
 		(registerUsedInMultipleBlocks.get(virtualRegister)?.size ?? 0) <= 1;
@@ -333,6 +348,11 @@ function allocateRegistersForFunction(fn: IRFunction) {
 			if (!("registers" in instruction)) {
 				continue;
 			}
+			const freeAfterInstruction: Record<RegisterRep, Set<number>> = {
+				boxed: new Set(),
+				number: new Set(),
+				boolean: new Set(),
+			};
 
 			for (let i = 0; i < instruction.registers.length; ++i) {
 				const virtualRegister = instruction.registers[i] ?? -1;
@@ -350,29 +370,28 @@ function allocateRegistersForFunction(fn: IRFunction) {
 					instruction.registers[i] = mappedValue;
 
 					if (isFreeable(virtualRegister, instruction)) {
-						// Free the register if this is the last use.
-						free.push(mappedValue);
+						freeAfterInstruction[rep].add(mappedValue);
 					}
 
 					continue;
 				}
 
-				const isLastUse = isFreeable(virtualRegister, instruction);
-
 				let mappedRegister: number;
 				if (free.length > 0) {
-					// Don't even claim it if it is the last use.
-					mappedRegister = isLastUse ? free[0]! : free.pop()!;
+					mappedRegister = free.pop()!;
 				} else {
 					mappedRegister = ++highestUsedRegister;
-					if (isLastUse) {
-						free.push(mappedRegister);
-						free.sort((a, b) => a - b);
-					}
 				}
 
 				instruction.registers[i] = mappedRegister;
 				virtualRegisterToRealRegister.set(virtualRegister, mappedRegister);
+				if (isFreeable(virtualRegister, instruction)) {
+					freeAfterInstruction[rep].add(mappedRegister);
+				}
+			}
+
+			for (const rep of ["boxed", "number", "boolean"] as const) {
+				freeRegisters[rep].push(...freeAfterInstruction[rep]);
 			}
 		}
 	}

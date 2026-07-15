@@ -7,8 +7,8 @@
 
 /*
  * The running fiber (isolate-local). Set by mal_fiber_load_exec right before a
- * switch-in, so it is always the fiber about to run. TODO(SMP): _Thread_local
- * once schedulers run on OS threads (isolate_todo.md Phase 4).
+ * switch-in, so it is always the fiber about to run. SMP requires _Thread_local
+ * once schedulers run on OS threads (docs/roadmaps/isolate-reactor.md).
  */
 MalFiber *mal_current_fiber = nullptr;
 

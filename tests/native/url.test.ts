@@ -22,7 +22,6 @@ describe("WHATWG URL / URLSearchParams", () => {
 			name: "urltest",
 			mainFile: HOST_MAIN,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

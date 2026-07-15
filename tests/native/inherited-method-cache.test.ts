@@ -23,28 +23,24 @@ describe("inherited built-in method and native call caches", () => {
 			name: "inherited-method-cache",
 			compiled: true,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/inherited-method-cache.js",
 			name: "inherited-method-cache-ni",
 			compiled: false,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 		monkeyPatch = buildNativeBinary({
 			fixture: "tests/local/inherited-method-cache-monkey-patch.js",
 			name: "inherited-method-cache-monkey-patch",
 			compiled: true,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 		accessor = buildNativeBinary({
 			fixture: "tests/local/inherited-method-cache-accessor.js",
 			name: "inherited-method-cache-accessor",
 			compiled: true,
 			outDir,
-			skipRuntimeBuild: true,
 		});
 	});
 

@@ -865,7 +865,7 @@ static MalValue mal_builtin_string_prototype_trim_end(MalVm *vm, MalValue this_v
 }
 
 static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue this_value, bool to_upper) {
-    // TODO(unicode): ASCII-only case mapping for now.
+    // Case mapping is currently ASCII-only.
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     usize length = mal_string_length(string);
     const c16 *source = mal_string_code_units(string);

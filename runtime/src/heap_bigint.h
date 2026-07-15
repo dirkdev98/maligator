@@ -8,7 +8,7 @@ typedef struct MalString MalString;
 /**
  * BigInt primitive value.
  *
- * TODO(bigint): this is a 128-bit-backed stand-in, not arbitrary precision.
+ * This is a 128-bit-backed stand-in, not arbitrary precision.
  * Values beyond the i128 range wrap. The 128-bit width is deliberate so the
  * full i64 and u64 ranges used by BigInt64Array/BigUint64Array round-trip.
  */

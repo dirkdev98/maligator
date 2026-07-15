@@ -7,7 +7,7 @@
  * that the reactor drives: create sockets in non-blocking mode, and expose the
  * pieces the reactor's readiness model needs (accept-when-readable, complete a
  * connect-when-writable). IPv4 only for now (numeric hosts; DNS + IPv6 arrive with
- * client fetch). See isolate_todo.md — the WinterTC fetch server sits on these.
+ * client fetch). The WinterTC fetch server sits on these.
  */
 
 /*

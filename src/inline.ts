@@ -1,6 +1,6 @@
 /**
  * Inliner eligibility analysis — foundation increment of the small-function inliner
- * (gc_todo.md task #6 / §N.7 step 4).
+ * (see docs/roadmaps/gc.md).
  *
  * Identifies direct `call` sites whose callee is a statically-known function (a
  * `createFunction` result) and whose target is safe + cheap to inline. This module
@@ -780,7 +780,7 @@ export function debugMethodInlineSites(program: IntermediateProgram): string {
 // loop calling `cb` directly (so the direct-call inliner folds `cb`'s body in and
 // DCE drops the closure); else fall back to the normal call. This pass only
 // *detects* such sites — zero miscompile risk — to validate the premise and feed
-// the substitution. See gc_todo.md task #6.
+// the substitution. See docs/roadmaps/gc.md.
 // ---------------------------------------------------------------------------
 
 /**

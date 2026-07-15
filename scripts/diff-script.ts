@@ -10,14 +10,18 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
+import { normalizeNativeFeatures } from "../src/build-flags.ts";
+import { compileEntrypointToBuffer } from "../src/compile-program.ts";
 import { emitVmDefinition } from "../src/emit-vm.ts";
 import { executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { buildLocalBinary } from "../src/local-build.ts";
 import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
+import { resolveNativeBuildContext } from "../src/native-build-context.ts";
 import { parseScript } from "../src/parser.ts";
 import { allocateRegisters } from "../src/register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
+import { stripTypesWithTypeScript } from "../src/typescript-strip.ts";
 
 const fixture = process.argv[2];
 if (fixture === undefined) {
@@ -27,6 +31,19 @@ if (fixture === undefined) {
 const strict = process.argv.includes("--strict");
 const stress = process.argv.includes("--stress");
 const source = readFileSync(path.resolve(fixture), "utf-8");
+const features = normalizeNativeFeatures();
+const context = resolveNativeBuildContext({
+	features,
+	compilerBake: {
+		kind: "source",
+		sourceDirectory: path.resolve("src"),
+		entrypoint: path.resolve("src/eval-compiler-entry.mts"),
+		bake: () =>
+			compileEntrypointToBuffer(path.resolve("src/eval-compiler-entry.mts"), {
+				stripTypes: stripTypesWithTypeScript,
+			}),
+	},
+});
 
 function buildBinary(name: string, compiled: boolean): string {
 	const parsed = parseScript(source, { strict });
@@ -40,7 +57,7 @@ function buildBinary(name: string, compiled: boolean): string {
 	allocateRegisters(ir);
 	const definition = lowerIrProgramToVmDefinition(ir);
 	const cSource = emitVmDefinition(definition, { compiled });
-	return buildLocalBinary({ name, cSource, verbose: false });
+	return buildLocalBinary({ context, name, cSource, verbose: false }).binaryPath;
 }
 
 function run(binary: string): { out: string; code: number } {

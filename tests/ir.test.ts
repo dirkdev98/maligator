@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "../src/ir.ts";
 import { parseScript } from "../src/parser.ts";
+import { allocateRegisters } from "../src/register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
 function compileScript(source: string, evalCompletion = false) {
@@ -77,6 +78,73 @@ test("var declarations initialize once in the owning prologue", () => {
 		(instruction) => instruction.type === "storeLocal",
 	);
 	expect(functionStores).toHaveLength(0);
+});
+
+test("hoisted closures do not claim captured var storage from their owner", () => {
+	const program = compileScript(`
+		function outer() {
+			var value = 1;
+			function read() { return value; }
+			return read();
+		}
+		outer();
+	`);
+	const outer = functionNamed(program, "outer");
+	const read = functionNamed(program, "read");
+	const load = instructionsOf(read).find(
+		(instruction) => instruction.type === "loadCaptured",
+	);
+
+	expect(read.nextCapturedIndex).toBe(0);
+	expect(load).toMatchObject({
+		type: "loadCaptured",
+		functionIndex: outer.functionIndex,
+	});
+	if (load?.type !== "loadCaptured") return;
+	expect(instructionsOf(outer)).toContainEqual(
+		expect.objectContaining({
+			type: "storeCaptured",
+			functionIndex: outer.functionIndex,
+			index: load.index,
+		}),
+	);
+});
+
+test("register allocation keeps distinct call operands live through the instruction", () => {
+	const call: IRInstruction = { type: "call", registers: [2, 3, 1, 4] };
+	const fn = {
+		parameterCount: 0,
+		nextRegisterDestination: 5,
+		blocks: [
+			{
+				instructions: [{ type: "createObject", registers: [1] }, call],
+			},
+		],
+	} as unknown as IRFunction;
+	allocateRegisters({ functions: [fn] } as unknown as IntermediateProgram);
+
+	expect(new Set(call.registers.slice(1)).size).toBe(3);
+});
+
+test("register allocation does not reuse registers in a non-SSA function", () => {
+	const fn = {
+		parameterCount: 0,
+		nextRegisterDestination: 5,
+		blocks: [
+			{
+				instructions: [
+					{ type: "createUndefined", registers: [0] },
+					{ type: "createNumber", registers: [1], value: 1 },
+					{ type: "move", registers: [0, 1] },
+					{ type: "createObject", registers: [2] },
+					{ type: "call", registers: [3, 4, 2] },
+				],
+			},
+		],
+	} as unknown as IRFunction;
+	allocateRegisters({ functions: [fn] } as unknown as IntermediateProgram);
+
+	expect(fn.nextRegisterDestination).toBe(5);
 });
 
 test("eval var declarations create configurable globals", () => {

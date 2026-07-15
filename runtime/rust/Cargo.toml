@@ -54,8 +54,8 @@ writeable = { version = "0.6", optional = true }
 regress = { version = "0.11", features = ["utf16"], optional = true }
 # ada-url: the WHATWG URL parser (wraps the C++ `ada` library). Optional + gated
 # behind the `web-platform` feature (engine surface.webPlatform): dropping it drops
-# the C++ URL parser AND the `-lc++` every ada link otherwise forces (rustLinkArgs
-# only appends it when web-platform is on). See src/url.rs + mal_url.h.
+# the C++ URL parser AND its C++ runtime link argument. The native artifact resolver
+# appends that argument only when web-platform is on. See src/url.rs + mal_url.h.
 ada-url = { version = "3", optional = true }
 
 [features]

@@ -117,7 +117,7 @@ typedef enum MalHeapType : u8 {
     MAL_HEAP_SYMBOL,
     /**
      * BigInt primitive (MalBigInt). Currently 128-bit backed, not arbitrary
-     * precision. TODO(bigint): real arbitrary-precision digits.
+     * precision. BigInt still needs real arbitrary-precision digits.
      */
     MAL_HEAP_BIGINT,
     MAL_HEAP_OBJECT,

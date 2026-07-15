@@ -8,7 +8,7 @@ typedef struct MalVm MalVm;
 typedef struct MalObject MalObject;
 
 /*
- * Host timers (isolate_todo.md Phase 1 — the JS-visible surface of the reactor).
+ * Host timers (the JS-visible surface of the reactor).
  *
  * `setTimeout(cb, ms, ...args)` registers a one-shot reactor timer; when it fires,
  * the callback becomes a runnable macrotask. The host event loop
