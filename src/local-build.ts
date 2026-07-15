@@ -5,6 +5,8 @@ import { buildSuffix, ccExtraFlags, cmakeCFlags, featureDefines } from "./build-
 import { ensureCompilerWire } from "./compiler-bake.ts";
 import type { CompilerBakeOptions } from "./compiler-bake.ts";
 import { ensureRustLibrary, RUST_INCLUDE_DIR, rustLinkArgs } from "./rust-build.ts";
+import { requireToolchain } from "./toolchain.ts";
+import type { Toolchain } from "./toolchain.ts";
 
 const LOCAL_DIR = ".cache/local";
 
@@ -20,6 +22,8 @@ function buildDirFor(cacheSuffix: string): string {
 
 /** The build dimensions that select a distinct cached archive. */
 interface RuntimeBuildDimensions {
+	/** Preflighted native toolchain shared with doctor. */
+	toolchain?: Toolchain;
 	/** Whether to embed the baked compiler + allow eval/Function. Default true. */
 	evalEnabled?: boolean;
 	/** Whether to compile the Realm surface (`-DMAL_REALMS`). Default true. */
@@ -45,6 +49,8 @@ interface RuntimeBuildDimensions {
 }
 
 export interface LocalBuildOptions {
+	/** Preflighted native toolchain; discovered automatically when omitted. */
+	toolchain?: Toolchain;
 	/**
 	 * Base name for the emitted `.c` and the linked binary under `.cache/local`.
 	 */
@@ -198,6 +204,8 @@ export function ensureRuntimeLibrary(
 	const webPlatformEnabled = dimensions.webPlatformEnabled ?? true;
 	const regexpEnabled = dimensions.regexpEnabled ?? true;
 	const nodeEnabled = dimensions.nodeEnabled ?? false;
+	const toolchain =
+		dimensions.toolchain ?? requireToolchain({ needsCxx: webPlatformEnabled });
 	const cacheSuffix = dimensions.cacheSuffix ?? "";
 	const rustCacheSuffix = dimensions.rustCacheSuffix ?? "";
 	const buildDir = buildDirFor(cacheSuffix);
@@ -215,12 +223,17 @@ export function ensureRuntimeLibrary(
 
 	// Re-running configure with unchanged cache variables is cheap.
 	execFileSync(
-		"cmake",
+		toolchain.tools.cmake.path,
 		[
 			"-S",
 			"runtime",
 			"-B",
 			buildDir,
+			`-DCMAKE_C_COMPILER=${toolchain.tools.cc.path}`,
+			`-DCMAKE_AR=${toolchain.tools.ar.path}`,
+			...(toolchain.tools.cxx === undefined
+				? []
+				: [`-DCMAKE_CXX_COMPILER=${toolchain.tools.cxx.path}`]),
 			`-DCMAKE_C_FLAGS=${cmakeCFlags({ evalEnabled, realmsEnabled, intlEnabled, intlServiceDefines, webPlatformEnabled, regexpEnabled, nodeEnabled })}`,
 		],
 		{
@@ -229,7 +242,7 @@ export function ensureRuntimeLibrary(
 	);
 
 	execFileSync(
-		"cmake",
+		toolchain.tools.cmake.path,
 		["--build", buildDir, "--target", "LibMaligator", "MalHost", "MalRuntime"],
 		{ stdio },
 	);
@@ -238,13 +251,17 @@ export function ensureRuntimeLibrary(
 	// engine (regress), always; Intl (ICU4X) and the URL (ada) parser by feature.
 	// Intl-off drops the ICU crates, web-off drops ada; the archive is keyed by
 	// rustCacheSuffix so variants coexist.
-	ensureRustLibrary(verbose, {
-		intlEnabled,
-		features: intlFeatures,
-		webPlatform: webPlatformEnabled,
-		regexp: regexpEnabled,
-		cacheSuffix: rustCacheSuffix,
-	});
+	ensureRustLibrary(
+		verbose,
+		{
+			intlEnabled,
+			features: intlFeatures,
+			webPlatform: webPlatformEnabled,
+			regexp: regexpEnabled,
+			cacheSuffix: rustCacheSuffix,
+		},
+		toolchain,
+	);
 
 	// Link order: runtime -> host -> engine (dependents first). rustLinkArgs() is
 	// appended after these by the caller (the engine references its symbols).
@@ -261,11 +278,12 @@ export function buildLoadDriver(
 	verbose: boolean,
 	compilerBake?: CompilerBakeOptions,
 ): string {
-	const libs = ensureRuntimeLibrary(verbose, { compilerBake });
+	const toolchain = requireToolchain({ needsCxx: true });
+	const libs = ensureRuntimeLibrary(verbose, { compilerBake, toolchain });
 	const binPath = path.join(LOCAL_DIR, `MaligatorLoad${buildSuffix()}`);
 
 	execFileSync(
-		"cc",
+		toolchain.tools.cc.path,
 		[
 			"-std=c2x",
 			...ccExtraFlags(),
@@ -279,7 +297,7 @@ export function buildLoadDriver(
 			RUST_INCLUDE_DIR,
 			"runtime/load_main.c",
 			...libs,
-			...rustLinkArgs(),
+			...rustLinkArgs("", true, toolchain.probes.cxxLinkArgs),
 			"-o",
 			binPath,
 		],
@@ -301,6 +319,8 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 	const webPlatformEnabled = options.webPlatformEnabled ?? true;
 	const regexpEnabled = options.regexpEnabled ?? true;
 	const nodeEnabled = options.nodeEnabled ?? false;
+	const toolchain =
+		options.toolchain ?? requireToolchain({ needsCxx: webPlatformEnabled });
 	const cacheSuffix = options.cacheSuffix ?? "";
 	const rustCacheSuffix = options.rustCacheSuffix ?? "";
 	const libs = options.skipRuntimeBuild
@@ -314,6 +334,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 				webPlatformEnabled,
 				regexpEnabled,
 				nodeEnabled,
+				toolchain,
 				cacheSuffix,
 				rustCacheSuffix,
 				compilerBake: options.compilerBake,
@@ -329,7 +350,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 	writeFileSync(cPath, options.cSource);
 
 	execFileSync(
-		"cc",
+		toolchain.tools.cc.path,
 		[
 			"-std=c2x",
 			...ccExtraFlags(),
@@ -355,7 +376,7 @@ export function buildLocalBinary(options: LocalBuildOptions): string {
 			cPath,
 			options.mainFile ?? "runtime/test262_main.c",
 			...libs,
-			...rustLinkArgs(rustCacheSuffix, webPlatformEnabled),
+			...rustLinkArgs(rustCacheSuffix, webPlatformEnabled, toolchain.probes.cxxLinkArgs),
 			"-o",
 			binPath,
 		],

@@ -10,9 +10,14 @@ import { CLI_HELP, CliUsageError, MALIGATOR_VERSION, parseCliArgs } from "../src
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliEntry = path.join(repoRoot, "src/index.ts");
 
-function invokeCli(args: Array<string>, cwd = repoRoot) {
+function invokeCli(
+	args: Array<string>,
+	cwd = repoRoot,
+	env: NodeJS.ProcessEnv = process.env,
+) {
 	return spawnSync(process.execPath, [cliEntry, ...args], {
 		cwd,
+		env,
 		encoding: "utf-8",
 	});
 }
@@ -105,6 +110,18 @@ describe("command shell", () => {
 		const result = invokeCli(["build"]);
 		expect(result.status).toBe(1);
 		expect(result.stdout).toContain("run 'maligator init'");
+	});
+
+	it("returns nonzero and actionable diagnostics when doctor cannot find tools", () => {
+		const result = invokeCli(["doctor"], repoRoot, { ...process.env, PATH: "" });
+		expect(result.status).toBe(1);
+		expect(result.stdout).toContain("[missing] cmake");
+		expect(result.stdout).toContain("Install Rustup");
+		if (process.platform === "darwin") {
+			expect(result.stdout).toContain("xcode-select --install");
+		} else if (process.platform === "linux") {
+			expect(result.stdout).toContain("apt install build-essential");
+		}
 	});
 });
 

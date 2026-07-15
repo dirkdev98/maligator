@@ -1,4 +1,4 @@
-import { execFile, execSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
@@ -23,6 +23,8 @@ import { allocateRegisters } from "../register-alloc.ts";
 import { ensureRustLibrary, rustLinkArgs } from "../rust-build.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../semantic-program.ts";
+import { requireToolchain } from "../toolchain.ts";
+import type { Toolchain } from "../toolchain.ts";
 import { stripTypesWithTypeScript } from "../typescript-strip.ts";
 import {
 	batchCacheKey,
@@ -46,6 +48,12 @@ import type { Test262File, Test262Result } from "./types.ts";
 import { mergeVmDefinitions } from "./vm-definition-merge.ts";
 
 const execFileAsync = promisify(execFile);
+let selectedToolchain: Toolchain | undefined;
+
+function test262Toolchain(): Toolchain {
+	selectedToolchain ??= requireToolchain({ needsCxx: true });
+	return selectedToolchain;
+}
 
 if (
 	process.env.MAL_LTO !== undefined &&
@@ -226,6 +234,7 @@ export function test262ResetStats() {
 }
 
 export function test262PrepareBuild() {
+	const toolchain = test262Toolchain();
 	rmSync(BUILD_PATH, { recursive: true, force: true });
 	mkdirSync(BUILD_PATH, { recursive: true });
 
@@ -243,29 +252,60 @@ export function test262PrepareBuild() {
 	// Configure every build dimension, including the unsuffixed default. Relying on
 	// an out-of-band initial configuration can leave runtime/build with empty C flags
 	// even though the normal runtime contract is -O2.
-	execSync(
-		`cmake -S runtime -B ${RUNTIME_BUILD_DIR} -DCMAKE_C_FLAGS=${JSON.stringify(cmakeCFlags())}`,
-		{
-			stdio: "ignore",
-		},
+	execFileSync(
+		toolchain.tools.cmake.path,
+		[
+			"-S",
+			"runtime",
+			"-B",
+			RUNTIME_BUILD_DIR,
+			`-DCMAKE_C_COMPILER=${toolchain.tools.cc.path}`,
+			`-DCMAKE_AR=${toolchain.tools.ar.path}`,
+			`-DCMAKE_C_FLAGS=${cmakeCFlags()}`,
+		],
+		{ stdio: "ignore" },
 	);
-	execSync(`cmake --build ${RUNTIME_BUILD_DIR}`, { stdio: "ignore" });
+	execFileSync(toolchain.tools.cmake.path, ["--build", RUNTIME_BUILD_DIR], {
+		stdio: "ignore",
+	});
 
 	// Build the Rust shim once per pass; cheap when cached. Date tz + Intl
 	// (ICU4X) and the RegExp engine (regress), both in libmal_rust.a.
-	ensureRustLibrary();
+	ensureRustLibrary(false, {}, toolchain);
 
 	// The mains include gc.h, whose header layout + barrier code differ under
 	// MAL_GC_GENERATIONAL, so they must compile with the same defines as the lib;
 	// sanitizerCcFlags() likewise keeps them instrumented in lockstep with the lib.
 	const mainFlags = [...gcDefines(), ...sanitizerCcFlags()].join(" ");
 	test262Log("Compiling harness mains...");
-	execSync(
-		`cc -std=c2x -O1 -I runtime/src ${mainFlags} -c runtime/test262_main.c -o ${BUILD_PATH}/test262_main.o`,
+	execFileSync(
+		toolchain.tools.cc.path,
+		[
+			"-std=c2x",
+			"-O1",
+			"-I",
+			"runtime/src",
+			...mainFlags.split(" ").filter(Boolean),
+			"-c",
+			"runtime/test262_main.c",
+			"-o",
+			`${BUILD_PATH}/test262_main.o`,
+		],
 		{ stdio: "inherit" },
 	);
-	execSync(
-		`cc -std=c2x -O1 -I runtime/src ${mainFlags} -c runtime/test262_batch.c -o ${BUILD_PATH}/test262_batch.o`,
+	execFileSync(
+		toolchain.tools.cc.path,
+		[
+			"-std=c2x",
+			"-O1",
+			"-I",
+			"runtime/src",
+			...mainFlags.split(" ").filter(Boolean),
+			"-c",
+			"runtime/test262_batch.c",
+			"-o",
+			`${BUILD_PATH}/test262_batch.o`,
+		],
 		{ stdio: "inherit" },
 	);
 }
@@ -644,13 +684,13 @@ interface RunnableBatchEntry extends BatchEntry {
 async function linkBatch(objectPath: string, binPath: string) {
 	const startedAt = performance.now();
 	await execFileAsync(
-		"cc",
+		test262Toolchain().tools.cc.path,
 		[
 			...CC_LINK_FLAGS,
 			objectPath,
 			`${BUILD_PATH}/test262_batch.o`,
 			LIB_ARCHIVE,
-			...rustLinkArgs(),
+			...rustLinkArgs("", true, test262Toolchain().probes.cxxLinkArgs),
 			"-o",
 			binPath,
 		],
@@ -984,20 +1024,20 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 			// Compile straight into the cache so a hit needs only a re-link.
 			ensureCacheDir();
 			await execFileAsync(
-				"cc",
+				test262Toolchain().tools.cc.path,
 				[...CC_COMPILE_FLAGS, "-c", `${baseName}.c`, "-o", objectCachePath(cacheKey)],
 				{ timeout: TEST262_METADATA.compileTimeoutMs },
 			);
 		} else {
 			// Baseline path: compile + link in one shot, no cache.
 			await execFileAsync(
-				"cc",
+				test262Toolchain().tools.cc.path,
 				[
 					...CC_COMPILE_FLAGS,
 					`${baseName}.c`,
 					`${BUILD_PATH}/test262_batch.o`,
 					LIB_ARCHIVE,
-					...rustLinkArgs(),
+					...rustLinkArgs("", true, test262Toolchain().probes.cxxLinkArgs),
 					"-o",
 					`${baseName}.bin`,
 				],
@@ -1142,7 +1182,7 @@ export async function test262RunSingle(
 				`${baseName}.c`,
 				`${BUILD_PATH}/test262_main.o`,
 				LIB_ARCHIVE,
-				...rustLinkArgs(),
+				...rustLinkArgs("", true, test262Toolchain().probes.cxxLinkArgs),
 				"-o",
 				`${baseName}.bin`,
 			],

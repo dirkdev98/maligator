@@ -1,6 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { statSync } from "node:fs";
 import * as path from "node:path";
+import { requireToolchain } from "./toolchain.ts";
+import type { Toolchain } from "./toolchain.ts";
+
+export { resolvePathExecutable } from "./toolchain.ts";
 
 /**
  * Build + link integration for `mal_rust`, the runtime's single Rust FFI shim
@@ -75,38 +78,23 @@ export function rustLibPath(cacheSuffix = ""): string {
  * The shim links clean on macOS with no frameworks so far. Extend here if a
  * future dependency introduces an undefined-symbol link error.
  *
- * `-lc++`: ada-url (URL parser) wraps the C++ `ada` library, whose objects are
- * bundled into libmal_rust.a, so the final link needs the C++ stdlib. On this
- * macOS/clang toolchain that is libc++ (`-lc++`); a gcc/Linux port would use
- * `-lstdc++`. It is appended ONLY when `webPlatform` is on — with ada gated out
- * (surface.webPlatform: false) there is no C++ to link, so the flag is dropped.
+ * ada-url wraps a C++ library whose objects are bundled into libmal_rust.a. The
+ * toolchain probe supplies the working C++ runtime link argument (`-lc++` or
+ * `-lstdc++`) only when the web-platform feature requires it.
  */
-export function rustLinkArgs(cacheSuffix = "", webPlatform = true): Array<string> {
-	return webPlatform ? [rustLibPath(cacheSuffix), "-lc++"] : [rustLibPath(cacheSuffix)];
+export function rustLinkArgs(
+	cacheSuffix = "",
+	webPlatform = true,
+	cxxLinkArgs: Array<string> = webPlatform
+		? requireToolchain({ needsCxx: true }).probes.cxxLinkArgs
+		: [],
+): Array<string> {
+	return webPlatform
+		? [rustLibPath(cacheSuffix), ...cxxLinkArgs]
+		: [rustLibPath(cacheSuffix)];
 }
 
 const builtConfigs = new Set<string>();
-
-/** Resolve from exactly the caller's PATH; never add package-manager directories. */
-export function resolvePathExecutable(
-	name: string,
-	searchPath = process.env.PATH ?? "",
-): string {
-	for (const directory of searchPath.split(path.delimiter)) {
-		const candidate = path.join(directory || ".", name);
-		try {
-			const stats = statSync(candidate);
-			if (!stats.isFile()) continue;
-			// The self-host's minimal Stats omits mode; its isolated PATH contains only
-			// symlinks created from executables already resolved by this Node-hosted check.
-			if (stats.mode !== undefined && (stats.mode & 0o111) === 0) continue;
-			return candidate;
-		} catch {
-			// Keep searching for a regular executable file.
-		}
-	}
-	throw new Error(`required executable '${name}' was not found on PATH`);
-}
 
 /**
  * Build `libmal_rust.a` (release) for the given Intl config if not already built
@@ -115,29 +103,22 @@ export function resolvePathExecutable(
  * coexist). Returns the path to the static archive. Cheap to call repeatedly:
  * cargo no-ops when nothing changed, and this memoizes per config.
  */
-export function ensureRustLibrary(verbose = false, config: RustBuildConfig = {}): string {
+export function ensureRustLibrary(
+	verbose = false,
+	config: RustBuildConfig = {},
+	selectedToolchain?: Toolchain,
+): string {
 	const intlEnabled = config.intlEnabled ?? true;
 	const cacheSuffix = config.cacheSuffix ?? "";
 	if (builtConfigs.has(cacheSuffix)) {
 		return rustLibPath(cacheSuffix);
 	}
 
+	const toolchain =
+		selectedToolchain ?? requireToolchain({ needsCxx: config.webPlatform ?? true });
 	const currentPath = process.env.PATH ?? "";
-	const rustupPath = resolvePathExecutable("rustup", currentPath);
-
-	// `rustup which cargo`, run inside the crate, honours rust-toolchain.toml and
-	// gives us the toolchain bin dir to put on PATH so cargo finds its own rustc
-	// (there are no rustup proxies on PATH in this environment).
-	const cargoPath = execFileSync(rustupPath, ["which", "cargo"], {
-		cwd: RUST_DIR,
-		env: { ...process.env, PATH: currentPath },
-		encoding: "utf-8",
-	}).trim();
-	const rustcPath = execFileSync(rustupPath, ["which", "rustc"], {
-		cwd: RUST_DIR,
-		env: { ...process.env, PATH: currentPath },
-		encoding: "utf-8",
-	}).trim();
+	const cargoPath = toolchain.tools.cargo.path;
+	const rustcPath = toolchain.tools.rustc.path;
 	const toolchainBin = path.dirname(cargoPath);
 
 	// Build an explicit feature set from the resolved config, always with
@@ -169,6 +150,8 @@ export function ensureRustLibrary(verbose = false, config: RustBuildConfig = {})
 		env: {
 			...process.env,
 			PATH: `${toolchainBin}${path.delimiter}${currentPath}`,
+			CC: toolchain.tools.cc.path,
+			...(toolchain.tools.cxx === undefined ? {} : { CXX: toolchain.tools.cxx.path }),
 			CARGO_HOME,
 			CARGO_TARGET_DIR: rustTargetDir(cacheSuffix),
 			RUSTC: rustcPath,

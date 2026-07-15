@@ -35,6 +35,13 @@ import {
 } from "./semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
 import { serializeVmDefinition } from "./serialize-vm.ts";
+import {
+	formatToolchainReport,
+	inspectToolchain,
+	requireToolchain,
+	ToolchainError,
+} from "./toolchain.ts";
+import type { Toolchain } from "./toolchain.ts";
 import { stripTypesWithTypeScript } from "./typescript-strip.ts";
 import { log } from "./utils.ts";
 
@@ -62,8 +69,9 @@ try {
 		}
 	}
 	if (parsed.kind === "doctor") {
-		log.info("error: 'maligator doctor' is not implemented yet");
-		process.exit(1);
+		const report = inspectToolchain();
+		log.info(formatToolchainReport(report));
+		process.exit(report.toolchain === undefined ? 1 : 0);
 	}
 	command = parsed;
 } catch (error) {
@@ -113,6 +121,19 @@ if (!existsSync(entrypoint)) {
 	process.exit(1);
 }
 const entrypointPath = path.resolve(entrypoint);
+
+let toolchain: Toolchain | undefined;
+if (!(command.kind === "build" && command.internal.serializePath !== undefined)) {
+	try {
+		toolchain = requireToolchain({ needsCxx: buildConfig.surface.webPlatform });
+	} catch (error) {
+		if (error instanceof ToolchainError) {
+			log.info(error.message);
+			process.exit(1);
+		}
+		throw error;
+	}
+}
 
 const semTiming = log.time("semantic analysis");
 // Pass the resolved build config into graph construction: it gates the `node`
@@ -244,6 +265,7 @@ const binaryPath = buildLocalBinary({
 	name,
 	cSource: output,
 	verbose,
+	toolchain,
 	...buildDerivationFromConfig(buildConfig),
 	compilerBake: {
 		bake: () =>

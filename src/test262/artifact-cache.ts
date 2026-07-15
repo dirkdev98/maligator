@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	existsSync,
@@ -9,6 +8,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { requireToolchain } from "../toolchain.ts";
 
 /**
  * Content-addressed cache for the expensive build artifact in the test262
@@ -128,11 +128,7 @@ export function buildFingerprint(ccFlags: Array<string>): string {
 	}
 	hash.update(ccFlags.join(" "));
 
-	try {
-		hash.update(execSync("cc --version", { encoding: "utf-8" }));
-	} catch {
-		// Best effort; the flags + headers already capture most of the ABI surface.
-	}
+	hash.update(requireToolchain({ needsCxx: true }).fingerprint);
 
 	cachedFingerprint = hash.digest("hex");
 	return cachedFingerprint;

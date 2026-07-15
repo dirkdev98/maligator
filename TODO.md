@@ -105,21 +105,21 @@ explicit entry with no config uses the conservative product defaults.
 
 ### C3 — Toolchain discovery + doctor
 
-- [ ] Introduce one toolchain model shared by `doctor` and native builds; honor
+- [x] Introduce one toolchain model shared by `doctor` and native builds; honor
       `CC` / `CXX`, then resolve executables from `PATH`.
-- [ ] Detect CMake, the C compiler, the conditional C++ linker requirement, rustup,
+- [x] Detect CMake, the C compiler, the conditional C++ linker requirement, rustup,
       and the `cargo` / `rustc` selected by `runtime/rust/rust-toolchain.toml`.
-- [ ] Probe required compile/link behavior and optional flags with tiny artifacts
+- [x] Probe required compile/link behavior and optional flags with tiny artifacts
       instead of inferring support from compiler names or version strings.
-- [ ] Probe at least C2x, LTO across compile + archive + link, and the host's symbol
+- [x] Probe at least C2x, LTO across compile + archive + link, and the host's symbol
       stripping mechanism. Record resolved paths, versions, target, and results.
-- [ ] Cache probe results under `.cache/mal-cache/toolchains/`; invalidate on the
+- [x] Cache probe results under `.cache/mal-cache/toolchains/`; invalidate on the
       executable identity/version, target, or tested flag set.
-- [ ] Implement `maligator doctor` with actionable macOS and supported Linux
+- [x] Implement `maligator doctor` with actionable macOS and supported Linux
       installation suggestions and a non-zero exit when required tools are absent.
-- [ ] Route `build` through the same diagnostics automatically; `doctor` is never a
+- [x] Route `build` through the same diagnostics automatically; `doctor` is never a
       prerequisite.
-- [ ] Add tests using isolated fake toolchains for selection, probe caching,
+- [x] Add tests using isolated fake toolchains for selection, probe caching,
       invalidation, missing tools, and platform-specific suggestions.
 
 ### C4 — Build/cache layout + production mode
