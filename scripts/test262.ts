@@ -15,6 +15,7 @@ import { summarizeTest262Preflight } from "../src/test262/preflight.ts";
 import type { Test262PreflightSummary } from "../src/test262/preflight.ts";
 import {
 	getCodeStats,
+	getBatchReports,
 	getFailuresWithSamples,
 	getTimings,
 	test262MergeStats,
@@ -305,8 +306,6 @@ async function runVariant(variant: "strict" | "sloppy"): Promise<VariantRun> {
 	for (const file of cacheContext.files) {
 		file.result = "UNKNOWN";
 	}
-	test262PrepareBuild();
-
 	startedAt = Date.now();
 	completed = 0;
 	test262Log(
@@ -349,7 +348,15 @@ async function runVariant(variant: "strict" | "sloppy"): Promise<VariantRun> {
 	writeFileSync(
 		test262ReportPath(variant),
 		JSON.stringify(
-			{ summary, code: codeStats, timings: getTimings(), ...getFailuresWithSamples() },
+			{
+				schemaVersion: 1,
+				variant,
+				summary,
+				code: codeStats,
+				timings: getTimings(),
+				...getFailuresWithSamples(),
+				batches: getBatchReports(),
+			},
 			null,
 			2,
 		),
@@ -481,6 +488,10 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 	);
 	test262Log(`Updated results in ${outputFile}.`);
 }
+
+// Build once per invocation. Reusing the harness objects across the strict and
+// sloppy passes also prevents the second pass from deleting the first report.
+test262PrepareBuild();
 
 if (onlyVariant) {
 	// Single-pass debug run: report only, never touch the committed results.

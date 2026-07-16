@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../build-config.ts";
@@ -40,6 +40,12 @@ import {
 import type { BatchManifest } from "./artifact-cache.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
+import { createTest262BatchReport } from "./report.ts";
+import type {
+	Test262BatchCacheState,
+	Test262BatchPhaseTimings,
+	Test262BatchReport,
+} from "./report.ts";
 import {
 	planTest262SharedHelpers,
 	test262SourcePlanCacheInput,
@@ -203,6 +209,7 @@ function recordTiming(phase: keyof typeof TIMINGS, label: string, ms: number) {
  */
 const CODE_STATS = { compiledFiles: 0, functionCount: 0, instructionCount: 0 };
 const OPCODE_COUNTS: Record<string, number> = {};
+const BATCH_REPORTS: Array<Test262BatchReport> = [];
 
 export function getCodeStats() {
 	const opcodes = Object.entries(OPCODE_COUNTS)
@@ -227,6 +234,10 @@ export function getTimings() {
 	);
 }
 
+export function getBatchReports(): Array<Test262BatchReport> {
+	return [...BATCH_REPORTS].sort((left, right) => left.id.localeCompare(right.id));
+}
+
 /**
  * Clear all run-level accumulators. Used between the strict and sloppy passes so
  * each pass reports its own timings, code stats, failure buckets, and pruned
@@ -247,6 +258,7 @@ export function test262ResetStats() {
 		}
 	}
 	USED_CACHE_KEYS.clear();
+	BATCH_REPORTS.length = 0;
 }
 
 export function test262PrepareBuild() {
@@ -690,7 +702,7 @@ interface RunnableBatchEntry extends BatchEntry {
 }
 
 /** Link a compiled batch object against the parent-selected artifacts. Cheap (~3% of cc). */
-async function linkBatch(objectPath: string, binPath: string) {
+async function linkBatch(objectPath: string, binPath: string): Promise<number> {
 	const startedAt = performance.now();
 	const artifacts = test262NativeArtifacts();
 	await execFileAsync(
@@ -706,7 +718,9 @@ async function linkBatch(objectPath: string, binPath: string) {
 		],
 		{ timeout: TEST262_METADATA.compileTimeoutMs },
 	);
-	recordTiming("link", "batch", performance.now() - startedAt);
+	const elapsedMs = performance.now() - startedAt;
+	recordTiming("link", "batch", elapsedMs);
+	return elapsedMs;
 }
 
 /** Execute a batch binary, parse its per-test verdicts, retry any unreported tests singly. */
@@ -806,6 +820,29 @@ function applyManifest(
 export async function test262RunBatch(files: Array<Test262File>, workerId: number) {
 	const useCache = cacheEnabled();
 	const baseName = path.join(BUILD_PATH, `batch${workerId}`);
+	const paths = files.map((file) => file.path);
+	const timings: Test262BatchPhaseTimings = {
+		compileMs: null,
+		ccMs: null,
+		linkMs: null,
+		runMs: null,
+	};
+	const recordBatch = (
+		manifest: BatchManifest,
+		cache: Test262BatchCacheState,
+		objectBytes: number | null,
+	) => {
+		BATCH_REPORTS.push(
+			createTest262BatchReport({
+				paths,
+				manifest,
+				objectBytes,
+				cache,
+				worker: workerId,
+				timings,
+			}),
+		);
+	};
 
 	// Compose every test once: it feeds both the cache key and the compiler.
 	const composed = files.map((file) => composeSource(file));
@@ -834,13 +871,21 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		if (cached) {
 			const entries = applyManifest(files, cached.manifest);
 			if (cached.objectPath !== undefined && entries.length > 0) {
-				await linkBatch(cached.objectPath, `${baseName}.bin`);
+				timings.linkMs = await linkBatch(cached.objectPath, `${baseName}.bin`);
+				const runStartedAt = performance.now();
 				await runBatchBinary(`${baseName}.bin`, entries, workerId);
+				timings.runMs = performance.now() - runStartedAt;
 			}
+			recordBatch(
+				cached.manifest,
+				"hit",
+				cached.objectPath === undefined ? null : statSync(cached.objectPath).size,
+			);
 			return;
 		}
 	}
 
+	const compileStartedAt = performance.now();
 	const entries: Array<RunnableBatchEntry> = [];
 	const resolved: BatchManifest["resolved"] = [];
 	const stats = {
@@ -973,8 +1018,9 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 	);
 
 	const manifest: BatchManifest = {
-		schemaVersion: 2,
+		schemaVersion: 3,
 		hasBinary: entries.length > 0,
+		generatedCBytes: null,
 		entries: entries.map((entry) => ({
 			path: entry.file.path,
 			index: entry.index,
@@ -989,11 +1035,13 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 			...physicalStats,
 		},
 	};
+	timings.compileMs = performance.now() - compileStartedAt;
 
 	if (entries.length === 0) {
 		if (useCache) {
 			storeManifest(cacheKey, manifest);
 		}
+		recordBatch(manifest, useCache ? "miss" : "disabled", null);
 		return;
 	}
 
@@ -1030,10 +1078,12 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 		"",
 	];
 
+	const generatedC = sources.join("\n");
+	manifest.generatedCBytes = Buffer.byteLength(generatedC);
 	const ccStartedAt = performance.now();
 	try {
 		const artifacts = test262NativeArtifacts();
-		writeFileSync(`${baseName}.c`, sources.join("\n"));
+		writeFileSync(`${baseName}.c`, generatedC);
 		if (useCache) {
 			// Compile straight into the cache so a hit needs only a re-link.
 			ensureCacheDir();
@@ -1061,11 +1111,8 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 	} catch (e) {
 		// A cc failure cannot be attributed to a single test; retry every test
 		// through the single-test path instead.
-		recordTiming(
-			"cc",
-			`batch(${entries.length}) FAILED`,
-			performance.now() - ccStartedAt,
-		);
+		timings.ccMs = performance.now() - ccStartedAt;
+		recordTiming("cc", `batch(${entries.length}) FAILED`, timings.ccMs);
 		test262Log(
 			`Batch cc failed on worker ${workerId}, retrying single tests: ${firstLine(
 				e instanceof Error ? e.message : String(e),
@@ -1076,17 +1123,25 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 			// Compilation above already attributed this logical test's code.
 			await test262RunSingle(entry.file, workerId, false);
 		}
+		recordBatch(manifest, useCache ? "miss" : "disabled", null);
 		return;
 	}
-	recordTiming("cc", `batch(${entries.length})`, performance.now() - ccStartedAt);
+	timings.ccMs = performance.now() - ccStartedAt;
+	recordTiming("cc", `batch(${entries.length})`, timings.ccMs);
 
+	let objectBytes: number | null = null;
 	if (useCache) {
 		// Publish the manifest only after the object compiled successfully.
 		storeManifest(cacheKey, manifest);
-		await linkBatch(objectCachePath(cacheKey), `${baseName}.bin`);
+		const objectPath = objectCachePath(cacheKey);
+		objectBytes = statSync(objectPath).size;
+		timings.linkMs = await linkBatch(objectPath, `${baseName}.bin`);
 	}
 
+	const runStartedAt = performance.now();
 	await runBatchBinary(`${baseName}.bin`, entries, workerId);
+	timings.runMs = performance.now() - runStartedAt;
+	recordBatch(manifest, useCache ? "miss" : "disabled", objectBytes);
 }
 
 function parseBatchOutput(stdout: string, entries: Array<BatchEntry>): Set<number> {
@@ -1269,6 +1324,7 @@ export interface StatsSnapshot {
 	failureCounts: Record<string, number>;
 	failureCache: Record<string, Array<string>>;
 	usedCacheKeys: Array<string>;
+	batches: Array<Test262BatchReport>;
 }
 
 /** Snapshot this thread's accumulators (used by a compile worker before it exits). */
@@ -1280,6 +1336,7 @@ export function test262DrainStats(): StatsSnapshot {
 		failureCounts: FAILURE_COUNTS,
 		failureCache: FAILURE_CACHE,
 		usedCacheKeys: [...USED_CACHE_KEYS],
+		batches: [...BATCH_REPORTS],
 	};
 }
 
@@ -1327,6 +1384,7 @@ export function test262MergeStats(snapshot: StatsSnapshot) {
 	for (const key of snapshot.usedCacheKeys) {
 		USED_CACHE_KEYS.add(key);
 	}
+	BATCH_REPORTS.push(...snapshot.batches);
 }
 
 function sortedWithSamples(

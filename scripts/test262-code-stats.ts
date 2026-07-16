@@ -128,7 +128,7 @@ function recoverVariant(
 			continue;
 		}
 
-		const current = manifest.schemaVersion === 2 && manifest.physical !== undefined;
+		const current = (manifest.schemaVersion ?? 0) >= 2 && manifest.physical !== undefined;
 		execFileSync("cc", [
 			current ? helperObject : legacyHelperObject,
 			objectPath,

@@ -43,8 +43,10 @@ function cacheDir(): string {
  * verdicts, failure buckets and code-size stats without re-compiling.
  */
 export interface BatchManifest {
-	schemaVersion: 2;
+	schemaVersion: 3;
 	hasBinary: boolean;
+	/** UTF-8 byte length of the emitted translation unit, or null when no C was emitted. */
+	generatedCBytes: number | null;
 	/** Tests that produced C, in driver index order. */
 	entries: Array<{
 		path: string;
@@ -203,7 +205,11 @@ export function loadArtifact(key: string): CachedArtifact | undefined {
 	} catch {
 		return undefined;
 	}
-	if (manifest.schemaVersion !== 2 || manifest.physical === undefined) {
+	if (
+		manifest.schemaVersion !== 3 ||
+		manifest.physical === undefined ||
+		!(typeof manifest.generatedCBytes === "number" || manifest.generatedCBytes === null)
+	) {
 		return undefined;
 	}
 
