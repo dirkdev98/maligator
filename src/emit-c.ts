@@ -1,4 +1,5 @@
 import { emitBinaryOperator, emitIntrinsic, emitUnaryOperator } from "./emit-vm.ts";
+import { decodeVmValueOperand } from "./lower-vm.ts";
 import type { VmExceptionHandler, VmFunction, VmInstruction } from "./lower-vm.ts";
 
 /**
@@ -1312,6 +1313,23 @@ function emitInstruction(
 			: reps[r] === "boolean"
 				? `mal_value_new_boolean(r${r})`
 				: `r${r}`;
+	const boxedOperand = (operand: number): string => {
+		const decoded = decodeVmValueOperand(operand);
+		switch (decoded.kind) {
+			case "register":
+				return boxed(decoded.register);
+			case "undefined":
+				return "MAL_VALUE_UNDEFINED";
+			case "null":
+				return "MAL_VALUE_NULL";
+			case "boolean":
+				return `MAL_VALUE_${decoded.value ? "TRUE" : "FALSE"}`;
+			case "number":
+				return `mal_value_from_i32(${decoded.value})`;
+			case "string":
+				return `mal_value_from_string(&mal_strings${suffix}[${decoded.index}])`;
+		}
+	};
 	// Read register r as a raw double (only valid for a number-rep register).
 	const num = (r: number): string => `r${r}`;
 	// Read register r as a raw C bool (ToBoolean). A boolean-rep register is the
@@ -1902,14 +1920,14 @@ function emitInstruction(
 			const argsExpr =
 				args.length === 0
 					? "nullptr"
-					: `((MalValue[]){ ${args.map((r) => boxed(r)).join(", ")} })`;
+					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
 			// A per-site monomorphic call cache: a repeat call to the same compiled callee
 			// skips the dispatch chain (see mal_vm_call_cached). The identity guard keeps it
 			// sound for bound/native/proxy/interpreted callees (they stay on the slow path).
 			return [
 				`static MalCallCache __cc_${ip};`,
-				`MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+				`MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll, // call-return safepoint
@@ -1923,10 +1941,10 @@ function emitInstruction(
 			const argsExpr =
 				args.length === 0
 					? "nullptr"
-					: `((MalValue[]){ ${args.map((r) => boxed(r)).join(", ")} })`;
+					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `construct_result_${ip}`;
 			return [
-				`MalCompletion ${tmp} = mal_vm_construct_value(vm, ${boxed(instruction.callee)}, ${argsExpr}, ${args.length});`,
+				`MalCompletion ${tmp} = mal_vm_construct_value(vm, ${boxedOperand(instruction.callee)}, ${argsExpr}, ${args.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll, // call-return safepoint

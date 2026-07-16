@@ -8,7 +8,12 @@ import {
 	optInlineSpeculative,
 } from "./inline.ts";
 import { debugIntermediateProgram } from "./ir.ts";
-import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
+import type {
+	IntermediateProgram,
+	IRFunction,
+	IRImmediateValue,
+	IRInstruction,
+} from "./ir.ts";
 import { debugEnabled, isNil } from "./utils.ts";
 
 /**
@@ -116,9 +121,84 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	// the proof to the exact allocation instruction before register reuse.
 	annotateStackObjectSites(program);
 	optStaticPropertyKeys(program);
+	optImmediateCallOperands(program);
 	optDeadInstructionElimination(program);
 
 	if (debugEnabled) debugIntermediateProgram(program);
+}
+
+const MAX_IMMEDIATE_I28 = 0x07ff_ffff;
+const MIN_IMMEDIATE_I28 = -0x0800_0000;
+const MAX_IMMEDIATE_CONSTANT_INDEX = 0x0fff_ffff;
+
+function immediateValue(instruction: IRInstruction | undefined): IRImmediateValue | undefined {
+	if (instruction === undefined) return undefined;
+	switch (instruction.type) {
+		case "createUndefined":
+			return { kind: "undefined" };
+		case "createNull":
+			return { kind: "null" };
+		case "createBoolean":
+			return { kind: "boolean", value: instruction.value };
+		case "createNumber":
+		case "createF64":
+			return Number.isInteger(instruction.value) &&
+				!Object.is(instruction.value, -0) &&
+				instruction.value >= MIN_IMMEDIATE_I28 &&
+				instruction.value <= MAX_IMMEDIATE_I28
+				? { kind: "number", value: instruction.value }
+				: undefined;
+		case "createString":
+			return instruction.stringIndex <= MAX_IMMEDIATE_CONSTANT_INDEX
+				? { kind: "string", index: instruction.stringIndex }
+				: undefined;
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Embed exact scalar/string constants directly in ordinary call and construct
+ * operands. The parallel register entry becomes -1, so existing liveness and
+ * allocation code naturally ignores it and DCE removes an otherwise-unused
+ * producer. Multiply-defined registers are excluded because their value is
+ * control-flow dependent.
+ */
+function optImmediateCallOperands(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		const definitions = new Map<number, IRInstruction>();
+		const definitionCounts = new Map<number, number>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (!("registers" in instruction)) continue;
+				for (let i = 0; i < destinationCount(instruction); i++) {
+					const register = instruction.registers[i]!;
+					const count = (definitionCounts.get(register) ?? 0) + 1;
+					definitionCounts.set(register, count);
+					if (count === 1) definitions.set(register, instruction);
+					else definitions.delete(register);
+				}
+			}
+		}
+
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type !== "call" && instruction.type !== "construct") continue;
+				for (let i = 1; i < instruction.registers.length; i++) {
+					const register = instruction.registers[i]!;
+					if (definitionCounts.get(register) !== 1) continue;
+					const value = immediateValue(definitions.get(register));
+					if (value === undefined) continue;
+					instruction.immediateValues ??= [];
+					instruction.immediateValues[i] = value;
+					instruction.registers[i] = -1;
+					changed = true;
+				}
+			}
+		}
+	}
+	return changed;
 }
 
 /**

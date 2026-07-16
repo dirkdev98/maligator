@@ -1,3 +1,4 @@
+import { rebaseVmValueOperand } from "../lower-vm.ts";
 import type { VmDefinition, VmInstruction } from "../lower-vm.ts";
 
 export interface MergedVmDefinition {
@@ -87,8 +88,22 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 				slots: instruction.slots.map((index) => index + base.global),
 			};
 		case "CALL":
+			return {
+				...instruction,
+				callee: rebaseVmValueOperand(instruction.callee, base.string),
+				thisValue: rebaseVmValueOperand(instruction.thisValue, base.string),
+				arguments: instruction.arguments.map((operand) =>
+					rebaseVmValueOperand(operand, base.string),
+				),
+			};
 		case "CONSTRUCT":
-			return { ...instruction, arguments: [...instruction.arguments] };
+			return {
+				...instruction,
+				callee: rebaseVmValueOperand(instruction.callee, base.string),
+				arguments: instruction.arguments.map((operand) =>
+					rebaseVmValueOperand(operand, base.string),
+				),
+			};
 		case "COPY_DATA_PROPERTIES":
 			return { ...instruction, excluded: [...instruction.excluded] };
 

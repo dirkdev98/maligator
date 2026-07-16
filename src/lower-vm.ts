@@ -1,10 +1,85 @@
-import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
+import type {
+	IntermediateProgram,
+	IRFunction,
+	IRImmediateValue,
+	IRInstruction,
+} from "./ir.ts";
 import { computeSafepointRoots } from "./liveness.ts";
 import type { Binding } from "./semantic-analysis.ts";
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
 type IRUnaryOperator = Extract<IRInstruction, { type: "unary" }>["operator"];
 type IRIntrinsic = Extract<IRInstruction, { type: "loadIntrinsic" }>["intrinsic"];
+
+const VM_VALUE_TAG_MASK = 0xf000_0000;
+const VM_VALUE_PAYLOAD_MASK = 0x0fff_ffff;
+const VM_VALUE_SPECIAL_TAG = 0x8000_0000;
+const VM_VALUE_STRING_TAG = 0x9000_0000;
+const VM_VALUE_I28_TAG = 0xb000_0000;
+
+export type DecodedVmValueOperand =
+	| { kind: "register"; register: number }
+	| { kind: "undefined" }
+	| { kind: "null" }
+	| { kind: "boolean"; value: boolean }
+	| { kind: "number"; value: number }
+	| { kind: "string"; index: number };
+
+function signed(bits: number): number {
+	return bits | 0;
+}
+
+export function encodeVmValueOperand(
+	register: number,
+	value: IRImmediateValue | undefined,
+): number {
+	if (value === undefined) return register;
+	switch (value.kind) {
+		case "undefined":
+			return signed(VM_VALUE_SPECIAL_TAG);
+		case "null":
+			return signed(VM_VALUE_SPECIAL_TAG | 1);
+		case "boolean":
+			return signed(VM_VALUE_SPECIAL_TAG | (value.value ? 3 : 2));
+		case "string":
+			return signed(VM_VALUE_STRING_TAG | value.index);
+		case "number": {
+			const zigzag = ((value.value << 1) ^ (value.value >> 31)) >>> 0;
+			return signed(VM_VALUE_I28_TAG | zigzag);
+		}
+	}
+}
+
+export function decodeVmValueOperand(operand: number): DecodedVmValueOperand {
+	if (operand >= 0) return { kind: "register", register: operand };
+	const bits = operand >>> 0;
+	const tag = (bits & VM_VALUE_TAG_MASK) >>> 0;
+	const payload = bits & VM_VALUE_PAYLOAD_MASK;
+	if (tag === VM_VALUE_SPECIAL_TAG) {
+		switch (payload) {
+			case 0:
+				return { kind: "undefined" };
+			case 1:
+				return { kind: "null" };
+			case 2:
+				return { kind: "boolean", value: false };
+			case 3:
+				return { kind: "boolean", value: true };
+		}
+	} else if (tag === VM_VALUE_STRING_TAG) {
+		return { kind: "string", index: payload };
+	} else if (tag === VM_VALUE_I28_TAG) {
+		return { kind: "number", value: (payload >>> 1) ^ -(payload & 1) };
+	}
+	throw new Error(`Invalid VM value operand ${operand}`);
+}
+
+export function rebaseVmValueOperand(operand: number, stringBase: number): number {
+	const decoded = decodeVmValueOperand(operand);
+	return decoded.kind === "string"
+		? signed(VM_VALUE_STRING_TAG | (decoded.index + stringBase))
+		: operand;
+}
 
 /**
  * Keep inline with the C struct
@@ -1047,18 +1122,35 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "CALL",
 				dst: instruction.registers[0],
-				callee: instruction.registers[1],
-				thisValue: instruction.registers[2],
+				callee: encodeVmValueOperand(
+					instruction.registers[1],
+					instruction.immediateValues?.[1],
+				),
+				thisValue: encodeVmValueOperand(
+					instruction.registers[2],
+					instruction.immediateValues?.[2],
+				),
 				argumentCount: instruction.registers.length - 3,
-				arguments: instruction.registers.slice(3),
+				arguments: instruction.registers
+					.slice(3)
+					.map((register, index) =>
+						encodeVmValueOperand(register, instruction.immediateValues?.[index + 3]),
+					),
 			};
 		case "construct":
 			return {
 				opcode: "CONSTRUCT",
 				dst: instruction.registers[0],
-				callee: instruction.registers[1],
+				callee: encodeVmValueOperand(
+					instruction.registers[1],
+					instruction.immediateValues?.[1],
+				),
 				argumentCount: instruction.registers.length - 2,
-				arguments: instruction.registers.slice(2),
+				arguments: instruction.registers
+					.slice(2)
+					.map((register, index) =>
+						encodeVmValueOperand(register, instruction.immediateValues?.[index + 2]),
+					),
 			};
 		case "throw":
 			return {

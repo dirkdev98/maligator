@@ -525,6 +525,13 @@ interface IRCursor {
 	block: IRBlock;
 }
 
+export type IRImmediateValue =
+	| { kind: "undefined" }
+	| { kind: "null" }
+	| { kind: "boolean"; value: boolean }
+	| { kind: "number"; value: number }
+	| { kind: "string"; index: number };
+
 export type IRInstruction =
 	| {
 			/**
@@ -759,12 +766,16 @@ export type IRInstruction =
 
 			// [destination, callee, this, ...arguments]
 			registers: [number, number, number, ...Array<number>];
+			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
+			immediateValues?: Array<IRImmediateValue | undefined>;
 	  }
 	| {
 			type: "construct";
 
 			// [destination, callee, ...arguments]
 			registers: [number, number, ...Array<number>];
+			/** COMPILE-ONLY: values embedded in place of the parallel register operands. */
+			immediateValues?: Array<IRImmediateValue | undefined>;
 	  }
 	| {
 			type: "throw";

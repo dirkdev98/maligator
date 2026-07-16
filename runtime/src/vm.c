@@ -591,6 +591,16 @@ void mal_vm_free(MalVm *vm) {
 // untouched. Side data lives in the loaded arena (mutable); static definitions
 // never pass through this splice path. Mirrors the reference list in
 // src/serialize-vm.ts.
+static i32 mal_vm_rebase_value_operand(i32 operand, i32 string_base) {
+    if (operand >= 0) return operand;
+    u32 bits = (u32) operand;
+    if ((bits & MAL_VALUE_OPERAND_TAG_MASK) != MAL_VALUE_OPERAND_STRING_TAG) {
+        return operand;
+    }
+    u32 index = (bits & MAL_VALUE_OPERAND_PAYLOAD_MASK) + (u32) string_base;
+    return (i32) (MAL_VALUE_OPERAND_STRING_TAG | index);
+}
+
 static void mal_vm_rebase_instruction(
     MalInstruction *in, i32 *instruction_data, i32 fn_base, i32 global_base,
     i32 string_base, i32 bigint_base, i32 template_base
@@ -689,6 +699,23 @@ static void mal_vm_rebase_instruction(
             for (i32 i = 0; i < count; i++) {
                 names[i] += string_base;
                 slots[i] += global_base;
+            }
+            break;
+        }
+        case MAL_OP_CALL: {
+            in->as.call.callee = mal_vm_rebase_value_operand(in->as.call.callee, string_base);
+            in->as.call.this_value = mal_vm_rebase_value_operand(in->as.call.this_value, string_base);
+            i32 *data = instruction_data + in->as.call.data_offset;
+            for (i32 i = 0; i < data[0]; i++) {
+                data[i + 1] = mal_vm_rebase_value_operand(data[i + 1], string_base);
+            }
+            break;
+        }
+        case MAL_OP_CONSTRUCT: {
+            in->as.construct.callee = mal_vm_rebase_value_operand(in->as.construct.callee, string_base);
+            i32 *data = instruction_data + in->as.construct.data_offset;
+            for (i32 i = 0; i < data[0]; i++) {
+                data[i + 1] = mal_vm_rebase_value_operand(data[i + 1], string_base);
             }
             break;
         }

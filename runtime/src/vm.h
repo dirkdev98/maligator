@@ -169,6 +169,12 @@ typedef struct MalCompletion {
     MalValue value;
 } MalCompletion;
 
+#define MAL_VALUE_OPERAND_TAG_MASK 0xf0000000u
+#define MAL_VALUE_OPERAND_PAYLOAD_MASK 0x0fffffffu
+#define MAL_VALUE_OPERAND_SPECIAL_TAG 0x80000000u
+#define MAL_VALUE_OPERAND_STRING_TAG 0x90000000u
+#define MAL_VALUE_OPERAND_I28_TAG 0xb0000000u
+
 typedef struct MalInstruction {
     MalOpcode opcode;
 
@@ -586,12 +592,13 @@ typedef struct MalInstruction {
         } merge_data_properties;
 
         struct {
-            // Side data: [count, argument registers...].
+            // callee/this_value and side data entries are tagged value operands:
+            // non-negative registers or negative primitive/string immediates.
             i32 dst, callee, this_value, data_offset;
         } call;
 
         struct {
-            // Side data: [count, argument registers...].
+            // callee and side data use the same tagged value operands as call.
             i32 dst, callee, data_offset;
         } construct;
 

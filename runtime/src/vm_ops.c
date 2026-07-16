@@ -204,6 +204,30 @@ void mal_op_create_bigint(MalCallable *callable, const MalInstruction *instructi
     callable->registers[instruction->as.create_bigint.dst] = mal_value_from_bigint(bigint);
 }
 
+static MalValue mal_op_value_operand(MalCallable *callable, i32 operand) {
+    if (operand >= 0) return callable->registers[operand];
+    u32 bits = (u32) operand;
+    u32 tag = bits & MAL_VALUE_OPERAND_TAG_MASK;
+    u32 payload = bits & MAL_VALUE_OPERAND_PAYLOAD_MASK;
+    if (tag == MAL_VALUE_OPERAND_SPECIAL_TAG) {
+        switch (payload) {
+            case 0: return MAL_VALUE_UNDEFINED;
+            case 1: return MAL_VALUE_NULL;
+            case 2: return MAL_VALUE_FALSE;
+            case 3: return MAL_VALUE_TRUE;
+            default: abort();
+        }
+    }
+    if (tag == MAL_VALUE_OPERAND_STRING_TAG) {
+        return mal_value_from_string(&callable->vm->definition->string_constants[payload]);
+    }
+    if (tag == MAL_VALUE_OPERAND_I28_TAG) {
+        i32 value = (i32) ((payload >> 1) ^ (u32) -(i32) (payload & 1));
+        return mal_value_from_i32(value);
+    }
+    abort();
+}
+
 MalValue mal_vm_op_create_object(MalVm *vm) {
     MalObject *object = mal_object_new(
         &vm->heap,
@@ -1473,8 +1497,8 @@ void mal_op_call(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     i32 caller_function_index = callable->function_index;
     i32 call_ip = callable->instruction_pointer - 1;
-    MalValue callee = callable->registers[instruction->as.call.callee];
-    MalValue this_value = callable->registers[instruction->as.call.this_value];
+    MalValue callee = mal_op_value_operand(callable, instruction->as.call.callee);
+    MalValue this_value = mal_op_value_operand(callable, instruction->as.call.this_value);
     i32 dst = instruction->as.call.dst;
     const i32 *data = mal_op_instruction_data(callable, instruction->as.call.data_offset);
     i32 argument_count = data[0];
@@ -1488,7 +1512,7 @@ void mal_op_call(MalCallable *callable, const MalInstruction *instruction) {
     }
     i32 base = vm->value_stack_size;
     for (i32 i = 0; i < argument_count; i++) {
-        vm->value_stack[base + i] = callable->registers[arguments[i]];
+        vm->value_stack[base + i] = mal_op_value_operand(callable, arguments[i]);
     }
     vm->value_stack_size = base + argument_count;
 
@@ -1551,7 +1575,7 @@ MalCompletion mal_vm_op_construct_spread(MalVm *vm, MalValue callee, MalValue ar
 
 void mal_op_construct(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
-    MalValue callee = callable->registers[instruction->as.construct.callee];
+    MalValue callee = mal_op_value_operand(callable, instruction->as.construct.callee);
     i32 dst = instruction->as.construct.dst;
     const i32 *data = mal_op_instruction_data(callable, instruction->as.construct.data_offset);
     i32 argument_count = data[0];
@@ -1563,7 +1587,7 @@ void mal_op_construct(MalCallable *callable, const MalInstruction *instruction) 
     }
     i32 base = vm->value_stack_size;
     for (i32 i = 0; i < argument_count; i++) {
-        vm->value_stack[base + i] = callable->registers[arguments[i]];
+        vm->value_stack[base + i] = mal_op_value_operand(callable, arguments[i]);
     }
     vm->value_stack_size = base + argument_count;
 
