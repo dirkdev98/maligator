@@ -518,6 +518,10 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->opcode = MAL_OP_CREATE_OBJECT_SHAPED;
             o->as.create_object_shaped.dst = rd_i32(r);
             i32 count = rd_i32(r);
+            if (count < 1 || count > MAL_SHAPE_MAX_INLINE_SLOTS) {
+                r->ok = false;
+                return;
+            }
             o->as.create_object_shaped.data_offset = rd_side_pair(r, side_data);
             if (r->ok && side_data->data[o->as.create_object_shaped.data_offset] != count) {
                 r->ok = false;

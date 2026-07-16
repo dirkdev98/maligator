@@ -1,5 +1,6 @@
 #include "vm_ops.h"
 
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -217,10 +218,18 @@ MalValue mal_vm_create_object_shaped(MalVm *vm, MalShape *shape, const MalValue 
     // of transitioning the shape property-by-property. No safepoint runs between
     // the allocation and the fill, so the half-initialized object is never visible
     // to the collector. `values` are already rooted in the caller's frame.
-    MalObject *object = mal_object_new(
-        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    assert(shape->inline_count == count);
+    MalObject *prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    if (count == 1) {
+        return mal_value_from_object(
+            mal_object_new_shaped_one(&vm->heap, prototype, shape, values[0]));
+    }
+    MalObject *object = mal_object_new(&vm->heap, prototype);
     object->shape = shape;
     object->slots = malloc(sizeof(MalValue) * count);
+    object->slots_owned = true;
     for (u32 i = 0; i < count; ++i) {
         object->slots[i] = values[i];
     }

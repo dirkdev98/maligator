@@ -145,6 +145,10 @@ function returnedNegative(depth, seed) {
 	return returnedNegative(depth - 1, seed + 1);
 }
 
+function returnedOne(seed) {
+	return { value: seed };
+}
+
 function storeNegative(seed) {
 	storedNegative = { a: seed, b: seed + 1, c: seed + 2, d: seed + 3 };
 	return storedNegative.a + storedNegative.d;
@@ -179,8 +183,11 @@ for (let i = 0; i < 60000; i++) {
 	checksum = (checksum + storeNegative(i)) % MOD;
 	checksum = (checksum + passNegative(i)) % MOD;
 }
+for (let i = 0; i < 300000; i++) {
+	checksum = (checksum + returnedOne(i).value) % MOD;
+}
 
-const EXPECTED_CHECKSUM = 797943181;
+const EXPECTED_CHECKSUM = 797792866;
 if (checksum !== EXPECTED_CHECKSUM) {
 	throw new Error("stack-object checksum " + checksum + " expected " + EXPECTED_CHECKSUM);
 }

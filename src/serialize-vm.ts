@@ -630,6 +630,14 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.index);
 			return;
 		case "CREATE_OBJECT_SHAPED":
+			if (
+				i.count < 1 ||
+				i.count > 32 ||
+				i.keyStringIndices.length !== i.count ||
+				i.valueRegisters.length !== i.count
+			) {
+				throw new RangeError("serialize-vm: invalid shaped object operands");
+			}
 			w.i32(i.dst);
 			w.i32(i.count);
 			w.i32Array(i.keyStringIndices);
@@ -1147,14 +1155,24 @@ function readInstruction(r: Reader): VmInstruction {
 			return { opcode, dst: r.i32() };
 		case "CREATE_PRIVATE_NAME":
 			return { opcode, dst: r.i32() };
-		case "CREATE_OBJECT_SHAPED":
-			return {
+		case "CREATE_OBJECT_SHAPED": {
+			const instruction: Extract<VmInstruction, { opcode: "CREATE_OBJECT_SHAPED" }> = {
 				opcode,
 				dst: r.i32(),
 				count: r.i32(),
 				keyStringIndices: r.i32Array(),
 				valueRegisters: r.i32Array(),
 			};
+			if (
+				instruction.count < 1 ||
+				instruction.count > 32 ||
+				instruction.keyStringIndices.length !== instruction.count ||
+				instruction.valueRegisters.length !== instruction.count
+			) {
+				throw new RangeError("serialize-vm: invalid shaped object operands");
+			}
+			return instruction;
+		}
 		case "CREATE_ARRAY":
 			return { opcode, dst: r.i32(), length: r.i32() };
 		case "INSTANTIATE_LITERAL_TEMPLATE":

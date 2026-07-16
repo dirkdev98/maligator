@@ -153,6 +153,9 @@ interface StackObjectBackendMetrics {
 	instructionCount: number;
 	bytecodeBytes: number;
 	binaryBytes: number;
+	objectSlotCoallocations: number;
+	objectSlotGrowMigrations: number;
+	objectSlotDictionaryMigrations: number;
 }
 interface StackObjectMetrics {
 	compiled: StackObjectBackendMetrics;
@@ -574,6 +577,12 @@ function benchStackObjectBackend(
 		instructionCount: parseVmStat(stderr, "instruction_count"),
 		bytecodeBytes: parseVmStat(stderr, "bytecode_bytes"),
 		binaryBytes: fileBytes(binary),
+		objectSlotCoallocations: parseGcStat(stderr, "object_slot_coallocations"),
+		objectSlotGrowMigrations: parseGcStat(stderr, "object_slot_grow_migrations"),
+		objectSlotDictionaryMigrations: parseGcStat(
+			stderr,
+			"object_slot_dictionary_migrations",
+		),
 		checksum: parseChecksum(result.stdout ?? "", binary),
 	};
 }
@@ -988,6 +997,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			);
 			console.log(
 				`               ${current.instructionCount} instructions, ${humanBytes(current.bytecodeBytes)} bytecode, ${humanBytes(current.binaryBytes)} binary`,
+			);
+			console.log(
+				`               ${current.objectSlotCoallocations} coallocated slots, ${current.objectSlotGrowMigrations} grow migrations, ${current.objectSlotDictionaryMigrations} dictionary migrations`,
 			);
 		}
 		console.log(

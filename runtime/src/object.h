@@ -49,6 +49,9 @@ typedef struct MalObject {
      * protector, disabling cached values that assume those objects are unmodified.
      */
     bool watched_method_proto : 1;
+    /** `slots` points to a separately malloc-owned buffer. False for empty,
+     * one-slot coallocated, and compiler-emitted stack objects. */
+    bool slots_owned : 1;
     MalShape *shape;
     struct MalObject *prototype;
     /** Inline named-property values for the shape; null in dictionary mode. */
@@ -61,6 +64,10 @@ typedef struct MalObject {
 // the 48-byte class (4 pointers + a 3-byte header + a flag byte = 40). A new
 // field that pushed it past 48 would bump every object type up a class.
 static_assert(sizeof(MalObject) <= 48, "MalObject outgrew its 48-byte size class");
+static_assert(sizeof(MalObject) + sizeof(MalValue) <= 48,
+              "MalObject plus one coallocated slot outgrew its 48-byte size class");
+static_assert(sizeof(MalObject) % alignof(MalValue) == 0,
+              "MalObject trailing slot is misaligned");
 
 /**
  * Initialize object state in caller-provided storage.
@@ -71,3 +78,21 @@ void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObje
  * Allocate and initialize a new ordinary object.
  */
 MalObject *mal_object_new(MalHeap *heap, MalObject *prototype);
+
+/** Allocate an ordinary object directly in a known shape. A one-slot shape uses
+ * the slack in the object's existing 48-byte managed-cell class. */
+MalObject *mal_object_new_shaped_one(MalHeap *heap, MalObject *prototype, MalShape *shape,
+                                     MalValue value);
+
+/** Grow shaped slot storage without reallocating coallocated managed cells. */
+void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count);
+
+/** Release separately-owned slots and clear the object's slot state. */
+void mal_object_release_slots(MalObject *object);
+
+/** Record a coallocated slot buffer being abandoned during dictionarization. */
+void mal_object_record_slot_dictionary_migration(MalObject *object);
+
+u64 mal_object_slot_coallocation_count(void);
+u64 mal_object_slot_grow_migration_count(void);
+u64 mal_object_slot_dictionary_migration_count(void);

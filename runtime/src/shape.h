@@ -23,11 +23,11 @@
  * Implementation note / deviation from the locked doc: the doc's struct embeds
  * `MalValue slots[]` inline in MalObject, but MalObject is the first member of
  * ~20 exotic subtypes, so it cannot end in a flexible array. We therefore keep a
- * separate `MalValue *slots` buffer on the object (a single allocation, far
- * cheaper than the old table) and use a 2-state model (shaped <-> dictionary)
- * with realloc-on-grow rather than the 3-state inline+overflow ladder. Object
- * identity is the MalObject address, which never moves, so growing the slots
- * buffer on a shape transition is sound. Index (array) keys never enter a shape;
+ * `MalValue *slots` pointer on the object and use a 2-state model (shaped <->
+ * dictionary). One-slot ordinary objects place that value in the slack of the
+ * existing 48-byte managed-cell class; larger and grown objects use a separate
+ * buffer. Object identity is the MalObject address, which never moves, so a
+ * coallocated slot migrates rather than reallocating its cell. Index (array) keys never enter a shape;
  * anything a shape can't represent (delete, non-default attrs, accessors, a
  * sealed/frozen object, an integer key) drops the object to dictionary mode (a
  * plain MalTable — exactly today's behavior), so the change is additive.

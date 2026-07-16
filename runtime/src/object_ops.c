@@ -136,12 +136,10 @@ static void mal_object_dictionarize(MalObject *object) {
         mal_property_define(table, mal_key_from_value(prop->key), &desc);
     }
     object->shape = mal_shape_empty();
-    // The inline-slot values are now all migrated into the overflow table, so the
-    // slots buffer (a plain realloc'd MalValue array) is dead — free it. Leaving
-    // it here was a real runtime leak: a dictionarized object's slots buffer was
-    // orphaned for the program's lifetime, and the finalizer then freed nullptr.
-    free(object->slots);
-    object->slots = nullptr;
+    // The values now live in the table. Separately-owned buffers are freed;
+    // coallocated storage remains part of the managed object cell.
+    mal_object_record_slot_dictionary_migration(object);
+    mal_object_release_slots(object);
 }
 
 MalTable *mal_object_properties(MalObject *object) {
@@ -356,15 +354,15 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
         if (object->overflow == nullptr
             && object->shape->inline_count < MAL_SHAPE_MAX_INLINE_SLOTS) {
             // Pure shaped (or empty) object with no dictionary props: grow the
-            // shape and the inline slots. Object identity is the cell address, so
-            // reallocating the slots buffer is sound.
+            // shape and the inline slots. Coallocated managed cells cannot move,
+            // so their first growth migrates to a separately-owned buffer.
             if (!object->extensible) {
                 return MAL_DEFINE_OWN_REJECTED;
             }
             MalShape *child =
                 mal_shape_add_property(object->shape, key, (u8) MAL_DEFAULT_DATA_FLAGS);
             u32 count = child->inline_count;
-            object->slots = realloc(object->slots, sizeof(MalValue) * count);
+            mal_object_grow_slots(object, object->shape->inline_count, count);
             object->slots[count - 1] = desc->value;
             object->shape = child;
             // Old object gains a new shaped property: both the value and the (string)

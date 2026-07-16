@@ -273,6 +273,38 @@ describe("serialize-vm", () => {
 		expect(() => serializeVmDefinition(probe)).toThrow(/negative argument index/);
 	});
 
+	it.each([
+		[0, [], []],
+		[33, new Array<number>(33).fill(0), new Array<number>(33).fill(0)],
+		[2, [0], [0, 1]],
+		[2, [0, 1], [0]],
+	])(
+		"rejects invalid shaped object operands",
+		(count, keyStringIndices, valueRegisters) => {
+			const probe: VmDefinition = {
+				...definition,
+				functions: [
+					{
+						...mainFn,
+						instructions: [
+							{
+								opcode: "CREATE_OBJECT_SHAPED",
+								dst: 0,
+								count,
+								keyStringIndices,
+								valueRegisters,
+							},
+						],
+					},
+				],
+				functionCount: 1,
+			};
+			expect(() => serializeVmDefinition(probe)).toThrow(
+				/invalid shaped object operands/,
+			);
+		},
+	);
+
 	it("drops the vestigial TRY_BEGIN.handlerIp (restored as 0)", () => {
 		const probe: VmDefinition = {
 			functionCount: 1,
