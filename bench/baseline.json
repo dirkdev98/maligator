@@ -2639,6 +2639,48 @@
         "wireBytes": 200892,
         "functionCount": 800
       }
+    },
+    {
+      "commit": "6702c87",
+      "dirty": false,
+      "compiler": {
+        "wallMs": 175.690708,
+        "sourceBytes": 163559,
+        "wireBytes": 95523,
+        "functionCount": 800
+      },
+      "stackObject": {
+        "compiled": {
+          "wallMs": 235.35075,
+          "collections": 28,
+          "allocatedMb": 127.98477172851562,
+          "peakLiveKb": 115.140625,
+          "maxPauseMs": 2.783,
+          "instructionCount": 0,
+          "bytecodeBytes": 0,
+          "binaryBytes": 14146784,
+          "objectSlotCoallocations": 300000,
+          "objectSlotGrowMigrations": 0,
+          "objectSlotDictionaryMigrations": 0,
+          "checksum": 797792866
+        },
+        "interpreted": {
+          "wallMs": 672.329375,
+          "collections": 45,
+          "allocatedMb": 192.07168579101562,
+          "peakLiveKb": 116.109375,
+          "maxPauseMs": 3.491,
+          "instructionCount": 860,
+          "bytecodeBytes": 18108,
+          "binaryBytes": 14072920,
+          "objectSlotCoallocations": 420000,
+          "objectSlotGrowMigrations": 0,
+          "objectSlotDictionaryMigrations": 0,
+          "checksum": 797792866
+        },
+        "nodeMs": 41.610375,
+        "checksum": 797792866
+      }
     }
   ]
 }
