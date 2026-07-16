@@ -42,6 +42,9 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 			return { ...instruction, index: instruction.index + base.global };
 		case "CREATE_STRING":
 			return { ...instruction, stringIndex: instruction.stringIndex + base.string };
+		case "LOAD_PROPERTY_STATIC":
+		case "STORE_PROPERTY_STATIC":
+			return { ...instruction, stringIndex: instruction.stringIndex + base.string };
 		case "CREATE_BIGINT":
 			return { ...instruction, bigintIndex: instruction.bigintIndex + base.bigint };
 		case "INSTANTIATE_LITERAL_TEMPLATE":

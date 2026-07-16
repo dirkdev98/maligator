@@ -625,6 +625,12 @@ static void mal_vm_rebase_instruction(
         case MAL_OP_CREATE_STRING:
             in->as.create_string.string_index += string_base;
             break;
+        case MAL_OP_LOAD_PROPERTY_STATIC:
+            in->as.load_property_static.string_index += string_base;
+            break;
+        case MAL_OP_STORE_PROPERTY_STATIC:
+            in->as.store_property_static.string_index += string_base;
+            break;
         case MAL_OP_CREATE_BIGINT:
             in->as.create_bigint.bigint_index += bigint_base;
             break;
@@ -1338,8 +1344,14 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_LOAD_PROPERTY:
                 mal_op_load_property(frame, instruction);
                 break;
+            case MAL_OP_LOAD_PROPERTY_STATIC:
+                mal_op_load_property_static(frame, instruction);
+                break;
             case MAL_OP_STORE_PROPERTY:
                 mal_op_store_property(frame, instruction);
+                break;
+            case MAL_OP_STORE_PROPERTY_STATIC:
+                mal_op_store_property_static(frame, instruction);
                 break;
             case MAL_OP_TO_PROPERTY_KEY:
                 mal_op_to_property_key(frame, instruction);

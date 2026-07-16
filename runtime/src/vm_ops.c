@@ -3350,6 +3350,17 @@ void mal_op_load_property(MalCallable *callable, const MalInstruction *instructi
     );
 }
 
+void mal_op_load_property_static(MalCallable *callable, const MalInstruction *instruction) {
+    MalValue key = mal_value_from_string(
+        &callable->vm->definition->string_constants[instruction->as.load_property_static.string_index]);
+    callable->registers[instruction->as.load_property_static.dst] = mal_vm_op_load_property_ic(
+        callable->vm,
+        callable->registers[instruction->as.load_property_static.object],
+        key,
+        mal_interp_ic(callable)
+    );
+}
+
 // ToPropertyKey applied once and returned as a re-keyable value, so a
 // read-modify-write member access (compound assignment, ++/--) converts the key
 // (running its @@toPrimitive / valueOf / toString) exactly once and feeds the
@@ -3534,6 +3545,19 @@ void mal_op_store_property(MalCallable *callable, const MalInstruction *instruct
         callable->registers[instruction->as.store_property.object],
         callable->registers[instruction->as.store_property.key],
         callable->registers[instruction->as.store_property.value],
+        callable->function->strict,
+        mal_interp_ic(callable)
+    );
+}
+
+void mal_op_store_property_static(MalCallable *callable, const MalInstruction *instruction) {
+    MalValue key = mal_value_from_string(
+        &callable->vm->definition->string_constants[instruction->as.store_property_static.string_index]);
+    mal_vm_op_store_property_ic(
+        callable->vm,
+        callable->registers[instruction->as.store_property_static.object],
+        key,
+        callable->registers[instruction->as.store_property_static.value],
         callable->function->strict,
         mal_interp_ic(callable)
     );

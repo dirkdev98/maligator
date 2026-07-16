@@ -841,6 +841,13 @@ export type IRInstruction =
 			registers: [number, number, number];
 	  }
 	| {
+			type: "loadPropertyStatic";
+
+			// [destination, object]
+			registers: [number, number];
+			stringIndex: number;
+	  }
+	| {
 			type: "loadSuperProperty";
 
 			// [destination, base, key, receiver] — lookup starts at base while
@@ -852,6 +859,13 @@ export type IRInstruction =
 
 			// [object, key, value]
 			registers: [number, number, number];
+	  }
+	| {
+			type: "storePropertyStatic";
+
+			// [object, value]
+			registers: [number, number];
+			stringIndex: number;
 	  }
 	| {
 			type: "toPropertyKey";

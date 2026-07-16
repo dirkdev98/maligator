@@ -16,8 +16,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 6 for LEB128 u32 and ZigZag-LEB128 i32 fields.
-export const WIRE_VERSION = 6;
+// Bumped to 7 for static-key property opcodes.
+export const WIRE_VERSION = 7;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -116,6 +116,8 @@ export const WIRE_OPCODES = [
 	"INSTANTIATE_LITERAL_TEMPLATE",
 	"LOAD_ARGUMENT_COUNT",
 	"LOAD_ARGUMENT",
+	"LOAD_PROPERTY_STATIC",
+	"STORE_PROPERTY_STATIC",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -735,12 +737,22 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.object);
 			w.i32(i.key);
 			return;
+		case "LOAD_PROPERTY_STATIC":
+			w.i32(i.dst);
+			w.i32(i.object);
+			w.i32(i.stringIndex);
+			return;
 		case "STORE_PROPERTY":
 		case "DEFINE_PRIVATE":
 		case "STORE_PRIVATE":
 			w.i32(i.object);
 			w.i32(i.key);
 			w.i32(i.value);
+			return;
+		case "STORE_PROPERTY_STATIC":
+			w.i32(i.object);
+			w.i32(i.value);
+			w.i32(i.stringIndex);
 			return;
 		case "STORE_SUPER_PROPERTY":
 			w.i32(i.object);
@@ -1216,6 +1228,8 @@ function readInstruction(r: Reader): VmInstruction {
 			return { opcode, src: r.i32(), index: r.i32() };
 		case "LOAD_PROPERTY":
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
+		case "LOAD_PROPERTY_STATIC":
+			return { opcode, dst: r.i32(), object: r.i32(), stringIndex: r.i32() };
 		case "DELETE_PROPERTY":
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
 		case "TO_PROPERTY_KEY":
@@ -1226,6 +1240,8 @@ function readInstruction(r: Reader): VmInstruction {
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
 		case "STORE_PROPERTY":
 			return { opcode, object: r.i32(), key: r.i32(), value: r.i32() };
+		case "STORE_PROPERTY_STATIC":
+			return { opcode, object: r.i32(), value: r.i32(), stringIndex: r.i32() };
 		case "DEFINE_PRIVATE":
 			return { opcode, object: r.i32(), key: r.i32(), value: r.i32() };
 		case "STORE_PRIVATE":

@@ -363,6 +363,12 @@ export type VmInstruction =
 			key: number;
 	  }
 	| {
+			opcode: "LOAD_PROPERTY_STATIC";
+			dst: number;
+			object: number;
+			stringIndex: number;
+	  }
+	| {
 			opcode: "LOAD_SUPER_PROPERTY";
 			dst: number;
 			object: number;
@@ -374,6 +380,12 @@ export type VmInstruction =
 			object: number;
 			key: number;
 			value: number;
+	  }
+	| {
+			opcode: "STORE_PROPERTY_STATIC";
+			object: number;
+			value: number;
+			stringIndex: number;
 	  }
 	| {
 			opcode: "TO_PROPERTY_KEY";
@@ -1154,6 +1166,13 @@ function lowerInstructionToVmInstruction(
 				object: instruction.registers[1],
 				key: instruction.registers[2],
 			};
+		case "loadPropertyStatic":
+			return {
+				opcode: "LOAD_PROPERTY_STATIC",
+				dst: instruction.registers[0],
+				object: instruction.registers[1],
+				stringIndex: instruction.stringIndex,
+			};
 		case "loadSuperProperty":
 			return {
 				opcode: "LOAD_SUPER_PROPERTY",
@@ -1168,6 +1187,13 @@ function lowerInstructionToVmInstruction(
 				object: instruction.registers[0],
 				key: instruction.registers[1],
 				value: instruction.registers[2],
+			};
+		case "storePropertyStatic":
+			return {
+				opcode: "STORE_PROPERTY_STATIC",
+				object: instruction.registers[0],
+				value: instruction.registers[1],
+				stringIndex: instruction.stringIndex,
 			};
 		case "toPropertyKey":
 			return {

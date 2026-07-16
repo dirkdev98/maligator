@@ -257,8 +257,10 @@ MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index);
 void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, MalValue value);
 
 void mal_op_load_property(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_load_property_static(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_store_property(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_store_property_static(MalCallable *callable, const MalInstruction *instruction);
 
 /**
  * Value-returning Get / completion-signalling Set with an already-evaluated key

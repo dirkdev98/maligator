@@ -123,6 +123,7 @@ const USE_ONLY_FIRST_REGISTER = new Set([
 	"storeGlobal",
 	"storeCaptured",
 	"storeProperty",
+	"storePropertyStatic",
 	"storeSuperProperty",
 	"storeGlobalProperty",
 	"mergeDataProperties",

@@ -13,7 +13,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 6u         // LEB128 u32 and ZigZag-LEB128 i32 fields
+#define WIRE_VERSION 7u         // static-key property opcodes
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -107,6 +107,8 @@ typedef enum WireOp {
     WIRE_INSTANTIATE_LITERAL_TEMPLATE,
     WIRE_LOAD_ARGUMENT_COUNT,
     WIRE_LOAD_ARGUMENT,
+    WIRE_LOAD_PROPERTY_STATIC,
+    WIRE_STORE_PROPERTY_STATIC,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -693,6 +695,12 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.load_property.object = rd_i32(r);
             o->as.load_property.key = rd_i32(r);
             return;
+        case WIRE_LOAD_PROPERTY_STATIC:
+            o->opcode = MAL_OP_LOAD_PROPERTY_STATIC;
+            o->as.load_property_static.dst = rd_i32(r);
+            o->as.load_property_static.object = rd_i32(r);
+            o->as.load_property_static.string_index = rd_i32(r);
+            return;
         case WIRE_DELETE_PROPERTY:
             o->opcode = MAL_OP_DELETE_PROPERTY;
             o->as.delete_property.dst = rd_i32(r);
@@ -722,6 +730,12 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.store_property.object = rd_i32(r);
             o->as.store_property.key = rd_i32(r);
             o->as.store_property.value = rd_i32(r);
+            return;
+        case WIRE_STORE_PROPERTY_STATIC:
+            o->opcode = MAL_OP_STORE_PROPERTY_STATIC;
+            o->as.store_property_static.object = rd_i32(r);
+            o->as.store_property_static.value = rd_i32(r);
+            o->as.store_property_static.string_index = rd_i32(r);
             return;
         case WIRE_DEFINE_PRIVATE:
             o->opcode = MAL_OP_DEFINE_PRIVATE;

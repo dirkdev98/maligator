@@ -106,6 +106,8 @@ typedef enum MalOpcode {
     // for the serialized wire format. Must stay in lockstep with serialize-vm's opcode list.
     MAL_OP_GUARD_FUNCTION_INDEX,
     MAL_OP_INSTANTIATE_LITERAL_TEMPLATE,
+    MAL_OP_LOAD_PROPERTY_STATIC,
+    MAL_OP_STORE_PROPERTY_STATIC,
 } MalOpcode;
 
 /** Packed literal-template stream tags; mirrored by src/ir.ts. */
@@ -356,6 +358,14 @@ typedef struct MalInstruction {
         struct {
             i32 object, key, value;
         } store_property;
+
+        struct {
+            i32 dst, object, string_index;
+        } load_property_static;
+
+        struct {
+            i32 object, value, string_index;
+        } store_property_static;
 
         struct {
             i32 dst, object, key;

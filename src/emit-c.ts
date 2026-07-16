@@ -343,10 +343,16 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 					disqualUse.add(instruction.receiver);
 				}
 				break;
+			case "LOAD_PROPERTY_STATIC":
+				disqualUse.add(instruction.object);
+				break;
 			case "STORE_PROPERTY":
 				disqualUse.add(instruction.object);
 				disqualUse.add(instruction.key);
 				// value is a neutral boundary read
+				break;
+			case "STORE_PROPERTY_STATIC":
+				disqualUse.add(instruction.object);
 				break;
 			case "TO_PROPERTY_KEY":
 				// object and key are read as boxed values, never numerically.
@@ -1160,8 +1166,17 @@ function emitBody(
 			if (jumpTargets.has(ip)) {
 				flush();
 			}
-			if (instr.opcode === "LOAD_PROPERTY" || instr.opcode === "STORE_PROPERTY") {
-				const kind = reps[instr.key] === "number" ? "array" : "object";
+			if (
+				instr.opcode === "LOAD_PROPERTY" ||
+				instr.opcode === "STORE_PROPERTY" ||
+				instr.opcode === "LOAD_PROPERTY_STATIC" ||
+				instr.opcode === "STORE_PROPERTY_STATIC"
+			) {
+				const kind =
+					(instr.opcode === "LOAD_PROPERTY" || instr.opcode === "STORE_PROPERTY") &&
+					reps[instr.key] === "number"
+						? "array"
+						: "object";
 				const obj = instr.object;
 				if (cur !== null && cur.reg === obj && cur.kind === kind) {
 					cur.ips.push(ip);
@@ -1512,7 +1527,12 @@ function emitInstruction(
 				`{ MalEnv *__old_env = env; env = mal_env_new(vm, __old_env->parent, ${instruction.scopeId}, ${instruction.slotCount}); for (i32 __i = 0; __i < ${instruction.slotCount}; __i++) env->slots[__i] = __old_env->slots[__i]; }${frameUpdate}`,
 			];
 		}
-		case "LOAD_PROPERTY": {
+		case "LOAD_PROPERTY":
+		case "LOAD_PROPERTY_STATIC": {
+			const key =
+				instruction.opcode === "LOAD_PROPERTY_STATIC"
+					? `mal_value_from_string(&mal_strings${suffix}[${instruction.stringIndex}])`
+					: boxed(instruction.key);
 			// Per-site monomorphic inline cache (a static, zero-initialized → starts empty).
 			// A hit is a direct slot/element read with no shape search or key conversion, and
 			// runs no user code — so the guarded-region form drops the throwCheck on the hit
@@ -1524,14 +1544,17 @@ function emitInstruction(
 			// the try_* helper inlines.
 			const reg: RegionAccess = region ?? {
 				name: `__rg_s${ip}`,
-				kind: reps[instruction.key] === "number" ? "array" : "object",
+				kind:
+					instruction.opcode === "LOAD_PROPERTY" && reps[instruction.key] === "number"
+						? "array"
+						: "object",
 				declare: true,
 				consolidated: false,
 				slotIndex: 0,
 				size: 1,
 				commitIps: null,
 			};
-			if (reg.kind === "array") {
+			if (reg.kind === "array" && instruction.opcode === "LOAD_PROPERTY") {
 				return [
 					...(reg.declare
 						? [
@@ -1555,10 +1578,10 @@ function emitInstruction(
 						: []),
 					`static MalInlineCache __ic_${ip};`,
 					`MalValue __v_${ip};`,
-					`if ((${reg.name} && mal_vm_object_try_load(${reg.name}, ${boxed(instruction.key)}, &__ic_${ip}, &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip}, &__v_${ip})) {`,
+					`if ((${reg.name} && mal_vm_object_try_load(${reg.name}, ${key}, &__ic_${ip}, &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip})) {`,
 					`  r${instruction.dst} = __v_${ip};`,
 					`} else {`,
-					`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
+					`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip});`,
 					`  ${throwCheck}`,
 					`}`,
 				];
@@ -1570,30 +1593,38 @@ function emitInstruction(
 				...(reg.declare ? consolidatedRegionDeclare(reg, boxed(instruction.object)) : []),
 				`static MalInlineCache __ic_${ip};`,
 				`MalValue __v_${ip};`,
-				`if (${reg.name}_ok && ${boxed(instruction.key)} == ${reg.name}_key[${reg.slotIndex}]) {`,
+				`if (${reg.name}_ok && ${key} == ${reg.name}_key[${reg.slotIndex}]) {`,
 				`  __v_${ip} = ${reg.name}_o->slots[${reg.name}_slp[${reg.slotIndex}]];`,
 				`} else {`,
-				`  __v_${ip} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &__ic_${ip});`,
+				`  __v_${ip} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip});`,
 				`  ${throwCheck}`,
 				`}`,
 				`r${instruction.dst} = __v_${ip};`,
 				...(reg.commitIps ? consolidatedRegionCommit(reg) : []),
 			];
 		}
-		case "STORE_PROPERTY": {
+		case "STORE_PROPERTY":
+		case "STORE_PROPERTY_STATIC": {
+			const key =
+				instruction.opcode === "STORE_PROPERTY_STATIC"
+					? `mal_value_from_string(&mal_strings${suffix}[${instruction.stringIndex}])`
+					: boxed(instruction.key);
 			// See LOAD_PROPERTY: a monomorphic data-slot/dense-element hit runs no user code,
 			// so the region form drops the throwCheck on the hit; the general-[[Set]] miss
 			// fallback keeps it. Array (number-rep index) vs plain object (string key).
 			const reg: RegionAccess = region ?? {
 				name: `__rg_s${ip}`,
-				kind: reps[instruction.key] === "number" ? "array" : "object",
+				kind:
+					instruction.opcode === "STORE_PROPERTY" && reps[instruction.key] === "number"
+						? "array"
+						: "object",
 				declare: true,
 				consolidated: false,
 				slotIndex: 0,
 				size: 1,
 				commitIps: null,
 			};
-			if (reg.kind === "array") {
+			if (reg.kind === "array" && instruction.opcode === "STORE_PROPERTY") {
 				return [
 					...(reg.declare
 						? [
@@ -1613,8 +1644,8 @@ function emitInstruction(
 						? [`MalObject *${reg.name} = mal_vm_as_object(${boxed(instruction.object)});`]
 						: []),
 					`static MalInlineCache __ic_${ip};`,
-					`if (!(${reg.name} && mal_vm_object_try_store(${reg.name}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, &__ic_${ip}))) {`,
-					`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
+					`if (!(${reg.name} && mal_vm_object_try_store(${reg.name}, ${key}, ${boxed(instruction.value)}, &__ic_${ip}))) {`,
+					`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
 					`  ${throwCheck}`,
 					`}`,
 				];
@@ -1624,10 +1655,10 @@ function emitInstruction(
 			return [
 				...(reg.declare ? consolidatedRegionDeclare(reg, boxed(instruction.object)) : []),
 				`static MalInlineCache __ic_${ip};`,
-				`if (${reg.name}_ok && ${boxed(instruction.key)} == ${reg.name}_key[${reg.slotIndex}]) {`,
+				`if (${reg.name}_ok && ${key} == ${reg.name}_key[${reg.slotIndex}]) {`,
 				`  mal_vm_object_slot_store(${reg.name}_o, ${reg.name}_slp[${reg.slotIndex}], ${boxed(instruction.value)});`,
 				`} else {`,
-				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
+				`  mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &__ic_${ip});`,
 				`  ${throwCheck}`,
 				`}`,
 				...(reg.commitIps ? consolidatedRegionCommit(reg) : []),

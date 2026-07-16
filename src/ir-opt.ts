@@ -111,8 +111,62 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	// residual identity-observed objects left after scalar replacement, and keys
 	// the proof to the exact allocation instruction before register reuse.
 	annotateStackObjectSites(program);
+	optStaticPropertyKeys(program);
+	optDeadInstructionElimination(program);
 
 	debugIntermediateProgram(program);
+}
+
+/**
+ * Fold constant-string property keys into dedicated operations after all passes
+ * that reason about the generic load/store shape have finished. DCE then removes
+ * key-producing createString instructions that have no other consumers.
+ */
+function optStaticPropertyKeys(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		const definitions = new Map<number, IRInstruction>();
+		const duplicateDefinitions = new Set<number>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (!("registers" in instruction)) continue;
+				const count = destinationCount(instruction);
+				for (let i = 0; i < count; i++) {
+					const register = instruction.registers[i]!;
+					if (definitions.has(register)) duplicateDefinitions.add(register);
+					else definitions.set(register, instruction);
+				}
+			}
+		}
+
+		for (const block of fn.blocks) {
+			for (let i = 0; i < block.instructions.length; i++) {
+				const instruction = block.instructions[i]!;
+				if (instruction.type !== "loadProperty" && instruction.type !== "storeProperty") {
+					continue;
+				}
+				const keyPosition = instruction.type === "loadProperty" ? 2 : 1;
+				const keyRegister = instruction.registers[keyPosition];
+				if (duplicateDefinitions.has(keyRegister)) continue;
+				const key = definitions.get(keyRegister);
+				if (key?.type !== "createString") continue;
+				block.instructions[i] =
+					instruction.type === "loadProperty"
+						? {
+								type: "loadPropertyStatic",
+								registers: [instruction.registers[0], instruction.registers[1]],
+								stringIndex: key.stringIndex,
+							}
+						: {
+								type: "storePropertyStatic",
+								registers: [instruction.registers[0], instruction.registers[2]],
+								stringIndex: key.stringIndex,
+							};
+				changed = true;
+			}
+		}
+	}
+	return changed;
 }
 
 /**
@@ -805,6 +859,7 @@ const WRITES_NO_REGISTER = new Set<IRInstruction["type"]>([
 	"storeCaptured",
 	"storeGlobalProperty",
 	"storeProperty",
+	"storePropertyStatic",
 	"storeSuperProperty",
 	"setPrototype",
 	"requireCoercible",
