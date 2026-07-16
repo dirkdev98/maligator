@@ -11,11 +11,15 @@ type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
 type IRUnaryOperator = Extract<IRInstruction, { type: "unary" }>["operator"];
 type IRIntrinsic = Extract<IRInstruction, { type: "loadIntrinsic" }>["intrinsic"];
 
-const VM_VALUE_TAG_MASK = 0xf000_0000;
-const VM_VALUE_PAYLOAD_MASK = 0x0fff_ffff;
-const VM_VALUE_SPECIAL_TAG = 0x8000_0000;
-const VM_VALUE_STRING_TAG = 0x9000_0000;
-const VM_VALUE_I28_TAG = 0xb000_0000;
+const VM_VALUE_UNDEFINED = -1;
+const VM_VALUE_NULL = -2;
+const VM_VALUE_FALSE = -3;
+const VM_VALUE_TRUE = -4;
+const VM_VALUE_STRING_BASE = -5;
+const VM_VALUE_MAX_PAYLOAD = 0x0fff_ffff;
+const VM_VALUE_STRING_MIN = VM_VALUE_STRING_BASE - VM_VALUE_MAX_PAYLOAD;
+const VM_VALUE_I28_BASE = -0x2000_0000;
+const VM_VALUE_I28_MIN = VM_VALUE_I28_BASE - VM_VALUE_MAX_PAYLOAD;
 
 export type DecodedVmValueOperand =
 	| { kind: "register"; register: number }
@@ -25,10 +29,6 @@ export type DecodedVmValueOperand =
 	| { kind: "number"; value: number }
 	| { kind: "string"; index: number };
 
-function signed(bits: number): number {
-	return bits | 0;
-}
-
 export function encodeVmValueOperand(
 	register: number,
 	value: IRImmediateValue | undefined,
@@ -36,40 +36,41 @@ export function encodeVmValueOperand(
 	if (value === undefined) return register;
 	switch (value.kind) {
 		case "undefined":
-			return signed(VM_VALUE_SPECIAL_TAG);
+			return VM_VALUE_UNDEFINED;
 		case "null":
-			return signed(VM_VALUE_SPECIAL_TAG | 1);
+			return VM_VALUE_NULL;
 		case "boolean":
-			return signed(VM_VALUE_SPECIAL_TAG | (value.value ? 3 : 2));
+			return value.value ? VM_VALUE_TRUE : VM_VALUE_FALSE;
 		case "string":
-			return signed(VM_VALUE_STRING_TAG | value.index);
+			return VM_VALUE_STRING_BASE - value.index;
 		case "number": {
-			const zigzag = ((value.value << 1) ^ (value.value >> 31)) >>> 0;
-			return signed(VM_VALUE_I28_TAG | zigzag);
+			const zigzag = value.value >= 0 ? value.value * 2 : -value.value * 2 - 1;
+			return VM_VALUE_I28_BASE - zigzag;
 		}
 	}
 }
 
 export function decodeVmValueOperand(operand: number): DecodedVmValueOperand {
 	if (operand >= 0) return { kind: "register", register: operand };
-	const bits = operand >>> 0;
-	const tag = (bits & VM_VALUE_TAG_MASK) >>> 0;
-	const payload = bits & VM_VALUE_PAYLOAD_MASK;
-	if (tag === VM_VALUE_SPECIAL_TAG) {
-		switch (payload) {
-			case 0:
-				return { kind: "undefined" };
-			case 1:
-				return { kind: "null" };
-			case 2:
-				return { kind: "boolean", value: false };
-			case 3:
-				return { kind: "boolean", value: true };
-		}
-	} else if (tag === VM_VALUE_STRING_TAG) {
-		return { kind: "string", index: payload };
-	} else if (tag === VM_VALUE_I28_TAG) {
-		return { kind: "number", value: (payload >>> 1) ^ -(payload & 1) };
+	switch (operand) {
+		case VM_VALUE_UNDEFINED:
+			return { kind: "undefined" };
+		case VM_VALUE_NULL:
+			return { kind: "null" };
+		case VM_VALUE_FALSE:
+			return { kind: "boolean", value: false };
+		case VM_VALUE_TRUE:
+			return { kind: "boolean", value: true };
+	}
+	if (operand <= VM_VALUE_STRING_BASE && operand >= VM_VALUE_STRING_MIN) {
+		return { kind: "string", index: VM_VALUE_STRING_BASE - operand };
+	}
+	if (operand <= VM_VALUE_I28_BASE && operand >= VM_VALUE_I28_MIN) {
+		const payload = VM_VALUE_I28_BASE - operand;
+		return {
+			kind: "number",
+			value: payload % 2 === 0 ? payload / 2 : -(payload + 1) / 2,
+		};
 	}
 	throw new Error(`Invalid VM value operand ${operand}`);
 }
@@ -77,7 +78,7 @@ export function decodeVmValueOperand(operand: number): DecodedVmValueOperand {
 export function rebaseVmValueOperand(operand: number, stringBase: number): number {
 	const decoded = decodeVmValueOperand(operand);
 	return decoded.kind === "string"
-		? signed(VM_VALUE_STRING_TAG | (decoded.index + stringBase))
+		? VM_VALUE_STRING_BASE - (decoded.index + stringBase)
 		: operand;
 }
 

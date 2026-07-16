@@ -604,12 +604,11 @@ void mal_vm_free(MalVm *vm) {
 // src/serialize-vm.ts.
 static i32 mal_vm_rebase_value_operand(i32 operand, i32 string_base) {
     if (operand >= 0) return operand;
-    u32 bits = (u32) operand;
-    if ((bits & MAL_VALUE_OPERAND_TAG_MASK) != MAL_VALUE_OPERAND_STRING_TAG) {
+    if (operand > MAL_VALUE_OPERAND_STRING_BASE || operand < MAL_VALUE_OPERAND_STRING_MIN) {
         return operand;
     }
-    u32 index = (bits & MAL_VALUE_OPERAND_PAYLOAD_MASK) + (u32) string_base;
-    return (i32) (MAL_VALUE_OPERAND_STRING_TAG | index);
+    i32 index = MAL_VALUE_OPERAND_STRING_BASE - operand;
+    return MAL_VALUE_OPERAND_STRING_BASE - (index + string_base);
 }
 
 static void mal_vm_rebase_instruction(

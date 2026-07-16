@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
-import { decodeVmValueOperand } from "../src/lower-vm.ts";
+import { decodeVmValueOperand, encodeVmValueOperand } from "../src/lower-vm.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
 function compile(source: string) {
@@ -9,6 +9,18 @@ function compile(source: string) {
 }
 
 describe("tagged call operands", () => {
+	it("uses self-host-stable negative arithmetic tags", () => {
+		expect(encodeVmValueOperand(-1, { kind: "undefined" })).toBe(-1);
+		expect(encodeVmValueOperand(-1, { kind: "null" })).toBe(-2);
+		expect(encodeVmValueOperand(-1, { kind: "string", index: 0 })).toBe(-5);
+		expect(
+			decodeVmValueOperand(encodeVmValueOperand(-1, { kind: "number", value: -7 })),
+		).toEqual({
+			kind: "number",
+			value: -7,
+		});
+	});
+
 	it("embeds primitive, string, and small integer call arguments", () => {
 		const definition = compile(`
 			function invoke(fn) {

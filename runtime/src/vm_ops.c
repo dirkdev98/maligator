@@ -212,23 +212,20 @@ void mal_op_create_bigint(MalCallable *callable, const MalInstruction *instructi
 
 static MalValue mal_op_value_operand(MalCallable *callable, i32 operand) {
     if (operand >= 0) return callable->registers[operand];
-    u32 bits = (u32) operand;
-    u32 tag = bits & MAL_VALUE_OPERAND_TAG_MASK;
-    u32 payload = bits & MAL_VALUE_OPERAND_PAYLOAD_MASK;
-    if (tag == MAL_VALUE_OPERAND_SPECIAL_TAG) {
-        switch (payload) {
-            case 0: return MAL_VALUE_UNDEFINED;
-            case 1: return MAL_VALUE_NULL;
-            case 2: return MAL_VALUE_FALSE;
-            case 3: return MAL_VALUE_TRUE;
-            default: abort();
-        }
+    switch (operand) {
+        case MAL_VALUE_OPERAND_UNDEFINED: return MAL_VALUE_UNDEFINED;
+        case MAL_VALUE_OPERAND_NULL: return MAL_VALUE_NULL;
+        case MAL_VALUE_OPERAND_FALSE: return MAL_VALUE_FALSE;
+        case MAL_VALUE_OPERAND_TRUE: return MAL_VALUE_TRUE;
     }
-    if (tag == MAL_VALUE_OPERAND_STRING_TAG) {
-        return mal_value_from_string(&callable->vm->definition->string_constants[payload]);
+    if (operand <= MAL_VALUE_OPERAND_STRING_BASE
+        && operand >= MAL_VALUE_OPERAND_STRING_MIN) {
+        i32 index = MAL_VALUE_OPERAND_STRING_BASE - operand;
+        return mal_value_from_string(&callable->vm->definition->string_constants[index]);
     }
-    if (tag == MAL_VALUE_OPERAND_I28_TAG) {
-        i32 value = (i32) ((payload >> 1) ^ (u32) -(i32) (payload & 1));
+    if (operand <= MAL_VALUE_OPERAND_I28_BASE && operand >= MAL_VALUE_OPERAND_I28_MIN) {
+        i32 payload = MAL_VALUE_OPERAND_I28_BASE - operand;
+        i32 value = (payload & 1) == 0 ? payload / 2 : -(payload + 1) / 2;
         return mal_value_from_i32(value);
     }
     abort();

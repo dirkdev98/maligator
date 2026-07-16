@@ -21,6 +21,9 @@ export function runSanitizerTests(args = process.argv.slice(2)): number {
 	return result.status ?? 1;
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+	process.argv[1] !== undefined &&
+	import.meta.url === pathToFileURL(process.argv[1]).href
+) {
 	process.exitCode = runSanitizerTests();
 }
