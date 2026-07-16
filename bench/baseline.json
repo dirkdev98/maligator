@@ -1725,6 +1725,19 @@
         "malP99Ms": 1.584958,
         "nodeP99Ms": 1.752
       }
+    },
+    {
+      "commit": "5613acd",
+      "dirty": false,
+      "interpreter": {
+        "malMs": 1974.884875,
+        "nodeMs": 106.912667,
+        "ratio": 18.471944722883023,
+        "rssMb": 12.078125,
+        "instructionSize": 40,
+        "instructionCount": 726,
+        "instructionBytes": 29040
+      }
     }
   ]
 }
