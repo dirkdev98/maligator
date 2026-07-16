@@ -5,7 +5,7 @@ import type { ESTree } from "meriyah";
 // semantic-program.ts so this file stays runnable on MalVm.
 import type { ModuleGraph } from "./module-graph.ts";
 import { parseScript } from "./parser.ts";
-import { log } from "./utils.ts";
+import { debugEnabled, log } from "./utils.ts";
 
 export interface SemanticProgram {
 	entrypointPath: string;
@@ -211,7 +211,7 @@ export function analyzeSourceAndRunSemanticAnalysis(
 
 	program.files.push(file);
 	analyzeFile(file);
-	debugSemanticProgram(program);
+	if (debugEnabled) debugSemanticProgram(program);
 
 	return program;
 }

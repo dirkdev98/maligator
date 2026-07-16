@@ -2,6 +2,7 @@ import type { BuildModuleGraphOptions, ModuleRecord } from "./module-graph.ts";
 import { buildModuleGraph } from "./module-graph.ts";
 import { analyzeFile, debugSemanticProgram } from "./semantic-analysis.ts";
 import type { SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
+import { debugEnabled } from "./utils.ts";
 
 /**
  * The disk/module-graph-driven front end: build the module graph from an
@@ -43,7 +44,7 @@ export function loadEntrypointAndRunSemanticAnalysis(
 		program.files.push(analyzeModuleRecord(record));
 	}
 
-	debugSemanticProgram(program);
+	if (debugEnabled) debugSemanticProgram(program);
 
 	return program;
 }

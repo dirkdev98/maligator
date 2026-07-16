@@ -1,5 +1,6 @@
 import { debugIntermediateProgram } from "./ir.ts";
 import type { IntermediateProgram, IRBlock, IRFunction, IRInstruction } from "./ir.ts";
+import { debugEnabled } from "./utils.ts";
 
 /**
  * Optimize from virtual registers to VM registers.
@@ -9,7 +10,7 @@ export function allocateRegisters(program: IntermediateProgram) {
 		allocateRegistersForFunction(fn);
 	}
 
-	debugIntermediateProgram(program);
+	if (debugEnabled) debugIntermediateProgram(program);
 }
 
 /**

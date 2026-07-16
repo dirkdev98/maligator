@@ -9,7 +9,7 @@ import {
 } from "./inline.ts";
 import { debugIntermediateProgram } from "./ir.ts";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
-import { isNil } from "./utils.ts";
+import { debugEnabled, isNil } from "./utils.ts";
 
 /**
  * IR instruction kinds with no side effects beyond writing their destination
@@ -114,7 +114,7 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	optStaticPropertyKeys(program);
 	optDeadInstructionElimination(program);
 
-	debugIntermediateProgram(program);
+	if (debugEnabled) debugIntermediateProgram(program);
 }
 
 /**

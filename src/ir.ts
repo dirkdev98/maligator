@@ -9,7 +9,7 @@ import type {
 	SemanticFile,
 	SemanticProgram,
 } from "./semantic-analysis.ts";
-import { log } from "./utils.ts";
+import { debugEnabled, log } from "./utils.ts";
 
 export interface IntermediateProgram {
 	/**
@@ -1562,7 +1562,7 @@ export function compileSemanticProgramToIr(
 		compileCjsWrappers(program);
 	}
 
-	debugIntermediateProgram(program);
+	if (debugEnabled) debugIntermediateProgram(program);
 
 	return program;
 }
