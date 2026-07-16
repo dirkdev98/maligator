@@ -2187,6 +2187,36 @@
         "malP99Ms": 0.7822079999999999,
         "nodeP99Ms": 0.885
       }
+    },
+    {
+      "commit": "c52c727",
+      "dirty": false,
+      "stackObject": {
+        "compiled": {
+          "wallMs": 260.530708,
+          "collections": 38,
+          "allocatedMb": 167.35092163085938,
+          "peakLiveKb": 115.359375,
+          "maxPauseMs": 5.083,
+          "instructionCount": 0,
+          "bytecodeBytes": 0,
+          "binaryBytes": 14194640,
+          "checksum": 597883230
+        },
+        "interpreted": {
+          "wallMs": 703.213958,
+          "collections": 38,
+          "allocatedMb": 167.35092163085938,
+          "peakLiveKb": 116.25,
+          "maxPauseMs": 5.219,
+          "instructionCount": 893,
+          "bytecodeBytes": 18740,
+          "binaryBytes": 14120952,
+          "checksum": 597883230
+        },
+        "nodeMs": 39.083083,
+        "checksum": 597883230
+      }
     }
   ]
 }
