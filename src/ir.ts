@@ -611,6 +611,9 @@ export type IRInstruction =
 	| {
 			type: "createObject";
 
+			/** COMPILE-ONLY: this allocation passed the closed stack-object proof. */
+			stackObject?: true;
+
 			// [destination]
 			registers: [number];
 	  }

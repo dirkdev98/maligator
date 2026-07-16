@@ -133,7 +133,10 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 		let stackObjectSlots = 0;
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				if (instruction.type === "createObjectShaped") {
+				if (
+					instruction.type === "createObject" ||
+					instruction.type === "createObjectShaped"
+				) {
 					delete instruction.stackObject;
 				}
 			}
@@ -183,7 +186,12 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 
 		for (const block of fn.blocks) {
 			for (const allocation of block.instructions) {
-				if (allocation.type !== "createObjectShaped") continue;
+				if (
+					allocation.type !== "createObject" &&
+					allocation.type !== "createObjectShaped"
+				) {
+					continue;
+				}
 				const objectRegister = allocation.registers[0];
 				if (
 					defCount.get(objectRegister) !== 1 ||
@@ -192,7 +200,9 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 					continue;
 				}
 
-				const ownKeys = new Set(allocation.keyStringIndices);
+				const keyStringIndices =
+					allocation.type === "createObjectShaped" ? allocation.keyStringIndices : [];
+				const ownKeys = new Set(keyStringIndices);
 				const aliases = new Set<number>([objectRegister]);
 				const worklist = [objectRegister];
 				let observed = false;
@@ -261,10 +271,10 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 				if (
 					safe &&
 					observed &&
-					stackObjectSlots + allocation.keyStringIndices.length <= maxStackObjectSlots
+					stackObjectSlots + keyStringIndices.length <= maxStackObjectSlots
 				) {
 					allocation.stackObject = true;
-					stackObjectSlots += allocation.keyStringIndices.length;
+					stackObjectSlots += keyStringIndices.length;
 				}
 			}
 		}

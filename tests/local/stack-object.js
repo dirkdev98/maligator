@@ -27,6 +27,12 @@ function loopReuse() {
 	return distinct && total === 160400;
 }
 
+function emptyObserved(seed) {
+	const o = {};
+	allocateNoise(seed);
+	return typeof o === "object" && o === o;
+}
+
 function simultaneous(seed) {
 	const left = { value: seed, tag: "left:" + seed };
 	const right = { value: seed + 1, tag: "right:" + seed };
@@ -85,6 +91,7 @@ function callEscape(seed) {
 }
 
 check("loop reuse", loopReuse());
+check("empty observed object", emptyObserved(40));
 check("simultaneous stack sites", simultaneous(41));
 check("recursion and reentrancy", recursive(6) === 70);
 check("branch normal", branchAndException(false) === 21);

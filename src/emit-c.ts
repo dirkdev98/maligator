@@ -504,8 +504,11 @@ export function emitCompiledFunction(
 	for (const site of fn.stackObjectSites ?? []) {
 		const instruction = fn.instructions[site.instructionIndex];
 		if (
-			instruction?.opcode !== "CREATE_OBJECT_SHAPED" ||
-			instruction.count !== site.slotCount ||
+			(instruction?.opcode !== "CREATE_OBJECT" &&
+				instruction?.opcode !== "CREATE_OBJECT_SHAPED") ||
+			(instruction.opcode === "CREATE_OBJECT"
+				? site.slotCount !== 0
+				: instruction.count !== site.slotCount) ||
 			stackObjectSites.has(site.instructionIndex)
 		) {
 			throw new Error(
@@ -1380,7 +1383,13 @@ function emitInstruction(
 				`r${instruction.dst} = mal_value_from_bigint(&mal_bigints${suffix}[${instruction.bigintIndex}]);`,
 			];
 		case "CREATE_OBJECT":
-			return [`r${instruction.dst} = mal_vm_op_create_object(vm);`];
+			if (stackObjectSite === undefined) {
+				return [`r${instruction.dst} = mal_vm_op_create_object(vm);`];
+			}
+			return [
+				`${stackObjectSite.objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = mal_shape_empty(), .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = nullptr, .overflow = nullptr };`,
+				`r${instruction.dst} = mal_value_from_object(&${stackObjectSite.objectName});`,
+			];
 		case "CREATE_OBJECT_SHAPED": {
 			// Build the literal's shape once (static per-site cache) and create the
 			// object directly in it, bulk-filling slots — no per-property defines.

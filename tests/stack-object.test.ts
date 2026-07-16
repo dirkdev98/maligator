@@ -33,12 +33,19 @@ function instructions(program: IntermediateProgram): Array<IRInstruction> {
 
 function stackSiteCount(program: IntermediateProgram): number {
 	return instructions(program).filter(
-		(instruction) => instruction.type === "createObjectShaped" && instruction.stackObject,
+		(instruction) =>
+			(instruction.type === "createObject" ||
+				instruction.type === "createObjectShaped") &&
+			instruction.stackObject,
 	).length;
 }
 
 describe("closed fixed-shape stack-object proof", () => {
 	it.each([
+		[
+			"empty identity-observed object",
+			`function f(a) { const o = {}; return typeof o === "object" && o === o ? a : 0; } globalThis.keep = f;`,
+		],
 		[
 			"typeof with static own load",
 			`function f(a) { const o = { x: a }; return typeof o === "object" ? o.x : 0; } globalThis.keep = f;`,
@@ -53,6 +60,16 @@ describe("closed fixed-shape stack-object proof", () => {
 		],
 	])("accepts %s", (_name, source) => {
 		expect(stackSiteCount(optimized(source))).toBe(1);
+	});
+
+	it("rejects every property read from an empty stack-object candidate", () => {
+		expect(
+			stackSiteCount(
+				optimized(
+					`function f() { const o = {}; return typeof o === "object" ? o.missing : 0; } globalThis.keep = f;`,
+				),
+			),
+		).toBe(0);
 	});
 
 	it("accepts loadPrototype as a non-retaining identity observation", () => {
@@ -188,6 +205,19 @@ describe("stack-object native metadata and C emission", () => {
 		expect(source).toMatch(/\.slots = &__gc_slots\[\d+\]/);
 		expect(source).toContain("mal_value_from_object(&__stack_object_");
 		expect(source).not.toContain("= mal_vm_create_object_shaped(vm");
+	});
+
+	it("emits an empty stack MalObject without activation slots", () => {
+		const definition = compileSemanticProgramToVmDefinition(
+			semantic(
+				`function f(a) { const o = {}; return typeof o === "object" && o === o ? a : 0; } globalThis.keep = f;`,
+			),
+		);
+		const source = emitVmDefinition(definition, { compiled: true });
+		expect(source).toContain("MalObject __stack_object_");
+		expect(source).toContain(".shape = mal_shape_empty()");
+		expect(source).toContain(".slots = nullptr");
+		expect(source).not.toContain("mal_vm_op_create_object(vm)");
 	});
 
 	it("keeps a rejected site on the heap allocation path", () => {

@@ -137,7 +137,7 @@ export interface VmFunction {
 	gcRootRegisters?: ReadonlyArray<number>;
 
 	/**
-	 * COMPILE-ONLY: exact CREATE_OBJECT_SHAPED instruction sites proven safe for
+	 * COMPILE-ONLY: exact CREATE_OBJECT/CREATE_OBJECT_SHAPED sites proven safe for
 	 * native stack emission. Omitted by the wire codec, so deserialized/interpreted
 	 * functions retain ordinary heap allocation semantics.
 	 */
@@ -762,10 +762,17 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 			}
 			const instructionIndex = instructions.length;
 			instructions.push(lowerInstructionToVmInstruction(blockStartIps, instruction));
-			if (instruction.type === "createObjectShaped" && instruction.stackObject) {
+			if (
+				(instruction.type === "createObject" ||
+					instruction.type === "createObjectShaped") &&
+				instruction.stackObject
+			) {
 				stackObjectSites.push({
 					instructionIndex,
-					slotCount: instruction.keyStringIndices.length,
+					slotCount:
+						instruction.type === "createObjectShaped"
+							? instruction.keyStringIndices.length
+							: 0,
 				});
 			}
 			positions.push(currentPos);
