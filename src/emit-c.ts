@@ -1715,6 +1715,11 @@ function emitInstruction(
 				`mal_vm_op_store_global_property(vm, ${instruction.nameStringIndex}, ${boxed(instruction.src)}, ${strict}, ${instruction.declaration}, ${instruction.declarationConfigurable});`,
 				throwCheck,
 			];
+		case "INIT_GLOBAL_VARS":
+			return [
+				`mal_vm_op_init_global_vars(vm, ${instruction.nameStringIndices.length}, (const i32[]){ ${instruction.nameStringIndices.join(", ")} }, ${instruction.declarationConfigurable});`,
+				throwCheck,
+			];
 		case "CREATE_ARGUMENTS_OBJECT":
 			// The unmapped `arguments` object (this engine never maps parameters). A
 			// strict function poisons `.callee`; a sloppy one exposes the invoked

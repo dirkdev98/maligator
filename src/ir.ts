@@ -1113,6 +1113,14 @@ export type IRInstruction =
 			declarationConfigurable?: boolean;
 	  }
 	| {
+			// Declaration-initialize a contiguous run of script `var` global
+			// properties to undefined. Global declaration checks and Annex B's
+			// EMPTY-valued stores remain scalar storeGlobalProperty instructions.
+			type: "initGlobalVars";
+			nameStringIndices: Array<number>;
+			declarationConfigurable: boolean;
+	  }
+	| {
 			// Throw ReferenceError if [source] holds the uninitialized sentinel:
 			// the named let/const/class binding is still in its temporal dead zone.
 			type: "throwIfTdz";
@@ -2096,6 +2104,16 @@ function emitVarDeclarationInits(
 	functionNames: ReadonlySet<string>,
 ) {
 	const seen = new Set<string>();
+	let pendingGlobalNames: Array<number> = [];
+	const flushGlobalNames = () => {
+		if (pendingGlobalNames.length === 0) return;
+		block.instructions.push({
+			type: "initGlobalVars",
+			nameStringIndices: pendingGlobalNames,
+			declarationConfigurable: program.evalCompletion,
+		});
+		pendingGlobalNames = [];
+	};
 	const functionNode = scope.node.type.includes("Function")
 		? scope.node
 		: scope.parent?.node.type.includes("Function")
@@ -2134,12 +2152,14 @@ function emitVarDeclarationInits(
 
 		const location = getOrCreateBindingLocation(program, fn, binding);
 		if (location.type === "globalProperty") {
+			if (binding.declarationNode?.type !== "FunctionDeclaration") {
+				pendingGlobalNames.push(location.nameStringIndex);
+				continue;
+			}
+			flushGlobalNames();
 			const value = nextRegisterDestination(fn);
 			block.instructions.push({
-				type:
-					binding.declarationNode?.type === "FunctionDeclaration"
-						? "createEmpty"
-						: "createUndefined",
+				type: "createEmpty",
 				registers: [value],
 			});
 			block.instructions.push({
@@ -2150,6 +2170,7 @@ function emitVarDeclarationInits(
 				declarationConfigurable: program.evalCompletion,
 			});
 		} else {
+			flushGlobalNames();
 			const parameterBinding = scope.parent?.bindings.find(
 				(candidate) =>
 					candidate !== binding &&
@@ -2169,6 +2190,7 @@ function emitVarDeclarationInits(
 			}
 		}
 	}
+	flushGlobalNames();
 }
 
 function emitGlobalDeclarationChecks(

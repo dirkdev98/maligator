@@ -619,6 +619,11 @@ export type VmInstruction =
 			declarationConfigurable: boolean;
 	  }
 	| {
+			opcode: "INIT_GLOBAL_VARS";
+			nameStringIndices: Array<number>;
+			declarationConfigurable: boolean;
+	  }
+	| {
 			opcode: "THROW_IF_TDZ";
 			src: number;
 			nameStringIndex: number;
@@ -1468,6 +1473,12 @@ function lowerInstructionToVmInstruction(
 				nameStringIndex: instruction.nameStringIndex,
 				declaration: instruction.declaration ?? false,
 				declarationConfigurable: instruction.declarationConfigurable ?? false,
+			};
+		case "initGlobalVars":
+			return {
+				opcode: "INIT_GLOBAL_VARS",
+				nameStringIndices: instruction.nameStringIndices,
+				declarationConfigurable: instruction.declarationConfigurable,
 			};
 		case "throwIfTdz":
 			return {

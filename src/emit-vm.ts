@@ -221,6 +221,13 @@ function instructionData(fn: VmDefinition["functions"][number]): {
 			case "COPY_DATA_PROPERTIES":
 				single(index, instruction.excluded, instruction.excludedCount);
 				break;
+			case "INIT_GLOBAL_VARS":
+				single(
+					index,
+					instruction.nameStringIndices,
+					instruction.nameStringIndices.length,
+				);
+				break;
 		}
 	});
 
@@ -814,6 +821,8 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 			return `{ .opcode = MAL_OP_LOAD_GLOBAL_PROPERTY, .as.load_global_property = { .dst = ${instruction.dst}, .name_string_index = ${instruction.nameStringIndex} } }`;
 		case "STORE_GLOBAL_PROPERTY":
 			return `{ .opcode = MAL_OP_STORE_GLOBAL_PROPERTY, .as.store_global_property = { .src = ${instruction.src}, .name_string_index = ${instruction.nameStringIndex}, .declaration = ${instruction.declaration}, .declaration_configurable = ${instruction.declarationConfigurable} } }`;
+		case "INIT_GLOBAL_VARS":
+			return `{ .opcode = MAL_OP_INIT_GLOBAL_VARS, .as.init_global_vars = { .data_offset = ${sideDataOffset()}, .declaration_configurable = ${instruction.declarationConfigurable} } }`;
 		case "THROW_IF_TDZ":
 			return `{ .opcode = MAL_OP_THROW_IF_TDZ, .as.throw_if_tdz = { .src = ${instruction.src}, .name_string_index = ${instruction.nameStringIndex} } }`;
 		case "WITH_ENTER":

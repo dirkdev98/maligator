@@ -138,25 +138,42 @@ test("direct eval conservatively materializes and marshals implicit arguments", 
 	expect(argumentsNameIndex).toBeGreaterThanOrEqual(0);
 });
 
-test("var declarations initialize once in the owning prologue", () => {
-	const program = compileScript("before = x; var x; function f(){ return y; var y; }");
-	const xNameIndex = program.stringConstants.findIndex(
-		(codeUnits) => String.fromCharCode(...codeUnits) === "x",
+test("contiguous global var initializations batch after scalar declaration checks", () => {
+	const program = compileScript(
+		"before = x; var x, y, z; function f(){ return local; var local; }",
 	);
-	const entryStores = instructionsOf(program.functions[0]!).filter(
-		(instruction) =>
-			instruction.type === "storeGlobalProperty" &&
-			instruction.declaration &&
-			instruction.nameStringIndex === xNameIndex,
+	const nameIndices = ["x", "y", "z"].map((name) =>
+		program.stringConstants.findIndex(
+			(codeUnits) => String.fromCharCode(...codeUnits) === name,
+		),
 	);
-	expect(entryStores).toHaveLength(2);
-	for (const store of entryStores) {
-		expect(store).toMatchObject({
-			type: "storeGlobalProperty",
-			declaration: true,
+	const entryInstructions = instructionsOf(program.functions[0]!);
+	const declarationChecks = entryInstructions
+		.filter(
+			(instruction) =>
+				instruction.type === "storeGlobalProperty" && instruction.declaration,
+		)
+		.filter(
+			(instruction) =>
+				instruction.type === "storeGlobalProperty" &&
+				nameIndices.includes(instruction.nameStringIndex),
+		);
+	expect(declarationChecks).toHaveLength(3);
+	expect(
+		entryInstructions.filter((instruction) => instruction.type === "createNull"),
+	).toHaveLength(3);
+	expect(
+		entryInstructions.filter((instruction) => instruction.type === "initGlobalVars"),
+	).toEqual([
+		{
+			type: "initGlobalVars",
+			nameStringIndices: nameIndices,
 			declarationConfigurable: false,
-		});
-	}
+		},
+	]);
+	expect(entryInstructions.indexOf(declarationChecks[2]!)).toBeLessThan(
+		entryInstructions.findIndex((instruction) => instruction.type === "initGlobalVars"),
+	);
 
 	const functionStores = instructionsOf(functionNamed(program, "f")).filter(
 		(instruction) => instruction.type === "storeLocal",
@@ -232,14 +249,42 @@ test("register allocation does not reuse registers in a non-SSA function", () =>
 });
 
 test("eval var declarations create configurable globals", () => {
-	const program = compileScript("var x;", true);
-	expect(instructionsOf(program.functions[0]!)).toContainEqual(
+	const program = compileScript("var x, y;", true);
+	const instructions = instructionsOf(program.functions[0]!);
+	expect(
+		instructions.filter(
+			(instruction) =>
+				instruction.type === "storeGlobalProperty" && instruction.declaration,
+		),
+	).toHaveLength(2);
+	expect(instructions).toContainEqual(
+		expect.objectContaining({ type: "initGlobalVars", declarationConfigurable: true }),
+	);
+});
+
+test("Annex B global var initialization remains an EMPTY scalar store", () => {
+	const program = compileScript("var before; { function annex() {} } var after;");
+	const instructions = instructionsOf(program.functions[0]!);
+	const annexNameIndex = program.stringConstants.findIndex(
+		(codeUnits) => String.fromCharCode(...codeUnits) === "annex",
+	);
+	const empty = instructions.find((instruction) => instruction.type === "createEmpty");
+	expect(empty?.type).toBe("createEmpty");
+	expect(instructions).toContainEqual(
 		expect.objectContaining({
 			type: "storeGlobalProperty",
+			registers: empty?.type === "createEmpty" ? empty.registers : [],
+			nameStringIndex: annexNameIndex,
 			declaration: true,
-			declarationConfigurable: true,
+			declarationConfigurable: false,
 		}),
 	);
+	expect(
+		instructions.filter((instruction) => instruction.type === "initGlobalVars"),
+	).toEqual([
+		expect.objectContaining({ nameStringIndices: [expect.any(Number)] }),
+		expect.objectContaining({ nameStringIndices: [expect.any(Number)] }),
+	]);
 });
 
 test("strict global function declarations check properties before initialization", () => {

@@ -13,7 +13,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 8u         // tagged call/construct value operands
+#define WIRE_VERSION 9u         // batched undefined global-var initialization
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -109,6 +109,7 @@ typedef enum WireOp {
     WIRE_LOAD_ARGUMENT,
     WIRE_LOAD_PROPERTY_STATIC,
     WIRE_STORE_PROPERTY_STATIC,
+    WIRE_INIT_GLOBAL_VARS,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -889,6 +890,17 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.store_global_property.declaration = rd_u8(r) != 0;
             o->as.store_global_property.declaration_configurable = rd_u8(r) != 0;
             return;
+        case WIRE_INIT_GLOBAL_VARS: {
+            o->opcode = MAL_OP_INIT_GLOBAL_VARS;
+            i32 count = rd_i32(r);
+            if (count < 1) {
+                r->ok = false;
+                return;
+            }
+            o->as.init_global_vars.data_offset = rd_side_single(r, side_data, count);
+            o->as.init_global_vars.declaration_configurable = rd_u8(r) != 0;
+            return;
+        }
         case WIRE_THROW_IF_TDZ:
             o->opcode = MAL_OP_THROW_IF_TDZ;
             o->as.throw_if_tdz.src = rd_i32(r);

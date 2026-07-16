@@ -16,8 +16,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 8 for tagged call/construct value operands.
-export const WIRE_VERSION = 8;
+// Bumped to 9 for batched undefined global-var initialization.
+export const WIRE_VERSION = 9;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -118,6 +118,7 @@ export const WIRE_OPCODES = [
 	"LOAD_ARGUMENT",
 	"LOAD_PROPERTY_STATIC",
 	"STORE_PROPERTY_STATIC",
+	"INIT_GLOBAL_VARS",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -859,6 +860,14 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.u8(i.declaration ? 1 : 0);
 			w.u8(i.declarationConfigurable ? 1 : 0);
 			return;
+		case "INIT_GLOBAL_VARS":
+			if (i.nameStringIndices.length === 0) {
+				throw new RangeError("serialize-vm: empty global-var initialization batch");
+			}
+			w.i32(i.nameStringIndices.length);
+			w.i32Array(i.nameStringIndices);
+			w.u8(i.declarationConfigurable ? 1 : 0);
+			return;
 		case "THROW_IF_TDZ":
 			w.i32(i.src);
 			w.i32(i.nameStringIndex);
@@ -1337,6 +1346,18 @@ function readInstruction(r: Reader): VmInstruction {
 				declaration: r.u8() !== 0,
 				declarationConfigurable: r.u8() !== 0,
 			};
+		case "INIT_GLOBAL_VARS": {
+			const count = r.i32();
+			const instruction: Extract<VmInstruction, { opcode: "INIT_GLOBAL_VARS" }> = {
+				opcode,
+				nameStringIndices: r.i32Array(),
+				declarationConfigurable: r.u8() !== 0,
+			};
+			if (count < 1 || instruction.nameStringIndices.length !== count) {
+				throw new RangeError("serialize-vm: invalid global-var initialization batch");
+			}
+			return instruction;
+		}
 		case "THROW_IF_TDZ":
 			return { opcode, src: r.i32(), nameStringIndex: r.i32() };
 		case "WITH_ENTER":

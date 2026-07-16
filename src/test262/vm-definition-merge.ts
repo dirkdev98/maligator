@@ -64,6 +64,13 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 				...instruction,
 				nameStringIndex: instruction.nameStringIndex + base.string,
 			};
+		case "INIT_GLOBAL_VARS":
+			return {
+				...instruction,
+				nameStringIndices: instruction.nameStringIndices.map(
+					(index) => index + base.string,
+				),
+			};
 		case "CREATE_OBJECT_SHAPED":
 			return {
 				...instruction,

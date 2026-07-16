@@ -78,6 +78,11 @@ describe("Test262 VM definition merger", () => {
 			},
 			{ opcode: "CREATE_MODULE_NAMESPACE", dst: 0, nameIndices: [0], slots: [0] },
 			{ opcode: "WITH_SET", found: 0, value: 1, nameStringIndex: 0 },
+			{
+				opcode: "INIT_GLOBAL_VARS",
+				nameStringIndices: [0],
+				declarationConfigurable: true,
+			},
 		];
 		const second = definition({
 			functions: [vmFunction(indexed)],
@@ -125,6 +130,10 @@ describe("Test262 VM definition merger", () => {
 		});
 		expect(rebased[11]).toMatchObject({ nameIndices: [2], slots: [3] });
 		expect(rebased[12]).toMatchObject({ nameStringIndex: 2 });
+		expect(rebased[13]).toMatchObject({
+			nameStringIndices: [2],
+			declarationConfigurable: true,
+		});
 		expect(second.functions[0]!.instructions).toEqual(indexed);
 	});
 

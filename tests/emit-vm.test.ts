@@ -37,6 +37,11 @@ const instructions: Array<VmInstruction> = [
 		excludedCount: 2,
 		excluded: [10, 11],
 	},
+	{
+		opcode: "INIT_GLOBAL_VARS",
+		nameStringIndices: [0, 2, 3],
+		declarationConfigurable: true,
+	},
 	{ opcode: "RETURN", value: 6 },
 ];
 
@@ -76,16 +81,19 @@ describe("emit-vm instruction packing", () => {
 	it("emits one flattened side table and raw f64 words", () => {
 		const output = emitVmDefinition(definition, { compiled: false });
 		expect(output).toContain(
-			"static const i32 mal_function_0_instruction_data[] = { 2, 1, 2, 3, 4, 2, 1, 2, 5, 6, 2, 1, -1, 2, 3, 2, 7, 8, 1, 9, 2, 10, 11 };",
+			"static const i32 mal_function_0_instruction_data[] = { 2, 1, 2, 3, 4, 2, 1, 2, 5, 6, 2, 1, -1, 2, 3, 2, 7, 8, 1, 9, 2, 10, 11, 3, 0, 2, 3 };",
 		);
-		for (const offset of [0, 5, 10, 15, 18, 20]) {
+		for (const offset of [0, 5, 10, 15, 18, 20, 23]) {
 			expect(output).toContain(`.data_offset = ${offset}`);
 		}
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x80000000u");
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff00000u");
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff80000u");
 		expect(output).toContain(".instruction_data = mal_function_0_instruction_data");
-		expect(output).toContain(".instruction_data_count = 23");
+		expect(output).toContain(".instruction_data_count = 27");
+		expect(output).toContain(
+			".as.init_global_vars = { .data_offset = 23, .declaration_configurable = true }",
+		);
 	});
 
 	it("emits and references shared side tables in batches", () => {

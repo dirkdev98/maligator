@@ -667,6 +667,13 @@ static void mal_vm_rebase_instruction(
         case MAL_OP_STORE_GLOBAL_PROPERTY:
             in->as.store_global_property.name_string_index += string_base;
             break;
+        case MAL_OP_INIT_GLOBAL_VARS: {
+            i32 *data = instruction_data + in->as.init_global_vars.data_offset;
+            for (i32 i = 0; i < data[0]; i++) {
+                data[i + 1] += string_base;
+            }
+            break;
+        }
         case MAL_OP_THROW_IF_TDZ:
             in->as.throw_if_tdz.name_string_index += string_base;
             break;
@@ -1603,6 +1610,9 @@ static void mal_vm_run_until_frame_count(
                 break;
             case MAL_OP_STORE_GLOBAL_PROPERTY:
                 mal_op_store_global_property(frame, instruction);
+                break;
+            case MAL_OP_INIT_GLOBAL_VARS:
+                mal_op_init_global_vars(frame, instruction);
                 break;
             case MAL_OP_THROW_IF_TDZ:
                 mal_op_throw_if_tdz(frame, instruction);

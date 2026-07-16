@@ -790,6 +790,11 @@ void mal_vm_op_store_global_property(
     bool declaration, bool declaration_configurable
 );
 
+/** Declaration-initialize a batch of global `var` properties to undefined. */
+void mal_vm_op_init_global_vars(
+    MalVm *vm, i32 count, const i32 *name_string_indices, bool declaration_configurable
+);
+
 /** Read `object`'s internal [[Prototype]] slot (null if none); never throws. */
 MalValue mal_vm_op_load_prototype(MalVm *vm, MalValue object_value);
 
@@ -938,6 +943,8 @@ void mal_op_load_undeclared(MalCallable *callable, const MalInstruction *instruc
 void mal_op_load_global_property(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_store_global_property(MalCallable *callable, const MalInstruction *instruction);
+
+void mal_op_init_global_vars(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_require_coercible(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_check_super_class(MalCallable *callable, const MalInstruction *instruction);

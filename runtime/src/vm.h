@@ -108,6 +108,7 @@ typedef enum MalOpcode {
     MAL_OP_INSTANTIATE_LITERAL_TEMPLATE,
     MAL_OP_LOAD_PROPERTY_STATIC,
     MAL_OP_STORE_PROPERTY_STATIC,
+    MAL_OP_INIT_GLOBAL_VARS,
 } MalOpcode;
 
 /** Packed literal-template stream tags; mirrored by src/ir.ts. */
@@ -554,6 +555,13 @@ typedef struct MalInstruction {
             bool declaration;
             bool declaration_configurable;
         } store_global_property;
+
+        struct {
+            // Side data: [count, name string indices...]. Each property is
+            // declaration-initialized to undefined with the shared configurability.
+            i32 data_offset;
+            bool declaration_configurable;
+        } init_global_vars;
 
         struct {
             // Throw ReferenceError if `src` holds the uninitialized sentinel (the

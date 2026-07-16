@@ -4244,6 +4244,25 @@ void mal_op_store_global_property(MalCallable *callable, const MalInstruction *i
     );
 }
 
+void mal_vm_op_init_global_vars(
+    MalVm *vm, i32 count, const i32 *name_string_indices, bool declaration_configurable
+) {
+    for (i32 i = 0; i < count; i++) {
+        mal_vm_op_store_global_property(
+            vm, name_string_indices[i], mal_value_new_undefined(), false, true,
+            declaration_configurable);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+    }
+}
+
+void mal_op_init_global_vars(MalCallable *callable, const MalInstruction *instruction) {
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.init_global_vars.data_offset);
+    mal_vm_op_init_global_vars(
+        callable->vm, data[0], &data[1],
+        instruction->as.init_global_vars.declaration_configurable);
+}
+
 // Shared by the interpreter op and the native backend: throw a TypeError when
 // `value` is null or undefined (RequireObjectCoercible). Sets vm->completion.
 void mal_vm_op_require_coercible(MalVm *vm, MalValue value) {

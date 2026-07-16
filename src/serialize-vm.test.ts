@@ -10,7 +10,7 @@ import {
 
 // A definition exercising the tricky encodings: variable-length operand arrays
 // (CALL / CREATE_OBJECT_SHAPED / CREATE_MODULE_NAMESPACE / CREATE_TEMPLATE_OBJECT /
-// COPY_DATA_PROPERTIES), the f64 / boolean / enum / u16-intrinsic operands,
+// COPY_DATA_PROPERTIES / INIT_GLOBAL_VARS), the f64 / boolean / enum / u16-intrinsic operands,
 // strings (incl. astral code units), bigints (incl. > 64 bits), handlers, the
 // vestigial TRY_BEGIN (handlerIp dropped → 0), and debug tables.
 const instructions: Array<VmInstruction> = [
@@ -68,6 +68,11 @@ const instructions: Array<VmInstruction> = [
 	{ opcode: "TRY_END" },
 	{ opcode: "ENV_PUSH", scopeId: -2, slotCount: 1 },
 	{ opcode: "ENV_POP" },
+	{
+		opcode: "INIT_GLOBAL_VARS",
+		nameStringIndices: [0, 1],
+		declarationConfigurable: true,
+	},
 	{ opcode: "RETURN", value: 11 },
 ];
 
@@ -157,6 +162,11 @@ describe("serialize-vm", () => {
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
+		expect(WIRE_OPCODES.slice(-3)).toEqual([
+			"LOAD_PROPERTY_STATIC",
+			"STORE_PROPERTY_STATIC",
+			"INIT_GLOBAL_VARS",
+		]);
 	});
 
 	it("round-trips a definition with debug info", () => {
