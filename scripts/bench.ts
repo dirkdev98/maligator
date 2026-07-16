@@ -24,6 +24,10 @@
  *   - coroutine bench/coroutine.js: generator, async, and async-generator frame
  *               churn in compiled and interpreted backends. Wall time and native
  *               support-buffer allocations.
+ *   - arguments bench/arguments.js: direct non-escaping `arguments.length`/`[0]`
+ *               reads in hot normal/default/generator calls. Backend wall time,
+ *               managed allocation, coroutine-buffer churn, bytecode, and binary
+ *               bytes isolate needless argument-object/slice materialization.
  *   - interpreter bench/language.js forced through bytecode: wide dispatch wall
  *               time, RSS, and exact loaded MalInstruction footprint.
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
@@ -112,6 +116,21 @@ interface CoroutineMetrics {
 	interpreted: CoroutineBackendMetrics;
 	nodeMs: number;
 }
+interface ArgumentsBackendMetrics {
+	wallMs: number;
+	collections: number;
+	allocatedMb: number;
+	frameAllocations: number;
+	frameReuses: number;
+	instructionCount: number;
+	bytecodeBytes: number;
+	binaryBytes: number;
+}
+interface ArgumentsMetrics {
+	compiled: ArgumentsBackendMetrics;
+	interpreted: ArgumentsBackendMetrics;
+	nodeMs: number;
+}
 interface InterpreterMetrics {
 	malMs: number;
 	nodeMs: number;
@@ -145,6 +164,7 @@ interface Entry {
 	string?: StringMetrics;
 	promise?: PromiseMetrics;
 	coroutine?: CoroutineMetrics;
+	arguments?: ArgumentsMetrics;
 	interpreter?: InterpreterMetrics;
 	gc?: Record<string, GcWorkload>;
 	http?: HttpMetrics | null;
@@ -409,6 +429,51 @@ function benchCoroutine(runs: number): CoroutineMetrics {
 	};
 }
 
+// ---- arguments (implicit object/slice allocation; compiled + interpreted) --
+
+function benchArgumentsBackend(binary: string, runs: number): ArgumentsBackendMetrics {
+	const wallMs = timeCommand(binary, [], runs);
+	const result = spawnSync(binary, [], {
+		env: {
+			...process.env,
+			MAL_GC_STATS: "1",
+			MAL_PROMISE_STATS: "1",
+			MAL_VM_STATS: "1",
+		},
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	const stderr = result.stderr ?? "";
+	return {
+		wallMs,
+		collections: parseGcStat(stderr, "collections"),
+		allocatedMb: parseGcStat(stderr, "allocated_bytes") / (1024 * 1024),
+		frameAllocations: parsePromiseStat(stderr, "frame_allocations"),
+		frameReuses: parsePromiseStat(stderr, "frame_reuses"),
+		instructionCount: parseVmStat(stderr, "instruction_count"),
+		bytecodeBytes: parseVmStat(stderr, "bytecode_bytes"),
+		binaryBytes: fileBytes(binary),
+	};
+}
+
+function benchArguments(runs: number): ArgumentsMetrics {
+	const compiled = buildNativeBinary({
+		fixture: "bench/arguments.js",
+		name: "bench-arguments",
+		compiled: true,
+	});
+	const interpreted = buildNativeBinary({
+		fixture: "bench/arguments.js",
+		name: "bench-arguments-ni",
+		compiled: false,
+	});
+	return {
+		compiled: benchArgumentsBackend(compiled, runs),
+		interpreted: benchArgumentsBackend(interpreted, runs),
+		nodeMs: timeCommand("node", ["bench/arguments.js"], runs),
+	};
+}
+
 // ---- interpreter (wide bytecode dispatch + footprint; vs V8) --------------
 
 function parseVmStat(stderr: string, field: string): number {
@@ -609,6 +674,7 @@ function latestMetrics(entries: Array<Entry>): Entry | undefined {
 		latest.string ??= entry.string;
 		latest.promise ??= entry.promise;
 		latest.coroutine ??= entry.coroutine;
+		latest.arguments ??= entry.arguments;
 		latest.interpreter ??= entry.interpreter;
 		latest.gc ??= entry.gc;
 		latest.http ??= entry.http;
@@ -742,6 +808,24 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		}
 		console.log(`  node        ${entry.coroutine.nodeMs.toFixed(1)}ms`);
 	}
+	if (entry.arguments) {
+		const p = previous?.arguments;
+		console.log("arguments (direct frame reads; vs V8):");
+		for (const name of ["compiled", "interpreted"] as const) {
+			const current = entry.arguments[name];
+			const prior = p?.[name];
+			console.log(
+				`  ${name.padEnd(11)} ${current.wallMs.toFixed(1)}ms${delta(current.wallMs, prior?.wallMs)}  ${current.collections} collections, ${current.allocatedMb.toFixed(1)}MB managed${delta(current.allocatedMb, prior?.allocatedMb)}`,
+			);
+			console.log(
+				`               ${current.frameAllocations} frame allocations${delta(current.frameAllocations, prior?.frameAllocations)}, ${current.frameReuses} reused`,
+			);
+			console.log(
+				`               ${current.instructionCount} instructions, ${humanBytes(current.bytecodeBytes)} bytecode, ${humanBytes(current.binaryBytes)} binary`,
+			);
+		}
+		console.log(`  node        ${entry.arguments.nodeMs.toFixed(1)}ms`);
+	}
 	if (entry.interpreter) {
 		const p = previous?.interpreter;
 		console.log("interpreter (language bytecode; vs V8):");
@@ -803,6 +887,7 @@ const which =
 				"string",
 				"promise",
 				"coroutine",
+				"arguments",
 				"interpreter",
 				"gc",
 				"http",
@@ -817,6 +902,7 @@ if (which.includes("module")) entry.module = benchModule(runs);
 if (which.includes("string")) entry.string = benchString(runs);
 if (which.includes("promise")) entry.promise = benchPromise(runs);
 if (which.includes("coroutine")) entry.coroutine = benchCoroutine(runs);
+if (which.includes("arguments")) entry.arguments = benchArguments(runs);
 if (which.includes("interpreter")) entry.interpreter = benchInterpreter(runs);
 if (which.includes("gc")) entry.gc = benchGc(runs);
 if (which.includes("http")) entry.http = benchHttp("10s", 50);
