@@ -30,7 +30,7 @@ typedef size_t usize;
 #define countof(a)  (sizeof(a) / sizeof(*(a)))
 #define lengthof(s) (countof(s) - 1)
 
-// Whether this build includes runtime `eval` / `new Function` and the 1.6 MB
+// Whether this build includes runtime `eval` / `new Function` and the embedded
 // baked compiler they need. Default on; the build config sets `-DMAL_EVAL=0`
 // (see build-flags.ts) when `engine.eval` is false, which drops the `#embed` of
 // compiler.malw (compiler_wire.c) and makes the eval/Function path throw an

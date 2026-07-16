@@ -2,7 +2,7 @@ import { compressPositions } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 
 /**
- * Flat, little-endian binary wire format for a {@link VmDefinition}, consumed at
+ * Sequential binary wire format for a {@link VmDefinition}, consumed at
  * runtime by the C loader `mal_vm_load_definition` (runtime/src/vm_load.c). It is
  * the same data `emit-vm.ts` bakes into C literals, but as a buffer the running
  * VM can ingest without a C compile — the foundation of runtime `eval` and a
@@ -16,8 +16,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 5 for STORE_GLOBAL_PROPERTY declaration flags.
-export const WIRE_VERSION = 5;
+// Bumped to 6 for LEB128 u32 and ZigZag-LEB128 i32 fields.
+export const WIRE_VERSION = 6;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -260,15 +260,26 @@ class Writer {
 		this.view.setUint16(this.pos, value, true);
 		this.pos += 2;
 	}
-	u32(value: number): void {
+	fixedU32(value: number): void {
 		this.ensure(4);
 		this.view.setUint32(this.pos, value, true);
 		this.pos += 4;
 	}
+	u32(value: number): void {
+		let remaining = value < 0 ? value + 0x100000000 : value;
+		for (let byteIndex = 0; byteIndex < 5; ++byteIndex) {
+			const byte = remaining % 0x80;
+			remaining = (remaining - byte) / 0x80;
+			this.u8(byte | (remaining > 0 ? 0x80 : 0));
+			if (remaining === 0) {
+				return;
+			}
+		}
+		throw new RangeError("serialize-vm: u32 out of range");
+	}
 	i32(value: number): void {
-		this.ensure(4);
-		this.view.setInt32(this.pos, value | 0, true);
-		this.pos += 4;
+		const signed = value | 0;
+		this.u32(signed < 0 ? -2 * signed - 1 : 2 * signed);
 	}
 	f64(value: number): void {
 		this.ensure(8);
@@ -293,7 +304,7 @@ class Writer {
 	}
 }
 
-/** Sequential little-endian buffer reader (the inverse of {@link Writer}). */
+/** Sequential buffer reader (the inverse of {@link Writer}). */
 class Reader {
 	private view: DataView;
 	private pos = 0;
@@ -310,15 +321,31 @@ class Reader {
 		this.pos += 2;
 		return v;
 	}
-	u32(): number {
+	fixedU32(): number {
 		const v = this.view.getUint32(this.pos, true);
 		this.pos += 4;
 		return v;
 	}
+	u32(): number {
+		let value = 0;
+		for (let shift = 0; shift <= 28; shift += 7) {
+			const byte = this.u8();
+			if (shift === 28 && (byte & 0xf0) !== 0) {
+				throw new RangeError("serialize-vm: invalid u32 varint");
+			}
+			value += (byte & 0x7f) * 2 ** shift;
+			if ((byte & 0x80) === 0) {
+				if (shift > 0 && (byte & 0x7f) === 0) {
+					throw new RangeError("serialize-vm: non-canonical u32 varint");
+				}
+				return value >>> 0;
+			}
+		}
+		throw new RangeError("serialize-vm: invalid u32 varint");
+	}
 	i32(): number {
-		const v = this.view.getInt32(this.pos, true);
-		this.pos += 4;
-		return v;
+		const value = this.u32();
+		return value % 2 === 0 ? value / 2 : -(value + 1) / 2;
 	}
 	f64(): number {
 		const v = this.view.getFloat64(this.pos, true);
@@ -331,12 +358,25 @@ class Reader {
 		return v;
 	}
 	i32Array(): Array<number> {
-		const n = this.u32();
+		const n = this.count(1);
 		const out = new Array<number>(n);
 		for (let i = 0; i < n; ++i) {
 			out[i] = this.i32();
 		}
 		return out;
+	}
+	count(minimumBytesPerItem: number): number {
+		const count = this.u32();
+		if (
+			count > 0x7fffffff ||
+			count > Math.floor(this.remaining() / minimumBytesPerItem)
+		) {
+			throw new RangeError("serialize-vm: truncated or corrupt buffer");
+		}
+		return count;
+	}
+	remaining(): number {
+		return this.view.byteLength - this.pos;
 	}
 }
 
@@ -417,8 +457,8 @@ export function serializeVmDefinition(
 	const debug = options.debugInfo !== false;
 	const w = new Writer();
 
-	w.u32(WIRE_MAGIC);
-	w.u32(WIRE_VERSION);
+	w.fixedU32(WIRE_MAGIC);
+	w.fixedU32(WIRE_VERSION);
 	w.u32(debug ? FLAG_HAS_DEBUG : 0);
 	w.u32(def.globalCount);
 
@@ -447,7 +487,7 @@ export function serializeVmDefinition(
 
 	// Packed static-data literal templates. Tags and operands are all u32 words.
 	w.u32(def.literalTemplateData.length);
-	for (const word of def.literalTemplateData) w.u32(word);
+	for (const word of def.literalTemplateData) w.fixedU32(word);
 
 	w.i32Array(def.cjsModuleFunctionIndices);
 
@@ -862,21 +902,21 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
  */
 export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 	const r = new Reader(bytes);
-	const magic = r.u32();
+	const magic = r.fixedU32();
 	if (magic !== WIRE_MAGIC) {
 		throw new Error(`serialize-vm: bad magic 0x${magic.toString(16)}`);
 	}
-	const version = r.u32();
+	const version = r.fixedU32();
 	if (version !== WIRE_VERSION) {
 		throw new Error(`serialize-vm: version ${version}, expected ${WIRE_VERSION}`);
 	}
 	const debug = (r.u32() & FLAG_HAS_DEBUG) !== 0;
 	const globalCount = r.u32();
 
-	const stringCount = r.u32();
+	const stringCount = r.count(1);
 	const stringConstants: Array<Array<number>> = [];
 	for (let s = 0; s < stringCount; ++s) {
-		const len = r.u32();
+		const len = r.count(2);
 		if (len > MAX_STRING_CODE_UNITS) {
 			throw new RangeError(
 				`serialize-vm: string constant has ${len} UTF-16 code units; maximum is ${MAX_STRING_CODE_UNITS}`,
@@ -889,23 +929,24 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		stringConstants.push(units);
 	}
 
-	const bigintCount = r.u32();
+	const bigintCount = r.count(16);
 	const bigintConstants: Array<bigint> = [];
 	for (let b = 0; b < bigintCount; ++b) {
 		const lo = r.u64();
 		const hi = r.u64();
-		bigintConstants.push((hi << 64n) | lo);
+		const value = (hi << 64n) | lo;
+		bigintConstants.push((hi & (1n << 63n)) === 0n ? value : value - (1n << 128n));
 	}
 
-	const literalTemplateWordCount = r.u32();
+	const literalTemplateWordCount = r.count(1);
 	const literalTemplateData = new Array<number>(literalTemplateWordCount);
 	for (let i = 0; i < literalTemplateWordCount; ++i) {
-		literalTemplateData[i] = r.u32();
+		literalTemplateData[i] = r.fixedU32();
 	}
 
 	const cjsModuleFunctionIndices = r.i32Array();
 
-	const functionCount = r.u32();
+	const functionCount = r.count(1);
 	const functions: Array<VmFunction> = [];
 	for (let f = 0; f < functionCount; ++f) {
 		functions.push(readFunction(r));
@@ -913,16 +954,16 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 
 	const files: Array<string> = [];
 	const sourcePositions: VmDefinition["sourcePositions"] = [];
-	const fileCount = r.u32();
+	const fileCount = r.count(1);
 	for (let f = 0; f < fileCount; ++f) {
-		const len = r.u32();
+		const len = r.count(1);
 		const buf = new Array<number>(len);
 		for (let i = 0; i < len; ++i) {
 			buf[i] = r.u8();
 		}
 		files.push(utf8Decode(buf));
 	}
-	const sourcePosCount = r.u32();
+	const sourcePosCount = r.count(4);
 	for (let p = 0; p < sourcePosCount; ++p) {
 		const line = r.i32();
 		const column = r.i32();
@@ -944,6 +985,9 @@ export function deserializeVmDefinition(bytes: Uint8Array): VmDefinition {
 		throw new Error(
 			"serialize-vm: host installs are not supported in portable wire definitions",
 		);
+	}
+	if (r.remaining() !== 0) {
+		throw new Error("serialize-vm: trailing data");
 	}
 
 	return {
@@ -974,19 +1018,19 @@ function readFunction(r: Reader): VmFunction {
 	const capturedCount = r.i32();
 	const fileIndex = r.i32();
 
-	const instructionCount = r.u32();
+	const instructionCount = r.count(1);
 	const instructions: Array<VmInstruction> = [];
 	for (let i = 0; i < instructionCount; ++i) {
 		instructions.push(readInstruction(r));
 	}
 
-	const handlerCount = r.u32();
+	const handlerCount = r.count(3);
 	const handlers: VmFunction["handlers"] = [];
 	for (let h = 0; h < handlerCount; ++h) {
 		handlers.push({ startIp: r.i32(), endIp: r.i32(), handlerIp: r.i32() });
 	}
 
-	const runCount = r.u32();
+	const runCount = r.count(2);
 	const runs: Array<{ startIp: number; posId: number }> = [];
 	for (let run = 0; run < runCount; ++run) {
 		runs.push({ startIp: r.i32(), posId: r.i32() });

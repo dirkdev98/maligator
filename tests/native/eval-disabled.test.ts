@@ -37,7 +37,7 @@ describe("engine.eval: false runtime gate", () => {
 		assertResultPass(runToStdout(evalOffBin, { env: STRESS_ENV }));
 	});
 
-	it("drops the 1.6 MB baked compiler (smaller than the eval-on binary)", () => {
+	it("drops the baked compiler (smaller than the eval-on binary)", () => {
 		const evalOnBin = buildNativeBinary({
 			fixture: "tests/local/eval_disabled.js",
 			name: "eval-enabled",
@@ -46,7 +46,7 @@ describe("engine.eval: false runtime gate", () => {
 		});
 		const offSize = statSync(evalOffBin).size;
 		const onSize = statSync(evalOnBin).size;
-		// The embedded wire is ~1.6 MB; allow generous slack for linker differences.
-		expect(onSize - offSize).toBeGreaterThan(1_000_000);
+		// Keep enough slack for linker differences without pinning the wire's exact size.
+		expect(onSize - offSize).toBeGreaterThan(500_000);
 	});
 });

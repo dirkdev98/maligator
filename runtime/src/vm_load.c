@@ -13,7 +13,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 5u         // STORE_GLOBAL_PROPERTY declaration flags
+#define WIRE_VERSION 6u         // LEB128 u32 and ZigZag-LEB128 i32 fields
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -212,9 +212,18 @@ static usize align_up(usize value, usize align) {
 }
 
 static void *arena_raw(MalLoadedDefinition *L, usize bytes, usize align) {
+    if (bytes > SIZE_MAX - align - sizeof(MalLoadArenaBlock)) {
+        return nullptr;
+    }
     MalLoadArenaBlock *block = L->arena;
-    usize offset = block != nullptr ? align_up(block->used, align) : 0;
-    if (block == nullptr || offset + bytes > block->size) {
+    usize offset = 0;
+    if (block != nullptr) {
+        if (block->used > SIZE_MAX - (align - 1)) {
+            return nullptr;
+        }
+        offset = align_up(block->used, align);
+    }
+    if (block == nullptr || offset > block->size || bytes > block->size - offset) {
         usize capacity = MAL_LOAD_ARENA_BLOCK;
         if (bytes + align > capacity) {
             capacity = bytes + align;
@@ -261,7 +270,7 @@ static u16 rd_u16(Rd *r) {
     return v;
 }
 
-static u32 rd_u32(Rd *r) {
+static u32 rd_fixed_u32(Rd *r) {
     if (!r->ok || r->pos + 4 > r->len) {
         r->ok = false;
         return 0;
@@ -272,8 +281,30 @@ static u32 rd_u32(Rd *r) {
     return v;
 }
 
+static u32 rd_u32(Rd *r) {
+    u32 value = 0;
+    for (u32 shift = 0; shift <= 28; shift += 7) {
+        u8 byte = rd_u8(r);
+        if (!r->ok || (shift == 28 && (byte & 0xf0u) != 0)) {
+            r->ok = false;
+            return 0;
+        }
+        value |= (u32) (byte & 0x7fu) << shift;
+        if ((byte & 0x80u) == 0) {
+            if (shift > 0 && (byte & 0x7fu) == 0) {
+                r->ok = false;
+                return 0;
+            }
+            return value;
+        }
+    }
+    r->ok = false;
+    return 0;
+}
+
 static i32 rd_i32(Rd *r) {
-    return (i32) rd_u32(r);
+    u32 value = rd_u32(r);
+    return (i32) ((value >> 1) ^ (u32) -(i32) (value & 1u));
 }
 
 static u64 rd_u64(Rd *r) {
@@ -300,7 +331,7 @@ static u32 rd_count(Rd *r, usize min_each) {
     if (min_each == 0) {
         min_each = 1;
     }
-    if ((usize) n > remaining / min_each) {
+    if (n > (u32) INT32_MAX || (usize) n > remaining / min_each) {
         r->ok = false;
         return 0;
     }
@@ -318,13 +349,23 @@ static void *arena(MalLoadedDefinition *L, Rd *r, usize bytes, usize align) {
     return p;
 }
 
+static void *arena_array(
+    MalLoadedDefinition *L, Rd *r, usize count, usize item_size, usize align
+) {
+    if (item_size != 0 && count > SIZE_MAX / item_size) {
+        r->ok = false;
+        return nullptr;
+    }
+    return arena(L, r, count * item_size, align);
+}
+
 static const i32 *rd_i32_array(MalLoadedDefinition *L, Rd *r, i32 *count_out) {
-    u32 n = rd_count(r, sizeof(i32));
+    u32 n = rd_count(r, 1);
     *count_out = (i32) n;
     if (!r->ok || n == 0) {
         return nullptr;
     }
-    i32 *arr = arena(L, r, (usize) n * sizeof(i32), alignof(i32));
+    i32 *arr = arena_array(L, r, n, sizeof(i32), alignof(i32));
     if (!r->ok) {
         return nullptr;
     }
@@ -370,7 +411,7 @@ static bool i32_builder_reserve(I32Builder *builder, Rd *r, usize additional) {
 
 static i32 rd_side_single(Rd *r, I32Builder *builder, i32 expected_count) {
     i32 offset = (i32) builder->count;
-    u32 count = rd_count(r, sizeof(i32));
+    u32 count = rd_count(r, 1);
     if (!r->ok || expected_count < 0 || count != (u32) expected_count ||
         !i32_builder_reserve(builder, r, (usize) count + 1)) {
         r->ok = false;
@@ -385,7 +426,7 @@ static i32 rd_side_single(Rd *r, I32Builder *builder, i32 expected_count) {
 
 static i32 rd_side_pair(Rd *r, I32Builder *builder) {
     i32 offset = (i32) builder->count;
-    u32 first_count = rd_count(r, sizeof(i32));
+    u32 first_count = rd_count(r, 1);
     if (!r->ok || first_count > (u32) ((INT32_MAX - 1) / 2) ||
         !i32_builder_reserve(builder, r, (usize) first_count * 2 + 1)) {
         r->ok = false;
@@ -395,7 +436,7 @@ static i32 rd_side_pair(Rd *r, I32Builder *builder) {
     for (u32 i = 0; i < first_count; i++) {
         builder->data[builder->count++] = rd_i32(r);
     }
-    u32 second_count = rd_count(r, sizeof(i32));
+    u32 second_count = rd_count(r, 1);
     if (!r->ok || second_count != first_count) {
         r->ok = false;
         return 0;
@@ -935,15 +976,15 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
 
     u32 instruction_count = rd_count(r, 1);
     fn->instruction_count = (i32) instruction_count;
-    MalInstruction *instructions =
-        arena(L, r, (usize) instruction_count * sizeof(MalInstruction), alignof(MalInstruction));
+    MalInstruction *instructions = arena_array(
+        L, r, instruction_count, sizeof(MalInstruction), alignof(MalInstruction));
     I32Builder side_data = {0};
     for (u32 i = 0; r->ok && i < instruction_count; i++) {
         rd_instruction(r, &instructions[i], &side_data);
     }
     fn->instructions = instructions;
-    i32 *instruction_data = arena(
-        L, r, side_data.count * sizeof(i32), alignof(i32));
+    i32 *instruction_data = arena_array(
+        L, r, side_data.count, sizeof(i32), alignof(i32));
     if (r->ok && side_data.count > 0) {
         memcpy(instruction_data, side_data.data, side_data.count * sizeof(i32));
     }
@@ -951,10 +992,10 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     fn->instruction_data_count = (i32) side_data.count;
     fn->instruction_data = instruction_data;
 
-    u32 handler_count = rd_count(r, 12);
+    u32 handler_count = rd_count(r, 3);
     fn->handler_count = (i32) handler_count;
-    MalExceptionHandler *handlers =
-        arena(L, r, (usize) handler_count * sizeof(MalExceptionHandler), alignof(MalExceptionHandler));
+    MalExceptionHandler *handlers = arena_array(
+        L, r, handler_count, sizeof(MalExceptionHandler), alignof(MalExceptionHandler));
     for (u32 i = 0; r->ok && i < handler_count; i++) {
         handlers[i].start_ip = rd_i32(r);
         handlers[i].end_ip = rd_i32(r);
@@ -962,10 +1003,10 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     }
     fn->handlers = handlers;
 
-    u32 run_count = rd_count(r, 8);
+    u32 run_count = rd_count(r, 2);
     fn->position_count = (i32) run_count;
-    MalLineEntry *positions =
-        arena(L, r, (usize) run_count * sizeof(MalLineEntry), alignof(MalLineEntry));
+    MalLineEntry *positions = arena_array(
+        L, r, run_count, sizeof(MalLineEntry), alignof(MalLineEntry));
     for (u32 i = 0; r->ok && i < run_count; i++) {
         positions[i].start_ip = rd_i32(r);
         positions[i].pos_id = rd_i32(r);
@@ -991,12 +1032,12 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
 
     Rd r = {.buf = buf, .len = len, .pos = 0, .ok = true};
 
-    u32 magic = rd_u32(&r);
+    u32 magic = rd_fixed_u32(&r);
     if (!r.ok || magic != WIRE_MAGIC) {
         err = "bad magic";
         goto fail;
     }
-    u32 version = rd_u32(&r);
+    u32 version = rd_fixed_u32(&r);
     if (!r.ok || version != WIRE_VERSION) {
         err = "version mismatch";
         goto fail;
@@ -1004,12 +1045,17 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
     u32 flags = rd_u32(&r);
     bool debug = (flags & WIRE_FLAG_HAS_DEBUG) != 0;
     MalVmDefinition *def = &L->definition;
-    def->global_count = rd_i32(&r);
+    u32 global_count = rd_u32(&r);
+    if (global_count > (u32) INT32_MAX) {
+        r.ok = false;
+    }
+    def->global_count = (i32) global_count;
 
     // Strings: immortal, external code units copied into the arena.
-    u32 string_count = rd_count(&r, 4);
+    u32 string_count = rd_count(&r, 1);
     def->string_constant_count = (i32) string_count;
-    MalString *strings = arena(L, &r, (usize) string_count * sizeof(MalString), alignof(MalString));
+    MalString *strings = arena_array(
+        L, &r, string_count, sizeof(MalString), alignof(MalString));
     def->string_constants = strings;
     for (u32 s = 0; r.ok && s < string_count; s++) {
         u32 length = rd_count(&r, sizeof(c16));
@@ -1020,7 +1066,7 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
             err = "string constant exceeds engine limit";
             goto fail;
         }
-        c16 *units = arena(L, &r, (usize) length * sizeof(c16), alignof(c16));
+        c16 *units = arena_array(L, &r, length, sizeof(c16), alignof(c16));
         for (u32 u = 0; r.ok && u < length; u++) {
             units[u] = rd_u16(&r);
         }
@@ -1038,7 +1084,8 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
     // BigInts: immortal, 128-bit value (low u64 then high u64).
     u32 bigint_count = rd_count(&r, 16);
     def->bigint_constant_count = (i32) bigint_count;
-    MalBigInt *bigints = arena(L, &r, (usize) bigint_count * sizeof(MalBigInt), alignof(MalBigInt));
+    MalBigInt *bigints = arena_array(
+        L, &r, bigint_count, sizeof(MalBigInt), alignof(MalBigInt));
     def->bigint_constants = bigints;
     for (u32 b = 0; r.ok && b < bigint_count; b++) {
         u64 lo = rd_u64(&r);
@@ -1050,10 +1097,10 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
 
     // Packed literal-template u32 stream.
     u32 literal_template_count = rd_count(&r, sizeof(u32));
-    u32 *literal_templates = arena(
-        L, &r, (usize) literal_template_count * sizeof(u32), alignof(u32));
+    u32 *literal_templates = arena_array(
+        L, &r, literal_template_count, sizeof(u32), alignof(u32));
     for (u32 i = 0; r.ok && i < literal_template_count; i++) {
-        literal_templates[i] = rd_u32(&r);
+        literal_templates[i] = rd_fixed_u32(&r);
     }
     def->literal_template_data_count = (i32) literal_template_count;
     def->literal_template_data = literal_templates;
@@ -1067,7 +1114,8 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
     // Functions.
     u32 function_count = rd_count(&r, 1);
     def->function_count = (i32) function_count;
-    MalFunction *functions = arena(L, &r, (usize) function_count * sizeof(MalFunction), alignof(MalFunction));
+    MalFunction *functions = arena_array(
+        L, &r, function_count, sizeof(MalFunction), alignof(MalFunction));
     def->functions = functions;
     for (u32 f = 0; r.ok && f < function_count; f++) {
         rd_function(L, &r, &functions[f], debug);
@@ -1075,7 +1123,8 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
 
     // Debug-info: files + source positions.
     u32 file_count = rd_count(&r, 1);
-    const char **files = arena(L, &r, (usize) file_count * sizeof(char *), alignof(char *));
+    const char **files = arena_array(
+        L, &r, file_count, sizeof(char *), alignof(char *));
     for (u32 f = 0; r.ok && f < file_count; f++) {
         u32 length = rd_count(&r, 1);
         char *str = arena(L, &r, (usize) length + 1, alignof(char));
@@ -1086,9 +1135,9 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
             files[f] = str;
         }
     }
-    u32 source_pos_count = rd_count(&r, 16);
-    MalSourcePos *source_positions =
-        arena(L, &r, (usize) source_pos_count * sizeof(MalSourcePos), alignof(MalSourcePos));
+    u32 source_pos_count = rd_count(&r, 4);
+    MalSourcePos *source_positions = arena_array(
+        L, &r, source_pos_count, sizeof(MalSourcePos), alignof(MalSourcePos));
     for (u32 p = 0; r.ok && p < source_pos_count; p++) {
         source_positions[p].line = rd_i32(&r);
         source_positions[p].column = rd_i32(&r);
@@ -1111,7 +1160,7 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
         goto fail;
     }
 
-    if (!r.ok) {
+    if (!r.ok || r.pos != r.len) {
         err = "truncated or corrupt buffer";
         goto fail;
     }

@@ -66,13 +66,13 @@ describe("wire loader side-data validation", () => {
 		directory = mkdtempSync(path.join(tmpdir(), "mal-wire-loader-"));
 	});
 
-	function rejectsMutation(name: string, offset: number): void {
+	function rejectsMutation(name: string, offset: number, encodedValue: number): void {
 		const wire = serializeVmDefinition(definition, { debugInfo: false });
-		new DataView(wire.buffer, wire.byteOffset, wire.byteLength).setUint32(
-			offset,
-			2,
-			true,
-		);
+		wire[offset] = encodedValue;
+		rejectsWire(name, wire);
+	}
+
+	function rejectsWire(name: string, wire: Uint8Array): void {
 		const wirePath = path.join(directory, `${name}.malw`);
 		writeFileSync(wirePath, wire);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
@@ -81,13 +81,23 @@ describe("wire loader side-data validation", () => {
 	}
 
 	it("rejects an explicit count that disagrees with its arrays", () => {
-		// Empty definition tables put the first instruction at byte 70. Its explicit
+		// Empty definition tables put the first instruction at byte 28. Its explicit
 		// count follows the opcode tag and dst operand.
-		rejectsMutation("explicit-count", 70 + 1 + 4);
+		rejectsMutation("explicit-count", 28 + 1 + 1, 4); // ZigZag(2)
 	});
 
 	it("rejects mismatched paired-array lengths", () => {
 		// Skip tag, dst, explicit count, then the first array's count and one value.
-		rejectsMutation("paired-count", 70 + 1 + 4 + 4 + 4 + 4);
+		rejectsMutation("paired-count", 28 + 1 + 1 + 1 + 1 + 1, 2);
+	});
+
+	it("rejects malformed varints and trailing data", () => {
+		const wire = serializeVmDefinition(definition, { debugInfo: false });
+		const replaceFlags = (bytes: Array<number>): Uint8Array =>
+			Uint8Array.from([...wire.subarray(0, 8), ...bytes, ...wire.subarray(9)]);
+
+		rejectsWire("overlong-varint", replaceFlags([0x80, 0]));
+		rejectsWire("overflowing-varint", replaceFlags([0x80, 0x80, 0x80, 0x80, 0x10]));
+		rejectsWire("trailing-data", Uint8Array.from([...wire, 0]));
 	});
 });

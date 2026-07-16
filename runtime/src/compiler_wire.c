@@ -19,7 +19,7 @@ const u8 *mal_compiler_wire_bytes(usize *len) {
 
 #else
 
-// eval-disabled build (`engine.eval: false`): the 1.6 MB compiler is not embedded
+// eval-disabled build (`engine.eval: false`): the compiler wire is not embedded
 // and compiler.malw need not exist. builtin_eval.c throws before ever asking for
 // these bytes, so this stub only satisfies the linker.
 const u8 *mal_compiler_wire_bytes(usize *len) {

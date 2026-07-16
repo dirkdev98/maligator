@@ -119,7 +119,7 @@ const definition: VmDefinition = {
 		[0x66, 0x6f, 0x6f], // "foo"
 		[0xd83d, 0xde00], // astral pair
 	],
-	bigintConstants: [42n, (1n << 100n) + 7n],
+	bigintConstants: [42n, -((1n << 100n) + 7n)],
 	literalTemplateData: [8, 2, 5, 1, 4, 0, 0x80000000],
 	globalCount: 6,
 	files: ["compiled://a.js", "compiled://b.ts"],
@@ -198,10 +198,61 @@ describe("serialize-vm", () => {
 		expect(restored.stringConstants).toEqual(definition.stringConstants);
 	});
 
-	it("preserves astral code units and >64-bit bigints", () => {
+	it("preserves astral code units and signed >64-bit bigints", () => {
 		const restored = deserializeVmDefinition(serializeVmDefinition(definition));
 		expect(restored.stringConstants[2]).toEqual([0xd83d, 0xde00]);
-		expect(restored.bigintConstants[1]).toBe((1n << 100n) + 7n);
+		expect(restored.bigintConstants[1]).toBe(-((1n << 100n) + 7n));
+	});
+
+	it("uses canonical u32 LEB128 at count boundaries", () => {
+		for (const [count, encoding] of [
+			[0, [0]],
+			[127, [127]],
+			[128, [0x80, 1]],
+			[16_383, [0xff, 0x7f]],
+			[16_384, [0x80, 0x80, 1]],
+		] as const) {
+			const probe: VmDefinition = {
+				...definition,
+				functions: [],
+				functionCount: 0,
+				stringConstants: [],
+				bigintConstants: [],
+				literalTemplateData: new Array<number>(count).fill(0xffffffff),
+				files: [],
+				sourcePositions: [],
+				cjsModuleFunctionIndices: [],
+			};
+			const wire = serializeVmDefinition(probe, { debugInfo: false });
+			// Fixed magic/version, then one-byte flags/global/string-count/bigint-count.
+			expect(Array.from(wire.subarray(12, 12 + encoding.length))).toEqual(encoding);
+			expect(deserializeVmDefinition(wire).literalTemplateData).toEqual(
+				probe.literalTemplateData,
+			);
+		}
+	});
+
+	it("rejects truncated, overflowing, and non-canonical varints", () => {
+		const wire = serializeVmDefinition(definition, { debugInfo: false });
+		const replaceFlags = (bytes: Array<number>): Uint8Array =>
+			Uint8Array.from([...wire.subarray(0, 8), ...bytes, ...wire.subarray(9)]);
+
+		expect(() =>
+			deserializeVmDefinition(Uint8Array.from([...wire.subarray(0, 8), 0x80])),
+		).toThrow();
+		expect(() =>
+			deserializeVmDefinition(replaceFlags([0x80, 0x80, 0x80, 0x80, 0x10])),
+		).toThrow(/invalid u32 varint/);
+		expect(() => deserializeVmDefinition(replaceFlags([0x80, 0]))).toThrow(
+			/non-canonical u32 varint/,
+		);
+	});
+
+	it("rejects trailing data", () => {
+		const wire = serializeVmDefinition(definition);
+		expect(() => deserializeVmDefinition(Uint8Array.from([...wire, 0]))).toThrow(
+			/trailing data/,
+		);
 	});
 
 	it("drops the vestigial TRY_BEGIN.handlerIp (restored as 0)", () => {
@@ -259,19 +310,15 @@ describe("serialize-vm", () => {
 		);
 	});
 
-	it("rejects a wire v4 buffer with a nonzero host-install count", () => {
+	it("rejects a wire buffer with a nonzero host-install count", () => {
 		const buffer = serializeVmDefinition(definition);
-		new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength).setUint32(
-			buffer.byteLength - 4,
-			1,
-			true,
-		);
+		buffer[buffer.byteLength - 1] = 1;
 		expect(() => deserializeVmDefinition(buffer)).toThrow(
 			/host installs are not supported in portable wire definitions/,
 		);
 	});
 
-	it("round-trips an ordinary wire v4 definition with an empty manifest", () => {
+	it("round-trips an ordinary wire definition with an empty manifest", () => {
 		const restored = deserializeVmDefinition(serializeVmDefinition(definition));
 		expect(restored.hostInstalls).toEqual([]);
 	});

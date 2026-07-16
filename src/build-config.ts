@@ -615,7 +615,7 @@ function shortHash(value: unknown): string {
  * output-name suffix (build-flags.ts) so binaries built under different
  * capabilities do not clobber each other. Native archives are content-addressed
  * from their exact inputs. The output depends
- * on `engine.eval` (flips `-DMAL_EVAL` + whether the 1.6 MB compiler is embedded),
+ * on `engine.eval` (flips `-DMAL_EVAL` + whether the compiler wire is embedded),
  * `engine.intl` (flips `-DMAL_INTL` + the locale-sensitive fallbacks),
  * `surface.webPlatform` (flips `-DMAL_WEB_PLATFORM` + whether url.c compiles), and
  * `surface.node` (flips `-DMAL_NODE` + the node host built-in surface). Not-yet-wired
