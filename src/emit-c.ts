@@ -498,7 +498,27 @@ export function emitCompiledFunction(
 	// bound instance is live across the rest of the body), initialized from the
 	// EMPTY parameter and read through the TDZ-checked LOAD_THIS / RETURN forms.
 	const thisSlot = fn.isDerivedConstructor ? slotCount : -1;
-	const totalSlots = slotCount + (fn.isDerivedConstructor ? 1 : 0);
+	const stackSlotsBase = slotCount + (fn.isDerivedConstructor ? 1 : 0);
+	const stackObjectSites = new Map<number, StackObjectSite>();
+	let nextStackSlot = stackSlotsBase;
+	for (const site of fn.stackObjectSites ?? []) {
+		const instruction = fn.instructions[site.instructionIndex];
+		if (
+			instruction?.opcode !== "CREATE_OBJECT_SHAPED" ||
+			instruction.count !== site.slotCount ||
+			stackObjectSites.has(site.instructionIndex)
+		) {
+			throw new Error(
+				`Invalid stack-object metadata at instruction ${site.instructionIndex}`,
+			);
+		}
+		stackObjectSites.set(site.instructionIndex, {
+			objectName: `__stack_object_${site.instructionIndex}`,
+			slotsOffset: nextStackSlot,
+		});
+		nextStackSlot += site.slotCount;
+	}
+	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
 	// so a with-function reassigns `env` and needs the root frame to keep the live
@@ -511,7 +531,16 @@ export function emitCompiledFunction(
 	const needsRootFrame = totalSlots > 0 || capturesEnv || hasWith;
 	const gcUnlink = needsRootFrame ? "mal_root_frame_head = __gc_frame.prev; " : "";
 
-	const body = emitBody(fn, suffix, reps, debug, gcUnlink, thisSlot, null);
+	const body = emitBody(
+		fn,
+		suffix,
+		reps,
+		debug,
+		gcUnlink,
+		thisSlot,
+		null,
+		stackObjectSites,
+	);
 	if (body === null) {
 		return null;
 	}
@@ -574,6 +603,9 @@ export function emitCompiledFunction(
 	if (totalSlots > 0) {
 		lines.push(`    MalValue __gc_slots[${totalSlots}];`);
 	}
+	for (const site of stackObjectSites.values()) {
+		lines.push(`    MalObject ${site.objectName};`);
+	}
 	for (let i = 0; i < fn.registerCount; i++) {
 		const slot = slotOf.get(i);
 		if (slot !== undefined) {
@@ -615,6 +647,12 @@ export function emitCompiledFunction(
 	// A derived constructor's rooted `this` slot starts as the (EMPTY) parameter.
 	if (thisSlot >= 0) {
 		lines.push(`    __gc_slots[${thisSlot}] = this_value;`);
+	}
+	// Stack-object slots are roots, not heap-object edges: initialize every slot
+	// before publishing the frame, then keep the entire run rooted for the whole
+	// activation (including calls, exceptions, and later loop iterations).
+	for (let slot = stackSlotsBase; slot < totalSlots; slot++) {
+		lines.push(`    __gc_slots[${slot}] = MAL_VALUE_UNDEFINED;`);
 	}
 
 	// Publish the root frame first, with every register slot already initialized,
@@ -713,7 +751,7 @@ function emitResumableFunction(
 	// thisSlot is -1: a coroutine is never a derived constructor, and `this` is read
 	// from the this_value parameter (which the resume path is invoked with from the
 	// saved frame), so no mutable this-slot is needed.
-	const body = emitBody(fn, suffix, reps, debug, gcUnlink, -1, coro);
+	const body = emitBody(fn, suffix, reps, debug, gcUnlink, -1, coro, new Map());
 	if (body === null) {
 		return null;
 	}
@@ -984,6 +1022,11 @@ interface RegionAccess {
 	commitIps: Array<number> | null;
 }
 
+interface StackObjectSite {
+	objectName: string;
+	slotsOffset: number;
+}
+
 /**
  * Hoisted state for a consolidated (polymorphic) object region: up to
  * MAL_OBJECT_REGION_MAX_SHAPES cached variant shapes, the shared per-access keys, and the
@@ -1038,6 +1081,7 @@ function emitBody(
 	gcUnlink: string,
 	thisSlot: number,
 	coro: CoroutineContext | null,
+	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
@@ -1192,6 +1236,7 @@ function emitBody(
 			thisSlot,
 			coro,
 			regionGuard.get(ip),
+			stackObjectSites.get(ip),
 		);
 		if (emitted === null) {
 			return null;
@@ -1221,6 +1266,7 @@ function emitInstruction(
 	thisSlot: number,
 	coro: CoroutineContext | null,
 	region: RegionAccess | undefined,
+	stackObjectSite: StackObjectSite | undefined,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -1342,10 +1388,26 @@ function emitInstruction(
 				.map((ki) => `&mal_strings${suffix}[${ki}]`)
 				.join(", ");
 			const values = instruction.valueRegisters.map((r) => boxed(r)).join(", ");
-			return [
+			const shape = [
 				`static MalShape *__oshape_${ip} = nullptr;`,
 				`if (__oshape_${ip} == nullptr) __oshape_${ip} = mal_shape_from_string_keys((MalString *[]){ ${keys} }, ${instruction.count});`,
-				`r${instruction.dst} = mal_vm_create_object_shaped(vm, __oshape_${ip}, (MalValue[]){ ${values} }, ${instruction.count});`,
+			];
+			if (stackObjectSite === undefined) {
+				return [
+					...shape,
+					`r${instruction.dst} = mal_vm_create_object_shaped(vm, __oshape_${ip}, (MalValue[]){ ${values} }, ${instruction.count});`,
+				];
+			}
+			const { objectName, slotsOffset } = stackObjectSite;
+			return [
+				...shape,
+				// Direct initialization is essential: this storage never enters the heap,
+				// and IMMORTAL+WHITE makes tracing/finalization/remembering skip the header.
+				`${objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = __oshape_${ip}, .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = &__gc_slots[${slotsOffset}], .overflow = nullptr };`,
+				...instruction.valueRegisters.map(
+					(register, index) => `__gc_slots[${slotsOffset + index}] = ${boxed(register)};`,
+				),
+				`r${instruction.dst} = mal_value_from_object(&${objectName});`,
 			];
 		}
 		case "CREATE_ARRAY":

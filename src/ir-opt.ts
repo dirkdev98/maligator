@@ -107,7 +107,168 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		}
 	}
 
+	// This is intentionally outside the transform fixpoint: it classifies the
+	// residual identity-observed objects left after scalar replacement, and keys
+	// the proof to the exact allocation instruction before register reuse.
+	annotateStackObjectSites(program);
+
 	debugIntermediateProgram(program);
+}
+
+/**
+ * Prove the first native stack-object class: a closed, fixed-shape ordinary
+ * object whose identity/type/prototype may be observed, but whose pointer cannot
+ * leave the activation or enter any operation capable of retaining it.
+ *
+ * This deliberately does not consume `stackAllocCandidates` from escape.ts. A
+ * use not listed below rejects the site, including every call position, return,
+ * throw, capture/global/heap store, dynamic or missing-key read, shape mutation,
+ * enumeration, delete, and suspension-related operation.
+ */
+export function annotateStackObjectSites(program: IntermediateProgram): void {
+	for (const fn of program.functions) {
+		// Slots stay rooted for the full activation. Bound their aggregate C-stack
+		// and root-scan cost; later sites simply retain ordinary heap allocation.
+		const maxStackObjectSlots = 256;
+		let stackObjectSlots = 0;
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type === "createObjectShaped") {
+					delete instruction.stackObject;
+				}
+			}
+		}
+
+		if (
+			fn.isGenerator ||
+			fn.isAsync ||
+			fn.semanticFile.hasDirectEval.size > 0 ||
+			functionUsesWith(fn)
+		) {
+			continue;
+		}
+
+		const defCount = new Map<number, number>();
+		const singleDef = new Map<number, IRInstruction>();
+		const usesOf = new Map<
+			number,
+			Array<{ instruction: IRInstruction; position: number }>
+		>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (!("registers" in instruction)) continue;
+				const defs = destinationCount(instruction);
+				for (let position = 0; position < defs; position++) {
+					const register = instruction.registers[position]!;
+					if (register < 0) continue;
+					const count = (defCount.get(register) ?? 0) + 1;
+					defCount.set(register, count);
+					if (count === 1) singleDef.set(register, instruction);
+					else singleDef.delete(register);
+				}
+				for (let position = defs; position < instruction.registers.length; position++) {
+					const register = instruction.registers[position]!;
+					if (register < 0) continue;
+					const uses = usesOf.get(register) ?? [];
+					uses.push({ instruction, position });
+					usesOf.set(register, uses);
+				}
+			}
+		}
+
+		const constantString = (register: number): number | undefined => {
+			const definition = singleDef.get(register);
+			return definition?.type === "createString" ? definition.stringIndex : undefined;
+		};
+
+		for (const block of fn.blocks) {
+			for (const allocation of block.instructions) {
+				if (allocation.type !== "createObjectShaped") continue;
+				const objectRegister = allocation.registers[0];
+				if (
+					defCount.get(objectRegister) !== 1 ||
+					singleDef.get(objectRegister) !== allocation
+				) {
+					continue;
+				}
+
+				const ownKeys = new Set(allocation.keyStringIndices);
+				const aliases = new Set<number>([objectRegister]);
+				const worklist = [objectRegister];
+				let observed = false;
+				let safe = true;
+				while (safe && worklist.length > 0) {
+					const alias = worklist.pop()!;
+					for (const { instruction: use, position } of usesOf.get(alias) ?? []) {
+						switch (use.type) {
+							case "move": {
+								const target = use.registers[0];
+								if (
+									position !== 1 ||
+									defCount.get(target) !== 1 ||
+									singleDef.get(target) !== use
+								) {
+									safe = false;
+									break;
+								}
+								if (!aliases.has(target)) {
+									aliases.add(target);
+									worklist.push(target);
+								}
+								break;
+							}
+							case "loadProperty": {
+								const key = constantString(use.registers[2]);
+								if (position !== 1 || key === undefined || !ownKeys.has(key)) {
+									safe = false;
+								}
+								break;
+							}
+							case "storeProperty": {
+								const key = constantString(use.registers[1]);
+								if (position !== 0 || key === undefined || !ownKeys.has(key)) {
+									safe = false;
+								}
+								break;
+							}
+							case "loadPrototype":
+								if (position !== 1) safe = false;
+								else observed = true;
+								break;
+							case "unary":
+								if (position !== 1 || use.operator !== "typeof") safe = false;
+								else observed = true;
+								break;
+							case "binary":
+								if (
+									(position !== 1 && position !== 2) ||
+									(use.operator !== "===" && use.operator !== "!==")
+								) {
+									safe = false;
+								} else {
+									observed = true;
+								}
+								break;
+							default:
+								safe = false;
+						}
+						if (!safe) break;
+					}
+				}
+
+				// Pure load/store records belong to scalar replacement. Requiring a real
+				// identity/type/prototype observation keeps this as the residual class.
+				if (
+					safe &&
+					observed &&
+					stackObjectSlots + allocation.keyStringIndices.length <= maxStackObjectSlots
+				) {
+					allocation.stackObject = true;
+					stackObjectSlots += allocation.keyStringIndices.length;
+				}
+			}
+		}
+	}
 }
 
 /**

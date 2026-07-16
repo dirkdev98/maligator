@@ -728,29 +728,12 @@ export function registerEscapesFrame(
 }
 
 // ---------------------------------------------------------------------------
-// Stack-allocation candidate classification (T7.4 / §N.7).
+// Broad stack-allocation opportunity diagnostic (T7.4 / §N.7).
 //
-// A single-assignment, non-escaping allocation whose SHAPE never transitions can
-// be placed in the caller's C frame instead of the GC heap: the object keeps its
-// identity (so it may still be passed to the non-retaining callees the escape
-// lattice already blesses) but never touches the collector. This is the residual
-// scalar replacement (ir-opt.ts) cannot take — scalar replacement additionally
-// requires that identity is never observed (no call-arg / dynamic-key use) and
-// removes the object entirely; stack allocation keeps a real object for the cases
-// that flow through a real call or a dynamic-key read.
-//
-// Safety rests on three runtime facts (verified in gc.c):
-//  - the container is a C-stack MalObject with storage=IMMORTAL, so mal_gc_shade
-//    always skips it (gc.c:311) → it is never marked BLACK → no stale-mark
-//    use-after-free even when a callee roots the boxed pointer across a GC;
-//  - its slots live in a stack MalValue[] rooted as a run in the §J root frame, so
-//    its referents stay live at any safepoint, from any call depth;
-//  - it owns no heap side-allocation (no `overflow` table), which requires the
-//    shape to be fixed — hence the shape-transition check below.
-// The escape lattice already proves non-retention + binding stability (only stable
-// global/lexical slots resolve to a callee summary; reassignable globals stay
-// `retained`), so this classifier's only added obligation is ruling out shape
-// mutation.
+// This classifier deliberately remains diagnostic: its escape summaries permit
+// non-retaining calls and dynamic-key reads, neither of which is sufficient proof
+// for a C-stack pointer. Native emission uses the narrower, instruction-keyed
+// closed-use proof in ir-opt.ts instead and must not consume this result directly.
 // ---------------------------------------------------------------------------
 
 export type StackAllocClass = "scalar" | "stack";
@@ -847,8 +830,8 @@ function classifyShapedStackAlloc(
 	return identityObserved ? "stack" : "scalar";
 }
 
-/** Every stack-allocation candidate in `fn`, keyed by allocation destination
- * register. Pure analysis — consumed by emit-c (behind MAL_STACK_ALLOC). */
+/** Every broad stack-allocation opportunity in `fn`, keyed by allocation
+ * destination register. Pure diagnostic analysis; not consumed by codegen. */
 export function stackAllocCandidates(
 	analysis: ProgramEscape,
 	fn: IRFunction,
@@ -962,9 +945,9 @@ export function dumpProgramEscape(program: IntermediateProgram): void {
 	log.info(debugProgramEscape(program));
 }
 
-/** `--dump-stack-alloc`: per-function stack-allocation candidates + a corpus tally
+/** `--dump-stack-alloc`: per-function broad stack-allocation opportunities + a corpus tally
  * (how many heap allocations escape analysis proves are frame-local and
- * shape-fixed). Diagnostic only — the transform lives in emit-c. */
+ * shape-fixed). Diagnostic only; the sound transform uses a separate narrow proof. */
 export function debugStackAlloc(program: IntermediateProgram): string {
 	const analysis = analyzeProgramEscape(program);
 	const lines: Array<string> = ["=== stack-allocation candidates ==="];

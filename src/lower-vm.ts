@@ -135,6 +135,13 @@ export interface VmFunction {
 	 * boxed register.
 	 */
 	gcRootRegisters?: ReadonlyArray<number>;
+
+	/**
+	 * COMPILE-ONLY: exact CREATE_OBJECT_SHAPED instruction sites proven safe for
+	 * native stack emission. Omitted by the wire codec, so deserialized/interpreted
+	 * functions retain ordinary heap allocation semantics.
+	 */
+	stackObjectSites?: ReadonlyArray<{ instructionIndex: number; slotCount: number }>;
 }
 
 /**
@@ -745,6 +752,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 
 	const instructions: Array<VmInstruction> = [];
 	const positions: Array<number> = [];
+	const stackObjectSites: Array<{ instructionIndex: number; slotCount: number }> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -752,7 +760,14 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 				currentPos = instruction.pos;
 				continue;
 			}
+			const instructionIndex = instructions.length;
 			instructions.push(lowerInstructionToVmInstruction(blockStartIps, instruction));
+			if (instruction.type === "createObjectShaped" && instruction.stackObject) {
+				stackObjectSites.push({
+					instructionIndex,
+					slotCount: instruction.keyStringIndices.length,
+				});
+			}
 			positions.push(currentPos);
 		}
 	}
@@ -797,6 +812,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		fileIndex,
 		positions,
 		gcRootRegisters,
+		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
 	};
 }
 

@@ -620,6 +620,14 @@ export type IRInstruction =
 			// filled directly, skipping per-property defineProperty transitions.
 			type: "createObjectShaped";
 
+			/**
+			 * COMPILE-ONLY: this exact allocation instruction passed the closed
+			 * fixed-shape stack-object proof after the optimization fixpoint. Register
+			 * allocation preserves the instruction object; lower-vm transfers the site
+			 * to VmFunction metadata, while serialized bytecode deliberately ignores it.
+			 */
+			stackObject?: true;
+
 			// [destination, ...valueRegisters] — one value register per key, in order
 			registers: [number, ...Array<number>];
 

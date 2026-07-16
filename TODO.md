@@ -25,8 +25,9 @@ roadmaps for everything else. Test262 verdict counts live only in
 - [ ] Add validity/version cells for user-defined prototype chains, then extend the
       inherited-value cache beyond watched built-in chains and measure method-call
       improvement.
-- [ ] Emit stack objects for eligible `stackAllocCandidates`, then add partial
-      escape with lazy materialization at cold escape edges.
+- [ ] Extend the native-only closed fixed-shape local stack-object slice to further
+      proven classes, then add partial escape with lazy materialization at cold
+      escape edges.
 - [ ] Measure region allocation and drop-insertion free lists after stack allocation
       lands; do not add either without an allocation-rate or wall-time win.
 - [x] Pool paired promise reactions, microtask jobs, suspendable-frame buffers, and
