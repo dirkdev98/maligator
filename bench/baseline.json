@@ -2681,6 +2681,209 @@
         "nodeMs": 41.610375,
         "checksum": 797792866
       }
+    },
+    {
+      "commit": "e36c44a",
+      "dirty": false,
+      "size": {
+        "full": {
+          "binaryBytes": 14051232,
+          "runtimeArchiveBytes": 117848,
+          "hostArchiveBytes": 31424,
+          "engineArchiveBytes": 1869480,
+          "rustArchiveBytes": 21760960
+        },
+        "no-eval": {
+          "binaryBytes": 13208984,
+          "runtimeArchiveBytes": 117848,
+          "hostArchiveBytes": 31424,
+          "engineArchiveBytes": 1042744,
+          "rustArchiveBytes": 21760960
+        },
+        "no-realms": {
+          "binaryBytes": 14033328,
+          "runtimeArchiveBytes": 117568,
+          "hostArchiveBytes": 31424,
+          "engineArchiveBytes": 1847352,
+          "rustArchiveBytes": 21760960
+        },
+        "no-intl": {
+          "binaryBytes": 3519672,
+          "runtimeArchiveBytes": 117848,
+          "hostArchiveBytes": 31424,
+          "engineArchiveBytes": 1766080,
+          "rustArchiveBytes": 8358280
+        },
+        "no-web": {
+          "binaryBytes": 13484408,
+          "runtimeArchiveBytes": 89960,
+          "hostArchiveBytes": 31424,
+          "engineArchiveBytes": 1869480,
+          "rustArchiveBytes": 21120864
+        },
+        "no-regexp": {
+          "binaryBytes": 13444976,
+          "runtimeArchiveBytes": 117848,
+          "hostArchiveBytes": 31424,
+          "engineArchiveBytes": 1829768,
+          "rustArchiveBytes": 20761448
+        },
+        "minimal": {
+          "binaryBytes": 2108920,
+          "runtimeArchiveBytes": 89744,
+          "hostArchiveBytes": 31424,
+          "engineArchiveBytes": 917560,
+          "rustArchiveBytes": 7717744
+        }
+      },
+      "compiler": {
+        "wallMs": 184.664666,
+        "sourceBytes": 163559,
+        "wireBytes": 95523,
+        "functionCount": 800
+      },
+      "language": {
+        "malMs": 217.657333,
+        "nodeMs": 106.994041,
+        "ratio": 2.0342939753065314
+      },
+      "module": {
+        "malMs": 165.932,
+        "nodeMs": 112.150417,
+        "ratio": 1.479548667215388,
+        "collections": 0,
+        "peakLiveKb": 0
+      },
+      "string": {
+        "malMs": 225.362917,
+        "nodeMs": 48.688125,
+        "ratio": 4.628703960154556,
+        "collections": 13,
+        "allocatedMb": 64.1082935333252,
+        "peakLiveKb": 126.6875
+      },
+      "promise": {
+        "malMs": 40.772833,
+        "nodeMs": 30.293792,
+        "ratio": 1.3459138096676704,
+        "collections": 7,
+        "allocatedMb": 68.60369873046875,
+        "jobAllocations": 4005,
+        "jobReuses": 18003,
+        "reactionAllocations": 19999,
+        "reactionReuses": 6
+      },
+      "coroutine": {
+        "compiled": {
+          "wallMs": 72.102541,
+          "collections": 6,
+          "allocatedMb": 84.31672668457031,
+          "frameAllocations": 3003,
+          "frameReuses": 20999,
+          "requestAllocations": 1,
+          "requestReuses": 2999
+        },
+        "interpreted": {
+          "wallMs": 84.1135,
+          "collections": 6,
+          "allocatedMb": 84.31672668457031,
+          "frameAllocations": 3004,
+          "frameReuses": 40998,
+          "requestAllocations": 1,
+          "requestReuses": 2999
+        },
+        "nodeMs": 32.149875
+      },
+      "arguments": {
+        "compiled": {
+          "wallMs": 98.549375,
+          "collections": 4,
+          "allocatedMb": 29.710769653320312,
+          "frameAllocations": 98976,
+          "frameReuses": 1024,
+          "instructionCount": 0,
+          "bytecodeBytes": 0,
+          "binaryBytes": 14069120
+        },
+        "interpreted": {
+          "wallMs": 282.6745,
+          "collections": 4,
+          "allocatedMb": 29.710769653320312,
+          "frameAllocations": 148976,
+          "frameReuses": 1024,
+          "instructionCount": 183,
+          "bytecodeBytes": 3744,
+          "binaryBytes": 14051840
+        },
+        "nodeMs": 40.906042
+      },
+      "stackObject": {
+        "compiled": {
+          "wallMs": 234.849042,
+          "collections": 28,
+          "allocatedMb": 127.98477172851562,
+          "peakLiveKb": 115.140625,
+          "maxPauseMs": 2.602,
+          "instructionCount": 0,
+          "bytecodeBytes": 0,
+          "binaryBytes": 14146784,
+          "objectSlotCoallocations": 300000,
+          "objectSlotGrowMigrations": 0,
+          "objectSlotDictionaryMigrations": 0,
+          "checksum": 797792866
+        },
+        "interpreted": {
+          "wallMs": 667.346625,
+          "collections": 45,
+          "allocatedMb": 192.07168579101562,
+          "peakLiveKb": 116.109375,
+          "maxPauseMs": 3.694,
+          "instructionCount": 860,
+          "bytecodeBytes": 18108,
+          "binaryBytes": 14072920,
+          "objectSlotCoallocations": 420000,
+          "objectSlotGrowMigrations": 0,
+          "objectSlotDictionaryMigrations": 0,
+          "checksum": 797792866
+        },
+        "nodeMs": 40.372666,
+        "checksum": 797792866
+      },
+      "interpreter": {
+        "malMs": 1772.523375,
+        "nodeMs": 109.38725,
+        "ratio": 16.204113139328395,
+        "rssMb": 12.0625,
+        "instructionSize": 20,
+        "instructionCount": 688,
+        "instructionBytes": 13760,
+        "instructionDataBytes": 256,
+        "bytecodeBytes": 14016
+      },
+      "gc": {
+        "cli": {
+          "wallMs": 72.536583,
+          "rssMb": 22.5625,
+          "maxPauseMs": 4.221
+        },
+        "desktop": {
+          "wallMs": 1853.349667,
+          "rssMb": 20.84375,
+          "maxPauseMs": 3.724
+        },
+        "server": {
+          "wallMs": 5177.770041,
+          "rssMb": 20.203125,
+          "maxPauseMs": 9.827
+        }
+      },
+      "http": {
+        "malRps": 128362.32069845307,
+        "nodeRps": 108965.84832149367,
+        "ratio": 1.1780050600783825,
+        "malP99Ms": 0.9005000000000001,
+        "nodeP99Ms": 0.90325
+      }
     }
   ]
 }
