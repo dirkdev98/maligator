@@ -14,6 +14,11 @@ function observed1(seed) {
 	return result;
 }
 
+function observedEmpty(seed) {
+	const o = {};
+	return typeof o === "object" && o === o ? seed + 1 : 0;
+}
+
 function observed4(seed) {
 	const o = { f0: seed, f1: seed + 1, f2: seed + 2, f3: seed + 3 };
 	if ((seed & 1) === 0) o.f2 = o.f0 + o.f3;
@@ -157,6 +162,7 @@ function passNegative(seed) {
 
 let checksum = 0;
 for (let i = 0; i < SHAPE_RUNS; i++) {
+	checksum = (checksum + observedEmpty(i)) % MOD;
 	checksum = (checksum + observed1(i)) % MOD;
 	checksum = (checksum + observed4(i)) % MOD;
 	checksum = (checksum + observed16(i)) % MOD;
@@ -174,7 +180,7 @@ for (let i = 0; i < 60000; i++) {
 	checksum = (checksum + passNegative(i)) % MOD;
 }
 
-const EXPECTED_CHECKSUM = 597883230;
+const EXPECTED_CHECKSUM = 797943181;
 if (checksum !== EXPECTED_CHECKSUM) {
 	throw new Error("stack-object checksum " + checksum + " expected " + EXPECTED_CHECKSUM);
 }
