@@ -968,9 +968,9 @@ void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction);
 
 // Allocate a compiled coroutine's heap register buffer (all undefined). Sized by
 // the backend to cover registers + the with-object stack + a self-reference slot;
-// owned by the coroutine object once GENERATOR_START/ASYNC_START adopts it, freed
-// on completion.
-MalValue *mal_coroutine_alloc_registers(i32 slot_count);
+// owned by the coroutine object once GENERATOR_START/ASYNC_START adopts it, then
+// returned to the VM's bounded buffer pool on completion.
+MalValue *mal_coroutine_alloc_registers(MalVm *vm, i32 slot_count);
 
 // GENERATOR_START: build the generator instance (prototype from callee.prototype,
 // else the intrinsic generator/async-generator prototype), adopt `registers` as

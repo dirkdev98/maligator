@@ -95,6 +95,13 @@ for (let i = 0; i < 2000; i++) {
 	g.next();
 	g.next();
 	maybeKeep(i, g);
+	let unopened = gen(2);
+	if (i & 1) unopened.return(i);
+	else {
+		try {
+			unopened.throw(i);
+		} catch {}
+	}
 }
 // 7b. async generators + pending async functions (same suspendable-frame machinery)
 async function* agen(n) {
@@ -105,11 +112,18 @@ async function stalled() {
 	await pendingForever; // never settles -> frame stays suspended at exit
 	return 1;
 }
+async function* blockedAgen() {
+	await pendingForever;
+	yield 1;
+}
 for (let i = 0; i < 1500; i++) {
 	let ag = agen(5);
 	ag.next();
+	let blocked = blockedAgen();
+	blocked.next();
+	blocked.next(); // leave one malloc-owned request queued when abandoned
 	let st = stalled();
-	maybeKeep(i, [ag, st]);
+	maybeKeep(i, [ag, blocked, st]);
 }
 // 8. promises + reactions
 for (let i = 0; i < 2000; i++) {

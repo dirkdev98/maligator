@@ -29,8 +29,9 @@ roadmaps for everything else. Test262 verdict counts live only in
       escape with lazy materialization at cold escape edges.
 - [ ] Measure region allocation and drop-insertion free lists after stack allocation
       lands; do not add either without an allocation-rate or wall-time win.
-- [ ] Pool promise jobs/reactions and suspendable-frame support allocations. Record
-      allocation count and wall time before and after.
+- [x] Pool paired promise reactions, microtask jobs, suspendable-frame buffers, and
+      async-generator requests in bounded per-VM freelists. The broad promise and
+      coroutine benchmarks track native allocation counts, reuse, and wall time.
 - [ ] Pack `MalInstruction` after pointer-carrying operands move behind side-table
       indices in the bytecode format.
 - [ ] Revisit `MalVm` and host-structure layout when SMP creates multiple VMs.

@@ -102,6 +102,8 @@ interface CoroutineBackendMetrics {
 	allocatedMb: number;
 	frameAllocations: number;
 	frameReuses: number;
+	requestAllocations: number;
+	requestReuses: number;
 }
 interface CoroutineMetrics {
 	compiled: CoroutineBackendMetrics;
@@ -370,6 +372,8 @@ function benchCoroutineBackend(binary: string, runs: number): CoroutineBackendMe
 		allocatedMb: parseGcStat(stderr, "allocated_bytes") / (1024 * 1024),
 		frameAllocations: parsePromiseStat(stderr, "frame_allocations"),
 		frameReuses: parsePromiseStat(stderr, "frame_reuses"),
+		requestAllocations: parsePromiseStat(stderr, "request_allocations"),
+		requestReuses: parsePromiseStat(stderr, "request_reuses"),
 	};
 }
 
@@ -656,6 +660,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			);
 			console.log(
 				`               ${current.collections} collections, ${current.allocatedMb.toFixed(1)}MB managed`,
+			);
+			console.log(
+				`               ${current.requestAllocations} request allocations${delta(current.requestAllocations, prior?.requestAllocations)}, ${current.requestReuses} reused`,
 			);
 		}
 		console.log(`  node        ${entry.coroutine.nodeMs.toFixed(1)}ms`);

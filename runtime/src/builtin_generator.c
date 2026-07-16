@@ -77,6 +77,7 @@ static MalValue mal_builtin_generator_throw(MalVm *vm, MalValue this_value, cons
     // Throwing into a not-yet-started or finished generator throws the value
     // back at the caller without running any body code.
     if (generator->state == MAL_GENERATOR_SUSPENDED_START) {
+        mal_generator_release_frame(vm, generator);
         generator->state = MAL_GENERATOR_COMPLETED;
     }
     if (generator->state == MAL_GENERATOR_COMPLETED) {
@@ -105,6 +106,7 @@ static MalValue mal_builtin_generator_return(MalVm *vm, MalValue this_value, con
     // Returning into a not-yet-started or finished generator completes it with
     // the given value, running no body code (no finalizers to honor).
     if (generator->state == MAL_GENERATOR_SUSPENDED_START) {
+        mal_generator_release_frame(vm, generator);
         generator->state = MAL_GENERATOR_COMPLETED;
     }
     if (generator->state == MAL_GENERATOR_COMPLETED) {

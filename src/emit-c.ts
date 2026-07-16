@@ -767,7 +767,7 @@ function emitResumableFunction(
 
 	// FRESH: allocate the buffer (already all-undefined), publish the root frame,
 	// build the captured env, then load parameters boxed before falling into body.
-	lines.push(`        __gc_slots = mal_coroutine_alloc_registers(${totalSlots});`);
+	lines.push(`        __gc_slots = mal_coroutine_alloc_registers(vm, ${totalSlots});`);
 	lines.push(
 		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .env = env };`,
 	);

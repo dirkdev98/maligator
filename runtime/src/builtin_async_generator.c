@@ -13,12 +13,76 @@
 #include "vm.h"
 #include "vm_ops.h"
 
+#define MAL_ASYNC_GENERATOR_REQUEST_POOL_LIMIT 4096
+
+static u64 g_request_allocations = 0;
+static u64 g_request_reuses = 0;
+
+u64 mal_async_generator_request_allocation_count(void) {
+    return g_request_allocations;
+}
+
+u64 mal_async_generator_request_reuse_count(void) {
+    return g_request_reuses;
+}
+
+static MalAsyncGeneratorRequest *mal_agen_request_new(MalVm *vm) {
+    MalAsyncGeneratorRequest *request = vm->async_generator_request_pool;
+    if (request == nullptr) {
+        request = malloc(sizeof(MalAsyncGeneratorRequest));
+        g_request_allocations++;
+    } else {
+        vm->async_generator_request_pool = request->next;
+        vm->async_generator_request_pool_count--;
+        g_request_reuses++;
+    }
+    request->next = nullptr;
+    return request;
+}
+
+static void mal_agen_request_recycle(MalVm *vm, MalAsyncGeneratorRequest *request) {
+    mal_gc_write_barrier(request->resolve);
+    mal_gc_write_barrier(request->reject);
+    mal_gc_write_barrier(request->value);
+    request->resolve = mal_value_new_undefined();
+    request->reject = mal_value_new_undefined();
+    request->value = mal_value_new_undefined();
+    request->mode = MAL_GENERATOR_RESUME_NEXT;
+
+    if (vm->async_generator_request_pool_count >= MAL_ASYNC_GENERATOR_REQUEST_POOL_LIMIT) {
+        free(request);
+        return;
+    }
+    request->next = vm->async_generator_request_pool;
+    vm->async_generator_request_pool = request;
+    vm->async_generator_request_pool_count++;
+}
+
+void mal_async_generator_free_requests(MalVm *vm, MalAsyncGeneratorRequest *request) {
+    while (request != nullptr) {
+        MalAsyncGeneratorRequest *next = request->next;
+        mal_agen_request_recycle(vm, request);
+        request = next;
+    }
+}
+
+void mal_async_generator_free_request_pool(MalVm *vm) {
+    MalAsyncGeneratorRequest *request = vm->async_generator_request_pool;
+    while (request != nullptr) {
+        MalAsyncGeneratorRequest *next = request->next;
+        free(request);
+        request = next;
+    }
+    vm->async_generator_request_pool = nullptr;
+    vm->async_generator_request_pool_count = 0;
+}
+
 static MalCompletion mal_agen_normal(void) {
     return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
 
 /** Detach and free the front request, returning its fields (or false if none). */
-static bool mal_agen_dequeue(MalGeneratorObject *agen, MalValue *out_resolve, MalValue *out_reject, i32 *out_mode, MalValue *out_value) {
+static bool mal_agen_dequeue(MalVm *vm, MalGeneratorObject *agen, MalValue *out_resolve, MalValue *out_reject, i32 *out_mode, MalValue *out_value) {
     MalAsyncGeneratorRequest *req = agen->agen_queue_head;
     if (req == nullptr) {
         return false;
@@ -31,13 +95,7 @@ static bool mal_agen_dequeue(MalGeneratorObject *agen, MalValue *out_resolve, Ma
     *out_reject = req->reject;
     *out_mode = req->mode;
     *out_value = req->value;
-    // SATB: the request node (traced via the async generator) is freed here; its
-    // settle capability + resume value are dropped from the heap graph, so shade
-    // them before the node goes away. Folds out off-cycle.
-    mal_gc_write_barrier(req->resolve);
-    mal_gc_write_barrier(req->reject);
-    mal_gc_write_barrier(req->value);
-    free(req);
+    mal_agen_request_recycle(vm, req);
     return true;
 }
 
@@ -55,6 +113,7 @@ void mal_async_generator_resume_next(MalVm *vm, MalGeneratorObject *agen) {
     while (agen->agen_queue_head != nullptr) {
         // return()/throw() on a not-yet-started generator completes it.
         if (agen->state == MAL_GENERATOR_SUSPENDED_START && agen->agen_queue_head->mode != MAL_GENERATOR_RESUME_NEXT) {
+            mal_generator_release_frame(vm, agen);
             agen->state = MAL_GENERATOR_COMPLETED;
         }
 
@@ -63,7 +122,7 @@ void mal_async_generator_resume_next(MalVm *vm, MalGeneratorObject *agen) {
             MalValue reject;
             i32 mode;
             MalValue value;
-            mal_agen_dequeue(agen, &resolve, &reject, &mode, &value);
+            mal_agen_dequeue(vm, agen, &resolve, &reject, &mode, &value);
             if (mode == MAL_GENERATOR_RESUME_THROW) {
                 vm->completion = mal_agen_normal();
                 mal_vm_call_value(vm, reject, mal_value_new_undefined(), &value, 1);
@@ -94,7 +153,7 @@ void mal_async_generator_yield(MalVm *vm, MalGeneratorObject *agen) {
     MalValue reject;
     i32 mode;
     MalValue value;
-    if (mal_agen_dequeue(agen, &resolve, &reject, &mode, &value)) {
+    if (mal_agen_dequeue(vm, agen, &resolve, &reject, &mode, &value)) {
         MalValue result = mal_vm_create_iter_result(vm, agen->yielded_value, false);
         mal_agen_settle_resolve(vm, resolve, result);
     }
@@ -110,7 +169,7 @@ void mal_async_generator_return(MalVm *vm, MalGeneratorObject *agen, MalValue va
     MalValue reject;
     i32 mode;
     MalValue request_value;
-    if (mal_agen_dequeue(agen, &resolve, &reject, &mode, &request_value)) {
+    if (mal_agen_dequeue(vm, agen, &resolve, &reject, &mode, &request_value)) {
         MalValue result = mal_vm_create_iter_result(vm, value, true);
         mal_agen_settle_resolve(vm, resolve, result);
     }
@@ -126,7 +185,7 @@ void mal_async_generator_throw_done(MalVm *vm, MalGeneratorObject *agen, MalValu
     MalValue reject;
     i32 mode;
     MalValue request_value;
-    if (mal_agen_dequeue(agen, &resolve, &reject, &mode, &request_value)) {
+    if (mal_agen_dequeue(vm, agen, &resolve, &reject, &mode, &request_value)) {
         vm->completion = mal_agen_normal();
         mal_vm_call_value(vm, reject, mal_value_new_undefined(), &reason, 1);
         vm->completion = mal_agen_normal();
@@ -157,8 +216,7 @@ static MalValue mal_agen_enqueue_and_drive(MalVm *vm, MalValue this_value, const
 
     MalGeneratorObject *agen = (MalGeneratorObject *) mal_value_to_heap(this_value);
 
-    MalAsyncGeneratorRequest *request = malloc(sizeof(MalAsyncGeneratorRequest));
-    request->next = nullptr;
+    MalAsyncGeneratorRequest *request = mal_agen_request_new(vm);
     request->resolve = cap_resolve;
     request->reject = cap_reject;
     request->mode = mode;

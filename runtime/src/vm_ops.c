@@ -4727,13 +4727,8 @@ void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction) {
 // Compiled coroutines (native-backend generators & async).
 // ---------------------------------------------------------------------------
 
-MalValue *mal_coroutine_alloc_registers(i32 slot_count) {
-    MalValue *registers = malloc(sizeof(MalValue) * (usize) slot_count);
-    mal_coroutine_note_buffer_allocation();
-    for (i32 i = 0; i < slot_count; i++) {
-        registers[i] = mal_value_new_undefined();
-    }
-    return registers;
+MalValue *mal_coroutine_alloc_registers(MalVm *vm, i32 slot_count) {
+    return mal_vm_alloc_coroutine_buffer(vm, slot_count);
 }
 
 MalGeneratorObject *mal_vm_op_generator_start_compiled(
@@ -4841,16 +4836,12 @@ void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generato
         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
     }
 
-    // Free after routing: settle_* re-enters the VM (mal_vm_call_value), and the
+    // Release after routing: settle_* re-enters the VM (mal_vm_call_value), and the
     // compiled frame's root frame is still linked over this buffer until the caller
-    // unlinks it — freeing first would expose a freed buffer to a collection there.
-    // The freed frame.registers is then left dangling, exactly as the interpreter.
+    // unlinks it, so recycling first could expose cleared/reused storage there.
     // SATB: the frame just went COMPLETED (tracer now skips it) and its buffer is
-    // freed here, so shade the activation's live edges before they leave the graph.
-    if (mal_gc_marking_active) {
-        mal_gc_satb_shade_frame(&generator->frame);
-    }
-    free(generator->frame.registers);
+    // released here, so shade the activation's live edges before they leave the graph.
+    mal_generator_release_frame(vm, generator);
 }
 
 void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue *registers) {
@@ -4859,7 +4850,7 @@ void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator
         // buffer: no coroutine object exists, so release the orphaned buffer and let
         // the throw propagate synchronously to the caller (params are evaluated
         // eagerly at call time, before the generator is created).
-        free(registers);
+        mal_vm_release_coroutine_buffer(vm, registers);
         return;
     }
 
@@ -4886,10 +4877,7 @@ void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator
     // Free after routing (see mal_vm_op_coroutine_return_compiled) — the root frame
     // is still linked over this buffer during the settle above.
     // SATB: shade the completed activation's edges before its buffer leaves the graph.
-    if (mal_gc_marking_active) {
-        mal_gc_satb_shade_frame(&generator->frame);
-    }
-    free(generator->frame.registers);
+    mal_generator_release_frame(vm, generator);
 }
 
 MalGeneratorObject *mal_vm_op_async_start_compiled(

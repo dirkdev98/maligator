@@ -30,7 +30,7 @@ typedef enum MalGeneratorResumeMode {
  * A generator instance owning its suspended activation. The frame's
  * registers/arguments buffers live with the generator while suspended
  * (transferred off the VM frame stack on suspend, pushed back on resume) and
- * are freed when the generator completes.
+ * are returned to the VM's bounded buffer pool when the generator completes.
  */
 typedef struct MalGeneratorObject {
     MalObject object;
@@ -104,3 +104,6 @@ typedef struct MalAsyncGeneratorRequest {
  * in `frame` (typically by suspending the current activation into it).
  */
 MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype);
+
+/** Shade, release, and null all malloc-owned storage in a coroutine frame. */
+void mal_generator_release_frame(MalVm *vm, MalGeneratorObject *generator);

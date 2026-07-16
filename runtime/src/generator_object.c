@@ -1,5 +1,8 @@
 #include "./generator_object.h"
 
+#include <stdlib.h>
+
+#include "gc.h"
 #include "heap.h"
 
 MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype) {
@@ -41,4 +44,20 @@ MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype
     generator->agen_queue_tail = nullptr;
 
     return generator;
+}
+
+void mal_generator_release_frame(MalVm *vm, MalGeneratorObject *generator) {
+    MalVmFrame *frame = &generator->frame;
+    if (mal_gc_marking_active && frame->function != nullptr) {
+        mal_gc_satb_shade_frame(frame);
+    }
+    mal_vm_release_coroutine_buffer(vm, frame->registers);
+    mal_vm_release_coroutine_buffer(vm, frame->arguments);
+    free(frame->with_objects);
+    frame->registers = nullptr;
+    frame->arguments = nullptr;
+    frame->argument_count = 0;
+    frame->with_objects = nullptr;
+    frame->with_count = 0;
+    frame->with_capacity = 0;
 }

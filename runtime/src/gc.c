@@ -7,6 +7,7 @@
 #include "./array_buffer_object.h"
 #include "./array_object.h"
 #include "./bound_function_object.h"
+#include "./builtin_async_generator.h"
 #include "./builtin_data_view.h"
 #include "./builtin_finalization_registry.h"
 #include "./builtin_iterator_helpers.h"
@@ -335,13 +336,16 @@ static void mal_gc_print_stats(void) {
             stderr,
             "[promise-stats] job_allocations=%llu job_reuses=%llu "
             "reaction_allocations=%llu reaction_reuses=%llu "
-            "frame_allocations=%llu frame_reuses=%llu\n",
+            "frame_allocations=%llu frame_reuses=%llu "
+            "request_allocations=%llu request_reuses=%llu\n",
             (unsigned long long) mal_promise_job_allocation_count(),
             (unsigned long long) mal_promise_job_reuse_count(),
             (unsigned long long) mal_promise_reaction_allocation_count(),
             (unsigned long long) mal_promise_reaction_reuse_count(),
             (unsigned long long) mal_coroutine_buffer_allocation_count(),
-            (unsigned long long) mal_coroutine_buffer_reuse_count()
+            (unsigned long long) mal_coroutine_buffer_reuse_count(),
+            (unsigned long long) mal_async_generator_request_allocation_count(),
+            (unsigned long long) mal_async_generator_request_reuse_count()
         );
     }
 }
@@ -1084,13 +1088,11 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
             MalGeneratorObject *gen = (MalGeneratorObject *) cell;
             if (gen->state == MAL_GENERATOR_SUSPENDED_START ||
                 gen->state == MAL_GENERATOR_SUSPENDED_YIELD) {
-                free(gen->frame.registers);
-                free(gen->frame.arguments);
-                free(gen->frame.with_objects);
-                gen->frame.registers = nullptr;
-                gen->frame.arguments = nullptr;
-                gen->frame.with_objects = nullptr;
+                mal_generator_release_frame(g_gc_vm, gen);
             }
+            mal_async_generator_free_requests(g_gc_vm, gen->agen_queue_head);
+            gen->agen_queue_head = nullptr;
+            gen->agen_queue_tail = nullptr;
             break;
         }
         default:

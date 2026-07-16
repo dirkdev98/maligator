@@ -867,6 +867,11 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     fn->register_count = rd_i32(r);
     fn->captured_count = rd_i32(r);
     fn->file_index = rd_i32(r);
+    if (fn->parameter_count < 0 || fn->register_count < fn->parameter_count ||
+        fn->captured_count < 0) {
+        r->ok = false;
+        return;
+    }
     fn->compiled = nullptr; // loaded code is always interpreted
 
     u32 instruction_count = rd_count(r, 1);

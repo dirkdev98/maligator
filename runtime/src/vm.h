@@ -1153,6 +1153,15 @@ typedef struct MalVm {
     struct MalPromiseReaction *reaction_pool;
     u32 reaction_pool_count;
 
+    /** Byte-bounded, untraced pool of cleared suspendable-frame value buffers. */
+    struct MalCoroutineBuffer *coroutine_buffer_pool;
+    usize coroutine_buffer_pool_bytes;
+    u32 coroutine_buffer_pool_count;
+
+    /** Cleared async-generator request nodes retained for reuse. */
+    struct MalAsyncGeneratorRequest *async_generator_request_pool;
+    u32 async_generator_request_pool_count;
+
     /**
      * [[KeptObjects]]: WeakRef targets observed (constructed or deref'd) since the
      * last microtask checkpoint, held strongly so a target cannot be reclaimed
@@ -1582,7 +1591,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition);
 /** Native suspendable-frame allocation counters used by benchmark telemetry. */
 u64 mal_coroutine_buffer_allocation_count(void);
 u64 mal_coroutine_buffer_reuse_count(void);
-void mal_coroutine_note_buffer_allocation(void);
+MalValue *mal_vm_alloc_coroutine_buffer(MalVm *vm, i32 slot_count);
+void mal_vm_release_coroutine_buffer(MalVm *vm, MalValue *values);
+void mal_vm_free_coroutine_buffer_pool(MalVm *vm);
 
 /**
  * Run the definition's host-install manifest: for each reached `node:*` built-in

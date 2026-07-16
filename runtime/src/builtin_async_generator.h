@@ -5,6 +5,7 @@
 
 typedef struct MalVm MalVm;
 typedef struct MalGeneratorObject MalGeneratorObject;
+typedef struct MalAsyncGeneratorRequest MalAsyncGeneratorRequest;
 
 /**
  * Install the async-iteration intrinsic chain: %AsyncIteratorPrototype% →
@@ -31,3 +32,11 @@ void mal_async_generator_resume_next(MalVm *vm, MalGeneratorObject *agen);
 void mal_async_generator_yield(MalVm *vm, MalGeneratorObject *agen);
 void mal_async_generator_return(MalVm *vm, MalGeneratorObject *agen, MalValue value);
 void mal_async_generator_throw_done(MalVm *vm, MalGeneratorObject *agen, MalValue reason);
+
+/** Release pending requests and the VM's cleared request-node pool. */
+void mal_async_generator_free_requests(MalVm *vm, MalAsyncGeneratorRequest *requests);
+void mal_async_generator_free_request_pool(MalVm *vm);
+
+/** Native request-node allocation counters used by benchmark telemetry. */
+u64 mal_async_generator_request_allocation_count(void);
+u64 mal_async_generator_request_reuse_count(void);

@@ -1,6 +1,7 @@
 #include "vm.h"
 
 #include <stdio.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #if defined(__APPLE__) || defined(__linux__)
@@ -26,17 +27,98 @@
 #include "vm_ops.h"
 
 static u64 g_coroutine_buffer_allocations = 0;
+static u64 g_coroutine_buffer_reuses = 0;
+
+#define MAL_COROUTINE_POOL_MAX_BYTES ((usize) 1024 * 1024)
+#define MAL_COROUTINE_POOL_MAX_BUFFER_BYTES ((usize) 64 * 1024)
+#define MAL_COROUTINE_POOL_MAX_BUFFERS 256
+
+typedef struct MalCoroutineBuffer {
+    struct MalCoroutineBuffer *next;
+    usize capacity;
+    usize used;
+    MalValue values[];
+} MalCoroutineBuffer;
 
 u64 mal_coroutine_buffer_allocation_count(void) {
     return g_coroutine_buffer_allocations;
 }
 
 u64 mal_coroutine_buffer_reuse_count(void) {
-    return 0;
+    return g_coroutine_buffer_reuses;
 }
 
-void mal_coroutine_note_buffer_allocation(void) {
-    g_coroutine_buffer_allocations++;
+static usize mal_coroutine_buffer_bytes(usize capacity) {
+    return offsetof(MalCoroutineBuffer, values) + sizeof(MalValue) * capacity;
+}
+
+static MalCoroutineBuffer *mal_coroutine_buffer_from_values(MalValue *values) {
+    return (MalCoroutineBuffer *) ((byte *) values - offsetof(MalCoroutineBuffer, values));
+}
+
+MalValue *mal_vm_alloc_coroutine_buffer(MalVm *vm, i32 slot_count) {
+    usize required = (usize) slot_count;
+    MalCoroutineBuffer **link = &vm->coroutine_buffer_pool;
+    MalCoroutineBuffer *buffer = nullptr;
+    while (*link != nullptr) {
+        if ((*link)->capacity >= required) {
+            buffer = *link;
+            *link = buffer->next;
+            vm->coroutine_buffer_pool_bytes -= mal_coroutine_buffer_bytes(buffer->capacity);
+            vm->coroutine_buffer_pool_count--;
+            g_coroutine_buffer_reuses++;
+            break;
+        }
+        link = &(*link)->next;
+    }
+
+    if (buffer == nullptr) {
+        buffer = malloc(mal_coroutine_buffer_bytes(required));
+        buffer->capacity = required;
+        g_coroutine_buffer_allocations++;
+    }
+    buffer->next = nullptr;
+    buffer->used = required;
+    for (usize i = 0; i < required; i++) {
+        buffer->values[i] = mal_value_new_undefined();
+    }
+    return buffer->values;
+}
+
+void mal_vm_release_coroutine_buffer(MalVm *vm, MalValue *values) {
+    if (values == nullptr) {
+        return;
+    }
+    MalCoroutineBuffer *buffer = mal_coroutine_buffer_from_values(values);
+    for (usize i = 0; i < buffer->used; i++) {
+        mal_gc_write_barrier(buffer->values[i]);
+        buffer->values[i] = mal_value_new_undefined();
+    }
+    buffer->used = 0;
+
+    usize bytes = mal_coroutine_buffer_bytes(buffer->capacity);
+    if (bytes > MAL_COROUTINE_POOL_MAX_BUFFER_BYTES ||
+        vm->coroutine_buffer_pool_count >= MAL_COROUTINE_POOL_MAX_BUFFERS ||
+        vm->coroutine_buffer_pool_bytes > MAL_COROUTINE_POOL_MAX_BYTES - bytes) {
+        free(buffer);
+        return;
+    }
+    buffer->next = vm->coroutine_buffer_pool;
+    vm->coroutine_buffer_pool = buffer;
+    vm->coroutine_buffer_pool_bytes += bytes;
+    vm->coroutine_buffer_pool_count++;
+}
+
+void mal_vm_free_coroutine_buffer_pool(MalVm *vm) {
+    MalCoroutineBuffer *buffer = vm->coroutine_buffer_pool;
+    while (buffer != nullptr) {
+        MalCoroutineBuffer *next = buffer->next;
+        free(buffer);
+        buffer = next;
+    }
+    vm->coroutine_buffer_pool = nullptr;
+    vm->coroutine_buffer_pool_bytes = 0;
+    vm->coroutine_buffer_pool_count = 0;
 }
 
 /**
@@ -241,6 +323,11 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->job_pool_count = 0;
     vm->reaction_pool = nullptr;
     vm->reaction_pool_count = 0;
+    vm->coroutine_buffer_pool = nullptr;
+    vm->coroutine_buffer_pool_bytes = 0;
+    vm->coroutine_buffer_pool_count = 0;
+    vm->async_generator_request_pool = nullptr;
+    vm->async_generator_request_pool_count = 0;
     vm->unhandled_rejections = nullptr;
     vm->unhandled_count = 0;
     vm->unhandled_capacity = 0;
@@ -399,8 +486,8 @@ void mal_vm_free(MalVm *vm) {
     // value-stack frames live in vm->value_stack, freed below.
     for (i32 i = 0; i < vm->frame_count; i++) {
         if (vm->frames[i].stack_base < 0) {
-            free(vm->frames[i].registers);
-            free(vm->frames[i].arguments);
+            mal_vm_release_coroutine_buffer(vm, vm->frames[i].registers);
+            mal_vm_release_coroutine_buffer(vm, vm->frames[i].arguments);
         }
     }
 
@@ -458,6 +545,8 @@ void mal_vm_free(MalVm *vm) {
     mal_gc_finalize_all(vm);
     mal_vm_free_job_pool(vm);
     mal_promise_free_reaction_pool(vm);
+    mal_vm_free_coroutine_buffer_pool(vm);
+    mal_async_generator_free_request_pool(vm);
     // Snapshot allocation statistics while the heap counters are still intact.
     mal_gc_state_free(vm);
     mal_heap_free(&vm->heap);
@@ -809,8 +898,8 @@ static void mal_vm_pop_frame_storage(MalVm *vm, MalVmFrame *frame) {
     if (frame->stack_base >= 0) {
         vm->value_stack_size = frame->stack_base;
     } else {
-        free(frame->registers);
-        free(frame->arguments);
+        mal_vm_release_coroutine_buffer(vm, frame->registers);
+        mal_vm_release_coroutine_buffer(vm, frame->arguments);
     }
 }
 
@@ -971,15 +1060,10 @@ bool mal_vm_push_function_frame(
     if (heap_resident) {
         // Copy parameters (and arguments, if read) out of the marshaling area
         // into owned heap storage, then release the area.
-        registers = malloc(sizeof(MalValue) * register_count);
-        mal_coroutine_note_buffer_allocation();
-        arguments = (wants_args && arg_count > 0) ? malloc(sizeof(MalValue) * arg_count) : nullptr;
-        if (arguments != nullptr) {
-            mal_coroutine_note_buffer_allocation();
-        }
-        for (i32 i = 0; i < register_count; i++) {
-            registers[i] = mal_value_new_undefined();
-        }
+        registers = mal_vm_alloc_coroutine_buffer(vm, register_count);
+        arguments = (wants_args && arg_count > 0)
+            ? mal_vm_alloc_coroutine_buffer(vm, arg_count)
+            : nullptr;
         for (i32 i = 0; i < params_present; i++) {
             registers[i] = vm->value_stack[base + i];
         }
@@ -1846,7 +1930,7 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
         // saved resume label and the front-end's inline post-suspend dispatch reads
         // the mode. The C-stack / depth guard lives in mal_vm_enter_compiled.
         if (!mal_vm_enter_compiled(vm, generator->frame.function_index)) {
-            generator->state = MAL_GENERATOR_COMPLETED;
+            mal_vm_op_coroutine_throw_compiled(vm, generator, generator->frame.registers);
 #if MAL_REALMS
             mal_vm_realm_switch_to(vm, saved_realm);
 #endif
