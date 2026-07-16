@@ -21,6 +21,12 @@ roadmaps for everything else. Test262 verdict counts live only in
 - [x] Fold exact primitive numeric/boolean/null/undefined operations and constant
       branches in non-resumable functions. Preserve NaN, infinities, and negative
       zero; leave exponentiation and resumable functions to host/resume-aware work.
+- [x] Embed exact primitive, small-integer, and string values directly in ordinary
+      call/construct operands. Negative arithmetic tags remain deterministic in the
+      self-hosted compiler; static property keys use dedicated bytecodes.
+- [x] Batch private-name creation, initializer-free private instance fields, and
+      contiguous undefined global-var initialization while preserving declaration,
+      brand, ordering, and abrupt-completion semantics.
 - [x] Coallocate one-slot ordinary shaped-object storage in the existing 48-byte
       managed-cell class. Growth migrates to an owned buffer, dictionary/finalizer
       paths honor ownership, and the stack-object benchmark tracks avoided buffers.
@@ -35,8 +41,8 @@ roadmaps for everything else. Test262 verdict counts live only in
       inherited-value cache beyond watched built-in chains and measure method-call
       improvement.
 - [ ] Extend the native-only closed fixed-shape local stack-object slice to further
-      proven classes (fixed-shape and zero-slot identity-observed objects are done),
-      then add partial escape with lazy materialization at cold escape edges.
+      proven classes. Fixed-shape/zero-slot objects and acyclic conditional-return
+      materialization are done; continuing call/store/capture escapes remain.
 - [ ] Measure region allocation and drop-insertion free lists after stack allocation
       lands; do not add either without an allocation-rate or wall-time win.
 - [x] Pool paired promise reactions, microtask jobs, suspendable-frame buffers, and
@@ -52,6 +58,8 @@ roadmaps for everything else. Test262 verdict counts live only in
       scanning every handler for every emitted instruction.
 - [ ] Revisit `MalVm` and host-structure layout when SMP creates multiple VMs.
 - [ ] Generate compiler/runtime opcode plumbing from one descriptor list.
+- [x] Reuse the runtime's immutable compiler-wire byte array for the product CLI's
+      compiler asset instead of linking a second byte-identical copy.
 - [x] Classify binding-wide-safe `arguments.length` and constant-index reads in
       semantic analysis. IR snapshots them from frame metadata/values without
       materializing an arguments object; the arguments benchmark tracks both

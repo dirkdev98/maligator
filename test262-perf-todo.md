@@ -14,19 +14,21 @@ reproducer passes.
 1. [ ] Design recoverable allocation failure for CELL, RAW, LOS, and direct native
        allocations. Add a preallocated/non-allocating emergency exception and
        deterministic fault-injection tests that prove OOM is catchable without GC
-       corruption or recursive allocation.
+       corruption or recursive allocation. The nullable CELL foundation, emergency
+       exception, and ordinary-object/materialization fault injection are complete;
+       remaining constructors plus RAW, LOS, GC-internal, and direct allocations are not.
 
 ## P1 - Generated code reduction
 
-2. [ ] Bulk-lower private names and instance fields while preserving identity,
+2. [x] Bulk-lower private names and initializer-free instance fields while preserving identity,
        declaration order, initializer effects, abrupt completion, and brand checks.
-3. [ ] Bulk-lower contiguous uninitialized global declarations while preserving
+3. [x] Bulk-lower contiguous uninitialized global declarations while preserving
        declaration-instantiation checks and global observability.
 4. [x] Add conservative Number/Boolean/null/undefined constant folding and
        dead-branch cleanup with exact NaN, negative-zero, overflow, and throwing
        semantics. Keep BigInt, strings, exponentiation, and resumable functions on
        their runtime paths until their host/resume contracts are explicit.
-5. [ ] Add tagged immediate and static-key operands to avoid standalone constant
+5. [x] Add tagged immediate and static-key operands to avoid standalone constant
        creation for calls, property operations, and construction.
 6. [ ] Evaluate resumable static call tables only after item 5 is measured; add them
        only if they materially reduce generated C/object size further.
@@ -37,7 +39,7 @@ reproducer passes.
 
 ## P2 - Measurement and scheduling
 
-9. [ ] Give C batches stable IDs and persist member paths, generated-C bytes,
+9. [x] Give C batches stable IDs and persist member paths, generated-C bytes,
        logical/physical code totals, object bytes, cache state, worker, and phase
        timings in each variant report.
 10. [ ] Preserve both strict and sloppy reports across an unfiltered dual run.
