@@ -146,42 +146,42 @@ bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value);
  */
 bool mal_vm_is_constructor(MalVm *vm, MalValue value);
 
-void mal_op_move(MalCallable *callable, MalInstruction *instruction);
+void mal_op_move(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_number(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_number(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_f64(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_f64(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_boolean(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_boolean(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_string(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_string(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_bigint(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_bigint(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_object(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_object(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_object_shaped(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_object_shaped(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_array(MalCallable *callable, MalInstruction *instruction);
-void mal_op_instantiate_literal_template(MalCallable *callable, MalInstruction *instruction);
-void mal_op_create_module_namespace(MalCallable *callable, MalInstruction *instruction);
-void mal_op_create_template_object(MalCallable *callable, MalInstruction *instruction);
-void mal_op_with_enter(MalCallable *callable, MalInstruction *instruction);
-void mal_op_with_exit(MalCallable *callable, MalInstruction *instruction);
-void mal_op_with_get(MalCallable *callable, MalInstruction *instruction);
-void mal_op_with_resolve_base(MalCallable *callable, MalInstruction *instruction);
-void mal_op_with_set(MalCallable *callable, MalInstruction *instruction);
-void mal_op_is_empty(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_array(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_instantiate_literal_template(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_create_module_namespace(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_create_template_object(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_with_enter(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_with_exit(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_with_get(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_with_resolve_base(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_with_set(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_is_empty(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction);
-void mal_op_create_empty(MalCallable *callable, MalInstruction *instruction);
-void mal_op_throw_if_tdz(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_undefined(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_create_empty(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_throw_if_tdz(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_null(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_null(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_function(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_function(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_arguments_object(MalCallable *callable, const MalInstruction *instruction);
 
 // Build an unmapped arguments object over `args`; shared by the interpreter op
 // and compiled code. `callee` is exposed only in sloppy mode (strict poisons it).
@@ -189,32 +189,32 @@ MalValue mal_create_arguments_object(
     MalVm *vm, const MalValue *args, i32 arg_count, MalValue callee, bool strict
 );
 
-void mal_op_load_this(MalCallable *callable, MalInstruction *instruction);
+void mal_op_load_this(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_load_new_target(MalCallable *callable, MalInstruction *instruction);
+void mal_op_load_new_target(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_load_callee(MalCallable *callable, MalInstruction *instruction);
+void mal_op_load_callee(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_call(MalCallable *callable, MalInstruction *instruction);
+void mal_op_call(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_call_spread(MalCallable *callable, MalInstruction *instruction);
+void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_construct(MalCallable *callable, MalInstruction *instruction);
+void mal_op_construct(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_construct_spread(MalCallable *callable, MalInstruction *instruction);
+void mal_op_construct_spread(MalCallable *callable, const MalInstruction *instruction);
 
 /**
  * `super(...args)`: [[Construct]] the parent forwarding the derived
  * constructor's new.target, then bind the result as `this`. The parent comes
  * from registers[parent], the arguments from the array in registers[arguments_array].
  */
-void mal_op_construct_super(MalCallable *callable, MalInstruction *instruction);
+void mal_op_construct_super(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_throw(MalCallable *callable, MalInstruction *instruction);
+void mal_op_throw(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_catch(MalCallable *callable, MalInstruction *instruction);
+void mal_op_catch(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_binary(MalCallable *callable, MalInstruction *instruction);
+void mal_op_binary(MalCallable *callable, const MalInstruction *instruction);
 
 /**
  * Value-returning core of a binary operator, shared by mal_op_binary and the
@@ -223,7 +223,7 @@ void mal_op_binary(MalCallable *callable, MalInstruction *instruction);
  */
 MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue right);
 
-void mal_op_unary(MalCallable *callable, MalInstruction *instruction);
+void mal_op_unary(MalCallable *callable, const MalInstruction *instruction);
 
 /**
  * Value-returning core of a unary operator, shared by mal_op_unary and the
@@ -231,19 +231,19 @@ void mal_op_unary(MalCallable *callable, MalInstruction *instruction);
  */
 MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value);
 
-void mal_op_store_global(MalCallable *callable, MalInstruction *instruction);
+void mal_op_store_global(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_load_global(MalCallable *callable, MalInstruction *instruction);
+void mal_op_load_global(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_load_intrinsic(MalCallable *callable, MalInstruction *instruction);
+void mal_op_load_intrinsic(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_load_captured(MalCallable *callable, MalInstruction *instruction);
-void mal_op_guard_function_index(MalCallable *callable, MalInstruction *instruction);
+void mal_op_load_captured(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_guard_function_index(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_store_captured(MalCallable *callable, MalInstruction *instruction);
+void mal_op_store_captured(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_env_push(MalCallable *callable, MalInstruction *instruction);
-void mal_op_env_copy(MalCallable *callable, MalInstruction *instruction);
+void mal_op_env_push(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_env_copy(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_env_pop(MalCallable *callable);
 
 /**
@@ -254,9 +254,9 @@ MalValue mal_vm_load_captured(MalEnv *env, i32 owner_function_index, i32 index);
 
 void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, MalValue value);
 
-void mal_op_load_property(MalCallable *callable, MalInstruction *instruction);
+void mal_op_load_property(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_store_property(MalCallable *callable, MalInstruction *instruction);
+void mal_op_store_property(MalCallable *callable, const MalInstruction *instruction);
 
 /**
  * Value-returning Get / completion-signalling Set with an already-evaluated key
@@ -697,7 +697,7 @@ static inline bool mal_vm_iterator_step_fast(MalVm *vm, const MalIteratorRecord 
     return mal_vm_iterator_step(vm, record, value_out, done_out);
 }
 
-void mal_op_to_property_key(MalCallable *callable, MalInstruction *instruction);
+void mal_op_to_property_key(MalCallable *callable, const MalInstruction *instruction);
 
 /**
  * Object-coercibility-check the base (nil throws first, per spec) then run
@@ -888,76 +888,76 @@ bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue 
  */
 MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 
-void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruction);
+void mal_op_store_super_property(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_load_super_property(MalCallable *callable, MalInstruction *instruction);
+void mal_op_load_super_property(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction);
+void mal_op_load_prototype(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_get_iterator(MalCallable *callable, MalInstruction *instruction);
+void mal_op_get_iterator(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_get_async_iterator(MalCallable *callable, MalInstruction *instruction);
+void mal_op_get_async_iterator(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_iterator_next(MalCallable *callable, MalInstruction *instruction);
+void mal_op_iterator_next(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_iterator_step(MalCallable *callable, MalInstruction *instruction);
+void mal_op_iterator_step(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_iterator_close(MalCallable *callable, MalInstruction *instruction);
+void mal_op_iterator_close(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction);
+void mal_op_for_in_keys(MalCallable *callable, const MalInstruction *instruction);
 
 // for-in enumeration key array for `source`; shared by the interpreter op and
 // compiled code. On a proxy-trap exception sets vm->completion (caller checks).
 MalValue mal_for_in_keys(MalVm *vm, MalValue source);
 
-void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction);
+void mal_op_delete_property(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction);
+void mal_op_define_accessor(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_define_property(MalCallable *callable, MalInstruction *instruction);
-void mal_op_set_function_name(MalCallable *callable, MalInstruction *instruction);
+void mal_op_define_property(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_set_function_name(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_private_name(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_private_name(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_define_private(MalCallable *callable, MalInstruction *instruction);
+void mal_op_define_private(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_load_private(MalCallable *callable, MalInstruction *instruction);
+void mal_op_load_private(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_store_private(MalCallable *callable, MalInstruction *instruction);
+void mal_op_store_private(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_has_private(MalCallable *callable, MalInstruction *instruction);
+void mal_op_has_private(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_set_prototype(MalCallable *callable, MalInstruction *instruction);
+void mal_op_set_prototype(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_load_undeclared(MalCallable *callable, MalInstruction *instruction);
+void mal_op_load_undeclared(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_load_global_property(MalCallable *callable, MalInstruction *instruction);
+void mal_op_load_global_property(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_store_global_property(MalCallable *callable, MalInstruction *instruction);
+void mal_op_store_global_property(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction);
-void mal_op_check_super_class(MalCallable *callable, MalInstruction *instruction);
+void mal_op_require_coercible(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_check_super_class(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_create_rest_arguments(MalCallable *callable, MalInstruction *instruction);
+void mal_op_create_rest_arguments(MalCallable *callable, const MalInstruction *instruction);
 
 // Rest-parameter array from `args[start..]`; shared by the interpreter op and
 // compiled code.
 MalValue mal_create_rest_arguments(MalVm *vm, const MalValue *args, i32 arg_count, i32 start);
 
-void mal_op_array_rest(MalCallable *callable, MalInstruction *instruction);
+void mal_op_array_rest(MalCallable *callable, const MalInstruction *instruction);
 
 // Array-destructuring rest from `source[start..]`; shared by the interpreter op
 // and compiled code. On null/undefined source or a throwing read sets
 // vm->completion (caller checks).
 MalValue mal_array_rest(MalVm *vm, MalValue source, u32 start);
 
-void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruction);
+void mal_op_copy_data_properties(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_merge_data_properties(MalCallable *callable, MalInstruction *instruction);
+void mal_op_merge_data_properties(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_jump(MalCallable *callable, MalInstruction *instruction);
+void mal_op_jump(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction);
+void mal_op_jump_if(MalCallable *callable, const MalInstruction *instruction);
 
 // ---------------------------------------------------------------------------
 // Compiled coroutines (native-backend generators & async). These have no

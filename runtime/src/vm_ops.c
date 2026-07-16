@@ -168,15 +168,15 @@ bool mal_vm_desc_read(MalVm *vm, MalPropertyDesc desc, MalValue receiver, MalVal
     return true;
 }
 
-void mal_op_move(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_move(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.move.dst] = callable->registers[instruction->as.move.src];
 }
 
-void mal_op_create_number(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_number(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_number.dst] = mal_value_from_i32(instruction->as.create_number.value);
 }
 
-void mal_op_create_f64(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_f64(MalCallable *callable, const MalInstruction *instruction) {
     u64 bits = (u64) instruction->as.create_f64.bits_low |
         ((u64) instruction->as.create_f64.bits_high << 32);
     f64 value;
@@ -184,18 +184,18 @@ void mal_op_create_f64(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.create_f64.dst] = mal_value_from_f64_convert_nan(value);
 }
 
-void mal_op_create_boolean(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_boolean(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_boolean.dst] = mal_value_new_boolean(instruction->as.create_boolean.value != 0);
 }
 
-void mal_op_create_string(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_string(MalCallable *callable, const MalInstruction *instruction) {
     // The string constant is an immortal, pre-hashed static; hand back a
     // pointer instead of allocating a fresh MalString per execution.
     MalString *string = &callable->vm->definition->string_constants[instruction->as.create_string.string_index];
     callable->registers[instruction->as.create_string.dst] = mal_value_from_string(string);
 }
 
-void mal_op_create_bigint(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_bigint(MalCallable *callable, const MalInstruction *instruction) {
     // The bigint constant is an immortal static with its value baked at compile
     // time; hand back a pointer instead of parsing and allocating per execution.
     MalBigInt *bigint = &callable->vm->definition->bigint_constants[instruction->as.create_bigint.bigint_index];
@@ -226,11 +226,11 @@ MalValue mal_vm_create_object_shaped(MalVm *vm, MalShape *shape, const MalValue 
     return mal_value_from_object(object);
 }
 
-void mal_op_create_object(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_object(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_object.dst] = mal_vm_op_create_object(callable->vm);
 }
 
-void mal_op_create_object_shaped(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_object_shaped(MalCallable *callable, const MalInstruction *instruction) {
     const i32 *data = mal_op_instruction_data(
         callable, instruction->as.create_object_shaped.data_offset);
     u32 count = (u32) data[0];
@@ -259,7 +259,7 @@ MalValue mal_vm_op_create_array(MalVm *vm, i32 length) {
     return mal_value_from_array_object(array);
 }
 
-void mal_op_create_array(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_array(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_array.dst] =
         mal_vm_op_create_array(callable->vm, instruction->as.create_array.length);
 }
@@ -483,7 +483,7 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset) {
     return result;
 }
 
-void mal_op_instantiate_literal_template(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_instantiate_literal_template(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.instantiate_literal_template.dst] =
         mal_vm_instantiate_literal_template(
             callable->vm, instruction->as.instantiate_literal_template.template_offset);
@@ -506,7 +506,7 @@ MalValue mal_vm_op_create_module_namespace(
     return mal_value_from_module_namespace_object(ns);
 }
 
-void mal_op_create_module_namespace(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_module_namespace(MalCallable *callable, const MalInstruction *instruction) {
     const i32 *data = mal_op_instruction_data(
         callable, instruction->as.create_module_namespace.data_offset);
     i32 count = data[0];
@@ -565,7 +565,7 @@ MalValue mal_vm_op_create_template_object(
     return result;
 }
 
-void mal_op_create_template_object(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_template_object(MalCallable *callable, const MalInstruction *instruction) {
     const i32 *data = mal_op_instruction_data(
         callable, instruction->as.create_template_object.data_offset);
     i32 count = data[0];
@@ -616,7 +616,7 @@ MalEnv *mal_vm_op_with_enter(MalVm *vm, MalEnv *parent, MalValue object) {
     return mal_env_new_with_object(vm, parent, object);
 }
 
-void mal_op_with_enter(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_with_enter(MalCallable *callable, const MalInstruction *instruction) {
     MalValue object = callable->registers[instruction->as.with_enter.object];
     MalEnv *env = mal_vm_op_with_enter(callable->vm, callable->env, object);
     if (env != nullptr) {
@@ -624,7 +624,7 @@ void mal_op_with_enter(MalCallable *callable, MalInstruction *instruction) {
     }
 }
 
-void mal_op_with_exit(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_with_exit(MalCallable *callable, const MalInstruction *instruction) {
     (void) instruction;
     // Pop the with object environment record pushed by the matching WITH_ENTER.
     callable->env = callable->env->parent;
@@ -657,7 +657,7 @@ MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index) {
     return mal_value_new_empty();
 }
 
-void mal_op_with_get(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_with_get(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.with_get.dst] = mal_vm_op_with_get(
         callable->vm, callable->env, instruction->as.with_get.name_string_index
     );
@@ -683,7 +683,7 @@ MalValue mal_vm_op_with_resolve_base(MalVm *vm, MalEnv *env, i32 name_string_ind
     return mal_value_new_empty();
 }
 
-void mal_op_with_resolve_base(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_with_resolve_base(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.with_resolve_base.dst] = mal_vm_op_with_resolve_base(
         callable->vm, callable->env, instruction->as.with_resolve_base.name_string_index
     );
@@ -710,7 +710,7 @@ bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue 
     return false;
 }
 
-void mal_op_with_set(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_with_set(MalCallable *callable, const MalInstruction *instruction) {
     bool found = mal_vm_op_with_set(
         callable->vm, callable->env, instruction->as.with_set.name_string_index,
         callable->registers[instruction->as.with_set.value]
@@ -718,16 +718,16 @@ void mal_op_with_set(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.with_set.found] = mal_value_new_boolean(found);
 }
 
-void mal_op_is_empty(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_is_empty(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.is_empty.dst] =
         mal_value_new_boolean(mal_value_is_empty(callable->registers[instruction->as.is_empty.src]));
 }
 
-void mal_op_create_undefined(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_undefined(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_undefined.dst] = mal_value_new_undefined();
 }
 
-void mal_op_create_empty(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_empty(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_empty.dst] = mal_value_new_empty();
 }
 
@@ -752,7 +752,7 @@ void mal_vm_op_throw_if_tdz(MalVm *vm, MalValue value, i32 name_string_index) {
     }
 }
 
-void mal_op_throw_if_tdz(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_throw_if_tdz(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_throw_if_tdz(
         callable->vm,
         callable->registers[instruction->as.throw_if_tdz.src],
@@ -760,7 +760,7 @@ void mal_op_throw_if_tdz(MalCallable *callable, MalInstruction *instruction) {
     );
 }
 
-void mal_op_create_null(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_null(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_null.dst] = mal_value_new_null();
 }
 
@@ -808,7 +808,7 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
     return mal_value_from_function_object(function);
 }
 
-void mal_op_create_function(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_function(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_function.dst] = mal_vm_op_create_function(
         callable->vm,
         instruction->as.create_function.function_index,
@@ -869,7 +869,7 @@ void mal_vm_op_set_function_name(MalVm *vm, MalValue func, MalValue key, u8 pref
     mal_object_define_own(mal_value_to_object(func), mal_intrinsic_string_key(vm, "name"), &name_desc);
 }
 
-void mal_op_set_function_name(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_set_function_name(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_set_function_name(
         callable->vm,
         callable->registers[instruction->as.set_function_name.func],
@@ -901,7 +901,7 @@ void mal_vm_store_captured(MalEnv *env, i32 owner_function_index, i32 index, Mal
     }
 }
 
-void mal_op_load_captured(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_load_captured(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.load_captured.dst] = mal_vm_load_captured(
         callable->env,
         instruction->as.load_captured.owner_function_index,
@@ -909,7 +909,7 @@ void mal_op_load_captured(MalCallable *callable, MalInstruction *instruction) {
     );
 }
 
-void mal_op_guard_function_index(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_guard_function_index(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.guard_function_index.dst] = mal_value_new_boolean(
         mal_vm_callee_has_index(
             callable->registers[instruction->as.guard_function_index.callee],
@@ -918,7 +918,7 @@ void mal_op_guard_function_index(MalCallable *callable, MalInstruction *instruct
     );
 }
 
-void mal_op_store_captured(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_store_captured(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_store_captured(
         callable->env,
         instruction->as.store_captured.owner_function_index,
@@ -929,7 +929,7 @@ void mal_op_store_captured(MalCallable *callable, MalInstruction *instruction) {
 
 // Enter a per-iteration loop scope: a fresh env whose parent is the current env,
 // tagged with the synthetic scope id, becomes the activation's capture env.
-void mal_op_env_push(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_env_push(MalCallable *callable, const MalInstruction *instruction) {
     callable->env = mal_env_new(
         callable->vm, callable->env, instruction->as.env_scope.scope_id, instruction->as.env_scope.slot_count
     );
@@ -938,7 +938,7 @@ void mal_op_env_push(MalCallable *callable, MalInstruction *instruction) {
 // Copy the loop bindings forward into a fresh sibling env (same parent as the
 // current scope env), per CreatePerIterationEnvironment. The old env stays alive
 // for any closures that captured it this iteration.
-void mal_op_env_copy(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_env_copy(MalCallable *callable, const MalInstruction *instruction) {
     MalEnv *old = callable->env;
     i32 slot_count = instruction->as.env_scope.slot_count;
     MalEnv *fresh = mal_env_new(callable->vm, old->parent, instruction->as.env_scope.scope_id, slot_count);
@@ -1024,7 +1024,7 @@ MalValue mal_create_arguments_object(
     return mal_value_from_object(arguments);
 }
 
-void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_arguments_object(MalCallable *callable, const MalInstruction *instruction) {
     if (!mal_value_is_undefined(callable->arguments_object)) {
         callable->registers[instruction->as.create_arguments_object.dst] = callable->arguments_object;
         return;
@@ -1037,7 +1037,7 @@ void mal_op_create_arguments_object(MalCallable *callable, MalInstruction *instr
     callable->registers[instruction->as.create_arguments_object.dst] = callable->arguments_object;
 }
 
-void mal_op_load_this(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_load_this(MalCallable *callable, const MalInstruction *instruction) {
     // GetThisBinding: `this` in a derived constructor is in a TDZ until super()
     // binds it. Reading it (directly, or as the receiver of a super property
     // reference) before then is a ReferenceError.
@@ -1049,11 +1049,11 @@ void mal_op_load_this(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.load_this.dst] = callable->this_value;
 }
 
-void mal_op_load_new_target(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_load_new_target(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.load_new_target.dst] = callable->new_target;
 }
 
-void mal_op_load_callee(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_load_callee(MalCallable *callable, const MalInstruction *instruction) {
     // The function object that pushed this frame — used to initialize a named
     // function expression's own-name binding to the closure.
     callable->registers[instruction->as.load_callee.dst] = callable->callee;
@@ -1439,7 +1439,7 @@ static i32 mal_vm_marshal_spread(MalVm *vm, MalValue array_value) {
     return (i32) length;
 }
 
-void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_call(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     i32 caller_function_index = callable->function_index;
     i32 call_ip = callable->instruction_pointer - 1;
@@ -1471,7 +1471,7 @@ void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
     mal_vm_fill_interp_call_cache(vm, caller_function_index, call_ip, callee);
 }
 
-void mal_op_call_spread(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     MalValue callee = callable->registers[instruction->as.call_spread.callee];
     MalValue this_value = callable->registers[instruction->as.call_spread.this_value];
@@ -1519,7 +1519,7 @@ MalCompletion mal_vm_op_construct_spread(MalVm *vm, MalValue callee, MalValue ar
     return completion;
 }
 
-void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_construct(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     MalValue callee = callable->registers[instruction->as.construct.callee];
     i32 dst = instruction->as.construct.dst;
@@ -1540,7 +1540,7 @@ void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
     mal_vm_construct_dispatch(vm, callee, base, argument_count, dst);
 }
 
-void mal_op_construct_spread(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_construct_spread(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     MalValue callee = callable->registers[instruction->as.construct_spread.callee];
     MalValue arguments_array = callable->registers[instruction->as.construct_spread.arguments_array];
@@ -1603,7 +1603,7 @@ MalCompletion mal_vm_op_construct_super(
     return completion;
 }
 
-void mal_op_construct_super(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_construct_super(MalCallable *callable, const MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     // Frames may relocate while the parent constructor runs; address the caller
     // by index for the post-construct writes rather than holding `callable`.
@@ -1644,14 +1644,14 @@ MalValue mal_vm_op_derived_construct_return(MalVm *vm, MalValue value, MalValue 
     return mal_value_is_undefined(value) ? this_value : value;
 }
 
-void mal_op_throw(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_throw(MalCallable *callable, const MalInstruction *instruction) {
     callable->vm->completion = (MalCompletion) {
         .kind = MAL_COMPLETION_THROW,
         .value = callable->registers[instruction->as.thrown.value],
     };
 }
 
-void mal_op_catch(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_catch(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.caught.dst] = callable->vm->completion.value;
     callable->vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
@@ -1977,7 +1977,7 @@ MalValue mal_vm_binary_op(MalVm *vm, MalBinaryOp op, MalValue left, MalValue rig
     return mal_value_new_undefined();
 }
 
-void mal_op_binary(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_binary(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.binary.dst] = mal_vm_binary_op(
         callable->vm,
         instruction->as.binary.op,
@@ -2069,7 +2069,7 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
     return mal_value_new_undefined();
 }
 
-void mal_op_unary(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_unary(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.unary.dst] = mal_vm_unary_op(
         callable->vm,
         instruction->as.unary.op,
@@ -2077,15 +2077,15 @@ void mal_op_unary(MalCallable *callable, MalInstruction *instruction) {
     );
 }
 
-void mal_op_store_global(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_store_global(MalCallable *callable, const MalInstruction *instruction) {
     callable->vm->globals[instruction->as.store_global.index] = callable->registers[instruction->as.store_global.src];
 }
 
-void mal_op_load_global(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_load_global(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.load_global.dst] = callable->vm->globals[instruction->as.load_global.index];
 }
 
-void mal_op_load_intrinsic(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_load_intrinsic(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.load_intrinsic.dst] = callable->vm->intrinsics[instruction->as.load_intrinsic.intrinsic];
 }
 
@@ -3320,7 +3320,7 @@ static MalInlineCache *mal_interp_ic(MalCallable *callable) {
     return &caches[callable->instruction_pointer - 1];
 }
 
-void mal_op_load_property(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_load_property(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.load_property.dst] = mal_vm_op_load_property_ic(
         callable->vm,
         callable->registers[instruction->as.load_property.object],
@@ -3352,7 +3352,7 @@ MalValue mal_vm_op_to_property_key(MalVm *vm, MalValue object_value, MalValue ke
     return key.value;
 }
 
-void mal_op_to_property_key(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_to_property_key(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.to_property_key.dst] = mal_vm_op_to_property_key(
         callable->vm,
         callable->registers[instruction->as.to_property_key.object],
@@ -3507,7 +3507,7 @@ void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_val
     mal_vm_op_store_property_keyed(vm, object_value, key, value, strict);
 }
 
-void mal_op_store_property(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_store_property(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_store_property_ic(
         callable->vm,
         callable->registers[instruction->as.store_property.object],
@@ -3622,7 +3622,7 @@ MalValue mal_vm_op_load_super_property(
     return out;
 }
 
-void mal_op_load_super_property(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_load_super_property(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.load_super_property.dst] =
         mal_vm_op_load_super_property(
             callable->vm,
@@ -3631,7 +3631,7 @@ void mal_op_load_super_property(MalCallable *callable, MalInstruction *instructi
             callable->registers[instruction->as.load_super_property.receiver]);
 }
 
-void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_store_super_property(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_store_super_property(
         callable->vm,
         callable->registers[instruction->as.store_super_property.object],
@@ -3642,7 +3642,7 @@ void mal_op_store_super_property(MalCallable *callable, MalInstruction *instruct
     );
 }
 
-void mal_op_get_iterator(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_get_iterator(MalCallable *callable, const MalInstruction *instruction) {
     MalValue source = callable->registers[instruction->as.get_iterator.source];
 
     MalIteratorRecord record;
@@ -3654,7 +3654,7 @@ void mal_op_get_iterator(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.get_iterator.next_dst] = record.next_method;
 }
 
-void mal_op_get_async_iterator(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_get_async_iterator(MalCallable *callable, const MalInstruction *instruction) {
     MalValue source = callable->registers[instruction->as.get_async_iterator.source];
 
     MalIteratorRecord record;
@@ -3666,7 +3666,7 @@ void mal_op_get_async_iterator(MalCallable *callable, MalInstruction *instructio
     callable->registers[instruction->as.get_async_iterator.next_dst] = record.next_method;
 }
 
-void mal_op_iterator_next(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_iterator_next(MalCallable *callable, const MalInstruction *instruction) {
     MalValue iterator = callable->registers[instruction->as.iterator_next.iterator];
     MalValue next = callable->registers[instruction->as.iterator_next.next];
 
@@ -3677,7 +3677,7 @@ void mal_op_iterator_next(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.iterator_next.result_dst] = completion.value;
 }
 
-void mal_op_iterator_step(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_iterator_step(MalCallable *callable, const MalInstruction *instruction) {
     MalIteratorRecord record = {
         .iterator = callable->registers[instruction->as.iterator_step.iterator],
         .next_method = callable->registers[instruction->as.iterator_step.next],
@@ -3693,7 +3693,7 @@ void mal_op_iterator_step(MalCallable *callable, MalInstruction *instruction) {
     callable->registers[instruction->as.iterator_step.done_dst] = mal_value_new_boolean(done);
 }
 
-void mal_op_iterator_close(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_iterator_close(MalCallable *callable, const MalInstruction *instruction) {
     MalIteratorRecord record = {
         .iterator = callable->registers[instruction->as.iterator_close.iterator],
         .next_method = mal_value_new_undefined(),
@@ -3903,7 +3903,7 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
     return mal_value_from_array_object(result);
 }
 
-void mal_op_for_in_keys(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_for_in_keys(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.for_in_keys.dst] =
         mal_for_in_keys(callable->vm, callable->registers[instruction->as.for_in_keys.source]);
 }
@@ -3922,7 +3922,7 @@ MalValue mal_vm_op_load_prototype(MalVm *vm, MalValue object_value) {
     return mal_value_new_null();
 }
 
-void mal_op_load_prototype(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_load_prototype(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.load_prototype.dst] =
         mal_vm_op_load_prototype(callable->vm, callable->registers[instruction->as.load_prototype.object]);
 }
@@ -3968,7 +3968,7 @@ MalValue mal_vm_op_delete_property(MalVm *vm, MalValue object_value, MalValue ke
     return mal_value_new_boolean(deleted);
 }
 
-void mal_op_delete_property(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_delete_property(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.delete_property.dst] = mal_vm_op_delete_property(
         callable->vm,
         callable->registers[instruction->as.delete_property.object],
@@ -3988,7 +3988,7 @@ void mal_vm_op_load_undeclared(MalVm *vm, i32 name_string_index) {
     mal_vm_throw_error_value(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, message);
 }
 
-void mal_op_load_undeclared(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_load_undeclared(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_load_undeclared(callable->vm, instruction->as.load_undeclared.name_string_index);
 }
 
@@ -4065,7 +4065,7 @@ MalValue mal_vm_op_load_global_property(MalVm *vm, i32 name_string_index) {
     return mal_value_new_undefined();
 }
 
-void mal_op_load_global_property(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_load_global_property(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.load_global_property.dst] =
         mal_vm_op_load_global_property(callable->vm, instruction->as.load_global_property.name_string_index);
 }
@@ -4151,7 +4151,7 @@ void mal_vm_op_store_global_property(
     mal_vm_op_store_property(vm, global, key.value, value, strict);
 }
 
-void mal_op_store_global_property(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_store_global_property(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_store_global_property(
         callable->vm,
         instruction->as.store_global_property.name_string_index,
@@ -4170,7 +4170,7 @@ void mal_vm_op_require_coercible(MalVm *vm, MalValue value) {
     }
 }
 
-void mal_op_require_coercible(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_require_coercible(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_require_coercible(
         callable->vm,
         callable->registers[instruction->as.require_coercible.src]
@@ -4200,7 +4200,7 @@ void mal_vm_op_check_super_class(MalVm *vm, MalValue parent) {
     }
 }
 
-void mal_op_check_super_class(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_check_super_class(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_check_super_class(
         callable->vm,
         callable->registers[instruction->as.check_super_class.parent]
@@ -4229,7 +4229,7 @@ MalValue mal_create_rest_arguments(MalVm *vm, const MalValue *args, i32 arg_coun
     return mal_value_from_array_object(rest);
 }
 
-void mal_op_create_rest_arguments(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_rest_arguments(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_rest_arguments.dst] = mal_create_rest_arguments(
         callable->vm, callable->arguments, callable->argument_count,
         instruction->as.create_rest_arguments.start_index
@@ -4279,7 +4279,7 @@ MalValue mal_array_rest(MalVm *vm, MalValue source, u32 start) {
     return mal_value_from_array_object(rest);
 }
 
-void mal_op_array_rest(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_array_rest(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.array_rest.dst] = mal_array_rest(
         callable->vm,
         callable->registers[instruction->as.array_rest.src],
@@ -4377,7 +4377,7 @@ done:
     return ok ? mal_value_from_object(copy) : mal_value_new_undefined();
 }
 
-void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_copy_data_properties(MalCallable *callable, const MalInstruction *instruction) {
     const i32 *data = mal_op_instruction_data(
         callable, instruction->as.copy_data_properties.data_offset);
     i32 excluded_count = data[0];
@@ -4446,7 +4446,7 @@ void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue 
     }
 }
 
-void mal_op_merge_data_properties(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_merge_data_properties(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_merge_data_properties(
         callable->vm,
         callable->registers[instruction->as.merge_data_properties.target],
@@ -4494,7 +4494,7 @@ void mal_vm_op_define_accessor(
     }
 }
 
-void mal_op_define_accessor(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_define_accessor(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_define_accessor(
         callable->vm,
         callable->registers[instruction->as.define_accessor.object],
@@ -4555,7 +4555,7 @@ void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_va
     }
 }
 
-void mal_op_define_property(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_define_property(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_define_property(
         callable->vm,
         callable->registers[instruction->as.define_property.object],
@@ -4578,7 +4578,7 @@ MalValue mal_vm_op_create_private_name(MalVm *vm) {
     return mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
 }
 
-void mal_op_create_private_name(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_create_private_name(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_private_name.dst] =
         mal_vm_op_create_private_name(callable->vm);
 }
@@ -4611,7 +4611,7 @@ void mal_vm_op_define_private(MalVm *vm, MalValue object_value, MalValue key_val
     mal_object_define_own(object, key, &desc);
 }
 
-void mal_op_define_private(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_define_private(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_define_private(
         callable->vm,
         callable->registers[instruction->as.define_private.object],
@@ -4640,7 +4640,7 @@ MalValue mal_vm_op_load_private(MalVm *vm, MalValue object_value, MalValue key_v
     return lookup.desc.value;
 }
 
-void mal_op_load_private(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_load_private(MalCallable *callable, const MalInstruction *instruction) {
     MalValue result = mal_vm_op_load_private(
         callable->vm,
         callable->registers[instruction->as.load_private.object],
@@ -4675,7 +4675,7 @@ void mal_vm_op_store_private(MalVm *vm, MalValue object_value, MalValue key_valu
     mal_gc_card(&object->header, value); // old instance -> young private field value
 }
 
-void mal_op_store_private(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_store_private(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_store_private(
         callable->vm,
         callable->registers[instruction->as.store_private.object],
@@ -4701,7 +4701,7 @@ MalValue mal_vm_op_has_private(MalVm *vm, MalValue object_value, MalValue key_va
     return mal_value_new_boolean(present);
 }
 
-void mal_op_has_private(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_has_private(MalCallable *callable, const MalInstruction *instruction) {
     MalValue result = mal_vm_op_has_private(
         callable->vm,
         callable->registers[instruction->as.has_private.object],
@@ -4729,7 +4729,7 @@ void mal_vm_op_set_prototype(MalVm *vm, MalValue object_value, MalValue prototyp
     mal_object_set_prototype(mal_value_to_object(object_value), prototype);
 }
 
-void mal_op_set_prototype(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_set_prototype(MalCallable *callable, const MalInstruction *instruction) {
     mal_vm_op_set_prototype(
         callable->vm,
         callable->registers[instruction->as.set_prototype.object],
@@ -4738,11 +4738,11 @@ void mal_op_set_prototype(MalCallable *callable, MalInstruction *instruction) {
     );
 }
 
-void mal_op_jump(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_jump(MalCallable *callable, const MalInstruction *instruction) {
     callable->instruction_pointer = instruction->as.jump.target_ip;
 }
 
-void mal_op_jump_if(MalCallable *callable, MalInstruction *instruction) {
+void mal_op_jump_if(MalCallable *callable, const MalInstruction *instruction) {
     if (mal_value_is_truthy(callable->registers[instruction->as.jump_if.cond])) {
         callable->instruction_pointer = instruction->as.jump_if.target_ip;
     }
