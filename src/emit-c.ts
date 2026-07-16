@@ -1079,6 +1079,35 @@ function consolidatedRegionCommit(reg: RegionAccess): Array<string> {
 }
 
 /**
+ * Resolve each instruction's innermost exception handler in one sweep. Handler
+ * ranges come from balanced TRY markers, so they are disjoint or properly nested.
+ */
+function exceptionHandlerTargets(
+	instructionCount: number,
+	handlers: ReadonlyArray<VmExceptionHandler>,
+): Array<number | undefined> {
+	const ordered = [...handlers].sort(
+		(left, right) => left.startIp - right.startIp || right.endIp - left.endIp,
+	);
+	const active: Array<VmExceptionHandler> = [];
+	const targets = new Array<number | undefined>(instructionCount);
+	let next = 0;
+	for (let ip = 0; ip < instructionCount; ip++) {
+		while (active.length > 0 && active[active.length - 1]!.endIp <= ip) active.pop();
+		while (next < ordered.length && ordered[next]!.startIp <= ip) {
+			const handler = ordered[next++]!;
+			const parent = active[active.length - 1];
+			if (parent !== undefined && handler.endIp > parent.endIp) {
+				throw new Error("Crossing exception-handler ranges");
+			}
+			active.push(handler);
+		}
+		targets[ip] = active[active.length - 1]?.handlerIp;
+	}
+	return targets;
+}
+
+/**
  * Emit the instruction body, with labels at jump targets and gotos for jumps.
  * Returns null if any instruction is not yet lowerable.
  */
@@ -1115,21 +1144,7 @@ function emitBody(
 	for (const handler of fn.handlers) {
 		jumpTargets.add(handler.handlerIp);
 	}
-	const handlerForIp = (ip: number): number | undefined => {
-		let best: VmExceptionHandler | undefined;
-		for (const handler of fn.handlers) {
-			if (ip < handler.startIp || ip >= handler.endIp) {
-				continue;
-			}
-			if (
-				best === undefined ||
-				handler.endIp - handler.startIp < best.endIp - best.startIp
-			) {
-				best = handler;
-			}
-		}
-		return best?.handlerIp;
-	};
+	const handlerTargets = exceptionHandlerTargets(fn.instructions.length, fn.handlers);
 
 	// Guarded property-access regions. Group consecutive LOAD/STORE_PROPERTY on the same
 	// object register within a straight-line window under one hoisted receiver guard: an
@@ -1249,7 +1264,7 @@ function emitBody(
 			suffix,
 			reps,
 			fn.strict,
-			handlerForIp(ip),
+			handlerTargets[ip],
 			gcUnlink,
 			thisSlot,
 			coro,
