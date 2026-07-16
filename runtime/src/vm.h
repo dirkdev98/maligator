@@ -1080,7 +1080,8 @@ typedef struct MalVm {
     i32 global_capacity;
 
     /**
-     * Per-function inline caches for the interpreter's property load/store ops,
+     * Per-function inline caches for the interpreter's property load/store ops
+     * and immutable shaped-object literal plans,
      * indexed [function_index][instruction_pointer]. Each function's array is
      * allocated lazily on first property access in it. The compiled backend uses
      * function-static caches instead; this gives the same monomorphic fast path

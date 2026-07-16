@@ -719,8 +719,8 @@ MalValue mal_vm_op_create_object(MalVm *vm);
 /**
  * Create a plain object directly in `shape` (built from the literal's static
  * keys) with `count` inline slots filled from `values` in key order. The
- * compiled backend caches the shape per literal site; the interpreter rebuilds
- * it (interned, so cheap) each time. See mal_vm_create_object_shaped in vm_ops.c.
+ * Both backends cache the immutable shape per literal site. See
+ * mal_vm_create_object_shaped in vm_ops.c.
  */
 MalValue mal_vm_create_object_shaped(MalVm *vm, struct MalShape *shape, const MalValue *values, u32 count);
 

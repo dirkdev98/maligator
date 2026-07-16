@@ -31,6 +31,7 @@
 MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 
 static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *value_out);
+static MalInlineCache *mal_interp_ic(MalCallable *callable);
 
 static const i32 *mal_op_instruction_data(MalCallable *callable, i32 offset) {
     return callable->function->instruction_data + offset;
@@ -238,14 +239,22 @@ void mal_op_create_object_shaped(MalCallable *callable, const MalInstruction *in
     const i32 *value_registers = &data[1 + count];
     MalString *keys[MAL_SHAPE_MAX_INLINE_SLOTS];
     MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
-    const MalString *string_constants = callable->vm->definition->string_constants;
+    MalInlineCache *cache = mal_interp_ic(callable);
+    MalShape *shape = (MalShape *) cache->shape;
     for (u32 i = 0; i < count; ++i) {
-        keys[i] = (MalString *) &string_constants[key_indices[i]];
         values[i] = callable->registers[value_registers[i]];
     }
-    // The interpreter has no per-site cache (the bytecode is const), so it rebuilds
-    // the shape each time; transitions are interned, so this is the same shape.
-    MalShape *shape = mal_shape_from_string_keys(keys, count);
+    // Shape transitions are immutable and interned. Reuse this bytecode site's
+    // otherwise-unused property-cache row instead of walking the same key sequence
+    // for every object allocation.
+    if (shape == nullptr) {
+        const MalString *string_constants = callable->vm->definition->string_constants;
+        for (u32 i = 0; i < count; ++i) {
+            keys[i] = (MalString *) &string_constants[key_indices[i]];
+        }
+        shape = mal_shape_from_string_keys(keys, count);
+        cache->shape = shape;
+    }
     callable->registers[instruction->as.create_object_shaped.dst] =
         mal_vm_create_object_shaped(callable->vm, shape, values, count);
 }
