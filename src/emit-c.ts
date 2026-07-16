@@ -99,6 +99,9 @@ function resumePointsOf(fn: VmFunction): Array<number> {
  * could, so it is handled defensively.
  */
 export function cF64Literal(value: number): string {
+	if (Object.is(value, -0)) {
+		return "-0.0";
+	}
 	if (Number.isNaN(value)) {
 		return '__builtin_nan("")';
 	}

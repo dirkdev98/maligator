@@ -55,6 +55,10 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		optDropUnreferencedBlocks,
 		optLocalsToRegister,
 		optCopyPropagation,
+		// Fold only primitive operations whose exact JavaScript result can be
+		// computed without coercing an object or running user code. Constant jump
+		// cleanup then exposes dead blocks to the existing CFG passes.
+		optFoldPrimitiveConstants,
 		// Rewrite `arr.forEach(cb)` into a guarded inlined loop whose `cb(...)` is a
 		// direct call. Runs before optInlineCalls so that direct call is folded in the
 		// same fixpoint round → the per-call closure + its captured env are eliminated.
@@ -364,6 +368,259 @@ function optDropInstructionsAfterJumpsOrReturns(program: IntermediateProgram): b
 		}
 	}
 
+	return changed;
+}
+
+type FoldedPrimitive =
+	| { kind: "number"; value: number }
+	| { kind: "boolean"; value: boolean }
+	| { kind: "null" }
+	| { kind: "undefined" };
+
+function foldedPrimitive(
+	instruction: IRInstruction | undefined,
+): FoldedPrimitive | undefined {
+	switch (instruction?.type) {
+		case "createNumber":
+		case "createF64":
+			return { kind: "number", value: instruction.value };
+		case "createBoolean":
+			return { kind: "boolean", value: instruction.value };
+		case "createNull":
+			return { kind: "null" };
+		case "createUndefined":
+			return { kind: "undefined" };
+		default:
+			return undefined;
+	}
+}
+
+function primitiveTruthy(value: FoldedPrimitive): boolean {
+	switch (value.kind) {
+		case "number":
+			return value.value !== 0 && !Number.isNaN(value.value);
+		case "boolean":
+			return value.value;
+		case "null":
+		case "undefined":
+			return false;
+	}
+}
+
+function primitiveNumber(value: FoldedPrimitive): number {
+	switch (value.kind) {
+		case "number":
+			return value.value;
+		case "boolean":
+			return value.value ? 1 : 0;
+		case "null":
+			return 0;
+		case "undefined":
+			return Number.NaN;
+	}
+}
+
+function foldUnaryPrimitive(
+	operator: Extract<IRInstruction, { type: "unary" }>["operator"],
+	operand: FoldedPrimitive,
+): FoldedPrimitive | undefined {
+	switch (operator) {
+		case "!":
+			return { kind: "boolean", value: !primitiveTruthy(operand) };
+		case "+":
+			return { kind: "number", value: primitiveNumber(operand) };
+		case "-":
+			return { kind: "number", value: -primitiveNumber(operand) };
+		case "~":
+			return { kind: "number", value: ~primitiveNumber(operand) };
+		case "typeof":
+			return undefined;
+	}
+}
+
+function foldNumericBinary(
+	operator: Extract<IRInstruction, { type: "binary" }>["operator"],
+	left: number,
+	right: number,
+): FoldedPrimitive | undefined {
+	switch (operator) {
+		case "+":
+			return { kind: "number", value: left + right };
+		case "-":
+			return { kind: "number", value: left - right };
+		case "*":
+			return { kind: "number", value: left * right };
+		case "/":
+			return { kind: "number", value: left / right };
+		case "%":
+			return { kind: "number", value: left % right };
+		case "**":
+			// Keep host-dependent transcendental approximation out of the wire: the
+			// Node and self-hosted compiler must serialize identical f64 bits.
+			return undefined;
+		case "&":
+			return { kind: "number", value: left & right };
+		case "|":
+			return { kind: "number", value: left | right };
+		case "^":
+			return { kind: "number", value: left ^ right };
+		case "<<":
+			return { kind: "number", value: left << right };
+		case ">>":
+			return { kind: "number", value: left >> right };
+		case ">>>":
+			return { kind: "number", value: left >>> right };
+		case "<":
+			return { kind: "boolean", value: left < right };
+		case "<=":
+			return { kind: "boolean", value: left <= right };
+		case ">":
+			return { kind: "boolean", value: left > right };
+		case ">=":
+			return { kind: "boolean", value: left >= right };
+		case "==":
+		case "===":
+			return { kind: "boolean", value: left === right };
+		case "!=":
+		case "!==":
+			return { kind: "boolean", value: left !== right };
+		case "in":
+		case "instanceof":
+			return undefined;
+	}
+}
+
+function foldPrimitiveEquality(
+	operator: Extract<IRInstruction, { type: "binary" }>["operator"],
+	left: FoldedPrimitive,
+	right: FoldedPrimitive,
+): FoldedPrimitive | undefined {
+	if (left.kind === "number" && right.kind === "number") {
+		return foldNumericBinary(operator, left.value, right.value);
+	}
+	if (
+		operator !== "===" &&
+		operator !== "!==" &&
+		operator !== "==" &&
+		operator !== "!="
+	) {
+		return undefined;
+	}
+
+	const loose = operator === "==" || operator === "!=";
+	let equal = false;
+	if (left.kind === right.kind) {
+		equal =
+			left.kind !== "boolean" || (right.kind === "boolean" && left.value === right.value);
+	} else if (loose) {
+		equal =
+			(left.kind === "null" && right.kind === "undefined") ||
+			(left.kind === "undefined" && right.kind === "null") ||
+			((left.kind === "number" || left.kind === "boolean") &&
+				(right.kind === "number" || right.kind === "boolean") &&
+				primitiveNumber(left) === primitiveNumber(right));
+	}
+	return {
+		kind: "boolean",
+		value: operator === "!==" || operator === "!=" ? !equal : equal,
+	};
+}
+
+type FoldedInstruction =
+	| Extract<IRInstruction, { type: "createF64" }>
+	| Extract<IRInstruction, { type: "createBoolean" }>
+	| Extract<IRInstruction, { type: "createNull" }>
+	| Extract<IRInstruction, { type: "createUndefined" }>;
+
+function foldedInstruction(
+	destination: number,
+	value: FoldedPrimitive,
+): FoldedInstruction {
+	switch (value.kind) {
+		case "number":
+			// F64 preserves NaN, infinities, and negative zero. Later representation
+			// inference still unboxes it in generated C where possible.
+			return { type: "createF64", registers: [destination], value: value.value };
+		case "boolean":
+			return { type: "createBoolean", registers: [destination], value: value.value };
+		case "null":
+			return { type: "createNull", registers: [destination] };
+		case "undefined":
+			return { type: "createUndefined", registers: [destination] };
+	}
+}
+
+function optFoldPrimitiveConstants(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		// Resumable functions can re-enter after an apparent single definition; their
+		// continuation state needs a resume-aware constant lattice before this pass is
+		// sound for values and branches spanning suspension points.
+		if (fn.isGenerator || fn.isAsync) continue;
+		const definitionCount = new Map<number, number>();
+		const singleDefinition = new Map<number, IRInstruction>();
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (!("registers" in instruction)) continue;
+				for (let i = 0; i < destinationCount(instruction); i++) {
+					const register = instruction.registers[i]!;
+					const count = (definitionCount.get(register) ?? 0) + 1;
+					definitionCount.set(register, count);
+					if (count === 1) singleDefinition.set(register, instruction);
+					else singleDefinition.delete(register);
+				}
+			}
+		}
+
+		for (const block of fn.blocks) {
+			const next: Array<IRInstruction> = [];
+			for (const instruction of block.instructions) {
+				let replacement: FoldedInstruction | undefined;
+				if (instruction.type === "unary") {
+					const operand = foldedPrimitive(singleDefinition.get(instruction.registers[1]));
+					const result =
+						operand === undefined
+							? undefined
+							: foldUnaryPrimitive(instruction.operator, operand);
+					if (result !== undefined) {
+						replacement = foldedInstruction(instruction.registers[0], result);
+					}
+				} else if (instruction.type === "binary") {
+					const left = foldedPrimitive(singleDefinition.get(instruction.registers[1]));
+					const right = foldedPrimitive(singleDefinition.get(instruction.registers[2]));
+					const result =
+						left === undefined || right === undefined
+							? undefined
+							: foldPrimitiveEquality(instruction.operator, left, right);
+					if (result !== undefined) {
+						replacement = foldedInstruction(instruction.registers[0], result);
+					}
+				} else if (instruction.type === "jumpIf") {
+					const condition = foldedPrimitive(
+						singleDefinition.get(instruction.registers[0]),
+					);
+					if (condition !== undefined) {
+						changed = true;
+						if (primitiveTruthy(condition)) {
+							next.push({ type: "jump", blocks: instruction.blocks });
+						}
+						continue;
+					}
+				}
+
+				if (replacement !== undefined) {
+					changed = true;
+					next.push(replacement);
+					if (definitionCount.get(replacement.registers[0]) === 1) {
+						singleDefinition.set(replacement.registers[0], replacement);
+					}
+				} else {
+					next.push(instruction);
+				}
+			}
+			block.instructions = next;
+		}
+	}
 	return changed;
 }
 
@@ -839,6 +1096,7 @@ export const irOptTestHooks = {
 	dropUnreferencedBlocksInFunction,
 	combineLinearBlocksInFunction,
 	eliminateRedundantTdzChecksInFunction,
+	foldPrimitiveConstants: optFoldPrimitiveConstants,
 };
 
 /**
