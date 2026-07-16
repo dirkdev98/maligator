@@ -43,6 +43,13 @@ MalObject *mal_object_new(MalHeap *heap, MalObject *prototype) {
     return object;
 }
 
+MalObject *mal_object_try_new(MalHeap *heap, MalObject *prototype) {
+    MalObject *object = mal_heap_try_alloc(heap, sizeof(MalObject), MAL_HEAP_OBJECT);
+    if (object == nullptr) return nullptr;
+    mal_object_init(heap, object, MAL_HEAP_OBJECT, prototype);
+    return object;
+}
+
 MalObject *mal_object_new_shaped_one(MalHeap *heap, MalObject *prototype, MalShape *shape,
                                      MalValue value) {
     assert(shape->inline_count == 1);

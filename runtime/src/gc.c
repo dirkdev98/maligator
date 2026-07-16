@@ -920,6 +920,7 @@ static void mal_gc_scan_roots(MalVm *vm) {
     }
 
     // Isolate-shared roots (one per isolate, not per fiber).
+    mal_gc_mark_value(vm->allocation_error);
 #if MAL_REALMS
     mal_gc_mark_value(vm->error_data_marker);
     mal_gc_mark_value(vm->error_stack_marker);

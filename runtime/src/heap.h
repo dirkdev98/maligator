@@ -80,6 +80,8 @@ typedef struct MalHeap {
      * (the native backend's call-site cache) tag it with the epoch and treat a
      * changed epoch as an invalidation — closing the ABA hole without rooting. */
     u32 epoch;
+    /** Test-only one-shot failure consumed by mal_heap_try_alloc. */
+    bool fail_next_cell_allocation;
 #if MAL_GC_CONCURRENT
     /** Incremental-sweep cursor (concurrent build): the chunk + in-chunk block
      * index the lazy per-safepoint sweep has reached, and the survivor-byte total
@@ -362,6 +364,9 @@ MalHeapType mal_heap_header_type(const MalHeapHeader *header);
  * Allocate a new heap object.
  */
 void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type);
+
+/** Fallible managed-cell allocation. Existing infallible callers retain abort-on-OOM. */
+void *mal_heap_try_alloc(MalHeap *heap, usize alloc_size, MalHeapType type);
 
 /**
  * Allocate raw heap storage without initializing a heap header. Returns an

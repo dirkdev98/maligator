@@ -229,10 +229,14 @@ static MalValue mal_op_value_operand(MalCallable *callable, i32 operand) {
 }
 
 MalValue mal_vm_op_create_object(MalVm *vm) {
-    MalObject *object = mal_object_new(
+    MalObject *object = mal_object_try_new(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])
     );
+    if (object == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return MAL_VALUE_UNDEFINED;
+    }
     return mal_value_from_object(object);
 }
 

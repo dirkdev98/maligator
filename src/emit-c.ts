@@ -1435,7 +1435,7 @@ function emitInstruction(
 			];
 		case "CREATE_OBJECT":
 			if (stackObjectSite === undefined) {
-				return [`r${instruction.dst} = mal_vm_op_create_object(vm);`];
+				return [`r${instruction.dst} = mal_vm_op_create_object(vm);`, throwCheck];
 			}
 			return [
 				`${stackObjectSite.objectName} = (MalObject){ .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT), .extensible = true, .shape = mal_shape_empty(), .prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]), .slots = nullptr, .overflow = nullptr };`,

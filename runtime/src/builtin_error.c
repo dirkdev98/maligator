@@ -504,6 +504,13 @@ void mal_vm_throw_error_value(MalVm *vm, MalIntrinsic prototype_slot, MalValue m
     };
 }
 
+void mal_vm_throw_allocation_error(MalVm *vm) {
+    vm->completion = (MalCompletion) {
+        .kind = MAL_COMPLETION_THROW,
+        .value = vm->allocation_error,
+    };
+}
+
 static MalObject *mal_builtin_error_install_kind(
     MalVm *vm,
     const byte *name,

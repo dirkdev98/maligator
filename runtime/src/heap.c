@@ -178,11 +178,12 @@ static MalGcChunk *mal_gc_new_chunk(MalHeap *heap) {
     usize mmap_size;
     void *base = mal_gc_aligned_mmap(MAL_GC_CHUNK_SIZE, MAL_GC_BLOCK_SIZE, &mmap_base, &mmap_size);
     if (base == nullptr) {
-        abort(); // out of address space; the runtime has no OOM recovery path
+        return nullptr;
     }
     MalGcChunk *chunk = malloc(sizeof(MalGcChunk));
     if (chunk == nullptr) {
-        abort();
+        munmap(mmap_base, mmap_size);
+        return nullptr;
     }
     chunk->base = base;
     chunk->mmap_base = mmap_base;
@@ -207,6 +208,7 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
         MalGcChunk *chunk = heap->chunks;
         if (chunk == nullptr || chunk->next_block >= chunk->block_count) {
             chunk = mal_gc_new_chunk(heap);
+            if (chunk == nullptr) return nullptr;
         }
         block_base = (u8 *) chunk->base + chunk->next_block * MAL_GC_BLOCK_SIZE;
         chunk->next_block++;
@@ -243,7 +245,7 @@ static inline void mal_gc_count_black(u8 kind, usize size) {
 static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
     MalGcLarge *rec = malloc(mal_gc_large_data_offset() + size);
     if (rec == nullptr) {
-        abort();
+        return nullptr;
     }
     rec->size = size;
     rec->kind = kind;
@@ -310,6 +312,7 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
     MalGcBlock *block = *current;
     if (block == nullptr || block->bump + block->cell_size > block->limit) {
         block = mal_gc_new_block(heap, size_class, kind);
+        if (block == nullptr) return nullptr;
         *current = block;
     }
 
@@ -336,6 +339,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->free_blocks = nullptr;
     heap->bytes_allocated = 0;
     heap->live_bytes = 0;
+    heap->fail_next_cell_allocation = false;
 #if MAL_GC_CONCURRENT
     heap->sweep_chunk = nullptr;
     heap->sweep_block = 0;
@@ -393,12 +397,25 @@ MalHeapType mal_heap_header_type(const MalHeapHeader *header) {
 
 void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
     void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_CELL);
+    if (ptr == nullptr) abort();
     mal_heap_header_init(ptr, type);
     return ptr;
 }
 
+void *mal_heap_try_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
+    if (heap->fail_next_cell_allocation) {
+        heap->fail_next_cell_allocation = false;
+        return nullptr;
+    }
+    void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_CELL);
+    if (ptr != nullptr) mal_heap_header_init(ptr, type);
+    return ptr;
+}
+
 void *mal_heap_alloc_raw(MalHeap *heap, usize alloc_size) {
-    return mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_RAW);
+    void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_RAW);
+    if (ptr == nullptr) abort();
+    return ptr;
 }
 
 static bool mal_gc_ptr_in_chunks(const MalHeap *heap, const void *ptr) {

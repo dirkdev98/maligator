@@ -363,3 +363,6 @@ void mal_vm_throw_error(MalVm *vm, MalIntrinsic prototype_slot, const byte *mess
  * mal_vm_throw_error with an arbitrary value as the message.
  */
 void mal_vm_throw_error_value(MalVm *vm, MalIntrinsic prototype_slot, MalValue message);
+
+/** Set the pending completion to the preallocated, non-allocating OOM exception. */
+void mal_vm_throw_allocation_error(MalVm *vm);

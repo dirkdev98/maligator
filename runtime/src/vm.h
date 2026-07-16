@@ -1152,6 +1152,8 @@ typedef struct MalVm {
     MalValue intrinsics[MAL_INTRINSIC_COUNT];
 #endif
     MalCompletion completion;
+    /** Preallocated, permanently rooted exception used when allocation cannot continue. */
+    MalValue allocation_error;
 
     /**
      * PromiseJobs microtask queue (singly-linked FIFO). Settling a promise and
