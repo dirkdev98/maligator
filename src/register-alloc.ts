@@ -131,6 +131,7 @@ const USE_ONLY_FIRST_REGISTER = new Set([
 	"defineAccessor",
 	"defineProperty",
 	"definePrivate",
+	"initPrivateFields",
 	"storePrivate",
 	"setPrototype",
 	"setFunctionName",

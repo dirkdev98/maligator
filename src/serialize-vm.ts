@@ -16,8 +16,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 9 for batched undefined global-var initialization.
-export const WIRE_VERSION = 9;
+// Bumped to 10 for bulk private-name and uninitialized private-field operations.
+export const WIRE_VERSION = 10;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -119,6 +119,8 @@ export const WIRE_OPCODES = [
 	"LOAD_PROPERTY_STATIC",
 	"STORE_PROPERTY_STATIC",
 	"INIT_GLOBAL_VARS",
+	"CREATE_PRIVATE_NAMES",
+	"INIT_PRIVATE_FIELDS",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -625,6 +627,14 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 		case "CREATE_PRIVATE_NAME":
 			w.i32(i.dst);
 			return;
+		case "CREATE_PRIVATE_NAMES":
+			if (i.capturedIndices.length === 0) {
+				throw new RangeError("serialize-vm: empty private-name batch");
+			}
+			w.i32(i.ownerFunctionIndex);
+			w.i32(i.capturedIndices.length);
+			w.i32Array(i.capturedIndices);
+			return;
 		case "LOAD_ARGUMENT":
 			if (i.index < 0) throw new RangeError("serialize-vm: negative argument index");
 			w.i32(i.dst);
@@ -757,6 +767,14 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.object);
 			w.i32(i.key);
 			w.i32(i.value);
+			return;
+		case "INIT_PRIVATE_FIELDS":
+			if (i.keyRegisters.length === 0) {
+				throw new RangeError("serialize-vm: empty private-field batch");
+			}
+			w.i32(i.object);
+			w.i32(i.keyRegisters.length);
+			w.i32Array(i.keyRegisters);
 			return;
 		case "STORE_PROPERTY_STATIC":
 			w.i32(i.object);
@@ -1164,6 +1182,15 @@ function readInstruction(r: Reader): VmInstruction {
 			return { opcode, dst: r.i32() };
 		case "CREATE_PRIVATE_NAME":
 			return { opcode, dst: r.i32() };
+		case "CREATE_PRIVATE_NAMES": {
+			const ownerFunctionIndex = r.i32();
+			const count = r.i32();
+			const capturedIndices = r.i32Array();
+			if (count < 1 || capturedIndices.length !== count) {
+				throw new RangeError("serialize-vm: invalid private-name batch");
+			}
+			return { opcode, ownerFunctionIndex, capturedIndices };
+		}
 		case "CREATE_OBJECT_SHAPED": {
 			const instruction: Extract<VmInstruction, { opcode: "CREATE_OBJECT_SHAPED" }> = {
 				opcode,
@@ -1273,6 +1300,15 @@ function readInstruction(r: Reader): VmInstruction {
 			return { opcode, object: r.i32(), key: r.i32(), value: r.i32() };
 		case "STORE_PRIVATE":
 			return { opcode, object: r.i32(), key: r.i32(), value: r.i32() };
+		case "INIT_PRIVATE_FIELDS": {
+			const object = r.i32();
+			const count = r.i32();
+			const keyRegisters = r.i32Array();
+			if (count < 1 || keyRegisters.length !== count) {
+				throw new RangeError("serialize-vm: invalid private-field batch");
+			}
+			return { opcode, object, keyRegisters };
+		}
 		case "STORE_SUPER_PROPERTY":
 			return { opcode, object: r.i32(), key: r.i32(), value: r.i32(), receiver: r.i32() };
 		case "LOAD_SUPER_PROPERTY":

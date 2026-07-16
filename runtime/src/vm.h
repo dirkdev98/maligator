@@ -109,6 +109,8 @@ typedef enum MalOpcode {
     MAL_OP_LOAD_PROPERTY_STATIC,
     MAL_OP_STORE_PROPERTY_STATIC,
     MAL_OP_INIT_GLOBAL_VARS,
+    MAL_OP_CREATE_PRIVATE_NAMES,
+    MAL_OP_INIT_PRIVATE_FIELDS,
 } MalOpcode;
 
 /** Packed literal-template stream tags; mirrored by src/ir.ts. */
@@ -513,8 +515,20 @@ typedef struct MalInstruction {
         } create_private_name;
 
         struct {
+            // Side data: [count, captured slot indices...]. All slots belong to
+            // owner_function_index and receive freshly minted private symbols.
+            i32 owner_function_index, data_offset;
+        } create_private_names;
+
+        struct {
             i32 object, key, value;
         } define_private;
+
+        struct {
+            // Side data: [count, key registers...]. Installs undefined-valued
+            // private fields in order and stops on the first duplicate stamp.
+            i32 object, data_offset;
+        } init_private_fields;
 
         struct {
             i32 dst, object, key;

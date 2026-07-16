@@ -823,8 +823,18 @@ MalValue mal_vm_op_copy_data_properties(
 /** A fresh unique private name (hidden private symbol); never throws. */
 MalValue mal_vm_op_create_private_name(MalVm *vm);
 
+/** Mint fresh private names directly into captured slots of the class evaluator. */
+void mal_vm_op_create_private_names(
+    MalVm *vm, MalEnv *env, i32 owner_function_index, i32 count, const i32 *captured_indices
+);
+
 /** AddPrivateName: install a private element on a new instance; dup install throws. */
 void mal_vm_op_define_private(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value);
+
+/** Install an ordered run of undefined-valued private instance fields. */
+void mal_vm_op_init_private_fields(
+    MalVm *vm, MalValue object_value, i32 count, const MalValue *keys
+);
 
 /** PrivateGet; an unbranded receiver throws (sets vm->completion). */
 MalValue mal_vm_op_load_private(MalVm *vm, MalValue object_value, MalValue key_value);
@@ -928,7 +938,11 @@ void mal_op_set_function_name(MalCallable *callable, const MalInstruction *instr
 
 void mal_op_create_private_name(MalCallable *callable, const MalInstruction *instruction);
 
+void mal_op_create_private_names(MalCallable *callable, const MalInstruction *instruction);
+
 void mal_op_define_private(MalCallable *callable, const MalInstruction *instruction);
+
+void mal_op_init_private_fields(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_load_private(MalCallable *callable, const MalInstruction *instruction);
 

@@ -83,6 +83,8 @@ describe("Test262 VM definition merger", () => {
 				nameStringIndices: [0],
 				declarationConfigurable: true,
 			},
+			{ opcode: "CREATE_PRIVATE_NAMES", ownerFunctionIndex: 0, capturedIndices: [0, 2] },
+			{ opcode: "INIT_PRIVATE_FIELDS", object: 0, keyRegisters: [1, 2] },
 		];
 		const second = definition({
 			functions: [vmFunction(indexed)],
@@ -134,6 +136,11 @@ describe("Test262 VM definition merger", () => {
 			nameStringIndices: [2],
 			declarationConfigurable: true,
 		});
+		expect(rebased[14]).toMatchObject({
+			ownerFunctionIndex: 2,
+			capturedIndices: [0, 2],
+		});
+		expect(rebased[15]).toMatchObject({ object: 0, keyRegisters: [1, 2] });
 		expect(second.functions[0]!.instructions).toEqual(indexed);
 	});
 

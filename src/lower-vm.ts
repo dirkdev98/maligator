@@ -572,10 +572,20 @@ export type VmInstruction =
 			dst: number;
 	  }
 	| {
+			opcode: "CREATE_PRIVATE_NAMES";
+			ownerFunctionIndex: number;
+			capturedIndices: Array<number>;
+	  }
+	| {
 			opcode: "DEFINE_PRIVATE";
 			object: number;
 			key: number;
 			value: number;
+	  }
+	| {
+			opcode: "INIT_PRIVATE_FIELDS";
+			object: number;
+			keyRegisters: Array<number>;
 	  }
 	| {
 			opcode: "LOAD_PRIVATE";
@@ -1419,12 +1429,24 @@ function lowerInstructionToVmInstruction(
 				opcode: "CREATE_PRIVATE_NAME",
 				dst: instruction.registers[0],
 			};
+		case "createPrivateNames":
+			return {
+				opcode: "CREATE_PRIVATE_NAMES",
+				ownerFunctionIndex: instruction.functionIndex,
+				capturedIndices: instruction.capturedIndices,
+			};
 		case "definePrivate":
 			return {
 				opcode: "DEFINE_PRIVATE",
 				object: instruction.registers[0],
 				key: instruction.registers[1],
 				value: instruction.registers[2],
+			};
+		case "initPrivateFields":
+			return {
+				opcode: "INIT_PRIVATE_FIELDS",
+				object: instruction.registers[0],
+				keyRegisters: instruction.registers.slice(1),
 			};
 		case "loadPrivate":
 			return {

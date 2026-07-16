@@ -13,7 +13,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 9u         // batched undefined global-var initialization
+#define WIRE_VERSION 10u        // bulk private names and uninitialized private fields
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -110,6 +110,8 @@ typedef enum WireOp {
     WIRE_LOAD_PROPERTY_STATIC,
     WIRE_STORE_PROPERTY_STATIC,
     WIRE_INIT_GLOBAL_VARS,
+    WIRE_CREATE_PRIVATE_NAMES,
+    WIRE_INIT_PRIVATE_FIELDS,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -857,6 +859,28 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->opcode = MAL_OP_CREATE_PRIVATE_NAME;
             o->as.create_private_name.dst = rd_i32(r);
             return;
+        case WIRE_CREATE_PRIVATE_NAMES: {
+            o->opcode = MAL_OP_CREATE_PRIVATE_NAMES;
+            o->as.create_private_names.owner_function_index = rd_i32(r);
+            i32 count = rd_i32(r);
+            if (count < 1) {
+                r->ok = false;
+                return;
+            }
+            o->as.create_private_names.data_offset = rd_side_single(r, side_data, count);
+            return;
+        }
+        case WIRE_INIT_PRIVATE_FIELDS: {
+            o->opcode = MAL_OP_INIT_PRIVATE_FIELDS;
+            o->as.init_private_fields.object = rd_i32(r);
+            i32 count = rd_i32(r);
+            if (count < 1) {
+                r->ok = false;
+                return;
+            }
+            o->as.init_private_fields.data_offset = rd_side_single(r, side_data, count);
+            return;
+        }
         case WIRE_SET_PROTOTYPE:
             o->opcode = MAL_OP_SET_PROTOTYPE;
             o->as.set_prototype.object = rd_i32(r);

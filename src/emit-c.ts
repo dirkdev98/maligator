@@ -2146,10 +2146,19 @@ function emitInstruction(
 		case "CREATE_PRIVATE_NAME":
 			// A fresh unique private name (hidden symbol); never throws.
 			return [`r${instruction.dst} = mal_vm_op_create_private_name(vm);`];
+		case "CREATE_PRIVATE_NAMES":
+			return [
+				`mal_vm_op_create_private_names(vm, env, ${instruction.ownerFunctionIndex}, ${instruction.capturedIndices.length}, (const i32[]){ ${instruction.capturedIndices.join(", ")} });`,
+			];
 		case "DEFINE_PRIVATE":
 			// AddPrivateName on a fresh instance/class object; a duplicate install throws.
 			return [
 				`mal_vm_op_define_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)});`,
+				throwCheck,
+			];
+		case "INIT_PRIVATE_FIELDS":
+			return [
+				`mal_vm_op_init_private_fields(vm, ${boxed(instruction.object)}, ${instruction.keyRegisters.length}, (const MalValue[]){ ${instruction.keyRegisters.map((key) => boxed(key)).join(", ")} });`,
 				throwCheck,
 			];
 		case "LOAD_PRIVATE":

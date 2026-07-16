@@ -42,6 +42,8 @@ const instructions: Array<VmInstruction> = [
 		nameStringIndices: [0, 2, 3],
 		declarationConfigurable: true,
 	},
+	{ opcode: "CREATE_PRIVATE_NAMES", ownerFunctionIndex: 0, capturedIndices: [1, 4] },
+	{ opcode: "INIT_PRIVATE_FIELDS", object: 6, keyRegisters: [8, 9] },
 	{ opcode: "RETURN", value: 6 },
 ];
 
@@ -52,7 +54,7 @@ const fn: VmFunction = {
 	parameterCount: 0,
 	length: 0,
 	registerCount: 12,
-	capturedCount: 0,
+	capturedCount: 5,
 	strict: true,
 	needsArguments: false,
 	isDerivedConstructor: false,
@@ -81,18 +83,24 @@ describe("emit-vm instruction packing", () => {
 	it("emits one flattened side table and raw f64 words", () => {
 		const output = emitVmDefinition(definition, { compiled: false });
 		expect(output).toContain(
-			"static const i32 mal_function_0_instruction_data[] = { 2, 1, 2, 3, 4, 2, 1, 2, 5, 6, 2, 1, -1, 2, 3, 2, 7, 8, 1, 9, 2, 10, 11, 3, 0, 2, 3 };",
+			"static const i32 mal_function_0_instruction_data[] = { 2, 1, 2, 3, 4, 2, 1, 2, 5, 6, 2, 1, -1, 2, 3, 2, 7, 8, 1, 9, 2, 10, 11, 3, 0, 2, 3, 2, 1, 4, 2, 8, 9 };",
 		);
-		for (const offset of [0, 5, 10, 15, 18, 20, 23]) {
+		for (const offset of [0, 5, 10, 15, 18, 20, 23, 27, 30]) {
 			expect(output).toContain(`.data_offset = ${offset}`);
 		}
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x80000000u");
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff00000u");
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff80000u");
 		expect(output).toContain(".instruction_data = mal_function_0_instruction_data");
-		expect(output).toContain(".instruction_data_count = 27");
+		expect(output).toContain(".instruction_data_count = 33");
 		expect(output).toContain(
 			".as.init_global_vars = { .data_offset = 23, .declaration_configurable = true }",
+		);
+		expect(output).toContain(
+			".as.create_private_names = { .owner_function_index = 0, .data_offset = 27 }",
+		);
+		expect(output).toContain(
+			".as.init_private_fields = { .object = 6, .data_offset = 30 }",
 		);
 	});
 
@@ -100,6 +108,12 @@ describe("emit-vm instruction packing", () => {
 		const output = emitBatch([definition, definition], { compiled: false });
 		expect(output).toContain("static const i32 mal_shared_insn_data_");
 		expect(output.match(/\.instruction_data = mal_shared_insn_data_/g)).toHaveLength(2);
+	});
+
+	it("emits native bulk-private helper calls", () => {
+		const output = emitVmDefinition(definition);
+		expect(output).toContain("mal_vm_op_create_private_names(vm, env, 0, 2");
+		expect(output).toContain("mal_vm_op_init_private_fields(vm, r6, 2");
 	});
 
 	it("uses a null side table when a function has no variable operands", () => {

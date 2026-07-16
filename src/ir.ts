@@ -1047,12 +1047,26 @@ export type IRInstruction =
 			registers: [number];
 	  }
 	| {
+			// Mint fresh hidden symbols directly into captured slots. The slots are
+			// parallel to capturedIndices and all belong to functionIndex.
+			type: "createPrivateNames";
+			functionIndex: number;
+			capturedIndices: Array<number>;
+	  }
+	| {
 			// [object, key, value]; installs a private member (field or brand
 			// marker) keyed by the private symbol in key. Throws if already
 			// present.
 			type: "definePrivate";
 
 			registers: [number, number, number];
+	  }
+	| {
+			// [object, ...keys]; install undefined-valued private instance fields
+			// in source order, stopping on the first duplicate stamp.
+			type: "initPrivateFields";
+
+			registers: [number, ...Array<number>];
 	  }
 	| {
 			// [destination, object, key]; own-only read keyed by a private
@@ -2710,23 +2724,29 @@ function classFieldKeyName(key: ESTree.Expression | ESTree.PrivateIdentifier): s
  * time. Each class evaluation produces distinct identities, so instances of
  * two evaluations of the same class source are not brand compatible.
  */
-function mintPrivateName(
+function mintPrivateNames(
 	program: IntermediateProgram,
 	fn: IRFunction,
 	cursor: IRCursor,
-	binding: Binding | undefined,
+	bindings: Array<Binding | undefined>,
 ) {
-	if (!binding) {
-		return;
+	const capturedIndices: Array<number> = [];
+	for (const binding of bindings) {
+		if (!binding) continue;
+		const location = getOrCreateBindingLocation(program, fn, binding);
+		if (location.type !== "captured" || location.functionIndex !== fn.functionIndex) {
+			throw new Error(
+				"Private names must use captured slots owned by the class evaluator",
+			);
+		}
+		capturedIndices.push(location.index);
 	}
-
-	const symbol = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "createPrivateName", registers: [symbol] });
-	storeRegisterAtLocation(
-		cursor.block,
-		getOrCreateBindingLocation(program, fn, binding),
-		symbol,
-	);
+	if (capturedIndices.length === 0) return;
+	cursor.block.instructions.push({
+		type: "createPrivateNames",
+		functionIndex: fn.functionIndex,
+		capturedIndices,
+	});
 }
 
 /**
@@ -2838,8 +2858,35 @@ function emitInstanceElementInit(
 		});
 	}
 
-	for (const entry of plan) {
-		emitFieldInstall(program, ctorFn, cursor, entry);
+	for (let i = 0; i < plan.length; ) {
+		const entry = plan[i]!;
+		if (!entry.private || entry.valueNode !== null) {
+			emitFieldInstall(program, ctorFn, cursor, entry);
+			i++;
+			continue;
+		}
+
+		const thisRegister = nextRegisterDestination(ctorFn);
+		cursor.block.instructions.push({ type: "loadThis", registers: [thisRegister] });
+		const keys: Array<number> = [];
+		let next = i;
+		while (next < plan.length) {
+			const candidate = plan[next]!;
+			if (!candidate.private || candidate.valueNode !== null) break;
+			keys.push(
+				loadRegisterFromLocation(
+					ctorFn,
+					cursor.block,
+					getOrCreateBindingLocation(program, ctorFn, candidate.fieldBinding),
+				),
+			);
+			next++;
+		}
+		cursor.block.instructions.push({
+			type: "initPrivateFields",
+			registers: [thisRegister, ...keys],
+		});
+		i = next;
 	}
 }
 
@@ -3160,11 +3207,11 @@ function compileClass(
 	// Mint the per-evaluation private symbols (brand markers and field keys).
 	// Only this class's own names are minted here; inherited names were minted
 	// by their declaring class.
-	mintPrivateName(program, fn, cursor, instanceBrandBinding);
-	mintPrivateName(program, fn, cursor, staticBrandBinding);
-	for (const entry of ownNames.values()) {
-		mintPrivateName(program, fn, cursor, entry.fieldBinding);
-	}
+	mintPrivateNames(program, fn, cursor, [
+		instanceBrandBinding,
+		staticBrandBinding,
+		...[...ownNames.values()].map((entry) => entry.fieldBinding),
+	]);
 
 	// Evaluate computed instance field keys once, here at class definition.
 	for (const { binding, node } of computedInstanceKeys) {

@@ -100,4 +100,30 @@ describe("wire loader side-data validation", () => {
 		rejectsWire("overflowing-varint", replaceFlags([0x80, 0x80, 0x80, 0x80, 0x10]));
 		rejectsWire("trailing-data", Uint8Array.from([...wire, 0]));
 	});
+
+	it("loads bulk private-name and private-field side data", () => {
+		const bulkDefinition: VmDefinition = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					registerCount: 3,
+					capturedCount: 2,
+					instructions: [
+						{
+							opcode: "CREATE_PRIVATE_NAMES",
+							ownerFunctionIndex: 0,
+							capturedIndices: [0, 1],
+						},
+						{ opcode: "INIT_PRIVATE_FIELDS", object: 0, keyRegisters: [1, 2] },
+						{ opcode: "RETURN", value: 0 },
+					],
+				},
+			],
+		};
+		const wirePath = path.join(directory, "bulk-private.malw");
+		writeFileSync(wirePath, serializeVmDefinition(bulkDefinition, { debugInfo: false }));
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status).toBe(0);
+	});
 });

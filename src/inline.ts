@@ -605,7 +605,9 @@ function methodDisqualifies(instruction: IRInstruction): boolean {
 		case "storePrivate":
 		case "hasPrivate":
 		case "definePrivate":
+		case "initPrivateFields":
 		case "createPrivateName":
+		case "createPrivateNames":
 		case "storeSuperProperty":
 		case "loadSuperProperty":
 		case "checkSuperClass":
@@ -2335,7 +2337,8 @@ export function optEliminateCapturedSlots(program: IntermediateProgram): boolean
 				for (const instruction of block.instructions) {
 					if (
 						(instruction.type === "loadCaptured" ||
-							instruction.type === "storeCaptured") &&
+							instruction.type === "storeCaptured" ||
+							instruction.type === "createPrivateNames") &&
 						instruction.functionIndex === fn.functionIndex
 					) {
 						usesOwnEnv = true;

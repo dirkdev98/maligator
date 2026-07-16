@@ -1204,6 +1204,7 @@ const WRITES_NO_REGISTER = new Set<IRInstruction["type"]>([
 	"throwIfTdz",
 	"defineProperty",
 	"defineAccessor",
+	"initPrivateFields",
 	"mergeDataProperties",
 	"setFunctionName",
 	"withEnter",

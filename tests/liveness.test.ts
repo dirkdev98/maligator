@@ -306,6 +306,7 @@ test("source-only safepoints root every operand", () => {
 		["defineAccessor", [5, 6, 7]],
 		["defineProperty", [5, 6, 7]],
 		["definePrivate", [5, 6, 7]],
+		["initPrivateFields", [5, 6, 7, 9]],
 		["storePrivate", [5, 6, 7]],
 		["iteratorClose", [5]],
 		["withEnter", [5]],

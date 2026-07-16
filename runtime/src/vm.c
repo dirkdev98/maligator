@@ -637,6 +637,11 @@ static void mal_vm_rebase_instruction(
                 in->as.store_captured.owner_function_index += fn_base;
             }
             break;
+        case MAL_OP_CREATE_PRIVATE_NAMES:
+            if (in->as.create_private_names.owner_function_index >= 0) {
+                in->as.create_private_names.owner_function_index += fn_base;
+            }
+            break;
         case MAL_OP_LOAD_GLOBAL:
             in->as.load_global.index += global_base;
             break;
@@ -1587,8 +1592,14 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_CREATE_PRIVATE_NAME:
                 mal_op_create_private_name(frame, instruction);
                 break;
+            case MAL_OP_CREATE_PRIVATE_NAMES:
+                mal_op_create_private_names(frame, instruction);
+                break;
             case MAL_OP_DEFINE_PRIVATE:
                 mal_op_define_private(frame, instruction);
+                break;
+            case MAL_OP_INIT_PRIVATE_FIELDS:
+                mal_op_init_private_fields(frame, instruction);
                 break;
             case MAL_OP_LOAD_PRIVATE:
                 mal_op_load_private(frame, instruction);

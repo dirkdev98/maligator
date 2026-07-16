@@ -71,6 +71,14 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 					(index) => index + base.string,
 				),
 			};
+		case "CREATE_PRIVATE_NAMES":
+			return {
+				...instruction,
+				ownerFunctionIndex: shifted(instruction.ownerFunctionIndex, base.function),
+				capturedIndices: [...instruction.capturedIndices],
+			};
+		case "INIT_PRIVATE_FIELDS":
+			return { ...instruction, keyRegisters: [...instruction.keyRegisters] };
 		case "CREATE_OBJECT_SHAPED":
 			return {
 				...instruction,

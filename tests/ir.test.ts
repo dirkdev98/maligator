@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "../src/ir.ts";
 import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
@@ -260,6 +261,93 @@ test("eval var declarations create configurable globals", () => {
 	expect(instructions).toContainEqual(
 		expect.objectContaining({ type: "initGlobalVars", declarationConfigurable: true }),
 	);
+});
+
+test("private names and initializer-free private field runs lower in bulk", () => {
+	const program = compileScript(`
+		function make() {
+			return class {
+				#a;
+				#b;
+				#initialized = 1;
+				#d;
+				#e;
+				#method() {}
+				get #accessor() { return 1; }
+			};
+		}
+	`);
+	const make = functionNamed(program, "make");
+	const constructor = program.functions.find((fn) => fn.classContext?.isConstructor);
+	expect(constructor).toBeDefined();
+
+	expect(
+		instructionsOf(make).filter(
+			(instruction) => instruction.type === "createPrivateNames",
+		),
+	).toEqual([
+		expect.objectContaining({
+			type: "createPrivateNames",
+			functionIndex: make.functionIndex,
+		}),
+	]);
+	const nameBatch = instructionsOf(make).find(
+		(instruction) => instruction.type === "createPrivateNames",
+	);
+	expect(
+		nameBatch?.type === "createPrivateNames" ? nameBatch.capturedIndices : [],
+	).toHaveLength(6);
+
+	const privateInitializers = instructionsOf(constructor!).filter(
+		(instruction) =>
+			instruction.type === "definePrivate" || instruction.type === "initPrivateFields",
+	);
+	expect(privateInitializers.map((instruction) => instruction.type)).toEqual([
+		"definePrivate",
+		"initPrivateFields",
+		"definePrivate",
+		"initPrivateFields",
+	]);
+	expect(
+		privateInitializers
+			.filter((instruction) => instruction.type === "initPrivateFields")
+			.map((instruction) => instruction.registers.length - 1),
+	).toEqual([2, 2]);
+
+	executeIROptimizations(program);
+	allocateRegisters(program);
+	const definition = lowerIrProgramToVmDefinition(program);
+	const loweredNameBatch = definition.functions[make.functionIndex]!.instructions.find(
+		(instruction) => instruction.opcode === "CREATE_PRIVATE_NAMES",
+	);
+	expect(loweredNameBatch?.opcode).toBe("CREATE_PRIVATE_NAMES");
+	expect(
+		loweredNameBatch?.opcode === "CREATE_PRIVATE_NAMES"
+			? loweredNameBatch.capturedIndices.length
+			: 0,
+	).toBe(6);
+	expect(
+		definition.functions[constructor!.functionIndex]!.instructions.filter(
+			(instruction) => instruction.opcode === "INIT_PRIVATE_FIELDS",
+		).map((instruction) =>
+			instruction.opcode === "INIT_PRIVATE_FIELDS" ? instruction.keyRegisters.length : 0,
+		),
+	).toEqual([2, 2]);
+
+	const vmInstructions = definition.functions.flatMap((fn) => fn.instructions);
+	const scalarizedCount = vmInstructions.reduce((count, instruction) => {
+		if (instruction.opcode === "CREATE_PRIVATE_NAMES") {
+			return count + instruction.capturedIndices.length * 2;
+		}
+		if (instruction.opcode === "INIT_PRIVATE_FIELDS") {
+			// The batch's shared LOAD_THIS and per-key LOAD_CAPTURED remain in the
+			// stream. Scalar lowering additionally needs N undefined values, N
+			// DEFINE_PRIVATE ops, and N-1 extra LOAD_THIS ops.
+			return count + instruction.keyRegisters.length * 3 - 1;
+		}
+		return count + 1;
+	}, 0);
+	expect(scalarizedCount - vmInstructions.length).toBe(19);
 });
 
 test("Annex B global var initialization remains an EMPTY scalar store", () => {

@@ -4684,6 +4684,23 @@ void mal_op_create_private_name(MalCallable *callable, const MalInstruction *ins
         mal_vm_op_create_private_name(callable->vm);
 }
 
+void mal_vm_op_create_private_names(
+    MalVm *vm, MalEnv *env, i32 owner_function_index, i32 count, const i32 *captured_indices
+) {
+    for (i32 i = 0; i < count; i++) {
+        mal_vm_store_captured(
+            env, owner_function_index, captured_indices[i], mal_vm_op_create_private_name(vm));
+    }
+}
+
+void mal_op_create_private_names(MalCallable *callable, const MalInstruction *instruction) {
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.create_private_names.data_offset);
+    mal_vm_op_create_private_names(
+        callable->vm, callable->env,
+        instruction->as.create_private_names.owner_function_index, data[0], &data[1]);
+}
+
 // Shared by the interpreter op and the native backend: AddPrivateName — install a
 // private field/method/brand on a freshly built instance or class object. A second
 // install of the same name on one object throws; sets vm->completion.
@@ -4719,6 +4736,27 @@ void mal_op_define_private(MalCallable *callable, const MalInstruction *instruct
         callable->registers[instruction->as.define_private.key],
         callable->registers[instruction->as.define_private.value]
     );
+}
+
+void mal_vm_op_init_private_fields(
+    MalVm *vm, MalValue object_value, i32 count, const MalValue *keys
+) {
+    for (i32 i = 0; i < count; i++) {
+        mal_vm_op_define_private(vm, object_value, keys[i], mal_value_new_undefined());
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+    }
+}
+
+void mal_op_init_private_fields(MalCallable *callable, const MalInstruction *instruction) {
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.init_private_fields.data_offset);
+    for (i32 i = 0; i < data[0]; i++) {
+        mal_vm_op_define_private(
+            callable->vm,
+            callable->registers[instruction->as.init_private_fields.object],
+            callable->registers[data[i + 1]], mal_value_new_undefined());
+        if (callable->vm->completion.kind == MAL_COMPLETION_THROW) return;
+    }
 }
 
 // Shared by the interpreter op and the native backend: PrivateGet. A receiver not

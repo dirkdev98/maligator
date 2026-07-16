@@ -228,6 +228,12 @@ function instructionData(fn: VmDefinition["functions"][number]): {
 					instruction.nameStringIndices.length,
 				);
 				break;
+			case "CREATE_PRIVATE_NAMES":
+				single(index, instruction.capturedIndices, instruction.capturedIndices.length);
+				break;
+			case "INIT_PRIVATE_FIELDS":
+				single(index, instruction.keyRegisters, instruction.keyRegisters.length);
+				break;
 		}
 	});
 
@@ -805,8 +811,12 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 			return `{ .opcode = MAL_OP_SET_FUNCTION_NAME, .as.set_function_name = { .func = ${instruction.func}, .key = ${instruction.key}, .prefix = ${instruction.prefix} } }`;
 		case "CREATE_PRIVATE_NAME":
 			return `{ .opcode = MAL_OP_CREATE_PRIVATE_NAME, .as.create_private_name = { .dst = ${instruction.dst} } }`;
+		case "CREATE_PRIVATE_NAMES":
+			return `{ .opcode = MAL_OP_CREATE_PRIVATE_NAMES, .as.create_private_names = { .owner_function_index = ${instruction.ownerFunctionIndex}, .data_offset = ${sideDataOffset()} } }`;
 		case "DEFINE_PRIVATE":
 			return `{ .opcode = MAL_OP_DEFINE_PRIVATE, .as.define_private = { .object = ${instruction.object}, .key = ${instruction.key}, .value = ${instruction.value} } }`;
+		case "INIT_PRIVATE_FIELDS":
+			return `{ .opcode = MAL_OP_INIT_PRIVATE_FIELDS, .as.init_private_fields = { .object = ${instruction.object}, .data_offset = ${sideDataOffset()} } }`;
 		case "LOAD_PRIVATE":
 			return `{ .opcode = MAL_OP_LOAD_PRIVATE, .as.load_private = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key} } }`;
 		case "STORE_PRIVATE":
