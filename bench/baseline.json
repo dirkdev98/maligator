@@ -2629,6 +2629,16 @@
         "malP99Ms": 0.8843329999999999,
         "nodeP99Ms": 0.877417
       }
+    },
+    {
+      "commit": "d1d7b45",
+      "dirty": false,
+      "compiler": {
+        "wallMs": 199.60075,
+        "sourceBytes": 163559,
+        "wireBytes": 200892,
+        "functionCount": 800
+      }
     }
   ]
 }
