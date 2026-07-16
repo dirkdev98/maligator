@@ -105,6 +105,8 @@ typedef enum WireOp {
     WIRE_GUARD_FUNCTION_INDEX,
     WIRE_LOAD_SUPER_PROPERTY,
     WIRE_INSTANTIATE_LITERAL_TEMPLATE,
+    WIRE_LOAD_ARGUMENT_COUNT,
+    WIRE_LOAD_ARGUMENT,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -563,6 +565,18 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
         case WIRE_CREATE_ARGUMENTS_OBJECT:
             o->opcode = MAL_OP_CREATE_ARGUMENTS_OBJECT;
             o->as.create_arguments_object.dst = rd_i32(r);
+            return;
+        case WIRE_LOAD_ARGUMENT_COUNT:
+            o->opcode = MAL_OP_LOAD_ARGUMENT_COUNT;
+            o->as.load_argument_count.dst = rd_i32(r);
+            return;
+        case WIRE_LOAD_ARGUMENT:
+            o->opcode = MAL_OP_LOAD_ARGUMENT;
+            o->as.load_argument.dst = rd_i32(r);
+            o->as.load_argument.index = rd_i32(r);
+            if (o->as.load_argument.index < 0) {
+                r->ok = false;
+            }
             return;
         case WIRE_LOAD_THIS:
             o->opcode = MAL_OP_LOAD_THIS;

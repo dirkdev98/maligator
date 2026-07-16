@@ -314,6 +314,8 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 			case "INSTANTIATE_LITERAL_TEMPLATE":
 			case "CREATE_FUNCTION":
 			case "CREATE_ARGUMENTS_OBJECT": // reads the raw args, no register operand
+			case "LOAD_ARGUMENT_COUNT": // reads arg_count, no register operand
+			case "LOAD_ARGUMENT": // reads the raw args, no register operand
 			case "CREATE_REST_ARGUMENTS": // reads the raw args, no register operand
 			case "DEFINE_PROPERTY": // object is the literal; key/value boxed boundary reads
 			case "LOAD_THIS":
@@ -1581,6 +1583,12 @@ function emitInstruction(
 			// function, which reaches the compiled frame via the `callee` parameter.
 			return [
 				`r${instruction.dst} = mal_create_arguments_object(vm, args, arg_count, callee, ${strict});`,
+			];
+		case "LOAD_ARGUMENT_COUNT":
+			return [`r${instruction.dst} = mal_value_from_i32(arg_count);`];
+		case "LOAD_ARGUMENT":
+			return [
+				`r${instruction.dst} = arg_count > ${instruction.index} ? args[${instruction.index}] : MAL_VALUE_UNDEFINED;`,
 			];
 		case "CREATE_REST_ARGUMENTS":
 			// A rest parameter `function f(...rest)`: the call arguments from

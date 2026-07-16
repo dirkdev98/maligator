@@ -37,8 +37,10 @@ roadmaps for everything else. Test262 verdict counts live only in
       The interpreted benchmark tracks row, side-table, and total bytecode bytes.
 - [ ] Revisit `MalVm` and host-structure layout when SMP creates multiple VMs.
 - [ ] Generate compiler/runtime opcode plumbing from one descriptor list.
-- [ ] Classify static `arguments` usage in semantic analysis so IR can avoid
-      materializing unused arguments objects.
+- [x] Classify binding-wide-safe `arguments.length` and constant-index reads in
+      semantic analysis. IR snapshots them from frame metadata/values without
+      materializing an arguments object; the arguments benchmark tracks both
+      backends' allocation, buffer, instruction, artifact, and wall-time effects.
 - [ ] Finish the accepted-but-unwired build configuration fields
       (`host.scheduler: "multiprocessing"`, `surface.maligator: false`) or reject
       them; add Intl locale subsetting.

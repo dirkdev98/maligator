@@ -1304,6 +1304,12 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_CREATE_ARGUMENTS_OBJECT:
                 mal_op_create_arguments_object(frame, instruction);
                 break;
+            case MAL_OP_LOAD_ARGUMENT_COUNT:
+                mal_op_load_argument_count(frame, instruction);
+                break;
+            case MAL_OP_LOAD_ARGUMENT:
+                mal_op_load_argument(frame, instruction);
+                break;
             case MAL_OP_LOAD_THIS:
                 mal_op_load_this(frame, instruction);
                 break;

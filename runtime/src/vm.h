@@ -31,6 +31,8 @@ typedef enum MalOpcode {
     MAL_OP_CREATE_NULL,
     MAL_OP_CREATE_FUNCTION,
     MAL_OP_CREATE_ARGUMENTS_OBJECT,
+    MAL_OP_LOAD_ARGUMENT_COUNT,
+    MAL_OP_LOAD_ARGUMENT,
     MAL_OP_LOAD_THIS,
     MAL_OP_LOAD_NEW_TARGET,
     MAL_OP_LOAD_CALLEE,
@@ -296,6 +298,14 @@ typedef struct MalInstruction {
         struct {
             i32 dst;
         } create_arguments_object;
+
+        struct {
+            i32 dst;
+        } load_argument_count;
+
+        struct {
+            i32 dst, index;
+        } load_argument;
 
         struct {
             i32 dst;

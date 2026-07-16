@@ -61,6 +61,8 @@ const instructions: Array<VmInstruction> = [
 	},
 	{ opcode: "ITERATOR_CLOSE", iterator: 10, normal: true },
 	{ opcode: "SET_PROTOTYPE", object: 10, prototype: 13, literal: true },
+	{ opcode: "LOAD_ARGUMENT_COUNT", dst: 14 },
+	{ opcode: "LOAD_ARGUMENT", dst: 14, index: 2 },
 	{ opcode: "TRY_END" },
 	{ opcode: "ENV_PUSH", scopeId: -2, slotCount: 1 },
 	{ opcode: "ENV_POP" },
@@ -76,7 +78,7 @@ const mainFn: VmFunction = {
 	registerCount: 15,
 	capturedCount: 0,
 	strict: true,
-	needsArguments: false,
+	needsArguments: true,
 	isDerivedConstructor: false,
 	isClassConstructor: false,
 	hasPrototype: true,
@@ -253,6 +255,20 @@ describe("serialize-vm", () => {
 		expect(() => deserializeVmDefinition(Uint8Array.from([...wire, 0]))).toThrow(
 			/trailing data/,
 		);
+	});
+
+	it("rejects negative direct argument indices", () => {
+		const probe: VmDefinition = {
+			...definition,
+			functions: [
+				{
+					...mainFn,
+					instructions: [{ opcode: "LOAD_ARGUMENT", dst: 0, index: -1 }],
+				},
+			],
+			functionCount: 1,
+		};
+		expect(() => serializeVmDefinition(probe)).toThrow(/negative argument index/);
 	});
 
 	it("drops the vestigial TRY_BEGIN.handlerIp (restored as 0)", () => {

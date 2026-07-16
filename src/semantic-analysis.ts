@@ -48,6 +48,15 @@ export interface SemanticFile {
 	withDynamicNodes: Set<ESTree.Node>;
 
 	/**
+	 * Implicit `arguments` identifier reads proven to be direct, non-escaping
+	 * frame accesses. IR may read the frame count/value without constructing the
+	 * arguments object. The map is populated only when every use of that binding
+	 * is safe, so one mutation, escape, arrow capture, `with`, or eval use keeps
+	 * the whole binding on the ordinary object path.
+	 */
+	staticArgumentsAccesses: Map<ESTree.Node, StaticArgumentsAccess>;
+
+	/**
 	 * Function-defining nodes (and the top-level Program) poisoned by a *direct*
 	 * eval — `eval(...)` resolving to the global eval, not a shadowing local —
 	 * anywhere in their lexical region. Direct eval can read and mutate every
@@ -60,6 +69,10 @@ export interface SemanticFile {
 	 */
 	hasDirectEval: Set<ESTree.Node>;
 }
+
+export type StaticArgumentsAccess =
+	| { member: ESTree.MemberExpression; kind: "length" }
+	| { member: ESTree.MemberExpression; kind: "index"; index: number };
 
 export interface Scope {
 	parent: Scope | null;
@@ -192,6 +205,7 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		nodeToScope: new Map(),
 		nodeToBinding: new Map(),
 		withDynamicNodes: new Set(),
+		staticArgumentsAccesses: new Map(),
 		hasDirectEval: new Set(),
 	};
 
@@ -245,6 +259,7 @@ export function analyzeFile(file: SemanticFile) {
 	}
 	registerBindingUsage(file.ast, file);
 	detectDirectEval(file.ast, file);
+	classifyStaticArgumentsUsage(file);
 	calculateBindingScopedTo(file);
 }
 
@@ -278,6 +293,13 @@ function detectDirectEval(node: ESTree.Node, file: SemanticFile) {
 			// `undeclared` == resolves to the global eval, not a shadowing local. A
 			// local `eval` (or an imported one) is a normal call, not direct eval.
 			if (binding?.undeclared) {
+				const argumentsBinding = resolveArgumentsBinding(file.nodeToScope.get(node));
+				if (argumentsBinding) {
+					// Eval source can dynamically name `arguments`; record a non-static
+					// use and retain the binding for direct-eval scope marshaling.
+					argumentsBinding.usageNodes.push(node);
+					file.nodeToBinding.set(node, argumentsBinding);
+				}
 				// Mark this call's enclosing function and every function above it: a
 				// nested direct eval can still address an outer function's locals.
 				let scope: Scope | null | undefined = file.nodeToScope.get(node);
@@ -292,6 +314,198 @@ function detectDirectEval(node: ESTree.Node, file: SemanticFile) {
 	}
 
 	recurseAst(node, detectDirectEval, file);
+}
+
+/** Resolve the `arguments` binding visible at a direct-eval call site. */
+function resolveArgumentsBinding(scope: Scope | undefined): Binding | undefined {
+	for (let current: Scope | null | undefined = scope; current; current = current.parent) {
+		const existing = current.bindings.find((binding) => binding.name === "arguments");
+		if (existing) {
+			return existing;
+		}
+		if (
+			current.node.type === "FunctionDeclaration" ||
+			current.node.type === "FunctionExpression"
+		) {
+			const binding: Binding = {
+				kind: "var",
+				name: "arguments",
+				implicit: "arguments",
+				declarationNode: current.node,
+				usageNodes: [],
+			};
+			current.bindings.push(binding);
+			return binding;
+		}
+		if (
+			current.node.type === "PropertyDefinition" ||
+			current.node.type === "StaticBlock"
+		) {
+			return undefined;
+		}
+	}
+	return undefined;
+}
+
+/** Canonical array-index property represented by a literal, if any. */
+function staticArgumentsIndex(member: ESTree.MemberExpression): number | undefined {
+	if (!member.computed || member.property.type !== "Literal") {
+		return undefined;
+	}
+	const value = member.property.value;
+	const index =
+		typeof value === "number" ? value : typeof value === "string" ? Number(value) : -1;
+	if (!Number.isInteger(index) || index < 0 || index > 0xfffffffe) {
+		return undefined;
+	}
+	if (typeof value === "string" && String(index) !== value) {
+		return undefined;
+	}
+	return index;
+}
+
+/** Whether `member` is evaluated as a value rather than a reference target/receiver. */
+function isDirectArgumentsRead(
+	member: ESTree.MemberExpression,
+	parents: Map<ESTree.Node, ESTree.Node>,
+): boolean {
+	let current: ESTree.Node = member;
+	for (;;) {
+		const parent = parents.get(current);
+		if (!parent) return true;
+		if (parent.type === "ChainExpression") {
+			current = parent;
+			continue;
+		}
+		if (
+			(parent.type === "CallExpression" || parent.type === "NewExpression") &&
+			parent.callee === current
+		) {
+			return false;
+		}
+		if (parent.type === "TaggedTemplateExpression" && parent.tag === current) {
+			return false;
+		}
+		if (parent.type === "AssignmentExpression") {
+			return parent.left !== current;
+		}
+		if (parent.type === "UpdateExpression" && parent.argument === current) {
+			return false;
+		}
+		if (parent.type === "UnaryExpression" && parent.operator === "delete") {
+			return false;
+		}
+		if (
+			(parent.type === "ForInStatement" || parent.type === "ForOfStatement") &&
+			parent.left === current
+		) {
+			return false;
+		}
+		if (
+			parent.type === "ArrayPattern" ||
+			parent.type === "ObjectPattern" ||
+			parent.type === "RestElement" ||
+			parent.type === "AssignmentPattern" ||
+			parent.type === "Property"
+		) {
+			current = parent;
+			continue;
+		}
+		return true;
+	}
+}
+
+/** A direct read cannot outlive its owning frame through an arrow closure. */
+function accessIsInOwningFunction(
+	file: SemanticFile,
+	usage: ESTree.Node,
+	binding: Binding,
+): boolean {
+	const owner = file.scopes.find((scope) => scope.bindings.includes(binding));
+	if (!owner) return false;
+	for (
+		let scope: Scope | null | undefined = file.nodeToScope.get(usage);
+		scope;
+		scope = scope.parent
+	) {
+		if (scope === owner) return true;
+		if (
+			scope.node.type === "ArrowFunctionExpression" ||
+			scope.node.type === "FunctionDeclaration" ||
+			scope.node.type === "FunctionExpression"
+		) {
+			return false;
+		}
+	}
+	return false;
+}
+
+/**
+ * Classify binding-wide-safe `arguments.length` and canonical constant-index
+ * reads. ECMAScript creates one mutable arguments object binding per non-arrow
+ * function, so optimization is all-or-nothing for that binding: any observable
+ * object use retains CreateMapped/UnmappedArgumentsObject behavior.
+ */
+function classifyStaticArgumentsUsage(file: SemanticFile): void {
+	const parents = new Map<ESTree.Node, ESTree.Node>();
+	const candidates = new Map<Binding, Map<ESTree.Node, StaticArgumentsAccess>>();
+
+	const visit = (node: ESTree.Node, parent?: ESTree.Node): void => {
+		if (parent) parents.set(node, parent);
+		if (node.type === "MemberExpression" && node.object.type === "Identifier") {
+			const identifier = node.object;
+			const binding = file.nodeToBinding.get(identifier);
+			if (
+				binding?.implicit === "arguments" &&
+				!file.withDynamicNodes.has(identifier) &&
+				accessIsInOwningFunction(file, identifier, binding)
+			) {
+				let access: StaticArgumentsAccess | undefined;
+				if (
+					!node.computed &&
+					node.property.type === "Identifier" &&
+					node.property.name === "length"
+				) {
+					access = { member: node, kind: "length" };
+				} else {
+					const index = staticArgumentsIndex(node);
+					if (index !== undefined) access = { member: node, kind: "index", index };
+				}
+				if (access) {
+					const byNode =
+						candidates.get(binding) ?? new Map<ESTree.Node, StaticArgumentsAccess>();
+					byNode.set(identifier, access);
+					candidates.set(binding, byNode);
+				}
+			}
+		}
+		for (const key of Object.keys(node)) {
+			const value: unknown = node[key as keyof ESTree.Node];
+			if (typeof value === "object" && value !== null && "type" in value) {
+				visit(value as ESTree.Node, node);
+			} else if (Array.isArray(value)) {
+				for (const item of value) {
+					if (typeof item === "object" && item !== null && "type" in item) {
+						visit(item as ESTree.Node, node);
+					}
+				}
+			}
+		}
+	};
+	visit(file.ast);
+
+	for (const [binding, byNode] of candidates) {
+		if (
+			binding.usageNodes.length > 0 &&
+			binding.usageNodes.every(
+				(usage) =>
+					byNode.has(usage) && isDirectArgumentsRead(byNode.get(usage)!.member, parents),
+			)
+		) {
+			for (const [usage, access] of byNode)
+				file.staticArgumentsAccesses.set(usage, access);
+		}
+	}
 }
 
 /**
@@ -830,9 +1044,9 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 			(recurseScope.node.type === "FunctionDeclaration" ||
 				recurseScope.node.type === "FunctionExpression")
 		) {
-			// Semantic analysis does not yet classify static arguments usage, so IR cannot avoid
-			// materializing the arguments object for direct non-escaping reads like
-			// arguments.length and arguments[0].
+			// Create the implicit binding lazily. A later semantic pass classifies
+			// binding-wide-safe direct reads for raw frame access; all other uses keep
+			// the ordinary arguments-object path.
 			const binding: Binding = {
 				kind: "var",
 				name: "arguments",

@@ -114,6 +114,8 @@ export const WIRE_OPCODES = [
 	"GUARD_FUNCTION_INDEX",
 	"LOAD_SUPER_PROPERTY",
 	"INSTANTIATE_LITERAL_TEMPLATE",
+	"LOAD_ARGUMENT_COUNT",
+	"LOAD_ARGUMENT",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -612,12 +614,18 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 		case "CREATE_EMPTY":
 		case "CREATE_NULL":
 		case "CREATE_ARGUMENTS_OBJECT":
+		case "LOAD_ARGUMENT_COUNT":
 		case "LOAD_THIS":
 		case "LOAD_NEW_TARGET":
 		case "LOAD_CALLEE":
 		case "CATCH":
 		case "CREATE_PRIVATE_NAME":
 			w.i32(i.dst);
+			return;
+		case "LOAD_ARGUMENT":
+			if (i.index < 0) throw new RangeError("serialize-vm: negative argument index");
+			w.i32(i.dst);
+			w.i32(i.index);
 			return;
 		case "CREATE_OBJECT_SHAPED":
 			w.i32(i.dst);
@@ -1109,6 +1117,14 @@ function readInstruction(r: Reader): VmInstruction {
 			return { opcode, dst: r.i32() };
 		case "CREATE_ARGUMENTS_OBJECT":
 			return { opcode, dst: r.i32() };
+		case "LOAD_ARGUMENT_COUNT":
+			return { opcode, dst: r.i32() };
+		case "LOAD_ARGUMENT": {
+			const dst = r.i32();
+			const index = r.i32();
+			if (index < 0) throw new RangeError("serialize-vm: negative argument index");
+			return { opcode, dst, index };
+		}
 		case "LOAD_THIS":
 			return { opcode, dst: r.i32() };
 		case "LOAD_NEW_TARGET":

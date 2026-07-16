@@ -108,3 +108,16 @@ test("no eval anywhere leaves the set empty", () => {
 	const file = analyze(`function f() { let x = 1; return x; }`);
 	expect(file.hasDirectEval.size).toBe(0);
 });
+
+test("direct eval is a conservative use of lexical arguments through an arrow", () => {
+	const file = analyze(`
+		function outer() {
+			return () => eval("arguments.length");
+		}
+	`);
+	const evalCall = findNode(file.ast, "CallExpression")!;
+	const binding = file.nodeToBinding.get(evalCall);
+	expect(binding?.implicit).toBe("arguments");
+	expect(binding?.scopedTo).toBe("captured");
+	expect(binding?.usageNodes).toContain(evalCall);
+});

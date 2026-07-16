@@ -360,6 +360,8 @@ export interface IRFunction {
 
 	blocks: Array<IRBlock>;
 	argumentsObjectRegister?: number;
+	/** Prologue snapshots for statically classified direct arguments reads. */
+	staticArgumentsRegisters?: Map<ESTree.Node, number>;
 	classContext?: IRClassContext;
 
 	/**
@@ -701,6 +703,17 @@ export type IRInstruction =
 
 			// [destination]
 			registers: [number];
+	  }
+	| {
+			// Direct non-escaping `arguments.length` from frame metadata.
+			type: "loadArgumentCount";
+			registers: [number];
+	  }
+	| {
+			// Direct non-escaping `arguments[index]` from the retained argument slice.
+			type: "loadArgument";
+			registers: [number];
+			index: number;
 	  }
 	| {
 			type: "loadThis";
@@ -3707,7 +3720,25 @@ function compileFunctionParams(
 	// initialization never mutates; creating it before the parameter logic
 	// keeps it available to default value expressions.
 	const argumentsBinding = getArgumentsBinding(fn, node);
-	if (argumentsBinding && argumentsBinding.usageNodes.length > 0) {
+	if (argumentsBinding) {
+		for (const usage of argumentsBinding.usageNodes) {
+			const access = fn.semanticFile.staticArgumentsAccesses.get(usage);
+			if (!access) continue;
+			const destination = nextRegisterDestination(fn);
+			block.instructions.push(
+				access.kind === "length"
+					? { type: "loadArgumentCount", registers: [destination] }
+					: { type: "loadArgument", registers: [destination], index: access.index },
+			);
+			(fn.staticArgumentsRegisters ??= new Map()).set(usage, destination);
+		}
+	}
+	if (
+		argumentsBinding &&
+		argumentsBinding.usageNodes.some(
+			(usage) => !fn.semanticFile.staticArgumentsAccesses.has(usage),
+		)
+	) {
 		const destination = nextRegisterDestination(fn);
 		fn.argumentsObjectRegister = destination;
 		block.instructions.push({
@@ -9395,6 +9426,16 @@ function compileMemberExpression(
 	cursor: IRCursor,
 	memberExpression: ESTree.MemberExpression,
 ): number {
+	if (memberExpression.object.type === "Identifier") {
+		const access = fn.semanticFile.staticArgumentsAccesses.get(memberExpression.object);
+		if (access?.member === memberExpression) {
+			const snapshot = fn.staticArgumentsRegisters?.get(memberExpression.object);
+			if (snapshot === undefined) {
+				throw new Error("Missing static arguments snapshot register");
+			}
+			return snapshot;
+		}
+	}
 	if (memberExpression.property.type === "PrivateIdentifier") {
 		// Private access is never on super and never computed.
 		const object = compileExpression(program, fn, cursor, memberExpression.object);
@@ -9683,7 +9724,8 @@ function compileSpreadArgumentsArray(
  * params/locals and the block bindings in scope at the call site (nearest
  * shadows outer). Globals and undeclared names are excluded: the eval'd code
  * reaches those through the global fallback. Enclosing-function bindings are not
- * marshaled yet (they would need promotion to captured slots).
+ * generally marshaled yet; lexical `arguments` through an arrow is the exception,
+ * because semantic classification promotes that binding to a captured slot.
  */
 function visibleBindingsForDirectEval(
 	fn: IRFunction,
@@ -9705,6 +9747,10 @@ function visibleBindingsForDirectEval(
 			break; // stop at the current function; enclosing scopes are not marshaled yet
 		}
 		scope = scope.parent;
+	}
+	const argumentsBinding = fn.semanticFile.nodeToBinding.get(callNode);
+	if (argumentsBinding && !result.has("arguments")) {
+		result.set("arguments", argumentsBinding);
 	}
 	return result;
 }

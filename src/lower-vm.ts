@@ -240,6 +240,15 @@ export type VmInstruction =
 			dst: number;
 	  }
 	| {
+			opcode: "LOAD_ARGUMENT_COUNT";
+			dst: number;
+	  }
+	| {
+			opcode: "LOAD_ARGUMENT";
+			dst: number;
+			index: number;
+	  }
+	| {
 			opcode: "LOAD_THIS";
 			dst: number;
 	  }
@@ -754,7 +763,8 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 	const needsArguments = instructions.some(
 		(instruction) =>
 			instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
-			instruction.opcode === "CREATE_REST_ARGUMENTS",
+			instruction.opcode === "CREATE_REST_ARGUMENTS" ||
+			instruction.opcode === "LOAD_ARGUMENT",
 	);
 
 	// GC root-frame minimization (C1): the native backend spills only registers
@@ -964,6 +974,17 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "CREATE_ARGUMENTS_OBJECT",
 				dst: instruction.registers[0],
+			};
+		case "loadArgumentCount":
+			return {
+				opcode: "LOAD_ARGUMENT_COUNT",
+				dst: instruction.registers[0],
+			};
+		case "loadArgument":
+			return {
+				opcode: "LOAD_ARGUMENT",
+				dst: instruction.registers[0],
+				index: instruction.index,
 			};
 		case "loadThis":
 			return {

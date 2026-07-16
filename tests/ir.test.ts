@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "../src/ir.ts";
+import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
 import { parseScript } from "../src/parser.ts";
 import { allocateRegisters } from "../src/register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
@@ -52,6 +53,89 @@ test("implicit arguments reads observe assignment through binding storage", () =
 		type: "loadLocal",
 		index: stores[0]!.type === "storeLocal" ? stores[0].index : -1,
 	});
+});
+
+test("direct arguments count and constant-index reads avoid object materialization", () => {
+	const program = compileScript(`
+		function count(){ return arguments.length; }
+		function first(){ return arguments[0]; }
+	`);
+	const count = functionNamed(program, "count");
+	const first = functionNamed(program, "first");
+
+	expect(instructionsOf(count)).toContainEqual({
+		type: "loadArgumentCount",
+		registers: [0],
+	});
+	expect(instructionsOf(first)).toContainEqual({
+		type: "loadArgument",
+		registers: [0],
+		index: 0,
+	});
+	for (const fn of [count, first]) {
+		expect(fn.argumentsObjectRegister).toBeUndefined();
+		expect(
+			instructionsOf(fn).some(
+				(instruction) => instruction.type === "createArgumentsObject",
+			),
+		).toBe(false);
+	}
+
+	const definition = lowerIrProgramToVmDefinition(program);
+	expect(definition.functions[count.functionIndex]!.needsArguments).toBe(false);
+	expect(definition.functions[first.functionIndex]!.needsArguments).toBe(true);
+});
+
+test("observable arguments object uses make direct reads fall back together", () => {
+	const program = compileScript(`
+		function escape(flag){ return flag ? arguments[0] : arguments; }
+		function mutate(){ arguments[0] = 2; return arguments[0]; }
+		function callee(){ return arguments.callee; }
+		function outer(){ return () => arguments.length; }
+	`);
+	for (const name of ["escape", "mutate", "callee", "outer"]) {
+		const fn = functionNamed(program, name);
+		expect(
+			instructionsOf(fn).some(
+				(instruction) => instruction.type === "createArgumentsObject",
+			),
+		).toBe(true);
+		expect(
+			instructionsOf(fn).some(
+				(instruction) =>
+					instruction.type === "loadArgument" || instruction.type === "loadArgumentCount",
+			),
+		).toBe(false);
+	}
+});
+
+test("direct eval conservatively materializes and marshals implicit arguments", () => {
+	const program = compileScript(`function f(){ return eval("arguments[0]"); }`);
+	const fn = functionNamed(program, "f");
+	expect(
+		instructionsOf(fn).some(
+			(instruction) => instruction.type === "createArgumentsObject",
+		),
+	).toBe(true);
+	const argumentsNameIndex = program.stringConstants.findIndex(
+		(value) => String.fromCharCode(...value) === "arguments",
+	);
+	const instructions = instructionsOf(fn);
+	const key = instructions.find(
+		(instruction) =>
+			instruction.type === "createString" &&
+			instruction.stringIndex === argumentsNameIndex,
+	);
+	expect(key?.type).toBe("createString");
+	expect(
+		instructions.some(
+			(instruction) =>
+				instruction.type === "storeProperty" &&
+				key?.type === "createString" &&
+				instruction.registers[1] === key.registers[0],
+		),
+	).toBe(true);
+	expect(argumentsNameIndex).toBeGreaterThanOrEqual(0);
 });
 
 test("var declarations initialize once in the owning prologue", () => {

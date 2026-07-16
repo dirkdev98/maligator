@@ -182,6 +182,8 @@ void mal_op_create_null(MalCallable *callable, const MalInstruction *instruction
 void mal_op_create_function(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_create_arguments_object(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_load_argument_count(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_load_argument(MalCallable *callable, const MalInstruction *instruction);
 
 // Build an unmapped arguments object over `args`; shared by the interpreter op
 // and compiled code. `callee` is exposed only in sloppy mode (strict poisons it).

@@ -1037,6 +1037,18 @@ void mal_op_create_arguments_object(MalCallable *callable, const MalInstruction 
     callable->registers[instruction->as.create_arguments_object.dst] = callable->arguments_object;
 }
 
+void mal_op_load_argument_count(MalCallable *callable, const MalInstruction *instruction) {
+    callable->registers[instruction->as.load_argument_count.dst] =
+        mal_value_from_i32(callable->argument_count);
+}
+
+void mal_op_load_argument(MalCallable *callable, const MalInstruction *instruction) {
+    i32 index = instruction->as.load_argument.index;
+    callable->registers[instruction->as.load_argument.dst] = index >= 0 && index < callable->argument_count
+        ? callable->arguments[index]
+        : mal_value_new_undefined();
+}
+
 void mal_op_load_this(MalCallable *callable, const MalInstruction *instruction) {
     // GetThisBinding: `this` in a derived constructor is in a TDZ until super()
     // binds it. Reading it (directly, or as the receiver of a super property
