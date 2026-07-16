@@ -82,13 +82,12 @@ function programCountType(source: string, type: string): number {
 
 test("a branching, multi-return local function is inlined block-wise", () => {
 	// `clamp` has three return points across multiple blocks; the multi-block path
-	// splices its blocks + a join block and converts each return. Inlining cascades
-	// (clamp into the IIFE, the IIFE into top level), so assert program-wide: the
-	// direct calls disappear, and clamp's branching body (jumpIf) lands somewhere.
-	const source = `(function (){
+	// splices its blocks + a join block and converts each return. Keep the input
+	// dynamic so constant folding cannot remove the branch after inlining.
+	const source = `globalThis.clamped = function (value) {
 			function clamp(x, lo, hi){ if (x < lo) return lo; if (x > hi) return hi; return x; }
-			return clamp(5, 0, 10) + clamp(-1, 0, 10);
-		})();`;
+			return clamp(value, 0, 10);
+		};`;
 	expect(programCountType(source, "call")).toBe(0);
 	expect(programCountType(source, "jumpIf")).toBeGreaterThan(0);
 });

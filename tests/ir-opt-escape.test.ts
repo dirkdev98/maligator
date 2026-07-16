@@ -160,7 +160,7 @@ test("a record escaping through an alias copy is NOT replaced", () => {
 test("a record whose alias is reassigned is NOT replaced", () => {
 	// `q` is not single-assignment, so the closure cannot prove it always holds p.
 	const fn = nested(
-		`(function (a, c){ const p = { x: a }; let q = p; if (c) q = { x: 9 }; return q.x; })(0, true);`,
+		`globalThis.f = function (a, c) { const p = { x: a }; let q = p; if (c) q = { x: 9 }; return q.x; };`,
 	);
 	expect(countOp(fn, "createObjectShaped")).toBe(2);
 });
