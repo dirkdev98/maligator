@@ -13,3 +13,8 @@
  * the length to *len.
  */
 const u8 *mal_compiler_wire_bytes(usize *len);
+
+#if MAL_EVAL
+/** Link-visible backing bytes, also reused by the redistributable CLI asset. */
+extern const u8 mal_compiler_wire_data[];
+#endif

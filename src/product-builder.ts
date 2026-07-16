@@ -66,9 +66,15 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		{ buildConfig: config, stripTypes: stripTypesWithTypeScript },
 	);
 	const definition = compileSemanticProgramToVmDefinition(semanticProgram);
+	const assets = includeConfiguredAssets(config.assets, repositoryRoot);
+	const compilerWire = assets.find((asset) => asset.name === "compilerWire");
+	if (compilerWire?.files.length !== 1) {
+		throw new Error("Product compilerWire asset must contain exactly one file");
+	}
+	compilerWire.files[0]!.embeddedSymbol = "mal_compiler_wire_data";
 	const cSource = emitVmDefinition(definition, {
 		compiled: true,
-		assets: includeConfiguredAssets(config.assets, repositoryRoot),
+		assets,
 		maligatorSurface: config.surface.maligator,
 	});
 	const derivation = buildDerivationFromConfig(config);

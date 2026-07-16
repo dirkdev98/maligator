@@ -125,4 +125,30 @@ describe("emit-vm instruction packing", () => {
 			".instruction_data_count = 0,\n        .instruction_data = nullptr",
 		);
 	});
+
+	it("aliases an asset to existing linked immutable bytes", () => {
+		const output = emitVmDefinition(definition, {
+			compiled: false,
+			assets: [
+				{
+					name: "compilerWire",
+					type: "file",
+					hash: "hash",
+					version: "1",
+					files: [
+						{
+							path: "compiler.malw",
+							sourcePath: "/unused/compiler.malw",
+							size: 825_000,
+							digest: "digest",
+							embeddedSymbol: "mal_compiler_wire_data",
+						},
+					],
+				},
+			],
+		});
+		expect(output).toContain("extern const u8 mal_compiler_wire_data[];");
+		expect(output).toContain(".data = mal_compiler_wire_data, .length = 825000");
+		expect(output).not.toContain('#embed "/unused/compiler.malw"');
+	});
 });

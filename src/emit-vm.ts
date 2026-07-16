@@ -426,10 +426,23 @@ function malVmDefinitionStruct(
 		lines.push("};", "");
 	}
 
+	const embeddedAssetSymbols = new Set(
+		assets.flatMap((asset) =>
+			asset.files.flatMap((file) =>
+				file.embeddedSymbol === undefined ? [] : [file.embeddedSymbol],
+			),
+		),
+	);
+	for (const symbol of embeddedAssetSymbols) {
+		lines.push(`extern const u8 ${symbol}[];`);
+	}
+	if (embeddedAssetSymbols.size > 0) lines.push("");
+
 	for (let assetIndex = 0; assetIndex < assets.length; assetIndex++) {
 		const asset = assets[assetIndex]!;
 		for (let fileIndex = 0; fileIndex < asset.files.length; fileIndex++) {
 			const file = asset.files[fileIndex]!;
+			if (file.embeddedSymbol !== undefined) continue;
 			const symbol = `mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}`;
 			if (file.size === 0) {
 				lines.push(`static const u8 ${symbol}[] = { 0 };`);
@@ -444,8 +457,10 @@ function malVmDefinitionStruct(
 		lines.push(`static const MalAssetFile mal_asset_${assetIndex}_files${suffix}[] = {`);
 		for (let fileIndex = 0; fileIndex < asset.files.length; fileIndex++) {
 			const file = asset.files[fileIndex]!;
+			const symbol =
+				file.embeddedSymbol ?? `mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}`;
 			lines.push(
-				`    { .path = "${cEscapeString(file.path)}", .data = mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}, .length = ${file.size} },`,
+				`    { .path = "${cEscapeString(file.path)}", .data = ${symbol}, .length = ${file.size} },`,
 			);
 		}
 		lines.push("};", "");

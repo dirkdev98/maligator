@@ -8,13 +8,13 @@
 #ifndef MAL_COMPILER_WIRE
 #error "MAL_COMPILER_WIRE must name the cached compiler wire"
 #endif
-static const u8 k_compiler_wire[] = {
+const u8 mal_compiler_wire_data[] = {
 #embed MAL_COMPILER_WIRE
 };
 
 const u8 *mal_compiler_wire_bytes(usize *len) {
-    *len = sizeof(k_compiler_wire);
-    return k_compiler_wire;
+    *len = sizeof(mal_compiler_wire_data);
+    return mal_compiler_wire_data;
 }
 
 #else

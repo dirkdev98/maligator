@@ -14,6 +14,8 @@ export interface IncludedAssetFile {
 	sourcePath: string;
 	size: number;
 	digest: string;
+	/** Existing linked C byte-array symbol used instead of emitting another #embed. */
+	embeddedSymbol?: string;
 }
 
 export interface IncludedAsset {
