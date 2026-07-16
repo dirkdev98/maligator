@@ -366,3 +366,6 @@ void mal_vm_throw_error_value(MalVm *vm, MalIntrinsic prototype_slot, MalValue m
 
 /** Set the pending completion to the preallocated, non-allocating OOM exception. */
 void mal_vm_throw_allocation_error(MalVm *vm);
+
+/** Preallocate the singleton OOM exception without capturing a stack trace. */
+MalValue mal_vm_create_allocation_error(MalVm *vm);

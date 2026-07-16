@@ -511,6 +511,17 @@ void mal_vm_throw_allocation_error(MalVm *vm) {
     };
 }
 
+MalValue mal_vm_create_allocation_error(MalVm *vm) {
+    MalObject *error = mal_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_PROTOTYPE]));
+    mal_error_mark_error_data(vm, error);
+    mal_intrinsic_define_data(
+        vm, error, "message", mal_value_from_string(mal_intrinsic_ascii(vm, "Out of memory")),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    error->extensible = false;
+    return mal_value_from_object(error);
+}
+
 static MalObject *mal_builtin_error_install_kind(
     MalVm *vm,
     const byte *name,

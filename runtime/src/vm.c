@@ -372,15 +372,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
 
     mal_intrinsics_init(vm);
 
-    // Build the emergency exception while allocation is healthy. Its throw path
-    // later only copies this rooted value into completion and cannot recurse.
-    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Out of memory");
-    vm->allocation_error = vm->completion.value;
-    mal_value_to_object(vm->allocation_error)->extensible = false;
-    vm->completion = (MalCompletion) {
-        .kind = MAL_COMPLETION_NORMAL,
-        .value = MAL_VALUE_UNDEFINED,
-    };
+    // Build the emergency exception while allocation is healthy, without normal
+    // stack capture. Its throw path later only copies this rooted value.
+    vm->allocation_error = mal_vm_create_allocation_error(vm);
 
     // CommonJS module registry: one lazily-loaded slot per CJS module.
     if (definition->cjs_module_count > 0) {
