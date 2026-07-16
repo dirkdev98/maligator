@@ -9,6 +9,8 @@
  *               (full / no-eval / no-realms / no-intl / no-web / no-regexp /
  *               minimal) — the "small binary" goal, one row per config so each
  *               feature flag's marginal bytes are tracked. No V8 compare.
+ *   - compiler  Node-hosted front-end throughput and serialized wire bytes for a
+ *               deterministic, constant-heavy multi-function source corpus.
  *   - language  bench/language.js wall time vs Node/V8 (wide instruction coverage).
  *   - module    bench/module-alloc.mjs: an ES module whose top-level const-bound
  *               helpers are composed in a hot allocation loop. Wall time vs V8 plus
@@ -52,6 +54,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { MaligatorBuildConfig } from "../src/build-config.ts";
+import { compileSourceToBuffer } from "../src/compile.ts";
 import {
 	buildNativeBinary,
 	buildNativeBinaryResult,
@@ -72,6 +75,12 @@ interface LanguageMetrics {
 	malMs: number;
 	nodeMs: number;
 	ratio: number;
+}
+interface CompilerMetrics {
+	wallMs: number;
+	sourceBytes: number;
+	wireBytes: number;
+	functionCount: number;
 }
 interface ModuleMetrics {
 	malMs: number;
@@ -179,6 +188,7 @@ interface Entry {
 	dirty: boolean;
 	/** Per-config binary/archive bytes (keyed by SIZE_PROFILES name). */
 	size?: Record<string, SizeMetrics>;
+	compiler?: CompilerMetrics;
 	language?: LanguageMetrics;
 	module?: ModuleMetrics;
 	string?: StringMetrics;
@@ -304,6 +314,40 @@ function benchSize(): Record<string, SizeMetrics> {
 		};
 	}
 	return result;
+}
+
+// ---- compiler (Node-hosted front end) -------------------------------------
+
+const COMPILER_FUNCTION_COUNT = 800;
+
+function compilerSource(): string {
+	return Array.from(
+		{ length: COMPILER_FUNCTION_COUNT },
+		(_, index) =>
+			`function compilerBench${index}(a, b) {
+	const folded = ((${index} + 17) * 9 - 11) / 2;
+	const selected = (${index} & 1) === 0 ? folded + 3 : folded - 5;
+	if ((${index} % 5) === 3) return a + selected;
+	return b + selected;
+}`,
+	).join("\n");
+}
+
+function benchCompiler(runs: number): CompilerMetrics {
+	const source = compilerSource();
+	let wire = compileSourceToBuffer(source);
+	const times: Array<number> = [];
+	for (let i = 0; i < runs; i++) {
+		const start = process.hrtime.bigint();
+		wire = compileSourceToBuffer(source);
+		times.push(Number(process.hrtime.bigint() - start) / 1e6);
+	}
+	return {
+		wallMs: median(times),
+		sourceBytes: Buffer.byteLength(source),
+		wireBytes: wire.byteLength,
+		functionCount: COMPILER_FUNCTION_COUNT,
+	};
 }
 
 // ---- language (vs V8) -----------------------------------------------------
@@ -847,6 +891,19 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			`  gc        ${entry.module.collections} collections${regressed}, ${entry.module.peakLiveKb.toFixed(1)}KB peak live`,
 		);
 	}
+	if (entry.compiler) {
+		const p = previous?.compiler;
+		console.log("compiler (Node-hosted front end):");
+		console.log(
+			`  wall      ${entry.compiler.wallMs.toFixed(1)}ms${delta(entry.compiler.wallMs, p?.wallMs)}`,
+		);
+		console.log(
+			`  corpus    ${entry.compiler.functionCount} functions, ${humanBytes(entry.compiler.sourceBytes)} source`,
+		);
+		console.log(
+			`  wire      ${humanBytes(entry.compiler.wireBytes)}${delta(entry.compiler.wireBytes, p?.wireBytes)}`,
+		);
+	}
 	if (entry.string) {
 		const p = previous?.string;
 		console.log("string (String + RegExp; vs V8):");
@@ -993,6 +1050,7 @@ const which =
 		? selected
 		: [
 				"size",
+				"compiler",
 				"language",
 				"module",
 				"string",
@@ -1009,6 +1067,7 @@ const { commit, dirty } = gitInfo();
 const entry: Entry = { commit, dirty };
 
 if (which.includes("size")) entry.size = benchSize();
+if (which.includes("compiler")) entry.compiler = benchCompiler(runs);
 if (which.includes("language")) entry.language = benchLanguage(runs);
 if (which.includes("module")) entry.module = benchModule(runs);
 if (which.includes("string")) entry.string = benchString(runs);
