@@ -199,7 +199,7 @@ typedef struct MalInstruction {
 
         struct {
             i32 dst;
-            f64 value;
+            u32 bits_low, bits_high;
         } create_f64;
 
         struct {
@@ -219,9 +219,8 @@ typedef struct MalInstruction {
         } create_object;
 
         struct {
-            i32 dst, count;
-            const i32 *key_indices;      // string-constant indices, in key order
-            const i32 *value_registers;  // value source registers, in key order
+            // Side data: [count, string-constant indices..., value registers...].
+            i32 dst, data_offset;
         } create_object_shaped;
 
         struct {
@@ -233,23 +232,15 @@ typedef struct MalInstruction {
         } instantiate_literal_template;
 
         struct {
-            // Build a module namespace object: `count` exports whose names are
-            // string constants (name_indices) and whose live values live in
-            // global slots (slots). Both arrays have `count` entries.
-            i32 dst, count;
-            const i32 *name_indices;
-            const i32 *slots;
+            // Side data: [count, name string indices..., global slots...].
+            i32 dst, data_offset;
         } create_module_namespace;
 
         struct {
             // Build (once, caching in global slot `cache_slot`) a tagged-template
-            // strings object: a frozen array of the `count` cooked strings with a
-            // frozen `.raw` array of the raw strings. A cooked index of -1 encodes
-            // an `undefined` cooked value (an invalid escape sequence). Both arrays
-            // have `count` entries.
-            i32 dst, cache_slot, count;
-            const i32 *cooked_indices;
-            const i32 *raw_indices;
+            // strings object. Side data: [count, cooked indices..., raw indices...].
+            // A cooked index of -1 encodes an invalid escape sequence.
+            i32 dst, cache_slot, data_offset;
         } create_template_object;
 
         struct {
@@ -561,8 +552,8 @@ typedef struct MalInstruction {
         } array_rest;
 
         struct {
-            i32 dst, src, excluded_count;
-            const i32 *excluded;
+            // Side data: [count, excluded key registers...].
+            i32 dst, src, data_offset;
         } copy_data_properties;
 
         /**
@@ -575,13 +566,13 @@ typedef struct MalInstruction {
         } merge_data_properties;
 
         struct {
-            i32 dst, callee, this_value, argument_count;
-            const i32 *arguments;
+            // Side data: [count, argument registers...].
+            i32 dst, callee, this_value, data_offset;
         } call;
 
         struct {
-            i32 dst, callee, argument_count;
-            const i32 *arguments;
+            // Side data: [count, argument registers...].
+            i32 dst, callee, data_offset;
         } construct;
 
         /**
@@ -610,6 +601,8 @@ typedef struct MalInstruction {
         } unary;
     } as;
 } MalInstruction;
+
+_Static_assert(sizeof(MalInstruction) == 20, "MalInstruction must remain densely packed");
 
 /**
  * Statically known protected instruction range. While the instruction pointer
@@ -739,6 +732,8 @@ typedef struct MalFunction {
 
     i32 instruction_count;
     const MalInstruction *instructions;
+    i32 instruction_data_count;
+    const i32 *instruction_data;
 
     i32 handler_count;
     const MalExceptionHandler *handlers;
@@ -1590,6 +1585,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition);
 
 /** Process-wide loaded bytecode footprint used by benchmark telemetry. */
 u64 mal_vm_loaded_instruction_count(void);
+u64 mal_vm_loaded_instruction_data_count(void);
 
 /** Native suspendable-frame allocation counters used by benchmark telemetry. */
 u64 mal_coroutine_buffer_allocation_count(void);

@@ -289,13 +289,6 @@ static u64 rd_u64(Rd *r) {
     return v;
 }
 
-static f64 rd_f64(Rd *r) {
-    u64 bits = rd_u64(r);
-    f64 v;
-    memcpy(&v, &bits, sizeof(f64));
-    return v;
-}
-
 /* A count whose elements consume at least `min_each` bytes; rejects an absurd
  * value before it drives a loop or an allocation. */
 static u32 rd_count(Rd *r, usize min_each) {
@@ -341,9 +334,81 @@ static const i32 *rd_i32_array(MalLoadedDefinition *L, Rd *r, i32 *count_out) {
     return arr;
 }
 
+typedef struct I32Builder {
+    i32 *data;
+    usize count;
+    usize capacity;
+} I32Builder;
+
+static bool i32_builder_reserve(I32Builder *builder, Rd *r, usize additional) {
+    usize limit = (usize) INT32_MAX;
+    if (SIZE_MAX / sizeof(i32) < limit) {
+        limit = SIZE_MAX / sizeof(i32);
+    }
+    if (!r->ok || additional > limit - builder->count) {
+        r->ok = false;
+        return false;
+    }
+    usize needed = builder->count + additional;
+    if (needed <= builder->capacity) {
+        return true;
+    }
+    usize capacity = builder->capacity > 0 ? builder->capacity : 16;
+    while (capacity < needed) {
+        usize doubled = capacity * 2;
+        capacity = doubled > limit ? limit : doubled;
+    }
+    i32 *data = realloc(builder->data, capacity * sizeof(i32));
+    if (data == nullptr) {
+        r->ok = false;
+        return false;
+    }
+    builder->data = data;
+    builder->capacity = capacity;
+    return true;
+}
+
+static i32 rd_side_single(Rd *r, I32Builder *builder, i32 expected_count) {
+    i32 offset = (i32) builder->count;
+    u32 count = rd_count(r, sizeof(i32));
+    if (!r->ok || expected_count < 0 || count != (u32) expected_count ||
+        !i32_builder_reserve(builder, r, (usize) count + 1)) {
+        r->ok = false;
+        return 0;
+    }
+    builder->data[builder->count++] = (i32) count;
+    for (u32 i = 0; i < count; i++) {
+        builder->data[builder->count++] = rd_i32(r);
+    }
+    return offset;
+}
+
+static i32 rd_side_pair(Rd *r, I32Builder *builder) {
+    i32 offset = (i32) builder->count;
+    u32 first_count = rd_count(r, sizeof(i32));
+    if (!r->ok || first_count > (u32) ((INT32_MAX - 1) / 2) ||
+        !i32_builder_reserve(builder, r, (usize) first_count * 2 + 1)) {
+        r->ok = false;
+        return 0;
+    }
+    builder->data[builder->count++] = (i32) first_count;
+    for (u32 i = 0; i < first_count; i++) {
+        builder->data[builder->count++] = rd_i32(r);
+    }
+    u32 second_count = rd_count(r, sizeof(i32));
+    if (!r->ok || second_count != first_count) {
+        r->ok = false;
+        return 0;
+    }
+    for (u32 i = 0; i < second_count; i++) {
+        builder->data[builder->count++] = rd_i32(r);
+    }
+    return offset;
+}
+
 // ---- instruction decode (mirrors writeInstruction in serialize-vm.ts) ----
 
-static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
+static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
     u8 tag = rd_u8(r);
     if (!r->ok) {
         return;
@@ -379,7 +444,11 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
         case WIRE_CREATE_F64:
             o->opcode = MAL_OP_CREATE_F64;
             o->as.create_f64.dst = rd_i32(r);
-            o->as.create_f64.value = rd_f64(r);
+            {
+                u64 bits = rd_u64(r);
+                o->as.create_f64.bits_low = (u32) bits;
+                o->as.create_f64.bits_high = (u32) (bits >> 32);
+            }
             return;
         case WIRE_CREATE_BOOLEAN:
             o->opcode = MAL_OP_CREATE_BOOLEAN;
@@ -403,10 +472,11 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
         case WIRE_CREATE_OBJECT_SHAPED: {
             o->opcode = MAL_OP_CREATE_OBJECT_SHAPED;
             o->as.create_object_shaped.dst = rd_i32(r);
-            o->as.create_object_shaped.count = rd_i32(r);
-            i32 keys, values;
-            o->as.create_object_shaped.key_indices = rd_i32_array(L, r, &keys);
-            o->as.create_object_shaped.value_registers = rd_i32_array(L, r, &values);
+            i32 count = rd_i32(r);
+            o->as.create_object_shaped.data_offset = rd_side_pair(r, side_data);
+            if (r->ok && side_data->data[o->as.create_object_shaped.data_offset] != count) {
+                r->ok = false;
+            }
             return;
         }
         case WIRE_CREATE_ARRAY:
@@ -422,20 +492,14 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
         case WIRE_CREATE_MODULE_NAMESPACE: {
             o->opcode = MAL_OP_CREATE_MODULE_NAMESPACE;
             o->as.create_module_namespace.dst = rd_i32(r);
-            i32 names, slots;
-            o->as.create_module_namespace.name_indices = rd_i32_array(L, r, &names);
-            o->as.create_module_namespace.slots = rd_i32_array(L, r, &slots);
-            o->as.create_module_namespace.count = names;
+            o->as.create_module_namespace.data_offset = rd_side_pair(r, side_data);
             return;
         }
         case WIRE_CREATE_TEMPLATE_OBJECT: {
             o->opcode = MAL_OP_CREATE_TEMPLATE_OBJECT;
             o->as.create_template_object.dst = rd_i32(r);
             o->as.create_template_object.cache_slot = rd_i32(r);
-            i32 cooked, raw;
-            o->as.create_template_object.cooked_indices = rd_i32_array(L, r, &cooked);
-            o->as.create_template_object.raw_indices = rd_i32_array(L, r, &raw);
-            o->as.create_template_object.count = cooked;
+            o->as.create_template_object.data_offset = rd_side_pair(r, side_data);
             return;
         }
         case WIRE_CREATE_UNDEFINED:
@@ -471,27 +535,23 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
             o->opcode = MAL_OP_LOAD_CALLEE;
             o->as.load_callee.dst = rd_i32(r);
             return;
-        case WIRE_CALL:
+        case WIRE_CALL: {
             o->opcode = MAL_OP_CALL;
             o->as.call.dst = rd_i32(r);
             o->as.call.callee = rd_i32(r);
             o->as.call.this_value = rd_i32(r);
-            o->as.call.argument_count = rd_i32(r);
-            {
-                i32 args;
-                o->as.call.arguments = rd_i32_array(L, r, &args);
-            }
+            i32 count = rd_i32(r);
+            o->as.call.data_offset = rd_side_single(r, side_data, count);
             return;
-        case WIRE_CONSTRUCT:
+        }
+        case WIRE_CONSTRUCT: {
             o->opcode = MAL_OP_CONSTRUCT;
             o->as.construct.dst = rd_i32(r);
             o->as.construct.callee = rd_i32(r);
-            o->as.construct.argument_count = rd_i32(r);
-            {
-                i32 args;
-                o->as.construct.arguments = rd_i32_array(L, r, &args);
-            }
+            i32 count = rd_i32(r);
+            o->as.construct.data_offset = rd_side_single(r, side_data, count);
             return;
+        }
         case WIRE_CATCH:
             o->opcode = MAL_OP_CATCH;
             o->as.caught.dst = rd_i32(r);
@@ -798,16 +858,15 @@ static void rd_instruction(MalLoadedDefinition *L, Rd *r, MalInstruction *o) {
             o->as.array_rest.src = rd_i32(r);
             o->as.array_rest.start_index = rd_i32(r);
             return;
-        case WIRE_COPY_DATA_PROPERTIES:
+        case WIRE_COPY_DATA_PROPERTIES: {
             o->opcode = MAL_OP_COPY_DATA_PROPERTIES;
             o->as.copy_data_properties.dst = rd_i32(r);
             o->as.copy_data_properties.src = rd_i32(r);
-            o->as.copy_data_properties.excluded_count = rd_i32(r);
-            {
-                i32 excluded;
-                o->as.copy_data_properties.excluded = rd_i32_array(L, r, &excluded);
-            }
+            i32 count = rd_i32(r);
+            o->as.copy_data_properties.data_offset =
+                rd_side_single(r, side_data, count);
             return;
+        }
         case WIRE_BINARY: {
             o->opcode = MAL_OP_BINARY;
             o->as.binary.dst = rd_i32(r);
@@ -878,10 +937,19 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     fn->instruction_count = (i32) instruction_count;
     MalInstruction *instructions =
         arena(L, r, (usize) instruction_count * sizeof(MalInstruction), alignof(MalInstruction));
+    I32Builder side_data = {0};
     for (u32 i = 0; r->ok && i < instruction_count; i++) {
-        rd_instruction(L, r, &instructions[i]);
+        rd_instruction(r, &instructions[i], &side_data);
     }
     fn->instructions = instructions;
+    i32 *instruction_data = arena(
+        L, r, side_data.count * sizeof(i32), alignof(i32));
+    if (r->ok && side_data.count > 0) {
+        memcpy(instruction_data, side_data.data, side_data.count * sizeof(i32));
+    }
+    free(side_data.data);
+    fn->instruction_data_count = (i32) side_data.count;
+    fn->instruction_data = instruction_data;
 
     u32 handler_count = rd_count(r, 12);
     fn->handler_count = (i32) handler_count;

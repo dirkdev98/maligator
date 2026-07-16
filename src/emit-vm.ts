@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { IncludedAsset } from "./assets.ts";
-import { cF64Literal, emitCompiledFunction } from "./emit-c.ts";
+import { emitCompiledFunction } from "./emit-c.ts";
 import type { CompiledFunction } from "./emit-c.ts";
 import { compressPositions } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
@@ -130,6 +130,8 @@ function malFunctionKind(fn: VmDefinition["functions"][number]): string {
 function malFunctionRow(
 	fn: VmDefinition["functions"][number],
 	instructionsSymbol: string,
+	instructionDataSymbol: string,
+	instructionDataCount: number,
 	handlersSymbol: string,
 	compiledSymbol: string,
 	debug: { positionsSymbol: string; positionCount: number; fileIndex: number },
@@ -150,6 +152,8 @@ function malFunctionRow(
 		`        .has_prototype = ${fn.hasPrototype},`,
 		`        .instruction_count = ${omitBytecode ? 0 : fn.instructions.length},`,
 		`        .instructions = ${omitBytecode ? "nullptr" : instructionsSymbol},`,
+		`        .instruction_data_count = ${omitBytecode ? 0 : instructionDataCount},`,
+		`        .instruction_data = ${omitBytecode ? "nullptr" : instructionDataSymbol},`,
 		`        .handler_count = ${omitBytecode ? 0 : fn.handlers.length},`,
 		`        .handlers = ${omitBytecode ? "nullptr" : handlersSymbol},`,
 		`        .compiled = ${compiledSymbol},`,
@@ -167,10 +171,60 @@ function positionArrayBody(fn: VmFunction): string {
 		.join("\n");
 }
 
-function instructionArrayBody(fn: VmDefinition["functions"][number]): string {
+function instructionArrayBody(
+	fn: VmDefinition["functions"][number],
+	dataOffsets: Array<number | undefined>,
+): string {
 	return fn.instructions
-		.map((instruction) => `    ${emitInstruction(instruction)},`)
+		.map((instruction, i) => `    ${emitInstruction(instruction, dataOffsets[i])},`)
 		.join("\n");
+}
+
+function instructionData(fn: VmDefinition["functions"][number]): {
+	data: Array<number>;
+	offsets: Array<number | undefined>;
+} {
+	const data: Array<number> = [];
+	const offsets: Array<number | undefined> = [];
+	const single = (index: number, values: Array<number>, count: number): void => {
+		if (count !== values.length) throw new Error("instruction side-data count mismatch");
+		offsets[index] = data.length;
+		data.push(count, ...values);
+	};
+	const paired = (index: number, first: Array<number>, second: Array<number>): void => {
+		if (first.length !== second.length)
+			throw new Error("instruction side-data length mismatch");
+		offsets[index] = data.length;
+		data.push(first.length, ...first, ...second);
+	};
+
+	fn.instructions.forEach((instruction, index) => {
+		switch (instruction.opcode) {
+			case "CREATE_OBJECT_SHAPED":
+				if (instruction.count !== instruction.keyStringIndices.length) {
+					throw new Error("instruction side-data count mismatch");
+				}
+				paired(index, instruction.keyStringIndices, instruction.valueRegisters);
+				break;
+			case "CREATE_MODULE_NAMESPACE":
+				paired(index, instruction.nameIndices, instruction.slots);
+				break;
+			case "CREATE_TEMPLATE_OBJECT":
+				paired(index, instruction.cookedIndices, instruction.rawIndices);
+				break;
+			case "CALL":
+				single(index, instruction.arguments, instruction.argumentCount);
+				break;
+			case "CONSTRUCT":
+				single(index, instruction.arguments, instruction.argumentCount);
+				break;
+			case "COPY_DATA_PROPERTIES":
+				single(index, instruction.excluded, instruction.excludedCount);
+				break;
+		}
+	});
+
+	return { data, offsets };
 }
 
 function handlerArrayBody(fn: VmDefinition["functions"][number]): string {
@@ -237,16 +291,26 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 	// bytecode and handler tables are dead weight. Only uncompiled functions
 	// (generators/async) keep their overlay.
 	const omitBytecode = compiled.map((c) => c !== null);
+	const instructionDataByFunction = definition.functions.map((fn, i) =>
+		omitBytecode[i] ? { data: [], offsets: [] } : instructionData(fn),
+	);
 
 	const positionInfo: Array<{ symbol: string; count: number }> = [];
 
 	for (let i = 0; i < definition.functions.length; ++i) {
 		const fn = definition.functions[i]!;
 		if (!omitBytecode[i]) {
+			const sideData = instructionDataByFunction[i]!;
+			if (sideData.data.length > 0) {
+				lines.push(
+					`static const i32 mal_function_${i}_instruction_data${suffix}[] = { ${sideData.data.join(", ")} };`,
+					"",
+				);
+			}
 			lines.push(
 				`static const MalInstruction mal_function_${i}_instructions${suffix}[] = {`,
 			);
-			lines.push(instructionArrayBody(fn));
+			lines.push(instructionArrayBody(fn, sideData.offsets));
 			lines.push("};", "");
 
 			if (fn.handlers.length > 0) {
@@ -279,6 +343,10 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 			...malFunctionRow(
 				fn,
 				`mal_function_${i}_instructions${suffix}`,
+				instructionDataByFunction[i]!.data.length > 0
+					? `mal_function_${i}_instruction_data${suffix}`
+					: "nullptr",
+				instructionDataByFunction[i]!.data.length,
 				fn.handlers.length > 0 ? `mal_function_${i}_handlers${suffix}` : "nullptr",
 				compiled[i] !== null ? compiled[i]!.symbol : "nullptr",
 				{
@@ -532,17 +600,28 @@ export function emitBatch(
 		const omitBytecode = compiled.map((c) => c !== null);
 
 		const instructionSymbols: Array<string> = [];
+		const instructionDataSymbols: Array<string> = [];
+		const instructionDataCounts: Array<number> = [];
 		const handlerSymbols: Array<string> = [];
 		for (let i = 0; i < definition.functions.length; ++i) {
 			const fn = definition.functions[i]!;
 			if (omitBytecode[i]) {
 				instructionSymbols.push("nullptr");
+				instructionDataSymbols.push("nullptr");
+				instructionDataCounts.push(0);
 				handlerSymbols.push("nullptr");
 				continue;
 			}
+			const sideData = instructionData(fn);
 			instructionSymbols.push(
-				intern("insns", "MalInstruction", instructionArrayBody(fn)),
+				intern("insns", "MalInstruction", instructionArrayBody(fn, sideData.offsets)),
 			);
+			instructionDataSymbols.push(
+				sideData.data.length > 0
+					? intern("insn_data", "i32", `    ${sideData.data.join(", ")}`)
+					: "nullptr",
+			);
+			instructionDataCounts.push(sideData.data.length);
 			handlerSymbols.push(
 				fn.handlers.length > 0
 					? intern("handlers", "MalExceptionHandler", handlerArrayBody(fn))
@@ -556,6 +635,8 @@ export function emitBatch(
 				...malFunctionRow(
 					definition.functions[i]!,
 					instructionSymbols[i]!,
+					instructionDataSymbols[i]!,
+					instructionDataCounts[i]!,
 					handlerSymbols[i]!,
 					compiled[i] !== null ? compiled[i]!.symbol : "nullptr",
 					// The batch path strips debug info (test262 does not use it).
@@ -575,7 +656,11 @@ export function emitBatch(
 	return lines.join("\n");
 }
 
-function emitInstruction(instruction: VmInstruction) {
+function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
+	const sideDataOffset = (): number => {
+		if (dataOffset === undefined) throw new Error("missing instruction side-data offset");
+		return dataOffset;
+	};
 	switch (instruction.opcode) {
 		case "MOVE":
 			return `{ .opcode = MAL_OP_MOVE, .as.move = { .dst = ${instruction.dst}, .src = ${instruction.src} } }`;
@@ -588,12 +673,7 @@ function emitInstruction(instruction: VmInstruction) {
 		case "CREATE_NUMBER":
 			return `{ .opcode = MAL_OP_CREATE_NUMBER, .as.create_number = { .dst = ${instruction.dst}, .value = ${instruction.value} } }`;
 		case "CREATE_F64":
-			// cF64Literal renders finite values in exponential notation (always a
-			// valid C double literal; plain stringification of large integral values
-			// would overflow as an integer literal) and non-finite values
-			// (Infinity/NaN, e.g. from an overflowing literal like `1e309`) as
-			// compiler builtins, since the bare words are not C constants.
-			return `{ .opcode = MAL_OP_CREATE_F64, .as.create_f64 = { .dst = ${instruction.dst}, .value = ${cF64Literal(instruction.value)} } }`;
+			return emitCreateF64(instruction.dst, instruction.value);
 		case "CREATE_BOOLEAN":
 			return `{ .opcode = MAL_OP_CREATE_BOOLEAN, .as.create_boolean = { .dst = ${instruction.dst}, .value = ${instruction.value ? 1 : 0} } }`;
 		case "CREATE_STRING":
@@ -603,29 +683,15 @@ function emitInstruction(instruction: VmInstruction) {
 		case "CREATE_OBJECT":
 			return `{ .opcode = MAL_OP_CREATE_OBJECT, .as.create_object = { .dst = ${instruction.dst} } }`;
 		case "CREATE_OBJECT_SHAPED":
-			return `{ .opcode = MAL_OP_CREATE_OBJECT_SHAPED, .as.create_object_shaped = { .dst = ${instruction.dst}, .count = ${instruction.count}, .key_indices = ${emitCallArguments(instruction.keyStringIndices)}, .value_registers = ${emitCallArguments(instruction.valueRegisters)} } }`;
+			return `{ .opcode = MAL_OP_CREATE_OBJECT_SHAPED, .as.create_object_shaped = { .dst = ${instruction.dst}, .data_offset = ${sideDataOffset()} } }`;
 		case "CREATE_ARRAY":
 			return `{ .opcode = MAL_OP_CREATE_ARRAY, .as.create_array = { .dst = ${instruction.dst}, .length = ${instruction.length} } }`;
 		case "INSTANTIATE_LITERAL_TEMPLATE":
 			return `{ .opcode = MAL_OP_INSTANTIATE_LITERAL_TEMPLATE, .as.instantiate_literal_template = { .dst = ${instruction.dst}, .template_offset = ${instruction.templateOffset} } }`;
-		case "CREATE_MODULE_NAMESPACE": {
-			const count = instruction.nameIndices.length;
-			const names =
-				count > 0 ? `(const i32[]){ ${instruction.nameIndices.join(", ")} }` : "nullptr";
-			const slots =
-				count > 0 ? `(const i32[]){ ${instruction.slots.join(", ")} }` : "nullptr";
-			return `{ .opcode = MAL_OP_CREATE_MODULE_NAMESPACE, .as.create_module_namespace = { .dst = ${instruction.dst}, .count = ${count}, .name_indices = ${names}, .slots = ${slots} } }`;
-		}
-		case "CREATE_TEMPLATE_OBJECT": {
-			const count = instruction.cookedIndices.length;
-			const cooked =
-				count > 0
-					? `(const i32[]){ ${instruction.cookedIndices.join(", ")} }`
-					: "nullptr";
-			const raw =
-				count > 0 ? `(const i32[]){ ${instruction.rawIndices.join(", ")} }` : "nullptr";
-			return `{ .opcode = MAL_OP_CREATE_TEMPLATE_OBJECT, .as.create_template_object = { .dst = ${instruction.dst}, .cache_slot = ${instruction.cacheSlot}, .count = ${count}, .cooked_indices = ${cooked}, .raw_indices = ${raw} } }`;
-		}
+		case "CREATE_MODULE_NAMESPACE":
+			return `{ .opcode = MAL_OP_CREATE_MODULE_NAMESPACE, .as.create_module_namespace = { .dst = ${instruction.dst}, .data_offset = ${sideDataOffset()} } }`;
+		case "CREATE_TEMPLATE_OBJECT":
+			return `{ .opcode = MAL_OP_CREATE_TEMPLATE_OBJECT, .as.create_template_object = { .dst = ${instruction.dst}, .cache_slot = ${instruction.cacheSlot}, .data_offset = ${sideDataOffset()} } }`;
 		case "CREATE_UNDEFINED":
 			return `{ .opcode = MAL_OP_CREATE_UNDEFINED, .as.create_undefined = { .dst = ${instruction.dst} } }`;
 		case "CREATE_EMPTY":
@@ -643,9 +709,9 @@ function emitInstruction(instruction: VmInstruction) {
 		case "LOAD_CALLEE":
 			return `{ .opcode = MAL_OP_LOAD_CALLEE, .as.load_callee = { .dst = ${instruction.dst} } }`;
 		case "CALL":
-			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .argument_count = ${instruction.argumentCount}, .arguments = ${emitCallArguments(instruction.arguments)} } }`;
+			return `{ .opcode = MAL_OP_CALL, .as.call = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .data_offset = ${sideDataOffset()} } }`;
 		case "CONSTRUCT":
-			return `{ .opcode = MAL_OP_CONSTRUCT, .as.construct = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .argument_count = ${instruction.argumentCount}, .arguments = ${emitCallArguments(instruction.arguments)} } }`;
+			return `{ .opcode = MAL_OP_CONSTRUCT, .as.construct = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .data_offset = ${sideDataOffset()} } }`;
 		case "THROW":
 			return `{ .opcode = MAL_OP_THROW, .as.thrown = { .value = ${instruction.value} } }`;
 		case "CATCH":
@@ -763,7 +829,7 @@ function emitInstruction(instruction: VmInstruction) {
 		case "ARRAY_REST":
 			return `{ .opcode = MAL_OP_ARRAY_REST, .as.array_rest = { .dst = ${instruction.dst}, .src = ${instruction.src}, .start_index = ${instruction.startIndex} } }`;
 		case "COPY_DATA_PROPERTIES":
-			return `{ .opcode = MAL_OP_COPY_DATA_PROPERTIES, .as.copy_data_properties = { .dst = ${instruction.dst}, .src = ${instruction.src}, .excluded_count = ${instruction.excludedCount}, .excluded = ${emitCallArguments(instruction.excluded)} } }`;
+			return `{ .opcode = MAL_OP_COPY_DATA_PROPERTIES, .as.copy_data_properties = { .dst = ${instruction.dst}, .src = ${instruction.src}, .data_offset = ${sideDataOffset()} } }`;
 		case "BINARY":
 			return `{ .opcode = MAL_OP_BINARY, .as.binary = { .dst = ${instruction.dst}, .left = ${instruction.left}, .right = ${instruction.right}, .op = ${emitBinaryOperator(instruction.operator)} } }`;
 		case "UNARY":
@@ -948,12 +1014,13 @@ function emitBigintValue(value: bigint): string {
 	return `(i128) (((unsigned __int128) ${hi}ULL << 64) | (unsigned __int128) ${lo}ULL)`;
 }
 
-function emitCallArguments(args: Array<number>) {
-	if (args.length === 0) {
-		return "nullptr";
-	}
-
-	return `(const i32[]) { ${args.join(", ")} }`;
+function emitCreateF64(dst: number, value: number): string {
+	const buffer = new ArrayBuffer(8);
+	const view = new DataView(buffer);
+	view.setFloat64(0, value, true);
+	const low = view.getUint32(0, true).toString(16).padStart(8, "0");
+	const high = view.getUint32(4, true).toString(16).padStart(8, "0");
+	return `{ .opcode = MAL_OP_CREATE_F64, .as.create_f64 = { .dst = ${dst}, .bits_low = 0x${low}u, .bits_high = 0x${high}u } }`;
 }
 
 export function emitBinaryOperator(operator: VmBinaryOperator) {

@@ -32,8 +32,9 @@ roadmaps for everything else. Test262 verdict counts live only in
 - [x] Pool paired promise reactions, microtask jobs, suspendable-frame buffers, and
       async-generator requests in bounded per-VM freelists. The broad promise and
       coroutine benchmarks track native allocation counts, reuse, and wall time.
-- [ ] Pack `MalInstruction` after pointer-carrying operands move behind side-table
-      indices in the bytecode format.
+- [x] Pack `MalInstruction` from 40 to 20 bytes by moving variable operands behind
+      per-function side-table offsets and storing F64 payloads as raw 32-bit words.
+      The interpreted benchmark tracks row, side-table, and total bytecode bytes.
 - [ ] Revisit `MalVm` and host-structure layout when SMP creates multiple VMs.
 - [ ] Generate compiler/runtime opcode plumbing from one descriptor list.
 - [ ] Classify static `arguments` usage in semantic analysis so IR can avoid

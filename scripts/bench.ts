@@ -120,6 +120,8 @@ interface InterpreterMetrics {
 	instructionSize: number;
 	instructionCount: number;
 	instructionBytes: number;
+	instructionDataBytes?: number;
+	bytecodeBytes?: number;
 }
 interface GcWorkload {
 	wallMs: number;
@@ -444,6 +446,8 @@ function benchInterpreter(runs: number): InterpreterMetrics {
 		instructionSize: parseVmStat(stderr, "instruction_size"),
 		instructionCount: parseVmStat(stderr, "instruction_count"),
 		instructionBytes: parseVmStat(stderr, "instruction_bytes"),
+		instructionDataBytes: parseVmStat(stderr, "instruction_data_bytes"),
+		bytecodeBytes: parseVmStat(stderr, "bytecode_bytes"),
 	};
 }
 
@@ -751,6 +755,12 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		console.log(
 			`  bytecode  ${entry.interpreter.instructionCount} instructions x ${entry.interpreter.instructionSize}B = ${humanBytes(entry.interpreter.instructionBytes)}${delta(entry.interpreter.instructionBytes, p?.instructionBytes)}`,
 		);
+		if (entry.interpreter.bytecodeBytes !== undefined) {
+			const previousBytes = p?.bytecodeBytes ?? p?.instructionBytes;
+			console.log(
+				`            ${humanBytes(entry.interpreter.instructionDataBytes ?? 0)} side data, ${humanBytes(entry.interpreter.bytecodeBytes)} total${delta(entry.interpreter.bytecodeBytes, previousBytes)}`,
+			);
+		}
 	}
 	if (entry.gc) {
 		console.log("gc (generational):");

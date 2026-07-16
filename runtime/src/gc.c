@@ -350,12 +350,18 @@ static void mal_gc_print_stats(void) {
     }
     if (getenv("MAL_VM_STATS") != nullptr) {
         u64 instruction_count = mal_vm_loaded_instruction_count();
+        u64 instruction_data_count = mal_vm_loaded_instruction_data_count();
+        u64 instruction_bytes = instruction_count * sizeof(MalInstruction);
+        u64 instruction_data_bytes = instruction_data_count * sizeof(i32);
         fprintf(
             stderr,
-            "[vm-stats] instruction_size=%zu instruction_count=%llu instruction_bytes=%llu\n",
+            "[vm-stats] instruction_size=%zu instruction_count=%llu "
+            "instruction_bytes=%llu instruction_data_bytes=%llu bytecode_bytes=%llu\n",
             sizeof(MalInstruction),
             (unsigned long long) instruction_count,
-            (unsigned long long) (instruction_count * sizeof(MalInstruction))
+            (unsigned long long) instruction_bytes,
+            (unsigned long long) instruction_data_bytes,
+            (unsigned long long) (instruction_bytes + instruction_data_bytes)
         );
     }
 }

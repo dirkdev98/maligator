@@ -29,6 +29,7 @@
 static u64 g_coroutine_buffer_allocations = 0;
 static u64 g_coroutine_buffer_reuses = 0;
 static u64 g_loaded_instruction_count = 0;
+static u64 g_loaded_instruction_data_count = 0;
 
 #define MAL_COROUTINE_POOL_MAX_BYTES ((usize) 1024 * 1024)
 #define MAL_COROUTINE_POOL_MAX_BUFFER_BYTES ((usize) 64 * 1024)
@@ -43,6 +44,10 @@ typedef struct MalCoroutineBuffer {
 
 u64 mal_vm_loaded_instruction_count(void) {
     return g_loaded_instruction_count;
+}
+
+u64 mal_vm_loaded_instruction_data_count(void) {
+    return g_loaded_instruction_data_count;
 }
 
 u64 mal_coroutine_buffer_allocation_count(void) {
@@ -236,6 +241,8 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->live_definition = *definition;
     for (i32 i = 0; i < definition->function_count; i++) {
         g_loaded_instruction_count += (u64) definition->functions[i].instruction_count;
+        g_loaded_instruction_data_count +=
+            (u64) definition->functions[i].instruction_data_count;
     }
     vm->definition = &vm->live_definition;
 
@@ -581,11 +588,12 @@ void mal_vm_free(MalVm *vm) {
 // Rebase a spliced instruction's references into the merged tables. Function
 // indices, global slots, and string/bigint constant indices shift by the base
 // table sizes; register operands and IP-relative fields are function-local and
-// untouched. Operand arrays live in the loaded arena (mutable); cast away const
-// to rewrite them in place. Mirrors the reference list in src/serialize-vm.ts.
+// untouched. Side data lives in the loaded arena (mutable); static definitions
+// never pass through this splice path. Mirrors the reference list in
+// src/serialize-vm.ts.
 static void mal_vm_rebase_instruction(
-    MalInstruction *in, i32 fn_base, i32 global_base, i32 string_base, i32 bigint_base,
-    i32 template_base
+    MalInstruction *in, i32 *instruction_data, i32 fn_base, i32 global_base,
+    i32 string_base, i32 bigint_base, i32 template_base
 ) {
     switch (in->opcode) {
         case MAL_OP_CREATE_FUNCTION:
@@ -645,17 +653,21 @@ static void mal_vm_rebase_instruction(
             in->as.with_set.name_string_index += string_base;
             break;
         case MAL_OP_CREATE_OBJECT_SHAPED: {
-            i32 *keys = (i32 *) in->as.create_object_shaped.key_indices;
-            for (i32 i = 0; i < in->as.create_object_shaped.count; i++) {
+            i32 *data = instruction_data + in->as.create_object_shaped.data_offset;
+            i32 count = data[0];
+            i32 *keys = &data[1];
+            for (i32 i = 0; i < count; i++) {
                 keys[i] += string_base; // value_registers are registers — untouched
             }
             break;
         }
         case MAL_OP_CREATE_TEMPLATE_OBJECT: {
             in->as.create_template_object.cache_slot += global_base;
-            i32 *cooked = (i32 *) in->as.create_template_object.cooked_indices;
-            i32 *raw = (i32 *) in->as.create_template_object.raw_indices;
-            for (i32 i = 0; i < in->as.create_template_object.count; i++) {
+            i32 *data = instruction_data + in->as.create_template_object.data_offset;
+            i32 count = data[0];
+            i32 *cooked = &data[1];
+            i32 *raw = &data[1 + count];
+            for (i32 i = 0; i < count; i++) {
                 if (cooked[i] >= 0) { // -1 = undefined cooked (invalid escape)
                     cooked[i] += string_base;
                 }
@@ -664,9 +676,11 @@ static void mal_vm_rebase_instruction(
             break;
         }
         case MAL_OP_CREATE_MODULE_NAMESPACE: {
-            i32 *names = (i32 *) in->as.create_module_namespace.name_indices;
-            i32 *slots = (i32 *) in->as.create_module_namespace.slots;
-            for (i32 i = 0; i < in->as.create_module_namespace.count; i++) {
+            i32 *data = instruction_data + in->as.create_module_namespace.data_offset;
+            i32 count = data[0];
+            i32 *names = &data[1];
+            i32 *slots = &data[1 + count];
+            for (i32 i = 0; i < count; i++) {
                 names[i] += string_base;
                 slots[i] += global_base;
             }
@@ -811,6 +825,8 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
     MalFunction *functions = (MalFunction *) live->functions;
     for (i32 f = 0; f < loaded->function_count; f++) {
         MalFunction fn = loaded->functions[f];
+        g_loaded_instruction_count += (u64) fn.instruction_count;
+        g_loaded_instruction_data_count += (u64) fn.instruction_data_count;
         fn.compiled = nullptr;
         fn.file_index = 0;
         fn.position_count = 0;
@@ -819,8 +835,9 @@ i32 mal_vm_splice_definition(MalVm *vm, const MalVmDefinition *loaded) {
             fn.name_string_index += string_base;
         }
         for (i32 k = 0; k < fn.instruction_count; k++) {
-            mal_vm_rebase_instruction((MalInstruction *) &fn.instructions[k], fn_base, global_base,
-                                       string_base, bigint_base, template_base);
+            mal_vm_rebase_instruction(
+                (MalInstruction *) &fn.instructions[k], (i32 *) fn.instruction_data,
+                fn_base, global_base, string_base, bigint_base, template_base);
         }
         functions[fn_base + f] = fn;
     }

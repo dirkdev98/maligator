@@ -32,6 +32,10 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 
 static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *value_out);
 
+static const i32 *mal_op_instruction_data(MalCallable *callable, i32 offset) {
+    return callable->function->instruction_data + offset;
+}
+
 MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right) {
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -173,7 +177,11 @@ void mal_op_create_number(MalCallable *callable, MalInstruction *instruction) {
 }
 
 void mal_op_create_f64(MalCallable *callable, MalInstruction *instruction) {
-    callable->registers[instruction->as.create_f64.dst] = mal_value_from_f64_convert_nan(instruction->as.create_f64.value);
+    u64 bits = (u64) instruction->as.create_f64.bits_low |
+        ((u64) instruction->as.create_f64.bits_high << 32);
+    f64 value;
+    memcpy(&value, &bits, sizeof(value));
+    callable->registers[instruction->as.create_f64.dst] = mal_value_from_f64_convert_nan(value);
 }
 
 void mal_op_create_boolean(MalCallable *callable, MalInstruction *instruction) {
@@ -223,13 +231,17 @@ void mal_op_create_object(MalCallable *callable, MalInstruction *instruction) {
 }
 
 void mal_op_create_object_shaped(MalCallable *callable, MalInstruction *instruction) {
-    u32 count = (u32) instruction->as.create_object_shaped.count;
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.create_object_shaped.data_offset);
+    u32 count = (u32) data[0];
+    const i32 *key_indices = &data[1];
+    const i32 *value_registers = &data[1 + count];
     MalString *keys[MAL_SHAPE_MAX_INLINE_SLOTS];
     MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
     const MalString *string_constants = callable->vm->definition->string_constants;
     for (u32 i = 0; i < count; ++i) {
-        keys[i] = (MalString *) &string_constants[instruction->as.create_object_shaped.key_indices[i]];
-        values[i] = callable->registers[instruction->as.create_object_shaped.value_registers[i]];
+        keys[i] = (MalString *) &string_constants[key_indices[i]];
+        values[i] = callable->registers[value_registers[i]];
     }
     // The interpreter has no per-site cache (the bytecode is const), so it rebuilds
     // the shape each time; transitions are interned, so this is the same shape.
@@ -495,11 +507,14 @@ MalValue mal_vm_op_create_module_namespace(
 }
 
 void mal_op_create_module_namespace(MalCallable *callable, MalInstruction *instruction) {
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.create_module_namespace.data_offset);
+    i32 count = data[0];
     callable->registers[instruction->as.create_module_namespace.dst] = mal_vm_op_create_module_namespace(
         callable->vm,
-        instruction->as.create_module_namespace.count,
-        instruction->as.create_module_namespace.name_indices,
-        instruction->as.create_module_namespace.slots
+        count,
+        &data[1],
+        &data[1 + count]
     );
 }
 
@@ -551,12 +566,15 @@ MalValue mal_vm_op_create_template_object(
 }
 
 void mal_op_create_template_object(MalCallable *callable, MalInstruction *instruction) {
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.create_template_object.data_offset);
+    i32 count = data[0];
     callable->registers[instruction->as.create_template_object.dst] = mal_vm_op_create_template_object(
         callable->vm,
         instruction->as.create_template_object.cache_slot,
-        instruction->as.create_template_object.count,
-        instruction->as.create_template_object.cooked_indices,
-        instruction->as.create_template_object.raw_indices
+        count,
+        &data[1],
+        &data[1 + count]
     );
 }
 
@@ -1428,7 +1446,9 @@ void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
     MalValue callee = callable->registers[instruction->as.call.callee];
     MalValue this_value = callable->registers[instruction->as.call.this_value];
     i32 dst = instruction->as.call.dst;
-    i32 argument_count = instruction->as.call.argument_count;
+    const i32 *data = mal_op_instruction_data(callable, instruction->as.call.data_offset);
+    i32 argument_count = data[0];
+    const i32 *arguments = &data[1];
 
     // Marshal the arguments onto the top of the value stack; the callee adopts
     // that region as its register window (no temp allocation, no param copy).
@@ -1438,7 +1458,7 @@ void mal_op_call(MalCallable *callable, MalInstruction *instruction) {
     }
     i32 base = vm->value_stack_size;
     for (i32 i = 0; i < argument_count; i++) {
-        vm->value_stack[base + i] = callable->registers[instruction->as.call.arguments[i]];
+        vm->value_stack[base + i] = callable->registers[arguments[i]];
     }
     vm->value_stack_size = base + argument_count;
 
@@ -1503,7 +1523,9 @@ void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
     MalVm *vm = callable->vm;
     MalValue callee = callable->registers[instruction->as.construct.callee];
     i32 dst = instruction->as.construct.dst;
-    i32 argument_count = instruction->as.construct.argument_count;
+    const i32 *data = mal_op_instruction_data(callable, instruction->as.construct.data_offset);
+    i32 argument_count = data[0];
+    const i32 *arguments = &data[1];
 
     if (vm->value_stack_size + argument_count > vm->value_stack_capacity) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
@@ -1511,7 +1533,7 @@ void mal_op_construct(MalCallable *callable, MalInstruction *instruction) {
     }
     i32 base = vm->value_stack_size;
     for (i32 i = 0; i < argument_count; i++) {
-        vm->value_stack[base + i] = callable->registers[instruction->as.construct.arguments[i]];
+        vm->value_stack[base + i] = callable->registers[arguments[i]];
     }
     vm->value_stack_size = base + argument_count;
 
@@ -4356,13 +4378,16 @@ done:
 }
 
 void mal_op_copy_data_properties(MalCallable *callable, MalInstruction *instruction) {
-    i32 excluded_count = instruction->as.copy_data_properties.excluded_count;
+    const i32 *data = mal_op_instruction_data(
+        callable, instruction->as.copy_data_properties.data_offset);
+    i32 excluded_count = data[0];
+    const i32 *excluded = &data[1];
     // Marshal the excluded-key registers into a contiguous buffer for the shared
     // op. The values alias rooted frame registers and no collection runs before
     // the op consumes them (allocation only requests a poll), so the copies stay live.
     MalValue excluded_keys[excluded_count > 0 ? excluded_count : 1];
     for (i32 i = 0; i < excluded_count; i++) {
-        excluded_keys[i] = callable->registers[instruction->as.copy_data_properties.excluded[i]];
+        excluded_keys[i] = callable->registers[excluded[i]];
     }
 
     MalValue result = mal_vm_op_copy_data_properties(
