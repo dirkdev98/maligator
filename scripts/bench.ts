@@ -541,6 +541,24 @@ function loadBaseline(): { entries: Array<Entry> } {
 	return JSON.parse(readFileSync(BASELINE_FILE, "utf-8")) as { entries: Array<Entry> };
 }
 
+function latestMetrics(entries: Array<Entry>): Entry | undefined {
+	if (entries.length === 0) return undefined;
+	const latest: Entry = { commit: "latest-per-metric", dirty: false };
+	for (let index = entries.length - 1; index >= 0; index--) {
+		const entry = entries[index];
+		if (entry === undefined) continue;
+		latest.size ??= entry.size;
+		latest.language ??= entry.language;
+		latest.module ??= entry.module;
+		latest.string ??= entry.string;
+		latest.promise ??= entry.promise;
+		latest.coroutine ??= entry.coroutine;
+		latest.gc ??= entry.gc;
+		latest.http ??= entry.http;
+	}
+	return latest;
+}
+
 function humanBytes(bytes: number): string {
 	return bytes >= 1024 * 1024
 		? `${(bytes / (1024 * 1024)).toFixed(2)}MB`
@@ -716,7 +734,7 @@ if (which.includes("gc")) entry.gc = benchGc(runs);
 if (which.includes("http")) entry.http = benchHttp("10s", 50);
 
 const baseline = loadBaseline();
-const previous = baseline.entries[baseline.entries.length - 1];
+const previous = latestMetrics(baseline.entries);
 report(entry, previous);
 
 if (update) {
