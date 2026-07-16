@@ -28,6 +28,7 @@
 
 static u64 g_coroutine_buffer_allocations = 0;
 static u64 g_coroutine_buffer_reuses = 0;
+static u64 g_loaded_instruction_count = 0;
 
 #define MAL_COROUTINE_POOL_MAX_BYTES ((usize) 1024 * 1024)
 #define MAL_COROUTINE_POOL_MAX_BUFFER_BYTES ((usize) 64 * 1024)
@@ -39,6 +40,10 @@ typedef struct MalCoroutineBuffer {
     usize used;
     MalValue values[];
 } MalCoroutineBuffer;
+
+u64 mal_vm_loaded_instruction_count(void) {
+    return g_loaded_instruction_count;
+}
 
 u64 mal_coroutine_buffer_allocation_count(void) {
     return g_coroutine_buffer_allocations;
@@ -229,6 +234,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     // in place (static, or the loader arena). Counts of 0 use a capacity of 1 so
     // a later splice always has a real array to grow.
     vm->live_definition = *definition;
+    for (i32 i = 0; i < definition->function_count; i++) {
+        g_loaded_instruction_count += (u64) definition->functions[i].instruction_count;
+    }
     vm->definition = &vm->live_definition;
 
     i32 function_count = definition->function_count;

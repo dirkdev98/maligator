@@ -24,6 +24,8 @@
  *   - coroutine bench/coroutine.js: generator, async, and async-generator frame
  *               churn in compiled and interpreted backends. Wall time and native
  *               support-buffer allocations.
+ *   - interpreter bench/language.js forced through bytecode: wide dispatch wall
+ *               time, RSS, and exact loaded MalInstruction footprint.
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
  *               wall, peak RSS, max GC pause (macOS: RSS/pauses via /usr/bin/time -l
  *               + MAL_GC_STATS). No V8 compare.
@@ -110,6 +112,15 @@ interface CoroutineMetrics {
 	interpreted: CoroutineBackendMetrics;
 	nodeMs: number;
 }
+interface InterpreterMetrics {
+	malMs: number;
+	nodeMs: number;
+	ratio: number;
+	rssMb: number;
+	instructionSize: number;
+	instructionCount: number;
+	instructionBytes: number;
+}
 interface GcWorkload {
 	wallMs: number;
 	rssMb: number;
@@ -132,6 +143,7 @@ interface Entry {
 	string?: StringMetrics;
 	promise?: PromiseMetrics;
 	coroutine?: CoroutineMetrics;
+	interpreter?: InterpreterMetrics;
 	gc?: Record<string, GcWorkload>;
 	http?: HttpMetrics | null;
 }
@@ -395,6 +407,46 @@ function benchCoroutine(runs: number): CoroutineMetrics {
 	};
 }
 
+// ---- interpreter (wide bytecode dispatch + footprint; vs V8) --------------
+
+function parseVmStat(stderr: string, field: string): number {
+	const line = stderr.split("\n").find((value) => value.includes("[vm-stats]"));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
+}
+
+function benchInterpreter(runs: number): InterpreterMetrics {
+	const binary = buildNativeBinary({
+		fixture: "bench/language.js",
+		name: "bench-interpreter",
+		compiled: false,
+	});
+	const malMs = timeCommand(binary, [], runs);
+	const nodeMs = timeCommand("node", ["bench/language.js"], runs);
+	const canRss = os.platform() === "darwin";
+	const result = canRss
+		? spawnSync("/usr/bin/time", ["-l", binary], {
+				env: { ...process.env, MAL_GC_STATS: "1", MAL_VM_STATS: "1" },
+				encoding: "utf-8",
+				stdio: ["ignore", "ignore", "pipe"],
+			})
+		: spawnSync(binary, [], {
+				env: { ...process.env, MAL_GC_STATS: "1", MAL_VM_STATS: "1" },
+				encoding: "utf-8",
+				stdio: ["ignore", "ignore", "pipe"],
+			});
+	const stderr = result.stderr ?? "";
+	return {
+		malMs,
+		nodeMs,
+		ratio: malMs / nodeMs,
+		rssMb: parseMaxRss(stderr) / (1024 * 1024),
+		instructionSize: parseVmStat(stderr, "instruction_size"),
+		instructionCount: parseVmStat(stderr, "instruction_count"),
+		instructionBytes: parseVmStat(stderr, "instruction_bytes"),
+	};
+}
+
 // ---- gc -------------------------------------------------------------------
 
 function parseGcMaxPause(stderr: string): number {
@@ -553,6 +605,7 @@ function latestMetrics(entries: Array<Entry>): Entry | undefined {
 		latest.string ??= entry.string;
 		latest.promise ??= entry.promise;
 		latest.coroutine ??= entry.coroutine;
+		latest.interpreter ??= entry.interpreter;
 		latest.gc ??= entry.gc;
 		latest.http ??= entry.http;
 	}
@@ -685,6 +738,20 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		}
 		console.log(`  node        ${entry.coroutine.nodeMs.toFixed(1)}ms`);
 	}
+	if (entry.interpreter) {
+		const p = previous?.interpreter;
+		console.log("interpreter (language bytecode; vs V8):");
+		console.log(
+			`  maligator ${entry.interpreter.malMs.toFixed(1)}ms${delta(entry.interpreter.malMs, p?.malMs)}  rss ${entry.interpreter.rssMb.toFixed(1)}MB`,
+		);
+		console.log(`  node      ${entry.interpreter.nodeMs.toFixed(1)}ms`);
+		console.log(
+			`  ratio     ${entry.interpreter.ratio.toFixed(2)}x${delta(entry.interpreter.ratio, p?.ratio)}`,
+		);
+		console.log(
+			`  bytecode  ${entry.interpreter.instructionCount} instructions x ${entry.interpreter.instructionSize}B = ${humanBytes(entry.interpreter.instructionBytes)}${delta(entry.interpreter.instructionBytes, p?.instructionBytes)}`,
+		);
+	}
 	if (entry.gc) {
 		console.log("gc (generational):");
 		for (const [name, w] of Object.entries(entry.gc)) {
@@ -719,7 +786,17 @@ const selected = args.filter((a) => !a.startsWith("--") && !/^\d+$/.test(a));
 const which =
 	selected.length > 0
 		? selected
-		: ["size", "language", "module", "string", "promise", "coroutine", "gc", "http"];
+		: [
+				"size",
+				"language",
+				"module",
+				"string",
+				"promise",
+				"coroutine",
+				"interpreter",
+				"gc",
+				"http",
+			];
 
 const { commit, dirty } = gitInfo();
 const entry: Entry = { commit, dirty };
@@ -730,6 +807,7 @@ if (which.includes("module")) entry.module = benchModule(runs);
 if (which.includes("string")) entry.string = benchString(runs);
 if (which.includes("promise")) entry.promise = benchPromise(runs);
 if (which.includes("coroutine")) entry.coroutine = benchCoroutine(runs);
+if (which.includes("interpreter")) entry.interpreter = benchInterpreter(runs);
 if (which.includes("gc")) entry.gc = benchGc(runs);
 if (which.includes("http")) entry.http = benchHttp("10s", 50);
 

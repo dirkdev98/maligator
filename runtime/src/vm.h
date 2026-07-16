@@ -1588,6 +1588,9 @@ typedef MalVmFrame MalCallable;
 
 void mal_vm_init(MalVm *vm, const MalVmDefinition *definition);
 
+/** Process-wide loaded bytecode footprint used by benchmark telemetry. */
+u64 mal_vm_loaded_instruction_count(void);
+
 /** Native suspendable-frame allocation counters used by benchmark telemetry. */
 u64 mal_coroutine_buffer_allocation_count(void);
 u64 mal_coroutine_buffer_reuse_count(void);

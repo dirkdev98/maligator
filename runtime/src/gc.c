@@ -348,6 +348,16 @@ static void mal_gc_print_stats(void) {
             (unsigned long long) mal_async_generator_request_reuse_count()
         );
     }
+    if (getenv("MAL_VM_STATS") != nullptr) {
+        u64 instruction_count = mal_vm_loaded_instruction_count();
+        fprintf(
+            stderr,
+            "[vm-stats] instruction_size=%zu instruction_count=%llu instruction_bytes=%llu\n",
+            sizeof(MalInstruction),
+            (unsigned long long) instruction_count,
+            (unsigned long long) (instruction_count * sizeof(MalInstruction))
+        );
+    }
 }
 
 /* Auto-collection heap-growth policy: the first collection fires once this many
