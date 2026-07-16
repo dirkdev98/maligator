@@ -26,8 +26,8 @@ roadmaps for everything else. Test262 verdict counts live only in
       inherited-value cache beyond watched built-in chains and measure method-call
       improvement.
 - [ ] Extend the native-only closed fixed-shape local stack-object slice to further
-      proven classes, then add partial escape with lazy materialization at cold
-      escape edges.
+      proven classes (fixed-shape and zero-slot identity-observed objects are done),
+      then add partial escape with lazy materialization at cold escape edges.
 - [ ] Measure region allocation and drop-insertion free lists after stack allocation
       lands; do not add either without an allocation-rate or wall-time win.
 - [x] Pool paired promise reactions, microtask jobs, suspendable-frame buffers, and
@@ -36,6 +36,11 @@ roadmaps for everything else. Test262 verdict counts live only in
 - [x] Pack `MalInstruction` from 40 to 20 bytes by moving variable operands behind
       per-function side-table offsets and storing F64 payloads as raw 32-bit words.
       The interpreted benchmark tracks row, side-table, and total bytecode bytes.
+- [x] Fold constant-string property keys into static-key bytecodes after high-level
+      optimization. This removes dead key producers and cuts tracked interpreter
+      bytecode rows without changing computed-key coercion semantics.
+- [x] Resolve native exception handlers with a nested-range sweep instead of
+      scanning every handler for every emitted instruction.
 - [ ] Revisit `MalVm` and host-structure layout when SMP creates multiple VMs.
 - [ ] Generate compiler/runtime opcode plumbing from one descriptor list.
 - [x] Classify binding-wide-safe `arguments.length` and constant-index reads in

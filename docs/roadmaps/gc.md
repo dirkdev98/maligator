@@ -11,8 +11,8 @@ by the compiler/runtime performance checklist in [`TODO.md`](../../TODO.md).
 
 - [ ] Deterministically release non-escaping RegExp and ICU handles at compiled
       scope end after the escape work can prove ownership.
-- [ ] Presize dense vectors created by `mal_intrinsic_new_array(len)` where the final
-      length is known.
+- [x] Presize dense vectors at audited intrinsic builders where the final length is
+      known, while keeping holey length-only arrays lazy.
 - [ ] Move compiled-call arguments through a rootable runtime seam only if required
       to switch root frames from `liveOrUsedAtSafepoint` to pure
       `liveAcrossSafepoint`.
