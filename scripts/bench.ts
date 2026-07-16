@@ -2,7 +2,7 @@
  * Consolidated benchmark runner + historical tracker. One entry point drives the
  * whole bench/ tree and diffs against a commit-attributed baseline:
  *
- *   node scripts/bench.ts [size|language|module|gc|http ...] [--runs N] [--update]
+ *   node scripts/bench.ts [size|language|stack-object|gc|http ...] [--runs N] [--update]
  *
  * Benches (default: all):
  *   - size      linked binary + per-archive bytes across a build-config matrix
@@ -28,6 +28,10 @@
  *               reads in hot normal/default/generator calls. Backend wall time,
  *               managed allocation, coroutine-buffer churn, bytecode, and binary
  *               bytes isolate needless argument-object/slice materialization.
+ *   - stack-object bench/stack-object.js: residual fixed-shape objects whose local
+ *               identity/type/prototype observations prevent scalar replacement.
+ *               Compiled and interpreted wall time, managed allocation/GC signals,
+ *               bytecode, and binary size establish the pre-stack-allocation floor.
  *   - interpreter bench/language.js forced through bytecode: wide dispatch wall
  *               time, RSS, and exact loaded MalInstruction footprint.
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
@@ -131,6 +135,22 @@ interface ArgumentsMetrics {
 	interpreted: ArgumentsBackendMetrics;
 	nodeMs: number;
 }
+interface StackObjectBackendMetrics {
+	wallMs: number;
+	collections: number;
+	allocatedMb: number;
+	peakLiveKb: number;
+	maxPauseMs: number;
+	instructionCount: number;
+	bytecodeBytes: number;
+	binaryBytes: number;
+}
+interface StackObjectMetrics {
+	compiled: StackObjectBackendMetrics;
+	interpreted: StackObjectBackendMetrics;
+	nodeMs: number;
+	checksum: number;
+}
 interface InterpreterMetrics {
 	malMs: number;
 	nodeMs: number;
@@ -165,6 +185,7 @@ interface Entry {
 	promise?: PromiseMetrics;
 	coroutine?: CoroutineMetrics;
 	arguments?: ArgumentsMetrics;
+	stackObject?: StackObjectMetrics;
 	interpreter?: InterpreterMetrics;
 	gc?: Record<string, GcWorkload>;
 	http?: HttpMetrics | null;
@@ -474,6 +495,75 @@ function benchArguments(runs: number): ArgumentsMetrics {
 	};
 }
 
+// ---- stack object (residual shaped allocation; compiled + interpreted) -----
+
+function parseChecksum(stdout: string, command: string): number {
+	const output = stdout.trim();
+	if (!/^\d+$/.test(output)) {
+		throw new Error(
+			`${command} produced invalid checksum output: ${JSON.stringify(output)}`,
+		);
+	}
+	return Number(output);
+}
+
+function benchStackObjectBackend(
+	binary: string,
+	runs: number,
+): StackObjectBackendMetrics & { checksum: number } {
+	const wallMs = timeCommand(binary, [], runs);
+	const result = spawnSync(binary, [], {
+		env: { ...process.env, MAL_GC_STATS: "1", MAL_VM_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	if (result.status !== 0) {
+		throw new Error(`stack-object binary failed: ${binary} (status ${result.status})`);
+	}
+	const stderr = result.stderr ?? "";
+	return {
+		wallMs,
+		collections: parseGcStat(stderr, "collections"),
+		allocatedMb: parseGcStat(stderr, "allocated_bytes") / (1024 * 1024),
+		peakLiveKb: parseGcStat(stderr, "peak_live_bytes") / 1024,
+		maxPauseMs: parseGcMaxPause(stderr),
+		instructionCount: parseVmStat(stderr, "instruction_count"),
+		bytecodeBytes: parseVmStat(stderr, "bytecode_bytes"),
+		binaryBytes: fileBytes(binary),
+		checksum: parseChecksum(result.stdout ?? "", binary),
+	};
+}
+
+function benchStackObject(runs: number): StackObjectMetrics {
+	const compiledBinary = buildNativeBinary({
+		fixture: "bench/stack-object.js",
+		name: "bench-stack-object",
+		compiled: true,
+	});
+	const interpretedBinary = buildNativeBinary({
+		fixture: "bench/stack-object.js",
+		name: "bench-stack-object-ni",
+		compiled: false,
+	});
+	const compiled = benchStackObjectBackend(compiledBinary, runs);
+	const interpreted = benchStackObjectBackend(interpretedBinary, runs);
+	const nodeMs = timeCommand("node", ["bench/stack-object.js"], runs);
+	const nodeResult = spawnSync("node", ["bench/stack-object.js"], {
+		encoding: "utf-8",
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	if (nodeResult.status !== 0) {
+		throw new Error(`Node stack-object fixture failed (status ${nodeResult.status})`);
+	}
+	const checksum = parseChecksum(nodeResult.stdout ?? "", "node bench/stack-object.js");
+	if (compiled.checksum !== checksum || interpreted.checksum !== checksum) {
+		throw new Error(
+			`stack-object checksum mismatch: compiled=${compiled.checksum} interpreted=${interpreted.checksum} node=${checksum}`,
+		);
+	}
+	return { compiled, interpreted, nodeMs, checksum };
+}
+
 // ---- interpreter (wide bytecode dispatch + footprint; vs V8) --------------
 
 function parseVmStat(stderr: string, field: string): number {
@@ -675,6 +765,7 @@ function latestMetrics(entries: Array<Entry>): Entry | undefined {
 		latest.promise ??= entry.promise;
 		latest.coroutine ??= entry.coroutine;
 		latest.arguments ??= entry.arguments;
+		latest.stackObject ??= entry.stackObject;
 		latest.interpreter ??= entry.interpreter;
 		latest.gc ??= entry.gc;
 		latest.http ??= entry.http;
@@ -826,6 +917,26 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		}
 		console.log(`  node        ${entry.arguments.nodeMs.toFixed(1)}ms`);
 	}
+	if (entry.stackObject) {
+		const p = previous?.stackObject;
+		console.log("stack-object (residual shaped objects; vs V8):");
+		for (const name of ["compiled", "interpreted"] as const) {
+			const current = entry.stackObject[name];
+			const prior = p?.[name];
+			console.log(
+				`  ${name.padEnd(11)} ${current.wallMs.toFixed(1)}ms${delta(current.wallMs, prior?.wallMs)}  ${current.collections} collections, ${current.allocatedMb.toFixed(1)}MB managed${delta(current.allocatedMb, prior?.allocatedMb)}`,
+			);
+			console.log(
+				`               ${current.peakLiveKb.toFixed(1)}KB peak live, ${current.maxPauseMs.toFixed(2)}ms max pause`,
+			);
+			console.log(
+				`               ${current.instructionCount} instructions, ${humanBytes(current.bytecodeBytes)} bytecode, ${humanBytes(current.binaryBytes)} binary`,
+			);
+		}
+		console.log(
+			`  node        ${entry.stackObject.nodeMs.toFixed(1)}ms  checksum ${entry.stackObject.checksum}`,
+		);
+	}
 	if (entry.interpreter) {
 		const p = previous?.interpreter;
 		console.log("interpreter (language bytecode; vs V8):");
@@ -888,6 +999,7 @@ const which =
 				"promise",
 				"coroutine",
 				"arguments",
+				"stack-object",
 				"interpreter",
 				"gc",
 				"http",
@@ -903,6 +1015,7 @@ if (which.includes("string")) entry.string = benchString(runs);
 if (which.includes("promise")) entry.promise = benchPromise(runs);
 if (which.includes("coroutine")) entry.coroutine = benchCoroutine(runs);
 if (which.includes("arguments")) entry.arguments = benchArguments(runs);
+if (which.includes("stack-object")) entry.stackObject = benchStackObject(runs);
 if (which.includes("interpreter")) entry.interpreter = benchInterpreter(runs);
 if (which.includes("gc")) entry.gc = benchGc(runs);
 if (which.includes("http")) entry.http = benchHttp("10s", 50);
