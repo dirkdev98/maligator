@@ -35,6 +35,7 @@
 		"test262:regressions": "node ./scripts/test262.ts --manifest tests/test262-regressions.txt --check",
 		"test:leak": "MAL_LEAKCHECK=1 vitest run --project native tests/native/leak.test.ts",
 		"test:native": "vitest run --project native",
+		"test:sanitize": "node ./scripts/test-sanitize.ts",
 		"test:unit": "vitest --project unit",
 		"type-check": "tsc",
 		"update": "npx npm-check --update --save-exact"

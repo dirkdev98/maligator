@@ -9,6 +9,7 @@
 - `npm test run` - Run all tests once with Vitest
 - `npm run test:unit` - Fast lane: pure-TS compiler tests only (no C build; the watch loop)
 - `npm run test:native` - Native lane: build each fixture into an isolate binary/server and drive it
+- `npm run test:sanitize -- <filename>` - Platform-safe native sanitizer lane (UBSan on macOS, ASan+UBSan elsewhere)
 - `npm test -- <filename>` - Run a single test file
 - `npm run test:leak` - macOS-only GC leak audit (`leaks`), off by default
 - `npm run test262` - Full test262 suite (expensive; ask before running)
