@@ -556,6 +556,13 @@ export type IRInstruction =
 	| {
 			type: "return";
 
+			/**
+			 * COMPILE-ONLY: materialize the matching stack-object site immediately
+			 * before this return. Lowering converts the function-local site id into
+			 * return-instruction-indexed VmFunction metadata.
+			 */
+			stackObjectMaterializeSiteId?: number;
+
 			// [return value]
 			registers: [number];
 	  }
@@ -618,8 +625,10 @@ export type IRInstruction =
 	| {
 			type: "createObject";
 
-			/** COMPILE-ONLY: this allocation passed the closed stack-object proof. */
+			/** COMPILE-ONLY: this allocation passed the stack-object proof. */
 			stackObject?: true;
+			/** COMPILE-ONLY: function-local id for conditional-return materialization. */
+			stackObjectSiteId?: number;
 
 			// [destination]
 			registers: [number];
@@ -631,12 +640,14 @@ export type IRInstruction =
 			type: "createObjectShaped";
 
 			/**
-			 * COMPILE-ONLY: this exact allocation instruction passed the closed
-			 * fixed-shape stack-object proof after the optimization fixpoint. Register
+			 * COMPILE-ONLY: this exact allocation instruction passed the closed or
+			 * conditional-return fixed-shape stack-object proof after the optimization fixpoint. Register
 			 * allocation preserves the instruction object; lower-vm transfers the site
 			 * to VmFunction metadata, while serialized bytecode deliberately ignores it.
 			 */
 			stackObject?: true;
+			/** COMPILE-ONLY: function-local id for conditional-return materialization. */
+			stackObjectSiteId?: number;
 
 			// [destination, ...valueRegisters] — one value register per key, in order
 			registers: [number, ...Array<number>];

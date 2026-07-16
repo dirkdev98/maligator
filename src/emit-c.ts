@@ -531,6 +531,21 @@ export function emitCompiledFunction(
 		});
 		nextStackSlot += site.slotCount;
 	}
+	const stackObjectMaterializations = new Map<number, StackObjectSite>();
+	for (const materialization of fn.stackObjectMaterializations ?? []) {
+		const returnInstruction = fn.instructions[materialization.returnInstructionIndex];
+		const site = stackObjectSites.get(materialization.allocationInstructionIndex);
+		if (
+			returnInstruction?.opcode !== "RETURN" ||
+			site === undefined ||
+			stackObjectMaterializations.has(materialization.returnInstructionIndex)
+		) {
+			throw new Error(
+				`Invalid stack-object materialization metadata at instruction ${materialization.returnInstructionIndex}`,
+			);
+		}
+		stackObjectMaterializations.set(materialization.returnInstructionIndex, site);
+	}
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -553,6 +568,7 @@ export function emitCompiledFunction(
 		thisSlot,
 		null,
 		stackObjectSites,
+		stackObjectMaterializations,
 	);
 	if (body === null) {
 		return null;
@@ -764,7 +780,17 @@ function emitResumableFunction(
 	// thisSlot is -1: a coroutine is never a derived constructor, and `this` is read
 	// from the this_value parameter (which the resume path is invoked with from the
 	// saved frame), so no mutable this-slot is needed.
-	const body = emitBody(fn, suffix, reps, debug, gcUnlink, -1, coro, new Map());
+	const body = emitBody(
+		fn,
+		suffix,
+		reps,
+		debug,
+		gcUnlink,
+		-1,
+		coro,
+		new Map(),
+		new Map(),
+	);
 	if (body === null) {
 		return null;
 	}
@@ -1124,6 +1150,7 @@ function emitBody(
 	thisSlot: number,
 	coro: CoroutineContext | null,
 	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
+	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
 	for (const instruction of fn.instructions) {
@@ -1274,6 +1301,7 @@ function emitBody(
 			coro,
 			regionGuard.get(ip),
 			stackObjectSites.get(ip),
+			stackObjectMaterializations.get(ip),
 		);
 		if (emitted === null) {
 			return null;
@@ -1304,6 +1332,7 @@ function emitInstruction(
 	coro: CoroutineContext | null,
 	region: RegionAccess | undefined,
 	stackObjectSite: StackObjectSite | undefined,
+	stackObjectMaterialization: StackObjectSite | undefined,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -2047,12 +2076,22 @@ function emitInstruction(
 				: [`if (${truthy(instruction.cond)}) goto L${instruction.targetIp};`];
 		case "RETURN": {
 			// Register -1 is the "no value" sentinel (a synthesized empty return).
-			const value =
+			let value =
 				instruction.value < 0 ? "MAL_VALUE_UNDEFINED" : boxed(instruction.value);
+			const materialize: Array<string> = [];
+			if (stackObjectMaterialization !== undefined) {
+				const materialized = `materialized_ret_${ip}`;
+				materialize.push(
+					`MalValue ${materialized} = mal_vm_materialize_stack_object(vm, &${stackObjectMaterialization.objectName});`,
+					throwCheck,
+				);
+				value = materialized;
+			}
 			// A coroutine body's return completes the activation: free its buffer and
 			// settle its promise / hand the value to the .next() driver.
 			if (coro !== null) {
 				return [
+					...materialize,
 					`mal_vm_op_coroutine_return_compiled(vm, __coro, ${value});`,
 					`${gcUnlink}return ${coroReturnValue};`,
 				];
@@ -2063,6 +2102,7 @@ function emitInstruction(
 			if (thisSlot >= 0) {
 				const ret = `derived_ret_${ip}`;
 				return [
+					...materialize,
 					`MalValue ${ret} = mal_vm_op_derived_construct_return(vm, ${value}, ${thisRef});`,
 					throwCheck,
 					`${gcUnlink}return ${ret};`,
@@ -2072,6 +2112,7 @@ function emitInstruction(
 			// (new_target set) substitutes `this` for a non-object completion; a
 			// plain call passes the value through unchanged.
 			return [
+				...materialize,
 				`${gcUnlink}return mal_ops_construct_result(${value}, this_value, new_target);`,
 			];
 		}

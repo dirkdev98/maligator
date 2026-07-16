@@ -69,6 +69,22 @@ function branchAndException(takeThrow) {
 	return typeof o === "object" && o === o ? o.value + o.text.length + caught : -1;
 }
 
+function conditionalReturn(seed, escape) {
+	const o = { value: seed, text: "partial:" + seed };
+	const alias = o;
+	alias.value = seed + 2;
+	allocateNoise(seed + 220);
+	if (escape) return alias;
+	return typeof o === "object" && o === alias ? alias.value + alias.text.length : -1;
+}
+
+function failConditionalReturn(escape) {
+	__mal_fail_next_cell_allocation();
+	const o = { value: 31, text: "oom-current" };
+	if (escape) return o;
+	return typeof o === "object" ? o.value : 0;
+}
+
 let globalEscape;
 function returnEscape(seed) {
 	return { value: seed, text: "return:" + seed };
@@ -96,6 +112,33 @@ check("simultaneous stack sites", simultaneous(41));
 check("recursion and reentrancy", recursive(6) === 70);
 check("branch normal", branchAndException(false) === 21);
 check("branch exception", branchAndException(true) === 28);
+
+check("partial nonescaping edge", conditionalReturn(20, false) === 32);
+const partial = conditionalReturn(21, true);
+const partialAgain = conditionalReturn(21, true);
+allocateNoise(250);
+check(
+	"partial return current state and prototype",
+	partial.value === 23 &&
+		partial.text === "partial:21" &&
+		Object.getPrototypeOf(partial) === Object.prototype,
+);
+check(
+	"partial return identity",
+	partial !== partialAgain && partial.value === partial.value,
+);
+
+if (typeof __mal_fail_next_cell_allocation === "function") {
+	let materializeOom = false;
+	try {
+		failConditionalReturn(true);
+	} catch (error) {
+		materializeOom = error instanceof Error;
+	}
+	check("partial return allocation failure", materializeOom);
+}
+const recoveredPartial = conditionalReturn(22, true);
+check("partial return allocation recovery", recoveredPartial.value === 24);
 
 const returned = returnEscape(11);
 allocateNoise(300);

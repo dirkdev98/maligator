@@ -34,6 +34,12 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *value_out);
 static MalInlineCache *mal_interp_ic(MalCallable *callable);
 
+static u64 g_stack_object_materializations = 0;
+
+u64 mal_vm_stack_object_materialization_count(void) {
+    return g_stack_object_materializations;
+}
+
 static const i32 *mal_op_instruction_data(MalCallable *callable, i32 offset) {
     return callable->function->instruction_data + offset;
 }
@@ -237,6 +243,37 @@ MalValue mal_vm_op_create_object(MalVm *vm) {
         mal_vm_throw_allocation_error(vm);
         return MAL_VALUE_UNDEFINED;
     }
+    return mal_value_from_object(object);
+}
+
+MalValue mal_vm_materialize_stack_object(MalVm *vm, const MalObject *source) {
+    assert(source->header.type == MAL_HEAP_OBJECT);
+    assert(source->header.storage == MAL_HEAP_STORAGE_IMMORTAL);
+    assert(source->overflow == nullptr);
+    u32 count = source->shape->inline_count;
+    assert(count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    assert((count == 0) == (source->slots == nullptr));
+
+    MalObject *object = mal_heap_try_alloc(
+        &vm->heap, sizeof(MalObject) + sizeof(MalValue) * count, MAL_HEAP_OBJECT);
+    if (object == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return MAL_VALUE_UNDEFINED;
+    }
+
+    // Preserve every ordinary-object internal field while retaining the fresh
+    // managed header. The trailing slots belong to the same GC cell.
+    MalHeapHeader header = object->header;
+    *object = *source;
+    object->header = header;
+    object->slots_owned = false;
+    if (count == 0) {
+        object->slots = nullptr;
+    } else {
+        object->slots = (MalValue *) (object + 1);
+        memcpy(object->slots, source->slots, sizeof(MalValue) * count);
+    }
+    g_stack_object_materializations++;
     return mal_value_from_object(object);
 }
 

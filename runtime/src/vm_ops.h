@@ -719,6 +719,15 @@ MalValue mal_vm_op_to_property_key(MalVm *vm, MalValue object_value, MalValue ke
 MalValue mal_vm_op_create_object(MalVm *vm);
 
 /**
+ * Clone a compiler-emitted ordinary stack object into one managed cell before
+ * it escapes through a return. On OOM, leaves an allocation-error completion.
+ */
+MalValue mal_vm_materialize_stack_object(MalVm *vm, const struct MalObject *source);
+
+/** Successful stack-object return materializations (benchmark telemetry). */
+u64 mal_vm_stack_object_materialization_count(void);
+
+/**
  * Create a plain object directly in `shape` (built from the literal's static
  * keys) with `count` inline slots filled from `values` in key order. The
  * Both backends cache the immutable shape per literal site. See

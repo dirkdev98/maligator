@@ -31,6 +31,7 @@
 #include "./shape.h"
 #include "./typed_array_object.h"
 #include "./vm.h"
+#include "./vm_ops.h"
 #include "mal_i18n.h"
 #include "mal_regexp.h"
 
@@ -318,14 +319,15 @@ static void mal_gc_print_stats(void) {
             "[gc-stats] collections=%llu minor=%llu major=%llu total_ms=%.3f "
             "max_pause_ms=%.3f peak_live_bytes=%llu allocated_bytes=%llu "
             "object_slot_coallocations=%llu object_slot_grow_migrations=%llu "
-            "object_slot_dictionary_migrations=%llu",
+            "object_slot_dictionary_migrations=%llu stack_object_materializations=%llu",
             (unsigned long long) g->collections, (unsigned long long) g->minor_count,
             (unsigned long long) g->major_count, (double) g->total_ns / 1.0e6,
             (double) g->max_pause_ns / 1.0e6, (unsigned long long) g->peak_live_bytes,
             (unsigned long long) allocated_bytes,
             (unsigned long long) mal_object_slot_coallocation_count(),
             (unsigned long long) mal_object_slot_grow_migration_count(),
-            (unsigned long long) mal_object_slot_dictionary_migration_count());
+            (unsigned long long) mal_object_slot_dictionary_migration_count(),
+            (unsigned long long) mal_vm_stack_object_materialization_count());
 #if MAL_GC_CONCURRENT
     fprintf(stderr,
             " cycles=%llu sync_backstop=%llu over_tenure_bytes=%llu "

@@ -156,6 +156,7 @@ interface StackObjectBackendMetrics {
 	objectSlotCoallocations: number;
 	objectSlotGrowMigrations: number;
 	objectSlotDictionaryMigrations: number;
+	stackObjectMaterializations: number;
 }
 interface StackObjectMetrics {
 	compiled: StackObjectBackendMetrics;
@@ -583,6 +584,7 @@ function benchStackObjectBackend(
 			stderr,
 			"object_slot_dictionary_migrations",
 		),
+		stackObjectMaterializations: parseGcStat(stderr, "stack_object_materializations"),
 		checksum: parseChecksum(result.stdout ?? "", binary),
 	};
 }
@@ -1000,6 +1002,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			);
 			console.log(
 				`               ${current.objectSlotCoallocations} coallocated slots, ${current.objectSlotGrowMigrations} grow migrations, ${current.objectSlotDictionaryMigrations} dictionary migrations`,
+			);
+			console.log(
+				`               ${current.stackObjectMaterializations} stack-object return materializations${delta(current.stackObjectMaterializations, prior?.stackObjectMaterializations)}`,
 			);
 		}
 		console.log(

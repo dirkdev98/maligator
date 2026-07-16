@@ -217,6 +217,17 @@ export interface VmFunction {
 	 * functions retain ordinary heap allocation semantics.
 	 */
 	stackObjectSites?: ReadonlyArray<{ instructionIndex: number; slotCount: number }>;
+
+	/**
+	 * COMPILE-ONLY: partial-escape materializations keyed to RETURN instruction
+	 * indices. The allocation index resolves the stack storage to clone. Omitted by
+	 * the wire codec so interpreter behavior and the serialized opcode set are
+	 * unchanged.
+	 */
+	stackObjectMaterializations?: ReadonlyArray<{
+		returnInstructionIndex: number;
+		allocationInstructionIndex: number;
+	}>;
 }
 
 /**
@@ -855,6 +866,11 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 	const instructions: Array<VmInstruction> = [];
 	const positions: Array<number> = [];
 	const stackObjectSites: Array<{ instructionIndex: number; slotCount: number }> = [];
+	const stackObjectSiteInstructionById = new Map<number, number>();
+	const pendingStackObjectMaterializations: Array<{
+		returnInstructionIndex: number;
+		siteId: number;
+	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -876,10 +892,39 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 							? instruction.keyStringIndices.length
 							: 0,
 				});
+				if (instruction.stackObjectSiteId !== undefined) {
+					if (stackObjectSiteInstructionById.has(instruction.stackObjectSiteId)) {
+						throw new Error(
+							`Duplicate stack-object site id ${instruction.stackObjectSiteId}`,
+						);
+					}
+					stackObjectSiteInstructionById.set(
+						instruction.stackObjectSiteId,
+						instructionIndex,
+					);
+				}
+			}
+			if (
+				instruction.type === "return" &&
+				instruction.stackObjectMaterializeSiteId !== undefined
+			) {
+				pendingStackObjectMaterializations.push({
+					returnInstructionIndex: instructionIndex,
+					siteId: instruction.stackObjectMaterializeSiteId,
+				});
 			}
 			positions.push(currentPos);
 		}
 	}
+	const stackObjectMaterializations = pendingStackObjectMaterializations.map(
+		({ returnInstructionIndex, siteId }) => {
+			const allocationInstructionIndex = stackObjectSiteInstructionById.get(siteId);
+			if (allocationInstructionIndex === undefined) {
+				throw new Error(`Unknown stack-object materialization site id ${siteId}`);
+			}
+			return { returnInstructionIndex, allocationInstructionIndex };
+		},
+	);
 
 	// These are the only ops that read frame->arguments; if neither appears the
 	// activation never needs the arguments slice. Derived from the emitted
@@ -922,6 +967,8 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		positions,
 		gcRootRegisters,
 		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
+		stackObjectMaterializations:
+			stackObjectMaterializations.length > 0 ? stackObjectMaterializations : undefined,
 	};
 }
 

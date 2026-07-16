@@ -131,7 +131,9 @@ const MAX_IMMEDIATE_I28 = 0x07ff_ffff;
 const MIN_IMMEDIATE_I28 = -0x0800_0000;
 const MAX_IMMEDIATE_CONSTANT_INDEX = 0x0fff_ffff;
 
-function immediateValue(instruction: IRInstruction | undefined): IRImmediateValue | undefined {
+function immediateValue(
+	instruction: IRInstruction | undefined,
+): IRImmediateValue | undefined {
 	if (instruction === undefined) return undefined;
 	switch (instruction.type) {
 		case "createUndefined":
@@ -254,14 +256,15 @@ function optStaticPropertyKeys(program: IntermediateProgram): boolean {
 }
 
 /**
- * Prove the first native stack-object class: a closed, fixed-shape ordinary
- * object whose identity/type/prototype may be observed, but whose pointer cannot
- * leave the activation or enter any operation capable of retaining it.
+ * Prove native stack objects: closed, fixed-shape ordinary objects whose
+ * identity/type/prototype may be observed. Stage 1 also permits direct
+ * conditional returns that are materialized before leaving the activation.
  *
  * This deliberately does not consume `stackAllocCandidates` from escape.ts. A
- * use not listed below rejects the site, including every call position, return,
- * throw, capture/global/heap store, dynamic or missing-key read, shape mutation,
- * enumeration, delete, and suspension-related operation.
+ * use not listed below rejects the site, including every call position, throw,
+ * capture/global/heap store, dynamic or missing-key read, shape mutation,
+ * enumeration, delete, and suspension-related operation. A direct return may be
+ * accepted by the partial-escape subset below when another ordinary exit remains.
  */
 export function annotateStackObjectSites(program: IntermediateProgram): void {
 	for (const fn of program.functions) {
@@ -271,11 +274,15 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 		let stackObjectSlots = 0;
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
+				if (instruction.type === "return") {
+					delete instruction.stackObjectMaterializeSiteId;
+				}
 				if (
 					instruction.type === "createObject" ||
 					instruction.type === "createObjectShaped"
 				) {
 					delete instruction.stackObject;
+					delete instruction.stackObjectSiteId;
 				}
 			}
 		}
@@ -283,11 +290,122 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 		if (
 			fn.isGenerator ||
 			fn.isAsync ||
+			(fn.classContext?.isConstructor ?? false) ||
 			fn.semanticFile.hasDirectEval.size > 0 ||
 			functionUsesWith(fn)
 		) {
 			continue;
 		}
+
+		// Stage 1 partial escape deliberately excludes loops and exception regions.
+		// This keeps each accepted return a one-shot edge from a live activation and
+		// avoids changing try/finally completion ordering.
+		const hasExceptionControl = fn.blocks.some((block) =>
+			block.instructions.some(
+				(instruction) =>
+					instruction.type === "tryBegin" ||
+					instruction.type === "tryEnd" ||
+					instruction.type === "catch" ||
+					instruction.type === "throw",
+			),
+		);
+		const successors = fn.blocks.map((block, blockIndex) => {
+			const result = new Set<number>();
+			for (const instruction of block.instructions) {
+				if (instruction.type === "jump" || instruction.type === "jumpIf") {
+					for (const target of instruction.blocks) {
+						if (target >= 0 && target < fn.blocks.length) result.add(target);
+					}
+				}
+			}
+			const last = block.instructions[block.instructions.length - 1];
+			if (
+				last?.type !== "jump" &&
+				last?.type !== "return" &&
+				last?.type !== "throw" &&
+				blockIndex + 1 < fn.blocks.length
+			) {
+				result.add(blockIndex + 1);
+			}
+			return [...result];
+		});
+		const reachable = new Set<number>();
+		const reachWorklist = fn.blocks.length > 0 ? [0] : [];
+		while (reachWorklist.length > 0) {
+			const blockIndex = reachWorklist.pop()!;
+			if (reachable.has(blockIndex)) continue;
+			reachable.add(blockIndex);
+			for (const successor of successors[blockIndex]!) reachWorklist.push(successor);
+		}
+		const predecessors = fn.blocks.map(() => new Set<number>());
+		for (const blockIndex of reachable) {
+			for (const successor of successors[blockIndex]!) {
+				if (reachable.has(successor)) predecessors[successor]!.add(blockIndex);
+			}
+		}
+		const remainingPredecessors = predecessors.map((incoming) => incoming.size);
+		const acyclicWorklist = [...reachable].filter(
+			(blockIndex) => remainingPredecessors[blockIndex] === 0,
+		);
+		let acyclicBlockCount = 0;
+		while (acyclicWorklist.length > 0) {
+			const blockIndex = acyclicWorklist.pop()!;
+			acyclicBlockCount++;
+			for (const successor of successors[blockIndex]!) {
+				if (!reachable.has(successor)) continue;
+				remainingPredecessors[successor] = remainingPredecessors[successor]! - 1;
+				if (remainingPredecessors[successor] === 0) acyclicWorklist.push(successor);
+			}
+		}
+		const hasReachableCycle = acyclicBlockCount !== reachable.size;
+		const dominators = fn.blocks.map((_, blockIndex) =>
+			blockIndex === 0 ? new Set([0]) : new Set(reachable),
+		);
+		let dominatorsChanged = true;
+		while (dominatorsChanged) {
+			dominatorsChanged = false;
+			for (const blockIndex of reachable) {
+				if (blockIndex === 0) continue;
+				const incoming = [...predecessors[blockIndex]!];
+				const next =
+					incoming.length === 0
+						? new Set<number>()
+						: new Set(
+								[...dominators[incoming[0]!]!].filter((candidate) =>
+									incoming.every((predecessor) =>
+										dominators[predecessor]!.has(candidate),
+									),
+								),
+							);
+				next.add(blockIndex);
+				const current = dominators[blockIndex]!;
+				if (
+					next.size !== current.size ||
+					[...next].some((candidate) => !current.has(candidate))
+				) {
+					dominators[blockIndex] = next;
+					dominatorsChanged = true;
+				}
+			}
+		}
+		const instructionLocations = new Map<
+			IRInstruction,
+			{ blockIndex: number; instructionIndex: number }
+		>();
+		for (let blockIndex = 0; blockIndex < fn.blocks.length; blockIndex++) {
+			const block = fn.blocks[blockIndex]!;
+			for (
+				let instructionIndex = 0;
+				instructionIndex < block.instructions.length;
+				instructionIndex++
+			) {
+				instructionLocations.set(block.instructions[instructionIndex]!, {
+					blockIndex,
+					instructionIndex,
+				});
+			}
+		}
+		let nextStackObjectSiteId = 0;
 
 		const defCount = new Map<number, number>();
 		const singleDef = new Map<number, IRInstruction>();
@@ -343,6 +461,9 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 				const ownKeys = new Set(keyStringIndices);
 				const aliases = new Set<number>([objectRegister]);
 				const worklist = [objectRegister];
+				const materializingReturns = new Set<
+					Extract<IRInstruction, { type: "return" }>
+				>();
 				let observed = false;
 				let safe = true;
 				while (safe && worklist.length > 0) {
@@ -397,6 +518,10 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 									observed = true;
 								}
 								break;
+							case "return":
+								if (position !== 0) safe = false;
+								else materializingReturns.add(use);
+								break;
 							default:
 								safe = false;
 						}
@@ -404,14 +529,49 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 					}
 				}
 
+				let partialEscape = false;
+				if (safe && materializingReturns.size > 0) {
+					const allocationLocation = instructionLocations.get(allocation)!;
+					const afterDominatedAllocation = (instruction: IRInstruction): boolean => {
+						const location = instructionLocations.get(instruction)!;
+						return (
+							reachable.has(location.blockIndex) &&
+							dominators[location.blockIndex]!.has(allocationLocation.blockIndex) &&
+							(location.blockIndex !== allocationLocation.blockIndex ||
+								location.instructionIndex > allocationLocation.instructionIndex)
+						);
+					};
+					const hasNonescapingReturn = fn.blocks.some((block) =>
+						block.instructions.some(
+							(instruction) =>
+								instruction.type === "return" &&
+								!materializingReturns.has(instruction) &&
+								afterDominatedAllocation(instruction),
+						),
+					);
+					partialEscape =
+						!hasExceptionControl &&
+						!hasReachableCycle &&
+						hasNonescapingReturn &&
+						[...materializingReturns].every(afterDominatedAllocation);
+					if (!partialEscape) safe = false;
+				}
+
 				// Pure load/store records belong to scalar replacement. Requiring a real
 				// identity/type/prototype observation keeps this as the residual class.
 				if (
 					safe &&
-					observed &&
+					(observed || partialEscape) &&
 					stackObjectSlots + keyStringIndices.length <= maxStackObjectSlots
 				) {
 					allocation.stackObject = true;
+					if (partialEscape) {
+						const siteId = nextStackObjectSiteId++;
+						allocation.stackObjectSiteId = siteId;
+						for (const instruction of materializingReturns) {
+							instruction.stackObjectMaterializeSiteId = siteId;
+						}
+					}
 					stackObjectSlots += keyStringIndices.length;
 				}
 			}

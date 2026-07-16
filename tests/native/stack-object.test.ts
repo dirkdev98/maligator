@@ -30,13 +30,19 @@ describe("compiled stack objects", () => {
 		});
 	});
 
-	it("preserves compiled identity, slots, recursion, branches, and escapes", () => {
-		assertPassLine(runToStdout(compiled), "stack-object");
+	it("preserves compiled identity, slots, recursion, branches, materialization, and escapes", () => {
+		assertPassLine(
+			runToStdout(compiled, { env: { MAL_ALLOC_FAIL_TEST: "1" } }),
+			"stack-object",
+		);
 	});
 
 	it("keeps stack slots rooted under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
 		assertPassLine(
-			runToStdout(compiled, { env: STRESS_ENV, timeoutMs: 60000 }),
+			runToStdout(compiled, {
+				env: { ...STRESS_ENV, MAL_ALLOC_FAIL_TEST: "1" },
+				timeoutMs: 60000,
+			}),
 			"stack-object",
 		);
 	});

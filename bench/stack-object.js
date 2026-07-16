@@ -1,8 +1,9 @@
 // Broad residual shaped-object benchmark. Positive objects are frame-local but
 // cannot be scalar-replaced because their type, identity, or prototype chain is
-// observed. No positive object is passed, returned, captured, suspended, stored,
-// thrown, or placed in another object. The bounded loops perform millions of
-// fixed-key operations; the final phases are explicit heap-allocation controls.
+// observed. Positive objects do not continue through calls, captures, stores, or
+// throws. One site has a rare conditional return that materializes its current
+// state. The bounded loops perform millions of fixed-key operations; the final
+// phases also retain explicit heap-allocation controls.
 
 const MOD = 1000000007;
 const SHAPE_RUNS = 120000;
@@ -145,8 +146,10 @@ function returnedNegative(depth, seed) {
 	return returnedNegative(depth - 1, seed + 1);
 }
 
-function returnedOne(seed) {
-	return { value: seed };
+function partiallyReturnedOne(seed, escape) {
+	const object = { value: seed };
+	if (escape) return object;
+	return typeof object === "object" && object === object ? object.value : 0;
 }
 
 function storeNegative(seed) {
@@ -184,7 +187,8 @@ for (let i = 0; i < 60000; i++) {
 	checksum = (checksum + passNegative(i)) % MOD;
 }
 for (let i = 0; i < 300000; i++) {
-	checksum = (checksum + returnedOne(i).value) % MOD;
+	const result = partiallyReturnedOne(i, i === 299999);
+	checksum = (checksum + (typeof result === "object" ? result.value : result)) % MOD;
 }
 
 const EXPECTED_CHECKSUM = 797792866;

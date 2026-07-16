@@ -190,6 +190,54 @@ describe("closed fixed-shape stack-object proof", () => {
 		);
 		expect(stackSiteCount(program)).toBe(256);
 	});
+
+	it("accepts direct alias returns when a dominated nonescaping return remains", () => {
+		const program = optimized(
+			`function f(escape, value) { const o = { x: value }; const alias = o; alias.x = value + 1; if (escape) return alias; return typeof o === "object" && o === alias ? o.x : 0; } globalThis.keep = f;`,
+		);
+		expect(stackSiteCount(program)).toBe(1);
+		const returns = instructions(program).filter(
+			(instruction): instruction is Extract<IRInstruction, { type: "return" }> =>
+				instruction.type === "return",
+		);
+		expect(
+			returns.filter(
+				(instruction) => instruction.stackObjectMaterializeSiteId !== undefined,
+			),
+		).toHaveLength(1);
+		expect(
+			returns.filter(
+				(instruction) => instruction.stackObjectMaterializeSiteId === undefined,
+			),
+		).not.toHaveLength(0);
+	});
+
+	it("accepts an empty createObject with a conditional return", () => {
+		expect(
+			stackSiteCount(
+				optimized(
+					`function f(escape) { const o = {}; if (escape) return o; return typeof o === "object" && o === o ? 1 : 0; } globalThis.keep = f;`,
+				),
+			),
+		).toBe(1);
+	});
+
+	it.each([
+		[
+			"looped activation",
+			`function f(escape, n) { const o = { x: n }; while (n-- > 0) o.x = n; if (escape) return o; return typeof o === "object" ? o.x : 0; } globalThis.keep = f;`,
+		],
+		[
+			"exception region",
+			`function f(escape) { const o = { x: 1 }; try { if (escape) return o; } catch (error) {} return typeof o === "object" ? o.x : 0; } globalThis.keep = f;`,
+		],
+		[
+			"continuing global escape",
+			`function f(escape) { const o = { x: 1 }; if (escape) return o; globalThis.saved = o; return 0; } globalThis.keep = f;`,
+		],
+	])("keeps the partial-return subset closed for %s", (_name, source) => {
+		expect(stackSiteCount(optimized(source))).toBe(0);
+	});
 });
 
 describe("stack-object native metadata and C emission", () => {
@@ -231,13 +279,45 @@ describe("stack-object native metadata and C emission", () => {
 		expect(source).not.toContain("MalObject __stack_object_");
 	});
 
+	it("anchors conditional-return materialization to RETURN metadata and checks OOM", () => {
+		const definition = compileSemanticProgramToVmDefinition(
+			semantic(
+				`function f(escape, value) { const o = { x: value, tag: "current" }; const alias = o; alias.x = value + 1; if (escape === 1) return alias; if (escape === 2) return o; return typeof o === "object" ? o.x : 0; } globalThis.keep = f;`,
+			),
+		);
+		const fn = definition.functions.find(
+			(candidate) => (candidate.stackObjectMaterializations?.length ?? 0) > 0,
+		)!;
+		expect(fn.stackObjectMaterializations).toHaveLength(2);
+		for (const materialization of fn.stackObjectMaterializations!) {
+			expect(fn.instructions[materialization.returnInstructionIndex]?.opcode).toBe(
+				"RETURN",
+			);
+			expect(
+				fn.stackObjectSites?.some(
+					(site) => site.instructionIndex === materialization.allocationInstructionIndex,
+				),
+			).toBe(true);
+		}
+
+		const source = emitVmDefinition(definition, { compiled: true });
+		expect(source).toContain("mal_vm_materialize_stack_object(vm, &__stack_object_");
+		expect(source).toMatch(
+			/mal_vm_materialize_stack_object\([^\n]+\);\n\s+if \(vm->completion\.kind == MAL_COMPLETION_THROW\)/,
+		);
+		expect(source).toMatch(/mal_ops_construct_result\(materialized_ret_\d+/);
+	});
+
 	it("does not serialize compile-only stack site metadata", () => {
 		const decoded = deserializeVmDefinition(
 			compileSourceToBuffer(
-				`function f() { const o = { x: 1 }; return typeof o === "object" ? o.x : 0; } globalThis.keep = f;`,
+				`function f(escape) { const o = { x: 1 }; if (escape) return o; return typeof o === "object" ? o.x : 0; } globalThis.keep = f;`,
 			),
 		);
 		expect(decoded.functions.every((fn) => fn.stackObjectSites === undefined)).toBe(true);
+		expect(
+			decoded.functions.every((fn) => fn.stackObjectMaterializations === undefined),
+		).toBe(true);
 		expect(
 			decoded.functions.some((fn) =>
 				fn.instructions.some(
