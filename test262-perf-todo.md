@@ -22,8 +22,10 @@ reproducer passes.
        declaration order, initializer effects, abrupt completion, and brand checks.
 3. [ ] Bulk-lower contiguous uninitialized global declarations while preserving
        declaration-instantiation checks and global observability.
-4. [ ] Add primitive constant folding and dead-branch cleanup with exact JavaScript
-       NaN, negative-zero, integer, BigInt, overflow, and throwing semantics.
+4. [x] Add conservative Number/Boolean/null/undefined constant folding and
+       dead-branch cleanup with exact NaN, negative-zero, overflow, and throwing
+       semantics. Keep BigInt, strings, exponentiation, and resumable functions on
+       their runtime paths until their host/resume contracts are explicit.
 5. [ ] Add tagged immediate and static-key operands to avoid standalone constant
        creation for calls, property operations, and construction.
 6. [ ] Evaluate resumable static call tables only after item 5 is measured; add them
@@ -48,9 +50,9 @@ reproducer passes.
 
 ## P3 - Compiler cleanup
 
-13. [ ] Avoid constructing semantic and IR debug renderings when `MAL_DEBUG` is
+13. [x] Avoid constructing semantic and IR debug renderings when `MAL_DEBUG` is
         disabled; gate construction rather than only the logger call.
-14. [ ] Replace compiled C emission's per-instruction handler scan with an interval
+14. [x] Replace compiled C emission's per-instruction handler scan with an interval
         cursor/index. Preserve innermost-handler selection and add a generated
         many-handler regression.
 

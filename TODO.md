@@ -15,6 +15,15 @@ roadmaps for everything else. Test262 verdict counts live only in
 
 ## Compiler and runtime performance
 
+- [x] Gate semantic and IR debug rendering before construction when `MAL_DEBUG`
+      is disabled. The compiler benchmark tracks Node-hosted front-end wall time
+      and serialized wire bytes on a deterministic multi-function corpus.
+- [x] Fold exact primitive numeric/boolean/null/undefined operations and constant
+      branches in non-resumable functions. Preserve NaN, infinities, and negative
+      zero; leave exponentiation and resumable functions to host/resume-aware work.
+- [x] Coallocate one-slot ordinary shaped-object storage in the existing 48-byte
+      managed-cell class. Growth migrates to an owned buffer, dictionary/finalizer
+      paths honor ownership, and the stack-object benchmark tracks avoided buffers.
 - [x] Convert public String, RegExp, and Intl substring producers to dependent
       slices. Tiny slices copy instead of pinning disproportionate owned parents;
       the broad string benchmark tracks allocation and wall time, and both backends
