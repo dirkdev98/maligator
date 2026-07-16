@@ -2217,6 +2217,36 @@
         "nodeMs": 39.083083,
         "checksum": 597883230
       }
+    },
+    {
+      "commit": "cd2c9c7",
+      "dirty": false,
+      "stackObject": {
+        "compiled": {
+          "wallMs": 220.241458,
+          "collections": 24,
+          "allocatedMb": 108.75717163085938,
+          "peakLiveKb": 114.984375,
+          "maxPauseMs": 2.787,
+          "instructionCount": 0,
+          "bytecodeBytes": 0,
+          "binaryBytes": 14194672,
+          "checksum": 597883230
+        },
+        "interpreted": {
+          "wallMs": 688.141333,
+          "collections": 38,
+          "allocatedMb": 167.35092163085938,
+          "peakLiveKb": 116.25,
+          "maxPauseMs": 4.714,
+          "instructionCount": 893,
+          "bytecodeBytes": 18740,
+          "binaryBytes": 14137464,
+          "checksum": 597883230
+        },
+        "nodeMs": 38.350708,
+        "checksum": 597883230
+      }
     }
   ]
 }
