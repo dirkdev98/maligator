@@ -43,7 +43,7 @@ bool mal_array_object_dense_has(const MalArrayObject *array, u32 index) {
 }
 
 /** Ensure `elements` has room for at least `needed` slots (geometric growth). */
-static bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed) {
+bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed) {
     if (needed <= array->capacity) {
         return true;
     }

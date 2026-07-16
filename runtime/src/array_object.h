@@ -54,6 +54,12 @@ bool mal_array_object_dense_get(const MalArrayObject *array, u32 index, MalValue
 /** Whether `index` is a present (non-hole) own element in the dense region. */
 bool mal_array_object_dense_has(const MalArrayObject *array, u32 index);
 
+/**
+ * Reserve dense element capacity without creating properties or changing length.
+ * Intended for audited native builders that know how many indices they will fill.
+ */
+bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed);
+
 /** Result of attempting a dense default-data store. */
 typedef enum MalArrayDenseStore {
     MAL_ARRAY_DENSE_APPLIED,     // stored in the vector (length already updated)

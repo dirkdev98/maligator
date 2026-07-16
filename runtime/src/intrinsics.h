@@ -351,6 +351,7 @@ MalObject *mal_intrinsic_new_object(MalVm *vm);
  * Allocate an array backed by %Array.prototype% with the given length.
  */
 MalArrayObject *mal_intrinsic_new_array(MalVm *vm, u32 length);
+MalArrayObject *mal_intrinsic_new_dense_array(MalVm *vm, u32 length);
 
 /**
  * Allocate an error backed by the given error prototype slot with the message

@@ -407,7 +407,7 @@ static MalValue mal_builtin_array_constructor(MalVm *vm, MalValue this_value, co
         return mal_value_from_array_object(mal_intrinsic_new_array(vm, length));
     }
 
-    MalArrayObject *array = mal_intrinsic_new_array(vm, (u32) arg_count);
+    MalArrayObject *array = mal_intrinsic_new_dense_array(vm, (u32) arg_count);
     for (i32 i = 0; i < arg_count; i++) {
         mal_object_set((MalObject *) array, mal_builtin_array_index_key((u32) i), args[i]);
     }
@@ -431,7 +431,7 @@ static MalValue mal_builtin_array_is_array(MalVm *vm, MalValue this_value, const
 
 static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    MalArrayObject *array = mal_intrinsic_new_array(vm, (u32) arg_count);
+    MalArrayObject *array = mal_intrinsic_new_dense_array(vm, (u32) arg_count);
     for (i32 i = 0; i < arg_count; i++) {
         mal_object_set((MalObject *) array, mal_builtin_array_index_key((u32) i), args[i]);
     }

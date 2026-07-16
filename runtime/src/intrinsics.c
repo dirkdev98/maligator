@@ -172,6 +172,12 @@ MalArrayObject *mal_intrinsic_new_array(MalVm *vm, u32 length) {
     return array;
 }
 
+MalArrayObject *mal_intrinsic_new_dense_array(MalVm *vm, u32 length) {
+    MalArrayObject *array = mal_intrinsic_new_array(vm, length);
+    mal_array_object_dense_reserve(array, length);
+    return array;
+}
+
 static void mal_intrinsics_init_global_this(MalVm *vm);
 
 /**

@@ -329,7 +329,7 @@ static MalValue regexp_build_groups(MalVm *vm, MalRegExpObject *re, MalString *s
 // Build the `.indices` array for the `d` flag: a [start,end] pair (or undefined)
 // per group, plus an `.indices.groups` object for named groups.
 static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *s, const int32_t *caps, int32_t ngroups) {
-    MalArrayObject *indices = mal_intrinsic_new_array(vm, (u32) ngroups);
+    MalArrayObject *indices = mal_intrinsic_new_dense_array(vm, (u32) ngroups);
     for (int32_t i = 0; i < ngroups; i++) {
         int32_t cs = caps[2 * i];
         int32_t ce = caps[2 * i + 1];
@@ -490,7 +490,7 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
         return mal_value_new_boolean(true);
     }
 
-    MalArrayObject *array = mal_intrinsic_new_array(vm, (u32) ngroups);
+    MalArrayObject *array = mal_intrinsic_new_dense_array(vm, (u32) ngroups);
     MalObject *array_object = (MalObject *) array;
 
     MalPropertyDesc index_desc = mal_intrinsic_data_desc(mal_value_from_f64((f64) match_start), REGEXP_WEC);
