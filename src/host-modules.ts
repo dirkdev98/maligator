@@ -5,10 +5,9 @@
  * export, shared by the module graph (resolution → virtual module records)
  * and the linker (host export binding synthesis).
  *
- * Only the `node:`-prefixed form is recognized: a bare `path` / `fs` import is
- * left to ordinary package resolution (and fails as "cannot find package" when
- * no such package exists), matching Node's requirement that built-ins be
- * imported with the explicit `node:` prefix.
+ * ES module imports use the `node:`-prefixed form. CommonJS resolution also
+ * recognizes each catalog id without that prefix (`path`, `fs`, ...), and
+ * canonicalizes both spellings to this catalog's `node:*` identity.
  *
  * The named lists are deliberately narrow: only the built-in APIs the compiler
  * and supported applications need today, not the full Node surface. The linker
@@ -136,6 +135,12 @@ export function isNodeSpecifier(specifier: string): boolean {
 /** The catalog entry for a specifier, or undefined when it is not a supported built-in. */
 export function lookupHostModule(specifier: string): HostModuleSpec | undefined {
 	return HOST_MODULES.get(specifier);
+}
+
+/** Canonical catalog id for a CommonJS built-in spelling, if supported. */
+export function canonicalCommonJsHostModuleId(specifier: string): string | undefined {
+	const id = isNodeSpecifier(specifier) ? specifier : `node:${specifier}`;
+	return HOST_MODULES.has(id) ? id : undefined;
 }
 
 /** Sorted list of supported specifiers, for clear "unknown module" diagnostics. */

@@ -945,7 +945,8 @@ typedef struct MalVmDefinition {
  * A CommonJS module's registry slot. `module_object` is its `module` object
  * (with the `exports` property); `loaded` is set true the moment loading begins
  * — before the wrapper runs — so a circular `require` returns the partial
- * `module.exports` rather than re-entering the wrapper.
+ * `module.exports` rather than re-entering the wrapper. A throwing wrapper
+ * clears the slot so a later require retries evaluation with a fresh object.
  */
 typedef struct MalCjsModuleSlot {
     MalValue module_object;

@@ -1,0 +1,5 @@
+{
+	"answer": 42,
+	"nested": { "ok": true },
+	"__proto__": { "own": true }
+}

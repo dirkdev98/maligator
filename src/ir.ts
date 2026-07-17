@@ -183,6 +183,9 @@ export interface IntermediateProgram {
 	 */
 	cjsEagerSlot: Map<string, number>;
 
+	/** Stable exports-object slots for host built-ins reached by CommonJS require. */
+	cjsHostSlot: Map<string, number>;
+
 	/**
 	 * Host built-in (`node:*`) modules reachable in the graph, each with the
 	 * synthetic global bindings backing its exports (see src/linker.ts). After
@@ -1541,6 +1544,7 @@ export function compileSemanticProgramToIr(
 		cjsWrapperFunctionIndex: [],
 		cjsImports: new Map(),
 		cjsEagerSlot: new Map(),
+		cjsHostSlot: new Map(),
 
 		hostModules: [],
 		hostProcess: null,
@@ -1592,6 +1596,7 @@ export function compileSemanticProgramToIr(
 		// compile the CJS wrappers after.
 		assignCjsModuleIds(program);
 		classifyPureDataCjsModules(program);
+		classifyCommonJsHostModules(program);
 		compileMergedModuleInit(program, evaluationOrder);
 		compileCjsWrappers(program);
 	}
@@ -1646,6 +1651,15 @@ function compileMergedModuleInit(
 		fn.blocks.push(eagerBlock);
 		emitCjsEagerInits(program, fn, { block: eagerBlock });
 		tail = eagerBlock;
+	}
+	if (program.cjsHostSlot.size > 0) {
+		const hostBlock: IRBlock = { instructions: [] };
+		fn.blocks.push(hostBlock);
+		if (tail) {
+			tail.instructions.push({ type: "jump", blocks: [fn.blocks.length - 1] });
+		}
+		emitCommonJsHostInits(program, fn, { block: hostBlock });
+		tail = hostBlock;
 	}
 
 	for (const modulePath of evaluationOrder) {
@@ -1754,6 +1768,7 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 function compileCjsProgram(program: IntermediateProgram, initFile: SemanticFile) {
 	assignCjsModuleIds(program);
 	classifyPureDataCjsModules(program);
+	classifyCommonJsHostModules(program);
 
 	const nonCjs = program.semantic.files.find((file) => !file.commonjs);
 	if (nonCjs) {
@@ -1790,6 +1805,27 @@ function classifyPureDataCjsModules(program: IntermediateProgram) {
 	}
 }
 
+/** Allocate one stable exports slot for each host built-in reached by require. */
+function classifyCommonJsHostModules(program: IntermediateProgram) {
+	const graph = program.semantic.graph;
+	if (!graph) {
+		return;
+	}
+	for (const record of graph.modules.values()) {
+		for (const dependency of record.dependencies) {
+			const resolvedPath = dependency.resolvedPath;
+			if (
+				dependency.kind === "require" &&
+				resolvedPath !== null &&
+				graph.modules.get(resolvedPath)?.host &&
+				!program.cjsHostSlot.has(resolvedPath)
+			) {
+				program.cjsHostSlot.set(resolvedPath, program.nextGlobalIndex++);
+			}
+		}
+	}
+}
+
 /**
  * A register holding a CommonJS module's `module.exports`: a direct slot read for
  * a pure-data module (built once at init), else a lazy `require()` call.
@@ -1800,6 +1836,16 @@ function emitCjsModuleExports(
 	cursor: IRCursor,
 	cjsPath: string,
 ): number {
+	const hostSlot = program.cjsHostSlot.get(cjsPath);
+	if (hostSlot !== undefined) {
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadGlobal",
+			registers: [destination],
+			index: hostSlot,
+		});
+		return destination;
+	}
 	const slot = program.cjsEagerSlot.get(cjsPath);
 	if (slot !== undefined) {
 		const destination = nextRegisterDestination(fn);
@@ -1811,6 +1857,51 @@ function emitCjsModuleExports(
 		return destination;
 	}
 	return emitCjsRequire(program, fn, cursor, program.cjsModuleId.get(cjsPath)!);
+}
+
+/** Build host CommonJS exports once, preserving the ESM default object's identity. */
+function emitCommonJsHostInits(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+) {
+	for (const [specifier, slot] of program.cjsHostSlot) {
+		const hostModule = program.hostModules.find(
+			(candidate) => candidate.specifier === specifier,
+		);
+		if (!hostModule) {
+			throw new Error(`Missing linked host module '${specifier}'`);
+		}
+
+		const defaultExport = hostModule.exports.find((entry) => entry.name === "default");
+		let exportsRegister: number;
+		if (defaultExport) {
+			exportsRegister = loadRegisterFromLocation(
+				fn,
+				cursor.block,
+				getOrCreateBindingLocation(program, fn, defaultExport.binding),
+			);
+		} else {
+			exportsRegister = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "createObject",
+				registers: [exportsRegister],
+			});
+			for (const hostExport of hostModule.exports) {
+				const value = loadRegisterFromLocation(
+					fn,
+					cursor.block,
+					getOrCreateBindingLocation(program, fn, hostExport.binding),
+				);
+				emitStoreProperty(program, fn, cursor, exportsRegister, hostExport.name, value);
+			}
+		}
+		cursor.block.instructions.push({
+			type: "storeGlobal",
+			registers: [exportsRegister],
+			index: slot,
+		});
+	}
 }
 
 /**
@@ -1940,6 +2031,7 @@ function compileCjsEntryDriver(program: IntermediateProgram, entryId: number) {
 	const block: IRBlock = { instructions: [] };
 	fn.blocks.push(block);
 	const cursor: IRCursor = { block };
+	emitCommonJsHostInits(program, fn, cursor);
 	emitCjsEagerInits(program, fn, cursor);
 	emitCjsRequire(program, fn, cursor, entryId);
 
@@ -1988,6 +2080,22 @@ function compileCjsModuleWrapper(
 			storeRegisterAtLocation(paramsBlock, location, register);
 		}
 	}
+	for (const [name, value] of [
+		["__filename", file.path],
+		["__dirname", commonJsDirname(file.path)],
+	] as const) {
+		const binding = programScope?.bindings.find(
+			(candidate) => candidate.name === name && !candidate.undeclared,
+		);
+		if (binding) {
+			const register = compileStaticString(program, fn, { block: paramsBlock }, value);
+			storeRegisterAtLocation(
+				paramsBlock,
+				getOrCreateBindingLocation(program, fn, binding),
+				register,
+			);
+		}
+	}
 
 	// Top-level let/const start in their TDZ, then run the module body.
 	if (programScope) {
@@ -1998,6 +2106,21 @@ function compileCjsModuleWrapper(
 
 	endFunction(fn);
 	return fn.functionIndex;
+}
+
+/** dirname for the absolute loader path without adding a compiler host dependency. */
+function commonJsDirname(filePath: string): string {
+	const separator = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+	if (separator < 0) {
+		return ".";
+	}
+	if (separator === 0) {
+		return filePath[0]!;
+	}
+	if (separator === 2 && filePath[1] === ":") {
+		return filePath.slice(0, 3);
+	}
+	return filePath.slice(0, separator);
 }
 
 /** Emit a call to the CJS `require` intrinsic with a numeric module id. */
@@ -2061,7 +2184,10 @@ function tryCompileCjsRequireCall(
 		return undefined;
 	}
 	const cjsPath = resolveCjsModulePath(program, fn.semanticFile, specifier.value);
-	if (cjsPath === undefined || !program.cjsModuleId.has(cjsPath)) {
+	if (
+		cjsPath === undefined ||
+		(!program.cjsModuleId.has(cjsPath) && !program.cjsHostSlot.has(cjsPath))
+	) {
 		return undefined;
 	}
 	return emitCjsModuleExports(program, fn, cursor, cjsPath);
@@ -7539,6 +7665,7 @@ function compileExpression(
 			if (
 				scope?.node.type === "Program" &&
 				fn.semanticFile.type === "script" &&
+				!fn.semanticFile.commonjs &&
 				!program.evalDirect
 			) {
 				cursor.block.instructions.push({

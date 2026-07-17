@@ -433,11 +433,26 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
         mal_value_new_undefined(),
     };
     i32 function_index = vm->definition->cjs_module_function_indices[id];
-    mal_vm_interpret_function(
-        vm, function_index, mal_value_new_undefined(), exports_value, args, 5,
-        mal_value_new_undefined(), nullptr
-    );
+    const MalFunction *function = &vm->definition->functions[function_index];
+    if (function->compiled != nullptr) {
+        if (mal_vm_enter_compiled(vm, function_index)) {
+            function->compiled(
+                vm, exports_value, args, 5, mal_value_new_undefined(), nullptr,
+                mal_value_new_undefined(), nullptr
+            );
+            mal_vm_leave_compiled(vm);
+        }
+    } else {
+        mal_vm_interpret_function(
+            vm, function_index, mal_value_new_undefined(), exports_value, args, 5,
+            mal_value_new_undefined(), nullptr
+        );
+    }
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        // Node removes a module whose evaluation failed. A later require must run
+        // a fresh module object rather than return this attempt's partial exports.
+        slot->module_object = mal_value_new_undefined();
+        slot->loaded = false;
         return mal_value_new_undefined();
     }
 

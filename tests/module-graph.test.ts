@@ -198,18 +198,37 @@ test("extracts require() dependencies from a CommonJS module", () => {
 	expect(order.indexOf("cjs-b.cjs")).toBeLessThan(order.indexOf("cjs-entry.cjs"));
 });
 
-test("rejects require('node:*') clearly at graph time", () => {
+test("resolves node: CommonJS built-ins to their canonical host identity", () => {
 	write("cjs-node.cjs", `module.exports = require("node:path");\n`);
-	expect(() =>
-		buildModuleGraph(path.join(root, "cjs-node.cjs"), { buildConfig: nodeOn }),
-	).toThrow(/Cannot require node built-in 'node:path'.*static import only/);
+	const graph = buildModuleGraph(path.join(root, "cjs-node.cjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe("node:path");
+	expect(graph.modules.get("node:path")?.host?.id).toBe("node:path");
 });
 
-test("a bare CommonJS builtin name remains package resolution", () => {
+test("canonicalizes bare CommonJS built-ins to the same node: host module", () => {
 	write("cjs-bare-path.cjs", `module.exports = require("path");\n`);
-	expect(() =>
-		buildModuleGraph(path.join(root, "cjs-bare-path.cjs"), { buildConfig: nodeOn }),
-	).toThrow(/cannot find package 'path'/);
+	const graph = buildModuleGraph(path.join(root, "cjs-bare-path.cjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe("node:path");
+	expect(
+		[...graph.modules.keys()].filter((modulePath) => modulePath === "node:path"),
+	).toHaveLength(1);
+});
+
+test("loads JSON dependencies as CommonJS modules", () => {
+	write("cjs-json.cjs", `module.exports = require("./data.json");\n`);
+	write("data.json", `{"answer":42,"__proto__":{"own":true}}\n`);
+	const graph = buildModuleGraph(path.join(root, "cjs-json.cjs"));
+	const jsonPath = path.join(root, "data.json");
+
+	expect(graph.modules.get(jsonPath)?.goal).toBe("cjs");
+	expect(graph.modules.get(jsonPath)?.source).toBe(
+		`{"answer":42,"__proto__":{"own":true}}\n`,
+	);
+	expect(graph.modules.get(jsonPath)?.parsed.ast.body).toHaveLength(1);
 });
 
 test("does not treat require() as a dependency in ESM/script modules", () => {

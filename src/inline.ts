@@ -2155,10 +2155,11 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
  * (the only remaining accesses of the definer's captured slots are then the inlined
  * ones, all inside the definer).
  *
- * Sound: `createFunction` is the only IR op that references a function as a value
- * (`loadCaptured`/`storeCaptured`'s functionIndex is a scope id within the function's
- * own — now dead — body). The entry (index 0) is always live. `functionIndex` ==
- * array position is preserved: functions are stubbed in place, never removed.
+ * Sound: `createFunction` and the CommonJS module table are the only roots that
+ * reference functions as executable values (`loadCaptured`/`storeCaptured`'s
+ * functionIndex is a scope id within the function's own — now dead — body). The
+ * entry (index 0) is always live. `functionIndex` == array position is preserved:
+ * functions are stubbed in place, never removed.
  */
 export function optEmptyDeadFunctions(program: IntermediateProgram): boolean {
 	const byIndex = new Map<number, IRFunction>();
@@ -2166,8 +2167,8 @@ export function optEmptyDeadFunctions(program: IntermediateProgram): boolean {
 		byIndex.set(fn.functionIndex, fn);
 	}
 
-	const live = new Set<number>([0]);
-	const worklist = [0];
+	const live = new Set<number>([0, ...program.cjsWrapperFunctionIndex]);
+	const worklist = [...live];
 	while (worklist.length > 0) {
 		const fn = byIndex.get(worklist.pop()!);
 		if (fn === undefined) {

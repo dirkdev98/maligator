@@ -4,6 +4,7 @@ import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import type { HostModuleSpec } from "./host-modules.ts";
 import {
+	canonicalCommonJsHostModuleId,
 	isNodeSpecifier,
 	lookupHostModule,
 	supportedHostModuleIds,
@@ -186,6 +187,12 @@ export function buildModuleGraph(
 
 		const source = sourceOverride ?? readFileSync(filePath, "utf-8");
 		let parseSource = blankHashbang(source);
+		if (path.extname(filePath) === ".json") {
+			// Validate with the JSON grammar now, then parse a CommonJS wrapper that
+			// preserves JSON.parse semantics for keys such as "__proto__".
+			JSON.parse(source);
+			parseSource = `module.exports = JSON.parse(${JSON.stringify(source)});`;
+		}
 		if (TS_EXTENSIONS.has(path.extname(filePath))) {
 			if (!options.stripTypes) {
 				throw new Error(
@@ -203,14 +210,15 @@ export function buildModuleGraph(
 					// graph. Preserve the edge for later lowering/runtime handling.
 					return { ...dependency, resolvedPath: null };
 				}
-				if (dependency.kind === "require" && isNodeSpecifier(dependency.specifier)) {
-					throw new SyntaxError(
-						`Cannot require node built-in '${dependency.specifier}' from ${filePath}: ` +
-							`node built-ins support static import only`,
-					);
-				}
-
-				const resolved = resolveSpecifier(dependency.specifier, filePath, ctx);
+				const canonicalHostId =
+					dependency.kind === "require"
+						? canonicalCommonJsHostModuleId(dependency.specifier)
+						: undefined;
+				const resolved = resolveSpecifier(
+					canonicalHostId ?? dependency.specifier,
+					filePath,
+					ctx,
+				);
 				if ("host" in resolved) {
 					if (dependency.kind === "dynamic") {
 						// A host built-in's exports are synthesized into global slots at link
@@ -322,6 +330,7 @@ function detectEntryGoal(filePath: string, explicit?: ModuleGoal): ModuleGoal {
 			return "module";
 		case ".cjs":
 		case ".cts":
+		case ".json":
 			return "cjs";
 		default:
 			// `.ts` follows `.js`: a `script` default for the entry.
@@ -346,7 +355,7 @@ function detectDependencyGoal(
 		case ".cts":
 			return "cjs";
 		case ".json":
-			throw new Error(`JSON imports are not supported yet: ${filePath}`);
+			return "cjs";
 		default:
 			// `.ts` follows `.js`: nearest package.json "type" decides.
 			break;
@@ -501,9 +510,8 @@ function hostModuleRecord(host: HostModuleSpec): ModuleRecord {
 
 /**
  * Resolve a specifier to an absolute on-disk path (Node-style) or a `node:*` host
- * built-in. Only the `node:`-prefixed form reaches the catalog; a bare `path`/`fs`
- * falls through to package resolution (and fails as a missing package), matching
- * Node's requirement that built-ins carry the explicit `node:` prefix.
+ * built-in. CommonJS bare built-ins are canonicalized before reaching this
+ * resolver; ES module bare specifiers still use package resolution.
  */
 function resolveSpecifier(
 	specifier: string,
