@@ -19,7 +19,9 @@ are normative for host work.
       bounded DNS/IPv6/Happy Eyeballs, pumped turns, and runtime-owned timer state.
       Generation-checked operation handles, owned FIFO tasks, exactly-once terminal
       transitions, checked readiness registration, and independent read/write fd
-      interests are implemented; task dispatch, wake posting, DNS, and timers remain.
+      interests are implemented. A thread-safe owned completion queue, pollable
+      wake source, and retained-work accounting now support future DNS workers;
+      one-turn dispatch, DNS, IPv6/Happy Eyeballs, and timer ownership remain.
 - [ ] H2: replace the buffered project parser/server with the bounded llhttp HTTP/1
       codec, raw-header transport, streaming server, and parser fuzzing.
 - [ ] H3: add the pooled outbound HTTP/1 client and build WinterTC and Node adapters

@@ -36,7 +36,9 @@ stated acceptance point without patching Express or anything in `node_modules`.
       Acceptance is constructing the Express application and middleware stack
       without unresolved built-ins or initialization failures.
       `node:events` now provides the EventEmitter lifecycle required by the tree;
-      the forced Express graph currently advances to the missing bare `tty` module.
+      `node:tty` and the dependency-used `node:util` formatting/inheritance helpers
+      are also implemented. The forced Express graph now advances to `node:zlib`,
+      the first substantial Buffer/Node Streams/compression boundary.
 - [ ] **Wave 3: supply Node HTTP lifecycle semantics.** Implement the required
       `node:http` and `node:net` client, server, socket, request, and response
       behavior, including EventEmitter integration, headers, status codes,
