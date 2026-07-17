@@ -220,6 +220,37 @@ describe("host-install manifest", () => {
 		expect(def.hostInstalls).toEqual([]);
 	});
 
+	it("coalesces free Buffer and node:buffer exports into one installer", () => {
+		const def = compile(
+			`import buffer, { Buffer as ImportedBuffer } from "node:buffer";\nglobalThis.sink = [buffer, ImportedBuffer, Buffer];\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_buffer",
+				exports: [
+					expect.objectContaining({ name: "Buffer" }),
+					expect.objectContaining({ name: "default" }),
+				],
+			}),
+		]);
+	});
+
+	it("installs free Buffer without a module import", () => {
+		const def = compile(`globalThis.sink = Buffer.from("x");\n`, { node: true });
+		expect(def.hostInstalls).toEqual([
+			{ installer: "mal_host_install_node_buffer", exports: [] },
+		]);
+	});
+
+	it("drops an unreachable free Buffer and an unused node:buffer import", () => {
+		const def = compile(
+			`import { Buffer as ImportedBuffer } from "node:buffer";\nfunction unused() { return [ImportedBuffer, Buffer]; }\nglobalThis.sink = 1;\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([]);
+	});
+
 	it("detects and installs the free global `process`", () => {
 		const def = compile(`globalThis.sink = process.argv;\n`, { node: true });
 		const install = def.hostInstalls.find(

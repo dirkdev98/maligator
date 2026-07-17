@@ -378,6 +378,29 @@ test("host catalog includes path normalize and crypto randomUUID", () => {
 	expect(cryptoSpec.hasDefault).toBe(false);
 });
 
+test("canonicalizes bare buffer and exposes the node:buffer constructor", () => {
+	write("buffer.cjs", `module.exports = require("buffer");\n`);
+	const graph = buildModuleGraph(path.join(root, "buffer.cjs"), {
+		buildConfig: nodeOn,
+	});
+	const dependency = graph.modules.get(graph.entry)!.dependencies[0]!;
+	expect(dependency.resolvedPath).toBe("node:buffer");
+	expect(graph.modules.get("node:buffer")?.host).toMatchObject({
+		named: ["Buffer"],
+		hasDefault: true,
+	});
+});
+
+test("canonicalizes bare ESM buffer to node:buffer", () => {
+	write("buffer.mjs", `import { Buffer } from "buffer";\nBuffer;\n`);
+	const graph = buildModuleGraph(path.join(root, "buffer.mjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
+		"node:buffer",
+	);
+});
+
 test("rejects a node:* import clearly when surface.node is off (the default)", () => {
 	write("node-off.mjs", `import { join } from "node:path";\n`);
 	expect(() => buildModuleGraph(path.join(root, "node-off.mjs"))).toThrow(
@@ -392,13 +415,12 @@ test("rejects an unknown node:* built-in clearly even when surface.node is on", 
 	).toThrow(/unknown node built-in module 'node:zlib'/);
 });
 
-test("a bare 'path' specifier is package resolution, not a host built-in", () => {
+test("canonicalizes a bare ESM path specifier to the host built-in", () => {
 	write("bare-path.mjs", `import { join } from "path";\njoin;\n`);
-	// Even with the node surface on, built-ins require the explicit node: prefix;
-	// a bare name falls through to (here, failing) package resolution.
-	expect(() =>
-		buildModuleGraph(path.join(root, "bare-path.mjs"), { buildConfig: nodeOn }),
-	).toThrow(/cannot find package 'path'/);
+	const graph = buildModuleGraph(path.join(root, "bare-path.mjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe("node:path");
 });
 
 test("a literal dynamic import of a supported node:* is rejected (static import only)", () => {

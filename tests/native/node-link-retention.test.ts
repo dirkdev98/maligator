@@ -20,6 +20,8 @@ describe("node host installer link retention", () => {
 	let pathOnly: string;
 	let processOnly: string;
 	let deadPath: string;
+	let bufferOnly: string;
+	let deadBuffer: string;
 
 	beforeAll(() => {
 		pathOnly = buildNativeBinary({
@@ -43,6 +45,20 @@ describe("node host installer link retention", () => {
 			outDir,
 			nodeEnabled: true,
 		});
+		bufferOnly = buildNativeBinary({
+			fixture: "tests/local/node-link-buffer.mjs",
+			name: "node-link-buffer",
+			mainFile: HOST_MAIN,
+			outDir,
+			nodeEnabled: true,
+		});
+		deadBuffer = buildNativeBinary({
+			fixture: "tests/local/node-link-dead-buffer.mjs",
+			name: "node-link-dead-buffer",
+			mainFile: HOST_MAIN,
+			outDir,
+			nodeEnabled: true,
+		});
 	});
 
 	it("retains only the node:path installer for a path-only program", () => {
@@ -61,5 +77,16 @@ describe("node host installer link retention", () => {
 
 	it("omits the path installer when its only read is optimized away", () => {
 		expect(retainedHostInstallers(deadPath)).toEqual(["mal_host_install_maligator"]);
+	});
+
+	it("retains Buffer for a reachable free global", () => {
+		expect(retainedHostInstallers(bufferOnly)).toEqual([
+			"mal_host_install_maligator",
+			"mal_host_install_node_buffer",
+		]);
+	});
+
+	it("omits the Buffer installer when its imported read is optimized away", () => {
+		expect(retainedHostInstallers(deadBuffer)).toEqual(["mal_host_install_maligator"]);
 	});
 });

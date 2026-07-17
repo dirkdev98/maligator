@@ -35,6 +35,9 @@ typedef struct MalTypedArrayObject {
     u32 length;
     // Auto-length view that tracks a resizable buffer's current size.
     bool length_tracking;
+    // Node Buffer branding. Buffers otherwise use the ordinary Uint8Array layout
+    // and the same ArrayBuffer backing store.
+    bool is_buffer;
 } MalTypedArrayObject;
 
 MalTypedArrayObject *mal_typed_array_object_new(

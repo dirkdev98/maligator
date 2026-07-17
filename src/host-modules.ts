@@ -68,6 +68,9 @@ export function hostInstallerSymbol(specifier: string): string {
  */
 export const PROCESS_INSTALLER_SYMBOL = "mal_host_install_process";
 
+/** Installer shared by the free `Buffer` global and the `node:buffer` module. */
+export const BUFFER_INSTALLER_SYMBOL = hostInstallerSymbol("node:buffer");
+
 // path is the one module with a planned default export (`import path from
 // "node:path"`) alongside its named functions — `relative` included.
 const PATH: HostModuleSpec = {
@@ -143,9 +146,19 @@ const UTIL: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:util"),
 };
 
+const BUFFER: HostModuleSpec = {
+	id: "node:buffer",
+	named: ["Buffer"],
+	hasDefault: true,
+	installer: BUFFER_INSTALLER_SYMBOL,
+};
+
 /** Supported `node:*` built-ins, keyed by canonical specifier. */
 export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
-	[PATH, FS, CHILD_PROCESS, CRYPTO, EVENTS, TTY, UTIL].map((spec) => [spec.id, spec]),
+	[PATH, FS, CHILD_PROCESS, CRYPTO, EVENTS, TTY, UTIL, BUFFER].map((spec) => [
+		spec.id,
+		spec,
+	]),
 );
 
 /** True for any `node:`-prefixed specifier, supported or not. */
@@ -158,8 +171,8 @@ export function lookupHostModule(specifier: string): HostModuleSpec | undefined 
 	return HOST_MODULES.get(specifier);
 }
 
-/** Canonical catalog id for a CommonJS built-in spelling, if supported. */
-export function canonicalCommonJsHostModuleId(specifier: string): string | undefined {
+/** Canonical catalog id for a Node built-in spelling, if supported. */
+export function canonicalNodeHostModuleId(specifier: string): string | undefined {
 	const id = isNodeSpecifier(specifier) ? specifier : `node:${specifier}`;
 	return HOST_MODULES.has(id) ? id : undefined;
 }

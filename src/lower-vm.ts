@@ -825,6 +825,14 @@ function buildHostInstalls(
 	};
 
 	const manifest: VmDefinition["hostInstalls"] = [];
+	const installFor = (installer: string) => {
+		let install = manifest.find((entry) => entry.installer === installer);
+		if (!install) {
+			install = { installer, exports: [] };
+			manifest.push(install);
+		}
+		return install;
+	};
 	for (const hostModule of program.hostModules) {
 		const usedExports: Array<{ name: string; slot: number }> = [];
 		for (const { name, binding } of hostModule.exports) {
@@ -834,12 +842,15 @@ function buildHostInstalls(
 			}
 		}
 		if (usedExports.length > 0) {
-			manifest.push({ installer: hostModule.installer, exports: usedExports });
+			installFor(hostModule.installer).exports.push(...usedExports);
 		}
 	}
 
 	if (program.hostProcess?.retained) {
-		manifest.push({ installer: program.hostProcess.installer, exports: [] });
+		installFor(program.hostProcess.installer);
+	}
+	if (program.hostBuffer?.retained) {
+		installFor(program.hostBuffer.installer);
 	}
 
 	return manifest;

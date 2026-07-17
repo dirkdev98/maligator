@@ -1,7 +1,7 @@
 import type { ESTree } from "meriyah";
 import { detectCjsExports } from "./cjs-exports.ts";
 import type { CjsExportInfo } from "./cjs-exports.ts";
-import { PROCESS_INSTALLER_SYMBOL } from "./host-modules.ts";
+import { BUFFER_INSTALLER_SYMBOL, PROCESS_INSTALLER_SYMBOL } from "./host-modules.ts";
 import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 
 /**
@@ -89,6 +89,9 @@ export interface ModuleLinkage {
 	 * is off. See {@link PROCESS_INSTALLER_SYMBOL}.
 	 */
 	hostProcess?: { installer: string };
+
+	/** The free global `Buffer`, backed by the `node:buffer` module installer. */
+	hostBuffer?: { installer: string };
 }
 
 type ExportEntry =
@@ -621,21 +624,22 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		linkage.namespaceImports.set(file.path, list);
 	}
 
-	// --- Free global `process` (node surface only) ---
-	// A free `process` reference statically retains the installer under the node
-	// surface. Do not rebind it: the installed value is a property of globalThis,
-	// and identifier reads/writes must observe that same mutable property.
+	// --- Free Node globals (node surface only) ---
+	// Do not rebind these: installed values are properties of globalThis, and
+	// identifier reads/writes must observe those same mutable properties.
 	if (graph.nodeEnabled) {
-		const used = program.files.some((file) =>
-			file.scopes[0]?.bindings.some(
-				(binding) =>
-					binding.name === "process" &&
-					binding.undeclared &&
-					binding.usageNodes.length > 0,
-			),
-		);
-		if (used) {
+		const freeGlobalUsed = (name: string) =>
+			program.files.some((file) =>
+				file.scopes[0]?.bindings.some(
+					(binding) =>
+						binding.name === name && binding.undeclared && binding.usageNodes.length > 0,
+				),
+			);
+		if (freeGlobalUsed("process")) {
 			linkage.hostProcess = { installer: PROCESS_INSTALLER_SYMBOL };
+		}
+		if (freeGlobalUsed("Buffer")) {
+			linkage.hostBuffer = { installer: BUFFER_INSTALLER_SYMBOL };
 		}
 	}
 

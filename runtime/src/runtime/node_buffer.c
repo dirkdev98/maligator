@@ -1,0 +1,1293 @@
+#include "node_buffer.h"
+
+#if MAL_NODE
+
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "array_buffer_object.h"
+#include "function_object.h"
+#include "gc.h"
+#include "heap_string.h"
+#include "intrinsics.h"
+#include "object.h"
+#include "object_ops.h"
+#include "text_encoding.h"
+#include "typed_array_object.h"
+#include "value.h"
+#include "value_ops.h"
+#include "vm_ops.h"
+
+typedef enum MalBufferEncoding {
+    MAL_BUFFER_UTF8,
+    MAL_BUFFER_LATIN1,
+    MAL_BUFFER_ASCII,
+    MAL_BUFFER_HEX,
+    MAL_BUFFER_BASE64,
+    MAL_BUFFER_BASE64URL,
+    MAL_BUFFER_UTF16LE,
+} MalBufferEncoding;
+
+// DataView keeps its layout private to builtin_data_view.c. Buffer.from needs
+// only the validated view window; keep this in sync with MalDataViewObject there.
+struct MalDataViewObject {
+    MalObject object;
+    MalArrayBufferObject *buffer;
+    u32 byte_offset;
+    u32 byte_length;
+    bool length_tracking;
+};
+
+static bool mal_buffer_ascii_equal_ci(const MalString *string, const char *ascii) {
+    usize length = strlen(ascii);
+    if (mal_string_length(string) != length) {
+        return false;
+    }
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        if (unit >= 'A' && unit <= 'Z') {
+            unit += 'a' - 'A';
+        }
+        if (unit != (c16) (u8) ascii[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool mal_buffer_encoding(
+    MalVm *vm, MalValue value, MalBufferEncoding fallback,
+    bool fallback_non_string, bool fallback_unknown, MalBufferEncoding *out
+) {
+    if (mal_value_is_undefined(value)) {
+        *out = fallback;
+        return true;
+    }
+    if (!mal_value_is_string(value)) {
+        if (fallback_non_string) {
+            *out = fallback;
+            return true;
+        }
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "The encoding argument must be a string");
+        return false;
+    }
+    MalString *string = mal_value_to_string(value);
+    if (mal_buffer_ascii_equal_ci(string, "utf8") ||
+        mal_buffer_ascii_equal_ci(string, "utf-8")) {
+        *out = MAL_BUFFER_UTF8;
+    } else if (mal_buffer_ascii_equal_ci(string, "latin1") ||
+               mal_buffer_ascii_equal_ci(string, "binary")) {
+        *out = MAL_BUFFER_LATIN1;
+    } else if (mal_buffer_ascii_equal_ci(string, "ascii")) {
+        *out = MAL_BUFFER_ASCII;
+    } else if (mal_buffer_ascii_equal_ci(string, "hex")) {
+        *out = MAL_BUFFER_HEX;
+    } else if (mal_buffer_ascii_equal_ci(string, "base64")) {
+        *out = MAL_BUFFER_BASE64;
+    } else if (mal_buffer_ascii_equal_ci(string, "base64url")) {
+        *out = MAL_BUFFER_BASE64URL;
+    } else if (mal_buffer_ascii_equal_ci(string, "ucs2") ||
+               mal_buffer_ascii_equal_ci(string, "ucs-2") ||
+               mal_buffer_ascii_equal_ci(string, "utf16le") ||
+               mal_buffer_ascii_equal_ci(string, "utf-16le")) {
+        *out = MAL_BUFFER_UTF16LE;
+    } else {
+        if (fallback_unknown) {
+            *out = fallback;
+            return true;
+        }
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Unknown Buffer encoding");
+        return false;
+    }
+    return true;
+}
+
+static i32 mal_buffer_hex_digit(c16 unit) {
+    if (unit >= '0' && unit <= '9') return unit - '0';
+    if (unit >= 'a' && unit <= 'f') return unit - 'a' + 10;
+    if (unit >= 'A' && unit <= 'F') return unit - 'A' + 10;
+    return -1;
+}
+
+static i32 mal_buffer_base64_digit(c16 unit) {
+    if (unit >= 'A' && unit <= 'Z') return unit - 'A';
+    if (unit >= 'a' && unit <= 'z') return unit - 'a' + 26;
+    if (unit >= '0' && unit <= '9') return unit - '0' + 52;
+    if (unit == '+' || unit == '-') return 62;
+    if (unit == '/' || unit == '_') return 63;
+    return -1;
+}
+
+static bool mal_buffer_base64_whitespace(c16 unit) {
+    return unit == 0x09 || unit == 0x0a || unit == 0x0c || unit == 0x0d || unit == 0x20;
+}
+
+/* Node's Buffer decoder is deliberately forgiving: both alphabets are accepted,
+ * whitespace and unrelated characters are ignored, and an incomplete final
+ * quartet contributes all complete bytes. */
+static byte *mal_buffer_decode_base64(const MalString *string, usize *length_out) {
+    usize length = mal_string_length(string);
+    byte *bytes = malloc(length / 4 * 3 + 3);
+    if (bytes == nullptr) {
+        *length_out = 0;
+        return nullptr;
+    }
+    const c16 *units = mal_string_code_units(string);
+    u32 accumulator = 0;
+    i32 sextets = 0;
+    usize written = 0;
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        if (unit == '=') break;
+        i32 digit = mal_buffer_base64_digit(unit);
+        if (digit < 0) {
+            if (mal_buffer_base64_whitespace(unit)) continue;
+            continue;
+        }
+        accumulator = (accumulator << 6) | (u32) digit;
+        sextets++;
+        if (sextets == 4) {
+            bytes[written++] = (byte) (accumulator >> 16);
+            bytes[written++] = (byte) (accumulator >> 8);
+            bytes[written++] = (byte) accumulator;
+            accumulator = 0;
+            sextets = 0;
+        }
+    }
+    if (sextets == 2) {
+        bytes[written++] = (byte) ((accumulator >> 4) & 0xff);
+    } else if (sextets == 3) {
+        bytes[written++] = (byte) ((accumulator >> 10) & 0xff);
+        bytes[written++] = (byte) ((accumulator >> 2) & 0xff);
+    }
+    *length_out = written;
+    return bytes;
+}
+
+static byte *mal_buffer_encode_string(
+    const MalString *string, MalBufferEncoding encoding, usize *length_out
+) {
+    const c16 *units = mal_string_code_units(string);
+    usize length = mal_string_length(string);
+    if (encoding == MAL_BUFFER_UTF8) {
+        return mal_utf8_encode(units, length, length_out);
+    }
+    if (encoding == MAL_BUFFER_BASE64 || encoding == MAL_BUFFER_BASE64URL) {
+        return mal_buffer_decode_base64(string, length_out);
+    }
+    if (encoding == MAL_BUFFER_HEX) {
+        byte *bytes = malloc(length / 2 + 1);
+        if (bytes == nullptr) {
+            *length_out = 0;
+            return nullptr;
+        }
+        usize written = 0;
+        while (written * 2 + 1 < length) {
+            i32 high = mal_buffer_hex_digit(units[written * 2]);
+            i32 low = mal_buffer_hex_digit(units[written * 2 + 1]);
+            if (high < 0 || low < 0) break;
+            bytes[written++] = (byte) ((high << 4) | low);
+        }
+        *length_out = written;
+        return bytes;
+    }
+    if (encoding == MAL_BUFFER_UTF16LE) {
+        byte *bytes = malloc(length * 2 + 1);
+        if (bytes == nullptr) {
+            *length_out = 0;
+            return nullptr;
+        }
+        for (usize i = 0; i < length; i++) {
+            bytes[i * 2] = (byte) units[i];
+            bytes[i * 2 + 1] = (byte) (units[i] >> 8);
+        }
+        *length_out = length * 2;
+        return bytes;
+    }
+
+    byte *bytes = malloc(length == 0 ? 1 : length);
+    if (bytes == nullptr) {
+        *length_out = 0;
+        return nullptr;
+    }
+    for (usize i = 0; i < length; i++) {
+        // Node's ascii and latin1 encoders both retain the low eight bits.
+        bytes[i] = (byte) (units[i] & 0xff);
+    }
+    *length_out = length;
+    return bytes;
+}
+
+static MalValue mal_buffer_string_from_bytes(
+    MalVm *vm, const byte *bytes, usize length, MalBufferEncoding encoding
+) {
+    usize output_length = length;
+    if (encoding == MAL_BUFFER_HEX) {
+        if (!mal_checked_size_multiply(
+                length, 2, MAL_STRING_MAX_CODE_UNITS, &output_length)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Invalid string length");
+            return mal_value_new_undefined();
+        }
+    } else if (encoding == MAL_BUFFER_BASE64 || encoding == MAL_BUFFER_BASE64URL) {
+        usize full_length;
+        usize tail_length = length % 3 == 0
+            ? 0
+            : encoding == MAL_BUFFER_BASE64 ? 4 : length % 3 + 1;
+        if (!mal_checked_size_multiply(
+                length / 3, 4, MAL_STRING_MAX_CODE_UNITS, &full_length) ||
+            !mal_checked_size_add(
+                full_length, tail_length, MAL_STRING_MAX_CODE_UNITS, &output_length)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Invalid string length");
+            return mal_value_new_undefined();
+        }
+    } else if (encoding == MAL_BUFFER_UTF16LE) {
+        output_length = length / 2;
+    } else if (length > MAL_STRING_MAX_CODE_UNITS) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid string length");
+        return mal_value_new_undefined();
+    }
+    if (output_length > MAL_STRING_MAX_CODE_UNITS) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid string length");
+        return mal_value_new_undefined();
+    }
+    if (encoding == MAL_BUFFER_UTF8) {
+        usize unit_count;
+        c16 *units = mal_utf8_decode(bytes, length, &unit_count);
+        if (units == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Buffer string allocation failed");
+            return mal_value_new_undefined();
+        }
+        MalValue value = mal_value_from_string(mal_string_new_copy(&vm->heap, units, unit_count));
+        free(units);
+        return value;
+    }
+    if (encoding == MAL_BUFFER_HEX) {
+        static const byte digits[] = "0123456789abcdef";
+        byte *ascii = malloc(output_length + 1);
+        if (ascii == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Buffer string allocation failed");
+            return mal_value_new_undefined();
+        }
+        for (usize i = 0; i < length; i++) {
+            u8 value = (u8) bytes[i];
+            ascii[i * 2] = digits[value >> 4];
+            ascii[i * 2 + 1] = digits[value & 0xf];
+        }
+        MalValue value = mal_value_from_string(mal_string_new_ascii(&vm->heap, ascii, length * 2));
+        free(ascii);
+        return value;
+    }
+    if (encoding == MAL_BUFFER_BASE64 || encoding == MAL_BUFFER_BASE64URL) {
+        static const byte standard[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        static const byte url[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        const byte *alphabet = encoding == MAL_BUFFER_BASE64URL ? url : standard;
+        bool padding = encoding == MAL_BUFFER_BASE64;
+        usize capacity = output_length;
+        byte *ascii = malloc(capacity + 1);
+        if (ascii == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Buffer string allocation failed");
+            return mal_value_new_undefined();
+        }
+        usize read = 0;
+        usize written = 0;
+        while (read + 3 <= length) {
+            u32 value = ((u32) (u8) bytes[read] << 16) |
+                        ((u32) (u8) bytes[read + 1] << 8) | (u8) bytes[read + 2];
+            ascii[written++] = alphabet[(value >> 18) & 0x3f];
+            ascii[written++] = alphabet[(value >> 12) & 0x3f];
+            ascii[written++] = alphabet[(value >> 6) & 0x3f];
+            ascii[written++] = alphabet[value & 0x3f];
+            read += 3;
+        }
+        if (length - read == 1) {
+            u32 value = (u32) (u8) bytes[read] << 16;
+            ascii[written++] = alphabet[(value >> 18) & 0x3f];
+            ascii[written++] = alphabet[(value >> 12) & 0x3f];
+            if (padding) {
+                ascii[written++] = '=';
+                ascii[written++] = '=';
+            }
+        } else if (length - read == 2) {
+            u32 value = ((u32) (u8) bytes[read] << 16) |
+                        ((u32) (u8) bytes[read + 1] << 8);
+            ascii[written++] = alphabet[(value >> 18) & 0x3f];
+            ascii[written++] = alphabet[(value >> 12) & 0x3f];
+            ascii[written++] = alphabet[(value >> 6) & 0x3f];
+            if (padding) ascii[written++] = '=';
+        }
+        MalValue result = mal_value_from_string(mal_string_new_ascii(&vm->heap, ascii, written));
+        free(ascii);
+        return result;
+    }
+    if (encoding == MAL_BUFFER_UTF16LE) {
+        c16 *units = malloc(sizeof(c16) * (output_length == 0 ? 1 : output_length));
+        if (units == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Buffer string allocation failed");
+            return mal_value_new_undefined();
+        }
+        for (usize i = 0; i < output_length; i++) {
+            units[i] = (c16) ((u8) bytes[i * 2] | ((u16) (u8) bytes[i * 2 + 1] << 8));
+        }
+        MalValue value = mal_value_from_string(
+            mal_string_new_copy(&vm->heap, units, output_length));
+        free(units);
+        return value;
+    }
+
+    c16 *units = malloc(sizeof(c16) * (length == 0 ? 1 : length));
+    if (units == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Buffer string allocation failed");
+        return mal_value_new_undefined();
+    }
+    for (usize i = 0; i < length; i++) {
+        units[i] = encoding == MAL_BUFFER_ASCII ? (u8) bytes[i] & 0x7f : (u8) bytes[i];
+    }
+    MalValue value = mal_value_from_string(mal_string_new_copy(&vm->heap, units, length));
+    free(units);
+    return value;
+}
+
+static bool mal_buffer_to_integer(MalVm *vm, MalValue value, f64 *out) {
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) return false;
+    *out = isnan(number) ? 0 : trunc(number);
+    return true;
+}
+
+static bool mal_buffer_to_size(MalVm *vm, MalValue value, u32 *out) {
+    f64 number;
+    if (!mal_buffer_to_integer(vm, value, &number)) return false;
+    if (number < 0 || !isfinite(number) || number > INT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "The Buffer size is invalid");
+        return false;
+    }
+    *out = (u32) number;
+    return true;
+}
+
+static bool mal_buffer_offset(
+    MalVm *vm, MalValue value, u32 length, u32 width, u32 *out
+) {
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) return false;
+    if (!isfinite(number) || number < 0 || trunc(number) != number ||
+        number > length || width > length - (u32) number) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Buffer offset is out of range");
+        return false;
+    }
+    *out = (u32) number;
+    return true;
+}
+
+static bool mal_buffer_allocation_size(MalVm *vm, MalValue value, u32 *out) {
+    if (!mal_ops_is_number(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "The Buffer size must be a number");
+        return false;
+    }
+    f64 number = mal_ops_to_number(value);
+    if (isnan(number) || number < 0 || !isfinite(number) || number > INT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "The Buffer size is invalid");
+        return false;
+    }
+    *out = (u32) trunc(number);
+    return true;
+}
+
+static bool mal_buffer_relative(
+    MalVm *vm, MalValue value, u32 length, u32 fallback, u32 *out
+) {
+    if (mal_value_is_undefined(value)) {
+        *out = fallback;
+        return true;
+    }
+    f64 number;
+    if (!mal_buffer_to_integer(vm, value, &number)) return false;
+    if (number < 0) number += length;
+    if (number < 0) number = 0;
+    if (number > length) number = length;
+    *out = (u32) number;
+    return true;
+}
+
+static bool mal_buffer_clamped(
+    MalVm *vm, MalValue value, u32 length, u32 fallback, u32 *out
+) {
+    if (mal_value_is_undefined(value)) {
+        *out = fallback;
+        return true;
+    }
+    f64 number;
+    if (!mal_buffer_to_integer(vm, value, &number)) return false;
+    if (number < 0) number = 0;
+    if (number > length) number = length;
+    *out = (u32) number;
+    return true;
+}
+
+static bool mal_buffer_range_index(
+    MalVm *vm, MalValue value, u32 length, u32 fallback, u32 *out
+) {
+    if (mal_value_is_undefined(value)) {
+        *out = fallback;
+        return true;
+    }
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) return false;
+    if (!isfinite(number) || number < 0 || trunc(number) != number || number > length) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Buffer range is out of bounds");
+        return false;
+    }
+    *out = (u32) number;
+    return true;
+}
+
+static MalObject *mal_buffer_prototype_from_callee(MalValue callee) {
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    return mal_value_to_object(mal_native_function_object_get_slot(function, 0));
+}
+
+static MalValue mal_buffer_new_view(
+    MalVm *vm, MalObject *prototype, MalArrayBufferObject *backing, u32 offset, u32 length
+) {
+    MalTypedArrayObject *array = mal_typed_array_object_new(
+        &vm->heap, prototype, backing, MAL_TA_UINT8, offset, length, false);
+    array->is_buffer = true;
+    return mal_value_from_typed_array_object(array);
+}
+
+static MalValue mal_buffer_new(MalVm *vm, MalObject *prototype, u32 length) {
+    MalValue backing = mal_value_from_array_buffer_object(mal_array_buffer_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+        length, length, false, false));
+    MalRootSpan root;
+    mal_gc_root(&root, &backing, 1);
+    if (length > 0 && mal_value_to_array_buffer_object(backing)->data == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Buffer allocation failed");
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    MalValue result = mal_buffer_new_view(
+        vm, prototype, mal_value_to_array_buffer_object(backing), 0, length);
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalTypedArrayObject *mal_buffer_receiver(MalVm *vm, MalValue value) {
+    if (!mal_value_is_typed_array_object(value) ||
+        !mal_value_to_typed_array_object(value)->is_buffer) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Buffer method called on incompatible receiver");
+        return nullptr;
+    }
+    MalTypedArrayObject *array = mal_value_to_typed_array_object(value);
+    if (mal_typed_array_object_is_out_of_bounds(array)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Buffer is detached or out of bounds");
+        return nullptr;
+    }
+    return array;
+}
+
+static byte *mal_buffer_view_data(MalTypedArrayObject *array) {
+    return array->buffer->data == nullptr
+        ? nullptr
+        : array->buffer->data + array->byte_offset;
+}
+
+static MalTypedArrayObject *mal_buffer_byte_view(MalVm *vm, MalValue value) {
+    if (!mal_value_is_typed_array_object(value) ||
+        mal_value_to_typed_array_object(value)->kind != MAL_TA_UINT8 ||
+        mal_typed_array_object_is_out_of_bounds(mal_value_to_typed_array_object(value))) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "The argument must be a Buffer or Uint8Array");
+        return nullptr;
+    }
+    return mal_value_to_typed_array_object(value);
+}
+
+static bool mal_buffer_data_view_window(
+    MalDataViewObject *view, MalArrayBufferObject **backing_out, u32 *length_out
+) {
+    MalArrayBufferObject *backing = view->buffer;
+    if (backing == nullptr || backing->detached ||
+        (view->length_tracking
+             ? view->byte_offset > backing->byte_length
+             : (u64) view->byte_offset + view->byte_length > backing->byte_length)) {
+        return false;
+    }
+    *backing_out = backing;
+    *length_out = view->length_tracking
+        ? backing->byte_length - view->byte_offset
+        : view->byte_length;
+    return true;
+}
+
+static MalValue mal_buffer_from_impl(
+    MalVm *vm, MalObject *prototype, const MalValue *args, i32 argc
+) {
+    MalValue source = argc >= 1 ? args[0] : mal_value_new_undefined();
+    if (mal_value_is_string(source)) {
+        MalBufferEncoding encoding;
+        if (!mal_buffer_encoding(vm, argc >= 2 ? args[1] : mal_value_new_undefined(),
+                                 MAL_BUFFER_UTF8, true, false, &encoding)) {
+            return mal_value_new_undefined();
+        }
+        usize length;
+        byte *bytes = mal_buffer_encode_string(mal_value_to_string(source), encoding, &length);
+        if (bytes == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Buffer encoding allocation failed");
+            return mal_value_new_undefined();
+        }
+        if (length > INT32_MAX) {
+            free(bytes);
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Buffer is too large");
+            return mal_value_new_undefined();
+        }
+        MalValue result = mal_buffer_new(vm, prototype, (u32) length);
+        if (mal_value_is_undefined(result)) {
+            free(bytes);
+            return result;
+        }
+        if (length > 0) memcpy(mal_value_to_typed_array_object(result)->buffer->data, bytes, length);
+        free(bytes);
+        return result;
+    }
+
+    if (mal_value_is_array_buffer_object(source)) {
+        MalArrayBufferObject *backing = mal_value_to_array_buffer_object(source);
+        if (backing->detached) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "Cannot create a Buffer from a detached ArrayBuffer");
+            return mal_value_new_undefined();
+        }
+        u32 offset = 0;
+        if (argc >= 2 && !mal_value_is_undefined(args[1]) &&
+            !mal_buffer_to_size(vm, args[1], &offset)) {
+            return mal_value_new_undefined();
+        }
+        if (offset > backing->byte_length) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Buffer offset is outside the ArrayBuffer");
+            return mal_value_new_undefined();
+        }
+        u32 length = backing->byte_length - offset;
+        if (argc >= 3 && !mal_value_is_undefined(args[2]) &&
+            !mal_buffer_to_size(vm, args[2], &length)) {
+            return mal_value_new_undefined();
+        }
+        if ((u64) offset + length > backing->byte_length) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Buffer length is outside the ArrayBuffer");
+            return mal_value_new_undefined();
+        }
+        return mal_buffer_new_view(vm, prototype, backing, offset, length);
+    }
+
+    if (mal_value_is_typed_array_object(source)) {
+        MalTypedArrayObject *input = mal_value_to_typed_array_object(source);
+        if (mal_typed_array_object_is_out_of_bounds(input)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "Cannot create a Buffer from an invalid view");
+            return mal_value_new_undefined();
+        }
+        u32 length = mal_typed_array_object_length(input);
+        MalValue result = mal_buffer_new(vm, prototype, length);
+        if (mal_value_is_undefined(result)) return result;
+        MalRootSpan root;
+        mal_gc_root(&root, &result, 1);
+        MalTypedArrayObject *output = mal_value_to_typed_array_object(result);
+        for (u32 i = 0; i < length; i++) {
+            MalValue element = mal_typed_array_object_get(vm, input, i);
+            mal_typed_array_object_set(vm, output, i, element);
+            if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
+                mal_gc_unroot(&root);
+                return mal_value_new_undefined();
+            }
+        }
+        mal_gc_unroot(&root);
+        return result;
+    }
+
+    if (mal_value_is_data_view_object(source)) {
+        return mal_buffer_new(vm, prototype, 0);
+    }
+
+    if (mal_value_is_object(source)) {
+        MalValue length_value;
+        if (!mal_vm_get_property(vm, source, mal_intrinsic_string_key(vm, "length"),
+                                 &length_value)) {
+            return mal_value_new_undefined();
+        }
+        if (mal_value_is_undefined(length_value)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "The first argument must be a string, ArrayBuffer, or array-like object");
+            return mal_value_new_undefined();
+        }
+        f64 number;
+        if (!mal_buffer_to_integer(vm, length_value, &number)) return mal_value_new_undefined();
+        if (number < 0) number = 0;
+        if (!isfinite(number) || number > INT32_MAX) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Buffer is too large");
+            return mal_value_new_undefined();
+        }
+        u32 length = (u32) number;
+        MalValue result = mal_buffer_new(vm, prototype, length);
+        if (mal_value_is_undefined(result)) return result;
+        MalValue roots[2] = {result, mal_value_new_undefined()};
+        MalRootSpan root;
+        mal_gc_root(&root, roots, 2);
+        mal_gc_native_rooted_begin(vm);
+        MalTypedArrayObject *output = mal_value_to_typed_array_object(roots[0]);
+        for (u32 i = 0; i < length; i++) {
+            MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+            if (!mal_vm_get_property(vm, source, key, &roots[1])) {
+                mal_gc_native_rooted_end(vm);
+                mal_gc_unroot(&root);
+                return mal_value_new_undefined();
+            }
+            mal_typed_array_object_set(vm, output, i, roots[1]);
+            if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
+                mal_gc_native_rooted_end(vm);
+                mal_gc_unroot(&root);
+                return mal_value_new_undefined();
+            }
+        }
+        mal_gc_native_rooted_end(vm);
+        mal_gc_unroot(&root);
+        return roots[0];
+    }
+
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                       "The first argument must be a string, ArrayBuffer, or array-like object");
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_buffer_constructor(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue new_target,
+    MalValue callee
+) {
+    (void) this_value;
+    MalValue target = mal_value_is_undefined(new_target) ? callee : new_target;
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, target, MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE, &prototype)) {
+        return mal_value_new_undefined();
+    }
+    if (argc >= 1 && mal_ops_is_number(args[0])) {
+        u32 length;
+        if (!mal_buffer_allocation_size(vm, args[0], &length)) {
+            return mal_value_new_undefined();
+        }
+        return mal_buffer_new(vm, prototype, length);
+    }
+    return mal_buffer_from_impl(vm, prototype, args, argc);
+}
+
+static MalValue mal_buffer_from(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) self;
+    (void) nt;
+    if (argc >= 1 && mal_ops_is_number(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Buffer.from does not accept a number");
+        return mal_value_new_undefined();
+    }
+    return mal_buffer_from_impl(vm, mal_buffer_prototype_from_callee(callee), args, argc);
+}
+
+static MalValue mal_buffer_alloc_impl(
+    MalVm *vm, const MalValue *args, i32 argc, MalValue callee, bool apply_fill
+) {
+    u32 length;
+    if (!mal_buffer_allocation_size(
+            vm, argc >= 1 ? args[0] : mal_value_new_undefined(), &length)) {
+        return mal_value_new_undefined();
+    }
+    MalValue result = mal_buffer_new(vm, mal_buffer_prototype_from_callee(callee), length);
+    if (mal_value_is_undefined(result)) return result;
+    if (!apply_fill || argc < 2 || mal_value_is_undefined(args[1]) || length == 0) return result;
+    MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
+    if (mal_ops_is_number(args[1])) {
+        f64 number;
+        if (!mal_vm_to_number(vm, args[1], &number)) return mal_value_new_undefined();
+        byte fill = !isfinite(number) ? 0 : (byte) (i64) trunc(number);
+        memset(array->buffer->data, fill, length);
+        return result;
+    }
+    if (mal_value_is_string(args[1])) {
+        MalBufferEncoding encoding;
+        if (!mal_buffer_encoding(vm, argc >= 3 ? args[2] : mal_value_new_undefined(),
+                                 MAL_BUFFER_UTF8, true, false, &encoding)) {
+            return mal_value_new_undefined();
+        }
+        usize fill_length;
+        byte *fill = mal_buffer_encode_string(mal_value_to_string(args[1]), encoding, &fill_length);
+        if (fill == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Buffer encoding allocation failed");
+            return mal_value_new_undefined();
+        }
+        if (fill_length > 0) {
+            for (u32 i = 0; i < length; i++) array->buffer->data[i] = fill[i % fill_length];
+        }
+        free(fill);
+        return result;
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                       "The fill argument must be a number or string");
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_buffer_alloc(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) self;
+    (void) nt;
+    return mal_buffer_alloc_impl(vm, args, argc, callee, true);
+}
+
+static MalValue mal_buffer_alloc_unsafe(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) self;
+    (void) nt;
+    // MalArrayBufferObject always zero-fills fresh memory; keeping that guarantee is
+    // safer than exposing stale native memory through allocUnsafe.
+    return mal_buffer_alloc_impl(vm, args, argc, callee, false);
+}
+
+static MalValue mal_buffer_is_buffer(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) vm;
+    (void) self;
+    (void) nt;
+    (void) callee;
+    MalValue value = argc >= 1 ? args[0] : mal_value_new_undefined();
+    return mal_value_new_boolean(mal_value_is_typed_array_object(value) &&
+                                 mal_value_to_typed_array_object(value)->is_buffer);
+}
+
+static MalValue mal_buffer_byte_length(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    MalValue value = argc >= 1 ? args[0] : mal_value_new_undefined();
+    if (mal_value_is_string(value)) {
+        MalBufferEncoding encoding;
+        if (!mal_buffer_encoding(vm, argc >= 2 ? args[1] : mal_value_new_undefined(),
+                                 MAL_BUFFER_UTF8, true, true, &encoding)) {
+            return mal_value_new_undefined();
+        }
+        usize length;
+        byte *bytes = mal_buffer_encode_string(mal_value_to_string(value), encoding, &length);
+        if (bytes == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "Buffer encoding allocation failed");
+            return mal_value_new_undefined();
+        }
+        free(bytes);
+        return mal_value_from_f64((f64) length);
+    }
+    if (mal_value_is_typed_array_object(value)) {
+        return mal_value_from_f64((f64) mal_typed_array_object_byte_length(
+            mal_value_to_typed_array_object(value)));
+    }
+    if (mal_value_is_data_view_object(value)) {
+        MalDataViewObject *view = mal_value_to_data_view_object(value);
+        MalArrayBufferObject *backing;
+        u32 length;
+        if (!mal_buffer_data_view_window(view, &backing, &length)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "Buffer.byteLength received an invalid view");
+            return mal_value_new_undefined();
+        }
+        return mal_value_from_f64((f64) length);
+    }
+    if (mal_value_is_array_buffer_object(value)) {
+        return mal_value_from_f64((f64) mal_value_to_array_buffer_object(value)->byte_length);
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                       "Buffer.byteLength requires a string or byte source");
+    return mal_value_new_undefined();
+}
+
+static i32 mal_buffer_compare_bytes(
+    const byte *left, usize left_length, const byte *right, usize right_length
+) {
+    usize common = left_length < right_length ? left_length : right_length;
+    i32 compared = common == 0 ? 0 : memcmp(left, right, common);
+    if (compared < 0) return -1;
+    if (compared > 0) return 1;
+    return left_length < right_length ? -1 : left_length > right_length ? 1 : 0;
+}
+
+static MalValue mal_buffer_compare(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    MalTypedArrayObject *left = mal_buffer_byte_view(
+        vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (left == nullptr) return mal_value_new_undefined();
+    MalTypedArrayObject *right = mal_buffer_byte_view(
+        vm, argc >= 2 ? args[1] : mal_value_new_undefined());
+    if (right == nullptr) return mal_value_new_undefined();
+    return mal_value_from_i32(mal_buffer_compare_bytes(
+        mal_buffer_view_data(left), mal_typed_array_object_length(left),
+        mal_buffer_view_data(right), mal_typed_array_object_length(right)));
+}
+
+static MalValue mal_buffer_concat(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) self;
+    (void) nt;
+    MalValue list = argc >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(list)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Buffer.concat requires an array of Buffers");
+        return mal_value_new_undefined();
+    }
+    MalValue length_value;
+    if (!mal_vm_get_property(vm, list, mal_intrinsic_string_key(vm, "length"), &length_value)) {
+        return mal_value_new_undefined();
+    }
+    u32 list_length;
+    if (!mal_buffer_to_size(vm, length_value, &list_length)) return mal_value_new_undefined();
+    u64 total = 0;
+    if (argc >= 2 && !mal_value_is_undefined(args[1])) {
+        u32 requested;
+        if (!mal_ops_is_number(args[1])) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "The totalLength argument must be a number");
+            return mal_value_new_undefined();
+        }
+        f64 requested_number = mal_ops_to_number(args[1]);
+        if (isnan(requested_number) || !isfinite(requested_number) ||
+            requested_number < 0 || trunc(requested_number) != requested_number ||
+            requested_number > INT32_MAX) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                               "The totalLength argument is invalid");
+            return mal_value_new_undefined();
+        }
+        requested = (u32) requested_number;
+        total = requested;
+    } else {
+        for (u32 i = 0; i < list_length; i++) {
+            MalValue item;
+            MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+            if (!mal_vm_get_property(vm, list, key, &item)) return mal_value_new_undefined();
+            MalTypedArrayObject *view = mal_buffer_byte_view(vm, item);
+            if (view == nullptr) return mal_value_new_undefined();
+            total += mal_typed_array_object_length(view);
+            if (total > INT32_MAX) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Buffer is too large");
+                return mal_value_new_undefined();
+            }
+        }
+    }
+    MalValue result = mal_buffer_new(vm, mal_buffer_prototype_from_callee(callee), (u32) total);
+    if (mal_value_is_undefined(result)) return result;
+    MalRootSpan root;
+    mal_gc_root(&root, &result, 1);
+    mal_gc_native_rooted_begin(vm);
+    MalTypedArrayObject *output = mal_value_to_typed_array_object(result);
+    u32 written = 0;
+    for (u32 i = 0; i < list_length && written < total; i++) {
+        MalValue item;
+        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+        if (!mal_vm_get_property(vm, list, key, &item)) goto concat_error;
+        MalTypedArrayObject *view = mal_buffer_byte_view(vm, item);
+        if (view == nullptr) goto concat_error;
+        u32 available = mal_typed_array_object_length(view);
+        u32 copy = available < total - written ? available : (u32) total - written;
+        if (copy > 0) {
+            memmove(output->buffer->data + written, mal_buffer_view_data(view), copy);
+        }
+        written += copy;
+    }
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&root);
+    return result;
+
+concat_error:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_buffer_to_string(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    MalTypedArrayObject *array = mal_buffer_receiver(vm, self);
+    if (array == nullptr) return mal_value_new_undefined();
+    MalBufferEncoding encoding;
+    if (!mal_buffer_encoding(vm, argc >= 1 ? args[0] : mal_value_new_undefined(),
+                             MAL_BUFFER_UTF8, false, false, &encoding)) {
+        return mal_value_new_undefined();
+    }
+    u32 length = mal_typed_array_object_length(array);
+    u32 start;
+    u32 end;
+    if (!mal_buffer_clamped(vm, argc >= 2 ? args[1] : mal_value_new_undefined(), length, 0,
+                            &start) ||
+        !mal_buffer_clamped(vm, argc >= 3 ? args[2] : mal_value_new_undefined(), length,
+                            length, &end)) {
+        return mal_value_new_undefined();
+    }
+    if (end < start) end = start;
+    const byte *data = mal_buffer_view_data(array);
+    return mal_buffer_string_from_bytes(
+        vm, data == nullptr ? nullptr : data + start, end - start, encoding);
+}
+
+static MalValue mal_buffer_equals(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    MalTypedArrayObject *left = mal_buffer_receiver(vm, self);
+    if (left == nullptr) return mal_value_new_undefined();
+    MalTypedArrayObject *right = mal_buffer_byte_view(
+        vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (right == nullptr) return mal_value_new_undefined();
+    u32 left_length = mal_typed_array_object_length(left);
+    u32 right_length = mal_typed_array_object_length(right);
+    bool equal = left_length == right_length &&
+                  (left_length == 0 || memcmp(mal_buffer_view_data(left),
+                                              mal_buffer_view_data(right),
+                                              left_length) == 0);
+    return mal_value_new_boolean(equal);
+}
+
+static MalValue mal_buffer_prototype_compare(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    MalTypedArrayObject *source = mal_buffer_receiver(vm, self);
+    if (source == nullptr) return mal_value_new_undefined();
+    MalTypedArrayObject *target = mal_buffer_byte_view(
+        vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (target == nullptr) return mal_value_new_undefined();
+    u32 target_length = mal_typed_array_object_length(target);
+    u32 source_length = mal_typed_array_object_length(source);
+    u32 target_start, target_end, source_start, source_end;
+    if (!mal_buffer_range_index(vm, argc >= 2 ? args[1] : mal_value_new_undefined(),
+                                target_length, 0, &target_start) ||
+        !mal_buffer_range_index(vm, argc >= 3 ? args[2] : mal_value_new_undefined(),
+                                target_length, target_length, &target_end) ||
+        !mal_buffer_range_index(vm, argc >= 4 ? args[3] : mal_value_new_undefined(),
+                                source_length, 0, &source_start) ||
+        !mal_buffer_range_index(vm, argc >= 5 ? args[4] : mal_value_new_undefined(),
+                                source_length, source_length, &source_end)) {
+        return mal_value_new_undefined();
+    }
+    if (target_end < target_start) target_end = target_start;
+    if (source_end < source_start) source_end = source_start;
+    const byte *source_data = mal_buffer_view_data(source);
+    const byte *target_data = mal_buffer_view_data(target);
+    return mal_value_from_i32(mal_buffer_compare_bytes(
+        source_data == nullptr ? nullptr : source_data + source_start, source_end - source_start,
+        target_data == nullptr ? nullptr : target_data + target_start, target_end - target_start));
+}
+
+static MalValue mal_buffer_subarray_impl(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue callee
+) {
+    MalTypedArrayObject *array = mal_buffer_receiver(vm, self);
+    if (array == nullptr) return mal_value_new_undefined();
+    u32 length = mal_typed_array_object_length(array);
+    u32 start, end;
+    if (!mal_buffer_relative(vm, argc >= 1 ? args[0] : mal_value_new_undefined(), length, 0,
+                             &start) ||
+        !mal_buffer_relative(vm, argc >= 2 ? args[1] : mal_value_new_undefined(), length,
+                             length, &end)) {
+        return mal_value_new_undefined();
+    }
+    if (end < start) end = start;
+    return mal_buffer_new_view(vm, mal_buffer_prototype_from_callee(callee), array->buffer,
+                               array->byte_offset + start, end - start);
+}
+
+static MalValue mal_buffer_subarray(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    return mal_buffer_subarray_impl(vm, self, args, argc, callee);
+}
+
+static MalValue mal_buffer_slice(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    // Unlike Uint8Array.prototype.slice, Node's legacy Buffer.slice is a shared view.
+    return mal_buffer_subarray_impl(vm, self, args, argc, callee);
+}
+
+static MalValue mal_buffer_write(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    MalTypedArrayObject *array = mal_buffer_receiver(vm, self);
+    if (array == nullptr) return mal_value_new_undefined();
+    if (argc < 1 || !mal_value_is_string(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Buffer.write requires a string");
+        return mal_value_new_undefined();
+    }
+    u32 array_length = mal_typed_array_object_length(array);
+    u32 offset = 0;
+    u32 max_length = array_length;
+    MalValue encoding_value = mal_value_new_undefined();
+    if (argc >= 2 && mal_value_is_string(args[1])) {
+        encoding_value = args[1];
+    } else {
+        if (argc >= 2 && !mal_value_is_undefined(args[1]) &&
+            !mal_buffer_offset(vm, args[1], array_length, 0, &offset)) {
+            return mal_value_new_undefined();
+        }
+        if (offset > array_length) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Buffer write offset is invalid");
+            return mal_value_new_undefined();
+        }
+        max_length = array_length - offset;
+        if (argc >= 3 && mal_value_is_string(args[2])) {
+            encoding_value = args[2];
+        } else {
+            if (argc >= 3 && !mal_value_is_undefined(args[2]) &&
+                !mal_buffer_offset(vm, args[2], array_length - offset, 0, &max_length)) {
+                return mal_value_new_undefined();
+            }
+            if (argc >= 4) encoding_value = args[3];
+        }
+    }
+    MalBufferEncoding encoding;
+    if (!mal_buffer_encoding(
+            vm, encoding_value, MAL_BUFFER_UTF8, false, false, &encoding)) {
+        return mal_value_new_undefined();
+    }
+    usize encoded_length;
+    byte *encoded = mal_buffer_encode_string(mal_value_to_string(args[0]), encoding, &encoded_length);
+    if (encoded == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Buffer encoding allocation failed");
+        return mal_value_new_undefined();
+    }
+    usize written = encoded_length < max_length ? encoded_length : max_length;
+    if (encoding == MAL_BUFFER_UTF8 && written < encoded_length) {
+        // Never leave a partial UTF-8 sequence at the end of the destination.
+        usize start = written;
+        while (start > 0 && (encoded[start] & 0xc0) == 0x80) start--;
+        if (start < written) {
+            u8 lead = (u8) encoded[start];
+            usize needed = lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
+            if (start + needed > written) written = start;
+        }
+    }
+    if (written > 0) {
+        memcpy(array->buffer->data + array->byte_offset + offset, encoded, written);
+    }
+    free(encoded);
+    return mal_value_from_i32((i32) written);
+}
+
+static MalValue mal_buffer_read_uint16_le(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    MalTypedArrayObject *array = mal_buffer_receiver(vm, self);
+    if (array == nullptr) return mal_value_new_undefined();
+    u32 offset;
+    if (!mal_buffer_offset(vm, argc >= 1 ? args[0] : mal_value_from_i32(0),
+                           mal_typed_array_object_length(array), 2, &offset)) {
+        return mal_value_new_undefined();
+    }
+    const byte *data = mal_buffer_view_data(array) + offset;
+    return mal_value_from_i32((i32) ((u8) data[0] | ((u16) (u8) data[1] << 8)));
+}
+
+static MalValue mal_buffer_write_uint32(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, bool little_endian
+) {
+    MalTypedArrayObject *array = mal_buffer_receiver(vm, self);
+    if (array == nullptr) return mal_value_new_undefined();
+    f64 number;
+    if (!mal_vm_to_number(
+            vm, argc >= 1 ? args[0] : mal_value_new_undefined(), &number)) {
+        return mal_value_new_undefined();
+    }
+    if (isnan(number)) number = 0;
+    number = trunc(number);
+    if (!isfinite(number) || number < 0 || number > UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Buffer value is out of range");
+        return mal_value_new_undefined();
+    }
+    u32 offset;
+    if (!mal_buffer_offset(vm, argc >= 2 ? args[1] : mal_value_from_i32(0),
+                           mal_typed_array_object_length(array), 4, &offset)) {
+        return mal_value_new_undefined();
+    }
+    u32 value = (u32) number;
+    byte *data = mal_buffer_view_data(array) + offset;
+    for (u32 i = 0; i < 4; i++) {
+        u32 shift = (little_endian ? i : 3 - i) * 8;
+        data[i] = (byte) (value >> shift);
+    }
+    return mal_value_from_i32((i32) offset + 4);
+}
+
+static MalValue mal_buffer_write_uint32_le(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    return mal_buffer_write_uint32(vm, self, args, argc, true);
+}
+
+static MalValue mal_buffer_write_uint32_be(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    return mal_buffer_write_uint32(vm, self, args, argc, false);
+}
+
+static MalNativeFunctionObject *mal_buffer_method(
+    MalVm *vm, const byte *name, i32 length, MalNativeFunctionCallback callback,
+    MalValue prototype
+) {
+    MalNativeFunctionObject *function = mal_native_function_object_new_with_slots(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, name), callback, &prototype, 1);
+    MalValue function_value = mal_value_from_native_function_object(function);
+    MalRootSpan root;
+    mal_gc_root(&root, &function_value, 1);
+    function->length = length;
+    mal_intrinsic_define_data(vm, (MalObject *) function, "length", mal_value_from_i32(length),
+                              MAL_PROPERTY_CONFIGURABLE);
+    mal_gc_unroot(&root);
+    return function;
+}
+
+static void mal_buffer_define_method(
+    MalVm *vm, MalObject *object, const byte *name, i32 length,
+    MalNativeFunctionCallback callback, MalValue prototype
+) {
+    MalValue value = mal_value_from_native_function_object(
+        mal_buffer_method(vm, name, length, callback, prototype));
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    mal_intrinsic_define_data(vm, object, name, value,
+                              MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                                  MAL_PROPERTY_CONFIGURABLE);
+    mal_gc_unroot(&root);
+}
+
+void mal_host_install_node_buffer(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
+    const MalHostLaunchContext *launch
+) {
+    (void) launch;
+    MalValue roots[3] = {
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+
+    MalObject *uint8_prototype = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]);
+    MalObject *prototype = mal_object_new(&vm->heap, uint8_prototype);
+    roots[0] = mal_value_from_object(prototype);
+
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, "Buffer"), 3, mal_buffer_constructor);
+    mal_native_function_object_set_constructor(constructor);
+    roots[1] = mal_value_from_native_function_object(constructor);
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", roots[0],
+                              MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, prototype, "constructor", roots[1],
+                              MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_object_set_prototype(
+        (MalObject *) constructor,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_CONSTRUCTOR]));
+
+    mal_buffer_define_method(vm, (MalObject *) constructor, "from", 1, mal_buffer_from, roots[0]);
+    mal_buffer_define_method(vm, (MalObject *) constructor, "alloc", 1, mal_buffer_alloc, roots[0]);
+    mal_buffer_define_method(vm, (MalObject *) constructor, "allocUnsafe", 1,
+                             mal_buffer_alloc_unsafe, roots[0]);
+    mal_buffer_define_method(vm, (MalObject *) constructor, "isBuffer", 1,
+                             mal_buffer_is_buffer, roots[0]);
+    mal_buffer_define_method(vm, (MalObject *) constructor, "byteLength", 1,
+                             mal_buffer_byte_length, roots[0]);
+    mal_buffer_define_method(vm, (MalObject *) constructor, "concat", 1, mal_buffer_concat,
+                             roots[0]);
+    mal_buffer_define_method(vm, (MalObject *) constructor, "compare", 2, mal_buffer_compare,
+                             roots[0]);
+
+    mal_buffer_define_method(vm, prototype, "toString", 0, mal_buffer_to_string, roots[0]);
+    mal_buffer_define_method(vm, prototype, "equals", 1, mal_buffer_equals, roots[0]);
+    mal_buffer_define_method(vm, prototype, "compare", 1, mal_buffer_prototype_compare,
+                             roots[0]);
+    mal_buffer_define_method(vm, prototype, "slice", 2, mal_buffer_slice, roots[0]);
+    mal_buffer_define_method(vm, prototype, "subarray", 2, mal_buffer_subarray, roots[0]);
+    mal_buffer_define_method(vm, prototype, "write", 1, mal_buffer_write, roots[0]);
+    mal_buffer_define_method(
+        vm, prototype, "readUInt16LE", 1, mal_buffer_read_uint16_le, roots[0]);
+    mal_buffer_define_method(
+        vm, prototype, "writeUInt32LE", 2, mal_buffer_write_uint32_le, roots[0]);
+    mal_buffer_define_method(
+        vm, prototype, "writeUInt32BE", 2, mal_buffer_write_uint32_be, roots[0]);
+
+    MalObject *module_default = mal_intrinsic_new_object(vm);
+    roots[2] = mal_value_from_object(module_default);
+    mal_intrinsic_define_data(vm, module_default, "Buffer", roots[1],
+                              MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                                  MAL_PROPERTY_CONFIGURABLE);
+
+    MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
+    mal_intrinsic_define_data(vm, global_this, "Buffer", roots[1],
+                              MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+
+    for (i32 i = 0; i < count; i++) {
+        if (strcmp(slots[i].name, "Buffer") == 0) {
+            vm->globals[slots[i].slot] = roots[1];
+        } else if (strcmp(slots[i].name, "default") == 0) {
+            vm->globals[slots[i].slot] = roots[2];
+        }
+    }
+    mal_gc_unroot(&root);
+}
+
+#endif /* MAL_NODE */

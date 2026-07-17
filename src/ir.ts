@@ -205,6 +205,9 @@ export interface IntermediateProgram {
 	 * then emits its slot-free installer manifest. Null otherwise.
 	 */
 	hostProcess: { installer: string; retained: boolean } | null;
+
+	/** Free global `Buffer`, installed by the same installer as `node:buffer`. */
+	hostBuffer: { installer: string; retained: boolean } | null;
 }
 
 type BindingLocation =
@@ -1548,6 +1551,7 @@ export function compileSemanticProgramToIr(
 
 		hostModules: [],
 		hostProcess: null,
+		hostBuffer: null,
 	};
 
 	// Cross-module linking: aliases imported names to their exporter bindings (a
@@ -1571,6 +1575,9 @@ export function compileSemanticProgramToIr(
 	program.hostModules = linkage.hostModules;
 	program.hostProcess = linkage.hostProcess
 		? { installer: linkage.hostProcess.installer, retained: false }
+		: null;
+	program.hostBuffer = linkage.hostBuffer
+		? { installer: linkage.hostBuffer.installer, retained: false }
 		: null;
 
 	const initFile = program.semantic.files.find(
@@ -4425,7 +4432,7 @@ function compileStaticIdentifierTarget(
 	if (!binding) {
 		throw new Error(`No binding found for pattern target ${identifier.name}`);
 	}
-	const hostGlobalLocation = retainHostProcess(program, binding)
+	const hostGlobalLocation = retainHostGlobal(program, binding)
 		? globalPropertyLocation(program, binding.name)
 		: null;
 
@@ -8194,7 +8201,7 @@ function compileIdentifierAssignment(
 		return -1;
 	}
 
-	const hostGlobalLocation = retainHostProcess(program, binding)
+	const hostGlobalLocation = retainHostGlobal(program, binding)
 		? globalPropertyLocation(program, binding.name)
 		: null;
 	if (binding.undeclared && !isIRIntrinsic(binding.name) && !hostGlobalLocation) {
@@ -8324,7 +8331,7 @@ function compileLogicalAssignment(
 			return -1;
 		}
 
-		const hostGlobalLocation = retainHostProcess(program, binding)
+		const hostGlobalLocation = retainHostGlobal(program, binding)
 			? globalPropertyLocation(program, binding.name)
 			: null;
 		if (binding.undeclared && !isIRIntrinsic(binding.name) && !hostGlobalLocation) {
@@ -8709,7 +8716,7 @@ function compileUnaryExpression(
 		const argument = expression.argument;
 		const binding = fn.semanticFile.nodeToBinding.get(argument);
 		if (binding) {
-			retainHostProcess(program, binding);
+			retainHostGlobal(program, binding);
 		}
 		if (binding?.undeclared && !isIRIntrinsic(argument.name)) {
 			if (
@@ -8828,7 +8835,7 @@ function compileStaticIdentifierDelete(
 ): number {
 	const binding = fn.semanticFile.nodeToBinding.get(identifier);
 	if (binding?.undeclared) {
-		retainHostProcess(program, binding);
+		retainHostGlobal(program, binding);
 		const global = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
 			type: "loadIntrinsic",
@@ -8942,7 +8949,7 @@ function compileUpdateExpression(
 		if (!binding) {
 			return -1;
 		}
-		const hostGlobalLocation = retainHostProcess(program, binding)
+		const hostGlobalLocation = retainHostGlobal(program, binding)
 			? globalPropertyLocation(program, binding.name)
 			: null;
 
@@ -10633,7 +10640,7 @@ function compileStaticIdentifier(
 	if (!binding) {
 		return -1;
 	}
-	retainHostProcess(program, binding);
+	retainHostGlobal(program, binding);
 
 	if (binding.undeclared && isIRIntrinsic(identifier.name)) {
 		const destination = nextRegisterDestination(fn);
@@ -10690,10 +10697,14 @@ function compileStaticIdentifier(
 	return destination;
 }
 
-/** Mark a reachable free `process` reference and keep it on globalThis storage. */
-function retainHostProcess(program: IntermediateProgram, binding: Binding): boolean {
+/** Mark a reachable free Node global and keep it on globalThis storage. */
+function retainHostGlobal(program: IntermediateProgram, binding: Binding): boolean {
 	if (program.hostProcess && binding.undeclared && binding.name === "process") {
 		program.hostProcess.retained = true;
+		return true;
+	}
+	if (program.hostBuffer && binding.undeclared && binding.name === "Buffer") {
+		program.hostBuffer.retained = true;
 		return true;
 	}
 	return false;

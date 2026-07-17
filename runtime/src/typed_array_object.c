@@ -66,6 +66,7 @@ MalTypedArrayObject *mal_typed_array_object_new(
     array->byte_offset = byte_offset;
     array->length = length;
     array->length_tracking = length_tracking;
+    array->is_buffer = false;
 
     return array;
 }
