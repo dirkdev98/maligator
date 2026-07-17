@@ -122,9 +122,16 @@ const CRYPTO: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:crypto"),
 };
 
+const EVENTS: HostModuleSpec = {
+	id: "node:events",
+	named: ["EventEmitter"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:events"),
+};
+
 /** Supported `node:*` built-ins, keyed by canonical specifier. */
 export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
-	[PATH, FS, CHILD_PROCESS, CRYPTO].map((spec) => [spec.id, spec]),
+	[PATH, FS, CHILD_PROCESS, CRYPTO, EVENTS].map((spec) => [spec.id, spec]),
 );
 
 /** True for any `node:`-prefixed specifier, supported or not. */

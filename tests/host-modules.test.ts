@@ -158,6 +158,29 @@ describe("host-install manifest", () => {
 		expect(def.hostInstalls[0]!.exports.map((e) => e.name)).toEqual(["default"]);
 	});
 
+	it("binds node:events default and named constructor exports through one installer", () => {
+		const def = compile(
+			`import Events, { EventEmitter } from "node:events";\nglobalThis.sink = [Events, EventEmitter];\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_events",
+				exports: [
+					expect.objectContaining({ name: "EventEmitter" }),
+					expect.objectContaining({ name: "default" }),
+				],
+			}),
+		]);
+	});
+
+	it("drops the node:events installer when its constructor read is optimized away", () => {
+		const def = compile(`import { EventEmitter } from "node:events";\nEventEmitter;\n`, {
+			node: true,
+		});
+		expect(def.hostInstalls).toEqual([]);
+	});
+
 	it("detects and installs the free global `process`", () => {
 		const def = compile(`globalThis.sink = process.argv;\n`, { node: true });
 		const install = def.hostInstalls.find(
