@@ -17,6 +17,9 @@ are normative for host work.
       exactly one host task per runtime turn.
 - [ ] H1: implement the neutral task/stream substrate, exactly-once terminal state,
       bounded DNS/IPv6/Happy Eyeballs, pumped turns, and runtime-owned timer state.
+      Generation-checked operation handles, owned FIFO tasks, exactly-once terminal
+      transitions, checked readiness registration, and independent read/write fd
+      interests are implemented; task dispatch, wake posting, DNS, and timers remain.
 - [ ] H2: replace the buffered project parser/server with the bounded llhttp HTTP/1
       codec, raw-header transport, streaming server, and parser fuzzing.
 - [ ] H3: add the pooled outbound HTTP/1 client and build WinterTC and Node adapters

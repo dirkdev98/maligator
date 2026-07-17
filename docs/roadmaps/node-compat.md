@@ -25,12 +25,18 @@ stated acceptance point without patching Express or anything in `node_modules`.
       `__filename`, and `__dirname`, plus the Node globals used by the tree such
       as `process` and `Buffer`. Acceptance is loading `app.js` through
       `require()` with the exact lockfile install and no application edits.
+      Static CommonJS wrappers, JSON modules, canonical bare/`node:` built-ins,
+      cache identity/cycles/failure eviction, and identifier-level `__filename` /
+      `__dirname` are implemented. Entry-goal detection, `require.main`, complete
+      module metadata, globals, and the remaining built-ins still block acceptance.
 - [ ] **Wave 2: supply core data and event primitives.** Support the built-in
       modules needed before network service: events, buffers and string
       decoding, streams, utilities, async context hooks, crypto helpers,
       filesystem/path helpers, URLs, query strings, TTY detection, and zlib.
       Acceptance is constructing the Express application and middleware stack
       without unresolved built-ins or initialization failures.
+      `node:events` now provides the EventEmitter lifecycle required by the tree;
+      the forced Express graph currently advances to the missing bare `tty` module.
 - [ ] **Wave 3: supply Node HTTP lifecycle semantics.** Implement the required
       `node:http` and `node:net` client, server, socket, request, and response
       behavior, including EventEmitter integration, headers, status codes,
