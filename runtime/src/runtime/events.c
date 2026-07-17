@@ -3,10 +3,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "array_object.h"
+#include "builtin_iterator.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap.h"
 #include "heap_string.h"
+#include "heap_symbol.h"
 #include "host_timer.h" // AbortSignal.timeout
 #include "intrinsics.h"
 #include "object.h"
@@ -37,6 +40,205 @@ static void ev_set(MalVm *vm, MalObject *obj, const byte *name, MalValue value) 
     mal_object_set(obj, mal_intrinsic_string_key(vm, name), value);
 }
 
+static void ev_define_getter(MalVm *vm, MalObject *proto, const byte *name,
+    const byte *function_name, MalNativeFunctionCallback getter) {
+    MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalPropertyDesc desc = {
+        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+        .value = mal_value_new_undefined(),
+        .getter = mal_value_from_native_function_object(mal_native_function_object_new(
+            &vm->heap, fn_proto, mal_intrinsic_ascii(vm, function_name), getter)),
+        .setter = mal_value_new_undefined(),
+    };
+    mal_object_define_own(proto, mal_intrinsic_string_key(vm, name), &desc);
+}
+
+/* ---------------------------------------------------------------------------
+ * DOMException (ordinary objects with hidden name/message slots).
+ * --------------------------------------------------------------------------- */
+
+typedef struct MalDomExceptionCode {
+    const char *name;
+    u16 code;
+} MalDomExceptionCode;
+
+static const MalDomExceptionCode dom_exception_codes[] = {
+    {"IndexSizeError", 1},
+    {"HierarchyRequestError", 3},
+    {"WrongDocumentError", 4},
+    {"InvalidCharacterError", 5},
+    {"NoModificationAllowedError", 7},
+    {"NotFoundError", 8},
+    {"NotSupportedError", 9},
+    {"InUseAttributeError", 10},
+    {"InvalidStateError", 11},
+    {"SyntaxError", 12},
+    {"InvalidModificationError", 13},
+    {"NamespaceError", 14},
+    {"InvalidAccessError", 15},
+    {"TypeMismatchError", 17},
+    {"SecurityError", 18},
+    {"NetworkError", 19},
+    {"AbortError", 20},
+    {"URLMismatchError", 21},
+    {"QuotaExceededError", 22},
+    {"TimeoutError", 23},
+    {"InvalidNodeTypeError", 24},
+    {"DataCloneError", 25},
+};
+
+static MalKey dom_exception_slot_key(MalVm *vm, MalIntrinsic slot) {
+    return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = vm->intrinsics[slot]};
+}
+
+static bool dom_exception_slot(
+    MalVm *vm, MalValue self, MalIntrinsic slot, MalValue *value_out) {
+    if (mal_value_is_object(self)) {
+        MalPropertyLookup lookup =
+            mal_object_get_own(mal_value_to_object(self), dom_exception_slot_key(vm, slot));
+        if (lookup.present) {
+            *value_out = lookup.desc.value;
+            return true;
+        }
+    }
+    mal_vm_throw_error(
+        vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "DOMException getter called on incompatible receiver");
+    return false;
+}
+
+static u16 dom_exception_legacy_code(const MalString *name) {
+    usize length = mal_string_length(name);
+    const c16 *units = mal_string_code_units(name);
+    for (usize i = 0; i < countof(dom_exception_codes); i++) {
+        const char *candidate = dom_exception_codes[i].name;
+        usize candidate_length = strlen(candidate);
+        if (candidate_length != length) {
+            continue;
+        }
+        bool equal = true;
+        for (usize j = 0; j < length; j++) {
+            if (units[j] != (u8) candidate[j]) {
+                equal = false;
+                break;
+            }
+        }
+        if (equal) {
+            return dom_exception_codes[i].code;
+        }
+    }
+    return 0;
+}
+
+static MalValue dom_exception_create(
+    MalVm *vm, MalObject *prototype, MalValue message, MalValue name) {
+    MalObject *exception = mal_object_new(&vm->heap, prototype);
+    MalValue exception_value = mal_value_from_object(exception);
+    MalValue roots[] = {exception_value, message, name};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, countof(roots));
+    MalPropertyDesc desc = mal_intrinsic_data_desc(roots[1], MAL_PROPERTY_NONE);
+    mal_object_define_own(exception,
+        dom_exception_slot_key(vm, MAL_INTRINSIC_DOM_EXCEPTION_MESSAGE_KEY), &desc);
+    desc.value = roots[2];
+    mal_object_define_own(
+        exception, dom_exception_slot_key(vm, MAL_INTRINSIC_DOM_EXCEPTION_NAME_KEY), &desc);
+    mal_gc_unroot(&rs);
+    return exception_value;
+}
+
+static MalValue dom_exception_new(MalVm *vm, const char *message, const char *name) {
+    MalValue values[] = {
+        mal_value_from_string(mal_string_new_ascii(&vm->heap, message, strlen(message))),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan rs;
+    mal_gc_root(&rs, values, countof(values));
+    values[1] = mal_value_from_string(mal_string_new_ascii(&vm->heap, name, strlen(name)));
+    MalValue result = dom_exception_create(vm,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DOM_EXCEPTION_PROTOTYPE]), values[0],
+        values[1]);
+    mal_gc_unroot(&rs);
+    return result;
+}
+
+static MalValue dom_exception_constructor(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) callee;
+    if (mal_value_is_undefined(nt)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Constructor DOMException requires 'new'");
+        return mal_value_new_undefined();
+    }
+
+    MalString *message;
+    MalValue values[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    if (argc < 1 || mal_value_is_undefined(args[0])) {
+        message = mal_intrinsic_ascii(vm, (const byte *) "");
+    } else if (!mal_vm_to_string(vm, args[0], &message)) {
+        return mal_value_new_undefined();
+    }
+    values[0] = mal_value_from_string(message);
+    MalRootSpan rs;
+    mal_gc_root(&rs, values, countof(values));
+
+    MalString *name;
+    if (argc < 2 || mal_value_is_undefined(args[1])) {
+        name = mal_intrinsic_ascii(vm, (const byte *) "Error");
+    } else if (!mal_vm_to_string(vm, args[1], &name)) {
+        mal_gc_unroot(&rs);
+        return mal_value_new_undefined();
+    }
+    values[1] = mal_value_from_string(name);
+
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, nt, MAL_INTRINSIC_DOM_EXCEPTION_PROTOTYPE, &prototype)) {
+        mal_gc_unroot(&rs);
+        return mal_value_new_undefined();
+    }
+    MalValue result = dom_exception_create(vm, prototype, values[0], values[1]);
+    mal_gc_unroot(&rs);
+    return result;
+}
+
+static MalValue dom_exception_get_name(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalValue value;
+    return dom_exception_slot(vm, self, MAL_INTRINSIC_DOM_EXCEPTION_NAME_KEY, &value)
+        ? value
+        : mal_value_new_undefined();
+}
+
+static MalValue dom_exception_get_message(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalValue value;
+    return dom_exception_slot(vm, self, MAL_INTRINSIC_DOM_EXCEPTION_MESSAGE_KEY, &value)
+        ? value
+        : mal_value_new_undefined();
+}
+
+static MalValue dom_exception_get_code(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalValue name;
+    if (!dom_exception_slot(vm, self, MAL_INTRINSIC_DOM_EXCEPTION_NAME_KEY, &name)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_i32(dom_exception_legacy_code(mal_value_to_string(name)));
+}
+
 /* Read a property and coerce to boolean (absent -> false). */
 static bool ev_get_bool(MalVm *vm, MalValue obj, const byte *name) {
     MalValue v;
@@ -55,15 +257,25 @@ static MalEventTargetObject *event_target_new(MalHeap *heap, MalObject *prototyp
     t->listeners = nullptr;
     t->count = 0;
     t->cap = 0;
+    t->dependents = nullptr;
+    t->dependent_count = 0;
+    t->dependent_cap = 0;
+    t->abort_reason = mal_value_new_undefined();
+    t->is_abort_signal = false;
+    t->abort_pending = false;
     return t;
 }
 
 static void event_target_finalize(MalHeapHeader *cell) {
     MalEventTargetObject *t = (MalEventTargetObject *) cell;
     free(t->listeners);
+    free(t->dependents);
     t->listeners = nullptr;
+    t->dependents = nullptr;
     t->count = 0;
     t->cap = 0;
+    t->dependent_count = 0;
+    t->dependent_cap = 0;
 }
 
 static void event_target_trace(MalHeapHeader *cell) {
@@ -72,6 +284,8 @@ static void event_target_trace(MalHeapHeader *cell) {
         mal_gc_mark_value(mal_value_from_string(t->listeners[i].type));
         mal_gc_mark_value(t->listeners[i].callback);
     }
+    mal_gc_mark_values(t->dependents, t->dependent_count);
+    mal_gc_mark_value(t->abort_reason);
 }
 
 static void event_target_add(MalEventTargetObject *t, MalString *type, MalValue cb, bool once) {
@@ -88,9 +302,15 @@ static void event_target_add(MalEventTargetObject *t, MalString *type, MalValue 
     t->listeners[t->count].callback = cb;
     t->listeners[t->count].once = once;
     t->count++;
+    mal_gc_card(&t->object.header, mal_value_from_string(type));
+    mal_gc_card(&t->object.header, cb);
 }
 
 static void event_target_remove(MalEventTargetObject *t, const MalString *type, MalValue cb) {
+    for (i32 i = 0; i < t->count; i++) {
+        mal_gc_write_barrier(mal_value_from_string(t->listeners[i].type));
+        mal_gc_write_barrier(t->listeners[i].callback);
+    }
     i32 w = 0;
     for (i32 i = 0; i < t->count; i++) {
         if (!(mal_string_equals(t->listeners[i].type, type) && t->listeners[i].callback == cb)) {
@@ -305,63 +525,136 @@ static MalValue event_stop_immediate(
  * AbortSignal + AbortController.
  * --------------------------------------------------------------------------- */
 
-/* A fresh, non-aborted AbortSignal (an EventTarget instance + aborted/reason/onabort
- * own properties). Returns a boxed value the caller should root before allocating. */
+/* A fresh, non-aborted AbortSignal. Returns a boxed value the caller should root
+ * before allocating. */
 static MalValue mal_abort_signal_new(MalVm *vm) {
     MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ABORT_SIGNAL_PROTOTYPE]);
     MalEventTargetObject *s = event_target_new(&vm->heap, proto);
     MalValue sval = mal_value_from_event_target_object(s);
     MalRootSpan rs;
     mal_gc_root(&rs, &sval, 1);
-    ev_set(vm, &s->object, (const byte *) "aborted", mal_value_new_boolean(false));
-    ev_set(vm, &s->object, (const byte *) "reason", mal_value_new_undefined());
+    s->is_abort_signal = true;
     ev_set(vm, &s->object, (const byte *) "onabort", mal_value_new_null());
     mal_gc_unroot(&rs);
     return sval;
 }
 
-/* Construct a default abort reason (v1: a plain Error, not a DOMException). */
-static MalValue mal_abort_error(MalVm *vm, const char *message) {
-    MalValue m = mal_value_from_string(mal_string_new_ascii(&vm->heap, message, strlen(message)));
-    MalRootSpan rs;
-    mal_gc_root(&rs, &m, 1);
-    MalCompletion c = mal_vm_construct_value(vm, vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR], &m, 1);
-    mal_gc_unroot(&rs);
-    return c.kind == MAL_COMPLETION_NORMAL ? c.value : mal_value_new_undefined();
+static MalEventTargetObject *abort_signal_this(MalValue value) {
+    if (!mal_value_is_event_target_object(value)) {
+        return nullptr;
+    }
+    MalEventTargetObject *signal = mal_value_to_event_target_object(value);
+    return signal->is_abort_signal ? signal : nullptr;
 }
 
-/* The "signal abort" algorithm: mark aborted, store reason, fire onabort + dispatch
- * an "abort" event. No-op if already aborted. `signal_val` must be rooted by caller. */
-static void mal_abort_signal_run(MalVm *vm, MalValue signal_val, MalValue reason) {
-    MalEventTargetObject *s = mal_value_to_event_target_object(signal_val);
-    if (ev_get_bool(vm, signal_val, (const byte *) "aborted")) {
+static void abort_signal_add_dependent(MalEventTargetObject *source, MalValue dependent) {
+    for (i32 i = 0; i < source->dependent_count; i++) {
+        if (source->dependents[i] == dependent) {
+            return;
+        }
+    }
+    if (source->dependent_count == source->dependent_cap) {
+        source->dependent_cap = source->dependent_cap == 0 ? 4 : source->dependent_cap * 2;
+        source->dependents =
+            realloc(source->dependents, sizeof(MalValue) * (usize) source->dependent_cap);
+    }
+    source->dependents[source->dependent_count++] = dependent;
+    mal_gc_card(&source->object.header, dependent);
+}
+
+/* Set the whole dependent tree before firing any events. Thus a source's abort
+ * listeners observe every affected dependent as already aborted. */
+static void abort_signal_set_tree(MalEventTargetObject *signal, MalValue reason) {
+    if (!mal_value_is_undefined(signal->abort_reason)) {
         return;
     }
-    MalValue slots[3];
-    slots[0] = signal_val;
-    slots[1] = reason;
-    slots[2] = mal_value_new_undefined(); // abort event
-    MalRootSpan rs;
-    mal_gc_root(&rs, slots, 3);
-    if (mal_value_is_undefined(slots[1])) {
-        slots[1] = mal_abort_error(vm, "The operation was aborted");
+    signal->abort_reason = reason;
+    signal->abort_pending = true;
+    mal_gc_card(&signal->object.header, reason);
+    for (i32 i = 0; i < signal->dependent_count; i++) {
+        abort_signal_set_tree(abort_signal_this(signal->dependents[i]), reason);
     }
-    ev_set(vm, &s->object, (const byte *) "aborted", mal_value_new_boolean(true));
-    ev_set(vm, &s->object, (const byte *) "reason", slots[1]);
+}
 
-    slots[2] = mal_event_new(vm, "abort");
-    mal_event_dispatch(vm, slots[0], slots[2]);
+static void abort_signal_fire_tree(MalVm *vm, MalValue signal_val) {
+    MalEventTargetObject *signal = abort_signal_this(signal_val);
+    if (!signal->abort_pending) {
+        return;
+    }
+    signal->abort_pending = false;
+
+    MalValue slots[] = {signal_val, mal_value_new_undefined()};
+    MalRootSpan rs;
+    mal_gc_root(&rs, slots, countof(slots));
+    slots[1] = mal_event_new(vm, "abort");
+    mal_event_dispatch(vm, slots[0], slots[1]);
 
     MalValue onabort;
     if (mal_vm_get_property(vm, slots[0], mal_intrinsic_string_key(vm, (const byte *) "onabort"), &onabort)
         && mal_value_is_callable(onabort)) {
-        mal_vm_call_value(vm, onabort, slots[0], &slots[2], 1);
+        mal_vm_call_value(vm, onabort, slots[0], &slots[1], 1);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             vm->completion =
                 (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
         }
     }
+
+    for (i32 i = 0; i < signal->dependent_count; i++) {
+        abort_signal_fire_tree(vm, signal->dependents[i]);
+    }
+    for (i32 i = 0; i < signal->dependent_count; i++) {
+        mal_gc_write_barrier(signal->dependents[i]);
+    }
+    signal->dependent_count = 0;
     mal_gc_unroot(&rs);
+}
+
+/* The "signal abort" algorithm. No-op if already aborted. `signal_val` must be
+ * rooted by the caller. */
+static void mal_abort_signal_run(MalVm *vm, MalValue signal_val, MalValue reason) {
+    MalEventTargetObject *signal = abort_signal_this(signal_val);
+    if (signal == nullptr || !mal_value_is_undefined(signal->abort_reason)) {
+        return;
+    }
+    MalValue roots[] = {signal_val, reason};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, countof(roots));
+    if (mal_value_is_undefined(roots[1])) {
+        roots[1] = dom_exception_new(vm, "This operation was aborted", "AbortError");
+    }
+    abort_signal_set_tree(signal, roots[1]);
+    abort_signal_fire_tree(vm, roots[0]);
+    mal_gc_unroot(&rs);
+}
+
+static MalValue abort_signal_get_aborted(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalEventTargetObject *signal = abort_signal_this(self);
+    if (signal == nullptr) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "AbortSignal getter called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(!mal_value_is_undefined(signal->abort_reason));
+}
+
+static MalValue abort_signal_get_reason(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalEventTargetObject *signal = abort_signal_this(self);
+    if (signal == nullptr) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "AbortSignal getter called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    return signal->abort_reason;
 }
 
 static MalValue abort_signal_constructor(
@@ -382,12 +675,13 @@ static MalValue abort_signal_throw_if_aborted(
     (void) argc;
     (void) nt;
     (void) callee;
-    if (mal_value_is_event_target_object(self) && ev_get_bool(vm, self, (const byte *) "aborted")) {
-        MalValue reason;
-        if (!mal_vm_get_property(vm, self, mal_intrinsic_string_key(vm, (const byte *) "reason"), &reason)) {
-            reason = mal_value_new_undefined();
-        }
-        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = reason};
+    MalEventTargetObject *signal = abort_signal_this(self);
+    if (signal == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "AbortSignal.throwIfAborted called on incompatible receiver");
+    } else if (!mal_value_is_undefined(signal->abort_reason)) {
+        vm->completion =
+            (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = signal->abort_reason};
     }
     return mal_value_new_undefined();
 }
@@ -416,7 +710,8 @@ static MalValue abort_signal_timeout_fire(
     MalValue signal = mal_native_function_object_get_slot(fn, 0);
     MalRootSpan rs;
     mal_gc_root(&rs, &signal, 1);
-    mal_abort_signal_run(vm, signal, mal_abort_error(vm, "The operation timed out"));
+    mal_abort_signal_run(vm, signal,
+        dom_exception_new(vm, "The operation was aborted due to timeout", "TimeoutError"));
     mal_gc_unroot(&rs);
     return mal_value_new_undefined();
 }
@@ -444,6 +739,77 @@ static MalValue abort_signal_static_timeout(
     mal_host_set_timeout(vm, mal_value_from_native_function_object(cb), ms, nullptr, 0);
     mal_gc_unroot(&rs);
     return signal;
+}
+
+static MalValue abort_signal_static_any(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    MalValue iterable = argc >= 1 ? args[0] : mal_value_new_undefined();
+    MalIteratorRecord record;
+    if (!mal_vm_get_iterator(vm, iterable, &record)) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue roots[] = {
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan record_span, roots_span;
+    mal_gc_root(&record_span, &record.iterator, 2);
+    mal_gc_root(&roots_span, roots, countof(roots));
+    mal_gc_native_rooted_begin(vm);
+    roots[0] = mal_abort_signal_new(vm);
+    roots[1] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    i32 count = 0;
+    bool valid = true;
+
+    while (true) {
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &roots[2], &done)) {
+            valid = false;
+            break;
+        }
+        if (done) {
+            break;
+        }
+        if (abort_signal_this(roots[2]) == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "AbortSignal.any requires AbortSignal values");
+            mal_vm_iterator_close(vm, &record);
+            valid = false;
+            break;
+        }
+        mal_array_object_store(mal_value_to_array_object(roots[1]),
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(count++)}, roots[2]);
+    }
+
+    if (valid) {
+        for (i32 i = 0; i < count; i++) {
+            mal_vm_get_property(vm, roots[1],
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)}, &roots[2]);
+            MalEventTargetObject *source = abort_signal_this(roots[2]);
+            if (!mal_value_is_undefined(source->abort_reason)) {
+                mal_abort_signal_run(vm, roots[0], source->abort_reason);
+                goto done;
+            }
+        }
+
+        for (i32 i = 0; i < count; i++) {
+            mal_vm_get_property(vm, roots[1],
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)}, &roots[2]);
+            abort_signal_add_dependent(abort_signal_this(roots[2]), roots[0]);
+        }
+    }
+
+done:
+    MalValue result = valid ? roots[0] : mal_value_new_undefined();
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&roots_span);
+    mal_gc_unroot(&record_span);
+    return result;
 }
 
 static MalValue abort_controller_constructor(
@@ -508,8 +874,72 @@ static MalObject *ev_install_class(MalVm *vm, MalObject *global_this, const byte
     return proto;
 }
 
+typedef struct MalDomExceptionConstant {
+    const byte *name;
+    i32 value;
+} MalDomExceptionConstant;
+
+static const MalDomExceptionConstant dom_exception_constants[] = {
+    {(const byte *) "INDEX_SIZE_ERR", 1},
+    {(const byte *) "DOMSTRING_SIZE_ERR", 2},
+    {(const byte *) "HIERARCHY_REQUEST_ERR", 3},
+    {(const byte *) "WRONG_DOCUMENT_ERR", 4},
+    {(const byte *) "INVALID_CHARACTER_ERR", 5},
+    {(const byte *) "NO_DATA_ALLOWED_ERR", 6},
+    {(const byte *) "NO_MODIFICATION_ALLOWED_ERR", 7},
+    {(const byte *) "NOT_FOUND_ERR", 8},
+    {(const byte *) "NOT_SUPPORTED_ERR", 9},
+    {(const byte *) "INUSE_ATTRIBUTE_ERR", 10},
+    {(const byte *) "INVALID_STATE_ERR", 11},
+    {(const byte *) "SYNTAX_ERR", 12},
+    {(const byte *) "INVALID_MODIFICATION_ERR", 13},
+    {(const byte *) "NAMESPACE_ERR", 14},
+    {(const byte *) "INVALID_ACCESS_ERR", 15},
+    {(const byte *) "VALIDATION_ERR", 16},
+    {(const byte *) "TYPE_MISMATCH_ERR", 17},
+    {(const byte *) "SECURITY_ERR", 18},
+    {(const byte *) "NETWORK_ERR", 19},
+    {(const byte *) "ABORT_ERR", 20},
+    {(const byte *) "URL_MISMATCH_ERR", 21},
+    {(const byte *) "QUOTA_EXCEEDED_ERR", 22},
+    {(const byte *) "TIMEOUT_ERR", 23},
+    {(const byte *) "INVALID_NODE_TYPE_ERR", 24},
+    {(const byte *) "DATA_CLONE_ERR", 25},
+};
+
 void mal_events_install(MalVm *vm, MalObject *global_this) {
     MalObject *obj_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+
+    // DOMException uses ordinary objects; private symbols provide reflection-hidden
+    // internal name/message slots and their intrinsic entries keep those keys rooted.
+    vm->intrinsics[MAL_INTRINSIC_DOM_EXCEPTION_NAME_KEY] =
+        mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    vm->intrinsics[MAL_INTRINSIC_DOM_EXCEPTION_MESSAGE_KEY] =
+        mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    MalObject *dom_exception_proto = ev_install_class(vm, global_this,
+        (const byte *) "DOMException", 0, dom_exception_constructor,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_PROTOTYPE]),
+        MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR, MAL_INTRINSIC_DOM_EXCEPTION_PROTOTYPE);
+    ev_define_getter(vm, dom_exception_proto, (const byte *) "name", (const byte *) "get name",
+        dom_exception_get_name);
+    ev_define_getter(vm, dom_exception_proto, (const byte *) "message",
+        (const byte *) "get message", dom_exception_get_message);
+    ev_define_getter(vm, dom_exception_proto, (const byte *) "code", (const byte *) "get code",
+        dom_exception_get_code);
+    MalObject *dom_exception_ctor =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR]);
+    for (usize i = 0; i < countof(dom_exception_constants); i++) {
+        MalValue value = mal_value_from_i32(dom_exception_constants[i].value);
+        mal_intrinsic_define_data(vm, dom_exception_ctor, dom_exception_constants[i].name, value,
+            MAL_PROPERTY_ENUMERABLE);
+        mal_intrinsic_define_data(vm, dom_exception_proto, dom_exception_constants[i].name, value,
+            MAL_PROPERTY_ENUMERABLE);
+    }
+    MalPropertyDesc tag_desc = mal_intrinsic_data_desc(
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "DOMException")),
+        MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(dom_exception_proto,
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag_desc);
 
     // Event.
     MalObject *event_proto = ev_install_class(vm, global_this, (const byte *) "Event", 1,
@@ -536,11 +966,17 @@ void mal_events_install(MalVm *vm, MalObject *global_this) {
         MAL_INTRINSIC_ABORT_SIGNAL_PROTOTYPE);
     mal_intrinsic_define_method_n(
         vm, sig_proto, (const byte *) "throwIfAborted", 0, abort_signal_throw_if_aborted);
+    ev_define_getter(vm, sig_proto, (const byte *) "aborted", (const byte *) "get aborted",
+        abort_signal_get_aborted);
+    ev_define_getter(vm, sig_proto, (const byte *) "reason", (const byte *) "get reason",
+        abort_signal_get_reason);
     MalValue sig_ctor = vm->intrinsics[MAL_INTRINSIC_ABORT_SIGNAL_CONSTRUCTOR];
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(sig_ctor), (const byte *) "abort", 0, abort_signal_static_abort);
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(sig_ctor), (const byte *) "timeout", 1, abort_signal_static_timeout);
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(sig_ctor), (const byte *) "any", 1, abort_signal_static_any);
 
     // AbortController.
     MalObject *ctrl_proto = ev_install_class(vm, global_this, (const byte *) "AbortController", 0,

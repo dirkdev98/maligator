@@ -1,4 +1,4 @@
-// Event / EventTarget / AbortController / AbortSignal acceptance fixture.
+// DOMException / Event / EventTarget / AbortController / AbortSignal fixture.
 //   node scripts/webtest.ts tests/local/events.js
 // Sync checks run first; AbortSignal.timeout (async, via the event loop) finalizes
 // the run and prints RESULT from its abort listener.
@@ -7,6 +7,78 @@ const results = [];
 function check(name, ok) {
 	results.push([name, !!ok]);
 }
+
+// --- DOMException ---
+check("DOMException global", typeof DOMException === "function");
+check("DOMException constructor length", DOMException.length === 0);
+let domCallThrew = false;
+try {
+	DOMException();
+} catch (err) {
+	domCallThrew = err instanceof TypeError;
+}
+check("DOMException requires new", domCallThrew);
+
+const domDefault = new DOMException();
+check(
+	"DOMException defaults",
+	domDefault.name === "Error" && domDefault.message === "" && domDefault.code === 0,
+);
+const domAbort = new DOMException("stopped", "AbortError");
+check(
+	"DOMException fields and inheritance",
+	domAbort.name === "AbortError" &&
+		domAbort.message === "stopped" &&
+		domAbort.code === 20 &&
+		domAbort instanceof DOMException &&
+		domAbort instanceof Error &&
+		String(domAbort) === "AbortError: stopped",
+);
+check(
+	"DOMException legacy codes",
+	new DOMException("", "IndexSizeError").code === 1 &&
+		new DOMException("", "TimeoutError").code === 23 &&
+		new DOMException("", "DataCloneError").code === 25 &&
+		new DOMException("", "DOMStringSizeError").code === 0 &&
+		new DOMException("", "UnknownError").code === 0,
+);
+check(
+	"DOMException legacy constants",
+	DOMException.ABORT_ERR === 20 &&
+		DOMException.prototype.ABORT_ERR === 20 &&
+		DOMException.TIMEOUT_ERR === 23 &&
+		DOMException.DATA_CLONE_ERR === 25,
+);
+const converted = new DOMException(123, { toString: () => "NetworkError" });
+check(
+	"DOMException converts message and name",
+	converted.message === "123" &&
+		converted.name === "NetworkError" &&
+		converted.code === 19,
+);
+let readonlyThrew = false;
+try {
+	domAbort.name = "TimeoutError";
+} catch (err) {
+	readonlyThrew = err instanceof TypeError;
+}
+check(
+	"DOMException fields are readonly",
+	readonlyThrew && domAbort.name === "AbortError" && domAbort.message === "stopped",
+);
+let domBrandThrew = false;
+try {
+	Object.getOwnPropertyDescriptor(DOMException.prototype, "name").get.call({});
+} catch (err) {
+	domBrandThrew = err instanceof TypeError;
+}
+check("DOMException getters brand-check", domBrandThrew);
+check(
+	"DOMException state is reflection-hidden",
+	!Object.getOwnPropertyNames(domAbort).includes("name") &&
+		!Object.getOwnPropertyNames(domAbort).includes("message") &&
+		Object.getOwnPropertySymbols(domAbort).length === 0,
+);
 
 // --- Event ---
 const e = new Event("test", { cancelable: true, bubbles: true });
@@ -90,8 +162,132 @@ const sa = AbortSignal.abort("static-reason");
 check("static abort aborted", sa.aborted === true && sa.reason === "static-reason");
 const sad = AbortSignal.abort();
 check(
-	"static abort default reason is Error",
-	sad.aborted === true && sad.reason instanceof Error,
+	"static abort default reason is AbortError DOMException",
+	sad.aborted === true &&
+		sad.reason instanceof DOMException &&
+		sad.reason.name === "AbortError" &&
+		sad.reason.message === "This operation was aborted" &&
+		sad.reason.code === DOMException.ABORT_ERR,
+);
+
+const defaultController = new AbortController();
+defaultController.abort();
+check(
+	"controller default reason is AbortError DOMException",
+	defaultController.signal.reason instanceof DOMException &&
+		defaultController.signal.reason.name === "AbortError" &&
+		defaultController.signal.reason.code === 20,
+);
+
+// Static AbortSignal.any.
+const alreadyFirst = AbortSignal.abort("first");
+const alreadySecond = AbortSignal.abort("second");
+const alreadyAny = AbortSignal.any([alreadyFirst, alreadySecond]);
+check(
+	"any uses first already-aborted reason",
+	alreadyAny.aborted === true && alreadyAny.reason === "first",
+);
+
+const laterFirst = new AbortController();
+const laterSecond = new AbortController();
+const laterAny = AbortSignal.any([laterFirst.signal, laterSecond.signal]);
+let laterFired = 0;
+laterAny.addEventListener("abort", () => laterFired++);
+laterSecond.abort("later-second");
+laterFirst.abort("later-first");
+check(
+	"any follows first later abort",
+	laterAny.aborted && laterAny.reason === "later-second" && laterFired === 1,
+);
+
+const propagationSource = new AbortController();
+let propagationAny;
+let dependentWasAbortedInSourceHandler = false;
+propagationSource.signal.addEventListener("abort", (event) => {
+	dependentWasAbortedInSourceHandler = propagationAny.aborted;
+	event.stopImmediatePropagation();
+});
+propagationAny = AbortSignal.any([propagationSource.signal]);
+propagationSource.abort("cannot-be-stopped");
+check(
+	"any propagation precedes and survives source event handlers",
+	dependentWasAbortedInSourceHandler && propagationAny.reason === "cannot-be-stopped",
+);
+
+const emptyAny = AbortSignal.any([]);
+check(
+	"any empty iterable stays live",
+	emptyAny.aborted === false && emptyAny.reason === undefined,
+);
+
+const lifetimeSource = new AbortController();
+let lifetimeFired = 0;
+(function installDependent() {
+	const dependent = AbortSignal.any([lifetimeSource.signal]);
+	dependent.addEventListener("abort", () => lifetimeFired++);
+})();
+for (let i = 0; i < 100; i++) ({ index: i });
+lifetimeSource.abort("retained");
+check("any source retains dependent signal", lifetimeFired === 1);
+
+let nonIterableThrew = false;
+try {
+	AbortSignal.any(1);
+} catch (err) {
+	nonIterableThrew = err instanceof TypeError;
+}
+check("any rejects non-iterable", nonIterableThrew);
+
+let wrongTypeThrew = false;
+try {
+	AbortSignal.any([new AbortController().signal, new EventTarget()]);
+} catch (err) {
+	wrongTypeThrew = err instanceof TypeError;
+}
+check("any rejects non-signal element", wrongTypeThrew);
+
+const iterationError = { marker: "iteration-error" };
+let preservedIterationError = false;
+try {
+	AbortSignal.any({
+		[Symbol.iterator]() {
+			return {
+				next() {
+					throw iterationError;
+				},
+			};
+		},
+	});
+} catch (err) {
+	preservedIterationError = err === iterationError;
+}
+check("any preserves iteration error", preservedIterationError);
+
+let iteratorClosed = false;
+let typeErrorAfterAborted = false;
+try {
+	AbortSignal.any({
+		[Symbol.iterator]() {
+			let index = 0;
+			return {
+				next() {
+					if (index++ === 0) return { value: alreadyFirst, done: false };
+					if (index === 2) return { value: {}, done: false };
+					return { value: undefined, done: true };
+				},
+				return() {
+					iteratorClosed = true;
+					return { value: undefined, done: true };
+				},
+			};
+		},
+	});
+} catch (err) {
+	typeErrorAfterAborted = err instanceof TypeError;
+}
+check(
+	"any validates full sequence and closes iterator",
+	typeErrorAfterAborted && iteratorClosed,
 );
 
 // --- async: AbortSignal.timeout finalizes the run ---
@@ -99,7 +295,13 @@ const ts = AbortSignal.timeout(10);
 check("timeout not yet aborted", ts.aborted === false);
 ts.addEventListener("abort", () => {
 	check("timeout aborted", ts.aborted === true);
-	check("timeout reason is Error", ts.reason instanceof Error);
+	check(
+		"timeout reason is TimeoutError DOMException",
+		ts.reason instanceof DOMException &&
+			ts.reason.name === "TimeoutError" &&
+			ts.reason.message === "The operation was aborted due to timeout" &&
+			ts.reason.code === DOMException.TIMEOUT_ERR,
+	);
 	let passed = 0;
 	for (const [name, ok] of results) {
 		if (ok) passed++;
