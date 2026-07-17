@@ -1,0 +1,13 @@
+{
+	"name": "maligator-express-5-fixture",
+	"version": "0.0.0",
+	"private": true,
+	"type": "commonjs",
+	"scripts": {
+		"smoke": "node smoke.js",
+		"start": "node app.js"
+	},
+	"dependencies": {
+		"express": "5.2.1"
+	}
+}
