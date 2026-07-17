@@ -19,6 +19,12 @@ const server = Mal.serve({
 		if (request.url.endsWith("/echo")) {
 			return new Response(request.headers.get("x-test") || "none");
 		}
+		if (request.url.endsWith("/cookies")) {
+			const headers = new Headers();
+			headers.append("Set-Cookie", "a=1; Path=/");
+			headers.append("set-cookie", "b=2; Path=/");
+			return new Response("cookies", { headers });
+		}
 		if (request.url.endsWith("/body")) {
 			return new Response("body=" + (await request.text()));
 		}

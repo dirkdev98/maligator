@@ -14,6 +14,12 @@ const server = Mal.serve({
 		if (request.url.endsWith("/echo")) {
 			return new Response(request.headers.get("x-test") || "none");
 		}
+		if (request.url.endsWith("/cookies")) {
+			const headers = new Headers();
+			headers.append("Set-Cookie", "a=1; Path=/");
+			headers.append("set-cookie", "b=2; Path=/");
+			return new Response("cookies", { headers });
+		}
 		if (request.url.endsWith("/binary")) {
 			// Binary Response body exercises the BufferSource path under STRESS.
 			return new Response(new Uint8Array([1, 2, 3, 4, 5]), {

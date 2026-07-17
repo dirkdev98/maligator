@@ -174,10 +174,16 @@ static MalValue mal_response_constructor(
         body_len = src_len;
     }
 
+    MalValue roots[2] = {init_headers, mal_value_new_undefined()};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, 2);
     MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_RESPONSE_PROTOTYPE]);
     MalResponseObject *r = mal_response_object_new(&vm->heap, proto, status, body, body_len);
-    r->headers = mal_value_from_headers_object(mal_headers_from_init(vm, init_headers));
-    return mal_value_from_response_object(r);
+    roots[1] = mal_value_from_response_object(r);
+    r->headers = mal_value_from_headers_object(mal_headers_from_init(vm, roots[0]));
+    MalValue result = roots[1];
+    mal_gc_unroot(&rs);
+    return result;
 }
 
 /* --- Response read side (a received/constructed Response is read via these). --- */
@@ -416,8 +422,12 @@ static MalValue mal_response_static_redirect(
     mal_gc_root(&rrs, &rval, 1);
     MalHeadersObject *h = mal_headers_create(vm);
     r->headers = mal_value_from_headers_object(h);
-    mal_headers_append_entry(h, mal_string_new_ascii(&vm->heap, "Location", 8),
-        mal_value_to_string(url_val));
+    MalString *url_string = mal_value_to_string(url_val);
+    usize url_len;
+    byte *url_bytes = mal_utf8_encode(
+        mal_string_code_units(url_string), mal_string_length(url_string), &url_len);
+    mal_headers_append_bytes(vm, h, "location", 8, (const char *) url_bytes, url_len);
+    free(url_bytes);
     mal_gc_unroot(&rrs);
     mal_gc_unroot(&urs);
     return rval;

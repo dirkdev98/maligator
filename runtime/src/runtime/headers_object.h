@@ -7,13 +7,13 @@
 typedef struct MalVm MalVm;
 
 /*
- * WinterTC fetch Headers (runtime layer): an ordered, case-insensitive list of
- * (name, value) string pairs. Stored in an owned C array, so it needs a registered
- * GC tracer (mark the name/value strings) + finalizer (free the array). Multi-value
- * headers are comma-joined on get for v1 (Set-Cookie special-casing is a follow-up).
+ * WinterTC fetch Headers (runtime layer): an ordered list of normalized (lowercase
+ * name, trimmed value) string pairs. Duplicate tuples stay separate so Set-Cookie
+ * can be exposed losslessly; JS iteration computes Fetch's sorted/combined view.
+ * The owned C array needs a registered GC tracer and finalizer.
  */
 typedef struct MalHeaderEntry {
-    MalString *name; // original case preserved
+    MalString *name; // validated lowercase HTTP token
     MalString *value;
 } MalHeaderEntry;
 
@@ -26,18 +26,17 @@ typedef struct MalHeadersObject {
 
 MalHeadersObject *mal_headers_object_new(MalHeap *heap, MalObject *prototype);
 
-/* Low-level append (grows the array; keeps insertion order). name/value are kept
- * by the Headers and traced. */
+/* Low-level append for already-normalized entries. name/value are traced. */
 void mal_headers_append_entry(MalHeadersObject *headers, MalString *name, MalString *value);
 
 /* Create an empty Headers using the intrinsic prototype. */
 MalHeadersObject *mal_headers_create(MalVm *vm);
 
-/* Create a Headers filled from an init (another Headers, or a plain object with
- * string values). Used by the Response constructor for its `headers` init option. */
+/* Create a Headers filled from an init (another Headers or an enumerable record).
+ * Record keys and values use Web IDL-ish string coercion. */
 MalHeadersObject *mal_headers_from_init(MalVm *vm, MalValue init);
 
-/* Append from raw bytes (for building request.headers from the parsed request). */
+/* Append normalized copies of raw host bytes to a JS Headers view. */
 void mal_headers_append_bytes(
     MalVm *vm, MalHeadersObject *headers, const char *name, usize name_len, const char *value,
     usize value_len);

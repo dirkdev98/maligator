@@ -56,6 +56,9 @@ describe("Mal.serve fetch server", () => {
 		const echo = await fetch(`${base}/echo`, { headers: { "x-test": "hi" } });
 		expect(await echo.text()).toBe("hi");
 
+		const cookies = await fetch(`${base}/cookies`);
+		expect(cookies.headers.getSetCookie()).toEqual(["a=1; Path=/", "b=2; Path=/"]);
+
 		const bytes = new Uint8Array(await (await fetch(`${base}/binary`)).arrayBuffer());
 		expect(bytes.length).toBe(5);
 		expect([bytes[0], bytes[4]]).toEqual([1, 5]);
