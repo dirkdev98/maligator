@@ -1,0 +1,80 @@
+# Documentation-only candidate manifest.
+# Upstream: web-platform-tests/wpt
+# Revision: f0b30d60daf6a64a3b087d66732c54c8e5273dbd
+
+# DOM events and abort
+dom/abort/AbortSignal.any.js
+dom/abort/event.any.js
+dom/abort/timeout.any.js
+dom/events/AddEventListenerOptions-once.any.js
+dom/events/Event-constructors.any.js
+dom/events/Event-isTrusted.any.js
+
+# HTML globals
+html/webappapis/atob/base64.any.js
+html/webappapis/timers/clearinterval-from-callback.any.js
+html/webappapis/timers/cleartimeout-clearinterval.any.js
+html/webappapis/timers/missing-timeout-setinterval.any.js
+html/webappapis/timers/negative-setinterval.any.js
+html/webappapis/timers/negative-settimeout.any.js
+
+# Encoding
+encoding/api-basics.any.js
+encoding/api-invalid-label.any.js
+encoding/api-surrogates-utf8.any.js
+encoding/encodeInto.any.js
+encoding/textdecoder-arguments.any.js
+encoding/textdecoder-byte-order-marks.any.js
+encoding/textdecoder-fatal.any.js
+encoding/textdecoder-ignorebom.any.js
+encoding/textdecoder-streaming.any.js
+encoding/textencoder-utf16-surrogates.any.js
+
+# Fetch object model
+fetch/api/headers/header-setcookie.any.js
+fetch/api/headers/header-values-normalize.any.js
+fetch/api/headers/headers-basic.any.js
+fetch/api/headers/headers-casing.any.js
+fetch/api/headers/headers-combine.any.js
+fetch/api/headers/headers-errors.any.js
+fetch/api/headers/headers-normalize.any.js
+fetch/api/headers/headers-structure.any.js
+fetch/api/request/forbidden-method.any.js
+fetch/api/request/request-constructor-init-body-override.any.js
+fetch/api/request/request-consume-empty.any.js
+fetch/api/request/request-error.any.js
+fetch/api/request/request-headers.any.js
+fetch/api/request/request-init-002.any.js
+fetch/api/request/request-structure.any.js
+fetch/api/response/json.any.js
+fetch/api/response/response-consume-empty.any.js
+fetch/api/response/response-error.any.js
+fetch/api/response/response-init-001.any.js
+fetch/api/response/response-init-002.any.js
+fetch/api/response/response-init-contenttype.any.js
+fetch/api/response/response-static-error.any.js
+fetch/api/response/response-static-json.any.js
+fetch/api/response/response-static-redirect.any.js
+
+# URL and URLSearchParams
+url/url-origin.any.js
+url/url-searchparams.any.js
+url/url-setters.any.js
+url/url-statics-canparse.any.js
+url/url-tojson.any.js
+url/urlencoded-parser.any.js
+url/urlsearchparams-append.any.js
+url/urlsearchparams-constructor.any.js
+url/urlsearchparams-delete.any.js
+url/urlsearchparams-foreach.any.js
+url/urlsearchparams-get.any.js
+url/urlsearchparams-getall.any.js
+url/urlsearchparams-has.any.js
+url/urlsearchparams-set.any.js
+url/urlsearchparams-size.any.js
+url/urlsearchparams-sort.any.js
+url/urlsearchparams-stringifier.any.js
+
+# High-resolution time
+hr-time/basic.any.js
+hr-time/monotonic-clock.any.js
