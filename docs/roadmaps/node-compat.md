@@ -42,7 +42,14 @@ stated acceptance point without patching Express or anything in `node_modules`.
       conversion, comparison, concatenation, slicing, writing, UTF-8/Latin-1/base64/
       UTF-16 encodings, and the integer primitives used by `iconv-lite`; a native
       smoke test loads Express's real `safer-buffer` dependency. The forced Express
-      graph still advances to `node:zlib`, followed by Node Streams/string decoding.
+      graph now gives every modern bare core name precedence over npm packages.
+      Curated `node:async_hooks` `AsyncResource`, incremental `node:string_decoder`,
+      and in-memory `node:stream` Readable/Writable/Duplex/Transform foundations are
+      implemented in compiled and interpreted modes, including GC-stress and
+      sanitizer coverage. A pinned smoke exercises `on-finished` and `iconv-lite`
+      against those native modules. The next module-graph blocker is `node:zlib`;
+      loading `raw-body` beyond that graph probe also requires V8-compatible
+      `Error.captureStackTrace` for `depd`/`http-errors` initialization.
 - [ ] **Wave 3: supply Node HTTP lifecycle semantics.** Implement the required
       `node:http` and `node:net` client, server, socket, request, and response
       behavior, including EventEmitter integration, headers, status codes,
