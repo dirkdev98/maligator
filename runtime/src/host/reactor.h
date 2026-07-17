@@ -2,6 +2,8 @@
 
 #include "./defaults.h"
 
+#include <stdatomic.h>
+
 /*
  * The I/O reactor (see docs/roadmaps/isolate-reactor.md). Completion-oriented core: a caller
  * registers interest (an fd becoming ready, or a deadline passing) together with a
@@ -17,8 +19,8 @@
  * handing a GC-owned buffer straight to the kernel a Phase-2 concern, not a
  * representation change here.
  *
- * Single-threaded / single-isolate for now (Phase 4 adds MPSC cross-isolate wake
- * via EVFILT_USER/eventfd — the backend `wake` seam is reserved for it).
+ * Registrations and dispatch remain reactor-thread-only. The retained-work and
+ * wake entries are thread-safe so bounded worker threads can post completions.
  */
 
 /* "Make this task runnable again." Fired by the reactor when an op/timer resolves.
@@ -59,6 +61,11 @@ typedef struct MalTimer {
 
 struct MalReactor {
     int backend_fd; /* kqueue / epoll descriptor */
+    int wake_read_fd;
+    int wake_write_fd;
+    _Atomic(bool) wake_pending;
+    _Atomic(usize) retained_work;
+    MalWaker wake_waker;
 
     /* Binary min-heap of pending timers, ordered by deadline. */
     MalTimer **timers;
@@ -79,6 +86,17 @@ void mal_reactor_free(MalReactor *r);
 
 /* True while the reactor holds anything that could still fire a waker. */
 bool mal_reactor_has_pending(const MalReactor *r);
+
+/* Account for work that can complete only on another thread. Retain before the
+ * worker becomes visible; release wakes a blocked reactor so it can recheck idle. */
+bool mal_reactor_retain_work(MalReactor *r);
+bool mal_reactor_release_work(MalReactor *r);
+
+/* Install the reactor-thread callback and signal it from any producer thread.
+ * Signals coalesce; a successful call guarantees a pollable wake remains. */
+void mal_reactor_set_waker(MalReactor *r, MalWaker waker);
+/* The reactor must outlive every thread that can call wake/release_work. */
+bool mal_reactor_wake(MalReactor *r);
 
 /* Register / cancel one-shot fd readiness interest. Each op represents exactly
  * one direction. Returns false if the request is invalid or the backend rejects

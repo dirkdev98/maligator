@@ -1,6 +1,8 @@
 #include "reactor.h"
 
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
@@ -133,6 +135,68 @@ static int mal_backend_create(void) {
 #else
     return epoll_create1(EPOLL_CLOEXEC);
 #endif
+}
+
+static bool mal_fd_set_flags(int fd) {
+    int status = fcntl(fd, F_GETFL, 0);
+    if (status < 0 || fcntl(fd, F_SETFL, status | O_NONBLOCK) < 0) {
+        return false;
+    }
+    int descriptor = fcntl(fd, F_GETFD, 0);
+    return descriptor >= 0 && fcntl(fd, F_SETFD, descriptor | FD_CLOEXEC) == 0;
+}
+
+static bool mal_backend_add_wake(MalReactor *r) {
+    int fds[2] = {-1, -1};
+    if (r->backend_fd < 0 || pipe(fds) < 0) {
+        return false;
+    }
+    if (!mal_fd_set_flags(fds[0]) || !mal_fd_set_flags(fds[1])) {
+        close(fds[0]);
+        close(fds[1]);
+        return false;
+    }
+
+#if MAL_REACTOR_KQUEUE
+    struct kevent kev;
+    EV_SET(&kev, (uintptr_t) fds[0], EVFILT_READ, EV_ADD, 0, 0, r);
+    bool added = kevent(r->backend_fd, &kev, 1, nullptr, 0, nullptr) == 0;
+#else
+    struct epoll_event ev = {0};
+    ev.events = EPOLLIN;
+    ev.data.ptr = r;
+    bool added = epoll_ctl(r->backend_fd, EPOLL_CTL_ADD, fds[0], &ev) == 0;
+#endif
+    if (!added) {
+        close(fds[0]);
+        close(fds[1]);
+        return false;
+    }
+    r->wake_read_fd = fds[0];
+    r->wake_write_fd = fds[1];
+    return true;
+}
+
+static void mal_reactor_dispatch_wake(MalReactor *r) {
+    unsigned char bytes[64];
+    for (;;) {
+        ssize_t count = read(r->wake_read_fd, bytes, sizeof(bytes));
+        if (count > 0) {
+            continue;
+        }
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+
+    /* Clear before invoking the consumer. A producer racing the batch drain then
+     * writes a fresh byte; one racing earlier is included in this callback. */
+    atomic_store_explicit(&r->wake_pending, false, memory_order_release);
+    MalWaker waker = r->wake_waker;
+    if (waker.fn != nullptr) {
+        waker.fn(waker.data);
+    }
 }
 
 static MalReactorFd *mal_reactor_find_fd(MalReactor *r, int fd) {
@@ -305,6 +369,10 @@ static void mal_backend_wait(MalReactor *r, i64 timeout_ns) {
     }
     int n = kevent(r->backend_fd, nullptr, 0, evs, MAL_REACTOR_MAX_EVENTS, tsp);
     for (int i = 0; i < n; i++) {
+        if (evs[i].udata == r) {
+            mal_reactor_dispatch_wake(r);
+            continue;
+        }
         MalReactorToken *token = (MalReactorToken *) evs[i].udata;
         if (token == nullptr) {
             continue;
@@ -325,6 +393,10 @@ static void mal_backend_wait(MalReactor *r, i64 timeout_ns) {
     int timeout_ms = timeout_ns < 0 ? -1 : (int) ((timeout_ns + 999999) / 1000000);
     int n = epoll_wait(r->backend_fd, evs, MAL_REACTOR_MAX_EVENTS, timeout_ms);
     for (int i = 0; i < n; i++) {
+        if (evs[i].data.ptr == r) {
+            mal_reactor_dispatch_wake(r);
+            continue;
+        }
         MalReactorToken *token = (MalReactorToken *) evs[i].data.ptr;
         if (token == nullptr) {
             continue;
@@ -371,6 +443,11 @@ static void mal_backend_wait(MalReactor *r, i64 timeout_ns) {
 
 void mal_reactor_init(MalReactor *r) {
     r->backend_fd = mal_backend_create();
+    r->wake_read_fd = -1;
+    r->wake_write_fd = -1;
+    atomic_init(&r->wake_pending, false);
+    atomic_init(&r->retained_work, 0);
+    r->wake_waker = (MalWaker) {0};
     r->timers = nullptr;
     r->timer_count = 0;
     r->timer_cap = 0;
@@ -378,9 +455,18 @@ void mal_reactor_init(MalReactor *r) {
     r->fds = nullptr;
     r->retired_tokens = nullptr;
     r->next_generation = 0;
+    (void) mal_backend_add_wake(r);
 }
 
 void mal_reactor_free(MalReactor *r) {
+    if (r->wake_read_fd >= 0) {
+        close(r->wake_read_fd);
+        r->wake_read_fd = -1;
+    }
+    if (r->wake_write_fd >= 0) {
+        close(r->wake_write_fd);
+        r->wake_write_fd = -1;
+    }
     if (r->backend_fd >= 0) {
         close(r->backend_fd);
         r->backend_fd = -1;
@@ -407,10 +493,79 @@ void mal_reactor_free(MalReactor *r) {
         free(state);
     }
     r->pending_ops = 0;
+    atomic_store_explicit(&r->wake_pending, false, memory_order_relaxed);
+    atomic_store_explicit(&r->retained_work, 0, memory_order_relaxed);
+    r->wake_waker = (MalWaker) {0};
 }
 
 bool mal_reactor_has_pending(const MalReactor *r) {
-    return r->timer_count > 0 || r->pending_ops > 0;
+    return r->timer_count > 0 || r->pending_ops > 0 ||
+        atomic_load_explicit(&r->retained_work, memory_order_acquire) > 0 ||
+        atomic_load_explicit(&r->wake_pending, memory_order_acquire);
+}
+
+bool mal_reactor_retain_work(MalReactor *r) {
+    if (r->wake_write_fd < 0) {
+        return false;
+    }
+    usize retained = atomic_load_explicit(&r->retained_work, memory_order_relaxed);
+    for (;;) {
+        if (retained == SIZE_MAX) {
+            return false;
+        }
+        if (atomic_compare_exchange_weak_explicit(
+                &r->retained_work,
+                &retained,
+                retained + 1,
+                memory_order_release,
+                memory_order_relaxed)) {
+            return true;
+        }
+    }
+}
+
+bool mal_reactor_release_work(MalReactor *r) {
+    usize retained = atomic_load_explicit(&r->retained_work, memory_order_relaxed);
+    for (;;) {
+        if (retained == 0) {
+            return false;
+        }
+        if (atomic_compare_exchange_weak_explicit(
+                &r->retained_work,
+                &retained,
+                retained - 1,
+                memory_order_acq_rel,
+                memory_order_relaxed)) {
+            return mal_reactor_wake(r);
+        }
+    }
+}
+
+void mal_reactor_set_waker(MalReactor *r, MalWaker waker) {
+    r->wake_waker = waker;
+}
+
+bool mal_reactor_wake(MalReactor *r) {
+    if (r->wake_write_fd < 0) {
+        return false;
+    }
+    if (atomic_exchange_explicit(&r->wake_pending, true, memory_order_acq_rel)) {
+        return true;
+    }
+    unsigned char byte = 1;
+    for (;;) {
+        if (write(r->wake_write_fd, &byte, 1) == 1) {
+            return true;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return true;
+        }
+        atomic_store_explicit(&r->wake_pending, false, memory_order_release);
+        return false;
+    }
 }
 
 bool mal_reactor_add_op(MalReactor *r, MalOp *op) {
@@ -488,7 +643,9 @@ void mal_reactor_wait(MalReactor *r) {
         i64 now = mal_reactor_now_ns();
         i64 deadline = r->timers[0]->deadline_ns;
         timeout = deadline > now ? deadline - now : 0;
-    } else if (r->pending_ops > 0) {
+    } else if (r->pending_ops > 0 ||
+        atomic_load_explicit(&r->retained_work, memory_order_acquire) > 0 ||
+        atomic_load_explicit(&r->wake_pending, memory_order_acquire)) {
         timeout = -1; // block until an fd event
     } else {
         return; // nothing pending

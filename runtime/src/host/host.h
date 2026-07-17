@@ -1,6 +1,7 @@
 #pragma once
 
 #include "./defaults.h"
+#include "host_task.h"
 #include "reactor.h"
 #include "vm.h"
 
@@ -17,6 +18,8 @@
  */
 typedef struct MalHost {
     MalReactor reactor;
+    MalHostTasks tasks;
+    MalHostPostedTasks posted_tasks;
     struct MalHostTimer *timers;
     i64 timer_next_id;
 } MalHost;
@@ -26,6 +29,23 @@ MalHost *mal_host_attach(MalVm *vm);
 
 /* Detach + tear down the host context (call before mal_vm_free). */
 void mal_host_detach(MalVm *vm);
+
+/* Cross-thread completion path. Payloads are host-owned plain C data, never VM
+ * values. These calls only transfer queue batches; runtime dispatch stays above. */
+bool mal_host_post_progress(
+    MalHost *host,
+    MalHostHandle operation,
+    void *data,
+    MalHostTaskDestroy destroy);
+bool mal_host_post_complete(
+    MalHost *host,
+    MalHostHandle operation,
+    MalHostTerminalResult result,
+    void *data,
+    MalHostTaskDestroy destroy);
+usize mal_host_drain_posted(MalHost *host);
+void mal_host_shutdown(MalHost *host);
+bool mal_host_has_pending_work(MalHost *host);
 
 /* The host context of an isolate (null if none attached). */
 static inline MalHost *mal_host(MalVm *vm) {

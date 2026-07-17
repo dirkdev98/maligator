@@ -1,10 +1,13 @@
 #include "vm.h"
 
+#include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "host.h"
@@ -44,6 +47,7 @@ static bool g_writer_done = false;
 
 static int g_payload_releases = 0;
 static int g_payload_sum = 0;
+static MalHost *g_cross_thread_host = nullptr;
 
 static void count_wake(void *data) {
     int *count = data;
@@ -283,7 +287,7 @@ static void task_payload_release(void *data) {
 static bool host_tasks_fifo(void) {
     MalHostTasks tasks;
     MalHostHandle operation = 0;
-    MalHostTask task;
+    MalHostTask task = {0};
     mal_host_tasks_init(&tasks);
     g_payload_releases = 0;
     g_payload_sum = 0;
@@ -439,6 +443,215 @@ static bool host_tasks_cancellation_wins(void) {
     return ok;
 }
 
+#define POST_PRODUCERS 2
+#define POSTS_PER_PRODUCER 32
+
+typedef struct PostProducer {
+    MalHost *host;
+    MalHostHandle operation;
+    int id;
+    int count;
+    bool ok;
+} PostProducer;
+
+static void *post_producer(void *data) {
+    PostProducer *producer = data;
+    struct timespec delay = {.tv_nsec = 5 * 1000000};
+    while (nanosleep(&delay, &delay) < 0 && errno == EINTR) {
+    }
+    for (int sequence = 0; producer->ok && sequence < producer->count; sequence++) {
+        int *payload = task_payload(producer->id * 1000 + sequence);
+        producer->ok = payload != nullptr && mal_host_post_progress(
+            producer->host,
+            producer->operation,
+            payload,
+            task_payload_release);
+        if (!producer->ok && payload != nullptr) {
+            free(payload);
+        }
+    }
+    int *terminal = task_payload(producer->id * 1000 + producer->count);
+    bool completed = producer->ok && terminal != nullptr && mal_host_post_complete(
+        producer->host,
+        producer->operation,
+        MAL_HOST_TERMINAL_OK,
+        terminal,
+        task_payload_release);
+    if (!completed && terminal != nullptr) {
+        free(terminal);
+    }
+    bool released = mal_reactor_release_work(&producer->host->reactor);
+    producer->ok = completed && released;
+    return nullptr;
+}
+
+static bool host_cross_thread_posts(void) {
+    MalHost *host = g_cross_thread_host;
+    PostProducer producers[POST_PRODUCERS] = {0};
+    pthread_t threads[POST_PRODUCERS];
+    bool started[POST_PRODUCERS] = {false};
+    bool ok = host != nullptr && !mal_reactor_has_pending(&host->reactor);
+    g_payload_releases = 0;
+    g_payload_sum = 0;
+
+    for (int id = 0; ok && id < POST_PRODUCERS; id++) {
+        producers[id] = (PostProducer) {
+            .host = host,
+            .id = id + 1,
+            .count = POSTS_PER_PRODUCER,
+            .ok = true,
+        };
+        ok = mal_host_operation_start(&host->tasks, &producers[id].operation) &&
+            mal_host_operation_activate(&host->tasks, producers[id].operation) &&
+            mal_reactor_retain_work(&host->reactor);
+        if (ok) {
+            started[id] = pthread_create(
+                &threads[id], nullptr, post_producer, &producers[id]) == 0;
+            ok = started[id];
+            if (!started[id]) {
+                (void) mal_reactor_release_work(&host->reactor);
+            }
+        }
+    }
+
+    while (mal_reactor_has_pending(&host->reactor)) {
+        mal_reactor_wait(&host->reactor);
+    }
+    for (int id = 0; id < POST_PRODUCERS; id++) {
+        if (started[id]) {
+            ok = pthread_join(threads[id], nullptr) == 0 && producers[id].ok && ok;
+        }
+    }
+
+    int next_sequence[POST_PRODUCERS] = {0};
+    int terminals = 0;
+    MalHostTask task;
+    while (mal_host_next_task(&host->tasks, &task)) {
+        int value = *(int *) task.data;
+        int id = value / 1000 - 1;
+        int sequence = value % 1000;
+        bool known = id >= 0 && id < POST_PRODUCERS &&
+            task.operation == producers[id].operation;
+        if (task.kind == MAL_HOST_TASK_PROGRESS) {
+            ok = known && sequence == next_sequence[id] && ok;
+            if (known) {
+                next_sequence[id]++;
+            }
+        } else {
+            ok = known && task.kind == MAL_HOST_TASK_TERMINAL &&
+                task.result == MAL_HOST_TERMINAL_OK &&
+                sequence == POSTS_PER_PRODUCER &&
+                next_sequence[id] == POSTS_PER_PRODUCER && ok;
+            terminals++;
+        }
+        mal_host_task_release(&host->tasks, &task);
+    }
+    for (int id = 0; id < POST_PRODUCERS; id++) {
+        if (mal_host_operation_state(&host->tasks, producers[id].operation) !=
+            MAL_HOST_OPERATION_INVALID) {
+            (void) mal_host_operation_cancel(&host->tasks, producers[id].operation);
+            if (mal_host_next_task(&host->tasks, &task)) {
+                mal_host_task_release(&host->tasks, &task);
+            }
+            ok = false;
+        }
+    }
+    int expected_releases = POST_PRODUCERS * (POSTS_PER_PRODUCER + 1);
+    return ok && terminals == POST_PRODUCERS &&
+        g_payload_releases == expected_releases &&
+        mal_host_posted_pending(&host->posted_tasks) == 0 &&
+        !mal_host_has_pending_work(host);
+}
+
+static bool host_post_cancellation(void) {
+    MalHost *host = g_cross_thread_host;
+    PostProducer producer = {
+        .host = host,
+        .id = 3,
+        .count = 2,
+        .ok = true,
+    };
+    pthread_t thread;
+    g_payload_releases = 0;
+    g_payload_sum = 0;
+    bool ok = host != nullptr &&
+        mal_host_operation_start(&host->tasks, &producer.operation) &&
+        mal_host_operation_activate(&host->tasks, producer.operation) &&
+        mal_reactor_retain_work(&host->reactor);
+    bool started = ok && pthread_create(&thread, nullptr, post_producer, &producer) == 0;
+    if (ok && !started) {
+        (void) mal_reactor_release_work(&host->reactor);
+        ok = false;
+    }
+    if (started) {
+        ok = pthread_join(thread, nullptr) == 0 && producer.ok && ok;
+    }
+
+    /* The worker owns the posted batch, but it has not reached neutral tasks yet.
+     * Main-thread cancellation wins before the reactor drains that batch. */
+    ok = mal_host_operation_cancel(&host->tasks, producer.operation) && ok;
+    mal_reactor_wait(&host->reactor);
+    MalHostTask task = {0};
+    ok = mal_host_next_task(&host->tasks, &task) &&
+        task.kind == MAL_HOST_TASK_TERMINAL &&
+        task.result == MAL_HOST_TERMINAL_CANCELLED && ok;
+    if (task._node != nullptr) {
+        mal_host_task_release(&host->tasks, &task);
+    }
+    return ok && !mal_host_next_task(&host->tasks, &task) &&
+        g_payload_releases == producer.count + 1 &&
+        !mal_host_has_pending_work(host);
+}
+
+static bool host_post_shutdown_and_idle(void) {
+    MalHost *host = g_cross_thread_host;
+    MalHostHandle operation = 0;
+    g_payload_releases = 0;
+    g_payload_sum = 0;
+    bool ok = host != nullptr &&
+        mal_host_operation_start(&host->tasks, &operation) &&
+        mal_host_operation_activate(&host->tasks, operation);
+    int *accepted = task_payload(41);
+    ok = ok && accepted != nullptr && mal_host_post_progress(
+        host, operation, accepted, task_payload_release);
+    if (!ok && accepted != nullptr) {
+        free(accepted);
+    }
+
+    mal_host_shutdown(host);
+    mal_host_shutdown(host);
+    int *rejected = task_payload(99);
+    bool rejected_owned = rejected != nullptr &&
+        !mal_host_post_progress(host, operation, rejected, task_payload_release) &&
+        *rejected == 99 && g_payload_releases == 0;
+    free(rejected);
+
+    MalHostTask task = {0};
+    ok = ok && rejected_owned && !mal_host_posted_accepting(&host->posted_tasks) &&
+        mal_host_tasks_pending(&host->tasks) == 1 &&
+        mal_host_next_task(&host->tasks, &task) &&
+        task.kind == MAL_HOST_TASK_PROGRESS && *(int *) task.data == 41;
+    if (task._node != nullptr) {
+        mal_host_task_release(&host->tasks, &task);
+    }
+    ok = mal_host_operation_cancel(&host->tasks, operation) && ok;
+    task = (MalHostTask) {0};
+    ok = mal_host_next_task(&host->tasks, &task) &&
+        task.result == MAL_HOST_TERMINAL_CANCELLED && ok;
+    if (task._node != nullptr) {
+        mal_host_task_release(&host->tasks, &task);
+    }
+
+    /* Consume the coalesced signal for the batch already drained by shutdown,
+     * then prove an entirely idle wait returns without polling forever. */
+    mal_reactor_wait(&host->reactor);
+    i64 before = mal_reactor_now_ns();
+    mal_reactor_wait(&host->reactor);
+    i64 idle_ns = mal_reactor_now_ns() - before;
+    return ok && g_payload_releases == 1 && g_payload_sum == 41 &&
+        !mal_host_has_pending_work(host) && idle_ns < 100000000;
+}
+
 /* Sleeper i sleeps (SLEEPER_COUNT - i) steps, so completion order is i =
  * N-1, N-2, ..., 0 (shortest sleep finishes first). */
 static void sleeper(void *arg) {
@@ -478,7 +691,7 @@ static void pipe_writer(void *arg) {
 int main(void) {
     MalVm vm;
     mal_vm_init(&vm, &mal_vm_definition);
-    mal_host_attach(&vm); // reactor + timers (the platform the scheduler drives)
+    g_cross_thread_host = mal_host_attach(&vm);
 
     MalScheduler sched;
     mal_sched_init(&sched, &vm);
@@ -534,6 +747,9 @@ int main(void) {
         {"host operation handles reject stale and cross-host reuse", host_tasks_stale_handles()},
         {"first terminal completion wins exactly once", host_tasks_completion_wins()},
         {"cancellation suppresses progress and wins exactly once", host_tasks_cancellation_wins()},
+        {"pthread producers wake and preserve per-producer FIFO", host_cross_thread_posts()},
+        {"main cancellation rejects an owned posted completion", host_post_cancellation()},
+        {"shutdown drains accepted posts, rejects new ownership, and idles", host_post_shutdown_and_idle()},
     };
     int total = (int) (sizeof(checks) / sizeof(checks[0]));
     int passed = 0;

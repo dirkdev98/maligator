@@ -1,5 +1,6 @@
 #include "host_task.h"
 
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +22,25 @@ typedef struct MalHostOperationSlot {
     u32 next_free;
     bool occupied;
 } MalHostOperationSlot;
+
+typedef struct MalHostPostedNode {
+    struct MalHostPostedNode *next;
+    MalHostTaskKind kind;
+    MalHostHandle operation;
+    MalHostTerminalResult result;
+    void *data;
+    MalHostTaskDestroy destroy;
+} MalHostPostedNode;
+
+typedef struct MalHostPostedState {
+    pthread_mutex_t mutex;
+    MalHostPostedNode *head;
+    MalHostPostedNode *tail;
+    MalHostPostWake wake;
+    void *wake_data;
+    usize pending;
+    bool accepting;
+} MalHostPostedState;
 
 static _Atomic(u64) mal_host_next_operation_generation = 1;
 
@@ -99,6 +119,7 @@ static void mal_host_task_enqueue(MalHostTasks *tasks, MalHostTaskNode *node) {
         tasks->tail->queue_next = node;
     }
     tasks->tail = node;
+    tasks->queued_count++;
 }
 
 static bool mal_host_operations_grow(MalHostTasks *tasks) {
@@ -129,6 +150,7 @@ static void mal_host_operation_retire(
     slot->occupied = false;
     slot->next_free = tasks->free_operation;
     tasks->free_operation = (u32) index + 1;
+    tasks->live_operations--;
 }
 
 static void mal_host_operation_terminal(
@@ -190,6 +212,7 @@ bool mal_host_operation_start(MalHostTasks *tasks, MalHostHandle *operation) {
     slot->occupied = true;
     terminal->operation_index = (u32) index;
     mal_host_task_own(tasks, terminal);
+    tasks->live_operations++;
     *operation = mal_host_operation_handle(index, slot->generation);
     return true;
 }
@@ -284,6 +307,7 @@ bool mal_host_operation_cancel(MalHostTasks *tasks, MalHostHandle operation) {
             if (tasks->tail == node) {
                 tasks->tail = previous;
             }
+            tasks->queued_count--;
             mal_host_task_destroy(tasks, node);
         } else {
             previous = node;
@@ -306,6 +330,7 @@ bool mal_host_next_task(MalHostTasks *tasks, MalHostTask *task) {
         tasks->tail = nullptr;
     }
     node->queue_next = nullptr;
+    tasks->queued_count--;
     *task = node->task;
     return true;
 }
@@ -328,4 +353,204 @@ void mal_host_task_release(MalHostTasks *tasks, MalHostTask *task) {
         slot->terminal = nullptr;
         mal_host_operation_retire(tasks, slot, operation_index);
     }
+}
+
+usize mal_host_tasks_pending(const MalHostTasks *tasks) {
+    return tasks->queued_count;
+}
+
+usize mal_host_operations_pending(const MalHostTasks *tasks) {
+    return tasks->live_operations;
+}
+
+bool mal_host_posted_tasks_init(
+    MalHostPostedTasks *posted, MalHostPostWake wake, void *wake_data) {
+    if (posted == nullptr || wake == nullptr) {
+        return false;
+    }
+    posted->state = nullptr;
+    MalHostPostedState *state = calloc(1, sizeof(MalHostPostedState));
+    if (state == nullptr) {
+        return false;
+    }
+    if (pthread_mutex_init(&state->mutex, nullptr) != 0) {
+        free(state);
+        return false;
+    }
+    state->wake = wake;
+    state->wake_data = wake_data;
+    state->accepting = true;
+    posted->state = state;
+    return true;
+}
+
+static bool mal_host_posted_push(
+    MalHostPostedTasks *posted,
+    MalHostTaskKind kind,
+    MalHostHandle operation,
+    MalHostTerminalResult result,
+    void *data,
+    MalHostTaskDestroy destroy) {
+    if (posted == nullptr || posted->state == nullptr || operation == 0) {
+        return false;
+    }
+    MalHostPostedNode *node = malloc(sizeof(MalHostPostedNode));
+    if (node == nullptr) {
+        return false;
+    }
+    *node = (MalHostPostedNode) {
+        .kind = kind,
+        .operation = operation,
+        .result = result,
+        .data = data,
+        .destroy = destroy,
+    };
+
+    MalHostPostedState *state = posted->state;
+    pthread_mutex_lock(&state->mutex);
+    if (!state->accepting) {
+        pthread_mutex_unlock(&state->mutex);
+        free(node);
+        return false;
+    }
+    MalHostPostedNode *previous_tail = state->tail;
+    if (previous_tail == nullptr) {
+        state->head = node;
+    } else {
+        previous_tail->next = node;
+    }
+    state->tail = node;
+    state->pending++;
+
+    /* Signal while serialized with draining. On a hard wake failure the enqueue
+     * can still be rolled back without racing the main reactor consumer. */
+    if (!state->wake(state->wake_data)) {
+        if (previous_tail == nullptr) {
+            state->head = nullptr;
+        } else {
+            previous_tail->next = nullptr;
+        }
+        state->tail = previous_tail;
+        state->pending--;
+        pthread_mutex_unlock(&state->mutex);
+        free(node);
+        return false;
+    }
+    pthread_mutex_unlock(&state->mutex);
+    return true;
+}
+
+bool mal_host_posted_progress(
+    MalHostPostedTasks *posted,
+    MalHostHandle operation,
+    void *data,
+    MalHostTaskDestroy destroy) {
+    return mal_host_posted_push(
+        posted,
+        MAL_HOST_TASK_PROGRESS,
+        operation,
+        MAL_HOST_TERMINAL_NONE,
+        data,
+        destroy);
+}
+
+bool mal_host_posted_complete(
+    MalHostPostedTasks *posted,
+    MalHostHandle operation,
+    MalHostTerminalResult result,
+    void *data,
+    MalHostTaskDestroy destroy) {
+    if (result != MAL_HOST_TERMINAL_OK && result != MAL_HOST_TERMINAL_ERROR) {
+        return false;
+    }
+    return mal_host_posted_push(
+        posted, MAL_HOST_TASK_TERMINAL, operation, result, data, destroy);
+}
+
+static usize mal_host_posted_transfer(
+    MalHostPostedTasks *posted, MalHostTasks *tasks, bool shutdown) {
+    if (posted == nullptr || posted->state == nullptr || tasks == nullptr) {
+        return 0;
+    }
+    MalHostPostedState *state = posted->state;
+    pthread_mutex_lock(&state->mutex);
+    if (shutdown) {
+        state->accepting = false;
+    }
+    MalHostPostedNode *node = state->head;
+    usize count = state->pending;
+    state->head = nullptr;
+    state->tail = nullptr;
+    state->pending = 0;
+    pthread_mutex_unlock(&state->mutex);
+
+    while (node != nullptr) {
+        MalHostPostedNode *next = node->next;
+        bool transferred = node->kind == MAL_HOST_TASK_PROGRESS
+            ? mal_host_operation_progress(
+                  tasks, node->operation, node->data, node->destroy)
+            : mal_host_operation_complete(
+                  tasks, node->operation, node->result, node->data, node->destroy);
+        if (!transferred && node->destroy != nullptr) {
+            node->destroy(node->data);
+        }
+        free(node);
+        node = next;
+    }
+    return count;
+}
+
+usize mal_host_posted_drain(MalHostPostedTasks *posted, MalHostTasks *tasks) {
+    return mal_host_posted_transfer(posted, tasks, false);
+}
+
+usize mal_host_posted_shutdown(MalHostPostedTasks *posted, MalHostTasks *tasks) {
+    return mal_host_posted_transfer(posted, tasks, true);
+}
+
+void mal_host_posted_tasks_free(MalHostPostedTasks *posted) {
+    if (posted == nullptr || posted->state == nullptr) {
+        return;
+    }
+    MalHostPostedState *state = posted->state;
+    pthread_mutex_lock(&state->mutex);
+    state->accepting = false;
+    MalHostPostedNode *node = state->head;
+    state->head = nullptr;
+    state->tail = nullptr;
+    state->pending = 0;
+    pthread_mutex_unlock(&state->mutex);
+    while (node != nullptr) {
+        MalHostPostedNode *next = node->next;
+        if (node->destroy != nullptr) {
+            node->destroy(node->data);
+        }
+        free(node);
+        node = next;
+    }
+    pthread_mutex_destroy(&state->mutex);
+    free(state);
+    posted->state = nullptr;
+}
+
+usize mal_host_posted_pending(MalHostPostedTasks *posted) {
+    if (posted == nullptr || posted->state == nullptr) {
+        return 0;
+    }
+    MalHostPostedState *state = posted->state;
+    pthread_mutex_lock(&state->mutex);
+    usize pending = state->pending;
+    pthread_mutex_unlock(&state->mutex);
+    return pending;
+}
+
+bool mal_host_posted_accepting(MalHostPostedTasks *posted) {
+    if (posted == nullptr || posted->state == nullptr) {
+        return false;
+    }
+    MalHostPostedState *state = posted->state;
+    pthread_mutex_lock(&state->mutex);
+    bool accepting = state->accepting;
+    pthread_mutex_unlock(&state->mutex);
+    return accepting;
 }

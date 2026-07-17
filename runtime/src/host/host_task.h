@@ -26,6 +26,7 @@ typedef enum MalHostTerminalResult {
 } MalHostTerminalResult;
 
 typedef void (*MalHostTaskDestroy)(void *data);
+typedef bool (*MalHostPostWake)(void *data);
 
 typedef struct MalHostTask {
     MalHostTaskKind kind;
@@ -41,8 +42,16 @@ typedef struct MalHostTasks {
     struct MalHostTaskNode *owned;
     struct MalHostOperationSlot *operations;
     usize operation_capacity;
+    usize queued_count;
+    usize live_operations;
     u32 free_operation;
 } MalHostTasks;
+
+/* Cross-thread producers own only plain host data. Posted payloads must not hold
+ * runtime/VM values; the main reactor thread translates them into neutral tasks. */
+typedef struct MalHostPostedTasks {
+    struct MalHostPostedState *state;
+} MalHostPostedTasks;
 
 void mal_host_tasks_init(MalHostTasks *tasks);
 void mal_host_tasks_free(MalHostTasks *tasks);
@@ -71,3 +80,29 @@ bool mal_host_operation_cancel(MalHostTasks *tasks, MalHostHandle operation);
 
 bool mal_host_next_task(MalHostTasks *tasks, MalHostTask *task);
 void mal_host_task_release(MalHostTasks *tasks, MalHostTask *task);
+
+usize mal_host_tasks_pending(const MalHostTasks *tasks);
+usize mal_host_operations_pending(const MalHostTasks *tasks);
+
+bool mal_host_posted_tasks_init(
+    MalHostPostedTasks *posted, MalHostPostWake wake, void *wake_data);
+/* Successful posts take ownership of data. Rejected posts leave it with caller. */
+bool mal_host_posted_progress(
+    MalHostPostedTasks *posted,
+    MalHostHandle operation,
+    void *data,
+    MalHostTaskDestroy destroy);
+bool mal_host_posted_complete(
+    MalHostPostedTasks *posted,
+    MalHostHandle operation,
+    MalHostTerminalResult result,
+    void *data,
+    MalHostTaskDestroy destroy);
+/* Main-reactor-only. A drain transfers the current FIFO batch, never dispatches it. */
+usize mal_host_posted_drain(MalHostPostedTasks *posted, MalHostTasks *tasks);
+/* Reject future posts and transfer every post accepted before shutdown. */
+usize mal_host_posted_shutdown(MalHostPostedTasks *posted, MalHostTasks *tasks);
+/* Destroy only after all producer threads have stopped calling the posted API. */
+void mal_host_posted_tasks_free(MalHostPostedTasks *posted);
+usize mal_host_posted_pending(MalHostPostedTasks *posted);
+bool mal_host_posted_accepting(MalHostPostedTasks *posted);
