@@ -425,3 +425,16 @@ test/harness/deepEqual-array.js
 test/intl402/Collator/prototype/resolvedOptions/basic.js
 test/built-ins/RegExp/match-indices/indices-array-non-unicode-match.js
 test/staging/sm/Array/concat-spreadable-basic.js
+test/built-ins/Array/prototype/find/resizable-buffer-shrink-mid-iteration.js
+test/built-ins/String/prototype/match/cstm-matcher-on-number-primitive.js
+test/built-ins/String/prototype/matchAll/cstm-matchall-on-string-primitive.js
+test/built-ins/String/prototype/search/cstm-search-on-bigint-primitive.js
+test/language/arguments-object/meth-args-trailing-comma-multiple.js
+test/language/arguments-object/cls-decl-meth-static-args-trailing-comma-single-args.js
+test/language/eval-code/direct/var-env-func-init-multi.js
+test/language/global-code/decl-func-dup.js
+test/language/statements/do-while/cptn-normal.js
+test/language/statements/for-of/cptn-expr-no-itr.js
+test/language/statements/function/S14_A5_T2.js
+test/language/statements/if/cptn-else-false-nrml.js
+test/staging/sm/statements/for-inof-name-iteration-expression-contains-index-string.js

@@ -785,6 +785,13 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 		node.type === "ArrowFunctionExpression"
 	) {
 		if ("id" in node && node.id) {
+			const kind =
+				node.type === "FunctionDeclaration" &&
+				isVarScopedFunctionDeclaration(node, scope, file)
+					? "var"
+					: scope.strict
+						? "let"
+						: "var";
 			// Register a function as a binding in their scope.
 			extractBindingsAndRegister(
 				file,
@@ -792,7 +799,7 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 				// only available in their own scope.
 				node.type === "FunctionDeclaration" ? scope.parent! : scope,
 				node,
-				scope.strict ? "let" : "var",
+				kind,
 				// A named function/generator/async expression's own-name binding is
 				// immutable (CreateImmutableBinding); a FunctionDeclaration's is not.
 				node.type === "FunctionExpression" ? true : undefined,
@@ -840,6 +847,34 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 	}
 
 	recurseAst(node, collectBindingsForNode, file);
+}
+
+/** Whether this declaration participates in Script/Function var declarations. */
+function isVarScopedFunctionDeclaration(
+	node: ESTree.FunctionDeclaration,
+	scope: Scope,
+	file: SemanticFile,
+): boolean {
+	const declarationScope = scope.parent;
+	if (
+		file.type === "script" &&
+		declarationScope?.node.type === "Program" &&
+		declarationScope.node.body.includes(node)
+	) {
+		return true;
+	}
+
+	if (declarationScope?.node.type !== "BlockStatement") {
+		return false;
+	}
+	const functionScope = declarationScope.parent;
+	return (
+		(functionScope?.node.type === "FunctionDeclaration" ||
+			functionScope?.node.type === "FunctionExpression" ||
+			functionScope?.node.type === "ArrowFunctionExpression") &&
+		functionScope.node.body === declarationScope.node &&
+		declarationScope.node.body.includes(node)
+	);
 }
 
 function hasParameterExpressions(

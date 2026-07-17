@@ -1,5 +1,9 @@
 import { expect, test } from "vitest";
-import { findHofInlineSites, findInlinableCalls } from "../src/inline.ts";
+import {
+	findHofInlineSites,
+	findInlinableCalls,
+	findMethodInlineSites,
+} from "../src/inline.ts";
 import { executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { parseScript } from "../src/parser.ts";
@@ -137,6 +141,34 @@ test("a callee that materializes arguments is not inlinable", () => {
 			`(function (){ function g(){ return arguments.length; } return g(1); })();`,
 		),
 	).toBe(0);
+});
+
+test("methods that read frame arguments are not guarded-inline candidates", () => {
+	const source = `
+		const obj = {
+			count(){ return arguments.length; },
+			first(){ return arguments[0]; },
+		};
+		obj.count(1, 2,);
+		obj.first(42,);
+	`;
+	const semantic = analyzeSourceAndRunSemanticAnalysis(
+		source,
+		"test.js",
+		parseScript(source, { strict: true }),
+	);
+	const ir = compileSemanticProgramToIr(semantic);
+	const instructionTypes = new Set(
+		ir.functions.flatMap((fn) =>
+			fn.blocks.flatMap((block) =>
+				block.instructions.map((instruction) => instruction.type),
+			),
+		),
+	);
+
+	expect(instructionTypes).toContain("loadArgumentCount");
+	expect(instructionTypes).toContain("loadArgument");
+	expect([...findMethodInlineSites(ir).byCaller.values()].flat()).toEqual([]);
 });
 
 test("a generator target is not inlinable", () => {

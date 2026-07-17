@@ -64,9 +64,15 @@ if (onlyVariant !== undefined && onlyVariant !== "strict" && onlyVariant !== "sl
 	throw new Error(`--variant only supports 'strict' or 'sloppy', got '${onlyVariant}'`);
 }
 
+const configuredCompileWorkers = Number(
+	process.env.T262_COMPILE_WORKERS ?? TEST262_METADATA.compileWorkers,
+);
+if (!Number.isInteger(configuredCompileWorkers) || configuredCompileWorkers < 1) {
+	throw new Error("T262_COMPILE_WORKERS must be a positive integer");
+}
 const compileWorkers = Math.max(
 	1,
-	Math.min(TEST262_METADATA.compileWorkers, os.availableParallelism()),
+	Math.min(configuredCompileWorkers, os.availableParallelism()),
 );
 const preflightMode = process.env.T262_PREFLIGHT === "1";
 const isFullRunRequest = !filter && !manifestPath && !random && !onlyVariant;

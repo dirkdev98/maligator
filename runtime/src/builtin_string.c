@@ -968,14 +968,14 @@ static MalValue mal_builtin_string_prototype_to_well_formed(MalVm *vm, MalValue 
     return result;
 }
 
-// GetMethod(arg, @@symbol) and, if callable, Call(method, arg, [this, ...extra]).
+// For an Object argument, GetMethod(arg, @@symbol) and, when present,
+// Call(method, arg, [this, ...extra]). Primitive arguments do not dispatch.
 // Returns 1 when dispatched (result in *out; a throw is left on the completion),
-// 0 when there is no method (caller runs the string fallback), -1 on a throw
-// while reading the method.
+// 0 when there is no method (caller runs the string fallback), -1 on a throw.
 static int mal_builtin_string_regex_dispatch(
     MalVm *vm, MalValue this_value, MalValue arg, MalIntrinsic symbol_slot, const MalValue *extra, i32 extra_count, MalValue *out
 ) {
-    if (mal_value_is_nil(arg)) {
+    if (!mal_value_is_object(arg)) {
         return 0;
     }
     MalValue method;
@@ -983,8 +983,13 @@ static int mal_builtin_string_regex_dispatch(
         *out = mal_value_new_undefined();
         return -1;
     }
-    if (!mal_value_is_callable(method)) {
+    if (mal_value_is_nil(method)) {
         return 0;
+    }
+    if (!mal_value_is_callable(method)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol method is not callable");
+        *out = mal_value_new_undefined();
+        return -1;
     }
     MalValue call_args[3];
     i32 n = 0;
@@ -1078,7 +1083,7 @@ static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_
         return mal_value_new_undefined();
     }
     MalValue regexp = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    if (!mal_value_is_nil(regexp)) {
+    if (mal_value_is_object(regexp)) {
         // A non-global RegExp argument is a TypeError (matchAll iterates globally).
         bool is_regexp = mal_builtin_string_is_regexp(vm, regexp);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {

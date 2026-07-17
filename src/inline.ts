@@ -596,6 +596,8 @@ function methodDisqualifies(instruction: IRInstruction): boolean {
 		case "loadCallee":
 		case "createArgumentsObject":
 		case "createRestArguments":
+		case "loadArgumentCount":
+		case "loadArgument":
 		case "withEnter":
 		case "withExit":
 		case "withGet":

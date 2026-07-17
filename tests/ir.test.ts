@@ -249,6 +249,40 @@ test("register allocation does not reuse registers in a non-SSA function", () =>
 	expect(fn.nextRegisterDestination).toBe(5);
 });
 
+test("register allocation does not reuse a loop temporary for a loop-carried value", () => {
+	const iteratorStep: IRInstruction = {
+		type: "iteratorStep",
+		registers: [4, 5, 2, 3],
+	};
+	const carry: IRInstruction = { type: "move", registers: [6, 4] };
+	const fn = {
+		parameterCount: 0,
+		nextRegisterDestination: 7,
+		blocks: [
+			{
+				instructions: [
+					{ type: "createString", registers: [0], stringIndex: 0 },
+					{ type: "forInKeys", registers: [1, 0] },
+					{ type: "getIterator", registers: [2, 3, 1] },
+					{ type: "jump", blocks: [1] },
+				],
+			},
+			{
+				instructions: [
+					iteratorStep,
+					{ type: "jumpIf", registers: [5], blocks: [2] },
+					carry,
+					{ type: "jump", blocks: [1] },
+				],
+			},
+			{ instructions: [{ type: "return", registers: [6] }] },
+		],
+	} as unknown as IRFunction;
+	allocateRegisters({ functions: [fn] } as unknown as IntermediateProgram);
+
+	expect(iteratorStep.registers[1]).not.toBe(carry.registers[0]);
+});
+
 test("eval var declarations create configurable globals", () => {
 	const program = compileScript("var x, y;", true);
 	const instructions = instructionsOf(program.functions[0]!);
@@ -491,6 +525,71 @@ test("bare empty blocks do not grow raw IR or disturb eval completion positions"
 		type: "return",
 		registers: [completionRegister],
 	});
+});
+
+test("compound statements reset eval completion to undefined exactly once", () => {
+	const sources = [
+		"1; if (false) {}",
+		"1; while (false) {}",
+		"1; do {} while (false)",
+		"1; for (; false; ) {}",
+		"var key; 1; for (key in {}) {}",
+		"var value; 1; for (value of []) {}",
+		"1; switch (0) {}",
+		"1; with ({}) {}",
+	];
+
+	for (const source of sources) {
+		const fn = compileScript(source, true).functions[0]!;
+		const completionRegister = fn.completionRegister;
+		expect(completionRegister, source).toBeDefined();
+		expect(
+			instructionsOf(fn).filter(
+				(instruction) =>
+					instruction.type === "createUndefined" &&
+					instruction.registers[0] === completionRegister,
+			),
+			source,
+		).toHaveLength(2);
+	}
+});
+
+test("valued compound bodies still update eval completion", () => {
+	const program = compileScript("1; if (true) { 2; }", true);
+	const fn = program.functions[0]!;
+	const completionRegister = fn.completionRegister;
+	const instructions = instructionsOf(fn);
+	const bodyValue = instructions.find(
+		(instruction) => instruction.type === "createNumber" && instruction.value === 2,
+	);
+
+	expect(bodyValue?.type).toBe("createNumber");
+	if (bodyValue?.type === "createNumber") {
+		expect(instructions).toContainEqual({
+			type: "move",
+			registers: [completionRegister!, bodyValue.registers[0]],
+		});
+	}
+});
+
+test("empty statements, blocks, and declarations preserve eval completion", () => {
+	const fn = compileScript("1; ; {}; var retained;", true).functions[0]!;
+	const completionRegister = fn.completionRegister;
+	const instructions = instructionsOf(fn);
+
+	expect(
+		instructions.filter(
+			(instruction) =>
+				instruction.type === "createUndefined" &&
+				instruction.registers[0] === completionRegister,
+		),
+	).toHaveLength(1);
+	expect(
+		instructions.filter(
+			(instruction) =>
+				instruction.type === "move" && instruction.registers[0] === completionRegister,
+		),
+	).toHaveLength(1);
 });
 
 test("structural empty loop and if bodies retain raw CFG blocks", () => {

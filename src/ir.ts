@@ -19,8 +19,7 @@ export interface IntermediateProgram {
 
 	/**
 	 * Eval-completion mode: compile the entry (Script) so it returns its
-	 * completion value — the value of the last script-level ExpressionStatement
-	 * that executed — instead of undefined. Set only when compiling source for
+	 * completion value instead of undefined. Set only when compiling source for
 	 * runtime `eval`; off for ordinary programs and for nested function bodies
 	 * (which keep their own `return` semantics).
 	 */
@@ -115,15 +114,7 @@ export interface IntermediateProgram {
 	 */
 	bindingToStorage: Map<Binding, BindingLocation>;
 
-	/**
-	 * Keep track of which functions we compiled already.
-	 */
-	bindingToFunctionCache: Map<
-		Binding,
-		{
-			fnIndex: number;
-		}
-	>;
+	/** Keep track of which function nodes we compiled already. */
 	nodeToFunctionCache: Map<ESTree.Node, { fnIndex: number }>;
 
 	/**
@@ -328,8 +319,8 @@ export interface IRFunction {
 
 	/**
 	 * Eval-completion register (see IntermediateProgram.evalCompletion). When set,
-	 * this is the Script entry function: each script-level ExpressionStatement
-	 * moves its value here, the function returns it, and it is initialized to
+	 * this is the Script entry function: statement evaluation maintains its
+	 * completion value here, the function returns it, and it is initialized to
 	 * undefined at entry. Undefined on every other function.
 	 */
 	completionRegister?: number;
@@ -1537,7 +1528,6 @@ export function compileSemanticProgramToIr(
 		compiledModuleInitForPaths: new Set(),
 		bindingToStorage: new Map(),
 		nextLoopScopeId: -1,
-		bindingToFunctionCache: new Map(),
 		nodeToFunctionCache: new Map(),
 
 		nextGlobalIndex: 0,
@@ -2535,8 +2525,9 @@ function compileNewFunction(
 		return -1;
 	}
 
-	if (program.bindingToFunctionCache.has(binding)) {
-		return program.bindingToFunctionCache.get(binding)!.fnIndex;
+	const cached = program.nodeToFunctionCache.get(functionNode);
+	if (cached) {
+		return cached.fnIndex;
 	}
 
 	// Brute-force find the file. We should do the linkup earlier, so we have / know which file
@@ -2573,7 +2564,7 @@ function compileNewFunction(
 	};
 
 	program.functions.push(fn);
-	program.bindingToFunctionCache.set(binding, { fnIndex: fn.functionIndex });
+	program.nodeToFunctionCache.set(functionNode, { fnIndex: fn.functionIndex });
 
 	const paramsCursor = compileFunctionParams(program, fn, functionNode);
 	prepareTailCallLoop(fn, functionNode);
@@ -4862,11 +4853,19 @@ function compileStatementsToBlock(
 						: undefined;
 			return declaration ? [declaration] : [];
 		});
-		const functionNames = new Set(
-			functionDeclarations.flatMap((declaration) =>
-				declaration.id ? [declaration.id.name] : [],
-			),
-		);
+		// Function/Eval/GlobalDeclarationInstantiation scans in reverse and keeps
+		// only the final declaration for each name.
+		const functionNames = new Set<string>();
+		const functionsToInitialize: Array<ESTree.FunctionDeclaration> = [];
+		for (let i = functionDeclarations.length - 1; i >= 0; i--) {
+			const declaration = functionDeclarations[i]!;
+			const name = declaration.id?.name;
+			if (name === undefined || functionNames.has(name)) {
+				continue;
+			}
+			functionNames.add(name);
+			functionsToInitialize.unshift(declaration);
+		}
 		const firstStatement = statements[0];
 		const firstScope = firstStatement
 			? fn.semanticFile.nodeToScope.get(firstStatement)
@@ -4892,7 +4891,7 @@ function compileStatementsToBlock(
 				fn,
 				block,
 				scope,
-				functionDeclarations,
+				functionsToInitialize,
 				functionNames,
 			);
 		}
@@ -4912,8 +4911,10 @@ function compileStatementsToBlock(
 			}
 		}
 
-		for (const declaration of functionDeclarations) {
+		for (const declaration of functionsToInitialize) {
 			compileFunctionDeclaration(program, fn, block, declaration);
+		}
+		for (const declaration of functionDeclarations) {
 			hoistedDeclarations.add(declaration);
 		}
 		for (const scope of declarationScopes) {
@@ -5200,6 +5201,16 @@ function compileExpressionStatement(
 	}
 }
 
+/** Initialize a compound statement's spec-level completion value. */
+function resetEvalCompletion(fn: IRFunction, block: IRBlock) {
+	if (fn.completionRegister !== undefined) {
+		block.instructions.push({
+			type: "createUndefined",
+			registers: [fn.completionRegister],
+		});
+	}
+}
+
 function compileFunctionDeclaration(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -5270,6 +5281,7 @@ function compileSwitchStatement(
 
 	const cursor: IRCursor = { block };
 	const discriminant = compileExpression(program, fn, cursor, statement.discriminant);
+	resetEvalCompletion(fn, cursor.block);
 
 	// Case bodies first, chained for fall-through, so the dispatch tests can
 	// reference their block indexes.
@@ -5344,6 +5356,7 @@ function compileWhileStatement(
 	block: IRBlock,
 	statement: ESTree.WhileStatement,
 ) {
+	resetEvalCompletion(fn, block);
 	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
 	block.instructions.push({
 		type: "jump",
@@ -5405,6 +5418,7 @@ function compileDoWhileStatement(
 	block: IRBlock,
 	statement: ESTree.DoWhileStatement,
 ) {
+	resetEvalCompletion(fn, block);
 	const loop: IRLoopContext = {
 		kind: "loop",
 		breakJumps: [],
@@ -5526,6 +5540,7 @@ function compileForStatement(
 			slotCount: perIter.slotCount,
 		});
 	}
+	resetEvalCompletion(fn, initCursor.block);
 
 	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
 	initCursor.block.instructions.push({
@@ -5632,6 +5647,7 @@ function compileForOfStatement(
 	if (iterable === -1) {
 		return;
 	}
+	resetEvalCompletion(fn, entryCursor.block);
 
 	const perIter = setupPerIterationScope(program, fn, statement);
 	if (statement.await) {
@@ -5680,6 +5696,7 @@ function compileForInStatement(
 		type: "forInKeys",
 		registers: [keys, source],
 	});
+	resetEvalCompletion(fn, entryCursor.block);
 
 	const perIter = setupPerIterationScope(program, fn, statement);
 	compileForInOfLoop(
@@ -6439,6 +6456,7 @@ function compileWithStatement(
 	const cursor: IRCursor = { block };
 	const object = compileExpression(program, fn, cursor, statement.object);
 	cursor.block.instructions.push({ type: "withEnter", registers: [object] });
+	resetEvalCompletion(fn, cursor.block);
 
 	const withContext: IRLoopContext = {
 		kind: "with",
@@ -6476,6 +6494,7 @@ function compileIfStatement(
 ) {
 	const cursor: IRCursor = { block };
 	const condition = compileExpression(program, fn, cursor, statement.test);
+	resetEvalCompletion(fn, cursor.block);
 	const consequentBlock = compileStatementsToBlock(
 		program,
 		fn,

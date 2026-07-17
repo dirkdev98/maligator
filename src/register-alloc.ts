@@ -327,13 +327,20 @@ function allocateRegistersForFunction(fn: IRFunction) {
 	const hasMultipleDefinitions = [...registerDefinitionCounts.values()].some(
 		(count) => count > 1,
 	);
+	const hasBackEdge = fn.blocks.some((block, from) =>
+		block.instructions.some(
+			(instruction) =>
+				(instruction.type === "jump" || instruction.type === "jumpIf") &&
+				instruction.blocks.some((to) => to >= 0 && to <= from),
+		),
+	);
 
-	// A register used in multiple blocks may be live across a loop back edge,
-	// which the last-static-use model cannot see; those are never freed. Nor are
-	// parameter registers, whose physical register holds a boxed incoming
-	// argument and must not be reused for, say, a numeric literal.
+	// A loop executes the same static definitions repeatedly, so a temporary that
+	// appears dead can overwrite a loop-carried value assigned its physical register.
+	// Keep cyclic functions uncoalesced until allocation uses CFG interference.
 	const isFreeable = (virtualRegister: number, instruction: IRInstruction) =>
 		!hasMultipleDefinitions &&
+		!hasBackEdge &&
 		virtualRegister >= fn.parameterCount &&
 		instruction === registerLastUsedIn.get(virtualRegister) &&
 		(registerUsedInMultipleBlocks.get(virtualRegister)?.size ?? 0) <= 1;

@@ -1,0 +1,38 @@
+let passed = 0;
+
+function check(name, source, expected) {
+	const actual = (0, eval)(source);
+	if (!Object.is(actual, expected)) {
+		throw new Error("FAIL " + name + ": got " + actual);
+	}
+	passed++;
+}
+
+check("if false", "1; if (false) {}", undefined);
+check("if valued", "1; if (true) { 2; }", 2);
+check("if strict false", '"use strict"; 1; if (false) {}', undefined);
+
+check("while no iteration", "1; while (false) {}", undefined);
+check("while valued", "var n = 1; 1; while (n--) { 3; }", 3);
+check("do while empty", "1; do {} while (false)", undefined);
+check("do while valued", "1; do { 4; } while (false)", 4);
+check("do while empty break", "1; do { break; } while (false)", undefined);
+check("do while valued break", "1; do { 5; break; } while (false)", 5);
+
+check("for no iteration", "1; for (; false; ) {}", undefined);
+check("for valued", "var n = 1; 1; for (; n--; ) { 6; }", 6);
+check("for-in no iteration", "var k; 1; for (k in {}) {}", undefined);
+check("for-in valued", "var k; 1; for (k in { x: 0 }) { 7; }", 7);
+check("for-of no iteration", "var v; 1; for (v of []) {}", undefined);
+check("for-of valued", "var v; 1; for (v of [0]) { 8; }", 8);
+
+check("switch no match", "1; switch (0) { case 1: 9; }", undefined);
+check("switch valued", "1; switch (0) { case 0: 9; }", 9);
+check("with empty", "1; with ({}) {}", undefined);
+check("with valued", "1; with ({}) { 10; }", 10);
+
+check("empty statement preserves", "11; ;", 11);
+check("empty block preserves", "12; {}", 12);
+check("declaration preserves", "13; var retained", 13);
+
+console.log("eval-completion PASS " + passed + "/" + passed);

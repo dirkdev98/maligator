@@ -1,6 +1,10 @@
 import * as path from "node:path";
 import { expect, test } from "vitest";
-import { debugSemanticProgram } from "../src/semantic-analysis.ts";
+import { parseScript } from "../src/parser.ts";
+import {
+	analyzeSourceAndRunSemanticAnalysis,
+	debugSemanticProgram,
+} from "../src/semantic-analysis.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
 
 test("snapshot sema changes", () => {
@@ -12,11 +16,11 @@ test("snapshot sema changes", () => {
 	expect(debugSemanticProgram(semantic)).toMatchInlineSnapshot(`
 		"/Users/dirk/projects/maligator/tests/local/semantic-analysis.js
 		  Scope(0 Program (parent: -1)
-		    Binding(assert let global FunctionDeclaration) (usages: 34, declared: true) 
-		    Binding(isPrimitive let global FunctionDeclaration) (usages: 3, declared: true) 
-		    Binding(compareArray let global FunctionDeclaration) (usages: 4, declared: true) 
-		    Binding(Test262Error let global FunctionDeclaration) (usages: 21, declared: true) 
-		    Binding($DONOTEVALUATE let global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(assert var global FunctionDeclaration) (usages: 34, declared: true) 
+		    Binding(isPrimitive var global FunctionDeclaration) (usages: 3, declared: true) 
+		    Binding(compareArray var global FunctionDeclaration) (usages: 4, declared: true) 
+		    Binding(Test262Error var global FunctionDeclaration) (usages: 21, declared: true) 
+		    Binding($DONOTEVALUATE var global FunctionDeclaration) (usages: 1, declared: true) 
 		    Binding(__isArray var global Identifier) (usages: 2, declared: true) 
 		    Binding(__defineProperty var global Identifier) (usages: 2, declared: true) 
 		    Binding(__getOwnPropertyDescriptor var global Identifier) (usages: 8, declared: true) 
@@ -26,40 +30,40 @@ test("snapshot sema changes", () => {
 		    Binding(__hasOwnProperty var global Identifier) (usages: 11, declared: true) 
 		    Binding(__propertyIsEnumerable var global Identifier) (usages: 2, declared: true) 
 		    Binding(nonIndexNumericPropertyName var global Identifier) (usages: 2, declared: true) 
-		    Binding(verifyProperty let global FunctionDeclaration) (usages: 5, declared: true) 
-		    Binding(isConfigurable let global FunctionDeclaration) (usages: 4, declared: true) 
-		    Binding(isEnumerable let global FunctionDeclaration) (usages: 4, declared: true) 
-		    Binding(isSameValue let global FunctionDeclaration) (usages: 5, declared: true) 
-		    Binding(isWritable let global FunctionDeclaration) (usages: 4, declared: true) 
-		    Binding(verifyCallableProperty let global FunctionDeclaration) (usages: 2, declared: true) 
-		    Binding(verifyEqualTo let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(verifyWritable let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(verifyNotWritable let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(verifyEnumerable let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(verifyNotEnumerable let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(verifyConfigurable let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(verifyNotConfigurable let global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(verifyProperty var global FunctionDeclaration) (usages: 5, declared: true) 
+		    Binding(isConfigurable var global FunctionDeclaration) (usages: 4, declared: true) 
+		    Binding(isEnumerable var global FunctionDeclaration) (usages: 4, declared: true) 
+		    Binding(isSameValue var global FunctionDeclaration) (usages: 5, declared: true) 
+		    Binding(isWritable var global FunctionDeclaration) (usages: 4, declared: true) 
+		    Binding(verifyCallableProperty var global FunctionDeclaration) (usages: 2, declared: true) 
+		    Binding(verifyEqualTo var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(verifyWritable var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(verifyNotWritable var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(verifyEnumerable var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(verifyNotEnumerable var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(verifyConfigurable var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(verifyNotConfigurable var global FunctionDeclaration) (usages: 1, declared: true) 
 		    Binding(verifyPrimordialProperty var global Identifier) (usages: 1, declared: true) 
 		    Binding(verifyPrimordialCallableProperty var global Identifier) (usages: 1, declared: true) 
-		    Binding(x let global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(x var global FunctionDeclaration) (usages: 1, declared: true) 
 		    Binding(TestClass let global ClassDeclaration) (usages: 1, declared: true) 
-		    Binding(varInNestedBlocks let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(varShadowsParam let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(multipleVarSameName let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(funcVsVar let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(funcInBlock let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(varBeforeFunc let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(outerHoisting let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(varInForIn let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(varInForOf let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(varDestructuring let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(sloppyBlockFunc let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(varInLabeled let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(complexParam let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(usageBeforeDecl let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(catchParamShadow let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(captureCheck let global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(someFunction let global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(varInNestedBlocks var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(varShadowsParam var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(multipleVarSameName var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(funcVsVar var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(funcInBlock var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(varBeforeFunc var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(outerHoisting var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(varInForIn var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(varInForOf var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(varDestructuring var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(sloppyBlockFunc var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(varInLabeled var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(complexParam var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(usageBeforeDecl var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(catchParamShadow var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(captureCheck var global FunctionDeclaration) (usages: 1, declared: true) 
+		    Binding(someFunction var global FunctionDeclaration) (usages: 1, declared: true) 
 		    Binding(undefined var global Identifier) (usages: 12, declared: false) 
 		    Binding(Array var global Identifier) (usages: 4, declared: false) 
 		    Binding(String var global Identifier) (usages: 19, declared: false) 
@@ -304,8 +308,8 @@ test("snapshot sema changes", () => {
 		  Scope(135 BlockStatement (parent: 134)
 		  Scope(136 FunctionDeclaration (parent: 0)
 		    Binding(quix var local ObjectPattern) (usages: 1, declared: true) 
+		    Binding(y var captured FunctionDeclaration) (usages: 1, declared: true) 
 		  Scope(137 BlockStatement (parent: 136)
-		    Binding(y let captured FunctionDeclaration) (usages: 1, declared: true) 
 		  Scope(138 FunctionDeclaration (parent: 137)
 		    Binding(arg var local Identifier) (usages: 1, declared: true) 
 		  Scope(139 BlockStatement (parent: 138)
@@ -360,9 +364,8 @@ test("snapshot sema changes", () => {
 		  Scope(170 BlockStatement (parent: 169)
 		  Scope(171 BlockStatement (parent: 170)
 		  Scope(172 FunctionDeclaration (parent: 0)
-		    Binding(innerFunc var local Identifier) (usages: 0, declared: true) 
+		    Binding(innerFunc var captured Identifier) (usages: 3, declared: true) 
 		  Scope(173 BlockStatement (parent: 172)
-		    Binding(innerFunc let captured FunctionDeclaration) (usages: 3, declared: true) 
 		  Scope(174 FunctionDeclaration (parent: 173)
 		  Scope(175 BlockStatement (parent: 174)
 		  Scope(176 FunctionDeclaration (parent: 0)
@@ -372,14 +375,13 @@ test("snapshot sema changes", () => {
 		  Scope(179 FunctionDeclaration (parent: 178)
 		  Scope(180 BlockStatement (parent: 179)
 		  Scope(181 FunctionDeclaration (parent: 0)
-		    Binding(sameName var local Identifier) (usages: 0, declared: true) 
+		    Binding(sameName var captured Identifier) (usages: 3, declared: true) 
 		  Scope(182 BlockStatement (parent: 181)
-		    Binding(sameName let captured FunctionDeclaration) (usages: 3, declared: true) 
 		  Scope(183 FunctionDeclaration (parent: 182)
 		  Scope(184 BlockStatement (parent: 183)
 		  Scope(185 FunctionDeclaration (parent: 0)
+		    Binding(innerFn var captured FunctionDeclaration) (usages: 2, declared: true) 
 		  Scope(186 BlockStatement (parent: 185)
-		    Binding(innerFn let captured FunctionDeclaration) (usages: 2, declared: true) 
 		  Scope(187 FunctionDeclaration (parent: 186)
 		  Scope(188 BlockStatement (parent: 187)
 		  Scope(189 BlockStatement (parent: 186)
@@ -424,8 +426,8 @@ test("snapshot sema changes", () => {
 		  Scope(216 BlockStatement (parent: 213)
 		    Binding(inDefault var local Identifier) (usages: 2, declared: true) 
 		  Scope(217 FunctionDeclaration (parent: 0)
+		    Binding(helper var captured FunctionDeclaration) (usages: 2, declared: true) 
 		  Scope(218 BlockStatement (parent: 217)
-		    Binding(helper let captured FunctionDeclaration) (usages: 2, declared: true) 
 		  Scope(219 FunctionDeclaration (parent: 218)
 		  Scope(220 BlockStatement (parent: 219)
 		  Scope(221 FunctionDeclaration (parent: 0)
@@ -449,3 +451,53 @@ test("snapshot sema changes", () => {
 		"
 	`);
 });
+
+test.each([false, true])(
+	"duplicate Script functions share one var binding (strict=%s)",
+	(strict) => {
+		const source = "function f(){ return 1 } function f(){ return 2 } f()";
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"duplicate.js",
+			parseScript(source, { strict }),
+		);
+		const file = semantic.files[0]!;
+		const declarations = file.ast.body.filter(
+			(statement) => statement.type === "FunctionDeclaration",
+		);
+		const binding = file.nodeToBinding.get(declarations[0]!);
+
+		expect(binding?.kind).toBe("var");
+		expect(file.nodeToBinding.get(declarations[1]!)).toBe(binding);
+		expect(
+			file.scopes[0]!.bindings.filter((candidate) => candidate.name === "f"),
+		).toEqual([binding]);
+	},
+);
+
+test.each([false, true])(
+	"duplicate function-body functions share one var binding (strict=%s)",
+	(strict) => {
+		const directive = strict ? '"use strict";' : "";
+		const source = `${directive} function outer(){ function f(){ return 1 } function f(){ return 2 } return f() }`;
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"duplicate.js",
+			parseScript(source, { strict: false }),
+		);
+		const file = semantic.files[0]!;
+		const outer = file.ast.body.find(
+			(statement) => statement.type === "FunctionDeclaration",
+		);
+		expect(outer?.type).toBe("FunctionDeclaration");
+		const body = outer?.type === "FunctionDeclaration" ? outer.body : undefined;
+		if (body?.type !== "BlockStatement") return;
+		const declarations = body.body.filter(
+			(statement) => statement.type === "FunctionDeclaration",
+		);
+		const binding = file.nodeToBinding.get(declarations[0]!);
+
+		expect(binding?.kind).toBe("var");
+		expect(file.nodeToBinding.get(declarations[1]!)).toBe(binding);
+	},
+);
