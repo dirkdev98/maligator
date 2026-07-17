@@ -35,6 +35,7 @@ typedef struct MalReadableStreamObject {
             MalValue controller;
             MalValue reader;
             MalValue stored_error;
+            bool disturbed;
         } stream;
         struct {
             MalValue stream;
@@ -61,3 +62,11 @@ typedef struct MalReadableStreamObject {
 
 /** Install ReadableStream and its default controller/reader globals. */
 void mal_readable_stream_install(MalVm *vm, MalObject *global_this);
+
+/** Create a default stream containing one owned Uint8Array copy of `bytes`. */
+MalValue mal_readable_stream_from_bytes(MalVm *vm, const byte *bytes, usize length);
+
+/** Internal Body-state hooks shared with the Fetch runtime. */
+bool mal_readable_stream_is_locked(MalValue value);
+bool mal_readable_stream_is_disturbed(MalValue value);
+bool mal_readable_stream_consume(MalVm *vm, MalValue value);

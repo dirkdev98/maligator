@@ -3,16 +3,23 @@
 #include <stdlib.h>
 
 byte *mal_utf8_encode(const c16 *units, usize len, usize *out_len) {
+    *out_len = 0;
+    if (len > (SIZE_MAX - 1) / 3) return nullptr;
     byte *out = malloc(len * 3 + 1); // <= 3 bytes/BMP unit; a surrogate pair is 2 units -> 4 bytes
+    if (out == nullptr) return nullptr;
     usize o = 0;
     for (usize i = 0; i < len; i++) {
         u32 c = units[i];
-        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < len) {
-            u32 lo = units[i + 1];
+        if (c >= 0xD800 && c <= 0xDBFF) {
+            u32 lo = i + 1 < len ? units[i + 1] : 0;
             if (lo >= 0xDC00 && lo <= 0xDFFF) {
                 c = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
                 i++;
+            } else {
+                c = 0xFFFD;
             }
+        } else if (c >= 0xDC00 && c <= 0xDFFF) {
+            c = 0xFFFD;
         }
         if (c < 0x80) {
             out[o++] = (byte) c;
@@ -35,43 +42,54 @@ byte *mal_utf8_encode(const c16 *units, usize len, usize *out_len) {
 }
 
 c16 *mal_utf8_decode(const byte *bytes, usize len, usize *out_count) {
+    *out_count = 0;
+    if (len > SIZE_MAX / sizeof(c16) - 1) return nullptr;
     c16 *out = malloc(sizeof(c16) * (len + 1)); // <= len code units
+    if (out == nullptr) return nullptr;
     usize o = 0;
     usize i = 0;
     while (i < len) {
         u8 b = (u8) bytes[i];
         u32 cp;
-        usize n;
+        usize n = 1;
+        u8 second_min = 0x80;
+        u8 second_max = 0xBF;
         if (b < 0x80) {
             cp = b;
-            n = 1;
-        } else if ((b & 0xE0) == 0xC0) {
+        } else if (b >= 0xC2 && b <= 0xDF) {
             cp = b & 0x1Fu;
             n = 2;
-        } else if ((b & 0xF0) == 0xE0) {
+        } else if (b >= 0xE0 && b <= 0xEF) {
             cp = b & 0x0Fu;
             n = 3;
-        } else if ((b & 0xF8) == 0xF0) {
+            if (b == 0xE0) second_min = 0xA0;
+            if (b == 0xED) second_max = 0x9F;
+        } else if (b >= 0xF0 && b <= 0xF4) {
             cp = b & 0x07u;
             n = 4;
+            if (b == 0xF0) second_min = 0x90;
+            if (b == 0xF4) second_max = 0x8F;
         } else {
             cp = 0xFFFD;
-            n = 1;
         }
         if (n > 1) {
-            if (i + n > len) {
-                cp = 0xFFFD;
-                n = 1;
-            } else {
-                for (usize k = 1; k < n; k++) {
-                    u8 cont = (u8) bytes[i + k];
-                    if ((cont & 0xC0) != 0x80) {
-                        cp = 0xFFFD;
-                        n = 1;
-                        break;
-                    }
-                    cp = (cp << 6) | (cont & 0x3Fu);
+            usize consumed = 1;
+            for (usize k = 1; k < n; k++) {
+                if (i + k >= len) {
+                    cp = 0xFFFD;
+                    n = consumed;
+                    break;
                 }
+                u8 cont = (u8) bytes[i + k];
+                u8 minimum = k == 1 ? second_min : 0x80;
+                u8 maximum = k == 1 ? second_max : 0xBF;
+                if (cont < minimum || cont > maximum) {
+                    cp = 0xFFFD;
+                    n = consumed;
+                    break;
+                }
+                cp = (cp << 6) | (cont & 0x3Fu);
+                consumed++;
             }
         }
         i += n;

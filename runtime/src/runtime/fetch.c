@@ -1,10 +1,12 @@
 #include "fetch.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "array_buffer_object.h"
+#include "builtin_json.h"
 #include "builtin_promise.h"
 #include "function_object.h"
 #include "gc.h"
@@ -14,7 +16,9 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
+#include "promise_object.h"
 #include "property_store.h"
+#include "readable_stream_object.h"
 #include "request_object.h"
 #include "response_object.h"
 #include "server.h" // host: mal_http_handler, mal_http_conn_respond, MalHttpRequest
@@ -44,6 +48,30 @@ static const char *mal_fetch_reason(int status) {
     }
 }
 
+static bool mal_fetch_string_ascii_equal_ci(const MalString *string, const char *ascii) {
+    usize length = strlen(ascii);
+    if (mal_string_length(string) != length) return false;
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        if (unit >= 'a' && unit <= 'z') unit -= 'a' - 'A';
+        c16 expected = (c16) (u8) ascii[i];
+        if (expected >= 'a' && expected <= 'z') expected -= 'a' - 'A';
+        if (unit != expected) return false;
+    }
+    return true;
+}
+
+static byte *mal_fetch_utf8_encode(MalVm *vm, const MalString *string, usize *length) {
+    byte *bytes = mal_utf8_encode(
+        mal_string_code_units(string), mal_string_length(string), length);
+    if (bytes == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "UTF-8 allocation failed");
+    }
+    return bytes;
+}
+
 /* Extract the byte range of a BufferSource (TypedArray or ArrayBuffer); returns
  * false for anything else. */
 static bool mal_fetch_buffer_source(MalValue v, const byte **out, usize *out_len) {
@@ -69,9 +97,19 @@ static bool mal_fetch_buffer_source(MalValue v, const byte **out, usize *out_len
 
 /* Fresh ArrayBuffer holding a copy of bytes. */
 static MalValue mal_fetch_new_array_buffer(MalVm *vm, const byte *data, usize len) {
+    if (len > UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Body is too large for an ArrayBuffer");
+        return mal_value_new_undefined();
+    }
     MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
     MalArrayBufferObject *ab =
         mal_array_buffer_object_new(&vm->heap, proto, (u32) len, (u32) len, false, false);
+    if (len > 0 && ab->data == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "ArrayBuffer allocation failed");
+        return mal_value_new_undefined();
+    }
     if (len > 0) {
         memcpy(ab->data, data, len);
     }
@@ -80,9 +118,19 @@ static MalValue mal_fetch_new_array_buffer(MalVm *vm, const byte *data, usize le
 
 /* Fresh Uint8Array over a copy of bytes (buffer rooted across the view alloc). */
 static MalValue mal_fetch_new_uint8array(MalVm *vm, const byte *data, usize len) {
+    if (len > UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Body is too large for a Uint8Array");
+        return mal_value_new_undefined();
+    }
     MalObject *ab_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
     MalArrayBufferObject *ab =
         mal_array_buffer_object_new(&vm->heap, ab_proto, (u32) len, (u32) len, false, false);
+    if (len > 0 && ab->data == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Uint8Array allocation failed");
+        return mal_value_new_undefined();
+    }
     if (len > 0) {
         memcpy(ab->data, data, len);
     }
@@ -106,6 +154,93 @@ static MalValue mal_fetch_resolve(MalVm *vm, MalValue value) {
     return mal_promise_resolve_value(vm, value, &promise) ? promise : mal_value_new_undefined();
 }
 
+static MalValue mal_fetch_reject(MalVm *vm, MalValue reason) {
+    MalValue roots[2] = {reason, mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    roots[1] = mal_value_from_promise_object(mal_promise_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
+    mal_promise_reject(vm, mal_value_to_promise_object(roots[1]), roots[0]);
+    MalValue result = roots[1];
+    mal_gc_unroot(&span);
+    return result;
+}
+
+static MalValue mal_fetch_reject_type_error(MalVm *vm) {
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "Body is unusable: stream is locked or disturbed");
+    MalValue error = vm->completion.value;
+    vm->completion =
+        (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    return mal_fetch_reject(vm, error);
+}
+
+static MalValue mal_fetch_reject_completion(MalVm *vm) {
+    MalValue error = vm->completion.value;
+    vm->completion =
+        (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    return mal_fetch_reject(vm, error);
+}
+
+typedef struct MalFetchBody {
+    MalObject *owner;
+    byte *bytes;
+    usize length;
+    MalValue *stream;
+} MalFetchBody;
+
+static bool mal_fetch_body_from_value(MalValue value, MalFetchBody *body) {
+    if (mal_value_is_response_object(value)) {
+        MalResponseObject *response = mal_value_to_response_object(value);
+        *body = (MalFetchBody) {
+            .owner = &response->object,
+            .bytes = response->body,
+            .length = response->body_len,
+            .stream = &response->body_stream,
+        };
+        return true;
+    }
+    if (mal_value_is_request_object(value)) {
+        MalRequestObject *request = mal_value_to_request_object(value);
+        *body = (MalFetchBody) {
+            .owner = &request->object,
+            .bytes = request->body,
+            .length = request->body_len,
+            .stream = &request->body_stream,
+        };
+        return true;
+    }
+    return false;
+}
+
+static MalValue mal_fetch_body_stream(MalVm *vm, MalValue owner, MalFetchBody *body) {
+    if (body->bytes == nullptr) {
+        return mal_value_new_null();
+    }
+    if (mal_value_is_undefined(*body->stream)) {
+        MalRootSpan span;
+        mal_gc_root(&span, &owner, 1);
+        MalValue stream =
+            mal_readable_stream_from_bytes(vm, body->bytes, body->length);
+        if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
+            mal_gc_unroot(&span);
+            return mal_value_new_undefined();
+        }
+        *body->stream = stream;
+        mal_gc_card(&body->owner->header, stream);
+        mal_gc_unroot(&span);
+    }
+    return *body->stream;
+}
+
+static bool mal_fetch_body_begin(MalVm *vm, MalValue owner, MalFetchBody *body) {
+    if (body->bytes == nullptr) {
+        return true;
+    }
+    MalValue stream = mal_fetch_body_stream(vm, owner, body);
+    return mal_readable_stream_consume(vm, stream);
+}
+
 /* ---------------------------------------------------------------------------
  * Response object.
  * --------------------------------------------------------------------------- */
@@ -118,6 +253,7 @@ MalResponseObject *mal_response_object_new(
     r->headers = mal_value_new_undefined();
     r->body = body;
     r->body_len = body_len;
+    r->body_stream = mal_value_new_undefined();
     return r;
 }
 
@@ -130,7 +266,9 @@ static void mal_response_finalize(MalHeapHeader *cell) {
 }
 
 static void mal_response_trace(MalHeapHeader *cell) {
-    mal_gc_mark_value(((MalResponseObject *) cell)->headers);
+    MalResponseObject *response = (MalResponseObject *) cell;
+    mal_gc_mark_value(response->headers);
+    mal_gc_mark_value(response->body_stream);
 }
 
 static MalValue mal_response_constructor(
@@ -145,45 +283,92 @@ static MalValue mal_response_constructor(
     (void) callee;
 
     i32 status = 200;
-    MalValue init_headers = mal_value_new_undefined();
+    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, 2);
+    byte *body = nullptr;
+    MalResponseObject *response = nullptr;
     if (arg_count >= 2 && mal_value_is_object(args[1])) {
         MalValue s;
-        if (mal_vm_get_property(vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "status"), &s)
-            && mal_ops_is_number(s)) {
-            status = (i32) mal_ops_to_number(s);
+        if (!mal_vm_get_property(
+                vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "status"), &s)) {
+            goto response_error;
         }
-        MalValue hv;
-        if (mal_vm_get_property(vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "headers"), &hv)) {
-            init_headers = hv;
+        if (!mal_value_is_undefined(s)) {
+            f64 number;
+            if (!mal_vm_to_number(vm, s, &number)) goto response_error;
+            if (!isfinite(number) || trunc(number) != number ||
+                number < INT32_MIN || number > INT32_MAX) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                    "Response status is invalid");
+                goto response_error;
+            }
+            status = (i32) number;
+        }
+        if (!mal_vm_get_property(vm, args[1],
+                mal_intrinsic_string_key(vm, (const byte *) "headers"), &roots[0])) {
+            goto response_error;
         }
     }
+    if (status < 200 || status > 599) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Response status must be between 200 and 599");
+        goto response_error;
+    }
 
-    byte *body = nullptr;
     usize body_len = 0;
     const byte *src_bytes;
     usize src_len;
+    if (arg_count >= 1 && mal_value_is_readable_stream_object(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStream BodyInit is not supported yet");
+        goto response_error;
+    }
     if (arg_count >= 1 && mal_value_is_string(args[0])) {
         MalString *str = mal_value_to_string(args[0]);
-        body = mal_utf8_encode(mal_string_code_units(str), mal_string_length(str), &body_len);
+        body = mal_fetch_utf8_encode(vm, str, &body_len);
+        if (body == nullptr) goto response_error;
     } else if (arg_count >= 1 && mal_fetch_buffer_source(args[0], &src_bytes, &src_len)) {
         // A BufferSource (ArrayBuffer / TypedArray) body: copy the raw bytes.
         body = malloc(src_len == 0 ? 1 : src_len);
+        if (body == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                "Response body allocation failed");
+            goto response_error;
+        }
         if (src_len > 0) {
             memcpy(body, src_bytes, src_len);
         }
         body_len = src_len;
+    } else if (arg_count >= 1 && !mal_value_is_nil(args[0])) {
+        MalString *str;
+        if (!mal_vm_to_string(vm, args[0], &str)) {
+            goto response_error;
+        }
+        body = mal_fetch_utf8_encode(vm, str, &body_len);
+        if (body == nullptr) goto response_error;
+    }
+    if (body != nullptr && (status == 204 || status == 205 || status == 304)) {
+        free(body);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Response status cannot have a body");
+        body = nullptr;
+        goto response_error;
     }
 
-    MalValue roots[2] = {init_headers, mal_value_new_undefined()};
-    MalRootSpan rs;
-    mal_gc_root(&rs, roots, 2);
     MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_RESPONSE_PROTOTYPE]);
-    MalResponseObject *r = mal_response_object_new(&vm->heap, proto, status, body, body_len);
-    roots[1] = mal_value_from_response_object(r);
-    r->headers = mal_value_from_headers_object(mal_headers_from_init(vm, roots[0]));
+    response = mal_response_object_new(&vm->heap, proto, status, body, body_len);
+    roots[1] = mal_value_from_response_object(response);
+    response->headers = mal_value_from_headers_object(mal_headers_from_init(vm, roots[0]));
+    if (vm->completion.kind != MAL_COMPLETION_NORMAL) goto response_error;
     MalValue result = roots[1];
     mal_gc_unroot(&rs);
     return result;
+
+response_error:
+    if (response == nullptr) free(body);
+    mal_gc_unroot(&rs);
+    return mal_value_new_undefined();
 }
 
 /* --- Response read side (a received/constructed Response is read via these). --- */
@@ -192,72 +377,138 @@ static MalResponseObject *mal_response_this(MalValue self) {
     return mal_value_is_response_object(self) ? mal_value_to_response_object(self) : nullptr;
 }
 
-/* Decode a Response's body bytes to a string (empty when there is no body). */
-static MalValue mal_response_body_string(MalVm *vm, MalResponseObject *r) {
-    if (r == nullptr || r->body == nullptr || r->body_len == 0) {
+static MalValue mal_fetch_body_string(MalVm *vm, const MalFetchBody *body) {
+    if (body->bytes == nullptr || body->length == 0) {
         return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
     }
     usize count;
-    c16 *units = mal_utf8_decode((const byte *) r->body, r->body_len, &count);
-    MalValue s = mal_value_from_string(mal_string_new_copy(&vm->heap, units, count));
+    c16 *units = mal_utf8_decode(body->bytes, body->length, &count);
+    if (units == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Body text allocation failed");
+        return mal_value_new_undefined();
+    }
+    usize offset = count > 0 && units[0] == 0xFEFF ? 1 : 0;
+    if (count - offset > MAL_STRING_MAX_CODE_UNITS) {
+        free(units);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Body text exceeds the string length limit");
+        return mal_value_new_undefined();
+    }
+    MalValue s = mal_value_from_string(
+        mal_string_new_copy(&vm->heap, units + offset, count - offset));
     free(units);
     return s;
 }
 
-static MalValue mal_response_method_text(
+static MalValue mal_fetch_body_method_text(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) args;
     (void) argc;
     (void) nt;
     (void) callee;
-    return mal_fetch_resolve(vm, mal_response_body_string(vm, mal_response_this(self)));
-}
-
-static MalValue mal_response_method_array_buffer(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) args;
-    (void) argc;
-    (void) nt;
-    (void) callee;
-    MalResponseObject *r = mal_response_this(self);
-    const byte *bytes = (r != nullptr && r->body != nullptr) ? (const byte *) r->body : (const byte *) "";
-    usize len = (r != nullptr && r->body != nullptr) ? r->body_len : 0;
-    return mal_fetch_resolve(vm, mal_fetch_new_array_buffer(vm, bytes, len));
-}
-
-static MalValue mal_response_method_bytes(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) args;
-    (void) argc;
-    (void) nt;
-    (void) callee;
-    MalResponseObject *r = mal_response_this(self);
-    const byte *bytes = (r != nullptr && r->body != nullptr) ? (const byte *) r->body : (const byte *) "";
-    usize len = (r != nullptr && r->body != nullptr) ? r->body_len : 0;
-    return mal_fetch_resolve(vm, mal_fetch_new_uint8array(vm, bytes, len));
-}
-
-static MalValue mal_response_method_json(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) args;
-    (void) argc;
-    (void) nt;
-    (void) callee;
-    MalValue text = mal_response_body_string(vm, mal_response_this(self));
-    MalValue parsed = mal_value_new_undefined();
-    MalValue json_ns = vm->intrinsics[MAL_INTRINSIC_JSON];
-    MalValue parse_fn;
-    if (mal_vm_get_property(vm, json_ns, mal_intrinsic_string_key(vm, (const byte *) "parse"), &parse_fn)
-        && mal_value_is_callable(parse_fn)) {
-        MalCompletion c = mal_vm_call_value(vm, parse_fn, json_ns, &text, 1);
-        if (c.kind == MAL_COMPLETION_THROW) {
-            vm->completion =
-                (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-        } else {
-            parsed = c.value;
-        }
+    MalFetchBody body;
+    if (!mal_fetch_body_from_value(self, &body)) {
+        return mal_fetch_reject_type_error(vm);
     }
-    return mal_fetch_resolve(vm, parsed);
+    if (!mal_fetch_body_begin(vm, self, &body)) {
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_fetch_reject_completion(vm);
+        }
+        return mal_fetch_reject_type_error(vm);
+    }
+    MalValue text = mal_fetch_body_string(vm, &body);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? mal_fetch_reject_completion(vm)
+        : mal_fetch_resolve(vm, text);
+}
+
+static MalValue mal_fetch_body_method_array_buffer(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalFetchBody body;
+    if (!mal_fetch_body_from_value(self, &body)) {
+        return mal_fetch_reject_type_error(vm);
+    }
+    if (!mal_fetch_body_begin(vm, self, &body)) {
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_fetch_reject_completion(vm);
+        }
+        return mal_fetch_reject_type_error(vm);
+    }
+    const byte *bytes = body.bytes != nullptr ? body.bytes : (const byte *) "";
+    MalValue array_buffer = mal_fetch_new_array_buffer(vm, bytes, body.length);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? mal_fetch_reject_completion(vm)
+        : mal_fetch_resolve(vm, array_buffer);
+}
+
+static MalValue mal_fetch_body_method_bytes(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalFetchBody body;
+    if (!mal_fetch_body_from_value(self, &body)) {
+        return mal_fetch_reject_type_error(vm);
+    }
+    if (!mal_fetch_body_begin(vm, self, &body)) {
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_fetch_reject_completion(vm);
+        }
+        return mal_fetch_reject_type_error(vm);
+    }
+    const byte *bytes = body.bytes != nullptr ? body.bytes : (const byte *) "";
+    MalValue byte_array = mal_fetch_new_uint8array(vm, bytes, body.length);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? mal_fetch_reject_completion(vm)
+        : mal_fetch_resolve(vm, byte_array);
+}
+
+static MalValue mal_fetch_body_method_json(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalFetchBody body;
+    if (!mal_fetch_body_from_value(self, &body)) {
+        return mal_fetch_reject_type_error(vm);
+    }
+    if (!mal_fetch_body_begin(vm, self, &body)) {
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_fetch_reject_completion(vm);
+        }
+        return mal_fetch_reject_type_error(vm);
+    }
+
+    MalValue roots[2] = {
+        mal_fetch_body_string(vm, &body),
+        mal_value_new_undefined(),
+    };
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_fetch_reject_completion(vm);
+    }
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    roots[1] = mal_builtin_json_parse_intrinsic(vm, roots[0]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        MalValue error = vm->completion.value;
+        vm->completion = (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = mal_value_new_undefined(),
+        };
+        MalValue result = mal_fetch_reject(vm, error);
+        mal_gc_unroot(&span);
+        return result;
+    }
+    MalValue result = mal_fetch_resolve(vm, roots[1]);
+    mal_gc_unroot(&span);
+    return result;
 }
 
 static MalValue mal_response_get_status(
@@ -307,6 +558,95 @@ static MalValue mal_response_get_headers(
     return r->headers;
 }
 
+static MalValue mal_fetch_body_get_body(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalFetchBody body;
+    if (!mal_fetch_body_from_value(self, &body)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Body getter called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    return mal_fetch_body_stream(vm, self, &body);
+}
+
+static MalValue mal_fetch_body_get_used(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalFetchBody body;
+    if (!mal_fetch_body_from_value(self, &body)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Body getter called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(body.bytes != nullptr &&
+        !mal_value_is_undefined(*body.stream) &&
+        mal_readable_stream_is_disturbed(*body.stream));
+}
+
+static bool mal_fetch_body_has_brand(MalValue self, bool response) {
+    return response ? mal_value_is_response_object(self) : mal_value_is_request_object(self);
+}
+
+static MalValue mal_fetch_body_method_for(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee,
+    bool response, MalNativeFunctionCallback callback) {
+    if (!mal_fetch_body_has_brand(self, response)) {
+        return mal_fetch_reject_type_error(vm);
+    }
+    return callback(vm, self, args, argc, nt, callee);
+}
+
+static MalValue mal_fetch_body_getter_for(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee,
+    bool response, MalNativeFunctionCallback callback) {
+    if (!mal_fetch_body_has_brand(self, response)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Body getter called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    return callback(vm, self, args, argc, nt, callee);
+}
+
+#define MAL_FETCH_BODY_METHOD_WRAPPER(prefix, response_brand, suffix, callback) \
+    static MalValue prefix##_##suffix( \
+        MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) { \
+        return mal_fetch_body_method_for( \
+            vm, self, args, argc, nt, callee, response_brand, callback); \
+    }
+
+#define MAL_FETCH_BODY_GETTER_WRAPPER(prefix, response_brand, suffix, callback) \
+    static MalValue prefix##_##suffix( \
+        MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) { \
+        return mal_fetch_body_getter_for( \
+            vm, self, args, argc, nt, callee, response_brand, callback); \
+    }
+
+MAL_FETCH_BODY_METHOD_WRAPPER(mal_response_body, true, text, mal_fetch_body_method_text)
+MAL_FETCH_BODY_METHOD_WRAPPER(mal_response_body, true, json, mal_fetch_body_method_json)
+MAL_FETCH_BODY_METHOD_WRAPPER(
+    mal_response_body, true, array_buffer, mal_fetch_body_method_array_buffer)
+MAL_FETCH_BODY_METHOD_WRAPPER(mal_response_body, true, bytes, mal_fetch_body_method_bytes)
+MAL_FETCH_BODY_GETTER_WRAPPER(mal_response_body, true, get_body, mal_fetch_body_get_body)
+MAL_FETCH_BODY_GETTER_WRAPPER(mal_response_body, true, get_used, mal_fetch_body_get_used)
+
+MAL_FETCH_BODY_METHOD_WRAPPER(mal_request_body, false, text, mal_fetch_body_method_text)
+MAL_FETCH_BODY_METHOD_WRAPPER(mal_request_body, false, json, mal_fetch_body_method_json)
+MAL_FETCH_BODY_METHOD_WRAPPER(
+    mal_request_body, false, array_buffer, mal_fetch_body_method_array_buffer)
+MAL_FETCH_BODY_METHOD_WRAPPER(mal_request_body, false, bytes, mal_fetch_body_method_bytes)
+MAL_FETCH_BODY_GETTER_WRAPPER(mal_request_body, false, get_body, mal_fetch_body_get_body)
+MAL_FETCH_BODY_GETTER_WRAPPER(mal_request_body, false, get_used, mal_fetch_body_get_used)
+
+#undef MAL_FETCH_BODY_METHOD_WRAPPER
+#undef MAL_FETCH_BODY_GETTER_WRAPPER
+
 /* Define a getter-only accessor on a prototype. */
 static void mal_fetch_define_getter(
     MalVm *vm, MalObject *proto, const byte *name, MalNativeFunctionCallback getter) {
@@ -322,20 +662,31 @@ static void mal_fetch_define_getter(
 }
 
 /* Read an optional { status, headers } init into out-params. */
-static void mal_response_read_init(MalVm *vm, const MalValue *args, i32 argc, i32 *status,
+static bool mal_response_read_init(MalVm *vm, const MalValue *args, i32 argc, i32 *status,
     MalValue *init_headers) {
     if (argc >= 2 && mal_value_is_object(args[1])) {
         MalValue s;
-        if (mal_vm_get_property(vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "status"), &s)
-            && mal_ops_is_number(s)) {
-            *status = (i32) mal_ops_to_number(s);
+        if (!mal_vm_get_property(
+                vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "status"), &s)) {
+            return false;
         }
-        MalValue hv;
-        if (mal_vm_get_property(
-                vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "headers"), &hv)) {
-            *init_headers = hv;
+        if (!mal_value_is_undefined(s)) {
+            f64 number;
+            if (!mal_vm_to_number(vm, s, &number)) return false;
+            if (!isfinite(number) || trunc(number) != number ||
+                number < 200 || number > 599) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                    "Response status must be between 200 and 599");
+                return false;
+            }
+            *status = (i32) number;
+        }
+        if (!mal_vm_get_property(vm, args[1],
+                mal_intrinsic_string_key(vm, (const byte *) "headers"), init_headers)) {
+            return false;
         }
     }
+    return true;
 }
 
 /* Response.json(data, init?): a JSON Response (Content-Type defaults to
@@ -362,23 +713,39 @@ static MalValue mal_response_static_json(
             "Response.json: data could not be serialized");
         return mal_value_new_undefined();
     }
-    MalValue json = c.value;
-    MalRootSpan jrs;
-    mal_gc_root(&jrs, &json, 1);
-    MalString *jstr = mal_value_to_string(json);
+    MalValue roots[2] = {c.value, mal_value_new_undefined()};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, 2);
+    MalString *jstr = mal_value_to_string(roots[0]);
     usize body_len;
-    byte *body = mal_utf8_encode(mal_string_code_units(jstr), mal_string_length(jstr), &body_len);
+    byte *body = mal_fetch_utf8_encode(vm, jstr, &body_len);
+    if (body == nullptr) {
+        mal_gc_unroot(&rs);
+        return mal_value_new_undefined();
+    }
 
     i32 status = 200;
-    MalValue init_headers = mal_value_new_undefined();
-    mal_response_read_init(vm, args, argc, &status, &init_headers);
+    if (!mal_response_read_init(vm, args, argc, &status, &roots[1])) {
+        free(body);
+        mal_gc_unroot(&rs);
+        return mal_value_new_undefined();
+    }
+    if (status == 204 || status == 205 || status == 304) {
+        free(body);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Response status cannot have a body");
+        mal_gc_unroot(&rs);
+        return mal_value_new_undefined();
+    }
 
     MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_RESPONSE_PROTOTYPE]);
     MalResponseObject *r = mal_response_object_new(&vm->heap, proto, status, body, body_len);
-    MalValue rval = mal_value_from_response_object(r);
-    MalRootSpan rrs;
-    mal_gc_root(&rrs, &rval, 1);
-    MalHeadersObject *h = mal_headers_from_init(vm, init_headers);
+    roots[0] = mal_value_from_response_object(r);
+    MalHeadersObject *h = mal_headers_from_init(vm, roots[1]);
+    if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
+        mal_gc_unroot(&rs);
+        return mal_value_new_undefined();
+    }
     r->headers = mal_value_from_headers_object(h); // reachable + traced via r now
     bool has_ct = false;
     for (i32 i = 0; i < h->count; i++) {
@@ -390,9 +757,9 @@ static MalValue mal_response_static_json(
     if (!has_ct) {
         mal_headers_append_bytes(vm, h, "content-type", 12, "application/json", 16);
     }
-    mal_gc_unroot(&rrs);
-    mal_gc_unroot(&jrs);
-    return rval;
+    MalValue result = roots[0];
+    mal_gc_unroot(&rs);
+    return result;
 }
 
 /* Response.redirect(url, status = 302): an empty-body Response with a Location. */
@@ -424,8 +791,12 @@ static MalValue mal_response_static_redirect(
     r->headers = mal_value_from_headers_object(h);
     MalString *url_string = mal_value_to_string(url_val);
     usize url_len;
-    byte *url_bytes = mal_utf8_encode(
-        mal_string_code_units(url_string), mal_string_length(url_string), &url_len);
+    byte *url_bytes = mal_fetch_utf8_encode(vm, url_string, &url_len);
+    if (url_bytes == nullptr) {
+        mal_gc_unroot(&rrs);
+        mal_gc_unroot(&urs);
+        return mal_value_new_undefined();
+    }
     mal_headers_append_bytes(vm, h, "location", 8, (const char *) url_bytes, url_len);
     free(url_bytes);
     mal_gc_unroot(&rrs);
@@ -460,6 +831,7 @@ MalRequestObject *mal_request_object_new(MalHeap *heap, MalObject *prototype) {
     mal_object_init(heap, &r->object, MAL_HEAP_REQUEST_OBJECT, prototype);
     r->body = nullptr;
     r->body_len = 0;
+    r->body_stream = mal_value_new_undefined();
     return r;
 }
 
@@ -471,82 +843,8 @@ static void mal_request_finalize(MalHeapHeader *cell) {
     }
 }
 
-/* Decode a Request's body bytes to a string (empty when there is no body). */
-static MalValue mal_request_body_string(MalVm *vm, MalRequestObject *r) {
-    if (r == nullptr || r->body == nullptr || r->body_len == 0) {
-        return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
-    }
-    usize count;
-    c16 *units = mal_utf8_decode(r->body, r->body_len, &count);
-    MalValue s = mal_value_from_string(mal_string_new_copy(&vm->heap, units, count));
-    free(units);
-    return s;
-}
-
-static MalValue mal_request_method_text(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) args;
-    (void) argc;
-    (void) nt;
-    (void) callee;
-    MalRequestObject *r =
-        mal_value_is_request_object(self) ? mal_value_to_request_object(self) : nullptr;
-    return mal_fetch_resolve(vm, mal_request_body_string(vm, r));
-}
-
-/* arrayBuffer(): Promise<ArrayBuffer> of the raw body bytes. */
-static MalValue mal_request_method_array_buffer(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) args;
-    (void) argc;
-    (void) nt;
-    (void) callee;
-    MalRequestObject *r =
-        mal_value_is_request_object(self) ? mal_value_to_request_object(self) : nullptr;
-    const byte *bytes = (r != nullptr && r->body != nullptr) ? r->body : (const byte *) "";
-    usize len = (r != nullptr && r->body != nullptr) ? r->body_len : 0;
-    return mal_fetch_resolve(vm, mal_fetch_new_array_buffer(vm, bytes, len));
-}
-
-/* bytes(): Promise<Uint8Array> of the raw body bytes. */
-static MalValue mal_request_method_bytes(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) args;
-    (void) argc;
-    (void) nt;
-    (void) callee;
-    MalRequestObject *r =
-        mal_value_is_request_object(self) ? mal_value_to_request_object(self) : nullptr;
-    const byte *bytes = (r != nullptr && r->body != nullptr) ? r->body : (const byte *) "";
-    usize len = (r != nullptr && r->body != nullptr) ? r->body_len : 0;
-    return mal_fetch_resolve(vm, mal_fetch_new_uint8array(vm, bytes, len));
-}
-
-static MalValue mal_request_method_json(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) args;
-    (void) argc;
-    (void) nt;
-    (void) callee;
-    MalRequestObject *r =
-        mal_value_is_request_object(self) ? mal_value_to_request_object(self) : nullptr;
-    MalValue text = mal_request_body_string(vm, r);
-
-    MalValue parsed = mal_value_new_undefined();
-    MalValue json_ns = vm->intrinsics[MAL_INTRINSIC_JSON];
-    MalValue parse_fn;
-    if (mal_vm_get_property(vm, json_ns, mal_intrinsic_string_key(vm, (const byte *) "parse"), &parse_fn)
-        && mal_value_is_callable(parse_fn)) {
-        MalCompletion c = mal_vm_call_value(vm, parse_fn, json_ns, &text, 1);
-        if (c.kind == MAL_COMPLETION_THROW) {
-            // v1: a parse error yields undefined (proper promise rejection later).
-            vm->completion =
-                (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-        } else {
-            parsed = c.value;
-        }
-    }
-    return mal_fetch_resolve(vm, parsed);
+static void mal_request_trace(MalHeapHeader *cell) {
+    mal_gc_mark_value(((MalRequestObject *) cell)->body_stream);
 }
 
 /* `new Request(input, init?)`: input is a URL string or another Request (copied);
@@ -566,84 +864,141 @@ static MalValue mal_request_constructor(
     MalRequestObject *r = mal_request_object_new(&vm->heap, proto);
     // Root the instance + the transient method/url/headers/body values across the
     // allocations below (ToString, Headers construction).
-    MalValue slots[5];
+    MalValue slots[6];
     slots[0] = mal_value_from_request_object(r);
     slots[1] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "GET", 3)); // method
     slots[2] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));    // url
     slots[3] = mal_value_new_undefined();                                        // headers init
     slots[4] = mal_value_new_undefined();                                        // body value
+    slots[5] = mal_value_new_undefined();                                        // Headers instance
     MalRootSpan rs;
-    mal_gc_root(&rs, slots, 5);
+    mal_gc_root(&rs, slots, 6);
+    MalRequestObject *source_request = nullptr;
+    bool body_override = false;
 
     if (argc >= 1 && mal_value_is_request_object(args[0])) {
         MalRequestObject *src = mal_value_to_request_object(args[0]);
+        source_request = src;
         MalValue v;
-        if (mal_vm_get_property(vm, args[0], mal_intrinsic_string_key(vm, (const byte *) "method"), &v)) {
-            slots[1] = v;
-        }
-        if (mal_vm_get_property(vm, args[0], mal_intrinsic_string_key(vm, (const byte *) "url"), &v)) {
-            slots[2] = v;
-        }
-        if (mal_vm_get_property(vm, args[0], mal_intrinsic_string_key(vm, (const byte *) "headers"), &v)) {
-            slots[3] = v;
-        }
-        if (src->body != nullptr && src->body_len > 0) {
-            r->body = malloc(src->body_len);
-            memcpy(r->body, src->body, src->body_len);
+        if (!mal_vm_get_property(vm, args[0],
+                mal_intrinsic_string_key(vm, (const byte *) "method"), &v)) goto request_error;
+        slots[1] = v;
+        if (!mal_vm_get_property(vm, args[0],
+                mal_intrinsic_string_key(vm, (const byte *) "url"), &v)) goto request_error;
+        slots[2] = v;
+        if (!mal_vm_get_property(vm, args[0],
+                mal_intrinsic_string_key(vm, (const byte *) "headers"), &v)) goto request_error;
+        slots[3] = v;
+        if (src->body != nullptr) {
+            r->body = malloc(src->body_len == 0 ? 1 : src->body_len);
+            if (r->body == nullptr) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                    "Request body allocation failed");
+                goto request_error;
+            }
+            if (src->body_len > 0) {
+                memcpy(r->body, src->body, src->body_len);
+            }
             r->body_len = src->body_len;
         }
     } else if (argc >= 1 && !mal_value_is_undefined(args[0])) {
         MalString *u;
-        if (mal_vm_to_string(vm, args[0], &u)) {
-            slots[2] = mal_value_from_string(u);
-        }
+        if (!mal_vm_to_string(vm, args[0], &u)) goto request_error;
+        slots[2] = mal_value_from_string(u);
     }
 
     if (argc >= 2 && mal_value_is_object(args[1])) {
         MalValue v;
-        if (mal_vm_get_property(vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "method"), &v)
-            && !mal_value_is_undefined(v)) {
+        if (!mal_vm_get_property(vm, args[1],
+                mal_intrinsic_string_key(vm, (const byte *) "method"), &v)) goto request_error;
+        if (!mal_value_is_undefined(v)) {
             MalString *m;
-            if (mal_vm_to_string(vm, v, &m)) {
-                slots[1] = mal_value_from_string(m);
-            }
+            if (!mal_vm_to_string(vm, v, &m)) goto request_error;
+            slots[1] = mal_value_from_string(m);
         }
-        if (mal_vm_get_property(vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "headers"), &v)
-            && !mal_value_is_undefined(v)) {
+        if (!mal_vm_get_property(vm, args[1],
+                mal_intrinsic_string_key(vm, (const byte *) "headers"), &v)) goto request_error;
+        if (!mal_value_is_undefined(v)) {
             slots[3] = v;
         }
-        if (mal_vm_get_property(vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "body"), &v)
-            && !mal_value_is_undefined(v)) {
+        if (!mal_vm_get_property(vm, args[1],
+                mal_intrinsic_string_key(vm, (const byte *) "body"), &v)) goto request_error;
+        if (!mal_value_is_nil(v)) {
             slots[4] = v;
+            body_override = true;
         }
     }
 
     // A body from init (string or BufferSource) replaces any copied body.
-    if (mal_value_is_string(slots[4])) {
+    if (mal_value_is_readable_stream_object(slots[4])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "ReadableStream BodyInit is not supported yet");
+        goto request_error;
+    } else if (mal_value_is_string(slots[4])) {
         MalString *bs = mal_value_to_string(slots[4]);
         free(r->body);
-        r->body = mal_utf8_encode(mal_string_code_units(bs), mal_string_length(bs), &r->body_len);
+        r->body = mal_fetch_utf8_encode(vm, bs, &r->body_len);
+        if (r->body == nullptr) goto request_error;
     } else {
         const byte *sb;
         usize sl;
         if (mal_fetch_buffer_source(slots[4], &sb, &sl)) {
             free(r->body);
             r->body = malloc(sl == 0 ? 1 : sl);
+            if (r->body == nullptr) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                    "Request body allocation failed");
+                goto request_error;
+            }
             if (sl > 0) {
                 memcpy(r->body, sb, sl);
             }
             r->body_len = sl;
+        } else if (!mal_value_is_undefined(slots[4])) {
+            MalString *bs;
+            if (!mal_vm_to_string(vm, slots[4], &bs)) goto request_error;
+            free(r->body);
+            r->body = mal_fetch_utf8_encode(vm, bs, &r->body_len);
+            if (r->body == nullptr) goto request_error;
+        }
+    }
+
+    MalString *method;
+    if (!mal_vm_to_string(vm, slots[1], &method)) goto request_error;
+    slots[1] = mal_value_from_string(method);
+    if (r->body != nullptr &&
+        (mal_fetch_string_ascii_equal_ci(method, "GET") ||
+            mal_fetch_string_ascii_equal_ci(method, "HEAD"))) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "GET and HEAD requests cannot have a body");
+        goto request_error;
+    }
+    slots[5] = mal_value_from_headers_object(mal_headers_from_init(vm, slots[3]));
+    if (vm->completion.kind != MAL_COMPLETION_NORMAL) goto request_error;
+
+    if (source_request != nullptr && source_request->body != nullptr && !body_override) {
+        MalFetchBody source_body;
+        (void) mal_fetch_body_from_value(args[0], &source_body);
+        if (!mal_fetch_body_begin(vm, args[0], &source_body)) {
+            if (vm->completion.kind == MAL_COMPLETION_NORMAL) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Cannot construct a Request from a used body");
+            }
+            goto request_error;
         }
     }
 
     mal_object_set(&r->object, mal_intrinsic_string_key(vm, (const byte *) "method"), slots[1]);
     mal_object_set(&r->object, mal_intrinsic_string_key(vm, (const byte *) "url"), slots[2]);
-    MalHeadersObject *h = mal_headers_from_init(vm, slots[3]);
     mal_object_set(&r->object, mal_intrinsic_string_key(vm, (const byte *) "headers"),
-        mal_value_from_headers_object(h));
+        slots[5]);
 
     mal_gc_unroot(&rs);
     return slots[0];
+
+request_error:
+    mal_gc_unroot(&rs);
+    return mal_value_new_undefined();
 }
 
 static MalValue mal_fetch_make_request(
@@ -652,6 +1007,11 @@ static MalValue mal_fetch_make_request(
     MalRequestObject *r = mal_request_object_new(&vm->heap, proto);
     if (body_len > 0) {
         r->body = malloc(body_len);
+        if (r->body == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                "Request body allocation failed");
+            return mal_value_new_undefined();
+        }
         memcpy(r->body, body, body_len);
         r->body_len = body_len;
     }
@@ -952,11 +1312,13 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
         vm->intrinsics[MAL_INTRINSIC_RESPONSE_CONSTRUCTOR],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     // Response read side + getters.
-    mal_intrinsic_define_method_n(vm, resp_proto, (const byte *) "text", 0, mal_response_method_text);
-    mal_intrinsic_define_method_n(vm, resp_proto, (const byte *) "json", 0, mal_response_method_json);
+    mal_intrinsic_define_method_n(vm, resp_proto, (const byte *) "text", 0, mal_response_body_text);
+    mal_intrinsic_define_method_n(vm, resp_proto, (const byte *) "json", 0, mal_response_body_json);
     mal_intrinsic_define_method_n(
-        vm, resp_proto, (const byte *) "arrayBuffer", 0, mal_response_method_array_buffer);
-    mal_intrinsic_define_method_n(vm, resp_proto, (const byte *) "bytes", 0, mal_response_method_bytes);
+        vm, resp_proto, (const byte *) "arrayBuffer", 0, mal_response_body_array_buffer);
+    mal_intrinsic_define_method_n(vm, resp_proto, (const byte *) "bytes", 0, mal_response_body_bytes);
+    mal_fetch_define_getter(vm, resp_proto, (const byte *) "body", mal_response_body_get_body);
+    mal_fetch_define_getter(vm, resp_proto, (const byte *) "bodyUsed", mal_response_body_get_used);
     mal_fetch_define_getter(vm, resp_proto, (const byte *) "status", mal_response_get_status);
     mal_fetch_define_getter(vm, resp_proto, (const byte *) "ok", mal_response_get_ok);
     mal_fetch_define_getter(vm, resp_proto, (const byte *) "statusText", mal_response_get_status_text);
@@ -986,11 +1348,13 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_data(vm, global_this, (const byte *) "Request",
         mal_value_from_native_function_object(req_ctor),
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "text", 0, mal_request_method_text);
-    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "json", 0, mal_request_method_json);
+    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "text", 0, mal_request_body_text);
+    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "json", 0, mal_request_body_json);
     mal_intrinsic_define_method_n(
-        vm, req_proto, (const byte *) "arrayBuffer", 0, mal_request_method_array_buffer);
-    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "bytes", 0, mal_request_method_bytes);
+        vm, req_proto, (const byte *) "arrayBuffer", 0, mal_request_body_array_buffer);
+    mal_intrinsic_define_method_n(vm, req_proto, (const byte *) "bytes", 0, mal_request_body_bytes);
+    mal_fetch_define_getter(vm, req_proto, (const byte *) "body", mal_request_body_get_body);
+    mal_fetch_define_getter(vm, req_proto, (const byte *) "bodyUsed", mal_request_body_get_used);
 
     // Headers (constructor + prototype; registers its own GC tracer/finalizer).
     mal_headers_install(vm, global_this);
@@ -1001,9 +1365,9 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_data(vm, global_this, (const byte *) "Mal",
         mal_value_from_object(mal_ns), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    // GC hooks for the fetch objects: the Response carries a Headers MalValue (trace)
-    // and owns its body buffer (finalize); Request owns an (optional) body buffer.
+    // GC hooks for Fetch-owned buffers and the traced Headers/body-stream fields.
     mal_gc_register_tracer(MAL_HEAP_RESPONSE_OBJECT, mal_response_trace);
     mal_gc_register_finalizer(MAL_HEAP_RESPONSE_OBJECT, mal_response_finalize);
+    mal_gc_register_tracer(MAL_HEAP_REQUEST_OBJECT, mal_request_trace);
     mal_gc_register_finalizer(MAL_HEAP_REQUEST_OBJECT, mal_request_finalize);
 }

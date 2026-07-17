@@ -1157,6 +1157,12 @@ static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const Mal
     return result;
 }
 
+MalValue mal_builtin_json_parse_intrinsic(MalVm *vm, MalValue text) {
+    return mal_builtin_json_parse(
+        vm, mal_value_new_undefined(), &text, 1,
+        mal_value_new_undefined(), mal_value_new_undefined());
+}
+
 static bool mal_json_is_json_whitespace(c16 c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }

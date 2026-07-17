@@ -60,11 +60,11 @@ const server = Mal.serve({
 			);
 		}
 		if (request.url.endsWith("/respread")) {
-			// Read back a locally-constructed Response via its async read methods.
+			// Each Body is one-shot, so exercise the read methods on independent responses.
 			const r = new Response("hello-resp", { status: 201 });
 			const txt = await r.text();
-			const ab = await r.arrayBuffer();
-			const by = await r.bytes();
+			const ab = await new Response("hello-resp").arrayBuffer();
+			const by = await new Response("hello-resp").bytes();
 			return new Response(
 				`t=${txt},ab=${ab.byteLength},b0=${by[0]},status=${r.status},ok=${r.ok},st=${r.statusText}`,
 			);

@@ -2,17 +2,22 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
+#include "array_buffer_object.h"
 #include "builtin_promise.h"
 #include "function_object.h"
 #include "gc.h"
 #include "intrinsics.h"
 #include "promise_object.h"
+#include "typed_array_object.h"
 #include "value.h"
 #include "vm.h"
 #include "vm_ops.h"
 
 static void rs_call_pull_if_needed(MalVm *vm, MalReadableStreamObject *controller);
+static MalReadableStreamObject *rs_acquire_reader(
+    MalVm *vm, MalReadableStreamObject *stream, MalObject *prototype);
 
 static MalCompletion rs_normal(void) {
     return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
@@ -159,6 +164,123 @@ static void rs_close_stream(MalVm *vm, MalReadableStreamObject *stream) {
         mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), roots[1]);
         mal_gc_unroot(&span);
     }
+}
+
+MalValue mal_readable_stream_from_bytes(
+    MalVm *vm, const byte *bytes, usize length) {
+    if (length > UINT32_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "ReadableStream byte source is too large");
+        return mal_value_new_undefined();
+    }
+    MalValue roots[4] = {
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 4);
+
+    MalReadableStreamObject *stream = rs_new(vm, MAL_READABLE_STREAM,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_READABLE_STREAM_PROTOTYPE]));
+    roots[0] = mal_value_from_readable_stream_object(stream);
+    stream->as.stream.state = MAL_READABLE_STREAM_READABLE;
+    stream->as.stream.controller = mal_value_new_undefined();
+    stream->as.stream.reader = mal_value_new_undefined();
+    stream->as.stream.stored_error = mal_value_new_undefined();
+    stream->as.stream.disturbed = false;
+
+    MalReadableStreamObject *controller = rs_new(vm,
+        MAL_READABLE_STREAM_DEFAULT_CONTROLLER,
+        mal_value_to_object(vm->intrinsics[
+            MAL_INTRINSIC_READABLE_STREAM_DEFAULT_CONTROLLER_PROTOTYPE]));
+    roots[1] = mal_value_from_readable_stream_object(controller);
+    controller->as.controller.stream = roots[0];
+    controller->as.controller.underlying_source = mal_value_new_undefined();
+    controller->as.controller.pull_method = mal_value_new_undefined();
+    controller->as.controller.cancel_method = mal_value_new_undefined();
+    controller->as.controller.queue_head = nullptr;
+    controller->as.controller.queue_tail = nullptr;
+    controller->as.controller.queue_total_size = length == 0 ? 0 : 1;
+    controller->as.controller.high_water_mark = 1;
+    controller->as.controller.started = true;
+    controller->as.controller.close_requested = true;
+    controller->as.controller.pulling = false;
+    controller->as.controller.pull_again = false;
+    stream->as.stream.controller = roots[1];
+    mal_gc_card(&stream->object.header, roots[1]);
+
+    if (length == 0) {
+        rs_close_stream(vm, stream);
+        MalValue result = roots[0];
+        mal_gc_unroot(&span);
+        return result;
+    }
+
+    MalArrayBufferObject *buffer = mal_array_buffer_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+        (u32) length, (u32) length, false, false);
+    roots[3] = mal_value_from_array_buffer_object(buffer);
+    if (buffer->data == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "ReadableStream byte source allocation failed");
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    memcpy(buffer->data, bytes, length);
+    roots[2] = mal_value_from_typed_array_object(mal_typed_array_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_PROTOTYPE]),
+        buffer, MAL_TA_UINT8, 0, (u32) length, false));
+
+    MalReadableStreamQueueEntry *entry = malloc(sizeof(MalReadableStreamQueueEntry));
+    if (entry == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "ReadableStream queue allocation failed");
+        mal_gc_unroot(&span);
+        return mal_value_new_undefined();
+    }
+    entry->next = nullptr;
+    entry->chunk = roots[2];
+    controller->as.controller.queue_head = entry;
+    controller->as.controller.queue_tail = entry;
+    mal_gc_card(&controller->object.header, roots[2]);
+
+    MalValue result = roots[0];
+    mal_gc_unroot(&span);
+    return result;
+}
+
+bool mal_readable_stream_is_locked(MalValue value) {
+    return rs_is_kind(value, MAL_READABLE_STREAM) &&
+        !mal_value_is_undefined(
+            mal_value_to_readable_stream_object(value)->as.stream.reader);
+}
+
+bool mal_readable_stream_is_disturbed(MalValue value) {
+    return rs_is_kind(value, MAL_READABLE_STREAM) &&
+        mal_value_to_readable_stream_object(value)->as.stream.disturbed;
+}
+
+bool mal_readable_stream_consume(MalVm *vm, MalValue value) {
+    if (!rs_is_kind(value, MAL_READABLE_STREAM)) {
+        return false;
+    }
+    MalReadableStreamObject *stream = mal_value_to_readable_stream_object(value);
+    if (!mal_value_is_undefined(stream->as.stream.reader) ||
+        stream->as.stream.disturbed) {
+        return false;
+    }
+    if (rs_acquire_reader(vm, stream,
+            mal_value_to_object(vm->intrinsics[
+                MAL_INTRINSIC_READABLE_STREAM_DEFAULT_READER_PROTOTYPE])) == nullptr) {
+        return false;
+    }
+    stream->as.stream.disturbed = true;
+    if (stream->as.stream.state == MAL_READABLE_STREAM_READABLE) {
+        rs_queue_clear(rs_controller_for(stream));
+        rs_close_stream(vm, stream);
+    }
+    return true;
 }
 
 static void rs_error_stream(
@@ -446,6 +568,7 @@ static MalValue rs_constructor(MalVm *vm, MalValue self, const MalValue *args,
     stream->as.stream.controller = mal_value_new_undefined();
     stream->as.stream.reader = mal_value_new_undefined();
     stream->as.stream.stored_error = mal_value_new_undefined();
+    stream->as.stream.disturbed = false;
 
     MalReadableStreamObject *controller = rs_new(vm,
         MAL_READABLE_STREAM_DEFAULT_CONTROLLER,
@@ -637,6 +760,7 @@ static MalValue rs_cancel_rejected(MalVm *vm, MalValue self, const MalValue *arg
 
 static MalValue rs_cancel_internal(
     MalVm *vm, MalReadableStreamObject *stream, MalValue reason) {
+    stream->as.stream.disturbed = true;
     if (stream->as.stream.state == MAL_READABLE_STREAM_CLOSED) {
         return rs_resolved_promise(vm, mal_value_new_undefined());
     }
@@ -835,6 +959,7 @@ static MalValue rs_reader_read(MalVm *vm, MalValue self, const MalValue *args,
     }
     MalReadableStreamObject *stream =
         mal_value_to_readable_stream_object(reader->as.reader.stream);
+    stream->as.stream.disturbed = true;
     if (stream->as.stream.state == MAL_READABLE_STREAM_CLOSED) {
         MalValue result = rs_read_result(vm, mal_value_new_undefined(), true);
         return rs_resolved_promise(vm, result);
