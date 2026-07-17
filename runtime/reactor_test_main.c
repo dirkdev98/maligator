@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "host.h"
+#include "host_task.h"
 #include "reactor.h"
 #include "scheduler.h"
 
@@ -39,6 +40,183 @@ static unsigned char g_byte_written = 0xA7;
 static int g_byte_read = -1;
 static bool g_reader_done = false;
 static bool g_writer_done = false;
+
+static int g_payload_releases = 0;
+static int g_payload_sum = 0;
+
+static int *task_payload(int value) {
+    int *payload = malloc(sizeof(int));
+    if (payload != nullptr) {
+        *payload = value;
+    }
+    return payload;
+}
+
+static void task_payload_release(void *data) {
+    int *payload = data;
+    g_payload_releases++;
+    g_payload_sum += *payload;
+    free(payload);
+}
+
+static bool host_tasks_fifo(void) {
+    MalHostTasks tasks;
+    MalHostHandle operation = 0;
+    MalHostTask task;
+    mal_host_tasks_init(&tasks);
+    g_payload_releases = 0;
+    g_payload_sum = 0;
+
+    bool ok = mal_host_operation_start(&tasks, &operation) &&
+        mal_host_operation_state(&tasks, operation) == MAL_HOST_OPERATION_STARTING &&
+        mal_host_operation_activate(&tasks, operation) &&
+        mal_host_operation_state(&tasks, operation) == MAL_HOST_OPERATION_ACTIVE;
+    for (int i = 1; ok && i <= 3; i++) {
+        int *payload = task_payload(i);
+        ok = payload != nullptr && mal_host_operation_progress(
+            &tasks, operation, payload, task_payload_release);
+        if (!ok && payload != nullptr) {
+            free(payload);
+        }
+    }
+    for (int expected = 1; ok && expected <= 3; expected++) {
+        ok = mal_host_next_task(&tasks, &task) &&
+            task.kind == MAL_HOST_TASK_PROGRESS && task.operation == operation &&
+            task.result == MAL_HOST_TERMINAL_NONE && *(int *) task.data == expected;
+        if (ok) {
+            mal_host_task_release(&tasks, &task);
+            ok = task._node == nullptr &&
+                mal_host_operation_state(&tasks, operation) == MAL_HOST_OPERATION_ACTIVE;
+        }
+    }
+    int *terminal_payload = task_payload(4);
+    ok = ok && terminal_payload != nullptr && mal_host_operation_complete(
+        &tasks,
+        operation,
+        MAL_HOST_TERMINAL_OK,
+        terminal_payload,
+        task_payload_release);
+    if (!ok && terminal_payload != nullptr &&
+        mal_host_operation_state(&tasks, operation) == MAL_HOST_OPERATION_ACTIVE) {
+        free(terminal_payload);
+    }
+    ok = ok &&
+        mal_host_operation_state(&tasks, operation) == MAL_HOST_OPERATION_TERMINAL_QUEUED &&
+        mal_host_next_task(&tasks, &task) && task.kind == MAL_HOST_TASK_TERMINAL &&
+        task.result == MAL_HOST_TERMINAL_OK && *(int *) task.data == 4;
+    if (ok) {
+        mal_host_task_release(&tasks, &task);
+        ok = mal_host_operation_state(&tasks, operation) == MAL_HOST_OPERATION_INVALID &&
+            g_payload_releases == 4 && g_payload_sum == 10 &&
+            !mal_host_next_task(&tasks, &task);
+    }
+    mal_host_tasks_free(&tasks);
+    return ok;
+}
+
+static bool host_tasks_stale_handles(void) {
+    MalHostTasks first;
+    MalHostTasks second;
+    MalHostHandle stale = 0;
+    MalHostHandle reused = 0;
+    MalHostTask task;
+    mal_host_tasks_init(&first);
+    mal_host_tasks_init(&second);
+
+    bool ok = mal_host_operation_start(&first, &stale) &&
+        mal_host_operation_state(&second, stale) == MAL_HOST_OPERATION_INVALID &&
+        !mal_host_operation_cancel(&second, stale) &&
+        mal_host_operation_activate(&first, stale) &&
+        mal_host_operation_complete(
+            &first, stale, MAL_HOST_TERMINAL_OK, nullptr, nullptr) &&
+        mal_host_next_task(&first, &task);
+    if (ok) {
+        mal_host_task_release(&first, &task);
+    }
+    ok = ok && mal_host_operation_start(&first, &reused) && reused != stale &&
+        mal_host_operation_state(&first, stale) == MAL_HOST_OPERATION_INVALID &&
+        !mal_host_operation_activate(&first, stale) &&
+        !mal_host_operation_cancel(&first, stale) &&
+        mal_host_operation_cancel(&first, reused) &&
+        mal_host_next_task(&first, &task) && task.result == MAL_HOST_TERMINAL_CANCELLED;
+    if (ok) {
+        mal_host_task_release(&first, &task);
+    }
+    mal_host_tasks_free(&second);
+    mal_host_tasks_free(&first);
+    return ok;
+}
+
+static bool host_tasks_completion_wins(void) {
+    MalHostTasks tasks;
+    MalHostHandle operation = 0;
+    MalHostTask task;
+    mal_host_tasks_init(&tasks);
+
+    bool ok = mal_host_operation_start(&tasks, &operation) &&
+        mal_host_operation_activate(&tasks, operation) &&
+        mal_host_operation_progress(&tasks, operation, nullptr, nullptr) &&
+        mal_host_operation_complete(
+            &tasks, operation, MAL_HOST_TERMINAL_ERROR, nullptr, nullptr) &&
+        mal_host_operation_cancel(&tasks, operation) &&
+        mal_host_operation_cancel(&tasks, operation) &&
+        !mal_host_operation_complete(
+            &tasks, operation, MAL_HOST_TERMINAL_OK, nullptr, nullptr);
+    int count = 0;
+    while (ok && mal_host_next_task(&tasks, &task)) {
+        count++;
+        ok = (count == 1 && task.kind == MAL_HOST_TASK_PROGRESS) ||
+            (count == 2 && task.kind == MAL_HOST_TASK_TERMINAL &&
+                task.result == MAL_HOST_TERMINAL_ERROR);
+        mal_host_task_release(&tasks, &task);
+    }
+    ok = ok && count == 2 &&
+        mal_host_operation_state(&tasks, operation) == MAL_HOST_OPERATION_INVALID;
+    mal_host_tasks_free(&tasks);
+    return ok;
+}
+
+static bool host_tasks_cancellation_wins(void) {
+    MalHostTasks tasks;
+    MalHostHandle operation = 0;
+    MalHostHandle starting = 0;
+    MalHostTask task;
+    mal_host_tasks_init(&tasks);
+    g_payload_releases = 0;
+    g_payload_sum = 0;
+
+    bool ok = mal_host_operation_start(&tasks, &operation) &&
+        mal_host_operation_activate(&tasks, operation);
+    for (int value = 5; ok && value <= 6; value++) {
+        int *payload = task_payload(value);
+        ok = payload != nullptr && mal_host_operation_progress(
+            &tasks, operation, payload, task_payload_release);
+        if (!ok && payload != nullptr) {
+            free(payload);
+        }
+    }
+    ok = ok && mal_host_operation_cancel(&tasks, operation) &&
+        g_payload_releases == 2 && g_payload_sum == 11 &&
+        mal_host_operation_cancel(&tasks, operation) &&
+        !mal_host_operation_complete(
+            &tasks, operation, MAL_HOST_TERMINAL_OK, nullptr, nullptr) &&
+        mal_host_next_task(&tasks, &task) && task.kind == MAL_HOST_TASK_TERMINAL &&
+        task.result == MAL_HOST_TERMINAL_CANCELLED;
+    if (ok) {
+        mal_host_task_release(&tasks, &task);
+    }
+    ok = ok && !mal_host_next_task(&tasks, &task) &&
+        !mal_host_operation_cancel(&tasks, operation) &&
+        mal_host_operation_start(&tasks, &starting) &&
+        mal_host_operation_cancel(&tasks, starting) &&
+        mal_host_next_task(&tasks, &task) && task.result == MAL_HOST_TERMINAL_CANCELLED;
+    if (ok) {
+        mal_host_task_release(&tasks, &task);
+    }
+    ok = ok && !mal_host_next_task(&tasks, &task);
+    mal_host_tasks_free(&tasks);
+    return ok;
+}
 
 /* Sleeper i sleeps (SLEEPER_COUNT - i) steps, so completion order is i =
  * N-1, N-2, ..., 0 (shortest sleep finishes first). */
@@ -126,6 +304,10 @@ int main(void) {
         {"all sleepers woke", all_slept},
         {"sleepers woke in deadline order", order_ok},
         {"pipe reader woken by fd readiness, got byte", pipe_ok},
+        {"host tasks preserve FIFO ownership", host_tasks_fifo()},
+        {"host operation handles reject stale and cross-host reuse", host_tasks_stale_handles()},
+        {"first terminal completion wins exactly once", host_tasks_completion_wins()},
+        {"cancellation suppresses progress and wins exactly once", host_tasks_cancellation_wins()},
     };
     int total = (int) (sizeof(checks) / sizeof(checks[0]));
     int passed = 0;
