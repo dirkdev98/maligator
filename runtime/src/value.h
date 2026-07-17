@@ -32,6 +32,7 @@ typedef struct MalHeadersObject MalHeadersObject;
 typedef struct MalUrlObject MalUrlObject;
 typedef struct MalUrlSearchParamsObject MalUrlSearchParamsObject;
 typedef struct MalEventTargetObject MalEventTargetObject;
+typedef struct MalReadableStreamObject MalReadableStreamObject;
 
 /**
  * NaN-Boxed MalValue representation.
@@ -467,6 +468,11 @@ MalValue mal_value_from_url_search_params_object(MalUrlSearchParamsObject *param
 bool mal_value_is_event_target_object(MalValue value);
 MalEventTargetObject *mal_value_to_event_target_object(MalValue value);
 MalValue mal_value_from_event_target_object(MalEventTargetObject *target);
+
+/** WHATWG default readable-stream object predicate + box/unbox. */
+bool mal_value_is_readable_stream_object(MalValue value);
+MalReadableStreamObject *mal_value_to_readable_stream_object(MalValue value);
+MalValue mal_value_from_readable_stream_object(MalReadableStreamObject *stream);
 
 /**
  * RegExp String Iterator predicate + box/unbox (matchAll's iterator).

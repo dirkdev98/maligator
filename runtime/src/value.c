@@ -166,6 +166,18 @@ MalValue mal_value_from_event_target_object(MalEventTargetObject *target) {
     return mal_value_from_heap((MalHeapHeader *) target);
 }
 
+bool mal_value_is_readable_stream_object(MalValue value) {
+    return mal_value_is_heap_type(value, MAL_HEAP_READABLE_STREAM_OBJECT);
+}
+
+MalReadableStreamObject *mal_value_to_readable_stream_object(MalValue value) {
+    return (MalReadableStreamObject *) mal_value_to_heap(value);
+}
+
+MalValue mal_value_from_readable_stream_object(MalReadableStreamObject *stream) {
+    return mal_value_from_heap((MalHeapHeader *) stream);
+}
+
 bool mal_value_is_regexp_string_iterator_object(MalValue value) {
     return mal_value_is_heap_type(value, MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT);
 }

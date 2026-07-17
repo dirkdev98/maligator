@@ -271,6 +271,12 @@ typedef enum MalHeapType : u8 {
      * properties. See runtime/events_object.h.
      */
     MAL_HEAP_EVENT_TARGET_OBJECT,
+    /**
+     * WHATWG default readable-stream objects. A private kind tag distinguishes
+     * ReadableStream, ReadableStreamDefaultController, and
+     * ReadableStreamDefaultReader instances. See runtime/readable_stream_object.h.
+     */
+    MAL_HEAP_READABLE_STREAM_OBJECT,
 
     /**
      * Sentinel: number of distinct heap types. Must stay last. Sizes the baked

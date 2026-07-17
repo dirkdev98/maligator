@@ -7,6 +7,7 @@
 #include "fetch.h"
 #include "host.h"
 #include "host_timer.h"
+#include "readable_stream_object.h"
 #include "url_object.h"
 #include "web_globals.h"
 
@@ -41,6 +42,7 @@ int main(int argc, char **argv) {
     mal_web_globals_install(&vm, global_this);    // TextEncoder / TextDecoder / …
     mal_url_install(&vm, global_this);            // URL / URLSearchParams (ada)
     mal_events_install(&vm, global_this);         // EventTarget / Event
+    mal_readable_stream_install(&vm, global_this); // ReadableStream default mode
 #endif
 
     // Fill the reached host built-in / `process` global slots before execution
