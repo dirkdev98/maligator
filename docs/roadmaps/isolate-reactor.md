@@ -5,6 +5,25 @@ HTTP server, WinterTC object surface, URL support, fibers, and reduction-budget
 scheduler substrate are implemented. Current native tests under `tests/native/`
 are the acceptance entry points.
 
+## Host architecture checkpoint
+
+The accepted contract is
+[`03-wave-0-host-architecture.md`](../decisions/03-wave-0-host-architecture.md).
+Its ownership, streaming, cancellation, event-loop, build, and verification gates
+are normative for host work.
+
+- [x] H0: fix the architecture: no Hyper dependency, llhttp HTTP/1, C-owned
+      sockets/DNS, optional Rustls FFI, neutral streaming APIs, raw headers, and
+      exactly one host task per runtime turn.
+- [ ] H1: implement the neutral task/stream substrate, exactly-once terminal state,
+      bounded DNS/IPv6/Happy Eyeballs, pumped turns, and runtime-owned timer state.
+- [ ] H2: replace the buffered project parser/server with the bounded llhttp HTTP/1
+      codec, raw-header transport, streaming server, and parser fuzzing.
+- [ ] H3: add the pooled outbound HTTP/1 client and build WinterTC and Node adapters
+      over the same host API, with no host auto-decompression.
+- [ ] H4: add optional Rustls through the existing Rust static library and pass the
+      production sanitizer, fuzz, leak, symbol/size, and benchmark gates.
+
 ## Runtime surface
 
 - [ ] Finish the small WinterTC residuals: `AbortSignal.any`, DOMException,
@@ -17,11 +36,8 @@ are the acceptance entry points.
 
 ## Outbound I/O
 
-- [ ] Add DNS through a completion-facing thread-pool backend, plus IPv6 and the
-      production TCP client transport.
-- [ ] Add an opt-in TLS layer above sockets using a DCE-droppable FFI implementation.
-- [ ] Implement outbound `fetch()` using the existing Request, Response, and Headers
-      types.
+- [ ] Complete H1-H4 above; outbound DNS, TCP, HTTP/1, optional TLS, and `fetch()`
+      are accepted only through the decision's neutral streaming host boundary.
 
 ## Actors
 
