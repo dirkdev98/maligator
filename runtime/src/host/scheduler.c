@@ -206,8 +206,10 @@ void mal_sched_wait_fd(MalScheduler *s, int fd, MalIoInterest interest) {
         .waker = mal_sched_fiber_waker(self),
         .active = false,
     };
-    mal_reactor_add_op(&mal_host(s->vm)->reactor, &op);
+    if (!mal_reactor_add_op(&mal_host(s->vm)->reactor, &op)) {
+        return;
+    }
     mal_sched_block();
     // Resumed. If we were woken for some other reason, deregister the stale op.
-    mal_reactor_cancel_op(&mal_host(s->vm)->reactor, &op);
+    (void) mal_reactor_cancel_op(&mal_host(s->vm)->reactor, &op);
 }

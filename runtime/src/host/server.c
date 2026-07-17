@@ -44,13 +44,13 @@ static MalReactor *conn_reactor(MalHttpConn *c) {
     return &mal_host(c->vm)->reactor;
 }
 
-static void conn_arm_read(MalHttpConn *c);
-static void conn_arm_write(MalHttpConn *c);
+static bool conn_arm_read(MalHttpConn *c);
+static bool conn_arm_write(MalHttpConn *c);
 static void conn_process(MalHttpConn *c);
 
 static void conn_close(MalHttpConn *c) {
-    mal_reactor_cancel_op(conn_reactor(c), &c->read_op);
-    mal_reactor_cancel_op(conn_reactor(c), &c->write_op);
+    (void) mal_reactor_cancel_op(conn_reactor(c), &c->read_op);
+    (void) mal_reactor_cancel_op(conn_reactor(c), &c->write_op);
     mal_net_close(c->fd);
     free(c->rbuf);
     free(c->wbuf);
@@ -60,18 +60,18 @@ static void conn_close(MalHttpConn *c) {
 static void conn_read_cb(void *data);
 static void conn_write_cb(void *data);
 
-static void conn_arm_read(MalHttpConn *c) {
+static bool conn_arm_read(MalHttpConn *c) {
     c->read_op.fd = c->fd;
     c->read_op.interest = MAL_IO_READ;
     c->read_op.waker = (MalWaker) {.fn = conn_read_cb, .data = c};
-    mal_reactor_add_op(conn_reactor(c), &c->read_op);
+    return mal_reactor_add_op(conn_reactor(c), &c->read_op);
 }
 
-static void conn_arm_write(MalHttpConn *c) {
+static bool conn_arm_write(MalHttpConn *c) {
     c->write_op.fd = c->fd;
     c->write_op.interest = MAL_IO_WRITE;
     c->write_op.waker = (MalWaker) {.fn = conn_write_cb, .data = c};
-    mal_reactor_add_op(conn_reactor(c), &c->write_op);
+    return mal_reactor_add_op(conn_reactor(c), &c->write_op);
 }
 
 /* Queue a response with the given status + body bytes; caller sets c->keep_alive
@@ -118,7 +118,9 @@ void mal_http_conn_respond(
         memcpy(c->wbuf + o, body, body_len);
     }
     c->wsent = 0;
-    conn_arm_write(c);
+    if (!conn_arm_write(c)) {
+        conn_close(c);
+    }
 }
 
 static void conn_send_error(MalHttpConn *c, int status, const char *reason) {
@@ -137,7 +139,9 @@ static void conn_process(MalHttpConn *c) {
             conn_send_error(c, 431, "Request Header Fields Too Large");
             return;
         }
-        conn_arm_read(c);
+        if (!conn_arm_read(c)) {
+            conn_close(c);
+        }
         return;
     }
     if (p == MAL_HTTP_ERROR) {
@@ -156,7 +160,9 @@ static void conn_process(MalHttpConn *c) {
         MalHttpParse dp =
             mal_http_dechunk(c->rbuf + consumed, c->rlen - consumed, &decoded, &raw);
         if (dp == MAL_HTTP_INCOMPLETE) {
-            conn_arm_read(c);
+            if (!conn_arm_read(c)) {
+                conn_close(c);
+            }
             return;
         }
         if (dp == MAL_HTTP_ERROR) {
@@ -168,7 +174,9 @@ static void conn_process(MalHttpConn *c) {
     } else {
         usize content_length = req.content_length > 0 ? (usize) req.content_length : 0;
         if (c->rlen < consumed + content_length) {
-            conn_arm_read(c); // wait for the rest of the body
+            if (!conn_arm_read(c)) { // wait for the rest of the body
+                conn_close(c);
+            }
             return;
         }
         body_len = content_length;
@@ -245,7 +253,9 @@ static void conn_write_cb(void *data) {
             continue;
         }
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            conn_arm_write(c); // socket buffer full: finish later
+            if (!conn_arm_write(c)) { // socket buffer full: finish later
+                conn_close(c);
+            }
             return;
         }
         conn_close(c);
@@ -261,7 +271,9 @@ static void conn_write_cb(void *data) {
     if (c->rlen > 0) {
         conn_process(c);
     } else {
-        conn_arm_read(c);
+        if (!conn_arm_read(c)) {
+            conn_close(c);
+        }
     }
 }
 
@@ -280,14 +292,19 @@ static void server_accept_cb(void *data) {
         c->rbuf = malloc(MAL_HTTP_RBUF_INIT);
         c->rcap = MAL_HTTP_RBUF_INIT;
         c->rlen = 0;
-        conn_arm_read(c);
+        if (!conn_arm_read(c)) {
+            conn_close(c);
+        }
     }
 
     // Re-arm the accept op (one-shot).
     server->accept_op.fd = server->listen_fd;
     server->accept_op.interest = MAL_IO_READ;
     server->accept_op.waker = (MalWaker) {.fn = server_accept_cb, .data = server};
-    mal_reactor_add_op(&mal_host(server->vm)->reactor, &server->accept_op);
+    if (!mal_reactor_add_op(&mal_host(server->vm)->reactor, &server->accept_op)) {
+        mal_net_close(server->listen_fd);
+        server->listen_fd = -1;
+    }
 }
 
 MalHttpServer *mal_http_server_start(MalVm *vm, const char *host, u16 port) {
@@ -301,7 +318,11 @@ MalHttpServer *mal_http_server_start(MalVm *vm, const char *host, u16 port) {
     server->accept_op.fd = fd;
     server->accept_op.interest = MAL_IO_READ;
     server->accept_op.waker = (MalWaker) {.fn = server_accept_cb, .data = server};
-    mal_reactor_add_op(&mal_host(vm)->reactor, &server->accept_op);
+    if (!mal_reactor_add_op(&mal_host(vm)->reactor, &server->accept_op)) {
+        mal_net_close(fd);
+        free(server);
+        return nullptr;
+    }
     return server;
 }
 
@@ -310,7 +331,7 @@ u16 mal_http_server_port(const MalHttpServer *server) {
 }
 
 void mal_http_server_stop(MalHttpServer *server) {
-    mal_reactor_cancel_op(&mal_host(server->vm)->reactor, &server->accept_op);
+    (void) mal_reactor_cancel_op(&mal_host(server->vm)->reactor, &server->accept_op);
     mal_net_close(server->listen_fd);
     free(server);
 }

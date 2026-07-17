@@ -33,6 +33,10 @@ typedef enum MalIoInterest {
     MAL_IO_WRITE = 2,
 } MalIoInterest;
 
+typedef struct MalReactor MalReactor;
+typedef struct MalReactorFd MalReactorFd;
+typedef struct MalReactorToken MalReactorToken;
+
 /* A pending readiness op. One-shot: fires its waker once the fd is ready, then is
  * removed. Storage is caller-owned (typically a stack local on the waiting fiber,
  * kept valid because a suspended fiber's C stack is preserved). */
@@ -41,6 +45,7 @@ typedef struct MalOp {
     MalIoInterest interest;
     MalWaker waker;
     bool active; /* true while registered; cleared when it fires or is cancelled */
+    MalReactor *_reactor;
 } MalOp;
 
 /* A pending timer. One-shot: fires its waker once CLOCK_MONOTONIC passes the
@@ -52,7 +57,7 @@ typedef struct MalTimer {
     i32 heap_index;
 } MalTimer;
 
-typedef struct MalReactor {
+struct MalReactor {
     int backend_fd; /* kqueue / epoll descriptor */
 
     /* Binary min-heap of pending timers, ordered by deadline. */
@@ -62,7 +67,12 @@ typedef struct MalReactor {
 
     /* Count of registered fd ops (so the scheduler knows when work remains). */
     i32 pending_ops;
-} MalReactor;
+
+    /* Reactor-owned readiness registrations and deferred backend event tokens. */
+    MalReactorFd *fds;
+    MalReactorToken *retired_tokens;
+    u64 next_generation;
+};
 
 void mal_reactor_init(MalReactor *r);
 void mal_reactor_free(MalReactor *r);
@@ -70,9 +80,13 @@ void mal_reactor_free(MalReactor *r);
 /* True while the reactor holds anything that could still fire a waker. */
 bool mal_reactor_has_pending(const MalReactor *r);
 
-/* Register / cancel one-shot fd readiness interest. */
-void mal_reactor_add_op(MalReactor *r, MalOp *op);
-void mal_reactor_cancel_op(MalReactor *r, MalOp *op);
+/* Register / cancel one-shot fd readiness interest. Each op represents exactly
+ * one direction. Returns false if the request is invalid or the backend rejects
+ * the registration change; a failed add leaves the op inactive. Cancellation is
+ * idempotent for an inactive op and always detaches an active op, with false
+ * reporting that backend cleanup failed. */
+bool mal_reactor_add_op(MalReactor *r, MalOp *op);
+bool mal_reactor_cancel_op(MalReactor *r, MalOp *op);
 
 /* Register / cancel a one-shot timer. */
 void mal_reactor_add_timer(MalReactor *r, MalTimer *t);

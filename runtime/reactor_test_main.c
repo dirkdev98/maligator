@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include "host.h"
@@ -43,6 +44,226 @@ static bool g_writer_done = false;
 
 static int g_payload_releases = 0;
 static int g_payload_sum = 0;
+
+static void count_wake(void *data) {
+    int *count = data;
+    (*count)++;
+}
+
+static bool reactor_concurrent_interests(void) {
+    MalReactor reactor;
+    int sockets[2] = {-1, -1};
+    int read_wakes = 0;
+    int write_wakes = 0;
+    mal_reactor_init(&reactor);
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) < 0) {
+        mal_reactor_free(&reactor);
+        return false;
+    }
+
+    MalOp read_op = {
+        .fd = sockets[0],
+        .interest = MAL_IO_READ,
+        .waker = {.fn = count_wake, .data = &read_wakes},
+    };
+    MalOp write_op = {
+        .fd = sockets[0],
+        .interest = MAL_IO_WRITE,
+        .waker = {.fn = count_wake, .data = &write_wakes},
+    };
+    unsigned char byte = 1;
+    bool ok = mal_reactor_add_op(&reactor, &read_op) &&
+        mal_reactor_add_op(&reactor, &write_op) && write(sockets[1], &byte, 1) == 1;
+    if (ok) {
+        mal_reactor_wait(&reactor);
+        ok = read_wakes == 1 && write_wakes == 1 && !mal_reactor_has_pending(&reactor);
+    }
+
+    (void) mal_reactor_cancel_op(&reactor, &read_op);
+    (void) mal_reactor_cancel_op(&reactor, &write_op);
+    mal_reactor_free(&reactor);
+    close(sockets[0]);
+    close(sockets[1]);
+    return ok;
+}
+
+static bool reactor_cancellation(void) {
+    MalReactor reactor;
+    int fds[2] = {-1, -1};
+    int wakes = 0;
+    mal_reactor_init(&reactor);
+    if (pipe(fds) < 0) {
+        mal_reactor_free(&reactor);
+        return false;
+    }
+
+    MalOp op = {
+        .fd = fds[0],
+        .interest = MAL_IO_READ,
+        .waker = {.fn = count_wake, .data = &wakes},
+    };
+    unsigned char byte = 1;
+    bool ok = mal_reactor_add_op(&reactor, &op) &&
+        mal_reactor_cancel_op(&reactor, &op) &&
+        mal_reactor_cancel_op(&reactor, &op) && write(fds[1], &byte, 1) == 1;
+    mal_reactor_wait(&reactor);
+    ok = ok && wakes == 0 && !op.active && !mal_reactor_has_pending(&reactor);
+
+    mal_reactor_free(&reactor);
+    close(fds[0]);
+    close(fds[1]);
+    return ok;
+}
+
+typedef struct RearmContext {
+    MalReactor *reactor;
+    MalOp op;
+    int wakes;
+    bool ok;
+} RearmContext;
+
+static void rearm_wake(void *data) {
+    RearmContext *context = data;
+    unsigned char byte;
+    context->ok = context->ok && read(context->op.fd, &byte, 1) == 1;
+    context->wakes++;
+    if (context->wakes == 1) {
+        context->ok = context->ok && mal_reactor_add_op(context->reactor, &context->op);
+    }
+}
+
+static bool reactor_rearm_is_one_shot(void) {
+    MalReactor reactor;
+    int fds[2] = {-1, -1};
+    mal_reactor_init(&reactor);
+    if (pipe(fds) < 0) {
+        mal_reactor_free(&reactor);
+        return false;
+    }
+
+    RearmContext context = {
+        .reactor = &reactor,
+        .op = {
+            .fd = fds[0],
+            .interest = MAL_IO_READ,
+            .waker = {.fn = rearm_wake},
+        },
+        .ok = true,
+    };
+    context.op.waker.data = &context;
+    unsigned char bytes[2] = {1, 2};
+    bool ok = write(fds[1], bytes, sizeof(bytes)) == (ssize_t) sizeof(bytes) &&
+        mal_reactor_add_op(&reactor, &context.op);
+    if (ok) {
+        mal_reactor_wait(&reactor);
+        ok = context.ok && context.wakes == 1 && context.op.active;
+    }
+    if (ok) {
+        mal_reactor_wait(&reactor);
+        ok = context.ok && context.wakes == 2 && !context.op.active &&
+            !mal_reactor_has_pending(&reactor);
+    }
+    mal_reactor_wait(&reactor);
+    ok = ok && context.wakes == 2;
+
+    (void) mal_reactor_cancel_op(&reactor, &context.op);
+    mal_reactor_free(&reactor);
+    close(fds[0]);
+    close(fds[1]);
+    return ok;
+}
+
+static bool reactor_registration_failure(void) {
+    MalReactor reactor;
+    int fds[2] = {-1, -1};
+    int wakes = 0;
+    mal_reactor_init(&reactor);
+    if (pipe(fds) < 0) {
+        mal_reactor_free(&reactor);
+        return false;
+    }
+    close(fds[0]);
+
+    MalOp op = {
+        .fd = fds[0],
+        .interest = MAL_IO_READ,
+        .waker = {.fn = count_wake, .data = &wakes},
+    };
+    bool ok = !mal_reactor_add_op(&reactor, &op) && !op.active &&
+        !mal_reactor_has_pending(&reactor) && wakes == 0;
+
+    mal_reactor_free(&reactor);
+    close(fds[1]);
+    return ok;
+}
+
+typedef struct FreeingContext {
+    MalReactor *reactor;
+    MalOp read_op;
+    MalOp write_op;
+    int *wakes;
+    bool *cancelled;
+} FreeingContext;
+
+static void cancel_and_free_wake(void *data) {
+    FreeingContext *context = data;
+    (*context->wakes)++;
+    bool read_cancelled = mal_reactor_cancel_op(context->reactor, &context->read_op);
+    bool write_cancelled = mal_reactor_cancel_op(context->reactor, &context->write_op);
+    *context->cancelled = read_cancelled && write_cancelled;
+    free(context);
+}
+
+static bool reactor_callback_can_free_owner(void) {
+    MalReactor reactor;
+    int sockets[2] = {-1, -1};
+    int wakes = 0;
+    bool cancelled = false;
+    mal_reactor_init(&reactor);
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) < 0) {
+        mal_reactor_free(&reactor);
+        return false;
+    }
+
+    FreeingContext *context = calloc(1, sizeof(FreeingContext));
+    if (context == nullptr) {
+        mal_reactor_free(&reactor);
+        close(sockets[0]);
+        close(sockets[1]);
+        return false;
+    }
+    context->reactor = &reactor;
+    context->wakes = &wakes;
+    context->cancelled = &cancelled;
+    context->read_op = (MalOp) {
+        .fd = sockets[0],
+        .interest = MAL_IO_READ,
+        .waker = {.fn = cancel_and_free_wake, .data = context},
+    };
+    context->write_op = (MalOp) {
+        .fd = sockets[0],
+        .interest = MAL_IO_WRITE,
+        .waker = {.fn = cancel_and_free_wake, .data = context},
+    };
+    unsigned char byte = 1;
+    bool ok = mal_reactor_add_op(&reactor, &context->read_op) &&
+        mal_reactor_add_op(&reactor, &context->write_op) &&
+        write(sockets[1], &byte, 1) == 1;
+    if (ok) {
+        mal_reactor_wait(&reactor);
+        mal_reactor_wait(&reactor);
+        ok = cancelled && wakes == 1 && !mal_reactor_has_pending(&reactor);
+    } else {
+        (void) mal_reactor_cancel_op(&reactor, &context->read_op);
+        (void) mal_reactor_cancel_op(&reactor, &context->write_op);
+        free(context);
+    }
+
+    mal_reactor_free(&reactor);
+    close(sockets[0]);
+    close(sockets[1]);
+    return ok;
+}
 
 static int *task_payload(int value) {
     int *payload = malloc(sizeof(int));
@@ -304,6 +525,11 @@ int main(void) {
         {"all sleepers woke", all_slept},
         {"sleepers woke in deadline order", order_ok},
         {"pipe reader woken by fd readiness, got byte", pipe_ok},
+        {"same fd supports independent read and write ops", reactor_concurrent_interests()},
+        {"cancelled readiness does not wake", reactor_cancellation()},
+        {"one-shot readiness rearms without duplicate wake", reactor_rearm_is_one_shot()},
+        {"backend registration failure leaves op inactive", reactor_registration_failure()},
+        {"callback cancellation permits owner free", reactor_callback_can_free_owner()},
         {"host tasks preserve FIFO ownership", host_tasks_fifo()},
         {"host operation handles reject stale and cross-host reuse", host_tasks_stale_handles()},
         {"first terminal completion wins exactly once", host_tasks_completion_wins()},
