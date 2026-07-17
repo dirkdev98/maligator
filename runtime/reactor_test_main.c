@@ -6,11 +6,14 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "host.h"
+#include "dns.h"
 #include "host_task.h"
 #include "reactor.h"
 #include "scheduler.h"
@@ -652,6 +655,410 @@ static bool host_post_shutdown_and_idle(void) {
         !mal_host_has_pending_work(host) && idle_ns < 100000000;
 }
 
+static bool dns_next_terminal(
+    MalHost *host, MalHostHandle operation, MalHostTask *task) {
+    while (mal_host_tasks_pending(&host->tasks) == 0 &&
+        mal_reactor_has_pending(&host->reactor)) {
+        mal_reactor_wait(&host->reactor);
+    }
+    return mal_host_next_task(&host->tasks, task) &&
+        task->kind == MAL_HOST_TASK_TERMINAL && task->operation == operation;
+}
+
+static bool dns_numeric_literals_bypass_workers(void) {
+    MalHost *host = g_cross_thread_host;
+    MalHostHandle ipv4 = 0;
+    MalHostHandle ipv6 = 0;
+    MalHostTask task = {0};
+    bool ok = host != nullptr && mal_dns_workers(&host->dns) == 0 &&
+        mal_dns_start(host, "127.0.0.1", "443", &ipv4) == MAL_DNS_START_OK &&
+        mal_dns_start(host, "::1", "80", &ipv6) == MAL_DNS_START_OK &&
+        mal_dns_workers(&host->dns) == 0;
+    int families[2] = {0};
+    MalHostHandle operations[2] = {ipv4, ipv6};
+    for (int i = 0; ok && i < 2; i++) {
+        ok = dns_next_terminal(host, operations[i], &task) &&
+            task.result == MAL_HOST_TERMINAL_OK;
+        MalDnsResult *result = task.data;
+        socklen_t length = 0;
+        const struct sockaddr *address = mal_dns_result_address(result, 0, &length);
+        families[i] = address == nullptr ? 0 : address->sa_family;
+        ok = ok && mal_dns_result_address_count(result) == 1 && length > 0 &&
+            mal_dns_result_error(result).kind == MAL_DNS_ERROR_NONE;
+        mal_host_task_release(&host->tasks, &task);
+    }
+    return ok && families[0] == AF_INET && families[1] == AF_INET6 &&
+        !mal_reactor_has_pending(&host->reactor);
+}
+
+static bool dns_localhost_owned_addresses(void) {
+    MalHost *host = g_cross_thread_host;
+    MalHostHandle operation = 0;
+    MalHostTask task = {0};
+    bool ok = mal_dns_start(host, "localhost", "80", &operation) == MAL_DNS_START_OK &&
+        operation != 0 && dns_next_terminal(host, operation, &task) &&
+        task.result == MAL_HOST_TERMINAL_OK;
+    bool ipv4 = false;
+    bool ipv6 = false;
+    if (ok) {
+        MalDnsResult *result = task.data;
+        ok = strcmp(mal_dns_result_hostname(result), "localhost") == 0 &&
+            strcmp(mal_dns_result_service(result), "80") == 0 &&
+            mal_dns_result_error(result).kind == MAL_DNS_ERROR_NONE &&
+            mal_dns_result_address_count(result) > 0;
+        for (usize i = 0; i < mal_dns_result_address_count(result); i++) {
+            const struct sockaddr *address = mal_dns_result_address(result, i, nullptr);
+            ipv4 = ipv4 || (address != nullptr && address->sa_family == AF_INET);
+            ipv6 = ipv6 || (address != nullptr && address->sa_family == AF_INET6);
+        }
+    }
+    if (task._node != nullptr) {
+        mal_host_task_release(&host->tasks, &task);
+    }
+    return ok && (ipv4 || ipv6) && !mal_host_has_pending_work(host);
+}
+
+static bool dns_nxdomain_is_structured(void) {
+    MalHost *host = g_cross_thread_host;
+    MalHostHandle operation = 0;
+    MalHostTask task = {0};
+    bool ok = mal_dns_start(
+        host, "maligator-dns-test.invalid", "443", &operation) == MAL_DNS_START_OK &&
+        dns_next_terminal(host, operation, &task) &&
+        task.result == MAL_HOST_TERMINAL_ERROR;
+    if (ok) {
+        MalDnsResult *result = task.data;
+        MalDnsError error = mal_dns_result_error(result);
+        ok = error.kind == MAL_DNS_ERROR_RESOLVER && error.resolver_code != 0 &&
+            error.system_errno == 0 &&
+            strcmp(mal_dns_result_hostname(result), "maligator-dns-test.invalid") == 0 &&
+            strcmp(mal_dns_result_service(result), "443") == 0 &&
+            mal_dns_result_address_count(result) == 0;
+    }
+    if (task._node != nullptr) {
+        mal_host_task_release(&host->tasks, &task);
+    }
+    return ok && !mal_host_has_pending_work(host);
+}
+
+typedef struct DnsResolverGate {
+    pthread_mutex_t mutex;
+    pthread_cond_t ready;
+    bool block;
+    bool entered;
+    bool valid_hints;
+    int calls;
+    int releases;
+} DnsResolverGate;
+
+static void dns_gate_init(DnsResolverGate *gate, bool block) {
+    memset(gate, 0, sizeof(*gate));
+    pthread_mutex_init(&gate->mutex, nullptr);
+    pthread_cond_init(&gate->ready, nullptr);
+    gate->block = block;
+    gate->valid_hints = true;
+}
+
+static void dns_gate_free(DnsResolverGate *gate) {
+    pthread_cond_destroy(&gate->ready);
+    pthread_mutex_destroy(&gate->mutex);
+}
+
+static void dns_gate_wait_entered(DnsResolverGate *gate) {
+    pthread_mutex_lock(&gate->mutex);
+    while (!gate->entered) {
+        pthread_cond_wait(&gate->ready, &gate->mutex);
+    }
+    pthread_mutex_unlock(&gate->mutex);
+}
+
+static void dns_gate_release(DnsResolverGate *gate) {
+    pthread_mutex_lock(&gate->mutex);
+    gate->block = false;
+    pthread_cond_broadcast(&gate->ready);
+    pthread_mutex_unlock(&gate->mutex);
+}
+
+static int dns_test_resolver(
+    const char *hostname,
+    const char *service,
+    const struct addrinfo *hints,
+    struct addrinfo **addresses,
+    void *data) {
+    (void) hostname;
+    (void) service;
+    DnsResolverGate *gate = data;
+    pthread_mutex_lock(&gate->mutex);
+    gate->calls++;
+    gate->entered = true;
+    gate->valid_hints = gate->valid_hints && hints != nullptr &&
+        hints->ai_family == AF_UNSPEC && hints->ai_socktype == SOCK_STREAM;
+    pthread_cond_broadcast(&gate->ready);
+    while (gate->block) {
+        pthread_cond_wait(&gate->ready, &gate->mutex);
+    }
+    pthread_mutex_unlock(&gate->mutex);
+    if (strcmp(hostname, "system.test") == 0) {
+        errno = EIO;
+        return EAI_SYSTEM;
+    }
+
+    struct addrinfo *ipv6 = calloc(1, sizeof(struct addrinfo));
+    struct addrinfo *ipv4 = calloc(1, sizeof(struct addrinfo));
+    struct sockaddr_in6 *address6 = calloc(1, sizeof(struct sockaddr_in6));
+    struct sockaddr_in *address4 = calloc(1, sizeof(struct sockaddr_in));
+    if (ipv6 == nullptr || ipv4 == nullptr || address6 == nullptr || address4 == nullptr) {
+        free(ipv6);
+        free(ipv4);
+        free(address6);
+        free(address4);
+        return EAI_MEMORY;
+    }
+    address6->sin6_family = AF_INET6;
+    address4->sin_family = AF_INET;
+    ipv6->ai_family = AF_INET6;
+    ipv6->ai_socktype = SOCK_STREAM;
+    ipv6->ai_addr = (struct sockaddr *) address6;
+    ipv6->ai_addrlen = sizeof(*address6);
+    ipv6->ai_next = ipv4;
+    ipv4->ai_family = AF_INET;
+    ipv4->ai_socktype = SOCK_STREAM;
+    ipv4->ai_addr = (struct sockaddr *) address4;
+    ipv4->ai_addrlen = sizeof(*address4);
+    *addresses = ipv6;
+    return 0;
+}
+
+static void dns_test_resolver_release(struct addrinfo *addresses, void *data) {
+    DnsResolverGate *gate = data;
+    while (addresses != nullptr) {
+        struct addrinfo *next = addresses->ai_next;
+        free(addresses->ai_addr);
+        free(addresses);
+        addresses = next;
+    }
+    pthread_mutex_lock(&gate->mutex);
+    gate->releases++;
+    pthread_mutex_unlock(&gate->mutex);
+}
+
+typedef struct DnsTestHost {
+    MalHost storage;
+    MalHost *host;
+} DnsTestHost;
+
+static bool dns_test_host_init(DnsTestHost *context, DnsResolverGate *gate) {
+    context->host = mal_host_init(&context->storage) ? &context->storage : nullptr;
+    MalDnsConfig config = {
+        .worker_count = 1,
+        .queue_capacity = 1,
+        .resolver = dns_test_resolver,
+        .resolver_release = dns_test_resolver_release,
+        .resolver_data = gate,
+    };
+    return context->host != nullptr && mal_dns_configure(&context->host->dns, &config);
+}
+
+static void dns_test_host_free(DnsTestHost *context) {
+    mal_host_free(context->host);
+}
+
+static bool dns_saturation_cancellation_and_wake(void) {
+    DnsResolverGate gate;
+    DnsTestHost context = {0};
+    dns_gate_init(&gate, true);
+    bool ok = dns_test_host_init(&context, &gate);
+    MalHostHandle first = 0;
+    MalHostHandle second = 0;
+    MalHostHandle rejected = 99;
+    ok = ok && mal_dns_workers(&context.host->dns) == 0 &&
+        mal_dns_start(context.host, "first.test", "80", &first) == MAL_DNS_START_OK;
+    if (ok) {
+        dns_gate_wait_entered(&gate);
+    }
+    ok = ok && mal_dns_workers(&context.host->dns) == 1 &&
+        mal_dns_start(context.host, "second.test", "80", &second) == MAL_DNS_START_OK &&
+        mal_dns_queued(&context.host->dns) == 1 &&
+        mal_dns_start(context.host, "third.test", "80", &rejected) ==
+            MAL_DNS_START_SATURATED && rejected == 0;
+
+    /* The worker may post before cancellation returns, but the reactor has not
+     * drained it, so logical cancellation still owns the sole terminal task. */
+    dns_gate_release(&gate);
+    while (mal_host_posted_pending(&context.host->posted_tasks) == 0) {
+        struct timespec delay = {.tv_nsec = 1000000};
+        while (nanosleep(&delay, &delay) < 0 && errno == EINTR) {
+        }
+    }
+    ok = mal_dns_cancel(context.host, first) && ok;
+    while (mal_reactor_has_pending(&context.host->reactor)) {
+        mal_reactor_wait(&context.host->reactor);
+    }
+
+    int terminals = 0;
+    bool cancelled = false;
+    bool ordered = false;
+    MalHostTask task = {0};
+    while (mal_host_next_task(&context.host->tasks, &task)) {
+        terminals++;
+        if (task.operation == first) {
+            cancelled = task.result == MAL_HOST_TERMINAL_CANCELLED && task.data == nullptr;
+        } else if (task.operation == second) {
+            MalDnsResult *result = mal_host_task_take_data(&context.host->tasks, &task);
+            const struct sockaddr *zero = mal_dns_result_address(result, 0, nullptr);
+            const struct sockaddr *one = mal_dns_result_address(result, 1, nullptr);
+            ordered = task.result == MAL_HOST_TERMINAL_OK && zero != nullptr && one != nullptr &&
+                zero->sa_family == AF_INET6 && one->sa_family == AF_INET;
+            mal_dns_result_release(result);
+        } else {
+            ok = false;
+        }
+        mal_host_task_release(&context.host->tasks, &task);
+    }
+    ok = ok && terminals == 2 && cancelled && ordered && gate.calls == 2 &&
+        gate.releases == 2 && gate.valid_hints &&
+        !mal_host_has_pending_work(context.host);
+    dns_test_host_free(&context);
+    dns_gate_free(&gate);
+    return ok;
+}
+
+static bool dns_queued_cancel_releases_capacity(void) {
+    DnsResolverGate gate;
+    DnsTestHost context = {0};
+    dns_gate_init(&gate, true);
+    bool ok = dns_test_host_init(&context, &gate);
+    MalHostHandle first = 0;
+    MalHostHandle cancelled = 0;
+    MalHostHandle replacement = 0;
+    ok = ok && mal_dns_start(context.host, "first.test", "80", &first) ==
+        MAL_DNS_START_OK;
+    if (ok) dns_gate_wait_entered(&gate);
+    ok = ok && mal_dns_start(context.host, "cancelled.test", "80", &cancelled) ==
+        MAL_DNS_START_OK && mal_dns_queued(&context.host->dns) == 1;
+    ok = ok && mal_dns_cancel(context.host, cancelled) &&
+        mal_dns_queued(&context.host->dns) == 0;
+    ok = ok && mal_dns_start(context.host, "replacement.test", "80", &replacement) ==
+        MAL_DNS_START_OK && mal_dns_queued(&context.host->dns) == 1;
+
+    MalHostHandle unrelated = 0;
+    ok = ok && mal_host_operation_start(&context.host->tasks, &unrelated) &&
+        mal_host_operation_activate(&context.host->tasks, unrelated) &&
+        !mal_dns_cancel(context.host, unrelated) &&
+        mal_host_operation_cancel(&context.host->tasks, unrelated);
+    MalHostHandle invalid = 99;
+    ok = ok && mal_dns_start(nullptr, "invalid.test", "80", &invalid) ==
+        MAL_DNS_START_INVALID_ARGUMENT && invalid == 0;
+
+    dns_gate_release(&gate);
+    while (mal_reactor_has_pending(&context.host->reactor)) {
+        mal_reactor_wait(&context.host->reactor);
+    }
+    int terminals = 0;
+    MalHostTask task = {0};
+    while (mal_host_next_task(&context.host->tasks, &task)) {
+        terminals++;
+        if (task.operation == cancelled || task.operation == unrelated) {
+            ok = task.result == MAL_HOST_TERMINAL_CANCELLED && ok;
+        } else if (task.operation == first || task.operation == replacement) {
+            ok = task.result == MAL_HOST_TERMINAL_OK && ok;
+        } else {
+            ok = false;
+        }
+        mal_host_task_release(&context.host->tasks, &task);
+    }
+    ok = ok && terminals == 4 && gate.calls == 2 && gate.releases == 2 &&
+        !mal_host_has_pending_work(context.host);
+    dns_test_host_free(&context);
+    dns_gate_free(&gate);
+    return ok;
+}
+
+static bool dns_system_error_is_structured(void) {
+    DnsResolverGate gate;
+    DnsTestHost context = {0};
+    dns_gate_init(&gate, false);
+    bool ok = dns_test_host_init(&context, &gate);
+    MalHostHandle operation = 0;
+    MalHostTask task = {0};
+    ok = ok && mal_dns_start(context.host, "system.test", "53", &operation) ==
+        MAL_DNS_START_OK && dns_next_terminal(context.host, operation, &task) &&
+        task.result == MAL_HOST_TERMINAL_ERROR;
+    if (ok) {
+        MalDnsResult *result = task.data;
+        MalDnsError error = mal_dns_result_error(result);
+        ok = error.kind == MAL_DNS_ERROR_SYSTEM && error.resolver_code == EAI_SYSTEM &&
+            error.system_errno == EIO && strcmp(mal_dns_result_hostname(result), "system.test") ==
+                0 &&
+            strcmp(mal_dns_result_service(result), "53") == 0;
+    }
+    if (task._node != nullptr) {
+        mal_host_task_release(&context.host->tasks, &task);
+    }
+    ok = ok && gate.calls == 1 && gate.releases == 0 &&
+        !mal_host_has_pending_work(context.host);
+    dns_test_host_free(&context);
+    dns_gate_free(&gate);
+    return ok;
+}
+
+static void *dns_delayed_gate_release(void *data) {
+    struct timespec delay = {.tv_nsec = 10 * 1000000};
+    while (nanosleep(&delay, &delay) < 0 && errno == EINTR) {
+    }
+    dns_gate_release(data);
+    return nullptr;
+}
+
+static bool dns_shutdown_joins_queued_and_inflight(void) {
+    DnsResolverGate gate;
+    DnsTestHost context = {0};
+    dns_gate_init(&gate, true);
+    bool ok = dns_test_host_init(&context, &gate);
+    MalHostHandle first = 0;
+    MalHostHandle second = 0;
+    ok = ok && mal_dns_start(context.host, "inflight.test", "80", &first) ==
+        MAL_DNS_START_OK;
+    if (ok) {
+        dns_gate_wait_entered(&gate);
+    }
+    ok = ok && mal_dns_start(context.host, "queued.test", "80", &second) ==
+        MAL_DNS_START_OK && mal_dns_queued(&context.host->dns) == 1;
+    pthread_t releaser;
+    bool releaser_started = ok &&
+        pthread_create(&releaser, nullptr, dns_delayed_gate_release, &gate) == 0;
+    ok = ok && releaser_started;
+    if (releaser_started) {
+        mal_host_shutdown(context.host);
+        ok = pthread_join(releaser, nullptr) == 0 && ok;
+    } else {
+        dns_gate_release(&gate);
+        mal_host_shutdown(context.host);
+    }
+
+    MalHostHandle rejected = 7;
+    ok = ok && !mal_dns_accepting(&context.host->dns) &&
+        mal_dns_workers(&context.host->dns) == 0 && mal_dns_queued(&context.host->dns) == 0 &&
+        mal_dns_start(context.host, "127.0.0.1", "80", &rejected) ==
+            MAL_DNS_START_SHUTDOWN && rejected == 0;
+    int terminals = 0;
+    MalHostTask task = {0};
+    while (mal_host_next_task(&context.host->tasks, &task)) {
+        terminals++;
+        ok = task.kind == MAL_HOST_TASK_TERMINAL &&
+            task.result == MAL_HOST_TERMINAL_CANCELLED && ok;
+        mal_host_task_release(&context.host->tasks, &task);
+    }
+    /* Shutdown may leave only a coalesced wake byte, never retained worker work. */
+    mal_reactor_wait(&context.host->reactor);
+    ok = ok && terminals == 2 && gate.calls == 1 && gate.releases == 1 &&
+        !mal_reactor_has_pending(&context.host->reactor) &&
+        mal_host_operations_pending(&context.host->tasks) == 0;
+    dns_test_host_free(&context);
+    dns_gate_free(&gate);
+    return ok;
+}
+
 /* Sleeper i sleeps (SLEEPER_COUNT - i) steps, so completion order is i =
  * N-1, N-2, ..., 0 (shortest sleep finishes first). */
 static void sleeper(void *arg) {
@@ -749,6 +1156,13 @@ int main(void) {
         {"cancellation suppresses progress and wins exactly once", host_tasks_cancellation_wins()},
         {"pthread producers wake and preserve per-producer FIFO", host_cross_thread_posts()},
         {"main cancellation rejects an owned posted completion", host_post_cancellation()},
+        {"numeric IPv4/IPv6 DNS bypasses the worker pool", dns_numeric_literals_bypass_workers()},
+        {"localhost resolves to owned IP addresses", dns_localhost_owned_addresses()},
+        {"NXDOMAIN carries resolver and request metadata", dns_nxdomain_is_structured()},
+        {"DNS bounds its queue, wakes, preserves order, and cancels stale completion", dns_saturation_cancellation_and_wake()},
+        {"DNS queued cancellation releases capacity and rejects foreign handles", dns_queued_cancel_releases_capacity()},
+        {"DNS preserves resolver system errors and request metadata", dns_system_error_is_structured()},
+        {"DNS shutdown joins queued/in-flight work and releases retains", dns_shutdown_joins_queued_and_inflight()},
         {"shutdown drains accepted posts, rejects new ownership, and idles", host_post_shutdown_and_idle()},
     };
     int total = (int) (sizeof(checks) / sizeof(checks[0]));

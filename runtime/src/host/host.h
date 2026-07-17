@@ -1,6 +1,7 @@
 #pragma once
 
 #include "./defaults.h"
+#include "dns.h"
 #include "host_task.h"
 #include "reactor.h"
 #include "vm.h"
@@ -20,9 +21,14 @@ typedef struct MalHost {
     MalReactor reactor;
     MalHostTasks tasks;
     MalHostPostedTasks posted_tasks;
+    MalDns dns;
     struct MalHostTimer *timers;
     i64 timer_next_id;
 } MalHost;
+
+/* Standalone lifecycle for embedders and host-only tests. */
+bool mal_host_init(MalHost *host);
+void mal_host_free(MalHost *host);
 
 /* Create a host context and attach it to the isolate (`vm->host`). */
 MalHost *mal_host_attach(MalVm *vm);

@@ -374,6 +374,9 @@ export function runtimeCcFlags(
 	env: NodeJS.ProcessEnv = process.env,
 ): Array<string> {
 	return [
+		...(process.platform === "linux"
+			? ["-D_POSIX_C_SOURCE=200809L", "-D_DEFAULT_SOURCE", "-pthread"]
+			: []),
 		...optFlags(plan, env),
 		...SANITIZER_FLAGS[sanitizerMode(env)],
 		...gcDefines(env),
@@ -387,6 +390,9 @@ export function ccExtraFlags(
 	env: NodeJS.ProcessEnv = process.env,
 ): Array<string> {
 	return [
+		...(process.platform === "linux"
+			? ["-D_POSIX_C_SOURCE=200809L", "-D_DEFAULT_SOURCE", "-pthread"]
+			: []),
 		...optFlags(plan, env),
 		...SANITIZER_FLAGS[sanitizerMode(env)],
 		...gcDefines(env),

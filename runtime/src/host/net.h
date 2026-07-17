@@ -2,12 +2,14 @@
 
 #include "./defaults.h"
 
+#include <sys/socket.h>
+
 /*
  * Non-blocking TCP socket helpers (host layer). Thin wrappers over POSIX sockets
  * that the reactor drives: create sockets in non-blocking mode, and expose the
  * pieces the reactor's readiness model needs (accept-when-readable, complete a
- * connect-when-writable). IPv4 only for now (numeric hosts; DNS + IPv6 arrive with
- * client fetch). The WinterTC fetch server sits on these.
+ * connect-when-writable). Numeric IPv4 and IPv6 are supported; DNS stays in the
+ * asynchronous host resolver. The WinterTC fetch server sits on these.
  */
 
 /*
@@ -26,11 +28,16 @@ int mal_net_listen(const char *host, u16 port, int backlog);
 int mal_net_accept(int listen_fd);
 
 /*
- * Create a non-blocking IPv4 socket and begin connecting to host:port. Returns the
+ * Create a non-blocking IPv4/IPv6 socket and begin connecting to host:port. Returns the
  * fd immediately; the connection may still be in progress (wait for the fd to
  * become writable, then check mal_net_socket_error). Returns -1 on immediate error.
  */
 int mal_net_connect(const char *host, u16 port);
+
+/* Parse a numeric IP literal and connect an already-resolved address. */
+bool mal_net_parse_ip(
+    const char *host, u16 port, struct sockaddr_storage *address, socklen_t *length);
+int mal_net_connect_address(const struct sockaddr *address, socklen_t length);
 
 /* The local port a socket is bound to (host byte order), or 0 on error. */
 u16 mal_net_local_port(int fd);

@@ -58,6 +58,8 @@ void mal_host_tasks_free(MalHostTasks *tasks);
 
 /* A successful start owns a reserved terminal task until that task is released. */
 bool mal_host_operation_start(MalHostTasks *tasks, MalHostHandle *operation);
+/* Discard a STARTING reservation without publishing a terminal task. */
+bool mal_host_operation_abort_start(MalHostTasks *tasks, MalHostHandle operation);
 bool mal_host_operation_activate(MalHostTasks *tasks, MalHostHandle operation);
 MalHostOperationState mal_host_operation_state(
     const MalHostTasks *tasks, MalHostHandle operation);
@@ -79,6 +81,8 @@ bool mal_host_operation_complete(
 bool mal_host_operation_cancel(MalHostTasks *tasks, MalHostHandle operation);
 
 bool mal_host_next_task(MalHostTasks *tasks, MalHostTask *task);
+/* Transfer payload ownership out of a dequeued task; its destroy callback is disarmed. */
+void *mal_host_task_take_data(MalHostTasks *tasks, MalHostTask *task);
 void mal_host_task_release(MalHostTasks *tasks, MalHostTask *task);
 
 usize mal_host_tasks_pending(const MalHostTasks *tasks);

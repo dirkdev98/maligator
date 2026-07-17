@@ -217,6 +217,19 @@ bool mal_host_operation_start(MalHostTasks *tasks, MalHostHandle *operation) {
     return true;
 }
 
+bool mal_host_operation_abort_start(MalHostTasks *tasks, MalHostHandle operation) {
+    usize index;
+    MalHostOperationSlot *slot = mal_host_operation_slot(tasks, operation, &index);
+    if (slot == nullptr || slot->state != MAL_HOST_OPERATION_STARTING) {
+        return false;
+    }
+    MalHostTaskNode *terminal = slot->terminal;
+    slot->terminal = nullptr;
+    mal_host_task_destroy(tasks, terminal);
+    mal_host_operation_retire(tasks, slot, index);
+    return true;
+}
+
 bool mal_host_operation_activate(MalHostTasks *tasks, MalHostHandle operation) {
     MalHostOperationSlot *slot = mal_host_operation_slot(tasks, operation, nullptr);
     if (slot == nullptr || slot->state != MAL_HOST_OPERATION_STARTING) {
@@ -333,6 +346,21 @@ bool mal_host_next_task(MalHostTasks *tasks, MalHostTask *task) {
     tasks->queued_count--;
     *task = node->task;
     return true;
+}
+
+void *mal_host_task_take_data(MalHostTasks *tasks, MalHostTask *task) {
+    if (task == nullptr || task->_node == nullptr) {
+        return nullptr;
+    }
+    MalHostTaskNode *node = task->_node;
+    if (node->owner != tasks || node->task.data != task->data) {
+        return nullptr;
+    }
+    void *data = node->task.data;
+    node->task.data = nullptr;
+    node->destroy = nullptr;
+    task->data = nullptr;
+    return data;
 }
 
 void mal_host_task_release(MalHostTasks *tasks, MalHostTask *task) {
