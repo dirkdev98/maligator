@@ -174,6 +174,45 @@ describe("host-install manifest", () => {
 		]);
 	});
 
+	it("binds node:tty default and named exports through one installer", () => {
+		const def = compile(
+			`import tty, { isatty } from "node:tty";\nglobalThis.sink = [tty, isatty];\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_tty",
+				exports: [
+					expect.objectContaining({ name: "isatty" }),
+					expect.objectContaining({ name: "default" }),
+				],
+			}),
+		]);
+	});
+
+	it("drops the node:tty installer when its export read is optimized away", () => {
+		const def = compile(`import { isatty } from "node:tty";\nisatty;\n`, {
+			node: true,
+		});
+		expect(def.hostInstalls).toEqual([]);
+	});
+
+	it("binds node:util default and named exports through one installer", () => {
+		const def = compile(
+			`import util, { format } from "node:util";\nglobalThis.sink = [util, format];\n`,
+			{ node: true },
+		);
+		expect(def.hostInstalls).toEqual([
+			expect.objectContaining({
+				installer: "mal_host_install_node_util",
+				exports: [
+					expect.objectContaining({ name: "format" }),
+					expect.objectContaining({ name: "default" }),
+				],
+			}),
+		]);
+	});
+
 	it("drops the node:events installer when its constructor read is optimized away", () => {
 		const def = compile(`import { EventEmitter } from "node:events";\nEventEmitter;\n`, {
 			node: true,

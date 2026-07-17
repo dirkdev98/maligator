@@ -218,6 +218,19 @@ test("canonicalizes bare CommonJS built-ins to the same node: host module", () =
 	).toHaveLength(1);
 });
 
+test("canonicalizes bare tty to the node:tty host module", () => {
+	write("cjs-bare-tty.cjs", `module.exports = require("tty");\n`);
+	const graph = buildModuleGraph(path.join(root, "cjs-bare-tty.cjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe("node:tty");
+	expect(graph.modules.get("node:tty")?.host?.named).toEqual([
+		"ReadStream",
+		"WriteStream",
+		"isatty",
+	]);
+});
+
 test("loads JSON dependencies as CommonJS modules", () => {
 	write("cjs-json.cjs", `module.exports = require("./data.json");\n`);
 	write("data.json", `{"answer":42,"__proto__":{"own":true}}\n`);

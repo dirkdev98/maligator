@@ -129,9 +129,23 @@ const EVENTS: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:events"),
 };
 
+const TTY: HostModuleSpec = {
+	id: "node:tty",
+	named: ["ReadStream", "WriteStream", "isatty"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:tty"),
+};
+
+const UTIL: HostModuleSpec = {
+	id: "node:util",
+	named: ["deprecate", "format", "formatWithOptions", "inherits", "inspect"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:util"),
+};
+
 /** Supported `node:*` built-ins, keyed by canonical specifier. */
 export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
-	[PATH, FS, CHILD_PROCESS, CRYPTO, EVENTS].map((spec) => [spec.id, spec]),
+	[PATH, FS, CHILD_PROCESS, CRYPTO, EVENTS, TTY, UTIL].map((spec) => [spec.id, spec]),
 );
 
 /** True for any `node:`-prefixed specifier, supported or not. */
