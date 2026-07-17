@@ -27,8 +27,9 @@ stated acceptance point without patching Express or anything in `node_modules`.
       `require()` with the exact lockfile install and no application edits.
       Static CommonJS wrappers, JSON modules, canonical bare/`node:` built-ins,
       cache identity/cycles/failure eviction, and identifier-level `__filename` /
-      `__dirname` are implemented. Entry-goal detection, `require.main`, complete
-      module metadata, globals, and the remaining built-ins still block acceptance.
+      `__dirname` are implemented. Global `Buffer` and canonical bare/`node:buffer`
+      imports now share one DCE-aware installer. Entry-goal detection, `require.main`,
+      complete module metadata, remaining globals, and built-ins still block acceptance.
 - [ ] **Wave 2: supply core data and event primitives.** Support the built-in
       modules needed before network service: events, buffers and string
       decoding, streams, utilities, async context hooks, crypto helpers,
@@ -37,8 +38,11 @@ stated acceptance point without patching Express or anything in `node_modules`.
       without unresolved built-ins or initialization failures.
       `node:events` now provides the EventEmitter lifecycle required by the tree;
       `node:tty` and the dependency-used `node:util` formatting/inheritance helpers
-      are also implemented. The forced Express graph now advances to `node:zlib`,
-      the first substantial Buffer/Node Streams/compression boundary.
+      are also implemented. `node:buffer` now provides Uint8Array-backed allocation,
+      conversion, comparison, concatenation, slicing, writing, UTF-8/Latin-1/base64/
+      UTF-16 encodings, and the integer primitives used by `iconv-lite`; a native
+      smoke test loads Express's real `safer-buffer` dependency. The forced Express
+      graph still advances to `node:zlib`, followed by Node Streams/string decoding.
 - [ ] **Wave 3: supply Node HTTP lifecycle semantics.** Implement the required
       `node:http` and `node:net` client, server, socket, request, and response
       behavior, including EventEmitter integration, headers, status codes,
