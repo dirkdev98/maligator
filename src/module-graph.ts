@@ -4,6 +4,7 @@ import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import type { HostModuleSpec } from "./host-modules.ts";
 import {
+	canonicalNodeBuiltinId,
 	canonicalNodeHostModuleId,
 	isNodeSpecifier,
 	lookupHostModule,
@@ -211,8 +212,9 @@ export function buildModuleGraph(
 					return { ...dependency, resolvedPath: null };
 				}
 				const canonicalHostId = canonicalNodeHostModuleId(dependency.specifier);
+				const canonicalBuiltinId = canonicalNodeBuiltinId(dependency.specifier);
 				const resolved = resolveSpecifier(
-					canonicalHostId ?? dependency.specifier,
+					canonicalHostId ?? canonicalBuiltinId ?? dependency.specifier,
 					filePath,
 					ctx,
 				);

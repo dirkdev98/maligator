@@ -153,13 +153,113 @@ const BUFFER: HostModuleSpec = {
 	installer: BUFFER_INSTALLER_SYMBOL,
 };
 
+const ASYNC_HOOKS: HostModuleSpec = {
+	id: "node:async_hooks",
+	named: ["AsyncResource"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:async_hooks"),
+};
+
+const STREAM: HostModuleSpec = {
+	id: "node:stream",
+	named: ["Stream", "Readable", "Writable", "Duplex", "Transform"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:stream"),
+};
+
+const STRING_DECODER: HostModuleSpec = {
+	id: "node:string_decoder",
+	named: ["StringDecoder"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:string_decoder"),
+};
+
 /** Supported `node:*` built-ins, keyed by canonical specifier. */
 export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
-	[PATH, FS, CHILD_PROCESS, CRYPTO, EVENTS, TTY, UTIL, BUFFER].map((spec) => [
-		spec.id,
-		spec,
-	]),
+	[
+		PATH,
+		FS,
+		CHILD_PROCESS,
+		CRYPTO,
+		EVENTS,
+		TTY,
+		UTIL,
+		BUFFER,
+		ASYNC_HOOKS,
+		STREAM,
+		STRING_DECODER,
+	].map((spec) => [spec.id, spec]),
 );
+
+// Public modern-Node core names. Keep this independent of the compiler host's
+// Node version so bare-core precedence is reproducible and self-hosting does not
+// introduce a node:module dependency into the compiler graph.
+const NODE_BUILTIN_IDS = new Set(
+	[
+		"assert",
+		"assert/strict",
+		"async_hooks",
+		"buffer",
+		"child_process",
+		"cluster",
+		"console",
+		"constants",
+		"crypto",
+		"dgram",
+		"diagnostics_channel",
+		"dns",
+		"dns/promises",
+		"domain",
+		"events",
+		"fs",
+		"fs/promises",
+		"http",
+		"http2",
+		"https",
+		"inspector",
+		"inspector/promises",
+		"module",
+		"net",
+		"os",
+		"path",
+		"path/posix",
+		"path/win32",
+		"perf_hooks",
+		"process",
+		"punycode",
+		"querystring",
+		"readline",
+		"readline/promises",
+		"repl",
+		"stream",
+		"stream/consumers",
+		"stream/promises",
+		"stream/web",
+		"string_decoder",
+		"sys",
+		"timers",
+		"timers/promises",
+		"tls",
+		"trace_events",
+		"tty",
+		"url",
+		"util",
+		"util/types",
+		"v8",
+		"vm",
+		"wasi",
+		"worker_threads",
+		"zlib",
+	].map((specifier) => `node:${specifier}`),
+);
+
+// These built-ins deliberately require the node: prefix in Node itself.
+const NODE_PREFIX_ONLY_BUILTIN_IDS = new Set([
+	"node:sea",
+	"node:sqlite",
+	"node:test",
+	"node:test/reporters",
+]);
 
 /** True for any `node:`-prefixed specifier, supported or not. */
 export function isNodeSpecifier(specifier: string): boolean {
@@ -175,6 +275,15 @@ export function lookupHostModule(specifier: string): HostModuleSpec | undefined 
 export function canonicalNodeHostModuleId(specifier: string): string | undefined {
 	const id = isNodeSpecifier(specifier) ? specifier : `node:${specifier}`;
 	return HOST_MODULES.has(id) ? id : undefined;
+}
+
+/** Canonical Node core identity, including built-ins not implemented by Maligator yet. */
+export function canonicalNodeBuiltinId(specifier: string): string | undefined {
+	const id = isNodeSpecifier(specifier) ? specifier : `node:${specifier}`;
+	return NODE_BUILTIN_IDS.has(id) ||
+		(isNodeSpecifier(specifier) && NODE_PREFIX_ONLY_BUILTIN_IDS.has(id))
+		? id
+		: undefined;
 }
 
 /** Sorted list of supported specifiers, for clear "unknown module" diagnostics. */

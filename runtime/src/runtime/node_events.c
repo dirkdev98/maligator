@@ -720,6 +720,16 @@ void mal_host_install_node_events(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
+    MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR];
+    if (!mal_value_is_undefined(cached)) {
+        for (i32 i = 0; i < count; i++) {
+            if (strcmp(slots[i].name, "EventEmitter") == 0
+                || strcmp(slots[i].name, "default") == 0) {
+                vm->globals[slots[i].slot] = cached;
+            }
+        }
+        return;
+    }
     static const MalNodeEventsMethod methods[] = {
         {"emit", 1, ee_emit},
         {"eventNames", 0, ee_event_names},
@@ -749,6 +759,8 @@ void mal_host_install_node_events(
         mal_intrinsic_ascii(vm, (const byte *) "EventEmitter"), 1, ee_constructor);
     mal_native_function_object_set_constructor(constructor);
     roots[1] = mal_value_from_native_function_object(constructor);
+    vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR] = roots[1];
+    vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE] = roots[0];
 
     mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "prototype",
                               roots[0], MAL_PROPERTY_NONE);

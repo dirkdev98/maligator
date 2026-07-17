@@ -2771,7 +2771,11 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
         MalValue value = callback(vm, mal_value_new_undefined(), resolution.args, resolution.arg_count, effective_new_target, resolution.callee);
         vm->gc_native_frames--;
         mal_gc_callee_roots_end(&ncr);
+        MalValue native_roots[] = {value, effective_new_target, resolution.callee};
+        MalRootSpan native_root;
+        mal_gc_root(&native_root, native_roots, countof(native_roots));
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_gc_unroot(&native_root);
 #if MAL_REALMS
             mal_vm_realm_switch_to(vm, saved_realm);
 #endif
@@ -2805,6 +2809,7 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
             if (found_default) {
                 if (!mal_vm_get_prototype_from_constructor(
                         vm, effective_new_target, default_proto, &derived_prototype)) {
+                    mal_gc_unroot(&native_root);
 #if MAL_REALMS
                     mal_vm_realm_switch_to(vm, saved_realm);
 #endif
@@ -2818,6 +2823,7 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                 MalValue prototype;
                 if (!mal_vm_get_property(vm, effective_new_target,
                         mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
+                    mal_gc_unroot(&native_root);
 #if MAL_REALMS
                     mal_vm_realm_switch_to(vm, saved_realm);
 #endif
@@ -2830,6 +2836,7 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
             }
         }
         completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+        mal_gc_unroot(&native_root);
     } else if (mal_value_is_function_object(resolution.callee)) {
         i32 function_index = mal_function_object_function_index(mal_value_to_function_object(resolution.callee));
         const MalFunction *function = &vm->definition->functions[function_index];

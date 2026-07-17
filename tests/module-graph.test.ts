@@ -423,6 +423,39 @@ test("canonicalizes a bare ESM path specifier to the host built-in", () => {
 	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe("node:path");
 });
 
+test("gives unsupported bare core modules precedence over npm packages", () => {
+	write("node_modules/assert/package.json", `{"main":"index.js"}\n`);
+	write("node_modules/assert/index.js", `module.exports = "npm-shadow";\n`);
+	write("bare-assert.cjs", `module.exports = require("assert");\n`);
+	expect(() =>
+		buildModuleGraph(path.join(root, "bare-assert.cjs"), { buildConfig: nodeOn }),
+	).toThrow(/unknown node built-in module 'node:assert'/);
+});
+
+test("recognizes inspector as a bare core module", () => {
+	write("bare-inspector.cjs", `module.exports = require("inspector");\n`);
+	expect(() =>
+		buildModuleGraph(path.join(root, "bare-inspector.cjs"), { buildConfig: nodeOn }),
+	).toThrow(/unknown node built-in module 'node:inspector'/);
+});
+
+test("does not treat prefix-only node:test as a bare core module", () => {
+	write("bare-test.cjs", `module.exports = require("test");\n`);
+	expect(() =>
+		buildModuleGraph(path.join(root, "bare-test.cjs"), { buildConfig: nodeOn }),
+	).toThrow(/Cannot resolve 'test'/);
+});
+
+test("canonicalizes bare string_decoder instead of resolving an ancestor shim", () => {
+	write("bare-decoder.cjs", `module.exports = require("string_decoder");\n`);
+	const graph = buildModuleGraph(path.join(root, "bare-decoder.cjs"), {
+		buildConfig: nodeOn,
+	});
+	expect(graph.modules.get(graph.entry)!.dependencies[0]!.resolvedPath).toBe(
+		"node:string_decoder",
+	);
+});
+
 test("a literal dynamic import of a supported node:* is rejected (static import only)", () => {
 	write(
 		"dyn-node.mjs",
