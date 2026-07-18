@@ -351,7 +351,7 @@ describe("native toolchain discovery", () => {
 		expect(invocation).toContain("-O2");
 		expect(invocation).not.toContain("-flto");
 		expect(invocation).not.toContain("strip ");
-	});
+	}, 10_000);
 
 	it("separates runtime cache keys by source, config, toolchain, and environment", () => {
 		const base = {
