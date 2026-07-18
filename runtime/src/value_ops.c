@@ -332,12 +332,7 @@ static i32 mal_ops_to_i32(MalValue value) {
         return mal_value_to_i32(value);
     }
 
-    f64 number = mal_ops_to_number(value);
-    if (isnan(number) || isinf(number) || number == 0) {
-        return 0;
-    }
-
-    return (i32) number;
+    return mal_ops_number_to_i32(mal_ops_to_number(value));
 }
 
 // mal_ops_number_value is now static inline in value_ops.h (inlined into the
@@ -617,7 +612,8 @@ MalValue mal_ops_bit_xor(MalValue left, MalValue right) {
 }
 
 MalValue mal_ops_shift_left(MalValue left, MalValue right) {
-    return mal_value_from_i32(mal_ops_to_i32(left) << (mal_ops_to_i32(right) & 0x1F));
+    u32 result = (u32) mal_ops_to_i32(left) << (mal_ops_to_i32(right) & 0x1F);
+    return mal_value_from_i32(mal_ops_u32_to_i32(result));
 }
 
 MalValue mal_ops_shift_right(MalValue left, MalValue right) {

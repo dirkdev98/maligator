@@ -75,20 +75,22 @@ static inline f64 mal_ops_number_as_f64(MalValue value) {
     return NAN; // MAL_VALUE_NAN
 }
 
-/**
- * ToInt32 of a value already known to be a JS Number (precondition:
- * mal_ops_is_number), for the native-C backend's unboxed bitwise/shift ops.
- * Deliberately mirrors the interpreter's mal_ops_to_i32 (value_ops.c) for the
- * non-int32-boxed path — a plain truncating cast with NaN/±Infinity/±0 → 0 —
- * rather than the spec's modulo-2^32 reduction, so native bitwise is
- * behavior-identical to the boxed op (the interpreter is itself non-spec for
- * out-of-range magnitudes; matching it is what keeps the backend an overlay).
- */
+/** Reinterpret a uint32 result as the corresponding signed two's-complement value. */
+static inline i32 mal_ops_u32_to_i32(u32 value) {
+    return value <= 2147483647u ? (i32) value : (i32) ((i64) value - 4294967296ll);
+}
+
+/** ToInt32 for a value already known to be a JS Number. */
 static inline i32 mal_ops_number_to_i32(f64 number) {
-    if (isnan(number) || isinf(number) || number == 0.0) {
+    if (!isfinite(number) || number == 0.0) {
         return 0;
     }
-    return (i32) number;
+    if (number >= -2147483648.0 && number < 2147483648.0) {
+        return (i32) number;
+    }
+    f64 modulo = fmod(trunc(number), 4294967296.0);
+    if (modulo < 0.0) modulo += 4294967296.0;
+    return mal_ops_u32_to_i32((u32) modulo);
 }
 
 /**

@@ -193,8 +193,11 @@ function nativeNumberExpr(operator: string, left: string, right: string): string
 	}
 	const bitwise = NATIVE_BITWISE[operator];
 	if (bitwise !== undefined) {
+		if (operator === "<<") {
+			return `(f64) mal_ops_u32_to_i32((u32) mal_ops_number_to_i32(${left}) << (mal_ops_number_to_i32(${right}) & 0x1F))`;
+		}
 		const right32 =
-			operator === "<<" || operator === ">>"
+			operator === ">>"
 				? `(mal_ops_number_to_i32(${right}) & 0x1F)`
 				: `mal_ops_number_to_i32(${right})`;
 		return `(f64) (mal_ops_number_to_i32(${left}) ${bitwise} ${right32})`;
