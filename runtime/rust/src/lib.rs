@@ -25,6 +25,11 @@ pub mod regexp;
 #[cfg(feature = "web-platform")]
 pub mod url;
 
+// Portable decompression primitives for node:zlib. This module owns codec state
+// only; it never retains input/output pointers supplied by the C caller.
+#[cfg(feature = "node-zlib")]
+pub mod zlib;
+
 /// ABI version. Bump on any breaking change to the C header so the C side can
 /// assert the linked archive matches `mal_i18n.h`.
 /// v2: added `mal_i18n_collator_free` / `mal_i18n_plural_rules_free` (gc_todo.md D2).

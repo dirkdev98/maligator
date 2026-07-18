@@ -57,6 +57,12 @@ regress = { version = "0.11", features = ["utf16"], optional = true }
 # the C++ URL parser AND its C++ runtime link argument. The native artifact resolver
 # appends that argument only when web-platform is on. See src/url.rs + mal_url.h.
 ada-url = { version = "3", optional = true }
+# Pure-Rust streaming codecs for the node:zlib backend. `zlib-rs` is selected
+# explicitly so enabling Node never introduces a system libz dependency.
+flate2 = { version = "1", default-features = false, features = [
+	"zlib-rs",
+], optional = true }
+brotli-decompressor = { version = "5", optional = true }
 
 [features]
 # On by default so dev/test262 builds carry the full Intl + web + RegExp surface.
@@ -72,6 +78,10 @@ web-platform = ["dep:ada-url"]
 # The RegExp engine (regress). Off drops the regex engine + its Unicode tables.
 # Maps to engine.regexp (rust-build.ts) + C `-DMAL_REGEXP`.
 regexp = ["dep:regress"]
+
+# node:zlib phase 1: decompression-only flat primitives. The C/JS adapters remain
+# outside this feature; Node builds select it through normalizeNativeFeatures.
+node-zlib = ["dep:flate2", "dep:brotli-decompressor"]
 
 # The always-on Intl floor: locale parsing/negotiation (Intl.Locale,
 # getCanonicalLocales, maximize/minimize) + result stringification. Every service

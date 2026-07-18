@@ -161,6 +161,7 @@ export function normalizeNativeFeatures(
 		...(intlEnabled ? (intlFeatures.length > 0 ? intlFeatures : ["intl-full"]) : []),
 		...(webPlatformEnabled ? ["web-platform"] : []),
 		...(regexpEnabled ? ["regexp"] : []),
+		...(nodeEnabled ? ["node-zlib"] : []),
 	]);
 	return {
 		evalEnabled,
