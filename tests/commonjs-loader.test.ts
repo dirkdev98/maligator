@@ -91,4 +91,44 @@ describe("CommonJS loader lowering", () => {
 		expect(constants).toContain(path.join(root, "child.cjs"));
 		expect(constants).toContain(root);
 	});
+
+	it("lowers require of a synchronous ES module to one stable namespace", () => {
+		const root = fixture({
+			"main.cjs": `const a = require("./dep.mjs");\nconst b = require("./dep.mjs");\nglobalThis.sink = [a, b];\n`,
+			"dep.mjs": `export const named = 1;\nexport default 2;\n`,
+		});
+		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"));
+		const definition = compileSemanticProgramToVmDefinition(program);
+
+		expect(
+			definition.functions
+				.flatMap((fn) => fn.instructions)
+				.filter((instruction) => instruction.opcode === "CREATE_MODULE_NAMESPACE"),
+		).toHaveLength(1);
+		expect(definition.cjsModuleFunctionIndices).toHaveLength(1);
+	});
+
+	it("rejects top-level await in a synchronously required ES module graph", () => {
+		const root = fixture({
+			"main.cjs": `require("./dep.mjs");\n`,
+			"dep.mjs": `await 0;\nexport default 1;\n`,
+		});
+		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"));
+
+		expect(() => compileSemanticProgramToVmDefinition(program)).toThrow(
+			/CommonJS cannot synchronously require an ES module graph with top-level await/,
+		);
+	});
+
+	it("rejects cycles involving a synchronously required ES module", () => {
+		const root = fixture({
+			"main.cjs": `module.exports = require("./dep.mjs");\n`,
+			"dep.mjs": `import main from "./main.cjs";\nexport default main;\n`,
+		});
+		const program = loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.cjs"));
+
+		expect(() => compileSemanticProgramToVmDefinition(program)).toThrow(
+			/CommonJS cannot synchronously require a cyclic ES module graph/,
+		);
+	});
 });

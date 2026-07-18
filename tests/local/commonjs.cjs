@@ -44,4 +44,11 @@ check(filenames.filename === __dirname + "/commonjs-filenames.cjs");
 check(filenames.dirname === __dirname);
 check(this === exports);
 
+const esmA = require("./commonjs-esm.mjs");
+const esmB = require("./commonjs-esm.mjs");
+check(esmA === esmB);
+check(esmA.named === 42);
+check(esmA.default.value === "default");
+check(globalThis.commonJsEsmLoads === 1);
+
 console.log("RESULT " + passed + "/" + total);

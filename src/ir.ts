@@ -183,6 +183,9 @@ export interface IntermediateProgram {
 	 */
 	cjsEagerSlot: Map<string, number>;
 
+	/** Stable namespace-object slots for ES modules reached by CommonJS require. */
+	cjsEsmNamespaceSlot: Map<string, number>;
+
 	/** Stable exports-object slots for host built-ins reached by CommonJS require. */
 	cjsHostSlot: Map<string, number>;
 
@@ -1547,6 +1550,7 @@ export function compileSemanticProgramToIr(
 		cjsWrapperFunctionIndex: [],
 		cjsImports: new Map(),
 		cjsEagerSlot: new Map(),
+		cjsEsmNamespaceSlot: new Map(),
 		cjsHostSlot: new Map(),
 
 		hostModules: [],
@@ -1624,6 +1628,7 @@ export function compileSemanticProgramToIr(
 function compileMergedModuleInit(
 	program: IntermediateProgram,
 	evaluationOrder: Array<string>,
+	cjsEntryId?: number,
 ) {
 	const fileByPath = new Map(program.semantic.files.map((file) => [file.path, file]));
 
@@ -1697,12 +1702,40 @@ function compileMergedModuleInit(
 		tail = fn.blocks[fn.blocks.length - 1]!;
 	}
 
+	if (cjsEntryId !== undefined) {
+		const entryBlock: IRBlock = { instructions: [] };
+		const entryBlockIndex = fn.blocks.push(entryBlock) - 1;
+		if (tail) {
+			tail.instructions.push({ type: "jump", blocks: [entryBlockIndex] });
+		}
+		const cursor: IRCursor = { block: entryBlock };
+		emitRequiredEsmNamespaceInits(program, fn, entryBlock);
+		emitCjsRequire(program, fn, cursor, cjsEntryId);
+	}
+
 	const modules = evaluationOrder
 		.map((modulePath) => fileByPath.get(modulePath))
 		.filter((file): file is SemanticFile => file !== undefined && !file.commonjs);
 	makeInitAsyncIfTopLevelAwait(fn, modules);
 
 	endFunction(fn);
+}
+
+/** Materialize each synchronously-required ESM namespace after ESM evaluation. */
+function emitRequiredEsmNamespaceInits(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+) {
+	for (const [modulePath, slot] of program.cjsEsmNamespaceSlot) {
+		const namespace = emitNamespaceObjectRegister(
+			program,
+			fn,
+			block,
+			program.moduleNamespaces.get(modulePath) ?? [],
+		);
+		block.instructions.push({ type: "storeGlobal", registers: [namespace], index: slot });
+	}
 }
 
 /**
@@ -1769,25 +1802,95 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 /**
  * Compile a CommonJS program: every reachable module becomes a wrapper function
  * run lazily through `require`, and a synthetic entry (function 0) kicks the
- * graph off by requiring the entrypoint. CJS requiring an ES module is not
- * supported yet (rejected loudly).
+ * graph off by requiring the entrypoint. Eligible ESM dependencies are
+ * evaluated first and exposed to require as stable namespace objects.
  */
 function compileCjsProgram(program: IntermediateProgram, initFile: SemanticFile) {
 	assignCjsModuleIds(program);
 	classifyPureDataCjsModules(program);
 	classifyCommonJsHostModules(program);
-
-	const nonCjs = program.semantic.files.find((file) => !file.commonjs);
-	if (nonCjs) {
-		throw new Error(
-			`CommonJS requiring an ES module (${nonCjs.path}) is not supported yet`,
-		);
-	}
+	classifyCommonJsEsmModules(program);
+	validateSynchronousCommonJsEsm(program);
 
 	// Function 0 is the program entry: build pure-data modules, then require() the
 	// entrypoint module.
-	compileCjsEntryDriver(program, program.cjsModuleId.get(initFile.path)!);
+	const entryId = program.cjsModuleId.get(initFile.path)!;
+	if (program.cjsEsmNamespaceSlot.size > 0) {
+		compileMergedModuleInit(program, program.semantic.graph!.evaluationOrder, entryId);
+	} else {
+		compileCjsEntryDriver(program, entryId);
+	}
 	compileCjsWrappers(program);
+}
+
+/** Allocate one stable namespace slot for every ESM target of CommonJS require. */
+function classifyCommonJsEsmModules(program: IntermediateProgram) {
+	const graph = program.semantic.graph;
+	if (!graph) {
+		return;
+	}
+	for (const record of graph.modules.values()) {
+		if (record.goal !== "cjs") {
+			continue;
+		}
+		for (const dependency of record.dependencies) {
+			const resolvedPath = dependency.resolvedPath;
+			const target = resolvedPath ? graph.modules.get(resolvedPath) : undefined;
+			if (
+				dependency.kind === "require" &&
+				resolvedPath &&
+				target?.goal === "module" &&
+				!target.host &&
+				!program.cjsEsmNamespaceSlot.has(resolvedPath)
+			) {
+				program.cjsEsmNamespaceSlot.set(resolvedPath, program.nextGlobalIndex++);
+			}
+		}
+	}
+}
+
+/** Reject mixed graphs that cannot be evaluated synchronously by scope hoisting. */
+function validateSynchronousCommonJsEsm(program: IntermediateProgram) {
+	if (program.cjsEsmNamespaceSlot.size === 0) {
+		return;
+	}
+	const graph = program.semantic.graph!;
+	const synchronousGraph = new Set<string>();
+	const visit = (modulePath: string) => {
+		if (synchronousGraph.has(modulePath)) {
+			return;
+		}
+		synchronousGraph.add(modulePath);
+		for (const dependency of graph.modules.get(modulePath)?.dependencies ?? []) {
+			if (dependency.kind !== "dynamic" && dependency.resolvedPath) {
+				visit(dependency.resolvedPath);
+			}
+		}
+	};
+	for (const modulePath of program.cjsEsmNamespaceSlot.keys()) {
+		visit(modulePath);
+	}
+	for (const file of program.semantic.files) {
+		if (synchronousGraph.has(file.path) && !file.commonjs && hasTopLevelAwait(file.ast)) {
+			throw new Error(
+				`CommonJS cannot synchronously require an ES module graph with top-level await (${file.path})`,
+			);
+		}
+	}
+	for (const cycle of graph.cycles) {
+		if (
+			cycle.some((modulePath) => {
+				const record = graph.modules.get(modulePath);
+				return (
+					synchronousGraph.has(modulePath) && record?.goal === "module" && !record.host
+				);
+			})
+		) {
+			throw new Error(
+				`CommonJS cannot synchronously require a cyclic ES module graph (${cycle.join(", ")})`,
+			);
+		}
+	}
 }
 
 /** Assign a registry id to every CommonJS module in the graph. */
@@ -1843,6 +1946,16 @@ function emitCjsModuleExports(
 	cursor: IRCursor,
 	cjsPath: string,
 ): number {
+	const esmNamespaceSlot = program.cjsEsmNamespaceSlot.get(cjsPath);
+	if (esmNamespaceSlot !== undefined) {
+		const destination = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadGlobal",
+			registers: [destination],
+			index: esmNamespaceSlot,
+		});
+		return destination;
+	}
 	const hostSlot = program.cjsHostSlot.get(cjsPath);
 	if (hostSlot !== undefined) {
 		const destination = nextRegisterDestination(fn);
@@ -2193,7 +2306,9 @@ function tryCompileCjsRequireCall(
 	const cjsPath = resolveCjsModulePath(program, fn.semanticFile, specifier.value);
 	if (
 		cjsPath === undefined ||
-		(!program.cjsModuleId.has(cjsPath) && !program.cjsHostSlot.has(cjsPath))
+		(!program.cjsModuleId.has(cjsPath) &&
+			!program.cjsHostSlot.has(cjsPath) &&
+			!program.cjsEsmNamespaceSlot.has(cjsPath))
 	) {
 		return undefined;
 	}
