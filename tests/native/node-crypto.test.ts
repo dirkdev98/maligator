@@ -10,29 +10,61 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-// node:crypto is behind surface.node, so the fixture is linked against the
-// node-on artifacts (-DMAL_NODE=1) prewarmed by globalSetup. The fixture self-reports
-// "RESULT N/N" (no "FAIL:" lines) over SHA-256 vectors, UUID v4 format / variant /
-// uniqueness, strict argument validation, and detached/resizable buffer safety.
+// node:crypto is behind surface.node, so these fixtures link against the node-on
+// artifacts (-DMAL_NODE=1) prewarmed by globalSetup.
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-crypto-"));
 
 describe("node:crypto (surface.node)", () => {
-	let bin: string;
+	let compiled: string;
+	let interpreted: string;
+	let pinnedCompiled: string;
+	let pinnedInterpreted: string;
 	beforeAll(() => {
-		bin = buildNativeBinary({
+		compiled = buildNativeBinary({
 			fixture: "tests/local/node-crypto.mts",
-			name: "node-crypto",
+			name: "node-crypto-compiled",
 			mainFile: HOST_MAIN,
 			outDir,
 			nodeEnabled: true,
 		});
+		interpreted = buildNativeBinary({
+			fixture: "tests/local/node-crypto.mts",
+			name: "node-crypto-interpreted",
+			mainFile: HOST_MAIN,
+			outDir,
+			nodeEnabled: true,
+			compiled: false,
+		});
+		pinnedCompiled = buildNativeBinary({
+			fixture: "tests/fixtures/express-5/crypto-smoke.cjs",
+			name: "node-crypto-pinned-compiled",
+			mainFile: HOST_MAIN,
+			outDir,
+			nodeEnabled: true,
+		});
+		pinnedInterpreted = buildNativeBinary({
+			fixture: "tests/fixtures/express-5/crypto-smoke.cjs",
+			name: "node-crypto-pinned-interpreted",
+			mainFile: HOST_MAIN,
+			outDir,
+			nodeEnabled: true,
+			compiled: false,
+		});
 	});
 
-	it("passes compiled", () => {
-		assertResultPass(runToStdout(bin));
+	it("passes focused semantics compiled and interpreted", () => {
+		assertResultPass(runToStdout(compiled));
+		assertResultPass(runToStdout(interpreted));
 	});
 
-	it("passes under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
-		assertResultPass(runToStdout(bin, { env: STRESS_ENV }));
+	it("loads pinned unmodified etag and cookie-signature", () => {
+		assertResultPass(runToStdout(pinnedCompiled));
+		assertResultPass(runToStdout(pinnedInterpreted));
+	});
+
+	it("passes focused and pinned fixtures under GC stress", () => {
+		for (const binary of [compiled, interpreted, pinnedCompiled, pinnedInterpreted]) {
+			assertResultPass(runToStdout(binary, { env: STRESS_ENV }));
+		}
 	});
 });

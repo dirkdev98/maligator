@@ -362,7 +362,7 @@ test("resolves supported node:* imports to virtual host modules (no disk read) w
 	);
 });
 
-test("host catalog includes path normalize and crypto randomUUID", () => {
+test("host catalog includes path and the curated crypto slice", () => {
 	write("catalog.mjs", `import "node:path";\nimport "node:crypto";\n`);
 	const graph = buildModuleGraph(path.join(root, "catalog.mjs"), {
 		buildConfig: nodeOn,
@@ -374,7 +374,13 @@ test("host catalog includes path normalize and crypto randomUUID", () => {
 	expect(pathSpec.hasDefault).toBe(true);
 
 	const cryptoSpec = graph.modules.get("node:crypto")!.host!;
-	expect(cryptoSpec.named).toEqual(["hash", "randomUUID"]);
+	expect(cryptoSpec.named).toEqual([
+		"createHash",
+		"createHmac",
+		"hash",
+		"randomUUID",
+		"timingSafeEqual",
+	]);
 	expect(cryptoSpec.hasDefault).toBe(false);
 });
 

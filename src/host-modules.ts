@@ -117,10 +117,10 @@ const CHILD_PROCESS: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:child_process"),
 };
 
-// crypto exposes the one-shot hash helper and RFC 4122 v4 UUID generation.
+// Curated hashing helpers used by the runtime and pinned Express dependencies.
 const CRYPTO: HostModuleSpec = {
 	id: "node:crypto",
-	named: ["hash", "randomUUID"],
+	named: ["createHash", "createHmac", "hash", "randomUUID", "timingSafeEqual"],
 	hasDefault: false,
 	installer: hostInstallerSymbol("node:crypto"),
 };

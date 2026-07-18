@@ -5,16 +5,17 @@
 /*
  * node:crypto host built-in (runtime layer, behind surface.node / MAL_NODE).
  *
- * A deliberately tiny slice: the one-shot `crypto.hash(algorithm, data,
- * outputEncoding)` helper and `crypto.randomUUID()`. The SHA-256 core is pure,
- * self-contained C (FIPS 180-4) with no OpenSSL / Rust dependency. UUIDs use the
- * engine-neutral host entropy API and set the RFC 4122 version 4 / variant bits.
+ * A deliberately tiny slice: one-shot SHA-256 `hash`, streaming SHA-1
+ * `createHash`, streaming SHA-256 `createHmac`, `timingSafeEqual`, and
+ * `randomUUID`. The digest cores are pure, self-contained C (FIPS 180-4) with
+ * no OpenSSL / Rust dependency.
  *
- * Supported surface (anything outside it throws TypeError): algorithm as the
- * primitive string "sha256", data as a primitive string (UTF-8 encoded,
- * mandatory) or a byte source (ArrayBuffer, TypedArray, or DataView, hashed as
- * raw bytes), and optional output encoding as the primitive string "hex".
- * Detached buffers and views made out of bounds by a resize are rejected.
+ * The streaming slice accepts only createHash("sha1") and
+ * createHmac("sha256", string-or-ArrayBufferView), UTF-8 strings (using utf8 or
+ * utf-8, case-insensitively) or ArrayBufferView updates, and digest("base64").
+ * The one-shot helper remains
+ * hash("sha256", string-or-byte-source, "hex"). Detached and out-of-bounds
+ * views are rejected, and finalized streaming state cannot be reused.
  */
 
 typedef struct MalVm MalVm;
@@ -22,7 +23,7 @@ typedef struct MalHostInstallSlot MalHostInstallSlot;
 typedef struct MalHostLaunchContext MalHostLaunchContext;
 
 /**
- * Fill the `node:crypto` export slots (`hash` and `randomUUID`) with native values.
+ * Fill the curated `node:crypto` export slots with native values.
  * Matches the engine-neutral MalHostInstaller ABI (see runtime/src/vm.h): the
  * emitted host-install manifest references this symbol for a program that imports
  * a supported export from `node:crypto`. Unknown slots are left untouched.
