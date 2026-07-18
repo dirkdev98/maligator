@@ -64,7 +64,11 @@ stated acceptance point without patching Express or anything in `node_modules`.
       `ServerResponse`, and header helpers) is implemented. Per-realm `Server` and
       `createServer` now inherit EventEmitter behavior and wire Express as the
       `request` listener. The next slice is transport-backed
-      `listen`/`address`/`close`.
+      `listen`/`address`/`close`. That lifecycle now binds real ephemeral IPv4
+      listeners, reports the kernel address, emits ordered asynchronous lifecycle
+      events, roots active servers, and drains accepted connections before close.
+      The next slice is per-server request transport bridging into
+      `IncomingMessage`/`ServerResponse` and the registered `request` listener.
 - [ ] **Wave 4: pass the Express behavior baseline.** Run the existing smoke
       runner under Maligator and match real Node for route dispatch, decoded
       route parameters, repeated query values, ordered application/route/async
