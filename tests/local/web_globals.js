@@ -256,6 +256,11 @@ try {
 }
 check("getRandomValues missing argument remains TypeError", grvMissingThrew);
 
+// --- console UTF-8 stdout sentinel ---
+// builtin_console must emit accented BMP (é), euro (€), and a supplementary
+// emoji (😀, a surrogate pair) as valid UTF-8 rather than \u escapes.
+console.log("SENTINEL é€😀");
+
 // --- queueMicrotask ordering (runs after sync, before timers) ---
 let order = "";
 queueMicrotask(() => {

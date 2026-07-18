@@ -1,7 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
 	assertResultPass,
 	buildNativeBinary,
@@ -75,5 +76,33 @@ describe.each(FIXTURES)("$name", ({ name, fixture, interpreted }) => {
 
 	it.runIf(interpreted)("passes interpreted under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
 		assertResultPass(runToStdout(interpretedBin!, { env: STRESS_ENV }));
+	});
+
+	// The web globals fixture logs a non-ASCII sentinel; console string output must
+	// be valid UTF-8 (accented BMP, euro, and a supplementary emoji), not \u escapes.
+	it.runIf(name === "web globals")("emits console strings as UTF-8", () => {
+		const raw = execFileSync(bin, { encoding: "buffer", timeout: 20000 });
+		const sentinel = Buffer.from([
+			0x53,
+			0x45,
+			0x4e,
+			0x54,
+			0x49,
+			0x4e,
+			0x45,
+			0x4c,
+			0x20, // "SENTINEL "
+			0xc3,
+			0xa9, // é  U+00E9
+			0xe2,
+			0x82,
+			0xac, // €  U+20AC
+			0xf0,
+			0x9f,
+			0x98,
+			0x80, // 😀 U+1F600
+			0x0a, // "\n"
+		]);
+		expect(raw.includes(sentinel)).toBe(true);
 	});
 });

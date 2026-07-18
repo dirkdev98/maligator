@@ -1,23 +1,22 @@
 #include "builtin_console.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "heap_string.h"
 #include "property_iter.h"
+#include "text_encoding.h"
 #include "value_ops.h"
 #include "vm.h"
 
 static void mal_builtin_console_print_string(FILE *stream, const MalString *string) {
-    const c16 *code_units = mal_string_code_units(string);
-    for (usize i = 0; i < mal_string_length(string); i++) {
-        c16 code_unit = code_units[i];
-        if (code_unit <= 0x7F) {
-            fputc((char) code_unit, stream);
-        } else {
-            // Non-ASCII output is not encoded as UTF-8 yet.
-            fprintf(stream, "\\u%04x", code_unit);
-        }
+    usize byte_len;
+    byte *bytes = mal_utf8_encode(mal_string_code_units(string), mal_string_length(string), &byte_len);
+    if (bytes == nullptr) {
+        return;
     }
+    fwrite(bytes, 1, byte_len, stream);
+    free(bytes);
 }
 
 static void mal_builtin_console_print_value(MalVm *vm, FILE *stream, MalValue value, bool quote_strings);
