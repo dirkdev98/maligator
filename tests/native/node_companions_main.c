@@ -12,6 +12,7 @@ static const MalIntrinsic companion_slots[] = {
     MAL_INTRINSIC_NODE_URL_MODULE,
     MAL_INTRINSIC_NODE_QUERYSTRING_MODULE,
     MAL_INTRINSIC_NODE_NET_MODULE,
+    MAL_INTRINSIC_NODE_OS_MODULE,
 };
 
 static void install_fragmented(
@@ -19,6 +20,11 @@ static void install_fragmented(
     for (i32 step = 0; step < vm->definition->host_install_count; step++) {
         i32 index = reverse ? vm->definition->host_install_count - step - 1 : step;
         const MalHostInstall *install = &vm->definition->host_installs[index];
+        if (install->installer == nullptr) continue;
+        if (install->slot_count == 0) {
+            install->installer(vm, nullptr, 0, launch);
+            continue;
+        }
         for (i32 slot_step = 0; slot_step < install->slot_count; slot_step++) {
             i32 slot = reverse ? install->slot_count - slot_step - 1 : slot_step;
             install->installer(vm, &install->slots[slot], 1, launch);

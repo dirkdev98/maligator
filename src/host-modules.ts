@@ -195,6 +195,13 @@ const NET: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:net"),
 };
 
+const OS: HostModuleSpec = {
+	id: "node:os",
+	named: ["release"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:os"),
+};
+
 const STRING_DECODER: HostModuleSpec = {
 	id: "node:string_decoder",
 	named: ["StringDecoder"],
@@ -226,6 +233,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		URL,
 		QUERYSTRING,
 		NET,
+		OS,
 		STRING_DECODER,
 		ZLIB,
 	].map((spec) => [spec.id, spec]),

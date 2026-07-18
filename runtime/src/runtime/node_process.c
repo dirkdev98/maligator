@@ -6,6 +6,7 @@
 #include <limits.h>
 #include <math.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -24,6 +25,7 @@
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
+#include "web_globals.h"
 
 // The process environment. On Darwin the real environ of an executable is reached
 // through _NSGetEnviron(); the bare `extern char **environ` only resolves in a
@@ -249,6 +251,66 @@ static MalValue mal_process_kill(
     return mal_value_new_boolean(true);
 }
 
+static MalValue mal_process_stdio_write(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt;
+    (void) callee;
+    if (argc < 1) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "The \"chunk\" argument is required");
+        return mal_value_new_undefined();
+    }
+
+    MalValue fd_value;
+    if (!mal_vm_get_property(
+            vm, self, mal_intrinsic_string_key(vm, (const byte *) "fd"), &fd_value)
+        || !mal_ops_is_number(fd_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "stdio write called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    int fd = (int) mal_ops_number_as_f64(fd_value);
+    if (fd != STDOUT_FILENO && fd != STDERR_FILENO) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "stdio stream has an invalid file descriptor");
+        return mal_value_new_undefined();
+    }
+
+    MalString *string = mal_ops_to_string(&vm->heap, args[0]);
+    usize length;
+    byte *bytes = mal_utf8_encode(
+        mal_string_code_units(string), mal_string_length(string), &length);
+    usize offset = 0;
+    while (offset < length) {
+        ssize_t written = write(fd, bytes + offset, length - offset);
+        if (written < 0 && errno == EINTR) continue;
+        if (written <= 0) {
+            free(bytes);
+            return mal_value_new_boolean(false);
+        }
+        offset += (usize) written;
+    }
+    free(bytes);
+    return mal_value_new_boolean(true);
+}
+
+static MalValue mal_process_build_stdio(MalVm *vm, int fd) {
+    const MalPropertyFlags flags =
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+    MalValue stream_value = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan root;
+    mal_gc_root(&root, &stream_value, 1);
+    MalObject *stream = mal_value_to_object(stream_value);
+    mal_intrinsic_define_data(
+        vm, stream, (const byte *) "fd", mal_value_from_i32(fd), flags);
+    mal_intrinsic_define_data(vm, stream, (const byte *) "isTTY",
+        mal_value_new_boolean(isatty(fd) == 1), flags);
+    mal_intrinsic_define_method_n(
+        vm, stream, (const byte *) "write", 1, mal_process_stdio_write);
+    mal_gc_unroot(&root);
+    return stream_value;
+}
+
 void mal_host_install_process(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     (void) slots;
@@ -257,6 +319,11 @@ void mal_host_install_process(
     MalRootSpan root;
     mal_gc_root(&root, &process_val, 1);
     MalObject *process = mal_value_to_object(process_val);
+    MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
+
+#if !MAL_WEB_PLATFORM
+    mal_text_encoding_globals_install(vm, global_this);
+#endif
 
     const MalPropertyFlags data_flags =
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
@@ -274,6 +341,20 @@ void mal_host_install_process(
     mal_gc_root(&env_root, &env, 1);
     mal_intrinsic_define_data(vm, process, (const byte *) "env", env, data_flags);
     mal_gc_unroot(&env_root);
+
+    MalValue stdout_value = mal_process_build_stdio(vm, STDOUT_FILENO);
+    MalRootSpan stdout_root;
+    mal_gc_root(&stdout_root, &stdout_value, 1);
+    mal_intrinsic_define_data(
+        vm, process, (const byte *) "stdout", stdout_value, data_flags);
+    mal_gc_unroot(&stdout_root);
+
+    MalValue stderr_value = mal_process_build_stdio(vm, STDERR_FILENO);
+    MalRootSpan stderr_root;
+    mal_gc_root(&stderr_root, &stderr_value, 1);
+    mal_intrinsic_define_data(
+        vm, process, (const byte *) "stderr", stderr_value, data_flags);
+    mal_gc_unroot(&stderr_root);
 
     mal_intrinsic_define_method_n(vm, process, (const byte *) "cwd", 0, mal_process_cwd);
     mal_intrinsic_define_method_n(vm, process, (const byte *) "exit", 1, mal_process_exit);
@@ -305,7 +386,6 @@ void mal_host_install_process(
 
     // A free `process` identifier resolves through the ordinary global object, so
     // publish the same writable/configurable property observed by globalThis.process.
-    MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     mal_intrinsic_define_data(
         vm, global_this, (const byte *) "process", process_val, data_flags);
 

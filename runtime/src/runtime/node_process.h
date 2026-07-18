@@ -19,9 +19,10 @@
  *   - cwd(): the current working directory.
  *   - exit(code), plus pid/kill for child-signal propagation.
  *   - platform/arch metadata used by native toolchain diagnostics.
+ *   - stdout/stderr stream-like objects with fd, isTTY, and write().
  *
- * No node:process module, signals, streams, or metadata — only the four members
- * above. `launch` carries the OS command line (argc/argv) the driver's `main`
+ * No node:process module or signal event surface. `launch` carries the OS command
+ * line (argc/argv) the driver's `main`
  * received; the driver threads its own argc/argv through mal_vm_run_host_installs.
  */
 void mal_host_install_process(

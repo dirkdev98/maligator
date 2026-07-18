@@ -280,6 +280,14 @@ describe("host-install manifest", () => {
 		);
 	});
 
+	it("installs Node text encoding globals without the web surface", () => {
+		const def = compile(`globalThis.sink = new TextDecoder();\n`, { node: true });
+		expect(def.hostInstalls).toContainEqual({
+			installer: "mal_host_install_process",
+			exports: [],
+		});
+	});
+
 	it("leaves an ordinary program's manifest empty", () => {
 		const def = compile(`globalThis.sink = process;\n`, { node: false });
 		expect(def.hostInstalls).toEqual([]);

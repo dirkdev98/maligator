@@ -81,11 +81,11 @@ export interface ModuleLinkage {
 	}>;
 
 	/**
-	 * The global `process` object, when the program reads it as a free (unresolved)
-	 * global and the build enables the node surface (`graph.nodeEnabled`). The
+	 * Node globals installed with `process`, when the program reads `process`,
+	 * `TextEncoder`, or `TextDecoder` as a free global and the node surface is on. The
 	 * binding remains unresolved so reads and writes retain ordinary global-object
 	 * semantics; this marker only statically retains the native installer.
-	 * Undefined when `process` is unused, shadowed by a local, or the node surface
+	 * Undefined when these globals are unused, shadowed by locals, or the node surface
 	 * is off. See {@link PROCESS_INSTALLER_SYMBOL}.
 	 */
 	hostProcess?: { installer: string };
@@ -635,7 +635,11 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 						binding.name === name && binding.undeclared && binding.usageNodes.length > 0,
 				),
 			);
-		if (freeGlobalUsed("process")) {
+		if (
+			freeGlobalUsed("process") ||
+			freeGlobalUsed("TextEncoder") ||
+			freeGlobalUsed("TextDecoder")
+		) {
 			linkage.hostProcess = { installer: PROCESS_INSTALLER_SYMBOL };
 		}
 		if (freeGlobalUsed("Buffer")) {

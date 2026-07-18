@@ -10,6 +10,19 @@ const barePath = require("path");
 const canonicalPath = require("node:path");
 check(barePath === canonicalPath);
 check(typeof barePath.join === "function");
+function requirePathFromNestedFunction() {
+	return require("node:path");
+}
+check(requirePathFromNestedFunction() === canonicalPath);
+exports.capturedMarker = {};
+exports.reducedMarker = Object.keys({})
+	.filter(() => true)
+	.reduce((value) => value, {});
+function readExportsFromNestedFunction() {
+	return exports.capturedMarker;
+}
+check(readExportsFromNestedFunction() === exports.capturedMarker);
+check(typeof exports.reducedMarker === "object" && exports.reducedMarker !== null);
 
 const identityA = require("./commonjs-identity.cjs");
 const identityB = require("./commonjs-identity.cjs");

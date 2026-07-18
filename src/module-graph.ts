@@ -143,13 +143,13 @@ export interface BuildModuleGraphOptions {
  * so a package's `node`-specific entry is inert unless the build opts into the
  * node surface.
  */
-const BASE_EXPORT_CONDITIONS = ["maligator", "import", "default"];
-
-/** The active `exports` conditions for a build (adds `node` only when enabled). */
-function exportConditions(nodeEnabled: boolean): ReadonlySet<string> {
-	return new Set(
-		nodeEnabled ? [...BASE_EXPORT_CONDITIONS, "node"] : BASE_EXPORT_CONDITIONS,
-	);
+/** The active `exports` conditions for a dependency edge. */
+function exportConditions(
+	nodeEnabled: boolean,
+	mode: "import" | "require",
+): ReadonlySet<string> {
+	const conditions = ["maligator", mode, "default"];
+	return new Set(nodeEnabled ? [...conditions, "node"] : conditions);
 }
 
 /**
@@ -178,7 +178,7 @@ export function buildModuleGraph(
 	const nodeEnabled = options.buildConfig?.surface.node ?? false;
 	const ctx: ResolveContext = {
 		nodeEnabled,
-		conditions: exportConditions(nodeEnabled),
+		conditions: exportConditions(nodeEnabled, "import"),
 	};
 
 	const load = (filePath: string, goal: ModuleGoal, sourceOverride?: string) => {
@@ -216,7 +216,13 @@ export function buildModuleGraph(
 				const resolved = resolveSpecifier(
 					canonicalHostId ?? canonicalBuiltinId ?? dependency.specifier,
 					filePath,
-					ctx,
+					{
+						...ctx,
+						conditions: exportConditions(
+							ctx.nodeEnabled,
+							dependency.kind === "require" ? "require" : "import",
+						),
+					},
 				);
 				if ("host" in resolved) {
 					if (dependency.kind === "dynamic") {
@@ -337,8 +343,9 @@ function detectDependencyGoal(
 }
 
 /**
- * Walk up from a directory looking for the nearest `package.json` with a "type"
- * field, returning the goal it implies (module vs commonjs).
+ * Walk up from a directory looking for the nearest `package.json`. That package
+ * boundary decides the goal: only `"type": "module"` selects ESM; an absent or
+ * unrecognized type defaults to CommonJS and must not inherit from an ancestor.
  */
 function findNearestPackageType(
 	dir: string,
@@ -349,7 +356,7 @@ function findNearestPackageType(
 	}
 
 	const pkg = readPackageJson(path.join(dir, "package.json"));
-	if (pkg && typeof pkg.type === "string") {
+	if (pkg) {
 		const goal: ModuleGoal = pkg.type === "module" ? "module" : "cjs";
 		cache.set(dir, goal);
 		return goal;

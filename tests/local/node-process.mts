@@ -71,6 +71,12 @@ check(
 	process.platform === "darwin" || process.platform === "linux",
 );
 check("arch is supported", process.arch === "arm64" || process.arch === "x64");
+check("stdout fd", process.stdout.fd === 1);
+check("stderr fd", process.stderr.fd === 2);
+check("stdout isTTY", typeof process.stdout.isTTY === "boolean");
+check("stderr isTTY", typeof process.stderr.isTTY === "boolean");
+check("stdout write", process.stdout.write("") === true);
+check("stderr write", process.stderr.write("") === true);
 
 function checkExitRangeError(name: string, code: number): void {
 	try {

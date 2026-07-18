@@ -203,7 +203,7 @@ export interface IntermediateProgram {
 	}>;
 
 	/**
-	 * The free global `process` when the node surface is on (see src/linker.ts).
+	 * Free Node globals installed with `process` (see src/linker.ts).
 	 * `retained` becomes true when reachable compilation encounters it; lower-vm
 	 * then emits its slot-free installer manifest. Null otherwise.
 	 */
@@ -10814,7 +10814,13 @@ function compileStaticIdentifier(
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */
 function retainHostGlobal(program: IntermediateProgram, binding: Binding): boolean {
-	if (program.hostProcess && binding.undeclared && binding.name === "process") {
+	if (
+		program.hostProcess &&
+		binding.undeclared &&
+		(binding.name === "process" ||
+			binding.name === "TextEncoder" ||
+			binding.name === "TextDecoder")
+	) {
 		program.hostProcess.retained = true;
 		return true;
 	}

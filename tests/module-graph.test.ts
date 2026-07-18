@@ -125,10 +125,19 @@ test("detects .js entry goals from the nearest package type", () => {
 	write("commonjs-package/package.json", JSON.stringify({ type: "commonjs" }));
 	write("commonjs-package/entry.js", `module.exports = require("./dependency.js");\n`);
 	write("commonjs-package/dependency.js", `module.exports = 42;\n`);
+	write("module-ancestor/package.json", JSON.stringify({ type: "module" }));
+	write(
+		"module-ancestor/default-package/package.json",
+		JSON.stringify({ name: "default-package" }),
+	);
+	write("module-ancestor/default-package/entry.js", `module.exports = 42;\n`);
 	write("module-package/package.json", JSON.stringify({ type: "module" }));
 	write("module-package/entry.js", `export const value = 42;\n`);
 
 	const commonjs = buildModuleGraph(path.join(root, "commonjs-package/entry.js"));
+	const defaultCommonjs = buildModuleGraph(
+		path.join(root, "module-ancestor/default-package/entry.js"),
+	);
 	const module = buildModuleGraph(path.join(root, "module-package/entry.js"));
 
 	expect(commonjs.modules.get(commonjs.entry)!.goal).toBe("cjs");
@@ -136,6 +145,7 @@ test("detects .js entry goals from the nearest package type", () => {
 		commonjs.modules.get(path.join(root, "commonjs-package/dependency.js"))!.goal,
 	).toBe("cjs");
 	expect(commonjs.modules.size).toBe(2);
+	expect(defaultCommonjs.modules.get(defaultCommonjs.entry)!.goal).toBe("cjs");
 	expect(module.modules.get(module.entry)!.goal).toBe("module");
 });
 
@@ -173,6 +183,7 @@ test("traverses the complete pinned Express initialization graph", () => {
 	expect(graph.modules.get("node:url")?.host?.named).toEqual(["Url", "parse", "format"]);
 	expect(graph.modules.get("node:querystring")?.host?.named).toEqual(["parse"]);
 	expect(graph.modules.get("node:net")?.host?.named).toEqual(["isIP"]);
+	expect(graph.modules.get("node:os")?.host?.named).toEqual(["release"]);
 });
 
 test("requires an explicit stripper for TypeScript and applies it across the graph", () => {
@@ -364,6 +375,39 @@ test("the node export condition is gated on surface.node", () => {
 			specifier: "ordered",
 			kind: "import",
 			resolved: path.join("node_modules", "ordered", "node.mjs"),
+		},
+	]);
+});
+
+test("selects package export conditions by dependency kind", () => {
+	write(
+		"node_modules/dual/package.json",
+		JSON.stringify({
+			type: "module",
+			exports: { import: "./import.mjs", require: "./require.cjs" },
+		}),
+	);
+	write("node_modules/dual/import.mjs", `export default "import";\n`);
+	write("node_modules/dual/require.cjs", `module.exports = "require";\n`);
+	write("dual-import.mjs", `import value from "dual";\nglobalThis.sink = value;\n`);
+	write("dual-require.cjs", `module.exports = require("dual");\n`);
+
+	expect(
+		depSummary(buildModuleGraph(path.join(root, "dual-import.mjs")), "dual-import.mjs"),
+	).toEqual([
+		{
+			specifier: "dual",
+			kind: "import",
+			resolved: path.join("node_modules", "dual", "import.mjs"),
+		},
+	]);
+	expect(
+		depSummary(buildModuleGraph(path.join(root, "dual-require.cjs")), "dual-require.cjs"),
+	).toEqual([
+		{
+			specifier: "dual",
+			kind: "require",
+			resolved: path.join("node_modules", "dual", "require.cjs"),
 		},
 	]);
 });

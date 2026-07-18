@@ -306,6 +306,7 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_NODE_URL_MODULE,
     MAL_INTRINSIC_NODE_QUERYSTRING_MODULE,
     MAL_INTRINSIC_NODE_NET_MODULE,
+    MAL_INTRINSIC_NODE_OS_MODULE,
     /* Per-realm node:zlib CommonJS/default export object, populated lazily. */
     MAL_INTRINSIC_NODE_ZLIB_MODULE,
 #if MAL_REALMS

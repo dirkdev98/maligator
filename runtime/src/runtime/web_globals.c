@@ -842,13 +842,7 @@ static MalValue mal_web_structured_clone(
  * Installation.
  * --------------------------------------------------------------------------- */
 
-void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
-    mal_web_mono_base_ns = mal_web_mono_ns();
-    struct timespec rt;
-    clock_gettime(CLOCK_REALTIME, &rt);
-    mal_web_time_origin_ms = (f64) rt.tv_sec * 1000.0 + (f64) rt.tv_nsec / 1.0e6;
-
-    // TextEncoder / TextDecoder.
+void mal_text_encoding_globals_install(MalVm *vm, MalObject *global_this) {
     MalObject *enc_proto =
         mal_web_install_class(vm, global_this, (const byte *) "TextEncoder", 0,
             mal_web_text_encoder_ctor, "utf-8");
@@ -862,6 +856,15 @@ void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
             mal_web_text_decoder_ctor, "utf-8");
     mal_intrinsic_define_method_n(vm, dec_proto, (const byte *) "decode", 1,
         mal_web_text_decoder_decode);
+}
+
+void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
+    mal_web_mono_base_ns = mal_web_mono_ns();
+    struct timespec rt;
+    clock_gettime(CLOCK_REALTIME, &rt);
+    mal_web_time_origin_ms = (f64) rt.tv_sec * 1000.0 + (f64) rt.tv_nsec / 1.0e6;
+
+    mal_text_encoding_globals_install(vm, global_this);
 
     // btoa / atob.
     mal_intrinsic_define_method_n(vm, global_this, (const byte *) "btoa", 1, mal_web_btoa);
