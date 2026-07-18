@@ -165,12 +165,14 @@ test("explicit entry goals and goal-specific extensions take precedence over pac
 	expect(module.modules.get(module.entry)!.goal).toBe("module");
 });
 
-test("traverses Express initialization through node:http to node:url", () => {
+test("traverses the complete pinned Express initialization graph", () => {
 	const entry = path.resolve("tests/fixtures/express-5/app.js");
+	const graph = buildModuleGraph(entry, { buildConfig: nodeOn });
 
-	expect(() => buildModuleGraph(entry, { buildConfig: nodeOn })).toThrow(
-		/Cannot resolve 'url' from .*parseurl[/\\]index\.js: unknown node built-in module 'node:url'/,
-	);
+	expect(graph.modules.has("node:http")).toBe(true);
+	expect(graph.modules.get("node:url")?.host?.named).toEqual(["Url", "parse", "format"]);
+	expect(graph.modules.get("node:querystring")?.host?.named).toEqual(["parse"]);
+	expect(graph.modules.get("node:net")?.host?.named).toEqual(["isIP"]);
 });
 
 test("requires an explicit stripper for TypeScript and applies it across the graph", () => {

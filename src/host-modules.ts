@@ -174,6 +174,27 @@ const HTTP: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:http"),
 };
 
+const URL: HostModuleSpec = {
+	id: "node:url",
+	named: ["Url", "parse", "format"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:url"),
+};
+
+const QUERYSTRING: HostModuleSpec = {
+	id: "node:querystring",
+	named: ["parse"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:querystring"),
+};
+
+const NET: HostModuleSpec = {
+	id: "node:net",
+	named: ["isIP"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:net"),
+};
+
 const STRING_DECODER: HostModuleSpec = {
 	id: "node:string_decoder",
 	named: ["StringDecoder"],
@@ -202,6 +223,9 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		ASYNC_HOOKS,
 		STREAM,
 		HTTP,
+		URL,
+		QUERYSTRING,
+		NET,
 		STRING_DECODER,
 		ZLIB,
 	].map((spec) => [spec.id, spec]),
