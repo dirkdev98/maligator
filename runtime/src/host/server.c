@@ -20,6 +20,7 @@ MalHttpHandler mal_http_handler = nullptr;
 typedef enum MalHttpRequestBehavior {
     MAL_HTTP_REQUEST_FIXED,
     MAL_HTTP_REQUEST_HANDLER,
+    MAL_HTTP_REQUEST_SERVER_HANDLER,
     MAL_HTTP_REQUEST_CLOSE,
 } MalHttpRequestBehavior;
 
@@ -29,6 +30,8 @@ struct MalHttpServer {
     MalOp accept_op;
     MalHttpRequestBehavior request_behavior;
     MalHttpHandler handler;
+    MalHttpServerHandler server_handler;
+    void *handler_data;
     struct MalHttpConn *connections;
     usize connection_count;
     bool closing;
@@ -51,6 +54,11 @@ typedef struct MalHttpConn {
     usize wsent;
 
     bool keep_alive;
+    bool awaiting_response;
+    bool in_handler;
+    bool close_pending;
+    MalHttpResponseCompleteCallback response_callback;
+    void *response_data;
     MalHttpServer *server;
     struct MalHttpConn *next;
 } MalHttpConn;
@@ -73,6 +81,10 @@ static void server_finish_close(MalHttpServer *server) {
 }
 
 static void conn_close(MalHttpConn *c) {
+    if (c->in_handler) {
+        c->close_pending = true;
+        return;
+    }
     MalHttpServer *server = c->server;
     (void) mal_reactor_cancel_op(conn_reactor(c), &c->read_op);
     (void) mal_reactor_cancel_op(conn_reactor(c), &c->write_op);
@@ -87,7 +99,10 @@ static void conn_close(MalHttpConn *c) {
     }
     free(c->rbuf);
     free(c->wbuf);
+    MalHttpResponseCompleteCallback response_callback = c->response_callback;
+    void *response_data = c->response_data;
     free(c);
+    if (response_callback != nullptr) response_callback(response_data);
     if (server->closing && server->connection_count == 0) {
         server_finish_close(server);
     }
@@ -112,25 +127,29 @@ static bool conn_arm_write(MalHttpConn *c) {
 
 /* Queue a response with the given status + body bytes; caller sets c->keep_alive
  * first. Public: the runtime's fetch hook calls this with the Response bytes. */
-void mal_http_conn_respond(
+void mal_http_conn_respond_framed(
     MalHttpConn *c,
     int status,
     const char *reason,
     const char *headers,
     usize headers_len,
     const char *body,
-    usize body_len) {
+    usize body_len,
+    i64 declared_content_length) {
     static const char default_ct[] = "Content-Type: text/plain; charset=utf-8\r\n";
 
     char status_line[128];
     int status_len = snprintf(status_line, sizeof(status_line), "HTTP/1.1 %d %s\r\n", status, reason);
     char framing[128];
-    int framing_len = snprintf(
-        framing,
-        sizeof(framing),
-        "Content-Length: %zu\r\nConnection: %s\r\n\r\n",
-        (size_t) body_len,
-        c->keep_alive ? "keep-alive" : "close");
+    bool keep_alive = c->keep_alive && !c->server->closing;
+    int framing_len = declared_content_length < 0
+        ? snprintf(framing, sizeof(framing), "Connection: %s\r\n\r\n",
+                   keep_alive ? "keep-alive" : "close")
+        : snprintf(
+            framing, sizeof(framing),
+            "Content-Length: %lld\r\nConnection: %s\r\n\r\n",
+            (long long) declared_content_length,
+            keep_alive ? "keep-alive" : "close");
     if (status_len < 0 || framing_len < 0) {
         conn_close(c);
         return;
@@ -143,6 +162,10 @@ void mal_http_conn_respond(
     free(c->wbuf);
     c->wlen = (usize) status_len + hdr_len + (usize) framing_len + body_len;
     c->wbuf = malloc(c->wlen);
+    if (c->wbuf == nullptr) {
+        conn_close(c);
+        return;
+    }
     usize o = 0;
     memcpy(c->wbuf + o, status_line, (usize) status_len);
     o += (usize) status_len;
@@ -154,9 +177,32 @@ void mal_http_conn_respond(
         memcpy(c->wbuf + o, body, body_len);
     }
     c->wsent = 0;
+    c->awaiting_response = false;
     if (!conn_arm_write(c)) {
         conn_close(c);
     }
+}
+
+void mal_http_conn_respond(
+    MalHttpConn *c,
+    int status,
+    const char *reason,
+    const char *headers,
+    usize headers_len,
+    const char *body,
+    usize body_len) {
+    mal_http_conn_respond_framed(
+        c, status, reason, headers, headers_len, body, body_len, (i64) body_len);
+}
+
+void mal_http_conn_close_after_response(MalHttpConn *c) {
+    c->keep_alive = false;
+}
+
+void mal_http_conn_on_response_complete(
+    MalHttpConn *c, MalHttpResponseCompleteCallback callback, void *data) {
+    c->response_callback = callback;
+    c->response_data = data;
 }
 
 static void conn_send_error(MalHttpConn *c, int status, const char *reason) {
@@ -222,8 +268,14 @@ static void conn_process(MalHttpConn *c) {
     c->keep_alive = req.keep_alive;
 
     // Dispatch using behavior captured by this server when it started.
+    c->awaiting_response = true;
+    c->in_handler = true;
     if (c->server->request_behavior == MAL_HTTP_REQUEST_HANDLER) {
         c->server->handler(c->vm, c, &req, c->rbuf + consumed, body_len);
+    } else if (c->server->request_behavior == MAL_HTTP_REQUEST_SERVER_HANDLER) {
+        c->server->server_handler(
+            c->server->handler_data, c->vm, c, &req,
+            c->rbuf + consumed, body_len);
     } else if (c->server->request_behavior == MAL_HTTP_REQUEST_FIXED) {
         char msg[512];
         int n = snprintf(
@@ -236,6 +288,12 @@ static void conn_process(MalHttpConn *c) {
             req.target);
         mal_http_conn_respond(c, 200, "OK", nullptr, 0, msg, n > 0 ? (usize) n : 0);
     } else {
+        c->in_handler = false;
+        conn_close(c);
+        return;
+    }
+    c->in_handler = false;
+    if (c->close_pending) {
         conn_close(c);
         return;
     }
@@ -301,7 +359,16 @@ static void conn_write_cb(void *data) {
     }
 
     // Response fully written.
-    if (!c->keep_alive) {
+    free(c->wbuf);
+    c->wbuf = nullptr;
+    c->wlen = 0;
+    c->wsent = 0;
+    MalHttpResponseCompleteCallback response_callback = c->response_callback;
+    void *response_data = c->response_data;
+    c->response_callback = nullptr;
+    c->response_data = nullptr;
+    if (response_callback != nullptr) response_callback(response_data);
+    if (!c->keep_alive || c->server->closing) {
         conn_close(c);
         return;
     }
@@ -364,7 +431,8 @@ static void server_accept_cb(void *data) {
 
 static MalHttpServer *server_start(
     MalVm *vm, const char *host, u16 port,
-    MalHttpRequestBehavior request_behavior, MalHttpHandler handler) {
+    MalHttpRequestBehavior request_behavior, MalHttpHandler handler,
+    MalHttpServerHandler server_handler, void *handler_data) {
     int fd = mal_net_listen(host, port, 128);
     if (fd < 0) {
         return nullptr;
@@ -378,6 +446,8 @@ static MalHttpServer *server_start(
     server->listen_fd = fd;
     server->request_behavior = request_behavior;
     server->handler = handler;
+    server->server_handler = server_handler;
+    server->handler_data = handler_data;
     server->accept_op.fd = fd;
     server->accept_op.interest = MAL_IO_READ;
     server->accept_op.waker = (MalWaker) {.fn = server_accept_cb, .data = server};
@@ -394,12 +464,24 @@ MalHttpServer *mal_http_server_start(MalVm *vm, const char *host, u16 port) {
     return server_start(
         vm, host, port,
         handler == nullptr ? MAL_HTTP_REQUEST_FIXED : MAL_HTTP_REQUEST_HANDLER,
-        handler);
+        handler, nullptr, nullptr);
 }
 
 MalHttpServer *mal_http_server_start_unhandled(
     MalVm *vm, const char *host, u16 port) {
-    return server_start(vm, host, port, MAL_HTTP_REQUEST_CLOSE, nullptr);
+    return server_start(
+        vm, host, port, MAL_HTTP_REQUEST_CLOSE, nullptr, nullptr, nullptr);
+}
+
+MalHttpServer *mal_http_server_start_handler(
+    MalVm *vm,
+    const char *host,
+    u16 port,
+    MalHttpServerHandler handler,
+    void *data) {
+    if (handler == nullptr) return nullptr;
+    return server_start(
+        vm, host, port, MAL_HTTP_REQUEST_SERVER_HANDLER, nullptr, handler, data);
 }
 
 u16 mal_http_server_port(const MalHttpServer *server) {
@@ -418,6 +500,18 @@ void mal_http_server_close(
     (void) mal_reactor_cancel_op(&mal_host(server->vm)->reactor, &server->accept_op);
     mal_net_close(server->listen_fd);
     server->listen_fd = -1;
+    MalHttpConn *conn = server->connections;
+    while (conn != nullptr) {
+        MalHttpConn *next = conn->next;
+        if (!conn->awaiting_response && conn->wbuf == nullptr) {
+            if (server->connection_count == 1) {
+                conn_close(conn);
+                return;
+            }
+            conn_close(conn);
+        }
+        conn = next;
+    }
     if (server->connection_count == 0) {
         server_finish_close(server);
     }
