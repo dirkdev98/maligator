@@ -18,12 +18,14 @@ describe("duplicate function declarations", () => {
 		compiled = buildNativeBinary({
 			fixture: "tests/local/duplicate-function-declarations.js",
 			name: "duplicate-function-declarations",
+			entryGoal: "script",
 			outDir,
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/duplicate-function-declarations.js",
 			name: "duplicate-function-declarations-ni",
 			compiled: false,
+			entryGoal: "script",
 			outDir,
 		});
 	});

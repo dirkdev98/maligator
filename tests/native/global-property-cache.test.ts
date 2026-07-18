@@ -19,6 +19,7 @@ describe("script global property cache", () => {
 			fixture: "tests/local/global-property-cache.js",
 			name: "global-property-cache",
 			compiled: true,
+			entryGoal: "script",
 			outDir,
 			realmsEnabled: true,
 		});
@@ -26,6 +27,7 @@ describe("script global property cache", () => {
 			fixture: "tests/local/global-property-cache.js",
 			name: "global-property-cache-ni",
 			compiled: false,
+			entryGoal: "script",
 			outDir,
 			realmsEnabled: true,
 		});

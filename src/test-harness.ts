@@ -24,6 +24,7 @@ import type { CompilerBakeInput } from "./compiler-bake.ts";
 import { emitVmDefinition } from "./emit-vm.ts";
 import { buildLocalBinary } from "./local-build.ts";
 import type { LocalBuildResult } from "./local-build.ts";
+import type { ModuleGoal } from "./module-graph.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./semantic-program.ts";
 import { stripTypesWithTypeScript } from "./typescript-strip.ts";
@@ -50,6 +51,8 @@ export interface BuildOptions {
 	name: string;
 	/** Native codegen (default) vs the bytecode interpreter (Tier B root walk). */
 	compiled?: boolean;
+	/** Explicit entry parse goal for fixtures whose semantics are script-specific. */
+	entryGoal?: ModuleGoal;
 	/** C driver to link; defaults to the test262 harness main. */
 	mainFile?: string;
 	/** Artifact directory; defaults to `.cache/mal-build`. Pass a temp dir under vitest. */
@@ -135,7 +138,11 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 		});
 	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
 		path.resolve(options.fixture),
-		{ buildConfig: config, stripTypes: stripTypesWithTypeScript },
+		{
+			buildConfig: config,
+			stripTypes: stripTypesWithTypeScript,
+			entryGoal: options.entryGoal,
+		},
 	);
 	// Tests intentionally bypass build policy so disabled-feature fixtures can
 	// compile and assert the runtime behavior of the reduced engine.

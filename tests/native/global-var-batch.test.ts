@@ -12,6 +12,7 @@ describe("batched global var initialization", () => {
 			fixture,
 			name: `global-var-batch-${compiled ? "compiled" : "interpreted"}`,
 			compiled,
+			entryGoal: "script",
 		});
 		expect(runToStdout(binary)).toBe("global-var-batch PASS\n");
 	});
