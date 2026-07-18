@@ -6,6 +6,7 @@
 
 #include "array_buffer_object.h"
 #include "array_object.h"
+#include "builtin_data_view.h"
 #include "date_object.h"
 #include "entropy.h"
 #include "events_object.h"
@@ -63,9 +64,12 @@ static MalValue mal_web_new_uint8array(MalVm *vm, const byte *data, usize len) {
     return mal_value_from_typed_array_object(view);
 }
 
-/* Extract the byte range of a BufferSource (TypedArray or ArrayBuffer). Returns
- * false for anything else. DataView is a follow-up (its struct is private). */
-static bool mal_web_buffer_source(MalValue v, const byte **out, usize *out_len) {
+/* Extract the byte range of a BufferSource (TypedArray, ArrayBuffer, or
+ * DataView). Returns true with *out and *out_len set (possibly empty) on success. On
+ * failure it throws and returns false: a TypeError for a non-BufferSource value,
+ * or for a DataView whose resizable buffer shrank out from under it. A detached
+ * backing store reads as empty rather than an error. */
+static bool mal_web_buffer_source(MalVm *vm, MalValue v, const byte **out, usize *out_len) {
     if (mal_value_is_typed_array_object(v)) {
         MalTypedArrayObject *ta = mal_value_to_typed_array_object(v);
         if (ta->buffer == nullptr) {
@@ -85,6 +89,20 @@ static bool mal_web_buffer_source(MalValue v, const byte **out, usize *out_len) 
         *out_len = ab->detached ? 0 : ab->byte_length;
         return true;
     }
+    if (mal_value_is_data_view_object(v)) {
+        switch (mal_data_view_object_span(mal_value_to_data_view_object(v), out, out_len)) {
+            case MAL_DATA_VIEW_SPAN_OK:
+            case MAL_DATA_VIEW_SPAN_DETACHED:
+                return true;
+            case MAL_DATA_VIEW_SPAN_RESIZABLE:
+            case MAL_DATA_VIEW_SPAN_OUT_OF_BOUNDS:
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "DataView has a resizable or out-of-bounds ArrayBuffer");
+                return false;
+        }
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "decode input must be an ArrayBuffer, TypedArray, or DataView");
     return false;
 }
 
@@ -354,9 +372,7 @@ static MalValue mal_web_text_decoder_decode(
     }
     const byte *bytes;
     usize len;
-    if (!mal_web_buffer_source(args[0], &bytes, &len)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "decode input must be an ArrayBuffer or TypedArray");
+    if (!mal_web_buffer_source(vm, args[0], &bytes, &len)) {
         return mal_value_new_undefined();
     }
     // Strip a leading UTF-8 BOM unless ignoreBOM was set at construction.

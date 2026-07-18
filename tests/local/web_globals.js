@@ -130,6 +130,59 @@ check(
 );
 check("TextDecoder default strips U+FEFF", decDefault.decode(bomBytes) === "hi");
 
+// --- TextDecoder from DataView (BufferSource) ---
+// Only the view's byteOffset/byteLength subrange is decoded: the € (0xe2 0x82
+// 0xac) is framed by invalid 0xff bytes that must not leak into the result.
+const dvFramed = new Uint8Array([0xff, 0xe2, 0x82, 0xac, 0xff]).buffer;
+check(
+	"TextDecoder DataView subrange ignores surrounding bytes",
+	dec.decode(new DataView(dvFramed, 1, 3)) === "€",
+);
+const dvBom = new Uint8Array([0xef, 0xbb, 0xbf, 104, 105]).buffer;
+const bomPrefixed = String.fromCharCode(0xfeff) + "hi";
+check(
+	"TextDecoder DataView default strips U+FEFF",
+	decDefault.decode(new DataView(dvBom)) === "hi",
+);
+check(
+	"TextDecoder DataView ignoreBOM preserves U+FEFF",
+	decIgnoreBom.decode(new DataView(dvBom)) === bomPrefixed,
+);
+let fatalDataViewThrew = false;
+try {
+	decFatal.decode(new DataView(new Uint8Array([0xff]).buffer));
+} catch (e) {
+	fatalDataViewThrew = e instanceof TypeError;
+}
+check("TextDecoder fatal rejects invalid DataView", fatalDataViewThrew);
+check(
+	"TextDecoder DataView zero length",
+	dec.decode(new DataView(new ArrayBuffer(0))) === "" &&
+		dec.decode(new DataView(new ArrayBuffer(4), 2, 0)) === "",
+);
+const detachedBuf = new ArrayBuffer(4);
+const detachedView = new DataView(detachedBuf);
+detachedBuf.transfer();
+check("TextDecoder detached DataView yields empty", dec.decode(detachedView) === "");
+let resizableInBoundsThrew = false;
+try {
+	const rb = new ArrayBuffer(8, { maxByteLength: 8 });
+	dec.decode(new DataView(rb, 0, 4));
+} catch (e) {
+	resizableInBoundsThrew = e instanceof TypeError;
+}
+check("TextDecoder resizable in-bounds DataView rejects", resizableInBoundsThrew);
+let resizableOobThrew = false;
+try {
+	const rb = new ArrayBuffer(8, { maxByteLength: 8 });
+	const rv = new DataView(rb, 4, 4);
+	rb.resize(2); // leaves the fixed [4, 8) view out of bounds
+	dec.decode(rv);
+} catch (e) {
+	resizableOobThrew = e instanceof TypeError;
+}
+check("TextDecoder resizable out-of-bounds DataView rejects", resizableOobThrew);
+
 // --- btoa / atob ---
 check("btoa", btoa("hello") === "aGVsbG8=");
 check("btoa padding", btoa("foobar") === "Zm9vYmFy" && btoa("fo") === "Zm8=");

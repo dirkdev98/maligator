@@ -26,6 +26,32 @@ MalArrayBufferObject *mal_data_view_object_buffer(const MalDataViewObject *view)
     return view->buffer;
 }
 
+static u32 mal_data_view_current_length(const MalDataViewObject *view);
+static bool mal_data_view_is_out_of_bounds(const MalDataViewObject *view);
+
+MalDataViewSpanStatus mal_data_view_object_span(
+    const MalDataViewObject *view, const byte **out, usize *out_len) {
+    *out = nullptr;
+    *out_len = 0;
+    // Detached is a subset of IsViewOutOfBounds; report it first so callers can
+    // treat a detached view as empty rather than as an error.
+    if (view->buffer->detached) {
+        return MAL_DATA_VIEW_SPAN_DETACHED;
+    }
+    if (view->buffer->resizable) {
+        return MAL_DATA_VIEW_SPAN_RESIZABLE;
+    }
+    if (mal_data_view_is_out_of_bounds(view)) {
+        return MAL_DATA_VIEW_SPAN_OUT_OF_BOUNDS;
+    }
+    u32 length = mal_data_view_current_length(view);
+    if (length > 0) {
+        *out = (const byte *) view->buffer->data + view->byte_offset;
+        *out_len = length;
+    }
+    return MAL_DATA_VIEW_SPAN_OK;
+}
+
 typedef enum MalDataViewType {
     DV_INT8,
     DV_UINT8,
