@@ -2,20 +2,272 @@
 
 #if MAL_NODE
 
+#include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "array_object.h"
 #include "function_object.h"
 #include "gc.h"
+#include "heap_string.h"
 #include "intrinsics.h"
 #include "node_stream.h"
 #include "object.h"
 #include "object_ops.h"
+#include "server.h"
+#include "value_ops.h"
 #include "vm_ops.h"
 
 #define HTTP_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 #define HTTP_METHOD (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE)
+
+typedef struct MalNodeHttpServerState {
+    MalVm *vm;
+    MalValue receiver;
+    MalHttpServer *native;
+    u16 port;
+    char host[16];
+    bool listening_pending;
+    bool closing;
+    bool close_ready;
+    struct MalNodeHttpServerState *next;
+} MalNodeHttpServerState;
+
+static MalNodeHttpServerState *http_servers;
+static bool http_roots_installed;
+
+static MalNodeHttpServerState *http_server_state(MalValue receiver) {
+    if (!mal_value_is_object(receiver)) return nullptr;
+    MalObject *object = mal_value_to_object(receiver);
+    for (MalNodeHttpServerState *state = http_servers; state != nullptr;
+         state = state->next) {
+        if (mal_value_to_object(state->receiver) == object) return state;
+    }
+    return nullptr;
+}
+
+static bool http_call_method(
+    MalVm *vm, MalValue receiver, const char *name, const MalValue *args, i32 argc) {
+    MalValue roots[] = {receiver, mal_value_new_undefined(),
+                        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    for (i32 i = 0; i < argc && i < 2; i++) roots[i + 2] = args[i];
+    bool found = mal_vm_get_property(
+        vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) name), &roots[1]);
+    if (found) {
+        mal_vm_call_value(vm, roots[1], roots[0], argc > 0 ? roots + 2 : nullptr, argc);
+    }
+    bool ok = found && vm->completion.kind != MAL_COMPLETION_THROW;
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+static bool http_emit(MalVm *vm, MalValue receiver, const char *event) {
+    MalValue name = mal_value_from_string(
+        mal_intrinsic_ascii(vm, (const byte *) event));
+    MalRootSpan root;
+    mal_gc_root(&root, &name, 1);
+    bool ok = http_call_method(vm, receiver, "emit", &name, 1);
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+static bool http_once(
+    MalVm *vm, MalValue receiver, const char *event, MalValue callback) {
+    MalValue args[] = {
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) event)), callback,
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, args, countof(args));
+    bool ok = http_call_method(vm, receiver, "once", args, 2);
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+static void http_native_close_complete(void *data) {
+    MalNodeHttpServerState *state = data;
+    state->native = nullptr;
+    state->close_ready = true;
+}
+
+static void http_scan_roots(MalVm *vm, void *data) {
+    (void) data;
+    for (MalNodeHttpServerState *state = http_servers; state != nullptr;
+         state = state->next) {
+        if (state->vm == vm) mal_gc_mark_value(state->receiver);
+    }
+}
+
+bool mal_node_http_drain(MalVm *vm) {
+    MalNodeHttpServerState **link = &http_servers;
+    while (*link != nullptr) {
+        MalNodeHttpServerState *state = *link;
+        if (state->vm != vm) {
+            link = &state->next;
+            continue;
+        }
+        if (state->listening_pending) {
+            state->listening_pending = false;
+            http_emit(vm, state->receiver, "listening");
+            return true;
+        }
+        if (state->close_ready) {
+            MalValue receiver = state->receiver;
+            MalRootSpan root;
+            mal_gc_root(&root, &receiver, 1);
+            *link = state->next;
+            free(state);
+            http_emit(vm, receiver, "close");
+            mal_gc_unroot(&root);
+            return true;
+        }
+        link = &state->next;
+    }
+    return false;
+}
+
+static bool http_ipv4_host(MalValue value, char out[16]) {
+    if (!mal_value_is_string(value)) return false;
+    MalString *string = mal_value_to_string(value);
+    usize length = mal_string_length(string);
+    if (length == 0 || length >= 16) return false;
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < length; i++) {
+        if (units[i] > 0x7f) return false;
+        out[i] = (char) units[i];
+    }
+    out[length] = '\0';
+    return true;
+}
+
+static MalValue http_server_listen(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    if (!mal_value_is_object(receiver) || argc < 1 || !mal_ops_is_number(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "The port argument must be a number");
+        return mal_value_new_undefined();
+    }
+    f64 number = mal_ops_number_as_f64(args[0]);
+    if (!isfinite(number) || number < 0 || number > 65535 || floor(number) != number) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "The port argument must be between 0 and 65535");
+        return mal_value_new_undefined();
+    }
+    if (http_server_state(receiver) != nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                           "Listen method has been called more than once");
+        return mal_value_new_undefined();
+    }
+
+    char host[16] = "0.0.0.0";
+    MalValue callback = mal_value_new_undefined();
+    if (argc > 1 && mal_value_is_string(args[1])) {
+        if (!http_ipv4_host(args[1], host)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "The host argument must be a numeric IPv4 address");
+            return mal_value_new_undefined();
+        }
+        if (argc > 2) callback = args[2];
+    } else if (argc > 1) {
+        callback = args[1];
+    }
+    if (!mal_value_is_undefined(callback) && !mal_value_is_callable(callback)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "The callback argument must be a function");
+        return mal_value_new_undefined();
+    }
+
+    MalHttpServer *native = mal_http_server_start_unhandled(vm, host, (u16) number);
+    if (native == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                           "Failed to listen on the requested address");
+        return mal_value_new_undefined();
+    }
+    MalNodeHttpServerState *state = calloc(1, sizeof(MalNodeHttpServerState));
+    if (state == nullptr) {
+        mal_http_server_stop(native);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                           "Failed to allocate server state");
+        return mal_value_new_undefined();
+    }
+    state->vm = vm;
+    state->receiver = receiver;
+    state->native = native;
+    state->port = mal_http_server_port(native);
+    memcpy(state->host, host, sizeof(state->host));
+    state->listening_pending = true;
+    state->next = http_servers;
+    http_servers = state;
+
+    if (!mal_value_is_undefined(callback)
+        && !http_once(vm, receiver, "listening", callback)) {
+        mal_http_server_close(native, http_native_close_complete, state);
+        return mal_value_new_undefined();
+    }
+    return receiver;
+}
+
+static MalValue http_server_address(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    MalNodeHttpServerState *state = http_server_state(receiver);
+    if (state == nullptr || state->native == nullptr || state->closing) {
+        return mal_value_new_null();
+    }
+    MalValue roots[] = {
+        mal_value_from_object(mal_intrinsic_new_object(vm)),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalObject *object = mal_value_to_object(roots[0]);
+    roots[1] = mal_value_from_string(mal_intrinsic_ascii(
+        vm, (const byte *) state->host));
+    roots[2] = mal_value_from_string(mal_intrinsic_ascii(
+        vm, (const byte *) "IPv4"));
+    mal_intrinsic_define_data(vm, object, (const byte *) "address", roots[1], HTTP_VISIBLE);
+    mal_intrinsic_define_data(vm, object, (const byte *) "family", roots[2], HTTP_VISIBLE);
+    mal_intrinsic_define_data(vm, object, (const byte *) "port",
+                              mal_value_from_i32((i32) state->port), HTTP_VISIBLE);
+    MalValue result = roots[0];
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue http_server_close(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalNodeHttpServerState *state = http_server_state(receiver);
+    if (state == nullptr || state->native == nullptr || state->closing) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                           "Server is not running");
+        return mal_value_new_undefined();
+    }
+    if (argc > 0 && !mal_value_is_undefined(args[0])) {
+        if (!mal_value_is_callable(args[0])) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "The callback argument must be a function");
+            return mal_value_new_undefined();
+        }
+        if (!http_once(vm, receiver, "close", args[0])) {
+            return mal_value_new_undefined();
+        }
+    }
+    state->closing = true;
+    mal_http_server_close(state->native, http_native_close_complete, state);
+    return receiver;
+}
 
 static MalValue http_construct(
     MalVm *vm, MalValue receiver, MalValue new_target, MalValue callee,
@@ -221,6 +473,15 @@ void mal_host_install_node_http(
     roots[5] = mal_value_from_object(mal_object_new(
         &vm->heap, mal_value_to_object(
             vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE])));
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(roots[5]), (const byte *) "listen", 3,
+        http_server_listen);
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(roots[5]), (const byte *) "address", 0,
+        http_server_address);
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(roots[5]), (const byte *) "close", 1,
+        http_server_close);
     roots[6] = http_constructor(vm, "Server", 2,
                                 http_server_constructor, roots[5]);
     mal_object_set_prototype(mal_value_to_object(roots[6]), mal_value_to_object(
@@ -250,6 +511,10 @@ void mal_host_install_node_http(
     vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR] = roots[6];
     vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_PROTOTYPE] = roots[5];
     vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_MODULE] = roots[0];
+    if (!http_roots_installed) {
+        mal_gc_register_root_source(http_scan_roots, nullptr);
+        http_roots_installed = true;
+    }
     http_install_exports(vm, slots, count, roots[0]);
     mal_gc_unroot(&root);
 }

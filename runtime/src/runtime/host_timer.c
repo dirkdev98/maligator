@@ -6,6 +6,9 @@
 #include "host.h"
 #include "intrinsics.h"
 #include "microtask.h"
+#if MAL_NODE
+#include "node_http.h"
+#endif
 #include "value_ops.h"
 #include "vm.h"
 
@@ -132,6 +135,11 @@ void mal_host_run_event_loop(MalVm *vm) {
     for (;;) {
         // Microtasks first (promise jobs), then one macrotask, then repeat.
         mal_vm_drain_microtasks(vm);
+#if MAL_NODE
+        if (mal_node_http_drain(vm)) {
+            continue;
+        }
+#endif
         if (mal_host_run_one_ready(vm)) {
             continue;
         }
