@@ -492,6 +492,44 @@ static MalValue mal_buffer_new(MalVm *vm, MalObject *prototype, u32 length) {
     return result;
 }
 
+MalValue mal_node_buffer_from_owned_bytes(MalVm *vm, byte *bytes, usize length) {
+    if (length > INT32_MAX || (length > 0 && bytes == nullptr)) {
+        free(bytes);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Buffer allocation failed");
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_undefined(
+            vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR])) {
+        mal_host_install_node_buffer(vm, nullptr, 0, nullptr);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            free(bytes);
+            return mal_value_new_undefined();
+        }
+    }
+
+    if (length == 0) {
+        free(bytes);
+        bytes = nullptr;
+    }
+    MalArrayBufferObject *backing = mal_array_buffer_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+        0, 0, false, false);
+    backing->data = bytes;
+    backing->byte_length = (u32) length;
+    backing->max_byte_length = (u32) length;
+    MalValue root_value = mal_value_from_array_buffer_object(backing);
+    MalRootSpan root;
+    mal_gc_root(&root, &root_value, 1);
+    MalValue result = mal_buffer_new_view(
+        vm,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE]),
+        backing, 0, (u32) length);
+    mal_gc_unroot(&root);
+    return result;
+}
+
 static MalTypedArrayObject *mal_buffer_receiver(MalVm *vm, MalValue value) {
     if (!mal_value_is_typed_array_object(value) ||
         !mal_value_to_typed_array_object(value)->is_buffer) {
@@ -1215,11 +1253,35 @@ static void mal_buffer_define_method(
     mal_gc_unroot(&root);
 }
 
+static void mal_buffer_install_exports(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
+    MalValue constructor, MalValue module_default
+) {
+    MalObject *global_this = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
+    mal_intrinsic_define_data(vm, global_this, "Buffer", constructor,
+                              MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    for (i32 i = 0; i < count; i++) {
+        if (strcmp(slots[i].name, "Buffer") == 0) {
+            vm->globals[slots[i].slot] = constructor;
+        } else if (strcmp(slots[i].name, "default") == 0) {
+            vm->globals[slots[i].slot] = module_default;
+        }
+    }
+}
+
 void mal_host_install_node_buffer(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch
 ) {
     (void) launch;
+    MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR];
+    if (!mal_value_is_undefined(cached)) {
+        mal_buffer_install_exports(
+            vm, slots, count, cached,
+            vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_MODULE]);
+        return;
+    }
     MalValue roots[3] = {
         mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
@@ -1276,17 +1338,10 @@ void mal_host_install_node_buffer(
                               MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
                                   MAL_PROPERTY_CONFIGURABLE);
 
-    MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
-    mal_intrinsic_define_data(vm, global_this, "Buffer", roots[1],
-                              MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "Buffer") == 0) {
-            vm->globals[slots[i].slot] = roots[1];
-        } else if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = roots[2];
-        }
-    }
+    vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR] = roots[1];
+    vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE] = roots[0];
+    vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_MODULE] = roots[2];
+    mal_buffer_install_exports(vm, slots, count, roots[1], roots[2]);
     mal_gc_unroot(&root);
 }
 

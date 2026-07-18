@@ -1460,34 +1460,69 @@ static MalValue stream_constructor_value(
     return value;
 }
 
+static const MalIntrinsic stream_constructor_slots[] = {
+    MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR,
+    MAL_INTRINSIC_NODE_READABLE_CONSTRUCTOR,
+    MAL_INTRINSIC_NODE_WRITABLE_CONSTRUCTOR,
+    MAL_INTRINSIC_NODE_DUPLEX_CONSTRUCTOR,
+    MAL_INTRINSIC_NODE_TRANSFORM_CONSTRUCTOR,
+};
+
+static const MalIntrinsic stream_prototype_slots[] = {
+    MAL_INTRINSIC_NODE_STREAM_PROTOTYPE,
+    MAL_INTRINSIC_NODE_READABLE_PROTOTYPE,
+    MAL_INTRINSIC_NODE_WRITABLE_PROTOTYPE,
+    MAL_INTRINSIC_NODE_DUPLEX_PROTOTYPE,
+    MAL_INTRINSIC_NODE_TRANSFORM_PROTOTYPE,
+};
+
+static void stream_install_exports(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count) {
+    static const char *export_names[] = {
+        "Stream", "Readable", "Writable", "Duplex", "Transform",
+    };
+    for (i32 i = 0; i < count; i++) {
+        usize export_index = 0;
+        if (strcmp(slots[i].name, "default") != 0) {
+            for (; export_index < countof(export_names); export_index++) {
+                if (strcmp(slots[i].name, export_names[export_index]) == 0) {
+                    break;
+                }
+            }
+        }
+        if (export_index < countof(export_names)) {
+            vm->globals[slots[i].slot] =
+                vm->intrinsics[stream_constructor_slots[export_index]];
+        }
+    }
+}
+
 void mal_host_install_node_stream(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
-    if (count == 0) {
+    if (!mal_value_is_undefined(
+            vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR])) {
+        stream_install_exports(vm, slots, count);
         return;
     }
 
-    /* Reuse the native EventEmitter implementation without adding a shared
-     * intrinsic or catalog dependency. The selected stream slot is only scratch
-     * until this installer writes its final export below. */
-    MalHostInstallSlot event_slot = {.name = "EventEmitter", .slot = slots[0].slot};
-    mal_host_install_node_events(vm, &event_slot, 1, launch);
+    /* Ensure the current realm's EventEmitter graph without borrowing a caller's
+     * global slot. This also makes count-zero internal installation safe. */
+    mal_host_install_node_events(vm, nullptr, 0, launch);
 
     MalValue roots[13];
     for (usize i = 0; i < countof(roots); i++) {
         roots[i] = mal_value_new_undefined();
     }
-    roots[0] = vm->globals[slots[0].slot];
+    roots[0] = vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR];
+    roots[1] = vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE];
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
 
-    MalValue event_prototype;
-    if (!stream_get(vm, roots[0], "prototype", &event_prototype)
-        || !mal_value_is_object(event_prototype)) {
+    if (!mal_value_is_object(roots[1])) {
         mal_gc_unroot(&root);
         return;
     }
-    roots[1] = event_prototype;
     roots[2] = mal_value_from_object(mal_object_new(&vm->heap, mal_value_to_object(roots[1])));
     roots[3] = mal_value_from_object(mal_object_new(&vm->heap, mal_value_to_object(roots[2])));
     roots[4] = mal_value_from_object(mal_object_new(&vm->heap, mal_value_to_object(roots[2])));
@@ -1581,24 +1616,10 @@ void mal_host_install_node_stream(
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
                                   (const byte *) export_names[i], roots[7 + i],
                                   STREAM_VISIBLE);
+        vm->intrinsics[stream_constructor_slots[i]] = roots[7 + i];
+        vm->intrinsics[stream_prototype_slots[i]] = roots[2 + i];
     }
-    for (i32 i = 0; i < count; i++) {
-        MalValue value = mal_value_new_undefined();
-        if (strcmp(slots[i].name, "default") == 0
-            || strcmp(slots[i].name, "Stream") == 0) {
-            value = roots[7];
-        } else {
-            for (usize j = 1; j < countof(export_names); j++) {
-                if (strcmp(slots[i].name, export_names[j]) == 0) {
-                    value = roots[7 + j];
-                    break;
-                }
-            }
-        }
-        if (!mal_value_is_undefined(value)) {
-            vm->globals[slots[i].slot] = value;
-        }
-    }
+    stream_install_exports(vm, slots, count);
     mal_gc_unroot(&root);
 }
 
