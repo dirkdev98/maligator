@@ -10,7 +10,6 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
-#include "property_iter.h"
 #include "property_store.h"
 #include "value.h"
 #include "value_ops.h"
@@ -85,6 +84,7 @@ MalHeadersObject *mal_headers_object_new(MalHeap *heap, MalObject *prototype) {
     h->entries = nullptr;
     h->count = 0;
     h->cap = 0;
+    h->guard = MAL_HEADERS_GUARD_NONE;
     return h;
 }
 
@@ -167,6 +167,15 @@ static bool mal_headers_normalized_name(
     return true;
 }
 
+static bool mal_headers_can_mutate(MalVm *vm, const MalHeadersObject *h) {
+    if (h->guard == MAL_HEADERS_GUARD_IMMUTABLE) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Headers are immutable");
+        return false;
+    }
+    return true;
+}
+
 static bool mal_headers_append_values(
     MalVm *vm, MalHeadersObject *h, MalValue name_input, MalValue value_input) {
     MalValue roots[4] = {
@@ -195,9 +204,12 @@ static bool mal_headers_append_values(
         return false;
     }
     MalString *normalized_value = mal_headers_trim_value(vm, value);
-    mal_headers_append_entry(h, name, normalized_value);
+    bool mutable = mal_headers_can_mutate(vm, h);
+    if (mutable) {
+        mal_headers_append_entry(h, name, normalized_value);
+    }
     mal_gc_unroot(&rs);
-    return true;
+    return mutable;
 }
 
 /* --- GC hooks --- */
@@ -220,68 +232,230 @@ static void mal_headers_finalize(MalHeapHeader *cell) {
     h->cap = 0;
 }
 
-/* Fill from the currently supported HeadersInit arms: Headers or an enumerable
- * record. Record keys are snapshotted before getters run, as Web IDL requires. */
-static bool mal_headers_fill_from_init(MalVm *vm, MalHeadersObject *h, MalValue init) {
-    if (mal_value_is_headers_object(init)) {
-        MalHeadersObject *src = mal_value_to_headers_object(init);
-        for (i32 i = 0; i < src->count; i++) {
-            mal_headers_append_entry(h, src->entries[i].name, src->entries[i].value);
-        }
-        return true;
+static MalKey mal_headers_index_key(u32 index) {
+    return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
+}
+
+static bool mal_headers_to_byte_string(MalVm *vm, MalValue input, MalValue *out) {
+    MalString *string;
+    if (!mal_vm_to_string(vm, input, &string)) {
+        return false;
     }
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < mal_string_length(string); i++) {
+        if (units[i] > 0xFF) {
+            mal_vm_throw_error(
+                vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not a ByteString");
+            return false;
+        }
+    }
+    *out = mal_value_from_string(string);
+    return true;
+}
+
+/* Web IDL sequence conversion does not IteratorClose when IteratorStepValue or
+ * element conversion is abrupt. Keep each converted inner sequence staged so
+ * Fetch's pair-arity and header validation steps run only after the complete
+ * outer sequence has converted. */
+static bool mal_headers_convert_inner_sequence(
+    MalVm *vm, MalValue input, MalValue *sequence_out) {
+    if (!mal_value_is_object(input)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Header pair must be an iterable object");
+        return false;
+    }
+
+    MalValue method;
+    if (!mal_vm_get_property(vm, input,
+            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &method)) {
+        return false;
+    }
+
+    MalIteratorRecord record;
+    if (!mal_vm_get_iterator_from_method(vm, input, method, &record)) {
+        return false;
+    }
+
+    *sequence_out = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue element = mal_value_new_undefined();
+    MalRootSpan record_span, element_span;
+    mal_gc_root(&record_span, &record.iterator, 2);
+    mal_gc_root(&element_span, &element, 1);
+
+    bool ok = false;
+    u32 index = 0;
+    while (true) {
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &element, &done)) {
+            break;
+        }
+        if (done) {
+            ok = true;
+            break;
+        }
+        MalValue converted;
+        if (!mal_headers_to_byte_string(vm, element, &converted)) {
+            break;
+        }
+        mal_array_object_store(mal_value_to_array_object(*sequence_out),
+            mal_headers_index_key(index++), converted);
+    }
+
+    mal_gc_unroot(&element_span);
+    mal_gc_unroot(&record_span);
+    return ok;
+}
+
+static bool mal_headers_convert_sequence(
+    MalVm *vm, MalValue input, MalValue method, MalValue *sequence_out) {
+    MalIteratorRecord record;
+    if (!mal_vm_get_iterator_from_method(vm, input, method, &record)) {
+        return false;
+    }
+
+    *sequence_out = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan record_span, roots_span;
+    mal_gc_root(&record_span, &record.iterator, 2);
+    mal_gc_root(&roots_span, roots, 2);
+
+    bool ok = false;
+    u32 index = 0;
+    while (true) {
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &roots[0], &done)) {
+            break;
+        }
+        if (done) {
+            ok = true;
+            break;
+        }
+        roots[1] = mal_value_new_undefined();
+        if (!mal_headers_convert_inner_sequence(vm, roots[0], &roots[1])) {
+            break;
+        }
+        mal_array_object_store(mal_value_to_array_object(*sequence_out),
+            mal_headers_index_key(index++), roots[1]);
+    }
+
+    mal_gc_unroot(&roots_span);
+    mal_gc_unroot(&record_span);
+    return ok;
+}
+
+static bool mal_headers_fill_from_sequence(
+    MalVm *vm, MalHeadersObject *h, MalValue sequence) {
+    MalArrayObject *outer = mal_value_to_array_object(sequence);
+    for (u32 i = 0; i < mal_array_object_length(outer); i++) {
+        MalValue pair_value;
+        mal_array_object_dense_get(outer, i, &pair_value);
+        MalArrayObject *pair = mal_value_to_array_object(pair_value);
+        if (mal_array_object_length(pair) != 2) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Header pair must contain exactly two items");
+            return false;
+        }
+        MalValue name;
+        MalValue value;
+        mal_array_object_dense_get(pair, 0, &name);
+        mal_array_object_dense_get(pair, 1, &value);
+        if (!mal_headers_append_values(vm, h, name, value)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool mal_headers_convert_record(
+    MalVm *vm, MalValue input, MalValue *record_out) {
+    *record_out = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue roots[5] = {
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 5);
+    if (!mal_vm_own_property_keys(vm, input, &roots[0])) {
+        mal_gc_unroot(&roots_span);
+        return false;
+    }
+
+    MalArrayObject *keys = mal_value_to_array_object(roots[0]);
+    u32 key_count = mal_array_object_length(keys);
+    u32 output = 0;
+    bool ok = true;
+    for (u32 i = 0; i < key_count; i++) {
+        mal_array_object_dense_get(keys, i, &roots[1]);
+        MalKey key;
+        if (!mal_vm_value_to_property_key(vm, roots[1], &key)) {
+            ok = false;
+            break;
+        }
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_vm_get_own_property(vm, input, key, &present, &desc)) {
+            ok = false;
+            break;
+        }
+        if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+            continue;
+        }
+
+        // Web IDL converts the record key before Get(O, key).
+        if (!mal_headers_to_byte_string(vm, roots[1], &roots[2]) ||
+            !mal_vm_get_property(vm, input, key, &roots[3]) ||
+            !mal_headers_to_byte_string(vm, roots[3], &roots[3])) {
+            ok = false;
+            break;
+        }
+        roots[4] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
+        MalArrayObject *pair = mal_value_to_array_object(roots[4]);
+        mal_array_object_store(pair, mal_headers_index_key(0), roots[2]);
+        mal_array_object_store(pair, mal_headers_index_key(1), roots[3]);
+        mal_array_object_store(mal_value_to_array_object(*record_out),
+            mal_headers_index_key(output++), roots[4]);
+    }
+
+    mal_gc_unroot(&roots_span);
+    return ok;
+}
+
+/* Fill from the HeadersInit sequence/record union. Both arms stage their fully
+ * converted ByteStrings before Fetch validates or appends any header. */
+static bool mal_headers_fill_from_init(MalVm *vm, MalHeadersObject *h, MalValue init) {
     if (!mal_value_is_object(init)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Headers init must be an object");
         return false;
     }
 
-    MalObject *object = mal_value_to_object(init);
-    MalPropertyIter iter;
-    mal_property_iter_init(
-        &iter, object, MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
-    MalKey key;
-    MalPropertyDesc desc;
-    i32 key_count = 0;
-    while (mal_property_iter_next(&iter, &key, &desc)) {
-        if (key.kind != MAL_KEY_SYMBOL) {
-            key_count++;
+    MalValue method;
+    if (!mal_vm_get_property(vm, init,
+            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &method)) {
+        return false;
+    }
+    if (!mal_value_is_nil(method)) {
+        if (!mal_value_is_callable(method)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Headers init iterator is not callable");
+            return false;
         }
+        MalValue sequence = mal_value_new_undefined();
+        MalRootSpan sequence_span;
+        mal_gc_root(&sequence_span, &sequence, 1);
+        bool ok = mal_headers_convert_sequence(vm, init, method, &sequence)
+            && mal_headers_fill_from_sequence(vm, h, sequence);
+        mal_gc_unroot(&sequence_span);
+        return ok;
     }
-
-    MalKey *keys = malloc(sizeof(MalKey) * (usize) (key_count == 0 ? 1 : key_count));
-    MalValue *key_roots = malloc(sizeof(MalValue) * (usize) (key_count == 0 ? 1 : key_count));
-    for (i32 i = 0; i < key_count; i++) {
-        key_roots[i] = mal_value_new_undefined();
-    }
-    MalRootSpan key_span;
-    mal_gc_root(&key_span, key_roots, key_count);
-
-    mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
-    i32 index = 0;
-    while (mal_property_iter_next(&iter, &key, &desc)) {
-        if (key.kind == MAL_KEY_SYMBOL) {
-            continue;
-        }
-        keys[index] = key;
-        key_roots[index] = key.value;
-        index++;
-    }
-
-    MalValue value = mal_value_new_undefined();
-    MalRootSpan value_span;
-    mal_gc_root(&value_span, &value, 1);
-    bool ok = true;
-    for (i32 i = 0; i < key_count; i++) {
-        if (!mal_vm_get_property(vm, init, keys[i], &value)
-            || !mal_headers_append_values(vm, h, key_roots[i], value)) {
-            ok = false;
-            break;
-        }
-    }
-    mal_gc_unroot(&value_span);
-    mal_gc_unroot(&key_span);
-    free(key_roots);
-    free(keys);
+    MalValue record = mal_value_new_undefined();
+    MalRootSpan record_span;
+    mal_gc_root(&record_span, &record, 1);
+    bool ok = mal_headers_convert_record(vm, init, &record)
+        && mal_headers_fill_from_sequence(vm, h, record);
+    mal_gc_unroot(&record_span);
     return ok;
 }
 
@@ -346,6 +520,11 @@ static MalValue mal_headers_method_set(
     MalRootSpan rs;
     mal_gc_root(&rs, &tmp_value, 1);
     if (mal_headers_append_values(vm, tmp, args[0], args[1])) {
+        if (!mal_headers_can_mutate(vm, h)) {
+            mal_gc_unroot(&rs);
+            mal_gc_native_rooted_end(vm);
+            return mal_value_new_undefined();
+        }
         MalString *name = tmp->entries[0].name;
         MalString *value = tmp->entries[0].value;
         i32 first = -1;
@@ -416,7 +595,9 @@ static MalValue mal_headers_method_delete(
     mal_gc_native_rooted_begin(vm);
     MalString *n;
     if (mal_headers_method_name(vm, args, argc, &name_root, &n)) {
-        mal_headers_remove(h, n);
+        if (mal_headers_can_mutate(vm, h)) {
+            mal_headers_remove(h, n);
+        }
     }
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&rs);
@@ -503,10 +684,6 @@ static MalValue mal_headers_constructor(
 }
 
 /* --- sorted, live iteration (entries / keys / values / forEach / @@iterator) --- */
-
-static MalKey mal_headers_index_key(u32 index) {
-    return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
-}
 
 typedef enum { MAL_HEADERS_ENTRIES, MAL_HEADERS_KEYS, MAL_HEADERS_VALUES } MalHeadersIterKind;
 

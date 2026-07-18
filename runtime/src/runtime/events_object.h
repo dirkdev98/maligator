@@ -38,6 +38,10 @@ typedef struct MalEventTargetObject {
 
 typedef struct MalVm MalVm;
 
+/* Throw a DOMException backed by the installed intrinsic prototype and hidden
+ * name/message slots. The helper roots all intermediate values across GC. */
+void mal_dom_exception_throw(MalVm *vm, const byte *message, const byte *name);
+
 /* Install DOMException / Event / EventTarget / AbortController / AbortSignal on
  * globalThis (host entry only). */
 void mal_events_install(MalVm *vm, MalObject *global_this);

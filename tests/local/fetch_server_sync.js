@@ -6,6 +6,9 @@ const server = Mal.serve({
 		if (request.url.endsWith("/created")) {
 			return new Response("made", { status: 201 });
 		}
+		if (request.url.endsWith("/custom-reason")) {
+			return new Response("custom", { status: 299, statusText: "All Fine" });
+		}
 		if (request.url.endsWith("/json")) {
 			return new Response('{"ok":true}', {
 				headers: { "content-type": "application/json" },

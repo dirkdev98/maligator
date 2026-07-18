@@ -7,14 +7,18 @@ function check(name, ok) {
 	results.push([name, !!ok]);
 }
 
-const r = new Response("hi", { status: 201, headers: { "content-type": "text/plain" } });
+const r = new Response("hi", {
+	status: 201,
+	statusText: "Created",
+	headers: { "content-type": "text/plain" },
+});
 check("status", r.status === 201);
 check("ok", r.ok === true);
 check("statusText", r.statusText === "Created");
 check("headers is Headers", r.headers instanceof Headers);
 check("headers.get", r.headers.get("content-type") === "text/plain");
 
-const r2 = new Response("x", { status: 404 });
+const r2 = new Response("x", { status: 404, statusText: "Not Found" });
 check("not-ok", r2.ok === false);
 check("status 404", r2.status === 404);
 check("statusText 404", r2.statusText === "Not Found");

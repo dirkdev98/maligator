@@ -161,6 +161,11 @@ static MalValue dom_exception_new(MalVm *vm, const char *message, const char *na
     return result;
 }
 
+void mal_dom_exception_throw(MalVm *vm, const byte *message, const byte *name) {
+    MalValue exception = dom_exception_new(vm, message, name);
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = exception};
+}
+
 static MalValue dom_exception_constructor(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;

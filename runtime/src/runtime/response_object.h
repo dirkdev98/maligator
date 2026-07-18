@@ -5,13 +5,15 @@
 #include "value.h"
 
 /*
- * WinterTC fetch Response (runtime layer). A status code, a Headers object, and an
- * owned body byte buffer (freed by a registered GC finalizer). Traced fields keep
- * the Headers object and lazy Body stream alive; the server reads the bytes in C.
+ * WinterTC fetch Response (runtime layer). A status code/reason, a Headers object,
+ * and an owned body byte buffer (freed by a registered GC finalizer). Traced fields
+ * keep statusText, Headers, and the lazy Body stream alive; the server reads bytes
+ * in C.
  */
 typedef struct MalResponseObject {
     MalObject object;
     i32 status;
+    MalValue status_text;
     MalValue headers; // a MalHeadersObject, or undefined
     byte *body;       // owned bytes; nullptr => null body
     usize body_len;

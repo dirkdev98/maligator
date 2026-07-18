@@ -8,6 +8,7 @@
 #include "array_object.h"
 #include "date_object.h"
 #include "entropy.h"
+#include "events_object.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap.h"
@@ -71,7 +72,9 @@ static bool mal_web_buffer_source(MalValue v, const byte **out, usize *out_len) 
             *out_len = 0;
             return true;
         }
-        *out = (const byte *) ta->buffer->data + ta->byte_offset;
+        *out = ta->buffer->data == nullptr
+            ? nullptr
+            : (const byte *) ta->buffer->data + ta->byte_offset;
         *out_len = mal_typed_array_object_byte_length(ta);
         return true;
     }
@@ -337,8 +340,9 @@ static MalValue mal_web_btoa(
     usize n = mal_string_length(str);
     for (usize i = 0; i < n; i++) {
         if (u[i] > 0xFF) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "btoa: string contains a character outside the Latin1 range");
+            mal_dom_exception_throw(vm,
+                "btoa: string contains a character outside the Latin1 range",
+                "InvalidCharacterError");
             return mal_value_new_undefined();
         }
     }
@@ -419,15 +423,20 @@ static MalValue mal_web_atob(
         }
         cleaned[m++] = c;
     }
-    // Drop up to two trailing '=' pads, then require a valid length.
-    usize pad = 0;
-    while (pad < 2 && m > 0 && cleaned[m - 1] == '=') {
-        m--;
-        pad++;
+    // Padding may only complete an otherwise four-unit block. Unpadded input is
+    // accepted, but a partial padding sequence such as "Zg=" remains invalid.
+    if (m % 4 == 0) {
+        if (m > 0 && cleaned[m - 1] == '=') {
+            m--;
+        }
+        if (m > 0 && cleaned[m - 1] == '=') {
+            m--;
+        }
     }
     if (m % 4 == 1) {
         free(cleaned);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "atob: invalid base64 length");
+        mal_dom_exception_throw(
+            vm, "atob: invalid base64 length", "InvalidCharacterError");
         return mal_value_new_undefined();
     }
 
@@ -445,8 +454,8 @@ static MalValue mal_web_atob(
         if (v < 0) {
             free(cleaned);
             free(out);
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "atob: string contains an invalid character");
+            mal_dom_exception_throw(vm, "atob: string contains an invalid character",
+                "InvalidCharacterError");
             return mal_value_new_undefined();
         }
         acc = (acc << 6) | (u32) v;
@@ -536,21 +545,27 @@ static MalValue mal_web_crypto_get_random_values(
     (void) self;
     (void) nt;
     (void) callee;
-    if (argc < 1 || !mal_value_is_typed_array_object(args[0])) {
+    if (argc < 1) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "getRandomValues requires an integer TypedArray");
         return mal_value_new_undefined();
     }
+    if (!mal_value_is_typed_array_object(args[0])) {
+        mal_dom_exception_throw(vm, "getRandomValues requires an integer TypedArray",
+            "TypeMismatchError");
+        return mal_value_new_undefined();
+    }
     MalTypedArrayObject *ta = mal_value_to_typed_array_object(args[0]);
     if (ta->kind == MAL_TA_FLOAT32 || ta->kind == MAL_TA_FLOAT64) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "getRandomValues: floating-point TypedArrays are not supported");
+        mal_dom_exception_throw(vm,
+            "getRandomValues: floating-point TypedArrays are not supported",
+            "TypeMismatchError");
         return mal_value_new_undefined();
     }
     u32 byte_len = mal_typed_array_object_byte_length(ta);
     if (byte_len > 65536) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-            "getRandomValues: byteLength exceeds 65536");
+        mal_dom_exception_throw(vm, "getRandomValues: byteLength exceeds 65536",
+            "QuotaExceededError");
         return mal_value_new_undefined();
     }
     if (byte_len > 0 && ta->buffer != nullptr) {
@@ -575,21 +590,21 @@ static MalKey mal_sc_index_key(u32 index) {
  * (SameValueZero identity), which both resolves circular/shared references and —
  * because it is rooted by the caller and every clone is inserted into it right
  * after allocation — keeps all in-progress clones reachable across the recursion's
- * allocations. Returns the clone, or sets a pending TypeError (and returns
+ * allocations. Returns the clone, or sets a pending DataCloneError (and returns
  * undefined) for an uncloneable value. */
 static MalValue mal_sc_clone(MalVm *vm, MalValue value, MalMapObject *memo) {
     // Primitives pass through; Symbols are not cloneable.
     if (!mal_value_is_object(value)) {
         if (mal_value_is_symbol(value)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "structuredClone: a Symbol cannot be cloned");
+            mal_dom_exception_throw(
+                vm, "structuredClone: a Symbol cannot be cloned", "DataCloneError");
             return mal_value_new_undefined();
         }
         return value;
     }
     if (mal_value_is_callable(value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "structuredClone: a function cannot be cloned");
+        mal_dom_exception_throw(
+            vm, "structuredClone: a function cannot be cloned", "DataCloneError");
         return mal_value_new_undefined();
     }
     // Already cloned (circular / shared reference).
@@ -609,7 +624,12 @@ static MalValue mal_sc_clone(MalVm *vm, MalValue value, MalMapObject *memo) {
     // ArrayBuffer: copy the bytes.
     if (mal_value_is_array_buffer_object(value)) {
         MalArrayBufferObject *src = mal_value_to_array_buffer_object(value);
-        u32 len = src->detached ? 0 : src->byte_length;
+        if (src->detached) {
+            mal_dom_exception_throw(
+                vm, "structuredClone: a detached ArrayBuffer cannot be cloned", "DataCloneError");
+            return mal_value_new_undefined();
+        }
+        u32 len = src->byte_length;
         MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
         MalArrayBufferObject *dst = mal_array_buffer_object_new(&vm->heap, proto, len, len, false, false);
         if (len > 0) {
@@ -623,6 +643,12 @@ static MalValue mal_sc_clone(MalVm *vm, MalValue value, MalMapObject *memo) {
     // TypedArray: clone the bytes into a fresh buffer + same-kind view.
     if (mal_value_is_typed_array_object(value)) {
         MalTypedArrayObject *src = mal_value_to_typed_array_object(value);
+        if (mal_typed_array_object_is_out_of_bounds(src)) {
+            mal_dom_exception_throw(vm,
+                "structuredClone: an out-of-bounds TypedArray cannot be cloned",
+                "DataCloneError");
+            return mal_value_new_undefined();
+        }
         u32 count = mal_typed_array_object_length(src);
         u32 byte_len = count * mal_typed_array_element_size(src->kind);
         MalObject *ab_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]);
@@ -667,8 +693,8 @@ static MalValue mal_sc_clone(MalVm *vm, MalValue value, MalMapObject *memo) {
     if (mal_value_is_map_object(value) || mal_value_is_set_object(value)) {
         MalMapObject *src = mal_value_to_map_object(value);
         if (src->weak) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "structuredClone: a WeakMap/WeakSet cannot be cloned");
+            mal_dom_exception_throw(vm,
+                "structuredClone: a WeakMap/WeakSet cannot be cloned", "DataCloneError");
             return mal_value_new_undefined();
         }
         bool is_set = mal_value_is_set_object(value);
@@ -707,6 +733,8 @@ static MalValue mal_sc_clone(MalVm *vm, MalValue value, MalMapObject *memo) {
         MalValue clone = mal_value_from_object(mal_intrinsic_new_object(vm));
         mal_map_object_set(memo, value, clone);
         MalObject *out = mal_value_to_object(clone);
+
+        usize key_count = 0;
         MalPropertyIter iter;
         mal_property_iter_init(
             &iter, mal_value_to_object(value), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
@@ -714,21 +742,78 @@ static MalValue mal_sc_clone(MalVm *vm, MalValue value, MalMapObject *memo) {
         MalPropertyDesc desc;
         while (mal_property_iter_next(&iter, &key, &desc)) {
             if (key.kind != MAL_KEY_STRING) {
-                continue; // symbol-keyed props are not cloned
+                continue;
             }
-            MalValue cloned = mal_sc_clone(vm, desc.value, memo);
-            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            if (!mal_checked_size_add(key_count, 1, INT32_MAX, &key_count)) {
+                mal_vm_throw_allocation_error(vm);
                 return mal_value_new_undefined();
             }
-            mal_object_set(out, key, cloned);
+        }
+
+        usize allocation_count = key_count == 0 ? 1 : key_count;
+        usize keys_size;
+        usize roots_size;
+        if (!mal_checked_size_multiply(
+                allocation_count, sizeof(MalKey), SIZE_MAX, &keys_size)
+            || !mal_checked_size_multiply(
+                allocation_count, sizeof(MalValue), SIZE_MAX, &roots_size)) {
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+        MalKey *keys = malloc(keys_size);
+        if (keys == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+        MalValue *key_roots = malloc(roots_size);
+        if (key_roots == nullptr) {
+            free(keys);
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+        mal_property_iter_init(
+            &iter, mal_value_to_object(value), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
+        usize key_index = 0;
+        while (mal_property_iter_next(&iter, &key, &desc)) {
+            if (key.kind == MAL_KEY_STRING) {
+                keys[key_index] = key;
+                key_roots[key_index++] = key.value;
+            }
+        }
+
+        MalValue property_value = mal_value_new_undefined();
+        MalRootSpan key_span;
+        MalRootSpan value_span;
+        mal_gc_root(&key_span, key_roots, (i32) key_count);
+        mal_gc_root(&value_span, &property_value, 1);
+        for (usize i = 0; i < key_count; i++) {
+            MalPropertyLookup own = mal_object_get_own(mal_value_to_object(value), keys[i]);
+            if (!own.present) {
+                continue;
+            }
+            if (!mal_vm_get_property(vm, value, keys[i], &property_value)) {
+                break;
+            }
+            MalValue cloned = mal_sc_clone(vm, property_value, memo);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                break;
+            }
+            mal_object_set(out, keys[i], cloned);
+        }
+        mal_gc_unroot(&value_span);
+        mal_gc_unroot(&key_span);
+        free(key_roots);
+        free(keys);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
         }
         return clone;
     }
 
-    // Everything else (Promise, Proxy, Error, boxed primitives, ...) is not
+    // Everything else (Promise, Proxy, boxed primitives, ...) is not
     // structured-cloneable in this v1.
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-        "structuredClone: value could not be cloned");
+    mal_dom_exception_throw(
+        vm, "structuredClone: value could not be cloned", "DataCloneError");
     return mal_value_new_undefined();
 }
 
@@ -737,7 +822,12 @@ static MalValue mal_web_structured_clone(
     (void) self;
     (void) nt;
     (void) callee;
-    MalValue input = argc >= 1 ? args[0] : mal_value_new_undefined();
+    if (argc < 1) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "structuredClone requires an argument");
+        return mal_value_new_undefined();
+    }
+    MalValue input = args[0];
     MalObject *map_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE]);
     MalMapObject *memo = mal_map_object_new(&vm->heap, MAL_HEAP_MAP_OBJECT, map_proto, false);
     MalValue memo_val = mal_value_from_map_object(memo);

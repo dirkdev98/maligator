@@ -351,6 +351,11 @@ bool mal_vm_get_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_ou
         return false;
     }
 
+    return mal_vm_get_iterator_from_method(vm, value, method, record_out);
+}
+
+bool mal_vm_get_iterator_from_method(
+    MalVm *vm, MalValue value, MalValue method, MalIteratorRecord *record_out) {
     if (!mal_value_is_callable(method)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Value is not iterable");
         return false;
@@ -366,13 +371,17 @@ bool mal_vm_get_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_ou
         return false;
     }
 
-    MalValue next_method;
-    if (!mal_vm_get_property(vm, completion.value, mal_intrinsic_string_key(vm, "next"), &next_method)) {
+    MalValue roots[2] = {completion.value, mal_value_new_undefined()};
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 2);
+    if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, "next"), &roots[1])) {
+        mal_gc_unroot(&roots_span);
         return false;
     }
 
-    record_out->iterator = completion.value;
-    record_out->next_method = next_method;
+    record_out->iterator = roots[0];
+    record_out->next_method = roots[1];
+    mal_gc_unroot(&roots_span);
 
     return true;
 }

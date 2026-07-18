@@ -7,6 +7,9 @@ const server = Mal.serve({
 		if (request.url.endsWith("/created")) {
 			return new Response("made", { status: 201 });
 		}
+		if (request.url.endsWith("/custom-reason")) {
+			return new Response("custom", { status: 299, statusText: "All Fine" });
+		}
 		if (request.url.endsWith("/async")) {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 			return new Response("async-done");
@@ -61,7 +64,7 @@ const server = Mal.serve({
 		}
 		if (request.url.endsWith("/respread")) {
 			// Each Body is one-shot, so exercise the read methods on independent responses.
-			const r = new Response("hello-resp", { status: 201 });
+			const r = new Response("hello-resp", { status: 201, statusText: "Created" });
 			const txt = await r.text();
 			const ab = await new Response("hello-resp").arrayBuffer();
 			const by = await new Response("hello-resp").bytes();

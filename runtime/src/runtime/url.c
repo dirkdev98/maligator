@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "array_object.h"
+#include "builtin_iterator.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap.h"
@@ -11,7 +13,6 @@
 #include "mal_url.h" // Rust FFI: ada-url handle + component accessors
 #include "object.h"
 #include "object_ops.h"
-#include "property_iter.h"
 #include "property_store.h"
 #include "text_encoding.h"
 #include "value.h"
@@ -269,6 +270,8 @@ static void usp_append(MalUrlSearchParamsObject *p, MalString *name, MalString *
     p->pairs[p->count].name = name;
     p->pairs[p->count].value = value;
     p->count++;
+    mal_gc_card(&p->object.header, mal_value_from_string(name));
+    mal_gc_card(&p->object.header, mal_value_from_string(value));
 }
 
 /* Byte helpers for application/x-www-form-urlencoded. */
@@ -370,38 +373,276 @@ static void usp_parse_string(MalVm *vm, MalUrlSearchParamsObject *p, MalString *
     free(bytes);
 }
 
-/* Fill from an init: string (form-urlencoded), URLSearchParams (copy), or a plain
- * object (own enumerable string keys -> ToString(value)). */
-static void usp_fill_from_init(MalVm *vm, MalUrlSearchParamsObject *p, MalValue init) {
-    if (mal_value_is_url_search_params_object(init)) {
-        MalUrlSearchParamsObject *src = mal_value_to_url_search_params_object(init);
-        for (i32 i = 0; i < src->count; i++) {
-            usp_append(p, src->pairs[i].name, src->pairs[i].value);
+static bool usp_to_usv_string(MalVm *vm, MalValue input, MalValue *out) {
+    MalString *string;
+    if (!mal_vm_to_string(vm, input, &string)) {
+        return false;
+    }
+
+    usize length = mal_string_length(string);
+    const c16 *source = mal_string_code_units(string);
+    bool well_formed = true;
+    for (usize i = 0; i < length; i++) {
+        c16 unit = source[i];
+        if (unit >= 0xD800 && unit <= 0xDBFF) {
+            if (i + 1 < length && source[i + 1] >= 0xDC00 && source[i + 1] <= 0xDFFF) {
+                i++;
+            } else {
+                well_formed = false;
+            }
+        } else if (unit >= 0xDC00 && unit <= 0xDFFF) {
+            well_formed = false;
         }
-        return;
     }
-    if (mal_value_is_string(init)) {
-        usp_parse_string(vm, p, mal_value_to_string(init));
-        return;
+    if (well_formed) {
+        *out = mal_value_from_string(string);
+        return true;
     }
-    if (!mal_value_is_object(init)) {
-        return;
+
+    c16 *units = malloc(sizeof(c16) * (length == 0 ? 1 : length));
+    for (usize i = 0; i < length; i++) {
+        c16 unit = source[i];
+        if (unit >= 0xD800 && unit <= 0xDBFF) {
+            if (i + 1 < length && source[i + 1] >= 0xDC00 && source[i + 1] <= 0xDFFF) {
+                units[i] = unit;
+                units[i + 1] = source[i + 1];
+                i++;
+            } else {
+                units[i] = 0xFFFD;
+            }
+        } else {
+            units[i] = unit >= 0xDC00 && unit <= 0xDFFF ? 0xFFFD : unit;
+        }
     }
-    MalPropertyIter iter;
-    mal_property_iter_init(
-        &iter, mal_value_to_object(init), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
-    MalKey key;
-    MalPropertyDesc desc;
-    while (mal_property_iter_next(&iter, &key, &desc)) {
-        if (key.kind != MAL_KEY_STRING) {
+    *out = mal_value_from_string(mal_string_new_copy(&vm->heap, units, length));
+    free(units);
+    return true;
+}
+
+/* Current Web IDL sequence conversion propagates abrupt completions without
+ * IteratorClose. Inner sequences are fully converted and staged before the URL
+ * constructor enforces its exactly-two-items requirement. */
+static bool usp_convert_inner_sequence(MalVm *vm, MalValue input, MalValue *sequence_out) {
+    if (!mal_value_is_object(input)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "URLSearchParams pair must be an iterable object");
+        return false;
+    }
+
+    MalValue method;
+    if (!mal_vm_get_property(vm, input,
+            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &method)) {
+        return false;
+    }
+    MalIteratorRecord record;
+    if (!mal_vm_get_iterator_from_method(vm, input, method, &record)) {
+        return false;
+    }
+
+    *sequence_out = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue element = mal_value_new_undefined();
+    MalRootSpan record_span, element_span;
+    mal_gc_root(&record_span, &record.iterator, 2);
+    mal_gc_root(&element_span, &element, 1);
+
+    bool ok = false;
+    u32 index = 0;
+    while (true) {
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &element, &done)) {
+            break;
+        }
+        if (done) {
+            ok = true;
+            break;
+        }
+        MalValue converted;
+        if (!usp_to_usv_string(vm, element, &converted)) {
+            break;
+        }
+        mal_array_object_store(mal_value_to_array_object(*sequence_out),
+            url_index_key(index++), converted);
+    }
+
+    mal_gc_unroot(&element_span);
+    mal_gc_unroot(&record_span);
+    return ok;
+}
+
+static bool usp_convert_sequence(
+    MalVm *vm, MalValue input, MalValue method, MalValue *sequence_out) {
+    MalIteratorRecord record;
+    if (!mal_vm_get_iterator_from_method(vm, input, method, &record)) {
+        return false;
+    }
+
+    *sequence_out = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan record_span, roots_span;
+    mal_gc_root(&record_span, &record.iterator, 2);
+    mal_gc_root(&roots_span, roots, 2);
+
+    bool ok = false;
+    u32 index = 0;
+    while (true) {
+        bool done;
+        if (!mal_vm_iterator_step(vm, &record, &roots[0], &done)) {
+            break;
+        }
+        if (done) {
+            ok = true;
+            break;
+        }
+        roots[1] = mal_value_new_undefined();
+        if (!usp_convert_inner_sequence(vm, roots[0], &roots[1])) {
+            break;
+        }
+        mal_array_object_store(mal_value_to_array_object(*sequence_out),
+            url_index_key(index++), roots[1]);
+    }
+
+    mal_gc_unroot(&roots_span);
+    mal_gc_unroot(&record_span);
+    return ok;
+}
+
+static bool usp_fill_from_sequence(
+    MalVm *vm, MalUrlSearchParamsObject *p, MalValue sequence) {
+    MalArrayObject *outer = mal_value_to_array_object(sequence);
+    for (u32 i = 0; i < mal_array_object_length(outer); i++) {
+        MalValue pair_value;
+        mal_array_object_dense_get(outer, i, &pair_value);
+        MalArrayObject *pair = mal_value_to_array_object(pair_value);
+        if (mal_array_object_length(pair) != 2) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "URLSearchParams pair must contain exactly two items");
+            return false;
+        }
+        MalValue name;
+        MalValue value;
+        mal_array_object_dense_get(pair, 0, &name);
+        mal_array_object_dense_get(pair, 1, &value);
+        usp_append(p, mal_value_to_string(name), mal_value_to_string(value));
+    }
+    return true;
+}
+
+static bool usp_convert_record(MalVm *vm, MalValue input, MalValue *record_out) {
+    *record_out = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    MalValue roots[5] = {
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 5);
+    if (!mal_vm_own_property_keys(vm, input, &roots[0])) {
+        mal_gc_unroot(&roots_span);
+        return false;
+    }
+
+    MalArrayObject *keys = mal_value_to_array_object(roots[0]);
+    u32 key_count = mal_array_object_length(keys);
+    bool ok = true;
+    for (u32 i = 0; i < key_count; i++) {
+        mal_array_object_dense_get(keys, i, &roots[1]);
+        MalKey key;
+        if (!mal_vm_value_to_property_key(vm, roots[1], &key)) {
+            ok = false;
+            break;
+        }
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_vm_get_own_property(vm, input, key, &present, &desc)) {
+            ok = false;
+            break;
+        }
+        if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
             continue;
         }
-        MalString *value;
-        if (!mal_vm_to_string(vm, desc.value, &value)) {
-            return;
+
+        // Web IDL converts the record key before Get(O, key).
+        if (!usp_to_usv_string(vm, roots[1], &roots[2]) ||
+            !mal_vm_get_property(vm, input, key, &roots[3]) ||
+            !usp_to_usv_string(vm, roots[3], &roots[3])) {
+            ok = false;
+            break;
         }
-        usp_append(p, mal_value_to_string(key.value), value);
+
+        MalArrayObject *record = mal_value_to_array_object(*record_out);
+        bool replaced = false;
+        for (u32 j = 0; j < mal_array_object_length(record); j++) {
+            MalValue pair_value;
+            MalValue prior_key;
+            mal_array_object_dense_get(record, j, &pair_value);
+            MalArrayObject *pair = mal_value_to_array_object(pair_value);
+            mal_array_object_dense_get(pair, 0, &prior_key);
+            if (mal_string_equals(
+                    mal_value_to_string(prior_key), mal_value_to_string(roots[2]))) {
+                mal_array_object_store(pair, url_index_key(1), roots[3]);
+                replaced = true;
+                break;
+            }
+        }
+        if (replaced) {
+            continue;
+        }
+
+        roots[4] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
+        MalArrayObject *pair = mal_value_to_array_object(roots[4]);
+        mal_array_object_store(pair, url_index_key(0), roots[2]);
+        mal_array_object_store(pair, url_index_key(1), roots[3]);
+        mal_array_object_store(record,
+            url_index_key(mal_array_object_length(record)), roots[4]);
     }
+
+    mal_gc_unroot(&roots_span);
+    return ok;
+}
+
+/* Convert the URLSearchParams constructor union. Object discrimination observes
+ * @@iterator once; an absent method selects the existing record arm. */
+static bool usp_fill_from_init(MalVm *vm, MalUrlSearchParamsObject *p, MalValue init) {
+    if (!mal_value_is_object(init)) {
+        MalValue string = mal_value_new_undefined();
+        MalRootSpan string_span;
+        mal_gc_root(&string_span, &string, 1);
+        bool ok = usp_to_usv_string(vm, init, &string);
+        if (ok) {
+            usp_parse_string(vm, p, mal_value_to_string(string));
+        }
+        mal_gc_unroot(&string_span);
+        return ok;
+    }
+
+    MalValue method;
+    if (!mal_vm_get_property(vm, init,
+            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &method)) {
+        return false;
+    }
+    if (!mal_value_is_nil(method)) {
+        if (!mal_value_is_callable(method)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "URLSearchParams init iterator is not callable");
+            return false;
+        }
+        MalValue sequence = mal_value_new_undefined();
+        MalRootSpan sequence_span;
+        mal_gc_root(&sequence_span, &sequence, 1);
+        bool ok = usp_convert_sequence(vm, init, method, &sequence)
+            && usp_fill_from_sequence(vm, p, sequence);
+        mal_gc_unroot(&sequence_span);
+        return ok;
+    }
+    MalValue record = mal_value_new_undefined();
+    MalRootSpan record_span;
+    mal_gc_root(&record_span, &record, 1);
+    bool ok = usp_convert_record(vm, init, &record)
+        && usp_fill_from_sequence(vm, p, record);
+    mal_gc_unroot(&record_span);
+    return ok;
 }
 
 static MalUrlSearchParamsObject *usp_create(MalVm *vm) {
@@ -478,11 +719,11 @@ static MalValue usp_ctor(
     MalUrlSearchParamsObject *p = usp_new(&vm->heap, proto);
     MalValue result = mal_value_from_url_search_params_object(p);
     if (argc >= 1 && !mal_value_is_undefined(args[0])) {
-        // Parsing a string init allocates many strings; keep the params object
-        // (and thus the pairs appended so far) rooted across the fill.
         MalRootSpan rs;
         mal_gc_root(&rs, &result, 1);
+        mal_gc_native_rooted_begin(vm);
         usp_fill_from_init(vm, p, args[0]);
+        mal_gc_native_rooted_end(vm);
         mal_gc_unroot(&rs);
     }
     return result;
@@ -596,15 +837,29 @@ static MalValue usp_set(
     i32 w = 0;
     for (i32 i = 0; i < p->count; i++) {
         if (mal_string_equals(p->pairs[i].name, name)) {
+            mal_gc_write_barrier(mal_value_from_string(p->pairs[i].name));
+            mal_gc_write_barrier(mal_value_from_string(p->pairs[i].value));
             if (first < 0) {
                 first = w;
+                if (w != i) {
+                    mal_gc_write_barrier(mal_value_from_string(p->pairs[w].name));
+                    mal_gc_write_barrier(mal_value_from_string(p->pairs[w].value));
+                }
                 p->pairs[w].name = name;
                 p->pairs[w].value = value;
+                mal_gc_card(&p->object.header, mal_value_from_string(name));
+                mal_gc_card(&p->object.header, mal_value_from_string(value));
                 w++;
             }
             // drop subsequent matches
         } else {
+            if (w != i) {
+                mal_gc_write_barrier(mal_value_from_string(p->pairs[w].name));
+                mal_gc_write_barrier(mal_value_from_string(p->pairs[w].value));
+            }
             p->pairs[w++] = p->pairs[i];
+            mal_gc_card(&p->object.header, mal_value_from_string(p->pairs[w - 1].name));
+            mal_gc_card(&p->object.header, mal_value_from_string(p->pairs[w - 1].value));
         }
     }
     if (first < 0) {
@@ -630,7 +885,16 @@ static MalValue usp_delete(
     i32 w = 0;
     for (i32 i = 0; i < p->count; i++) {
         if (!mal_string_equals(p->pairs[i].name, name)) {
+            if (w != i) {
+                mal_gc_write_barrier(mal_value_from_string(p->pairs[w].name));
+                mal_gc_write_barrier(mal_value_from_string(p->pairs[w].value));
+            }
             p->pairs[w++] = p->pairs[i];
+            mal_gc_card(&p->object.header, mal_value_from_string(p->pairs[w - 1].name));
+            mal_gc_card(&p->object.header, mal_value_from_string(p->pairs[w - 1].value));
+        } else {
+            mal_gc_write_barrier(mal_value_from_string(p->pairs[i].name));
+            mal_gc_write_barrier(mal_value_from_string(p->pairs[i].value));
         }
     }
     p->count = w;

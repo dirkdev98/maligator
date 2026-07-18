@@ -14,6 +14,7 @@
 #include "heap.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "mal_url.h"
 #include "object.h"
 #include "object_ops.h"
 #include "promise_object.h"
@@ -72,27 +73,120 @@ static byte *mal_fetch_utf8_encode(MalVm *vm, const MalString *string, usize *le
     return bytes;
 }
 
-/* Extract the byte range of a BufferSource (TypedArray or ArrayBuffer); returns
- * false for anything else. */
-static bool mal_fetch_buffer_source(MalValue v, const byte **out, usize *out_len) {
+typedef enum MalFetchBufferSourceResult {
+    MAL_FETCH_NOT_BUFFER_SOURCE,
+    MAL_FETCH_BUFFER_SOURCE_OK,
+    MAL_FETCH_BUFFER_SOURCE_ERROR,
+} MalFetchBufferSourceResult;
+
+// DataView keeps this layout private to builtin_data_view.c. Fetch needs the
+// internal view window so user-defined properties cannot spoof BodyInit bytes.
+struct MalDataViewObject {
+    MalObject object;
+    MalArrayBufferObject *buffer;
+    u32 byte_offset;
+    u32 byte_length;
+    bool length_tracking;
+};
+
+/* Extract a validated BufferSource span. Detached and out-of-bounds views are
+ * errors rather than empty bodies. */
+static MalFetchBufferSourceResult mal_fetch_buffer_source(
+    MalVm *vm, MalValue v, const byte **out, usize *out_len) {
     if (mal_value_is_typed_array_object(v)) {
         MalTypedArrayObject *ta = mal_value_to_typed_array_object(v);
-        if (ta->buffer == nullptr || ta->buffer->detached) {
-            *out = nullptr;
-            *out_len = 0;
-            return true;
+        if (mal_typed_array_object_is_out_of_bounds(ta)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "BodyInit contains a detached or out-of-bounds view");
+            return MAL_FETCH_BUFFER_SOURCE_ERROR;
         }
-        *out = (const byte *) ta->buffer->data + ta->byte_offset;
-        *out_len = mal_typed_array_object_byte_length(ta);
-        return true;
+        usize length = mal_typed_array_object_byte_length(ta);
+        *out = length == 0 ? nullptr : (const byte *) ta->buffer->data + ta->byte_offset;
+        *out_len = length;
+        return MAL_FETCH_BUFFER_SOURCE_OK;
+    }
+    if (mal_value_is_data_view_object(v)) {
+        MalDataViewObject *view = mal_value_to_data_view_object(v);
+        MalArrayBufferObject *buffer = view->buffer;
+        if (buffer == nullptr || buffer->detached
+            || (view->length_tracking && view->byte_offset > buffer->byte_length)
+            || (!view->length_tracking
+                && (u64) view->byte_offset + view->byte_length > buffer->byte_length)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "BodyInit contains a detached or out-of-bounds view");
+            return MAL_FETCH_BUFFER_SOURCE_ERROR;
+        }
+        usize length = view->length_tracking
+            ? buffer->byte_length - view->byte_offset
+            : view->byte_length;
+        *out = length == 0 ? nullptr : (const byte *) buffer->data + view->byte_offset;
+        *out_len = length;
+        return MAL_FETCH_BUFFER_SOURCE_OK;
     }
     if (mal_value_is_array_buffer_object(v)) {
         MalArrayBufferObject *ab = mal_value_to_array_buffer_object(v);
+        if (ab->detached) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "BodyInit contains a detached ArrayBuffer");
+            return MAL_FETCH_BUFFER_SOURCE_ERROR;
+        }
         *out = (const byte *) ab->data;
-        *out_len = ab->detached ? 0 : ab->byte_length;
-        return true;
+        *out_len = ab->byte_length;
+        return MAL_FETCH_BUFFER_SOURCE_OK;
+    }
+    return MAL_FETCH_NOT_BUFFER_SOURCE;
+}
+
+static bool mal_fetch_name_is(const MalString *name, const char *ascii);
+
+static bool mal_fetch_headers_have(MalHeadersObject *headers, const char *name) {
+    for (i32 i = 0; i < headers->count; i++) {
+        if (mal_fetch_name_is(headers->entries[i].name, name)) return true;
     }
     return false;
+}
+
+static void mal_fetch_default_content_type(
+    MalVm *vm, MalHeadersObject *headers, const char *value) {
+    if (value != nullptr && !mal_fetch_headers_have(headers, "content-type")) {
+        mal_headers_append_bytes(vm, headers, "content-type", 12, value, strlen(value));
+    }
+}
+
+static bool mal_fetch_reason_phrase(MalVm *vm, MalValue value, MalValue *out) {
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    const c16 *units = mal_string_code_units(string);
+    usize length = mal_string_length(string);
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        if (unit > 0xFF) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Response statusText is not a ByteString");
+            return false;
+        }
+        if ((unit < 0x20 && unit != '\t') || unit == 0x7F) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Response statusText is not a valid reason phrase");
+            return false;
+        }
+    }
+    *out = mal_value_from_string(string);
+    return true;
+}
+
+/* Web IDL unsigned short conversion: ToNumber, truncate, then modulo 2^16. */
+static bool mal_fetch_to_uint16(MalVm *vm, MalValue value, u16 *out) {
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) return false;
+    if (!isfinite(number) || number == 0) {
+        *out = 0;
+        return true;
+    }
+    f64 wrapped = fmod(trunc(number), 65536.0);
+    if (wrapped < 0) wrapped += 65536.0;
+    *out = (u16) wrapped;
+    return true;
 }
 
 /* Fresh ArrayBuffer holding a copy of bytes. */
@@ -143,9 +237,6 @@ static MalValue mal_fetch_new_uint8array(MalVm *vm, const byte *data, usize len)
     mal_gc_unroot(&rs);
     return view;
 }
-
-/* Case-insensitive header-name match (defined below; used by Response.json). */
-static bool mal_fetch_name_is(const MalString *name, const char *ascii);
 
 /* Resolve a value to a native Promise, returning the promise (or undefined on
  * failure). mal_promise_resolve_value roots its argument internally. */
@@ -250,6 +341,7 @@ MalResponseObject *mal_response_object_new(
     MalResponseObject *r = mal_heap_alloc(heap, sizeof(MalResponseObject), MAL_HEAP_RESPONSE_OBJECT);
     mal_object_init(heap, &r->object, MAL_HEAP_RESPONSE_OBJECT, prototype);
     r->status = status;
+    r->status_text = mal_value_new_undefined();
     r->headers = mal_value_new_undefined();
     r->body = body;
     r->body_len = body_len;
@@ -267,6 +359,7 @@ static void mal_response_finalize(MalHeapHeader *cell) {
 
 static void mal_response_trace(MalHeapHeader *cell) {
     MalResponseObject *response = (MalResponseObject *) cell;
+    mal_gc_mark_value(response->status_text);
     mal_gc_mark_value(response->headers);
     mal_gc_mark_value(response->body_stream);
 }
@@ -279,15 +372,19 @@ static MalValue mal_response_constructor(
     MalValue new_target,
     MalValue callee) {
     (void) this_value;
-    (void) new_target;
     (void) callee;
 
     i32 status = 200;
-    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalValue roots[3] = {
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0)),
+    };
     MalRootSpan rs;
-    mal_gc_root(&rs, roots, 2);
+    mal_gc_root(&rs, roots, 3);
     byte *body = nullptr;
     MalResponseObject *response = nullptr;
+    const char *content_type = nullptr;
     if (arg_count >= 2 && mal_value_is_object(args[1])) {
         MalValue s;
         if (!mal_vm_get_property(
@@ -295,15 +392,18 @@ static MalValue mal_response_constructor(
             goto response_error;
         }
         if (!mal_value_is_undefined(s)) {
-            f64 number;
-            if (!mal_vm_to_number(vm, s, &number)) goto response_error;
-            if (!isfinite(number) || trunc(number) != number ||
-                number < INT32_MIN || number > INT32_MAX) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                    "Response status is invalid");
-                goto response_error;
-            }
-            status = (i32) number;
+            u16 converted;
+            if (!mal_fetch_to_uint16(vm, s, &converted)) goto response_error;
+            status = converted;
+        }
+        MalValue status_text;
+        if (!mal_vm_get_property(vm, args[1],
+                mal_intrinsic_string_key(vm, (const byte *) "statusText"), &status_text)) {
+            goto response_error;
+        }
+        if (!mal_value_is_undefined(status_text)
+            && !mal_fetch_reason_phrase(vm, status_text, &roots[2])) {
+            goto response_error;
         }
         if (!mal_vm_get_property(vm, args[1],
                 mal_intrinsic_string_key(vm, (const byte *) "headers"), &roots[0])) {
@@ -328,25 +428,35 @@ static MalValue mal_response_constructor(
         MalString *str = mal_value_to_string(args[0]);
         body = mal_fetch_utf8_encode(vm, str, &body_len);
         if (body == nullptr) goto response_error;
-    } else if (arg_count >= 1 && mal_fetch_buffer_source(args[0], &src_bytes, &src_len)) {
+        content_type = "text/plain;charset=UTF-8";
+    } else if (arg_count >= 1) {
+        MalFetchBufferSourceResult buffer_result =
+            mal_fetch_buffer_source(vm, args[0], &src_bytes, &src_len);
+        if (buffer_result == MAL_FETCH_BUFFER_SOURCE_ERROR) goto response_error;
+        if (buffer_result == MAL_FETCH_BUFFER_SOURCE_OK) {
         // A BufferSource (ArrayBuffer / TypedArray) body: copy the raw bytes.
-        body = malloc(src_len == 0 ? 1 : src_len);
-        if (body == nullptr) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                "Response body allocation failed");
-            goto response_error;
+            body = malloc(src_len == 0 ? 1 : src_len);
+            if (body == nullptr) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                    "Response body allocation failed");
+                goto response_error;
+            }
+            if (src_len > 0) {
+                memcpy(body, src_bytes, src_len);
+            }
+            body_len = src_len;
+        } else if (!mal_value_is_nil(args[0])) {
+            bool is_search_params = mal_value_is_url_search_params_object(args[0]);
+            MalString *str;
+            if (!mal_vm_to_string(vm, args[0], &str)) {
+                goto response_error;
+            }
+            body = mal_fetch_utf8_encode(vm, str, &body_len);
+            if (body == nullptr) goto response_error;
+            content_type = is_search_params
+                ? "application/x-www-form-urlencoded;charset=UTF-8"
+                : "text/plain;charset=UTF-8";
         }
-        if (src_len > 0) {
-            memcpy(body, src_bytes, src_len);
-        }
-        body_len = src_len;
-    } else if (arg_count >= 1 && !mal_value_is_nil(args[0])) {
-        MalString *str;
-        if (!mal_vm_to_string(vm, args[0], &str)) {
-            goto response_error;
-        }
-        body = mal_fetch_utf8_encode(vm, str, &body_len);
-        if (body == nullptr) goto response_error;
     }
     if (body != nullptr && (status == 204 || status == 205 || status == 304)) {
         free(body);
@@ -356,10 +466,18 @@ static MalValue mal_response_constructor(
         goto response_error;
     }
 
-    MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_RESPONSE_PROTOTYPE]);
+    MalObject *proto;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target, MAL_INTRINSIC_RESPONSE_PROTOTYPE, &proto)) {
+        goto response_error;
+    }
     response = mal_response_object_new(&vm->heap, proto, status, body, body_len);
     roots[1] = mal_value_from_response_object(response);
     response->headers = mal_value_from_headers_object(mal_headers_from_init(vm, roots[0]));
+    if (vm->completion.kind != MAL_COMPLETION_NORMAL) goto response_error;
+    response->status_text = roots[2];
+    mal_fetch_default_content_type(
+        vm, mal_value_to_headers_object(response->headers), content_type);
     if (vm->completion.kind != MAL_COMPLETION_NORMAL) goto response_error;
     MalValue result = roots[1];
     mal_gc_unroot(&rs);
@@ -513,24 +631,32 @@ static MalValue mal_fetch_body_method_json(
 
 static MalValue mal_response_get_status(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) vm;
     (void) args;
     (void) argc;
     (void) nt;
     (void) callee;
     MalResponseObject *r = mal_response_this(self);
-    return mal_value_from_f64((f64) (r != nullptr ? r->status : 0));
+    if (r == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Response getter called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_f64((f64) r->status);
 }
 
 static MalValue mal_response_get_ok(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) vm;
     (void) args;
     (void) argc;
     (void) nt;
     (void) callee;
     MalResponseObject *r = mal_response_this(self);
-    return mal_value_new_boolean(r != nullptr && r->status >= 200 && r->status <= 299);
+    if (r == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Response getter called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(r->status >= 200 && r->status <= 299);
 }
 
 static MalValue mal_response_get_status_text(
@@ -540,19 +666,73 @@ static MalValue mal_response_get_status_text(
     (void) nt;
     (void) callee;
     MalResponseObject *r = mal_response_this(self);
-    const char *reason = mal_fetch_reason(r != nullptr ? r->status : 200);
-    return mal_value_from_string(mal_string_new_ascii(&vm->heap, reason, strlen(reason)));
+    if (r == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Response getter called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    return mal_value_is_string(r->status_text)
+        ? r->status_text
+        : mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
 }
 
-static MalValue mal_response_get_headers(
+static MalValue mal_response_get_type(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) vm;
     (void) args;
     (void) argc;
     (void) nt;
     (void) callee;
     MalResponseObject *r = mal_response_this(self);
-    if (r == nullptr || !mal_value_is_headers_object(r->headers)) {
+    if (r == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Response getter called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    const char *type = r->status == 0 ? "error" : "default";
+    return mal_value_from_string(mal_string_new_ascii(&vm->heap, type, strlen(type)));
+}
+
+static MalValue mal_response_get_url(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    if (mal_response_this(self) == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Response getter called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
+}
+
+static MalValue mal_response_get_redirected(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    if (mal_response_this(self) == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Response getter called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(false);
+}
+
+static MalValue mal_response_get_headers(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    MalResponseObject *r = mal_response_this(self);
+    if (r == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Response getter called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    if (!mal_value_is_headers_object(r->headers)) {
         return mal_value_new_undefined();
     }
     return r->headers;
@@ -652,7 +832,7 @@ static void mal_fetch_define_getter(
     MalVm *vm, MalObject *proto, const byte *name, MalNativeFunctionCallback getter) {
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
+        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
         .value = mal_value_new_undefined(),
         .getter = mal_value_from_native_function_object(
             mal_native_function_object_new(&vm->heap, fn_proto, mal_intrinsic_ascii(vm, name), getter)),
@@ -661,9 +841,9 @@ static void mal_fetch_define_getter(
     mal_object_define_own(proto, mal_intrinsic_string_key(vm, name), &desc);
 }
 
-/* Read an optional { status, headers } init into out-params. */
+/* Read an optional { status, statusText, headers } init into out-params. */
 static bool mal_response_read_init(MalVm *vm, const MalValue *args, i32 argc, i32 *status,
-    MalValue *init_headers) {
+    MalValue *init_headers, MalValue *status_text) {
     if (argc >= 2 && mal_value_is_object(args[1])) {
         MalValue s;
         if (!mal_vm_get_property(
@@ -671,15 +851,23 @@ static bool mal_response_read_init(MalVm *vm, const MalValue *args, i32 argc, i3
             return false;
         }
         if (!mal_value_is_undefined(s)) {
-            f64 number;
-            if (!mal_vm_to_number(vm, s, &number)) return false;
-            if (!isfinite(number) || trunc(number) != number ||
-                number < 200 || number > 599) {
+            u16 converted;
+            if (!mal_fetch_to_uint16(vm, s, &converted)) return false;
+            *status = converted;
+            if (*status < 200 || *status > 599) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                     "Response status must be between 200 and 599");
                 return false;
             }
-            *status = (i32) number;
+        }
+        MalValue text;
+        if (!mal_vm_get_property(vm, args[1],
+                mal_intrinsic_string_key(vm, (const byte *) "statusText"), &text)) {
+            return false;
+        }
+        if (!mal_value_is_undefined(text)
+            && !mal_fetch_reason_phrase(vm, text, status_text)) {
+            return false;
         }
         if (!mal_vm_get_property(vm, args[1],
                 mal_intrinsic_string_key(vm, (const byte *) "headers"), init_headers)) {
@@ -713,9 +901,10 @@ static MalValue mal_response_static_json(
             "Response.json: data could not be serialized");
         return mal_value_new_undefined();
     }
-    MalValue roots[2] = {c.value, mal_value_new_undefined()};
+    MalValue roots[3] = {c.value, mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan rs;
-    mal_gc_root(&rs, roots, 2);
+    mal_gc_root(&rs, roots, 3);
+    roots[2] = mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
     MalString *jstr = mal_value_to_string(roots[0]);
     usize body_len;
     byte *body = mal_fetch_utf8_encode(vm, jstr, &body_len);
@@ -725,7 +914,7 @@ static MalValue mal_response_static_json(
     }
 
     i32 status = 200;
-    if (!mal_response_read_init(vm, args, argc, &status, &roots[1])) {
+    if (!mal_response_read_init(vm, args, argc, &status, &roots[1], &roots[2])) {
         free(body);
         mal_gc_unroot(&rs);
         return mal_value_new_undefined();
@@ -741,22 +930,14 @@ static MalValue mal_response_static_json(
     MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_RESPONSE_PROTOTYPE]);
     MalResponseObject *r = mal_response_object_new(&vm->heap, proto, status, body, body_len);
     roots[0] = mal_value_from_response_object(r);
+    r->status_text = roots[2];
     MalHeadersObject *h = mal_headers_from_init(vm, roots[1]);
     if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
         mal_gc_unroot(&rs);
         return mal_value_new_undefined();
     }
     r->headers = mal_value_from_headers_object(h); // reachable + traced via r now
-    bool has_ct = false;
-    for (i32 i = 0; i < h->count; i++) {
-        if (mal_fetch_name_is(h->entries[i].name, "content-type")) {
-            has_ct = true;
-            break;
-        }
-    }
-    if (!has_ct) {
-        mal_headers_append_bytes(vm, h, "content-type", 12, "application/json", 16);
-    }
+    mal_fetch_default_content_type(vm, h, "application/json");
     MalValue result = roots[0];
     mal_gc_unroot(&rs);
     return result;
@@ -775,13 +956,27 @@ static MalValue mal_response_static_redirect(
         }
         return mal_value_new_undefined();
     }
-    i32 status = 302;
-    if (argc >= 2 && mal_ops_is_number(args[1])) {
-        status = (i32) mal_ops_to_number(args[1]);
+    void *url_handle = mal_url_parse(
+        mal_string_code_units(url), mal_string_length(url), nullptr, 0, false);
+    if (url_handle == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid URL");
+        return mal_value_new_undefined();
     }
-    MalValue url_val = mal_value_from_string(url);
-    MalRootSpan urs;
-    mal_gc_root(&urs, &url_val, 1);
+    i32 status = 302;
+    if (argc >= 2 && !mal_value_is_undefined(args[1])) {
+        u16 converted;
+        if (!mal_fetch_to_uint16(vm, args[1], &converted)) {
+            mal_url_free(url_handle);
+            return mal_value_new_undefined();
+        }
+        status = converted;
+    }
+    if (status != 301 && status != 302 && status != 303 && status != 307 && status != 308) {
+        mal_url_free(url_handle);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Invalid redirect status");
+        return mal_value_new_undefined();
+    }
     MalObject *proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_RESPONSE_PROTOTYPE]);
     MalResponseObject *r = mal_response_object_new(&vm->heap, proto, status, nullptr, 0);
     MalValue rval = mal_value_from_response_object(r);
@@ -789,18 +984,22 @@ static MalValue mal_response_static_redirect(
     mal_gc_root(&rrs, &rval, 1);
     MalHeadersObject *h = mal_headers_create(vm);
     r->headers = mal_value_from_headers_object(h);
-    MalString *url_string = mal_value_to_string(url_val);
-    usize url_len;
-    byte *url_bytes = mal_fetch_utf8_encode(vm, url_string, &url_len);
-    if (url_bytes == nullptr) {
+    i32 url_len = mal_url_href(url_handle, nullptr, 0);
+    byte *url_bytes = url_len > 0 ? malloc((usize) url_len) : nullptr;
+    if (url_len > 0 && url_bytes == nullptr) {
+        mal_url_free(url_handle);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Redirect URL allocation failed");
         mal_gc_unroot(&rrs);
-        mal_gc_unroot(&urs);
         return mal_value_new_undefined();
     }
-    mal_headers_append_bytes(vm, h, "location", 8, (const char *) url_bytes, url_len);
+    if (url_len > 0) mal_url_href(url_handle, url_bytes, url_len);
+    mal_headers_append_bytes(
+        vm, h, "location", 8, (const char *) url_bytes, (usize) url_len);
+    h->guard = MAL_HEADERS_GUARD_IMMUTABLE;
     free(url_bytes);
+    mal_url_free(url_handle);
     mal_gc_unroot(&rrs);
-    mal_gc_unroot(&urs);
     return rval;
 }
 
@@ -817,7 +1016,9 @@ static MalValue mal_response_static_error(
     MalValue rval = mal_value_from_response_object(r);
     MalRootSpan rrs;
     mal_gc_root(&rrs, &rval, 1);
-    r->headers = mal_value_from_headers_object(mal_headers_create(vm));
+    MalHeadersObject *h = mal_headers_create(vm);
+    h->guard = MAL_HEADERS_GUARD_IMMUTABLE;
+    r->headers = mal_value_from_headers_object(h);
     mal_gc_unroot(&rrs);
     return rval;
 }
@@ -845,6 +1046,70 @@ static void mal_request_finalize(MalHeapHeader *cell) {
 
 static void mal_request_trace(MalHeapHeader *cell) {
     mal_gc_mark_value(((MalRequestObject *) cell)->body_stream);
+}
+
+static bool mal_fetch_method_token_unit(c16 unit) {
+    if ((unit >= '0' && unit <= '9') || (unit >= 'A' && unit <= 'Z')
+        || (unit >= 'a' && unit <= 'z')) {
+        return true;
+    }
+    switch (unit) {
+        case '!':
+        case '#':
+        case '$':
+        case '%':
+        case '&':
+        case '\'':
+        case '*':
+        case '+':
+        case '-':
+        case '.':
+        case '^':
+        case '_':
+        case '`':
+        case '|':
+        case '~': return true;
+        default: return false;
+    }
+}
+
+static bool mal_fetch_normalize_method(MalVm *vm, MalString *method, MalValue *out) {
+    usize length = mal_string_length(method);
+    const c16 *units = mal_string_code_units(method);
+    if (length == 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Request method is not a valid HTTP token");
+        return false;
+    }
+    for (usize i = 0; i < length; i++) {
+        if (units[i] > 0xFF) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Request method is not a ByteString");
+            return false;
+        }
+        if (!mal_fetch_method_token_unit(units[i])) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Request method is not a valid HTTP token");
+            return false;
+        }
+    }
+    if (mal_fetch_string_ascii_equal_ci(method, "CONNECT")
+        || mal_fetch_string_ascii_equal_ci(method, "TRACE")
+        || mal_fetch_string_ascii_equal_ci(method, "TRACK")) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Request method is forbidden");
+        return false;
+    }
+    static const char *normalized[] = {"DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT"};
+    for (usize i = 0; i < sizeof(normalized) / sizeof(normalized[0]); i++) {
+        if (mal_fetch_string_ascii_equal_ci(method, normalized[i])) {
+            *out = mal_value_from_string(mal_string_new_ascii(
+                &vm->heap, normalized[i], strlen(normalized[i])));
+            return true;
+        }
+    }
+    *out = mal_value_from_string(method);
+    return true;
 }
 
 /* `new Request(input, init?)`: input is a URL string or another Request (copied);
@@ -875,6 +1140,7 @@ static MalValue mal_request_constructor(
     mal_gc_root(&rs, slots, 6);
     MalRequestObject *source_request = nullptr;
     bool body_override = false;
+    const char *content_type = nullptr;
 
     if (argc >= 1 && mal_value_is_request_object(args[0])) {
         MalRequestObject *src = mal_value_to_request_object(args[0]);
@@ -939,10 +1205,14 @@ static MalValue mal_request_constructor(
         free(r->body);
         r->body = mal_fetch_utf8_encode(vm, bs, &r->body_len);
         if (r->body == nullptr) goto request_error;
+        content_type = "text/plain;charset=UTF-8";
     } else {
         const byte *sb;
         usize sl;
-        if (mal_fetch_buffer_source(slots[4], &sb, &sl)) {
+        MalFetchBufferSourceResult buffer_result =
+            mal_fetch_buffer_source(vm, slots[4], &sb, &sl);
+        if (buffer_result == MAL_FETCH_BUFFER_SOURCE_ERROR) goto request_error;
+        if (buffer_result == MAL_FETCH_BUFFER_SOURCE_OK) {
             free(r->body);
             r->body = malloc(sl == 0 ? 1 : sl);
             if (r->body == nullptr) {
@@ -955,17 +1225,22 @@ static MalValue mal_request_constructor(
             }
             r->body_len = sl;
         } else if (!mal_value_is_undefined(slots[4])) {
+            bool is_search_params = mal_value_is_url_search_params_object(slots[4]);
             MalString *bs;
             if (!mal_vm_to_string(vm, slots[4], &bs)) goto request_error;
             free(r->body);
             r->body = mal_fetch_utf8_encode(vm, bs, &r->body_len);
             if (r->body == nullptr) goto request_error;
+            content_type = is_search_params
+                ? "application/x-www-form-urlencoded;charset=UTF-8"
+                : "text/plain;charset=UTF-8";
         }
     }
 
     MalString *method;
     if (!mal_vm_to_string(vm, slots[1], &method)) goto request_error;
-    slots[1] = mal_value_from_string(method);
+    if (!mal_fetch_normalize_method(vm, method, &slots[1])) goto request_error;
+    method = mal_value_to_string(slots[1]);
     if (r->body != nullptr &&
         (mal_fetch_string_ascii_equal_ci(method, "GET") ||
             mal_fetch_string_ascii_equal_ci(method, "HEAD"))) {
@@ -974,6 +1249,9 @@ static MalValue mal_request_constructor(
         goto request_error;
     }
     slots[5] = mal_value_from_headers_object(mal_headers_from_init(vm, slots[3]));
+    if (vm->completion.kind != MAL_COMPLETION_NORMAL) goto request_error;
+    mal_fetch_default_content_type(
+        vm, mal_value_to_headers_object(slots[5]), content_type);
     if (vm->completion.kind != MAL_COMPLETION_NORMAL) goto request_error;
 
     if (source_request != nullptr && source_request->body != nullptr && !body_override) {
@@ -1153,8 +1431,24 @@ static void mal_fetch_respond_with(MalHttpConn *conn, MalValue result) {
     MalResponseObject *r = mal_value_to_response_object(result);
     usize hlen = 0;
     char *block = mal_fetch_serialize_headers(r, &hlen);
-    mal_http_conn_respond(conn, r->status, mal_fetch_reason(r->status), block, hlen,
+    const char *reason = mal_fetch_reason(r->status);
+    char *custom_reason = nullptr;
+    if (mal_value_is_string(r->status_text)) {
+        MalString *status_text = mal_value_to_string(r->status_text);
+        usize length = mal_string_length(status_text);
+        if (length > 0) {
+            custom_reason = malloc(length + 1);
+            if (custom_reason != nullptr) {
+                const c16 *units = mal_string_code_units(status_text);
+                for (usize i = 0; i < length; i++) custom_reason[i] = (char) units[i];
+                custom_reason[length] = '\0';
+                reason = custom_reason;
+            }
+        }
+    }
+    mal_http_conn_respond(conn, r->status, reason, block, hlen,
         r->body != nullptr ? r->body : "", r->body_len);
+    free(custom_reason);
     free(block);
 }
 
@@ -1322,6 +1616,10 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     mal_fetch_define_getter(vm, resp_proto, (const byte *) "status", mal_response_get_status);
     mal_fetch_define_getter(vm, resp_proto, (const byte *) "ok", mal_response_get_ok);
     mal_fetch_define_getter(vm, resp_proto, (const byte *) "statusText", mal_response_get_status_text);
+    mal_fetch_define_getter(vm, resp_proto, (const byte *) "type", mal_response_get_type);
+    mal_fetch_define_getter(vm, resp_proto, (const byte *) "url", mal_response_get_url);
+    mal_fetch_define_getter(
+        vm, resp_proto, (const byte *) "redirected", mal_response_get_redirected);
     mal_fetch_define_getter(vm, resp_proto, (const byte *) "headers", mal_response_get_headers);
     // Static Response.json / redirect / error.
     mal_intrinsic_define_method_n(

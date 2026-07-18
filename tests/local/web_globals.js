@@ -7,6 +7,14 @@ const results = [];
 function check(name, ok) {
 	results.push([name, !!ok]);
 }
+function isDOMException(error, name, code) {
+	return (
+		error instanceof DOMException &&
+		error instanceof Error &&
+		error.name === name &&
+		error.code === code
+	);
+}
 function bytes(u8) {
 	// Index manually rather than Array.from(u8): the latter trips a pre-existing
 	// GC-rooting bug in Array.from over a typed array under MAL_GC_STRESS, which is
@@ -78,16 +86,54 @@ let btoaThrew = false;
 try {
 	btoa("snowman:☃");
 } catch (e) {
-	btoaThrew = true;
+	btoaThrew = isDOMException(e, "InvalidCharacterError", 5);
 }
-check("btoa rejects >0xFF", btoaThrew);
+check("btoa rejects >0xFF with InvalidCharacterError", btoaThrew);
 let atobThrew = false;
 try {
 	atob("not*base64");
 } catch (e) {
-	atobThrew = true;
+	atobThrew = isDOMException(e, "InvalidCharacterError", 5);
 }
-check("atob rejects invalid", atobThrew);
+check("atob rejects invalid character with InvalidCharacterError", atobThrew);
+let atobLengthThrew = false;
+try {
+	atob("a");
+} catch (e) {
+	atobLengthThrew = isDOMException(e, "InvalidCharacterError", 5);
+}
+check("atob rejects invalid length with InvalidCharacterError", atobLengthThrew);
+let atobPaddingThrew = false;
+try {
+	atob("Zg=");
+} catch (e) {
+	atobPaddingThrew = isDOMException(e, "InvalidCharacterError", 5);
+}
+check("atob rejects partial padding with InvalidCharacterError", atobPaddingThrew);
+let base64MissingArgsAreTypeErrors = false;
+try {
+	btoa();
+} catch (btoaError) {
+	try {
+		atob();
+	} catch (atobError) {
+		base64MissingArgsAreTypeErrors =
+			btoaError instanceof TypeError && atobError instanceof TypeError;
+	}
+}
+check("btoa/atob missing arguments remain TypeError", base64MissingArgsAreTypeErrors);
+const base64Abrupt = new Error("base64 coercion");
+let base64AbruptPreserved = false;
+try {
+	btoa({
+		toString() {
+			throw base64Abrupt;
+		},
+	});
+} catch (e) {
+	base64AbruptPreserved = e === base64Abrupt;
+}
+check("btoa preserves coercion abrupt completion", base64AbruptPreserved);
 
 // --- performance ---
 check("performance.now type", typeof performance.now() === "number");
@@ -118,16 +164,40 @@ let grvThrew = false;
 try {
 	crypto.getRandomValues(new Float64Array(4));
 } catch (e) {
-	grvThrew = true;
+	grvThrew = isDOMException(e, "TypeMismatchError", 17);
 }
-check("getRandomValues rejects float", grvThrew);
+check("getRandomValues rejects float with TypeMismatchError", grvThrew);
+let grvDataViewThrew = false;
+try {
+	crypto.getRandomValues(new DataView(new ArrayBuffer(4)));
+} catch (e) {
+	grvDataViewThrew = isDOMException(e, "TypeMismatchError", 17);
+}
+check("getRandomValues rejects DataView with TypeMismatchError", grvDataViewThrew);
+let grvValueThrew = false;
+try {
+	crypto.getRandomValues(1);
+} catch (e) {
+	grvValueThrew = isDOMException(e, "TypeMismatchError", 17);
+}
+check("getRandomValues rejects non-view value with TypeMismatchError", grvValueThrew);
 let grvTooLargeThrew = false;
 try {
 	crypto.getRandomValues(new Uint8Array(65537));
 } catch (e) {
-	grvTooLargeThrew = e instanceof RangeError;
+	grvTooLargeThrew = isDOMException(e, "QuotaExceededError", 22);
 }
-check("getRandomValues rejects more than 65536 bytes", grvTooLargeThrew);
+check(
+	"getRandomValues rejects more than 65536 bytes with QuotaExceededError",
+	grvTooLargeThrew,
+);
+let grvMissingThrew = false;
+try {
+	crypto.getRandomValues();
+} catch (e) {
+	grvMissingThrew = e instanceof TypeError;
+}
+check("getRandomValues missing argument remains TypeError", grvMissingThrew);
 
 // --- queueMicrotask ordering (runs after sync, before timers) ---
 let order = "";

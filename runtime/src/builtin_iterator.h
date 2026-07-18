@@ -48,6 +48,15 @@ MalValue mal_vm_new_builtin_iterator(MalVm *vm, MalIteratorKind kind, MalValue t
 bool mal_vm_get_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_out);
 
 /**
+ * Spec GetIteratorFromMethod(value, method): call an already-observed iterator
+ * method and capture the returned iterator's next method. This is useful when a
+ * preceding dispatch step (such as Web IDL union conversion) must observe
+ * @@iterator exactly once.
+ */
+bool mal_vm_get_iterator_from_method(
+    MalVm *vm, MalValue value, MalValue method, MalIteratorRecord *record_out);
+
+/**
  * Spec IteratorStep + value read: calls next() and unpacks the result
  * object. Returns false when something threw. On success *done_out signals
  * exhaustion and *value_out carries the step value (undefined when done).

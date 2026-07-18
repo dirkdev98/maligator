@@ -7,6 +7,14 @@ const results = [];
 function check(name, ok) {
 	results.push([name, !!ok]);
 }
+function isDataCloneError(error) {
+	return (
+		error instanceof DOMException &&
+		error instanceof Error &&
+		error.name === "DataCloneError" &&
+		error.code === 25
+	);
+}
 
 // --- primitives pass through ---
 check("num", structuredClone(42) === 42);
@@ -89,17 +97,108 @@ let fnThrew = false;
 try {
 	structuredClone(() => {});
 } catch (e) {
-	fnThrew = true;
+	fnThrew = isDataCloneError(e);
 }
-check("function-throws", fnThrew);
+check("function throws DataCloneError", fnThrew);
 
 let symThrew = false;
 try {
 	structuredClone(Symbol("x"));
 } catch (e) {
-	symThrew = true;
+	symThrew = isDataCloneError(e);
 }
-check("symbol-throws", symThrew);
+check("symbol throws DataCloneError", symThrew);
+
+let unsupportedThrew = false;
+try {
+	structuredClone(new WeakMap());
+} catch (e) {
+	unsupportedThrew = isDataCloneError(e);
+}
+check("unsupported object throws DataCloneError", unsupportedThrew);
+
+const detachedBuffer = new ArrayBuffer(4);
+detachedBuffer.transfer();
+let detachedBufferThrew = false;
+try {
+	structuredClone(detachedBuffer);
+} catch (e) {
+	detachedBufferThrew = isDataCloneError(e);
+}
+check("detached ArrayBuffer throws DataCloneError", detachedBufferThrew);
+
+const detachedView = new Uint8Array(4);
+detachedView.buffer.transfer();
+let detachedViewThrew = false;
+try {
+	structuredClone(detachedView);
+} catch (e) {
+	detachedViewThrew = isDataCloneError(e);
+}
+check("detached TypedArray throws DataCloneError", detachedViewThrew);
+
+const resizableBuffer = new ArrayBuffer(8, { maxByteLength: 8 });
+const outOfBoundsView = new Uint8Array(resizableBuffer, 4, 4);
+resizableBuffer.resize(2);
+let outOfBoundsViewThrew = false;
+try {
+	structuredClone(outOfBoundsView);
+} catch (e) {
+	outOfBoundsViewThrew = isDataCloneError(e);
+}
+check("out-of-bounds TypedArray throws DataCloneError", outOfBoundsViewThrew);
+
+let missingThrew = false;
+try {
+	structuredClone();
+} catch (e) {
+	missingThrew = e instanceof TypeError;
+}
+check("missing argument remains TypeError", missingThrew);
+
+const getterAbrupt = new RangeError("getter abrupt");
+let getterAbruptPreserved = false;
+try {
+	structuredClone({
+		get value() {
+			throw getterAbrupt;
+		},
+	});
+} catch (e) {
+	getterAbruptPreserved = e === getterAbrupt;
+}
+check("getter abrupt completion is preserved", getterAbruptPreserved);
+
+let getterCalls = 0;
+const getterClone = structuredClone({
+	get value() {
+		getterCalls++;
+		return { nested: 7 };
+	},
+});
+check(
+	"getter result is cloned once",
+	getterCalls === 1 && getterClone.value.nested === 7,
+);
+
+const changedEnumerable = {};
+Object.defineProperty(changedEnumerable, "first", {
+	enumerable: true,
+	get() {
+		Object.defineProperty(changedEnumerable, "second", { enumerable: false });
+		return 1;
+	},
+});
+Object.defineProperty(changedEnumerable, "second", {
+	configurable: true,
+	enumerable: true,
+	value: 2,
+});
+const changedEnumerableClone = structuredClone(changedEnumerable);
+check(
+	"snapshot key survives enumerability change",
+	changedEnumerableClone.first === 1 && changedEnumerableClone.second === 2,
+);
 
 let passed = 0;
 for (const [name, ok] of results) {

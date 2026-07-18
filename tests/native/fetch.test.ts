@@ -47,7 +47,13 @@ describe("Mal.serve fetch server", () => {
 
 		const created = await fetch(`${base}/created`);
 		expect(created.status).toBe(201);
+		expect(created.statusText).toBe("Created");
 		expect(await created.text()).toBe("made");
+
+		const customReason = await fetch(`${base}/custom-reason`);
+		expect(customReason.status).toBe(299);
+		expect(customReason.statusText).toBe("All Fine");
+		expect(await customReason.text()).toBe("custom");
 
 		const json = await fetch(`${base}/json`);
 		expect(json.headers.get("content-type")).toBe("application/json");

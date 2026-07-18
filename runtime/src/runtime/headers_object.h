@@ -17,12 +17,21 @@ typedef struct MalHeaderEntry {
     MalString *value;
 } MalHeaderEntry;
 
+typedef enum MalHeadersGuard {
+    MAL_HEADERS_GUARD_NONE,
+    MAL_HEADERS_GUARD_IMMUTABLE,
+} MalHeadersGuard;
+
 typedef struct MalHeadersObject {
     MalObject object;
     MalHeaderEntry *entries; // owned
     i32 count;
     i32 cap;
+    MalHeadersGuard guard;
 } MalHeadersObject;
+
+static_assert(sizeof(MalHeadersObject) <= 64,
+    "MalHeadersObject outgrew its 64-byte size class");
 
 MalHeadersObject *mal_headers_object_new(MalHeap *heap, MalObject *prototype);
 
