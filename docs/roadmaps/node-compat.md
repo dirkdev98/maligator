@@ -60,15 +60,18 @@ stated acceptance point without patching Express or anything in `node_modules`.
       `listen(0, "127.0.0.1")`, `server.address()`, and asynchronous
       `server.close(callback)`. Acceptance is starting the fixture on an ephemeral
       port, driving its smoke requests through `node:http`, and closing it cleanly.
-      The initialization floor (`METHODS`, `STATUS_CODES`, `IncomingMessage`,
-      `ServerResponse`, and header helpers) is implemented. Per-realm `Server` and
-      `createServer` now inherit EventEmitter behavior and wire Express as the
-      `request` listener. The next slice is transport-backed
-      `listen`/`address`/`close`. That lifecycle now binds real ephemeral IPv4
-      listeners, reports the kernel address, emits ordered asynchronous lifecycle
-      events, roots active servers, and drains accepted connections before close.
-      The next slice is per-server request transport bridging into
-      `IncomingMessage`/`ServerResponse` and the registered `request` listener.
+      The server initialization floor (`METHODS`, `IncomingMessage`,
+      `ServerResponse`, response-header helpers, and buffered `write`/`end`) is
+      implemented. Per-realm `Server` and `createServer` inherit EventEmitter
+      behavior and wire Express as the `request` listener. Real ephemeral IPv4
+      listeners report the kernel address and emit ordered asynchronous lifecycle
+      events. Parsed requests are copied into runtime macrotasks, dispatched as
+      rooted Readable `IncomingMessage` objects, and paired with buffered
+      `ServerResponse` objects whose completion follows the native write. Focused
+      coverage exercises compiled/interpreted dispatch, request bodies, keep-alive,
+      HEAD/no-body framing, close-after-response, reentrancy, GC stress, and UBSan.
+      The remaining slices are streaming/backpressure, richer socket/header/status
+      behavior, and the `http.request` client path.
 - [ ] **Wave 4: pass the Express behavior baseline.** Run the existing smoke
       runner under Maligator and match real Node for route dispatch, decoded
       route parameters, repeated query values, ordered application/route/async
@@ -76,7 +79,10 @@ stated acceptance point without patching Express or anything in `node_modules`.
       URL-encoded request bodies, cookie serialization, redirects, custom 404
       handling, custom error middleware, ephemeral listen, and graceful close.
       Only at this point should the fixture become a Maligator test expected to
-      pass.
+      pass. A first unmodified-Express network checkpoint now passes route-parameter
+      and repeated-query decoding, ordered async middleware, JSON request bodies,
+      JSON responses, and custom 404 middleware when driven externally. The full
+      smoke runner and remaining form/cookie/redirect/error cases stay open.
 
 ## Likely built-ins
 
