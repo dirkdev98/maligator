@@ -399,6 +399,9 @@ static bool usp_to_usv_string(MalVm *vm, MalValue input, MalValue *out) {
         return true;
     }
 
+    MalValue source_root = mal_value_from_string(string);
+    MalRootSpan source_span;
+    mal_gc_root(&source_span, &source_root, 1);
     c16 *units = malloc(sizeof(c16) * (length == 0 ? 1 : length));
     for (usize i = 0; i < length; i++) {
         c16 unit = source[i];
@@ -416,6 +419,7 @@ static bool usp_to_usv_string(MalVm *vm, MalValue input, MalValue *out) {
     }
     *out = mal_value_from_string(mal_string_new_copy(&vm->heap, units, length));
     free(units);
+    mal_gc_unroot(&source_span);
     return true;
 }
 
@@ -711,6 +715,24 @@ static MalUrlSearchParamsObject *usp_this(MalValue self) {
                                                        : nullptr;
 }
 
+static MalUrlSearchParamsObject *usp_this_or_throw(MalVm *vm, MalValue self) {
+    MalUrlSearchParamsObject *p = usp_this(self);
+    if (p == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "URLSearchParams method called on incompatible receiver");
+    }
+    return p;
+}
+
+static bool usp_require_args(MalVm *vm, i32 argc, i32 required) {
+    if (argc >= required) {
+        return true;
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "Not enough arguments for URLSearchParams method");
+    return false;
+}
+
 static MalValue usp_ctor(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) this_value;
@@ -733,19 +755,29 @@ static MalValue usp_get(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) nt;
     (void) callee;
-    MalUrlSearchParamsObject *p = usp_this(self);
-    if (p == nullptr || argc < 1) {
-        return mal_value_new_null();
-    }
-    MalString *name;
-    if (!mal_vm_to_string(vm, args[0], &name)) {
+    MalUrlSearchParamsObject *p = usp_this_or_throw(vm, self);
+    if (p == nullptr || !usp_require_args(vm, argc, 1)) {
         return mal_value_new_undefined();
     }
+    MalValue name_value = mal_value_new_undefined();
+    MalRootSpan rs;
+    mal_gc_root(&rs, &name_value, 1);
+    mal_gc_native_rooted_begin(vm);
+    bool converted = usp_to_usv_string(vm, args[0], &name_value);
+    mal_gc_native_rooted_end(vm);
+    if (!converted) {
+        mal_gc_unroot(&rs);
+        return mal_value_new_undefined();
+    }
+    MalString *name = mal_value_to_string(name_value);
     for (i32 i = 0; i < p->count; i++) {
         if (mal_string_equals(p->pairs[i].name, name)) {
-            return mal_value_from_string(p->pairs[i].value);
+            MalValue result = mal_value_from_string(p->pairs[i].value);
+            mal_gc_unroot(&rs);
+            return result;
         }
     }
+    mal_gc_unroot(&rs);
     return mal_value_new_null();
 }
 
@@ -753,14 +785,21 @@ static MalValue usp_get_all(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) nt;
     (void) callee;
-    MalUrlSearchParamsObject *p = usp_this(self);
-    if (p == nullptr || argc < 1) {
-        return mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
-    }
-    MalString *name;
-    if (!mal_vm_to_string(vm, args[0], &name)) {
+    MalUrlSearchParamsObject *p = usp_this_or_throw(vm, self);
+    if (p == nullptr || !usp_require_args(vm, argc, 1)) {
         return mal_value_new_undefined();
     }
+    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+    bool converted = usp_to_usv_string(vm, args[0], &roots[0]);
+    mal_gc_native_rooted_end(vm);
+    if (!converted) {
+        mal_gc_unroot(&rs);
+        return mal_value_new_undefined();
+    }
+    MalString *name = mal_value_to_string(roots[0]);
     // Pre-size the array (an index-set does not grow array length), then fill.
     u32 matches = 0;
     for (i32 i = 0; i < p->count; i++) {
@@ -768,54 +807,76 @@ static MalValue usp_get_all(
             matches++;
         }
     }
-    MalValue out_val = mal_value_from_array_object(mal_intrinsic_new_array(vm, matches));
-    MalRootSpan rs;
-    mal_gc_root(&rs, &out_val, 1);
-    MalObject *out = (MalObject *) mal_value_to_array_object(out_val);
+    roots[1] = mal_value_from_array_object(mal_intrinsic_new_array(vm, matches));
+    MalObject *out = (MalObject *) mal_value_to_array_object(roots[1]);
     u32 n = 0;
     for (i32 i = 0; i < p->count; i++) {
         if (mal_string_equals(p->pairs[i].name, name)) {
             mal_object_set(out, url_index_key(n++), mal_value_from_string(p->pairs[i].value));
         }
     }
+    MalValue result = roots[1];
     mal_gc_unroot(&rs);
-    return out_val;
+    return result;
 }
 
 static MalValue usp_has(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) nt;
     (void) callee;
-    MalUrlSearchParamsObject *p = usp_this(self);
-    if (p == nullptr || argc < 1) {
-        return mal_value_new_boolean(false);
-    }
-    MalString *name;
-    if (!mal_vm_to_string(vm, args[0], &name)) {
+    MalUrlSearchParamsObject *p = usp_this_or_throw(vm, self);
+    if (p == nullptr || !usp_require_args(vm, argc, 1)) {
         return mal_value_new_undefined();
     }
+    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+    bool converted = usp_to_usv_string(vm, args[0], &roots[0]);
+    if (converted && argc >= 2) {
+        converted = usp_to_usv_string(vm, args[1], &roots[1]);
+    }
+    mal_gc_native_rooted_end(vm);
+    if (!converted) {
+        mal_gc_unroot(&rs);
+        return mal_value_new_undefined();
+    }
+    MalString *name = mal_value_to_string(roots[0]);
+    MalString *value = argc >= 2 ? mal_value_to_string(roots[1]) : nullptr;
+    bool found = false;
     for (i32 i = 0; i < p->count; i++) {
-        if (mal_string_equals(p->pairs[i].name, name)) {
-            return mal_value_new_boolean(true);
+        if (mal_string_equals(p->pairs[i].name, name)
+            && (value == nullptr || mal_string_equals(p->pairs[i].value, value))) {
+            found = true;
+            break;
         }
     }
-    return mal_value_new_boolean(false);
+    mal_gc_unroot(&rs);
+    return mal_value_new_boolean(found);
 }
 
 static MalValue usp_append_method(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) nt;
     (void) callee;
-    MalUrlSearchParamsObject *p = usp_this(self);
-    if (p == nullptr || argc < 2) {
+    MalUrlSearchParamsObject *p = usp_this_or_throw(vm, self);
+    if (p == nullptr || !usp_require_args(vm, argc, 2)) {
         return mal_value_new_undefined();
     }
-    MalString *name;
-    MalString *value;
-    if (!mal_vm_to_string(vm, args[0], &name) || !mal_vm_to_string(vm, args[1], &value)) {
+    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+    bool converted = usp_to_usv_string(vm, args[0], &roots[0])
+        && usp_to_usv_string(vm, args[1], &roots[1]);
+    if (converted) {
+        usp_append(p, mal_value_to_string(roots[0]), mal_value_to_string(roots[1]));
+    }
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&rs);
+    if (!converted) {
         return mal_value_new_undefined();
     }
-    usp_append(p, name, value);
     return mal_value_new_undefined();
 }
 
@@ -824,15 +885,23 @@ static MalValue usp_set(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) nt;
     (void) callee;
-    MalUrlSearchParamsObject *p = usp_this(self);
-    if (p == nullptr || argc < 2) {
+    MalUrlSearchParamsObject *p = usp_this_or_throw(vm, self);
+    if (p == nullptr || !usp_require_args(vm, argc, 2)) {
         return mal_value_new_undefined();
     }
-    MalString *name;
-    MalString *value;
-    if (!mal_vm_to_string(vm, args[0], &name) || !mal_vm_to_string(vm, args[1], &value)) {
+    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+    bool converted = usp_to_usv_string(vm, args[0], &roots[0])
+        && usp_to_usv_string(vm, args[1], &roots[1]);
+    if (!converted) {
+        mal_gc_native_rooted_end(vm);
+        mal_gc_unroot(&rs);
         return mal_value_new_undefined();
     }
+    MalString *name = mal_value_to_string(roots[0]);
+    MalString *value = mal_value_to_string(roots[1]);
     i32 first = -1;
     i32 w = 0;
     for (i32 i = 0; i < p->count; i++) {
@@ -867,6 +936,8 @@ static MalValue usp_set(
     } else {
         p->count = w;
     }
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&rs);
     return mal_value_new_undefined();
 }
 
@@ -874,17 +945,30 @@ static MalValue usp_delete(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) nt;
     (void) callee;
-    MalUrlSearchParamsObject *p = usp_this(self);
-    if (p == nullptr || argc < 1) {
+    MalUrlSearchParamsObject *p = usp_this_or_throw(vm, self);
+    if (p == nullptr || !usp_require_args(vm, argc, 1)) {
         return mal_value_new_undefined();
     }
-    MalString *name;
-    if (!mal_vm_to_string(vm, args[0], &name)) {
+    MalValue roots[2] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan rs;
+    mal_gc_root(&rs, roots, 2);
+    mal_gc_native_rooted_begin(vm);
+    bool converted = usp_to_usv_string(vm, args[0], &roots[0]);
+    if (converted && argc >= 2) {
+        converted = usp_to_usv_string(vm, args[1], &roots[1]);
+    }
+    if (!converted) {
+        mal_gc_native_rooted_end(vm);
+        mal_gc_unroot(&rs);
         return mal_value_new_undefined();
     }
+    MalString *name = mal_value_to_string(roots[0]);
+    MalString *value = argc >= 2 ? mal_value_to_string(roots[1]) : nullptr;
     i32 w = 0;
     for (i32 i = 0; i < p->count; i++) {
-        if (!mal_string_equals(p->pairs[i].name, name)) {
+        bool remove = mal_string_equals(p->pairs[i].name, name)
+            && (value == nullptr || mal_string_equals(p->pairs[i].value, value));
+        if (!remove) {
             if (w != i) {
                 mal_gc_write_barrier(mal_value_from_string(p->pairs[w].name));
                 mal_gc_write_barrier(mal_value_from_string(p->pairs[w].value));
@@ -898,6 +982,8 @@ static MalValue usp_delete(
         }
     }
     p->count = w;
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&rs);
     return mal_value_new_undefined();
 }
 
@@ -905,12 +991,11 @@ static MalValue usp_delete(
  * pairs in insertion order. */
 static MalValue usp_sort(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) vm;
     (void) args;
     (void) argc;
     (void) nt;
     (void) callee;
-    MalUrlSearchParamsObject *p = usp_this(self);
+    MalUrlSearchParamsObject *p = usp_this_or_throw(vm, self);
     if (p == nullptr) {
         return mal_value_new_undefined();
     }
@@ -932,9 +1017,9 @@ static MalValue usp_to_string(
     (void) argc;
     (void) nt;
     (void) callee;
-    MalUrlSearchParamsObject *p = usp_this(self);
+    MalUrlSearchParamsObject *p = usp_this_or_throw(vm, self);
     if (p == nullptr) {
-        return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
+        return mal_value_new_undefined();
     }
     return usp_serialize(vm, p);
 }
@@ -943,8 +1028,13 @@ static MalValue usp_for_each(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) nt;
     (void) callee;
-    MalUrlSearchParamsObject *p = usp_this(self);
-    if (p == nullptr || argc < 1 || !mal_value_is_callable(args[0])) {
+    MalUrlSearchParamsObject *p = usp_this_or_throw(vm, self);
+    if (p == nullptr || !usp_require_args(vm, argc, 1)) {
+        return mal_value_new_undefined();
+    }
+    if (!mal_value_is_callable(args[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "URLSearchParams forEach callback is not callable");
         return mal_value_new_undefined();
     }
     MalValue cb = args[0];
@@ -1016,7 +1106,7 @@ static MalValue usp_make_iterator(MalVm *vm, MalUrlSearchParamsObject *p, UspIte
         (void) argc;                                                                             \
         (void) nt;                                                                               \
         (void) callee;                                                                           \
-        MalUrlSearchParamsObject *p = usp_this(self);                                            \
+        MalUrlSearchParamsObject *p = usp_this_or_throw(vm, self);                               \
         if (p == nullptr) {                                                                       \
             return mal_value_new_undefined();                                                    \
         }                                                                                        \
@@ -1029,13 +1119,12 @@ USP_ITER(usp_values, USP_VALUES)
 
 static MalValue usp_get_size(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) vm;
     (void) args;
     (void) argc;
     (void) nt;
     (void) callee;
-    MalUrlSearchParamsObject *p = usp_this(self);
-    return mal_value_from_f64((f64) (p != nullptr ? p->count : 0));
+    MalUrlSearchParamsObject *p = usp_this_or_throw(vm, self);
+    return p != nullptr ? mal_value_from_f64((f64) p->count) : mal_value_new_undefined();
 }
 
 /* url.searchParams: a snapshot URLSearchParams parsed from url.search (v1 is not
