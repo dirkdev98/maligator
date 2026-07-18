@@ -6,8 +6,9 @@ The initial compatibility target is the unmodified CommonJS release
 dependencies require Node 18 or newer, so compatibility follows modern Node
 behavior rather than historical Node quirks.
 
-The fixture is a target and a real-Node baseline. It is deliberately not wired
-into the Maligator test suite until the module and host surfaces can load it.
+The fixture is both a real-Node baseline and a Maligator native acceptance target.
+The suite now compiles and constructs the unmodified application in compiled and
+interpreted modes; network serving remains the next milestone.
 
 ## Milestones
 
@@ -19,7 +20,7 @@ stated acceptance point without patching Express or anything in `node_modules`.
       CommonJS application and a Node-only smoke runner covering every behavior
       in the final milestone. Confirm `npm install` and `npm run smoke` on real
       Node. Do not add a passing expectation for Maligator yet.
-- [ ] **Wave 1: load the tree.** Resolve fixture-local `node_modules`, package
+- [x] **Wave 1: load the tree.** Resolve fixture-local `node_modules`, package
       entry points, relative JavaScript files, and JSON modules. Implement
       CommonJS `require`, `module`, `exports`, `require.main`, module caching,
       `__filename`, and `__dirname`, plus the Node globals used by the tree such
@@ -28,9 +29,10 @@ stated acceptance point without patching Express or anything in `node_modules`.
       Static CommonJS wrappers, JSON modules, canonical bare/`node:` built-ins,
       cache identity/cycles/failure eviction, and identifier-level `__filename` /
       `__dirname` are implemented. Global `Buffer` and canonical bare/`node:buffer`
-      imports now share one DCE-aware installer. Entry-goal detection, `require.main`,
-      complete module metadata, remaining globals, and built-ins still block acceptance.
-- [ ] **Wave 2: supply core data and event primitives.** Support the built-in
+      imports now share one DCE-aware installer. Package boundaries stop goal lookup,
+      `require` and `import` select their matching package export conditions, and the
+      pinned `app.js` graph loads without application or dependency edits.
+- [x] **Wave 2: supply core data and event primitives.** Support the built-in
       modules needed before network service: events, buffers and string
       decoding, streams, utilities, async context hooks, crypto helpers,
       filesystem/path helpers, URLs, query strings, TTY detection, and zlib.
@@ -41,15 +43,16 @@ stated acceptance point without patching Express or anything in `node_modules`.
       are also implemented. `node:buffer` now provides Uint8Array-backed allocation,
       conversion, comparison, concatenation, slicing, writing, UTF-8/Latin-1/base64/
       UTF-16 encodings, and the integer primitives used by `iconv-lite`; a native
-      smoke test loads Express's real `safer-buffer` dependency. The forced Express
+      smoke test loads Express's real `safer-buffer` dependency. The Express
       graph now gives every modern bare core name precedence over npm packages.
       Curated `node:async_hooks` `AsyncResource`, incremental `node:string_decoder`,
       and in-memory `node:stream` Readable/Writable/Duplex/Transform foundations are
       implemented in compiled and interpreted modes, including GC-stress and
-      sanitizer coverage. A pinned smoke exercises `on-finished` and `iconv-lite`
-      against those native modules. The next module-graph blocker is `node:zlib`;
-      loading `raw-body` beyond that graph probe also requires V8-compatible
-      `Error.captureStackTrace` for `depd`/`http-errors` initialization.
+      sanitizer coverage. Native zlib, crypto, URL/query-string/net/OS companions,
+      V8-compatible stack capture, process stdio, and Node-global text encoding now
+      close initialization. `tests/native/node-companions.test.ts` constructs the
+      unmodified Express application in compiled and interpreted builds with the web
+      surface disabled, and exercises fragmented/reverse installation plus GC stress.
 - [ ] **Wave 3: supply Node HTTP lifecycle semantics.** Implement the required
       `node:http` and `node:net` client, server, socket, request, and response
       behavior, including EventEmitter integration, headers, status codes,
@@ -57,6 +60,10 @@ stated acceptance point without patching Express or anything in `node_modules`.
       `listen(0, "127.0.0.1")`, `server.address()`, and asynchronous
       `server.close(callback)`. Acceptance is starting the fixture on an ephemeral
       port, driving its smoke requests through `node:http`, and closing it cleanly.
+      The initialization floor (`METHODS`, `STATUS_CODES`, `IncomingMessage`,
+      `ServerResponse`, and header helpers) is implemented. The next slice is
+      `Server`/`createServer` construction and request-listener wiring, followed by
+      transport-backed `listen`/`address`/`close`.
 - [ ] **Wave 4: pass the Express behavior baseline.** Run the existing smoke
       runner under Maligator and match real Node for route dispatch, decoded
       route parameters, repeated query values, ordered application/route/async
@@ -86,6 +93,7 @@ to the same built-in where the tree uses both forms.
   query parser.
 - `node:util`: inheritance and inspection helpers used by dependencies.
 - `node:tty`: terminal/color detection in `debug`.
+- `node:os`: release metadata used by terminal color detection.
 
 The Node-only smoke runner additionally imports `node:assert/strict` and
 `node:http`. These are harness requirements, not additional Express production
