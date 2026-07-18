@@ -304,6 +304,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->value_stack = malloc(sizeof(MalValue) * (usize) vm->value_stack_capacity);
     vm->value_stack_size = 0;
     vm->native_call_depth = 0;
+    vm->proxy_dispatch_depth = 0;
     vm->stack_limit = mal_vm_compute_stack_limit();
     vm->gc_native_frames = 0;
     // Fibers: the main fiber is created at the end of init (once every exec field
@@ -2238,6 +2239,8 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
     trace->frame_count = count;
     trace->frames = records;
     trace->async_parent = nullptr;
+    trace->frame_skip = 0;
+    trace->frame_limit = -1;
 
     // Async stack stitching (v2): if execution is inside a resumed async
     // function, follow the awaited_by chain to splice the awaiting ancestors'
@@ -2267,6 +2270,8 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
             .pos_id = mal_vm_position_for(function, parent->frame.instruction_pointer - 1),
         };
         segment->async_parent = nullptr;
+        segment->frame_skip = 0;
+        segment->frame_limit = -1;
         *link = segment;
         link = &segment->async_parent;
         async_state = parent;
@@ -2343,11 +2348,14 @@ static void mal_stack_buf_push_i32(MalStackBuf *buf, i32 value) {
 
 MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
     MalStackBuf buf = {0};
+    i32 logical_index = 0;
+    i32 emitted = 0;
 
     for (const MalStackTrace *segment = trace; segment != nullptr; segment = segment->async_parent) {
-        if (segment != trace) {
+        bool emitted_segment = false;
+        if (segment != trace && emitted > 0) {
             // Async-boundary separator (v2): frames below were the awaiting context.
-            mal_stack_buf_push_ascii(&buf, "\n    --- await ---");
+            emitted_segment = true;
         }
         for (i32 i = 0; i < segment->frame_count; i++) {
             const MalStackFrameRecord *record = &segment->frames[i];
@@ -2366,6 +2374,22 @@ MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
                     pos->inlined_function_index < vm->definition->function_count;
                 i32 function_index = inlined ? pos->inlined_function_index : record->function_index;
                 const MalFunction *function = &vm->definition->functions[function_index];
+
+                if (logical_index++ < trace->frame_skip) {
+                    if (!inlined) {
+                        break;
+                    }
+                    pos_id = pos->caller_pos_id;
+                    continue;
+                }
+                if (trace->frame_limit >= 0 && emitted >= trace->frame_limit) {
+                    goto done;
+                }
+                if (emitted_segment) {
+                    mal_stack_buf_push_ascii(&buf, "\n    --- await ---");
+                    emitted_segment = false;
+                }
+                emitted++;
 
                 mal_stack_buf_push_ascii(&buf, "\n    at ");
 
@@ -2399,6 +2423,8 @@ MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
             }
         }
     }
+
+done:
 
     MalString *result = mal_string_new_copy(&vm->heap, buf.units, buf.length);
     free(buf.units);

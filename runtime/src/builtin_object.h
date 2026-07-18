@@ -22,6 +22,19 @@ MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, 
  */
 MalValue mal_builtin_object_descriptor_object(MalVm *vm, MalPropertyDesc desc);
 
+/** Parsed ToPropertyDescriptor result, including field presence. */
+typedef struct MalPropertyDescriptorParse {
+    bool has_value, has_writable, has_get, has_set, has_enumerable, has_configurable;
+    MalPropertyDesc desc;
+} MalPropertyDescriptorParse;
+
+/**
+ * Spec ToPropertyDescriptor over any object, using proxy-aware HasProperty/Get
+ * in field order. Returns false with an abrupt completion left on the VM.
+ */
+bool mal_builtin_object_to_property_descriptor(
+    MalVm *vm, MalValue descriptor, MalPropertyDescriptorParse *out);
+
 /**
  * The spec [[DefineOwnProperty]] path shared by Object.defineProperty and
  * Reflect.defineProperty: ToPropertyDescriptor(descriptor_value) (which may

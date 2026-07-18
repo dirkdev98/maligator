@@ -1016,6 +1016,9 @@ typedef struct MalStackTrace {
     i32 frame_count;
     MalStackFrameRecord *frames;
     struct MalStackTrace *async_parent;
+    /** Logical frames to omit and retain when an explicit V8-style capture is read. */
+    i32 frame_skip;
+    i32 frame_limit;
 } MalStackTrace;
 
 // Opaque loaded definition (vm_load.h); the VM retains the ones it splices at
@@ -1296,6 +1299,9 @@ typedef struct MalVm {
      * rather than overflowing the C stack.
      */
     i32 native_call_depth;
+
+    /** Active nested Proxy meta-object dispatches; bounds recursive Proxy chains. */
+    i32 proxy_dispatch_depth;
 
     /**
      * Lowest safe C-stack address (the real stack bottom plus a safety margin), or 0

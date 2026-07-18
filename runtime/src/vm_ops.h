@@ -45,6 +45,23 @@ bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out);
 bool mal_vm_desc_read(MalVm *vm, MalPropertyDesc desc, MalValue receiver, MalValue *out);
 
 /**
+ * Spec [[OwnPropertyKeys]] over an object, including Proxy traps and the engine's
+ * Array, TypedArray, String-wrapper, and module-namespace exotic own keys. The
+ * returned dense array contains String/Symbol key values in property order.
+ */
+bool mal_vm_own_property_keys(MalVm *vm, MalValue object, MalValue *keys_out);
+
+/**
+ * Spec [[GetOwnProperty]] over an object, including Proxy traps and exotic own
+ * descriptors. A clean miss returns true with *present_out false.
+ */
+bool mal_vm_get_own_property(
+    MalVm *vm, MalValue object, MalKey key, bool *present_out, MalPropertyDesc *desc_out);
+
+/** Spec IsExtensible over ordinary and Proxy objects. */
+bool mal_vm_is_extensible_object(MalVm *vm, MalValue object, bool *extensible_out);
+
+/**
  * Spec-flavored Get(receiver, key) over any value: nil receivers throw,
  * primitives resolve against their prototype intrinsics (string length and
  * index reads answered by the string itself), synthetic properties and

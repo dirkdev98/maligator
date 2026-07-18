@@ -20,104 +20,102 @@ static MalValue mal_builtin_object_arg(const MalValue *args, i32 arg_count, i32 
     return index < arg_count ? args[index] : mal_value_new_undefined();
 }
 
-static bool mal_builtin_object_desc_get_value(MalVm *vm, MalObject *object, const byte *name, MalValue *out) {
-    MalPropertyResolution resolution = mal_object_resolve_property(object, mal_intrinsic_string_key(vm, name));
-    if (!resolution.found) {
+static bool mal_builtin_object_descriptor_field(
+    MalVm *vm, MalValue descriptor, const byte *name, bool *present_out, MalValue *value_out) {
+    MalKey key = mal_intrinsic_string_key(vm, name);
+    bool present = mal_vm_has_property(vm, descriptor, key);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return false;
+    }
+    *present_out = present;
+    return !present || mal_vm_get_property(vm, descriptor, key, value_out);
+}
+
+bool mal_builtin_object_to_property_descriptor(
+    MalVm *vm, MalValue descriptor, MalPropertyDescriptorParse *out) {
+    if (!mal_value_is_object(descriptor)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Property description must be an object");
         return false;
     }
 
-    return mal_vm_desc_read(vm, resolution.desc, mal_value_from_object(object), out);
-}
-
-static bool mal_builtin_object_desc_get_bool(MalVm *vm, MalObject *object, const byte *name) {
-    MalValue value;
-    return mal_builtin_object_desc_get_value(vm, object, name, &value) && mal_value_is_truthy(value);
-}
-
-/**
- * ToPropertyDescriptor: parsed fields plus which ones the descriptor object
- * actually provided, so defines can merge with the current descriptor.
- */
-typedef struct MalBuiltinObjectDescParse {
-    bool ok;
-    bool has_value, has_writable, has_get, has_set, has_enumerable, has_configurable;
-    MalPropertyDesc desc;
-} MalBuiltinObjectDescParse;
-
-static MalBuiltinObjectDescParse mal_builtin_object_parse_descriptor(MalVm *vm, MalObject *descriptor) {
-    MalBuiltinObjectDescParse parse = {
-        .ok = true,
+    *out = (MalPropertyDescriptorParse) {
         .desc = mal_intrinsic_data_desc(mal_value_new_undefined(), MAL_PROPERTY_NONE),
     };
-    MalValue field = mal_value_new_undefined();
+    MalValue roots[5] = {
+        descriptor,
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 5);
 
-    // ToPropertyDescriptor (6.2.6.5) reads fields in this order: enumerable,
-    // configurable, value, writable, get, set — observable when they are getters.
-    if (mal_builtin_object_desc_get_value(vm, descriptor, "enumerable", &field)) {
-        parse.has_enumerable = true;
-        if (mal_value_is_truthy(field)) {
-            parse.desc.flags |= MAL_PROPERTY_ENUMERABLE;
-        }
+    bool ok = false;
+    if (!mal_builtin_object_descriptor_field(
+            vm, roots[0], "enumerable", &out->has_enumerable, &roots[1])) {
+        goto done;
     }
-    if (mal_builtin_object_desc_get_value(vm, descriptor, "configurable", &field)) {
-        parse.has_configurable = true;
-        if (mal_value_is_truthy(field)) {
-            parse.desc.flags |= MAL_PROPERTY_CONFIGURABLE;
-        }
+    if (out->has_enumerable && mal_value_is_truthy(roots[1])) {
+        out->desc.flags |= MAL_PROPERTY_ENUMERABLE;
     }
-    if (mal_builtin_object_desc_get_value(vm, descriptor, "value", &field)) {
-        parse.has_value = true;
-        parse.desc.value = field;
+    if (!mal_builtin_object_descriptor_field(
+            vm, roots[0], "configurable", &out->has_configurable, &roots[1])) {
+        goto done;
     }
-    if (mal_builtin_object_desc_get_value(vm, descriptor, "writable", &field)) {
-        parse.has_writable = true;
-        if (mal_value_is_truthy(field)) {
-            parse.desc.flags |= MAL_PROPERTY_WRITABLE;
-        }
+    if (out->has_configurable && mal_value_is_truthy(roots[1])) {
+        out->desc.flags |= MAL_PROPERTY_CONFIGURABLE;
     }
-    if (mal_builtin_object_desc_get_value(vm, descriptor, "get", &field)) {
-        if (!mal_value_is_callable(field) && !mal_value_is_undefined(field)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Getter must be a function");
-            parse.ok = false;
-            return parse;
-        }
-        parse.has_get = true;
-        parse.desc.flags |= MAL_PROPERTY_ACCESSOR;
-        parse.desc.getter = field;
+    if (!mal_builtin_object_descriptor_field(
+            vm, roots[0], "value", &out->has_value, &roots[2])) {
+        goto done;
     }
-    if (mal_builtin_object_desc_get_value(vm, descriptor, "set", &field)) {
-        if (!mal_value_is_callable(field) && !mal_value_is_undefined(field)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Setter must be a function");
-            parse.ok = false;
-            return parse;
-        }
-        parse.has_set = true;
-        parse.desc.flags |= MAL_PROPERTY_ACCESSOR;
-        parse.desc.setter = field;
+    if (!mal_builtin_object_descriptor_field(
+            vm, roots[0], "writable", &out->has_writable, &roots[1])) {
+        goto done;
     }
-
-    if ((parse.has_value || parse.has_writable) && (parse.has_get || parse.has_set)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Property descriptors must not specify a value or be writable when a getter or setter has been specified");
-        parse.ok = false;
-        return parse;
+    if (out->has_writable && mal_value_is_truthy(roots[1])) {
+        out->desc.flags |= MAL_PROPERTY_WRITABLE;
+    }
+    if (!mal_builtin_object_descriptor_field(
+            vm, roots[0], "get", &out->has_get, &roots[3])) {
+        goto done;
+    }
+    if (out->has_get && !mal_value_is_callable(roots[3]) && !mal_value_is_undefined(roots[3])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Getter must be a function");
+        goto done;
+    }
+    if (!mal_builtin_object_descriptor_field(
+            vm, roots[0], "set", &out->has_set, &roots[4])) {
+        goto done;
+    }
+    if (out->has_set && !mal_value_is_callable(roots[4]) && !mal_value_is_undefined(roots[4])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Setter must be a function");
+        goto done;
+    }
+    if ((out->has_value || out->has_writable) && (out->has_get || out->has_set)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Property descriptors must not mix data and accessor fields");
+        goto done;
     }
 
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        // A descriptor field getter threw; don't define from a torn read.
-        parse.ok = false;
+    out->desc.value = roots[2];
+    out->desc.getter = roots[3];
+    out->desc.setter = roots[4];
+    if (out->has_get || out->has_set) {
+        out->desc.flags |= MAL_PROPERTY_ACCESSOR;
     }
+    ok = true;
 
-    return parse;
+done:
+    mal_gc_unroot(&roots_span);
+    return ok;
 }
 
 MalDefineOwnStatus mal_builtin_object_try_define(MalVm *vm, MalObject *target, MalKey key, MalValue descriptor_value) {
-    if (!mal_value_is_object(descriptor_value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Property description must be an object");
-        return MAL_DEFINE_OWN_REJECTED;
-    }
-
-    MalBuiltinObjectDescParse parse = mal_builtin_object_parse_descriptor(vm, mal_value_to_object(descriptor_value));
-    if (!parse.ok) {
+    MalPropertyDescriptorParse parse;
+    if (!mal_builtin_object_to_property_descriptor(vm, descriptor_value, &parse)) {
         return MAL_DEFINE_OWN_REJECTED;
     }
 

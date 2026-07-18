@@ -1,5 +1,7 @@
 #include "builtin_error.h"
 
+#include <limits.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -401,6 +403,336 @@ static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_v
     return mal_value_from_string(result);
 }
 
+enum {
+    MAL_CALLSITE_FILE,
+    MAL_CALLSITE_LINE,
+    MAL_CALLSITE_COLUMN,
+    MAL_CALLSITE_FUNCTION,
+    MAL_CALLSITE_METHOD,
+    MAL_CALLSITE_SLOT_COUNT,
+};
+
+enum {
+    MAL_CALLSITE_METHOD_GET_FILE = MAL_CALLSITE_FILE,
+    MAL_CALLSITE_METHOD_GET_LINE = MAL_CALLSITE_LINE,
+    MAL_CALLSITE_METHOD_GET_COLUMN = MAL_CALLSITE_COLUMN,
+    MAL_CALLSITE_METHOD_GET_FUNCTION = MAL_CALLSITE_FUNCTION,
+    MAL_CALLSITE_METHOD_IS_EVAL,
+    MAL_CALLSITE_METHOD_GET_THIS,
+    MAL_CALLSITE_METHOD_TO_STRING,
+};
+
+static MalValue mal_error_callsite_method(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    i32 method = mal_value_to_i32(mal_native_function_object_get_slot(function, MAL_CALLSITE_METHOD));
+    if (method >= MAL_CALLSITE_FILE && method <= MAL_CALLSITE_FUNCTION) {
+        return mal_native_function_object_get_slot(function, method);
+    }
+    if (method == MAL_CALLSITE_METHOD_IS_EVAL) {
+        return mal_value_new_boolean(false);
+    }
+    if (method == MAL_CALLSITE_METHOD_GET_THIS) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue name = mal_native_function_object_get_slot(function, MAL_CALLSITE_FUNCTION);
+    MalValue file = mal_native_function_object_get_slot(function, MAL_CALLSITE_FILE);
+    MalValue line = mal_native_function_object_get_slot(function, MAL_CALLSITE_LINE);
+    MalValue column = mal_native_function_object_get_slot(function, MAL_CALLSITE_COLUMN);
+    MalValue result = mal_value_is_null(name)
+        ? mal_value_from_string(mal_intrinsic_ascii(vm, "<anonymous>"))
+        : name;
+    if (mal_value_is_null(file)) {
+        return result;
+    }
+
+    result = mal_vm_add(vm, result, mal_value_from_string(mal_intrinsic_ascii(vm, " (")));
+    result = mal_vm_add(vm, result, file);
+    if (!mal_value_is_null(line)) {
+        result = mal_vm_add(vm, result, mal_value_from_string(mal_intrinsic_ascii(vm, ":")));
+        result = mal_vm_add(vm, result, line);
+        result = mal_vm_add(vm, result, mal_value_from_string(mal_intrinsic_ascii(vm, ":")));
+        result = mal_vm_add(vm, result, column);
+    }
+    return mal_vm_add(vm, result, mal_value_from_string(mal_intrinsic_ascii(vm, ")")));
+}
+
+static void mal_error_callsite_define_method(
+    MalVm *vm,
+    MalObject *site,
+    const byte *name,
+    i32 method,
+    MalValue *slots
+) {
+    slots[MAL_CALLSITE_METHOD] = mal_value_from_i32(method);
+    MalNativeFunctionObject *function = mal_native_function_object_new_with_slots(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, name),
+        mal_error_callsite_method,
+        slots,
+        MAL_CALLSITE_SLOT_COUNT
+    );
+    mal_intrinsic_define_data(
+        vm,
+        site,
+        name,
+        mal_value_from_native_function_object(function),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE
+    );
+}
+
+static MalObject *mal_error_new_callsite(MalVm *vm, i32 function_index, i32 pos_id) {
+    const MalFunction *function = &vm->definition->functions[function_index];
+    bool have_pos = pos_id >= 0 && pos_id < vm->definition->source_position_count;
+    const MalSourcePos *pos = have_pos ? &vm->definition->source_positions[pos_id] : nullptr;
+    bool have_file = function->file_index >= 0 && function->file_index < vm->definition->file_count;
+    const MalString *name = &vm->definition->string_constants[function->name_string_index];
+    MalValue slots[MAL_CALLSITE_SLOT_COUNT] = {
+        have_file
+            ? mal_value_from_string(mal_string_new_ascii(
+                &vm->heap,
+                vm->definition->files[function->file_index],
+                strlen(vm->definition->files[function->file_index])
+            ))
+            : mal_value_new_null(),
+        have_pos ? mal_value_from_i32(pos->line) : mal_value_new_null(),
+        have_pos ? mal_value_from_i32(pos->column + 1) : mal_value_new_null(),
+        mal_string_length(name) > 0 ? mal_value_from_string((MalString *) name) : mal_value_new_null(),
+        mal_value_new_undefined(),
+    };
+    MalObject *site = mal_intrinsic_new_object(vm);
+    mal_error_callsite_define_method(vm, site, "getFileName", MAL_CALLSITE_METHOD_GET_FILE, slots);
+    mal_error_callsite_define_method(vm, site, "getLineNumber", MAL_CALLSITE_METHOD_GET_LINE, slots);
+    mal_error_callsite_define_method(vm, site, "getColumnNumber", MAL_CALLSITE_METHOD_GET_COLUMN, slots);
+    mal_error_callsite_define_method(vm, site, "isEval", MAL_CALLSITE_METHOD_IS_EVAL, slots);
+    mal_error_callsite_define_method(vm, site, "getFunctionName", MAL_CALLSITE_METHOD_GET_FUNCTION, slots);
+    mal_error_callsite_define_method(vm, site, "getThis", MAL_CALLSITE_METHOD_GET_THIS, slots);
+    mal_error_callsite_define_method(vm, site, "toString", MAL_CALLSITE_METHOD_TO_STRING, slots);
+    return site;
+}
+
+static MalArrayObject *mal_error_callsite_array(MalVm *vm, const MalStackTrace *trace) {
+    MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
+    i32 logical_index = 0;
+    i32 emitted = 0;
+    for (const MalStackTrace *segment = trace; segment != nullptr; segment = segment->async_parent) {
+        for (i32 i = 0; i < segment->frame_count; i++) {
+            const MalStackFrameRecord *record = &segment->frames[i];
+            i32 pos_id = record->pos_id;
+            i32 guard = 0;
+            while (guard++ < 100000) {
+                bool have_pos = pos_id >= 0 && pos_id < vm->definition->source_position_count;
+                const MalSourcePos *pos = have_pos ? &vm->definition->source_positions[pos_id] : nullptr;
+                bool inlined = pos != nullptr && pos->inlined_function_index >= 0 &&
+                    pos->inlined_function_index < vm->definition->function_count;
+                i32 function_index = inlined ? pos->inlined_function_index : record->function_index;
+                if (logical_index++ >= trace->frame_skip) {
+                    if (trace->frame_limit >= 0 && emitted >= trace->frame_limit) {
+                        return array;
+                    }
+                    mal_array_object_store(
+                        array,
+                        (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(emitted++)},
+                        mal_value_from_object(mal_error_new_callsite(vm, function_index, pos_id))
+                    );
+                }
+                if (!inlined) {
+                    break;
+                }
+                pos_id = pos->caller_pos_id;
+            }
+        }
+    }
+    return array;
+}
+
+static i32 mal_error_trace_constructor_skip(MalVm *vm, const MalStackTrace *trace, i32 constructor_index) {
+    i32 logical_count = 0;
+    for (const MalStackTrace *segment = trace; segment != nullptr; segment = segment->async_parent) {
+        for (i32 i = 0; i < segment->frame_count; i++) {
+            const MalStackFrameRecord *record = &segment->frames[i];
+            i32 pos_id = record->pos_id;
+            i32 guard = 0;
+            while (guard++ < 100000) {
+                bool have_pos = pos_id >= 0 && pos_id < vm->definition->source_position_count;
+                const MalSourcePos *pos = have_pos ? &vm->definition->source_positions[pos_id] : nullptr;
+                bool inlined = pos != nullptr && pos->inlined_function_index >= 0 &&
+                    pos->inlined_function_index < vm->definition->function_count;
+                i32 function_index = inlined ? pos->inlined_function_index : record->function_index;
+                logical_count++;
+                if (function_index == constructor_index) {
+                    return logical_count;
+                }
+                if (!inlined) {
+                    break;
+                }
+                pos_id = pos->caller_pos_id;
+            }
+        }
+    }
+    return logical_count;
+}
+
+static MalValue mal_builtin_error_captured_stack_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) arg_count;
+    (void) new_target;
+    (void) callee;
+    if (!mal_value_is_object(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Error stack getter called on non-object");
+        return mal_value_new_undefined();
+    }
+    MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(this_value), mal_error_stack_key(vm));
+    MalStackTrace *trace = lookup.present
+        ? mal_vm_stored_stack_trace(vm, mal_value_to_i32(lookup.desc.value))
+        : nullptr;
+    if (trace != nullptr && trace->frame_limit == -2) {
+        return mal_value_new_undefined();
+    }
+
+    MalValue prepare;
+    if (!mal_vm_get_property(
+            vm,
+            vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR],
+            mal_intrinsic_string_key(vm, "prepareStackTrace"),
+            &prepare)) {
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_callable(prepare)) {
+        MalArrayObject *sites = trace != nullptr
+            ? mal_error_callsite_array(vm, trace)
+            : mal_intrinsic_new_array(vm, 0);
+        MalValue roots[3] = {prepare, this_value, mal_value_from_array_object(sites)};
+        MalRootSpan root_span;
+        mal_gc_root(&root_span, roots, 3);
+        mal_gc_native_rooted_begin(vm);
+        MalCompletion completion = mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), &roots[1], 2);
+        mal_gc_native_rooted_end(vm);
+        mal_gc_unroot(&root_span);
+        return completion.kind == MAL_COMPLETION_NORMAL
+            ? completion.value
+            : mal_value_new_undefined();
+    }
+
+    MalValue header = mal_builtin_error_prototype_to_string(
+        vm, this_value, nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined()
+    );
+    if (vm->completion.kind == MAL_COMPLETION_THROW || trace == nullptr) {
+        return header;
+    }
+    MalString *frames = mal_vm_format_stack_frames(vm, trace);
+    MalValue result = mal_vm_add(vm, header, mal_value_from_string(frames));
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
+}
+
+static MalValue mal_builtin_error_captured_stack_setter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    if (!mal_value_is_object(this_value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Error stack setter called on non-object");
+        return mal_value_new_undefined();
+    }
+    MalPropertyDesc desc = mal_intrinsic_data_desc(
+        arg_count >= 1 ? args[0] : mal_value_new_undefined(),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE
+    );
+    mal_object_define_own(mal_value_to_object(this_value), mal_intrinsic_string_key(vm, "stack"), &desc);
+    return mal_value_new_undefined();
+}
+
+static bool mal_error_can_define_configurable_own(MalObject *target, MalKey key) {
+    MalPropertyLookup existing = mal_object_get_own(target, key);
+    return existing.present
+        ? (existing.desc.flags & MAL_PROPERTY_CONFIGURABLE) != 0
+        : mal_object_is_extensible(target);
+}
+
+static MalValue mal_builtin_error_capture_stack_trace(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) this_value;
+    (void) new_target;
+    (void) callee;
+    MalValue target = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_object(target)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Error.captureStackTrace target must be an object");
+        return mal_value_new_undefined();
+    }
+
+    MalObject *target_object = mal_value_to_object(target);
+    MalKey stack_key = mal_intrinsic_string_key(vm, "stack");
+    MalKey trace_key = mal_error_stack_key(vm);
+    if (!mal_error_can_define_configurable_own(target_object, stack_key) ||
+        !mal_error_can_define_configurable_own(target_object, trace_key)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
+        return mal_value_new_undefined();
+    }
+
+    MalValue limit_value;
+    if (!mal_vm_get_property(
+            vm,
+            vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR],
+            mal_intrinsic_string_key(vm, "stackTraceLimit"),
+            &limit_value)) {
+        return mal_value_new_undefined();
+    }
+
+    MalStackTrace *trace = mal_vm_capture_stack(vm);
+    if (!mal_ops_is_number(limit_value)) {
+        trace->frame_limit = -2;
+    } else {
+        f64 limit = mal_ops_number_as_f64(limit_value);
+        trace->frame_limit = isnan(limit) || limit <= 0
+            ? 0
+            : (isinf(limit) || limit >= INT_MAX ? INT_MAX : (i32) trunc(limit));
+    }
+    if (arg_count >= 2 && mal_value_is_function_object(args[1])) {
+        trace->frame_skip = mal_error_trace_constructor_skip(
+            vm,
+            trace,
+            mal_function_object_function_index(mal_value_to_function_object(args[1]))
+        );
+    }
+
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalPropertyDesc stack_desc = {
+        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
+        .value = mal_value_new_undefined(),
+        .getter = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+            &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "get stack"), 0,
+            mal_builtin_error_captured_stack_getter
+        )),
+        .setter = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+            &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "set stack"), 1,
+            mal_builtin_error_captured_stack_setter
+        )),
+    };
+    MalPropertyLookup previous_trace = mal_object_get_own(target_object, trace_key);
+    MalPropertyDesc trace_desc = mal_intrinsic_data_desc(
+        mal_value_from_i32(vm->captured_trace_count), MAL_PROPERTY_CONFIGURABLE);
+    if (mal_object_define_own(target_object, trace_key, &trace_desc) == MAL_DEFINE_OWN_REJECTED) {
+        mal_vm_free_stack_trace(trace);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
+        return mal_value_new_undefined();
+    }
+    if (mal_object_define_own(target_object, stack_key, &stack_desc) == MAL_DEFINE_OWN_REJECTED) {
+        if (previous_trace.present) {
+            mal_object_define_own(target_object, trace_key, &previous_trace.desc);
+        } else {
+            mal_object_delete_own(target_object, trace_key);
+        }
+        mal_vm_free_stack_trace(trace);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
+        return mal_value_new_undefined();
+    }
+
+    mal_vm_store_stack_trace(vm, trace);
+    return mal_value_new_undefined();
+}
+
 /**
  * get Error.prototype.stack (error-stack-accessor proposal):
  *   1. If this is not an Object, throw a TypeError.
@@ -585,6 +917,20 @@ void mal_builtin_error_install(MalVm *vm) {
 
     // Error.isError: { [[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: true }.
     mal_intrinsic_define_method_n(vm, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR]), "isError", 1, mal_builtin_error_is_error);
+    mal_intrinsic_define_method_n(
+        vm,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR]),
+        "captureStackTrace",
+        2,
+        mal_builtin_error_capture_stack_trace
+    );
+    mal_intrinsic_define_data(
+        vm,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_CONSTRUCTOR]),
+        "stackTraceLimit",
+        mal_value_from_i32(10),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
+    );
 
     // NativeError / AggregateError constructors have [[Prototype]] === %Error%
     // (the Error constructor), not %Function.prototype%.

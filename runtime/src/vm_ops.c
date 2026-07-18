@@ -33,6 +33,7 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value);
 
 static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, MalKey key, MalValue *value_out);
 static MalInlineCache *mal_interp_ic(MalCallable *callable);
+static bool mal_vm_key_is_prototype(MalKey key);
 
 static u64 g_stack_object_materializations = 0;
 
@@ -173,6 +174,257 @@ bool mal_vm_desc_read(MalVm *vm, MalPropertyDesc desc, MalValue receiver, MalVal
     }
 
     *out = completion.value;
+    return true;
+}
+
+static MalValue mal_vm_own_key_value(MalVm *vm, MalKey key) {
+    return key.kind == MAL_KEY_INDEX
+        ? mal_value_from_string(mal_ops_to_string(&vm->heap, key.value))
+        : key.value;
+}
+
+static bool mal_vm_script_function_has_prototype(MalVm *vm, MalValue value) {
+    if (!mal_value_is_function_object(value)) {
+        return false;
+    }
+    i32 index = mal_function_object_function_index(mal_value_to_function_object(value));
+    const MalFunction *function = &vm->definition->functions[index];
+    return function->has_prototype && function->kind != MAL_FUNCTION_KIND_ASYNC;
+}
+
+bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_out) {
+    if (!mal_value_is_object(object_value)) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Own property keys require an object");
+        return false;
+    }
+    if (mal_value_is_proxy_object(object_value)) {
+        return mal_proxy_own_property_keys(
+            vm, mal_value_to_proxy_object(object_value), keys_out);
+    }
+
+
+    // Script constructor/generator functions expose their prototype property
+    // lazily. Reflection must include it even before an ordinary Get touched it.
+    if (mal_vm_script_function_has_prototype(vm, object_value) &&
+        !mal_object_get_own(
+            mal_value_to_object(object_value), mal_intrinsic_string_key(vm, "prototype"))
+             .present) {
+        mal_vm_function_prototype(vm, object_value);
+    }
+
+    MalArrayObject *keys = mal_intrinsic_new_array(vm, 0);
+    *keys_out = mal_value_from_array_object(keys);
+    u32 count = 0;
+
+    if (mal_value_is_module_namespace_object(object_value)) {
+        MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(object_value);
+        for (i32 i = 0; i < ns->export_count; i++) {
+            mal_array_object_store(keys,
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_value_from_string(ns->exports[i].name));
+        }
+        mal_array_object_store(keys,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG).value);
+        return true;
+    }
+
+    MalObject *object = mal_value_to_object(object_value);
+    bool typed_array = mal_value_is_typed_array_object(object_value);
+    if (typed_array) {
+        u32 length = mal_typed_array_object_length(mal_value_to_typed_array_object(object_value));
+        for (u32 index = 0; index < length; index++) {
+            mal_array_object_store(keys,
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) index))));
+        }
+    }
+
+    MalPropertyDesc string_exotic;
+    bool string_wrapper = mal_primitive_wrapper_string_exotic_own(
+        &vm->heap, object, mal_intrinsic_string_key(vm, "length"), &string_exotic);
+    u32 string_length = 0;
+    if (string_wrapper) {
+        string_length = (u32) mal_value_to_i32(string_exotic.value);
+        for (u32 index = 0; index < string_length; index++) {
+            mal_array_object_store(keys,
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) index))));
+        }
+    }
+
+    bool length_pending = mal_value_is_array_object(object_value);
+    bool string_length_pending = string_wrapper;
+    MalPropertyIter iter;
+    mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+    MalKey key;
+    MalPropertyDesc desc;
+    while (mal_property_iter_next(&iter, &key, &desc)) {
+        if (key.kind == MAL_KEY_SYMBOL && mal_symbol_is_private(mal_value_to_symbol(key.value))) {
+            continue;
+        }
+        if (typed_array && key.kind == MAL_KEY_INDEX) {
+            continue;
+        }
+        if (string_wrapper && key.kind == MAL_KEY_INDEX) {
+            i32 index = mal_value_to_i32(key.value);
+            if (index >= 0 && (u32) index < string_length) {
+                continue;
+            }
+        }
+        if (string_length_pending && key.kind != MAL_KEY_INDEX) {
+            mal_array_object_store(keys,
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
+            string_length_pending = false;
+        }
+        if (length_pending && key.kind != MAL_KEY_INDEX) {
+            mal_array_object_store(keys,
+                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
+            length_pending = false;
+        }
+        mal_array_object_store(keys,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+            mal_vm_own_key_value(vm, key));
+    }
+    if (length_pending) {
+        mal_array_object_store(keys,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+            mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
+    }
+    if (string_length_pending) {
+        mal_array_object_store(keys,
+            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+            mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
+    }
+    return true;
+}
+
+bool mal_vm_get_own_property(
+    MalVm *vm, MalValue object_value, MalKey key, bool *present_out,
+    MalPropertyDesc *desc_out) {
+    *present_out = false;
+    if (!mal_value_is_object(object_value)) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Own property lookup requires an object");
+        return false;
+    }
+    if (mal_value_is_proxy_object(object_value)) {
+        return mal_proxy_get_own_property_descriptor(
+            vm, mal_value_to_proxy_object(object_value), key, present_out, desc_out);
+    }
+
+    if (mal_vm_script_function_has_prototype(vm, object_value) &&
+        mal_vm_key_is_prototype(key) &&
+        !mal_object_get_own(mal_value_to_object(object_value), key).present) {
+        mal_vm_function_prototype(vm, object_value);
+        MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(object_value), key);
+        if (lookup.present) {
+            *desc_out = lookup.desc;
+            *present_out = true;
+            return true;
+        }
+    }
+
+    if (mal_value_is_module_namespace_object(object_value)) {
+        MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(object_value);
+        MalKey tag = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG);
+        if (key.kind == MAL_KEY_SYMBOL && key.value == tag.value) {
+            *desc_out = (MalPropertyDesc) {
+                .flags = MAL_PROPERTY_NONE,
+                .value = mal_value_from_string(mal_intrinsic_ascii(vm, "Module")),
+                .getter = mal_value_new_undefined(),
+                .setter = mal_value_new_undefined(),
+            };
+            *present_out = true;
+            return true;
+        }
+        if (key.kind == MAL_KEY_STRING) {
+            MalString *name = mal_value_to_string(key.value);
+            for (i32 i = 0; i < ns->export_count; i++) {
+                if (mal_string_equals(name, ns->exports[i].name)) {
+                    MalValue value = vm->globals[ns->exports[i].slot];
+                    if (mal_value_is_empty(value)) {
+                        mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE,
+                            "Cannot access module export before initialization");
+                        return false;
+                    }
+                    *desc_out = (MalPropertyDesc) {
+                        .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE,
+                        .value = value,
+                        .getter = mal_value_new_undefined(),
+                        .setter = mal_value_new_undefined(),
+                    };
+                    *present_out = true;
+                    return true;
+                }
+            }
+        }
+        return true;
+    }
+
+    if (mal_value_is_typed_array_object(object_value) && key.kind == MAL_KEY_INDEX) {
+        MalTypedArrayObject *array = mal_value_to_typed_array_object(object_value);
+        i32 index = mal_value_to_i32(key.value);
+        if (index >= 0 && (u32) index < mal_typed_array_object_length(array)) {
+            *desc_out = (MalPropertyDesc) {
+                .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                    MAL_PROPERTY_CONFIGURABLE,
+                .value = mal_typed_array_object_get(vm, array, (u32) index),
+                .getter = mal_value_new_undefined(),
+                .setter = mal_value_new_undefined(),
+            };
+            *present_out = true;
+        }
+        return true;
+    }
+    if (mal_value_is_typed_array_object(object_value) && key.kind == MAL_KEY_STRING &&
+        mal_vm_string_is_canonical_numeric_index(vm, mal_value_to_string(key.value))) {
+        return true;
+    }
+
+    if (mal_value_is_array_object(object_value) && mal_array_key_is_length(key)) {
+        MalArrayObject *array = mal_value_to_array_object(object_value);
+        *desc_out = (MalPropertyDesc) {
+            .flags = array->length_writable ? MAL_PROPERTY_WRITABLE : MAL_PROPERTY_NONE,
+            .value = mal_value_from_u32(mal_array_object_length(array)),
+            .getter = mal_value_new_undefined(),
+            .setter = mal_value_new_undefined(),
+        };
+        *present_out = true;
+        return true;
+    }
+
+    MalPropertyDesc string_exotic;
+    if (mal_primitive_wrapper_string_exotic_own(
+            &vm->heap, mal_value_to_object(object_value), key, &string_exotic)) {
+        *desc_out = string_exotic;
+        *present_out = true;
+        return true;
+    }
+
+    MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(object_value), key);
+    if (lookup.present) {
+        *desc_out = lookup.desc;
+        *present_out = true;
+    }
+    return true;
+}
+
+bool mal_vm_is_extensible_object(
+    MalVm *vm, MalValue object_value, bool *extensible_out) {
+    if (!mal_value_is_object(object_value)) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "IsExtensible requires an object");
+        return false;
+    }
+    if (mal_value_is_proxy_object(object_value)) {
+        return mal_proxy_is_extensible(
+            vm, mal_value_to_proxy_object(object_value), extensible_out);
+    }
+    *extensible_out = mal_object_is_extensible(mal_value_to_object(object_value));
     return true;
 }
 
