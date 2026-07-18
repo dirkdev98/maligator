@@ -6,6 +6,7 @@
 
 typedef struct MalVm MalVm;
 typedef struct MalObject MalObject;
+typedef bool (*MalHostMacrotaskDrain)(MalVm *vm);
 
 /*
  * Host timers (the JS-visible surface of the reactor).
@@ -49,6 +50,10 @@ void mal_host_clear_timeout(MalVm *vm, i64 id);
 /* Drive the event loop until the isolate is idle (no timers, fd ops, or
  * microtasks). Runs after the top-level program's synchronous phase. */
 void mal_host_run_event_loop(MalVm *vm);
+
+/* Register an optional runtime macrotask source without making the host loop
+ * reference that runtime directly. Duplicate function pointers are ignored. */
+void mal_host_register_macrotask_drain(MalHostMacrotaskDrain drain);
 
 /* Free all remaining timer tasks (teardown). */
 void mal_host_timers_free(MalVm *vm);

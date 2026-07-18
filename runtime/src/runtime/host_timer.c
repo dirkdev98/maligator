@@ -6,11 +6,28 @@
 #include "host.h"
 #include "intrinsics.h"
 #include "microtask.h"
-#if MAL_NODE
-#include "node_http.h"
-#endif
 #include "value_ops.h"
 #include "vm.h"
+
+#define MAL_HOST_MAX_MACROTASK_DRAINS 8
+static MalHostMacrotaskDrain mal_host_macrotask_drains[MAL_HOST_MAX_MACROTASK_DRAINS];
+static i32 mal_host_macrotask_drain_count;
+
+void mal_host_register_macrotask_drain(MalHostMacrotaskDrain drain) {
+    for (i32 i = 0; i < mal_host_macrotask_drain_count; i++) {
+        if (mal_host_macrotask_drains[i] == drain) return;
+    }
+    if (mal_host_macrotask_drain_count < MAL_HOST_MAX_MACROTASK_DRAINS) {
+        mal_host_macrotask_drains[mal_host_macrotask_drain_count++] = drain;
+    }
+}
+
+static bool mal_host_run_runtime_macrotask(MalVm *vm) {
+    for (i32 i = 0; i < mal_host_macrotask_drain_count; i++) {
+        if (mal_host_macrotask_drains[i](vm)) return true;
+    }
+    return false;
+}
 
 /* Reactor waker: the timer's deadline passed. It is already off the reactor heap;
  * mark the task ready so the event loop's macrotask phase runs its callback. */
@@ -135,11 +152,9 @@ void mal_host_run_event_loop(MalVm *vm) {
     for (;;) {
         // Microtasks first (promise jobs), then one macrotask, then repeat.
         mal_vm_drain_microtasks(vm);
-#if MAL_NODE
-        if (mal_node_http_drain(vm)) {
+        if (mal_host_run_runtime_macrotask(vm)) {
             continue;
         }
-#endif
         if (mal_host_run_one_ready(vm)) {
             continue;
         }

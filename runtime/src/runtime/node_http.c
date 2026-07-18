@@ -10,6 +10,7 @@
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "host_timer.h"
 #include "intrinsics.h"
 #include "node_stream.h"
 #include "object.h"
@@ -513,6 +514,7 @@ void mal_host_install_node_http(
     vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_MODULE] = roots[0];
     if (!http_roots_installed) {
         mal_gc_register_root_source(http_scan_roots, nullptr);
+        mal_host_register_macrotask_drain(mal_node_http_drain);
         http_roots_installed = true;
     }
     http_install_exports(vm, slots, count, roots[0]);
