@@ -167,6 +167,13 @@ const STREAM: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:stream"),
 };
 
+const HTTP: HostModuleSpec = {
+	id: "node:http",
+	named: ["METHODS", "IncomingMessage", "ServerResponse"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:http"),
+};
+
 const STRING_DECODER: HostModuleSpec = {
 	id: "node:string_decoder",
 	named: ["StringDecoder"],
@@ -194,6 +201,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		BUFFER,
 		ASYNC_HOOKS,
 		STREAM,
+		HTTP,
 		STRING_DECODER,
 		ZLIB,
 	].map((spec) => [spec.id, spec]),

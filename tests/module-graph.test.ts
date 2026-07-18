@@ -165,11 +165,11 @@ test("explicit entry goals and goal-specific extensions take precedence over pac
 	expect(module.modules.get(module.entry)!.goal).toBe("module");
 });
 
-test("traverses the CommonJS Express entry to the first unsupported builtin", () => {
+test("traverses Express initialization through node:http to node:url", () => {
 	const entry = path.resolve("tests/fixtures/express-5/app.js");
 
 	expect(() => buildModuleGraph(entry, { buildConfig: nodeOn })).toThrow(
-		/Cannot resolve 'node:http' from .*express[/\\]lib[/\\]application\.js: unknown node built-in module 'node:http'/,
+		/Cannot resolve 'url' from .*parseurl[/\\]index\.js: unknown node built-in module 'node:url'/,
 	);
 });
 
@@ -482,11 +482,27 @@ test("canonicalizes bare zlib and exposes only the decompression adapter", () =>
 	});
 });
 
+test("canonicalizes bare and node: HTTP specifiers to one host module", () => {
+	write("http.cjs", `module.exports = [require("http"), require("node:http")];\n`);
+	const graph = buildModuleGraph(path.join(root, "http.cjs"), {
+		buildConfig: nodeOn,
+	});
+	const dependencies = graph.modules.get(graph.entry)!.dependencies;
+	expect(dependencies.map((dependency) => dependency.resolvedPath)).toEqual([
+		"node:http",
+		"node:http",
+	]);
+	expect(graph.modules.get("node:http")?.host).toMatchObject({
+		named: ["METHODS", "IncomingMessage", "ServerResponse"],
+		hasDefault: true,
+	});
+});
+
 test("rejects an unknown node:* built-in clearly even when surface.node is on", () => {
-	write("node-unknown.mjs", `import "node:http";\n`);
+	write("node-unknown.mjs", `import "node:https";\n`);
 	expect(() =>
 		buildModuleGraph(path.join(root, "node-unknown.mjs"), { buildConfig: nodeOn }),
-	).toThrow(/unknown node built-in module 'node:http'/);
+	).toThrow(/unknown node built-in module 'node:https'/);
 });
 
 test("canonicalizes a bare ESM path specifier to the host built-in", () => {
@@ -545,10 +561,10 @@ test("a literal dynamic import of a supported node:* is rejected (static import 
 });
 
 test("a literal dynamic import of an unknown node:* is rejected, not deferred", () => {
-	write("dyn-unknown.mjs", `import("node:http");\n`);
+	write("dyn-unknown.mjs", `import("node:https");\n`);
 	expect(() =>
 		buildModuleGraph(path.join(root, "dyn-unknown.mjs"), { buildConfig: nodeOn }),
-	).toThrow(/unknown node built-in module 'node:http'/);
+	).toThrow(/unknown node built-in module 'node:https'/);
 });
 
 test("a literal dynamic import of node:* is rejected when surface.node is off", () => {
