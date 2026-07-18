@@ -174,6 +174,13 @@ const STRING_DECODER: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:string_decoder"),
 };
 
+const ZLIB: HostModuleSpec = {
+	id: "node:zlib",
+	named: ["createInflate", "createGunzip", "createBrotliDecompress"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:zlib"),
+};
+
 /** Supported `node:*` built-ins, keyed by canonical specifier. */
 export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 	[
@@ -188,6 +195,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		ASYNC_HOOKS,
 		STREAM,
 		STRING_DECODER,
+		ZLIB,
 	].map((spec) => [spec.id, spec]),
 );
 

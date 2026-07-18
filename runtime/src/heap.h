@@ -277,6 +277,11 @@ typedef enum MalHeapType : u8 {
      * ReadableStreamDefaultReader instances. See runtime/readable_stream_object.h.
      */
     MAL_HEAP_READABLE_STREAM_OBJECT,
+    /**
+     * node:zlib decompressor state: an ordinary object wrapping one opaque Rust
+     * codec handle. See runtime/node_zlib_object.h.
+     */
+    MAL_HEAP_NODE_ZLIB_OBJECT,
 
     /**
      * Sentinel: number of distinct heap types. Must stay last. Sizes the baked

@@ -121,6 +121,58 @@ test("detects goals by extension (.mjs => module)", () => {
 	expect(graph.modules.get(path.join(root, pkgIndex))!.goal).toBe("module");
 });
 
+test("detects .js entry goals from the nearest package type", () => {
+	write("commonjs-package/package.json", JSON.stringify({ type: "commonjs" }));
+	write("commonjs-package/entry.js", `module.exports = require("./dependency.js");\n`);
+	write("commonjs-package/dependency.js", `module.exports = 42;\n`);
+	write("module-package/package.json", JSON.stringify({ type: "module" }));
+	write("module-package/entry.js", `export const value = 42;\n`);
+
+	const commonjs = buildModuleGraph(path.join(root, "commonjs-package/entry.js"));
+	const module = buildModuleGraph(path.join(root, "module-package/entry.js"));
+
+	expect(commonjs.modules.get(commonjs.entry)!.goal).toBe("cjs");
+	expect(
+		commonjs.modules.get(path.join(root, "commonjs-package/dependency.js"))!.goal,
+	).toBe("cjs");
+	expect(commonjs.modules.size).toBe(2);
+	expect(module.modules.get(module.entry)!.goal).toBe("module");
+});
+
+test("explicit entry goals and goal-specific extensions take precedence over package type", () => {
+	write("goal-precedence/package.json", JSON.stringify({ type: "module" }));
+	write("goal-precedence/entry.js", `globalThis.value = 1;\n`);
+	write("goal-precedence/explicit-module.js", `export const value = 1;\n`);
+	write("goal-precedence/forced.cjs", `module.exports = 1;\n`);
+	write("goal-precedence/forced.mjs", `export const value = 1;\n`);
+
+	const explicitScript = buildModuleGraph(path.join(root, "goal-precedence/entry.js"), {
+		entryGoal: "script",
+	});
+	const override = buildModuleGraph(
+		path.join(root, "goal-precedence/explicit-module.js"),
+		{
+			entryGoal: "script",
+			goalOverride: "module",
+		},
+	);
+	const cjs = buildModuleGraph(path.join(root, "goal-precedence/forced.cjs"));
+	const module = buildModuleGraph(path.join(root, "goal-precedence/forced.mjs"));
+
+	expect(explicitScript.modules.get(explicitScript.entry)!.goal).toBe("script");
+	expect(override.modules.get(override.entry)!.goal).toBe("module");
+	expect(cjs.modules.get(cjs.entry)!.goal).toBe("cjs");
+	expect(module.modules.get(module.entry)!.goal).toBe("module");
+});
+
+test("traverses the CommonJS Express entry to the first unsupported builtin", () => {
+	const entry = path.resolve("tests/fixtures/express-5/app.js");
+
+	expect(() => buildModuleGraph(entry, { buildConfig: nodeOn })).toThrow(
+		/Cannot resolve 'node:http' from .*express[/\\]lib[/\\]application\.js: unknown node built-in module 'node:http'/,
+	);
+});
+
 test("requires an explicit stripper for TypeScript and applies it across the graph", () => {
 	write("typed-entry.mts", `import { value } from "./typed-dep.ts";\nvalue;\n`);
 	write("typed-dep.ts", `export const value: number = 1;\n`);
@@ -414,11 +466,27 @@ test("rejects a node:* import clearly when surface.node is off (the default)", (
 	);
 });
 
+test("canonicalizes bare zlib and exposes only the decompression adapter", () => {
+	write("zlib.cjs", `module.exports = [require("zlib"), require("node:zlib")];\n`);
+	const graph = buildModuleGraph(path.join(root, "zlib.cjs"), {
+		buildConfig: nodeOn,
+	});
+	const dependencies = graph.modules.get(graph.entry)!.dependencies;
+	expect(dependencies.map((dependency) => dependency.resolvedPath)).toEqual([
+		"node:zlib",
+		"node:zlib",
+	]);
+	expect(graph.modules.get("node:zlib")?.host).toMatchObject({
+		named: ["createInflate", "createGunzip", "createBrotliDecompress"],
+		hasDefault: true,
+	});
+});
+
 test("rejects an unknown node:* built-in clearly even when surface.node is on", () => {
-	write("node-unknown.mjs", `import "node:zlib";\n`);
+	write("node-unknown.mjs", `import "node:http";\n`);
 	expect(() =>
 		buildModuleGraph(path.join(root, "node-unknown.mjs"), { buildConfig: nodeOn }),
-	).toThrow(/unknown node built-in module 'node:zlib'/);
+	).toThrow(/unknown node built-in module 'node:http'/);
 });
 
 test("canonicalizes a bare ESM path specifier to the host built-in", () => {
@@ -477,10 +545,10 @@ test("a literal dynamic import of a supported node:* is rejected (static import 
 });
 
 test("a literal dynamic import of an unknown node:* is rejected, not deferred", () => {
-	write("dyn-unknown.mjs", `import("node:zlib");\n`);
+	write("dyn-unknown.mjs", `import("node:http");\n`);
 	expect(() =>
 		buildModuleGraph(path.join(root, "dyn-unknown.mjs"), { buildConfig: nodeOn }),
-	).toThrow(/unknown node built-in module 'node:zlib'/);
+	).toThrow(/unknown node built-in module 'node:http'/);
 });
 
 test("a literal dynamic import of node:* is rejected when surface.node is off", () => {

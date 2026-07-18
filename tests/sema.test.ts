@@ -10,6 +10,7 @@ import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts
 test("snapshot sema changes", () => {
 	const semantic = loadEntrypointAndRunSemanticAnalysis(
 		path.join(import.meta.dirname, "./local/semantic-analysis.js"),
+		{ entryGoal: "script" },
 	);
 
 	// This local absolute path still needs a CI-portable fixture.

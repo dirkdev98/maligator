@@ -280,7 +280,9 @@ export function buildModuleGraph(
 
 	load(
 		entry,
-		options.goalOverride ?? detectEntryGoal(entry, options.entryGoal),
+		options.goalOverride ??
+			options.entryGoal ??
+			detectDependencyGoal(entry, packageTypeCache),
 		options.entrySource,
 	);
 
@@ -307,40 +309,9 @@ function parseWithGoal(source: string, goal: ModuleGoal) {
 }
 
 /**
- * The entrypoint's goal: extension first, then a `script` default.
- *
- * We intentionally do NOT consult `package.json` "type" for the entrypoint
- * here: this repository is itself `type: module`, and walking up would
- * reclassify every script fixture under tests/ as a module. Dependencies
- * reached through `import` get full detection (detectDependencyGoal); no
- * current fixture exercises that path.
- *
- * Full Node entry detection remains once fixtures declare their
- * goal and the CJS milestone gives `.js`-as-CommonJS a real lowering.
- */
-function detectEntryGoal(filePath: string, explicit?: ModuleGoal): ModuleGoal {
-	if (explicit) {
-		return explicit;
-	}
-
-	switch (path.extname(filePath)) {
-		case ".mjs":
-		case ".mts":
-			return "module";
-		case ".cjs":
-		case ".cts":
-		case ".json":
-			return "cjs";
-		default:
-			// `.ts` follows `.js`: a `script` default for the entry.
-			return "script";
-	}
-}
-
-/**
- * A dependency's goal follows Node: extension, then the nearest `package.json`
+ * A module's automatic goal follows Node: extension, then the nearest `package.json`
  * "type". A `.js` file under `type: module` is a module; otherwise it is
- * CommonJS (which lowering rejects loudly until the CJS milestone).
+ * CommonJS.
  */
 function detectDependencyGoal(
 	filePath: string,
