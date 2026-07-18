@@ -13,6 +13,7 @@
 #include "gc.h"
 #include "heap.h"
 #include "heap_string.h"
+#include "heap_symbol.h"
 #include "intrinsics.h"
 #include "map_object.h"
 #include "microtask.h"
@@ -243,11 +244,39 @@ static bool mal_web_is_utf8_label(const MalString *s) {
     return false;
 }
 
+/* Per-instance TextDecoder options, packed as an int32 stored on the instance
+ * under a private "brand" symbol carried in each function's slot 0 (the
+ * StringDecoder pattern). The brand doubles as a receiver check: a foreign object
+ * lacks the property. */
+#define MAL_TEXT_DECODER_FATAL 1
+#define MAL_TEXT_DECODER_IGNORE_BOM 2
+
+static MalKey mal_web_text_decoder_brand_key(MalValue callee) {
+    MalValue brand = mal_native_function_object_get_slot(
+        mal_value_to_native_function_object(callee), 0);
+    return (MalKey) {.kind = MAL_KEY_SYMBOL, .value = brand};
+}
+
+/* Read the option flags off `self`, or throw a TypeError for a receiver that was
+ * not produced by this TextDecoder constructor. */
+static bool mal_web_text_decoder_flags(MalVm *vm, MalValue self, MalValue callee, i32 *out) {
+    if (mal_value_is_object(self) && mal_value_is_native_function_object(callee)) {
+        MalPropertyLookup lookup =
+            mal_object_get_own(mal_value_to_object(self), mal_web_text_decoder_brand_key(callee));
+        if (lookup.present && mal_value_is_int32(lookup.desc.value)) {
+            *out = mal_value_to_i32(lookup.desc.value);
+            return true;
+        }
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "TextDecoder method called on an incompatible receiver");
+    return false;
+}
+
 static MalValue mal_web_text_decoder_ctor(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) callee;
-    // Only UTF-8 is supported; a recognized non-UTF-8 label is a RangeError, and
-    // options (fatal/ignoreBOM) are accepted-and-ignored for v1.
+    (void) this_value;
+    // Only UTF-8 is supported; a recognized non-UTF-8 label is a RangeError.
     if (argc >= 1 && !mal_value_is_undefined(args[0])) {
         MalString *label;
         if (!mal_vm_to_string(vm, args[0], &label)) {
@@ -259,15 +288,67 @@ static MalValue mal_web_text_decoder_ctor(
             return mal_value_new_undefined();
         }
     }
-    (void) this_value;
-    return mal_value_from_object(mal_web_ordinary_instance(vm, nt));
+    // Read fatal/ignoreBOM from the options dictionary before allocating so a
+    // throwing getter aborts construction cleanly.
+    i32 flags = 0;
+    if (argc >= 2 && mal_value_is_object(args[1])) {
+        MalValue value;
+        if (!mal_vm_get_property(vm, args[1],
+                mal_intrinsic_string_key(vm, (const byte *) "fatal"), &value)) {
+            return mal_value_new_undefined();
+        }
+        if (mal_value_is_truthy(value)) {
+            flags |= MAL_TEXT_DECODER_FATAL;
+        }
+        if (!mal_vm_get_property(vm, args[1],
+                mal_intrinsic_string_key(vm, (const byte *) "ignoreBOM"), &value)) {
+            return mal_value_new_undefined();
+        }
+        if (mal_value_is_truthy(value)) {
+            flags |= MAL_TEXT_DECODER_IGNORE_BOM;
+        }
+    }
+    MalValue instance = mal_value_from_object(mal_web_ordinary_instance(vm, nt));
+    MalRootSpan rs;
+    mal_gc_root(&rs, &instance, 1);
+    MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_from_i32(flags), MAL_PROPERTY_NONE);
+    mal_object_define_own(
+        mal_value_to_object(instance), mal_web_text_decoder_brand_key(callee), &desc);
+    mal_gc_unroot(&rs);
+    return instance;
+}
+
+static MalValue mal_web_text_decoder_get_fatal(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    i32 flags;
+    if (!mal_web_text_decoder_flags(vm, self, callee, &flags)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean((flags & MAL_TEXT_DECODER_FATAL) != 0);
+}
+
+static MalValue mal_web_text_decoder_get_ignore_bom(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    i32 flags;
+    if (!mal_web_text_decoder_flags(vm, self, callee, &flags)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean((flags & MAL_TEXT_DECODER_IGNORE_BOM) != 0);
 }
 
 static MalValue mal_web_text_decoder_decode(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) self;
     (void) nt;
-    (void) callee;
+    i32 flags;
+    if (!mal_web_text_decoder_flags(vm, self, callee, &flags)) {
+        return mal_value_new_undefined();
+    }
     if (argc < 1 || mal_value_is_undefined(args[0])) {
         return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
     }
@@ -278,13 +359,21 @@ static MalValue mal_web_text_decoder_decode(
             "decode input must be an ArrayBuffer or TypedArray");
         return mal_value_new_undefined();
     }
-    // Skip a leading UTF-8 BOM (ignoreBOM defaults to false).
-    if (len >= 3 && (u8) bytes[0] == 0xEF && (u8) bytes[1] == 0xBB && (u8) bytes[2] == 0xBF) {
+    // Strip a leading UTF-8 BOM unless ignoreBOM was set at construction.
+    if ((flags & MAL_TEXT_DECODER_IGNORE_BOM) == 0 && len >= 3 && (u8) bytes[0] == 0xEF
+        && (u8) bytes[1] == 0xBB && (u8) bytes[2] == 0xBF) {
         bytes += 3;
         len -= 3;
     }
     usize count;
-    c16 *units = mal_utf8_decode(bytes, len, &count);
+    bool had_error;
+    c16 *units = mal_utf8_decode_report(bytes, len, &count, &had_error);
+    if ((flags & MAL_TEXT_DECODER_FATAL) != 0 && had_error) {
+        free(units);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "TextDecoder.decode: input is not valid utf-8");
+        return mal_value_new_undefined();
+    }
     MalValue s = mal_value_from_string(mal_string_new_copy(&vm->heap, units, count));
     free(units);
     return s;
@@ -314,6 +403,40 @@ static MalObject *mal_web_install_class(
     mal_intrinsic_define_data(vm, global_this, name, mal_value_from_native_function_object(ctor),
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     return proto;
+}
+
+/* A native function carrying `brand` in slot 0, so its callback can recover the
+ * per-instance state key from `callee` (the TextDecoder brand pattern). */
+static MalNativeFunctionObject *mal_web_branded_function(
+    MalVm *vm, const byte *name, i32 length, MalNativeFunctionCallback fn, MalValue brand) {
+    MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalNativeFunctionObject *function = mal_native_function_object_new_with_slots(
+        &vm->heap, fn_proto, mal_intrinsic_ascii(vm, name), fn, &brand, 1);
+    function->length = length;
+    mal_intrinsic_define_data(vm, (MalObject *) function, (const byte *) "length",
+        mal_value_from_i32(length), MAL_PROPERTY_CONFIGURABLE);
+    return function;
+}
+
+/* Define a readonly accessor whose getter carries `brand` in slot 0. */
+static void mal_web_define_branded_getter(MalVm *vm, MalObject *proto, const byte *name,
+    MalNativeFunctionCallback getter, MalValue brand) {
+    MalPropertyDesc desc = {
+        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+        .value = mal_value_new_undefined(),
+        .getter = mal_value_from_native_function_object(
+            mal_web_branded_function(vm, name, 0, getter, brand)),
+        .setter = mal_value_new_undefined(),
+    };
+    mal_object_define_own(proto, mal_intrinsic_string_key(vm, name), &desc);
+}
+
+/* Define a prototype method whose callback carries `brand` in slot 0. */
+static void mal_web_define_branded_method(MalVm *vm, MalObject *proto, const byte *name,
+    i32 length, MalNativeFunctionCallback fn, MalValue brand) {
+    mal_intrinsic_define_data(vm, proto, name,
+        mal_value_from_native_function_object(mal_web_branded_function(vm, name, length, fn, brand)),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
 /* ---------------------------------------------------------------------------
@@ -851,11 +974,34 @@ void mal_text_encoding_globals_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_method_n(vm, enc_proto, (const byte *) "encodeInto", 2,
         mal_web_text_encoder_encode_into);
 
-    MalObject *dec_proto =
-        mal_web_install_class(vm, global_this, (const byte *) "TextDecoder", 0,
-            mal_web_text_decoder_ctor, "utf-8");
-    mal_intrinsic_define_method_n(vm, dec_proto, (const byte *) "decode", 1,
-        mal_web_text_decoder_decode);
+    // TextDecoder carries its per-instance fatal/ignoreBOM options through a
+    // private brand symbol placed in every function's slot 0; the constructor
+    // stamps the packed flags onto the instance under that key and the decode
+    // method plus the fatal/ignoreBOM getters read them back. This is why it is
+    // wired by hand rather than via mal_web_install_class.
+    MalObject *obj_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    MalValue dec_brand = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    MalObject *dec_proto = mal_object_new(&vm->heap, obj_proto);
+    MalNativeFunctionObject *dec_ctor = mal_web_branded_function(
+        vm, (const byte *) "TextDecoder", 0, mal_web_text_decoder_ctor, dec_brand);
+    mal_native_function_object_set_constructor(dec_ctor);
+    mal_intrinsic_define_data(vm, (MalObject *) dec_ctor, (const byte *) "prototype",
+        mal_value_from_object(dec_proto), MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, dec_proto, (const byte *) "constructor",
+        mal_value_from_native_function_object(dec_ctor),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, dec_proto, (const byte *) "encoding",
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "utf-8")),
+        MAL_PROPERTY_CONFIGURABLE);
+    mal_web_define_branded_method(vm, dec_proto, (const byte *) "decode", 1,
+        mal_web_text_decoder_decode, dec_brand);
+    mal_web_define_branded_getter(vm, dec_proto, (const byte *) "fatal",
+        mal_web_text_decoder_get_fatal, dec_brand);
+    mal_web_define_branded_getter(vm, dec_proto, (const byte *) "ignoreBOM",
+        mal_web_text_decoder_get_ignore_bom, dec_brand);
+    mal_intrinsic_define_data(vm, global_this, (const byte *) "TextDecoder",
+        mal_value_from_native_function_object(dec_ctor),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
 void mal_web_globals_install(MalVm *vm, MalObject *global_this) {

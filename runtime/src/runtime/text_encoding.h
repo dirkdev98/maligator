@@ -13,3 +13,12 @@ byte *mal_utf8_encode(const c16 *units, usize len, usize *out_len);
 
 /** UTF-8 bytes -> UTF-16 code units. Sets *out_count; returns a malloc'd buffer. */
 c16 *mal_utf8_decode(const byte *bytes, usize len, usize *out_count);
+
+/*
+ * Shared decode core. Always substitutes U+FFFD for malformed or truncated
+ * sequences (same output as mal_utf8_decode) and additionally reports through
+ * *had_error whether any such substitution occurred, so a fatal TextDecoder can
+ * throw instead of accepting the replacement. Sets *out_count; returns a malloc'd
+ * buffer the caller frees.
+ */
+c16 *mal_utf8_decode_report(const byte *bytes, usize len, usize *out_count, bool *had_error);

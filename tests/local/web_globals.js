@@ -73,6 +73,63 @@ try {
 }
 check("TextDecoder rejects non-utf8", decThrew);
 
+// --- TextDecoder fatal / ignoreBOM options ---
+const decDefault = new TextDecoder("utf-8");
+check("TextDecoder default fatal getter", decDefault.fatal === false);
+check("TextDecoder default ignoreBOM getter", decDefault.ignoreBOM === false);
+
+const decFatal = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+check("TextDecoder fatal getter true", decFatal.fatal === true);
+check("TextDecoder ignoreBOM getter true", decFatal.ignoreBOM === true);
+
+// The getters have no setter; assignment must not mutate the option.
+try {
+	decFatal.fatal = false;
+} catch (e) {}
+try {
+	decFatal.ignoreBOM = false;
+} catch (e) {}
+check("TextDecoder fatal getter readonly", decFatal.fatal === true);
+check("TextDecoder ignoreBOM getter readonly", decFatal.ignoreBOM === true);
+
+let fatalInvalidThrew = false;
+try {
+	decFatal.decode(new Uint8Array([0xff]));
+} catch (e) {
+	fatalInvalidThrew = e instanceof TypeError;
+}
+check("TextDecoder fatal rejects invalid byte 0xFF", fatalInvalidThrew);
+
+let fatalTruncatedThrew = false;
+try {
+	// 3-byte lead with a single continuation byte -> truncated sequence.
+	decFatal.decode(new Uint8Array([0xe2, 0x82]));
+} catch (e) {
+	fatalTruncatedThrew = e instanceof TypeError;
+}
+check("TextDecoder fatal rejects truncated sequence", fatalTruncatedThrew);
+
+check(
+	"TextDecoder fatal accepts valid utf-8",
+	decFatal.decode(new Uint8Array([104, 105])) === "hi",
+);
+check(
+	"TextDecoder lenient replaces invalid byte",
+	decDefault.decode(new Uint8Array([0xff])) === "\uFFFD",
+);
+check(
+	"TextDecoder lenient replaces truncated sequence",
+	decDefault.decode(new Uint8Array([0xe2, 0x82])) === "\uFFFD",
+);
+
+const bomBytes = new Uint8Array([0xef, 0xbb, 0xbf, 104, 105]);
+const decIgnoreBom = new TextDecoder("utf-8", { ignoreBOM: true });
+check(
+	"TextDecoder ignoreBOM preserves U+FEFF",
+	decIgnoreBom.decode(bomBytes) === "\uFEFFhi",
+);
+check("TextDecoder default strips U+FEFF", decDefault.decode(bomBytes) === "hi");
+
 // --- btoa / atob ---
 check("btoa", btoa("hello") === "aGVsbG8=");
 check("btoa padding", btoa("foobar") === "Zm9vYmFy" && btoa("fo") === "Zm8=");

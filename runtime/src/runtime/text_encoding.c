@@ -42,7 +42,13 @@ byte *mal_utf8_encode(const c16 *units, usize len, usize *out_len) {
 }
 
 c16 *mal_utf8_decode(const byte *bytes, usize len, usize *out_count) {
+    bool had_error;
+    return mal_utf8_decode_report(bytes, len, out_count, &had_error);
+}
+
+c16 *mal_utf8_decode_report(const byte *bytes, usize len, usize *out_count, bool *had_error) {
     *out_count = 0;
+    *had_error = false;
     if (len > SIZE_MAX / sizeof(c16) - 1) return nullptr;
     c16 *out = malloc(sizeof(c16) * (len + 1)); // <= len code units
     if (out == nullptr) return nullptr;
@@ -71,6 +77,7 @@ c16 *mal_utf8_decode(const byte *bytes, usize len, usize *out_count) {
             if (b == 0xF4) second_max = 0x8F;
         } else {
             cp = 0xFFFD;
+            *had_error = true;
         }
         if (n > 1) {
             usize consumed = 1;
@@ -78,6 +85,7 @@ c16 *mal_utf8_decode(const byte *bytes, usize len, usize *out_count) {
                 if (i + k >= len) {
                     cp = 0xFFFD;
                     n = consumed;
+                    *had_error = true;
                     break;
                 }
                 u8 cont = (u8) bytes[i + k];
@@ -86,6 +94,7 @@ c16 *mal_utf8_decode(const byte *bytes, usize len, usize *out_count) {
                 if (cont < minimum || cont > maximum) {
                     cp = 0xFFFD;
                     n = consumed;
+                    *had_error = true;
                     break;
                 }
                 cp = (cp << 6) | (cont & 0x3Fu);
