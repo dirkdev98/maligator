@@ -169,7 +169,7 @@ const STREAM: HostModuleSpec = {
 
 const HTTP: HostModuleSpec = {
 	id: "node:http",
-	named: ["METHODS", "IncomingMessage", "ServerResponse"],
+	named: ["METHODS", "IncomingMessage", "ServerResponse", "Server", "createServer"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:http"),
 };

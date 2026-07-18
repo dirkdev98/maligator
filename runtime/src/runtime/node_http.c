@@ -66,6 +66,72 @@ static MalValue http_server_response_constructor(
                           MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR);
 }
 
+static MalValue http_server_constructor(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    MalValue listener = mal_value_new_undefined();
+    if (argc > 0 && mal_value_is_callable(args[0])) {
+        listener = args[0];
+    } else {
+        if (argc > 0 && !mal_value_is_undefined(args[0])
+            && !mal_value_is_null(args[0]) && !mal_value_is_object(args[0])) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "The options argument must be an object");
+            return mal_value_new_undefined();
+        }
+        if (argc > 1) listener = args[1];
+    }
+    if (!mal_value_is_undefined(listener) && !mal_value_is_callable(listener)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "The listener argument must be a function");
+        return mal_value_new_undefined();
+    }
+
+    MalValue roots[] = {
+        new_target, callee, listener, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue target = mal_value_is_undefined(roots[0]) ? roots[1] : roots[0];
+    roots[3] = mal_vm_function_prototype(vm, target);
+    MalObject *prototype = mal_value_is_object(roots[3])
+        ? mal_value_to_object(roots[3])
+        : mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    roots[4] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    mal_vm_call_value(vm,
+        vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR],
+        roots[4], nullptr, 0);
+    if (vm->completion.kind != MAL_COMPLETION_THROW
+        && !mal_value_is_undefined(roots[2])) {
+        roots[5] = mal_value_from_string(
+            mal_intrinsic_ascii(vm, (const byte *) "request"));
+        MalPropertyLookup on = mal_object_get_own(
+            mal_value_to_object(
+                vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE]),
+            mal_intrinsic_string_key(vm, (const byte *) "on"));
+        MalValue on_args[] = {roots[5], roots[2]};
+        mal_vm_call_value(vm, on.desc.value, roots[4], on_args, 2);
+    }
+    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW
+        ? mal_value_new_undefined() : roots[4];
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue http_create_server(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    MalCompletion completion = mal_vm_construct_value(
+        vm, vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR], args, argc);
+    return completion.kind == MAL_COMPLETION_THROW
+        ? mal_value_new_undefined() : completion.value;
+}
+
 static MalValue http_constructor(
     MalVm *vm, const char *name, i32 length, MalNativeFunctionCallback callback,
     MalValue prototype) {
@@ -127,15 +193,16 @@ void mal_host_install_node_http(
         return;
     }
 
-	mal_host_install_node_stream(vm, nullptr, 0, launch);
+    mal_host_install_node_stream(vm, nullptr, 0, launch);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return;
     }
-	MalValue roots[6] = {
+    MalValue roots[9] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -151,10 +218,27 @@ void mal_host_install_node_http(
                                 http_server_response_constructor, roots[2]);
     mal_object_set_prototype(mal_value_to_object(roots[3]), mal_value_to_object(
         vm->intrinsics[MAL_INTRINSIC_NODE_READABLE_CONSTRUCTOR]));
-    roots[5] = http_methods(vm);
+    roots[5] = mal_value_from_object(mal_object_new(
+        &vm->heap, mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE])));
+    roots[6] = http_constructor(vm, "Server", 2,
+                                http_server_constructor, roots[5]);
+    mal_object_set_prototype(mal_value_to_object(roots[6]), mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR]));
+    roots[7] = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "createServer"), 2,
+            http_create_server));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
+                              (const byte *) "createServer", roots[7], HTTP_VISIBLE);
+    roots[8] = http_methods(vm);
 
-    static const char *names[] = {"METHODS", "IncomingMessage", "ServerResponse"};
-    MalValue values[] = {roots[5], roots[3], roots[4]};
+    static const char *names[] = {
+        "METHODS", "IncomingMessage", "ServerResponse", "Server",
+    };
+    MalValue values[] = {roots[8], roots[3], roots[4], roots[6]};
     for (usize i = 0; i < countof(names); i++) {
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
                                   (const byte *) names[i], values[i], HTTP_VISIBLE);
@@ -163,6 +247,8 @@ void mal_host_install_node_http(
     vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_PROTOTYPE] = roots[1];
     vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR] = roots[4];
     vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_PROTOTYPE] = roots[2];
+    vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR] = roots[6];
+    vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_PROTOTYPE] = roots[5];
     vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_MODULE] = roots[0];
     http_install_exports(vm, slots, count, roots[0]);
     mal_gc_unroot(&root);
