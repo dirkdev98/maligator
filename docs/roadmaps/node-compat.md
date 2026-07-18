@@ -61,9 +61,10 @@ stated acceptance point without patching Express or anything in `node_modules`.
       `server.close(callback)`. Acceptance is starting the fixture on an ephemeral
       port, driving its smoke requests through `node:http`, and closing it cleanly.
       The initialization floor (`METHODS`, `STATUS_CODES`, `IncomingMessage`,
-      `ServerResponse`, and header helpers) is implemented. The next slice is
-      `Server`/`createServer` construction and request-listener wiring, followed by
-      transport-backed `listen`/`address`/`close`.
+      `ServerResponse`, and header helpers) is implemented. Per-realm `Server` and
+      `createServer` now inherit EventEmitter behavior and wire Express as the
+      `request` listener. The next slice is transport-backed
+      `listen`/`address`/`close`.
 - [ ] **Wave 4: pass the Express behavior baseline.** Run the existing smoke
       runner under Maligator and match real Node for route dispatch, decoded
       route parameters, repeated query values, ordered application/route/async
