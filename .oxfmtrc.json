@@ -1,6 +1,10 @@
 {
 	"$schema": "./node_modules/oxfmt/configuration_schema.json",
-	"ignorePatterns": ["scripts/test262.json", "bench/baseline.json"],
+	"ignorePatterns": [
+		"scripts/test262.json",
+		"bench/baseline.json",
+		"runtime/rust/target"
+	],
 	"useTabs": true,
 	"printWidth": 90,
 	"experimentalSortImports": {
