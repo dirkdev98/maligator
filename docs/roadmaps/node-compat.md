@@ -7,8 +7,8 @@ dependencies require Node 18 or newer, so compatibility follows modern Node
 behavior rather than historical Node quirks.
 
 The fixture is both a real-Node baseline and a Maligator native acceptance target.
-The suite now compiles and constructs the unmodified application in compiled and
-interpreted modes; network serving remains the next milestone.
+The suite now runs its unmodified smoke program through Maligator's inbound server
+and outbound client in compiled and interpreted modes, including GC stress.
 
 ## Milestones
 
@@ -70,9 +70,11 @@ stated acceptance point without patching Express or anything in `node_modules`.
       `ServerResponse` objects whose completion follows the native write. Focused
       coverage exercises compiled/interpreted dispatch, request bodies, keep-alive,
       HEAD/no-body framing, close-after-response, reentrancy, GC stress, and UBSan.
-      The remaining slices are streaming/backpressure, richer socket/header/status
-      behavior, and the `http.request` client path.
-- [ ] **Wave 4: pass the Express behavior baseline.** Run the existing smoke
+      A buffered `http.request` client now covers localhost/numeric-IPv4 loopback,
+      request headers and bodies, status/response headers, response bodies, and
+      connection errors. The remaining slices are streaming/backpressure and richer
+      socket, header, status, URL/options, cancellation, and connection-reuse behavior.
+- [x] **Wave 4: pass the Express behavior baseline.** Run the existing smoke
       runner under Maligator and match real Node for route dispatch, decoded
       route parameters, repeated query values, ordered application/route/async
       middleware, automatic forwarding of async rejections, JSON and
@@ -82,8 +84,11 @@ stated acceptance point without patching Express or anything in `node_modules`.
       pass. The externally driven unmodified-Express checkpoint now covers route
       parameters, repeated query values, ordered async middleware, JSON and
       URL-encoded bodies, cookies, redirects, async rejection forwarding, and custom
-      error middleware in normal and GC-stress runs. Running the fixture's own full
-      smoke runner remains blocked on the outbound `http.request` client path.
+      error middleware in normal and GC-stress runs. `tests/native/express-smoke.test.ts`
+      now compiles and runs the fixture's own unchanged smoke program in compiled and
+      interpreted modes, normal and GC-stress, with UBSan coverage. Its harness-only
+      `node:assert/strict` dependency has the `equal`, `deepEqual`, and `match` subset
+      used by this fixture; that module is not yet a general Node assertion surface.
 - [ ] **Benchmark native Express serving.** After the behavior baseline is green,
       add a representative unmodified-Express request mix to the consolidated
       `npm run bench` HTTP tracker. Record binary-size, throughput, and latency
@@ -114,7 +119,8 @@ to the same built-in where the tree uses both forms.
 
 The Node-only smoke runner additionally imports `node:assert/strict` and
 `node:http`. These are harness requirements, not additional Express production
-dependencies.
+dependencies. Only the three strict assertion methods exercised by this runner are
+currently implemented.
 
 ## Baseline workflow
 
