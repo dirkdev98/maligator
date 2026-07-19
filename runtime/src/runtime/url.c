@@ -79,6 +79,15 @@ static MalUrlObject *url_object_new(MalHeap *heap, MalObject *prototype, void *h
 
 static void url_create_search_params(MalVm *vm, MalUrlObject *url);
 
+static MalValue url_create(MalVm *vm, MalObject *prototype, void *handle) {
+    MalValue result = mal_value_from_url_object(url_object_new(&vm->heap, prototype, handle));
+    MalRootSpan rs;
+    mal_gc_root(&rs, &result, 1);
+    url_create_search_params(vm, mal_value_to_url_object(result));
+    mal_gc_unroot(&rs);
+    return result;
+}
+
 static void url_trace(MalHeapHeader *cell) {
     MalUrlObject *u = (MalUrlObject *) cell;
     if (u->search_params != nullptr) {
@@ -94,8 +103,9 @@ static void url_finalize(MalHeapHeader *cell) {
     }
 }
 
-/* Parse (input, base?) from JS args into an ada handle, or null with a pending
- * TypeError. */
+/* Convert (input, base?) in Web IDL order and parse into an ada handle. The FFI's
+ * lossy UTF-16 decode completes USVString conversion. Null means either a pending
+ * conversion throw or a parse failure; callers distinguish via vm->completion. */
 static void *url_parse_args(MalVm *vm, const MalValue *args, i32 argc) {
     MalString *input;
     if (argc < 1 || !mal_vm_to_string(vm, args[0], &input)) {
@@ -131,12 +141,22 @@ static MalValue url_constructor(
         return mal_value_new_undefined();
     }
     MalObject *proto = url_instance_proto(vm, nt, MAL_INTRINSIC_URL_PROTOTYPE);
-    MalValue result = mal_value_from_url_object(url_object_new(&vm->heap, proto, handle));
-    MalRootSpan rs;
-    mal_gc_root(&rs, &result, 1);
-    url_create_search_params(vm, mal_value_to_url_object(result));
-    mal_gc_unroot(&rs);
-    return result;
+    return url_create(vm, proto, handle);
+}
+
+static MalValue url_parse(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    void *handle = url_parse_args(vm, args, argc);
+    if (handle == nullptr) {
+        return vm->completion.kind == MAL_COMPLETION_THROW
+            ? mal_value_new_undefined()
+            : mal_value_new_null();
+    }
+    return url_create(vm,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_URL_PROTOTYPE]), handle);
 }
 
 static MalValue url_can_parse(
@@ -1332,6 +1352,7 @@ void mal_url_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_method_n(vm, url_proto, (const byte *) "toString", 0, url_to_string);
     mal_intrinsic_define_method_n(vm, url_proto, (const byte *) "toJSON", 0, url_to_string);
     mal_intrinsic_define_method_n(vm, (MalObject *) url_ctor, (const byte *) "canParse", 1, url_can_parse);
+    mal_intrinsic_define_method_n(vm, (MalObject *) url_ctor, (const byte *) "parse", 1, url_parse);
     mal_intrinsic_define_data(vm, global_this, (const byte *) "URL",
         vm->intrinsics[MAL_INTRINSIC_URL_CONSTRUCTOR],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);

@@ -300,6 +300,9 @@ function assert_false(actual, message) { if (actual !== false) __wpt_fail(messag
 function assert_equals(actual, expected, message) {
   if (!Object.is(actual, expected)) __wpt_fail((message ? message + ": " : "") + "expected " + String(expected) + " but got " + String(actual));
 }
+function assert_not_equals(actual, expected, message) {
+  if (Object.is(actual, expected)) __wpt_fail((message ? message + ": " : "") + "expected values to differ");
+}
 function assert_array_equals(actual, expected, message) {
   if (actual.length !== expected.length) __wpt_fail((message ? message + ": " : "") + "array lengths differ");
   for (var i = 0; i < expected.length; i++) assert_equals(actual[i], expected[i], message || "array item " + i);

@@ -69,6 +69,11 @@
 			"gcStress": true
 		},
 		{
+			"path": "url/url-statics-parse.any.js",
+			"sha256": "a0d32f83ad40a43682e3ffd6bf6f766932d84109785b428641f42b5ca3ccbf49",
+			"gcStress": true
+		},
+		{
 			"path": "url/url-tojson.any.js",
 			"sha256": "dc5707460963a2cc4dd2e77d48b369ac174515b8fd2f76083f0ade9328b5551a",
 			"gcStress": true

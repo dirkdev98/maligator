@@ -197,6 +197,24 @@ describe("curated WPT harness", () => {
 		expect(first).toContain("WPT_RESULT");
 	});
 
+	it("supports assert_not_equals", () => {
+		const program = createWptProgram(
+			"url/assert-not-equals.any.js",
+			String.raw`
+test(function() { assert_not_equals({}, {}); }, "different");
+test(function() { assert_not_equals(1, 1); }, "same");`,
+		);
+		const stdout = execFileSync("node", ["--input-type=commonjs", "--eval", program], {
+			encoding: "utf8",
+			timeout: 2_000,
+		});
+		const parsed = parseWptOutput(stdout, "url/assert-not-equals.any.js");
+		expect(parsed.subtests.map(({ subtest, status }) => [subtest, status])).toEqual([
+			["different", "PASS"],
+			["same", "FAIL"],
+		]);
+	});
+
 	it("runs promise tests sequentially and times out each active subtest with a timer", () => {
 		const program = createWptProgram(
 			"url/promises.any.js",

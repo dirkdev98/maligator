@@ -67,6 +67,92 @@ check("canParse valid", URL.canParse("https://example.com") === true);
 check("canParse invalid", URL.canParse("http://") === false);
 check("canParse with base", URL.canParse("/p", "https://example.com") === true);
 
+// --- URL.parse ---
+eq("parse length", URL.parse.length, 1);
+const parsed = URL.parse.call({}, "/p?q=1", "https://example.com/base");
+check("parse generic branded result", parsed instanceof URL);
+eq("parse href", parsed.href, "https://example.com/p?q=1");
+check("parse fresh result", parsed !== URL.parse(parsed.href));
+check("parse associated searchParams", parsed.searchParams === parsed.searchParams);
+parsed.searchParams.set("q", "updated");
+eq("parse searchParams writes through", parsed.search, "?q=updated");
+let parseMissingThrew = false;
+try {
+	URL.parse();
+} catch (error) {
+	parseMissingThrew = error instanceof TypeError;
+}
+check("parse missing URL throws TypeError", parseMissingThrew);
+check("parse invalid URL returns null", URL.parse("http://") === null);
+check(
+	"parse invalid base returns null",
+	URL.parse("https://example.com", "not a base") === null,
+);
+eq(
+	"parse explicit undefined base omitted",
+	URL.parse("https://example.com/a", undefined).href,
+	"https://example.com/a",
+);
+eq(
+	"parse USVString input",
+	URL.parse("https://example.com/\ud800").pathname,
+	"/%EF%BF%BD",
+);
+
+let parseConversionOrder = "";
+const parseInput = {
+	toString() {
+		parseConversionOrder += "u";
+		return "/ordered";
+	},
+};
+const parseBase = {
+	toString() {
+		parseConversionOrder += "b";
+		return "https://example.com/";
+	},
+};
+eq("parse conversion result", URL.parse(parseInput, parseBase).pathname, "/ordered");
+eq("parse conversion order", parseConversionOrder, "ub");
+
+const parseInputError = {};
+let parseBaseConverted = false;
+let parseInputThrow;
+try {
+	URL.parse(
+		{
+			toString() {
+				throw parseInputError;
+			},
+		},
+		{
+			toString() {
+				parseBaseConverted = true;
+				return "https://example.com/";
+			},
+		},
+	);
+} catch (error) {
+	parseInputThrow = error;
+}
+check(
+	"parse input conversion throw and short-circuit",
+	parseInputThrow === parseInputError && !parseBaseConverted,
+);
+
+const parseBaseError = {};
+let parseBaseThrow;
+try {
+	URL.parse("/path", {
+		toString() {
+			throw parseBaseError;
+		},
+	});
+} catch (error) {
+	parseBaseThrow = error;
+}
+check("parse base conversion throw", parseBaseThrow === parseBaseError);
+
 // --- setters reflect in href ---
 const s = new URL("https://example.com/a");
 s.protocol = "http:";
