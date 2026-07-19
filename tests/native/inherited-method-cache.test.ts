@@ -16,6 +16,8 @@ describe("inherited built-in method and native call caches", () => {
 	let interpreted: string;
 	let monkeyPatch: string;
 	let accessor: string;
+	let ordinaryCompiled: string;
+	let ordinaryInterpreted: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -40,6 +42,18 @@ describe("inherited built-in method and native call caches", () => {
 			fixture: "tests/local/inherited-method-cache-accessor.js",
 			name: "inherited-method-cache-accessor",
 			compiled: true,
+			outDir,
+		});
+		ordinaryCompiled = buildNativeBinary({
+			fixture: "tests/local/inherited-ordinary-cache.js",
+			name: "inherited-ordinary-cache",
+			compiled: true,
+			outDir,
+		});
+		ordinaryInterpreted = buildNativeBinary({
+			fixture: "tests/local/inherited-ordinary-cache.js",
+			name: "inherited-ordinary-cache-ni",
+			compiled: false,
 			outDir,
 		});
 	});
@@ -75,4 +89,16 @@ describe("inherited built-in method and native call caches", () => {
 	it("invalidates on Date.prototype accessor replacement", () => {
 		assertExactLines(runToStdout(accessor), ["inherited-method-cache-accessor PASS"]);
 	});
+
+	it.each([
+		["compiled", () => ordinaryCompiled],
+		["interpreted", () => ordinaryInterpreted],
+	])(
+		"preserves ordinary user prototype mutation semantics in %s mode",
+		(_name, binary) => {
+			assertExactLines(runToStdout(binary(), { env: { MAL_HOST_GC: "1" } }), [
+				"inherited-ordinary-cache PASS",
+			]);
+		},
+	);
 });
