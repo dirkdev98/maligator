@@ -75,7 +75,10 @@ stated acceptance point without patching Express or anything in `node_modules`.
       connection errors. Its URL/options overloads apply Node's option precedence,
       and `http.get` returns the request after ending it exactly once. The remaining
       slices are streaming/backpressure and richer socket, header, status,
-      cancellation, DNS/address-family, and connection-reuse behavior.
+      DNS/address-family, and connection-reuse behavior. `ClientRequest.destroy()`
+      and `abort()` now cancel the native operation, suppress a queued response, and
+      publish idempotent Node-compatible abort/error/close terminal events under GC
+      stress and UBSan.
 - [x] **Wave 4: pass the Express behavior baseline.** Run the existing smoke
       runner under Maligator and match real Node for route dispatch, decoded
       route parameters, repeated query values, ordered application/route/async
@@ -107,8 +110,11 @@ stated acceptance point without patching Express or anything in `node_modules`.
       form parsing at 6,943 req/s (0.16x). Inlining the common already-flat string
       access paths reduced an alternating 15-run string workload from 254.7-255.0ms to
       220.6-225.4ms, while three repeated HTTP runs left Express throughput at its
-      baseline. Next target measured call-dispatch, property-lookup, and object-shaping
-      costs rather than endpoint shortcuts.
+      baseline. A conservative global-epoch inherited-value cache for ordinary user
+      prototype chains was rejected: routes improved 3.7%, JSON/form 1.7%, and bare
+      HTTP 0.4%, below the 5% gate, while the binary grew roughly 60KB. A future
+      property-cache attempt needs per-chain validity cells; other targets remain
+      measured call-dispatch and object-shaping costs rather than endpoint shortcuts.
 
 ## Likely built-ins
 
