@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "http_client.h"
+
 static bool mal_host_wake(void *data) {
     return mal_reactor_wake(data);
 }
@@ -102,6 +104,7 @@ usize mal_host_drain_posted(MalHost *host) {
 
 void mal_host_shutdown(MalHost *host) {
     if (host != nullptr) {
+        mal_http_client_shutdown(host);
         mal_dns_shutdown(&host->dns);
         (void) mal_host_posted_shutdown(&host->posted_tasks, &host->tasks);
         mal_dns_reap_completed(&host->dns);

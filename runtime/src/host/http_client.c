@@ -28,6 +28,7 @@ typedef struct MalHttpClient {
     usize response_capacity;
     bool connecting;
     bool head_request;
+    struct MalHttpClient *next;
 } MalHttpClient;
 
 static char *client_copy(const char *bytes, usize length) {
@@ -52,6 +53,9 @@ void mal_http_client_result_free(void *data) {
 
 static void client_destroy(MalHttpClient *client) {
     if (client == nullptr) return;
+    MalHttpClient **link = &client->host->http_clients;
+    while (*link != nullptr && *link != client) link = &(*link)->next;
+    if (*link == client) *link = client->next;
     (void) mal_reactor_cancel_op(&client->host->reactor, &client->read_op);
     (void) mal_reactor_cancel_op(&client->host->reactor, &client->write_op);
     mal_net_close(client->fd);
@@ -379,6 +383,8 @@ bool mal_http_client_start(
         || !mal_host_operation_activate(&host->tasks, *operation)) {
         goto fail_client;
     }
+    client->next = host->http_clients;
+    host->http_clients = client;
     return true;
 
 fail_client:
@@ -387,4 +393,27 @@ fail_client:
 fail:
     (void) mal_host_operation_abort_start(&host->tasks, *operation);
     return false;
+}
+
+bool mal_http_client_cancel(MalHost *host, MalHostHandle operation) {
+    if (host == nullptr || operation == 0) return false;
+    for (MalHttpClient *client = host->http_clients;
+         client != nullptr; client = client->next) {
+        if (client->operation != operation) continue;
+        if (!mal_host_operation_cancel(&host->tasks, operation)) return false;
+        client_destroy(client);
+        return true;
+    }
+    /* Completion may already have closed the transport and queued its terminal
+     * task. Cancellation remains valid so the runtime can suppress that result. */
+    return mal_host_operation_cancel(&host->tasks, operation);
+}
+
+void mal_http_client_shutdown(MalHost *host) {
+    if (host == nullptr) return;
+    while (host->http_clients != nullptr) {
+        MalHttpClient *client = host->http_clients;
+        (void) mal_host_operation_cancel(&host->tasks, client->operation);
+        client_destroy(client);
+    }
 }

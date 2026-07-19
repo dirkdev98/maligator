@@ -33,4 +33,9 @@ bool mal_http_client_start(
     bool head_request,
     MalHostHandle *operation);
 
+/* Cancel by stable host operation identity. A matching active transport is
+ * closed synchronously; its cancelled terminal task remains runtime-owned. */
+bool mal_http_client_cancel(MalHost *host, MalHostHandle operation);
+void mal_http_client_shutdown(MalHost *host);
+
 void mal_http_client_result_free(void *data);

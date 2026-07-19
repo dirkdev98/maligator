@@ -22,6 +22,7 @@ typedef struct MalHost {
     MalHostTasks tasks;
     MalHostPostedTasks posted_tasks;
     MalDns dns;
+    struct MalHttpClient *http_clients;
     struct MalHostTimer *timers;
     i64 timer_next_id;
 } MalHost;

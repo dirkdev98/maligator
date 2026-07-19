@@ -108,7 +108,11 @@ typedef struct MalNodeHttpClientState {
     byte *body;
     usize body_len;
     usize body_capacity;
+    MalValue destroy_error;
     bool ended;
+    bool cancelled;
+    bool aborted;
+    bool terminal_pending;
     struct MalNodeHttpClientState *next;
 } MalNodeHttpClientState;
 
@@ -1000,6 +1004,9 @@ static MalValue http_client_write(
     (void) new_target;
     (void) callee;
     MalNodeHttpClientState *state = http_client_state(receiver);
+    if (state != nullptr && state->cancelled) {
+        return mal_value_new_boolean(false);
+    }
     if (state == nullptr || state->ended) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "write after end");
         return mal_value_new_boolean(false);
@@ -1011,6 +1018,50 @@ static MalValue http_client_write(
         mal_vm_call_value(vm, args[argc - 1], mal_value_new_undefined(), nullptr, 0);
     }
     return mal_value_new_boolean(true);
+}
+
+static void http_client_cancel(
+    MalVm *vm, MalNodeHttpClientState *state, bool aborted, MalValue error) {
+    if (state->cancelled) return;
+    state->cancelled = true;
+    state->aborted = aborted;
+    state->destroy_error = error;
+    http_define(vm, state->request, "destroyed", mal_value_new_boolean(true));
+    http_define(vm, state->request, "aborted", mal_value_new_boolean(aborted));
+    http_define(vm, state->request, "writable", mal_value_new_boolean(false));
+    if (state->operation == 0) {
+        state->terminal_pending = true;
+    } else if (!mal_http_client_cancel(mal_host(vm), state->operation)) {
+        state->operation = 0;
+        state->terminal_pending = true;
+    }
+}
+
+static MalValue http_client_destroy(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalNodeHttpClientState *state = http_client_state(receiver);
+    if (state == nullptr) return receiver;
+    MalValue error = argc > 0 ? args[0] : mal_value_new_undefined();
+    http_client_cancel(vm, state, false, error);
+    return receiver;
+}
+
+static MalValue http_client_abort(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    MalNodeHttpClientState *state = http_client_state(receiver);
+    if (state != nullptr) {
+        http_client_cancel(
+            vm, state, true, mal_value_new_undefined());
+    }
+    return mal_value_new_undefined();
 }
 
 static bool http_client_start_request(MalVm *vm, MalNodeHttpClientState *state) {
@@ -1061,6 +1112,9 @@ static MalValue http_client_end(
     (void) new_target;
     (void) callee;
     MalNodeHttpClientState *state = http_client_state(receiver);
+    if (state != nullptr && state->cancelled) {
+        return receiver;
+    }
     if (state == nullptr || state->ended) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "write after end");
         return mal_value_new_undefined();
@@ -1074,6 +1128,8 @@ static MalValue http_client_end(
     state->ended = true;
     http_define(vm, receiver, "finished", mal_value_new_boolean(true));
     http_define(vm, receiver, "writableEnded", mal_value_new_boolean(true));
+    http_define(vm, receiver, "writableFinished", mal_value_new_boolean(true));
+    http_define(vm, receiver, "writable", mal_value_new_boolean(false));
     if (argc > 0 && mal_value_is_callable(args[argc - 1])) {
         mal_vm_call_value(
             vm, args[argc - 1], mal_value_new_undefined(), nullptr, 0);
@@ -1182,7 +1238,10 @@ static void http_scan_roots(MalVm *vm, void *data) {
     }
     for (MalNodeHttpClientState *state = http_clients; state != nullptr;
          state = state->next) {
-        if (state->vm == vm) mal_gc_mark_value(state->request);
+        if (state->vm == vm) {
+            mal_gc_mark_value(state->request);
+            mal_gc_mark_value(state->destroy_error);
+        }
     }
 }
 
@@ -1441,6 +1500,34 @@ static void http_client_dispatch(
     mal_realm_switch(vm, state->realm);
 #endif
     MalHttpClientResult *result = task->data;
+    if (state->cancelled) {
+        if (state->aborted) http_emit(vm, state->request, "abort");
+        MalValue error = state->destroy_error;
+        MalRootSpan error_root;
+        bool error_rooted = false;
+        if (vm->completion.kind != MAL_COMPLETION_THROW
+            && mal_value_is_nil(error) && state->ended) {
+            error = http_client_error(vm, "socket hang up");
+            mal_gc_root(&error_root, &error, 1);
+            error_rooted = true;
+            http_define(vm, error, "code",
+                mal_value_from_string(
+                    mal_intrinsic_ascii(vm, (const byte *) "ECONNRESET")));
+        }
+        if (vm->completion.kind != MAL_COMPLETION_THROW
+            && !mal_value_is_nil(error)) {
+            http_call_method(vm, state->request, "emit", (MalValue[]) {
+                mal_value_from_string(
+                    mal_intrinsic_ascii(vm, (const byte *) "error")),
+                error,
+            }, 2);
+        }
+        if (error_rooted) mal_gc_unroot(&error_root);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            http_emit(vm, state->request, "close");
+        }
+        goto done;
+    }
     if (task->result != MAL_HOST_TERMINAL_OK || result == nullptr) {
         MalValue error = http_client_error(
             vm, result == nullptr ? nullptr : result->error);
@@ -1452,6 +1539,12 @@ static void http_client_dispatch(
             error,
         }, 2);
         mal_gc_unroot(&root);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            http_define(
+                vm, state->request, "destroyed", mal_value_new_boolean(true));
+            http_define(vm, state->request, "writable", mal_value_new_boolean(false));
+            http_emit(vm, state->request, "close");
+        }
         goto done;
     }
     MalCompletion response_completion = mal_vm_construct_value(
@@ -1506,6 +1599,11 @@ static void http_client_dispatch(
         }
     }
     mal_gc_unroot(&root);
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        http_define(vm, state->request, "destroyed", mal_value_new_boolean(true));
+        http_define(vm, state->request, "writable", mal_value_new_boolean(false));
+        http_emit(vm, state->request, "close");
+    }
 
 done:
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -1521,7 +1619,28 @@ done:
 
 static bool http_client_drain(MalVm *vm) {
     MalHost *host = mal_host(vm);
-    if (host == nullptr || mal_host_tasks_pending(&host->tasks) == 0) return false;
+    if (host == nullptr) return false;
+    MalNodeHttpClientState **pending_link = &http_clients;
+    while (*pending_link != nullptr) {
+        MalNodeHttpClientState *state = *pending_link;
+        if (state->vm != vm || !state->terminal_pending) {
+            pending_link = &state->next;
+            continue;
+        }
+        MalValue roots[] = {state->request, state->destroy_error};
+        MalRootSpan root;
+        mal_gc_root(&root, roots, countof(roots));
+        *pending_link = state->next;
+        MalHostTask task = {
+            .kind = MAL_HOST_TASK_TERMINAL,
+            .result = MAL_HOST_TERMINAL_CANCELLED,
+        };
+        http_client_dispatch(vm, state, &task);
+        http_client_free(state);
+        mal_gc_unroot(&root);
+        return true;
+    }
+    if (mal_host_tasks_pending(&host->tasks) == 0) return false;
     MalHostTask task;
     if (!mal_host_peek_task(&host->tasks, &task)) return false;
     MalNodeHttpClientState **link = &http_clients;
@@ -1532,9 +1651,9 @@ static bool http_client_drain(MalVm *vm) {
     if (*link == nullptr || task.kind != MAL_HOST_TASK_TERMINAL
         || !mal_host_next_task(&host->tasks, &task)) return false;
     MalNodeHttpClientState *state = *link;
-    MalValue request = state->request;
+    MalValue roots[] = {state->request, state->destroy_error};
     MalRootSpan root;
-    mal_gc_root(&root, &request, 1);
+    mal_gc_root(&root, roots, countof(roots));
     *link = state->next;
     http_client_dispatch(vm, state, &task);
     http_client_free(state);
@@ -1811,6 +1930,9 @@ static MalValue http_client_request_constructor(
         http_define(vm, result, "finished", mal_value_new_boolean(false));
         http_define(vm, result, "writable", mal_value_new_boolean(true));
         http_define(vm, result, "writableEnded", mal_value_new_boolean(false));
+        http_define(vm, result, "writableFinished", mal_value_new_boolean(false));
+        http_define(vm, result, "destroyed", mal_value_new_boolean(false));
+        http_define(vm, result, "aborted", mal_value_new_boolean(false));
     }
     return result;
 }
@@ -2005,6 +2127,7 @@ static MalValue http_request(
         goto fail;
     }
     state->vm = vm;
+    state->destroy_error = mal_value_new_undefined();
 #if MAL_REALMS
     state->realm = vm->current_realm;
 #endif
@@ -2310,6 +2433,12 @@ void mal_host_install_node_http(
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[9]), (const byte *) "end", 3,
         http_client_end);
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(roots[9]), (const byte *) "destroy", 1,
+        http_client_destroy);
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(roots[9]), (const byte *) "abort", 0,
+        http_client_abort);
     roots[10] = http_constructor(vm, "ClientRequest", 3,
                                   http_client_request_constructor, roots[9]);
     mal_object_set_prototype(mal_value_to_object(roots[10]), mal_value_to_object(
