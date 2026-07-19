@@ -94,6 +94,9 @@ stated acceptance point without patching Express or anything in `node_modules`.
       `npm run bench` HTTP tracker. Record binary-size, throughput, and latency
       baselines before optimizing the buffered adapter or replacing it with the
       streaming transport, so compatibility work cannot hide performance regressions.
+      The tracker now measures a six-route mix plus JSON and URL-encoded POSTs against
+      Node, with compiled binary size, request throughput, and p99 latency. Recording
+      its first clean committed baseline entry remains.
 
 ## Likely built-ins
 
