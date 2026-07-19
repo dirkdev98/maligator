@@ -6,7 +6,7 @@ export default defineConfig(
 		disableImportOrdering: true,
 	},
 	{
-		ignores: ["tests/local", "bench"],
+		ignores: ["tests/local", "tests/wpt/fixtures", "bench"],
 	},
 	{
 		// CLI/dev scripts print to stdout/stderr by design — console is their output.

@@ -1,0 +1,27 @@
+{
+	"schemaVersion": 1,
+	"repository": "https://github.com/web-platform-tests/wpt.git",
+	"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd",
+	"tests": [
+		{
+			"path": "url/urlsearchparams-append.any.js",
+			"sha256": "b3fdef26237562dee586c7768af5b484b3ff9d372595d8a8e59b7ebd1099c19b",
+			"gcStress": true
+		},
+		{
+			"path": "url/urlsearchparams-get.any.js",
+			"sha256": "0bfd999026f963ffc3f021cf509d1e8f3300cddd52c21ebffcd392d8d43bca34",
+			"gcStress": true
+		},
+		{
+			"path": "url/urlsearchparams-set.any.js",
+			"sha256": "41771dec1616c4715c33a2a77b3125483c4bce24998e344222e9b8d1f49d68de",
+			"gcStress": true
+		},
+		{
+			"path": "encoding/api-surrogates-utf8.any.js",
+			"sha256": "66c441e9f6718f6e38c8bffeb52e25de785e8c4e1bc76d57b3cf1da98730b873",
+			"gcStress": true
+		}
+	]
+}

@@ -3,7 +3,8 @@
 	"ignorePatterns": [
 		"scripts/test262.json",
 		"bench/baseline.json",
-		"runtime/rust/target"
+		"runtime/rust/target",
+		"tests/wpt/fixtures"
 	],
 	"useTabs": true,
 	"printWidth": 90,

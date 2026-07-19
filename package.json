@@ -37,6 +37,7 @@
 		"test:native": "vitest run --project native",
 		"test:sanitize": "node ./scripts/test-sanitize.ts",
 		"test:unit": "vitest --project unit",
+		"test:wpt": "node ./scripts/wpt.ts",
 		"type-check": "tsc",
 		"update": "npx npm-check --update --save-exact"
 	},
