@@ -25,6 +25,17 @@ This is a source inventory, not a conformance claim. ECMA-262 correctness remain
 owned by [`test262.md`](test262.md). Workers are not required by ECMA-429 and are
 out of scope until Maligator defines a worker global.
 
+### Active server-runtime profile
+
+The active implementation profile prioritizes APIs used directly by server
+applications: Fetch objects and outbound fetch, Streams, URL, encoding, Headers,
+Blob/File/FormData body handling, compression, crypto, timers, performance, base64,
+structured clone, abort, and exception reporting. WebAssembly, worker/message-port
+APIs, browser-profile globals (`navigator` and `self`), browser event subclasses,
+and browser global event-handler attributes remain inventoried but are deferred and
+do not block this implementation phase. They must not be described as conforming
+until restored to scope and completed.
+
 ## Capability matrix
 
 | ECMA-429 area                                        | Status | Current capability and concrete evidence                                                                                                                                                                                                                                                                                                                                       | Required closure                                                                                                                                                                                                                                           |
@@ -45,7 +56,7 @@ out of scope until Maligator defines a worker global.
 | `TextEncoderStream`, `TextDecoderStream`             |   M    | No runtime definitions were found.                                                                                                                                                                                                                                                                                                                                             | Build as TransformStream adapters after core streams and encoding state are correct.                                                                                                                                                                       |
 | `CompressionStream`, `DecompressionStream`           |   M    | No runtime definitions or compression backend were found.                                                                                                                                                                                                                                                                                                                      | `deflate`, `deflate-raw`, and `gzip` transforms, chunk/error/flush behavior, and cancellation-safe native state.                                                                                                                                           |
 | `URL`                                                |   P    | Ada-backed parsing, components, setters, `canParse`, and stringification are in `runtime/src/runtime/url.c:67-233`; covered by `tests/native/url.test.ts`.                                                                                                                                                                                                                     | Complete Web IDL behavior and URL WPT corpus, add `URL.parse` if required by the tracked URL Standard, and connect object URLs when Blob lands.                                                                                                            |
-| `URLSearchParams`                                    |   P    | Parsing, mutation, sort, serialization, optional-value `delete`/`has`, and snapshot iterators are in `runtime/src/runtime/url.c`, with focused Web IDL boundary coverage.                                                                                                                                                                                                      | Iterable/record coercion, live iterators, and stable two-way association with `URL.search`; current `url.searchParams` is an unlinked snapshot.                                                                                                            |
+| `URLSearchParams`                                    |   P    | Parsing, mutation, sort, serialization, optional-value `delete`/`has`, and sequence/record initialization are in `runtime/src/runtime/url.c`. Every URL eagerly owns a stable `searchParams` object; query assignment and params mutation synchronize in both directions with traced GC ownership. Snapshot iterators and focused Web IDL boundary coverage remain.            | Replace snapshot iteration with a dedicated branded live iterator and close remaining Web IDL descriptors/coercions against the URL WPT corpus.                                                                                                            |
 | `URLPattern`                                         |   M    | No runtime definition was found.                                                                                                                                                                                                                                                                                                                                               | Implement the URL Pattern Standard after URL behavior is WPT-backed.                                                                                                                                                                                       |
 | `Crypto`, global `crypto`                            |   P    | A plain object exposing `getRandomValues` and `randomUUID` uses host entropy in `runtime/src/runtime/web_globals.c:502-564,796-803`; covered by `tests/local/web_globals.js:102-130`.                                                                                                                                                                                          | Real `Crypto` interface/branding, exact WebCrypto exceptions and integer-array rules, plus `crypto.subtle`.                                                                                                                                                |
 | `CryptoKey`, `SubtleCrypto`                          |   M    | No web crypto key or algorithm implementation was found. `node:crypto` is a separate optional host module.                                                                                                                                                                                                                                                                     | Key lifecycle and the ECMA-429 WebCrypto Level 2 algorithm surface, with constant-time audited/native primitives.                                                                                                                                          |
@@ -93,9 +104,11 @@ is exercised by `tests/native/fetch.test.ts`.
 - [x] Inventory every required interface/global with repository evidence.
 - [x] Define the initial curated WPT candidates and expected-failure policy in
       `tests/wpt/` without pretending that a WPT runner exists.
-- [ ] Before implementation work changes a status, add a real testharness adapter,
-      pin a WPT revision, record subtest-level results, and run native GC-stress
-      variants where the test does not depend on wall-clock precision.
+- [x] Add a real server-main testharness adapter, pin a WPT revision, record
+      subtest-level results with exact expected failures, and run native GC-stress
+      variants where the test does not depend on wall-clock precision. The first
+      executable slice runs 14 URLSearchParams/UTF-8 subtests from four byte-pinned
+      upstream files with no unexpected or stale results.
 
 Exit: no conformance claim; this document and the candidate manifests are the
 reviewed baseline.
@@ -146,10 +159,11 @@ normal, interpreter where applicable, GC-stress, sanitizer, and cancellation run
 
 ### W4: global and conformance closure
 
-- [ ] Complete Event subclasses, global handlers, navigator/self/reportError,
-      console, timers, performance, base64, and structured-clone residuals.
-- [ ] Implement the ECMA-429 WebAssembly API 2 and streaming integration, or keep
-      the product explicitly non-conforming until that independent effort completes.
+- [ ] Complete server-relevant exception reporting, `reportError`, console, timers,
+      performance, base64, and structured-clone residuals. Browser event subclasses,
+      global event-handler attributes, navigator/self, and messaging remain deferred.
+- [ ] Keep the product explicitly non-conforming while the deferred ECMA-429
+      WebAssembly API 2 surface remains unimplemented.
 - [ ] Expand from curated manifests to every applicable ECMA-429 WPT; classify only
       genuine server-global inapplicability, publish deviations, and remove all
       stale expected failures.

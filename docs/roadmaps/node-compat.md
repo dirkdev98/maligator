@@ -79,10 +79,16 @@ stated acceptance point without patching Express or anything in `node_modules`.
       URL-encoded request bodies, cookie serialization, redirects, custom 404
       handling, custom error middleware, ephemeral listen, and graceful close.
       Only at this point should the fixture become a Maligator test expected to
-      pass. A first unmodified-Express network checkpoint now passes route-parameter
-      and repeated-query decoding, ordered async middleware, JSON request bodies,
-      JSON responses, and custom 404 middleware when driven externally. The full
-      smoke runner and remaining form/cookie/redirect/error cases stay open.
+      pass. The externally driven unmodified-Express checkpoint now covers route
+      parameters, repeated query values, ordered async middleware, JSON and
+      URL-encoded bodies, cookies, redirects, async rejection forwarding, and custom
+      error middleware in normal and GC-stress runs. Running the fixture's own full
+      smoke runner remains blocked on the outbound `http.request` client path.
+- [ ] **Benchmark native Express serving.** After the behavior baseline is green,
+      add a representative unmodified-Express request mix to the consolidated
+      `npm run bench` HTTP tracker. Record binary-size, throughput, and latency
+      baselines before optimizing the buffered adapter or replacing it with the
+      streaming transport, so compatibility work cannot hide performance regressions.
 
 ## Likely built-ins
 
