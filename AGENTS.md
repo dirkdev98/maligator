@@ -59,3 +59,15 @@ Use https://tc39.es/ecma262/multipage/ when looking up parts of the spec.
 - Never use git worktrees.
 - When asked to commit, create unsigned local commits and do not push unless explicitly asked.
 - Work through clusters in phased semantic slices rather than stopping after the first passing case.
+
+## External Subagents
+
+- When the user asks for subagents, use the available external harness, either `opencode run` or `claude -p`, and give each invocation a 30-minute wall-clock limit.
+- On macOS, enforce the limit with Perl's alarm wrapper:
+  - `perl -e 'alarm shift; exec @ARGV' 1800 opencode run "<prompt>" --auto --session "<session-id>"`
+  - `perl -e 'alarm shift; exec @ARGV' 1800 claude -p "<prompt>"`
+- The installed OpenCode CLI accepts the prompt as a positional argument; do not use the unsupported `opencode run --prompt` form.
+- Give each subagent a complete, self-contained prompt with its scope, whether it may edit files, expected verification, and the exact result it should report.
+- Run independent subagents in parallel. Reuse an OpenCode session ID when continuing the same assignment rather than starting over.
+- Treat timeout exit status as an incomplete run, inspect the worktree and captured output, and either resume the session or finish the remaining work directly.
+- Read the complete captured output when terminal output is truncated, then review all subagent edits and run the relevant verification before considering the assignment complete.
