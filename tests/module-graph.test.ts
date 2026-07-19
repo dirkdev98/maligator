@@ -552,6 +552,25 @@ test("canonicalizes bare and node: HTTP specifiers to one host module", () => {
 	});
 });
 
+test("canonicalizes strict assert and exposes the smoke-runner assertions", () => {
+	write(
+		"assert-strict.cjs",
+		`module.exports = [require("assert/strict"), require("node:assert/strict")];\n`,
+	);
+	const graph = buildModuleGraph(path.join(root, "assert-strict.cjs"), {
+		buildConfig: nodeOn,
+	});
+	const dependencies = graph.modules.get(graph.entry)!.dependencies;
+	expect(dependencies.map((dependency) => dependency.resolvedPath)).toEqual([
+		"node:assert/strict",
+		"node:assert/strict",
+	]);
+	expect(graph.modules.get("node:assert/strict")?.host).toMatchObject({
+		named: ["equal", "deepEqual", "match"],
+		hasDefault: true,
+	});
+});
+
 test("rejects an unknown node:* built-in clearly even when surface.node is on", () => {
 	write("node-unknown.mjs", `import "node:https";\n`);
 	expect(() =>

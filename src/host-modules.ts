@@ -153,6 +153,13 @@ const BUFFER: HostModuleSpec = {
 	installer: BUFFER_INSTALLER_SYMBOL,
 };
 
+const ASSERT_STRICT: HostModuleSpec = {
+	id: "node:assert/strict",
+	named: ["equal", "deepEqual", "match"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:assert/strict"),
+};
+
 const ASYNC_HOOKS: HostModuleSpec = {
 	id: "node:async_hooks",
 	named: ["AsyncResource"],
@@ -235,6 +242,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		TTY,
 		UTIL,
 		BUFFER,
+		ASSERT_STRICT,
 		ASYNC_HOOKS,
 		STREAM,
 		HTTP,

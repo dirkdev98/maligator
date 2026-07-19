@@ -283,6 +283,8 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR,
     MAL_INTRINSIC_NODE_BUFFER_PROTOTYPE,
     MAL_INTRINSIC_NODE_BUFFER_MODULE,
+    /* Per-realm node:assert/strict CommonJS/default export object. */
+    MAL_INTRINSIC_NODE_ASSERT_STRICT_MODULE,
     /* Per-realm Node stream constructor/prototype graph, populated lazily. */
     MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR,
     MAL_INTRINSIC_NODE_STREAM_PROTOTYPE,
