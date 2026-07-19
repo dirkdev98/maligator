@@ -184,17 +184,13 @@ associated.search = "";
 eq("url-empty-search clears params", associatedParams.toString(), "");
 eq("url-empty-search removes query", associated.href, "https://other.example/next#tail");
 
-// Iterators remain snapshots until a dedicated branded live iterator is added.
-const snapshot = new URLSearchParams("a=1&b=2");
-const snapshotEntries = snapshot.entries();
-snapshot.append("c", "3");
-eq("usp-snapshot-first", snapshotEntries.next().value.join("="), "a=1");
-eq("usp-snapshot-existing", snapshotEntries.next().value.join("="), "b=2");
-check("usp-snapshot-excludes-appended", snapshotEntries.next().done);
-
-const snapshotKeys = snapshot.keys();
-snapshot.delete("a");
-eq("usp-snapshot-keys before mutation", snapshotKeys.next().value, "a");
+const live = new URLSearchParams("a=1&b=2");
+const liveEntries = live.entries();
+live.append("c", "3");
+eq("usp-live-first", liveEntries.next().value.join("="), "a=1");
+live.delete("b");
+eq("usp-live-observes mutation", liveEntries.next().value.join("="), "c=3");
+check("usp-live-done", liveEntries.next().done);
 
 // Keep only the params object reachable while stress GC runs through allocations;
 // its traced back-reference must retain the URL handle used for write-back.

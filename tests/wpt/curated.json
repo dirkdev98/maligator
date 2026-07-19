@@ -74,6 +74,11 @@
 			"gcStress": true
 		},
 		{
+			"path": "url/urlsearchparams-foreach.any.js",
+			"sha256": "93e1c9dc0b32d13cdf6de9a100ab9c92a197ac361d1a8d6f164d562b433a4b8d",
+			"gcStress": true
+		},
+		{
 			"path": "url/urlsearchparams-get.any.js",
 			"sha256": "0bfd999026f963ffc3f021cf509d1e8f3300cddd52c21ebffcd392d8d43bca34",
 			"gcStress": true

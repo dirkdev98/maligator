@@ -17,6 +17,12 @@
 
 typedef struct MalUrlSearchParamsObject MalUrlSearchParamsObject;
 
+typedef enum MalUrlSearchParamsIteratorKind : u8 {
+    MAL_URL_SEARCH_PARAMS_ITERATOR_ENTRIES,
+    MAL_URL_SEARCH_PARAMS_ITERATOR_KEYS,
+    MAL_URL_SEARCH_PARAMS_ITERATOR_VALUES,
+} MalUrlSearchParamsIteratorKind;
+
 typedef struct MalUrlObject {
     MalObject object;
     void *handle; // ada_url::Url, from mal_url_parse; freed by mal_url_free
@@ -35,6 +41,13 @@ struct MalUrlSearchParamsObject {
     i32 cap;
     MalUrlObject *url;
 };
+
+typedef struct MalUrlSearchParamsIteratorObject {
+    MalObject object;
+    MalUrlSearchParamsObject *params;
+    u64 index;
+    MalUrlSearchParamsIteratorKind kind;
+} MalUrlSearchParamsIteratorObject;
 
 typedef struct MalVm MalVm;
 

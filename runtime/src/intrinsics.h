@@ -252,6 +252,7 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_URL_PROTOTYPE,
     MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR,
     MAL_INTRINSIC_URL_SEARCH_PARAMS_PROTOTYPE,
+    MAL_INTRINSIC_URL_SEARCH_PARAMS_ITERATOR_PROTOTYPE,
     /*
      * DOMException / Event / EventTarget / AbortSignal / AbortController
      * (runtime/events.c).

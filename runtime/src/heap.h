@@ -265,6 +265,11 @@ typedef enum MalHeapType : u8 {
      */
     MAL_HEAP_URL_SEARCH_PARAMS_OBJECT,
     /**
+     * Iterator over a live URLSearchParams list. The iterator strongly retains
+     * its params object, which in turn retains an associated URL when present.
+     */
+    MAL_HEAP_URL_SEARCH_PARAMS_ITERATOR_OBJECT,
+    /**
      * DOM EventTarget / AbortSignal instances (MalEventTargetObject): an ordinary
      * object plus a native (type, callback, once) listener list. Traced + finalized
      * via registered hooks. AbortSignal state (aborted/reason) rides as own

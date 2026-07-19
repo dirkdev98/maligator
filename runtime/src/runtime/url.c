@@ -1171,49 +1171,71 @@ static MalValue usp_for_each(
     return mal_value_new_undefined();
 }
 
-/* Iterator kinds for entries/keys/values. */
-typedef enum { USP_ENTRIES, USP_KEYS, USP_VALUES } UspIterKind;
+static void usp_iterator_trace(MalHeapHeader *cell) {
+    MalUrlSearchParamsIteratorObject *iterator =
+        (MalUrlSearchParamsIteratorObject *) cell;
+    mal_gc_mark_value(mal_value_from_url_search_params_object(iterator->params));
+}
 
-/* Build a snapshot Array (of [k,v] pairs / keys / values) and return its iterator,
- * reusing the Array iterator rather than a bespoke iterator object. */
-static MalValue usp_make_iterator(MalVm *vm, MalUrlSearchParamsObject *p, UspIterKind kind) {
-    // Pre-size the snapshot (an index-set does not grow array length).
-    MalValue arr_val = mal_value_from_array_object(mal_intrinsic_new_array(vm, (u32) p->count));
-    MalRootSpan rs;
-    mal_gc_root(&rs, &arr_val, 1);
-    MalObject *arr = (MalObject *) mal_value_to_array_object(arr_val);
-    for (i32 i = 0; i < p->count; i++) {
-        if (kind == USP_ENTRIES) {
-            // The [key, value] sub-array is unreachable until stored in arr, so root
-            // it across its own element fills.
-            MalValue pair_val = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
-            MalRootSpan prs;
-            mal_gc_root(&prs, &pair_val, 1);
-            MalObject *pair = (MalObject *) mal_value_to_array_object(pair_val);
-            mal_object_set(pair, url_index_key(0), mal_value_from_string(p->pairs[i].name));
-            mal_object_set(pair, url_index_key(1), mal_value_from_string(p->pairs[i].value));
-            mal_object_set(arr, url_index_key((u32) i), pair_val);
-            mal_gc_unroot(&prs);
-            continue;
-        }
-        // keys/values: the string is reachable via `p` (rooted through `self`).
-        MalValue element = kind == USP_KEYS ? mal_value_from_string(p->pairs[i].name)
-                                            : mal_value_from_string(p->pairs[i].value);
-        mal_object_set(arr, url_index_key((u32) i), element);
+static MalValue usp_make_iterator(MalVm *vm, MalUrlSearchParamsObject *p,
+    MalUrlSearchParamsIteratorKind kind) {
+    MalUrlSearchParamsIteratorObject *iterator = mal_heap_alloc(&vm->heap,
+        sizeof(MalUrlSearchParamsIteratorObject),
+        MAL_HEAP_URL_SEARCH_PARAMS_ITERATOR_OBJECT);
+    mal_object_init(&vm->heap, &iterator->object,
+        MAL_HEAP_URL_SEARCH_PARAMS_ITERATOR_OBJECT,
+        mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_URL_SEARCH_PARAMS_ITERATOR_PROTOTYPE]));
+    iterator->params = p;
+    iterator->index = 0;
+    iterator->kind = kind;
+    mal_gc_card(&iterator->object.header,
+        mal_value_from_url_search_params_object(p));
+    return mal_value_from_heap((MalHeapHeader *) iterator);
+}
+
+static MalValue usp_iterator_next(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    if (!mal_value_is_heap_type(
+            self, MAL_HEAP_URL_SEARCH_PARAMS_ITERATOR_OBJECT)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Receiver is not a URLSearchParams iterator");
+        return mal_value_new_undefined();
     }
-    // Return arr[Symbol.iterator]().
-    MalValue iter_fn;
-    MalValue iterator = mal_value_new_undefined();
-    if (mal_vm_get_property(
-            vm, arr_val, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &iter_fn)
-        && mal_value_is_callable(iter_fn)) {
-        MalCompletion c = mal_vm_call_value(vm, iter_fn, arr_val, nullptr, 0);
-        if (c.kind != MAL_COMPLETION_THROW) {
-            iterator = c.value;
-        }
+
+    MalUrlSearchParamsIteratorObject *iterator =
+        (MalUrlSearchParamsIteratorObject *) mal_value_to_heap(self);
+    MalUrlSearchParamsObject *p = iterator->params;
+    if (iterator->index >= (u64) p->count) {
+        return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
     }
-    mal_gc_unroot(&rs);
-    return iterator;
+
+    u64 index = iterator->index++;
+    MalValue value;
+    if (iterator->kind == MAL_URL_SEARCH_PARAMS_ITERATOR_KEYS) {
+        value = mal_value_from_string(p->pairs[index].name);
+    } else if (iterator->kind == MAL_URL_SEARCH_PARAMS_ITERATOR_VALUES) {
+        value = mal_value_from_string(p->pairs[index].value);
+    } else {
+        value = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
+        MalRootSpan value_span;
+        mal_gc_root(&value_span, &value, 1);
+        MalObject *pair = (MalObject *) mal_value_to_array_object(value);
+        mal_object_set(pair, url_index_key(0),
+            mal_value_from_string(p->pairs[index].name));
+        mal_object_set(pair, url_index_key(1),
+            mal_value_from_string(p->pairs[index].value));
+        mal_gc_unroot(&value_span);
+    }
+    MalRootSpan value_span;
+    mal_gc_root(&value_span, &value, 1);
+    MalValue result = mal_vm_create_iter_result(vm, value, false);
+    mal_gc_unroot(&value_span);
+    return result;
 }
 
 #define USP_ITER(fn, kind)                                                                       \
@@ -1230,9 +1252,9 @@ static MalValue usp_make_iterator(MalVm *vm, MalUrlSearchParamsObject *p, UspIte
         return usp_make_iterator(vm, p, kind);                                                   \
     }
 
-USP_ITER(usp_entries, USP_ENTRIES)
-USP_ITER(usp_keys, USP_KEYS)
-USP_ITER(usp_values, USP_VALUES)
+USP_ITER(usp_entries, MAL_URL_SEARCH_PARAMS_ITERATOR_ENTRIES)
+USP_ITER(usp_keys, MAL_URL_SEARCH_PARAMS_ITERATOR_KEYS)
+USP_ITER(usp_values, MAL_URL_SEARCH_PARAMS_ITERATOR_VALUES)
 
 static MalValue usp_get_size(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
@@ -1314,6 +1336,29 @@ void mal_url_install(MalVm *vm, MalObject *global_this) {
         vm->intrinsics[MAL_INTRINSIC_URL_CONSTRUCTOR],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
+    // Web IDL iterator prototype shared by entries(), keys(), and values().
+    MalObject *usp_iterator_proto = mal_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE]));
+    vm->intrinsics[MAL_INTRINSIC_URL_SEARCH_PARAMS_ITERATOR_PROTOTYPE] =
+        mal_value_from_object(usp_iterator_proto);
+    MalValue usp_iterator_next_fn = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(&vm->heap, fn_proto,
+            mal_intrinsic_ascii(vm, (const byte *) "next"), 0,
+            usp_iterator_next));
+    MalPropertyDesc usp_iterator_next_desc = mal_intrinsic_data_desc(
+        usp_iterator_next_fn, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+            MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(usp_iterator_proto,
+        mal_intrinsic_string_key(vm, (const byte *) "next"),
+        &usp_iterator_next_desc);
+    MalPropertyDesc usp_iterator_tag_desc = mal_intrinsic_data_desc(
+        mal_value_from_string(mal_intrinsic_ascii(
+            vm, (const byte *) "URLSearchParams Iterator")),
+        MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(usp_iterator_proto,
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG),
+        &usp_iterator_tag_desc);
+
     // URLSearchParams constructor + prototype.
     MalObject *usp_proto = mal_object_new(&vm->heap, obj_proto);
     MalNativeFunctionObject *usp_ctor_obj = mal_native_function_object_new_arity(
@@ -1327,6 +1372,12 @@ void mal_url_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_data(vm, usp_proto, (const byte *) "constructor",
         vm->intrinsics[MAL_INTRINSIC_URL_SEARCH_PARAMS_CONSTRUCTOR],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    MalPropertyDesc usp_tag_desc = mal_intrinsic_data_desc(
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "URLSearchParams")),
+        MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(usp_proto,
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG),
+        &usp_tag_desc);
 
     mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "get", 1, usp_get);
     mal_intrinsic_define_method_n(vm, usp_proto, (const byte *) "getAll", 1, usp_get_all);
@@ -1363,6 +1414,8 @@ void mal_url_install(MalVm *vm, MalObject *global_this) {
     mal_gc_register_tracer(MAL_HEAP_URL_OBJECT, url_trace);
     mal_gc_register_finalizer(MAL_HEAP_URL_SEARCH_PARAMS_OBJECT, usp_finalize);
     mal_gc_register_tracer(MAL_HEAP_URL_SEARCH_PARAMS_OBJECT, usp_trace);
+    mal_gc_register_tracer(
+        MAL_HEAP_URL_SEARCH_PARAMS_ITERATOR_OBJECT, usp_iterator_trace);
 }
 
 #endif // MAL_WEB_PLATFORM
