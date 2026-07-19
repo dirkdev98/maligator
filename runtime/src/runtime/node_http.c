@@ -732,73 +732,76 @@ static bool http_client_ascii_string(
 }
 
 static bool http_client_parse_url(
-    MalVm *vm, MalValue value, char **host_out, u16 *port_out,
-    char **path_out, usize *path_len_out) {
+    MalVm *vm, MalValue value, char **protocol_out, char **host_out,
+    u16 *port_out, char **path_out, usize *path_len_out) {
     char *url;
     usize url_len;
     if (!http_client_ascii_string(vm, value, &url, &url_len)) return false;
-    static const char prefix[] = "http://";
-    if (url_len < sizeof(prefix) - 1
-        || memcmp(url, prefix, sizeof(prefix) - 1) != 0) {
-        free(url);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                           "Only http:// URLs are supported");
-        return false;
+    char *separator = strstr(url, "://");
+    if (separator == nullptr || separator == url) goto invalid_url;
+    usize protocol_len = (usize) (separator - url) + 1;
+    char *protocol = http_copy_bytes(url, protocol_len);
+    if (protocol == nullptr) goto allocation;
+    for (usize i = 0; i < protocol_len; i++) {
+        if (protocol[i] >= 'A' && protocol[i] <= 'Z') {
+            protocol[i] = (char) (protocol[i] + 0x20);
+        }
     }
-    char *authority = url + sizeof(prefix) - 1;
-    char *slash = strchr(authority, '/');
-    char *query = strchr(authority, '?');
-    char *fragment = strchr(authority, '#');
-    char *path_start = slash;
-    if (path_start == nullptr || (query != nullptr && query < path_start)) {
-        path_start = query;
+    char *authority = separator + 3;
+    char *authority_end = authority;
+    while (authority_end < url + url_len && *authority_end != '/'
+           && *authority_end != '?' && *authority_end != '#') {
+        authority_end++;
     }
-    if (fragment != nullptr && (path_start == nullptr || fragment < path_start)) {
-        path_start = nullptr;
-    }
-    char *authority_end = path_start == nullptr ? url + url_len : path_start;
-    if (fragment != nullptr && fragment < authority_end) authority_end = fragment;
     char *colon = memchr(authority, ':', (usize) (authority_end - authority));
     char *host_end = colon == nullptr ? authority_end : colon;
-    if (host_end == authority) goto invalid;
+    if (host_end == authority) {
+        free(protocol);
+        goto invalid_url;
+    }
     usize host_len = (usize) (host_end - authority);
     char *host = http_copy_bytes(authority, host_len);
-    if (host == nullptr) goto allocation;
+    if (host == nullptr) {
+        free(protocol);
+        goto allocation;
+    }
+    for (usize i = 0; i < host_len; i++) {
+        if (host[i] >= 'A' && host[i] <= 'Z') host[i] = (char) (host[i] + 0x20);
+    }
     u16 port = 80;
     if (colon != nullptr) {
         usize parsed = 0;
         if (colon + 1 == authority_end) {
+            free(protocol);
             free(host);
-            goto invalid;
+            goto invalid_url;
         }
         for (char *cursor = colon + 1; cursor < authority_end; cursor++) {
             if (*cursor < '0' || *cursor > '9') {
+                free(protocol);
                 free(host);
-                goto invalid;
+                goto invalid_url;
             }
             parsed = parsed * 10 + (usize) (*cursor - '0');
             if (parsed > 65535) {
+                free(protocol);
                 free(host);
-                goto invalid;
+                goto invalid_port;
             }
         }
         port = (u16) parsed;
     }
-    if (strcmp(host, "localhost") != 0) {
-        struct sockaddr_storage address;
-        socklen_t address_len;
-        if (!mal_net_parse_ip(host, port, &address, &address_len)
-            || address.ss_family != AF_INET) {
-            free(host);
-            goto invalid;
-        }
-    }
+    char *fragment = memchr(
+        authority_end, '#', (usize) (url + url_len - authority_end));
+    char *path_start = authority_end;
+    if (path_start == url + url_len || *path_start == '#') path_start = nullptr;
     const char *path_end = fragment != nullptr ? fragment : url + url_len;
     bool query_only = path_start != nullptr && path_start[0] == '?';
     const char *path_bytes = path_start == nullptr ? "/" : path_start;
     usize path_len = path_start == nullptr ? 1 : (usize) (path_end - path_start);
     char *path = malloc(path_len + (query_only ? 2 : 1));
     if (path == nullptr) {
+        free(protocol);
         free(host);
         goto allocation;
     }
@@ -810,12 +813,14 @@ static bool http_client_parse_url(
     for (usize i = 0; i < path_len; i++) {
         unsigned char ch = (unsigned char) path[i];
         if (ch <= 0x20 || ch == 0x7f) {
+            free(protocol);
             free(host);
             free(path);
-            goto invalid;
+            goto invalid_path;
         }
     }
     free(url);
+    *protocol_out = protocol;
     *host_out = host;
     *port_out = port;
     *path_out = path;
@@ -826,10 +831,20 @@ allocation:
     free(url);
     mal_vm_throw_allocation_error(vm);
     return false;
-invalid:
+invalid_port:
+    free(url);
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                       "HTTP port must be an integer from 0 through 65535");
+    return false;
+invalid_path:
     free(url);
     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                       "HTTP URL must use localhost or a numeric IPv4 host and valid port");
+                       "HTTP path contains invalid characters");
+    return false;
+invalid_url:
+    free(url);
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                       "HTTP request URL must be an absolute URL");
     return false;
 }
 
@@ -1892,6 +1907,65 @@ static bool http_client_option(
             vm, options, mal_intrinsic_string_key(vm, (const byte *) name), out);
 }
 
+static bool http_client_replace_string(
+    MalVm *vm, MalValue value, char **target, usize *length) {
+    char *replacement;
+    usize replacement_len;
+    if (!http_client_ascii_string(vm, value, &replacement, &replacement_len)) {
+        return false;
+    }
+    free(*target);
+    *target = replacement;
+    *length = replacement_len;
+    return true;
+}
+
+static bool http_client_set_port(MalVm *vm, MalValue value, u16 *port) {
+    f64 number;
+    if (!mal_vm_to_number(vm, value, &number)) return false;
+    if (!isfinite(number) || floor(number) != number || number < 0 || number > 65535) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "HTTP port must be an integer from 0 through 65535");
+        return false;
+    }
+    *port = (u16) number;
+    return true;
+}
+
+static bool http_client_validate_endpoint(
+    MalVm *vm, const char *protocol, const char *host, u16 port,
+    const char *path, usize path_len) {
+    if (strcmp(protocol, "http:") != 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Only the http: protocol is supported");
+        return false;
+    }
+    if (host[0] == '\0') {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "HTTP hostname must not be empty");
+        return false;
+    }
+    if (strcmp(host, "localhost") != 0) {
+        struct sockaddr_storage address;
+        socklen_t address_len;
+        if (!mal_net_parse_ip(host, port, &address, &address_len)
+            || address.ss_family != AF_INET) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "HTTP hostname must be localhost or a numeric IPv4 address");
+            return false;
+        }
+    }
+    for (usize i = 0; i < path_len; i++) {
+        unsigned char ch = (unsigned char) path[i];
+        if (ch <= 0x20 || ch == 0x7f) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "HTTP path contains invalid characters");
+            return false;
+        }
+    }
+    return true;
+}
+
 static MalValue http_request(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -1900,14 +1974,19 @@ static MalValue http_request(
     (void) callee;
     if (argc < 1) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                           "http.request requires a URL");
+                           "http.request requires a URL or options object");
         return mal_value_new_undefined();
     }
-    MalValue options = argc > 1 && mal_value_is_object(args[1])
-        ? args[1] : mal_value_new_undefined();
-    MalValue callback = argc > 2 ? args[2]
-        : (argc > 1 && mal_value_is_callable(args[1])
-            ? args[1] : mal_value_new_undefined());
+    bool url_object = mal_value_is_url_object(args[0]);
+    bool options_only = mal_value_is_object(args[0]) && !url_object;
+    MalValue options = options_only ? args[0]
+        : (argc > 1 && mal_value_is_object(args[1]) ? args[1]
+                                                    : mal_value_new_undefined());
+    MalValue callback = options_only
+        ? (argc > 1 ? args[1] : mal_value_new_undefined())
+        : (argc > 2 ? args[2]
+                    : (argc > 1 && mal_value_is_callable(args[1])
+                           ? args[1] : mal_value_new_undefined()));
     if (!mal_value_is_undefined(callback) && !mal_value_is_callable(callback)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                            "The response callback must be a function");
@@ -1915,6 +1994,7 @@ static MalValue http_request(
     }
     MalValue roots[] = {
         options, callback, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
     };
     MalRootSpan root;
@@ -1928,11 +2008,82 @@ static MalValue http_request(
 #if MAL_REALMS
     state->realm = vm->current_realm;
 #endif
-    if (!http_client_parse_url(
-            vm, args[0], &state->host, &state->port,
-            &state->path, &state->path_len)) {
-        goto fail_state;
+    char *protocol = nullptr;
+    usize protocol_len = 0;
+    usize host_len = 0;
+    if (options_only) {
+        protocol = http_copy_bytes("http:", 5);
+        state->host = http_copy_bytes("localhost", 9);
+        state->path = http_copy_bytes("/", 1);
+        state->port = 80;
+        state->path_len = 1;
+        host_len = 9;
+        protocol_len = 5;
+        if (protocol == nullptr || state->host == nullptr || state->path == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            goto fail_endpoint;
+        }
+    } else if (!http_client_parse_url(
+                   vm, args[0], &protocol, &state->host, &state->port,
+                   &state->path, &state->path_len)) {
+        goto fail_endpoint;
+    } else {
+        protocol_len = strlen(protocol);
+        host_len = strlen(state->host);
     }
+    if (!http_client_option(vm, roots[0], "protocol", &roots[2])) {
+        goto fail_endpoint;
+    }
+    if (!mal_value_is_undefined(roots[2])
+        && !http_client_replace_string(
+            vm, roots[2], &protocol, &protocol_len)) {
+        goto fail_endpoint;
+    }
+    if (!http_client_option(vm, roots[0], "hostname", &roots[3])) {
+        goto fail_endpoint;
+    }
+    if (!mal_value_is_undefined(roots[3])) {
+        if (!http_client_replace_string(vm, roots[3], &state->host, &host_len)) {
+            goto fail_endpoint;
+        }
+    } else if (options_only) {
+        if (!http_client_option(vm, roots[0], "host", &roots[4])) {
+            goto fail_endpoint;
+        }
+        if (!mal_value_is_undefined(roots[4])
+            && !http_client_replace_string(
+                vm, roots[4], &state->host, &host_len)) {
+            goto fail_endpoint;
+        }
+    }
+    if (!http_client_option(vm, roots[0], "port", &roots[4])) goto fail_endpoint;
+    if (!mal_value_is_undefined(roots[4])
+        && !http_client_set_port(vm, roots[4], &state->port)) {
+        goto fail_endpoint;
+    }
+    if (!http_client_option(vm, roots[0], "path", &roots[5])) goto fail_endpoint;
+    if (!mal_value_is_undefined(roots[5])) {
+        if (!http_client_replace_string(
+                vm, roots[5], &state->path, &state->path_len)) {
+            goto fail_endpoint;
+        }
+        if (state->path_len == 0) {
+            free(state->path);
+            state->path = http_copy_bytes("/", 1);
+            state->path_len = 1;
+            if (state->path == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                goto fail_endpoint;
+            }
+        }
+    }
+    if (!http_client_validate_endpoint(
+            vm, protocol, state->host, state->port,
+            state->path, state->path_len)) {
+        goto fail_endpoint;
+    }
+    free(protocol);
+    protocol = nullptr;
     if (!http_client_option(vm, roots[0], "method", &roots[2])) goto fail_state;
     if (mal_value_is_undefined(roots[2])) {
         state->method = http_copy_bytes("GET", 3);
@@ -1990,11 +2141,27 @@ static MalValue http_request(
     mal_gc_unroot(&root);
     return result;
 
+fail_endpoint:
+    free(protocol);
 fail_state:
     http_client_free(state);
 fail:
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
+}
+
+static MalValue http_get(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    MalValue request = http_request(
+        vm, receiver, args, argc, new_target, callee);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, &request, 1);
+    bool ended = http_call_method(vm, request, "end", nullptr, 0);
+    MalValue result = ended ? request : mal_value_new_undefined();
+    mal_gc_unroot(&root);
+    return result;
 }
 
 static MalValue http_constructor(
@@ -2062,14 +2229,14 @@ void mal_host_install_node_http(
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return;
     }
-    MalValue roots[12] = {
+    MalValue roots[13] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -2155,6 +2322,14 @@ void mal_host_install_node_http(
             http_request));
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
                               (const byte *) "request", roots[11], HTTP_VISIBLE);
+    roots[12] = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "get"), 3,
+            http_get));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
+                              (const byte *) "get", roots[12], HTTP_VISIBLE);
 
     static const char *names[] = {
         "METHODS", "IncomingMessage", "ServerResponse", "Server", "ClientRequest",

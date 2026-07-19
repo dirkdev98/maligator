@@ -183,6 +183,7 @@ const HTTP: HostModuleSpec = {
 		"Server",
 		"ClientRequest",
 		"createServer",
+		"get",
 		"request",
 	],
 	hasDefault: true,

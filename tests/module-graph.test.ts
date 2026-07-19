@@ -546,6 +546,7 @@ test("canonicalizes bare and node: HTTP specifiers to one host module", () => {
 			"Server",
 			"ClientRequest",
 			"createServer",
+			"get",
 			"request",
 		],
 		hasDefault: true,
