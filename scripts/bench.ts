@@ -39,9 +39,9 @@
  *   - gc        bench/gc/{cli,desktop,server}.js under the generational collector:
  *               wall, peak RSS, max GC pause (macOS: RSS/pauses via /usr/bin/time -l
  *               + MAL_GC_STATS). No V8 compare.
- *   - http      bench/http server: req/s vs Node's http.createServer, driven by `oha`
- *               (multi-threaded, so the load generator isn't the bottleneck). Skipped
- *               if `oha` is not installed.
+ *   - http      bare server and pinned Express 5 application: linked binary bytes,
+ *               req/s, and p99 latency vs Node, driven by `oha` (multi-threaded, so
+ *               the load generator isn't the bottleneck). Skipped if `oha` is absent.
  *
  * History: bench/baseline.json is a bounded list of entries keyed by commit
  * short-SHA (no timestamps). A run prints current-vs-latest deltas; `--update`
@@ -50,8 +50,16 @@
  */
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import type { MaligatorBuildConfig } from "../src/build-config.ts";
 import { compileSourceToBuffer } from "../src/compile.ts";
@@ -60,6 +68,8 @@ import {
 	buildNativeBinaryResult,
 	HOST_MAIN,
 } from "../src/test-harness.ts";
+import { parseOhaOutput, planExpressHttpWorkload } from "./bench-http.ts";
+import type { ExpressHttpWorkload, OhaMetrics } from "./bench-http.ts";
 
 const BASELINE_FILE = "bench/baseline.json";
 const HISTORY_LIMIT = 50;
@@ -181,6 +191,17 @@ interface GcWorkload {
 	maxPauseMs: number;
 }
 interface HttpMetrics {
+	malRps: number;
+	nodeRps: number;
+	ratio: number;
+	malP99Ms: number;
+	nodeP99Ms: number;
+	express?: {
+		binaryBytes: number;
+		workloads: Record<string, HttpComparisonMetrics>;
+	};
+}
+interface HttpComparisonMetrics {
 	malRps: number;
 	nodeRps: number;
 	ratio: number;
@@ -738,26 +759,58 @@ function waitReachable(url: string): void {
 
 /** Run oha for `duration` at `conc`, returning req/s + p99 ms. */
 function ohaRun(
-	url: string,
+	target: string,
 	duration: string,
 	conc: number,
-): { rps: number; p99Ms: number } {
+	extraArgs: Array<string> = [],
+): OhaMetrics {
 	const out = execFileSync(
 		"oha",
-		["-z", duration, "-c", String(conc), "--no-tui", "--output-format", "json", url],
+		[
+			"-z",
+			duration,
+			"-c",
+			String(conc),
+			"--no-tui",
+			"--output-format",
+			"json",
+			"--redirect",
+			"0",
+			...extraArgs,
+			target,
+		],
 		{ encoding: "utf-8" },
 	);
-	const j = JSON.parse(out) as {
-		summary: { requestsPerSec: number };
-		latencyPercentiles?: Record<string, number>;
-	};
+	return parseOhaOutput(out);
+}
+
+function compareHttp(
+	malTarget: string,
+	nodeTarget: string,
+	duration: string,
+	conc: number,
+	extraArgs: Array<string> = [],
+): HttpComparisonMetrics {
+	const mal = ohaRun(malTarget, duration, conc, extraArgs);
+	const node = ohaRun(nodeTarget, duration, conc, extraArgs);
 	return {
-		rps: j.summary.requestsPerSec,
-		p99Ms: (j.latencyPercentiles?.p99 ?? 0) * 1000,
+		malRps: mal.rps,
+		nodeRps: node.rps,
+		ratio: mal.rps / node.rps,
+		malP99Ms: mal.p99Ms,
+		nodeP99Ms: node.p99Ms,
 	};
 }
 
-function benchHttp(duration: string, conc: number): HttpMetrics | null {
+function workloadArgs(workload: ExpressHttpWorkload): Array<string> {
+	const args: Array<string> = [];
+	if (workload.method) args.push("--method", workload.method);
+	for (const header of workload.headers ?? []) args.push("-H", header);
+	if (workload.body !== undefined) args.push("-d", workload.body);
+	return args;
+}
+
+function benchHttp(durationSeconds: number, conc: number): HttpMetrics | null {
 	if (!ohaAvailable()) {
 		console.log("http: `oha` not installed — skipping (install oha for the http bench).");
 		return null;
@@ -775,15 +828,60 @@ function benchHttp(duration: string, conc: number): HttpMetrics | null {
 		// Warm up both before measuring.
 		ohaRun("http://127.0.0.1:3111/", "3s", 50);
 		ohaRun("http://127.0.0.1:3112/", "3s", 50);
-		const malRes = ohaRun("http://127.0.0.1:3111/", duration, conc);
-		const nodeRes = ohaRun("http://127.0.0.1:3112/", duration, conc);
-		return {
-			malRps: malRes.rps,
-			nodeRps: nodeRes.rps,
-			ratio: malRes.rps / nodeRes.rps,
-			malP99Ms: malRes.p99Ms,
-			nodeP99Ms: nodeRes.p99Ms,
-		};
+		const result: HttpMetrics = compareHttp(
+			"http://127.0.0.1:3111/",
+			"http://127.0.0.1:3112/",
+			`${durationSeconds}s`,
+			conc,
+		);
+
+		const expressBin = buildNativeBinary({
+			fixture: "bench/http/express-server.cjs",
+			name: "bench-http-express",
+			mainFile: HOST_MAIN,
+			nodeEnabled: true,
+		});
+		const expressMal = spawn(expressBin, [], {
+			env: { ...process.env, PORT: "3113" },
+			stdio: "ignore",
+		});
+		const expressNode = spawn("node", ["bench/http/express-server.cjs"], {
+			env: { ...process.env, PORT: "3114" },
+			stdio: "ignore",
+		});
+		const tempDir = mkdtempSync(path.join(os.tmpdir(), "mal-bench-http-"));
+		try {
+			waitReachable("http://127.0.0.1:3113/middleware");
+			waitReachable("http://127.0.0.1:3114/middleware");
+			ohaRun("http://127.0.0.1:3113/middleware", "1s", conc);
+			ohaRun("http://127.0.0.1:3114/middleware", "1s", conc);
+			const workloads: Record<string, HttpComparisonMetrics> = {};
+			for (const workload of planExpressHttpWorkload(durationSeconds)) {
+				const malUrls = path.join(tempDir, `${workload.name}-mal.txt`);
+				const nodeUrls = path.join(tempDir, `${workload.name}-node.txt`);
+				writeFileSync(
+					malUrls,
+					`${workload.paths.map((value) => `http://127.0.0.1:3113${value}`).join("\n")}\n`,
+				);
+				writeFileSync(
+					nodeUrls,
+					`${workload.paths.map((value) => `http://127.0.0.1:3114${value}`).join("\n")}\n`,
+				);
+				workloads[workload.name] = compareHttp(
+					malUrls,
+					nodeUrls,
+					`${workload.durationSeconds}s`,
+					conc,
+					["--urls-from-file", ...workloadArgs(workload)],
+				);
+			}
+			result.express = { binaryBytes: fileBytes(expressBin), workloads };
+		} finally {
+			expressMal.kill("SIGKILL");
+			expressNode.kill("SIGKILL");
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+		return result;
 	} finally {
 		mal.kill("SIGKILL");
 		node.kill("SIGKILL");
@@ -1052,6 +1150,20 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		console.log(
 			`  ratio     ${entry.http.ratio.toFixed(2)}x${delta(entry.http.ratio, p?.ratio, false)}`,
 		);
+		if (entry.http.express) {
+			console.log(
+				`  express   ${humanBytes(entry.http.express.binaryBytes)} binary${delta(entry.http.express.binaryBytes, p?.express?.binaryBytes)}`,
+			);
+			for (const [name, current] of Object.entries(entry.http.express.workloads)) {
+				const prior = p?.express?.workloads[name];
+				console.log(
+					`    ${name.padEnd(6)} maligator ${current.malRps.toFixed(0)} req/s (p99 ${current.malP99Ms.toFixed(2)}ms)${delta(current.malRps, prior?.malRps, false)}`,
+				);
+				console.log(
+					`           node      ${current.nodeRps.toFixed(0)} req/s (p99 ${current.nodeP99Ms.toFixed(2)}ms)  ratio ${current.ratio.toFixed(2)}x${delta(current.ratio, prior?.ratio, false)}`,
+				);
+			}
+		}
 	}
 }
 
@@ -1061,7 +1173,14 @@ const args = process.argv.slice(2);
 const update = args.includes("--update");
 const runsIdx = args.indexOf("--runs");
 const runs = runsIdx >= 0 ? Number(args[runsIdx + 1]) : 5;
-const selected = args.filter((a) => !a.startsWith("--") && !/^\d+$/.test(a));
+const httpSecondsIdx = args.indexOf("--http-seconds");
+const httpSeconds = httpSecondsIdx >= 0 ? Number(args[httpSecondsIdx + 1]) : 10;
+const optionValues = new Set<number>();
+if (runsIdx >= 0) optionValues.add(runsIdx + 1);
+if (httpSecondsIdx >= 0) optionValues.add(httpSecondsIdx + 1);
+const selected = args.filter(
+	(a, index) => !a.startsWith("--") && !optionValues.has(index),
+);
 const which =
 	selected.length > 0
 		? selected
@@ -1094,7 +1213,7 @@ if (which.includes("arguments")) entry.arguments = benchArguments(runs);
 if (which.includes("stack-object")) entry.stackObject = benchStackObject(runs);
 if (which.includes("interpreter")) entry.interpreter = benchInterpreter(runs);
 if (which.includes("gc")) entry.gc = benchGc(runs);
-if (which.includes("http")) entry.http = benchHttp("10s", 50);
+if (which.includes("http")) entry.http = benchHttp(httpSeconds, 50);
 
 const baseline = loadBaseline();
 const previous = latestMetrics(baseline.entries);
