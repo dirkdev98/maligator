@@ -19,6 +19,11 @@
 			"gcStress": true
 		},
 		{
+			"path": "encoding/textdecoder-fatal-streaming.any.js",
+			"sha256": "f57d56e829f93ecf33b96d0bb640e693b3ea54bb1baae1fcd3309867de58658b",
+			"gcStress": true
+		},
+		{
 			"path": "encoding/textdecoder-ignorebom.any.js",
 			"sha256": "f0ecc2649c9d12e1ea0556d3eac82d78de15d9466301ec4997add573d39bebe1",
 			"gcStress": true

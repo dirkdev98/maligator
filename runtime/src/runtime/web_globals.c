@@ -287,14 +287,20 @@ static MalTextEncoding mal_web_text_encoding(const MalString *label) {
     return MAL_TEXT_ENCODING_INVALID;
 }
 
-/* Per-instance TextDecoder options, packed as an int32 stored on the instance
- * under a private "brand" symbol carried in each function's slot 0 (the
- * StringDecoder pattern). The brand doubles as a receiver check: a foreign object
- * lacks the property. */
+/* Per-instance TextDecoder options and streaming state, packed as an int32 stored
+ * on the instance under a private "brand" symbol carried in each function's slot
+ * 0 (the StringDecoder pattern). At most three bytes can be pending for each of
+ * the supported encodings. The brand doubles as a receiver check. */
 #define MAL_TEXT_DECODER_FATAL 1
 #define MAL_TEXT_DECODER_IGNORE_BOM 2
 #define MAL_TEXT_DECODER_ENCODING_SHIFT 2
 #define MAL_TEXT_DECODER_ENCODING_MASK (3 << MAL_TEXT_DECODER_ENCODING_SHIFT)
+#define MAL_TEXT_DECODER_ACTIVE (1 << 4)
+#define MAL_TEXT_DECODER_BOM_SEEN (1 << 5)
+#define MAL_TEXT_DECODER_PENDING_COUNT_SHIFT 6
+#define MAL_TEXT_DECODER_PENDING_COUNT_MASK (3 << MAL_TEXT_DECODER_PENDING_COUNT_SHIFT)
+#define MAL_TEXT_DECODER_PENDING_BYTES_SHIFT 8
+#define MAL_TEXT_DECODER_BASE_MASK 0x0f
 
 static MalKey mal_web_text_decoder_brand_key(MalValue callee) {
     MalValue brand = mal_native_function_object_get_slot(
@@ -316,6 +322,74 @@ static bool mal_web_text_decoder_flags(MalVm *vm, MalValue self, MalValue callee
     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
         "TextDecoder method called on an incompatible receiver");
     return false;
+}
+
+static void mal_web_text_decoder_set_flags(
+    MalValue self, MalValue callee, i32 flags) {
+    mal_object_set(mal_value_to_object(self), mal_web_text_decoder_brand_key(callee),
+        mal_value_from_i32(flags));
+}
+
+/* Return the prefix which can be decoded without treating a valid partial UTF-8
+ * sequence at the end as an error. Invalid prefixes are left for the regular
+ * decoder, including its restore/reconsume behavior. */
+static usize mal_web_utf8_stream_prefix(const byte *bytes, usize len) {
+    usize i = 0;
+    while (i < len) {
+        u8 lead = (u8) bytes[i];
+        usize needed;
+        u8 second_min = 0x80;
+        u8 second_max = 0xbf;
+        if (lead < 0x80 || lead < 0xc2 || lead > 0xf4) {
+            i++;
+            continue;
+        } else if (lead <= 0xdf) {
+            needed = 2;
+        } else if (lead <= 0xef) {
+            needed = 3;
+            if (lead == 0xe0) second_min = 0xa0;
+            if (lead == 0xed) second_max = 0x9f;
+        } else {
+            needed = 4;
+            if (lead == 0xf0) second_min = 0x90;
+            if (lead == 0xf4) second_max = 0x8f;
+        }
+
+        usize consumed = 1;
+        bool invalid = false;
+        for (usize k = 1; k < needed && i + k < len; k++) {
+            u8 continuation = (u8) bytes[i + k];
+            u8 minimum = k == 1 ? second_min : 0x80;
+            u8 maximum = k == 1 ? second_max : 0xbf;
+            if (continuation < minimum || continuation > maximum) {
+                invalid = true;
+                break;
+            }
+            consumed++;
+        }
+        if (!invalid && i + needed > len) {
+            return i;
+        }
+        i += invalid ? consumed : needed;
+    }
+    return len;
+}
+
+static usize mal_web_utf16_stream_prefix(
+    const byte *bytes, usize len, bool big_endian) {
+    usize pending = len % 2;
+    usize complete = len - pending;
+    if (complete >= 2) {
+        u8 first = (u8) bytes[complete - 2];
+        u8 second = (u8) bytes[complete - 1];
+        c16 unit = big_endian
+            ? (c16) ((first << 8) | second)
+            : (c16) ((second << 8) | first);
+        if (unit >= 0xd800 && unit <= 0xdbff) {
+            pending += 2;
+        }
+    }
+    return len - pending;
 }
 
 static MalValue mal_web_text_decoder_ctor(
@@ -357,7 +431,8 @@ static MalValue mal_web_text_decoder_ctor(
     MalValue instance = mal_value_from_object(mal_web_ordinary_instance(vm, nt));
     MalRootSpan rs;
     mal_gc_root(&rs, &instance, 1);
-    MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_from_i32(flags), MAL_PROPERTY_NONE);
+    MalPropertyDesc desc =
+        mal_intrinsic_data_desc(mal_value_from_i32(flags), MAL_PROPERTY_WRITABLE);
     mal_object_define_own(
         mal_value_to_object(instance), mal_web_text_decoder_brand_key(callee), &desc);
     mal_gc_unroot(&rs);
@@ -412,44 +487,106 @@ static MalValue mal_web_text_decoder_decode(
     if (!mal_web_text_decoder_flags(vm, self, callee, &flags)) {
         return mal_value_new_undefined();
     }
-    if (argc < 1 || mal_value_is_undefined(args[0])) {
-        return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
-    }
-    const byte *bytes;
-    usize len;
-    if (!mal_web_buffer_source(vm, args[0], &bytes, &len)) {
+    MalValue input = argc >= 1 ? args[0] : mal_value_new_undefined();
+    const byte *bytes = nullptr;
+    usize len = 0;
+    if (!mal_value_is_undefined(input) && !mal_web_buffer_source(vm, input, &bytes, &len)) {
         return mal_value_new_undefined();
+    }
+
+    bool stream = false;
+    MalValue options = argc >= 2 ? args[1] : mal_value_new_undefined();
+    if (!mal_value_is_undefined(options) && !mal_value_is_null(options)) {
+        if (!mal_value_is_object(options)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "TextDecoder.decode options must be an object");
+            return mal_value_new_undefined();
+        }
+        MalValue value;
+        if (!mal_vm_get_property(vm, options,
+                mal_intrinsic_string_key(vm, (const byte *) "stream"), &value)) {
+            return mal_value_new_undefined();
+        }
+        stream = mal_value_is_truthy(value);
+    }
+
+    // Dictionary conversion can detach or resize the input backing store.
+    if (!mal_value_is_undefined(input) && !mal_web_buffer_source(vm, input, &bytes, &len)) {
+        return mal_value_new_undefined();
+    }
+
+    u32 state = (u32) flags;
+    if ((state & MAL_TEXT_DECODER_ACTIVE) == 0) {
+        state &= MAL_TEXT_DECODER_BASE_MASK;
     }
     MalTextEncoding encoding =
         (MalTextEncoding) ((flags & MAL_TEXT_DECODER_ENCODING_MASK) >> MAL_TEXT_DECODER_ENCODING_SHIFT);
-    if ((flags & MAL_TEXT_DECODER_IGNORE_BOM) == 0) {
-        if (encoding == MAL_TEXT_ENCODING_UTF8 && len >= 3 && (u8) bytes[0] == 0xEF
-            && (u8) bytes[1] == 0xBB && (u8) bytes[2] == 0xBF) {
-            bytes += 3;
-            len -= 3;
-        } else if (encoding == MAL_TEXT_ENCODING_UTF16LE && len >= 2
-            && (u8) bytes[0] == 0xFF && (u8) bytes[1] == 0xFE) {
-            bytes += 2;
-            len -= 2;
-        } else if (encoding == MAL_TEXT_ENCODING_UTF16BE && len >= 2
-            && (u8) bytes[0] == 0xFE && (u8) bytes[1] == 0xFF) {
-            bytes += 2;
-            len -= 2;
-        }
+
+    usize old_pending =
+        (state & MAL_TEXT_DECODER_PENDING_COUNT_MASK) >> MAL_TEXT_DECODER_PENDING_COUNT_SHIFT;
+    if (len > SIZE_MAX - old_pending) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "TextDecoder.decode input is too large");
+        return mal_value_new_undefined();
     }
+    usize total = old_pending + len;
+    byte *combined = malloc(total == 0 ? 1 : total);
+    if (combined == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    u32 packed = state >> MAL_TEXT_DECODER_PENDING_BYTES_SHIFT;
+    for (usize i = 0; i < old_pending; i++) {
+        combined[i] = (byte) (packed >> (i * 8));
+    }
+    if (len > 0) {
+        memcpy(combined + old_pending, bytes, len);
+    }
+
+    usize decode_len = total;
+    if (stream) {
+        decode_len = encoding == MAL_TEXT_ENCODING_UTF8
+            ? mal_web_utf8_stream_prefix(combined, total)
+            : mal_web_utf16_stream_prefix(
+                  combined, total, encoding == MAL_TEXT_ENCODING_UTF16BE);
+    }
+    usize pending = total - decode_len;
+    state &= MAL_TEXT_DECODER_BASE_MASK | MAL_TEXT_DECODER_BOM_SEEN;
+    if (stream) state |= MAL_TEXT_DECODER_ACTIVE;
+    state |= (u32) pending << MAL_TEXT_DECODER_PENDING_COUNT_SHIFT;
+    for (usize i = 0; i < pending; i++) {
+        state |= (u32) (u8) combined[decode_len + i]
+            << (MAL_TEXT_DECODER_PENDING_BYTES_SHIFT + i * 8);
+    }
+
     usize count;
     bool had_error;
     c16 *units = encoding == MAL_TEXT_ENCODING_UTF8
-        ? mal_utf8_decode_report(bytes, len, &count, &had_error)
+        ? mal_utf8_decode_report(combined, decode_len, &count, &had_error)
         : mal_utf16_decode_report(
-              bytes, len, encoding == MAL_TEXT_ENCODING_UTF16BE, &count, &had_error);
+              combined, decode_len, encoding == MAL_TEXT_ENCODING_UTF16BE, &count, &had_error);
+    free(combined);
+    if (units == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+
+    usize start = 0;
+    if ((state & MAL_TEXT_DECODER_BOM_SEEN) == 0 && count > 0) {
+        state |= MAL_TEXT_DECODER_BOM_SEEN;
+        if ((state & MAL_TEXT_DECODER_IGNORE_BOM) == 0 && units[0] == 0xfeff) {
+            start = 1;
+        }
+    }
+    mal_web_text_decoder_set_flags(self, callee, (i32) state);
     if ((flags & MAL_TEXT_DECODER_FATAL) != 0 && had_error) {
         free(units);
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "TextDecoder.decode: input is not valid for the selected encoding");
         return mal_value_new_undefined();
     }
-    MalValue s = mal_value_from_string(mal_string_new_copy(&vm->heap, units, count));
+    MalValue s =
+        mal_value_from_string(mal_string_new_copy(&vm->heap, units + start, count - start));
     free(units);
     return s;
 }
