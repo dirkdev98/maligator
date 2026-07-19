@@ -49,11 +49,36 @@ throwsTypeError("forEach requires callable", () => new URLSearchParams().forEach
 const undefinedArgs = new URLSearchParams("x=1&x=undefined");
 check("has omitted value", undefinedArgs.has("x"));
 check("has explicit undefined", undefinedArgs.has("x", undefined));
+check(
+	"has explicit undefined differs from string",
+	new URLSearchParams("x=1").has("x", undefined),
+);
 check("has filters value", !undefinedArgs.has("x", "missing"));
 undefinedArgs.delete("x", undefined);
-eq("delete explicit undefined", undefinedArgs.toString(), "x=1");
+eq("delete explicit undefined", undefinedArgs.toString(), "");
 undefinedArgs.delete("x");
 eq("delete omitted value", undefinedArgs.toString(), "");
+
+const explicitValues = new URLSearchParams(
+	"nullish=null&nullish=keep&empty=&empty=keep&zero=0&zero=keep&boolean=false&boolean=keep",
+);
+check("has explicit null", explicitValues.has("nullish", null));
+check("has explicit empty string", explicitValues.has("empty", ""));
+check("has explicit zero", explicitValues.has("zero", 0));
+check("has explicit false", explicitValues.has("boolean", false));
+explicitValues.delete("nullish", null);
+explicitValues.delete("empty", "");
+explicitValues.delete("zero", 0);
+explicitValues.delete("boolean", false);
+eq(
+	"delete preserves unrelated explicit values",
+	explicitValues.toString(),
+	"nullish=keep&empty=keep&zero=keep&boolean=keep",
+);
+
+const associated = new URL("https://example.test/?x=1&x=undefined&keep=1");
+associated.searchParams.delete("x", undefined);
+eq("delete explicit undefined updates associated URL", associated.search, "?keep=1");
 
 // All DOMString-facing arguments use USVString conversion.
 const loneSurrogate = "\uD800";

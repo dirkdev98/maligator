@@ -1,14 +1,5 @@
 {
 	"schemaVersion": 1,
 	"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd",
-	"expectations": [
-		{
-			"path": "url/urlsearchparams-has.any.js",
-			"subtest": "Two-argument has() respects undefined as second arg",
-			"status": "FAIL",
-			"milestone": "W2",
-			"reason": "URLSearchParams.has treats an explicit undefined value as present instead of omitted",
-			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
-		}
-	]
+	"expectations": []
 }

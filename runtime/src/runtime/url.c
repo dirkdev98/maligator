@@ -944,7 +944,8 @@ static MalValue usp_has(
     mal_gc_root(&rs, roots, 2);
     mal_gc_native_rooted_begin(vm);
     bool converted = usp_to_usv_string(vm, args[0], &roots[0]);
-    if (converted && argc >= 2) {
+    bool has_value = argc >= 2 && !mal_value_is_undefined(args[1]);
+    if (converted && has_value) {
         converted = usp_to_usv_string(vm, args[1], &roots[1]);
     }
     mal_gc_native_rooted_end(vm);
@@ -953,7 +954,7 @@ static MalValue usp_has(
         return mal_value_new_undefined();
     }
     MalString *name = mal_value_to_string(roots[0]);
-    MalString *value = argc >= 2 ? mal_value_to_string(roots[1]) : nullptr;
+    MalString *value = has_value ? mal_value_to_string(roots[1]) : nullptr;
     bool found = false;
     for (i32 i = 0; i < p->count; i++) {
         if (mal_string_equals(p->pairs[i].name, name)
@@ -1067,7 +1068,8 @@ static MalValue usp_delete(
     mal_gc_root(&rs, roots, 2);
     mal_gc_native_rooted_begin(vm);
     bool converted = usp_to_usv_string(vm, args[0], &roots[0]);
-    if (converted && argc >= 2) {
+    bool has_value = argc >= 2 && !mal_value_is_undefined(args[1]);
+    if (converted && has_value) {
         converted = usp_to_usv_string(vm, args[1], &roots[1]);
     }
     if (!converted) {
@@ -1076,7 +1078,7 @@ static MalValue usp_delete(
         return mal_value_new_undefined();
     }
     MalString *name = mal_value_to_string(roots[0]);
-    MalString *value = argc >= 2 ? mal_value_to_string(roots[1]) : nullptr;
+    MalString *value = has_value ? mal_value_to_string(roots[1]) : nullptr;
     i32 w = 0;
     for (i32 i = 0; i < p->count; i++) {
         bool remove = mal_string_equals(p->pairs[i].name, name)
