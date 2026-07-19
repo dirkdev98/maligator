@@ -68,7 +68,11 @@ import {
 	buildNativeBinaryResult,
 	HOST_MAIN,
 } from "../src/test-harness.ts";
-import { parseOhaOutput, planExpressHttpWorkload } from "./bench-http.ts";
+import {
+	formatOhaDuration,
+	parseOhaOutput,
+	planExpressHttpWorkload,
+} from "./bench-http.ts";
 import type { ExpressHttpWorkload, OhaMetrics } from "./bench-http.ts";
 
 const BASELINE_FILE = "bench/baseline.json";
@@ -831,7 +835,7 @@ function benchHttp(durationSeconds: number, conc: number): HttpMetrics | null {
 		const result: HttpMetrics = compareHttp(
 			"http://127.0.0.1:3111/",
 			"http://127.0.0.1:3112/",
-			`${durationSeconds}s`,
+			formatOhaDuration(durationSeconds),
 			conc,
 		);
 
@@ -870,7 +874,7 @@ function benchHttp(durationSeconds: number, conc: number): HttpMetrics | null {
 				workloads[workload.name] = compareHttp(
 					malUrls,
 					nodeUrls,
-					`${workload.durationSeconds}s`,
+					formatOhaDuration(workload.durationSeconds),
 					conc,
 					["--urls-from-file", ...workloadArgs(workload)],
 				);

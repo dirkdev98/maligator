@@ -12,6 +12,13 @@ export interface ExpressHttpWorkload {
 	body?: string;
 }
 
+export function formatOhaDuration(seconds: number): string {
+	if (!Number.isFinite(seconds) || seconds <= 0) {
+		throw new Error(`HTTP benchmark duration must be positive, got ${seconds}`);
+	}
+	return `${Math.max(1, Math.round(seconds * 1000))}ms`;
+}
+
 const EXPRESS_ROUTE_MIX = [
 	"/users/a%20b?search=teeth&tag=one&tag=two",
 	"/middleware",

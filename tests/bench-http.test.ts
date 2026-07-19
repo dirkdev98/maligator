@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseOhaOutput, planExpressHttpWorkload } from "../scripts/bench-http.ts";
+import {
+	formatOhaDuration,
+	parseOhaOutput,
+	planExpressHttpWorkload,
+} from "../scripts/bench-http.ts";
 
 describe("HTTP benchmark support", () => {
 	it("plans the representative Express workload within one duration budget", () => {
@@ -38,6 +42,12 @@ describe("HTTP benchmark support", () => {
 				}),
 			),
 		).toEqual({ rps: 1234.5, p99Ms: 12.5 });
+	});
+
+	it("formats fractional workload durations without floating-point artifacts", () => {
+		expect(formatOhaDuration(3 * 0.6)).toBe("1800ms");
+		expect(formatOhaDuration(0.2)).toBe("200ms");
+		expect(() => formatOhaDuration(0)).toThrow(/must be positive/);
 	});
 
 	it("rejects incomplete oha metrics instead of recording zeros", () => {
