@@ -306,10 +306,6 @@ bool mal_value_is_callable(MalValue value) {
     return false;
 }
 
-MalString *mal_value_to_string(MalValue value) {
-    return (MalString *) mal_value_to_heap(value);
-}
-
 MalSymbol *mal_value_to_symbol(MalValue value) {
     return (MalSymbol *) mal_value_to_heap(value);
 }

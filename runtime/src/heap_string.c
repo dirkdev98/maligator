@@ -269,12 +269,7 @@ MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length) 
     return string;
 }
 
-const c16 *mal_string_code_units(const MalString *string) {
-    MalString *mutable = (MalString *) string;
-    if (mutable->storage != MAL_STRING_STORAGE_CONS) {
-        return mutable->code_units;
-    }
-
+const c16 *mal_string_flatten(MalString *mutable) {
     usize capacity = 64;
     MalString **stack = malloc(sizeof(MalString *) * capacity);
     if (stack == nullptr) {

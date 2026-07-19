@@ -97,11 +97,19 @@ MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize leng
  */
 MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length);
 
+/** Flatten a lazy concatenation and return its now-contiguous UTF-16 storage. */
+const c16 *mal_string_flatten(MalString *string);
+
 /**
- * Return contiguous UTF-16 code units, flattening a lazy concatenation once on
- * first access.
+ * Return contiguous UTF-16 code units. Almost every string is already flat, so
+ * keep that access local and leave the allocating cons-string path out of line.
  */
-const c16 *mal_string_code_units(const MalString *string);
+static inline const c16 *mal_string_code_units(const MalString *string) {
+    if (string->storage != MAL_STRING_STORAGE_CONS) {
+        return string->code_units;
+    }
+    return mal_string_flatten((MalString *) string);
+}
 
 /**
  * Return the string UTF-16 code unit length.
