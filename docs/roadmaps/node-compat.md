@@ -72,8 +72,10 @@ stated acceptance point without patching Express or anything in `node_modules`.
       HEAD/no-body framing, close-after-response, reentrancy, GC stress, and UBSan.
       A buffered `http.request` client now covers localhost/numeric-IPv4 loopback,
       request headers and bodies, status/response headers, response bodies, and
-      connection errors. The remaining slices are streaming/backpressure and richer
-      socket, header, status, URL/options, cancellation, and connection-reuse behavior.
+      connection errors. Its URL/options overloads apply Node's option precedence,
+      and `http.get` returns the request after ending it exactly once. The remaining
+      slices are streaming/backpressure and richer socket, header, status,
+      cancellation, DNS/address-family, and connection-reuse behavior.
 - [x] **Wave 4: pass the Express behavior baseline.** Run the existing smoke
       runner under Maligator and match real Node for route dispatch, decoded
       route parameters, repeated query values, ordered application/route/async
@@ -102,9 +104,11 @@ stated acceptance point without patching Express or anything in `node_modules`.
       throughput. Servicing deferred GC polls at safe host macrotask boundaries reduced
       five-second route-load RSS from roughly 2.1 GiB to 20 MiB and raised the clean
       route baseline to 12,235 req/s (0.25x Node), with JSON at 9,240 req/s (0.20x) and
-      form parsing at 6,943 req/s (0.16x). Next target measured call-dispatch,
-      string/RegExp, property-lookup, and object-shaping costs rather than endpoint
-      shortcuts.
+      form parsing at 6,943 req/s (0.16x). Inlining the common already-flat string
+      access paths reduced an alternating 15-run string workload from 254.7-255.0ms to
+      220.6-225.4ms, while three repeated HTTP runs left Express throughput at its
+      baseline. Next target measured call-dispatch, property-lookup, and object-shaping
+      costs rather than endpoint shortcuts.
 
 ## Likely built-ins
 
