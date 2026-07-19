@@ -73,7 +73,17 @@ static MalUrlObject *url_object_new(MalHeap *heap, MalObject *prototype, void *h
     MalUrlObject *u = mal_heap_alloc(heap, sizeof(MalUrlObject), MAL_HEAP_URL_OBJECT);
     mal_object_init(heap, &u->object, MAL_HEAP_URL_OBJECT, prototype);
     u->handle = handle;
+    u->search_params = nullptr;
     return u;
+}
+
+static void url_create_search_params(MalVm *vm, MalUrlObject *url);
+
+static void url_trace(MalHeapHeader *cell) {
+    MalUrlObject *u = (MalUrlObject *) cell;
+    if (u->search_params != nullptr) {
+        mal_gc_mark_value(mal_value_from_url_search_params_object(u->search_params));
+    }
 }
 
 static void url_finalize(MalHeapHeader *cell) {
@@ -121,7 +131,12 @@ static MalValue url_constructor(
         return mal_value_new_undefined();
     }
     MalObject *proto = url_instance_proto(vm, nt, MAL_INTRINSIC_URL_PROTOTYPE);
-    return mal_value_from_url_object(url_object_new(&vm->heap, proto, handle));
+    MalValue result = mal_value_from_url_object(url_object_new(&vm->heap, proto, handle));
+    MalRootSpan rs;
+    mal_gc_root(&rs, &result, 1);
+    url_create_search_params(vm, mal_value_to_url_object(result));
+    mal_gc_unroot(&rs);
+    return result;
 }
 
 static MalValue url_can_parse(
@@ -194,7 +209,6 @@ URL_GETTER(url_get_origin, mal_url_origin)
         return mal_value_new_undefined();                                                        \
     }
 
-URL_SETTER_STR(url_set_href, mal_url_set_href)
 URL_SETTER_STR(url_set_protocol, mal_url_set_protocol)
 
 /* Setter taking an optional string; the JS IDL setters are non-nullable, so
@@ -223,8 +237,50 @@ URL_SETTER_OPT(url_set_host, mal_url_set_host)
 URL_SETTER_OPT(url_set_hostname, mal_url_set_hostname)
 URL_SETTER_OPT(url_set_port, mal_url_set_port)
 URL_SETTER_OPT(url_set_pathname, mal_url_set_pathname)
-URL_SETTER_OPT(url_set_search, mal_url_set_search)
 URL_SETTER_OPT(url_set_hash, mal_url_set_hash)
+
+static void url_refresh_search_params(MalVm *vm, MalUrlObject *url);
+
+static MalValue url_set_href(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt;
+    (void) callee;
+    if (!mal_value_is_url_object(self)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "not a URL");
+        return mal_value_new_undefined();
+    }
+    MalString *value;
+    if (argc < 1 || !mal_vm_to_string(vm, args[0], &value)) {
+        return mal_value_new_undefined();
+    }
+    MalUrlObject *url = mal_value_to_url_object(self);
+    if (!mal_url_set_href(
+            url->handle, mal_string_code_units(value), mal_string_length(value))) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid URL");
+        return mal_value_new_undefined();
+    }
+    url_refresh_search_params(vm, url);
+    return mal_value_new_undefined();
+}
+
+static MalValue url_set_search(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) nt;
+    (void) callee;
+    if (!mal_value_is_url_object(self)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "not a URL");
+        return mal_value_new_undefined();
+    }
+    MalString *value;
+    if (argc < 1 || !mal_vm_to_string(vm, args[0], &value)) {
+        return mal_value_new_undefined();
+    }
+    MalUrlObject *url = mal_value_to_url_object(self);
+    mal_url_set_search(
+        url->handle, mal_string_code_units(value), mal_string_length(value), false);
+    url_refresh_search_params(vm, url);
+    return mal_value_new_undefined();
+}
 
 /* toString() / toJSON() == href. */
 static MalValue url_to_string(
@@ -243,6 +299,7 @@ static MalUrlSearchParamsObject *usp_new(MalHeap *heap, MalObject *prototype) {
     p->pairs = nullptr;
     p->count = 0;
     p->cap = 0;
+    p->url = nullptr;
     return p;
 }
 
@@ -260,6 +317,17 @@ static void usp_trace(MalHeapHeader *cell) {
         mal_gc_mark_value(mal_value_from_string(p->pairs[i].name));
         mal_gc_mark_value(mal_value_from_string(p->pairs[i].value));
     }
+    if (p->url != nullptr) {
+        mal_gc_mark_value(mal_value_from_url_object(p->url));
+    }
+}
+
+static void usp_clear(MalUrlSearchParamsObject *p) {
+    for (i32 i = 0; i < p->count; i++) {
+        mal_gc_write_barrier(mal_value_from_string(p->pairs[i].name));
+        mal_gc_write_barrier(mal_value_from_string(p->pairs[i].value));
+    }
+    p->count = 0;
 }
 
 static void usp_append(MalUrlSearchParamsObject *p, MalString *name, MalString *value) {
@@ -371,6 +439,18 @@ static void usp_parse_string(MalVm *vm, MalUrlSearchParamsObject *p, MalString *
     byte *bytes = mal_utf8_encode(u + off, len - off, &blen);
     usp_parse_bytes(vm, p, bytes, blen);
     free(bytes);
+}
+
+static void url_refresh_search_params(MalVm *vm, MalUrlObject *url) {
+    if (url->search_params == nullptr) {
+        return;
+    }
+    MalValue search = url_component(vm, url->handle, mal_url_search);
+    MalRootSpan rs;
+    mal_gc_root(&rs, &search, 1);
+    usp_clear(url->search_params);
+    usp_parse_string(vm, url->search_params, mal_value_to_string(search));
+    mal_gc_unroot(&rs);
 }
 
 static bool usp_to_usv_string(MalVm *vm, MalValue input, MalValue *out) {
@@ -654,6 +734,24 @@ static MalUrlSearchParamsObject *usp_create(MalVm *vm) {
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_URL_SEARCH_PARAMS_PROTOTYPE]));
 }
 
+static void url_create_search_params(MalVm *vm, MalUrlObject *url) {
+    MalUrlSearchParamsObject *p = usp_create(vm);
+    MalValue params = mal_value_from_url_search_params_object(p);
+    url->search_params = p;
+    p->url = url;
+    mal_gc_card(&url->object.header, params);
+    mal_gc_card(&p->object.header, mal_value_from_url_object(url));
+
+    MalRootSpan rs;
+    mal_gc_root(&rs, &params, 1);
+    MalValue search = url_component(vm, url->handle, mal_url_search);
+    MalRootSpan search_span;
+    mal_gc_root(&search_span, &search, 1);
+    usp_parse_string(vm, p, mal_value_to_string(search));
+    mal_gc_unroot(&search_span);
+    mal_gc_unroot(&rs);
+}
+
 /* Growable UTF-16 output buffer for serialization. */
 typedef struct {
     c16 *data;
@@ -708,6 +806,19 @@ static MalValue usp_serialize(MalVm *vm, MalUrlSearchParamsObject *p) {
     MalValue result = mal_value_from_string(mal_string_new_copy(&vm->heap, o.data, o.len));
     free(o.data);
     return result;
+}
+
+static void usp_update_url(MalVm *vm, MalUrlSearchParamsObject *p) {
+    if (p->url == nullptr) {
+        return;
+    }
+    MalValue query = usp_serialize(vm, p);
+    MalRootSpan rs;
+    mal_gc_root(&rs, &query, 1);
+    MalString *string = mal_value_to_string(query);
+    mal_url_set_search(p->url->handle, mal_string_code_units(string),
+        mal_string_length(string), p->count == 0);
+    mal_gc_unroot(&rs);
 }
 
 static MalUrlSearchParamsObject *usp_this(MalValue self) {
@@ -871,6 +982,7 @@ static MalValue usp_append_method(
         && usp_to_usv_string(vm, args[1], &roots[1]);
     if (converted) {
         usp_append(p, mal_value_to_string(roots[0]), mal_value_to_string(roots[1]));
+        usp_update_url(vm, p);
     }
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&rs);
@@ -936,6 +1048,7 @@ static MalValue usp_set(
     } else {
         p->count = w;
     }
+    usp_update_url(vm, p);
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&rs);
     return mal_value_new_undefined();
@@ -982,6 +1095,7 @@ static MalValue usp_delete(
         }
     }
     p->count = w;
+    usp_update_url(vm, p);
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&rs);
     return mal_value_new_undefined();
@@ -1008,6 +1122,7 @@ static MalValue usp_sort(
         }
         p->pairs[j + 1] = key;
     }
+    usp_update_url(vm, p);
     return mal_value_new_undefined();
 }
 
@@ -1127,8 +1242,6 @@ static MalValue usp_get_size(
     return p != nullptr ? mal_value_from_f64((f64) p->count) : mal_value_new_undefined();
 }
 
-/* url.searchParams: a snapshot URLSearchParams parsed from url.search (v1 is not
- * live — write-back to the URL is a follow-up). */
 static MalValue url_get_search_params(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) args;
@@ -1139,17 +1252,8 @@ static MalValue url_get_search_params(
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "not a URL");
         return mal_value_new_undefined();
     }
-    MalValue search = url_component(vm, mal_value_to_url_object(self)->handle, mal_url_search);
-    MalRootSpan srs;
-    mal_gc_root(&srs, &search, 1); // survives the params-object allocation below
-    MalUrlSearchParamsObject *p = usp_create(vm);
-    MalValue result = mal_value_from_url_search_params_object(p);
-    MalRootSpan rrs;
-    mal_gc_root(&rrs, &result, 1);
-    usp_parse_string(vm, p, mal_value_to_string(search));
-    mal_gc_unroot(&rrs);
-    mal_gc_unroot(&srs);
-    return result;
+    MalUrlObject *url = mal_value_to_url_object(self);
+    return mal_value_from_url_search_params_object(url->search_params);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1254,6 +1358,7 @@ void mal_url_install(MalVm *vm, MalObject *global_this) {
 
     // GC hooks.
     mal_gc_register_finalizer(MAL_HEAP_URL_OBJECT, url_finalize);
+    mal_gc_register_tracer(MAL_HEAP_URL_OBJECT, url_trace);
     mal_gc_register_finalizer(MAL_HEAP_URL_SEARCH_PARAMS_OBJECT, usp_finalize);
     mal_gc_register_tracer(MAL_HEAP_URL_SEARCH_PARAMS_OBJECT, usp_trace);
 }

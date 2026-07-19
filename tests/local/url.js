@@ -138,13 +138,74 @@ new URLSearchParams("a=1&b=2").forEach((v, k) => {
 });
 eq("usp-forEach", forEachOut, "a:1;b:2;");
 
-// --- url.searchParams (snapshot read for v1) ---
-eq("url-searchParams-get", new URL("https://x.com/?a=1&b=2").searchParams.get("a"), "1");
-eq(
-	"url-searchParams-toString",
-	new URL("https://x.com/?a=1&b=2").searchParams.toString(),
-	"a=1&b=2",
+// --- url.searchParams stable two-way association ---
+const associated = new URL("https://x.com/path?a=1&b=2#frag");
+const associatedParams = associated.searchParams;
+check("url-searchParams-stable", associatedParams === associated.searchParams);
+check(
+	"url-searchParams eager prototype",
+	Object.getPrototypeOf(associatedParams) === URLSearchParams.prototype,
 );
+eq("url-searchParams-get", associatedParams.get("a"), "1");
+associatedParams.append("c", "a b");
+eq("url-searchParams-to-url", associated.search, "?a=1&b=2&c=a+b");
+associated.search = "?x=3&x=4";
+check("url-search-to-params identity", associated.searchParams === associatedParams);
+eq("url-search-to-params", associatedParams.toString(), "x=3&x=4");
+associated.href = "https://other.example/next?href=updated#tail";
+check("url-href-to-params identity", associated.searchParams === associatedParams);
+eq("url-href-to-params", associatedParams.toString(), "href=updated");
+associatedParams.set("href", "written back");
+eq(
+	"url-params-set href",
+	associated.href,
+	"https://other.example/next?href=written+back#tail",
+);
+associatedParams.delete("href");
+eq("url-params-empty removes query", associated.href, "https://other.example/next#tail");
+
+associatedParams.set("safe", "1");
+const hrefBeforeInvalid = associated.href;
+const paramsBeforeInvalid = associatedParams.toString();
+let invalidHrefThrew = false;
+try {
+	associated.href = "not a valid URL";
+} catch (e) {
+	invalidHrefThrew = e instanceof TypeError;
+}
+check("url-invalid-href throws TypeError", invalidHrefThrew);
+eq("url-invalid-href unchanged", associated.href, hrefBeforeInvalid);
+check("url-invalid-href params identity", associated.searchParams === associatedParams);
+eq("url-invalid-href params unchanged", associatedParams.toString(), paramsBeforeInvalid);
+
+associated.search = "?direct=1";
+eq("url-search direct sync", associatedParams.toString(), "direct=1");
+associated.search = "";
+eq("url-empty-search clears params", associatedParams.toString(), "");
+eq("url-empty-search removes query", associated.href, "https://other.example/next#tail");
+
+// Iterators remain snapshots until a dedicated branded live iterator is added.
+const snapshot = new URLSearchParams("a=1&b=2");
+const snapshotEntries = snapshot.entries();
+snapshot.append("c", "3");
+eq("usp-snapshot-first", snapshotEntries.next().value.join("="), "a=1");
+eq("usp-snapshot-existing", snapshotEntries.next().value.join("="), "b=2");
+check("usp-snapshot-excludes-appended", snapshotEntries.next().done);
+
+const snapshotKeys = snapshot.keys();
+snapshot.delete("a");
+eq("usp-snapshot-keys before mutation", snapshotKeys.next().value, "a");
+
+// Keep only the params object reachable while stress GC runs through allocations;
+// its traced back-reference must retain the URL handle used for write-back.
+function retainedSearchParams() {
+	const url = new URL("https://retained.example/?start=1");
+	return url.searchParams;
+}
+const retained = retainedSearchParams();
+for (let i = 0; i < 80; i++) retained.append("k" + i, "v" + i);
+eq("url-searchParams retained URL", retained.get("k79"), "v79");
+eq("url-searchParams retained write-back", retained.toString().slice(-7), "k79=v79");
 
 // --- summary ---
 let passed = 0;

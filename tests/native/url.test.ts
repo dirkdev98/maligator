@@ -15,21 +15,37 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-url-"));
 // The URL object holds an ada-url Rust handle freed by a GC finalizer, so the
 // STRESS run exercises that lifecycle.
 describe("WHATWG URL / URLSearchParams", () => {
-	let bin: string;
+	let compiled: string;
+	let interpreted: string;
 	beforeAll(() => {
-		bin = buildNativeBinary({
+		compiled = buildNativeBinary({
 			fixture: "tests/local/url.js",
-			name: "urltest",
+			name: "urltest-compiled",
+			mainFile: HOST_MAIN,
+			outDir,
+		});
+		interpreted = buildNativeBinary({
+			fixture: "tests/local/url.js",
+			name: "urltest-interpreted",
+			compiled: false,
 			mainFile: HOST_MAIN,
 			outDir,
 		});
 	});
 
 	it("passes compiled", () => {
-		assertResultPass(runToStdout(bin));
+		assertResultPass(runToStdout(compiled));
 	});
 
-	it("passes under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
-		assertResultPass(runToStdout(bin, { env: STRESS_ENV }));
+	it("passes compiled under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
+		assertResultPass(runToStdout(compiled, { env: STRESS_ENV }));
+	});
+
+	it("passes interpreted", () => {
+		assertResultPass(runToStdout(interpreted));
+	});
+
+	it("passes interpreted under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
+		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV }));
 	});
 });
