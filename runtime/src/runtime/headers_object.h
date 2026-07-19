@@ -41,8 +41,7 @@ void mal_headers_append_entry(MalHeadersObject *headers, MalString *name, MalStr
 /* Create an empty Headers using the intrinsic prototype. */
 MalHeadersObject *mal_headers_create(MalVm *vm);
 
-/* Create a Headers filled from an init (another Headers or an enumerable record).
- * Record keys and values use Web IDL-ish string coercion. */
+/* Create an intrinsic-prototype Headers filled from a Web IDL HeadersInit. */
 MalHeadersObject *mal_headers_from_init(MalVm *vm, MalValue init);
 
 /* Append normalized copies of raw host bytes to a JS Headers view. */

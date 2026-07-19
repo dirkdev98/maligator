@@ -2809,11 +2809,10 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
             return vm->completion;
         }
 
-        // Native constructors currently allocate internally. Reapply
-        // OrdinaryCreateFromConstructor to their object result when new.target
-        // differs. The prototype the native selected identifies its intrinsic
-        // default slot; this also handles a primitive newTarget.prototype by
-        // selecting that slot from newTarget's realm.
+        // Native constructors allocate internally. If one returned an object with
+        // an intrinsic prototype, reapply OrdinaryCreateFromConstructor when
+        // new.target differs. A non-intrinsic prototype was already selected by
+        // the native and must not trigger a second observable prototype lookup.
         if (mal_value_is_object(value) && effective_new_target != resolution.callee &&
             mal_value_is_object(effective_new_target)) {
             MalObject *value_object = mal_value_to_object(value);
@@ -2843,22 +2842,6 @@ MalCompletion mal_vm_construct_value_with_target(MalVm *vm, MalValue callee, con
                     return vm->completion;
                 }
                 mal_object_set_prototype(value_object, derived_prototype);
-            } else {
-                // Preserve support for embedding-provided native constructors
-                // whose allocation prototype is not an engine intrinsic.
-                MalValue prototype;
-                if (!mal_vm_get_property(vm, effective_new_target,
-                        mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
-                    mal_gc_unroot(&native_root);
-#if MAL_REALMS
-                    mal_vm_realm_switch_to(vm, saved_realm);
-#endif
-                    free(resolution.owned_args);
-                    return vm->completion;
-                }
-                if (mal_value_is_object(prototype)) {
-                    mal_object_set_prototype(value_object, mal_value_to_object(prototype));
-                }
             }
         }
         completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};

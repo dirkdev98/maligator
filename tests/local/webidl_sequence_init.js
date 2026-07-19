@@ -438,6 +438,8 @@ function abruptSequence(Constructor) {
 	const marker = {};
 	let outerClosed = 0;
 	let innerClosed = 0;
+	let outerReturnGets = 0;
+	let innerReturnGets = 0;
 	const pair = {
 		[Symbol.iterator]() {
 			let done = false;
@@ -454,9 +456,12 @@ function abruptSequence(Constructor) {
 						},
 					};
 				},
-				return() {
-					innerClosed++;
-					return { done: true };
+				get return() {
+					innerReturnGets++;
+					return function () {
+						innerClosed++;
+						return { done: true };
+					};
 				},
 			};
 		},
@@ -470,9 +475,12 @@ function abruptSequence(Constructor) {
 					done = true;
 					return { done: false, value: pair };
 				},
-				return() {
-					outerClosed++;
-					return { done: true };
+				get return() {
+					outerReturnGets++;
+					return function () {
+						outerClosed++;
+						return { done: true };
+					};
 				},
 			};
 		},
@@ -483,7 +491,13 @@ function abruptSequence(Constructor) {
 	} catch (error) {
 		preserved = error === marker;
 	}
-	return preserved && outerClosed === 0 && innerClosed === 0;
+	return (
+		preserved &&
+		outerReturnGets === 0 &&
+		innerReturnGets === 0 &&
+		outerClosed === 0 &&
+		innerClosed === 0
+	);
 }
 
 function abruptInnerNextGetter(Constructor) {
@@ -587,6 +601,35 @@ mutated.delete("delete");
 check(
 	"URLSearchParams set/delete barriers retain compacted young strings",
 	mutated.toString() === "replace=young-1&tail=young-2",
+);
+
+const cardedHeaders = new Headers();
+forceGc();
+for (let i = 0; i < 24; i++) {
+	cardedHeaders.append(
+		{
+			toString() {
+				return "x-name-" + i;
+			},
+		},
+		{
+			toString() {
+				return "value-" + i;
+			},
+		},
+	);
+}
+cardedHeaders.set("x-name-0", {
+	toString() {
+		return "replaced";
+	},
+});
+cardedHeaders.delete("x-name-1");
+check(
+	"Headers append/set/delete barriers retain young strings",
+	cardedHeaders.get("x-name-0") === "replaced" &&
+		!cardedHeaders.has("x-name-1") &&
+		cardedHeaders.get("x-name-23") === "value-23",
 );
 
 let passed = 0;

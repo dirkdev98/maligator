@@ -69,10 +69,14 @@ static MalString *mal_headers_trim_value(MalVm *vm, const MalString *value) {
     const c16 *units = mal_string_code_units(value);
     usize start = 0;
     usize end = mal_string_length(value);
-    while (start < end && (units[start] == ' ' || units[start] == '\t')) {
+    while (start < end
+        && (units[start] == ' ' || units[start] == '\t' || units[start] == '\r'
+            || units[start] == '\n')) {
         start++;
     }
-    while (end > start && (units[end - 1] == ' ' || units[end - 1] == '\t')) {
+    while (end > start
+        && (units[end - 1] == ' ' || units[end - 1] == '\t' || units[end - 1] == '\r'
+            || units[end - 1] == '\n')) {
         end--;
     }
     return mal_string_new_copy(&vm->heap, units + start, end - start);
@@ -199,14 +203,15 @@ static bool mal_headers_append_values(
         return false;
     }
     roots[2] = mal_value_from_string(value);
+    roots[2] = mal_value_from_string(mal_headers_trim_value(vm, value));
+    value = mal_value_to_string(roots[2]);
     if (!mal_headers_validate_value(vm, value)) {
         mal_gc_unroot(&rs);
         return false;
     }
-    MalString *normalized_value = mal_headers_trim_value(vm, value);
     bool mutable = mal_headers_can_mutate(vm, h);
     if (mutable) {
-        mal_headers_append_entry(h, name, normalized_value);
+        mal_headers_append_entry(h, name, value);
     }
     mal_gc_unroot(&rs);
     return mutable;
@@ -659,11 +664,12 @@ static MalValue mal_headers_method_get(
     return result;
 }
 
-MalHeadersObject *mal_headers_from_init(MalVm *vm, MalValue init) {
+static MalHeadersObject *mal_headers_from_init_with_prototype(
+    MalVm *vm, MalValue init, MalObject *prototype) {
     MalValue roots[2] = {mal_value_new_undefined(), init};
     MalRootSpan rs;
     mal_gc_root(&rs, roots, 2);
-    MalHeadersObject *h = mal_headers_create(vm);
+    MalHeadersObject *h = mal_headers_object_new(&vm->heap, prototype);
     roots[0] = mal_value_from_headers_object(h);
     if (!mal_value_is_undefined(roots[1])) {
         mal_gc_native_rooted_begin(vm);
@@ -674,13 +680,33 @@ MalHeadersObject *mal_headers_from_init(MalVm *vm, MalValue init) {
     return h;
 }
 
+MalHeadersObject *mal_headers_from_init(MalVm *vm, MalValue init) {
+    return mal_headers_from_init_with_prototype(vm, init,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_HEADERS_PROTOTYPE]));
+}
+
 static MalValue mal_headers_constructor(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) this_value;
-    (void) nt;
     (void) callee;
+    if (mal_value_is_undefined(nt)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Constructor Headers requires 'new'");
+        return mal_value_new_undefined();
+    }
     MalValue init = argc >= 1 ? args[0] : mal_value_new_undefined();
-    return mal_value_from_headers_object(mal_headers_from_init(vm, init));
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, nt, MAL_INTRINSIC_HEADERS_PROTOTYPE, &prototype)) {
+        return mal_value_new_undefined();
+    }
+    MalValue prototype_root = mal_value_from_object(prototype);
+    MalRootSpan prototype_span;
+    mal_gc_root(&prototype_span, &prototype_root, 1);
+    MalValue result = mal_value_from_headers_object(
+        mal_headers_from_init_with_prototype(vm, init, prototype));
+    mal_gc_unroot(&prototype_span);
+    return result;
 }
 
 /* --- sorted, live iteration (entries / keys / values / forEach / @@iterator) --- */

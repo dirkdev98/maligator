@@ -26,7 +26,7 @@ const FIXTURES = [
 	{
 		name: "Headers iteration",
 		fixture: "tests/local/headers_iter.js",
-		interpreted: false,
+		interpreted: true,
 	},
 	{
 		name: "Response read methods",

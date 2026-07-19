@@ -23,6 +23,39 @@ const h = new Headers({
 		return 42;
 	},
 });
+class DerivedHeaders extends Headers {}
+const derived = new DerivedHeaders([["X-Derived", "yes"]]);
+let constructionOrder = "";
+const orderedInit = {};
+Object.defineProperty(orderedInit, Symbol.iterator, {
+	get() {
+		constructionOrder += "i";
+		return function () {
+			return [][Symbol.iterator]();
+		};
+	},
+});
+const NewTargetBase = function () {};
+const NewTarget = new Proxy(NewTargetBase, {
+	get(target, key, receiver) {
+		if (key === "prototype") constructionOrder += "p";
+		return Reflect.get(target, key, receiver);
+	},
+});
+const reflected = Reflect.construct(Headers, [orderedInit], NewTarget);
+check(
+	"constructor requires new",
+	rejectsTypeError(() => Headers()),
+);
+check(
+	"subclass construction honors newTarget prototype",
+	derived instanceof DerivedHeaders && derived.get("x-derived") === "yes",
+);
+check(
+	"Reflect.construct honors newTarget prototype",
+	Object.getPrototypeOf(reflected) === NewTargetBase.prototype,
+);
+check("prototype lookup precedes HeadersInit", constructionOrder === "pi");
 check(
 	"record getters, coercion, lowercase names, and value trimming",
 	getterCalls === 1 && h.get("X-Z") === "z" && h.get("x-num") === "42",
@@ -35,6 +68,26 @@ h.append("set-cookie", "b=2");
 check("get combines duplicate values", h.get("X-A") === "1, 2");
 check("get combines Set-Cookie for compatibility", h.get("set-cookie") === "a=1, b=2");
 check("getSetCookie preserves separate values", h.getSetCookie().join("|") === "a=1|b=2");
+
+const initializedDuplicates = new Headers([
+	["X-Duplicate", "one"],
+	["x-duplicate", "two"],
+	["Set-Cookie", "c=3"],
+	["set-cookie", "d=4"],
+]);
+check(
+	"sequence initialization preserves duplicate and Set-Cookie values",
+	initializedDuplicates.get("x-duplicate") === "one, two" &&
+		initializedDuplicates.getSetCookie().join("|") === "c=3|d=4" &&
+		[...initializedDuplicates].length === 3,
+);
+
+check(
+	"normalization strips edge HTTP whitespace before validation",
+	new Headers([["x", "\r\n \tvalue\t \r\n"]]).get("x") === "value" &&
+		new Headers([["x", "\r\n"]]).get("x") === "" &&
+		rejectsTypeError(() => new Headers([["x", "a\rb"]])),
+);
 
 let entries = "";
 for (const [name, value] of h.entries()) entries += `${name}=${value};`;
