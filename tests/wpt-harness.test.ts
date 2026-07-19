@@ -227,4 +227,35 @@ promise_test(function() { assert_true(true); }, "after timeout");`,
 			["after timeout", "PASS"],
 		]);
 	});
+
+	it("supports the async and assertion APIs used by the curated server-main tests", () => {
+		const program = createWptProgram(
+			"html/webappapis/timers/apis.any.js",
+			String.raw`
+test(function(t) {
+  assert_throws_js(TypeError, function() { throw new TypeError("bad"); });
+  var reason = {};
+  assert_throws_exactly(reason, function() { throw reason; });
+  t.step_func(function() { assert_true(true); })();
+}, "sync context");
+async_test(function(t) {
+  t.step_timeout(t.step_func_done(function() { assert_true(true); }), 5);
+}, "async context");
+async_test(function(t) {
+  setTimeout(t.step_func(function() { assert_unreached("callback failure"); }), 5);
+}, "async failure");
+done();`,
+			50,
+		);
+		const stdout = execFileSync("node", ["--input-type=commonjs", "--eval", program], {
+			encoding: "utf8",
+			timeout: 2_000,
+		});
+		const parsed = parseWptOutput(stdout, "html/webappapis/timers/apis.any.js");
+		expect(parsed.subtests.map(({ subtest, status }) => [subtest, status])).toEqual([
+			["sync context", "PASS"],
+			["async context", "PASS"],
+			["async failure", "FAIL"],
+		]);
+	});
 });

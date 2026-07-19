@@ -4,6 +4,71 @@
 	"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd",
 	"tests": [
 		{
+			"path": "dom/abort/event.any.js",
+			"sha256": "d67dcb62c7959d541ab6fe9fd3e2bfe1fb9ffcb27290f8c51d37a32074d844c5",
+			"gcStress": true
+		},
+		{
+			"path": "encoding/api-surrogates-utf8.any.js",
+			"sha256": "66c441e9f6718f6e38c8bffeb52e25de785e8c4e1bc76d57b3cf1da98730b873",
+			"gcStress": true
+		},
+		{
+			"path": "encoding/textdecoder-fatal.any.js",
+			"sha256": "083a058a10a2bdc77e1da32d0acda791b568a6701c49db10cec2bfa1f7b9eab8",
+			"gcStress": true
+		},
+		{
+			"path": "encoding/textdecoder-ignorebom.any.js",
+			"sha256": "f0ecc2649c9d12e1ea0556d3eac82d78de15d9466301ec4997add573d39bebe1",
+			"gcStress": true
+		},
+		{
+			"path": "encoding/textencoder-utf16-surrogates.any.js",
+			"sha256": "9f62d3946b7734822ce9a1be906f9204718315df50c034f779afae894ae0753f",
+			"gcStress": true
+		},
+		{
+			"path": "fetch/api/headers/headers-casing.any.js",
+			"sha256": "f9034ff6ddc3c23e2aa16419738005d229e19a0b40eb5791af465b16df3ab877",
+			"gcStress": true
+		},
+		{
+			"path": "fetch/api/headers/headers-combine.any.js",
+			"sha256": "8bc26fcc318dc1fb0d0b60f2a4dd6d5fdaa8ac2e148d20856f6186b5d4f4971d",
+			"gcStress": true
+		},
+		{
+			"path": "fetch/api/headers/headers-errors.any.js",
+			"sha256": "4b4b9c8d9b72a52c5200feaa67f018cc91d05e9ee0c98a2a18ad56f44873047b",
+			"gcStress": true
+		},
+		{
+			"path": "fetch/api/headers/headers-normalize.any.js",
+			"sha256": "8f914199d80ed14cd5dec7992464a10981e0b5b74fd26b70768f04f1fd1fb4c1",
+			"gcStress": true
+		},
+		{
+			"path": "fetch/api/headers/headers-structure.any.js",
+			"sha256": "50f222c12d865e69b860ce02b471accd4b6983a516bec380ece51fbda3a72bec",
+			"gcStress": true
+		},
+		{
+			"path": "html/webappapis/timers/cleartimeout-clearinterval.any.js",
+			"sha256": "88249c3de681efa1db0c3a6ca39cdc74b657b052eeb96ca7d43b2971d5327985",
+			"gcStress": true
+		},
+		{
+			"path": "url/url-statics-canparse.any.js",
+			"sha256": "65aac5c10f153bc2ac851a0b88257a69dd5f4c92cb5e70a225b6fb06f1300de1",
+			"gcStress": true
+		},
+		{
+			"path": "url/url-tojson.any.js",
+			"sha256": "dc5707460963a2cc4dd2e77d48b369ac174515b8fd2f76083f0ade9328b5551a",
+			"gcStress": true
+		},
+		{
 			"path": "url/urlsearchparams-append.any.js",
 			"sha256": "b3fdef26237562dee586c7768af5b484b3ff9d372595d8a8e59b7ebd1099c19b",
 			"gcStress": true
@@ -14,13 +79,23 @@
 			"gcStress": true
 		},
 		{
+			"path": "url/urlsearchparams-getall.any.js",
+			"sha256": "f6501e719a9ab88c648d1bff0da30b2efda7aaa16d9e4220e95a952fdc17be8c",
+			"gcStress": true
+		},
+		{
+			"path": "url/urlsearchparams-has.any.js",
+			"sha256": "568dcc6cb4b4ff7c9fbf59482bcde7b38c1c9da4247dd121894e1fedb8ddf352",
+			"gcStress": true
+		},
+		{
 			"path": "url/urlsearchparams-set.any.js",
 			"sha256": "41771dec1616c4715c33a2a77b3125483c4bce24998e344222e9b8d1f49d68de",
 			"gcStress": true
 		},
 		{
-			"path": "encoding/api-surrogates-utf8.any.js",
-			"sha256": "66c441e9f6718f6e38c8bffeb52e25de785e8c4e1bc76d57b3cf1da98730b873",
+			"path": "url/urlsearchparams-size.any.js",
+			"sha256": "cc17292db2bc179bd2629be9867ded0b413de399a6ce1fbf8943d012894cac94",
 			"gcStress": true
 		}
 	]

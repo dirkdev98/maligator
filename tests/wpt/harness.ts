@@ -199,10 +199,66 @@ function __wpt_emit(name, status, message) {
   __wpt_count++;
   console.log("WPT_RESULT " + JSON.stringify({path: __wpt_path, subtest: name, status: status, message: message}));
 }
+function __wpt_context(finish, isSettled) {
+  var context = {};
+  context.done = function() { finish("PASS", null); };
+  context.step_func = function(callback) {
+    return function() {
+      if (isSettled()) return;
+      try { return callback.apply(this, arguments); }
+      catch (error) { finish("FAIL", __wpt_message(error)); }
+    };
+  };
+  context.step_func_done = function(callback) {
+    return context.step_func(function() {
+      if (callback) callback.apply(this, arguments);
+      context.done();
+    });
+  };
+  context.step_timeout = function(callback, timeout) {
+    return setTimeout(context.step_func(callback), timeout);
+  };
+  context.unreached_func = function(message) {
+    return context.step_func(function() { assert_unreached(message); });
+  };
+  return context;
+}
 function test(callback, name) {
   console.log("WPT_START " + JSON.stringify({path: __wpt_path, subtest: String(name)}));
-  try { callback(); __wpt_emit(String(name), "PASS", null); }
+  try {
+    var settled = false;
+    var finish = function(status, message) {
+      if (settled) return;
+      settled = true;
+      if (status !== "PASS") throw new Error(message);
+    };
+    callback(__wpt_context(finish, function() { return settled; }));
+    __wpt_emit(String(name), "PASS", null);
+  }
   catch (error) { __wpt_emit(String(name), "FAIL", __wpt_message(error)); }
+}
+function async_test(callback, name) {
+  name = String(name);
+	__wpt_queue = __wpt_queue.then(function() {
+		console.log("WPT_START " + JSON.stringify({path: __wpt_path, subtest: name}));
+		return new Promise(function(resolve) {
+			var settled = false;
+			var timer;
+			function finish(status, message) {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				__wpt_emit(name, status, message);
+				resolve();
+			}
+			var context = __wpt_context(finish, function() { return settled; });
+			timer = setTimeout(function() {
+				finish("TIMEOUT", "subtest timed out after " + __wpt_timeout + "ms");
+			}, __wpt_timeout);
+			try { callback(context); }
+			catch (error) { finish("FAIL", __wpt_message(error)); }
+		});
+	});
 }
 function promise_test(callback, name) {
 	name = String(name);
@@ -248,11 +304,23 @@ function assert_array_equals(actual, expected, message) {
   if (actual.length !== expected.length) __wpt_fail((message ? message + ": " : "") + "array lengths differ");
   for (var i = 0; i < expected.length; i++) assert_equals(actual[i], expected[i], message || "array item " + i);
 }
+function assert_throws_js(constructor, callback, message) {
+  var error = null;
+  try { callback(); } catch (caught) { error = caught; }
+  if (!(error instanceof constructor)) __wpt_fail((message ? message + ": " : "") + "expected " + constructor.name);
+}
 function assert_throws_dom(name, callback, message) {
   var error = null;
   try { callback(); } catch (caught) { error = caught; }
   if (error === null || error.name !== name) __wpt_fail((message ? message + ": " : "") + "expected " + name);
 }
+function assert_throws_exactly(expected, callback, message) {
+  var error = null;
+  try { callback(); } catch (caught) { error = caught; }
+  if (error !== expected) __wpt_fail((message ? message + ": " : "") + "expected exact thrown value");
+}
+function assert_unreached(message) { __wpt_fail(message || "reached unreachable code"); }
+function done() {}
 function format_value(value) { return JSON.stringify(value); }
 function generate_tests(callback, cases) {
   cases.forEach(function(item) { test(function() { callback.apply(null, item.slice(1)); }, item[0]); });
