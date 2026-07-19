@@ -153,9 +153,11 @@ void mal_host_run_event_loop(MalVm *vm) {
         // Microtasks first (promise jobs), then one macrotask, then repeat.
         mal_vm_drain_microtasks(vm);
         if (mal_host_run_runtime_macrotask(vm)) {
+            if (mal_gc_poll) mal_gc_safepoint(vm);
             continue;
         }
         if (mal_host_run_one_ready(vm)) {
+            if (mal_gc_poll) mal_gc_safepoint(vm);
             continue;
         }
         // No callback is ready. If the reactor still holds timers/fd ops, block
