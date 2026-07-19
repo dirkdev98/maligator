@@ -348,6 +348,14 @@ bool mal_host_next_task(MalHostTasks *tasks, MalHostTask *task) {
     return true;
 }
 
+bool mal_host_peek_task(const MalHostTasks *tasks, MalHostTask *task) {
+    if (task == nullptr || tasks->head == nullptr) return false;
+    *task = tasks->head->task;
+    task->_node = nullptr;
+    task->data = nullptr;
+    return true;
+}
+
 void *mal_host_task_take_data(MalHostTasks *tasks, MalHostTask *task) {
     if (task == nullptr || task->_node == nullptr) {
         return nullptr;

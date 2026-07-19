@@ -133,6 +133,10 @@ int mal_net_connect_address(const struct sockaddr *address, socklen_t length) {
         errno = error;
         return -1;
     }
+#if defined(SO_NOSIGPIPE)
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
     int r = connect(fd, address, length);
     if (r < 0 && errno != EINPROGRESS) {
         close(fd);
@@ -169,4 +173,12 @@ void mal_net_close(int fd) {
     if (fd >= 0) {
         close(fd);
     }
+}
+
+ssize_t mal_net_write(int fd, const void *bytes, usize length) {
+#if defined(MSG_NOSIGNAL)
+    return send(fd, bytes, length, MSG_NOSIGNAL);
+#else
+    return send(fd, bytes, length, 0);
+#endif
 }

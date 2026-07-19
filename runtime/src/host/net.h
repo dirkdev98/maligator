@@ -47,3 +47,6 @@ int mal_net_socket_error(int fd);
 
 /* Close a socket fd (no-op for fd < 0). */
 void mal_net_close(int fd);
+
+/* Socket write that suppresses SIGPIPE when the peer has already closed. */
+ssize_t mal_net_write(int fd, const void *bytes, usize length);

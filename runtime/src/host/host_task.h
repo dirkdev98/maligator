@@ -81,6 +81,8 @@ bool mal_host_operation_complete(
 bool mal_host_operation_cancel(MalHostTasks *tasks, MalHostHandle operation);
 
 bool mal_host_next_task(MalHostTasks *tasks, MalHostTask *task);
+/* Inspect the next task without dequeuing or transferring any ownership. */
+bool mal_host_peek_task(const MalHostTasks *tasks, MalHostTask *task);
 /* Transfer payload ownership out of a dequeued task; its destroy callback is disarmed. */
 void *mal_host_task_take_data(MalHostTasks *tasks, MalHostTask *task);
 void mal_host_task_release(MalHostTasks *tasks, MalHostTask *task);
