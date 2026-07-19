@@ -89,14 +89,22 @@ stated acceptance point without patching Express or anything in `node_modules`.
       interpreted modes, normal and GC-stress, with UBSan coverage. Its harness-only
       `node:assert/strict` dependency has the `equal`, `deepEqual`, and `match` subset
       used by this fixture; that module is not yet a general Node assertion surface.
-- [ ] **Benchmark native Express serving.** After the behavior baseline is green,
+- [x] **Benchmark native Express serving.** After the behavior baseline is green,
       add a representative unmodified-Express request mix to the consolidated
       `npm run bench` HTTP tracker. Record binary-size, throughput, and latency
       baselines before optimizing the buffered adapter or replacing it with the
       streaming transport, so compatibility work cannot hide performance regressions.
       The tracker now measures a six-route mix plus JSON and URL-encoded POSTs against
-      Node, with compiled binary size, request throughput, and p99 latency. Recording
-      its first clean committed baseline entry remains.
+      Node, with compiled binary size, request throughput, and p99 latency. The first
+      clean baseline is recorded at `1b7734a`.
+- [ ] **Close measured Express performance gaps.** Keep a profiling-driven performance
+      lane beside compatibility work, preserving fixture behavior and bare-server
+      throughput. Servicing deferred GC polls at safe host macrotask boundaries reduced
+      five-second route-load RSS from roughly 2.1 GiB to 20 MiB and raised the clean
+      route baseline to 12,235 req/s (0.25x Node), with JSON at 9,240 req/s (0.20x) and
+      form parsing at 6,943 req/s (0.16x). Next target measured call-dispatch,
+      string/RegExp, property-lookup, and object-shaping costs rather than endpoint
+      shortcuts.
 
 ## Likely built-ins
 
