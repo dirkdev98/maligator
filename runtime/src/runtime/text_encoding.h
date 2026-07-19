@@ -22,3 +22,11 @@ c16 *mal_utf8_decode(const byte *bytes, usize len, usize *out_count);
  * buffer the caller frees.
  */
 c16 *mal_utf8_decode_report(const byte *bytes, usize len, usize *out_count, bool *had_error);
+
+/*
+ * Decode UTF-16 bytes in the requested byte order. Valid surrogate pairs are
+ * preserved as two engine code units. Odd trailing bytes and unpaired
+ * surrogates become U+FFFD and set *had_error.
+ */
+c16 *mal_utf16_decode_report(
+    const byte *bytes, usize len, bool big_endian, usize *out_count, bool *had_error);

@@ -221,13 +221,20 @@ static MalValue mal_web_text_encoder_encode_into(
     return mal_value_from_object(result);
 }
 
-/* Recognize the UTF-8 encoding labels we support (case-insensitive). */
-static bool mal_web_is_utf8_label(const MalString *s) {
-    static const char *aliases[] = {"utf-8", "utf8", "unicode-1-1-utf-8", "unicode11utf8",
-        "unicode20utf8", "x-unicode20utf8"};
+typedef enum {
+    MAL_TEXT_ENCODING_UTF8,
+    MAL_TEXT_ENCODING_UTF16LE,
+    MAL_TEXT_ENCODING_UTF16BE,
+    MAL_TEXT_ENCODING_INVALID,
+} MalTextEncoding;
+
+/* Match an Encoding Standard label after trimming ASCII whitespace and folding
+ * ASCII case. */
+static bool mal_web_encoding_label_matches(
+    const MalString *s, const char *const *aliases, usize alias_count) {
     usize len = mal_string_length(s);
     const c16 *u = mal_string_code_units(s);
-    for (usize a = 0; a < countof(aliases); a++) {
+    for (usize a = 0; a < alias_count; a++) {
         const char *alias = aliases[a];
         usize alen = strlen(alias);
         // WHATWG strips leading/trailing ASCII whitespace before matching.
@@ -262,12 +269,32 @@ static bool mal_web_is_utf8_label(const MalString *s) {
     return false;
 }
 
+static MalTextEncoding mal_web_text_encoding(const MalString *label) {
+    static const char *const utf8_aliases[] = {"utf-8", "utf8", "unicode-1-1-utf-8",
+        "unicode11utf8", "unicode20utf8", "x-unicode20utf8"};
+    static const char *const utf16le_aliases[] = {
+        "csunicode", "iso-10646-ucs-2", "ucs-2", "unicode", "unicodefeff", "utf-16", "utf-16le"};
+    static const char *const utf16be_aliases[] = {"unicodefffe", "utf-16be"};
+    if (mal_web_encoding_label_matches(label, utf8_aliases, countof(utf8_aliases))) {
+        return MAL_TEXT_ENCODING_UTF8;
+    }
+    if (mal_web_encoding_label_matches(label, utf16le_aliases, countof(utf16le_aliases))) {
+        return MAL_TEXT_ENCODING_UTF16LE;
+    }
+    if (mal_web_encoding_label_matches(label, utf16be_aliases, countof(utf16be_aliases))) {
+        return MAL_TEXT_ENCODING_UTF16BE;
+    }
+    return MAL_TEXT_ENCODING_INVALID;
+}
+
 /* Per-instance TextDecoder options, packed as an int32 stored on the instance
  * under a private "brand" symbol carried in each function's slot 0 (the
  * StringDecoder pattern). The brand doubles as a receiver check: a foreign object
  * lacks the property. */
 #define MAL_TEXT_DECODER_FATAL 1
 #define MAL_TEXT_DECODER_IGNORE_BOM 2
+#define MAL_TEXT_DECODER_ENCODING_SHIFT 2
+#define MAL_TEXT_DECODER_ENCODING_MASK (3 << MAL_TEXT_DECODER_ENCODING_SHIFT)
 
 static MalKey mal_web_text_decoder_brand_key(MalValue callee) {
     MalValue brand = mal_native_function_object_get_slot(
@@ -294,21 +321,22 @@ static bool mal_web_text_decoder_flags(MalVm *vm, MalValue self, MalValue callee
 static MalValue mal_web_text_decoder_ctor(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) this_value;
-    // Only UTF-8 is supported; a recognized non-UTF-8 label is a RangeError.
+    MalTextEncoding encoding = MAL_TEXT_ENCODING_UTF8;
     if (argc >= 1 && !mal_value_is_undefined(args[0])) {
         MalString *label;
         if (!mal_vm_to_string(vm, args[0], &label)) {
             return mal_value_new_undefined();
         }
-        if (!mal_web_is_utf8_label(label)) {
+        encoding = mal_web_text_encoding(label);
+        if (encoding == MAL_TEXT_ENCODING_INVALID) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                "TextDecoder: only the 'utf-8' encoding is supported");
+                "TextDecoder: unsupported encoding label");
             return mal_value_new_undefined();
         }
     }
     // Read fatal/ignoreBOM from the options dictionary before allocating so a
     // throwing getter aborts construction cleanly.
-    i32 flags = 0;
+    i32 flags = (i32) encoding << MAL_TEXT_DECODER_ENCODING_SHIFT;
     if (argc >= 2 && mal_value_is_object(args[1])) {
         MalValue value;
         if (!mal_vm_get_property(vm, args[1],
@@ -334,6 +362,23 @@ static MalValue mal_web_text_decoder_ctor(
         mal_value_to_object(instance), mal_web_text_decoder_brand_key(callee), &desc);
     mal_gc_unroot(&rs);
     return instance;
+}
+
+static MalValue mal_web_text_decoder_get_encoding(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    i32 flags;
+    if (!mal_web_text_decoder_flags(vm, self, callee, &flags)) {
+        return mal_value_new_undefined();
+    }
+    MalTextEncoding encoding =
+        (MalTextEncoding) ((flags & MAL_TEXT_DECODER_ENCODING_MASK) >> MAL_TEXT_DECODER_ENCODING_SHIFT);
+    const byte *name = encoding == MAL_TEXT_ENCODING_UTF16LE ? (const byte *) "utf-16le"
+        : encoding == MAL_TEXT_ENCODING_UTF16BE                  ? (const byte *) "utf-16be"
+                                                                 : (const byte *) "utf-8";
+    return mal_value_from_string(mal_intrinsic_ascii(vm, name));
 }
 
 static MalValue mal_web_text_decoder_get_fatal(
@@ -375,19 +420,33 @@ static MalValue mal_web_text_decoder_decode(
     if (!mal_web_buffer_source(vm, args[0], &bytes, &len)) {
         return mal_value_new_undefined();
     }
-    // Strip a leading UTF-8 BOM unless ignoreBOM was set at construction.
-    if ((flags & MAL_TEXT_DECODER_IGNORE_BOM) == 0 && len >= 3 && (u8) bytes[0] == 0xEF
-        && (u8) bytes[1] == 0xBB && (u8) bytes[2] == 0xBF) {
-        bytes += 3;
-        len -= 3;
+    MalTextEncoding encoding =
+        (MalTextEncoding) ((flags & MAL_TEXT_DECODER_ENCODING_MASK) >> MAL_TEXT_DECODER_ENCODING_SHIFT);
+    if ((flags & MAL_TEXT_DECODER_IGNORE_BOM) == 0) {
+        if (encoding == MAL_TEXT_ENCODING_UTF8 && len >= 3 && (u8) bytes[0] == 0xEF
+            && (u8) bytes[1] == 0xBB && (u8) bytes[2] == 0xBF) {
+            bytes += 3;
+            len -= 3;
+        } else if (encoding == MAL_TEXT_ENCODING_UTF16LE && len >= 2
+            && (u8) bytes[0] == 0xFF && (u8) bytes[1] == 0xFE) {
+            bytes += 2;
+            len -= 2;
+        } else if (encoding == MAL_TEXT_ENCODING_UTF16BE && len >= 2
+            && (u8) bytes[0] == 0xFE && (u8) bytes[1] == 0xFF) {
+            bytes += 2;
+            len -= 2;
+        }
     }
     usize count;
     bool had_error;
-    c16 *units = mal_utf8_decode_report(bytes, len, &count, &had_error);
+    c16 *units = encoding == MAL_TEXT_ENCODING_UTF8
+        ? mal_utf8_decode_report(bytes, len, &count, &had_error)
+        : mal_utf16_decode_report(
+              bytes, len, encoding == MAL_TEXT_ENCODING_UTF16BE, &count, &had_error);
     if ((flags & MAL_TEXT_DECODER_FATAL) != 0 && had_error) {
         free(units);
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "TextDecoder.decode: input is not valid utf-8");
+            "TextDecoder.decode: input is not valid for the selected encoding");
         return mal_value_new_undefined();
     }
     MalValue s = mal_value_from_string(mal_string_new_copy(&vm->heap, units, count));
@@ -1006,11 +1065,10 @@ void mal_text_encoding_globals_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_data(vm, dec_proto, (const byte *) "constructor",
         mal_value_from_native_function_object(dec_ctor),
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_intrinsic_define_data(vm, dec_proto, (const byte *) "encoding",
-        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "utf-8")),
-        MAL_PROPERTY_CONFIGURABLE);
     mal_web_define_branded_method(vm, dec_proto, (const byte *) "decode", 1,
         mal_web_text_decoder_decode, dec_brand);
+    mal_web_define_branded_getter(vm, dec_proto, (const byte *) "encoding",
+        mal_web_text_decoder_get_encoding, dec_brand);
     mal_web_define_branded_getter(vm, dec_proto, (const byte *) "fatal",
         mal_web_text_decoder_get_fatal, dec_brand);
     mal_web_define_branded_getter(vm, dec_proto, (const byte *) "ignoreBOM",
