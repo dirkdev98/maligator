@@ -412,6 +412,20 @@ describe("curated WPT harness", () => {
 		});
 	});
 
+	it("retains synchronous step_func failures when the caller swallows the throw", () => {
+		const parsed = runProgram(String.raw`
+test(function(t) {
+  var listener = t.step_func(function() { assert_true(false, "listener failed"); });
+  try { listener(); } catch (error) {}
+}, "swallowed listener failure");`);
+		expect(parsed.subtests[0]).toMatchObject({
+			subtest: "swallowed listener failure",
+			status: "FAIL",
+			message: "listener failed",
+		});
+		expect(parsed.harness.status).toBe("OK");
+	});
+
 	it("passes promise_test context and supports promise_rejects_exactly", () => {
 		const source = String.raw`
 var reason = {};

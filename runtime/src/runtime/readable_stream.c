@@ -684,6 +684,146 @@ fail:
     return mal_value_new_undefined();
 }
 
+static MalValue rs_strategy_constructor(MalVm *vm, const MalValue *args, i32 argc,
+    MalValue new_target, MalReadableStreamKind kind, MalIntrinsic prototype_slot) {
+    if (mal_value_is_undefined(new_target)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Queuing strategy constructor requires 'new'");
+        return mal_value_new_undefined();
+    }
+    MalValue roots[2] = {
+        argc >= 1 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    if (!mal_value_is_object(roots[0])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Queuing strategy init must be an object");
+        goto fail;
+    }
+    if (!mal_vm_get_property(vm, roots[0],
+            mal_intrinsic_string_key(vm, (const byte *) "highWaterMark"),
+            &roots[1])) {
+        goto fail;
+    }
+    if (mal_value_is_undefined(roots[1])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Queuing strategy highWaterMark is required");
+        goto fail;
+    }
+    f64 high_water_mark;
+    if (!mal_vm_to_number(vm, roots[1], &high_water_mark)) {
+        goto fail;
+    }
+    MalObject *prototype = rs_instance_prototype(vm, new_target, prototype_slot);
+    if (prototype == nullptr) {
+        goto fail;
+    }
+    MalReadableStreamObject *strategy = rs_new(vm, kind, prototype);
+    strategy->as.strategy.high_water_mark = high_water_mark;
+    mal_gc_unroot(&span);
+    return mal_value_from_readable_stream_object(strategy);
+
+fail:
+    mal_gc_unroot(&span);
+    return mal_value_new_undefined();
+}
+
+static MalValue rs_count_strategy_constructor(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) self;
+    (void) callee;
+    return rs_strategy_constructor(vm, args, argc, new_target,
+        MAL_COUNT_QUEUING_STRATEGY, MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_PROTOTYPE);
+}
+
+static MalValue rs_byte_length_strategy_constructor(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) self;
+    (void) callee;
+    return rs_strategy_constructor(vm, args, argc, new_target,
+        MAL_BYTE_LENGTH_QUEUING_STRATEGY,
+        MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_PROTOTYPE);
+}
+
+static MalValue rs_strategy_high_water_mark(
+    MalVm *vm, MalValue self, MalReadableStreamKind kind, const byte *message) {
+    MalReadableStreamObject *strategy = rs_require(vm, self, kind, message);
+    return strategy == nullptr
+        ? mal_value_new_undefined()
+        : mal_value_from_f64_convert_nan(strategy->as.strategy.high_water_mark);
+}
+
+static MalValue rs_count_strategy_get_high_water_mark(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return rs_strategy_high_water_mark(vm, self, MAL_COUNT_QUEUING_STRATEGY,
+        (const byte *) "CountQueuingStrategy.highWaterMark getter called on incompatible receiver");
+}
+
+static MalValue rs_byte_length_strategy_get_high_water_mark(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return rs_strategy_high_water_mark(vm, self, MAL_BYTE_LENGTH_QUEUING_STRATEGY,
+        (const byte *) "ByteLengthQueuingStrategy.highWaterMark getter called on incompatible receiver");
+}
+
+static MalValue rs_count_strategy_get_size(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    if (rs_require(vm, self, MAL_COUNT_QUEUING_STRATEGY,
+            (const byte *) "CountQueuingStrategy.size getter called on incompatible receiver") == nullptr) {
+        return mal_value_new_undefined();
+    }
+    return vm->intrinsics[MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_SIZE];
+}
+
+static MalValue rs_byte_length_strategy_get_size(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    if (rs_require(vm, self, MAL_BYTE_LENGTH_QUEUING_STRATEGY,
+            (const byte *) "ByteLengthQueuingStrategy.size getter called on incompatible receiver") == nullptr) {
+        return mal_value_new_undefined();
+    }
+    return vm->intrinsics[MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_SIZE];
+}
+
+static MalValue rs_count_strategy_size(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm;
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    return mal_value_from_i32(1);
+}
+
+static MalValue rs_byte_length_strategy_size(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    MalValue chunk = argc >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue byte_length;
+    if (!mal_vm_get_property(vm, chunk,
+            mal_intrinsic_string_key(vm, (const byte *) "byteLength"), &byte_length)) {
+        return mal_value_new_undefined();
+    }
+    return byte_length;
+}
+
 static MalReadableStreamObject *rs_acquire_reader(
     MalVm *vm, MalReadableStreamObject *stream, MalObject *prototype) {
     if (!mal_value_is_undefined(stream->as.stream.reader)) {
@@ -1178,6 +1318,9 @@ static void rs_trace(MalHeapHeader *cell) {
                 mal_gc_mark_value(request->promise);
             }
             break;
+        case MAL_COUNT_QUEUING_STRATEGY:
+        case MAL_BYTE_LENGTH_QUEUING_STRATEGY:
+            break;
     }
 }
 
@@ -1203,7 +1346,7 @@ static void rs_define_getter(MalVm *vm, MalObject *prototype, const byte *name,
     MalObject *fn_proto =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
+        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
         .value = mal_value_new_undefined(),
         .getter = mal_value_from_native_function_object(mal_native_function_object_new(
             &vm->heap, fn_proto, mal_intrinsic_ascii(vm, display_name), callback)),
@@ -1274,6 +1417,36 @@ void mal_readable_stream_install(MalVm *vm, MalObject *global_this) {
         vm, reader_proto, (const byte *) "read", 0, rs_reader_read);
     mal_intrinsic_define_method_n(
         vm, reader_proto, (const byte *) "releaseLock", 0, rs_reader_release_lock);
+
+    MalObject *function_proto =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    vm->intrinsics[MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_SIZE] =
+        mal_value_from_native_function_object(mal_native_function_object_new_arity(
+            &vm->heap, function_proto, mal_intrinsic_ascii(vm, (const byte *) "size"),
+            0, rs_count_strategy_size));
+    vm->intrinsics[MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_SIZE] =
+        mal_value_from_native_function_object(mal_native_function_object_new_arity(
+            &vm->heap, function_proto, mal_intrinsic_ascii(vm, (const byte *) "size"),
+            1, rs_byte_length_strategy_size));
+
+    MalObject *count_strategy_proto = rs_install_class(vm, global_this,
+        (const byte *) "CountQueuingStrategy", 1, rs_count_strategy_constructor,
+        MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_CONSTRUCTOR,
+        MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_PROTOTYPE);
+    rs_define_getter(vm, count_strategy_proto, (const byte *) "highWaterMark",
+        (const byte *) "get highWaterMark", rs_count_strategy_get_high_water_mark);
+    rs_define_getter(vm, count_strategy_proto, (const byte *) "size",
+        (const byte *) "get size", rs_count_strategy_get_size);
+
+    MalObject *byte_strategy_proto = rs_install_class(vm, global_this,
+        (const byte *) "ByteLengthQueuingStrategy", 1,
+        rs_byte_length_strategy_constructor,
+        MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_CONSTRUCTOR,
+        MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_PROTOTYPE);
+    rs_define_getter(vm, byte_strategy_proto, (const byte *) "highWaterMark",
+        (const byte *) "get highWaterMark", rs_byte_length_strategy_get_high_water_mark);
+    rs_define_getter(vm, byte_strategy_proto, (const byte *) "size",
+        (const byte *) "get size", rs_byte_length_strategy_get_size);
 
     mal_gc_register_tracer(MAL_HEAP_READABLE_STREAM_OBJECT, rs_trace);
     mal_gc_register_finalizer(MAL_HEAP_READABLE_STREAM_OBJECT, rs_finalize);

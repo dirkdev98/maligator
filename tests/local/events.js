@@ -82,6 +82,14 @@ check(
 // --- Event ---
 const e = new Event("test", { cancelable: true, bubbles: true });
 check("event type", e.type === "test");
+const trustedDescriptor = Object.getOwnPropertyDescriptor(e, "isTrusted");
+check(
+	"script Event has shared own isTrusted accessor",
+	e.isTrusted === false &&
+		typeof trustedDescriptor.get === "function" &&
+		trustedDescriptor.get ===
+			Object.getOwnPropertyDescriptor(new Event("other"), "isTrusted").get,
+);
 check("event cancelable", e.cancelable === true);
 check("event bubbles", e.bubbles === true);
 check("defaultPrevented false", e.defaultPrevented === false);
@@ -160,13 +168,22 @@ check("signal instanceof AbortSignal", ac.signal instanceof AbortSignal);
 check("signal instanceof EventTarget", ac.signal instanceof EventTarget);
 
 let abortFired = 0;
-ac.signal.addEventListener("abort", () => abortFired++);
+let abortTrusted = false;
+let abortEvent;
+ac.signal.addEventListener("abort", (event) => {
+	abortFired++;
+	abortTrusted = event.isTrusted;
+	abortEvent = event;
+});
 let onabortFired = 0;
 ac.signal.onabort = () => onabortFired++;
 ac.abort("boom");
 check("aborted", ac.signal.aborted === true);
 check("reason", ac.signal.reason === "boom");
 check("abort listener fired", abortFired === 1);
+check("abort event is trusted", abortTrusted);
+new EventTarget().dispatchEvent(abortEvent);
+check("script redispatch clears trusted state", abortEvent.isTrusted === false);
 check("onabort fired", onabortFired === 1);
 ac.abort("again");
 check("second abort is a no-op", ac.signal.reason === "boom" && abortFired === 1);

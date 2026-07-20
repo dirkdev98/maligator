@@ -40,6 +40,9 @@ static void ev_set(MalVm *vm, MalObject *obj, const byte *name, MalValue value) 
     mal_object_set(obj, mal_intrinsic_string_key(vm, name), value);
 }
 
+static MalKey event_trusted_slot_key(MalVm *vm);
+static bool event_set_trusted(MalVm *vm, MalValue event, bool trusted);
+
 static void ev_define_getter(MalVm *vm, MalObject *proto, const byte *name,
     const byte *function_name, MalNativeFunctionCallback getter) {
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
@@ -476,7 +479,8 @@ static MalValue event_target_dispatch_event(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) nt;
     (void) callee;
-    if (event_target_this(self) == nullptr || argc < 1 || !mal_value_is_object(args[0])) {
+    if (event_target_this(self) == nullptr || argc < 1 ||
+        !event_set_trusted(vm, args[0], false)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "dispatchEvent requires an Event");
         return mal_value_new_undefined();
     }
@@ -487,7 +491,54 @@ static MalValue event_target_dispatch_event(
  * Event (ordinary object with own properties).
  * --------------------------------------------------------------------------- */
 
-static MalValue mal_event_new(MalVm *vm, const char *type) {
+static MalKey event_trusted_slot_key(MalVm *vm) {
+    return (MalKey) {.kind = MAL_KEY_SYMBOL,
+        .value = vm->intrinsics[MAL_INTRINSIC_EVENT_TRUSTED_KEY]};
+}
+
+static bool event_set_trusted(MalVm *vm, MalValue event, bool trusted) {
+    if (!mal_value_is_object(event) ||
+        !mal_object_get_own(
+            mal_value_to_object(event), event_trusted_slot_key(vm)).present) {
+        return false;
+    }
+    return mal_object_set(mal_value_to_object(event), event_trusted_slot_key(vm),
+        mal_value_new_boolean(trusted));
+}
+
+static MalValue event_get_is_trusted(MalVm *vm, MalValue self,
+    const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) nt;
+    (void) callee;
+    if (mal_value_is_object(self)) {
+        MalPropertyLookup lookup =
+            mal_object_get_own(mal_value_to_object(self), event_trusted_slot_key(vm));
+        if (lookup.present) {
+            return lookup.desc.value;
+        }
+    }
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "Event.isTrusted getter called on incompatible receiver");
+    return mal_value_new_undefined();
+}
+
+static void event_define_trusted_state(MalVm *vm, MalObject *event, bool trusted) {
+    MalPropertyDesc state = mal_intrinsic_data_desc(
+        mal_value_new_boolean(trusted), MAL_PROPERTY_WRITABLE);
+    mal_object_define_own(event, event_trusted_slot_key(vm), &state);
+    MalPropertyDesc accessor = {
+        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_ENUMERABLE,
+        .value = mal_value_new_undefined(),
+        .getter = vm->intrinsics[MAL_INTRINSIC_EVENT_IS_TRUSTED_GETTER],
+        .setter = mal_value_new_undefined(),
+    };
+    mal_object_define_own(event,
+        mal_intrinsic_string_key(vm, (const byte *) "isTrusted"), &accessor);
+}
+
+static MalValue mal_event_new(MalVm *vm, const char *type, bool trusted) {
     MalObject *ev = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVENT_PROTOTYPE]));
     MalValue evval = mal_value_from_object(ev);
     MalRootSpan rs;
@@ -497,6 +548,7 @@ static MalValue mal_event_new(MalVm *vm, const char *type) {
     ev_set(vm, ev, (const byte *) "bubbles", mal_value_new_boolean(false));
     ev_set(vm, ev, (const byte *) "cancelable", mal_value_new_boolean(false));
     ev_set(vm, ev, (const byte *) "defaultPrevented", mal_value_new_boolean(false));
+    event_define_trusted_state(vm, ev, trusted);
     mal_gc_unroot(&rs);
     return evval;
 }
@@ -524,6 +576,7 @@ static MalValue event_constructor(
     ev_set(vm, ev, (const byte *) "bubbles", mal_value_new_boolean(bubbles));
     ev_set(vm, ev, (const byte *) "cancelable", mal_value_new_boolean(cancelable));
     ev_set(vm, ev, (const byte *) "defaultPrevented", mal_value_new_boolean(false));
+    event_define_trusted_state(vm, ev, false);
     mal_gc_unroot(&rs);
     return evval;
 }
@@ -630,7 +683,7 @@ static void abort_signal_fire_tree(MalVm *vm, MalValue signal_val) {
     MalValue slots[] = {signal_val, mal_value_new_undefined()};
     MalRootSpan rs;
     mal_gc_root(&rs, slots, countof(slots));
-    slots[1] = mal_event_new(vm, "abort");
+    slots[1] = mal_event_new(vm, "abort", true);
     mal_event_dispatch(vm, slots[0], slots[1]);
 
     MalValue onabort;
@@ -986,6 +1039,14 @@ void mal_events_install(MalVm *vm, MalObject *global_this) {
         mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag_desc);
 
     // Event.
+    vm->intrinsics[MAL_INTRINSIC_EVENT_TRUSTED_KEY] =
+        mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    vm->intrinsics[MAL_INTRINSIC_EVENT_IS_TRUSTED_GETTER] =
+        mal_value_from_native_function_object(mal_native_function_object_new(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "get isTrusted"),
+            event_get_is_trusted));
     MalObject *event_proto = ev_install_class(vm, global_this, (const byte *) "Event", 1,
         event_constructor, obj_proto, MAL_INTRINSIC_EVENT_CONSTRUCTOR, MAL_INTRINSIC_EVENT_PROTOTYPE);
     mal_intrinsic_define_method_n(vm, event_proto, (const byte *) "preventDefault", 0, event_prevent_default);

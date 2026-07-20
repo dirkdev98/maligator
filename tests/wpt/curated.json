@@ -36,6 +36,14 @@
 			"includes": []
 		},
 		{
+			"path": "dom/events/Event-isTrusted.any.js",
+			"sha256": "73925cca5b100206b4070406e0666fa8516373af4a0285132af1fc40d5880084",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
+		},
+		{
 			"path": "encoding/api-basics.any.js",
 			"sha256": "fa0a7e0dadb315e6b8b9c2572f7e620b54f37148d3319af500a477f9d14a93a6",
 			"target": "server-main",
@@ -215,6 +223,14 @@
 			"target": "server-main",
 			"modes": ["normal", "gc-stress"],
 			"metadata": [],
+			"includes": []
+		},
+		{
+			"path": "streams/queuing-strategies.any.js",
+			"sha256": "ece59cf020e6a21a363f6fae7de227a71656b2aba216892138e00d8367045184",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
 			"includes": []
 		},
 		{

@@ -594,14 +594,18 @@ function test(callback, name) {
   __wpt_start(testRecord);
   try {
     var settled = false;
+    var stepStatus = null;
+    var stepMessage = null;
     var finish = function(status, message) {
       if (settled) return;
       settled = true;
+      stepStatus = status;
+      stepMessage = message;
       if (status !== "PASS") throw new Error(message);
     };
     var value = callback(__wpt_context(finish, function() { return settled; }));
     __wpt_check_return_value("test", testRecord, value);
-    __wpt_emit(testRecord, "PASS", null);
+    __wpt_emit(testRecord, stepStatus === null ? "PASS" : stepStatus, stepMessage);
   }
   catch (error) { __wpt_emit(testRecord, "FAIL", __wpt_message(error)); }
 }

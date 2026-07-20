@@ -13,7 +13,49 @@ async function run() {
 		"globals",
 		typeof ReadableStream === "function" &&
 			typeof ReadableStreamDefaultController === "function" &&
-			typeof ReadableStreamDefaultReader === "function",
+			typeof ReadableStreamDefaultReader === "function" &&
+			typeof CountQueuingStrategy === "function" &&
+			typeof ByteLengthQueuingStrategy === "function",
+	);
+	const countStrategy = new CountQueuingStrategy({ highWaterMark: 4 });
+	const secondCountStrategy = new CountQueuingStrategy({ highWaterMark: 8 });
+	const byteLengthStrategy = new ByteLengthQueuingStrategy({ highWaterMark: 16 });
+	const countHighWaterMark = Object.getOwnPropertyDescriptor(
+		CountQueuingStrategy.prototype,
+		"highWaterMark",
+	).get;
+	const countSize = Object.getOwnPropertyDescriptor(
+		CountQueuingStrategy.prototype,
+		"size",
+	).get;
+	let crossBrandRejected = false;
+	try {
+		countHighWaterMark.call(byteLengthStrategy);
+	} catch (error) {
+		crossBrandRejected = error instanceof TypeError;
+	}
+	try {
+		countSize.call(byteLengthStrategy);
+		crossBrandRejected = false;
+	} catch (error) {
+		crossBrandRejected = crossBrandRejected && error instanceof TypeError;
+	}
+	check(
+		"queuing strategy state and shared size algorithms",
+		countStrategy.highWaterMark === 4 &&
+			countStrategy.size === secondCountStrategy.size &&
+			countStrategy.size({
+				get byteLength() {
+					throw new Error("ignored");
+				},
+			}) === 1 &&
+			byteLengthStrategy.highWaterMark === 16 &&
+			crossBrandRejected &&
+			Object.prototype.propertyIsEnumerable.call(
+				CountQueuingStrategy.prototype,
+				"size",
+			) &&
+			byteLengthStrategy.size({ byteLength: 7 }) === 7,
 	);
 
 	let queuedController;

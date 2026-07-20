@@ -8,6 +8,8 @@ typedef enum MalReadableStreamKind : u8 {
     MAL_READABLE_STREAM,
     MAL_READABLE_STREAM_DEFAULT_CONTROLLER,
     MAL_READABLE_STREAM_DEFAULT_READER,
+    MAL_COUNT_QUEUING_STRATEGY,
+    MAL_BYTE_LENGTH_QUEUING_STRATEGY,
 } MalReadableStreamKind;
 
 typedef enum MalReadableStreamState : u8 {
@@ -59,10 +61,13 @@ typedef struct MalReadableStreamObject {
             MalReadableStreamReadRequest *requests_head;
             MalReadableStreamReadRequest *requests_tail;
         } reader;
+        struct {
+            f64 high_water_mark;
+        } strategy;
     } as;
 } MalReadableStreamObject;
 
-/** Install ReadableStream and its default controller/reader globals. */
+/** Install default readable streams and queuing-strategy globals. */
 void mal_readable_stream_install(MalVm *vm, MalObject *global_this);
 
 /** Create a default stream containing one owned Uint8Array copy of `bytes`. */
