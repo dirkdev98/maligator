@@ -13,7 +13,7 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
-#include "text_encoding.h"
+#include "web_text_encoding.h"
 #include "typed_array_object.h"
 #include "value.h"
 #include "vm.h"

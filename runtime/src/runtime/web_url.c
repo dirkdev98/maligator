@@ -1,4 +1,4 @@
-#include "url_object.h"
+#include "web_url_object.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -14,7 +14,7 @@
 #include "object.h"
 #include "object_ops.h"
 #include "property_store.h"
-#include "text_encoding.h"
+#include "web_text_encoding.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"

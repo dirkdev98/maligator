@@ -3,12 +3,12 @@
 #include <stdio.h>  // setvbuf
 #include <stdlib.h> // getenv
 
-#include "events_object.h"
-#include "fetch.h"
+#include "web_events_object.h"
+#include "web_fetch.h"
 #include "host.h"
-#include "host_timer.h"
-#include "readable_stream_object.h"
-#include "url_object.h"
+#include "web_host_timer.h"
+#include "web_readable_stream_object.h"
+#include "web_url_object.h"
 #include "web_globals.h"
 
 // Host entry: run the compiled program's synchronous phase, then drive the event
@@ -34,7 +34,7 @@ int main(int argc, char **argv) {
     // The WinterTC web personality (surface.webPlatform). Off → none of these
     // install, so their translation units — and the ada C++ URL parser + `-lc++`
     // they'd pull — are never referenced and drop out at link. `Mal.serve` rides in
-    // with mal_fetch_install (fetch.c). The reactor (mal_host_attach) is a separate
+    // with mal_fetch_install (web_fetch.c). The reactor (mal_host_attach) is a separate
     // axis and stays: a non-web host program still gets the event loop.
     MalObject *global_this = mal_value_to_object(vm.intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     mal_host_timers_install(&vm, global_this);   // setTimeout / clearTimeout

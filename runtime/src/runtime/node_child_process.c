@@ -19,7 +19,7 @@
 #include "property_iter.h"
 #include "property_store.h"
 #include "table.h"
-#include "text_encoding.h"
+#include "web_text_encoding.h"
 #include "value.h"
 #include "vm.h"
 #include "vm_ops.h" // mal_vm_get_property / mal_vm_to_string

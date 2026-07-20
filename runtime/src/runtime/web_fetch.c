@@ -1,4 +1,4 @@
-#include "fetch.h"
+#include "web_fetch.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -10,7 +10,7 @@
 #include "builtin_promise.h"
 #include "function_object.h"
 #include "gc.h"
-#include "headers_object.h"
+#include "web_headers_object.h"
 #include "heap.h"
 #include "heap_string.h"
 #include "intrinsics.h"
@@ -19,11 +19,11 @@
 #include "object_ops.h"
 #include "promise_object.h"
 #include "property_store.h"
-#include "readable_stream_object.h"
-#include "request_object.h"
-#include "response_object.h"
+#include "web_readable_stream_object.h"
+#include "web_request_object.h"
+#include "web_response_object.h"
 #include "server.h" // host: mal_http_handler, mal_http_conn_respond, MalHttpRequest
-#include "text_encoding.h"
+#include "web_text_encoding.h"
 #include "typed_array_object.h"
 #include "value.h"
 #include "value_ops.h"

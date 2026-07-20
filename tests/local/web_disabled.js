@@ -7,22 +7,22 @@
 // core engine intact.
 
 const absent = [
-	// URL / URLSearchParams (url.c → ada).
+	// URL / URLSearchParams (web_url.c → ada).
 	"URL",
 	"URLSearchParams",
-	// fetch surface + Mal.serve (fetch.c).
+	// fetch surface + Mal.serve (web_fetch.c).
 	"fetch",
 	"Response",
 	"Request",
 	"Mal",
-	// timers (host_timer.c).
+	// timers (web_host_timer.c).
 	"setTimeout",
 	"clearTimeout",
 	// web globals (web_globals.c).
 	"TextEncoder",
 	"structuredClone",
 	"queueMicrotask",
-	// events (events.c).
+	// events (web_events.c).
 	"EventTarget",
 	"AbortController",
 ];

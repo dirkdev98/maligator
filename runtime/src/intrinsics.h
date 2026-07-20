@@ -232,7 +232,7 @@ typedef enum MalIntrinsic {
      */
     MAL_INTRINSIC_DYNAMIC_IMPORT,
     /*
-     * WinterTC fetch server slots (runtime/fetch.c). Installed only by the host
+     * WinterTC fetch server slots (runtime/web_fetch.c). Installed only by the host
      * entry (mal_fetch_install), so they stay undefined — and harmless — in the bare
      * test262 VM. Stored here so the collector roots them (scan_roots marks every
      * intrinsic), including the live fetch handler.
@@ -245,7 +245,7 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_HEADERS_ITERATOR_PROTOTYPE,
     MAL_INTRINSIC_FETCH_HANDLER,
     /*
-     * WHATWG URL / URLSearchParams (runtime/url.c). Host-entry only
+     * WHATWG URL / URLSearchParams (runtime/web_url.c). Host-entry only
      * (mal_url_install), so they stay undefined in the bare test262 VM. Rooted by
      * scan_roots like every intrinsic slot.
      */
@@ -256,7 +256,7 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_URL_SEARCH_PARAMS_ITERATOR_PROTOTYPE,
     /*
      * DOMException / Event / EventTarget / AbortSignal / AbortController
-     * (runtime/events.c).
+     * (runtime/web_events.c).
      * Host-entry only, so undefined in the bare test262 VM.
      */
     MAL_INTRINSIC_DOM_EXCEPTION_CONSTRUCTOR,
@@ -273,7 +273,7 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_ABORT_SIGNAL_PROTOTYPE,
     MAL_INTRINSIC_ABORT_CONTROLLER_CONSTRUCTOR,
     MAL_INTRINSIC_ABORT_CONTROLLER_PROTOTYPE,
-    /* WHATWG default readable streams (runtime/readable_stream.c), host-entry only. */
+    /* WHATWG default readable streams (runtime/web_readable_stream.c), host-entry only. */
     MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR,
     MAL_INTRINSIC_READABLE_STREAM_PROTOTYPE,
     MAL_INTRINSIC_READABLE_STREAM_DEFAULT_CONTROLLER_CONSTRUCTOR,

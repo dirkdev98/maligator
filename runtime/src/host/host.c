@@ -53,7 +53,7 @@ void mal_host_free(MalHost *host) {
     mal_dns_free(&host->dns);
     mal_host_posted_tasks_free(&host->posted_tasks);
     mal_host_tasks_free(&host->tasks);
-    // The setTimeout task list is runtime state (host_timer.c); the entry frees it
+    // The setTimeout task list is runtime state (web_host_timer.c); the entry frees it
     // before detach, so the host layer keeps no dependency on the runtime layer.
     mal_reactor_free(&host->reactor);
     memset(host, 0, sizeof(*host));

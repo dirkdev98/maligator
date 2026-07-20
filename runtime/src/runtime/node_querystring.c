@@ -12,7 +12,7 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
-#include "text_encoding.h"
+#include "web_text_encoding.h"
 #include "vm_ops.h"
 
 #define QS_VISIBLE \

@@ -1,4 +1,4 @@
-#include "events_object.h"
+#include "web_events_object.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +10,7 @@
 #include "heap.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
-#include "host_timer.h" // AbortSignal.timeout
+#include "web_host_timer.h" // AbortSignal.timeout
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"

@@ -4,7 +4,7 @@
 #include <stdlib.h>
 
 #include "host.h"
-#include "host_timer.h" // mal_host_run_event_loop
+#include "web_host_timer.h" // mal_host_run_event_loop
 #include "server.h"
 
 /*

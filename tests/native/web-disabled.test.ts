@@ -13,7 +13,7 @@ import {
 
 // The runtime half of `surface.webPlatform: false` (the cache-suffix / derivation
 // half is covered by tests/build-config.test.ts). Builds the host entry into the
-// web-off archive: `-DMAL_WEB_PLATFORM=0` compiles url.c away and the Rust crate is
+// web-off archive: `-DMAL_WEB_PLATFORM=0` compiles web_url.c away and the Rust crate is
 // built without the `web-platform` feature, so the ada C++ parser AND the `-lc++`
 // link are dropped. That this binary LINKS at all — with the URL install gated out
 // of host_main and no `mal_url_*` symbols in the archive — is the core assertion.
@@ -54,7 +54,7 @@ describe("surface.webPlatform: false runtime gate", () => {
 		});
 		const offSize = statSync(webOffBin).size;
 		const onSize = statSync(webOnBin).size;
-		// ada (C++ URL parser) + url.c measure ~0.5 MB; allow generous slack.
+		// ada (C++ URL parser) + web_url.c measure ~0.5 MB; allow generous slack.
 		expect(onSize - offSize).toBeGreaterThan(300_000);
 	});
 });

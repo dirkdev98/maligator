@@ -5,7 +5,7 @@
 
 #include "heap_string.h"
 #include "property_iter.h"
-#include "text_encoding.h"
+#include "web_text_encoding.h"
 #include "value_ops.h"
 #include "vm.h"
 

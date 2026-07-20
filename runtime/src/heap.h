@@ -239,31 +239,31 @@ typedef enum MalHeapType : u8 {
 
     /**
      * WinterTC fetch Response (MalResponseObject): status + an owned UTF-8 body
-     * byte buffer. Freed by the GC finalizer. See runtime/response_object.h.
+     * byte buffer. Freed by the GC finalizer. See runtime/web_response_object.h.
      */
     MAL_HEAP_RESPONSE_OBJECT,
     /**
      * WinterTC fetch Request (MalRequestObject): method/url own-properties + an
-     * (optional) owned body byte buffer. See runtime/request_object.h.
+     * (optional) owned body byte buffer. See runtime/web_request_object.h.
      */
     MAL_HEAP_REQUEST_OBJECT,
     /**
      * WinterTC fetch Headers (MalHeadersObject): an ordered, case-insensitive list
      * of (name, value) string pairs. Traced + finalized via registered hooks. See
-     * runtime/headers_object.h.
+     * runtime/web_headers_object.h.
      */
     MAL_HEAP_HEADERS_OBJECT,
-    /** Iterator over a live Headers list. See runtime/headers_object.h. */
+    /** Iterator over a live Headers list. See runtime/web_headers_object.h. */
     MAL_HEAP_HEADERS_ITERATOR_OBJECT,
     /**
      * WHATWG URL (MalUrlObject): wraps an opaque ada-url handle, freed by the GC
-     * finalizer via mal_url_free. See runtime/url_object.h.
+     * finalizer via mal_url_free. See runtime/web_url_object.h.
      */
     MAL_HEAP_URL_OBJECT,
     /**
      * WHATWG URLSearchParams (MalUrlSearchParamsObject): an ordered list of
      * (name, value) string pairs. Traced + finalized via registered hooks. See
-     * runtime/url_object.h.
+     * runtime/web_url_object.h.
      */
     MAL_HEAP_URL_SEARCH_PARAMS_OBJECT,
     /**
@@ -275,13 +275,13 @@ typedef enum MalHeapType : u8 {
      * DOM EventTarget / AbortSignal instances (MalEventTargetObject): an ordinary
      * object plus a native (type, callback, once) listener list. Traced + finalized
      * via registered hooks. AbortSignal state (aborted/reason) rides as own
-     * properties. See runtime/events_object.h.
+     * properties. See runtime/web_events_object.h.
      */
     MAL_HEAP_EVENT_TARGET_OBJECT,
     /**
      * WHATWG default readable-stream objects. A private kind tag distinguishes
      * ReadableStream, ReadableStreamDefaultController, and
-     * ReadableStreamDefaultReader instances. See runtime/readable_stream_object.h.
+     * ReadableStreamDefaultReader instances. See runtime/web_readable_stream_object.h.
      */
     MAL_HEAP_READABLE_STREAM_OBJECT,
     /**

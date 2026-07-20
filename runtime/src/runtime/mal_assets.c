@@ -10,7 +10,7 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "posix_fs.h"
-#include "text_encoding.h"
+#include "web_text_encoding.h"
 #include "value.h"
 #include "vm_ops.h"
 

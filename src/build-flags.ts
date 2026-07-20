@@ -321,7 +321,7 @@ export function optFlags(
  * baked compiler and turns the eval/Function runtime path into an EvalError throw.
  * `intlEnabled: false` adds `-DMAL_INTL=0`, which drops the Intl global + the ICU
  * call sites (kept in lockstep with the Rust `intl` Cargo feature).
- * `webPlatformEnabled: false` adds `-DMAL_WEB_PLATFORM=0`, which compiles url.c away
+ * `webPlatformEnabled: false` adds `-DMAL_WEB_PLATFORM=0`, which compiles web_url.c away
  * so no ada FFI symbols are referenced (in lockstep with the Rust `web-platform`
  * feature, which drops the C++ ada parser + `-lc++`). `nodeEnabled: true` adds
  * `-DMAL_NODE=1`, opting the node host built-in surface in (it defaults off, so —

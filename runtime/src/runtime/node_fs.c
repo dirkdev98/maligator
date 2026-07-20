@@ -18,7 +18,7 @@
 #include "posix_fs.h" // host layer: the POSIX syscalls + errno results
 #include "property_store.h"
 #include "table.h"
-#include "text_encoding.h"
+#include "web_text_encoding.h"
 #include "typed_array_object.h"
 #include "value.h"
 #include "value_ops.h"

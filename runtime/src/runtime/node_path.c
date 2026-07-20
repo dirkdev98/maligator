@@ -14,7 +14,7 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "property_store.h"
-#include "text_encoding.h"
+#include "web_text_encoding.h"
 #include "value.h"
 #include "vm.h"
 

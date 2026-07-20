@@ -617,7 +617,7 @@ function shortHash(value: unknown): string {
  * from their exact inputs. The output depends
  * on `engine.eval` (flips `-DMAL_EVAL` + whether the compiler wire is embedded),
  * `engine.intl` (flips `-DMAL_INTL` + the locale-sensitive fallbacks),
- * `surface.webPlatform` (flips `-DMAL_WEB_PLATFORM` + whether url.c compiles), and
+ * `surface.webPlatform` (flips `-DMAL_WEB_PLATFORM` + whether web_url.c compiles), and
  * `surface.node` (flips `-DMAL_NODE` + the node host built-in surface). Not-yet-wired
  * fields (host.scheduler) are excluded so unrelated edits do not change the name.
  * Returns "" for the canonical build (eval on, Intl on, all
@@ -626,7 +626,7 @@ function shortHash(value: unknown): string {
  */
 export function buildConfigCacheSuffix(config: ResolvedBuildConfig): string {
 	// The generated binary depends on eval, whether Intl is on, which services are selected
-	// (each flips a -DMAL_INTL_HAS_* define), web-platform (url.c gating), regexp
+	// (each flips a -DMAL_INTL_HAS_* define), web-platform (web_url.c gating), regexp
 	// (builtin_regexp/regexp_object/gc/string gating), and node (the host built-in
 	// surface), but NOT on the locale set (that only changes Rust/ICU datagen).
 	// Empty services = all; eval + realms + Intl + all-services + web + regexp on and

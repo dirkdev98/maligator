@@ -22,10 +22,10 @@ production network host:
   `runtime/src/host/server.c` buffers each complete request and response, invokes a
   process-global handler, and can retain an untyped connection pointer across an
   asynchronous runtime call.
-- `runtime/src/runtime/fetch.c` is a WinterTC-specific adapter over that server. It
+- `runtime/src/runtime/web_fetch.c` is a WinterTC-specific adapter over that server. It
   copies complete bodies and converts raw transport headers directly into the
-  runtime `Headers` representation in `runtime/src/runtime/headers.c`.
-- `runtime/src/runtime/host_timer.c` currently keeps runtime timer state in
+  runtime `Headers` representation in `runtime/src/runtime/web_headers.c`.
+- `runtime/src/runtime/web_host_timer.c` currently keeps runtime timer state in
   `MalHost`. Its event loop already attempts one timer macrotask followed by a
   microtask checkpoint, while socket callbacks bypass that macrotask boundary.
 - `runtime/rust/Cargo.toml` and `src/rust-build.ts` already build one optional-feature
@@ -289,7 +289,7 @@ Timers, DNS results, accepts, readable/writable progress, terminal operation eve
 and cross-thread wakes all become host tasks. This replaces the direct callback
 execution in `runtime/src/host/reactor.c` and `runtime/src/host/server.c` and extends
 the one-timer-per-turn intent already documented in
-`runtime/src/runtime/host_timer.c`. FIFO order is required within one task source;
+`runtime/src/runtime/web_host_timer.c`. FIFO order is required within one task source;
 cross-source ordering is the order in which the reactor thread enqueues tasks.
 
 ### DNS and sockets

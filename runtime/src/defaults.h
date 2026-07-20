@@ -64,7 +64,7 @@ typedef size_t usize;
 
 // Whether this build includes the WHATWG URL surface (the ada-url C++ parser).
 // Default on; the build config sets `-DMAL_WEB_PLATFORM=0` (see build-flags.ts)
-// when `surface.webPlatform` is false, which compiles url.c away so no `mal_url_*`
+// when `surface.webPlatform` is false, which compiles web_url.c away so no `mal_url_*`
 // ada FFI symbols are referenced. Must be kept in lockstep with the Rust crate's
 // `web-platform` Cargo feature (rust-build.ts) — with it off the ada archive + the
 // `-lc++` link are dropped, so a stray URL reference would fail to link. URL is
