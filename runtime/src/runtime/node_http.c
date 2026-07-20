@@ -295,6 +295,19 @@ static void http_define(
         mal_intrinsic_string_key(vm, (const byte *) name), value);
 }
 
+static void http_define_own(
+    MalVm *vm, MalValue receiver, const char *name, MalValue value) {
+    MalPropertyDesc desc = {
+        .flags = HTTP_VISIBLE,
+        .value = value,
+        .getter = mal_value_new_undefined(),
+        .setter = mal_value_new_undefined(),
+    };
+    mal_object_define_own(
+        mal_value_to_object(receiver),
+        mal_intrinsic_string_key(vm, (const byte *) name), &desc);
+}
+
 static MalValue http_ascii_value(MalVm *vm, const char *bytes, usize length) {
     return mal_value_from_string(
         mal_string_new_ascii(&vm->heap, (const byte *) bytes, length));
@@ -1338,39 +1351,36 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
         goto fail;
     }
     roots[4] = mal_value_from_object(mal_intrinsic_new_object(vm));
-    http_define(vm, roots[4], "encrypted", mal_value_new_boolean(false));
-    http_define(vm, roots[4], "readable", mal_value_new_boolean(true));
-    http_define(vm, roots[4], "writable", mal_value_new_boolean(true));
+    http_define_own(vm, roots[4], "encrypted", mal_value_new_boolean(false));
+    http_define_own(vm, roots[4], "readable", mal_value_new_boolean(true));
+    http_define_own(vm, roots[4], "writable", mal_value_new_boolean(true));
     roots[5] = mal_value_from_object(mal_intrinsic_new_object(vm));
     roots[6] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
 
-    http_define(vm, roots[0], "method",
+    http_define_own(vm, roots[0], "method",
                 http_ascii_value(vm, state->method, state->method_len));
-    http_define(vm, roots[0], "url",
+    http_define_own(vm, roots[0], "url",
                 http_ascii_value(vm, state->target, state->target_len));
-    http_define(vm, roots[0], "headers", roots[2]);
-    http_define(vm, roots[0], "rawHeaders", roots[3]);
-    http_define(vm, roots[0], "httpVersion",
+    http_define_own(vm, roots[0], "headers", roots[2]);
+    http_define_own(vm, roots[0], "rawHeaders", roots[3]);
+    http_define_own(vm, roots[0], "httpVersion",
                 http_ascii_value(vm, state->minor_version == 0 ? "1.0" : "1.1", 3));
-    http_define(vm, roots[0], "httpVersionMajor", mal_value_from_i32(1));
-    http_define(vm, roots[0], "httpVersionMinor",
+    http_define_own(vm, roots[0], "httpVersionMajor", mal_value_from_i32(1));
+    http_define_own(vm, roots[0], "httpVersionMinor",
                 mal_value_from_i32(state->minor_version));
-    http_define(vm, roots[0], "complete", mal_value_new_boolean(true));
-    http_define(vm, roots[0], "aborted", mal_value_new_boolean(false));
-    http_define(vm, roots[0], "upgrade", mal_value_new_boolean(false));
-    http_define(vm, roots[0], "trailers", roots[5]);
-    http_define(vm, roots[0], "rawTrailers", roots[6]);
-    http_define(vm, roots[0], "socket", roots[4]);
-    http_define(vm, roots[0], "connection", roots[4]);
+    http_define_own(vm, roots[0], "complete", mal_value_new_boolean(true));
+    http_define_own(vm, roots[0], "aborted", mal_value_new_boolean(false));
+    http_define_own(vm, roots[0], "upgrade", mal_value_new_boolean(false));
+    http_define_own(vm, roots[0], "trailers", roots[5]);
+    http_define_own(vm, roots[0], "rawTrailers", roots[6]);
+    http_define_own(vm, roots[0], "socket", roots[4]);
+    http_define_own(vm, roots[0], "connection", roots[4]);
 
-    http_define(vm, roots[1], "statusCode", mal_value_from_i32(200));
-    http_define(vm, roots[1], "statusMessage", mal_value_new_undefined());
-    http_define(vm, roots[1], "headersSent", mal_value_new_boolean(false));
-    http_define(vm, roots[1], "finished", mal_value_new_boolean(false));
-    http_define(vm, roots[1], "writableEnded", mal_value_new_boolean(false));
-    http_define(vm, roots[1], "writableFinished", mal_value_new_boolean(false));
-    http_define(vm, roots[1], "socket", roots[4]);
-    http_define(vm, roots[1], "connection", roots[4]);
+    // ServerResponse's constructor already installed its six default state
+    // fields. Dispatch only adds the connection-specific fields; redefining all
+    // defaults here made every request repeat six shape searches and writes.
+    http_define_own(vm, roots[1], "socket", roots[4]);
+    http_define_own(vm, roots[1], "connection", roots[4]);
 
     MalValue emit_args[] = {
         mal_value_from_string(
@@ -1563,22 +1573,22 @@ static void http_client_dispatch(
         goto done;
     }
     roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
-    http_define(vm, roots[3], "encrypted", mal_value_new_boolean(false));
-    http_define(vm, roots[3], "readable", mal_value_new_boolean(true));
-    http_define(vm, roots[3], "writable", mal_value_new_boolean(false));
-    http_define(vm, roots[0], "statusCode", mal_value_from_i32(result->status));
-    http_define(vm, roots[0], "statusMessage", mal_value_new_undefined());
-    http_define(vm, roots[0], "headers", roots[1]);
-    http_define(vm, roots[0], "rawHeaders", roots[2]);
-    http_define(vm, roots[0], "httpVersion",
+    http_define_own(vm, roots[3], "encrypted", mal_value_new_boolean(false));
+    http_define_own(vm, roots[3], "readable", mal_value_new_boolean(true));
+    http_define_own(vm, roots[3], "writable", mal_value_new_boolean(false));
+    http_define_own(vm, roots[0], "statusCode", mal_value_from_i32(result->status));
+    http_define_own(vm, roots[0], "statusMessage", mal_value_new_undefined());
+    http_define_own(vm, roots[0], "headers", roots[1]);
+    http_define_own(vm, roots[0], "rawHeaders", roots[2]);
+    http_define_own(vm, roots[0], "httpVersion",
                 http_ascii_value(vm, result->minor_version == 0 ? "1.0" : "1.1", 3));
-    http_define(vm, roots[0], "httpVersionMajor", mal_value_from_i32(1));
-    http_define(vm, roots[0], "httpVersionMinor",
+    http_define_own(vm, roots[0], "httpVersionMajor", mal_value_from_i32(1));
+    http_define_own(vm, roots[0], "httpVersionMinor",
                 mal_value_from_i32(result->minor_version));
-    http_define(vm, roots[0], "complete", mal_value_new_boolean(true));
-    http_define(vm, roots[0], "aborted", mal_value_new_boolean(false));
-    http_define(vm, roots[0], "socket", roots[3]);
-    http_define(vm, roots[0], "connection", roots[3]);
+    http_define_own(vm, roots[0], "complete", mal_value_new_boolean(true));
+    http_define_own(vm, roots[0], "aborted", mal_value_new_boolean(false));
+    http_define_own(vm, roots[0], "socket", roots[3]);
+    http_define_own(vm, roots[0], "connection", roots[3]);
     MalValue emit_args[] = {
         mal_value_from_string(
             mal_intrinsic_ascii(vm, (const byte *) "response")),
@@ -1927,12 +1937,12 @@ static MalValue http_client_request_constructor(
     MalValue result = http_construct(vm, receiver, new_target, callee,
                                      MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR);
     if (mal_value_is_object(result)) {
-        http_define(vm, result, "finished", mal_value_new_boolean(false));
-        http_define(vm, result, "writable", mal_value_new_boolean(true));
-        http_define(vm, result, "writableEnded", mal_value_new_boolean(false));
-        http_define(vm, result, "writableFinished", mal_value_new_boolean(false));
-        http_define(vm, result, "destroyed", mal_value_new_boolean(false));
-        http_define(vm, result, "aborted", mal_value_new_boolean(false));
+        http_define_own(vm, result, "finished", mal_value_new_boolean(false));
+        http_define_own(vm, result, "writable", mal_value_new_boolean(true));
+        http_define_own(vm, result, "writableEnded", mal_value_new_boolean(false));
+        http_define_own(vm, result, "writableFinished", mal_value_new_boolean(false));
+        http_define_own(vm, result, "destroyed", mal_value_new_boolean(false));
+        http_define_own(vm, result, "aborted", mal_value_new_boolean(false));
     }
     return result;
 }
@@ -1945,12 +1955,12 @@ static MalValue http_server_response_constructor(
     MalValue result = http_construct(vm, receiver, new_target, callee,
                                      MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR);
     if (mal_value_is_object(result)) {
-        http_define(vm, result, "statusCode", mal_value_from_i32(200));
-        http_define(vm, result, "statusMessage", mal_value_new_undefined());
-        http_define(vm, result, "headersSent", mal_value_new_boolean(false));
-        http_define(vm, result, "finished", mal_value_new_boolean(false));
-        http_define(vm, result, "writableEnded", mal_value_new_boolean(false));
-        http_define(vm, result, "writableFinished", mal_value_new_boolean(false));
+        http_define_own(vm, result, "statusCode", mal_value_from_i32(200));
+        http_define_own(vm, result, "statusMessage", mal_value_new_undefined());
+        http_define_own(vm, result, "headersSent", mal_value_new_boolean(false));
+        http_define_own(vm, result, "finished", mal_value_new_boolean(false));
+        http_define_own(vm, result, "writableEnded", mal_value_new_boolean(false));
+        http_define_own(vm, result, "writableFinished", mal_value_new_boolean(false));
     }
     return result;
 }
@@ -2249,9 +2259,9 @@ static MalValue http_request(
     if (request.kind == MAL_COMPLETION_THROW) goto fail_state;
     roots[4] = request.value;
     state->request = roots[4];
-    http_define(vm, roots[4], "method",
+    http_define_own(vm, roots[4], "method",
                 http_ascii_value(vm, state->method, state->method_len));
-    http_define(vm, roots[4], "path",
+    http_define_own(vm, roots[4], "path",
                 http_ascii_value(vm, state->path, state->path_len));
     state->next = http_clients;
     http_clients = state;
