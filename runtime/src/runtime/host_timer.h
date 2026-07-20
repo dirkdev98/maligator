@@ -29,7 +29,8 @@ typedef struct MalHostTimer {
     MalValue callback;
     MalValue *args; /* heap copy of setTimeout extra args (nullptr if none) */
     i32 arg_count;
-    i64 repeat_ms;  /* setInterval period; 0 for a one-shot setTimeout */
+    i64 repeat_ms;  /* normalized setInterval period, including zero */
+    bool repeating; /* distinguishes zero-delay intervals from one-shot timers */
     bool ready;     /* timer fired; callback awaits the macrotask phase */
     bool cancelled; /* clearTimeout'd before it fired/ran */
     MalVm *vm;      /* back-ref for the reactor waker */

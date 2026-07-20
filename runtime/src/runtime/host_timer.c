@@ -58,13 +58,15 @@ static void mal_host_unlink_timer(MalHost *host, MalHostTimer *t) {
 }
 
 static i64 mal_host_add_timer(
-    MalVm *vm, MalValue callback, i64 delay_ms, MalValue *args, i32 arg_count, i64 repeat_ms) {
+    MalVm *vm, MalValue callback, i64 delay_ms, MalValue *args, i32 arg_count,
+    i64 repeat_ms, bool repeating) {
     MalHostTimer *t = calloc(1, sizeof(MalHostTimer));
     t->id = mal_host(vm)->timer_next_id++;
     t->callback = callback;
     t->args = args;
     t->arg_count = arg_count;
     t->repeat_ms = repeat_ms;
+    t->repeating = repeating;
     t->ready = false;
     t->cancelled = false;
     t->vm = vm;
@@ -87,7 +89,7 @@ static i64 mal_host_add_timer(
 
 i64 mal_host_set_timeout(
     MalVm *vm, MalValue callback, i64 delay_ms, MalValue *args, i32 arg_count) {
-    return mal_host_add_timer(vm, callback, delay_ms, args, arg_count, 0);
+    return mal_host_add_timer(vm, callback, delay_ms, args, arg_count, 0, false);
 }
 
 i64 mal_host_set_interval(
@@ -95,7 +97,7 @@ i64 mal_host_set_interval(
     if (period_ms < 0) {
         period_ms = 0;
     }
-    return mal_host_add_timer(vm, callback, period_ms, args, arg_count, period_ms);
+    return mal_host_add_timer(vm, callback, period_ms, args, arg_count, period_ms, true);
 }
 
 void mal_host_clear_timeout(MalVm *vm, i64 id) {
@@ -132,13 +134,7 @@ static bool mal_host_run_one_ready(MalVm *vm) {
             free(t);
             continue;
         }
-        if (t->repeat_ms > 0) {
-            // Re-arm before running so self-clearInterval cancels the next tick.
-            t->ready = false;
-            t->timer.deadline_ns = mal_reactor_now_ns() + t->repeat_ms * 1000000;
-            t->timer.heap_index = -1;
-            mal_reactor_add_timer(&host->reactor, &t->timer);
-
+        if (t->repeating) {
             MalValue cb = t->callback;
             MalValue *cargs = t->args;
             i32 cargc = t->arg_count;
@@ -146,6 +142,17 @@ static bool mal_host_run_one_ready(MalVm *vm) {
             mal_gc_root(&rs_cb, &cb, 1);
             mal_vm_call_value(vm, cb, mal_value_new_undefined(), cargs, cargc);
             mal_gc_unroot(&rs_cb);
+            if (t->cancelled) {
+                mal_host_unlink_timer(host, t);
+                free(t->args);
+                free(t);
+            } else {
+                // Rearm after the handler so timers it creates at the same delay run first.
+                t->ready = false;
+                t->timer.deadline_ns = mal_reactor_now_ns() + t->repeat_ms * 1000000;
+                t->timer.heap_index = -1;
+                mal_reactor_add_timer(&host->reactor, &t->timer);
+            }
             return true;
         }
 

@@ -31,10 +31,17 @@ const EXPECTED = [
 
 describe("host event loop (setTimeout ordering)", () => {
 	let bin: string;
+	let zeroIntervalBin: string;
 	beforeAll(() => {
 		bin = buildNativeBinary({
 			fixture: "tests/local/host_settimeout.js",
 			name: "hosttest",
+			mainFile: HOST_MAIN,
+			outDir,
+		});
+		zeroIntervalBin = buildNativeBinary({
+			fixture: "tests/local/host_setinterval_zero.js",
+			name: "hostintervalzero",
 			mainFile: HOST_MAIN,
 			outDir,
 		});
@@ -46,5 +53,23 @@ describe("host event loop (setTimeout ordering)", () => {
 
 	it("emits the expected sequence under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
 		assertExactLines(runToStdout(bin, { env: STRESS_ENV }), EXPECTED);
+	});
+
+	it("repeats and self-clears a zero-delay interval", () => {
+		assertExactLines(runToStdout(zeroIntervalBin), [
+			"interval 1",
+			"nested timeout",
+			"interval 2",
+			"RESULT 1/1",
+		]);
+	});
+
+	it("keeps a zero-delay interval rooted under GC stress", () => {
+		assertExactLines(runToStdout(zeroIntervalBin, { env: STRESS_ENV }), [
+			"interval 1",
+			"nested timeout",
+			"interval 2",
+			"RESULT 1/1",
+		]);
 	});
 });

@@ -226,6 +226,14 @@
 			"includes": []
 		},
 		{
+			"path": "html/webappapis/timers/missing-timeout-setinterval.any.js",
+			"sha256": "5edf0f09d55cacd4ffa6e62696d3614d7fcd099627a56b4a9d00449633395da5",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
+		},
+		{
 			"path": "streams/queuing-strategies.any.js",
 			"sha256": "ece59cf020e6a21a363f6fae7de227a71656b2aba216892138e00d8367045184",
 			"target": "server-main",
