@@ -30,6 +30,13 @@ static MalValue rs_take_type_error(MalVm *vm, const byte *message) {
     return error;
 }
 
+static MalValue rs_take_range_error(MalVm *vm, const byte *message) {
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message);
+    MalValue error = vm->completion.value;
+    vm->completion = rs_normal();
+    return error;
+}
+
 static MalReadableStreamObject *rs_new(
     MalVm *vm, MalReadableStreamKind kind, MalObject *prototype) {
     MalReadableStreamObject *object = mal_heap_alloc(
@@ -113,9 +120,11 @@ static void rs_clear_algorithms(MalReadableStreamObject *controller) {
     mal_gc_write_barrier(controller->as.controller.underlying_source);
     mal_gc_write_barrier(controller->as.controller.pull_method);
     mal_gc_write_barrier(controller->as.controller.cancel_method);
+    mal_gc_write_barrier(controller->as.controller.size_algorithm);
     controller->as.controller.underlying_source = mal_value_new_undefined();
     controller->as.controller.pull_method = mal_value_new_undefined();
     controller->as.controller.cancel_method = mal_value_new_undefined();
+    controller->as.controller.size_algorithm = mal_value_new_undefined();
 }
 
 static void rs_queue_clear(MalReadableStreamObject *controller) {
@@ -198,6 +207,7 @@ MalValue mal_readable_stream_from_bytes(
     controller->as.controller.underlying_source = mal_value_new_undefined();
     controller->as.controller.pull_method = mal_value_new_undefined();
     controller->as.controller.cancel_method = mal_value_new_undefined();
+    controller->as.controller.size_algorithm = mal_value_new_undefined();
     controller->as.controller.queue_head = nullptr;
     controller->as.controller.queue_tail = nullptr;
     controller->as.controller.queue_total_size = length == 0 ? 0 : 1;
@@ -241,6 +251,7 @@ MalValue mal_readable_stream_from_bytes(
     }
     entry->next = nullptr;
     entry->chunk = roots[2];
+    entry->size = 1;
     controller->as.controller.queue_head = entry;
     controller->as.controller.queue_tail = entry;
     mal_gc_card(&controller->object.header, roots[2]);
@@ -323,6 +334,56 @@ static f64 rs_desired_size(MalReadableStreamObject *controller) {
     }
     return controller->as.controller.high_water_mark -
         controller->as.controller.queue_total_size;
+}
+
+static bool rs_chunk_size(MalVm *vm, MalReadableStreamObject *controller,
+    MalValue chunk, f64 *size_out) {
+    if (mal_value_is_undefined(controller->as.controller.size_algorithm)) {
+        *size_out = 1;
+        return true;
+    }
+
+    MalValue roots[4] = {
+        mal_value_from_readable_stream_object(controller), chunk,
+        controller->as.controller.size_algorithm, mal_value_new_undefined(),
+    };
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 4);
+    MalCompletion call = mal_vm_call_value(
+        vm, roots[2], mal_value_new_undefined(), &roots[1], 1);
+    if (call.kind == MAL_COMPLETION_THROW) {
+        roots[3] = call.value;
+        vm->completion = rs_normal();
+        rs_error_stream(vm,
+            mal_value_to_readable_stream_object(controller->as.controller.stream), roots[3]);
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = roots[3]};
+        mal_gc_unroot(&span);
+        return false;
+    }
+    roots[3] = call.value;
+
+    f64 chunk_size;
+    if (!mal_vm_to_number(vm, roots[3], &chunk_size)) {
+        roots[1] = vm->completion.value;
+        vm->completion = rs_normal();
+        rs_error_stream(vm,
+            mal_value_to_readable_stream_object(controller->as.controller.stream), roots[1]);
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = roots[1]};
+        mal_gc_unroot(&span);
+        return false;
+    }
+    if (!isfinite(chunk_size) || chunk_size < 0) {
+        roots[3] = rs_take_range_error(
+            vm, (const byte *) "ReadableStream chunk size must be finite and non-negative");
+        rs_error_stream(vm,
+            mal_value_to_readable_stream_object(controller->as.controller.stream), roots[3]);
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = roots[3]};
+        mal_gc_unroot(&span);
+        return false;
+    }
+    *size_out = chunk_size;
+    mal_gc_unroot(&span);
+    return true;
 }
 
 static bool rs_should_call_pull(MalReadableStreamObject *controller) {
@@ -535,6 +596,15 @@ static MalValue rs_constructor(MalVm *vm, MalValue self, const MalValue *args,
                 goto fail;
             }
         }
+        if (!mal_vm_get_property(vm, roots[1],
+                mal_intrinsic_string_key(vm, (const byte *) "size"), &roots[9])) {
+            goto fail;
+        }
+        if (!mal_value_is_undefined(roots[9]) && !mal_value_is_callable(roots[9])) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "ReadableStream strategy size must be callable");
+            goto fail;
+        }
     }
 
     MalValue source = mal_value_is_nil(roots[0]) ? mal_value_new_undefined() : roots[0];
@@ -579,6 +649,7 @@ static MalValue rs_constructor(MalVm *vm, MalValue self, const MalValue *args,
     controller->as.controller.underlying_source = roots[2];
     controller->as.controller.pull_method = roots[4];
     controller->as.controller.cancel_method = roots[5];
+    controller->as.controller.size_algorithm = roots[9];
     controller->as.controller.queue_head = nullptr;
     controller->as.controller.queue_tail = nullptr;
     controller->as.controller.queue_total_size = 0;
@@ -870,16 +941,21 @@ static MalValue rs_controller_enqueue(MalVm *vm, MalValue self, const MalValue *
         mal_promise_fulfill(vm, mal_value_to_promise_object(roots[1]), roots[2]);
         mal_gc_unroot(&span);
     } else {
+        f64 chunk_size;
+        if (!rs_chunk_size(vm, controller, chunk, &chunk_size)) {
+            return mal_value_new_undefined();
+        }
         MalReadableStreamQueueEntry *entry = malloc(sizeof(MalReadableStreamQueueEntry));
         entry->next = nullptr;
         entry->chunk = chunk;
+        entry->size = chunk_size;
         if (controller->as.controller.queue_tail == nullptr) {
             controller->as.controller.queue_head = entry;
         } else {
             controller->as.controller.queue_tail->next = entry;
         }
         controller->as.controller.queue_tail = entry;
-        controller->as.controller.queue_total_size += 1;
+        controller->as.controller.queue_total_size += chunk_size;
         mal_gc_card(&controller->object.header, chunk);
     }
     rs_call_pull_if_needed(vm, controller);
@@ -979,7 +1055,10 @@ static MalValue rs_reader_read(MalVm *vm, MalValue self, const MalValue *args,
         if (controller->as.controller.queue_head == nullptr) {
             controller->as.controller.queue_tail = nullptr;
         }
-        controller->as.controller.queue_total_size -= 1;
+        controller->as.controller.queue_total_size -= entry->size;
+        if (controller->as.controller.queue_total_size < 0) {
+            controller->as.controller.queue_total_size = 0;
+        }
         mal_gc_write_barrier(entry->chunk);
         free(entry);
         roots[1] = rs_read_result(vm, roots[0], false);
@@ -1085,6 +1164,7 @@ static void rs_trace(MalHeapHeader *cell) {
             mal_gc_mark_value(object->as.controller.underlying_source);
             mal_gc_mark_value(object->as.controller.pull_method);
             mal_gc_mark_value(object->as.controller.cancel_method);
+            mal_gc_mark_value(object->as.controller.size_algorithm);
             for (MalReadableStreamQueueEntry *entry = object->as.controller.queue_head;
                  entry != nullptr; entry = entry->next) {
                 mal_gc_mark_value(entry->chunk);

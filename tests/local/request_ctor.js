@@ -1,6 +1,5 @@
 // Request constructor synchronous surface (STRESS-safe). The async body round-trip
 // is covered by the fetch server's /reqctor route.
-//   node scripts/webtest.ts tests/local/request_ctor.js
 // v1 keeps the method as-given (no spec uppercasing) — asserted accordingly.
 
 const results = [];

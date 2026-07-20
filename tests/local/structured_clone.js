@@ -1,6 +1,5 @@
-// structuredClone acceptance fixture. Run via the generic
-// webtest runner: `node scripts/webtest.ts tests/local/structured_clone.js`.
-// Written before implementation (TDD). Prints one line per check + a final
+// structuredClone acceptance fixture. Written before implementation (TDD).
+// Prints one line per check + a final
 // "RESULT <passed>/<total>" the runner asserts.
 
 const results = [];

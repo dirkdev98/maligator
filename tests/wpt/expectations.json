@@ -1,5 +1,30 @@
 {
-	"schemaVersion": 1,
+	"schemaVersion": 2,
 	"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd",
-	"expectations": []
+	"expectations": [
+		{
+			"path": "fetch/api/headers/header-setcookie.any.js",
+			"variant": "",
+			"backend": "compiled",
+			"mode": "normal",
+			"subtest": "Set-Cookie is a forbidden response header",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Mal.serve uses Response as its outbound server response and currently requires Set-Cookie values to survive; separating the server transport response from browser response guards remains unresolved",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		},
+		{
+			"path": "fetch/api/headers/header-setcookie.any.js",
+			"variant": "",
+			"backend": "compiled",
+			"mode": "gc-stress",
+			"subtest": "Set-Cookie is a forbidden response header",
+			"occurrence": 1,
+			"status": "FAIL",
+			"milestone": "W2",
+			"reason": "Mal.serve uses Response as its outbound server response and currently requires Set-Cookie values to survive; separating the server transport response from browser response guards remains unresolved",
+			"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd"
+		}
+	]
 }

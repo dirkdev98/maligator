@@ -253,6 +253,8 @@ typedef enum MalHeapType : u8 {
      * runtime/headers_object.h.
      */
     MAL_HEAP_HEADERS_OBJECT,
+    /** Iterator over a live Headers list. See runtime/headers_object.h. */
+    MAL_HEAP_HEADERS_ITERATOR_OBJECT,
     /**
      * WHATWG URL (MalUrlObject): wraps an opaque ada-url handle, freed by the GC
      * finalizer via mal_url_free. See runtime/url_object.h.

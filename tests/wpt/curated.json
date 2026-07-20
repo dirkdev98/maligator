@@ -1,117 +1,349 @@
 {
-	"schemaVersion": 1,
+	"schemaVersion": 2,
 	"repository": "https://github.com/web-platform-tests/wpt.git",
 	"revision": "f0b30d60daf6a64a3b087d66732c54c8e5273dbd",
 	"tests": [
 		{
+			"path": "dom/abort/AbortSignal.any.js",
+			"sha256": "64be009f125bb0111362b70540f752ae5a1b176746f9941380f48d1e66630c81",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,dedicatedworker" }],
+			"includes": []
+		},
+		{
 			"path": "dom/abort/event.any.js",
 			"sha256": "d67dcb62c7959d541ab6fe9fd3e2bfe1fb9ffcb27290f8c51d37a32074d844c5",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,dedicatedworker" }],
+			"includes": []
+		},
+		{
+			"path": "dom/abort/timeout.any.js",
+			"sha256": "c0388b0d5c0bab8785ab1421124706d4b70a16c981b5bb5c6d8477398f336911",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,dedicatedworker" }],
+			"includes": []
+		},
+		{
+			"path": "dom/events/AddEventListenerOptions-once.any.js",
+			"sha256": "9446ac20ed90dba10bb2cad56ae9fb67e57677b8930ce1703218564e172cd302",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "title", "value": "AddEventListenerOptions.once" }],
+			"includes": []
+		},
+		{
+			"path": "encoding/api-basics.any.js",
+			"sha256": "fa0a7e0dadb315e6b8b9c2572f7e620b54f37148d3319af500a477f9d14a93a6",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,dedicatedworker" },
+				{ "name": "title", "value": "Encoding API: Basics" }
+			],
+			"includes": []
 		},
 		{
 			"path": "encoding/api-surrogates-utf8.any.js",
 			"sha256": "66c441e9f6718f6e38c8bffeb52e25de785e8c4e1bc76d57b3cf1da98730b873",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,dedicatedworker" },
+				{
+					"name": "title",
+					"value": "Encoding API: Invalid UTF-16 surrogates with UTF-8 encoding"
+				}
+			],
+			"includes": []
+		},
+		{
+			"path": "encoding/textdecoder-arguments.any.js",
+			"sha256": "ac82bce4b2364615737cb2e1348c6a7cc6155b107afc79ecae22057694808d78",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,dedicatedworker" },
+				{
+					"name": "title",
+					"value": "Encoding API: TextDecoder decode() optional arguments"
+				}
+			],
+			"includes": []
+		},
+		{
+			"path": "encoding/textdecoder-byte-order-marks.any.js",
+			"sha256": "dd73fab542fe5d7fea58b5ca7bffc916c3535dd0069bc537ae5f41d4c3996361",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,dedicatedworker" },
+				{ "name": "title", "value": "Encoding API: Byte-order marks" }
+			],
+			"includes": []
 		},
 		{
 			"path": "encoding/textdecoder-fatal.any.js",
 			"sha256": "083a058a10a2bdc77e1da32d0acda791b568a6701c49db10cec2bfa1f7b9eab8",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,dedicatedworker" },
+				{ "name": "title", "value": "Encoding API: Fatal flag" }
+			],
+			"includes": []
 		},
 		{
 			"path": "encoding/textdecoder-fatal-streaming.any.js",
 			"sha256": "f57d56e829f93ecf33b96d0bb640e693b3ea54bb1baae1fcd3309867de58658b",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,dedicatedworker" },
+				{ "name": "title", "value": "Encoding API: End-of-file" }
+			],
+			"includes": []
 		},
 		{
 			"path": "encoding/textdecoder-ignorebom.any.js",
 			"sha256": "f0ecc2649c9d12e1ea0556d3eac82d78de15d9466301ec4997add573d39bebe1",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,dedicatedworker" },
+				{ "name": "title", "value": "Encoding API: TextDecoder ignoreBOM option" }
+			],
+			"includes": []
 		},
 		{
 			"path": "encoding/textencoder-utf16-surrogates.any.js",
 			"sha256": "9f62d3946b7734822ce9a1be906f9204718315df50c034f779afae894ae0753f",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "global", "value": "window,dedicatedworker" },
+				{
+					"name": "title",
+					"value": "Encoding API: USVString surrogate handling when encoding"
+				}
+			],
+			"includes": []
+		},
+		{
+			"path": "fetch/api/headers/header-setcookie.any.js",
+			"sha256": "b587804553ca837bf953fea9b40c94237af803710f56f45e98750b450da42be2",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "title", "value": "Headers set-cookie special cases" },
+				{ "name": "global", "value": "window,worker" }
+			],
+			"includes": []
+		},
+		{
+			"path": "fetch/api/headers/headers-basic.any.js",
+			"sha256": "596cd577710773b42a5edf7c6150138fd0502e005a76b383a8331b5fcaf2cfeb",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "title", "value": "Headers structure" },
+				{ "name": "global", "value": "window,worker" }
+			],
+			"includes": []
 		},
 		{
 			"path": "fetch/api/headers/headers-casing.any.js",
 			"sha256": "f9034ff6ddc3c23e2aa16419738005d229e19a0b40eb5791af465b16df3ab877",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "title", "value": "Headers case management" },
+				{ "name": "global", "value": "window,worker" }
+			],
+			"includes": []
 		},
 		{
 			"path": "fetch/api/headers/headers-combine.any.js",
 			"sha256": "8bc26fcc318dc1fb0d0b60f2a4dd6d5fdaa8ac2e148d20856f6186b5d4f4971d",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "title", "value": "Headers have combined (and sorted) values" },
+				{ "name": "global", "value": "window,worker" }
+			],
+			"includes": []
 		},
 		{
 			"path": "fetch/api/headers/headers-errors.any.js",
 			"sha256": "4b4b9c8d9b72a52c5200feaa67f018cc91d05e9ee0c98a2a18ad56f44873047b",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "title", "value": "Headers errors" },
+				{ "name": "global", "value": "window,worker" }
+			],
+			"includes": []
 		},
 		{
 			"path": "fetch/api/headers/headers-normalize.any.js",
 			"sha256": "8f914199d80ed14cd5dec7992464a10981e0b5b74fd26b70768f04f1fd1fb4c1",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "title", "value": "Headers normalize values" },
+				{ "name": "global", "value": "window,worker" }
+			],
+			"includes": []
 		},
 		{
 			"path": "fetch/api/headers/headers-structure.any.js",
 			"sha256": "50f222c12d865e69b860ce02b471accd4b6983a516bec380ece51fbda3a72bec",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [
+				{ "name": "title", "value": "Headers basic" },
+				{ "name": "global", "value": "window,worker" }
+			],
+			"includes": []
 		},
 		{
 			"path": "html/webappapis/timers/cleartimeout-clearinterval.any.js",
 			"sha256": "88249c3de681efa1db0c3a6ca39cdc74b657b052eeb96ca7d43b2971d5327985",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
+		},
+		{
+			"path": "streams/readable-streams/bad-strategies.any.js",
+			"sha256": "6feff82c1b36f3107643b0efcaf46bf07c9c8a40947de603294959d1881aa62b",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
+			"path": "streams/readable-streams/constructor.any.js",
+			"sha256": "5a80b6aea8ce78ffc639bc85ab9ec9bfb64a4b102dcee53a6eaee1d904f4205c",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
+		},
+		{
+			"path": "streams/readable-streams/floating-point-total-queue-size.any.js",
+			"sha256": "7e7e4d0767702c23de523e0e58d17cf997d12ced0f5836cf7930ec320243f560",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [{ "name": "global", "value": "window,worker" }],
+			"includes": []
 		},
 		{
 			"path": "url/url-statics-canparse.any.js",
 			"sha256": "65aac5c10f153bc2ac851a0b88257a69dd5f4c92cb5e70a225b6fb06f1300de1",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
 		},
 		{
 			"path": "url/url-statics-parse.any.js",
 			"sha256": "a0d32f83ad40a43682e3ffd6bf6f766932d84109785b428641f42b5ca3ccbf49",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
 		},
 		{
 			"path": "url/url-tojson.any.js",
 			"sha256": "dc5707460963a2cc4dd2e77d48b369ac174515b8fd2f76083f0ade9328b5551a",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
 		},
 		{
 			"path": "url/urlsearchparams-append.any.js",
 			"sha256": "b3fdef26237562dee586c7768af5b484b3ff9d372595d8a8e59b7ebd1099c19b",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
+		},
+		{
+			"path": "url/urlsearchparams-delete.any.js",
+			"sha256": "946cf6e91d89a4d40ca848430ec8298e2de6fbbd3a9d1efd7b47425ce90a55c1",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
 		},
 		{
 			"path": "url/urlsearchparams-foreach.any.js",
 			"sha256": "93e1c9dc0b32d13cdf6de9a100ab9c92a197ac361d1a8d6f164d562b433a4b8d",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
 		},
 		{
 			"path": "url/urlsearchparams-get.any.js",
 			"sha256": "0bfd999026f963ffc3f021cf509d1e8f3300cddd52c21ebffcd392d8d43bca34",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
 		},
 		{
 			"path": "url/urlsearchparams-getall.any.js",
 			"sha256": "f6501e719a9ab88c648d1bff0da30b2efda7aaa16d9e4220e95a952fdc17be8c",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
 		},
 		{
 			"path": "url/urlsearchparams-has.any.js",
 			"sha256": "568dcc6cb4b4ff7c9fbf59482bcde7b38c1c9da4247dd121894e1fedb8ddf352",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
 		},
 		{
 			"path": "url/urlsearchparams-set.any.js",
 			"sha256": "41771dec1616c4715c33a2a77b3125483c4bce24998e344222e9b8d1f49d68de",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
 		},
 		{
 			"path": "url/urlsearchparams-size.any.js",
 			"sha256": "cc17292db2bc179bd2629be9867ded0b413de399a6ce1fbf8943d012894cac94",
-			"gcStress": true
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
+		},
+		{
+			"path": "url/urlsearchparams-sort.any.js",
+			"sha256": "cdfc1ef89cfcefa5fae94ebdeaa2a869c47b47b47d08aba4c7db0b6e44b31fca",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
+		},
+		{
+			"path": "url/urlsearchparams-stringifier.any.js",
+			"sha256": "14f7b8871fec6a02dbbe324a5f8943932ecb149285e5cc149fdf34ae769d52c0",
+			"target": "server-main",
+			"modes": ["normal", "gc-stress"],
+			"metadata": [],
+			"includes": []
 		}
 	]
 }

@@ -30,6 +30,19 @@ typedef struct MalHeadersObject {
     MalHeadersGuard guard;
 } MalHeadersObject;
 
+typedef enum MalHeadersIteratorKind : u8 {
+    MAL_HEADERS_ITERATOR_ENTRIES,
+    MAL_HEADERS_ITERATOR_KEYS,
+    MAL_HEADERS_ITERATOR_VALUES,
+} MalHeadersIteratorKind;
+
+typedef struct MalHeadersIteratorObject {
+    MalObject object;
+    MalHeadersObject *headers;
+    i32 index;
+    MalHeadersIteratorKind kind;
+} MalHeadersIteratorObject;
+
 static_assert(sizeof(MalHeadersObject) <= 64,
     "MalHeadersObject outgrew its 64-byte size class");
 

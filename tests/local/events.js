@@ -1,5 +1,4 @@
 // DOMException / Event / EventTarget / AbortController / AbortSignal fixture.
-//   node scripts/webtest.ts tests/local/events.js
 // Sync checks run first; AbortSignal.timeout (async, via the event loop) finalizes
 // the run and prints RESULT from its abort listener.
 
@@ -114,6 +113,38 @@ et.addEventListener("b", () => onceCount++, { once: true });
 et.dispatchEvent(new Event("b"));
 et.dispatchEvent(new Event("b"));
 check("once listener", onceCount === 1);
+
+let nestedOnceCount = 0;
+et.addEventListener(
+	"nested-once",
+	() => {
+		nestedOnceCount++;
+		et.dispatchEvent(new Event("nested-once"));
+	},
+	{ once: true },
+);
+et.dispatchEvent(new Event("nested-once"));
+check("once listener removed before nested dispatch", nestedOnceCount === 1);
+
+const mutationOrder = [];
+const mutationTarget = new EventTarget();
+const removedAndReadded = () => mutationOrder.push("second");
+mutationTarget.addEventListener(
+	"mutation",
+	() => {
+		mutationOrder.push("first");
+		mutationTarget.removeEventListener("mutation", removedAndReadded);
+		mutationTarget.addEventListener("mutation", removedAndReadded);
+	},
+	{ once: true },
+);
+mutationTarget.addEventListener("mutation", removedAndReadded);
+mutationTarget.dispatchEvent(new Event("mutation"));
+mutationTarget.dispatchEvent(new Event("mutation"));
+check(
+	"dispatch skips removed snapshot listeners",
+	mutationOrder.join() === "first,second",
+);
 
 // preventDefault via a listener makes dispatchEvent return false.
 et.addEventListener("c", (ev) => ev.preventDefault());

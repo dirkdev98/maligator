@@ -262,6 +262,7 @@ static MalEventTargetObject *event_target_new(MalHeap *heap, MalObject *prototyp
     t->listeners = nullptr;
     t->count = 0;
     t->cap = 0;
+    t->dispatch_depth = 0;
     t->dependents = nullptr;
     t->dependent_count = 0;
     t->dependent_cap = 0;
@@ -295,7 +296,8 @@ static void event_target_trace(MalHeapHeader *cell) {
 
 static void event_target_add(MalEventTargetObject *t, MalString *type, MalValue cb, bool once) {
     for (i32 i = 0; i < t->count; i++) {
-        if (mal_string_equals(t->listeners[i].type, type) && t->listeners[i].callback == cb) {
+        if (!t->listeners[i].removed && mal_string_equals(t->listeners[i].type, type)
+            && t->listeners[i].callback == cb) {
             return; // duplicate (same type + callback): a no-op per spec
         }
     }
@@ -306,23 +308,50 @@ static void event_target_add(MalEventTargetObject *t, MalString *type, MalValue 
     t->listeners[t->count].type = type;
     t->listeners[t->count].callback = cb;
     t->listeners[t->count].once = once;
+    t->listeners[t->count].removed = false;
     t->count++;
     mal_gc_card(&t->object.header, mal_value_from_string(type));
     mal_gc_card(&t->object.header, cb);
 }
 
-static void event_target_remove(MalEventTargetObject *t, const MalString *type, MalValue cb) {
+static void event_target_remove_at(MalEventTargetObject *t, i32 index) {
+    if (t->dispatch_depth > 0) {
+        mal_gc_write_barrier(mal_value_from_string(t->listeners[index].type));
+        mal_gc_write_barrier(t->listeners[index].callback);
+        t->listeners[index].removed = true;
+        return;
+    }
     for (i32 i = 0; i < t->count; i++) {
         mal_gc_write_barrier(mal_value_from_string(t->listeners[i].type));
         mal_gc_write_barrier(t->listeners[i].callback);
     }
-    i32 w = 0;
+    for (i32 i = index + 1; i < t->count; i++) {
+        t->listeners[i - 1] = t->listeners[i];
+    }
+    t->count--;
+}
+
+static void event_target_compact(MalEventTargetObject *t) {
+    i32 write = 0;
     for (i32 i = 0; i < t->count; i++) {
-        if (!(mal_string_equals(t->listeners[i].type, type) && t->listeners[i].callback == cb)) {
-            t->listeners[w++] = t->listeners[i];
+        if (t->listeners[i].removed) {
+            mal_gc_write_barrier(mal_value_from_string(t->listeners[i].type));
+            mal_gc_write_barrier(t->listeners[i].callback);
+        } else {
+            t->listeners[write++] = t->listeners[i];
         }
     }
-    t->count = w;
+    t->count = write;
+}
+
+static void event_target_remove(MalEventTargetObject *t, const MalString *type, MalValue cb) {
+    for (i32 i = 0; i < t->count; i++) {
+        if (!t->listeners[i].removed && mal_string_equals(t->listeners[i].type, type)
+            && t->listeners[i].callback == cb) {
+            event_target_remove_at(t, i);
+            return;
+        }
+    }
 }
 
 static MalEventTargetObject *event_target_this(MalValue self) {
@@ -348,40 +377,50 @@ static bool mal_event_dispatch(MalVm *vm, MalValue target_val, MalValue event_va
 
     i32 n = 0;
     for (i32 i = 0; i < t->count; i++) {
-        if (mal_string_equals(t->listeners[i].type, etype)) {
+        if (!t->listeners[i].removed && mal_string_equals(t->listeners[i].type, etype)) {
             n++;
         }
     }
     if (n > 0) {
         MalValue *cbs = malloc(sizeof(MalValue) * (usize) n);
-        bool *onces = malloc(sizeof(bool) * (usize) n);
+        i32 *indices = malloc(sizeof(i32) * (usize) n);
         i32 j = 0;
         for (i32 i = 0; i < t->count; i++) {
-            if (mal_string_equals(t->listeners[i].type, etype)) {
+            if (!t->listeners[i].removed && mal_string_equals(t->listeners[i].type, etype)) {
                 cbs[j] = t->listeners[i].callback;
-                onces[j] = t->listeners[i].once;
+                indices[j] = i;
                 j++;
             }
         }
         MalRootSpan rs;
         mal_gc_root(&rs, cbs, n); // the snapshot survives once-removal + callbacks
+        t->dispatch_depth++;
         for (j = 0; j < n; j++) {
+            i32 listener_index = indices[j];
+            if (t->listeners[listener_index].removed) {
+                continue;
+            }
+            if (t->listeners[listener_index].once) {
+                // Remove before invoking so a nested dispatch cannot observe it.
+                event_target_remove_at(t, listener_index);
+            }
             mal_vm_call_value(vm, cbs[j], target_val, &event_val, 1);
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
                 // A listener's exception is reported, not propagated (spec).
                 vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL,
                     .value = mal_value_new_undefined()};
             }
-            if (onces[j]) {
-                event_target_remove(t, etype, cbs[j]);
-            }
             if (ev_get_bool(vm, event_val, (const byte *) "__stopImmediate")) {
                 break;
             }
         }
+        t->dispatch_depth--;
+        if (t->dispatch_depth == 0) {
+            event_target_compact(t);
+        }
         mal_gc_unroot(&rs);
         free(cbs);
-        free(onces);
+        free(indices);
     }
     return !ev_get_bool(vm, event_val, (const byte *) "defaultPrevented");
 }

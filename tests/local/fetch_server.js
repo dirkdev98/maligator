@@ -1,6 +1,6 @@
 // WinterTC fetch server smoke test. Mal.serve starts an HTTP server on an
-// ephemeral port; the handler returns a Response. The runner (scripts/fetchtest.ts)
-// reads the port, drives it with Node's fetch, and asserts.
+// ephemeral port; the handler returns a Response. The native test reads the port,
+// drives it with Node's fetch, and asserts.
 const server = Mal.serve({
 	port: 0,
 	async fetch(request) {

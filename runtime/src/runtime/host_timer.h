@@ -33,7 +33,9 @@ typedef struct MalHostTimer {
     bool ready;     /* timer fired; callback awaits the macrotask phase */
     bool cancelled; /* clearTimeout'd before it fired/ran */
     MalVm *vm;      /* back-ref for the reactor waker */
+    struct MalHostTimer *previous;
     struct MalHostTimer *next;
+    struct MalHostTimer *ready_next;
 } MalHostTimer;
 
 /* Register a setTimeout; returns its id. Takes ownership of `args` (freed with the

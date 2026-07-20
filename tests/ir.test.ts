@@ -700,6 +700,96 @@ test("literal templates preserve exact f64 bits", () => {
 	}
 });
 
+test("captured loop body bindings use the per-iteration environment", () => {
+	const program = compileScript(`
+		function collect() {
+			const callbacks = [];
+			for (const size of [1, 2]) {
+				let thrown = size;
+				callbacks.push(() => size + thrown);
+			}
+			return callbacks;
+		}
+	`);
+	const collect = functionNamed(program, "collect");
+	const envPush = instructionsOf(collect).filter(
+		(instruction) => instruction.type === "envPush",
+	);
+
+	expect(envPush).toHaveLength(1);
+	expect(envPush[0]).toMatchObject({ slotCount: 2 });
+	if (envPush[0]?.type !== "envPush") return;
+	const { scopeId } = envPush[0];
+
+	const callback = program.functions.find(
+		(fn) =>
+			fn !== collect &&
+			instructionsOf(fn).some(
+				(instruction) =>
+					instruction.type === "loadCaptured" && instruction.functionIndex === scopeId,
+			),
+	);
+	expect(callback).toBeDefined();
+	expect(
+		instructionsOf(callback!).filter(
+			(instruction) =>
+				instruction.type === "loadCaptured" && instruction.functionIndex === scopeId,
+		),
+	).toHaveLength(2);
+	expect(
+		collect.blocks.some((block) =>
+			block.instructions.some((instruction, index) => {
+				const next = block.instructions[index + 1];
+				return (
+					instruction.type === "createEmpty" &&
+					next?.type === "storeCaptured" &&
+					next.functionIndex === scopeId &&
+					next.registers[0] === instruction.registers[0]
+				);
+			}),
+		),
+	).toBe(true);
+});
+
+test.each([
+	[
+		"classic for",
+		`function collect() {
+			const callbacks = [];
+			for (let value = 0; value < 2; value++) {
+				let body = value;
+				callbacks.push(() => value + body);
+			}
+		}`,
+	],
+	[
+		"for-in",
+		`function collect() {
+			const callbacks = [];
+			for (const value in { a: 1, b: 2 }) {
+				let body = value;
+				callbacks.push(() => value + body);
+			}
+		}`,
+	],
+	[
+		"for-await-of",
+		`async function collect(source) {
+			const callbacks = [];
+			for await (const value of source) {
+				let body = value;
+				callbacks.push(() => value + body);
+			}
+		}`,
+	],
+])("captured %s body bindings use a two-slot iteration environment", (_name, source) => {
+	const program = compileScript(source);
+	const envPushes = program.functions.flatMap((fn) =>
+		instructionsOf(fn).filter((instruction) => instruction.type === "envPush"),
+	);
+	expect(envPushes).toContainEqual(expect.objectContaining({ slotCount: 2 }));
+});
+
 test("array rest assignment captures and spills its member reference before draining", () => {
 	const program = compileScript(
 		'let target, source; function key(){ return "x" } [...target[key()]] = source;',

@@ -711,8 +711,6 @@ static MalValue mal_headers_constructor(
 
 /* --- sorted, live iteration (entries / keys / values / forEach / @@iterator) --- */
 
-typedef enum { MAL_HEADERS_ENTRIES, MAL_HEADERS_KEYS, MAL_HEADERS_VALUES } MalHeadersIterKind;
-
 static i32 mal_headers_name_compare(const MalString *a, const MalString *b) {
     usize a_len = mal_string_length(a);
     usize b_len = mal_string_length(b);
@@ -822,39 +820,24 @@ static bool mal_headers_iteration_item(MalVm *vm, MalHeadersObject *h, i32 targe
     return found;
 }
 
-enum {
-    MAL_HEADERS_ITER_SLOT_HEADERS,
-    MAL_HEADERS_ITER_SLOT_INDEX,
-    MAL_HEADERS_ITER_SLOT_KIND,
-};
-
-static MalValue mal_headers_iterator_self(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) vm;
-    (void) args;
-    (void) argc;
-    (void) nt;
-    (void) callee;
-    return self;
+static void mal_headers_iterator_trace(MalHeapHeader *cell) {
+    MalHeadersIteratorObject *iterator = (MalHeadersIteratorObject *) cell;
+    mal_gc_mark_value(mal_value_from_headers_object(iterator->headers));
 }
 
 static MalValue mal_headers_iterator_next(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) self;
     (void) args;
     (void) argc;
     (void) nt;
-    MalNativeFunctionObject *next = mal_value_to_native_function_object(callee);
-    MalValue headers_value =
-        mal_native_function_object_get_slot(next, MAL_HEADERS_ITER_SLOT_HEADERS);
-    if (!mal_value_is_headers_object(headers_value)) {
-        return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
+    (void) callee;
+    if (!mal_value_is_heap_type(self, MAL_HEAP_HEADERS_ITERATOR_OBJECT)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Receiver is not a Headers iterator");
+        return mal_value_new_undefined();
     }
 
-    i32 index = mal_value_to_i32(
-        mal_native_function_object_get_slot(next, MAL_HEADERS_ITER_SLOT_INDEX));
-    MalHeadersIterKind kind = (MalHeadersIterKind) mal_value_to_i32(
-        mal_native_function_object_get_slot(next, MAL_HEADERS_ITER_SLOT_KIND));
+    MalHeadersIteratorObject *iterator = (MalHeadersIteratorObject *) mal_value_to_heap(self);
     MalValue roots[3] = {
         mal_value_new_undefined(),
         mal_value_new_undefined(),
@@ -862,57 +845,37 @@ static MalValue mal_headers_iterator_next(
     };
     MalRootSpan rs;
     mal_gc_root(&rs, roots, 3);
-    if (!mal_headers_iteration_item(vm, mal_value_to_headers_object(headers_value), index,
+    if (!mal_headers_iteration_item(vm, iterator->headers, iterator->index,
             &roots[0], &roots[1])) {
         mal_gc_unroot(&rs);
         return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
     }
-    mal_native_function_object_set_slot(
-        next, MAL_HEADERS_ITER_SLOT_INDEX, mal_value_from_i32(index + 1));
+    iterator->index++;
 
-    if (kind == MAL_HEADERS_ENTRIES) {
+    if (iterator->kind == MAL_HEADERS_ITERATOR_ENTRIES) {
         roots[2] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
         MalObject *pair = (MalObject *) mal_value_to_array_object(roots[2]);
         mal_object_set(pair, mal_headers_index_key(0), roots[0]);
         mal_object_set(pair, mal_headers_index_key(1), roots[1]);
     } else {
-        roots[2] = kind == MAL_HEADERS_KEYS ? roots[0] : roots[1];
+        roots[2] = iterator->kind == MAL_HEADERS_ITERATOR_KEYS ? roots[0] : roots[1];
     }
     MalValue result = mal_vm_create_iter_result(vm, roots[2], false);
     mal_gc_unroot(&rs);
     return result;
 }
 
-static MalValue mal_headers_make_iterator(MalVm *vm, MalHeadersObject *h, MalHeadersIterKind kind) {
-    MalValue roots[4] = {
-        mal_value_from_headers_object(h),
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
-    };
-    MalRootSpan rs;
-    mal_gc_root(&rs, roots, 4);
-    roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
-    MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    MalValue slots[3] = {roots[0], mal_value_from_i32(0), mal_value_from_i32((i32) kind)};
-    MalRootSpan slot_span;
-    mal_gc_root(&slot_span, slots, 3);
-    roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
-        &vm->heap, fn_proto, mal_intrinsic_ascii(vm, (const byte *) "next"),
-        mal_headers_iterator_next, slots, 3));
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), (const byte *) "next", roots[2],
-        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    roots[3] = mal_value_from_native_function_object(mal_native_function_object_new(
-        &vm->heap, fn_proto, mal_intrinsic_ascii(vm, (const byte *) "[Symbol.iterator]"),
-        mal_headers_iterator_self));
-    MalPropertyDesc desc = mal_intrinsic_data_desc(
-        roots[3], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_object_define_own(mal_value_to_object(roots[1]),
-        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR), &desc);
-    mal_gc_unroot(&slot_span);
-    MalValue result = roots[1];
-    mal_gc_unroot(&rs);
-    return result;
+static MalValue mal_headers_make_iterator(
+    MalVm *vm, MalHeadersObject *h, MalHeadersIteratorKind kind) {
+    MalHeadersIteratorObject *iterator = mal_heap_alloc(
+        &vm->heap, sizeof(MalHeadersIteratorObject), MAL_HEAP_HEADERS_ITERATOR_OBJECT);
+    mal_object_init(&vm->heap, &iterator->object, MAL_HEAP_HEADERS_ITERATOR_OBJECT,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_HEADERS_ITERATOR_PROTOTYPE]));
+    iterator->headers = h;
+    iterator->index = 0;
+    iterator->kind = kind;
+    mal_gc_card(&iterator->object.header, mal_value_from_headers_object(h));
+    return mal_value_from_heap((MalHeapHeader *) iterator);
 }
 
 #define MAL_HEADERS_ITER(fn, kind)                                                                \
@@ -929,9 +892,9 @@ static MalValue mal_headers_make_iterator(MalVm *vm, MalHeadersObject *h, MalHea
         return mal_headers_make_iterator(vm, h, kind);                                            \
     }
 
-MAL_HEADERS_ITER(mal_headers_method_entries, MAL_HEADERS_ENTRIES)
-MAL_HEADERS_ITER(mal_headers_method_keys, MAL_HEADERS_KEYS)
-MAL_HEADERS_ITER(mal_headers_method_values, MAL_HEADERS_VALUES)
+MAL_HEADERS_ITER(mal_headers_method_entries, MAL_HEADERS_ITERATOR_ENTRIES)
+MAL_HEADERS_ITER(mal_headers_method_keys, MAL_HEADERS_ITERATOR_KEYS)
+MAL_HEADERS_ITER(mal_headers_method_values, MAL_HEADERS_ITERATOR_VALUES)
 
 static MalValue mal_headers_method_for_each(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
@@ -1015,6 +978,26 @@ void mal_headers_install(MalVm *vm, MalObject *global_this) {
     vm->intrinsics[MAL_INTRINSIC_HEADERS_CONSTRUCTOR] = mal_value_from_native_function_object(ctor);
     vm->intrinsics[MAL_INTRINSIC_HEADERS_PROTOTYPE] = mal_value_from_object(proto);
 
+    MalObject *iterator_proto = mal_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE]));
+    vm->intrinsics[MAL_INTRINSIC_HEADERS_ITERATOR_PROTOTYPE] =
+        mal_value_from_object(iterator_proto);
+    MalValue iterator_next = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(&vm->heap, fn_proto,
+            mal_intrinsic_ascii(vm, (const byte *) "next"), 0,
+            mal_headers_iterator_next));
+    MalPropertyDesc iterator_next_desc = mal_intrinsic_data_desc(
+        iterator_next, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+            MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(iterator_proto,
+        mal_intrinsic_string_key(vm, (const byte *) "next"), &iterator_next_desc);
+    MalPropertyDesc iterator_tag_desc = mal_intrinsic_data_desc(
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "Headers Iterator")),
+        MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(iterator_proto,
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG),
+        &iterator_tag_desc);
+
     mal_intrinsic_define_data(vm, (MalObject *) ctor, (const byte *) "prototype",
         vm->intrinsics[MAL_INTRINSIC_HEADERS_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, proto, (const byte *) "constructor",
@@ -1046,4 +1029,6 @@ void mal_headers_install(MalVm *vm, MalObject *global_this) {
 
     mal_gc_register_tracer(MAL_HEAP_HEADERS_OBJECT, mal_headers_trace);
     mal_gc_register_finalizer(MAL_HEAP_HEADERS_OBJECT, mal_headers_finalize);
+    mal_gc_register_tracer(
+        MAL_HEAP_HEADERS_ITERATOR_OBJECT, mal_headers_iterator_trace);
 }

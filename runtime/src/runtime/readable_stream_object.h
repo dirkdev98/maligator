@@ -19,6 +19,7 @@ typedef enum MalReadableStreamState : u8 {
 typedef struct MalReadableStreamQueueEntry {
     struct MalReadableStreamQueueEntry *next;
     MalValue chunk;
+    f64 size;
 } MalReadableStreamQueueEntry;
 
 typedef struct MalReadableStreamReadRequest {
@@ -42,6 +43,7 @@ typedef struct MalReadableStreamObject {
             MalValue underlying_source;
             MalValue pull_method;
             MalValue cancel_method;
+            MalValue size_algorithm;
             MalReadableStreamQueueEntry *queue_head;
             MalReadableStreamQueueEntry *queue_tail;
             f64 queue_total_size;

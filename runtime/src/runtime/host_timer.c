@@ -32,7 +32,29 @@ static bool mal_host_run_runtime_macrotask(MalVm *vm) {
 /* Reactor waker: the timer's deadline passed. It is already off the reactor heap;
  * mark the task ready so the event loop's macrotask phase runs its callback. */
 static void mal_host_timer_waker(void *data) {
-    ((MalHostTimer *) data)->ready = true;
+    MalHostTimer *t = data;
+    MalHost *host = mal_host(t->vm);
+    t->ready = true;
+    t->ready_next = nullptr;
+    if (host->ready_timers_tail == nullptr) {
+        host->ready_timers = t;
+    } else {
+        host->ready_timers_tail->ready_next = t;
+    }
+    host->ready_timers_tail = t;
+}
+
+static void mal_host_unlink_timer(MalHost *host, MalHostTimer *t) {
+    if (t->previous == nullptr) {
+        host->timers = t->next;
+    } else {
+        t->previous->next = t->next;
+    }
+    if (t->next == nullptr) {
+        host->timers_tail = t->previous;
+    } else {
+        t->next->previous = t->previous;
+    }
 }
 
 static i64 mal_host_add_timer(
@@ -51,8 +73,14 @@ static i64 mal_host_add_timer(
     t->timer.waker = (MalWaker) {.fn = mal_host_timer_waker, .data = t};
     t->timer.heap_index = -1;
 
-    t->next = mal_host(vm)->timers;
-    mal_host(vm)->timers = t;
+    t->previous = mal_host(vm)->timers_tail;
+    t->next = nullptr;
+    if (mal_host(vm)->timers_tail == nullptr) {
+        mal_host(vm)->timers = t;
+    } else {
+        mal_host(vm)->timers_tail->next = t;
+    }
+    mal_host(vm)->timers_tail = t;
     mal_reactor_add_timer(&mal_host(vm)->reactor, &t->timer);
     return t->id;
 }
@@ -71,17 +99,19 @@ i64 mal_host_set_interval(
 }
 
 void mal_host_clear_timeout(MalVm *vm, i64 id) {
-    MalHostTimer **pp = &mal_host(vm)->timers;
-    while (*pp != nullptr) {
-        MalHostTimer *t = *pp;
+    MalHost *host = mal_host(vm);
+    for (MalHostTimer *t = host->timers; t != nullptr; t = t->next) {
         if (t->id == id) {
-            mal_reactor_cancel_timer(&mal_host(vm)->reactor, &t->timer);
-            *pp = t->next;
-            free(t->args);
-            free(t);
+            if (t->ready) {
+                t->cancelled = true;
+            } else {
+                mal_reactor_cancel_timer(&host->reactor, &t->timer);
+                mal_host_unlink_timer(host, t);
+                free(t->args);
+                free(t);
+            }
             return;
         }
-        pp = &t->next;
     }
 }
 
@@ -89,61 +119,56 @@ void mal_host_clear_timeout(MalVm *vm, i64 id) {
  * are ready. Runs at most one per call so the caller drains microtasks between
  * macrotasks (HTML event-loop ordering). */
 static bool mal_host_run_one_ready(MalVm *vm) {
-    MalHostTimer **pp = &mal_host(vm)->timers;
-    while (*pp != nullptr) {
-        MalHostTimer *t = *pp;
+    MalHost *host = mal_host(vm);
+    while (host->ready_timers != nullptr) {
+        MalHostTimer *t = host->ready_timers;
+        host->ready_timers = t->ready_next;
+        if (host->ready_timers == nullptr) {
+            host->ready_timers_tail = nullptr;
+        }
         if (t->cancelled) {
-            *pp = t->next;
+            mal_host_unlink_timer(host, t);
             free(t->args);
             free(t);
             continue;
         }
-        if (t->ready) {
-            if (t->repeat_ms > 0) {
-                // Repeating (setInterval): re-arm for the next period BEFORE running,
-                // so a self-clearInterval during the callback cleanly cancels the
-                // re-armed timer. `t` stays in the list (rooted) and owns its args,
-                // so snapshot only what the call needs and never touch `t` after —
-                // the callback may free it via clearInterval.
-                t->ready = false;
-                t->timer.deadline_ns = mal_reactor_now_ns() + t->repeat_ms * 1000000;
-                t->timer.heap_index = -1;
-                mal_reactor_add_timer(&mal_host(vm)->reactor, &t->timer);
+        if (t->repeat_ms > 0) {
+            // Re-arm before running so self-clearInterval cancels the next tick.
+            t->ready = false;
+            t->timer.deadline_ns = mal_reactor_now_ns() + t->repeat_ms * 1000000;
+            t->timer.heap_index = -1;
+            mal_reactor_add_timer(&host->reactor, &t->timer);
 
-                MalValue cb = t->callback;
-                MalValue *cargs = t->args;
-                i32 cargc = t->arg_count;
-                MalRootSpan rs_cb;
-                mal_gc_root(&rs_cb, &cb, 1);
-                mal_vm_call_value(vm, cb, mal_value_new_undefined(), cargs, cargc);
-                mal_gc_unroot(&rs_cb);
-                return true;
-            }
-
-            *pp = t->next; // unlink before running: the callback may mutate the list
             MalValue cb = t->callback;
             MalValue *cargs = t->args;
             i32 cargc = t->arg_count;
-            free(t); // the task struct is done; cb/cargs kept alive below
-
-            // Root the callback + args across the call: they left the scanned
-            // host-timer list, and invoking the callback can trigger a GC.
             MalRootSpan rs_cb;
             mal_gc_root(&rs_cb, &cb, 1);
-            MalRootSpan rs_args;
-            if (cargc > 0) {
-                mal_gc_root(&rs_args, cargs, cargc);
-            }
             mal_vm_call_value(vm, cb, mal_value_new_undefined(), cargs, cargc);
-            if (cargc > 0) {
-                mal_gc_unroot(&rs_args);
-            }
             mal_gc_unroot(&rs_cb);
-
-            free(cargs);
             return true;
         }
-        pp = &t->next;
+
+        mal_host_unlink_timer(host, t); // callback may mutate the pending list
+        MalValue cb = t->callback;
+        MalValue *cargs = t->args;
+        i32 cargc = t->arg_count;
+        free(t); // the task struct is done; cb/cargs kept alive below
+
+        MalRootSpan rs_cb;
+        mal_gc_root(&rs_cb, &cb, 1);
+        MalRootSpan rs_args;
+        if (cargc > 0) {
+            mal_gc_root(&rs_args, cargs, cargc);
+        }
+        mal_vm_call_value(vm, cb, mal_value_new_undefined(), cargs, cargc);
+        if (cargc > 0) {
+            mal_gc_unroot(&rs_args);
+        }
+        mal_gc_unroot(&rs_cb);
+
+        free(cargs);
+        return true;
     }
     return false;
 }
@@ -178,6 +203,9 @@ void mal_host_timers_free(MalVm *vm) {
         t = next;
     }
     mal_host(vm)->timers = nullptr;
+    mal_host(vm)->timers_tail = nullptr;
+    mal_host(vm)->ready_timers = nullptr;
+    mal_host(vm)->ready_timers_tail = nullptr;
 }
 
 /* --- native globals ------------------------------------------------------- */

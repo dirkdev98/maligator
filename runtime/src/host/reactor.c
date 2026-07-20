@@ -60,10 +60,15 @@ static void mal_timer_swap(MalReactor *r, i32 a, i32 b) {
     ta->heap_index = b;
 }
 
+static bool mal_timer_less(const MalTimer *a, const MalTimer *b) {
+    return a->deadline_ns < b->deadline_ns
+        || (a->deadline_ns == b->deadline_ns && a->sequence < b->sequence);
+}
+
 static void mal_timer_sift_up(MalReactor *r, i32 i) {
     while (i > 0) {
         i32 parent = (i - 1) / 2;
-        if (r->timers[parent]->deadline_ns <= r->timers[i]->deadline_ns) {
+        if (!mal_timer_less(r->timers[i], r->timers[parent])) {
             break;
         }
         mal_timer_swap(r, i, parent);
@@ -76,12 +81,10 @@ static void mal_timer_sift_down(MalReactor *r, i32 i) {
         i32 left = 2 * i + 1;
         i32 right = 2 * i + 2;
         i32 smallest = i;
-        if (left < r->timer_count &&
-            r->timers[left]->deadline_ns < r->timers[smallest]->deadline_ns) {
+        if (left < r->timer_count && mal_timer_less(r->timers[left], r->timers[smallest])) {
             smallest = left;
         }
-        if (right < r->timer_count &&
-            r->timers[right]->deadline_ns < r->timers[smallest]->deadline_ns) {
+        if (right < r->timer_count && mal_timer_less(r->timers[right], r->timers[smallest])) {
             smallest = right;
         }
         if (smallest == i) {
@@ -100,6 +103,7 @@ void mal_reactor_add_timer(MalReactor *r, MalTimer *t) {
     i32 i = r->timer_count++;
     r->timers[i] = t;
     t->heap_index = i;
+    t->sequence = r->next_timer_sequence++;
     mal_timer_sift_up(r, i);
 }
 
@@ -451,6 +455,7 @@ void mal_reactor_init(MalReactor *r) {
     r->timers = nullptr;
     r->timer_count = 0;
     r->timer_cap = 0;
+    r->next_timer_sequence = 0;
     r->pending_ops = 0;
     r->fds = nullptr;
     r->retired_tokens = nullptr;

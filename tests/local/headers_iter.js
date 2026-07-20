@@ -1,5 +1,4 @@
-// Headers Fetch/WinterTC semantics acceptance fixture. Run via:
-//   node scripts/webtest.ts tests/local/headers_iter.js
+// Headers Fetch/WinterTC semantics acceptance fixture.
 
 const results = [];
 function check(name, ok) {
@@ -128,6 +127,34 @@ check(
 		first.value.join("=") === "x-a=1" &&
 		second.value.join("=") === "x-z=2, 3" &&
 		iterator.next().done,
+);
+const iteratorPrototype = Object.getPrototypeOf(iterator);
+const sharedIteratorPrototype = Object.getPrototypeOf(
+	Object.getPrototypeOf([][Symbol.iterator]()),
+);
+const iteratorNextDescriptor = Object.getOwnPropertyDescriptor(iteratorPrototype, "next");
+const iteratorTagDescriptor = Object.getOwnPropertyDescriptor(
+	iteratorPrototype,
+	Symbol.toStringTag,
+);
+check(
+	"Headers iterators share the standard iterator prototype",
+	Object.getPrototypeOf(h.keys()) === iteratorPrototype &&
+		Object.getPrototypeOf(h.values()) === iteratorPrototype &&
+		Object.getPrototypeOf(iteratorPrototype) === sharedIteratorPrototype,
+);
+check(
+	"Headers iterator descriptors and branding",
+	iteratorNextDescriptor.value.name === "next" &&
+		iteratorNextDescriptor.value.length === 0 &&
+		iteratorNextDescriptor.writable &&
+		iteratorNextDescriptor.enumerable &&
+		iteratorNextDescriptor.configurable &&
+		iteratorTagDescriptor.value === "Headers Iterator" &&
+		!iteratorTagDescriptor.writable &&
+		!iteratorTagDescriptor.enumerable &&
+		iteratorTagDescriptor.configurable &&
+		rejectsTypeError(() => iteratorNextDescriptor.value.call({})),
 );
 
 const forEachHeaders = new Headers({ b: "2", a: "1" });

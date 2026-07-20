@@ -37,6 +37,9 @@ bool mal_host_init(MalHost *host) {
     mal_reactor_set_waker(
         &host->reactor, (MalWaker) {.fn = mal_host_wake_drain, .data = host});
     host->timers = nullptr;
+    host->timers_tail = nullptr;
+    host->ready_timers = nullptr;
+    host->ready_timers_tail = nullptr;
     host->timer_next_id = 1;
     return true;
 }

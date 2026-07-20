@@ -57,6 +57,7 @@ typedef struct MalTimer {
     i64 deadline_ns;
     MalWaker waker;
     i32 heap_index;
+    u64 sequence;
 } MalTimer;
 
 struct MalReactor {
@@ -71,6 +72,7 @@ struct MalReactor {
     MalTimer **timers;
     i32 timer_count;
     i32 timer_cap;
+    u64 next_timer_sequence;
 
     /* Count of registered fd ops (so the scheduler knows when work remains). */
     i32 pending_ops;

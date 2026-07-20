@@ -81,6 +81,53 @@ async function run() {
 		"error rejects read and closed once",
 		(await rejectedRead) && (await rejectedClosed),
 	);
+	let invalidSizeController;
+	const invalidSizeStream = new ReadableStream(
+		{
+			start(controller) {
+				invalidSizeController = controller;
+			},
+		},
+		{ highWaterMark: 1, size: () => NaN },
+	);
+	let invalidSizeError;
+	try {
+		invalidSizeController.enqueue("invalid");
+	} catch (error) {
+		invalidSizeError = error;
+	}
+	const invalidSizeRejection = await invalidSizeStream
+		.getReader()
+		.closed.catch((error) => error);
+	check(
+		"invalid strategy size throws and errors with one RangeError",
+		invalidSizeError instanceof RangeError && invalidSizeRejection === invalidSizeError,
+	);
+	const invalidSizeIdentities = [];
+	for (const size of [NaN, -Infinity, Infinity, -1]) {
+		let thrown;
+		let controller;
+		const stream = new ReadableStream(
+			{
+				start(value) {
+					controller = value;
+				},
+			},
+			{ highWaterMark: 1, size: () => size },
+		);
+		try {
+			controller.enqueue("invalid");
+		} catch (error) {
+			thrown = error;
+		}
+		invalidSizeIdentities.push(
+			stream.getReader().closed.catch((error) => error === thrown),
+		);
+	}
+	check(
+		"invalid strategy size identity survives loop closures",
+		(await Promise.all(invalidSizeIdentities)).every(Boolean),
+	);
 	let enqueueAfterError = false;
 	try {
 		errorController.enqueue("late");

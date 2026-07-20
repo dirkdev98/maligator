@@ -5717,23 +5717,28 @@ function compileDoWhileStatement(
 }
 
 /**
- * If a loop's lexical head bindings (its for-head `let`/`const`) are captured by a
- * closure, they need a fresh per-iteration environment (CreatePerIterationEnvironment)
- * so each closure observes its own binding. Move those bindings into a synthetic
- * capture scope (a negative env id that never collides with a function index) and
- * return its id + slot count; the loop lowering emits the ENV_PUSH/COPY/POP ops.
- * Returns null when no head binding is captured (the common case — zero overhead).
+ * If a loop's lexical head or direct body bindings are captured by a closure, they
+ * need a fresh environment each iteration so every closure observes its own binding.
+ * Move those bindings into a synthetic capture scope (a negative env id that never
+ * collides with a function index); the loop lowering emits the ENV_PUSH/COPY/POP ops.
+ * Returns null when no such binding is captured (the common case — zero overhead).
  */
 function setupPerIterationScope(
 	program: IntermediateProgram,
 	fn: IRFunction,
-	loopNode: ESTree.Node,
+	loopNode: ESTree.ForStatement | ESTree.ForInStatement | ESTree.ForOfStatement,
 ): { scopeId: number; slotCount: number } | null {
-	const scope = fn.semanticFile.nodeToScope.get(loopNode);
-	if (!scope) {
+	const loopScope = fn.semanticFile.nodeToScope.get(loopNode);
+	if (!loopScope) {
 		return null;
 	}
-	const captured = scope.bindings.filter((binding) => binding.scopedTo === "captured");
+	const bodyScope =
+		loopNode.body.type === "BlockStatement"
+			? fn.semanticFile.nodeToScope.get(loopNode.body)
+			: undefined;
+	const captured = [...loopScope.bindings, ...(bodyScope?.bindings ?? [])].filter(
+		(binding) => binding.scopedTo === "captured",
+	);
 	if (captured.length === 0) {
 		return null;
 	}
@@ -5758,7 +5763,7 @@ function compileForStatement(
 	block: IRBlock,
 	statement: ESTree.ForStatement,
 ) {
-	// Per-iteration env, if the head bindings are captured. ENV_PUSH enters scope
+	// Per-iteration env, if head or direct body bindings are captured. ENV_PUSH enters scope
 	// L0 (so the init stores into it), ENV_COPY before the first test copies L0→L1,
 	// each update copies Li→Li+1 (the increment runs in the new env), and ENV_POP
 	// restores the enclosing env on exit. Set up before the init compiles so the
@@ -5819,11 +5824,7 @@ function compileForStatement(
 		});
 	}
 
-	const bodyIdx = compileStatementsToBlock(
-		program,
-		fn,
-		normalizeStatementOrBlock(statement.body),
-	);
+	const bodyIdx = compileStatementsToBlock(program, fn, [statement.body]);
 	headerCursor.block.instructions.push({
 		type: "jumpIf",
 		registers: [condition],
@@ -5980,8 +5981,8 @@ function compileForInOfLoop(
 		registers: [iteratorRegister, nextRegister, iterable],
 	});
 
-	// Enter the per-iteration scope (each iteration rebinds the loop variable into
-	// a fresh env via the ENV_COPY in the bind block below).
+	// Enter the per-iteration scope (each iteration rebinds captured head and direct
+	// body bindings into a fresh env via the ENV_COPY in the bind block below).
 	if (perIter) {
 		entryCursor.block.instructions.push({
 			type: "envPush",
@@ -6031,9 +6032,9 @@ function compileForInOfLoop(
 		blocks: [bindIdx],
 	});
 
-	// A fresh per-iteration env (each iteration rebinds the loop variable into it);
-	// continue re-enters via the header, so this re-runs each iteration. The copy
-	// carries nothing meaningful forward — the pattern bind below overwrites it.
+	// A fresh per-iteration env; continue re-enters via the header, so this re-runs
+	// each iteration. The head pattern and body TDZ initialization overwrite copied
+	// values before user code can observe them.
 	if (perIter) {
 		bindBlock.instructions.push({
 			type: "envCopy",
@@ -6059,7 +6060,7 @@ function compileForInOfLoop(
 		compilePatternTarget(program, fn, bindCursor, left, valueRegister, true);
 	}
 
-	const bodyIdx = compileStatementsToBlock(program, fn, normalizeStatementOrBlock(body));
+	const bodyIdx = compileStatementsToBlock(program, fn, [body]);
 	bindCursor.block.instructions.push({
 		type: "jump",
 		blocks: [bodyIdx],
@@ -6228,7 +6229,7 @@ function compileForAwaitOfLoop(
 		compilePatternTarget(program, fn, bindCursor, left, valueRegister, true);
 	}
 
-	const bodyIdx = compileStatementsToBlock(program, fn, normalizeStatementOrBlock(body));
+	const bodyIdx = compileStatementsToBlock(program, fn, [body]);
 	bindCursor.block.instructions.push({ type: "jump", blocks: [bodyIdx] });
 
 	const bodyLastBlock = fn.blocks.at(-1)!;

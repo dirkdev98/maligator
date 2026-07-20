@@ -21,6 +21,7 @@ typedef struct MalEventListener {
     MalString *type;
     MalValue callback;
     bool once;
+    bool removed;
 } MalEventListener;
 
 typedef struct MalEventTargetObject {
@@ -28,6 +29,7 @@ typedef struct MalEventTargetObject {
     MalEventListener *listeners;
     i32 count;
     i32 cap;
+    i32 dispatch_depth;
     MalValue *dependents;
     i32 dependent_count;
     i32 dependent_cap;

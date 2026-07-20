@@ -1,8 +1,8 @@
 // Targeted GC unit tests (T6.4). Deterministic assertions about the collector's
 // observable contract, driven by the real forced-collection hook + a live-bytes
-// diagnostic the runtime installs under MAL_HOST_GC. Run via `node
-// scripts/gctest.ts` (builds + runs with MAL_HOST_GC=1, optionally under
-// MAL_GC_STRESS/VERIFY). A failed assertion throws -> non-zero exit.
+// diagnostic the runtime installs under MAL_HOST_GC. `tests/native/gc.test.ts`
+// runs it with MAL_HOST_GC=1 and the configured stress variants. A failed
+// assertion throws -> non-zero exit.
 //
 // Covers: cycle reclamation (tracing backstop), WeakMap ephemeron death +
 // chained-ephemeron revival (the fixpoint), WeakRef liveness, and root-frame

@@ -19,11 +19,14 @@ const EXPECTED = [
 	"end",
 	"microtask-1",
 	"t:0",
+	"t:equal-1",
+	"t:equal-2",
+	"t:cancel-ready",
 	"t:args x y",
 	"t:50 schedules another",
 	"t:50 microtask",
-	"t:nested",
 	"t:100",
+	"t:nested",
 ];
 
 describe("host event loop (setTimeout ordering)", () => {

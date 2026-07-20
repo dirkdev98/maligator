@@ -1,6 +1,5 @@
 // Response synchronous getters + construction (STRESS-safe; the async read methods
 // text/json/arrayBuffer/bytes are covered by the fetch server's /respread route).
-//   node scripts/webtest.ts tests/local/response_read.js
 
 const results = [];
 function check(name, ok) {
