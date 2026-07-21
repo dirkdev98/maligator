@@ -93,13 +93,15 @@ static void mal_perf_stats_print(void) {
     fprintf(
         stderr,
         "[perf-intrinsic-stats] calls=%llu bytes=%llu cache_hits=%llu cache_fills=%llu "
-        "hits=%llu misses=%llu\n",
+        "hits=%llu misses=%llu direct_calls=%llu direct_hits=%llu\n",
         (unsigned long long) mal_perf_stats.intrinsic_ascii_calls,
         (unsigned long long) mal_perf_stats.intrinsic_ascii_bytes,
         (unsigned long long) mal_perf_stats.intrinsic_ascii_cache_hits,
         (unsigned long long) mal_perf_stats.intrinsic_ascii_cache_fills,
         (unsigned long long) mal_perf_stats.intrinsic_ascii_hits,
-        (unsigned long long) mal_perf_stats.intrinsic_ascii_misses
+        (unsigned long long) mal_perf_stats.intrinsic_ascii_misses,
+        (unsigned long long) mal_perf_stats.intrinsic_hot_direct_calls,
+        (unsigned long long) mal_perf_stats.intrinsic_hot_direct_hits
     );
     for (usize i = 0; i < MAL_PERF_INTRINSIC_NAME_CAPACITY; i++) {
         const MalPerfIntrinsicName *entry = &mal_perf_intrinsic_names[i];

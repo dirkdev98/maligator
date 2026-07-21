@@ -209,7 +209,7 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
     // lazily. Reflection must include it even before an ordinary Get touched it.
     if (mal_vm_script_function_has_prototype(vm, object_value) &&
         !mal_object_get_own(
-            mal_value_to_object(object_value), mal_intrinsic_string_key(vm, "prototype"))
+            mal_value_to_object(object_value), mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE))
              .present) {
         mal_vm_function_prototype(vm, object_value);
     }
@@ -244,7 +244,7 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
 
     MalPropertyDesc string_exotic;
     bool string_wrapper = mal_primitive_wrapper_string_exotic_own(
-        &vm->heap, object, mal_intrinsic_string_key(vm, "length"), &string_exotic);
+        &vm->heap, object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH), &string_exotic);
     u32 string_length = 0;
     if (string_wrapper) {
         string_length = (u32) mal_value_to_i32(string_exotic.value);
@@ -1130,13 +1130,13 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
     // reflective machinery and delete observe them with the right attributes.
     const MalFunction *definition = &vm->definition->functions[function_index];
     MalPropertyDesc length_desc = mal_intrinsic_data_desc(mal_value_from_i32(definition->length), MAL_PROPERTY_CONFIGURABLE);
-    mal_object_define_own(&function->object, mal_intrinsic_string_key(vm, "length"), &length_desc);
+    mal_object_define_own(&function->object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH), &length_desc);
 
     MalValue name_value = definition->name_string_index >= 0 && definition->name_string_index < vm->definition->string_constant_count
         ? mal_value_from_string(&vm->definition->string_constants[definition->name_string_index])
         : mal_value_from_string(mal_intrinsic_ascii(vm, ""));
     MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
-    mal_object_define_own(&function->object, mal_intrinsic_string_key(vm, "name"), &name_desc);
+    mal_object_define_own(&function->object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME), &name_desc);
 
     return mal_value_from_function_object(function);
 }
@@ -1199,7 +1199,7 @@ void mal_vm_op_set_function_name(MalVm *vm, MalValue func, MalValue key, u8 pref
     }
 
     MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
-    mal_object_define_own(mal_value_to_object(func), mal_intrinsic_string_key(vm, "name"), &name_desc);
+    mal_object_define_own(mal_value_to_object(func), mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME), &name_desc);
 }
 
 void mal_op_set_function_name(MalCallable *callable, const MalInstruction *instruction) {
@@ -1319,7 +1319,7 @@ MalValue mal_create_arguments_object(
         .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE,
         .value = mal_value_from_i32(arg_count),
     };
-    mal_object_define_own(arguments, mal_intrinsic_string_key(vm, "length"), &length_desc);
+    mal_object_define_own(arguments, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH), &length_desc);
 
     // Make the arguments object iterable: an own @@iterator = %Array.prototype.values%
     // (spec CreateUnmappedArgumentsObject), non-enumerable/writable/configurable.
@@ -1336,7 +1336,7 @@ MalValue mal_create_arguments_object(
     // `callee`: an unmapped (strict) arguments object poisons it with
     // %ThrowTypeError% (non-enumerable, non-configurable); a mapped (sloppy)
     // one exposes the function as a writable, configurable data property.
-    MalKey callee_key = mal_intrinsic_string_key(vm, "callee");
+    MalKey callee_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CALLEE);
     if (strict) {
         MalValue thrower = vm->intrinsics[MAL_INTRINSIC_THROW_TYPE_ERROR];
         MalPropertyDesc callee_desc = {
@@ -2457,7 +2457,7 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
     MalFunctionObject *function_object = mal_value_is_function_object(function_value)
         ? mal_value_to_function_object(function_value)
         : nullptr;
-    MalKey key = mal_intrinsic_string_key(vm, "prototype");
+    MalKey key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE);
 
     MalPropertyLookup lookup = mal_object_get_own(function, key);
     if (lookup.present) {
@@ -3133,7 +3133,7 @@ bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
         return false;
     }
 
-    MalKey key = mal_intrinsic_string_key(vm, "prototype");
+    MalKey key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE);
     MalValue prototype_value = mal_value_new_undefined();
     MalValue synthetic;
     if (mal_vm_resolve_synthetic_property(vm, target, key, &synthetic)) {
@@ -4216,7 +4216,7 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
         MalPropertyDesc string_exotic;
         if (current->header.type == MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT &&
             mal_primitive_wrapper_string_exotic_own(
-                &vm->heap, current, mal_intrinsic_string_key(vm, "length"), &string_exotic
+                &vm->heap, current, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH), &string_exotic
             )) {
             u32 string_length = (u32) mal_value_to_i32(string_exotic.value);
             for (u32 i = 0; i < string_length; i++) {
@@ -4232,7 +4232,7 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
                 );
                 count++;
             }
-            MalKey length_key = mal_intrinsic_string_key(vm, "length");
+            MalKey length_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH);
             if (!mal_object_get_own(seen, length_key).present) {
                 mal_object_define_own(seen, length_key, &marker);
             }
@@ -4596,7 +4596,7 @@ void mal_vm_op_check_super_class(MalVm *vm, MalValue parent) {
         return;
     }
     MalValue proto;
-    if (!mal_vm_get_property(vm, parent, mal_intrinsic_string_key(vm, "prototype"), &proto)) {
+    if (!mal_vm_get_property(vm, parent, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE), &proto)) {
         return; // a `prototype` getter threw; propagate its completion
     }
     if (!mal_value_is_object(proto) && !mal_value_is_null(proto)) {
@@ -5211,7 +5211,7 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
     ]);
     MalValue prototype_value;
     if (mal_value_is_object(callee) &&
-        mal_vm_get_property(vm, callee, mal_intrinsic_string_key(vm, "prototype"), &prototype_value) &&
+        mal_vm_get_property(vm, callee, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE), &prototype_value) &&
         mal_value_is_object(prototype_value)) {
         generator_prototype = mal_value_to_object(prototype_value);
     }

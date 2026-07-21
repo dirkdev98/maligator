@@ -385,10 +385,16 @@ void mal_intrinsics_init(MalVm *vm);
  */
 MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name);
 
+/** Return a measured hot atom directly by its compile-time identifier. */
+MalString *mal_intrinsic_hot_ascii(MalVm *vm, MalHotIntrinsicKey key);
+
 /**
  * Build a string property key from a NUL-terminated ASCII name.
  */
 MalKey mal_intrinsic_string_key(MalVm *vm, const byte *name);
+
+/** Build a string property key directly from a measured hot-key identifier. */
+MalKey mal_intrinsic_hot_string_key(MalVm *vm, MalHotIntrinsicKey key);
 
 /**
  * Build a symbol property key from a well-known symbol intrinsic slot.

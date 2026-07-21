@@ -53,6 +53,49 @@
 #define MAL_HOT_KEY_SIGNATURE(length, first, last) \
     ((u32) (length) | ((u32) (u8) (first) << 8) | ((u32) (u8) (last) << 16))
 
+static const byte *const mal_hot_intrinsic_names[MAL_HOT_KEY_COUNT] = {
+    [MAL_HOT_KEY_EMPTY] = (const byte *) "",
+    [MAL_HOT_KEY_LENGTH] = (const byte *) "length",
+    [MAL_HOT_KEY_NAME] = (const byte *) "name",
+    [MAL_HOT_KEY_LAST_INDEX] = (const byte *) "lastIndex",
+    [MAL_HOT_KEY_EVENTS] = (const byte *) "_events",
+    [MAL_HOT_KEY_EVENTS_COUNT] = (const byte *) "_eventsCount",
+    [MAL_HOT_KEY_PROTOTYPE] = (const byte *) "prototype",
+    [MAL_HOT_KEY_GROUPS] = (const byte *) "groups",
+    [MAL_HOT_KEY_INDEX] = (const byte *) "index",
+    [MAL_HOT_KEY_INPUT] = (const byte *) "input",
+    [MAL_HOT_KEY_CALLEE] = (const byte *) "callee",
+    [MAL_HOT_KEY_EXEC] = (const byte *) "exec",
+    [MAL_HOT_KEY_READABLE_STATE] = (const byte *) "_readableState",
+    [MAL_HOT_KEY_DESTROYED] = (const byte *) "destroyed",
+    [MAL_HOT_KEY_ENDED] = (const byte *) "ended",
+    [MAL_HOT_KEY_EMIT] = (const byte *) "emit",
+    [MAL_HOT_KEY_PENDING] = (const byte *) "pending",
+    [MAL_HOT_KEY_DATA] = (const byte *) "data",
+    [MAL_HOT_KEY_READABLE_QUEUE] = (const byte *) "_malReadableQueue",
+    [MAL_HOT_KEY_READABLE_INDEX] = (const byte *) "_malReadableIndex",
+    [MAL_HOT_KEY_ENCODING] = (const byte *) "encoding",
+    [MAL_HOT_KEY_FLOWING] = (const byte *) "_malFlowing",
+    [MAL_HOT_KEY_NEW_LISTENER] = (const byte *) "newListener",
+    [MAL_HOT_KEY_REMOVE_LISTENER] = (const byte *) "removeListener",
+    [MAL_HOT_KEY_READABLE_ENDED] = (const byte *) "readableEnded",
+    [MAL_HOT_KEY_PAUSED] = (const byte *) "_malPaused",
+    [MAL_HOT_KEY_READABLE] = (const byte *) "readable",
+    [MAL_HOT_KEY_FLAGS] = (const byte *) "flags",
+    [MAL_HOT_KEY_UNICODE_SETS] = (const byte *) "unicodeSets",
+    [MAL_HOT_KEY_MULTILINE] = (const byte *) "multiline",
+    [MAL_HOT_KEY_IGNORE_CASE] = (const byte *) "ignoreCase",
+    [MAL_HOT_KEY_HAS_INDICES] = (const byte *) "hasIndices",
+    [MAL_HOT_KEY_STICKY] = (const byte *) "sticky",
+    [MAL_HOT_KEY_DOT_ALL] = (const byte *) "dotAll",
+    [MAL_HOT_KEY_GLOBAL] = (const byte *) "global",
+    [MAL_HOT_KEY_UNICODE] = (const byte *) "unicode",
+    [MAL_HOT_KEY_PUSH] = (const byte *) "push",
+    [MAL_HOT_KEY_ERROR] = (const byte *) "error",
+    [MAL_HOT_KEY_TO_JSON] = (const byte *) "toJSON",
+    [MAL_HOT_KEY_SEARCH] = (const byte *) "search",
+};
+
 static MalHotIntrinsicKey mal_hot_intrinsic_key(const byte *name, usize length) {
     if (length == 0) return MAL_HOT_KEY_EMPTY;
     if (length > 255) return MAL_HOT_KEY_COUNT;
@@ -192,8 +235,25 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     return atom;
 }
 
+MalString *mal_intrinsic_hot_ascii(MalVm *vm, MalHotIntrinsicKey key) {
+    MAL_PERF_COUNT(intrinsic_hot_direct_calls);
+    MalString *atom = vm->hot_intrinsic_keys[key];
+    if (atom != nullptr) {
+        MAL_PERF_COUNT(intrinsic_hot_direct_hits);
+        return atom;
+    }
+    return mal_intrinsic_ascii(vm, mal_hot_intrinsic_names[key]);
+}
+
 MalKey mal_intrinsic_string_key(MalVm *vm, const byte *name) {
     return (MalKey) {.kind = MAL_KEY_STRING, .value = mal_value_from_string(mal_intrinsic_ascii(vm, name))};
+}
+
+MalKey mal_intrinsic_hot_string_key(MalVm *vm, MalHotIntrinsicKey key) {
+    return (MalKey) {
+        .kind = MAL_KEY_STRING,
+        .value = mal_value_from_string(mal_intrinsic_hot_ascii(vm, key)),
+    };
 }
 
 MalKey mal_intrinsic_symbol_key(MalVm *vm, MalIntrinsic symbol_slot) {

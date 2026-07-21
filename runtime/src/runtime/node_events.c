@@ -25,6 +25,10 @@ static MalKey ee_name_key(MalVm *vm, const char *name) {
     return mal_intrinsic_string_key(vm, (const byte *) name);
 }
 
+static MalKey ee_hot_key(MalVm *vm, MalHotIntrinsicKey key) {
+    return mal_intrinsic_hot_string_key(vm, key);
+}
+
 static bool ee_string_is(MalValue value, const char *ascii) {
     if (!mal_value_is_string(value)) {
         return false;
@@ -50,7 +54,7 @@ static MalObject *ee_events(MalVm *vm, MalValue receiver, bool create) {
     if (!ee_require_receiver(vm, receiver, &object)) {
         return nullptr;
     }
-    MalPropertyLookup lookup = mal_object_get_own(object, ee_name_key(vm, "_events"));
+    MalPropertyLookup lookup = mal_object_get_own(object, ee_hot_key(vm, MAL_HOT_KEY_EVENTS));
     if (lookup.present && mal_value_is_object(lookup.desc.value)) {
         return mal_value_to_object(lookup.desc.value);
     }
@@ -61,8 +65,8 @@ static MalObject *ee_events(MalVm *vm, MalValue receiver, bool create) {
     MalValue events_value = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
     MalRootSpan root;
     mal_gc_root(&root, &events_value, 1);
-    mal_object_set(object, ee_name_key(vm, "_events"), events_value);
-    mal_object_set(object, ee_name_key(vm, "_eventsCount"), mal_value_from_i32(0));
+    mal_object_set(object, ee_hot_key(vm, MAL_HOT_KEY_EVENTS), events_value);
+    mal_object_set(object, ee_hot_key(vm, MAL_HOT_KEY_EVENTS_COUNT), mal_value_from_i32(0));
     if (!mal_object_get_own(object, ee_name_key(vm, "_maxListeners")).present) {
         mal_object_set(object, ee_name_key(vm, "_maxListeners"), mal_value_new_undefined());
     }
@@ -71,13 +75,13 @@ static MalObject *ee_events(MalVm *vm, MalValue receiver, bool create) {
 }
 
 static void ee_set_event_count(MalVm *vm, MalValue receiver, i32 count) {
-    mal_object_set(mal_value_to_object(receiver), ee_name_key(vm, "_eventsCount"),
+    mal_object_set(mal_value_to_object(receiver), ee_hot_key(vm, MAL_HOT_KEY_EVENTS_COUNT),
                    mal_value_from_i32(count));
 }
 
 static i32 ee_event_count(MalVm *vm, MalValue receiver) {
     MalPropertyLookup lookup =
-        mal_object_get_own(mal_value_to_object(receiver), ee_name_key(vm, "_eventsCount"));
+        mal_object_get_own(mal_value_to_object(receiver), ee_hot_key(vm, MAL_HOT_KEY_EVENTS_COUNT));
     return lookup.present && mal_value_is_int32(lookup.desc.value)
         ? mal_value_to_i32(lookup.desc.value)
         : 0;
@@ -240,7 +244,7 @@ static MalValue ee_add(
         MalValue meta_args[] = {ee_key_value(vm, event), roots[2]};
         MalRootSpan meta_root;
         mal_gc_root(&meta_root, meta_args, countof(meta_args));
-        ee_emit_key(vm, roots[0], ee_name_key(vm, "newListener"), meta_args, 2);
+        ee_emit_key(vm, roots[0], ee_hot_key(vm, MAL_HOT_KEY_NEW_LISTENER), meta_args, 2);
         mal_gc_unroot(&meta_root);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             mal_gc_unroot(&root);
@@ -311,7 +315,7 @@ static bool ee_remove_one(
         MalValue meta_args[] = {ee_key_value(vm, event), roots[1]};
         MalRootSpan meta_root;
         mal_gc_root(&meta_root, meta_args, countof(meta_args));
-        ee_emit_key(vm, receiver, ee_name_key(vm, "removeListener"), meta_args, 2);
+        ee_emit_key(vm, receiver, ee_hot_key(vm, MAL_HOT_KEY_REMOVE_LISTENER), meta_args, 2);
         mal_gc_unroot(&meta_root);
     }
     mal_gc_unroot(&root);
@@ -519,7 +523,7 @@ static MalValue ee_remove_all_listeners(
         MalValue fresh = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
         MalRootSpan root;
         mal_gc_root(&root, &fresh, 1);
-        mal_object_set(mal_value_to_object(receiver), ee_name_key(vm, "_events"), fresh);
+        mal_object_set(mal_value_to_object(receiver), ee_hot_key(vm, MAL_HOT_KEY_EVENTS), fresh);
         ee_set_event_count(vm, receiver, 0);
         mal_gc_unroot(&root);
         return receiver;
@@ -541,7 +545,7 @@ static MalValue ee_remove_all_listeners(
         }
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
-        ee_remove_all_key(vm, receiver, ee_name_key(vm, "removeListener"));
+        ee_remove_all_key(vm, receiver, ee_hot_key(vm, MAL_HOT_KEY_REMOVE_LISTENER));
     }
     mal_gc_unroot(&root);
     return receiver;

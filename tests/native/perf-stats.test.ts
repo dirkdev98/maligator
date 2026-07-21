@@ -88,6 +88,8 @@ describe("opt-in performance statistics", () => {
 		expect(field(intrinsics, "calls")).toBeGreaterThan(0);
 		expect(field(intrinsics, "cache_hits")).toBeGreaterThan(0);
 		expect(field(intrinsics, "cache_fills")).toBeGreaterThan(0);
+		expect(field(intrinsics, "direct_calls")).toBeGreaterThan(0);
+		expect(field(intrinsics, "direct_hits")).toBeGreaterThan(0);
 		expect(field(intrinsics, "hits")).toBeGreaterThan(0);
 		expect(
 			field(intrinsics, "cache_hits") +

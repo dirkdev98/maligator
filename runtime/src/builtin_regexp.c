@@ -237,7 +237,7 @@ static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern
     re->flag_bits = bits;
     // lastIndex is a { writable, !enumerable, !configurable } own data property.
     MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_from_i32(0), MAL_PROPERTY_WRITABLE);
-    mal_object_define_own((MalObject *) re, mal_intrinsic_string_key(vm, (const byte *) "lastIndex"), &desc);
+    mal_object_define_own((MalObject *) re, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), &desc);
     return true;
 }
 
@@ -256,7 +256,7 @@ MalValue mal_regexp_create(MalVm *vm, MalString *pattern, MalString *flags) {
 
 static bool regexp_get_last_index(MalVm *vm, MalValue r, i64 *out) {
     MalValue v;
-    if (!mal_vm_get_property(vm, r, mal_intrinsic_string_key(vm, (const byte *) "lastIndex"), &v)) {
+    if (!mal_vm_get_property(vm, r, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), &v)) {
         return false;
     }
     f64 num;
@@ -270,7 +270,7 @@ static bool regexp_get_last_index(MalVm *vm, MalValue r, i64 *out) {
 
 static bool regexp_set_last_index(MalVm *vm, MalValue r, i64 value) {
     bool ok = mal_vm_set_property(
-        vm, r, mal_intrinsic_string_key(vm, (const byte *) "lastIndex"), mal_value_from_f64((f64) value), r
+        vm, r, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), mal_value_from_f64((f64) value), r
     );
     if (regexp_threw(vm)) {
         return false;
@@ -384,7 +384,7 @@ static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *
         groups_value = mal_value_from_object(groups);
     }
     MalPropertyDesc groups_desc = mal_intrinsic_data_desc(groups_value, REGEXP_WEC);
-    mal_object_define_own((MalObject *) indices, mal_intrinsic_string_key(vm, (const byte *) "groups"), &groups_desc);
+    mal_object_define_own((MalObject *) indices, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_GROUPS), &groups_desc);
 
     return mal_value_from_object((MalObject *) indices);
 }
@@ -490,9 +490,9 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
     MalObject *array_object = (MalObject *) array;
 
     MalPropertyDesc index_desc = mal_intrinsic_data_desc(mal_value_from_f64((f64) match_start), REGEXP_WEC);
-    mal_object_define_own(array_object, mal_intrinsic_string_key(vm, (const byte *) "index"), &index_desc);
+    mal_object_define_own(array_object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_INDEX), &index_desc);
     MalPropertyDesc input_desc = mal_intrinsic_data_desc(mal_value_from_string(s), REGEXP_WEC);
-    mal_object_define_own(array_object, mal_intrinsic_string_key(vm, (const byte *) "input"), &input_desc);
+    mal_object_define_own(array_object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_INPUT), &input_desc);
 
     for (int32_t i = 0; i < ngroups; i++) {
         int32_t cs = caps[2 * i];
@@ -503,7 +503,7 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
 
     MalValue groups = regexp_build_groups(vm, re, s);
     MalPropertyDesc groups_desc = mal_intrinsic_data_desc(groups, REGEXP_WEC);
-    mal_object_define_own(array_object, mal_intrinsic_string_key(vm, (const byte *) "groups"), &groups_desc);
+    mal_object_define_own(array_object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_GROUPS), &groups_desc);
 
     if (has_indices) {
         MalValue indices = regexp_build_indices(vm, re, s, caps, ngroups);
@@ -521,7 +521,7 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
 // Returns object or null; sets *ok=false (with a pending throw) on error.
 static MalValue regexp_exec_abstract(MalVm *vm, MalValue r, MalString *s, bool match_only, bool *ok) {
     MalValue exec_fn;
-    if (!mal_vm_get_property(vm, r, mal_intrinsic_string_key(vm, (const byte *) "exec"), &exec_fn)) {
+    if (!mal_vm_get_property(vm, r, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_EXEC), &exec_fn)) {
         *ok = false;
         return mal_value_new_undefined();
     }
@@ -617,7 +617,7 @@ static MalValue regexp_constructor(MalVm *vm, MalValue this_value, const MalValu
         }
         if (mal_value_is_undefined(flags)) {
             MalValue flags_value;
-            if (!mal_vm_get_property(vm, pattern, mal_intrinsic_string_key(vm, (const byte *) "flags"), &flags_value)) {
+            if (!mal_vm_get_property(vm, pattern, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_FLAGS), &flags_value)) {
                 return mal_value_new_undefined();
             }
             if (!mal_vm_to_string(vm, flags_value, &f_str)) {
@@ -813,7 +813,7 @@ static MalValue regexp_proto_to_string(MalVm *vm, MalValue this_value, const Mal
     }
     MalValue flags_value;
     MalString *flags;
-    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, (const byte *) "flags"), &flags_value)) {
+    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_FLAGS), &flags_value)) {
         return mal_value_new_undefined();
     }
     if (!mal_vm_to_string(vm, flags_value, &flags)) {
@@ -884,7 +884,7 @@ static i64 regexp_advance_string_index(MalString *s, i64 index, bool unicode) {
 
 static bool regexp_flags_string(MalVm *vm, MalValue rx, MalString **out) {
     MalValue value;
-    if (!mal_vm_get_property(vm, rx, mal_intrinsic_string_key(vm, (const byte *) "flags"), &value)) {
+    if (!mal_vm_get_property(vm, rx, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_FLAGS), &value)) {
         return false;
     }
     return mal_vm_to_string(vm, value, out);
@@ -999,7 +999,7 @@ static MalValue regexp_proto_search(MalVm *vm, MalValue this_value, const MalVal
     }
 
     MalValue previous_last_index;
-    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, (const byte *) "lastIndex"), &previous_last_index)) {
+    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), &previous_last_index)) {
         return mal_value_new_undefined();
     }
     if (!regexp_same_value(previous_last_index, mal_value_from_i32(0))) {
@@ -1015,12 +1015,12 @@ static MalValue regexp_proto_search(MalVm *vm, MalValue this_value, const MalVal
     }
 
     MalValue current_last_index;
-    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, (const byte *) "lastIndex"), &current_last_index)) {
+    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), &current_last_index)) {
         return mal_value_new_undefined();
     }
     if (!regexp_same_value(current_last_index, previous_last_index)) {
         bool restore = mal_vm_set_property(
-            vm, this_value, mal_intrinsic_string_key(vm, (const byte *) "lastIndex"), previous_last_index, this_value
+            vm, this_value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), previous_last_index, this_value
         );
         if (regexp_threw(vm) || !restore) {
             if (!regexp_threw(vm)) {
@@ -1034,7 +1034,7 @@ static MalValue regexp_proto_search(MalVm *vm, MalValue this_value, const MalVal
         return mal_value_from_i32(-1);
     }
     MalValue index;
-    if (!mal_vm_get_property(vm, result, mal_intrinsic_string_key(vm, (const byte *) "index"), &index)) {
+    if (!mal_vm_get_property(vm, result, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_INDEX), &index)) {
         return mal_value_new_undefined();
     }
     return index;
@@ -1336,7 +1336,7 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         usize matched_len = mal_string_length(matched);
 
         MalValue index_value;
-        if (!mal_vm_get_property(vm, result, mal_intrinsic_string_key(vm, (const byte *) "index"), &index_value)) {
+        if (!mal_vm_get_property(vm, result, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_INDEX), &index_value)) {
             goto done;
         }
         f64 index_num;
@@ -1386,7 +1386,7 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         }
 
         MalValue named_captures;
-        if (!mal_vm_get_property(vm, result, mal_intrinsic_string_key(vm, (const byte *) "groups"), &named_captures)) {
+        if (!mal_vm_get_property(vm, result, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_GROUPS), &named_captures)) {
             goto done;
         }
         pr_roots[1] = named_captures;

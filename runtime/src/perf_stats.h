@@ -67,6 +67,8 @@ typedef struct MalPerfStats {
     u64 intrinsic_ascii_cache_fills;
     u64 intrinsic_ascii_hits;
     u64 intrinsic_ascii_misses;
+    u64 intrinsic_hot_direct_calls;
+    u64 intrinsic_hot_direct_hits;
 
     u64 property_ensure_calls;
     u64 property_ensure_inserts;
