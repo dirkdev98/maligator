@@ -5,6 +5,7 @@
 const express = require("express");
 
 const app = express();
+let benchmarkClose = null;
 
 app.disable("x-powered-by");
 app.use(express.json());
@@ -62,6 +63,13 @@ app.get("/redirect-target", (_request, response) => {
 	response.send("redirected");
 });
 
+if (process.env.MAL_BENCH_CONTROL === "1") {
+	app.post("/__maligator_bench_exit", (_request, response) => {
+		response.end();
+		benchmarkClose();
+	});
+}
+
 app.use((request, _response, next) => {
 	const error = new Error(`Not found: ${request.method} ${request.path}`);
 	error.status = 404;
@@ -78,6 +86,9 @@ function listen(port = 0, host = "127.0.0.1") {
 		server.once("error", reject);
 		server.once("listening", () => {
 			server.removeListener("error", reject);
+			if (process.env.MAL_BENCH_CONTROL === "1") {
+				benchmarkClose = () => server.close();
+			}
 			const address = server.address();
 			if (!address || typeof address === "string") {
 				reject(new Error("Expected a TCP server address"));

@@ -3303,23 +3303,31 @@ static void mal_ic_try_record_inherited_value(
     MalVm *vm, MalValue receiver, MalValue key_value, MalValue result, MalInlineCache *ic
 ) {
     if (!mal_primitive_method_protector || !mal_value_is_object(receiver) ||
-        mal_value_is_proxy_object(receiver) || !mal_value_is_heap(key_value) ||
+        mal_value_is_proxy_object(receiver)) {
+        MAL_PERF_COUNT(ic_inherited_reject_basic);
+        return;
+    }
+    if (!mal_value_is_heap(key_value) ||
         mal_value_to_heap(key_value)->storage != MAL_HEAP_STORAGE_IMMORTAL) {
+        MAL_PERF_COUNT(ic_inherited_reject_key);
         return;
     }
 
     MalObject *object = mal_value_to_object(receiver);
     if (object->overflow != nullptr || object->prototype == nullptr) {
+        MAL_PERF_COUNT(ic_inherited_reject_receiver);
         return;
     }
     MalKey key;
     if (!mal_vm_value_to_property_key(vm, key_value, &key)) {
+        MAL_PERF_COUNT(ic_inherited_reject_resolution);
         return;
     }
     MalPropertyResolution resolution = mal_object_resolve_property(object, key);
     if (!resolution.found || resolution.own ||
         (resolution.desc.flags & MAL_PROPERTY_ACCESSOR) ||
         resolution.desc.value != result) {
+        MAL_PERF_COUNT(ic_inherited_reject_resolution);
         return;
     }
 
@@ -3334,6 +3342,7 @@ static void mal_ic_try_record_inherited_value(
         }
     }
     if (!stable_chain) {
+        MAL_PERF_COUNT(ic_inherited_reject_chain);
         return;
     }
 
@@ -3347,9 +3356,11 @@ static void mal_ic_try_record_inherited_value(
     ic->megamorphic = false;
     ic->mode = MAL_IC_MODE_INHERITED_VALUE;
     ic->receiver_type = (u8) object->header.type;
+    MAL_PERF_COUNT(ic_inherited_fills);
 }
 
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
+    MAL_PERF_COUNT(ic_load_fallbacks);
     MalValue inherited_value;
     if (mal_vm_inherited_try_load(object_value, key_value, ic, &inherited_value)) {
         return inherited_value;
@@ -3373,11 +3384,13 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 // a shape but differ in overflow values), so require exact object
                 // identity too.
                 if (mal_primitive_method_protector && object == ic->obj) {
+                    MAL_PERF_COUNT(ic_load_watched_hits);
                     return ic->value;
                 }
                 // Protector broke or different watched object at this polymorphic
                 // site: fall through and re-resolve (may re-fill for this object).
             } else {
+                MAL_PERF_COUNT(ic_load_slow_mono_hits);
                 return object->slots[ic->slot]; // same layout + key: slot still valid
             }
         }
@@ -3386,6 +3399,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         if (ic->poly_count > 0 && key_value == ic->key) {
             for (u8 i = 0; i < ic->poly_count; i++) {
                 if (object->shape == ic->poly_shape[i]) {
+                    MAL_PERF_COUNT(ic_load_poly_hits);
                     return object->slots[ic->poly_slot[i]];
                 }
             }
@@ -3395,8 +3409,10 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         if (ic->megamorphic) {
             const MalStubEntry *e = &vm->load_stub[mal_stub_hash(object->shape, key_value)];
             if (e->shape == object->shape && e->key == key_value) {
+                MAL_PERF_COUNT(ic_load_mega_hits);
                 return object->slots[e->slot];
             }
+            MAL_PERF_COUNT(ic_load_mega_misses);
         }
         // Miss on a plain object. Convert the key ONCE (running any user
         // toString/valueOf exactly once) and reuse it for both the cache fill and
@@ -3406,8 +3422,9 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
             return mal_value_new_undefined();
         }
         if (key.kind == MAL_KEY_STRING) {
-            i32 idx = mal_shape_find(object->shape, key);
+            i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_LOAD_IC);
             if (idx >= 0) {
+                MAL_PERF_COUNT(ic_load_shape_hits);
                 const MalShapeProp *prop = &object->shape->props[idx];
                 // Only cache when the key can be compared by value across accesses
                 // without an ABA hazard: a heap key (string/symbol) must be immortal
@@ -3420,12 +3437,15 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 if (mal_value_is_heap(key_value)
                     && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
                     mal_ic_record(ic, object->shape, key_value, prop->slot);
+                    MAL_PERF_COUNT(ic_load_shape_fills);
                     // Warm the shared stub cache so a megamorphic site's next access to
                     // this (shape,key) is an O(1) probe rather than another shape search.
                     MalStubEntry *stub = &vm->load_stub[mal_stub_hash(object->shape, key_value)];
                     stub->shape = object->shape;
                     stub->key = key_value;
                     stub->slot = prop->slot;
+                } else {
+                    MAL_PERF_COUNT(ic_load_shape_uncacheable);
                 }
                 return object->slots[prop->slot];
             }
@@ -3447,11 +3467,13 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                     ic->obj = object;
                     ic->prim_kind = 0;
                     ic->mode = MAL_IC_MODE_SHAPE;
+                    MAL_PERF_COUNT(ic_load_watched_fills);
                     return own.desc.value;
                 }
             }
         }
         // Prototype / overflow / index / symbol key: resolve with the converted key.
+        MAL_PERF_COUNT(ic_load_plain_generic);
         return mal_vm_op_load_property_keyed(vm, object_value, key);
     }
 
@@ -3466,6 +3488,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
             && ic->realm == vm->current_realm
 #endif
         ) {
+            MAL_PERF_COUNT(ic_load_primitive_hits);
             return ic->value;
         }
         MalValue result = mal_vm_op_load_property(vm, object_value, key_value);
@@ -3494,8 +3517,11 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
 #if MAL_REALMS
                     ic->realm = vm->current_realm;
 #endif
+                    MAL_PERF_COUNT(ic_load_primitive_fills);
                 }
             }
+        } else {
+            MAL_PERF_COUNT(ic_load_primitive_uncacheable);
         }
         return result;
     }
@@ -3518,6 +3544,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                 && ic->prim_kind == 0
 #endif
                 && object == ic->obj && key_value == ic->key) {
+                MAL_PERF_COUNT(ic_load_watched_hits);
                 return ic->value;
             }
             if (mal_value_is_string(key_value)
@@ -3532,11 +3559,13 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
                     ic->obj = object;
                     ic->prim_kind = 0;
                     ic->mode = MAL_IC_MODE_SHAPE;
+                    MAL_PERF_COUNT(ic_load_watched_fills);
                     return own.desc.value;
                 }
             }
         }
     }
+    MAL_PERF_COUNT(ic_load_other_generic);
     MalValue result = mal_vm_op_load_property(vm, object_value, key_value);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         mal_ic_try_record_inherited_value(vm, object_value, key_value, result, ic);
@@ -3547,9 +3576,11 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
 void mal_vm_op_store_property_ic(
     MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic
 ) {
+    MAL_PERF_COUNT(ic_store_fallbacks);
     if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
         MalObject *object = (MalObject *) mal_value_to_heap(object_value);
         if (object->shape == ic->shape && key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
+            MAL_PERF_COUNT(ic_store_slow_mono_hits);
             // hit: overwrite an existing shaped data slot (shape + key unchanged).
             // (A value-sentinel entry is a load-only cache — never index slots with it.)
             mal_gc_write_barrier(object->slots[ic->slot]);
@@ -3562,6 +3593,7 @@ void mal_vm_op_store_property_ic(
         if (ic->poly_count > 0 && key_value == ic->key) {
             for (u8 i = 0; i < ic->poly_count; i++) {
                 if (object->shape == ic->poly_shape[i]) {
+                    MAL_PERF_COUNT(ic_store_poly_hits);
                     mal_gc_write_barrier(object->slots[ic->poly_slot[i]]);
                     object->slots[ic->poly_slot[i]] = value;
                     mal_gc_card(&object->header, value);
@@ -3577,10 +3609,11 @@ void mal_vm_op_store_property_ic(
             return;
         }
         if (key.kind == MAL_KEY_STRING) {
-            i32 idx = mal_shape_find(object->shape, key);
+            i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_STORE_IC);
             // Cache only a default (writable, enumerable, configurable) data slot;
             // a store to such a property cannot run a setter or change the shape.
             if (idx >= 0 && mal_shape_attrs_are_default(object->shape->props[idx].attrs)) {
+                MAL_PERF_COUNT(ic_store_shape_hits);
                 const MalShapeProp *prop = &object->shape->props[idx];
                 // Cache only a heap immortal key (see the load path's ABA note); a
                 // non-heap key (ToPropertyKey of a number) must not be derefed.
@@ -3588,6 +3621,9 @@ void mal_vm_op_store_property_ic(
                 if (mal_value_is_heap(key_value)
                     && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
                     mal_ic_record(ic, object->shape, key_value, prop->slot);
+                    MAL_PERF_COUNT(ic_store_shape_fills);
+                } else {
+                    MAL_PERF_COUNT(ic_store_shape_uncacheable);
                 }
                 mal_gc_write_barrier(object->slots[prop->slot]);
                 object->slots[prop->slot] = value;
@@ -3597,9 +3633,11 @@ void mal_vm_op_store_property_ic(
         }
         // Prototype setter / overflow / index / symbol key: store with the
         // converted key (no re-conversion).
+        MAL_PERF_COUNT(ic_store_plain_generic);
         mal_vm_op_store_property_keyed(vm, object_value, key, value, strict);
         return;
     }
+    MAL_PERF_COUNT(ic_store_other_generic);
     mal_vm_op_store_property(vm, object_value, key_value, value, strict);
 }
 

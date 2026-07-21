@@ -113,7 +113,7 @@ static bool mal_object_desc_is_default_data(const MalPropertyDesc *desc) {
 /** Lazily create and return the object's dictionary/overflow table. */
 static MalTable *mal_object_ensure_overflow(MalObject *object) {
     if (object->overflow == nullptr) {
-        object->overflow = mal_table_new(MAL_TABLE_MODE_OBJECT);
+        object->overflow = mal_table_new(MAL_TABLE_MODE_OBJECT, MAL_TABLE_ROLE_OBJECT);
     }
     return object->overflow;
 }
@@ -268,7 +268,7 @@ MalPropertyLookup mal_object_get_own(const MalObject *object, MalKey key) {
     }
     // Shaped string property: synthesize a data descriptor from the inline slot.
     if (key.kind == MAL_KEY_STRING) {
-        i32 idx = mal_shape_find(object->shape, key);
+        i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_GET_OWN);
         if (idx >= 0) {
             const MalShapeProp *prop = &object->shape->props[idx];
             return (MalPropertyLookup){
@@ -341,7 +341,7 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
 
     // Shape fast path: a default data property under a string key.
     if (key.kind == MAL_KEY_STRING && mal_object_desc_is_default_data(desc)) {
-        i32 idx = mal_shape_find(object->shape, key);
+        i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DEFINE_OWN);
         if (idx >= 0) {
             // Existing shaped data property (always writable+configurable): a
             // default-data redefine is compatible, so just update the value.
@@ -439,7 +439,8 @@ bool mal_object_delete_own(MalObject *object, MalKey key) {
 
     // A shape is a fixed layout, so removing a shaped property drops the object
     // to dictionary mode first, then deletes from the table.
-    if (key.kind == MAL_KEY_STRING && mal_shape_find(object->shape, key) >= 0) {
+    if (key.kind == MAL_KEY_STRING &&
+        mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DELETE_OWN) >= 0) {
         mal_object_dictionarize(object);
     }
     if (object->overflow != nullptr) {
@@ -486,7 +487,7 @@ bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
 
     // Own writable data property. Fast path: write the inline slot directly.
     if (key.kind == MAL_KEY_STRING) {
-        i32 idx = mal_shape_find(object->shape, key);
+        i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_SET_OWN);
         if (idx >= 0) {
             u32 slot = object->shape->props[idx].slot;
             mal_gc_write_barrier(object->slots[slot]); // SATB: shade overwritten ref

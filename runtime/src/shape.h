@@ -40,6 +40,16 @@
 typedef struct MalShape MalShape;
 typedef struct MalShapeTransition MalShapeTransition;
 
+typedef enum MalShapeFindCaller {
+    MAL_SHAPE_FIND_GET_OWN,
+    MAL_SHAPE_FIND_DEFINE_OWN,
+    MAL_SHAPE_FIND_DELETE_OWN,
+    MAL_SHAPE_FIND_SET_OWN,
+    MAL_SHAPE_FIND_LOAD_IC,
+    MAL_SHAPE_FIND_STORE_IC,
+    MAL_SHAPE_FIND_CALLER_COUNT,
+} MalShapeFindCaller;
+
 /** One named property in a shape: its key, slot index, and attribute flags. */
 typedef struct MalShapeProp {
     /** Key value; the equality domain is derived on read (mal_key_kind_of).
@@ -74,7 +84,7 @@ MalShape *mal_shape_empty(void);
  * Index of `key` in the shape's props, or -1 if absent. String keys compare by
  * content; other key kinds by value bits (matching the table's key equality).
  */
-i32 mal_shape_find(const MalShape *shape, MalKey key);
+i32 mal_shape_find(const MalShape *shape, MalKey key, MalShapeFindCaller caller);
 
 /**
  * The child shape reached by adding a default data property `key` with `attrs`,

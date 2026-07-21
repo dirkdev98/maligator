@@ -5,6 +5,7 @@
 #include "builtin_iterator.h"
 #include "function_object.h" // mal_function_object_function_index, for the call guard
 #include "object_ops.h"
+#include "perf_stats.h"
 #include "table.h"
 #include "value_ops.h" // mal_ops_number_value, for the numeric-index fast paths
 #include "vm.h"
@@ -468,6 +469,7 @@ static inline MalObject *mal_vm_as_object(MalValue v) {
 static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key, const MalInlineCache *ic,
                                           MalValue *out) {
     if (object->shape == ic->shape && key == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
+        mal_perf_ic_load_mono_hit();
         *out = object->slots[ic->slot];
         return true;
     }
@@ -493,6 +495,7 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
         return false;
     }
     *out = ic->value;
+    mal_perf_ic_load_inherited_hit();
     return true;
 }
 
@@ -506,6 +509,7 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
 static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalValue value,
                                            const MalInlineCache *ic) {
     if (object->shape == ic->shape && key == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
+        mal_perf_ic_store_mono_hit();
         mal_gc_write_barrier(object->slots[ic->slot]);
         object->slots[ic->slot] = value;
         mal_gc_card(&object->header, value);

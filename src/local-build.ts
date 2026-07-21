@@ -47,7 +47,7 @@ export function buildLoadDriver(
 	const binaryPath = path.join(
 		BUILD_DIRECTORY,
 		context.plan.mode,
-		`MaligatorLoad${buildSuffix()}`,
+		`MaligatorLoad${buildSuffix("", context.environment)}`,
 	);
 	mkdirSync(path.dirname(binaryPath), { recursive: true });
 
@@ -79,7 +79,10 @@ export function buildLoadDriver(
 export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 	const { context } = options;
 	const artifacts = ensureNativeArtifacts(context, options.verbose);
-	const artifactName = `${options.name}${buildSuffix(options.cacheSuffix ?? "")}`;
+	const artifactName = `${options.name}${buildSuffix(
+		options.cacheSuffix ?? "",
+		context.environment,
+	)}`;
 	const outputDirectory = options.outDir ?? path.join(BUILD_DIRECTORY, context.plan.mode);
 	mkdirSync(outputDirectory, { recursive: true });
 	const cPath = path.join(outputDirectory, `${artifactName}.c`);

@@ -1,0 +1,185 @@
+#include "perf_stats.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+
+#if MAL_PERF_STATS
+bool mal_perf_stats_enabled = false;
+MalPerfStats mal_perf_stats;
+
+static const char *const mal_perf_table_roles[MAL_PERF_TABLE_ROLE_COUNT] = {
+    "object",
+    "atoms",
+    "symbol_registry",
+    "map",
+};
+
+static const char *const mal_perf_shape_callers[MAL_PERF_SHAPE_CALLER_COUNT] = {
+    "get_own",
+    "define_own",
+    "delete_own",
+    "set_own",
+    "load_ic",
+    "store_ic",
+};
+
+static void mal_perf_stats_print(void) {
+    fprintf(
+        stderr,
+        "[perf-string-stats] key_equals_calls=%llu key_pointer_hits=%llu "
+        "key_string_fallbacks=%llu key_non_string_misses=%llu "
+        "string_equals_calls=%llu string_pointer_hits=%llu string_length_misses=%llu "
+        "string_hash_misses=%llu string_memcmp_calls=%llu string_memcmp_code_units=%llu "
+        "hash_calls=%llu hash_cached_hits=%llu hash_computes=%llu "
+        "hash_dependent_computes=%llu hash_cons_flattens=%llu\n",
+        (unsigned long long) mal_perf_stats.key_equals_calls,
+        (unsigned long long) mal_perf_stats.key_pointer_hits,
+        (unsigned long long) mal_perf_stats.key_string_fallbacks,
+        (unsigned long long) mal_perf_stats.key_non_string_misses,
+        (unsigned long long) mal_perf_stats.string_equals_calls,
+        (unsigned long long) mal_perf_stats.string_pointer_hits,
+        (unsigned long long) mal_perf_stats.string_length_misses,
+        (unsigned long long) mal_perf_stats.string_hash_misses,
+        (unsigned long long) mal_perf_stats.string_memcmp_calls,
+        (unsigned long long) mal_perf_stats.string_memcmp_code_units,
+        (unsigned long long) mal_perf_stats.string_hash_calls,
+        (unsigned long long) mal_perf_stats.string_hash_cached_hits,
+        (unsigned long long) mal_perf_stats.string_hash_computes,
+        (unsigned long long) mal_perf_stats.string_hash_dependent_computes,
+        (unsigned long long) mal_perf_stats.string_hash_cons_flattens
+    );
+    fprintf(
+        stderr,
+        "[perf-intrinsic-stats] calls=%llu bytes=%llu hits=%llu misses=%llu\n",
+        (unsigned long long) mal_perf_stats.intrinsic_ascii_calls,
+        (unsigned long long) mal_perf_stats.intrinsic_ascii_bytes,
+        (unsigned long long) mal_perf_stats.intrinsic_ascii_hits,
+        (unsigned long long) mal_perf_stats.intrinsic_ascii_misses
+    );
+    for (u32 i = 0; i < MAL_PERF_TABLE_ROLE_COUNT; i++) {
+        const MalPerfTableStats *stats = &mal_perf_stats.tables[i];
+        fprintf(
+            stderr,
+            "[perf-table-stats] role=%s lookups=%llu lookup_hits=%llu lookup_misses=%llu "
+            "upserts=%llu upsert_hits=%llu upsert_inserts=%llu find_calls=%llu "
+            "probes=%llu max_probe=%llu string_queries=%llu rehashes=%llu "
+            "rehash_entries=%llu slot_growths=%llu deletes=%llu delete_hits=%llu "
+            "clears=%llu compactions=%llu\n",
+            mal_perf_table_roles[i],
+            (unsigned long long) stats->lookups,
+            (unsigned long long) stats->lookup_hits,
+            (unsigned long long) stats->lookup_misses,
+            (unsigned long long) stats->upserts,
+            (unsigned long long) stats->upsert_hits,
+            (unsigned long long) stats->upsert_inserts,
+            (unsigned long long) stats->find_calls,
+            (unsigned long long) stats->probes,
+            (unsigned long long) stats->max_probe,
+            (unsigned long long) stats->string_queries,
+            (unsigned long long) stats->rehashes,
+            (unsigned long long) stats->rehash_entries,
+            (unsigned long long) stats->slot_growths,
+            (unsigned long long) stats->deletes,
+            (unsigned long long) stats->delete_hits,
+            (unsigned long long) stats->clears,
+            (unsigned long long) stats->compactions
+        );
+    }
+    for (u32 i = 0; i < MAL_PERF_SHAPE_CALLER_COUNT; i++) {
+        const MalPerfShapeStats *stats = &mal_perf_stats.shapes[i];
+        fprintf(
+            stderr,
+            "[perf-shape-stats] caller=%s calls=%llu hits=%llu misses=%llu widths=%llu "
+            "comparisons=%llu max_width=%llu max_comparisons=%llu pointer_hits=%llu "
+            "content_hits=%llu\n",
+            mal_perf_shape_callers[i],
+            (unsigned long long) stats->calls,
+            (unsigned long long) stats->hits,
+            (unsigned long long) stats->misses,
+            (unsigned long long) stats->widths,
+            (unsigned long long) stats->comparisons,
+            (unsigned long long) stats->max_width,
+            (unsigned long long) stats->max_comparisons,
+            (unsigned long long) stats->pointer_hits,
+            (unsigned long long) stats->content_hits
+        );
+    }
+    fprintf(
+        stderr,
+        "[perf-shape-transition-stats] calls=%llu hits=%llu creates=%llu comparisons=%llu "
+        "max_comparisons=%llu pointer_hits=%llu content_hits=%llu\n",
+        (unsigned long long) mal_perf_stats.shape_transition_calls,
+        (unsigned long long) mal_perf_stats.shape_transition_hits,
+        (unsigned long long) mal_perf_stats.shape_transition_creates,
+        (unsigned long long) mal_perf_stats.shape_transition_comparisons,
+        (unsigned long long) mal_perf_stats.shape_transition_max_comparisons,
+        (unsigned long long) mal_perf_stats.shape_transition_pointer_hits,
+        (unsigned long long) mal_perf_stats.shape_transition_content_hits
+    );
+    fprintf(
+        stderr,
+        "[perf-ic-stats] load_mono_hits=%llu load_region_hits=%llu "
+        "load_inherited_hits=%llu load_fallbacks=%llu load_slow_mono_hits=%llu "
+        "load_poly_hits=%llu load_mega_hits=%llu load_mega_misses=%llu "
+        "load_shape_hits=%llu load_shape_fills=%llu load_shape_uncacheable=%llu "
+        "load_plain_generic=%llu load_primitive_hits=%llu load_primitive_fills=%llu "
+        "load_primitive_uncacheable=%llu load_watched_hits=%llu load_watched_fills=%llu "
+        "load_other_generic=%llu inherited_fills=%llu inherited_reject_basic=%llu "
+        "inherited_reject_key=%llu inherited_reject_receiver=%llu "
+        "inherited_reject_resolution=%llu inherited_reject_chain=%llu "
+        "store_mono_hits=%llu store_region_hits=%llu store_fallbacks=%llu "
+        "store_slow_mono_hits=%llu store_poly_hits=%llu store_shape_hits=%llu "
+        "store_shape_fills=%llu store_shape_uncacheable=%llu store_plain_generic=%llu "
+        "store_other_generic=%llu\n",
+        (unsigned long long) mal_perf_stats.ic_load_mono_hits,
+        (unsigned long long) mal_perf_stats.ic_load_region_hits,
+        (unsigned long long) mal_perf_stats.ic_load_inherited_hits,
+        (unsigned long long) mal_perf_stats.ic_load_fallbacks,
+        (unsigned long long) mal_perf_stats.ic_load_slow_mono_hits,
+        (unsigned long long) mal_perf_stats.ic_load_poly_hits,
+        (unsigned long long) mal_perf_stats.ic_load_mega_hits,
+        (unsigned long long) mal_perf_stats.ic_load_mega_misses,
+        (unsigned long long) mal_perf_stats.ic_load_shape_hits,
+        (unsigned long long) mal_perf_stats.ic_load_shape_fills,
+        (unsigned long long) mal_perf_stats.ic_load_shape_uncacheable,
+        (unsigned long long) mal_perf_stats.ic_load_plain_generic,
+        (unsigned long long) mal_perf_stats.ic_load_primitive_hits,
+        (unsigned long long) mal_perf_stats.ic_load_primitive_fills,
+        (unsigned long long) mal_perf_stats.ic_load_primitive_uncacheable,
+        (unsigned long long) mal_perf_stats.ic_load_watched_hits,
+        (unsigned long long) mal_perf_stats.ic_load_watched_fills,
+        (unsigned long long) mal_perf_stats.ic_load_other_generic,
+        (unsigned long long) mal_perf_stats.ic_inherited_fills,
+        (unsigned long long) mal_perf_stats.ic_inherited_reject_basic,
+        (unsigned long long) mal_perf_stats.ic_inherited_reject_key,
+        (unsigned long long) mal_perf_stats.ic_inherited_reject_receiver,
+        (unsigned long long) mal_perf_stats.ic_inherited_reject_resolution,
+        (unsigned long long) mal_perf_stats.ic_inherited_reject_chain,
+        (unsigned long long) mal_perf_stats.ic_store_mono_hits,
+        (unsigned long long) mal_perf_stats.ic_store_region_hits,
+        (unsigned long long) mal_perf_stats.ic_store_fallbacks,
+        (unsigned long long) mal_perf_stats.ic_store_slow_mono_hits,
+        (unsigned long long) mal_perf_stats.ic_store_poly_hits,
+        (unsigned long long) mal_perf_stats.ic_store_shape_hits,
+        (unsigned long long) mal_perf_stats.ic_store_shape_fills,
+        (unsigned long long) mal_perf_stats.ic_store_shape_uncacheable,
+        (unsigned long long) mal_perf_stats.ic_store_plain_generic,
+        (unsigned long long) mal_perf_stats.ic_store_other_generic
+    );
+}
+
+void mal_perf_stats_init(void) {
+    static bool registered = false;
+    if (getenv("MAL_PERF_STATS") == nullptr) {
+        return;
+    }
+    mal_perf_stats_enabled = true;
+    if (!registered) {
+        registered = true;
+        atexit(mal_perf_stats_print);
+    }
+}
+#else
+// Keep dead instrumentation references valid even in unoptimized diagnostic builds.
+MalPerfStats mal_perf_stats;
+#endif

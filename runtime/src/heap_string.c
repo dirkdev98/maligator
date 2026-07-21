@@ -5,6 +5,7 @@
 
 #include "gc.h"
 #include "checked_size.h"
+#include "perf_stats.h"
 
 static void mal_string_require_valid_length(usize length) {
     // Raw constructors have no VM/completion channel. VM-aware producers must
@@ -302,15 +303,24 @@ usize mal_string_length(const MalString *string) {
 }
 
 u64 mal_string_hash(const MalString *string) {
+    MAL_PERF_COUNT(string_hash_calls);
     if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
+        MAL_PERF_COUNT(string_hash_computes);
+        MAL_PERF_COUNT(string_hash_dependent_computes);
         return mal_string_hash_code_units(string->code_units, string->length);
     }
 
     MalString *mutable = (MalString *) string;
+    if (string->storage == MAL_STRING_STORAGE_CONS) {
+        MAL_PERF_COUNT(string_hash_cons_flattens);
+    }
     const c16 *code_units = mal_string_code_units(string);
     if (!mutable->hash_valid) {
+        MAL_PERF_COUNT(string_hash_computes);
         mutable->hash = mal_string_hash_code_units(code_units, string->length);
         mutable->hash_valid = true;
+    } else {
+        MAL_PERF_COUNT(string_hash_cached_hits);
     }
     return mutable->hash;
 }
@@ -320,14 +330,23 @@ MalStringStorage mal_string_storage(const MalString *string) {
 }
 
 bool mal_string_equals(const MalString *left, const MalString *right) {
+    MAL_PERF_COUNT(string_equals_calls);
     if (left == right) {
+        MAL_PERF_COUNT(string_pointer_hits);
         return true;
     }
 
-    if (left->length != right->length || mal_string_hash(left) != mal_string_hash(right)) {
+    if (left->length != right->length) {
+        MAL_PERF_COUNT(string_length_misses);
+        return false;
+    }
+    if (mal_string_hash(left) != mal_string_hash(right)) {
+        MAL_PERF_COUNT(string_hash_misses);
         return false;
     }
 
+    MAL_PERF_COUNT(string_memcmp_calls);
+    MAL_PERF_ADD(string_memcmp_code_units, left->length);
     return memcmp(mal_string_code_units(left), mal_string_code_units(right), sizeof(c16) * left->length) == 0;
 }
 

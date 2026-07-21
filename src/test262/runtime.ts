@@ -15,6 +15,7 @@ import {
 	gcDefines,
 	gcGenerational,
 	gmallocEnabled,
+	perfStatsDefines,
 	runEnv,
 	sanitizerCcFlags,
 } from "../build-flags.ts";
@@ -86,6 +87,7 @@ const CC_COMPILE_FLAGS = [
 	"-I",
 	"runtime/src",
 	...gcDefines(),
+	...perfStatsDefines(),
 	...sanitizerCcFlags(),
 ];
 const CC_LINK_FLAGS = ["-std=c2x", ...GENERATED_C_OPT_FLAGS, ...sanitizerCcFlags()];
@@ -312,8 +314,10 @@ export function test262PrepareBuild() {
 
 	// The mains include gc.h, whose header layout + barrier code differ under
 	// MAL_GC_GENERATIONAL, so they must compile with the same defines as the lib;
-	// sanitizerCcFlags() likewise keeps them instrumented in lockstep with the lib.
-	const mainFlags = [...gcDefines(), ...sanitizerCcFlags()].join(" ");
+	// sanitizer/perf flags likewise keep them instrumented in lockstep with the lib.
+	const mainFlags = [...gcDefines(), ...perfStatsDefines(), ...sanitizerCcFlags()].join(
+		" ",
+	);
 	test262Log("Compiling harness mains...");
 	execFileSync(
 		toolchain.tools.cc.path,
@@ -1264,6 +1268,7 @@ export async function test262RunSingle(
 				...GENERATED_C_OPT_FLAGS,
 				"-I",
 				"runtime/src",
+				...perfStatsDefines(),
 				...sanitizerCcFlags(),
 				`${baseName}.c`,
 				`${BUILD_PATH}/test262_main.o`,

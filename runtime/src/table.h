@@ -13,6 +13,15 @@ typedef enum MalTableMode {
     MAL_TABLE_MODE_GENERAL,
 } MalTableMode;
 
+/** Instrumentation role; storage semantics continue to come from MalTableMode. */
+typedef enum MalTableRole {
+    MAL_TABLE_ROLE_OBJECT,
+    MAL_TABLE_ROLE_ATOMS,
+    MAL_TABLE_ROLE_SYMBOL_REGISTRY,
+    MAL_TABLE_ROLE_MAP,
+    MAL_TABLE_ROLE_COUNT,
+} MalTableRole;
+
 /**
  * Physical iteration order exposed by the table substrate.
  */
@@ -37,7 +46,7 @@ typedef struct MalTableLookup {
 /**
  * Create a new ordered table substrate.
  */
-MalTable *mal_table_new(MalTableMode mode);
+MalTable *mal_table_new(MalTableMode mode, MalTableRole role);
 
 /**
  * Destroy a table previously created with mal_table_new.

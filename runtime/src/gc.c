@@ -23,6 +23,7 @@
 #include "./module_namespace_object.h"
 #include "./monotonic_clock.h"
 #include "./object.h"
+#include "./perf_stats.h"
 #include "./primitive_wrapper_object.h"
 #include "./promise_object.h"
 #include "./property_store.h"
@@ -381,6 +382,7 @@ void mal_gc_init(MalVm *vm) {
     g_gc = g;
     g_gc_vm = vm;
     g_gc_stats_state = g;
+    mal_perf_stats_init();
 #if MAL_GC_GENERATIONAL
     g->major_every = 8;
 #endif

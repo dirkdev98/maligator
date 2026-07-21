@@ -40,6 +40,7 @@
 #include "builtin_uri.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "perf_stats.h"
 #include "table.h"
 #include "typed_array_object.h"
 #include "vm.h"
@@ -53,6 +54,8 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     while (name[length] != '\0') {
         length++;
     }
+    MAL_PERF_COUNT(intrinsic_ascii_calls);
+    MAL_PERF_ADD(intrinsic_ascii_bytes, length);
 
     // Probe the atom table with a stack-allocated (or, for rare long names,
     // throwaway-heap) external key string so a hit costs no allocation. On a
@@ -70,10 +73,12 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
 
     MalTableLookup lookup = mal_table_lookup(vm->atoms, key);
     if (lookup.present) {
+        MAL_PERF_COUNT(intrinsic_ascii_hits);
         free(heap_units);
         return mal_value_to_string(mal_table_entry_key(vm->atoms, lookup.entry).value);
     }
 
+    MAL_PERF_COUNT(intrinsic_ascii_misses);
     MalString *atom = mal_string_new_ascii(&vm->heap, name, length);
     MalKey atom_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
     mal_table_upsert_entry(vm->atoms, atom_key);

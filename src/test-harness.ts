@@ -103,6 +103,8 @@ export interface BuildOptions {
 	config?: ResolvedBuildConfig;
 	/** Override the eval compiler source, primarily for explicit prebuilt-wire checks. */
 	compilerBake?: CompilerBakeInput;
+	/** Override native build environment, primarily for compile-time instrument tests. */
+	environment?: NodeJS.ProcessEnv;
 }
 
 export type BuildNativeBinaryResult = LocalBuildResult;
@@ -155,6 +157,7 @@ export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinar
 	const derivation = buildDerivationFromConfig(config);
 	const context = resolveNativeBuildContext({
 		features: derivation.features,
+		environment: options.environment,
 		compilerBake: options.compilerBake ?? {
 			kind: "source",
 			sourceDirectory: path.resolve("src"),

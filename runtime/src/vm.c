@@ -368,9 +368,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     for (i32 i = 0; i < MAL_INTRINSIC_COUNT; i++) {
         vm->intrinsics[i] = mal_value_new_undefined();
     }
-    vm->symbol_registry = mal_table_new(MAL_TABLE_MODE_GENERAL);
+    vm->symbol_registry = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_SYMBOL_REGISTRY);
     // Must exist before mal_intrinsics_init, which interns keys through it.
-    vm->atoms = mal_table_new(MAL_TABLE_MODE_GENERAL);
+    vm->atoms = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_ATOMS);
 
     mal_intrinsics_init(vm);
 

@@ -269,6 +269,21 @@ export function gcConcurrent(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
+ * Whether to compile the opt-in property/key performance counters. The counter
+ * sites are compiled out of normal binaries because even predictable branches
+ * materially distort the hot paths they measure. An instrumented binary still
+ * checks `MAL_PERF_STATS` at runtime before accumulating or printing counters.
+ */
+export function perfStatsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	return envOn("MAL_PERF_STATS", env);
+}
+
+/** Preprocessor gate for the zero-cost-when-unbuilt performance counters. */
+export function perfStatsDefines(env: NodeJS.ProcessEnv = process.env): Array<string> {
+	return perfStatsEnabled(env) ? ["-DMAL_PERF_STATS=1"] : [];
+}
+
+/**
  * Preprocessor defines selecting GC build dimensions. The generational define is
  * emitted EXPLICITLY (=1 or =0) rather than only when opted in: the opt-out
  * (`=0`) must reach the C preprocessor end-to-end, and stamping the value into
@@ -283,23 +298,30 @@ export function gcDefines(env: NodeJS.ProcessEnv = process.env): Array<string> {
 }
 
 /**
- * Binary suffix for the current sanitizer/GC mode. Native archives carry these
- * exact compiler flags in their content-addressed identity. Empty for the normal build.
+ * Binary suffix for the current sanitizer/GC/instrumentation mode. Native
+ * archives carry these exact compiler flags in their content-addressed identity.
+ * Empty for the normal build.
  *
  * `cacheSuffix` is a human-facing build-config decoration only. It does not select
  * or identify C/Rust archives. Empty (the default) keeps the unsuffixed binary name.
  */
-export function buildSuffix(cacheSuffix = ""): string {
-	const mode = sanitizerMode();
+export function buildSuffix(
+	cacheSuffix = "",
+	env: NodeJS.ProcessEnv = process.env,
+): string {
+	const mode = sanitizerMode(env);
 	let suffix = mode === "none" ? "" : `-${mode}`;
 	// Generational is the default (2026-07-10 flip), so it is UNSUFFIXED; the
 	// opt-out (`MAL_GC_GENERATIONAL=0`) gets its own `-nongen` dir so the two
 	// dimensions never share an archive/cache (header layout + barrier code differ).
-	if (!gcGenerational()) {
+	if (!gcGenerational(env)) {
 		suffix += "-nongen";
 	}
-	if (gcConcurrent()) {
+	if (gcConcurrent(env)) {
 		suffix += "-conc";
+	}
+	if (perfStatsEnabled(env)) {
+		suffix += "-perf";
 	}
 	if (cacheSuffix) {
 		suffix += `-${cacheSuffix}`;
@@ -387,6 +409,7 @@ export function runtimeCcFlags(
 		...optFlags(plan, env),
 		...SANITIZER_FLAGS[sanitizerMode(env)],
 		...gcDefines(env),
+		...perfStatsDefines(env),
 		...featureDefines(opts),
 	];
 }
@@ -403,6 +426,7 @@ export function ccExtraFlags(
 		...optFlags(plan, env),
 		...SANITIZER_FLAGS[sanitizerMode(env)],
 		...gcDefines(env),
+		...perfStatsDefines(env),
 	];
 }
 

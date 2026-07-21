@@ -6,7 +6,7 @@
 
 void mal_map_object_init(MalHeap *heap, MalMapObject *map, MalHeapType type, MalObject *prototype, bool weak) {
     mal_object_init(heap, &map->object, type, prototype);
-    map->entries = mal_table_new(MAL_TABLE_MODE_GENERAL);
+    map->entries = mal_table_new(MAL_TABLE_MODE_GENERAL, MAL_TABLE_ROLE_MAP);
     map->weak = weak;
 }
 
