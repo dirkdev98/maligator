@@ -119,6 +119,25 @@ static usize mal_table_find_slot(const MalTable *table, MalValue key) {
     return index;
 }
 
+static void mal_table_close_delete_hole(MalTable *table, usize hole) {
+    usize mask = table->slot_capacity - 1;
+    usize scan = (hole + 1) & mask;
+
+    while (table->slots[scan] != MAL_TABLE_EMPTY) {
+        MAL_PERF_COUNT(tables[table->role].delete_cluster_scans);
+        i32 entry_index = table->slots[scan];
+        usize home = mal_table_hash_value(table->entries[entry_index].key) & mask;
+        if (((hole - home) & mask) < ((scan - home) & mask)) {
+            table->slots[hole] = entry_index;
+            hole = scan;
+            MAL_PERF_COUNT(tables[table->role].delete_slot_moves);
+        }
+        scan = (scan + 1) & mask;
+    }
+
+    table->slots[hole] = MAL_TABLE_EMPTY;
+}
+
 static void mal_table_rehash(MalTable *table, u32 capacity) {
     if (mal_perf_stats_enabled) {
         MalPerfTableStats *stats = &mal_perf_stats.tables[table->role];
@@ -317,8 +336,8 @@ bool mal_table_delete(MalTable *table, MalKey key) {
     table->size--;
     table->tombstone_count++;
 
-    // Removing from an open-addressed table can break probe chains, so rebuild them.
-    mal_table_rehash(table, table->slot_capacity);
+    // Preserve every surviving probe chain without reallocating the slot array.
+    mal_table_close_delete_hole(table, index);
 
     return true;
 }

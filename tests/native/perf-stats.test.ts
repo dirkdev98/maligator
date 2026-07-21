@@ -113,8 +113,11 @@ describe("opt-in performance statistics", () => {
 				expect(field(table, "find_calls")).toBe(
 					field(table, "lookups") +
 						field(table, "upserts") +
+						field(table, "deletes") +
 						field(table, "slot_growths"),
 				);
+				expect(field(table, "delete_cluster_scans")).toBeGreaterThan(0);
+				expect(field(table, "delete_slot_moves")).toBeGreaterThan(0);
 			}
 		}
 

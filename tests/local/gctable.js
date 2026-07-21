@@ -103,6 +103,42 @@ ok(
 	m.size === 2 && intact(m.get("x"), 99) && intact(m.get("y"), 100),
 );
 
+// All keys begin in the final slot at capacity 16, forcing a wraparound cluster.
+// Deletion must repair the cyclic probe chain without changing insertion order.
+const collisionKeys = [
+	"collision-11",
+	"collision-23",
+	"collision-24",
+	"collision-32",
+	"collision-36",
+	"collision-53",
+];
+const collisions = new Map(collisionKeys.map((key, index) => [key, val(index)]));
+collisions.delete(collisionKeys[0]);
+collisions.delete(collisionKeys[3]);
+gc();
+ok(
+	"map-wraparound-delete-repairs-cluster",
+	intact(collisions.get(collisionKeys[1]), 1) &&
+		intact(collisions.get(collisionKeys[2]), 2) &&
+		intact(collisions.get(collisionKeys[4]), 4) &&
+		intact(collisions.get(collisionKeys[5]), 5) &&
+		!collisions.has(collisionKeys[0]) &&
+		!collisions.has(collisionKeys[3]),
+);
+collisions.set(collisionKeys[0], val(100));
+ok(
+	"map-wraparound-reinsert-appends",
+	Array.from(collisions.keys()).join(",") ===
+		[
+			collisionKeys[1],
+			collisionKeys[2],
+			collisionKeys[4],
+			collisionKeys[5],
+			collisionKeys[0],
+		].join(",") && intact(collisions.get(collisionKeys[0]), 100),
+);
+
 // --- Set delete + clear + reuse (object elements so the entries hold cells). ---
 let s = new Set();
 let elems = [];

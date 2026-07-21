@@ -117,7 +117,7 @@ static void mal_perf_stats_print(void) {
             "upserts=%llu upsert_hits=%llu upsert_inserts=%llu find_calls=%llu "
             "probes=%llu max_probe=%llu string_queries=%llu rehashes=%llu "
             "rehash_entries=%llu slot_growths=%llu deletes=%llu delete_hits=%llu "
-            "clears=%llu compactions=%llu\n",
+            "delete_cluster_scans=%llu delete_slot_moves=%llu clears=%llu compactions=%llu\n",
             mal_perf_table_roles[i],
             (unsigned long long) stats->lookups,
             (unsigned long long) stats->lookup_hits,
@@ -134,6 +134,8 @@ static void mal_perf_stats_print(void) {
             (unsigned long long) stats->slot_growths,
             (unsigned long long) stats->deletes,
             (unsigned long long) stats->delete_hits,
+            (unsigned long long) stats->delete_cluster_scans,
+            (unsigned long long) stats->delete_slot_moves,
             (unsigned long long) stats->clears,
             (unsigned long long) stats->compactions
         );

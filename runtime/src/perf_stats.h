@@ -25,6 +25,8 @@ typedef struct MalPerfTableStats {
     u64 slot_growths;
     u64 deletes;
     u64 delete_hits;
+    u64 delete_cluster_scans;
+    u64 delete_slot_moves;
     u64 clears;
     u64 compactions;
 } MalPerfTableStats;

@@ -23,6 +23,21 @@ for (let i = 0; i < 40; i++) {
 	map.set(key, i + 1);
 }
 
+const collisionKeys = [
+	"collision-11",
+	"collision-23",
+	"collision-24",
+	"collision-32",
+	"collision-36",
+	"collision-53",
+];
+const collisionMap = new Map(collisionKeys.map((key, index) => [key, index + 1]));
+collisionMap.delete(collisionKeys[0]);
+for (let i = 1; i < collisionKeys.length; i++) {
+	if (collisionMap.get(collisionKeys[i]) !== i + 1)
+		throw new Error("broken collision chain");
+}
+
 const counter = new Counter(3);
 let total = 0;
 for (let i = 0; i < 2000; i++) {
