@@ -16,8 +16,12 @@ for (let i = 0; i < 64; i++) {
 }
 
 const map = new Map();
-map.set("alpha", 1);
-map.set("beta", 2);
+const mapKeys = [];
+for (let i = 0; i < 40; i++) {
+	const key = "map-" + i;
+	mapKeys.push(key);
+	map.set(key, i + 1);
+}
 
 const counter = new Counter(3);
 let total = 0;
@@ -27,7 +31,7 @@ for (let i = 0; i < 2000; i++) {
 	object.alpha = (object.alpha + 1) % 1000;
 	const dynamicKey = i % 2 === 0 ? ["be", "ta"].join("") : ["gam", "ma"].join("");
 	total += object[dynamicKey];
-	total += map.get(i % 2 === 0 ? "alpha" : "beta");
+	total += map.get(mapKeys[i % mapKeys.length]);
 	total += counter.read();
 }
 

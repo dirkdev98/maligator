@@ -148,17 +148,18 @@ static void mal_table_rehash(MalTable *table, u32 capacity) {
     table->slot_capacity = capacity;
 }
 
-static void mal_table_grow_slots_if_needed(MalTable *table) {
+static bool mal_table_grow_slots_if_needed(MalTable *table) {
     usize used_size = table->size + 1;
 
     if (used_size * MAL_TABLE_MAX_LOAD_DENOMINATOR <= table->slot_capacity * MAL_TABLE_MAX_LOAD_NUMERATOR) {
-        return;
+        return false;
     }
 
     if (mal_perf_stats_enabled) {
         mal_perf_stats.tables[table->role].slot_growths++;
     }
     mal_table_rehash(table, table->slot_capacity * 2);
+    return true;
 }
 
 // Grows `entries` when the append cursor reaches capacity. The grow may move the
@@ -263,10 +264,12 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key) {
         return mal_table_handle((u32) table->slots[index]);
     }
 
-    // Grow first (both may reallocate / rehash), then re-find the now-valid slot.
+    // Entry-buffer growth preserves the slot array. Only slot growth rehashes and
+    // invalidates the empty index found above.
     mal_table_grow_entries_if_needed(table);
-    mal_table_grow_slots_if_needed(table);
-    index = mal_table_find_slot(table, key.value);
+    if (mal_table_grow_slots_if_needed(table)) {
+        index = mal_table_find_slot(table, key.value);
+    }
 
     u32 entry_index = table->entry_count++;
     MalTableEntry *entry = &table->entries[entry_index];

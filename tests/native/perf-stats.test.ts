@@ -91,6 +91,13 @@ describe("opt-in performance statistics", () => {
 		for (const role of ["object", "atoms", "map"]) {
 			const table = reportLine(result.stderr, "[perf-table-stats]", `role=${role} `);
 			expect(field(table, "find_calls")).toBeGreaterThan(0);
+			if (role === "map") {
+				expect(field(table, "find_calls")).toBe(
+					field(table, "lookups") +
+						field(table, "upserts") +
+						field(table, "slot_growths"),
+				);
+			}
 		}
 
 		for (const caller of ["get_own", "define_own", "load_ic"]) {
