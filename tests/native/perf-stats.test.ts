@@ -8,7 +8,7 @@ import { assertPassLine, buildNativeBinary } from "../../src/test-harness.ts";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-perf-stats-"));
 
 function field(line: string, name: string): number {
-	return Number(line.match(new RegExp(`${name}=([0-9]+)`))?.[1] ?? 0);
+	return Number(line.match(new RegExp(`(?:^|\\s)${name}=([0-9]+)`))?.[1] ?? 0);
 }
 
 function reportLine(stderr: string, prefix: string, discriminator?: string): string {
@@ -86,7 +86,25 @@ describe("opt-in performance statistics", () => {
 
 		const intrinsics = reportLine(result.stderr, "[perf-intrinsic-stats]");
 		expect(field(intrinsics, "calls")).toBeGreaterThan(0);
+		expect(field(intrinsics, "cache_hits")).toBeGreaterThan(0);
+		expect(field(intrinsics, "cache_fills")).toBeGreaterThan(0);
 		expect(field(intrinsics, "hits")).toBeGreaterThan(0);
+		expect(
+			field(intrinsics, "cache_hits") +
+				field(intrinsics, "hits") +
+				field(intrinsics, "misses"),
+		).toBe(field(intrinsics, "calls"));
+		const attributedNameCalls = result.stderr
+			.split("\n")
+			.filter((line) => line.startsWith("[perf-intrinsic-name]"))
+			.reduce((sum, line) => sum + field(line, "calls"), 0);
+		expect(attributedNameCalls).toBe(field(intrinsics, "calls"));
+		const intrinsicName = reportLine(
+			result.stderr,
+			"[perf-intrinsic-name]",
+			"name=length ",
+		);
+		expect(field(intrinsicName, "calls")).toBeGreaterThan(0);
 
 		for (const role of ["object", "atoms", "map"]) {
 			const table = reportLine(result.stderr, "[perf-table-stats]", `role=${role} `);
@@ -113,5 +131,22 @@ describe("opt-in performance statistics", () => {
 		expect(loadHits).toBeGreaterThan(0);
 		expect(field(ic, "load_fallbacks")).toBeGreaterThan(0);
 		expect(field(ic, "store_fallbacks")).toBeGreaterThan(0);
+	});
+
+	it("keeps cached atoms live through GC stress and tears the VM down", () => {
+		const result = spawnSync(binary, [], {
+			env: {
+				...process.env,
+				MAL_PERF_STATS: "1",
+				MAL_GC_STRESS: "1",
+				MAL_GC_VERIFY: "1",
+				MAL_GC_AT_EXIT: "1",
+			},
+			encoding: "utf-8",
+		});
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		assertPassLine(result.stdout, "perf-stats");
+		const intrinsics = reportLine(result.stderr, "[perf-intrinsic-stats]");
+		expect(field(intrinsics, "cache_hits")).toBeGreaterThan(0);
 	});
 });

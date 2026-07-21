@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "builtin_array.h"
 #include "builtin_array_buffer.h"
@@ -49,6 +50,98 @@
 // back to a heap-converted probe buffer.
 #define MAL_INTERN_STACK_MAX 64
 
+#define MAL_HOT_KEY_SIGNATURE(length, first, last) \
+    ((u32) (length) | ((u32) (u8) (first) << 8) | ((u32) (u8) (last) << 16))
+
+static MalHotIntrinsicKey mal_hot_intrinsic_key(const byte *name, usize length) {
+    if (length == 0) return MAL_HOT_KEY_EMPTY;
+    if (length > 255) return MAL_HOT_KEY_COUNT;
+
+    u32 signature = MAL_HOT_KEY_SIGNATURE(length, name[0], name[length - 1]);
+    switch (signature) {
+        case MAL_HOT_KEY_SIGNATURE(6, 'l', 'h'):
+            return memcmp(name, "length", 6) == 0 ? MAL_HOT_KEY_LENGTH : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(4, 'n', 'e'):
+            return memcmp(name, "name", 4) == 0 ? MAL_HOT_KEY_NAME : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(9, 'l', 'x'):
+            return memcmp(name, "lastIndex", 9) == 0 ? MAL_HOT_KEY_LAST_INDEX : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(7, '_', 's'):
+            return memcmp(name, "_events", 7) == 0 ? MAL_HOT_KEY_EVENTS : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(12, '_', 't'):
+            return memcmp(name, "_eventsCount", 12) == 0 ? MAL_HOT_KEY_EVENTS_COUNT : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(9, 'p', 'e'):
+            return memcmp(name, "prototype", 9) == 0 ? MAL_HOT_KEY_PROTOTYPE : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(6, 'g', 's'):
+            return memcmp(name, "groups", 6) == 0 ? MAL_HOT_KEY_GROUPS : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(5, 'i', 'x'):
+            return memcmp(name, "index", 5) == 0 ? MAL_HOT_KEY_INDEX : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(5, 'i', 't'):
+            return memcmp(name, "input", 5) == 0 ? MAL_HOT_KEY_INPUT : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(6, 'c', 'e'):
+            return memcmp(name, "callee", 6) == 0 ? MAL_HOT_KEY_CALLEE : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(4, 'e', 'c'):
+            return memcmp(name, "exec", 4) == 0 ? MAL_HOT_KEY_EXEC : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(14, '_', 'e'):
+            return memcmp(name, "_readableState", 14) == 0 ? MAL_HOT_KEY_READABLE_STATE : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(9, 'd', 'd'):
+            return memcmp(name, "destroyed", 9) == 0 ? MAL_HOT_KEY_DESTROYED : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(5, 'e', 'd'):
+            return memcmp(name, "ended", 5) == 0 ? MAL_HOT_KEY_ENDED : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(4, 'e', 't'):
+            return memcmp(name, "emit", 4) == 0 ? MAL_HOT_KEY_EMIT : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(7, 'p', 'g'):
+            return memcmp(name, "pending", 7) == 0 ? MAL_HOT_KEY_PENDING : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(4, 'd', 'a'):
+            return memcmp(name, "data", 4) == 0 ? MAL_HOT_KEY_DATA : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(17, '_', 'e'):
+            return memcmp(name, "_malReadableQueue", 17) == 0 ? MAL_HOT_KEY_READABLE_QUEUE : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(17, '_', 'x'):
+            return memcmp(name, "_malReadableIndex", 17) == 0 ? MAL_HOT_KEY_READABLE_INDEX : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(8, 'e', 'g'):
+            return memcmp(name, "encoding", 8) == 0 ? MAL_HOT_KEY_ENCODING : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(11, '_', 'g'):
+            return memcmp(name, "_malFlowing", 11) == 0 ? MAL_HOT_KEY_FLOWING : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(11, 'n', 'r'):
+            return memcmp(name, "newListener", 11) == 0 ? MAL_HOT_KEY_NEW_LISTENER : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(14, 'r', 'r'):
+            return memcmp(name, "removeListener", 14) == 0 ? MAL_HOT_KEY_REMOVE_LISTENER : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(13, 'r', 'd'):
+            return memcmp(name, "readableEnded", 13) == 0 ? MAL_HOT_KEY_READABLE_ENDED : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(10, '_', 'd'):
+            return memcmp(name, "_malPaused", 10) == 0 ? MAL_HOT_KEY_PAUSED : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(8, 'r', 'e'):
+            return memcmp(name, "readable", 8) == 0 ? MAL_HOT_KEY_READABLE : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(5, 'f', 's'):
+            return memcmp(name, "flags", 5) == 0 ? MAL_HOT_KEY_FLAGS : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(11, 'u', 's'):
+            return memcmp(name, "unicodeSets", 11) == 0 ? MAL_HOT_KEY_UNICODE_SETS : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(9, 'm', 'e'):
+            return memcmp(name, "multiline", 9) == 0 ? MAL_HOT_KEY_MULTILINE : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(10, 'i', 'e'):
+            return memcmp(name, "ignoreCase", 10) == 0 ? MAL_HOT_KEY_IGNORE_CASE : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(10, 'h', 's'):
+            return memcmp(name, "hasIndices", 10) == 0 ? MAL_HOT_KEY_HAS_INDICES : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(6, 's', 'y'):
+            return memcmp(name, "sticky", 6) == 0 ? MAL_HOT_KEY_STICKY : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(6, 'd', 'l'):
+            return memcmp(name, "dotAll", 6) == 0 ? MAL_HOT_KEY_DOT_ALL : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(6, 'g', 'l'):
+            return memcmp(name, "global", 6) == 0 ? MAL_HOT_KEY_GLOBAL : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(7, 'u', 'e'):
+            return memcmp(name, "unicode", 7) == 0 ? MAL_HOT_KEY_UNICODE : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(4, 'p', 'h'):
+            return memcmp(name, "push", 4) == 0 ? MAL_HOT_KEY_PUSH : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(5, 'e', 'r'):
+            return memcmp(name, "error", 5) == 0 ? MAL_HOT_KEY_ERROR : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(6, 't', 'N'):
+            return memcmp(name, "toJSON", 6) == 0 ? MAL_HOT_KEY_TO_JSON : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(6, 's', 'h'):
+            return memcmp(name, "search", 6) == 0 ? MAL_HOT_KEY_SEARCH : MAL_HOT_KEY_COUNT;
+        default:
+            return MAL_HOT_KEY_COUNT;
+    }
+}
+
 MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     usize length = 0;
     while (name[length] != '\0') {
@@ -56,6 +149,13 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     }
     MAL_PERF_COUNT(intrinsic_ascii_calls);
     MAL_PERF_ADD(intrinsic_ascii_bytes, length);
+    mal_perf_intrinsic_name(name, length);
+
+    MalHotIntrinsicKey hot_key = mal_hot_intrinsic_key(name, length);
+    if (hot_key != MAL_HOT_KEY_COUNT && vm->hot_intrinsic_keys[hot_key] != nullptr) {
+        MAL_PERF_COUNT(intrinsic_ascii_cache_hits);
+        return vm->hot_intrinsic_keys[hot_key];
+    }
 
     // Probe the atom table with a stack-allocated (or, for rare long names,
     // throwaway-heap) external key string so a hit costs no allocation. On a
@@ -72,16 +172,21 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(&probe)};
 
     MalTableLookup lookup = mal_table_lookup(vm->atoms, key);
+    MalString *atom;
     if (lookup.present) {
         MAL_PERF_COUNT(intrinsic_ascii_hits);
-        free(heap_units);
-        return mal_value_to_string(mal_table_entry_key(vm->atoms, lookup.entry).value);
+        atom = mal_value_to_string(mal_table_entry_key(vm->atoms, lookup.entry).value);
+    } else {
+        MAL_PERF_COUNT(intrinsic_ascii_misses);
+        atom = mal_string_new_ascii(&vm->heap, name, length);
+        MalKey atom_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
+        mal_table_upsert_entry(vm->atoms, atom_key);
     }
 
-    MAL_PERF_COUNT(intrinsic_ascii_misses);
-    MalString *atom = mal_string_new_ascii(&vm->heap, name, length);
-    MalKey atom_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
-    mal_table_upsert_entry(vm->atoms, atom_key);
+    if (hot_key != MAL_HOT_KEY_COUNT) {
+        vm->hot_intrinsic_keys[hot_key] = atom;
+        MAL_PERF_COUNT(intrinsic_ascii_cache_fills);
+    }
 
     free(heap_units);
     return atom;

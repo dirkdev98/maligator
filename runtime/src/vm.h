@@ -1274,6 +1274,12 @@ typedef struct MalVm {
     MalTable *atoms;
 
     /**
+     * Direct pointers for measured request-hot atom names. The atom table owns
+     * and roots the strings; this array only removes repeated content probes.
+     */
+    MalString *hot_intrinsic_keys[MAL_HOT_KEY_COUNT];
+
+    /**
      * Contiguous register/argument storage for non-suspendable frames. Each such
      * frame carves a window [stack_base, stack_base+slots); return pops it by
      * restoring value_stack_size. Fixed capacity — overflow throws a RangeError

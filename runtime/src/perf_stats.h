@@ -61,6 +61,8 @@ typedef struct MalPerfStats {
 
     u64 intrinsic_ascii_calls;
     u64 intrinsic_ascii_bytes;
+    u64 intrinsic_ascii_cache_hits;
+    u64 intrinsic_ascii_cache_fills;
     u64 intrinsic_ascii_hits;
     u64 intrinsic_ascii_misses;
 
@@ -116,6 +118,7 @@ extern MalPerfStats mal_perf_stats;
 #if MAL_PERF_STATS
 extern bool mal_perf_stats_enabled;
 void mal_perf_stats_init(void);
+void mal_perf_intrinsic_name(const byte *name, usize length);
 
 #define MAL_PERF_COUNT(field) \
     do { \
@@ -134,6 +137,10 @@ void mal_perf_stats_init(void);
 #define mal_perf_stats_enabled false
 
 static inline void mal_perf_stats_init(void) {}
+static inline void mal_perf_intrinsic_name(const byte *name, usize length) {
+    (void) name;
+    (void) length;
+}
 
 #define MAL_PERF_COUNT(field) ((void) 0)
 #define MAL_PERF_ADD(field, value) ((void) 0)

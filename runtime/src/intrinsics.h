@@ -7,6 +7,51 @@
 
 typedef struct MalVm MalVm;
 
+/** Request-hot internal ASCII names cached per VM by mal_intrinsic_ascii. */
+typedef enum MalHotIntrinsicKey {
+    MAL_HOT_KEY_EMPTY,
+    MAL_HOT_KEY_LENGTH,
+    MAL_HOT_KEY_NAME,
+    MAL_HOT_KEY_LAST_INDEX,
+    MAL_HOT_KEY_EVENTS,
+    MAL_HOT_KEY_EVENTS_COUNT,
+    MAL_HOT_KEY_PROTOTYPE,
+    MAL_HOT_KEY_GROUPS,
+    MAL_HOT_KEY_INDEX,
+    MAL_HOT_KEY_INPUT,
+    MAL_HOT_KEY_CALLEE,
+    MAL_HOT_KEY_EXEC,
+    MAL_HOT_KEY_READABLE_STATE,
+    MAL_HOT_KEY_DESTROYED,
+    MAL_HOT_KEY_ENDED,
+    MAL_HOT_KEY_EMIT,
+    MAL_HOT_KEY_PENDING,
+    MAL_HOT_KEY_DATA,
+    MAL_HOT_KEY_READABLE_QUEUE,
+    MAL_HOT_KEY_READABLE_INDEX,
+    MAL_HOT_KEY_ENCODING,
+    MAL_HOT_KEY_FLOWING,
+    MAL_HOT_KEY_NEW_LISTENER,
+    MAL_HOT_KEY_REMOVE_LISTENER,
+    MAL_HOT_KEY_READABLE_ENDED,
+    MAL_HOT_KEY_PAUSED,
+    MAL_HOT_KEY_READABLE,
+    MAL_HOT_KEY_FLAGS,
+    MAL_HOT_KEY_UNICODE_SETS,
+    MAL_HOT_KEY_MULTILINE,
+    MAL_HOT_KEY_IGNORE_CASE,
+    MAL_HOT_KEY_HAS_INDICES,
+    MAL_HOT_KEY_STICKY,
+    MAL_HOT_KEY_DOT_ALL,
+    MAL_HOT_KEY_GLOBAL,
+    MAL_HOT_KEY_UNICODE,
+    MAL_HOT_KEY_PUSH,
+    MAL_HOT_KEY_ERROR,
+    MAL_HOT_KEY_TO_JSON,
+    MAL_HOT_KEY_SEARCH,
+    MAL_HOT_KEY_COUNT,
+} MalHotIntrinsicKey;
+
 /**
  * Well-known values created during VM bootstrap that the VM and compiler can
  * reference directly, without going through the global object.

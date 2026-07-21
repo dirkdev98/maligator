@@ -2,10 +2,22 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #if MAL_PERF_STATS
+#define MAL_PERF_INTRINSIC_NAME_CAPACITY 2048
+#define MAL_PERF_INTRINSIC_NAME_MAX_LENGTH 63
+
+typedef struct MalPerfIntrinsicName {
+    u64 hash;
+    u64 calls;
+    u32 length;
+    byte name[MAL_PERF_INTRINSIC_NAME_MAX_LENGTH + 1];
+} MalPerfIntrinsicName;
+
 bool mal_perf_stats_enabled = false;
 MalPerfStats mal_perf_stats;
+static MalPerfIntrinsicName mal_perf_intrinsic_names[MAL_PERF_INTRINSIC_NAME_CAPACITY];
 
 static const char *const mal_perf_table_roles[MAL_PERF_TABLE_ROLE_COUNT] = {
     "object",
@@ -22,6 +34,36 @@ static const char *const mal_perf_shape_callers[MAL_PERF_SHAPE_CALLER_COUNT] = {
     "load_ic",
     "store_ic",
 };
+
+void mal_perf_intrinsic_name(const byte *name, usize length) {
+    if (!mal_perf_stats_enabled || length > MAL_PERF_INTRINSIC_NAME_MAX_LENGTH) {
+        return;
+    }
+
+    u64 hash = 1469598103934665603ULL;
+    for (usize i = 0; i < length; i++) {
+        hash ^= name[i];
+        hash *= 1099511628211ULL;
+    }
+
+    usize index = hash & (MAL_PERF_INTRINSIC_NAME_CAPACITY - 1);
+    for (usize probe = 0; probe < MAL_PERF_INTRINSIC_NAME_CAPACITY; probe++) {
+        MalPerfIntrinsicName *entry = &mal_perf_intrinsic_names[index];
+        if (entry->calls == 0) {
+            entry->hash = hash;
+            entry->length = (u32) length;
+            memcpy(entry->name, name, length);
+            entry->name[length] = '\0';
+            entry->calls = 1;
+            return;
+        }
+        if (entry->hash == hash && entry->length == length && memcmp(entry->name, name, length) == 0) {
+            entry->calls++;
+            return;
+        }
+        index = (index + 1) & (MAL_PERF_INTRINSIC_NAME_CAPACITY - 1);
+    }
+}
 
 static void mal_perf_stats_print(void) {
     fprintf(
@@ -50,12 +92,23 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
-        "[perf-intrinsic-stats] calls=%llu bytes=%llu hits=%llu misses=%llu\n",
+        "[perf-intrinsic-stats] calls=%llu bytes=%llu cache_hits=%llu cache_fills=%llu "
+        "hits=%llu misses=%llu\n",
         (unsigned long long) mal_perf_stats.intrinsic_ascii_calls,
         (unsigned long long) mal_perf_stats.intrinsic_ascii_bytes,
+        (unsigned long long) mal_perf_stats.intrinsic_ascii_cache_hits,
+        (unsigned long long) mal_perf_stats.intrinsic_ascii_cache_fills,
         (unsigned long long) mal_perf_stats.intrinsic_ascii_hits,
         (unsigned long long) mal_perf_stats.intrinsic_ascii_misses
     );
+    for (usize i = 0; i < MAL_PERF_INTRINSIC_NAME_CAPACITY; i++) {
+        const MalPerfIntrinsicName *entry = &mal_perf_intrinsic_names[i];
+        if (entry->calls == 0) continue;
+        fprintf(
+            stderr, "[perf-intrinsic-name] name=%s calls=%llu\n",
+            entry->name, (unsigned long long) entry->calls
+        );
+    }
     for (u32 i = 0; i < MAL_PERF_TABLE_ROLE_COUNT; i++) {
         const MalPerfTableStats *stats = &mal_perf_stats.tables[i];
         fprintf(
