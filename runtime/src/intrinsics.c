@@ -180,7 +180,7 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
         MAL_PERF_COUNT(intrinsic_ascii_misses);
         atom = mal_string_new_ascii(&vm->heap, name, length);
         MalKey atom_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
-        mal_table_upsert_entry(vm->atoms, atom_key);
+        (void) mal_table_upsert_entry(vm->atoms, atom_key, nullptr);
     }
 
     if (hot_key != MAL_HOT_KEY_COUNT) {

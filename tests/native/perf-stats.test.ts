@@ -105,6 +105,9 @@ describe("opt-in performance statistics", () => {
 			"name=length ",
 		);
 		expect(field(intrinsicName, "calls")).toBeGreaterThan(0);
+		const properties = reportLine(result.stderr, "[perf-property-stats]");
+		expect(field(properties, "ensure_calls")).toBeGreaterThan(0);
+		expect(field(properties, "ensure_inserts")).toBeGreaterThan(0);
 
 		for (const role of ["object", "atoms", "map"]) {
 			const table = reportLine(result.stderr, "[perf-table-stats]", `role=${role} `);

@@ -67,4 +67,26 @@ const dictionary = {};
 for (let index = 0; index < 40; index++) dictionary["key" + index] = index;
 checks.push(dictionary[["key", 39].join("")] === 39);
 
+const ensured = {};
+Object.defineProperty(ensured, "anchor", { value: 1 });
+for (let index = 0; index < 20; index++) {
+	Reflect.defineProperty(ensured, "ensured" + index, {
+		value: index,
+		writable: true,
+		enumerable: true,
+		configurable: true,
+	});
+}
+checks.push(
+	ensured.ensured19 === 19,
+	Reflect.ownKeys(ensured).at(-1) === "ensured19",
+	!Reflect.defineProperty(ensured, "anchor", { configurable: true }),
+	Object.getOwnPropertyDescriptor(ensured, "anchor").configurable === false,
+);
+Object.preventExtensions(ensured);
+checks.push(
+	!Reflect.defineProperty(ensured, "ghost", { value: 1 }),
+	!("ghost" in ensured),
+);
+
 console.log("RESULT " + checks.filter(Boolean).length + "/" + checks.length);

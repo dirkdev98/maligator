@@ -38,6 +38,18 @@ for (let i = 1; i < collisionKeys.length; i++) {
 		throw new Error("broken collision chain");
 }
 
+const dictionary = {};
+Object.defineProperty(dictionary, "anchor", { value: 1, configurable: true });
+for (let i = 0; i < 40; i++) {
+	Object.defineProperty(dictionary, "dict-" + i, {
+		value: i,
+		writable: true,
+		enumerable: true,
+		configurable: true,
+	});
+}
+if (dictionary["dict-39"] !== 39) throw new Error("broken dictionary insertion");
+
 const counter = new Counter(3);
 let total = 0;
 for (let i = 0; i < 2000; i++) {

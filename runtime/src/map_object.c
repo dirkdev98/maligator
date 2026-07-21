@@ -61,7 +61,7 @@ MalKey mal_map_key_from_value(MalValue value) {
 }
 
 void mal_map_object_set(MalMapObject *map, MalValue key, MalValue value) {
-    void *entry = mal_table_upsert_entry(map->entries, mal_map_key_from_value(key));
+    void *entry = mal_table_upsert_entry(map->entries, mal_map_key_from_value(key), nullptr);
     mal_table_entry_set_value(map->entries, entry, value);
     // Old map gaining a young key/value: remember it so the minor collector traces
     // its entries table. For a WeakMap this also re-registers it for the weak pass

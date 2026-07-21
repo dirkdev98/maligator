@@ -4,6 +4,7 @@
 
 #include "./gc.h"
 #include "./heap.h"
+#include "./perf_stats.h"
 
 static MalPropertyDesc *mal_property_entry_data(MalTable *table, void *entry) {
     MalPropertyDesc *desc = mal_table_entry_data(table, entry);
@@ -30,15 +31,35 @@ MalPropertyLookup mal_property_lookup(const MalTable *table, MalKey key) {
     return (MalPropertyLookup) {.present = true, .entry = lookup.entry, .desc = *desc};
 }
 
+MalPropertyEnsure mal_property_ensure(
+    MalTable *table, MalKey key, const MalPropertyDesc *initial
+) {
+    MAL_PERF_COUNT(property_ensure_calls);
+    bool inserted;
+    void *entry = mal_table_upsert_entry(table, key, &inserted);
+    MalPropertyDesc *current = mal_property_entry_data(table, entry);
+    if (inserted) {
+        *current = *initial;
+        MAL_PERF_COUNT(property_ensure_inserts);
+    } else {
+        MAL_PERF_COUNT(property_ensure_hits);
+    }
+    return (MalPropertyEnsure) {
+        .inserted = inserted,
+        .entry = entry,
+        .desc = *current,
+    };
+}
+
 void *mal_property_define(MalTable *table, MalKey key, const MalPropertyDesc *desc) {
-    void *entry = mal_table_upsert_entry(table, key);
+    void *entry = mal_table_upsert_entry(table, key, nullptr);
     *mal_property_entry_data(table, entry) = *desc;
 
     return entry;
 }
 
 void *mal_property_set_value(MalTable *table, MalKey key, MalValue value) {
-    void *entry = mal_table_upsert_entry(table, key);
+    void *entry = mal_table_upsert_entry(table, key, nullptr);
     MalPropertyDesc *desc = mal_property_entry_data(table, entry);
 
     desc->flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;

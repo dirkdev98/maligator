@@ -380,16 +380,24 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
     // already in dictionary mode): operate on the overflow table as before.
     mal_object_dictionarize(object);
     MalTable *table = mal_object_ensure_overflow(object);
-    MalPropertyLookup lookup = mal_property_lookup(table, key);
-
-    if (!lookup.present) {
-        if (!object->extensible) {
+    MalPropertyLookup lookup;
+    if (object->extensible) {
+        MalPropertyEnsure ensured = mal_property_ensure(table, key, desc);
+        if (ensured.inserted) {
+            mal_gc_card_desc(&object->header, desc); // old object -> young desc refs
+            mal_gc_card(&object->header, key.value); // ... and the (string/symbol) key
+            return MAL_DEFINE_OWN_APPLIED;
+        }
+        lookup = (MalPropertyLookup) {
+            .present = true,
+            .entry = ensured.entry,
+            .desc = ensured.desc,
+        };
+    } else {
+        lookup = mal_property_lookup(table, key);
+        if (!lookup.present) {
             return MAL_DEFINE_OWN_REJECTED;
         }
-        mal_property_define(table, key, desc);
-        mal_gc_card_desc(&object->header, desc); // old object -> young desc refs
-        mal_gc_card(&object->header, key.value); // ... and the (string/symbol) key
-        return MAL_DEFINE_OWN_APPLIED;
     }
 
     if (!mal_object_define_is_compatible(lookup.desc, *desc)) {

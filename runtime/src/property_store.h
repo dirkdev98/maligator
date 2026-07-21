@@ -33,10 +33,21 @@ typedef struct MalPropertyLookup {
     MalPropertyDesc desc;
 } MalPropertyLookup;
 
+typedef struct MalPropertyEnsure {
+    bool inserted;
+    void *entry;
+    MalPropertyDesc desc;
+} MalPropertyEnsure;
+
 /**
  * Look up a property descriptor stored for key.
  */
 MalPropertyLookup mal_property_lookup(const MalTable *table, MalKey key);
+
+/** Ensure a property exists, initializing its descriptor only when inserted. */
+MalPropertyEnsure mal_property_ensure(
+    MalTable *table, MalKey key, const MalPropertyDesc *initial
+);
 
 /**
  * Define or replace the descriptor stored for key.

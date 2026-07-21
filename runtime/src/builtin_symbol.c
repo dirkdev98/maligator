@@ -98,7 +98,7 @@ static MalValue mal_builtin_symbol_for(MalVm *vm, MalValue this_value, const Mal
     MalSymbol *symbol = mal_symbol_new(&vm->heap, key);
     symbol->registered = true;
 
-    void *entry = mal_table_upsert_entry(vm->symbol_registry, registry_key);
+    void *entry = mal_table_upsert_entry(vm->symbol_registry, registry_key, nullptr);
     mal_table_entry_set_value(vm->symbol_registry, entry, mal_value_from_symbol(symbol));
 
     return mal_value_from_symbol(symbol);

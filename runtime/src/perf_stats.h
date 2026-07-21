@@ -68,6 +68,10 @@ typedef struct MalPerfStats {
     u64 intrinsic_ascii_hits;
     u64 intrinsic_ascii_misses;
 
+    u64 property_ensure_calls;
+    u64 property_ensure_inserts;
+    u64 property_ensure_hits;
+
     MalPerfTableStats tables[MAL_PERF_TABLE_ROLE_COUNT];
     MalPerfShapeStats shapes[MAL_PERF_SHAPE_CALLER_COUNT];
     u64 shape_transition_calls;

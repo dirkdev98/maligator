@@ -109,6 +109,12 @@ static void mal_perf_stats_print(void) {
             entry->name, (unsigned long long) entry->calls
         );
     }
+    fprintf(
+        stderr, "[perf-property-stats] ensure_calls=%llu ensure_inserts=%llu ensure_hits=%llu\n",
+        (unsigned long long) mal_perf_stats.property_ensure_calls,
+        (unsigned long long) mal_perf_stats.property_ensure_inserts,
+        (unsigned long long) mal_perf_stats.property_ensure_hits
+    );
     for (u32 i = 0; i < MAL_PERF_TABLE_ROLE_COUNT; i++) {
         const MalPerfTableStats *stats = &mal_perf_stats.tables[i];
         fprintf(

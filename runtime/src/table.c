@@ -270,7 +270,7 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
     return (MalTableLookup) {.present = true, .entry = mal_table_handle((u32) entry)};
 }
 
-void *mal_table_upsert_entry(MalTable *table, MalKey key) {
+void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     MalPerfTableStats *stats = mal_perf_stats_enabled ? &mal_perf_stats.tables[table->role] : nullptr;
     if (stats != nullptr) {
         stats->upserts++;
@@ -280,6 +280,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key) {
         if (stats != nullptr) {
             stats->upsert_hits++;
         }
+        if (inserted != nullptr) *inserted = false;
         return mal_table_handle((u32) table->slots[index]);
     }
 
@@ -303,6 +304,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key) {
         stats->upsert_inserts++;
     }
 
+    if (inserted != nullptr) *inserted = true;
     return mal_table_handle(entry_index);
 }
 

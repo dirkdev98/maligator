@@ -70,8 +70,9 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key);
 
 /**
  * Insert a new entry for key, or return the existing live entry if present.
+ * When non-null, `inserted` reports which result was returned.
  */
-void *mal_table_upsert_entry(MalTable *table, MalKey key);
+void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted);
 
 /**
  * Delete a live entry if present.
