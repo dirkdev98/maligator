@@ -9,34 +9,38 @@
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "hex.h"
 #include "intrinsics.h"
+#include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
-#include "web_text_encoding.h"
+#include "utf8.h"
 #include "vm_ops.h"
 
 #define QS_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 
-static i32 qs_hex(byte value) {
-    if (value >= '0' && value <= '9') return value - '0';
-    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
-    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
-    return -1;
-}
-
 static MalValue qs_decode(MalVm *vm, MalString *source, usize start, usize length) {
     const c16 *units = mal_string_code_units(source) + start;
     usize utf8_length;
     byte *utf8 = mal_utf8_encode(units, length, &utf8_length);
+    if (utf8 == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     byte *decoded = malloc(utf8_length == 0 ? 1 : utf8_length);
+    if (decoded == nullptr) {
+        free(utf8);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     usize output = 0;
     for (usize i = 0; i < utf8_length; i++) {
         if (utf8[i] == '+') {
             decoded[output++] = ' ';
         } else if (utf8[i] == '%' && i + 2 < utf8_length) {
-            i32 high = qs_hex(utf8[i + 1]);
-            i32 low = qs_hex(utf8[i + 2]);
+            i32 high = mal_hex_decode_digit((u8) utf8[i + 1]);
+            i32 low = mal_hex_decode_digit((u8) utf8[i + 2]);
             if (high >= 0 && low >= 0) {
                 decoded[output++] = (byte) ((high << 4) | low);
                 i += 2;
@@ -48,13 +52,13 @@ static MalValue qs_decode(MalVm *vm, MalString *source, usize start, usize lengt
         }
     }
     free(utf8);
-    usize unit_count;
-    c16 *decoded_units = mal_utf8_decode(decoded, output, &unit_count);
+    MalString *string = mal_string_from_utf8(&vm->heap, decoded, output);
     free(decoded);
-    MalValue value = mal_value_from_string(
-        mal_string_new_copy(&vm->heap, decoded_units, unit_count));
-    free(decoded_units);
-    return value;
+    if (string == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(string);
 }
 
 static MalValue qs_parse(
@@ -91,8 +95,16 @@ static MalValue qs_parse(
         usize equal = start;
         while (equal < end && units[equal] != '=') equal++;
         roots[1] = qs_decode(vm, source, start, equal - start);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_gc_unroot(&root);
+            return mal_value_new_undefined();
+        }
         roots[2] = qs_decode(vm, source, equal < end ? equal + 1 : end,
                              end - (equal < end ? equal + 1 : end));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_gc_unroot(&root);
+            return mal_value_new_undefined();
+        }
         MalKey key = {.kind = MAL_KEY_STRING, .value = roots[1]};
         MalPropertyLookup prior = mal_object_get_own(mal_value_to_object(roots[0]), key);
         if (!prior.present) {
@@ -101,17 +113,16 @@ static MalValue qs_parse(
         } else if (mal_value_is_array_object(prior.desc.value)) {
             MalArrayObject *array = mal_value_to_array_object(prior.desc.value);
             mal_array_object_store(array,
-                (MalKey) {.kind = MAL_KEY_INDEX,
-                          .value = mal_value_from_i32((i32) mal_array_object_length(array))},
+                mal_key_index((i32) mal_array_object_length(array)),
                 roots[2]);
         } else {
             MalArrayObject *array = mal_intrinsic_new_dense_array(vm, 2);
             MalValue array_value = mal_value_from_array_object(array);
             mal_array_object_store(array,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)},
+                mal_key_index(0),
                 prior.desc.value);
             mal_array_object_store(array,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, roots[2]);
+                mal_key_index(1), roots[2]);
             MalPropertyDesc desc = {.flags = QS_VISIBLE, .value = array_value};
             mal_object_define_own(mal_value_to_object(roots[0]), key, &desc);
         }
@@ -122,20 +133,6 @@ static MalValue qs_parse(
     MalValue result = roots[0];
     mal_gc_unroot(&root);
     return result;
-}
-
-static void qs_publish(
-    MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module) {
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = module;
-        } else {
-            MalPropertyLookup found = mal_object_get_own(
-                mal_value_to_object(module),
-                mal_intrinsic_string_key(vm, (const byte *) slots[i].name));
-            if (found.present) vm->globals[slots[i].slot] = found.desc.value;
-        }
-    }
 }
 
 void mal_host_install_node_querystring(
@@ -154,7 +151,7 @@ void mal_host_install_node_querystring(
         vm->intrinsics[MAL_INTRINSIC_NODE_QUERYSTRING_MODULE] = module;
         mal_gc_unroot(&root);
     }
-    qs_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, slots, count, module);
 }
 
 #endif /* MAL_NODE */

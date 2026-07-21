@@ -880,13 +880,13 @@ static MalValue abort_signal_static_any(
             break;
         }
         mal_array_object_store(mal_value_to_array_object(roots[1]),
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(count++)}, roots[2]);
+            mal_key_index(count++), roots[2]);
     }
 
     if (valid) {
         for (i32 i = 0; i < count; i++) {
             mal_vm_get_property(vm, roots[1],
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)}, &roots[2]);
+                mal_key_index(i), &roots[2]);
             MalEventTargetObject *source = abort_signal_this(roots[2]);
             if (!mal_value_is_undefined(source->abort_reason)) {
                 mal_abort_signal_run(vm, roots[0], source->abort_reason);
@@ -896,7 +896,7 @@ static MalValue abort_signal_static_any(
 
         for (i32 i = 0; i < count; i++) {
             mal_vm_get_property(vm, roots[1],
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)}, &roots[2]);
+                mal_key_index(i), &roots[2]);
             abort_signal_add_dependent(abort_signal_this(roots[2]), roots[0]);
         }
     }

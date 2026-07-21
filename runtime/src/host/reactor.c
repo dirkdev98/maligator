@@ -7,6 +7,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "monotonic_clock.h"
+
 #if defined(__APPLE__) || defined(__FreeBSD__)
 #define MAL_REACTOR_KQUEUE 1
 #include <sys/event.h>
@@ -41,9 +43,7 @@ struct MalReactorToken {
 };
 
 i64 mal_reactor_now_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (i64) ts.tv_sec * 1000000000 + (i64) ts.tv_nsec;
+    return (i64) mal_monotonic_now_ns();
 }
 
 /* ---------------------------------------------------------------------------

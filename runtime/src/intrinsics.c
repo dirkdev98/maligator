@@ -38,6 +38,7 @@
 #include "builtin_shadow_realm.h"
 #endif
 #include "builtin_uri.h"
+#include "gc.h"
 #include "heap_string.h"
 #include "table.h"
 #include "typed_array_object.h"
@@ -117,6 +118,63 @@ MalPropertyDesc mal_intrinsic_data_desc(MalValue value, MalPropertyFlags flags) 
     };
 }
 
+MalPropertyDesc mal_intrinsic_accessor_desc(
+    MalValue getter, MalValue setter, MalPropertyFlags flags) {
+    return (MalPropertyDesc) {
+        .flags = flags | MAL_PROPERTY_ACCESSOR,
+        .value = mal_value_new_undefined(),
+        .getter = getter,
+        .setter = setter,
+    };
+}
+
+void mal_intrinsic_define_accessor_n(
+    MalVm *vm,
+    MalObject *object,
+    MalKey key,
+    const byte *getter_name,
+    i32 getter_length,
+    MalNativeFunctionCallback getter,
+    const byte *setter_name,
+    i32 setter_length,
+    MalNativeFunctionCallback setter,
+    MalPropertyFlags flags
+) {
+    MalValue accessors[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, accessors, countof(accessors));
+    MalObject *function_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    if (getter != nullptr) {
+        accessors[0] = mal_value_from_native_function_object(
+            mal_native_function_object_new_arity(
+                &vm->heap, function_prototype, mal_intrinsic_ascii(vm, getter_name),
+                getter_length, getter));
+    }
+    if (setter != nullptr) {
+        accessors[1] = mal_value_from_native_function_object(
+            mal_native_function_object_new_arity(
+                &vm->heap, function_prototype, mal_intrinsic_ascii(vm, setter_name),
+                setter_length, setter));
+    }
+    MalPropertyDesc desc = mal_intrinsic_accessor_desc(accessors[0], accessors[1], flags);
+    mal_object_define_own(object, key, &desc);
+    mal_gc_unroot(&root);
+}
+
+void mal_intrinsic_define_getter(
+    MalVm *vm,
+    MalObject *object,
+    const byte *name,
+    const byte *getter_name,
+    MalNativeFunctionCallback getter,
+    MalPropertyFlags flags
+) {
+    mal_intrinsic_define_accessor_n(
+        vm, object, mal_intrinsic_string_key(vm, name), getter_name, 0, getter,
+        nullptr, 0, nullptr, flags);
+}
+
 void mal_intrinsic_define_data(MalVm *vm, MalObject *object, const byte *name, MalValue value, MalPropertyFlags flags) {
     MalPropertyDesc desc = mal_intrinsic_data_desc(value, flags);
     mal_object_define_own(object, mal_intrinsic_string_key(vm, name), &desc);
@@ -148,18 +206,10 @@ MalValue mal_intrinsic_species_getter(MalVm *vm, MalValue this_value, const MalV
 }
 
 void mal_intrinsic_define_species(MalVm *vm, MalObject *constructor) {
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = mal_value_from_native_function_object(mal_native_function_object_new(
-            &vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, "get [Symbol.species]"),
-            mal_intrinsic_species_getter
-        )),
-        .setter = mal_value_new_undefined(),
-    };
-    mal_object_define_own(constructor, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_SPECIES), &desc);
+    mal_intrinsic_define_accessor_n(
+        vm, constructor, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_SPECIES),
+        "get [Symbol.species]", 0, mal_intrinsic_species_getter,
+        nullptr, 0, nullptr, MAL_PROPERTY_CONFIGURABLE);
 }
 
 MalObject *mal_intrinsic_new_object(MalVm *vm) {

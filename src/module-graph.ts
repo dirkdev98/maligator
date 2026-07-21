@@ -2,6 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "./build-config.ts";
+import { traverseEstree } from "./estree-traversal.ts";
 import type { HostModuleSpec } from "./host-modules.ts";
 import {
 	canonicalNodeBuiltinId,
@@ -389,49 +390,36 @@ function extractDependencies(
 ): Array<ExtractedDependency> {
 	const dependencies: Array<ExtractedDependency> = [];
 
-	const visit = (node: unknown) => {
-		if (Array.isArray(node)) {
-			for (const item of node) {
-				visit(item);
-			}
-			return;
-		}
-
-		if (!node || typeof node !== "object" || !("type" in node)) {
-			return;
-		}
-
-		const typed = node as ESTree.Node;
-
-		switch (typed.type) {
+	traverseEstree(ast.body, (node) => {
+		switch (node.type) {
 			case "ImportDeclaration":
-				dependencies.push({ specifier: literalString(typed.source), kind: "import" });
+				dependencies.push({ specifier: literalString(node.source), kind: "import" });
 				break;
 			case "ExportNamedDeclaration":
 				// Only re-exports carry a source (`export { x } from "y"`).
-				if (typed.source) {
-					dependencies.push({ specifier: literalString(typed.source), kind: "export" });
+				if (node.source) {
+					dependencies.push({ specifier: literalString(node.source), kind: "export" });
 				}
 				break;
 			case "ExportAllDeclaration":
-				dependencies.push({ specifier: literalString(typed.source), kind: "export" });
+				dependencies.push({ specifier: literalString(node.source), kind: "export" });
 				break;
 			case "ImportExpression":
-				dependencies.push({ specifier: literalString(typed.source), kind: "dynamic" });
+				dependencies.push({ specifier: literalString(node.source), kind: "dynamic" });
 				break;
 			case "CallExpression": {
 				// `require("x")` in a CommonJS module. A naive callee-name match: a
 				// shadowed/reassigned `require` is a rare edge case refined later.
 				// meriyah types CallExpression.callee as `any`, so narrow explicitly.
-				const callee = typed.callee as ESTree.Node;
+				const callee = node.callee as ESTree.Node;
 				if (
 					goal === "cjs" &&
 					callee.type === "Identifier" &&
 					callee.name === "require" &&
-					typed.arguments.length === 1
+					node.arguments.length === 1
 				) {
 					dependencies.push({
-						specifier: literalString(typed.arguments[0]),
+						specifier: literalString(node.arguments[0]),
 						kind: "require",
 					});
 				}
@@ -440,13 +428,7 @@ function extractDependencies(
 			default:
 				break;
 		}
-
-		for (const key of Object.keys(typed)) {
-			visit((typed as unknown as Record<string, unknown>)[key]);
-		}
-	};
-
-	visit(ast.body);
+	});
 	return dependencies;
 }
 

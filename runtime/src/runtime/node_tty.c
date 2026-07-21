@@ -165,10 +165,10 @@ static MalValue tty_get_window_size(
     mal_gc_root(&root, &result, 1);
     MalArrayObject *array = mal_value_to_array_object(result);
     mal_array_object_store(array,
-        (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)},
+        mal_key_index(0),
         size.available ? mal_value_from_i32(size.columns) : mal_value_new_undefined());
     mal_array_object_store(array,
-        (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)},
+        mal_key_index(1),
         size.available ? mal_value_from_i32(size.rows) : mal_value_new_undefined());
     mal_gc_unroot(&root);
     return result;

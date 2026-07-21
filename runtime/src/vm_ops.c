@@ -7,6 +7,7 @@
 #include "array_object.h"
 #include "async_function.h"
 #include "bound_function_object.h"
+#include "bigint128.h"
 #include "builtin_array.h"
 #include "builtin_async_generator.h"
 #include "builtin_async_iterator.h"
@@ -105,7 +106,7 @@ bool mal_vm_string_is_canonical_numeric_index(MalVm *vm, MalString *string) {
 static bool mal_vm_string_to_property_key(MalValue value, MalKey *key_out) {
     i32 index = 0;
     if (mal_vm_string_to_array_index(mal_value_to_string(value), &index)) {
-        *key_out = (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(index)};
+        *key_out = mal_key_index(index);
         return true;
     }
 
@@ -129,7 +130,7 @@ bool mal_vm_value_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
 // builtins) observe correct coercion. Returns false on an abrupt completion.
 bool mal_vm_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
     if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
-        *key_out = (MalKey) {.kind = MAL_KEY_INDEX, .value = value};
+        *key_out = mal_key_index(mal_value_to_i32(value));
         return true;
     }
     if (mal_value_is_string(value)) {
@@ -221,11 +222,11 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
         MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(object_value);
         for (i32 i = 0; i < ns->export_count; i++) {
             mal_array_object_store(keys,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_key_index(count++),
                 mal_value_from_string(ns->exports[i].name));
         }
         mal_array_object_store(keys,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+            mal_key_index(count),
             mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG).value);
         return true;
     }
@@ -236,7 +237,7 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
         u32 length = mal_typed_array_object_length(mal_value_to_typed_array_object(object_value));
         for (u32 index = 0; index < length; index++) {
             mal_array_object_store(keys,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_key_index(count++),
                 mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) index))));
         }
     }
@@ -249,7 +250,7 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
         string_length = (u32) mal_value_to_i32(string_exotic.value);
         for (u32 index = 0; index < string_length; index++) {
             mal_array_object_store(keys,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_key_index(count++),
                 mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) index))));
         }
     }
@@ -275,28 +276,28 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
         }
         if (string_length_pending && key.kind != MAL_KEY_INDEX) {
             mal_array_object_store(keys,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_key_index(count++),
                 mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
             string_length_pending = false;
         }
         if (length_pending && key.kind != MAL_KEY_INDEX) {
             mal_array_object_store(keys,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_key_index(count++),
                 mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
             length_pending = false;
         }
         mal_array_object_store(keys,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+            mal_key_index(count++),
             mal_vm_own_key_value(vm, key));
     }
     if (length_pending) {
         mal_array_object_store(keys,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+            mal_key_index(count),
             mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
     }
     if (string_length_pending) {
         mal_array_object_store(keys,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+            mal_key_index(count),
             mal_value_from_string(mal_intrinsic_ascii(vm, "length")));
     }
     return true;
@@ -860,7 +861,7 @@ static MalArrayObject *mal_vm_build_template_string_array(MalVm *vm, const i32 *
         MalValue element = indices[i] < 0
                                ? mal_value_new_undefined()
                                : mal_value_from_string(&vm->definition->string_constants[indices[i]]);
-        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)};
+        MalKey key = mal_key_index(i);
         MalPropertyDesc desc = {.flags = MAL_PROPERTY_ENUMERABLE, .value = element};
         mal_object_define_own(&array->object, key, &desc);
     }
@@ -1307,7 +1308,7 @@ MalValue mal_create_arguments_object(
     for (i32 i = 0; i < arg_count; i++) {
         mal_object_set(
             arguments,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)},
+            mal_key_index(i),
             args[i]
         );
     }
@@ -2000,20 +2001,6 @@ void mal_op_catch(MalCallable *callable, const MalInstruction *instruction) {
     callable->vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
 
-// BigInt `<<` semantics: a positive count shifts left (a * 2^count), a negative
-// count is an arithmetic right shift. Beyond the 128-bit backing width the value
-// saturates until BigInt uses arbitrary-precision digits.
-static i128 mal_vm_bigint_shift_left(i128 value, i128 count) {
-    if (count >= 0) {
-        return count >= 128 ? 0 : value << count;
-    }
-    i128 right = -count;
-    if (right >= 128) {
-        return value < 0 ? -1 : 0;
-    }
-    return value >> right;
-}
-
 static bool mal_vm_op_is_bigint_arith(MalBinaryOp op) {
     switch (op) {
         case MAL_BIN_ADD:
@@ -2054,54 +2041,45 @@ static MalValue mal_vm_bigint_arith(MalVm *vm, MalBinaryOp op, MalValue left, Ma
 
     switch (op) {
         case MAL_BIN_ADD:
-            result = a + b;
+            result = mal_bigint128_add(a, b);
             break;
         case MAL_BIN_SUB:
-            result = a - b;
+            result = mal_bigint128_subtract(a, b);
             break;
         case MAL_BIN_MUL:
-            result = a * b;
+            result = mal_bigint128_multiply(a, b);
             break;
         case MAL_BIN_DIV:
         case MAL_BIN_REM:
-            if (b == 0) {
+            if (!(op == MAL_BIN_DIV
+                    ? mal_bigint128_divide(a, b, &result)
+                    : mal_bigint128_remainder(a, b, &result))) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Division by zero");
                 return mal_value_new_undefined();
             }
-            result = op == MAL_BIN_DIV ? a / b : a % b;
             break;
         case MAL_BIN_POW: {
             if (b < 0) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Exponent must be non-negative");
                 return mal_value_new_undefined();
             }
-            // Square-and-multiply so a huge exponent can't spin (wraps at 128 bits).
-            i128 base = a;
-            i128 exponent = b;
-            result = 1;
-            while (exponent > 0) {
-                if (exponent & 1) {
-                    result *= base;
-                }
-                base *= base;
-                exponent >>= 1;
-            }
+            result = mal_bigint128_exponentiate(a, b);
             break;
         }
         case MAL_BIN_BIT_AND:
-            result = a & b;
+            result = mal_bigint128_bit_and(a, b);
             break;
         case MAL_BIN_BIT_OR:
-            result = a | b;
+            result = mal_bigint128_bit_or(a, b);
             break;
         case MAL_BIN_BIT_XOR:
-            result = a ^ b;
+            result = mal_bigint128_bit_xor(a, b);
             break;
         case MAL_BIN_SHL:
-            result = mal_vm_bigint_shift_left(a, b);
+            result = mal_bigint128_shift_left(a, b);
             break;
         case MAL_BIN_SHR:
-            result = mal_vm_bigint_shift_left(a, -b);
+            result = mal_bigint128_shift_right(a, b);
             break;
         case MAL_BIN_USHR:
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -2381,7 +2359,8 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
             return mal_value_new_boolean(!mal_value_is_truthy(value));
         case MAL_UNARY_NEGATE:
             if (mal_value_is_bigint(value)) {
-                return mal_value_from_bigint(mal_bigint_new(&vm->heap, -mal_bigint_value(mal_value_to_bigint(value))));
+                return mal_value_from_bigint(mal_bigint_new(
+                    &vm->heap, mal_bigint128_negate(mal_bigint_value(mal_value_to_bigint(value)))));
             }
             if (mal_value_is_int32(value) && mal_value_to_i32(value) != 0 && mal_value_to_i32(value) != INT32_MIN) {
                 return mal_value_from_i32(-mal_value_to_i32(value));
@@ -2397,7 +2376,8 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
             return mal_ops_number_value(mal_ops_to_number(value));
         case MAL_UNARY_BIT_NOT:
             if (mal_value_is_bigint(value)) {
-                return mal_value_from_bigint(mal_bigint_new(&vm->heap, ~mal_bigint_value(mal_value_to_bigint(value))));
+                return mal_value_from_bigint(mal_bigint_new(
+                    &vm->heap, mal_bigint128_bit_not(mal_bigint_value(mal_value_to_bigint(value)))));
             }
             return mal_ops_bit_xor(value, mal_value_from_i32(-1));
         case MAL_UNARY_TYPEOF: {
@@ -2934,7 +2914,7 @@ static bool mal_vm_array_set_length(MalVm *vm, MalArrayObject *array, MalValue v
     if (!mal_vm_to_number(vm, value, &number_length)) {
         return false;
     }
-    u32 new_length = (u32) number_length;
+    u32 new_length = mal_ops_number_to_uint32(number_length);
     if ((f64) new_length != number_length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
         return false;
@@ -4105,7 +4085,7 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
         for (usize i = 0; i < mal_string_length(string); i++) {
             mal_array_object_store(
                 result,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+                mal_key_index(count),
                 mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) i)))
             );
             count++;
@@ -4119,7 +4099,7 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
         for (i32 i = 0; i < ns->export_count; i++) {
             mal_array_object_store(
                 result,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+                mal_key_index(count),
                 mal_value_from_string(ns->exports[i].name)
             );
             count++;
@@ -4154,7 +4134,7 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
         u32 key_count = mal_array_object_length(keys);
         for (u32 i = 0; i < key_count; i++) {
             MalValue key_value;
-            if (!mal_vm_get_property(vm, keys_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &key_value)) {
+            if (!mal_vm_get_property(vm, keys_value, mal_key_index(i), &key_value)) {
                 return mal_value_from_array_object(result);
             }
             if (!mal_value_is_string(key_value)) {
@@ -4176,7 +4156,7 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
             if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
                 continue;
             }
-            mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)}, key_value);
+            mal_array_object_store(result, mal_key_index(count), key_value);
             count++;
         }
         MalValue proto;
@@ -4202,14 +4182,14 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
             )) {
             u32 string_length = (u32) mal_value_to_i32(string_exotic.value);
             for (u32 i = 0; i < string_length; i++) {
-                MalKey index_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+                MalKey index_key = mal_key_index(i);
                 if (mal_object_get_own(seen, index_key).present) {
                     continue;
                 }
                 mal_object_define_own(seen, index_key, &marker);
                 mal_array_object_store(
                     result,
-                    (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+                    mal_key_index(count),
                     mal_vm_for_in_key_string(vm, index_key)
                 );
                 count++;
@@ -4225,14 +4205,14 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
         if (current->header.type == MAL_HEAP_TYPED_ARRAY_OBJECT) {
             u32 typed_length = mal_typed_array_object_length((MalTypedArrayObject *) current);
             for (u32 i = 0; i < typed_length; i++) {
-                MalKey index_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+                MalKey index_key = mal_key_index(i);
                 if (mal_object_get_own(seen, index_key).present) {
                     continue;
                 }
                 mal_object_define_own(seen, index_key, &marker);
                 mal_array_object_store(
                     result,
-                    (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+                    mal_key_index(count),
                     mal_vm_for_in_key_string(vm, index_key)
                 );
                 count++;
@@ -4261,7 +4241,7 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
 
             mal_array_object_store(
                 result,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
+                mal_key_index(count),
                 mal_vm_for_in_key_string(vm, key)
             );
             count++;
@@ -4608,7 +4588,7 @@ MalValue mal_create_rest_arguments(MalVm *vm, const MalValue *args, i32 arg_coun
     for (i32 i = 0; i < count; i++) {
         mal_object_set(
             (MalObject *) rest,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)},
+            mal_key_index(i),
             args[start + i]
         );
     }
@@ -4658,7 +4638,7 @@ MalValue mal_array_rest(MalVm *vm, MalValue source, u32 start) {
 
         mal_object_set(
             (MalObject *) rest,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)},
+            mal_key_index(i),
             element
         );
     }
@@ -4726,7 +4706,7 @@ MalValue mal_vm_op_copy_data_properties(
         // properties.
         MalString *string = mal_value_to_string(source);
         for (usize i = 0; i < mal_string_length(string); i++) {
-            MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+            MalKey key = mal_key_index(i);
             if (excluded != nullptr && mal_object_get_own(excluded, key).present) {
                 continue;
             }
@@ -4804,7 +4784,7 @@ void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue 
                 mal_value_from_string(mal_string_new_slice(&vm->heap, string, i, 1)),
                 MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
             );
-            mal_object_define_own(target, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &desc);
+            mal_object_define_own(target, mal_key_index(i), &desc);
         }
         return;
     }

@@ -239,7 +239,7 @@ void mal_object_array_deoptimize(MalArrayObject *array) {
             continue;
         }
         MalPropertyDesc desc = mal_object_data_desc(buffer[i], MAL_DEFAULT_DATA_FLAGS);
-        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+        MalKey key = mal_key_index(i);
         mal_object_define_own(&array->object, key, &desc);
     }
     mal_gc_unroot(&span);

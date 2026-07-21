@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "n
 import * as path from "node:path";
 import { BuildConfigError } from "./build-config.ts";
 import type { AssetInclusion } from "./build-config.ts";
+import { legacyLocaleNameComparator, walkDirectoryTree } from "./file-tree.ts";
 
 export const ASSET_FORMAT_VERSION = "1";
 export const ASSET_COMPLETION_MARKER = ".maligator-asset-complete";
@@ -126,34 +127,25 @@ function includeDirectory(
 	const matched = patterns.map(() => false);
 	const files: Array<IncludedAssetFile> = [];
 
-	const walk = (directory: string, relativeSegments: Array<string>): void => {
-		const entries = readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
-			a.name.localeCompare(b.name),
-		);
-		for (const entry of entries) {
-			const nextSegments = [...relativeSegments, entry.name];
-			const fullPath = path.join(directory, entry.name);
-			if (entry.isDirectory()) {
-				walk(fullPath, nextSegments);
-				continue;
-			}
-			if (!entry.isFile()) {
-				assetError(name, `unsupported non-regular file '${nextSegments.join("/")}'`);
+	walkDirectoryTree(
+		sourcePath,
+		({ dirent, fullPath, relativeSegments }) => {
+			if (!dirent.isFile()) {
+				assetError(name, `unsupported non-regular file '${relativeSegments.join("/")}'`);
 			}
 			for (let index = 0; index < patterns.length; index++) {
-				if (matchPath(patterns[index]!, nextSegments)) matched[index] = true;
+				if (matchPath(patterns[index]!, relativeSegments)) matched[index] = true;
 			}
-			if (patterns.some((pattern) => matchPath(pattern, nextSegments))) {
-				const relativePath = nextSegments.join("/");
+			if (patterns.some((pattern) => matchPath(pattern, relativeSegments))) {
+				const relativePath = relativeSegments.join("/");
 				if (relativePath === ASSET_COMPLETION_MARKER) {
 					assetError(name, `path '${ASSET_COMPLETION_MARKER}' is reserved`);
 				}
 				files.push(fileRow(fullPath, relativePath, stagingDirectory));
 			}
-		}
-	};
-
-	walk(sourcePath, []);
+		},
+		legacyLocaleNameComparator,
+	);
 	for (let index = 0; index < matched.length; index++) {
 		if (!matched[index]) {
 			assetError(name, `include pattern '${config.include[index]}' matched no files`);

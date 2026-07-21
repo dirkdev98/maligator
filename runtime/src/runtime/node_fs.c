@@ -18,7 +18,7 @@
 #include "posix_fs.h" // host layer: the POSIX syscalls + errno results
 #include "property_store.h"
 #include "table.h"
-#include "web_text_encoding.h"
+#include "utf8.h"
 #include "typed_array_object.h"
 #include "value.h"
 #include "value_ops.h"
@@ -38,11 +38,12 @@ static const MalPropertyFlags NODE_FS_VISIBLE =
  * --------------------------------------------------------------------------- */
 
 static MalValue node_fs_string_from_utf8(MalVm *vm, const byte *bytes, usize len) {
-    usize count;
-    c16 *units = mal_utf8_decode(bytes, len, &count);
-    MalValue s = mal_value_from_string(mal_string_new_copy(&vm->heap, units, count));
-    free(units);
-    return s;
+    MalString *string = mal_string_from_utf8(&vm->heap, bytes, len);
+    if (string == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(string);
 }
 
 static MalValue node_fs_uint8_array(MalVm *vm, const byte *bytes, usize len) {
@@ -80,19 +81,19 @@ static char *node_fs_path_cstr(MalVm *vm, MalValue value) {
     if (!mal_vm_to_string(vm, value, &str)) {
         return nullptr;
     }
-    const c16 *units = mal_string_code_units(str);
-    usize unit_len = mal_string_length(str);
-    for (usize i = 0; i < unit_len; i++) {
-        if (units[i] == 0) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                (const byte *) "filesystem path must not contain null bytes");
-            return nullptr;
-        }
-    }
     usize len;
-    byte *bytes = mal_utf8_encode(units, unit_len, &len);
-    bytes[len] = '\0'; // mal_utf8_encode over-allocates (len*3+1), so the NUL always fits
-    return (char *) bytes;
+    char *bytes;
+    MalUtf8CStringResult result = mal_string_to_utf8_c_string(str, &bytes, &len);
+    if (result == MAL_UTF8_C_STRING_EMBEDDED_NUL) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "filesystem path must not contain null bytes");
+        return nullptr;
+    }
+    if (result == MAL_UTF8_C_STRING_ALLOCATION_FAILED) {
+        mal_vm_throw_allocation_error(vm);
+        return nullptr;
+    }
+    return bytes;
 }
 
 /* Build a string value, root it across the define, and set it as an enumerable own
@@ -143,10 +144,6 @@ static void node_fs_throw_errno_with_dest(
 
 static void node_fs_throw_errno(MalVm *vm, int err, const char *syscall, const char *path) {
     node_fs_throw_errno_with_dest(vm, err, syscall, path, nullptr);
-}
-
-static MalKey node_fs_index_key(u32 index) {
-    return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
 }
 
 /* The prototype (Stats / Dirent) carried in the active function's slot 0. Falls
@@ -294,7 +291,12 @@ static MalValue node_fs_write_file_sync(
             free(path);
             return mal_value_new_undefined();
         }
-        owned = mal_utf8_encode(mal_string_code_units(str), mal_string_length(str), &len);
+        owned = mal_string_to_utf8(str, &len);
+        if (owned == nullptr) {
+            free(path);
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
         bytes = owned;
     } else {
         free(path);
@@ -386,7 +388,7 @@ static MalValue node_fs_readdir_sync(
         } else {
             element = held[0];
         }
-        mal_object_set(array_obj, node_fs_index_key((u32) i), element);
+        mal_object_set(array_obj, mal_key_index(i), element);
         mal_gc_unroot(&rs);
     }
     mal_gc_unroot(&array_rs);

@@ -126,4 +126,48 @@ describe("wire loader side-data validation", () => {
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status).toBe(0);
 	});
+
+	it("loads unaligned fixed-width little-endian scalar fields", () => {
+		const scalarDefinition: VmDefinition = {
+			...definition,
+			// A two-byte global-count varint places the following u16/u64/fixed-u32
+			// payloads at deliberately unaligned offsets.
+			globalCount: 128,
+			stringConstants: [[0xd800, 0xabcd]],
+			bigintConstants: [-0x0123456789abcdef0123456789abcdefn],
+			literalTemplateData: [0x01234567, 0x89abcdef],
+			functions: [
+				{
+					...fn,
+					registerCount: 2,
+					instructions: [
+						{ opcode: "CREATE_F64", dst: 0, value: 6.25 },
+						{ opcode: "CREATE_F64", dst: 1, value: -0 },
+						{ opcode: "RETURN", value: 1 },
+					],
+				},
+			],
+		};
+		const wirePath = path.join(directory, "unaligned-scalars.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(scalarDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], {
+			encoding: "utf8",
+			env: { ...process.env, MAL_DUMP_LOADED_SCALARS: "1" },
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout).toBe(
+			[
+				"string[0] d800 abcd",
+				"bigint[0] fedcba9876543210fedcba9876543211",
+				"literal[0] 01234567",
+				"literal[1] 89abcdef",
+				"f64[0:0] 4019000000000000",
+				"f64[0:1] 8000000000000000",
+				"",
+			].join("\n"),
+		);
+	});
 });

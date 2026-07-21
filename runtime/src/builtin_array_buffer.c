@@ -6,13 +6,9 @@
 
 #include "array_buffer_object.h"
 #include "object_ops.h"
+#include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
-
-// Largest value ToIndex accepts (2^53 - 1). Allocation imposes the tighter
-// UINT32_MAX cap separately, so a too-large-but-valid index still flows through
-// prototype resolution before the data block fails.
-#define MAL_MAX_SAFE_INTEGER 9007199254740991.0
 
 // ToIndex: full ToIntegerOrInfinity coercion (runs valueOf/toString, throws
 // TypeError on Symbol/BigInt) followed by the 0 <= index <= 2^53-1 range check.
@@ -26,13 +22,8 @@ static bool mal_array_buffer_to_index(MalVm *vm, MalValue value, f64 *out) {
     if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
-    // ToIntegerOrInfinity: NaN -> 0, otherwise truncate toward zero.
-    if (isnan(number)) {
-        number = 0;
-    } else {
-        number = trunc(number);
-    }
-    if (number < 0 || number > MAL_MAX_SAFE_INTEGER) {
+    number = mal_ops_number_to_integer_or_infinity(number);
+    if (number < 0 || number > MAL_NUMBER_MAX_SAFE_INTEGER) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array buffer length");
         return false;
     }
@@ -212,17 +203,7 @@ static bool mal_array_buffer_clamp(MalVm *vm, MalValue value, u32 length, u32 fa
     if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
-    if (isnan(number)) {
-        number = 0;
-    } else {
-        number = trunc(number);
-    }
-    if (number < 0) {
-        number += length;
-        *out = number < 0 ? 0 : (u32) number;
-    } else {
-        *out = number > length ? length : (u32) number;
-    }
+    *out = (u32) mal_ops_number_clamp_relative(number, (f64) length);
     return true;
 }
 
@@ -540,46 +521,12 @@ static MalValue mal_builtin_array_buffer_slice_to_immutable(MalVm *vm, MalValue 
     return mal_value_from_array_buffer_object(result);
 }
 
-// @@species getter returns the receiver (the default behavior).
-static MalValue mal_builtin_array_buffer_species_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
-    (void) args;
-    (void) arg_count;
-    (void) new_target;
-    return this_value;
-}
-
 static void mal_builtin_array_buffer_define_getter(MalVm *vm, MalObject *object, const byte *name, MalNativeFunctionCallback getter) {
     // Built-in accessor functions have "get " prepended to the property name.
     byte get_name[64];
     snprintf((char *) get_name, sizeof(get_name), "get %s", name);
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = mal_value_from_native_function_object(mal_native_function_object_new(
-            &vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, get_name),
-            getter
-        )),
-        .setter = mal_value_new_undefined(),
-    };
-    mal_object_define_own(object, mal_intrinsic_string_key(vm, name), &desc);
-}
-
-static void mal_builtin_array_buffer_define_species(MalVm *vm, MalObject *constructor) {
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = mal_value_from_native_function_object(mal_native_function_object_new(
-            &vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, "get [Symbol.species]"),
-            mal_builtin_array_buffer_species_getter
-        )),
-        .setter = mal_value_new_undefined(),
-    };
-    mal_object_define_own(constructor, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_SPECIES), &desc);
+    mal_intrinsic_define_getter(
+        vm, object, name, get_name, getter, MAL_PROPERTY_CONFIGURABLE);
 }
 
 // ---- SharedArrayBuffer.prototype accessors/methods (shared brand) ----
@@ -719,7 +666,7 @@ void mal_builtin_array_buffer_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, (MalObject *) constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_method_n(vm, (MalObject *) constructor, "isView", 1, mal_builtin_array_buffer_is_view);
-    mal_builtin_array_buffer_define_species(vm, (MalObject *) constructor);
+    mal_intrinsic_define_species(vm, (MalObject *) constructor);
 
     mal_builtin_array_buffer_define_getter(vm, prototype, "byteLength", mal_builtin_array_buffer_byte_length_getter);
     mal_builtin_array_buffer_define_getter(vm, prototype, "maxByteLength", mal_builtin_array_buffer_max_byte_length_getter);
@@ -745,7 +692,7 @@ void mal_builtin_array_buffer_install(MalVm *vm) {
 
     mal_intrinsic_define_data(vm, (MalObject *) shared_constructor, "prototype", vm->intrinsics[MAL_INTRINSIC_SHARED_ARRAY_BUFFER_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, shared_prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_builtin_array_buffer_define_species(vm, (MalObject *) shared_constructor);
+    mal_intrinsic_define_species(vm, (MalObject *) shared_constructor);
 
     mal_builtin_array_buffer_define_getter(vm, shared_prototype, "byteLength", mal_shared_array_buffer_byte_length_getter);
     mal_builtin_array_buffer_define_getter(vm, shared_prototype, "maxByteLength", mal_shared_array_buffer_max_byte_length_getter);

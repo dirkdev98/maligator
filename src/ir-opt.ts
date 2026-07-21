@@ -7,6 +7,7 @@ import {
 	optInlineMethod,
 	optInlineSpeculative,
 } from "./inline.ts";
+import { buildIRRegisterIndex, destinationCount } from "./ir-register-index.ts";
 import { debugIntermediateProgram } from "./ir.ts";
 import type {
 	IntermediateProgram,
@@ -169,35 +170,29 @@ function immediateValue(
 function optImmediateCallOperands(program: IntermediateProgram): boolean {
 	let changed = false;
 	for (const fn of program.functions) {
-		const definitions = new Map<number, IRInstruction>();
-		const definitionCounts = new Map<number, number>();
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (!("registers" in instruction)) continue;
-				for (let i = 0; i < destinationCount(instruction); i++) {
-					const register = instruction.registers[i]!;
-					const count = (definitionCounts.get(register) ?? 0) + 1;
-					definitionCounts.set(register, count);
-					if (count === 1) definitions.set(register, instruction);
-					else definitions.delete(register);
-				}
-			}
-		}
+		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
+		const replacements: Array<{
+			instruction: Extract<IRInstruction, { type: "call" | "construct" }>;
+			position: number;
+			value: IRImmediateValue;
+		}> = [];
 
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				if (instruction.type !== "call" && instruction.type !== "construct") continue;
 				for (let i = 1; i < instruction.registers.length; i++) {
 					const register = instruction.registers[i]!;
-					if (definitionCounts.get(register) !== 1) continue;
 					const value = immediateValue(definitions.get(register));
 					if (value === undefined) continue;
-					instruction.immediateValues ??= [];
-					instruction.immediateValues[i] = value;
-					instruction.registers[i] = -1;
-					changed = true;
+					replacements.push({ instruction, position: i, value });
 				}
 			}
+		}
+		for (const { instruction, position, value } of replacements) {
+			instruction.immediateValues ??= [];
+			instruction.immediateValues[position] = value;
+			instruction.registers[position] = -1;
+			changed = true;
 		}
 	}
 	return changed;
@@ -211,19 +206,12 @@ function optImmediateCallOperands(program: IntermediateProgram): boolean {
 function optStaticPropertyKeys(program: IntermediateProgram): boolean {
 	let changed = false;
 	for (const fn of program.functions) {
-		const definitions = new Map<number, IRInstruction>();
-		const duplicateDefinitions = new Set<number>();
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (!("registers" in instruction)) continue;
-				const count = destinationCount(instruction);
-				for (let i = 0; i < count; i++) {
-					const register = instruction.registers[i]!;
-					if (definitions.has(register)) duplicateDefinitions.add(register);
-					else definitions.set(register, instruction);
-				}
-			}
-		}
+		const definitions = buildIRRegisterIndex(fn).uniqueDefinitions;
+		const replacements: Array<{
+			block: IRFunction["blocks"][number];
+			index: number;
+			instruction: IRInstruction;
+		}> = [];
 
 		for (const block of fn.blocks) {
 			for (let i = 0; i < block.instructions.length; i++) {
@@ -233,10 +221,9 @@ function optStaticPropertyKeys(program: IntermediateProgram): boolean {
 				}
 				const keyPosition = instruction.type === "loadProperty" ? 2 : 1;
 				const keyRegister = instruction.registers[keyPosition];
-				if (duplicateDefinitions.has(keyRegister)) continue;
 				const key = definitions.get(keyRegister);
 				if (key?.type !== "createString") continue;
-				block.instructions[i] =
+				const replacement: IRInstruction =
 					instruction.type === "loadProperty"
 						? {
 								type: "loadPropertyStatic",
@@ -248,8 +235,12 @@ function optStaticPropertyKeys(program: IntermediateProgram): boolean {
 								registers: [instruction.registers[0], instruction.registers[2]],
 								stringIndex: key.stringIndex,
 							};
-				changed = true;
+				replacements.push({ block, index: i, instruction: replacement });
 			}
+		}
+		for (const replacement of replacements) {
+			replacement.block.instructions[replacement.index] = replacement.instruction;
+			changed = true;
 		}
 	}
 	return changed;
@@ -388,52 +379,16 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 				}
 			}
 		}
-		const instructionLocations = new Map<
-			IRInstruction,
-			{ blockIndex: number; instructionIndex: number }
-		>();
-		for (let blockIndex = 0; blockIndex < fn.blocks.length; blockIndex++) {
-			const block = fn.blocks[blockIndex]!;
-			for (
-				let instructionIndex = 0;
-				instructionIndex < block.instructions.length;
-				instructionIndex++
-			) {
-				instructionLocations.set(block.instructions[instructionIndex]!, {
-					blockIndex,
-					instructionIndex,
-				});
-			}
-		}
+		const registerIndex = buildIRRegisterIndex(fn, { locations: true });
+		const instructionLocations = registerIndex.locations!;
 		let nextStackObjectSiteId = 0;
 
 		const defCount = new Map<number, number>();
-		const singleDef = new Map<number, IRInstruction>();
-		const usesOf = new Map<
-			number,
-			Array<{ instruction: IRInstruction; position: number }>
-		>();
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if (!("registers" in instruction)) continue;
-				const defs = destinationCount(instruction);
-				for (let position = 0; position < defs; position++) {
-					const register = instruction.registers[position]!;
-					if (register < 0) continue;
-					const count = (defCount.get(register) ?? 0) + 1;
-					defCount.set(register, count);
-					if (count === 1) singleDef.set(register, instruction);
-					else singleDef.delete(register);
-				}
-				for (let position = defs; position < instruction.registers.length; position++) {
-					const register = instruction.registers[position]!;
-					if (register < 0) continue;
-					const uses = usesOf.get(register) ?? [];
-					uses.push({ instruction, position });
-					usesOf.set(register, uses);
-				}
-			}
+		for (const [register, definitions] of registerIndex.definitions) {
+			defCount.set(register, definitions.length);
 		}
+		const singleDef = registerIndex.uniqueDefinitions;
+		const usesOf = registerIndex.uses;
 
 		const constantString = (register: number): number | undefined => {
 			const definition = singleDef.get(register);
@@ -1339,44 +1294,6 @@ export const irOptTestHooks = {
 	foldPrimitiveConstants: optFoldPrimitiveConstants,
 };
 
-/**
- * IR instruction kinds whose `registers[0]` is a SOURCE (read), not a freshly
- * written destination, and which write no register at all (they target a slot,
- * global, property, or control flow). For these every register operand is a use
- * and copy propagation may rewrite all of them. Anything not listed is assumed
- * to write `registers[0]` (so it is left untouched and invalidated), the safe
- * direction. Kept to clearly source-only ops.
- */
-const WRITES_NO_REGISTER = new Set<IRInstruction["type"]>([
-	"return",
-	"throw",
-	"jump",
-	"jumpIf",
-	"storeLocal",
-	"storeGlobal",
-	"storeCaptured",
-	"storeGlobalProperty",
-	"storeProperty",
-	"storePropertyStatic",
-	"storeSuperProperty",
-	"setPrototype",
-	"requireCoercible",
-	"throwIfTdz",
-	"defineProperty",
-	"defineAccessor",
-	"initPrivateFields",
-	"mergeDataProperties",
-	"setFunctionName",
-	"withEnter",
-]);
-
-/** IR kinds that write two leading destination registers (the iterator pairs). */
-const TWO_DESTINATIONS = new Set<IRInstruction["type"]>([
-	"getIterator",
-	"getAsyncIterator",
-	"iteratorStep",
-]);
-
 /** Whether a function contains any `with`-statement op (dynamic scoping). */
 function functionUsesWith(fn: IRFunction): boolean {
 	for (const block of fn.blocks) {
@@ -1393,14 +1310,6 @@ function functionUsesWith(fn: IRFunction): boolean {
 		}
 	}
 	return false;
-}
-
-/** The number of leading `registers` entries an instruction writes (defines). */
-export function destinationCount(instruction: IRInstruction): number {
-	if (!("registers" in instruction) || WRITES_NO_REGISTER.has(instruction.type)) {
-		return 0;
-	}
-	return TWO_DESTINATIONS.has(instruction.type) ? 2 : 1;
 }
 
 /**

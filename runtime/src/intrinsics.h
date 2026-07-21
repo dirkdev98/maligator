@@ -381,6 +381,38 @@ MalValue mal_intrinsic_species_getter(MalVm *vm, MalValue this_value, const MalV
  */
 MalPropertyDesc mal_intrinsic_data_desc(MalValue value, MalPropertyFlags flags);
 
+/** Build an accessor descriptor, adding MAL_PROPERTY_ACCESSOR to `flags`. */
+MalPropertyDesc mal_intrinsic_accessor_desc(
+    MalValue getter, MalValue setter, MalPropertyFlags flags);
+
+/**
+ * Install an accessor whose getter/setter are native functions. A null callback
+ * leaves that half undefined. Display names, arities, key kind, and flags are
+ * supplied explicitly so this helper does not infer observable metadata.
+ */
+void mal_intrinsic_define_accessor_n(
+    MalVm *vm,
+    MalObject *object,
+    MalKey key,
+    const byte *getter_name,
+    i32 getter_length,
+    MalNativeFunctionCallback getter,
+    const byte *setter_name,
+    i32 setter_length,
+    MalNativeFunctionCallback setter,
+    MalPropertyFlags flags
+);
+
+/** Install a getter-only, string-keyed intrinsic accessor of arity zero. */
+void mal_intrinsic_define_getter(
+    MalVm *vm,
+    MalObject *object,
+    const byte *name,
+    const byte *getter_name,
+    MalNativeFunctionCallback getter,
+    MalPropertyFlags flags
+);
+
 /**
  * Define a named data property on an intrinsic object.
  */

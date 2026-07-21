@@ -5,7 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ascii.h"
 #include "array_buffer_object.h"
+#include "builtin_data_view.h"
 #include "builtin_json.h"
 #include "builtin_promise.h"
 #include "function_object.h"
@@ -23,7 +25,7 @@
 #include "web_request_object.h"
 #include "web_response_object.h"
 #include "server.h" // host: mal_http_handler, mal_http_conn_respond, MalHttpRequest
-#include "web_text_encoding.h"
+#include "utf8.h"
 #include "typed_array_object.h"
 #include "value.h"
 #include "value_ops.h"
@@ -50,22 +52,11 @@ static const char *mal_fetch_reason(int status) {
 }
 
 static bool mal_fetch_string_ascii_equal_ci(const MalString *string, const char *ascii) {
-    usize length = strlen(ascii);
-    if (mal_string_length(string) != length) return false;
-    const c16 *units = mal_string_code_units(string);
-    for (usize i = 0; i < length; i++) {
-        c16 unit = units[i];
-        if (unit >= 'a' && unit <= 'z') unit -= 'a' - 'A';
-        c16 expected = (c16) (u8) ascii[i];
-        if (expected >= 'a' && expected <= 'z') expected -= 'a' - 'A';
-        if (unit != expected) return false;
-    }
-    return true;
+    return mal_string_equals_ascii_ci(string, ascii);
 }
 
 static byte *mal_fetch_utf8_encode(MalVm *vm, const MalString *string, usize *length) {
-    byte *bytes = mal_utf8_encode(
-        mal_string_code_units(string), mal_string_length(string), length);
+    byte *bytes = mal_string_to_utf8(string, length);
     if (bytes == nullptr) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
             "UTF-8 allocation failed");
@@ -79,62 +70,28 @@ typedef enum MalFetchBufferSourceResult {
     MAL_FETCH_BUFFER_SOURCE_ERROR,
 } MalFetchBufferSourceResult;
 
-// DataView keeps this layout private to builtin_data_view.c. Fetch needs the
-// internal view window so user-defined properties cannot spoof BodyInit bytes.
-struct MalDataViewObject {
-    MalObject object;
-    MalArrayBufferObject *buffer;
-    u32 byte_offset;
-    u32 byte_length;
-    bool length_tracking;
-};
-
 /* Extract a validated BufferSource span. Detached and out-of-bounds views are
  * errors rather than empty bodies. */
 static MalFetchBufferSourceResult mal_fetch_buffer_source(
     MalVm *vm, MalValue v, const byte **out, usize *out_len) {
-    if (mal_value_is_typed_array_object(v)) {
-        MalTypedArrayObject *ta = mal_value_to_typed_array_object(v);
-        if (mal_typed_array_object_is_out_of_bounds(ta)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "BodyInit contains a detached or out-of-bounds view");
-            return MAL_FETCH_BUFFER_SOURCE_ERROR;
-        }
-        usize length = mal_typed_array_object_byte_length(ta);
-        *out = length == 0 ? nullptr : (const byte *) ta->buffer->data + ta->byte_offset;
-        *out_len = length;
-        return MAL_FETCH_BUFFER_SOURCE_OK;
+    MalBufferSourceSpan span;
+    MalBufferSourceSpanStatus status = mal_buffer_source_span(v, &span);
+    if (status == MAL_BUFFER_SOURCE_SPAN_NOT_BUFFER_SOURCE) {
+        return MAL_FETCH_NOT_BUFFER_SOURCE;
     }
-    if (mal_value_is_data_view_object(v)) {
-        MalDataViewObject *view = mal_value_to_data_view_object(v);
-        MalArrayBufferObject *buffer = view->buffer;
-        if (buffer == nullptr || buffer->detached
-            || (view->length_tracking && view->byte_offset > buffer->byte_length)
-            || (!view->length_tracking
-                && (u64) view->byte_offset + view->byte_length > buffer->byte_length)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "BodyInit contains a detached or out-of-bounds view");
-            return MAL_FETCH_BUFFER_SOURCE_ERROR;
-        }
-        usize length = view->length_tracking
-            ? buffer->byte_length - view->byte_offset
-            : view->byte_length;
-        *out = length == 0 ? nullptr : (const byte *) buffer->data + view->byte_offset;
-        *out_len = length;
-        return MAL_FETCH_BUFFER_SOURCE_OK;
-    }
-    if (mal_value_is_array_buffer_object(v)) {
-        MalArrayBufferObject *ab = mal_value_to_array_buffer_object(v);
-        if (ab->detached) {
+    if (status != MAL_BUFFER_SOURCE_SPAN_OK) {
+        if (mal_value_is_array_buffer_object(v)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                 "BodyInit contains a detached ArrayBuffer");
-            return MAL_FETCH_BUFFER_SOURCE_ERROR;
+        } else {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "BodyInit contains a detached or out-of-bounds view");
         }
-        *out = (const byte *) ab->data;
-        *out_len = ab->byte_length;
-        return MAL_FETCH_BUFFER_SOURCE_OK;
+        return MAL_FETCH_BUFFER_SOURCE_ERROR;
     }
-    return MAL_FETCH_NOT_BUFFER_SOURCE;
+    *out = span.data;
+    *out_len = span.length;
+    return MAL_FETCH_BUFFER_SOURCE_OK;
 }
 
 static bool mal_fetch_name_is(const MalString *name, const char *ascii);
@@ -1342,22 +1299,7 @@ static MalHttpConn *mal_fetch_unbox_conn(MalValue value) {
 
 /* Case-insensitive match of a header name (UTF-16) against a lowercase ASCII literal. */
 static bool mal_fetch_name_is(const MalString *name, const char *ascii) {
-    usize len = mal_string_length(name);
-    usize alen = strlen(ascii);
-    if (len != alen) {
-        return false;
-    }
-    const c16 *u = mal_string_code_units(name);
-    for (usize i = 0; i < len; i++) {
-        c16 x = u[i];
-        if (x >= 'A' && x <= 'Z') {
-            x = (c16) (x + 32);
-        }
-        if (x != (c16) (unsigned char) ascii[i]) {
-            return false;
-        }
-    }
-    return true;
+    return mal_string_equals_ascii_ci(name, ascii);
 }
 
 /* Serialize a Response's Headers into an HTTP header block ("Name: Value\r\n" per

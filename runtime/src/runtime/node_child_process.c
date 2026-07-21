@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ascii.h"
 #include "array_object.h"
 #include "function_object.h"
 #include "gc.h"
@@ -19,7 +20,7 @@
 #include "property_iter.h"
 #include "property_store.h"
 #include "table.h"
-#include "web_text_encoding.h"
+#include "utf8.h"
 #include "value.h"
 #include "vm.h"
 #include "vm_ops.h" // mal_vm_get_property / mal_vm_to_string
@@ -27,16 +28,6 @@
 /* ---------------------------------------------------------------------------
  * Marshalling helpers.
  * --------------------------------------------------------------------------- */
-
-static bool mal_ncp_string_has_nul(const MalString *s) {
-    const c16 *units = mal_string_code_units(s);
-    for (usize i = 0; i < mal_string_length(s); i++) {
-        if (units[i] == 0) {
-            return true;
-        }
-    }
-    return false;
-}
 
 static void mal_ncp_throw_nul(MalVm *vm, const char *name) {
     char message[96];
@@ -52,29 +43,22 @@ static byte *mal_ncp_to_cstr(MalVm *vm, MalValue v, const char *name) {
     if (!mal_vm_to_string(vm, v, &s)) {
         return NULL;
     }
-    if (mal_ncp_string_has_nul(s)) {
+    char *bytes;
+    usize out_len;
+    MalUtf8CStringResult result = mal_string_to_utf8_c_string(s, &bytes, &out_len);
+    if (result == MAL_UTF8_C_STRING_EMBEDDED_NUL) {
         mal_ncp_throw_nul(vm, name);
         return NULL;
     }
-    usize out_len;
-    byte *bytes = mal_utf8_encode(mal_string_code_units(s), mal_string_length(s), &out_len);
-    bytes[out_len] = '\0'; // mal_utf8_encode over-allocates (len*3+1), so index out_len fits
-    return bytes;
+    if (result == MAL_UTF8_C_STRING_ALLOCATION_FAILED) {
+        mal_vm_throw_allocation_error(vm);
+        return NULL;
+    }
+    return (byte *) bytes;
 }
 
 static bool mal_ncp_str_eq_ascii(const MalString *s, const char *ascii) {
-    usize n = mal_string_length(s);
-    usize a = strlen(ascii);
-    if (n != a) {
-        return false;
-    }
-    const c16 *u = mal_string_code_units(s);
-    for (usize i = 0; i < n; i++) {
-        if (u[i] != (c16) (u8) ascii[i]) {
-            return false;
-        }
-    }
-    return true;
+    return mal_string_equals_ascii(s, ascii);
 }
 
 /* Map one `stdio` entry (a "pipe"/"inherit"/"ignore" string) to a stream mode,
@@ -94,10 +78,6 @@ static MalProcStdio mal_ncp_stdio_mode(MalValue v, MalProcStdio dflt) {
         return MAL_PROC_STDIO_PIPE;
     }
     return dflt;
-}
-
-static MalKey mal_ncp_index_key(u32 i) {
-    return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
 }
 
 static MalKey mal_ncp_name_key(MalVm *vm, const char *name) {
@@ -141,22 +121,30 @@ static MalValue mal_ncp_captured(MalVm *vm, const byte *data, usize len, bool ca
     if (!captured) {
         return mal_value_new_null();
     }
-    usize count;
-    c16 *units = mal_utf8_decode(data != NULL ? data : (const byte *) "", len, &count);
-    MalValue s = mal_value_from_string(mal_string_new_copy(&vm->heap, units, count));
-    free(units);
-    return s;
+    MalString *string = mal_string_from_utf8(
+        &vm->heap, data != NULL ? data : (const byte *) "", len);
+    if (string == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(string);
 }
 
 /* UTF-8 encode an enumerable property key for an environment entry. */
 static byte *mal_ncp_env_key(MalVm *vm, MalKey key, usize *len) {
     if (key.kind == MAL_KEY_STRING) {
         const MalString *s = mal_value_to_string(key.value);
-        if (mal_ncp_string_has_nul(s)) {
+        char *out;
+        MalUtf8CStringResult result = mal_string_to_utf8_c_string(s, &out, len);
+        if (result == MAL_UTF8_C_STRING_EMBEDDED_NUL) {
             mal_ncp_throw_nul(vm, "env name");
             return NULL;
         }
-        return mal_utf8_encode(mal_string_code_units(s), mal_string_length(s), len);
+        if (result == MAL_UTF8_C_STRING_ALLOCATION_FAILED) {
+            mal_vm_throw_allocation_error(vm);
+            return NULL;
+        }
+        return (byte *) out;
     }
     char index[16];
     int n = snprintf(index, sizeof(index), "%d", mal_value_to_i32(key.value));
@@ -348,7 +336,11 @@ static MalValue mal_node_exec_file_sync(
         if (!mal_vm_to_string(vm, tmp, &s)) {
             goto cleanup;
         }
-        input_c = mal_utf8_encode(mal_string_code_units(s), mal_string_length(s), &input_len);
+        input_c = mal_string_to_utf8(s, &input_len);
+        if (input_c == NULL) {
+            mal_vm_throw_allocation_error(vm);
+            goto cleanup;
+        }
     }
 
     // stdio: a single string covers all three streams; a 3-element array is per-stream.
@@ -361,7 +353,7 @@ static MalValue mal_node_exec_file_sync(
         MalProcStdio modes[3] = {dflts[0], dflts[1], dflts[2]};
         for (u32 i = 0; i < 3 && i < n; i++) {
             MalValue el;
-            if (!mal_vm_get_property(vm, tmp, mal_ncp_index_key(i), &el)) {
+            if (!mal_vm_get_property(vm, tmp, mal_key_index(i), &el)) {
                 goto cleanup;
             }
             modes[i] = mal_ncp_stdio_mode(el, dflts[i]);
@@ -435,15 +427,28 @@ static MalValue mal_node_exec_file_sync(
                 env_ok = false;
                 break;
             }
-            if (mal_ncp_string_has_nul(vs)) {
+            usize vlen;
+            char *vc;
+            MalUtf8CStringResult value_result =
+                mal_string_to_utf8_c_string(vs, &vc, &vlen);
+            if (value_result != MAL_UTF8_C_STRING_OK) {
                 free(kc);
-                mal_ncp_throw_nul(vm, "env value");
+                if (value_result == MAL_UTF8_C_STRING_EMBEDDED_NUL) {
+                    mal_ncp_throw_nul(vm, "env value");
+                } else {
+                    mal_vm_throw_allocation_error(vm);
+                }
                 env_ok = false;
                 break;
             }
-            usize vlen;
-            byte *vc = mal_utf8_encode(mal_string_code_units(vs), mal_string_length(vs), &vlen);
             char *entry = malloc(klen + 1 + vlen + 1);
+            if (entry == NULL) {
+                free(kc);
+                free(vc);
+                mal_vm_throw_allocation_error(vm);
+                env_ok = false;
+                break;
+            }
             memcpy(entry, kc, klen);
             entry[klen] = '=';
             memcpy(entry + klen + 1, vc, vlen);
@@ -470,7 +475,7 @@ static MalValue mal_node_exec_file_sync(
         argv[0] = (char *) file_c;
         for (u32 i = 0; i < nargs; i++) {
             MalValue el;
-            if (!mal_vm_get_property(vm, args_val, mal_ncp_index_key(i), &el)) {
+            if (!mal_vm_get_property(vm, args_val, mal_key_index(i), &el)) {
                 argv[argv_args + 1] = NULL;
                 goto cleanup;
             }

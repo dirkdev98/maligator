@@ -158,7 +158,7 @@ static u32 mal_array_object_shrink(MalArrayObject *array, u32 new_length) {
 
     u32 achieved = new_length;
     for (usize i = 0; i < count; i++) {
-        MalKey index_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) indices[i])};
+        MalKey index_key = mal_key_index(indices[i]);
         if (!mal_object_delete_own(&array->object, index_key)) {
             achieved = indices[i] + 1;
             break;

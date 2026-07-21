@@ -90,6 +90,23 @@ check(
 	"DataView construction follows Node array-like semantics",
 	copiedDataView.length === 0 && Buffer.byteLength(dataView) === 3,
 );
+const resizableDataViewBuffer = new ArrayBuffer(4, { maxByteLength: 8 });
+const fixedDataView = new DataView(resizableDataViewBuffer, 1, 3);
+const trackingDataView = new DataView(resizableDataViewBuffer, 1);
+resizableDataViewBuffer.resize(2);
+check(
+	"DataView byteLength tracks a resized backing store",
+	Buffer.byteLength(trackingDataView) === 1,
+);
+throws("DataView byteLength rejects an out-of-bounds view", TypeError, () =>
+	Buffer.byteLength(fixedDataView),
+);
+const detachedDataViewBuffer = new ArrayBuffer(1);
+const detachedDataView = new DataView(detachedDataViewBuffer);
+detachedDataViewBuffer.transfer();
+throws("DataView byteLength rejects a detached view", TypeError, () =>
+	Buffer.byteLength(detachedDataView),
+);
 
 const sliced = shared.slice(1, 3);
 const subarray = shared.subarray(-2);

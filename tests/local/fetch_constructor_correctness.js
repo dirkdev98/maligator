@@ -252,6 +252,17 @@ async function run() {
 					}),
 			),
 	);
+	const trackingBodyBuffer = new ArrayBuffer(5, { maxByteLength: 8 });
+	new Uint8Array(trackingBodyBuffer).set([30, 31, 32, 33, 34]);
+	const trackingBodyView = new DataView(trackingBodyBuffer, 1);
+	trackingBodyBuffer.resize(3);
+	const trackingBodyBytes = await new Response(trackingBodyView).bytes();
+	check(
+		"length-tracking DataView body uses its resized window",
+		trackingBodyBytes.length === 2 &&
+			trackingBodyBytes[0] === 31 &&
+			trackingBodyBytes[1] === 32,
+	);
 
 	check(
 		"Request normalizes standard methods",

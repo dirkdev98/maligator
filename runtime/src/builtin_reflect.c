@@ -93,10 +93,8 @@ static bool mal_reflect_create_list(MalVm *vm, MalValue list, MalValue **out, i3
 
     // ToLength: truncate toward zero, NaN/negative → 0. Capped pragmatically so
     // an absurd length cannot demand an unbounded allocation.
-    i64 length = 0;
-    if (length_number >= 1.0) {
-        length = length_number > 2147483647.0 ? 2147483647 : (i64) length_number;
-    }
+    f64 safe_length = mal_ops_number_to_length(length_number);
+    i64 length = safe_length > 2147483647.0 ? 2147483647 : (i64) safe_length;
     if (length == 0) {
         return true;
     }
@@ -111,7 +109,7 @@ static bool mal_reflect_create_list(MalVm *vm, MalValue list, MalValue **out, i3
     bool ok = true;
     for (i64 index = 0; index < length; index++) {
         items_span.count = (i32) index;
-        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
+        MalKey key = mal_key_index(index);
         if (!mal_vm_get_property(vm, list, key, &items[index])) {
             ok = false;
             break;
@@ -134,80 +132,6 @@ static MalValue mal_reflect_key_to_value(MalVm *vm, MalKey key) {
         return mal_value_from_string(mal_ops_to_string(&vm->heap, key.value));
     }
     return key.value;
-}
-
-/**
- * Spec ToPrimitive(input, "string") for an object input. The shared
- * mal_vm_value_to_property_key intentionally stringifies objects without running
- * user coercion (see its note), so an object propertyKey whose @@toPrimitive /
- * toString / valueOf throws would be swallowed. Reflect must ReturnIfAbrupt on
- * that throw, so this mirrors the OrdinaryToPrimitive logic in mal_vm_to_number
- * but with the string-hint method order (toString → valueOf) and "string" hint.
- * Returns false with a pending throw completion on an abrupt coercion.
- */
-static bool mal_reflect_object_to_primitive_string(MalVm *vm, MalValue value, MalValue *out) {
-    MalValue exotic;
-    if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE), &exotic)) {
-        return false;
-    }
-    if (!mal_value_is_nil(exotic)) {
-        if (!mal_value_is_callable(exotic)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.toPrimitive is not a function");
-            return false;
-        }
-        MalValue hint = mal_value_from_string(mal_intrinsic_ascii(vm, "string"));
-        // @@toPrimitive runs with the object as `this` and the hint as its arg.
-        MalCompletion result = mal_vm_call_value(vm, exotic, value, &hint, 1);
-        if (result.kind != MAL_COMPLETION_NORMAL) {
-            return false;
-        }
-        if (mal_value_is_object(result.value)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
-            return false;
-        }
-        *out = result.value;
-        return true;
-    }
-
-    // OrdinaryToPrimitive with string hint: toString before valueOf.
-    const byte *methods[2] = {"toString", "valueOf"};
-    for (i32 i = 0; i < 2; i++) {
-        MalValue method;
-        if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, methods[i]), &method)) {
-            return false;
-        }
-        if (mal_value_is_callable(method)) {
-            MalCompletion result = mal_vm_call_value(vm, method, value, nullptr, 0);
-            if (result.kind != MAL_COMPLETION_NORMAL) {
-                return false;
-            }
-            if (!mal_value_is_object(result.value)) {
-                *out = result.value;
-                return true;
-            }
-        }
-    }
-
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
-    return false;
-}
-
-/**
- * Spec ToPropertyKey for the Reflect entry points: run ToPrimitive(string) for
- * an object first (surfacing any thrown user coercion), keep a Symbol result as
- * a symbol key, otherwise feed the primitive back through the shared key builder
- * (which handles string / array-index canonicalisation). Primitive inputs pass
- * straight through, preserving the prior behaviour exactly.
- */
-static bool mal_reflect_to_property_key(MalVm *vm, MalValue value, MalKey *key_out) {
-    if (mal_value_is_object(value)) {
-        MalValue primitive;
-        if (!mal_reflect_object_to_primitive_string(vm, value, &primitive)) {
-            return false;
-        }
-        value = primitive;
-    }
-    return mal_vm_value_to_property_key(vm, value, key_out);
 }
 
 static MalValue mal_reflect_apply(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -268,7 +192,7 @@ static MalValue mal_reflect_get(MalVm *vm, MalValue this_value, const MalValue *
     }
 
     MalKey key;
-    if (!mal_reflect_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_vm_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
@@ -288,7 +212,7 @@ static MalValue mal_reflect_set(MalVm *vm, MalValue this_value, const MalValue *
     }
 
     MalKey key;
-    if (!mal_reflect_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_vm_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
@@ -311,7 +235,7 @@ static MalValue mal_reflect_has(MalVm *vm, MalValue this_value, const MalValue *
     }
 
     MalKey key;
-    if (!mal_reflect_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_vm_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
@@ -328,7 +252,7 @@ static MalValue mal_reflect_delete_property(MalVm *vm, MalValue this_value, cons
     }
 
     MalKey key;
-    if (!mal_reflect_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_vm_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
@@ -345,7 +269,7 @@ static MalValue mal_reflect_define_property(MalVm *vm, MalValue this_value, cons
     }
 
     MalKey key;
-    if (!mal_reflect_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_vm_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
@@ -374,7 +298,7 @@ static MalValue mal_reflect_get_own_property_descriptor(MalVm *vm, MalValue this
     }
 
     MalKey key;
-    if (!mal_reflect_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
+    if (!mal_vm_to_property_key(vm, mal_reflect_arg(args, arg_count, 1), &key)) {
         return mal_value_new_undefined();
     }
 
@@ -433,13 +357,13 @@ static MalValue mal_reflect_own_keys(MalVm *vm, MalValue this_value, const MalVa
         for (i32 i = 0; i < ns->export_count; i++) {
             mal_array_object_store(
                 result,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_key_index(count++),
                 mal_value_from_string(ns->exports[i].name)
             );
         }
         mal_array_object_store(
             result,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+            mal_key_index(count++),
             mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG).value
         );
         return mal_value_from_array_object(result);
@@ -452,7 +376,7 @@ static MalValue mal_reflect_own_keys(MalVm *vm, MalValue this_value, const MalVa
         for (u32 index = 0; index < length; index++) {
             mal_array_object_store(
                 result,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_key_index(count++),
                 mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) index)))
             );
         }
@@ -469,13 +393,13 @@ static MalValue mal_reflect_own_keys(MalVm *vm, MalValue this_value, const MalVa
         for (u32 index = 0; index < length; index++) {
             mal_array_object_store(
                 result,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_key_index(count++),
                 mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) index)))
             );
         }
         mal_array_object_store(
             result,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+            mal_key_index(count++),
             mal_value_from_string(mal_intrinsic_ascii(vm, "length"))
         );
     }
@@ -502,14 +426,14 @@ static MalValue mal_reflect_own_keys(MalVm *vm, MalValue this_value, const MalVa
         if (length_pending && key.kind != MAL_KEY_INDEX) {
             mal_array_object_store(
                 result,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+                mal_key_index(count++),
                 mal_value_from_string(mal_intrinsic_ascii(vm, "length"))
             );
             length_pending = false;
         }
         mal_array_object_store(
             result,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+            mal_key_index(count++),
             mal_reflect_key_to_value(vm, key)
         );
     }
@@ -517,7 +441,7 @@ static MalValue mal_reflect_own_keys(MalVm *vm, MalValue this_value, const MalVa
     if (length_pending) {
         mal_array_object_store(
             result,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
+            mal_key_index(count++),
             mal_value_from_string(mal_intrinsic_ascii(vm, "length"))
         );
     }

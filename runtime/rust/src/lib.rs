@@ -13,6 +13,8 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod ffi;
+
 // The RegExp FFI (regress engine). Gated behind the `regexp` Cargo feature
 // (engine.regexp) so a non-regex build drops the engine + its Unicode tables. See
 // src/regexp.rs.
@@ -49,17 +51,7 @@ pub extern "C" fn mal_i18n_abi_version() -> u32 {
 // visibility, so the C side links them exactly as before when the feature is on.
 #[cfg(feature = "intl")]
 mod intl {
-
-/// Copy `s` (UTF-8) into the caller buffer `out` (at most `out_cap` bytes) and
-/// return the full byte length, so the C side can probe with cap 0 then fill.
-fn write_str(s: &str, out: *mut u8, out_cap: i32) -> i32 {
-    let bytes = s.as_bytes();
-    if !out.is_null() && out_cap > 0 {
-        let n = bytes.len().min(out_cap as usize);
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, n) };
-    }
-    bytes.len() as i32
-}
+use crate::ffi::{nullable_slice, nullable_u16_slice, write_utf8};
 
 /// Parse a BCP-47 tag from a UTF-8 buffer into an ICU4X Locale.
 fn parse_locale(tag_ptr: *const u8, tag_len: usize) -> Option<icu_locale::Locale> {
@@ -78,7 +70,7 @@ fn locale_expander() -> icu_locale::LocaleExpander {
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_canonicalize_locale(tag_ptr: *const u8, tag_len: usize, out: *mut u8, out_cap: i32) -> i32 {
     match parse_locale(tag_ptr, tag_len) {
-        Some(locale) => write_str(&locale.to_string(), out, out_cap),
+        Some(locale) => unsafe { write_utf8(&locale.to_string(), out, out_cap) },
         None => -1,
     }
 }
@@ -90,7 +82,7 @@ pub unsafe extern "C" fn mal_i18n_locale_maximize(tag_ptr: *const u8, tag_len: u
         return -1;
     };
     locale_expander().maximize(&mut locale.id);
-    write_str(&locale.to_string(), out, out_cap)
+    unsafe { write_utf8(&locale.to_string(), out, out_cap) }
 }
 
 /// Remove likely subtags (Intl.Locale.prototype.minimize) and write the result.
@@ -100,7 +92,7 @@ pub unsafe extern "C" fn mal_i18n_locale_minimize(tag_ptr: *const u8, tag_len: u
         return -1;
     };
     locale_expander().minimize(&mut locale.id);
-    write_str(&locale.to_string(), out, out_cap)
+    unsafe { write_utf8(&locale.to_string(), out, out_cap) }
 }
 
 /// Locale subtag selector for mal_i18n_locale_field.
@@ -145,7 +137,7 @@ pub unsafe extern "C" fn mal_i18n_locale_field(tag_ptr: *const u8, tag_len: usiz
         MAL_LOCALE_FIELD_NUMBERING_SYSTEM => keyword(key!("nu")),
         _ => return -1,
     };
-    write_str(&value, out, out_cap)
+    unsafe { write_utf8(&value, out, out_cap) }
 }
 
 // ---------------------------------------------------------------------------
@@ -214,8 +206,10 @@ pub unsafe extern "C" fn mal_i18n_collator_compare_utf16(
     b_len: usize,
 ) -> i32 {
     let collator = unsafe { &*(handle as *const icu_collator::CollatorBorrowed<'static>) };
-    let a = unsafe { core::slice::from_raw_parts(a_ptr, a_len) };
-    let b = unsafe { core::slice::from_raw_parts(b_ptr, b_len) };
+    // ICU collators operate on scalar values; malformed UTF-16 is therefore
+    // replaced rather than preserved as lone surrogate code units.
+    let a = unsafe { nullable_u16_slice(a_ptr, a_len) };
+    let b = unsafe { nullable_u16_slice(b_ptr, b_len) };
     let sa = String::from_utf16_lossy(a);
     let sb = String::from_utf16_lossy(b);
     match collator.compare(&sa, &sb) {
@@ -341,7 +335,7 @@ pub unsafe extern "C" fn mal_i18n_number_format(
     if percent != 0 {
         text.push('%');
     }
-    write_str(&text, out, out_cap)
+    unsafe { write_utf8(&text, out, out_cap) }
 }
 
 // ---------------------------------------------------------------------------
@@ -414,7 +408,7 @@ pub unsafe extern "C" fn mal_i18n_datetime_format(
             Err(_) => return -1,
         }
     };
-    write_str(&text, out, out_cap)
+    unsafe { write_utf8(&text, out, out_cap) }
 }
 
 // ---------------------------------------------------------------------------
@@ -464,16 +458,18 @@ pub unsafe extern "C" fn mal_i18n_list_format(
     let Ok(formatter) = formatter else {
         return -1;
     };
-    let slice = unsafe { core::slice::from_raw_parts(items, items_count) };
+    let slice = unsafe { nullable_slice(items, items_count) };
     let strings: Vec<String> = slice
         .iter()
         .map(|s| {
-            let u = unsafe { core::slice::from_raw_parts(s.ptr, s.len) };
+            // List formatting is scalar-value based: lone surrogates become
+            // U+FFFD when each item is converted to a Rust String.
+            let u = unsafe { nullable_u16_slice(s.ptr, s.len) };
             String::from_utf16_lossy(u)
         })
         .collect();
     let text = formatter.format_to_string(strings.iter());
-    write_str(&text, out, out_cap)
+    unsafe { write_utf8(&text, out, out_cap) }
 }
 
 // ---------------------------------------------------------------------------
@@ -499,7 +495,8 @@ pub unsafe extern "C" fn mal_i18n_segment(
     use icu_segmenter::options::{SentenceBreakInvariantOptions, WordBreakInvariantOptions};
     use icu_segmenter::{GraphemeClusterSegmenter, SentenceSegmenter, WordSegmenter};
 
-    let u = unsafe { core::slice::from_raw_parts(text_ptr, text_len) };
+    // ICU segmentation consumes scalar values, so malformed UTF-16 is lossy.
+    let u = unsafe { nullable_u16_slice(text_ptr, text_len) };
     let s = String::from_utf16_lossy(u);
 
     // Map each UTF-8 byte offset (on a char boundary) to a UTF-16 index in `s`.
@@ -623,7 +620,7 @@ pub unsafe extern "C" fn mal_i18n_display_name(
         _ => return -1,
     };
     match name {
-        Some(text) => write_str(&text, out, out_cap),
+        Some(text) => unsafe { write_utf8(&text, out, out_cap) },
         None => -1,
     }
 }
@@ -695,7 +692,7 @@ pub unsafe extern "C" fn mal_i18n_relative_time(
         return -1;
     };
     let text = formatter.format(decimal).write_to_string().into_owned();
-    write_str(&text, out, out_cap)
+    unsafe { write_utf8(&text, out, out_cap) }
 }
 
 // ---------------------------------------------------------------------------
@@ -757,7 +754,7 @@ pub unsafe extern "C" fn mal_i18n_duration_format(
         return -1;
     };
     let text = formatter.format(&duration).write_to_string().into_owned();
-    write_str(&text, out, out_cap)
+    unsafe { write_utf8(&text, out, out_cap) }
 }
 } // mod intl
 
@@ -830,10 +827,5 @@ pub extern "C" fn mal_i18n_utc_from_local_ms(local_ms: i64) -> i64 {
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_local_tz_name(buf: *mut u8, cap: i32) -> i32 {
     let name = system_time_zone().iana_name().unwrap_or("UTC");
-    let bytes = name.as_bytes();
-    if !buf.is_null() && cap > 0 {
-        let n = bytes.len().min(cap as usize);
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n) };
-    }
-    bytes.len() as i32
+    unsafe { ffi::write_utf8(name, buf, cap) }
 }

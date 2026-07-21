@@ -6,8 +6,54 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "bigint128.h"
+#include "ecma_whitespace.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
+
+f64 mal_ops_number_to_integer_or_infinity(f64 number) {
+    if (isnan(number) || number == 0.0) {
+        return 0.0;
+    }
+    return trunc(number);
+}
+
+f64 mal_ops_number_to_length(f64 number) {
+    f64 integer = mal_ops_number_to_integer_or_infinity(number);
+    if (integer <= 0.0) {
+        return 0.0;
+    }
+    return integer > MAL_NUMBER_MAX_SAFE_INTEGER ? MAL_NUMBER_MAX_SAFE_INTEGER : integer;
+}
+
+f64 mal_ops_number_clamp_relative(f64 number, f64 length) {
+    f64 relative = mal_ops_number_to_integer_or_infinity(number);
+    if (relative < 0.0) {
+        relative += length;
+    }
+    if (relative <= 0.0) {
+        return 0.0;
+    }
+    return relative > length ? length : relative;
+}
+
+u64 mal_ops_number_to_uint_width(f64 number, u32 width) {
+    if (!isfinite(number) || number == 0.0) {
+        return 0;
+    }
+    // Callers use integer element widths no larger than 32 bits, for which both
+    // the modulus and every remainder are represented exactly by f64.
+    f64 modulus = ldexp(1.0, (i32) width);
+    f64 remainder = fmod(trunc(number), modulus);
+    if (remainder < 0.0) {
+        remainder += modulus;
+    }
+    return (u64) remainder;
+}
+
+u32 mal_ops_number_to_uint32(f64 number) {
+    return (u32) mal_ops_number_to_uint_width(number, 32);
+}
 
 static i128 mal_ops_bigint_of(MalValue value) {
     return mal_bigint_value(mal_value_to_bigint(value));
@@ -26,11 +72,6 @@ MalValue mal_ops_number_value(f64 value);
 
 static MalString *mal_ops_string_from_ascii(MalHeap *heap, const byte *bytes) {
     return mal_string_new_ascii(heap, bytes, strlen(bytes));
-}
-
-// StrWhiteSpace (the ASCII subset); a non-ASCII string is rejected wholesale below.
-static bool mal_ops_string_number_is_space(char c) {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
 }
 
 static int mal_ops_string_number_digit(char c) {
@@ -52,27 +93,28 @@ static MalValue mal_ops_string_to_number(MalValue value) {
     MalString *string = mal_value_to_string(value);
     usize length = mal_string_length(string);
     const c16 *code_units = mal_string_code_units(string);
-    byte *bytes = malloc(length + 1);
+    usize unit_start = 0;
+    usize unit_end = length;
+    while (unit_start < unit_end && mal_ecma_is_string_whitespace(code_units[unit_start])) {
+        unit_start++;
+    }
+    while (unit_end > unit_start && mal_ecma_is_string_whitespace(code_units[unit_end - 1])) {
+        unit_end--;
+    }
+    usize token_length = unit_end - unit_start;
+    byte *bytes = malloc(token_length + 1);
 
-    for (usize i = 0; i < length; i++) {
-        if (code_units[i] > 0x7F) {
+    for (usize i = 0; i < token_length; i++) {
+        if (code_units[unit_start + i] > 0x7F) {
             free(bytes);
             return mal_value_new_nan();
         }
-        bytes[i] = (byte) code_units[i];
+        bytes[i] = (byte) code_units[unit_start + i];
     }
-    bytes[length] = '\0';
+    bytes[token_length] = '\0';
 
     char *start = bytes;
-    while (mal_ops_string_number_is_space(*start)) {
-        start++;
-    }
-    char *end = bytes + length;
-    while (end > start && mal_ops_string_number_is_space(end[-1])) {
-        end--;
-    }
-    *end = '\0';
-    usize token_length = (usize) (end - start);
+    char *end = bytes + token_length;
 
     // Empty (or all-whitespace) string is +0.
     if (token_length == 0) {
@@ -434,13 +476,13 @@ static bool mal_ops_equal_bool(MalValue left, MalValue right) {
     if (mal_value_is_bigint(left) && mal_value_is_string(right)) {
         bool ok;
         MalString *string = mal_value_to_string(right);
-        i128 parsed = mal_bigint_parse(mal_string_code_units(string), mal_string_length(string), &ok);
+        i128 parsed = mal_bigint128_parse(mal_string_code_units(string), mal_string_length(string), &ok);
         return ok && mal_ops_bigint_of(left) == parsed;
     }
     if (mal_value_is_string(left) && mal_value_is_bigint(right)) {
         bool ok;
         MalString *string = mal_value_to_string(left);
-        i128 parsed = mal_bigint_parse(mal_string_code_units(string), mal_string_length(string), &ok);
+        i128 parsed = mal_bigint128_parse(mal_string_code_units(string), mal_string_length(string), &ok);
         return ok && parsed == mal_ops_bigint_of(right);
     }
 

@@ -36,10 +36,6 @@ static MalKey stream_key(MalVm *vm, const char *name) {
     return mal_intrinsic_string_key(vm, (const byte *) name);
 }
 
-static MalKey stream_index(u32 index) {
-    return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
-}
-
 static MalValue stream_own(MalVm *vm, MalValue object, const char *name) {
     if (!mal_value_is_object(object)) {
         return mal_value_new_undefined();
@@ -427,7 +423,7 @@ static u32 stream_remove_blocked_pipe(
                 continue;
             }
             mal_array_object_store(
-                next, stream_index(mal_array_object_length(next)), roots[4]);
+                next, mal_key_index(mal_array_object_length(next)), roots[4]);
         }
         stream_set(vm, roots[0], "_malBlockedPipes", roots[3]);
     }
@@ -516,7 +512,7 @@ static bool stream_pipe_chunk(MalVm *vm, MalValue source, MalValue chunk) {
             MalValue blocked = stream_own(vm, roots[0], "_malBlockedPipes");
             MalArrayObject *blocked_array = mal_value_to_array_object(blocked);
             mal_array_object_store(
-                blocked_array, stream_index(mal_array_object_length(blocked_array)),
+                blocked_array, mal_key_index(mal_array_object_length(blocked_array)),
                 record);
             mal_gc_unroot(&record_root);
             MalValue drain_args[] = {
@@ -641,7 +637,7 @@ static MalValue stream_push(
         MalRootSpan root;
         mal_gc_root(&root, &queue_value, 1);
         MalArrayObject *queue = mal_value_to_array_object(queue_value);
-        mal_array_object_store(queue, stream_index(mal_array_object_length(queue)), chunk);
+        mal_array_object_store(queue, mal_key_index(mal_array_object_length(queue)), chunk);
         mal_gc_unroot(&root);
     }
     return mal_value_new_boolean(!stream_truthy_own(vm, receiver, "_malPaused"));
@@ -760,7 +756,7 @@ static MalValue stream_pipe(
         stream_set(vm, roots[0], "_malPipes", roots[2]);
     }
     MalArrayObject *pipes = mal_value_to_array_object(roots[2]);
-    mal_array_object_store(pipes, stream_index(mal_array_object_length(pipes)), roots[1]);
+    mal_array_object_store(pipes, mal_key_index(mal_array_object_length(pipes)), roots[1]);
     stream_emit(vm, roots[1], "pipe", roots, 1);
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         stream_resume_core(vm, roots[0]);
@@ -798,7 +794,7 @@ static MalValue stream_unpipe(
                 stream_emit(vm, roots[4], "unpipe", roots, 1);
             } else {
                 mal_array_object_store(
-                    next, stream_index(mal_array_object_length(next)), roots[4]);
+                    next, mal_key_index(mal_array_object_length(next)), roots[4]);
             }
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
                 break;
@@ -1184,7 +1180,7 @@ static void stream_enqueue_write(
     stream_set(vm, roots[5], "callback", roots[3]);
     stream_set(vm, roots[5], "size", mal_value_from_i32(chunk_size));
     MalArrayObject *queue = mal_value_to_array_object(roots[4]);
-    mal_array_object_store(queue, stream_index(mal_array_object_length(queue)), roots[5]);
+    mal_array_object_store(queue, mal_key_index(mal_array_object_length(queue)), roots[5]);
     mal_gc_unroot(&root);
 }
 
@@ -1343,7 +1339,7 @@ static void stream_append_end_callback(
     mal_gc_root(&root, &callbacks, 1);
     MalArrayObject *array = mal_value_to_array_object(callbacks);
     mal_array_object_store(
-        array, stream_index(mal_array_object_length(array)), callback);
+        array, mal_key_index(mal_array_object_length(array)), callback);
     mal_gc_unroot(&root);
 }
 

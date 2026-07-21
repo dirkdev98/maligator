@@ -9,12 +9,15 @@
 #include "gc.h"
 #include "heap.h"
 #include "heap_string.h"
+#include "hex.h"
 #include "intrinsics.h"
 #include "mal_url.h" // Rust FFI: ada-url handle + component accessors
 #include "object.h"
 #include "object_ops.h"
 #include "property_store.h"
-#include "web_text_encoding.h"
+#include "u16_buffer.h"
+#include "utf16.h"
+#include "utf8.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -30,10 +33,6 @@
  * Shared helpers.
  * --------------------------------------------------------------------------- */
 
-static MalKey url_index_key(u32 index) {
-    return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
-}
-
 /* Turn an FFI probe-fill (UTF-8) getter into a MalString value. */
 typedef int32_t (*MalUrlGetterFn)(void *handle, uint8_t *out, int32_t cap);
 
@@ -43,13 +42,18 @@ static MalValue url_component(MalVm *vm, void *handle, MalUrlGetterFn getter) {
         return mal_value_from_string(mal_string_new_ascii(&vm->heap, "", 0));
     }
     byte *buf = malloc((usize) len);
+    if (buf == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     getter(handle, (uint8_t *) buf, len);
-    usize count;
-    c16 *units = mal_utf8_decode(buf, (usize) len, &count);
-    MalValue s = mal_value_from_string(mal_string_new_copy(&vm->heap, units, count));
-    free(units);
+    MalString *string = mal_string_from_utf8(&vm->heap, buf, (usize) len);
     free(buf);
-    return s;
+    if (string == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(string);
 }
 
 /* OrdinaryCreateFromConstructor: a plain object over new_target.prototype (native
@@ -362,20 +366,6 @@ static void usp_append(MalUrlSearchParamsObject *p, MalString *name, MalString *
     mal_gc_card(&p->object.header, mal_value_from_string(value));
 }
 
-/* Byte helpers for application/x-www-form-urlencoded. */
-static int usp_hex_val(byte c) {
-    if (c >= '0' && c <= '9') {
-        return c - '0';
-    }
-    if (c >= 'a' && c <= 'f') {
-        return c - 'a' + 10;
-    }
-    if (c >= 'A' && c <= 'F') {
-        return c - 'A' + 10;
-    }
-    return -1;
-}
-
 /* Decode a form-urlencoded token: '+' -> space, %XX -> byte, else literal. */
 static byte *usp_form_decode(const byte *in, usize len, usize *out_len) {
     byte *out = malloc(len == 0 ? 1 : len);
@@ -385,8 +375,8 @@ static byte *usp_form_decode(const byte *in, usize len, usize *out_len) {
         if (c == '+') {
             out[o++] = ' ';
         } else if (c == '%' && i + 2 < len) {
-            int hi = usp_hex_val(in[i + 1]);
-            int lo = usp_hex_val(in[i + 2]);
+            i32 hi = mal_hex_decode_digit((u8) in[i + 1]);
+            i32 lo = mal_hex_decode_digit((u8) in[i + 2]);
             if (hi >= 0 && lo >= 0) {
                 out[o++] = (byte) (hi * 16 + lo);
                 i += 2;
@@ -402,15 +392,11 @@ static byte *usp_form_decode(const byte *in, usize len, usize *out_len) {
 }
 
 static MalString *usp_bytes_to_string(MalVm *vm, const byte *bytes, usize len) {
-    usize count;
-    c16 *units = mal_utf8_decode(bytes, len, &count);
-    MalString *s = mal_string_new_copy(&vm->heap, units, count);
-    free(units);
-    return s;
+    return mal_string_from_utf8(&vm->heap, bytes, len);
 }
 
 /* Parse a form-urlencoded byte buffer into pairs. */
-static void usp_parse_bytes(MalVm *vm, MalUrlSearchParamsObject *p, const byte *bytes, usize len) {
+static bool usp_parse_bytes(MalVm *vm, MalUrlSearchParamsObject *p, const byte *bytes, usize len) {
     usize start = 0;
     for (usize i = 0; i <= len; i++) {
         if (i == len || bytes[i] == '&') {
@@ -434,12 +420,32 @@ static void usp_parse_bytes(MalVm *vm, MalUrlSearchParamsObject *p, const byte *
                 usize vdl;
                 byte *nd = usp_form_decode(nb, nlen, &ndl);
                 byte *vd = usp_form_decode(vb, vlen, &vdl);
+                if (nd == nullptr || vd == nullptr) {
+                    free(nd);
+                    free(vd);
+                    mal_vm_throw_allocation_error(vm);
+                    return false;
+                }
                 // Root the name across the value allocation (both are freshly
                 // allocated and not yet reachable from the params object).
-                MalValue nsv = mal_value_from_string(usp_bytes_to_string(vm, nd, ndl));
+                MalString *ns = usp_bytes_to_string(vm, nd, ndl);
+                if (ns == nullptr) {
+                    free(nd);
+                    free(vd);
+                    mal_vm_throw_allocation_error(vm);
+                    return false;
+                }
+                MalValue nsv = mal_value_from_string(ns);
                 MalRootSpan rs;
                 mal_gc_root(&rs, &nsv, 1);
                 MalString *vs = usp_bytes_to_string(vm, vd, vdl);
+                if (vs == nullptr) {
+                    mal_gc_unroot(&rs);
+                    free(nd);
+                    free(vd);
+                    mal_vm_throw_allocation_error(vm);
+                    return false;
+                }
                 usp_append(p, mal_value_to_string(nsv), vs);
                 mal_gc_unroot(&rs);
                 free(nd);
@@ -448,17 +454,23 @@ static void usp_parse_bytes(MalVm *vm, MalUrlSearchParamsObject *p, const byte *
             start = i + 1;
         }
     }
+    return true;
 }
 
 /* Parse a query String (UTF-16), stripping one leading '?'. */
-static void usp_parse_string(MalVm *vm, MalUrlSearchParamsObject *p, MalString *query) {
+static bool usp_parse_string(MalVm *vm, MalUrlSearchParamsObject *p, MalString *query) {
     const c16 *u = mal_string_code_units(query);
     usize len = mal_string_length(query);
     usize off = (len > 0 && u[0] == '?') ? 1 : 0;
     usize blen;
     byte *bytes = mal_utf8_encode(u + off, len - off, &blen);
-    usp_parse_bytes(vm, p, bytes, blen);
+    if (bytes == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    bool result = usp_parse_bytes(vm, p, bytes, blen);
     free(bytes);
+    return result;
 }
 
 static void url_refresh_search_params(MalVm *vm, MalUrlObject *url) {
@@ -469,7 +481,9 @@ static void url_refresh_search_params(MalVm *vm, MalUrlObject *url) {
     MalRootSpan rs;
     mal_gc_root(&rs, &search, 1);
     usp_clear(url->search_params);
-    usp_parse_string(vm, url->search_params, mal_value_to_string(search));
+    if (mal_value_is_string(search)) {
+        usp_parse_string(vm, url->search_params, mal_value_to_string(search));
+    }
     mal_gc_unroot(&rs);
 }
 
@@ -482,17 +496,12 @@ static bool usp_to_usv_string(MalVm *vm, MalValue input, MalValue *out) {
     usize length = mal_string_length(string);
     const c16 *source = mal_string_code_units(string);
     bool well_formed = true;
-    for (usize i = 0; i < length; i++) {
-        c16 unit = source[i];
-        if (unit >= 0xD800 && unit <= 0xDBFF) {
-            if (i + 1 < length && source[i + 1] >= 0xDC00 && source[i + 1] <= 0xDFFF) {
-                i++;
-            } else {
-                well_formed = false;
-            }
-        } else if (unit >= 0xDC00 && unit <= 0xDFFF) {
+    for (usize i = 0; i < length;) {
+        usize width;
+        if (!mal_utf16_read_scalar(source, length, i, nullptr, &width)) {
             well_formed = false;
         }
+        i += width;
     }
     if (well_formed) {
         *out = mal_value_from_string(string);
@@ -503,19 +512,14 @@ static bool usp_to_usv_string(MalVm *vm, MalValue input, MalValue *out) {
     MalRootSpan source_span;
     mal_gc_root(&source_span, &source_root, 1);
     c16 *units = malloc(sizeof(c16) * (length == 0 ? 1 : length));
-    for (usize i = 0; i < length; i++) {
-        c16 unit = source[i];
-        if (unit >= 0xD800 && unit <= 0xDBFF) {
-            if (i + 1 < length && source[i + 1] >= 0xDC00 && source[i + 1] <= 0xDFFF) {
-                units[i] = unit;
-                units[i + 1] = source[i + 1];
-                i++;
-            } else {
-                units[i] = 0xFFFD;
-            }
+    for (usize i = 0; i < length;) {
+        usize width;
+        if (mal_utf16_read_scalar(source, length, i, nullptr, &width)) {
+            for (usize j = 0; j < width; j++) units[i + j] = source[i + j];
         } else {
-            units[i] = unit >= 0xDC00 && unit <= 0xDFFF ? 0xFFFD : unit;
+            units[i] = 0xFFFD;
         }
+        i += width;
     }
     *out = mal_value_from_string(mal_string_new_copy(&vm->heap, units, length));
     free(units);
@@ -565,7 +569,7 @@ static bool usp_convert_inner_sequence(MalVm *vm, MalValue input, MalValue *sequ
             break;
         }
         mal_array_object_store(mal_value_to_array_object(*sequence_out),
-            url_index_key(index++), converted);
+            mal_key_index(index++), converted);
     }
 
     mal_gc_unroot(&element_span);
@@ -602,7 +606,7 @@ static bool usp_convert_sequence(
             break;
         }
         mal_array_object_store(mal_value_to_array_object(*sequence_out),
-            url_index_key(index++), roots[1]);
+            mal_key_index(index++), roots[1]);
     }
 
     mal_gc_unroot(&roots_span);
@@ -685,7 +689,7 @@ static bool usp_convert_record(MalVm *vm, MalValue input, MalValue *record_out) 
             mal_array_object_dense_get(pair, 0, &prior_key);
             if (mal_string_equals(
                     mal_value_to_string(prior_key), mal_value_to_string(roots[2]))) {
-                mal_array_object_store(pair, url_index_key(1), roots[3]);
+                mal_array_object_store(pair, mal_key_index(1), roots[3]);
                 replaced = true;
                 break;
             }
@@ -696,10 +700,10 @@ static bool usp_convert_record(MalVm *vm, MalValue input, MalValue *record_out) 
 
         roots[4] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
         MalArrayObject *pair = mal_value_to_array_object(roots[4]);
-        mal_array_object_store(pair, url_index_key(0), roots[2]);
-        mal_array_object_store(pair, url_index_key(1), roots[3]);
+        mal_array_object_store(pair, mal_key_index(0), roots[2]);
+        mal_array_object_store(pair, mal_key_index(1), roots[3]);
         mal_array_object_store(record,
-            url_index_key(mal_array_object_length(record)), roots[4]);
+            mal_key_index(mal_array_object_length(record)), roots[4]);
     }
 
     mal_gc_unroot(&roots_span);
@@ -715,7 +719,7 @@ static bool usp_fill_from_init(MalVm *vm, MalUrlSearchParamsObject *p, MalValue 
         mal_gc_root(&string_span, &string, 1);
         bool ok = usp_to_usv_string(vm, init, &string);
         if (ok) {
-            usp_parse_string(vm, p, mal_value_to_string(string));
+            ok = usp_parse_string(vm, p, mal_value_to_string(string));
         }
         mal_gc_unroot(&string_span);
         return ok;
@@ -767,24 +771,17 @@ static void url_create_search_params(MalVm *vm, MalUrlObject *url) {
     MalValue search = url_component(vm, url->handle, mal_url_search);
     MalRootSpan search_span;
     mal_gc_root(&search_span, &search, 1);
-    usp_parse_string(vm, p, mal_value_to_string(search));
+    if (mal_value_is_string(search)) {
+        usp_parse_string(vm, p, mal_value_to_string(search));
+    }
     mal_gc_unroot(&search_span);
     mal_gc_unroot(&rs);
 }
 
-/* Growable UTF-16 output buffer for serialization. */
-typedef struct {
-    c16 *data;
-    usize len;
-    usize cap;
-} UspOut;
+typedef MalU16Buffer UspOut;
 
-static void usp_out_push(UspOut *o, c16 unit) {
-    if (o->len == o->cap) {
-        o->cap = o->cap == 0 ? 32 : o->cap * 2;
-        o->data = realloc(o->data, sizeof(c16) * o->cap);
-    }
-    o->data[o->len++] = unit;
+static bool usp_out_push(UspOut *o, c16 unit) {
+    return mal_u16_buffer_push(o, unit) == MAL_U16_BUFFER_OK;
 }
 
 static bool usp_form_unreserved(byte c) {
@@ -793,39 +790,44 @@ static bool usp_form_unreserved(byte c) {
 }
 
 /* Append a String, form-urlencoded (space -> '+', unreserved literal, else %XX). */
-static void usp_encode_append(UspOut *o, const MalString *s) {
+static bool usp_encode_append(UspOut *o, const MalString *s) {
     static const char hex[] = "0123456789ABCDEF";
     usize blen;
-    byte *bytes = mal_utf8_encode(mal_string_code_units(s), mal_string_length(s), &blen);
+    byte *bytes = mal_string_to_utf8(s, &blen);
+    if (bytes == nullptr) return false;
+    bool ok = true;
     for (usize i = 0; i < blen; i++) {
         byte c = bytes[i];
         if (c == ' ') {
-            usp_out_push(o, '+');
+            ok = usp_out_push(o, '+');
         } else if (usp_form_unreserved(c)) {
-            usp_out_push(o, (c16) (u8) c);
+            ok = usp_out_push(o, (c16) (u8) c);
         } else {
-            usp_out_push(o, '%');
-            usp_out_push(o, (c16) (u8) hex[(u8) c >> 4]);
-            usp_out_push(o, (c16) (u8) hex[(u8) c & 0x0F]);
+            ok = usp_out_push(o, '%')
+                && usp_out_push(o, (c16) (u8) hex[(u8) c >> 4])
+                && usp_out_push(o, (c16) (u8) hex[(u8) c & 0x0F]);
         }
+        if (!ok) break;
     }
     free(bytes);
+    return ok;
 }
 
 /* Serialize the pair list to an application/x-www-form-urlencoded String. */
 static MalValue usp_serialize(MalVm *vm, MalUrlSearchParamsObject *p) {
-    UspOut o = {nullptr, 0, 0};
+    UspOut o = {0};
     for (i32 i = 0; i < p->count; i++) {
-        if (i > 0) {
-            usp_out_push(&o, '&');
+        bool ok = (i == 0 || usp_out_push(&o, '&'))
+            && usp_encode_append(&o, p->pairs[i].name)
+            && usp_out_push(&o, '=')
+            && usp_encode_append(&o, p->pairs[i].value);
+        if (!ok) {
+            mal_u16_buffer_dispose(&o);
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
         }
-        usp_encode_append(&o, p->pairs[i].name);
-        usp_out_push(&o, '=');
-        usp_encode_append(&o, p->pairs[i].value);
     }
-    MalValue result = mal_value_from_string(mal_string_new_copy(&vm->heap, o.data, o.len));
-    free(o.data);
-    return result;
+    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, &o));
 }
 
 static void usp_update_url(MalVm *vm, MalUrlSearchParamsObject *p) {
@@ -833,6 +835,7 @@ static void usp_update_url(MalVm *vm, MalUrlSearchParamsObject *p) {
         return;
     }
     MalValue query = usp_serialize(vm, p);
+    if (!mal_value_is_string(query)) return;
     MalRootSpan rs;
     mal_gc_root(&rs, &query, 1);
     MalString *string = mal_value_to_string(query);
@@ -943,7 +946,7 @@ static MalValue usp_get_all(
     u32 n = 0;
     for (i32 i = 0; i < p->count; i++) {
         if (mal_string_equals(p->pairs[i].name, name)) {
-            mal_object_set(out, url_index_key(n++), mal_value_from_string(p->pairs[i].value));
+            mal_object_set(out, mal_key_index(n++), mal_value_from_string(p->pairs[i].value));
         }
     }
     MalValue result = roots[1];
@@ -1245,9 +1248,9 @@ static MalValue usp_iterator_next(MalVm *vm, MalValue self, const MalValue *args
         MalRootSpan value_span;
         mal_gc_root(&value_span, &value, 1);
         MalObject *pair = (MalObject *) mal_value_to_array_object(value);
-        mal_object_set(pair, url_index_key(0),
+        mal_object_set(pair, mal_key_index(0),
             mal_value_from_string(p->pairs[index].name));
-        mal_object_set(pair, url_index_key(1),
+        mal_object_set(pair, mal_key_index(1),
             mal_value_from_string(p->pairs[index].value));
         mal_gc_unroot(&value_span);
     }

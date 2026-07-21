@@ -22,6 +22,7 @@ import {
 import { ensureNativeArtifacts, runtimeArtifactKey } from "../src/runtime-build.ts";
 import { ensureRustArtifacts, resolveRustArtifacts } from "../src/rust-build.ts";
 import { formatToolchainReport, inspectToolchain } from "../src/toolchain.ts";
+import type { ToolchainReport } from "../src/toolchain.ts";
 
 interface FakeToolchain {
 	root: string;
@@ -812,5 +813,27 @@ describe("native toolchain discovery", () => {
 			"sudo apt install build-essential",
 		);
 		expect(formatToolchainReport(report, "darwin")).toContain("xcode-select --install");
+	});
+
+	it("uses the exact same suggestions and readiness tail in both report modes", () => {
+		const report: ToolchainReport = {
+			tools: {},
+			cacheHit: false,
+			issues: [{ tool: "cc", message: "not found", required: true }],
+		};
+		const tail = [
+			"",
+			"Suggested fixes:",
+			"  Install Apple build tools: xcode-select --install",
+			"",
+			"Toolchain is not ready.",
+		].join("\n");
+
+		expect(formatToolchainReport(report, "darwin")).toBe(
+			`Maligator native toolchain:\n[missing] cc: not found\n${tail}`,
+		);
+		expect(formatToolchainReport(report, "darwin", true)).toBe(
+			`Maligator native toolchain:\n[missing] cc: not found\n${tail}`,
+		);
 	});
 });

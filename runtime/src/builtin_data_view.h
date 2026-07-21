@@ -15,25 +15,25 @@ void mal_builtin_data_view_install(MalVm *vm);
  */
 MalArrayBufferObject *mal_data_view_object_buffer(const MalDataViewObject *view);
 
-/**
- * Outcome of resolving a DataView's live byte span. DETACHED and OUT_OF_BOUNDS
- * are kept distinct because they map to different observable behavior in
- * BufferSource consumers: a detached view reads as empty, whereas a view left
- * out of bounds by a resizable buffer shrinking under it (spec IsViewOutOfBounds)
- * is unreadable and callers raise a TypeError.
- */
-typedef enum MalDataViewSpanStatus {
-    MAL_DATA_VIEW_SPAN_OK,
-    MAL_DATA_VIEW_SPAN_DETACHED,
-    MAL_DATA_VIEW_SPAN_RESIZABLE,
-    MAL_DATA_VIEW_SPAN_OUT_OF_BOUNDS,
-} MalDataViewSpanStatus;
+typedef enum MalBufferSourceSpanStatus {
+    MAL_BUFFER_SOURCE_SPAN_OK,
+    MAL_BUFFER_SOURCE_SPAN_NOT_BUFFER_SOURCE,
+    MAL_BUFFER_SOURCE_SPAN_DETACHED,
+    MAL_BUFFER_SOURCE_SPAN_OUT_OF_BOUNDS,
+} MalBufferSourceSpanStatus;
+
+typedef struct MalBufferSourceSpan {
+    byte *data;
+    usize length;
+    bool resizable;
+} MalBufferSourceSpan;
 
 /**
- * Resolve the bytes a DataView currently reads through, honoring the live
- * detached/resizable state. On OK, *out and *out_len describe the byteOffset-based
- * subrange (*out_len may be 0). On DETACHED or OUT_OF_BOUNDS, *out is null and
- * *out_len is 0. Exposes only the span so consumers need not see the layout.
+ * Resolve the current bytes of an ArrayBuffer, TypedArray, or DataView without
+ * exposing view layouts. OK may describe an empty span with null data. Detached
+ * and out-of-bounds are structural outcomes; callers decide whether either is
+ * empty input or an error. The span is a snapshot and must be resolved again
+ * after user code that can detach or resize its backing store.
  */
-MalDataViewSpanStatus mal_data_view_object_span(
-    const MalDataViewObject *view, const byte **out, usize *out_len);
+MalBufferSourceSpanStatus mal_buffer_source_span(
+    MalValue value, MalBufferSourceSpan *out);

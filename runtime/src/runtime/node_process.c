@@ -20,7 +20,7 @@
 #include "object_ops.h"
 #include "property_store.h"
 #include "table.h"
-#include "web_text_encoding.h"
+#include "utf8.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -47,19 +47,16 @@ static char **mal_process_environ(void) {
 // so there is no real path to report — see MalHostLaunchContext.
 static const char mal_process_script_placeholder[] = "<compiled>";
 
-static MalKey mal_process_index_key(u32 index) {
-    return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
-}
-
 // Decode `len` UTF-8 bytes into a fresh MalString value. argv / env / cwd arrive as
 // OS byte strings; Node treats them as UTF-8, so a raw byte >= 0x80 becomes the
 // matching code point (or U+FFFD when ill-formed) rather than a Latin-1 char.
 static MalValue mal_process_utf8_string_n(MalVm *vm, const char *bytes, usize len) {
-    usize count;
-    c16 *units = mal_utf8_decode((const byte *) bytes, len, &count);
-    MalValue value = mal_value_from_string(mal_string_new_copy(&vm->heap, units, count));
-    free(units);
-    return value;
+    MalString *string = mal_string_from_utf8(&vm->heap, (const byte *) bytes, len);
+    if (string == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(string);
 }
 
 static MalValue mal_process_utf8_string(MalVm *vm, const char *cstr) {
@@ -72,7 +69,7 @@ static void mal_process_set_element(MalVm *vm, MalObject *array, u32 index, cons
     MalValue element = mal_process_utf8_string(vm, utf8);
     MalRootSpan rs;
     mal_gc_root(&rs, &element, 1);
-    mal_object_set(array, mal_process_index_key(index), element);
+    mal_object_set(array, mal_key_index(index), element);
     mal_gc_unroot(&rs);
 }
 
@@ -278,8 +275,11 @@ static MalValue mal_process_stdio_write(
 
     MalString *string = mal_ops_to_string(&vm->heap, args[0]);
     usize length;
-    byte *bytes = mal_utf8_encode(
-        mal_string_code_units(string), mal_string_length(string), &length);
+    byte *bytes = mal_string_to_utf8(string, &length);
+    if (bytes == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     usize offset = 0;
     while (offset < length) {
         ssize_t written = write(fd, bytes + offset, length - offset);

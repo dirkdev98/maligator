@@ -78,7 +78,7 @@ static bool mal_property_iter_next_dense(MalPropertyIter *iter, MalKey *key_out,
         }
         iter->last_index = i;
         iter->has_last_index = true;
-        *key_out = (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+        *key_out = mal_key_index(i);
         *desc_out = (MalPropertyDesc){
             .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
             .value = value,

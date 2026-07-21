@@ -7,24 +7,16 @@
 #include <string.h>
 
 #include "builtin_intl.h"
+#include "ecma_whitespace.h"
 #include "heap_string.h"
 #include "primitive_wrapper_object.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
 
-static bool mal_builtin_number_is_whitespace(c16 code_unit) {
-    return (code_unit >= 0x09 && code_unit <= 0x0D) ||
-        code_unit == 0x20 ||
-        code_unit == 0xA0 ||
-        code_unit == 0x2028 ||
-        code_unit == 0x2029 ||
-        code_unit == 0xFEFF;
-}
-
 static f64 mal_builtin_parse_int_units(const c16 *code_units, usize length, f64 raw_radix) {
     usize i = 0;
-    while (i < length && mal_builtin_number_is_whitespace(code_units[i])) {
+    while (i < length && mal_ecma_is_string_whitespace(code_units[i])) {
         i++;
     }
 
@@ -34,7 +26,7 @@ static f64 mal_builtin_parse_int_units(const c16 *code_units, usize length, f64 
         i++;
     }
 
-    i32 radix = isnan(raw_radix) ? 0 : (i32) raw_radix;
+    i32 radix = mal_ops_number_to_i32(raw_radix);
     bool strip_prefix = true;
     if (radix != 0) {
         if (radix < 2 || radix > 36) {
@@ -79,7 +71,7 @@ static f64 mal_builtin_parse_int_units(const c16 *code_units, usize length, f64 
 
 static f64 mal_builtin_parse_float_units(const c16 *code_units, usize length) {
     usize start = 0;
-    while (start < length && mal_builtin_number_is_whitespace(code_units[start])) {
+    while (start < length && mal_ecma_is_string_whitespace(code_units[start])) {
         start++;
     }
 
@@ -230,7 +222,7 @@ static MalValue mal_builtin_number_is_safe_integer(MalVm *vm, MalValue this_valu
         return mal_value_new_boolean(false);
     }
 
-    return mal_value_new_boolean(fabs(mal_ops_to_number(args[0])) <= 9007199254740991.0);
+    return mal_value_new_boolean(fabs(mal_ops_to_number(args[0])) <= MAL_NUMBER_MAX_SAFE_INTEGER);
 }
 
 static MalValue mal_builtin_parse_int(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -354,7 +346,7 @@ static MalValue mal_builtin_number_prototype_to_string(MalVm *vm, MalValue this_
         if (!mal_vm_to_number(vm, args[0], &raw)) {
             return mal_value_new_undefined();
         }
-        radix = isnan(raw) ? 0 : trunc(raw);
+        radix = mal_ops_number_to_integer_or_infinity(raw);
     }
     if (radix < 2 || radix > 36) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toString() radix must be between 2 and 36");
@@ -397,7 +389,7 @@ static MalValue mal_builtin_number_prototype_to_fixed(MalVm *vm, MalValue this_v
         if (!mal_vm_to_number(vm, args[0], &raw)) {
             return mal_value_new_undefined();
         }
-        digits = isnan(raw) ? 0 : trunc(raw);
+        digits = mal_ops_number_to_integer_or_infinity(raw);
     }
     if (digits < 0 || digits > 100) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "toFixed() digits argument must be between 0 and 100");
@@ -554,7 +546,7 @@ static MalValue mal_builtin_number_prototype_to_exponential(MalVm *vm, MalValue 
         if (!mal_vm_to_number(vm, args[0], &raw)) {
             return mal_value_new_undefined();
         }
-        digits = isnan(raw) ? 0 : trunc(raw);
+        digits = mal_ops_number_to_integer_or_infinity(raw);
     }
 
     if (!isfinite(number)) {
@@ -628,7 +620,7 @@ static MalValue mal_builtin_number_prototype_to_precision(MalVm *vm, MalValue th
     if (!mal_vm_to_number(vm, args[0], &raw)) {
         return mal_value_new_undefined();
     }
-    f64 precision = isnan(raw) ? 0 : trunc(raw);
+    f64 precision = mal_ops_number_to_integer_or_infinity(raw);
     if (!isfinite(number)) {
         return mal_value_from_string(mal_ops_to_string(&vm->heap, mal_ops_number_value(number)));
     }
@@ -732,8 +724,8 @@ void mal_builtin_number_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, constructor_object, "prototype", vm->intrinsics[MAL_INTRINSIC_NUMBER_PROTOTYPE], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, prototype, "constructor", vm->intrinsics[MAL_INTRINSIC_NUMBER_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 
-    mal_intrinsic_define_data(vm, constructor_object, "MAX_SAFE_INTEGER", mal_value_from_f64(9007199254740991.0), MAL_PROPERTY_NONE);
-    mal_intrinsic_define_data(vm, constructor_object, "MIN_SAFE_INTEGER", mal_value_from_f64(-9007199254740991.0), MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, constructor_object, "MAX_SAFE_INTEGER", mal_value_from_f64(MAL_NUMBER_MAX_SAFE_INTEGER), MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, constructor_object, "MIN_SAFE_INTEGER", mal_value_from_f64(MAL_NUMBER_MIN_SAFE_INTEGER), MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, constructor_object, "EPSILON", mal_value_from_f64(DBL_EPSILON), MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, constructor_object, "MAX_VALUE", mal_value_from_f64(DBL_MAX), MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, constructor_object, "MIN_VALUE", mal_value_from_f64(5e-324), MAL_PROPERTY_NONE);

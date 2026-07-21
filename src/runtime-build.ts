@@ -14,33 +14,19 @@ import {
 import * as path from "node:path";
 import { runtimeCcFlags } from "./build-flags.ts";
 import { ensureCompilerWire } from "./compiler-bake.ts";
+import { hashDirectoryTrees, legacyLocaleNameComparator } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { ensureRustArtifacts } from "./rust-build.ts";
 import type { RustArtifacts } from "./rust-build.ts";
 
 function runtimeSourceHash(runtimeDirectory: string): string {
 	const root = path.resolve(runtimeDirectory);
-	const parts: Array<string> = [];
-	const collect = (filePath: string): void => {
-		parts.push(
-			path.relative(root, filePath),
-			"\0",
-			hash("sha256", readFileSync(filePath), "hex"),
-			"\0",
-		);
-	};
-	const walk = (directory: string): void => {
-		for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
-			a.name.localeCompare(b.name),
-		)) {
-			const full = path.join(directory, entry.name);
-			if (entry.isDirectory()) walk(full);
-			else if (/\.[ch]$/.test(entry.name)) collect(full);
-		}
-	};
-	walk(path.join(root, "src"));
-	walk(path.join(root, "rust/include"));
-	return hash("sha256", parts.join(""), "hex");
+	return hashDirectoryTrees({
+		root,
+		directories: [path.join(root, "src"), path.join(root, "rust/include")],
+		include: (entry) => /\.[ch]$/.test(entry.name),
+		compareNames: legacyLocaleNameComparator,
+	});
 }
 
 export function runtimeArtifactKey(inputs: {

@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ascii.h"
 #include "array_object.h"
 #include "array_buffer_object.h"
 #include "function_object.h"
@@ -22,7 +23,7 @@
 #include "object.h"
 #include "object_ops.h"
 #include "server.h"
-#include "web_text_encoding.h"
+#include "utf8.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
 #include "vm_ops.h"
@@ -497,7 +498,7 @@ static MalValue http_response_get_header_names(
             vm, state->response_headers[i].name,
             state->response_headers[i].name_len);
         mal_array_object_store(
-            array, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)},
+            array, mal_key_index(i),
             name);
     }
     mal_gc_unroot(&root);
@@ -511,9 +512,8 @@ static bool http_response_append(
     byte *owned = nullptr;
     if (mal_value_is_string(chunk)) {
         MalString *string = mal_value_to_string(chunk);
-        owned = mal_utf8_encode(
-            mal_string_code_units(string), mal_string_length(string), &length);
-        if (owned == nullptr && length > 0) {
+        owned = mal_string_to_utf8(string, &length);
+        if (owned == nullptr) {
             mal_vm_throw_allocation_error(vm);
             return false;
         }
@@ -611,16 +611,7 @@ static const char *http_status_reason(int status) {
 
 static bool http_string_equal_ci(MalValue value, const char *ascii) {
     if (!mal_value_is_string(value)) return false;
-    MalString *string = mal_value_to_string(value);
-    usize length = mal_string_length(string);
-    if (length != strlen(ascii)) return false;
-    const c16 *units = mal_string_code_units(string);
-    for (usize i = 0; i < length; i++) {
-        c16 unit = units[i];
-        if (unit >= 'A' && unit <= 'Z') unit += 0x20;
-        if (unit != (byte) ascii[i]) return false;
-    }
-    return true;
+    return mal_string_equals_ascii_ci(mal_value_to_string(value), ascii);
 }
 
 static bool http_block_append(
@@ -668,9 +659,8 @@ static bool http_response_serialize_headers(
             return false;
         }
         usize value_length;
-        byte *value = mal_utf8_encode(
-            mal_string_code_units(string), mal_string_length(string), &value_length);
-        if (value == nullptr && value_length > 0) {
+        byte *value = mal_string_to_utf8(string, &value_length);
+        if (value == nullptr) {
             free(block);
             mal_vm_throw_allocation_error(vm);
             return false;
@@ -925,10 +915,8 @@ static bool http_client_serialize_headers(
             break;
         }
         usize value_len;
-        byte *value = mal_utf8_encode(
-            mal_string_code_units(value_string), mal_string_length(value_string),
-            &value_len);
-        bool valid = value != nullptr || value_len == 0;
+        byte *value = mal_string_to_utf8(value_string, &value_len);
+        bool valid = value != nullptr;
         for (usize j = 0; valid && j < value_len; j++) {
             if (value[j] == '\r' || value[j] == '\n') valid = false;
         }
@@ -965,9 +953,8 @@ static bool http_client_append(
     byte *owned = nullptr;
     if (mal_value_is_string(chunk)) {
         MalString *string = mal_value_to_string(chunk);
-        owned = mal_utf8_encode(
-            mal_string_code_units(string), mal_string_length(string), &length);
-        if (owned == nullptr && length > 0) {
+        owned = mal_string_to_utf8(string, &length);
+        if (owned == nullptr) {
             mal_vm_throw_allocation_error(vm);
             return false;
         }
@@ -1290,13 +1277,11 @@ static bool http_request_headers(
         roots[4] = http_ascii_value(vm, header->name, header->name_len);
         mal_array_object_store(
             raw,
-            (MalKey) {.kind = MAL_KEY_INDEX,
-                      .value = mal_value_from_i32((i32) (i * 2))},
+            mal_key_index((i32) (i * 2)),
             roots[4]);
         mal_array_object_store(
             raw,
-            (MalKey) {.kind = MAL_KEY_INDEX,
-                      .value = mal_value_from_i32((i32) (i * 2 + 1))},
+            mal_key_index((i32) (i * 2 + 1)),
             roots[3]);
     }
     *headers_out = roots[0];
@@ -1477,9 +1462,7 @@ static bool http_client_response_headers(
             MalArrayObject *cookies = mal_value_to_array_object(roots[4]);
             mal_array_object_store(
                 cookies,
-                (MalKey) {.kind = MAL_KEY_INDEX,
-                          .value = mal_value_from_i32(
-                              (i32) mal_array_object_length(cookies))},
+                mal_key_index((i32) mal_array_object_length(cookies)),
                 roots[3]);
         } else {
             mal_object_set(mal_value_to_object(roots[0]),
@@ -1488,13 +1471,11 @@ static bool http_client_response_headers(
         roots[4] = http_ascii_value(vm, header->name, header->name_len);
         mal_array_object_store(
             raw,
-            (MalKey) {.kind = MAL_KEY_INDEX,
-                      .value = mal_value_from_i32((i32) (i * 2))},
+            mal_key_index((i32) (i * 2)),
             roots[4]);
         mal_array_object_store(
             raw,
-            (MalKey) {.kind = MAL_KEY_INDEX,
-                      .value = mal_value_from_i32((i32) (i * 2 + 1))},
+            mal_key_index((i32) (i * 2 + 1)),
             roots[3]);
     }
     *headers_out = roots[0];
@@ -2326,7 +2307,7 @@ static MalValue http_methods(MalVm *vm) {
     MalRootSpan root;
     mal_gc_root(&root, &value, 1);
     for (u32 i = 0; i < countof(methods); i++) {
-        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+        MalKey key = mal_key_index(i);
         MalValue method = mal_value_from_string(
             mal_intrinsic_ascii(vm, (const byte *) methods[i]));
         mal_array_object_store(array, key, method);

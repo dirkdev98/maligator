@@ -10,6 +10,7 @@
 MalNativeFunctionCallback mal_array_iterator_next_callback = nullptr;
 #include "vm.h"
 #include "vm_ops.h"
+#include "utf16.h"
 
 MalValue mal_vm_create_iter_result(MalVm *vm, MalValue value, bool done) {
     MalObject *result = mal_intrinsic_new_object(vm);
@@ -53,8 +54,8 @@ MalValue mal_vm_new_builtin_iterator(MalVm *vm, MalIteratorKind kind, MalValue t
 
 static MalValue mal_builtin_iterator_pair(MalVm *vm, MalValue first, MalValue second) {
     MalArrayObject *pair = mal_intrinsic_new_array(vm, 2);
-    mal_object_set((MalObject *) pair, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, first);
-    mal_object_set((MalObject *) pair, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, second);
+    mal_object_set((MalObject *) pair, mal_key_index(0), first);
+    mal_object_set((MalObject *) pair, mal_key_index(1), second);
 
     return mal_value_from_array_object(pair);
 }
@@ -176,7 +177,7 @@ static bool mal_builtin_iterator_array_advance(
     if (!mal_vm_get_property(
         vm,
         iterator->target,
-        (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)},
+        mal_key_index(index),
         &element
     )) {
         return false;
@@ -206,13 +207,7 @@ static bool mal_builtin_iterator_string_advance(
     }
 
     const c16 *code_units = mal_string_code_units(string);
-    usize count = 1;
-
-    // Surrogate pairs advance as one code point.
-    if (code_units[index] >= 0xD800 && code_units[index] <= 0xDBFF && index + 1 < length &&
-        code_units[index + 1] >= 0xDC00 && code_units[index + 1] <= 0xDFFF) {
-        count = 2;
-    }
+    usize count = mal_utf16_code_point_width(code_units, length, index);
 
     iterator->index += count;
     *done_out = false;

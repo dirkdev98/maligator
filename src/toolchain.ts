@@ -592,6 +592,20 @@ function installationSuggestions(
 	return suggestions;
 }
 
+function appendToolchainReportTail(
+	lines: Array<string>,
+	report: ToolchainReport,
+	platform: NodeJS.Platform,
+): void {
+	const suggestions = installationSuggestions(report, platform);
+	if (suggestions.length > 0)
+		lines.push("", "Suggested fixes:", ...suggestions.map((item) => `  ${item}`));
+	lines.push(
+		"",
+		report.toolchain === undefined ? "Toolchain is not ready." : "Toolchain is ready.",
+	);
+}
+
 export function formatToolchainReport(
 	report: ToolchainReport,
 	platform: NodeJS.Platform = process.platform,
@@ -619,13 +633,7 @@ export function formatToolchainReport(
 				`[${issue.required ? "missing" : "optional"}] ${issue.tool}: ${issue.message}`,
 			);
 		}
-		const suggestions = installationSuggestions(report, platform);
-		if (suggestions.length > 0)
-			lines.push("", "Suggested fixes:", ...suggestions.map((item) => `  ${item}`));
-		lines.push(
-			"",
-			report.toolchain === undefined ? "Toolchain is not ready." : "Toolchain is ready.",
-		);
+		appendToolchainReportTail(lines, report, platform);
 		return lines.join("\n");
 	}
 	for (const name of ["cc", "cxx", "ar", "rustup", "cargo", "rustc", "strip"] as const) {
@@ -655,12 +663,6 @@ export function formatToolchainReport(
 		if (issue.tool === "strip" || issue.tool === "lto") continue;
 		if (!issue.required) lines.push(`warning: ${issue.message}`);
 	}
-	const suggestions = installationSuggestions(report, platform);
-	if (suggestions.length > 0)
-		lines.push("", "Suggested fixes:", ...suggestions.map((item) => `  ${item}`));
-	lines.push(
-		"",
-		report.toolchain === undefined ? "Toolchain is not ready." : "Toolchain is ready.",
-	);
+	appendToolchainReportTail(lines, report, platform);
 	return lines.join("\n");
 }

@@ -82,18 +82,6 @@ static u64 mal_table_hash_value(MalValue value) {
     return mal_table_hash_mix(value);
 }
 
-static bool mal_table_value_equals(MalValue left, MalValue right) {
-    if (left == right) {
-        return true;
-    }
-
-    if (mal_value_is_string(left) && mal_value_is_string(right)) {
-        return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
-    }
-
-    return false;
-}
-
 // The hash slot for `key`: either the slot holding a live entry equal to `key`,
 // or the first empty slot on its probe chain (slots only ever reference live
 // entries — a delete rebuilds the chains — so probing stops at the first empty).
@@ -103,7 +91,7 @@ static usize mal_table_find_slot(const MalTable *table, MalValue key) {
 
     while (table->slots[index] != MAL_TABLE_EMPTY) {
         MalTableEntry *entry = &table->entries[table->slots[index]];
-        if (entry->live && mal_table_value_equals(entry->key, key)) {
+        if (entry->live && mal_key_value_equals(entry->key, key)) {
             break;
         }
 
@@ -366,7 +354,7 @@ bool mal_table_entry_matches(
         return false;
     }
     const MalTableEntry *candidate = &table->entries[index];
-    return candidate->live && mal_table_value_equals(candidate->key, key.value);
+    return candidate->live && mal_key_value_equals(candidate->key, key.value);
 }
 
 void mal_table_iter_init(MalTableIter *iter, MalTable *table, MalTableIterKind kind) {

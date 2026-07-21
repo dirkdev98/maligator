@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "array_buffer_object.h"
+#include "bigint128.h"
 #include "builtin_bigint.h"
 #include "builtin_promise.h"
 #include "heap_bigint.h"
@@ -55,11 +56,8 @@ static bool atomics_to_index(MalVm *vm, MalValue value, u32 length, u32 *out) {
     if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
-    if (isnan(number)) {
-        number = 0;
-    }
-    number = trunc(number);
-    if (number < 0 || number > 9007199254740991.0) {
+    number = mal_ops_number_to_integer_or_infinity(number);
+    if (number < 0 || number > MAL_NUMBER_MAX_SAFE_INTEGER) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Atomics: invalid index");
         return false;
     }
@@ -77,24 +75,12 @@ static bool atomics_to_integer(MalVm *vm, MalValue value, f64 *out) {
     if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
-    *out = isnan(number) ? 0 : trunc(number);
+    *out = mal_ops_number_to_integer_or_infinity(number);
     return true;
 }
 
 // Reduce a finite Number to the low `bytes*8` bits (the element-width modular
 // representation), matching the TypedArray store conversion.
-static u64 atomics_reduce(f64 number, u32 bytes) {
-    if (!isfinite(number) || number == 0) {
-        return 0;
-    }
-    f64 modulus = pow(2.0, (f64) (bytes * 8));
-    f64 remainder = fmod(trunc(number), modulus);
-    if (remainder < 0) {
-        remainder += modulus;
-    }
-    return (u64) remainder;
-}
-
 // RevalidateAtomicAccess after a user coercion may have detached/shrunk the
 // buffer: an out-of-bounds view is a TypeError, a now-too-small index a RangeError.
 static bool atomics_revalidate(MalVm *vm, MalTypedArrayObject *array, u32 index) {
@@ -139,15 +125,15 @@ static i64 atomics_apply_i64(AtomicsOp op, i64 old, i64 operand) {
 static i128 atomics_apply_i128(AtomicsOp op, i128 old, i128 operand) {
     switch (op) {
     case ATOMICS_ADD:
-        return old + operand;
+        return mal_bigint128_add(old, operand);
     case ATOMICS_SUB:
-        return old - operand;
+        return mal_bigint128_subtract(old, operand);
     case ATOMICS_AND:
-        return old & operand;
+        return mal_bigint128_bit_and(old, operand);
     case ATOMICS_OR:
-        return old | operand;
+        return mal_bigint128_bit_or(old, operand);
     case ATOMICS_XOR:
-        return old ^ operand;
+        return mal_bigint128_bit_xor(old, operand);
     case ATOMICS_EXCHANGE:
         return operand;
     }
@@ -192,7 +178,7 @@ static MalValue atomics_rmw(MalVm *vm, const MalValue *args, i32 arg_count, Atom
         return mal_value_new_undefined();
     }
     u32 element_size = mal_typed_array_element_size(array->kind);
-    i64 operand = (i64) atomics_reduce(number, element_size);
+    i64 operand = (i64) mal_ops_number_to_uint_width(number, element_size * 8);
     MalValue old_value = mal_typed_array_object_get(vm, array, index);
     i64 old = (i64) mal_ops_to_number(old_value);
     i64 result = atomics_apply_i64(op, old, operand);
@@ -348,8 +334,8 @@ static MalValue mal_atomics_compare_exchange(MalVm *vm, MalValue this_value, con
     }
     u32 element_size = mal_typed_array_element_size(array->kind);
     MalValue old_value = mal_typed_array_object_get(vm, array, index);
-    u64 old_bits = atomics_reduce(mal_ops_to_number(old_value), element_size);
-    u64 expected_bits = atomics_reduce(expected_num, element_size);
+    u64 old_bits = mal_ops_number_to_uint_width(mal_ops_to_number(old_value), element_size * 8);
+    u64 expected_bits = mal_ops_number_to_uint_width(expected_num, element_size * 8);
     if (old_bits == expected_bits) {
         mal_typed_array_object_set(vm, array, index, mal_ops_number_value(replacement_num));
     }
@@ -508,8 +494,9 @@ static MalValue mal_atomics_wait_async(MalVm *vm, MalValue this_value, const Mal
             return mal_value_new_undefined();
         }
         u32 element_size = mal_typed_array_element_size(array->kind);
-        u64 want = atomics_reduce(number, element_size);
-        u64 current = atomics_reduce(mal_ops_to_number(mal_typed_array_object_get(vm, array, index)), element_size);
+        u64 want = mal_ops_number_to_uint_width(number, element_size * 8);
+        u64 current = mal_ops_number_to_uint_width(
+            mal_ops_to_number(mal_typed_array_object_get(vm, array, index)), element_size * 8);
         matches = current == want;
     }
     f64 timeout;

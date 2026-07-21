@@ -23,6 +23,7 @@
  * instructions.
  */
 
+import { buildIRRegisterIndex } from "./ir-register-index.ts";
 import { addInlineSourcePosition, getOrCreateStringConstant } from "./ir.ts";
 import type { IntermediateProgram, IRBlock, IRFunction, IRInstruction } from "./ir.ts";
 import { definedRegister } from "./register-alloc.ts";
@@ -109,25 +110,16 @@ export function functionValuedRegisters(
 	capturedSlots: ReadonlyMap<string, number>,
 	globalSlots: ReadonlyMap<number, number>,
 ): Map<number, number> {
-	const defCount = new Map<number, number>();
-	for (const block of fn.blocks) {
-		for (const instruction of block.instructions) {
-			if (!("registers" in instruction)) {
-				continue;
-			}
-			const def = definedRegister(instruction);
-			if (def !== null) {
-				defCount.set(def, (defCount.get(def) ?? 0) + 1);
-			}
-		}
-	}
+	const definitions = buildIRRegisterIndex(fn).definitions;
+	const isSingleDefinition = (register: number) =>
+		definitions.get(register)?.length === 1;
 
 	const funcOf = new Map<number, number>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
 			if (
 				instruction.type === "createFunction" &&
-				defCount.get(instruction.registers[0]) === 1
+				isSingleDefinition(instruction.registers[0])
 			) {
 				funcOf.set(instruction.registers[0], instruction.functionIndex);
 			}
@@ -145,7 +137,7 @@ export function functionValuedRegisters(
 					const destination = instruction.registers[0];
 					const source = instruction.registers[1];
 					if (
-						defCount.get(destination) === 1 &&
+						isSingleDefinition(destination) &&
 						funcOf.has(source) &&
 						!funcOf.has(destination)
 					) {
@@ -163,7 +155,7 @@ export function functionValuedRegisters(
 					);
 					if (
 						slot !== undefined &&
-						defCount.get(destination) === 1 &&
+						isSingleDefinition(destination) &&
 						!funcOf.has(destination)
 					) {
 						funcOf.set(destination, slot);
@@ -174,7 +166,7 @@ export function functionValuedRegisters(
 					const slot = globalSlots.get(instruction.index);
 					if (
 						slot !== undefined &&
-						defCount.get(destination) === 1 &&
+						isSingleDefinition(destination) &&
 						!funcOf.has(destination)
 					) {
 						funcOf.set(destination, slot);
@@ -235,21 +227,13 @@ export function capturedSlotFunctions(program: IntermediateProgram): Map<string,
  * `throwIfTdz` the front end emits — kept by DCE — so resolving the callee never
  * skips a temporal-dead-zone throw). */
 function createEmptyRegisters(fn: IRFunction): Set<number> {
-	const defCount = new Map<number, number>();
-	for (const block of fn.blocks) {
-		for (const instruction of block.instructions) {
-			const def = "registers" in instruction ? definedRegister(instruction) : null;
-			if (def !== null) {
-				defCount.set(def, (defCount.get(def) ?? 0) + 1);
-			}
-		}
-	}
+	const definitions = buildIRRegisterIndex(fn).definitions;
 	const set = new Set<number>();
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
 			if (
 				instruction.type === "createEmpty" &&
-				defCount.get(instruction.registers[0]) === 1
+				definitions.get(instruction.registers[0])?.length === 1
 			) {
 				set.add(instruction.registers[0]);
 			}
@@ -435,7 +419,7 @@ function globalFunctionDeclarations(program: IntermediateProgram): Map<number, n
 	const found = new Map<number, number>();
 	const ambiguous = new Set<number>();
 	for (const fn of program.functions) {
-		// A linear per-block last-writer scan, not singleDefinitions: hoisted declarations
+		// A linear per-block last-writer scan, not a function-wide definition index:
 		// reuse one destination register across every `createFunction F; storeGlobalProperty
 		// N` pair (so the register is multi-def), and the pair is adjacent, so the most
 		// recent writer of the store's source is the createFunction that feeds it.
@@ -500,7 +484,7 @@ export function findSpeculativeInlineSites(
 	};
 	const byCaller = new Map<number, Array<SpeculativeInlineSite>>();
 	for (const fn of program.functions) {
-		const defs = singleDefinitions(fn);
+		const defs = buildIRRegisterIndex(fn).uniqueDefinitions;
 		const sites: Array<SpeculativeInlineSite> = [];
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
@@ -715,7 +699,7 @@ export function findMethodInlineSites(program: IntermediateProgram): ProgramMeth
 	};
 	const byCaller = new Map<number, Array<MethodInlineSite>>();
 	for (const fn of program.functions) {
-		const defs = singleDefinitions(fn);
+		const defs = buildIRRegisterIndex(fn).uniqueDefinitions;
 		const sites: Array<MethodInlineSite> = [];
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
@@ -847,35 +831,6 @@ export function decodeStringConstant(
 	return String.fromCharCode(...program.stringConstants[index]!);
 }
 
-/** Registers defined exactly once in `fn`, mapped to their defining instruction. */
-export function singleDefinitions(fn: IRFunction): Map<number, IRInstruction> {
-	const count = new Map<number, number>();
-	for (const block of fn.blocks) {
-		for (const instruction of block.instructions) {
-			if (!("registers" in instruction)) {
-				continue;
-			}
-			const def = definedRegister(instruction);
-			if (def !== null) {
-				count.set(def, (count.get(def) ?? 0) + 1);
-			}
-		}
-	}
-	const defs = new Map<number, IRInstruction>();
-	for (const block of fn.blocks) {
-		for (const instruction of block.instructions) {
-			if (!("registers" in instruction)) {
-				continue;
-			}
-			const def = definedRegister(instruction);
-			if (def !== null && count.get(def) === 1) {
-				defs.set(def, instruction);
-			}
-		}
-	}
-	return defs;
-}
-
 /**
  * Find `recv.method(callback[, …])` sites whose method is a known array iteration
  * method and whose callback resolves to an inlinable local function. Detection
@@ -899,7 +854,7 @@ export function findHofInlineSites(program: IntermediateProgram): ProgramHofSite
 	const byCaller = new Map<number, Array<HofInlineSite>>();
 	for (const fn of program.functions) {
 		const funcOf = functionValuedRegisters(fn, capturedSlots, globalSlots);
-		const defs = singleDefinitions(fn);
+		const defs = buildIRRegisterIndex(fn).uniqueDefinitions;
 		const sites: Array<HofInlineSite> = [];
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
@@ -2241,15 +2196,8 @@ export function optEliminateCapturedSlots(program: IntermediateProgram): boolean
 
 	for (const fn of program.functions) {
 		const defCount = new Map<number, number>();
-		for (const block of fn.blocks) {
-			for (const instruction of block.instructions) {
-				if ("registers" in instruction) {
-					const def = definedRegister(instruction);
-					if (def !== null) {
-						defCount.set(def, (defCount.get(def) ?? 0) + 1);
-					}
-				}
-			}
+		for (const [register, definitions] of buildIRRegisterIndex(fn).definitions) {
+			defCount.set(register, definitions.length);
 		}
 		defCountByFn.set(fn.functionIndex, defCount);
 

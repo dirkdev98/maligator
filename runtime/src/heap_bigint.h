@@ -36,10 +36,3 @@ i128 mal_bigint_value(const MalBigInt *bigint);
  * Format a BigInt value in the given radix (2..36) as a heap string.
  */
 MalString *mal_bigint_to_string(MalHeap *heap, i128 value, i32 radix);
-
-/**
- * Parse a StringToBigInt: optional surrounding whitespace, optional leading
- * sign, and either a 0x/0o/0b-prefixed literal or a decimal run. The empty (or
- * all-whitespace) string is 0. Sets *ok to false on any invalid input.
- */
-i128 mal_bigint_parse(const c16 *code_units, usize length, bool *ok);

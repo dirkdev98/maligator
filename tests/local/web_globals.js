@@ -183,6 +183,35 @@ try {
 }
 check("TextDecoder resizable out-of-bounds DataView rejects", resizableOobThrew);
 
+const bigintView = new DataView(new ArrayBuffer(8));
+const bigintCoercionOrder = [];
+bigintView.setBigInt64(0, {
+	[Symbol.toPrimitive](hint) {
+		bigintCoercionOrder.push("primitive:" + hint);
+		return "42";
+	},
+});
+check(
+	"DataView BigInt store uses canonical ToPrimitive once",
+	bigintView.getBigInt64(0) === 42n &&
+		bigintCoercionOrder.join(",") === "primitive:number",
+);
+let bigintFallbackOrder = "";
+bigintView.setBigUint64(0, {
+	valueOf() {
+		bigintFallbackOrder += "valueOf";
+		return {};
+	},
+	toString() {
+		bigintFallbackOrder += ",toString";
+		return "7";
+	},
+});
+check(
+	"DataView BigInt store preserves ordinary coercion order",
+	bigintView.getBigUint64(0) === 7n && bigintFallbackOrder === "valueOf,toString",
+);
+
 // --- btoa / atob ---
 check("btoa", btoa("hello") === "aGVsbG8=");
 check("btoa padding", btoa("foobar") === "Zm9vYmFy" && btoa("fo") === "Zm8=");

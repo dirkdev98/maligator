@@ -3,7 +3,6 @@ import { hash } from "node:crypto";
 import {
 	mkdirSync,
 	mkdtempSync,
-	readdirSync,
 	readFileSync,
 	renameSync,
 	rmSync,
@@ -12,6 +11,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import type { NativeFeatureSpec } from "./build-flags.ts";
+import { hashDirectoryTrees, legacyLocaleNameComparator } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
 
 export { resolvePathExecutable } from "./toolchain.ts";
@@ -19,25 +19,12 @@ export { resolvePathExecutable } from "./toolchain.ts";
 /** Digest every Rust source and Cargo input under a runtime's rust directory. */
 export function rustSourceDigest(rustDirectory: string): string {
 	const rustRoot = path.resolve(rustDirectory);
-	const parts: Array<string> = [];
-	const walk = (directory: string): void => {
-		for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
-			a.name.localeCompare(b.name),
-		)) {
-			const full = path.join(directory, entry.name);
-			if (entry.isDirectory()) walk(full);
-			else if (/\.(?:rs|toml|lock)$/.test(entry.name)) {
-				parts.push(
-					path.relative(rustRoot, full),
-					"\0",
-					hash("sha256", readFileSync(full), "hex"),
-					"\0",
-				);
-			}
-		}
-	};
-	walk(rustRoot);
-	return hash("sha256", parts.join(""), "hex");
+	return hashDirectoryTrees({
+		root: rustRoot,
+		directories: [rustRoot],
+		include: (entry) => /\.(?:rs|toml|lock)$/.test(entry.name),
+		compareNames: legacyLocaleNameComparator,
+	});
 }
 
 export interface RustArtifactKeyInputs {

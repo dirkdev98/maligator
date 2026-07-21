@@ -6,6 +6,7 @@
 #include <time.h>
 
 #include "builtin_iterator.h"
+#include "float16.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -100,20 +101,6 @@ static MalValue mal_builtin_math_round(MalVm *vm, MalValue this_value, const Mal
     return mal_ops_number_value(result);
 }
 
-// ToUint32 per spec (ToNumber already applied): truncate toward zero, reduce
-// modulo 2^32 into [0, 2^32).
-static u32 mal_builtin_math_to_uint32(f64 x) {
-    if (!isfinite(x) || x == 0.0) {
-        return 0;
-    }
-    f64 truncated = trunc(x);
-    f64 modulo = fmod(truncated, 4294967296.0);
-    if (modulo < 0.0) {
-        modulo += 4294967296.0;
-    }
-    return (u32) modulo;
-}
-
 static MalValue mal_builtin_math_clz32(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -122,7 +109,7 @@ static MalValue mal_builtin_math_clz32(MalVm *vm, MalValue this_value, const Mal
     if (!mal_builtin_math_to_number(vm, args, arg_count, 0, &x)) {
         return mal_value_new_nan();
     }
-    u32 value = mal_builtin_math_to_uint32(x);
+    u32 value = mal_ops_number_to_uint32(x);
     return mal_value_from_i32(value == 0 ? 32 : __builtin_clz(value));
 }
 
@@ -138,8 +125,8 @@ static MalValue mal_builtin_math_imul(MalVm *vm, MalValue this_value, const MalV
     if (!mal_builtin_math_to_number(vm, args, arg_count, 1, &right)) {
         return mal_value_new_nan();
     }
-    u32 a = mal_builtin_math_to_uint32(left);
-    u32 b = mal_builtin_math_to_uint32(right);
+    u32 a = mal_ops_number_to_uint32(left);
+    u32 b = mal_ops_number_to_uint32(right);
     return mal_value_from_i32((i32) (a * b));
 }
 
@@ -329,51 +316,6 @@ static MalValue mal_builtin_math_max(MalVm *vm, MalValue this_value, const MalVa
     return mal_builtin_math_min_max(vm, args, arg_count, true);
 }
 
-// Round a binary64 to the nearest binary16 (round-to-nearest, ties to even)
-// and widen back to binary64, matching Math.f16round.
-static f64 mal_builtin_math_round_f16(f64 x) {
-    if (isnan(x)) {
-        return NAN;
-    }
-    if (isinf(x)) {
-        return x;
-    }
-    if (x == 0.0) {
-        return x; // preserves the sign of zero
-    }
-
-    int sign = signbit(x) ? 1 : 0;
-    f64 ax = fabs(x);
-
-    // binary16: 1 sign, 5 exponent (bias 15), 10 mantissa.
-    // Largest finite half is 65504; midpoint to infinity is 65520.
-    if (ax >= 65520.0) {
-        return sign ? -INFINITY : INFINITY;
-    }
-    // Smallest positive subnormal half is 2^-24; below half of it rounds to 0.
-    if (ax < ldexp(1.0, -25)) {
-        return sign ? -0.0 : 0.0;
-    }
-
-    int exponent;
-    f64 mantissa = frexp(ax, &exponent); // ax = mantissa * 2^exponent, mantissa in [0.5, 1)
-    // Number of mantissa bits available at this magnitude.
-    f64 rounded;
-    if (exponent - 1 >= -14) {
-        // Normal half: 11 significant bits (implicit + 10).
-        f64 scale = ldexp(1.0, 11);
-        f64 scaled = mantissa * scale; // in [scale/2, scale)
-        f64 r = nearbyint(scaled);     // ties to even under default rounding mode
-        rounded = ldexp(r, exponent - 11);
-    } else {
-        // Subnormal half: round to a multiple of 2^-24.
-        f64 unit = ldexp(1.0, -24);
-        f64 r = nearbyint(ax / unit);
-        rounded = r * unit;
-    }
-    return sign ? -rounded : rounded;
-}
-
 static MalValue mal_builtin_math_f16round(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -382,7 +324,8 @@ static MalValue mal_builtin_math_f16round(MalVm *vm, MalValue this_value, const 
     if (!mal_builtin_math_to_number(vm, args, arg_count, 0, &x)) {
         return mal_value_new_nan();
     }
-    return mal_ops_number_value(mal_builtin_math_round_f16(x));
+    return mal_ops_number_value(
+        mal_float16_bits_to_f64(mal_float16_f64_to_bits(x)));
 }
 
 // Math.sumPrecise: exact (infinitely precise then single-rounded) summation of

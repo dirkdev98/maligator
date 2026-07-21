@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ascii.h"
 #include "array_object.h"
 #include "builtin_date.h"
 #include "builtin_iterator.h"
@@ -14,6 +15,7 @@
 #include "intrinsics.h"
 #include "mal_i18n.h"
 #include "value_ops.h"
+#include "utf16.h"
 #include "vm.h"
 #include "vm_ops.h"
 
@@ -109,17 +111,7 @@ static bool intl_tag_utf8(const MalString *s, byte *buf, usize cap, usize *out_l
 }
 
 static bool intl_string_eq_ascii(const MalString *s, const char *ascii) {
-    usize n = strlen(ascii);
-    if (mal_string_length(s) != n) {
-        return false;
-    }
-    const c16 *units = mal_string_code_units(s);
-    for (usize i = 0; i < n; i++) {
-        if (units[i] != (c16) (byte) ascii[i]) {
-            return false;
-        }
-    }
-    return true;
+    return mal_string_equals_ascii(s, ascii);
 }
 
 /** Decode a UTF-8 byte buffer (ICU4X formatter output) into a JS UTF-16 string. */
@@ -154,9 +146,8 @@ static MalValue intl_string_from_utf8(MalVm *vm, const byte *raw, usize len) {
         if (cp <= 0xFFFF) {
             units[n++] = (c16) cp;
         } else {
-            cp -= 0x10000;
-            units[n++] = (c16) (0xD800 + (cp >> 10));
-            units[n++] = (c16) (0xDC00 + (cp & 0x3FF));
+            mal_utf16_emit_pair(cp, units + n);
+            n += 2;
         }
     }
     MalValue result = mal_value_from_string(mal_string_new_copy(&vm->heap, units, n));
@@ -218,7 +209,7 @@ static void intl_array_push(MalVm *vm, MalArrayObject *array, u32 index, MalValu
         .getter = mal_value_new_undefined(),
         .setter = mal_value_new_undefined(),
     };
-    MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
+    MalKey key = mal_key_index(index);
     mal_object_define_own((MalObject *) array, key, &desc);
     mal_array_object_set_length(array, index + 1);
 }
@@ -235,17 +226,9 @@ static void intl_set_to_string_tag(MalVm *vm, MalObject *object, const char *tag
 static void intl_define_getter(MalVm *vm, MalObject *prototype, const char *name, MalNativeFunctionCallback callback) {
     byte display[64];
     snprintf((char *) display, sizeof(display), "get %s", name);
-    MalNativeFunctionObject *getter = mal_native_function_object_new(
-        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, display), callback
-    );
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = mal_value_from_native_function_object(getter),
-        .setter = mal_value_new_undefined(),
-    };
-    mal_object_define_own(prototype, mal_intrinsic_string_key(vm, name), &desc);
+    mal_intrinsic_define_getter(
+        vm, prototype, (const byte *) name, display, callback,
+        MAL_PROPERTY_CONFIGURABLE);
 }
 
 static bool intl_this(MalVm *vm, MalValue this_value, MalIntlKind kind, MalIntlObject **out, const char *what) {
@@ -286,7 +269,7 @@ static MalString *intl_canonicalize(MalVm *vm, const MalString *tag) {
 static bool intl_array_contains(MalVm *vm, MalArrayObject *array, u32 count, const MalString *needle) {
     (void) vm;
     for (u32 i = 0; i < count; i++) {
-        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+        MalKey key = mal_key_index(i);
         MalValue existing;
         if (mal_vm_get_property(vm, mal_value_from_array_object(array), key, &existing)) {
             if (mal_value_is_string(existing) && mal_string_length(mal_value_to_string(existing)) == mal_string_length(needle)) {
@@ -349,16 +332,17 @@ static MalArrayObject *intl_canonicalize_locale_list(MalVm *vm, MalValue locales
     if (!mal_vm_to_number(vm, length_value, &length_number)) {
         return nullptr;
     }
-    if (isnan(length_number) || length_number <= 0.0) {
+    length_number = mal_ops_number_to_length(length_number);
+    if (length_number == 0.0) {
         return result;
     }
-    u64 length = length_number > 9007199254740991.0 ? 9007199254740991ULL : (u64) length_number;
+    u64 length = (u64) length_number;
 
     for (u64 i = 0; i < length; i++) {
         // Array index elements are stored under MAL_KEY_INDEX; beyond the index
         // range they would be string keys, but a locale list is never that long.
         MalKey property_key = i <= 0xFFFFFFFEULL
-            ? (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}
+            ? mal_key_index(i)
             : mal_intrinsic_string_key(vm, "");
         if (!mal_vm_has_property(vm, locales, property_key)) {
             continue;
@@ -861,7 +845,7 @@ static MalString *intl_resolve_locale(MalVm *vm, MalValue locales) {
     if (list == nullptr) {
         return nullptr;
     }
-    MalKey first_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)};
+    MalKey first_key = mal_key_index(0);
     MalValue first;
     if (mal_vm_get_property(vm, mal_value_from_array_object(list), first_key, &first) && mal_value_is_string(first)) {
         return mal_value_to_string(first);
@@ -1986,7 +1970,7 @@ static MalU16Str *intl_collect_u16(MalVm *vm, MalArrayObject *list, u32 count) {
     }
     MalU16Str *items = malloc(sizeof(MalU16Str) * count);
     for (u32 i = 0; i < count; i++) {
-        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+        MalKey key = mal_key_index(i);
         MalValue element;
         mal_vm_get_property(vm, mal_value_from_array_object(list), key, &element);
         MalString *s = mal_value_to_string(element);
@@ -2103,7 +2087,7 @@ static MalValue intl_list_format_format_to_parts(MalVm *vm, MalValue this_value,
     u32 part_index = 0;
     usize cursor = 0;
     for (u32 i = 0; i < count; i++) {
-        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+        MalKey key = mal_key_index(i);
         MalValue element;
         mal_vm_get_property(vm, mal_value_from_array_object(list), key, &element);
         MalString *el = mal_value_to_string(element);
@@ -2825,8 +2809,8 @@ static MalValue intl_segment_iterator_next(MalVm *vm, MalValue this_value, const
         return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
     }
 
-    MalKey start_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(pos)};
-    MalKey end_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(pos + 1)};
+    MalKey start_key = mal_key_index(pos);
+    MalKey end_key = mal_key_index(pos + 1);
     MalValue start_v, end_v;
     mal_vm_get_property(vm, bounds_value, start_key, &start_v);
     mal_vm_get_property(vm, bounds_value, end_key, &end_v);

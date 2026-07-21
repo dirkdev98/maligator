@@ -43,6 +43,19 @@ check(
 	"Array join rejects delimiter overflow",
 	throwsRangeError(() => [halfLimit, halfLimit].join()),
 );
+let separatorOverflowReads = 0;
+const separatorOverflow = [];
+Object.defineProperty(separatorOverflow, 0, {
+	get() {
+		separatorOverflowReads++;
+		return "x";
+	},
+});
+separatorOverflow.length = 3;
+check(
+	"Array join rejects separator overflow before element reads",
+	throwsRangeError(() => separatorOverflow.join(atLimit)) && separatorOverflowReads === 0,
+);
 const localeHalf = { toLocaleString: () => halfLimit };
 check(
 	"Array toLocaleString rejects delimiter overflow",
@@ -166,6 +179,27 @@ check(
 check("empty String.prototype.concat remains correct", "".concat("") === "");
 check("string replacement remains correct", "aba".replaceAll("a", "$&$") === "a$ba$");
 check("regexp replacement remains correct", "aba".replace(/(a)/g, "$1$") === "a$ba$");
+const builderGrowth = "0123456789abcdef".repeat(32);
+check(
+	"JSON builders grow and finish empty strings",
+	JSON.stringify({ value: builderGrowth }) === '{"value":"' + builderGrowth + '"}' &&
+		JSON.parse('""') === "",
+);
+check(
+	"replacement builders grow and finish empty strings",
+	"x".repeat(256).replaceAll("x", "yz") === "yz".repeat(256) &&
+		"".replaceAll("", "") === "",
+);
+check(
+	"regexp builders grow and finish empty strings",
+	"x".repeat(256).replace(/x/g, "yz") === "yz".repeat(256) && "".replace(/x/g, "") === "",
+);
+check(
+	"URI builders grow and finish empty strings",
+	encodeURIComponent("%".repeat(128)) === "%25".repeat(128) &&
+		encodeURIComponent("") === "" &&
+		decodeURIComponent("") === "",
+);
 
 let passed = 0;
 for (const [name, condition] of results) {

@@ -1,13 +1,15 @@
 #include "builtin_data_view.h"
 
-#include <math.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "array_buffer_object.h"
 #include "builtin_bigint.h"
+#include "endian.h"
+#include "float16.h"
 #include "heap_bigint.h"
 #include "object_ops.h"
+#include "scalar_bits.h"
+#include "typed_array_object.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -29,27 +31,49 @@ MalArrayBufferObject *mal_data_view_object_buffer(const MalDataViewObject *view)
 static u32 mal_data_view_current_length(const MalDataViewObject *view);
 static bool mal_data_view_is_out_of_bounds(const MalDataViewObject *view);
 
-MalDataViewSpanStatus mal_data_view_object_span(
-    const MalDataViewObject *view, const byte **out, usize *out_len) {
-    *out = nullptr;
-    *out_len = 0;
-    // Detached is a subset of IsViewOutOfBounds; report it first so callers can
-    // treat a detached view as empty rather than as an error.
-    if (view->buffer->detached) {
-        return MAL_DATA_VIEW_SPAN_DETACHED;
+MalBufferSourceSpanStatus mal_buffer_source_span(
+    MalValue value, MalBufferSourceSpan *out) {
+    *out = (MalBufferSourceSpan) {0};
+
+    MalArrayBufferObject *buffer;
+    u32 byte_offset = 0;
+    usize byte_length;
+    if (mal_value_is_array_buffer_object(value)) {
+        buffer = mal_value_to_array_buffer_object(value);
+        if (buffer->detached) {
+            return MAL_BUFFER_SOURCE_SPAN_DETACHED;
+        }
+        byte_length = buffer->byte_length;
+    } else if (mal_value_is_typed_array_object(value)) {
+        MalTypedArrayObject *array = mal_value_to_typed_array_object(value);
+        buffer = array->buffer;
+        if (buffer == nullptr || buffer->detached) {
+            return MAL_BUFFER_SOURCE_SPAN_DETACHED;
+        }
+        if (mal_typed_array_object_is_out_of_bounds(array)) {
+            return MAL_BUFFER_SOURCE_SPAN_OUT_OF_BOUNDS;
+        }
+        byte_offset = array->byte_offset;
+        byte_length = mal_typed_array_object_byte_length(array);
+    } else if (mal_value_is_data_view_object(value)) {
+        MalDataViewObject *view = mal_value_to_data_view_object(value);
+        buffer = view->buffer;
+        if (buffer == nullptr || buffer->detached) {
+            return MAL_BUFFER_SOURCE_SPAN_DETACHED;
+        }
+        if (mal_data_view_is_out_of_bounds(view)) {
+            return MAL_BUFFER_SOURCE_SPAN_OUT_OF_BOUNDS;
+        }
+        byte_offset = view->byte_offset;
+        byte_length = mal_data_view_current_length(view);
+    } else {
+        return MAL_BUFFER_SOURCE_SPAN_NOT_BUFFER_SOURCE;
     }
-    if (view->buffer->resizable) {
-        return MAL_DATA_VIEW_SPAN_RESIZABLE;
-    }
-    if (mal_data_view_is_out_of_bounds(view)) {
-        return MAL_DATA_VIEW_SPAN_OUT_OF_BOUNDS;
-    }
-    u32 length = mal_data_view_current_length(view);
-    if (length > 0) {
-        *out = (const byte *) view->buffer->data + view->byte_offset;
-        *out_len = length;
-    }
-    return MAL_DATA_VIEW_SPAN_OK;
+
+    out->data = byte_length == 0 ? nullptr : buffer->data + byte_offset;
+    out->length = byte_length;
+    out->resizable = buffer->resizable;
+    return MAL_BUFFER_SOURCE_SPAN_OK;
 }
 
 typedef enum MalDataViewType {
@@ -82,83 +106,6 @@ static u32 mal_data_view_type_size(MalDataViewType type) {
         default:
             return 8;
     }
-}
-
-// IEEE-754 binary16 → f64. Handles subnormals, infinities, and NaN.
-static f64 mal_data_view_float16_to_f64(u16 bits) {
-    u32 sign = (u32) (bits >> 15) & 0x1;
-    u32 exponent = (u32) (bits >> 10) & 0x1F;
-    u32 mantissa = (u32) bits & 0x3FF;
-    f64 value;
-    if (exponent == 0) {
-        // Zero or subnormal: value = mantissa * 2^-24.
-        value = ldexp((f64) mantissa, -24);
-    } else if (exponent == 0x1F) {
-        value = mantissa != 0 ? NAN : INFINITY;
-    } else {
-        // Normalized: (1 + mantissa/1024) * 2^(exponent-15).
-        value = ldexp(1.0 + (f64) mantissa / 1024.0, (i32) exponent - 15);
-    }
-    return sign ? -value : value;
-}
-
-// f64 → IEEE-754 binary16 with round-half-to-even, matching the spec's
-// RoundMVResult / NumberToRawBytes for the Float16 type.
-static u16 mal_data_view_f64_to_float16(f64 value) {
-    if (isnan(value)) {
-        return 0x7E00;
-    }
-    u16 sign = signbit(value) ? 0x8000 : 0x0000;
-    f64 abs = fabs(value);
-    if (isinf(abs)) {
-        return sign | 0x7C00;
-    }
-    if (abs == 0.0) {
-        return sign;
-    }
-    int exp;
-    f64 frac = frexp(abs, &exp);  // abs = frac * 2^exp, frac in [0.5, 1).
-    // Convert to the binary16 unbiased exponent of the leading bit: abs in
-    // [2^(exp-1), 2^exp), so the leading-bit exponent e satisfies abs in
-    // [2^e, 2^(e+1)) with e = exp - 1.
-    int e = exp - 1;
-    if (e < -24) {
-        // Underflows below the smallest subnormal; rounds to (signed) zero,
-        // except values at least half of 2^-24 round up to the min subnormal.
-        f64 scaled = ldexp(abs, 24);  // count of 2^-24 units
-        f64 rounded = nearbyint(scaled);  // round-half-to-even (default mode)
-        return sign | (u16) (i64) rounded;
-    }
-    if (e < -14) {
-        // Subnormal: quantize mantissa in units of 2^-24.
-        f64 scaled = ldexp(abs, 24);
-        f64 rounded = nearbyint(scaled);
-        u32 m = (u32) (i64) rounded;
-        if (m >= 0x400) {
-            // Rounded up into the smallest normal.
-            return sign | 0x0400 | (m & 0x3FF);
-        }
-        return sign | (u16) m;
-    }
-    if (e > 15) {
-        // Overflow to infinity.
-        return sign | 0x7C00;
-    }
-    // Normalized: mantissa = round((frac*2 - 1) * 1024) with frac*2 in [1, 2).
-    f64 significand = ldexp(abs, -e);  // in [1, 2)
-    f64 mantissa_f = (significand - 1.0) * 1024.0;
-    f64 m = nearbyint(mantissa_f);
-    u32 mantissa = (u32) (i64) m;
-    u32 exponent = (u32) (e + 15);
-    if (mantissa >= 0x400) {
-        // Rounded up to next exponent.
-        mantissa = 0;
-        exponent += 1;
-        if (exponent >= 0x1F) {
-            return sign | 0x7C00;
-        }
-    }
-    return sign | (u16) (exponent << 10) | (u16) mantissa;
 }
 
 static u32 mal_data_view_current_length(const MalDataViewObject *view) {
@@ -206,13 +153,8 @@ static bool mal_data_view_to_index(MalVm *vm, MalValue value, u64 *out) {
     if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
-    // ToIntegerOrInfinity: NaN → 0, otherwise truncate toward zero.
-    if (isnan(number)) {
-        number = 0;
-    } else {
-        number = trunc(number);
-    }
-    if (number < 0 || number > 9007199254740991.0) {
+    number = mal_ops_number_to_integer_or_infinity(number);
+    if (number < 0 || number > MAL_NUMBER_MAX_SAFE_INTEGER) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid DataView offset/length");
         return false;
     }
@@ -303,80 +245,39 @@ static MalValue mal_builtin_data_view_constructor(MalVm *vm, MalValue this_value
     return mal_value_from_data_view_object(view);
 }
 
-// Spec ToBigInt for the set* value: ToPrimitive(value, number) runs first (so a
-// user @@toPrimitive / valueOf → toString fires and can throw), then the
-// resulting primitive is converted. mal_bigint_to_bigint already handles every
-// primitive case (BigInt/boolean/string accepted; number/symbol/null/undefined
-// reject with TypeError), so we only need the ToPrimitive step in front of it.
-// (The shared mal_bigint_to_bigint in builtin_bigint.c is owned by another
-// worktree and does not run ToPrimitive, so we do it here.)
-static bool mal_data_view_to_bigint(MalVm *vm, MalValue value, i128 *out) {
-    if (mal_value_is_object(value)) {
-        MalValue exotic;
-        if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE), &exotic)) {
-            return false;
-        }
-        if (!mal_value_is_nil(exotic)) {
-            if (!mal_value_is_callable(exotic)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.toPrimitive is not a function");
-                return false;
-            }
-            MalValue hint = mal_value_from_string(mal_intrinsic_ascii(vm, "number"));
-            MalCompletion result = mal_vm_call_value(vm, exotic, value, &hint, 1);
-            if (result.kind != MAL_COMPLETION_NORMAL) {
-                return false;
-            }
-            if (mal_value_is_object(result.value)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
-                return false;
-            }
-            value = result.value;
-        } else {
-            const byte *methods[2] = {"valueOf", "toString"};
-            bool converted = false;
-            for (i32 i = 0; i < 2 && !converted; i++) {
-                MalValue method;
-                if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, methods[i]), &method)) {
-                    return false;
-                }
-                if (mal_value_is_callable(method)) {
-                    MalCompletion result = mal_vm_call_value(vm, method, value, nullptr, 0);
-                    if (result.kind != MAL_COMPLETION_NORMAL) {
-                        return false;
-                    }
-                    if (!mal_value_is_object(result.value)) {
-                        value = result.value;
-                        converted = true;
-                    }
-                }
-            }
-            if (!converted) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
-                return false;
-            }
-        }
-    }
-    return mal_bigint_to_bigint(vm, value, out);
+static u16 mal_data_view_load_u16(const byte *at, bool little_endian) {
+    return little_endian ? mal_load_u16_le(at) : mal_load_u16_be(at);
 }
 
-// Reduce a Number to its low bits for an integer DataView store.
-static i64 mal_data_view_to_int(f64 number, f64 modulus) {
-    if (!isfinite(number)) {
-        return 0;
-    }
-    return (i64) fmod(trunc(number), modulus);
+static u32 mal_data_view_load_u32(const byte *at, bool little_endian) {
+    return little_endian ? mal_load_u32_le(at) : mal_load_u32_be(at);
 }
 
-// Reorder `size` bytes between host order and the requested endianness (the host
-// is assumed little-endian; big-endian requests reverse the bytes).
-static void mal_data_view_order(byte *bytes, u32 size, bool little_endian) {
+static u64 mal_data_view_load_u64(const byte *at, bool little_endian) {
+    return little_endian ? mal_load_u64_le(at) : mal_load_u64_be(at);
+}
+
+static void mal_data_view_store_u16(byte *at, u16 bits, bool little_endian) {
     if (little_endian) {
-        return;
+        mal_store_u16_le(at, bits);
+    } else {
+        mal_store_u16_be(at, bits);
     }
-    for (u32 i = 0; i < size / 2; i++) {
-        byte tmp = bytes[i];
-        bytes[i] = bytes[size - 1 - i];
-        bytes[size - 1 - i] = tmp;
+}
+
+static void mal_data_view_store_u32(byte *at, u32 bits, bool little_endian) {
+    if (little_endian) {
+        mal_store_u32_le(at, bits);
+    } else {
+        mal_store_u32_be(at, bits);
+    }
+}
+
+static void mal_data_view_store_u64(byte *at, u64 bits, bool little_endian) {
+    if (little_endian) {
+        mal_store_u64_le(at, bits);
+    } else {
+        mal_store_u64_be(at, bits);
     }
 }
 
@@ -402,66 +303,44 @@ static MalValue mal_data_view_get(MalVm *vm, MalValue this_value, const MalValue
         return mal_value_new_undefined();
     }
 
-    byte bytes[8];
-    memcpy(bytes, view->buffer->data + view->byte_offset + index, size);
-    mal_data_view_order(bytes, size, little_endian);
+    const byte *at = view->buffer->data + view->byte_offset + index;
 
     switch (type) {
-        case DV_INT8: {
-            i8 v;
-            memcpy(&v, bytes, 1);
-            return mal_value_from_i32(v);
-        }
-        case DV_UINT8: {
-            u8 v;
-            memcpy(&v, bytes, 1);
-            return mal_value_from_i32(v);
-        }
-        case DV_INT16: {
-            i16 v;
-            memcpy(&v, bytes, 2);
-            return mal_value_from_i32(v);
-        }
-        case DV_UINT16: {
-            u16 v;
-            memcpy(&v, bytes, 2);
-            return mal_value_from_i32(v);
-        }
-        case DV_INT32: {
-            i32 v;
-            memcpy(&v, bytes, 4);
-            return mal_value_from_i32(v);
-        }
+        case DV_INT8:
+            return mal_value_from_i32(mal_scalar_i8_from_bits(
+                mal_scalar_load_native_u8(at)));
+        case DV_UINT8:
+            return mal_value_from_i32(mal_scalar_load_native_u8(at));
+        case DV_INT16:
+            return mal_value_from_i32(mal_scalar_i16_from_bits(
+                mal_data_view_load_u16(at, little_endian)));
+        case DV_UINT16:
+            return mal_value_from_i32(mal_data_view_load_u16(at, little_endian));
+        case DV_INT32:
+            return mal_value_from_i32(mal_scalar_i32_from_bits(
+                mal_data_view_load_u32(at, little_endian)));
         case DV_UINT32: {
-            u32 v;
-            memcpy(&v, bytes, 4);
+            u32 v = mal_data_view_load_u32(at, little_endian);
             return v <= INT32_MAX ? mal_value_from_i32((i32) v) : mal_ops_number_value((f64) v);
         }
-        case DV_FLOAT16: {
-            u16 v;
-            memcpy(&v, bytes, 2);
-            return mal_value_from_f64_convert_nan(mal_data_view_float16_to_f64(v));
-        }
-        case DV_FLOAT32: {
-            f32 v;
-            memcpy(&v, bytes, 4);
-            return mal_value_from_f64_convert_nan((f64) v);
-        }
-        case DV_FLOAT64: {
-            f64 v;
-            memcpy(&v, bytes, 8);
-            return mal_value_from_f64_convert_nan(v);
-        }
-        case DV_BIGINT64: {
-            i64 v;
-            memcpy(&v, bytes, 8);
-            return mal_value_from_bigint(mal_bigint_new(&vm->heap, (i128) v));
-        }
-        case DV_BIGUINT64: {
-            u64 v;
-            memcpy(&v, bytes, 8);
-            return mal_value_from_bigint(mal_bigint_new(&vm->heap, (i128) (u128) v));
-        }
+        case DV_FLOAT16:
+            return mal_value_from_f64_convert_nan(mal_float16_bits_to_f64(
+                mal_data_view_load_u16(at, little_endian)));
+        case DV_FLOAT32:
+            return mal_value_from_f64_convert_nan((f64) mal_scalar_f32_from_bits(
+                mal_data_view_load_u32(at, little_endian)));
+        case DV_FLOAT64:
+            return mal_value_from_f64_convert_nan(mal_scalar_f64_from_bits(
+                mal_data_view_load_u64(at, little_endian)));
+        case DV_BIGINT64:
+            return mal_value_from_bigint(mal_bigint_new(
+                &vm->heap,
+                (i128) mal_scalar_i64_from_bits(
+                    mal_data_view_load_u64(at, little_endian))));
+        case DV_BIGUINT64:
+            return mal_value_from_bigint(mal_bigint_new(
+                &vm->heap,
+                (i128) (u128) mal_data_view_load_u64(at, little_endian)));
     }
     return mal_value_new_undefined();
 }
@@ -482,19 +361,13 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
 
     // Value coercion (ToBigInt / ToNumber, both running user side effects) happens
     // after ToIndex(byteOffset) but before the detached and bounds checks.
-    byte bytes[8];
+    u64 bits = 0;
     if (type == DV_BIGINT64 || type == DV_BIGUINT64) {
         i128 big;
-        if (!mal_data_view_to_bigint(vm, value, &big)) {
+        if (!mal_bigint_to_bigint(vm, value, &big)) {
             return mal_value_new_undefined();
         }
-        if (type == DV_BIGINT64) {
-            i64 v = (i64) big;
-            memcpy(bytes, &v, 8);
-        } else {
-            u64 v = (u64) big;
-            memcpy(bytes, &v, 8);
-        }
+        bits = (u64) (u128) big;
     } else {
         f64 number;
         if (!mal_vm_to_number(vm, value, &number)) {
@@ -502,35 +375,28 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
         }
         switch (type) {
             case DV_INT8:
-            case DV_UINT8: {
-                u8 v = (u8) mal_data_view_to_int(number, 256.0);
-                memcpy(bytes, &v, 1);
+            case DV_UINT8:
+                bits = mal_ops_number_to_uint_width(number, 8);
                 break;
-            }
             case DV_INT16:
-            case DV_UINT16: {
-                u16 v = (u16) mal_data_view_to_int(number, 65536.0);
-                memcpy(bytes, &v, 2);
+            case DV_UINT16:
+                bits = mal_ops_number_to_uint_width(number, 16);
                 break;
-            }
             case DV_INT32:
-            case DV_UINT32: {
-                u32 v = (u32) mal_data_view_to_int(number, 4294967296.0);
-                memcpy(bytes, &v, 4);
+            case DV_UINT32:
+                bits = mal_ops_number_to_uint32(number);
                 break;
-            }
-            case DV_FLOAT16: {
-                u16 v = mal_data_view_f64_to_float16(number);
-                memcpy(bytes, &v, 2);
+            case DV_FLOAT16:
+                // NumberToRawBytes uses the shared canonical binary16 NaN.
+                bits = mal_float16_f64_to_bits(number);
                 break;
-            }
             case DV_FLOAT32: {
                 f32 v = (f32) number;
-                memcpy(bytes, &v, 4);
+                bits = mal_scalar_f32_to_bits(v);
                 break;
             }
             case DV_FLOAT64:
-                memcpy(bytes, &number, 8);
+                bits = mal_scalar_f64_to_bits(number);
                 break;
             default:
                 break;
@@ -546,8 +412,21 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
         return mal_value_new_undefined();
     }
 
-    mal_data_view_order(bytes, size, little_endian);
-    memcpy(view->buffer->data + view->byte_offset + index, bytes, size);
+    byte *at = view->buffer->data + view->byte_offset + index;
+    switch (size) {
+        case 1:
+            mal_scalar_store_native_u8(at, (u8) bits);
+            break;
+        case 2:
+            mal_data_view_store_u16(at, (u16) bits, little_endian);
+            break;
+        case 4:
+            mal_data_view_store_u32(at, (u32) bits, little_endian);
+            break;
+        case 8:
+            mal_data_view_store_u64(at, bits, little_endian);
+            break;
+    }
     return mal_value_new_undefined();
 }
 
@@ -627,14 +506,8 @@ static void mal_dv_define_getter(MalVm *vm, MalObject *object, const byte *name,
     // Built-in accessor functions get "get " prepended to the property name.
     byte getter_name[64];
     snprintf((char *) getter_name, sizeof getter_name, "get %s", (const char *) name);
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = mal_value_from_native_function_object(mal_native_function_object_new(
-            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]), mal_intrinsic_ascii(vm, getter_name), getter)),
-        .setter = mal_value_new_undefined(),
-    };
-    mal_object_define_own(object, mal_intrinsic_string_key(vm, name), &desc);
+    mal_intrinsic_define_getter(
+        vm, object, name, getter_name, getter, MAL_PROPERTY_CONFIGURABLE);
 }
 
 void mal_builtin_data_view_install(MalVm *vm) {

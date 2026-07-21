@@ -4,6 +4,9 @@
 
 #include "function_object.h"
 #include "heap_string.h"
+#include "hex.h"
+#include "u16_buffer.h"
+#include "utf16.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -11,35 +14,23 @@
 // A growable UTF-16 code-unit buffer used to build encode/decode results.
 typedef struct MalUriBuffer {
     MalVm *vm;
-    c16 *data;
-    usize length;
-    usize capacity;
+    union {
+        MalU16Buffer output;
+        struct {
+            c16 *data;
+            usize length;
+            usize capacity;
+            MalU16BufferStatus status;
+        };
+    };
 } MalUriBuffer;
 
 static bool mal_uri_buffer_push(MalUriBuffer *buffer, c16 unit) {
-    usize required;
-    if (!mal_checked_size_add(buffer->length, 1, MAL_STRING_MAX_CODE_UNITS, &required)) {
-        mal_vm_throw_error(buffer->vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+    if (mal_u16_buffer_push(&buffer->output, unit) != MAL_U16_BUFFER_OK) {
+        mal_vm_throw_error(
+            buffer->vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
         return false;
     }
-    if (required > buffer->capacity) {
-        usize capacity;
-        usize bytes;
-        if (!mal_checked_size_growth(
-                buffer->capacity, required, 16, MAL_STRING_MAX_CODE_UNITS, &capacity) ||
-            !mal_checked_size_multiply(capacity, sizeof(c16), SIZE_MAX, &bytes)) {
-            mal_vm_throw_error(buffer->vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
-            return false;
-        }
-        c16 *grown = realloc(buffer->data, bytes);
-        if (grown == nullptr) {
-            mal_vm_throw_error(buffer->vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
-            return false;
-        }
-        buffer->data = grown;
-        buffer->capacity = capacity;
-    }
-    buffer->data[buffer->length++] = unit;
     return true;
 }
 
@@ -86,34 +77,15 @@ static bool mal_uri_decode_uri_reserved(c16 c) {
 }
 
 static MalValue mal_uri_buffer_to_string(MalVm *vm, MalUriBuffer *buffer) {
-    MalString *string = mal_string_new_copy(&vm->heap, buffer->data, buffer->length);
-    free(buffer->data);
-    return mal_value_from_string(string);
+    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, &buffer->output));
 }
 
 // Convert two hex code units (already known to be present) into a byte. Returns
 // false when either unit is not a hexadecimal digit.
 static bool mal_uri_hex_pair(c16 high, c16 low, u8 *out) {
-    i32 high_value;
-    i32 low_value;
-    if (high >= '0' && high <= '9') {
-        high_value = high - '0';
-    } else if (high >= 'A' && high <= 'F') {
-        high_value = high - 'A' + 10;
-    } else if (high >= 'a' && high <= 'f') {
-        high_value = high - 'a' + 10;
-    } else {
-        return false;
-    }
-    if (low >= '0' && low <= '9') {
-        low_value = low - '0';
-    } else if (low >= 'A' && low <= 'F') {
-        low_value = low - 'A' + 10;
-    } else if (low >= 'a' && low <= 'f') {
-        low_value = low - 'a' + 10;
-    } else {
-        return false;
-    }
+    i32 high_value = mal_hex_decode_digit(high);
+    i32 low_value = mal_hex_decode_digit(low);
+    if (high_value < 0 || low_value < 0) return false;
     *out = (u8) ((high_value << 4) | low_value);
     return true;
 }
@@ -135,31 +107,13 @@ static MalValue mal_uri_encode(MalVm *vm, MalString *string, bool (*unescaped)(c
         }
 
         u32 code_point;
-        if (c >= 0xDC00 && c <= 0xDFFF) {
-            // Unpaired trailing surrogate.
+        usize width;
+        if (!mal_utf16_read_scalar(units, length, k, &code_point, &width)) {
             free(buffer.data);
             mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
             return mal_value_new_undefined();
         }
-        if (c < 0xD800 || c > 0xDBFF) {
-            code_point = c;
-        } else {
-            // Leading surrogate: a trailing surrogate must follow.
-            usize next = k + 1;
-            if (next >= length) {
-                free(buffer.data);
-                mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
-                return mal_value_new_undefined();
-            }
-            c16 low = units[next];
-            if (low < 0xDC00 || low > 0xDFFF) {
-                free(buffer.data);
-                mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
-                return mal_value_new_undefined();
-            }
-            k = next;
-            code_point = (((u32) c - 0xD800) << 10) + ((u32) low - 0xDC00) + 0x10000;
-        }
+        k += width - 1;
 
         // UTF-8 encode the code point and percent-escape each octet.
         if (code_point <= 0x7F) {
@@ -317,9 +271,10 @@ static MalValue mal_uri_decode(MalVm *vm, MalString *string, bool (*reserved)(c1
                 return mal_value_new_undefined();
             }
         } else {
-            u32 adjusted = code_point - 0x10000;
-            if (!mal_uri_buffer_push(&buffer, (c16) (0xD800 + (adjusted >> 10))) ||
-                !mal_uri_buffer_push(&buffer, (c16) (0xDC00 + (adjusted & 0x3FF)))) {
+            c16 pair[2];
+            mal_utf16_emit_pair(code_point, pair);
+            if (!mal_uri_buffer_push(&buffer, pair[0]) ||
+                !mal_uri_buffer_push(&buffer, pair[1])) {
                 free(buffer.data);
                 return mal_value_new_undefined();
             }

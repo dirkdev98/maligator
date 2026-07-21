@@ -35,6 +35,10 @@ typedef struct MalPropertyDescriptorParse {
 bool mal_builtin_object_to_property_descriptor(
     MalVm *vm, MalValue descriptor, MalPropertyDescriptorParse *out);
 
+/** Create a plain descriptor object containing exactly the parsed fields. */
+MalValue mal_builtin_object_parsed_descriptor_object(
+    MalVm *vm, const MalPropertyDescriptorParse *parsed);
+
 /**
  * The spec [[DefineOwnProperty]] path shared by Object.defineProperty and
  * Reflect.defineProperty: ToPropertyDescriptor(descriptor_value) (which may

@@ -10,11 +10,13 @@
 
 #include "function_object.h"
 #include "gc.h"
+#include "checked_size.h"
 #include "heap_string.h"
 #include "intrinsics.h"
 #include "object.h"
 #include "property_store.h"
-#include "web_text_encoding.h"
+#include "u16_buffer.h"
+#include "utf8.h"
 #include "value.h"
 #include "vm.h"
 
@@ -38,64 +40,43 @@
  * path algorithms build results here, then copy into a heap MalString at the end.
  * -------------------------------------------------------------------------- */
 
-typedef struct {
-    c16 *data;
-    usize len;
-    usize cap;
-} MalPathBuf;
+typedef MalU16Buffer MalPathBuf;
 
 static void path_buf_init(MalPathBuf *b) {
-    b->data = nullptr;
-    b->len = 0;
-    b->cap = 0;
+    *b = (MalPathBuf) {0};
 }
 
 static void path_buf_free(MalPathBuf *b) {
-    free(b->data);
-    b->data = nullptr;
-    b->len = 0;
-    b->cap = 0;
-}
-
-static void path_buf_reserve(MalPathBuf *b, usize need) {
-    if (need <= b->cap) {
-        return;
-    }
-    usize cap = b->cap != 0 ? b->cap : 16;
-    while (cap < need) {
-        cap *= 2;
-    }
-    b->data = realloc(b->data, cap * sizeof(c16));
-    b->cap = cap;
+    mal_u16_buffer_dispose(b);
 }
 
 static void path_buf_push_units(MalPathBuf *b, const c16 *units, usize n) {
-    if (n == 0) {
-        return;
-    }
-    path_buf_reserve(b, b->len + n);
-    memcpy(b->data + b->len, units, n * sizeof(c16));
-    b->len += n;
+    mal_u16_buffer_append_units(b, units, n);
 }
 
 static void path_buf_push_char(MalPathBuf *b, c16 c) {
-    path_buf_reserve(b, b->len + 1);
-    b->data[b->len++] = c;
+    mal_u16_buffer_push(b, c);
 }
 
 /* Prepend `seg` + "/" to the buffer (the `${path}/${resolvedPath}` step of resolve). */
 static void path_buf_prepend_seg(MalPathBuf *b, const c16 *seg, usize seg_len) {
-    usize add = seg_len + 1;
-    path_buf_reserve(b, b->len + add);
-    memmove(b->data + add, b->data, b->len * sizeof(c16));
+    usize add;
+    if (!mal_checked_size_add(seg_len, 1, MAL_STRING_MAX_CODE_UNITS, &add)) {
+        b->status = MAL_U16_BUFFER_LENGTH_OVERFLOW;
+        return;
+    }
+    if (mal_u16_buffer_reserve(b, add) != MAL_U16_BUFFER_OK) {
+        return;
+    }
+    memmove(b->data + add, b->data, b->length * sizeof(c16));
     memcpy(b->data, seg, seg_len * sizeof(c16));
     b->data[seg_len] = PATH_SEP;
-    b->len += add;
+    b->length += add;
 }
 
 /* Index of the last '/' in the buffer, or -1. */
 static i64 path_buf_last_sep(const MalPathBuf *b) {
-    for (i64 i = (i64) b->len - 1; i >= 0; --i) {
+    for (i64 i = (i64) b->length - 1; i >= 0; --i) {
         if (b->data[i] == PATH_SEP) {
             return i;
         }
@@ -120,6 +101,26 @@ static MalValue path_units(MalVm *vm, const c16 *units, usize n) {
         return mal_value_new_undefined();
     }
     return mal_value_from_string(mal_string_new_copy(&vm->heap, units, n));
+}
+
+static bool path_buf_check(MalVm *vm, const MalPathBuf *buffer) {
+    if (buffer->status == MAL_U16_BUFFER_OK) {
+        return true;
+    }
+    if (buffer->status == MAL_U16_BUFFER_LENGTH_OVERFLOW) {
+        mal_vm_throw_error(
+            vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+    } else {
+        mal_vm_throw_allocation_error(vm);
+    }
+    return false;
+}
+
+static MalValue path_buf_to_value(MalVm *vm, const MalPathBuf *buffer) {
+    if (!path_buf_check(vm, buffer)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(mal_u16_buffer_copy(&vm->heap, buffer));
 }
 
 /* Node validateString: a non-string argument is an ERR_INVALID_ARG_TYPE TypeError.
@@ -161,22 +162,22 @@ static void normalize_string(const c16 *path, i64 len, bool allow_above_root, Ma
             if (last_slash == i - 1 || dots == 1) {
                 // NOOP: empty segment or a lone '.'.
             } else if (dots == 2) {
-                if ((i64) res->len < 2 || last_segment_length != 2
-                    || res->data[res->len - 1] != PATH_DOT || res->data[res->len - 2] != PATH_DOT) {
-                    if ((i64) res->len > 2) {
+                if ((i64) res->length < 2 || last_segment_length != 2
+                    || res->data[res->length - 1] != PATH_DOT || res->data[res->length - 2] != PATH_DOT) {
+                    if ((i64) res->length > 2) {
                         i64 last_sep_index = path_buf_last_sep(res);
                         if (last_sep_index == -1) {
-                            res->len = 0;
+                            res->length = 0;
                             last_segment_length = 0;
                         } else {
-                            res->len = (usize) last_sep_index;
-                            last_segment_length = (i64) res->len - 1 - path_buf_last_sep(res);
+                            res->length = (usize) last_sep_index;
+                            last_segment_length = (i64) res->length - 1 - path_buf_last_sep(res);
                         }
                         last_slash = i;
                         dots = 0;
                         continue;
-                    } else if (res->len != 0) {
-                        res->len = 0;
+                    } else if (res->length != 0) {
+                        res->length = 0;
                         last_segment_length = 0;
                         last_slash = i;
                         dots = 0;
@@ -184,7 +185,7 @@ static void normalize_string(const c16 *path, i64 len, bool allow_above_root, Ma
                     }
                 }
                 if (allow_above_root) {
-                    if (res->len > 0) {
+                    if (res->length > 0) {
                         path_buf_push_char(res, PATH_SEP);
                     }
                     path_buf_push_char(res, PATH_DOT);
@@ -193,7 +194,7 @@ static void normalize_string(const c16 *path, i64 len, bool allow_above_root, Ma
                 }
             } else {
                 i64 seg_len = i - last_slash - 1;
-                if (res->len > 0) {
+                if (res->length > 0) {
                     path_buf_push_char(res, PATH_SEP);
                 }
                 path_buf_push_units(res, &path[last_slash + 1], (usize) seg_len);
@@ -220,9 +221,13 @@ static MalValue posix_normalize_units(MalVm *vm, const c16 *path, i64 len) {
     MalPathBuf res;
     path_buf_init(&res);
     normalize_string(path, len, !is_absolute, &res);
+    if (!path_buf_check(vm, &res)) {
+        path_buf_free(&res);
+        return mal_value_new_undefined();
+    }
 
     MalValue result;
-    if (res.len == 0) {
+    if (res.length == 0) {
         if (is_absolute) {
             result = path_ascii(vm, "/");
         } else {
@@ -234,11 +239,11 @@ static MalValue posix_normalize_units(MalVm *vm, const c16 *path, i64 len) {
         if (is_absolute) {
             path_buf_push_char(&out, PATH_SEP);
         }
-        path_buf_push_units(&out, res.data, res.len);
+        path_buf_push_units(&out, res.data, res.length);
         if (trailing_sep) {
             path_buf_push_char(&out, PATH_SEP);
         }
-        result = path_units(vm, out.data, out.len);
+        result = path_buf_to_value(vm, &out);
         path_buf_free(&out);
     }
     path_buf_free(&res);
@@ -304,25 +309,34 @@ static bool posix_resolve_core(MalVm *vm, const MalValue *args, i32 argc, MalPat
             continue;
         }
         path_buf_prepend_seg(&resolved, pu, pl);
+        if (!path_buf_check(vm, &resolved)) {
+            free(cwd_units);
+            path_buf_free(&resolved);
+            return false;
+        }
         resolved_absolute = pu[0] == PATH_SEP;
         free(cwd_units);
     }
 
     MalPathBuf norm;
     path_buf_init(&norm);
-    normalize_string(resolved.data, (i64) resolved.len, !resolved_absolute, &norm);
+    normalize_string(resolved.data, (i64) resolved.length, !resolved_absolute, &norm);
     path_buf_free(&resolved);
+    if (!path_buf_check(vm, &norm)) {
+        path_buf_free(&norm);
+        return false;
+    }
 
     if (resolved_absolute) {
         path_buf_push_char(out, PATH_SEP);
-        path_buf_push_units(out, norm.data, norm.len);
-    } else if (norm.len > 0) {
-        path_buf_push_units(out, norm.data, norm.len);
+        path_buf_push_units(out, norm.data, norm.length);
+    } else if (norm.length > 0) {
+        path_buf_push_units(out, norm.data, norm.length);
     } else {
         path_buf_push_char(out, PATH_DOT);
     }
     path_buf_free(&norm);
-    return true;
+    return path_buf_check(vm, out);
 }
 
 /* --------------------------------------------------------------------------
@@ -340,7 +354,7 @@ static MalValue mal_node_path_resolve(
         path_buf_free(&out);
         return mal_value_new_undefined();
     }
-    MalValue result = path_units(vm, out.data, out.len);
+    MalValue result = path_buf_to_value(vm, &out);
     path_buf_free(&out);
     return result;
 }
@@ -397,8 +411,10 @@ static MalValue mal_node_path_join(
             have = true;
         }
     }
-    MalValue result = have ? posix_normalize_units(vm, joined.data, (i64) joined.len)
-                           : path_ascii(vm, ".");
+    MalValue result = path_buf_check(vm, &joined)
+        ? (have ? posix_normalize_units(vm, joined.data, (i64) joined.length)
+                : path_ascii(vm, "."))
+        : mal_value_new_undefined();
     path_buf_free(&joined);
     return result;
 }
@@ -540,8 +556,8 @@ static MalValue mal_node_path_relative(
 
     const c16 *from = from_buf.data;
     const c16 *to = to_buf.data;
-    i64 from_total = (i64) from_buf.len;
-    i64 to_total = (i64) to_buf.len;
+    i64 from_total = (i64) from_buf.length;
+    i64 to_total = (i64) to_buf.length;
 
     if (from_total == to_total
         && memcmp(from, to, (usize) from_total * sizeof(c16)) == 0) {
@@ -599,7 +615,7 @@ static MalValue mal_node_path_relative(
     path_buf_init(&out);
     for (i = from_start + last_common_sep + 1; i <= from_end; ++i) {
         if (i == from_end || from[i] == PATH_SEP) {
-            if (out.len == 0) {
+            if (out.length == 0) {
                 path_buf_push_char(&out, PATH_DOT);
                 path_buf_push_char(&out, PATH_DOT);
             } else {
@@ -613,7 +629,7 @@ static MalValue mal_node_path_relative(
     i64 tail_start = to_start + last_common_sep;
     path_buf_push_units(&out, &to[tail_start], (usize) (to_total - tail_start));
 
-    MalValue result = path_units(vm, out.data, out.len);
+    MalValue result = path_buf_to_value(vm, &out);
     path_buf_free(&out);
     path_buf_free(&from_buf);
     path_buf_free(&to_buf);

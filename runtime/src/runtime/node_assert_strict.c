@@ -2,12 +2,11 @@
 
 #if MAL_NODE
 
-#include <string.h>
-
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
 #include "value_ops.h"
@@ -105,20 +104,6 @@ static MalValue assert_match(
     return mal_value_new_undefined();
 }
 
-static void assert_publish(
-    MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module) {
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = module;
-        } else {
-            MalPropertyLookup found = mal_object_get_own(
-                mal_value_to_object(module),
-                mal_intrinsic_string_key(vm, (const byte *) slots[i].name));
-            if (found.present) vm->globals[slots[i].slot] = found.desc.value;
-        }
-    }
-}
-
 void mal_host_install_node_assert_strict(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
@@ -138,7 +123,7 @@ void mal_host_install_node_assert_strict(
         vm->intrinsics[MAL_INTRINSIC_NODE_ASSERT_STRICT_MODULE] = module;
         mal_gc_unroot(&root);
     }
-    assert_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, slots, count, module);
 }
 
 #endif /* MAL_NODE */

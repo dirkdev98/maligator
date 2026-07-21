@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import { traverseEstree } from "./estree-traversal.ts";
 
 /**
  * Static detection of a CommonJS module's named exports — a pragmatic
@@ -145,30 +146,13 @@ export function detectCjsExports(ast: ESTree.Program): CjsExportInfo {
 		}
 	};
 
-	const visit = (value: unknown) => {
-		if (Array.isArray(value)) {
-			for (const item of value) {
-				visit(item);
-			}
-			return;
-		}
-		if (!value || typeof value !== "object" || !("type" in value)) {
-			return;
-		}
-		const node = value as ESTree.Node;
-
+	traverseEstree(ast.body, (node) => {
 		if (node.type === "AssignmentExpression") {
 			handleAssignment(node);
 		} else if (node.type === "CallExpression") {
 			handleDefineProperty(node);
 		}
-
-		for (const key of Object.keys(node)) {
-			visit((node as unknown as Record<string, unknown>)[key]);
-		}
-	};
-
-	visit(ast.body);
+	});
 	return { names, complete, reassignsModuleExports };
 }
 

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "./defaults.h"
-#include "./value.h"
+#include "./key.h"
 
 typedef struct MalTable MalTable;
 
@@ -12,65 +12,6 @@ typedef enum MalTableMode {
     MAL_TABLE_MODE_OBJECT,
     MAL_TABLE_MODE_GENERAL,
 } MalTableMode;
-
-/**
- * Equality domain for a stored key.
- */
-typedef enum MalKeyKind {
-    MAL_KEY_INDEX,
-    MAL_KEY_STRING,
-    MAL_KEY_SYMBOL,
-    MAL_KEY_NUMBER,
-    MAL_KEY_OBJECT,
-    /**
-     * Statically encoded values (true/false/null/undefined) keyed by their
-     * bit pattern. Used by general-mode tables (Map/Set keys).
-     */
-    MAL_KEY_STATIC,
-} MalKeyKind;
-
-/**
- * Tagged key wrapper used by the ordered table substrate. `kind` is fully
- * determined by `value` (see mal_key_kind_of) — it is a transient convenience on
- * the by-value argument type, NOT stored per entry: the substrate stores only the
- * 8-byte `value` and reconstructs the kind on read.
- */
-typedef struct MalKey {
-    MalKeyKind kind;
-    MalValue value;
-} MalKey;
-
-/**
- * Derive a key's equality domain from its value's NaN-boxing class. The map key
- * canonicalizer (mal_map_key_from_value) and every property-key constructor pick
- * a kind consistent with this, so a stored key needs only its value: an integer
- * index is int32-encoded (INDEX); a numeric Map key is always f64-encoded
- * (NUMBER, never colliding with an int32 INDEX); strings/symbols/objects carry
- * their own class; null/undefined/true/false are STATIC.
- */
-static inline MalKeyKind mal_key_kind_of(MalValue value) {
-    if (mal_value_is_string(value)) {
-        return MAL_KEY_STRING;
-    }
-    if (mal_value_is_symbol(value)) {
-        return MAL_KEY_SYMBOL;
-    }
-    if (mal_value_is_object(value)) {
-        return MAL_KEY_OBJECT;
-    }
-    if (mal_value_is_int32(value)) {
-        return MAL_KEY_INDEX;
-    }
-    if (mal_value_is_nil(value) || mal_value_is_boolean(value)) {
-        return MAL_KEY_STATIC;
-    }
-    return MAL_KEY_NUMBER;
-}
-
-/** Reconstruct the full tagged key from a stored value. */
-static inline MalKey mal_key_from_value(MalValue value) {
-    return (MalKey) {.kind = mal_key_kind_of(value), .value = value};
-}
 
 /**
  * Physical iteration order exposed by the table substrate.

@@ -5,29 +5,22 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ascii.h"
 #include "array_buffer_object.h"
+#include "base64.h"
 #include "builtin_data_view.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "hex.h"
 #include "heap_symbol.h"
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
-#include "web_text_encoding.h"
+#include "utf8.h"
 #include "typed_array_object.h"
 #include "value.h"
 #include "vm_ops.h"
-
-/* DataView keeps its layout private to builtin_data_view.c. Keep this in sync
- * with the runtime crypto adapter until the engine exposes a byte-view helper. */
-struct MalDataViewObject {
-    MalObject object;
-    MalArrayBufferObject *buffer;
-    u32 byte_offset;
-    u32 byte_length;
-    bool length_tracking;
-};
 
 typedef enum MalStringDecoderEncoding {
     MAL_SD_UTF8,
@@ -46,15 +39,7 @@ typedef struct MalStringDecoderState {
 } MalStringDecoderState;
 
 static bool sd_ascii_equal_ci(const MalString *string, const char *ascii) {
-    usize length = strlen(ascii);
-    if (mal_string_length(string) != length) return false;
-    const c16 *units = mal_string_code_units(string);
-    for (usize i = 0; i < length; i++) {
-        c16 unit = units[i];
-        if (unit >= 'A' && unit <= 'Z') unit += 'a' - 'A';
-        if (unit != (c16) (u8) ascii[i]) return false;
-    }
-    return true;
+    return mal_string_equals_ascii_ci(string, ascii);
 }
 
 static bool sd_encoding(
@@ -168,33 +153,13 @@ static usize sd_pending_unpack(u32 packed, byte bytes[3]) {
 static bool sd_byte_view(
     MalVm *vm, MalValue value, const byte **data, usize *length
 ) {
-    MalArrayBufferObject *buffer;
-    usize byte_offset;
-    if (mal_value_is_typed_array_object(value)) {
-        MalTypedArrayObject *array = mal_value_to_typed_array_object(value);
-        if (mal_typed_array_object_is_out_of_bounds(array)) goto invalid;
-        buffer = array->buffer;
-        byte_offset = array->byte_offset;
-        *length = mal_typed_array_object_byte_length(array);
-    } else if (mal_value_is_data_view_object(value)) {
-        MalDataViewObject *view = mal_value_to_data_view_object(value);
-        buffer = view->buffer;
-        if (buffer == nullptr || buffer->detached ||
-            view->byte_offset > buffer->byte_length ||
-            (!view->length_tracking &&
-             (u64) view->byte_offset + view->byte_length > buffer->byte_length)) {
-            goto invalid;
-        }
-        byte_offset = view->byte_offset;
-        *length = view->length_tracking
-            ? buffer->byte_length - byte_offset
-            : view->byte_length;
-    } else {
+    if (!mal_value_is_typed_array_object(value) && !mal_value_is_data_view_object(value)) {
         goto invalid;
     }
-    *data = buffer->data == nullptr
-        ? (const byte *) ""
-        : buffer->data + byte_offset;
+    MalBufferSourceSpan span;
+    if (mal_buffer_source_span(value, &span) != MAL_BUFFER_SOURCE_SPAN_OK) goto invalid;
+    *data = span.data == nullptr ? (const byte *) "" : span.data;
+    *length = span.length;
     return true;
 
 invalid:
@@ -375,9 +340,13 @@ static MalValue sd_decode_base64(
     usize consumed = total - total % 3;
     usize retained = total - consumed;
     bool padding = state->encoding == MAL_SD_BASE64;
-    usize output_length = consumed / 3 * 4;
-    if (final && retained != 0) {
-        output_length += padding ? 4 : retained + 1;
+    usize input_length = final ? total : consumed;
+    usize output_length;
+    if (!mal_base64_encoded_length(
+            input_length, padding, MAL_STRING_MAX_CODE_UNITS, &output_length)) {
+        free(joined);
+        sd_checked_output(vm, MAL_STRING_MAX_CODE_UNITS + 1);
+        return mal_value_new_undefined();
     }
     if (!sd_checked_output(vm, output_length)) {
         free(joined);
@@ -388,38 +357,22 @@ static MalValue sd_decode_base64(
         free(joined);
         return sd_allocation_error(vm);
     }
-    static const byte standard[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    static const byte url[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    const byte *alphabet = state->encoding == MAL_SD_BASE64URL ? url : standard;
     usize read = 0;
     usize written = 0;
-    while (read + 3 <= consumed) {
-        u32 value = ((u32) (u8) joined[read] << 16) |
-                    ((u32) (u8) joined[read + 1] << 8) |
-                    (u8) joined[read + 2];
-        units[written++] = alphabet[(value >> 18) & 0x3f];
-        units[written++] = alphabet[(value >> 12) & 0x3f];
-        units[written++] = alphabet[(value >> 6) & 0x3f];
-        units[written++] = alphabet[value & 0x3f];
-        read += 3;
-    }
-    if (final && retained == 1) {
-        u32 value = (u32) (u8) joined[consumed] << 16;
-        units[written++] = alphabet[(value >> 18) & 0x3f];
-        units[written++] = alphabet[(value >> 12) & 0x3f];
-        if (padding) {
-            units[written++] = '=';
-            units[written++] = '=';
+    while (read < input_length) {
+        usize remaining = input_length - read;
+        usize block_length = remaining < 3 ? remaining : 3;
+        byte encoded[4];
+        usize encoded_length = mal_base64_encode_block(
+            joined + read, block_length,
+            state->encoding == MAL_SD_BASE64URL
+                ? MAL_BASE64_ALPHABET_URL
+                : MAL_BASE64_ALPHABET_STANDARD,
+            padding, encoded);
+        for (usize i = 0; i < encoded_length; i++) {
+            units[written++] = (u8) encoded[i];
         }
-    } else if (final && retained == 2) {
-        u32 value = ((u32) (u8) joined[consumed] << 16) |
-                    ((u32) (u8) joined[consumed + 1] << 8);
-        units[written++] = alphabet[(value >> 18) & 0x3f];
-        units[written++] = alphabet[(value >> 12) & 0x3f];
-        units[written++] = alphabet[(value >> 6) & 0x3f];
-        if (padding) units[written++] = '=';
+        read += block_length;
     }
 
     u32 next_pending = !final && retained != 0
@@ -437,19 +390,21 @@ static MalValue sd_decode_base64(
 static MalValue sd_decode_stateless(
     MalVm *vm, MalStringDecoderState *state, const byte *data, usize length
 ) {
-    usize output_length = state->encoding == MAL_SD_HEX ? length * 2 : length;
-    if (state->encoding == MAL_SD_HEX && length > MAL_STRING_MAX_CODE_UNITS / 2) {
-        return sd_checked_output(vm, MAL_STRING_MAX_CODE_UNITS + 1);
+    usize output_length = length;
+    if (state->encoding == MAL_SD_HEX
+        && !mal_hex_encoded_length(length, MAL_STRING_MAX_CODE_UNITS, &output_length)) {
+        sd_checked_output(vm, MAL_STRING_MAX_CODE_UNITS + 1);
+        return mal_value_new_undefined();
     }
     if (!sd_checked_output(vm, output_length)) return mal_value_new_undefined();
     c16 *units = malloc(sizeof(c16) * (output_length == 0 ? 1 : output_length));
     if (units == nullptr) return sd_allocation_error(vm);
     if (state->encoding == MAL_SD_HEX) {
-        static const byte digits[] = "0123456789abcdef";
         for (usize i = 0; i < length; i++) {
-            u8 value = (u8) data[i];
-            units[i * 2] = digits[value >> 4];
-            units[i * 2 + 1] = digits[value & 0x0f];
+            byte encoded[2];
+            mal_hex_encode_byte_lower(data[i], encoded);
+            units[i * 2] = (u8) encoded[0];
+            units[i * 2 + 1] = (u8) encoded[1];
         }
     } else {
         for (usize i = 0; i < length; i++) {

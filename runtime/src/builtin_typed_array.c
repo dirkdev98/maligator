@@ -5,9 +5,11 @@
 #include <string.h>
 
 #include "array_buffer_object.h"
+#include "base64.h"
 #include "builtin_bigint.h"
 #include "builtin_iterator.h"
 #include "heap_bigint.h"
+#include "hex.h"
 #include "object_ops.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
@@ -129,10 +131,7 @@ static bool mal_ta_to_index(MalVm *vm, MalValue value, u32 *out) {
     if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
-    if (isnan(number)) {
-        number = 0;
-    }
-    number = trunc(number);
+    number = mal_ops_number_to_integer_or_infinity(number);
     if (number < 0 || isinf(number) || number > 4294967295.0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid length");
         return false;
@@ -149,7 +148,7 @@ static bool mal_ta_to_integer(MalVm *vm, MalValue value, f64 *out) {
     if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
-    *out = isnan(number) ? 0 : trunc(number);
+    *out = mal_ops_number_to_integer_or_infinity(number);
     return true;
 }
 
@@ -162,15 +161,10 @@ static bool mal_ta_relative(MalVm *vm, MalValue value, u32 length, u32 fallback,
         return true;
     }
     f64 number;
-    if (!mal_ta_to_integer(vm, value, &number)) {
+    if (!mal_vm_to_number(vm, value, &number)) {
         return false;
     }
-    if (number < 0) {
-        number += length;
-        *out = number < 0 ? 0 : (u32) number;
-    } else {
-        *out = number > length ? length : (u32) number;
-    }
+    *out = (u32) mal_ops_number_clamp_relative(number, (f64) length);
     return true;
 }
 
@@ -340,10 +334,7 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
         if (!mal_vm_to_number(vm, length_value, &length_number)) {
             return mal_value_new_undefined();
         }
-        length_number = isnan(length_number) ? 0 : trunc(length_number);
-        if (length_number < 0) {
-            length_number = 0;
-        }
+        length_number = mal_ops_number_to_length(length_number);
         // AllocateTypedArrayBuffer rejects a length that overflows a valid
         // buffer with a RangeError (e.g. 2^53).
         if (length_number > 4294967295.0 || (u64) length_number * element_size > 4294967295u) {
@@ -357,7 +348,7 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
         mal_object_set_prototype(&array->object, prototype);
         for (u32 i = 0; i < length; i++) {
             MalValue element;
-            if (!mal_vm_get_property(vm, arg, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &element)) {
+            if (!mal_vm_get_property(vm, arg, mal_key_index(i), &element)) {
                 return mal_value_new_undefined();
             }
             mal_typed_array_object_set(vm, array, i, element);
@@ -484,11 +475,11 @@ static MalValue mal_ta_at(MalVm *vm, MalValue this_value, const MalValue *args, 
     if (!mal_ta_to_integer(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &relative)) {
         return mal_value_new_undefined();
     }
-    i64 index = relative < 0 ? (i64) length + (i64) relative : (i64) relative;
-    if (index < 0 || (u64) index >= length) {
+    f64 actual = relative < 0 ? (f64) length + relative : relative;
+    if (actual < 0 || actual >= (f64) length) {
         return mal_value_new_undefined();
     }
-    return mal_typed_array_object_get(vm, array, (u32) index);
+    return mal_typed_array_object_get(vm, array, (u32) actual);
 }
 
 static MalValue mal_ta_fill(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -588,17 +579,15 @@ static MalValue mal_ta_set(MalVm *vm, MalValue this_value, const MalValue *args,
     if (!mal_vm_to_number(vm, length_value, &src_length_number)) {
         return mal_value_new_undefined();
     }
-    src_length_number = isnan(src_length_number) ? 0 : trunc(src_length_number);
-    u32 src_length = (src_length_number > 0)
-        ? (src_length_number > 4294967295.0 ? UINT32_MAX : (u32) src_length_number)
-        : 0;
+    src_length_number = mal_ops_number_to_length(src_length_number);
+    u32 src_length = src_length_number > 4294967295.0 ? UINT32_MAX : (u32) src_length_number;
     if ((u64) offset + src_length > length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Source is too large");
         return mal_value_new_undefined();
     }
     for (u32 i = 0; i < src_length; i++) {
         MalValue element;
-        if (!mal_vm_get_property(vm, source, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &element)) {
+        if (!mal_vm_get_property(vm, source, mal_key_index(i), &element)) {
             return mal_value_new_undefined();
         }
         mal_typed_array_object_set(vm, array, offset + i, element);
@@ -716,67 +705,6 @@ static MalValue mal_ta_copy_within(MalVm *vm, MalValue this_value, const MalValu
     return this_value;
 }
 
-// ToString that runs user coercion: for an object, ToPrimitive(string) via
-// @@toPrimitive else toString → valueOf, then ToString of the primitive.
-// Throws (vm->completion) and returns nullptr on an abrupt completion.
-static MalString *mal_ta_to_string_value(MalVm *vm, MalValue value) {
-    if (mal_value_is_symbol(value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value to a string");
-        return nullptr;
-    }
-    if (mal_value_is_object(value)) {
-        MalValue exotic;
-        if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE), &exotic)) {
-            return nullptr;
-        }
-        if (!mal_value_is_nil(exotic)) {
-            if (!mal_value_is_callable(exotic)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.toPrimitive is not a function");
-                return nullptr;
-            }
-            MalValue hint = mal_value_from_string(mal_intrinsic_ascii(vm, "string"));
-            MalCompletion result = mal_vm_call_value(vm, exotic, value, &hint, 1);
-            if (result.kind != MAL_COMPLETION_NORMAL) {
-                return nullptr;
-            }
-            if (mal_value_is_object(result.value)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
-                return nullptr;
-            }
-            value = result.value;
-        } else {
-            // OrdinaryToPrimitive with hint string: toString → valueOf.
-            const byte *methods[2] = {"toString", "valueOf"};
-            bool converted = false;
-            for (i32 i = 0; i < 2 && !converted; i++) {
-                MalValue method;
-                if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, methods[i]), &method)) {
-                    return nullptr;
-                }
-                if (mal_value_is_callable(method)) {
-                    MalCompletion result = mal_vm_call_value(vm, method, value, nullptr, 0);
-                    if (result.kind != MAL_COMPLETION_NORMAL) {
-                        return nullptr;
-                    }
-                    if (!mal_value_is_object(result.value)) {
-                        value = result.value;
-                        converted = true;
-                    }
-                }
-            }
-            if (!converted) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
-                return nullptr;
-            }
-        }
-        if (mal_value_is_symbol(value)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value to a string");
-            return nullptr;
-        }
-    }
-    return mal_ops_to_string(&vm->heap, value);
-}
-
 static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     MalTypedArrayObject *array = mal_ta_this(vm, this_value);
@@ -786,8 +714,7 @@ static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args
     u32 length = mal_typed_array_object_length(array);
     MalString *separator;
     if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
-        separator = mal_ta_to_string_value(vm, args[0]);
-        if (separator == nullptr) {
+        if (!mal_vm_to_string(vm, args[0], &separator)) {
             return mal_value_new_undefined();
         }
     } else {
@@ -1571,16 +1498,14 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
         if (!mal_vm_to_number(vm, length_value, &length_number)) {
             goto done;
         }
-        length_number = isnan(length_number) ? 0 : trunc(length_number);
-        u32 length = (length_number > 0)
-            ? (length_number > 4294967295.0 ? UINT32_MAX : (u32) length_number)
-            : 0;
+        length_number = mal_ops_number_to_length(length_number);
+        u32 length = length_number > 4294967295.0 ? UINT32_MAX : (u32) length_number;
         values = length > 0 ? malloc(sizeof(MalValue) * length) : nullptr;
         values_span.slots = values;
         for (u32 i = 0; i < length; i++) {
             // Scan only already-filled entries while this get may collect.
             values_span.count = (i32) i;
-            if (!mal_vm_get_property(vm, source, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &values[i])) {
+            if (!mal_vm_get_property(vm, source, mal_key_index(i), &values[i])) {
                 goto done;
             }
         }
@@ -1627,51 +1552,6 @@ done:
 // ---- Uint8Array base64/hex (Uint8Array-to/from-base64 proposal) ----------
 
 typedef enum { MAL_B64_LOOSE, MAL_B64_STRICT, MAL_B64_STOP } MalB64LastChunk;
-
-static const byte mal_b64_alphabet_std[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-static const byte mal_b64_alphabet_url[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-static bool mal_b64_is_whitespace(c16 c) {
-    return c == 0x09 || c == 0x0A || c == 0x0C || c == 0x0D || c == 0x20;
-}
-
-static i32 mal_b64_decode_char(c16 c, bool url) {
-    if (c >= 'A' && c <= 'Z') {
-        return c - 'A';
-    }
-    if (c >= 'a' && c <= 'z') {
-        return c - 'a' + 26;
-    }
-    if (c >= '0' && c <= '9') {
-        return c - '0' + 52;
-    }
-    if (c == '+') {
-        return url ? -1 : 62;
-    }
-    if (c == '/') {
-        return url ? -1 : 63;
-    }
-    if (c == '-') {
-        return url ? 62 : -1;
-    }
-    if (c == '_') {
-        return url ? 63 : -1;
-    }
-    return -1;
-}
-
-static i32 mal_hex_decode_char(c16 c) {
-    if (c >= '0' && c <= '9') {
-        return c - '0';
-    }
-    if (c >= 'a' && c <= 'f') {
-        return c - 'a' + 10;
-    }
-    if (c >= 'A' && c <= 'F') {
-        return c - 'A' + 10;
-    }
-    return -1;
-}
 
 /** ValidateUint8Array: receiver must be a Uint8Array. */
 static MalTypedArrayObject *mal_ta_uint8_this(MalVm *vm, MalValue this_value) {
@@ -1774,14 +1654,15 @@ static bool mal_b64_decode(MalVm *vm, const c16 *s, usize len, bool url, MalB64L
 
     while (i < len) {
         c16 c = s[i];
-        if (mal_b64_is_whitespace(c)) {
+        if (mal_base64_is_ascii_whitespace(c)) {
             i++;
             continue;
         }
         if (c == '=') {
             break;
         }
-        i32 v = mal_b64_decode_char(c, url);
+        i32 v = mal_base64_decode_digit(
+            c, url ? MAL_BASE64_ALPHABET_URL : MAL_BASE64_ALPHABET_STANDARD);
         if (v < 0) {
             // Commit the bytes decoded so far (setFromBase64 writes up to the error).
             *read_out = read;
@@ -1818,7 +1699,7 @@ static bool mal_b64_decode(MalVm *vm, const c16 *s, usize len, bool url, MalB64L
     if (nsext == 0) {
         // Only whitespace may remain (stray '=' is malformed).
         while (i < len) {
-            if (!mal_b64_is_whitespace(s[i])) {
+            if (!mal_base64_is_ascii_whitespace(s[i])) {
                 *read_out = read;
                 *written_out = written;
                 mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Unexpected base64 padding");
@@ -1874,9 +1755,10 @@ static bool mal_b64_decode(MalVm *vm, const c16 *s, usize len, bool url, MalB64L
         }
         i32 needed_padding = 4 - nsext;
         i32 seen = 0;
-        while (i < len && s[i] == '=' && seen < needed_padding) {
+        while (seen < needed_padding && i < len && s[i] == '=') {
             i++;
             seen++;
+            while (i < len && mal_base64_is_ascii_whitespace(s[i])) i++;
         }
         if (seen < needed_padding) {
             // Incomplete padding: stop-before-partial stops here; others error.
@@ -1892,7 +1774,7 @@ static bool mal_b64_decode(MalVm *vm, const c16 *s, usize len, bool url, MalB64L
         }
         // Exactly the needed padding: only whitespace may follow.
         while (i < len) {
-            if (!mal_b64_is_whitespace(s[i])) {
+            if (!mal_base64_is_ascii_whitespace(s[i])) {
                 *read_out = read;
                 *written_out = written;
                 mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Unexpected character after base64 padding");
@@ -1935,8 +1817,8 @@ static bool mal_hex_decode(MalVm *vm, const c16 *s, usize len, byte *out, usize 
         if (written + 1 > max_out) {
             break;
         }
-        i32 hi = mal_hex_decode_char(s[i]);
-        i32 lo = mal_hex_decode_char(s[i + 1]);
+        i32 hi = mal_hex_decode_digit(s[i]);
+        i32 lo = mal_hex_decode_digit(s[i + 1]);
         if (hi < 0 || lo < 0) {
             // Commit the bytes decoded so far (setFromHex writes up to the error).
             *read_out = i;
@@ -1954,15 +1836,9 @@ static bool mal_hex_decode(MalVm *vm, const c16 *s, usize len, byte *out, usize 
 
 /** Encode `bytes` as base64 into a fresh String. */
 static MalValue mal_b64_encode(MalVm *vm, const byte *bytes, usize length, bool url, bool omit_padding) {
-    const byte *alphabet = url ? mal_b64_alphabet_url : mal_b64_alphabet_std;
-    usize full_length;
-    if (!mal_checked_size_multiply(length / 3, 4, MAL_STRING_MAX_CODE_UNITS, &full_length)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
-        return mal_value_new_undefined();
-    }
-    usize tail_length = length % 3 == 0 ? 0 : (omit_padding ? length % 3 + 1 : 4);
     usize out_length;
-    if (!mal_checked_size_add(full_length, tail_length, MAL_STRING_MAX_CODE_UNITS, &out_length)) {
+    if (!mal_base64_encoded_length(
+            length, !omit_padding, MAL_STRING_MAX_CODE_UNITS, &out_length)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
         return mal_value_new_undefined();
     }
@@ -1971,44 +1847,20 @@ static MalValue mal_b64_encode(MalVm *vm, const byte *bytes, usize length, bool 
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
         return mal_value_new_undefined();
     }
-    usize w = 0;
-    usize i = 0;
-    while (i + 3 <= length) {
-        u32 all = (((u32) bytes[i] & 0xFF) << 16) | (((u32) bytes[i + 1] & 0xFF) << 8) | ((u32) bytes[i + 2] & 0xFF);
-        out[w++] = alphabet[(all >> 18) & 0x3F];
-        out[w++] = alphabet[(all >> 12) & 0x3F];
-        out[w++] = alphabet[(all >> 6) & 0x3F];
-        out[w++] = alphabet[all & 0x3F];
-        i += 3;
-    }
-    usize remaining = length - i;
-    if (remaining == 1) {
-        u32 all = ((u32) bytes[i] & 0xFF) << 16;
-        out[w++] = alphabet[(all >> 18) & 0x3F];
-        out[w++] = alphabet[(all >> 12) & 0x3F];
-        if (!omit_padding) {
-            out[w++] = '=';
-            out[w++] = '=';
-        }
-    } else if (remaining == 2) {
-        u32 all = (((u32) bytes[i] & 0xFF) << 16) | (((u32) bytes[i + 1] & 0xFF) << 8);
-        out[w++] = alphabet[(all >> 18) & 0x3F];
-        out[w++] = alphabet[(all >> 12) & 0x3F];
-        out[w++] = alphabet[(all >> 6) & 0x3F];
-        if (!omit_padding) {
-            out[w++] = '=';
-        }
-    }
-    MalValue result = mal_value_from_string(mal_string_new_ascii(&vm->heap, out, w));
+    usize written = mal_base64_encode(
+        bytes, length,
+        url ? MAL_BASE64_ALPHABET_URL : MAL_BASE64_ALPHABET_STANDARD,
+        !omit_padding, out);
+    MalValue result = mal_value_from_string(
+        mal_string_new_ascii(&vm->heap, out, written));
     free(out);
     return result;
 }
 
 /** Encode `bytes` as lowercase hex into a fresh String. */
 static MalValue mal_hex_encode(MalVm *vm, const byte *bytes, usize length) {
-    static const byte digits[] = "0123456789abcdef";
     usize out_length;
-    if (!mal_checked_size_multiply(length, 2, MAL_STRING_MAX_CODE_UNITS, &out_length)) {
+    if (!mal_hex_encoded_length(length, MAL_STRING_MAX_CODE_UNITS, &out_length)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
         return mal_value_new_undefined();
     }
@@ -2017,11 +1869,7 @@ static MalValue mal_hex_encode(MalVm *vm, const byte *bytes, usize length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
         return mal_value_new_undefined();
     }
-    for (usize i = 0; i < length; i++) {
-        u32 b = (u32) bytes[i] & 0xFF;
-        out[i * 2] = digits[b >> 4];
-        out[i * 2 + 1] = digits[b & 0x0F];
-    }
+    mal_hex_encode_lower(bytes, length, out);
     MalValue result = mal_value_from_string(mal_string_new_ascii(&vm->heap, out, out_length));
     free(out);
     return result;
@@ -2067,7 +1915,7 @@ static MalValue mal_ta_from_base64(MalVm *vm, MalValue this_value, const MalValu
     }
     MalValue result = mal_ta_create(vm, MAL_TA_UINT8, (u32) written);
     MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
-    memcpy(array->buffer->data, bytes, written);
+    if (written > 0) memcpy(array->buffer->data, bytes, written);
     free(bytes);
     return result;
 }
@@ -2091,7 +1939,7 @@ static MalValue mal_ta_from_hex(MalVm *vm, MalValue this_value, const MalValue *
     }
     MalValue result = mal_ta_create(vm, MAL_TA_UINT8, (u32) written);
     MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
-    memcpy(array->buffer->data, bytes, written);
+    if (written > 0) memcpy(array->buffer->data, bytes, written);
     free(bytes);
     return result;
 }
@@ -2121,7 +1969,10 @@ static MalValue mal_ta_to_base64(MalVm *vm, MalValue this_value, const MalValue 
         return mal_value_new_undefined();
     }
     u32 length = mal_typed_array_object_length(array);
-    return mal_b64_encode(vm, array->buffer->data + array->byte_offset, length, url, omit_padding);
+    const byte *bytes = length == 0
+        ? nullptr
+        : array->buffer->data + array->byte_offset;
+    return mal_b64_encode(vm, bytes, length, url, omit_padding);
 }
 
 static MalValue mal_ta_to_hex(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2138,7 +1989,10 @@ static MalValue mal_ta_to_hex(MalVm *vm, MalValue this_value, const MalValue *ar
         return mal_value_new_undefined();
     }
     u32 length = mal_typed_array_object_length(array);
-    return mal_hex_encode(vm, array->buffer->data + array->byte_offset, length);
+    const byte *bytes = length == 0
+        ? nullptr
+        : array->buffer->data + array->byte_offset;
+    return mal_hex_encode(vm, bytes, length);
 }
 
 /** Build the { read, written } result record for setFromBase64/setFromHex. */
@@ -2189,7 +2043,9 @@ static MalValue mal_ta_set_from_base64(MalVm *vm, MalValue this_value, const Mal
     usize written;
     bool ok = mal_b64_decode(vm, units, len, url, last_chunk, bytes, target_length, &read, &written);
     // Commit the successfully-decoded bytes even when a later chunk errors.
-    memcpy(array->buffer->data + array->byte_offset, bytes, written);
+    if (written > 0) {
+        memcpy(array->buffer->data + array->byte_offset, bytes, written);
+    }
     free(bytes);
     if (!ok) {
         return mal_value_new_undefined();
@@ -2223,7 +2079,9 @@ static MalValue mal_ta_set_from_hex(MalVm *vm, MalValue this_value, const MalVal
     usize read;
     usize written;
     bool ok = mal_hex_decode(vm, units, len, bytes, target_length, &read, &written);
-    memcpy(array->buffer->data + array->byte_offset, bytes, written);
+    if (written > 0) {
+        memcpy(array->buffer->data + array->byte_offset, bytes, written);
+    }
     free(bytes);
     if (!ok) {
         return mal_value_new_undefined();
@@ -2234,22 +2092,9 @@ static MalValue mal_ta_set_from_hex(MalVm *vm, MalValue this_value, const MalVal
 // ---- install -------------------------------------------------------------
 
 static void mal_ta_define_getter(MalVm *vm, MalObject *object, MalKey key, const byte *name, MalNativeFunctionCallback getter) {
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = mal_value_from_native_function_object(mal_native_function_object_new(
-            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]), mal_intrinsic_ascii(vm, name), getter)),
-        .setter = mal_value_new_undefined(),
-    };
-    mal_object_define_own(object, key, &desc);
-}
-
-static MalValue mal_ta_species_getter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
-    (void) args;
-    (void) arg_count;
-    (void) new_target;
-    return this_value;
+    mal_intrinsic_define_accessor_n(
+        vm, object, key, name, 0, getter, nullptr, 0, nullptr,
+        MAL_PROPERTY_CONFIGURABLE);
 }
 
 void mal_builtin_typed_array_install(MalVm *vm) {
@@ -2310,14 +2155,7 @@ void mal_builtin_typed_array_install(MalVm *vm) {
 
     mal_intrinsic_define_method_n(vm, (MalObject *) ta_constructor, "from", 1, mal_ta_from);
     mal_intrinsic_define_method_n(vm, (MalObject *) ta_constructor, "of", 0, mal_ta_of);
-    MalPropertyDesc species_desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = mal_value_from_native_function_object(mal_native_function_object_new(
-            &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "get [Symbol.species]"), mal_ta_species_getter)),
-        .setter = mal_value_new_undefined(),
-    };
-    mal_object_define_own((MalObject *) ta_constructor, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_SPECIES), &species_desc);
+    mal_intrinsic_define_species(vm, (MalObject *) ta_constructor);
 
     // The eleven concrete TypedArray constructors / prototypes.
     for (i32 k = 0; k < MAL_TA_KIND_COUNT; k++) {

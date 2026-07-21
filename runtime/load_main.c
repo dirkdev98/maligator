@@ -1,5 +1,6 @@
 #include "vm.h"
 #include "vm_load.h"
+#include "bigint128.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -57,6 +58,38 @@ static MalLoadedDefinition *load(const char *path) {
     return loaded;
 }
 
+static void dump_loaded_scalars(const MalVmDefinition *definition) {
+    for (i32 i = 0; i < definition->string_constant_count; i++) {
+        const MalString *string = &definition->string_constants[i];
+        const c16 *units = mal_string_code_units(string);
+        printf("string[%d]", i);
+        for (usize j = 0; j < mal_string_length(string); j++) {
+            printf(" %04x", (unsigned) units[j]);
+        }
+        putchar('\n');
+    }
+    for (i32 i = 0; i < definition->bigint_constant_count; i++) {
+        u128 bits = mal_bigint128_bits(mal_bigint_value(&definition->bigint_constants[i]));
+        printf("bigint[%d] %016llx%016llx\n", i,
+               (unsigned long long) (bits >> 64), (unsigned long long) bits);
+    }
+    for (i32 i = 0; i < definition->literal_template_data_count; i++) {
+        printf("literal[%d] %08x\n", i, definition->literal_template_data[i]);
+    }
+    for (i32 function_index = 0; function_index < definition->function_count; function_index++) {
+        const MalFunction *function = &definition->functions[function_index];
+        for (i32 instruction_index = 0; instruction_index < function->instruction_count; instruction_index++) {
+            const MalInstruction *instruction = &function->instructions[instruction_index];
+            if (instruction->opcode == MAL_OP_CREATE_F64) {
+                u64 bits = ((u64) instruction->as.create_f64.bits_high << 32) |
+                           instruction->as.create_f64.bits_low;
+                printf("f64[%d:%d] %016llx\n", function_index, instruction_index,
+                       (unsigned long long) bits);
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     bool splice = argc >= 4 && strcmp(argv[1], "--splice") == 0;
     if (argc < 2 || (splice && argc < 4)) {
@@ -68,6 +101,9 @@ int main(int argc, char **argv) {
     MalLoadedDefinition *base = load(splice ? argv[2] : argv[1]);
     if (base == nullptr) {
         return 2;
+    }
+    if (getenv("MAL_DUMP_LOADED_SCALARS") != nullptr) {
+        dump_loaded_scalars(mal_loaded_definition_get(base));
     }
     mal_vm_init(&vm, mal_loaded_definition_get(base));
 

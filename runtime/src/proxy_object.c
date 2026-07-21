@@ -639,45 +639,6 @@ done:
 
 // ---- defineProperty -------------------------------------------------------
 
-static MalValue mal_proxy_descriptor_object(
-    MalVm *vm, const MalPropertyDescriptorParse *parsed) {
-    MalValue roots[4] = {
-        mal_value_from_object(mal_intrinsic_new_object(vm)),
-        parsed->desc.value,
-        parsed->desc.getter,
-        parsed->desc.setter,
-    };
-    MalRootSpan roots_span;
-    mal_gc_root(&roots_span, roots, 4);
-    MalObject *object = mal_value_to_object(roots[0]);
-    MalPropertyFlags flags =
-        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
-    if (parsed->has_enumerable) {
-        mal_intrinsic_define_data(vm, object, "enumerable",
-            mal_value_new_boolean(parsed->desc.flags & MAL_PROPERTY_ENUMERABLE), flags);
-    }
-    if (parsed->has_configurable) {
-        mal_intrinsic_define_data(vm, object, "configurable",
-            mal_value_new_boolean(parsed->desc.flags & MAL_PROPERTY_CONFIGURABLE), flags);
-    }
-    if (parsed->has_value) {
-        mal_intrinsic_define_data(vm, object, "value", roots[1], flags);
-    }
-    if (parsed->has_writable) {
-        mal_intrinsic_define_data(vm, object, "writable",
-            mal_value_new_boolean(parsed->desc.flags & MAL_PROPERTY_WRITABLE), flags);
-    }
-    if (parsed->has_get) {
-        mal_intrinsic_define_data(vm, object, "get", roots[2], flags);
-    }
-    if (parsed->has_set) {
-        mal_intrinsic_define_data(vm, object, "set", roots[3], flags);
-    }
-    MalValue result = roots[0];
-    mal_gc_unroot(&roots_span);
-    return result;
-}
-
 static bool mal_proxy_define_own_property_snapshot(
     MalVm *vm, MalValue target, MalValue handler, MalKey key,
     const MalPropertyDescriptorParse *parsed, MalValue descriptor_value) {
@@ -802,7 +763,7 @@ bool mal_proxy_define_own_property(MalVm *vm, MalProxyObject *proxy, MalKey key,
     if (ok) {
         roots[6] = proxy->target;
         roots[7] = proxy->handler;
-        roots[8] = mal_proxy_descriptor_object(vm, &parsed);
+        roots[8] = mal_builtin_object_parsed_descriptor_object(vm, &parsed);
         ok = mal_proxy_define_own_property_snapshot(
             vm, roots[6], roots[7], key, &parsed, roots[8]);
         mal_proxy_dispatch_leave(vm);
@@ -901,7 +862,7 @@ static bool mal_proxy_own_keys_build(
     // `seen` is the duplicate/coverage set; `keys` is the result being built (both
     // created and rooted by the caller).
     for (i64 index = 0; index < length; index++) {
-        MalKey idx_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
+        MalKey idx_key = mal_key_index(index);
         MalValue element;
         if (!mal_vm_get_property(vm, result, idx_key, &element)) {
             return false;
@@ -920,7 +881,7 @@ static bool mal_proxy_own_keys_build(
             return false;
         }
         mal_object_define_own(seen, element_key, &marker);
-        mal_array_object_store(keys, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)}, element);
+        mal_array_object_store(keys, mal_key_index(index), element);
     }
 
     MalValue invariant_roots[2] = {
@@ -1196,7 +1157,7 @@ static MalCompletion mal_proxy_throw_completion(MalVm *vm, const byte *message) 
 static MalValue mal_proxy_args_array(MalVm *vm, const MalValue *args, i32 arg_count) {
     MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
     for (i32 i = 0; i < arg_count; i++) {
-        mal_array_object_store(array, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)}, args[i]);
+        mal_array_object_store(array, mal_key_index(i), args[i]);
     }
     return mal_value_from_array_object(array);
 }

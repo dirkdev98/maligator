@@ -7,6 +7,7 @@
 
 #include "array_object.h"
 #include "builtin_iterator.h"
+#include "checked_size.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
 #include "object_ops.h"
@@ -74,70 +75,6 @@ static void mal_error_capture_stack(MalVm *vm, MalObject *error) {
 }
 
 /**
- * Spec ToString that can invoke user-defined ToPrimitive/toString/valueOf and
- * therefore can throw (Symbol argument, abrupt conversion). On a pending throw
- * it returns false and leaves vm->completion set.
- */
-static bool mal_error_to_string(MalVm *vm, MalValue value, MalString **out) {
-    // ToPrimitive(value, string) for objects: @@toPrimitive, else the
-    // OrdinaryToPrimitive order toString -> valueOf (string hint).
-    if (mal_value_is_object(value)) {
-        MalValue exotic;
-        if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE), &exotic)) {
-            return false;
-        }
-        if (!mal_value_is_nil(exotic)) {
-            if (!mal_value_is_callable(exotic)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.toPrimitive is not a function");
-                return false;
-            }
-            MalValue hint = mal_value_from_string(mal_intrinsic_ascii(vm, "string"));
-            MalCompletion result = mal_vm_call_value(vm, exotic, value, &hint, 1);
-            if (result.kind != MAL_COMPLETION_NORMAL) {
-                return false;
-            }
-            if (mal_value_is_object(result.value)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
-                return false;
-            }
-            value = result.value;
-        } else {
-            const byte *methods[2] = {"toString", "valueOf"};
-            bool converted = false;
-            for (i32 i = 0; i < 2 && !converted; i++) {
-                MalValue method;
-                if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, methods[i]), &method)) {
-                    return false;
-                }
-                if (mal_value_is_callable(method)) {
-                    MalCompletion result = mal_vm_call_value(vm, method, value, nullptr, 0);
-                    if (result.kind != MAL_COMPLETION_NORMAL) {
-                        return false;
-                    }
-                    if (!mal_value_is_object(result.value)) {
-                        value = result.value;
-                        converted = true;
-                    }
-                }
-            }
-            if (!converted) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
-                return false;
-            }
-        }
-    }
-
-    // ToString proper: a Symbol is not convertible.
-    if (mal_value_is_symbol(value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value to a string");
-        return false;
-    }
-
-    *out = mal_ops_to_string(&vm->heap, value);
-    return true;
-}
-
-/**
  * InstallErrorCause(O, options): when `options` is an object with an own-or-
  * inherited "cause", copy it to a non-enumerable own "cause" data property.
  * Returns false on a pending throw (Get is observable).
@@ -178,7 +115,7 @@ static MalValue mal_builtin_error_make(MalVm *vm, MalIntrinsic prototype_slot, c
 
     if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
         MalString *message_string;
-        if (!mal_error_to_string(vm, args[0], &message_string)) {
+        if (!mal_vm_to_string(vm, args[0], &message_string)) {
             return mal_value_new_undefined();
         }
         mal_intrinsic_define_data(vm, error, "message", mal_value_from_string(message_string), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
@@ -257,7 +194,7 @@ static MalValue mal_builtin_aggregate_error_make(MalVm *vm, MalValue errors_valu
 
     if (!mal_value_is_undefined(message_value)) {
         MalString *message_string;
-        if (!mal_error_to_string(vm, message_value, &message_string)) {
+        if (!mal_vm_to_string(vm, message_value, &message_string)) {
             return mal_value_new_undefined();
         }
         mal_intrinsic_define_data(vm, error, "message", mal_value_from_string(message_string), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
@@ -283,7 +220,7 @@ static MalValue mal_builtin_aggregate_error_make(MalVm *vm, MalValue errors_valu
         if (done) {
             break;
         }
-        mal_array_object_store(list, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(index++)}, item);
+        mal_array_object_store(list, mal_key_index(index++), item);
     }
 
     // AggregateError "errors": { writable: true, enumerable: false, configurable: true }.
@@ -337,7 +274,7 @@ static bool mal_builtin_error_get_string(MalVm *vm, MalObject *error, const byte
         *out = nullptr;
         return true;
     }
-    return mal_error_to_string(vm, value, out);
+    return mal_vm_to_string(vm, value, out);
 }
 
 static MalValue mal_builtin_error_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -537,7 +474,7 @@ static MalArrayObject *mal_error_callsite_array(MalVm *vm, const MalStackTrace *
                     }
                     mal_array_object_store(
                         array,
-                        (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(emitted++)},
+                        mal_key_index(emitted++),
                         mal_value_from_object(mal_error_new_callsite(vm, function_index, pos_id))
                     );
                 }
@@ -803,18 +740,11 @@ static MalValue mal_builtin_error_stack_setter(MalVm *vm, MalValue this_value, c
 }
 
 static void mal_builtin_error_define_stack_accessor(MalVm *vm, MalObject *prototype) {
-    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = mal_value_from_native_function_object(mal_native_function_object_new_arity(
-            &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "get stack"), 0, mal_builtin_error_stack_getter
-        )),
-        .setter = mal_value_from_native_function_object(mal_native_function_object_new_arity(
-            &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "set stack"), 1, mal_builtin_error_stack_setter
-        )),
-    };
-    mal_object_define_own(prototype, mal_intrinsic_string_key(vm, "stack"), &desc);
+    mal_intrinsic_define_accessor_n(
+        vm, prototype, mal_intrinsic_string_key(vm, "stack"),
+        "get stack", 0, mal_builtin_error_stack_getter,
+        "set stack", 1, mal_builtin_error_stack_setter,
+        MAL_PROPERTY_CONFIGURABLE);
 }
 
 void mal_vm_throw_error(MalVm *vm, MalIntrinsic prototype_slot, const byte *message) {

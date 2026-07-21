@@ -39,13 +39,6 @@ static_assert(sizeof(MalString) <= 32, "MalString outgrew its 32-byte size class
 #define MAL_STRING_MAX_CODE_UNITS ((usize) 16 * 1024 * 1024)
 static_assert(MAL_STRING_MAX_CODE_UNITS <= INT32_MAX, "string length must fit regexp/i32 indices");
 
-/** Checked size arithmetic bounded by an explicit caller-provided limit. */
-bool mal_checked_size_add(usize left, usize right, usize limit, usize *out);
-
-bool mal_checked_size_multiply(usize left, usize right, usize limit, usize *out);
-
-bool mal_checked_size_growth(usize current, usize required, usize initial, usize limit, usize *out);
-
 /**
  * Hash a UTF-16 code unit sequence.
  */

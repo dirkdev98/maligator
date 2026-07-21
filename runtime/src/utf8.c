@@ -1,6 +1,9 @@
-#include "web_text_encoding.h"
+#include "utf8.h"
 
 #include <stdlib.h>
+
+#include "heap_string.h"
+#include "utf16.h"
 
 byte *mal_utf8_encode(const c16 *units, usize len, usize *out_len) {
     *out_len = 0;
@@ -9,18 +12,10 @@ byte *mal_utf8_encode(const c16 *units, usize len, usize *out_len) {
     if (out == nullptr) return nullptr;
     usize o = 0;
     for (usize i = 0; i < len; i++) {
-        u32 c = units[i];
-        if (c >= 0xD800 && c <= 0xDBFF) {
-            u32 lo = i + 1 < len ? units[i + 1] : 0;
-            if (lo >= 0xDC00 && lo <= 0xDFFF) {
-                c = 0x10000 + ((c - 0xD800) << 10) + (lo - 0xDC00);
-                i++;
-            } else {
-                c = 0xFFFD;
-            }
-        } else if (c >= 0xDC00 && c <= 0xDFFF) {
-            c = 0xFFFD;
-        }
+        u32 c;
+        usize width;
+        if (!mal_utf16_read_scalar(units, len, i, &c, &width)) c = 0xFFFD;
+        i += width - 1;
         if (c < 0x80) {
             out[o++] = (byte) c;
         } else if (c < 0x800) {
@@ -105,59 +100,43 @@ c16 *mal_utf8_decode_report(const byte *bytes, usize len, usize *out_count, bool
         if (cp <= 0xFFFF) {
             out[o++] = (c16) cp;
         } else {
-            cp -= 0x10000;
-            out[o++] = (c16) (0xD800 + (cp >> 10));
-            out[o++] = (c16) (0xDC00 + (cp & 0x3FF));
+            mal_utf16_emit_pair(cp, out + o);
+            o += 2;
         }
     }
     *out_count = o;
     return out;
 }
 
-c16 *mal_utf16_decode_report(
-    const byte *bytes, usize len, bool big_endian, usize *out_count, bool *had_error) {
-    *out_count = 0;
-    *had_error = false;
-    usize capacity = len / 2 + len % 2;
-    if (capacity > SIZE_MAX / sizeof(c16)) return nullptr;
-    c16 *out = malloc(sizeof(c16) * (capacity == 0 ? 1 : capacity));
-    if (out == nullptr) return nullptr;
+byte *mal_string_to_utf8(const MalString *string, usize *out_len) {
+    return mal_utf8_encode(mal_string_code_units(string), mal_string_length(string), out_len);
+}
 
-    usize o = 0;
-    usize i = 0;
-    while (i + 1 < len) {
-        u8 first = (u8) bytes[i];
-        u8 second = (u8) bytes[i + 1];
-        c16 unit = big_endian ? (c16) ((first << 8) | second) : (c16) ((second << 8) | first);
-        i += 2;
+MalString *mal_string_from_utf8(MalHeap *heap, const byte *bytes, usize len) {
+    usize count;
+    c16 *units = mal_utf8_decode(bytes, len, &count);
+    if (units == nullptr || count > MAL_STRING_MAX_CODE_UNITS) {
+        free(units);
+        return nullptr;
+    }
+    MalString *string = mal_string_new_copy(heap, units, count);
+    free(units);
+    return string;
+}
 
-        if (unit >= 0xD800 && unit <= 0xDBFF) {
-            if (i + 1 < len) {
-                first = (u8) bytes[i];
-                second = (u8) bytes[i + 1];
-                c16 trail = big_endian
-                    ? (c16) ((first << 8) | second)
-                    : (c16) ((second << 8) | first);
-                if (trail >= 0xDC00 && trail <= 0xDFFF) {
-                    out[o++] = unit;
-                    out[o++] = trail;
-                    i += 2;
-                    continue;
-                }
-            }
-            out[o++] = 0xFFFD;
-            *had_error = true;
-        } else if (unit >= 0xDC00 && unit <= 0xDFFF) {
-            out[o++] = 0xFFFD;
-            *had_error = true;
-        } else {
-            out[o++] = unit;
-        }
+MalUtf8CStringResult mal_string_to_utf8_c_string(
+    const MalString *string, char **out, usize *out_len
+) {
+    *out = nullptr;
+    *out_len = 0;
+    const c16 *units = mal_string_code_units(string);
+    usize length = mal_string_length(string);
+    for (usize i = 0; i < length; i++) {
+        if (units[i] == 0) return MAL_UTF8_C_STRING_EMBEDDED_NUL;
     }
-    if (i < len) {
-        out[o++] = 0xFFFD;
-        *had_error = true;
-    }
-    *out_count = o;
-    return out;
+    byte *bytes = mal_utf8_encode(units, length, out_len);
+    if (bytes == nullptr) return MAL_UTF8_C_STRING_ALLOCATION_FAILED;
+    bytes[*out_len] = '\0';
+    *out = (char *) bytes;
+    return MAL_UTF8_C_STRING_OK;
 }

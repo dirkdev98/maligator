@@ -23,6 +23,8 @@ use std::sync::Arc;
 
 use regress::{Flags, Match, Regex};
 
+use crate::ffi::{nullable_u16_slice, write_utf8};
+
 /// ABI version, mirrored by MAL_REGEXP_ABI_VERSION in mal_regexp.h.
 /// v2: added `mal_regexp_free` (GC finalization, gc_todo.md D2).
 pub const MAL_REGEXP_ABI_VERSION: u32 = 2;
@@ -77,16 +79,6 @@ struct CompiledPattern {
 #[no_mangle]
 pub extern "C" fn mal_regexp_abi_version() -> u32 {
     MAL_REGEXP_ABI_VERSION
-}
-
-/// Build a `&[u16]` from a (ptr, len), tolerating a null ptr when len is 0
-/// (`from_raw_parts` is UB on null even for an empty slice).
-unsafe fn slice_u16<'a>(ptr: *const u16, len: usize) -> &'a [u16] {
-    if len == 0 {
-        &[]
-    } else {
-        unsafe { core::slice::from_raw_parts(ptr, len) }
-    }
 }
 
 /// Decode UTF-16 code units into Unicode code points, combining valid surrogate
@@ -167,7 +159,9 @@ pub unsafe extern "C" fn mal_regexp_compile(
     pattern_len: usize,
     flags: u32,
 ) -> *mut core::ffi::c_void {
-    let units = unsafe { slice_u16(pattern, pattern_len) };
+    // Keep raw code units here: compile_pattern deliberately preserves lone
+    // surrogates as their numeric values instead of replacing them.
+    let units = unsafe { nullable_u16_slice(pattern, pattern_len) };
 
     match compile_pattern(units, flags) {
         Some((re, unicode_mode)) => {
@@ -242,7 +236,9 @@ pub unsafe extern "C" fn mal_regexp_exec(
         cp.last = None;
         return 0;
     }
-    let subj = unsafe { slice_u16(subject, subject_len) };
+    // regress receives the original code units so non-Unicode mode can match
+    // lone surrogates and Unicode mode can apply its own pair handling.
+    let subj = unsafe { nullable_u16_slice(subject, subject_len) };
 
     let found = if cp.unicode_mode {
         cp.re.find_from_utf16(subj, start).next()
@@ -328,12 +324,7 @@ pub unsafe extern "C" fn mal_regexp_named_group(
         }
     }
 
-    let bytes = name.as_bytes();
-    if !name_out.is_null() && name_cap > 0 {
-        let n = bytes.len().min(name_cap as usize);
-        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), name_out, n) };
-    }
-    bytes.len() as i32
+    unsafe { write_utf8(name, name_out, name_cap) }
 }
 
 #[cfg(test)]

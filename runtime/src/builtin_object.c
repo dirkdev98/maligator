@@ -11,6 +11,7 @@
 #include "primitive_wrapper_object.h"
 #include "property_iter.h"
 #include "proxy_object.h"
+#include "rooted_collection.h"
 #include "typed_array_object.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -305,6 +306,85 @@ static void mal_builtin_object_define_from_value(MalVm *vm, MalObject *target, M
     }
 }
 
+static bool mal_builtin_object_define_value(
+    MalVm *vm, MalValue target, MalKey key, MalValue descriptor
+) {
+    if (mal_value_is_proxy_object(target)) {
+        bool ok = mal_proxy_define_own_property(
+            vm, mal_value_to_proxy_object(target), key, descriptor);
+        if (!ok && vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_vm_throw_error(
+                vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot redefine property");
+        }
+        return ok;
+    }
+    mal_builtin_object_define_from_value(
+        vm, mal_value_to_object(target), key, descriptor);
+    return vm->completion.kind != MAL_COMPLETION_THROW;
+}
+
+/** ObjectDefineProperties: collect and validate every descriptor before defining. */
+static bool mal_builtin_object_define_properties_impl(
+    MalVm *vm, MalValue target, MalValue properties
+) {
+    MalValue object_roots[2] = {target, properties};
+    MalRootSpan object_span;
+    mal_gc_root(&object_span, object_roots, 2);
+
+    MalRootedKeySnapshot own_keys;
+    MalRootedKeySnapshot define_keys;
+    MalRootedValueList descriptors;
+    mal_rooted_key_snapshot_init(&own_keys);
+    mal_rooted_key_snapshot_init(&define_keys);
+    mal_rooted_value_list_init(&descriptors);
+
+    bool ok = mal_rooted_key_snapshot_own_keys(vm, object_roots[1], &own_keys);
+    for (usize i = 0; ok && i < own_keys.count; i++) {
+        bool present;
+        MalPropertyDesc property_desc;
+        if (!mal_vm_get_own_property(
+                vm, object_roots[1], own_keys.keys[i], &present, &property_desc)) {
+            ok = false;
+            break;
+        }
+        if (!present || !(property_desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+            continue;
+        }
+
+        MalValue descriptor_value;
+        if (!mal_vm_get_property(
+                vm, object_roots[1], own_keys.keys[i], &descriptor_value)) {
+            ok = false;
+            break;
+        }
+        MalPropertyDescriptorParse parsed;
+        if (!mal_builtin_object_to_property_descriptor(vm, descriptor_value, &parsed)) {
+            ok = false;
+            break;
+        }
+        MalValue parsed_roots[3] = {
+            parsed.desc.value, parsed.desc.getter, parsed.desc.setter,
+        };
+        MalRootSpan parsed_span;
+        mal_gc_root(&parsed_span, parsed_roots, 3);
+        MalValue normalized = mal_builtin_object_parsed_descriptor_object(vm, &parsed);
+        mal_rooted_key_snapshot_append(&define_keys, own_keys.keys[i]);
+        mal_rooted_value_list_append(&descriptors, normalized);
+        mal_gc_unroot(&parsed_span);
+    }
+
+    for (usize i = 0; ok && i < define_keys.count; i++) {
+        ok = mal_builtin_object_define_value(
+            vm, object_roots[0], define_keys.keys[i], descriptors.values[i]);
+    }
+
+    mal_rooted_value_list_dispose(&descriptors);
+    mal_rooted_key_snapshot_dispose(&define_keys);
+    mal_rooted_key_snapshot_dispose(&own_keys);
+    mal_gc_unroot(&object_span);
+    return ok;
+}
+
 /**
  * ToObject for the primitive types: box into the matching primitive wrapper
  * with the proper .prototype intrinsic. Returns undefined for non-primitives
@@ -403,24 +483,9 @@ static MalValue mal_builtin_object_define_properties(MalVm *vm, MalValue this_va
         props = mal_builtin_object_box_primitive(vm, props);
     }
 
-    MalPropertyIter iter;
-    mal_property_iter_init(&iter, mal_value_to_object(props), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
-
-    MalKey key;
-    MalPropertyDesc desc;
-    while (mal_property_iter_next(&iter, &key, &desc)) {
-        // Read each descriptor entry with Get, so an accessor descriptor source
-        // (e.g. `{ get x() {…} }`) invokes its getter rather than seeing a raw slot.
-        MalValue descriptor;
-        if (!mal_vm_get_property(vm, props, key, &descriptor)) {
-            return mal_value_new_undefined();
-        }
-        mal_builtin_object_define_from_value(vm, mal_value_to_object(args[0]), key, descriptor);
-        if (vm->completion.kind == MAL_COMPLETION_THROW) {
-            return mal_value_new_undefined();
-        }
+    if (!mal_builtin_object_define_properties_impl(vm, args[0], props)) {
+        return mal_value_new_undefined();
     }
-
     return args[0];
 }
 
@@ -443,6 +508,46 @@ MalValue mal_builtin_object_descriptor_object(MalVm *vm, MalPropertyDesc desc) {
     mal_intrinsic_define_data(vm, result, "configurable", mal_value_new_boolean(desc.flags & MAL_PROPERTY_CONFIGURABLE), flags);
 
     return mal_value_from_object(result);
+}
+
+MalValue mal_builtin_object_parsed_descriptor_object(
+    MalVm *vm, const MalPropertyDescriptorParse *parsed
+) {
+    MalValue roots[4] = {
+        mal_value_from_object(mal_intrinsic_new_object(vm)),
+        parsed->desc.value,
+        parsed->desc.getter,
+        parsed->desc.setter,
+    };
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 4);
+    MalObject *object = mal_value_to_object(roots[0]);
+    MalPropertyFlags flags =
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+    if (parsed->has_enumerable) {
+        mal_intrinsic_define_data(vm, object, "enumerable",
+            mal_value_new_boolean(parsed->desc.flags & MAL_PROPERTY_ENUMERABLE), flags);
+    }
+    if (parsed->has_configurable) {
+        mal_intrinsic_define_data(vm, object, "configurable",
+            mal_value_new_boolean(parsed->desc.flags & MAL_PROPERTY_CONFIGURABLE), flags);
+    }
+    if (parsed->has_value) {
+        mal_intrinsic_define_data(vm, object, "value", roots[1], flags);
+    }
+    if (parsed->has_writable) {
+        mal_intrinsic_define_data(vm, object, "writable",
+            mal_value_new_boolean(parsed->desc.flags & MAL_PROPERTY_WRITABLE), flags);
+    }
+    if (parsed->has_get) {
+        mal_intrinsic_define_data(vm, object, "get", roots[2], flags);
+    }
+    if (parsed->has_set) {
+        mal_intrinsic_define_data(vm, object, "set", roots[3], flags);
+    }
+    MalValue result = roots[0];
+    mal_gc_unroot(&roots_span);
+    return result;
 }
 
 // [[GetOwnProperty]] → a descriptor object (or undefined), routing through a
@@ -612,7 +717,7 @@ static MalValue mal_builtin_object_get_own_property_descriptors(MalVm *vm, MalVa
         u32 key_count = mal_array_object_length(mal_value_to_array_object(keys_value));
         for (u32 i = 0; i < key_count; i++) {
             MalValue key_value;
-            if (!mal_vm_get_property(vm, keys_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &key_value)) {
+            if (!mal_vm_get_property(vm, keys_value, mal_key_index(i), &key_value)) {
                 return mal_value_new_undefined();
             }
             MalKey key;
@@ -632,7 +737,7 @@ static MalValue mal_builtin_object_get_own_property_descriptors(MalVm *vm, MalVa
     if (mal_value_is_typed_array_object(target)) {
         u32 ta_length = mal_typed_array_object_length(mal_value_to_typed_array_object(target));
         for (u32 i = 0; i < ta_length; i++) {
-            if (!mal_builtin_object_descriptors_put(vm, result, target, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)})) {
+            if (!mal_builtin_object_descriptors_put(vm, result, target, mal_key_index(i))) {
                 return mal_value_new_undefined();
             }
         }
@@ -643,7 +748,7 @@ static MalValue mal_builtin_object_get_own_property_descriptors(MalVm *vm, MalVa
     if (mal_primitive_wrapper_string_exotic_own(&vm->heap, object, mal_intrinsic_string_key(vm, "length"), &string_exotic)) {
         u32 string_length = (u32) mal_value_to_i32(string_exotic.value);
         for (u32 i = 0; i < string_length; i++) {
-            if (!mal_builtin_object_descriptors_put(vm, result, target, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)})) {
+            if (!mal_builtin_object_descriptors_put(vm, result, target, mal_key_index(i))) {
                 return mal_value_new_undefined();
             }
         }
@@ -704,100 +809,7 @@ static MalValue mal_builtin_object_key_to_string(MalVm *vm, MalKey key) {
 // pending throw on an abrupt step. `result` is rooted by the caller wrapper
 // (mal_builtin_object_collect) across the getter/trap re-entry below.
 static bool mal_builtin_object_collect_impl(MalVm *vm, MalValue target, MalPropertyIterKind iter_kind, MalBuiltinObjectCollect collect, MalArrayObject *result) {
-    // A proxy's keys come from its ownKeys trap; only string keys participate in
-    // these string-keyed collections, and for-key collections that filter to
-    // enumerable own properties (Object.keys/values/entries) re-check each key's
-    // descriptor through the getOwnPropertyDescriptor trap.
-    if (mal_value_is_proxy_object(target)) {
-        MalProxyObject *proxy = mal_value_to_proxy_object(target);
-        MalValue keys_value;
-        if (!mal_proxy_own_property_keys(vm, proxy, &keys_value)) {
-            return mal_value_new_undefined();
-        }
-        MalArrayObject *keys = mal_value_to_array_object(keys_value);
-        u32 key_count = mal_array_object_length(keys);
-        bool enumerable_only = iter_kind == MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER;
-        // keys_value (the ownKeys array) is held across the trap/getter re-entry
-        // below; root it (result is rooted by the wrapper).
-        MalRootSpan keys_span;
-        mal_gc_root(&keys_span, &keys_value, 1);
-        u32 out = 0;
-        bool ok = true;
-        for (u32 i = 0; i < key_count; i++) {
-            MalValue key_value;
-            if (!mal_vm_get_property(vm, keys_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &key_value)) {
-                ok = false;
-                break;
-            }
-            if (!mal_value_is_string(key_value)) {
-                continue;
-            }
-            MalKey key;
-            if (!mal_vm_to_property_key(vm, key_value, &key)) {
-                ok = false;
-                break;
-            }
-            bool present;
-            MalPropertyDesc desc;
-            if (enumerable_only || collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
-                if (!mal_proxy_get_own_property_descriptor(vm, proxy, key, &present, &desc)) {
-                    ok = false;
-                    break;
-                }
-                if (enumerable_only && (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE))) {
-                    continue;
-                }
-            }
-            MalValue element = key_value;
-            if (collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
-                MalValue value;
-                if (!mal_vm_get_property(vm, target, key, &value)) {
-                    ok = false;
-                    break;
-                }
-                element = value;
-                if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
-                    MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
-                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, key_value);
-                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, value);
-                    element = mal_value_from_array_object(entry);
-                }
-            }
-            mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) out++)}, element);
-        }
-        mal_gc_unroot(&keys_span);
-        return ok;
-    }
-
-    // A module namespace's own keys are its sorted string exports (all
-    // enumerable); values/entries read each export live (which may throw on a
-    // binding still in its TDZ).
-    if (mal_value_is_module_namespace_object(target)) {
-        MalModuleNamespaceObject *ns = mal_value_to_module_namespace_object(target);
-        for (i32 i = 0; i < ns->export_count; i++) {
-            MalValue name = mal_value_from_string(ns->exports[i].name);
-            MalValue element = name;
-            if (collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
-                MalValue value;
-                if (!mal_vm_get_property(vm, target, (MalKey) {.kind = MAL_KEY_STRING, .value = name}, &value)) {
-                    return false;
-                }
-                element = value;
-                if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
-                    MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
-                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, name);
-                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, value);
-                    element = mal_value_from_array_object(entry);
-                }
-            }
-            mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)}, element);
-        }
-        return true;
-    }
-
     if (!mal_value_is_object(target)) {
-        // ToObject: null/undefined throw; other primitives box (a String box
-        // contributes its index chars + length via the exotic path below).
         if (mal_value_is_nil(target)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
             return false;
@@ -809,177 +821,51 @@ static bool mal_builtin_object_collect_impl(MalVm *vm, MalValue target, MalPrope
         target = boxed;
     }
 
-    MalObject *object = mal_value_to_object(target);
-
-    // EnumerableOwnProperties snapshots the key list first; for value/entry
-    // collection a getter may mutate the object while we read, but only the
-    // snapshotted keys are visited (and re-checked for own-enumerability).
-    bool reads_values = collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS;
-    MalKey *keys = nullptr;
-    usize key_count = 0;
-    usize key_capacity = 0;
-
-    u32 count = 0;
-
-    // A String wrapper's exotic own keys are its indices, then the
-    // non-enumerable `length`; they precede the ordinary table keys and are
-    // never table-backed. Object.keys/values/entries see only the enumerable
-    // indices; Object.getOwnPropertyNames (the non-enumerable view) also lists
-    // `length`.
+    MalRootSpan target_span;
+    mal_gc_root(&target_span, &target, 1);
+    MalRootedKeySnapshot keys;
+    mal_rooted_key_snapshot_init(&keys);
+    bool ok = mal_rooted_key_snapshot_own_keys(vm, target, &keys);
     bool enumerable_only = iter_kind == MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER;
-
-    // A TypedArray's own keys begin with its canonical integer indices (each an
-    // enumerable, writable, configurable data property — so they show in every
-    // view), ahead of the ordinary table keys. They are exotic, never table-backed.
-    if (mal_value_is_typed_array_object(target)) {
-        MalTypedArrayObject *typed_array = mal_value_to_typed_array_object(target);
-        u32 typed_length = mal_typed_array_object_length(typed_array);
-        for (u32 i = 0; i < typed_length; i++) {
-            MalKey index_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
-            MalValue index_string = mal_builtin_object_key_to_string(vm, index_key);
-            MalValue element = index_string;
-            if (reads_values) {
-                MalValue value = mal_typed_array_object_get(vm, typed_array, i);
-                element = value;
-                if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
-                    MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
-                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, index_string);
-                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, value);
-                    element = mal_value_from_array_object(entry);
-                }
-            }
-            mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)}, element);
-        }
-    }
-
-    MalPropertyDesc string_exotic;
-    if (mal_primitive_wrapper_string_exotic_own(
-            &vm->heap, object, mal_intrinsic_string_key(vm, "length"), &string_exotic
-        )) {
-        u32 string_length = (u32) mal_value_to_i32(string_exotic.value);
-        for (u32 i = 0; i < string_length; i++) {
-            MalKey index_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
-            MalValue index_string = mal_builtin_object_key_to_string(vm, index_key);
-            MalValue element = index_string;
-            if (reads_values) {
-                MalPropertyDesc index_desc;
-                mal_primitive_wrapper_string_exotic_own(&vm->heap, object, index_key, &index_desc);
-                element = index_desc.value;
-                if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
-                    MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
-                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, index_string);
-                    mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, index_desc.value);
-                    element = mal_value_from_array_object(entry);
-                }
-            }
-            mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)}, element);
-        }
-        // `length` is non-enumerable, so only the key-listing non-enumerable
-        // view (getOwnPropertyNames) reports it.
-        if (!enumerable_only && !reads_values) {
-            mal_array_object_store(
-                result,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
-                mal_value_from_string(mal_intrinsic_ascii(vm, "length"))
-            );
-        }
-    }
-
-    // An Array's exotic `length` is a non-enumerable own string key that sits
-    // right after the integer-index keys in own-key order, so only the key-listing
-    // non-enumerable view (getOwnPropertyNames) reports it — emit it before the
-    // first non-index table key (or after the indices if there are none).
-    bool length_pending = mal_value_is_array_object(target) && !enumerable_only && !reads_values;
-
-    MalPropertyIter iter;
-    mal_property_iter_init(&iter, object, iter_kind);
-
-    MalKey key;
-    MalPropertyDesc desc;
-    while (mal_property_iter_next(&iter, &key, &desc)) {
-        // Symbol keys are excluded from string-keyed property collections.
+    i32 count = 0;
+    for (usize i = 0; ok && i < keys.count; i++) {
+        MalKey key = keys.keys[i];
         if (key.kind == MAL_KEY_SYMBOL) {
             continue;
         }
-
-        if (reads_values) {
-            // Defer value reads until the key list is fully snapshotted.
-            if (key_count == key_capacity) {
-                key_capacity = key_capacity == 0 ? 8 : key_capacity * 2;
-                keys = realloc(keys, sizeof(MalKey) * key_capacity);
+        if (enumerable_only) {
+            bool present;
+            MalPropertyDesc desc;
+            if (!mal_vm_get_own_property(vm, target, key, &present, &desc)) {
+                ok = false;
+                break;
             }
-            keys[key_count++] = key;
-            continue;
+            if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+                continue;
+            }
         }
 
-        if (length_pending && key.kind != MAL_KEY_INDEX) {
-            mal_array_object_store(
-                result,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
-                mal_value_from_string(mal_intrinsic_ascii(vm, "length"))
-            );
-            length_pending = false;
+        MalValue key_string = mal_builtin_object_key_to_string(vm, key);
+        MalValue element = key_string;
+        if (collect != MAL_BUILTIN_OBJECT_COLLECT_KEYS) {
+            MalValue value;
+            if (!mal_vm_get_property(vm, target, key, &value)) {
+                ok = false;
+                break;
+            }
+            element = value;
+            if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
+                MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
+                mal_object_set((MalObject *) entry, mal_key_index(0), key_string);
+                mal_object_set((MalObject *) entry, mal_key_index(1), value);
+                element = mal_value_from_array_object(entry);
+            }
         }
-
-        mal_array_object_store(
-            result,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)},
-            mal_builtin_object_key_to_string(vm, key)
-        );
-        count++;
+        mal_array_object_store(result, mal_key_index(count++), element);
     }
 
-    // An array with only integer-index keys still lists `length` after them.
-    if (length_pending) {
-        mal_array_object_store(
-            result,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count++)},
-            mal_value_from_string(mal_intrinsic_ascii(vm, "length"))
-        );
-        length_pending = false;
-    }
-
-    // A getter during the value reads can delete a sibling key, dropping it from
-    // the object's table — its only other root. MalKey isn't a MalValue, so mirror
-    // the snapshotted key values into a parallel array and root that across the
-    // loop. (Symbol keys were skipped above; remaining keys are STRING/INDEX.)
-    MalValue *key_values = key_count > 0 ? malloc(sizeof(MalValue) * key_count) : nullptr;
-    for (usize i = 0; i < key_count; i++) {
-        key_values[i] = keys[i].value;
-    }
-    MalRootSpan keys_span;
-    mal_gc_root(&keys_span, key_values, (i32) key_count);
-    bool ok = true;
-
-    for (usize i = 0; i < key_count; i++) {
-        // Re-resolve: a property deleted or made non-enumerable mid-read is
-        // skipped, matching the spec's "still has the key" check.
-        MalPropertyLookup lookup = mal_object_get_own(object, keys[i]);
-        if (!lookup.present || !(lookup.desc.flags & MAL_PROPERTY_ENUMERABLE)) {
-            continue;
-        }
-
-        MalValue value;
-        if (!mal_vm_desc_read(vm, lookup.desc, target, &value)) {
-            ok = false;
-            break;
-        }
-
-        MalValue element = value;
-        if (collect == MAL_BUILTIN_OBJECT_COLLECT_ENTRIES) {
-            MalArrayObject *entry = mal_intrinsic_new_array(vm, 2);
-            mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, mal_builtin_object_key_to_string(vm, keys[i]));
-            mal_object_set((MalObject *) entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, value);
-            element = mal_value_from_array_object(entry);
-        }
-
-        mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)}, element);
-        count++;
-    }
-
-    mal_gc_unroot(&keys_span);
-    free(key_values);
-    free(keys);
+    mal_rooted_key_snapshot_dispose(&keys);
+    mal_gc_unroot(&target_span);
     return ok;
 }
 
@@ -1060,106 +946,28 @@ static bool mal_builtin_object_assign_copy(MalVm *vm, MalValue target, MalKey ke
 // a TypedArray's / String wrapper's exotic indices are seen, and both string and
 // symbol keys are copied (Object.assign copies symbol-keyed properties too).
 static bool mal_builtin_object_assign_from(MalVm *vm, MalValue target, MalValue source) {
-    if (mal_value_is_proxy_object(source)) {
-        MalProxyObject *proxy = mal_value_to_proxy_object(source);
-        MalValue keys_value;
-        if (!mal_proxy_own_property_keys(vm, proxy, &keys_value)) {
-            return false;
+    // [[OwnPropertyKeys]] is snapshotted before any descriptor/Get/Set effects.
+    // Each key's current [[GetOwnProperty]] controls whether it is copied.
+    MalRootedKeySnapshot keys;
+    mal_rooted_key_snapshot_init(&keys);
+    bool ok = mal_rooted_key_snapshot_own_keys(vm, source, &keys);
+    for (usize i = 0; ok && i < keys.count; i++) {
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_vm_get_own_property(
+                vm, source, keys.keys[i], &present, &desc)) {
+            ok = false;
+            break;
         }
-        // keys_value (the ownKeys array) is held across the trap/getter re-entry of
-        // the copy loop; root it. (target/source are rooted by the assign wrapper.)
-        MalRootSpan keys_span;
-        mal_gc_root(&keys_span, &keys_value, 1);
-        u32 key_count = mal_array_object_length(mal_value_to_array_object(keys_value));
-        bool ok = true;
-        for (u32 i = 0; i < key_count; i++) {
-            MalValue key_value;
-            if (!mal_vm_get_property(vm, keys_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &key_value)) {
-                ok = false;
-                break;
-            }
-            MalKey key;
-            if (!mal_vm_to_property_key(vm, key_value, &key)) {
-                ok = false;
-                break;
-            }
-            bool present;
-            MalPropertyDesc desc;
-            if (!mal_proxy_get_own_property_descriptor(vm, proxy, key, &present, &desc)) {
-                ok = false;
-                break;
-            }
-            if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
-                continue;
-            }
-            if (!mal_builtin_object_assign_copy(vm, target, key, source)) {
-                ok = false;
-                break;
-            }
+        if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+            continue;
         }
-        mal_gc_unroot(&keys_span);
-        return ok;
-    }
-
-    MalObject *object = mal_value_to_object(source);
-
-    // A TypedArray's exotic integer indices come first and are all enumerable.
-    if (mal_value_is_typed_array_object(source)) {
-        u32 ta_length = mal_typed_array_object_length(mal_value_to_typed_array_object(source));
-        for (u32 i = 0; i < ta_length; i++) {
-            if (!mal_builtin_object_assign_copy(vm, target, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, source)) {
-                return false;
-            }
-        }
-    }
-
-    // A String wrapper exposes its code units as enumerable indexed own data
-    // properties (its `length` is non-enumerable, so it is not copied).
-    MalPropertyDesc string_exotic;
-    if (mal_primitive_wrapper_string_exotic_own(&vm->heap, object, mal_intrinsic_string_key(vm, "length"), &string_exotic)) {
-        u32 string_length = (u32) mal_value_to_i32(string_exotic.value);
-        for (u32 i = 0; i < string_length; i++) {
-            if (!mal_builtin_object_assign_copy(vm, target, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, source)) {
-                return false;
-            }
-        }
-    }
-
-    // Ordinary table keys (strings then symbols). Snapshot the enumerable own
-    // keys before copying, since a target setter may mutate the source mid-copy.
-    MalPropertyIter iter;
-    mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
-    MalKey *keys = nullptr;
-    usize key_count = 0;
-    usize key_capacity = 0;
-    MalKey key;
-    MalPropertyDesc desc;
-    while (mal_property_iter_next(&iter, &key, &desc)) {
-        if (key_count == key_capacity) {
-            key_capacity = key_capacity == 0 ? 8 : key_capacity * 2;
-            keys = realloc(keys, sizeof(MalKey) * key_capacity);
-        }
-        keys[key_count++] = key;
-    }
-    // A target setter (or source getter) during the copy can collect; root the
-    // snapshotted keys (parallel MalValue array — these may be string or symbol)
-    // across the loop so a deleted key's name cannot dangle.
-    MalValue *key_values = key_count > 0 ? malloc(sizeof(MalValue) * key_count) : nullptr;
-    for (usize i = 0; i < key_count; i++) {
-        key_values[i] = keys[i].value;
-    }
-    MalRootSpan keys_span;
-    mal_gc_root(&keys_span, key_values, (i32) key_count);
-    bool ok = true;
-    for (usize i = 0; i < key_count; i++) {
-        if (!mal_builtin_object_assign_copy(vm, target, keys[i], source)) {
+        if (!mal_builtin_object_assign_copy(vm, target, keys.keys[i], source)) {
             ok = false;
             break;
         }
     }
-    mal_gc_unroot(&keys_span);
-    free(key_values);
-    free(keys);
+    mal_rooted_key_snapshot_dispose(&keys);
     return ok;
 }
 
@@ -1221,29 +1029,22 @@ static MalValue mal_builtin_object_create(MalVm *vm, MalValue this_value, const 
     }
 
     MalObject *prototype = mal_value_is_object(prototype_value) ? mal_value_to_object(prototype_value) : nullptr;
-    MalObject *result = mal_object_new(&vm->heap, prototype);
+    MalValue result = mal_value_from_object(mal_object_new(&vm->heap, prototype));
 
     MalValue properties = mal_builtin_object_arg(args, arg_count, 1);
-    if (mal_value_is_object(properties)) {
-        MalPropertyIter iter;
-        mal_property_iter_init(&iter, mal_value_to_object(properties), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
-
-        MalKey key;
-        MalPropertyDesc desc;
-        while (mal_property_iter_next(&iter, &key, &desc)) {
-            // ObjectDefineProperties reads each descriptor entry with Get.
-            MalValue descriptor;
-            if (!mal_vm_get_property(vm, properties, key, &descriptor)) {
-                return mal_value_new_undefined();
-            }
-            mal_builtin_object_define_from_value(vm, result, key, descriptor);
-            if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                return mal_value_new_undefined();
-            }
+    if (!mal_value_is_undefined(properties)) {
+        if (!mal_value_is_object(properties)) {
+            mal_vm_throw_error(
+                vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Object.create properties must be an object");
+            return mal_value_new_undefined();
+        }
+        if (!mal_builtin_object_define_properties_impl(vm, result, properties)) {
+            return mal_value_new_undefined();
         }
     }
 
-    return mal_value_from_object(result);
+    return result;
 }
 
 static MalValue mal_builtin_object_get_prototype_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1743,13 +1544,13 @@ static MalValue mal_builtin_object_get_own_property_symbols(MalVm *vm, MalValue 
         u32 out = 0;
         for (u32 i = 0; i < key_count; i++) {
             MalValue key_value;
-            if (!mal_vm_get_property(vm, keys_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)}, &key_value)) {
+            if (!mal_vm_get_property(vm, keys_value, mal_key_index(i), &key_value)) {
                 return mal_value_new_undefined();
             }
             if (!mal_value_is_symbol(key_value)) {
                 continue;
             }
-            mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) out++)}, key_value);
+            mal_array_object_store(result, mal_key_index(out++), key_value);
         }
         return mal_value_from_array_object(result);
     }
@@ -1758,7 +1559,7 @@ static MalValue mal_builtin_object_get_own_property_symbols(MalVm *vm, MalValue 
     if (mal_value_is_module_namespace_object(target)) {
         mal_array_object_store(
             result,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)},
+            mal_key_index(0),
             mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG).value
         );
         return mal_value_from_array_object(result);
@@ -1781,7 +1582,7 @@ static MalValue mal_builtin_object_get_own_property_symbols(MalVm *vm, MalValue 
             continue;
         }
 
-        mal_array_object_store(result, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) count)}, key.value);
+        mal_array_object_store(result, mal_key_index(count), key.value);
         count++;
     }
 
@@ -1799,7 +1600,7 @@ static MalValue mal_builtin_object_indexed(MalVm *vm, MalValue target, u32 index
 
     MalPropertyResolution resolution = mal_object_resolve_property(
         mal_value_to_object(target),
-        (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)}
+        mal_key_index(index)
     );
     if (!resolution.found) {
         return mal_value_new_undefined();
@@ -1839,8 +1640,8 @@ static MalValue mal_builtin_object_from_entries(MalVm *vm, MalValue this_value, 
 
         MalValue key_value;
         MalValue value;
-        if (!mal_vm_get_property(vm, entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, &key_value) ||
-            !mal_vm_get_property(vm, entry, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, &value)) {
+        if (!mal_vm_get_property(vm, entry, mal_key_index(0), &key_value) ||
+            !mal_vm_get_property(vm, entry, mal_key_index(1), &value)) {
             mal_vm_iterator_close(vm, &record);
             return mal_value_new_undefined();
         }
@@ -1908,7 +1709,7 @@ static MalValue mal_builtin_object_group_by(MalVm *vm, MalValue this_value, cons
 
         mal_array_object_store(
             group,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) mal_array_object_length(group))},
+            mal_key_index(mal_array_object_length(group)),
             element
         );
     }
@@ -2215,22 +2016,9 @@ void mal_builtin_object_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, prototype, "__lookupSetter__", 1, mal_builtin_object_prototype_lookup_setter);
 
     // Annex B __proto__ is an accessor pair on Object.prototype.
-    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    MalPropertyDesc proto_desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = mal_value_from_native_function_object(mal_native_function_object_new(
-            &vm->heap,
-            function_prototype,
-            mal_intrinsic_ascii(vm, "get __proto__"),
-            mal_builtin_object_proto_getter
-        )),
-        .setter = mal_value_from_native_function_object(mal_native_function_object_new(
-            &vm->heap,
-            function_prototype,
-            mal_intrinsic_ascii(vm, "set __proto__"),
-            mal_builtin_object_proto_setter
-        )),
-    };
-    mal_object_define_own(prototype, mal_intrinsic_string_key(vm, "__proto__"), &proto_desc);
+    mal_intrinsic_define_accessor_n(
+        vm, prototype, mal_intrinsic_string_key(vm, "__proto__"),
+        "get __proto__", 0, mal_builtin_object_proto_getter,
+        "set __proto__", 1, mal_builtin_object_proto_setter,
+        MAL_PROPERTY_CONFIGURABLE);
 }

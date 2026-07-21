@@ -9,11 +9,13 @@
 //! module exposes only a parsed-URL handle + flat component accessors.
 //!
 //! Strings cross as UTF-16 IN (MalString's native storage → `String::from_utf16_
-//! lossy`, since WHATWG operates on scalar values) and UTF-8 OUT (the probe-then-
-//! fill `write_str` convention; the C side decodes to a MalString). URLSearchParams
+//! lossy`, since WHATWG operates on scalar values) and UTF-8 OUT (the shared
+//! probe-then-fill convention; the C side decodes to a MalString). URLSearchParams
 //! is implemented entirely C-side (form-urlencoded), so it needs nothing here.
 
 use ada_url::Url;
+
+use crate::ffi::{nullable_u16_slice, write_utf8};
 
 /// ABI version, mirrored by MAL_URL_ABI_VERSION in mal_url.h.
 pub const MAL_URL_ABI_VERSION: u32 = 1;
@@ -24,31 +26,10 @@ pub extern "C" fn mal_url_abi_version() -> u32 {
     MAL_URL_ABI_VERSION
 }
 
-/// Build a `&[u16]` from a (ptr, len), tolerating a null ptr when len is 0
-/// (`from_raw_parts` is UB on null even for an empty slice).
-unsafe fn slice_u16<'a>(ptr: *const u16, len: usize) -> &'a [u16] {
-    if len == 0 {
-        &[]
-    } else {
-        unsafe { core::slice::from_raw_parts(ptr, len) }
-    }
-}
-
 /// UTF-16 (ptr, len) → owned String, lossily (lone surrogates → U+FFFD), matching
 /// WHATWG URL's scalar-value handling of input.
 unsafe fn utf16_to_string(ptr: *const u16, len: usize) -> String {
-    String::from_utf16_lossy(unsafe { slice_u16(ptr, len) })
-}
-
-/// Copy `s` (UTF-8) into `out` (at most `out_cap` bytes) and return the full byte
-/// length, so the C side can probe with cap 0 then fill.
-fn write_str(s: &str, out: *mut u8, out_cap: i32) -> i32 {
-    let bytes = s.as_bytes();
-    if !out.is_null() && out_cap > 0 {
-        let n = bytes.len().min(out_cap as usize);
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, n) };
-    }
-    bytes.len() as i32
+    String::from_utf16_lossy(unsafe { nullable_u16_slice(ptr, len) })
 }
 
 unsafe fn url_ref<'a>(handle: *mut core::ffi::c_void) -> &'a Url {
@@ -121,7 +102,7 @@ macro_rules! url_getter {
             out: *mut u8,
             out_cap: i32,
         ) -> i32 {
-            write_str(unsafe { url_ref(handle) }.$method(), out, out_cap)
+            unsafe { write_utf8(url_ref(handle).$method(), out, out_cap) }
         }
     };
 }
@@ -144,7 +125,7 @@ pub unsafe extern "C" fn mal_url_origin(
     out: *mut u8,
     out_cap: i32,
 ) -> i32 {
-    write_str(&unsafe { url_ref(handle) }.origin(), out, out_cap)
+    unsafe { write_utf8(&url_ref(handle).origin(), out, out_cap) }
 }
 
 /// Define a setter taking a plain string (`set_href`/`set_protocol`). Returns

@@ -3,14 +3,19 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include "ascii.h"
 #include "array_object.h"
 #include "builtin_iterator.h"
+#include "checked_size.h"
+#include "ecma_whitespace.h"
 #include "function_object.h"
 #include "heap_string.h"
 #include "intrinsics.h"
 #include "mal_regexp.h"
 #include "object_ops.h"
 #include "regexp_object.h"
+#include "u16_buffer.h"
+#include "utf16.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm.h"
@@ -94,9 +99,8 @@ static MalString *regexp_string_from_utf8(MalVm *vm, const uint8_t *bytes, usize
         if (width == 1) {
             units[count++] = (c16) cp;
         } else {
-            cp -= 0x10000;
-            units[count++] = (c16) (0xD800 + (cp >> 10));
-            units[count++] = (c16) (0xDC00 + (cp & 0x3FF));
+            mal_utf16_emit_pair(cp, units + count);
+            count += 2;
         }
     }
     MalString *result = mal_string_new_copy(&vm->heap, units, count);
@@ -260,15 +264,7 @@ static bool regexp_get_last_index(MalVm *vm, MalValue r, i64 *out) {
         return false;
     }
     // ToLength: NaN/negatives clamp to 0, cap at 2^53-1.
-    if (isnan(num) || num <= 0) {
-        *out = 0;
-        return true;
-    }
-    num = trunc(num);
-    if (num > 9007199254740991.0) {
-        num = 9007199254740991.0;
-    }
-    *out = (i64) num;
+    *out = (i64) mal_ops_number_to_length(num);
     return true;
 }
 
@@ -338,11 +334,11 @@ static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *
             entry = mal_value_new_undefined();
         } else {
             MalArrayObject *pair = mal_intrinsic_new_array(vm, 2);
-            mal_array_object_store(pair, (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, mal_value_from_f64((f64) cs));
-            mal_array_object_store(pair, (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, mal_value_from_f64((f64) ce));
+            mal_array_object_store(pair, mal_key_index(0), mal_value_from_f64((f64) cs));
+            mal_array_object_store(pair, mal_key_index(1), mal_value_from_f64((f64) ce));
             entry = mal_value_from_object((MalObject *) pair);
         }
-        mal_array_object_store(indices, (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)}, entry);
+        mal_array_object_store(indices, mal_key_index(i), entry);
     }
 
     // indices.groups
@@ -377,8 +373,8 @@ static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *
                 entry = mal_value_new_undefined();
             } else {
                 MalArrayObject *pair = mal_intrinsic_new_array(vm, 2);
-                mal_array_object_store(pair, (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, mal_value_from_f64((f64) range[0]));
-                mal_array_object_store(pair, (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(1)}, mal_value_from_f64((f64) range[1]));
+                mal_array_object_store(pair, mal_key_index(0), mal_value_from_f64((f64) range[0]));
+                mal_array_object_store(pair, mal_key_index(1), mal_value_from_f64((f64) range[1]));
                 entry = mal_value_from_object((MalObject *) pair);
             }
             MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
@@ -502,7 +498,7 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
         int32_t cs = caps[2 * i];
         int32_t ce = caps[2 * i + 1];
         MalValue element = cs < 0 ? mal_value_new_undefined() : regexp_substring(vm, s, cs, ce);
-        mal_array_object_store(array, (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(i)}, element);
+        mal_array_object_store(array, mal_key_index(i), element);
     }
 
     MalValue groups = regexp_build_groups(vm, re, s);
@@ -856,54 +852,20 @@ static MalValue regexp_proto_to_string(MalVm *vm, MalValue this_value, const Mal
 // Symbol.* protocol helpers
 // ---------------------------------------------------------------------------
 
-// A growable UTF-16 string builder for @@replace / GetSubstitution.
-typedef struct {
-    c16 *data;
-    usize len;
-    usize cap;
-} RegexpBuilder;
-
-static bool regexp_builder_reserve(MalVm *vm, RegexpBuilder *b, usize extra) {
-    usize required;
-    if (!mal_checked_size_add(b->len, extra, MAL_STRING_MAX_CODE_UNITS, &required)) {
-        return regexp_throw_string_length(vm);
-    }
-    if (required <= b->cap) {
-        return true;
-    }
-    usize cap;
-    usize bytes;
-    if (!mal_checked_size_growth(b->cap, required, 16, MAL_STRING_MAX_CODE_UNITS, &cap) ||
-        !mal_checked_size_multiply(sizeof(c16), cap, SIZE_MAX, &bytes)) {
-        return regexp_throw_string_length(vm);
-    }
-    c16 *grown = realloc(b->data, bytes);
-    if (grown == nullptr) {
-        return regexp_throw_string_length(vm);
-    }
-    b->data = grown;
-    b->cap = cap;
-    return true;
-}
+typedef MalU16Buffer RegexpBuilder;
 
 static bool regexp_builder_append_units(MalVm *vm, RegexpBuilder *b, const c16 *units, usize n) {
-    if (!regexp_builder_reserve(vm, b, n)) {
-        return false;
-    }
-    for (usize i = 0; i < n; i++) {
-        b->data[b->len++] = units[i];
-    }
-    return true;
+    return mal_u16_buffer_append_units(b, units, n) == MAL_U16_BUFFER_OK ||
+        regexp_throw_string_length(vm);
 }
 
 static bool regexp_builder_append_string(MalVm *vm, RegexpBuilder *b, const MalString *s) {
-    return regexp_builder_append_units(vm, b, mal_string_code_units(s), mal_string_length(s));
+    return mal_u16_buffer_append_string(b, s) == MAL_U16_BUFFER_OK ||
+        regexp_throw_string_length(vm);
 }
 
 static MalValue regexp_builder_finish(MalVm *vm, RegexpBuilder *b) {
-    MalString *s = mal_string_new_copy(&vm->heap, b->data, b->len);
-    free(b->data);
-    return mal_value_from_string(s);
+    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, b));
 }
 
 // AdvanceStringIndex(S, index, unicode): +2 across a surrogate pair in unicode
@@ -917,12 +879,7 @@ static i64 regexp_advance_string_index(MalString *s, i64 index, bool unicode) {
         return index + 1;
     }
     const c16 *u = mal_string_code_units(s);
-    c16 first = u[index];
-    c16 second = u[index + 1];
-    if (first >= 0xD800 && first <= 0xDBFF && second >= 0xDC00 && second <= 0xDFFF) {
-        return index + 2;
-    }
-    return index + 1;
+    return index + (i64) mal_utf16_code_point_width(u, length, (usize) index);
 }
 
 static bool regexp_flags_string(MalVm *vm, MalValue rx, MalString **out) {
@@ -1004,7 +961,7 @@ static bool regexp_get_string_prop(MalVm *vm, MalValue obj, const byte *name, Ma
 // array stores elements under index keys, so a string "0" key would miss).
 static bool regexp_get_index_string(MalVm *vm, MalValue obj, i32 index, MalString **out) {
     MalValue value;
-    MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(index)};
+    MalKey key = mal_key_index(index);
     if (!mal_vm_get_property(vm, obj, key, &value)) {
         return false;
     }
@@ -1021,15 +978,7 @@ static bool regexp_get_length_prop(MalVm *vm, MalValue obj, const byte *name, i6
     if (!mal_vm_to_number(vm, value, &num)) {
         return false;
     }
-    if (isnan(num) || num <= 0) {
-        *out = 0;
-        return true;
-    }
-    num = trunc(num);
-    if (num > 9007199254740991.0) {
-        num = 9007199254740991.0;
-    }
-    *out = (i64) num;
+    *out = (i64) mal_ops_number_to_length(num);
     return true;
 }
 
@@ -1138,7 +1087,7 @@ static MalValue regexp_proto_match(MalVm *vm, MalValue this_value, const MalValu
         if (!regexp_get_index_string(vm, result, 0, &match_str)) {
             return mal_value_new_undefined();
         }
-        mal_array_object_store(array, (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) n)}, mal_value_from_string(match_str));
+        mal_array_object_store(array, mal_key_index(n), mal_value_from_string(match_str));
         if (mal_string_length(match_str) == 0) {
             i64 this_index;
             if (!regexp_get_last_index(vm, this_value, &this_index)) {
@@ -1394,13 +1343,10 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         if (!mal_vm_to_number(vm, index_value, &index_num)) {
             goto done;
         }
-        i64 position = isnan(index_num) ? 0 : (i64) trunc(index_num);
-        if (position < 0) {
-            position = 0;
-        }
-        if (position > (i64) length_s) {
-            position = (i64) length_s;
-        }
+        f64 integer_position = mal_ops_number_to_length(index_num);
+        i64 position = integer_position > (f64) length_s
+            ? (i64) length_s
+            : (i64) integer_position;
 
         // Captures 1..n_captures, each ToString'd or undefined.
         usize capture_bytes;
@@ -1418,7 +1364,7 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         bool capture_error = false;
         for (i64 ci = 1; ci <= n_captures; ci++) {
             MalValue cap_value;
-            MalKey cap_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) ci)};
+            MalKey cap_key = mal_key_index(ci);
             if (!mal_vm_get_property(vm, result, cap_key, &cap_value)) {
                 capture_error = true;
                 break;
@@ -1518,7 +1464,6 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         }
     }
     ret = regexp_builder_finish(vm, &accumulated);
-    accumulated.data = nullptr; // regexp_builder_finish copied and freed it
 
 done:
     mal_gc_native_rooted_end(vm);
@@ -1528,7 +1473,7 @@ done:
     mal_gc_unroot(&s_span);
     free(captures);
     free(results);
-    free(accumulated.data);
+    mal_u16_buffer_dispose(&accumulated);
     return ret;
 }
 
@@ -1597,16 +1542,7 @@ static MalValue regexp_proto_split(MalVm *vm, MalValue this_value, const MalValu
         if (!mal_vm_to_number(vm, limit_value, &lim)) {
             return mal_value_new_undefined();
         }
-        if (isnan(lim) || lim == 0) {
-            limit = 0;
-        } else {
-            double m = trunc(lim);
-            double mod = fmod(m, 4294967296.0);
-            if (mod < 0) {
-                mod += 4294967296.0;
-            }
-            limit = (u32) mod;
-        }
+        limit = mal_ops_number_to_uint32(lim);
     }
 
     MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
@@ -1626,7 +1562,7 @@ static MalValue regexp_proto_split(MalVm *vm, MalValue this_value, const MalValu
         if (!mal_value_is_null(z)) {
             return mal_value_from_object((MalObject *) array);
         }
-        mal_array_object_store(array, (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(0)}, mal_value_from_string(s));
+        mal_array_object_store(array, mal_key_index(0), mal_value_from_string(s));
         return mal_value_from_object((MalObject *) array);
     }
 
@@ -1659,7 +1595,7 @@ static MalValue regexp_proto_split(MalVm *vm, MalValue this_value, const MalValu
         }
         // Substring S[p, q].
         mal_array_object_store(
-            array, (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) array_len++)},
+            array, mal_key_index(array_len++),
             regexp_substring(vm, s, (i32) p, (i32) q)
         );
         if (array_len == limit) {
@@ -1673,11 +1609,11 @@ static MalValue regexp_proto_split(MalVm *vm, MalValue this_value, const MalValu
         number_of_captures = number_of_captures > 0 ? number_of_captures - 1 : 0;
         for (i64 i = 1; i <= number_of_captures; i++) {
             MalValue capture;
-            MalKey capture_key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+            MalKey capture_key = mal_key_index(i);
             if (!mal_vm_get_property(vm, z, capture_key, &capture)) {
                 return mal_value_new_undefined();
             }
-            mal_array_object_store(array, (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) array_len++)}, capture);
+            mal_array_object_store(array, mal_key_index(array_len++), capture);
             if (array_len == limit) {
                 return mal_value_from_object((MalObject *) array);
             }
@@ -1687,7 +1623,7 @@ static MalValue regexp_proto_split(MalVm *vm, MalValue this_value, const MalValu
     }
     // Final substring S[p, size].
     mal_array_object_store(
-        array, (MalKey){.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) array_len)},
+        array, mal_key_index(array_len),
         regexp_substring(vm, s, (i32) p, (i32) size)
     );
     return mal_value_from_object((MalObject *) array);
@@ -1792,16 +1728,8 @@ static MalValue regexp_string_iterator_next(MalVm *vm, MalValue this_value, cons
 // ---------------------------------------------------------------------------
 
 static void regexp_define_getter(MalVm *vm, MalObject *prototype, const byte *name, const byte *display_name, MalNativeFunctionCallback callback) {
-    MalNativeFunctionObject *getter = mal_native_function_object_new(
-        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]), mal_intrinsic_ascii(vm, display_name), callback
-    );
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = mal_value_from_native_function_object(getter),
-        .setter = mal_value_new_undefined(),
-    };
-    mal_object_define_own(prototype, mal_intrinsic_string_key(vm, name), &desc);
+    mal_intrinsic_define_getter(
+        vm, prototype, name, display_name, callback, MAL_PROPERTY_CONFIGURABLE);
 }
 
 // Define a symbol-keyed method with an explicit arity (its `length`), unlike
@@ -1848,14 +1776,10 @@ static bool regexp_is_punctuator_or_space(c16 c) {
         case ',': case '-': case '=': case '<': case '>': case '#': case '&':
         case '!': case '%': case ':': case ';': case '@': case '~': case '\'':
         case '`': case '"':
-        // WhiteSpace + LineTerminator (BMP); 0x09-0x0D are control-escaped above.
-        case 0x20: case 0xA0: case 0x1680: case 0x2000: case 0x2001: case 0x2002:
-        case 0x2003: case 0x2004: case 0x2005: case 0x2006: case 0x2007: case 0x2008:
-        case 0x2009: case 0x200A: case 0x2028: case 0x2029: case 0x202F: case 0x205F:
-        case 0x3000: case 0xFEFF:
             return true;
         default:
-            return false;
+            // 0x09-0x0D are handled by their short control escapes first.
+            return mal_ecma_is_string_whitespace(c);
     }
 }
 
@@ -1876,9 +1800,9 @@ static MalValue regexp_escape(MalVm *vm, MalValue this_value, const MalValue *ar
         c16 c = u[i];
         // The first code point, if an ASCII alphanumeric, is hex-escaped so the
         // result can't combine with a preceding character into an identifier.
-        if (i == 0 && ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) {
+        if (i == 0 && mal_ascii_is_alphanumeric(c)) {
             if (!regexp_escape_hex(vm, &builder, c)) {
-                free(builder.data);
+                mal_u16_buffer_dispose(&builder);
                 return mal_value_new_undefined();
             }
             continue;
@@ -1899,7 +1823,7 @@ static MalValue regexp_escape(MalVm *vm, MalValue this_value, const MalValue *ar
     return regexp_builder_finish(vm, &builder);
 
 fail:
-    free(builder.data);
+    mal_u16_buffer_dispose(&builder);
     return mal_value_new_undefined();
 }
 

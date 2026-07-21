@@ -2,7 +2,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 
 #include "./array_buffer_object.h"
 #include "./array_object.h"
@@ -22,6 +21,7 @@
 #include "./map_object.h"
 #include "./microtask.h"
 #include "./module_namespace_object.h"
+#include "./monotonic_clock.h"
 #include "./object.h"
 #include "./primitive_wrapper_object.h"
 #include "./promise_object.h"
@@ -299,12 +299,6 @@ void mal_gc_satb_record(MalValue old_value) {
 #else
     (void) old_value;
 #endif
-}
-
-static u64 mal_gc_now_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (u64) ts.tv_sec * 1000000000ull + (u64) ts.tv_nsec;
 }
 
 static void mal_gc_print_stats(void) {
@@ -1347,7 +1341,7 @@ static usize mal_gc_advance_trigger(MalVm *vm) {
  * today's mal_gc_collect body, factored so the concurrent build can reuse it for
  * STW minors and for finishing a cycle synchronously (backstop / MODE=stw). */
 static void mal_gc_collect_sync(MalVm *vm, bool major) {
-    u64 start_ns = g_gc->stats_enabled ? mal_gc_now_ns() : 0;
+    u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     g_gc->grey_count = 0;
     g_gc->weak_maps_count = 0;
     g_gc->weak_refs_count = 0;
@@ -1393,7 +1387,7 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
     mal_gc_advance_trigger(vm);
 
     if (g_gc->stats_enabled) {
-        u64 elapsed = mal_gc_now_ns() - start_ns;
+        u64 elapsed = mal_monotonic_now_ns() - start_ns;
         g_gc->collections++;
         mal_gc_stat_record(elapsed);
         mal_gc_stat_peak_live(vm);
@@ -1442,7 +1436,7 @@ void mal_gc_collect(MalVm *vm) {
  * heap-reset walk is the one O(heap) step of a pause, unavoidable for a sticky
  * major and identical to the STW major's pre-pass. */
 static void mal_gc_cycle_begin(MalVm *vm) {
-    u64 start_ns = g_gc->stats_enabled ? mal_gc_now_ns() : 0;
+    u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     g_gc->grey_count = 0;
     g_gc->weak_maps_count = 0;
     g_gc->weak_refs_count = 0;
@@ -1469,7 +1463,7 @@ static void mal_gc_cycle_begin(MalVm *vm) {
     g_gc->bytes_at_last_step = vm->heap.bytes_allocated;
 
     if (g_gc->stats_enabled) {
-        u64 elapsed = mal_gc_now_ns() - start_ns;
+        u64 elapsed = mal_monotonic_now_ns() - start_ns;
         g_gc->cycles++;
         g_gc->init_mark_ns = elapsed;
         mal_gc_stat_record(elapsed);
@@ -1480,7 +1474,7 @@ static void mal_gc_cycle_begin(MalVm *vm) {
  * are SATB-exempt), run the weak/ephemeron pass, then clear marking and hand off
  * to the incremental sweep. O(roots + floating snapshot), not O(heap). */
 static void mal_gc_cycle_remark(MalVm *vm) {
-    u64 start_ns = g_gc->stats_enabled ? mal_gc_now_ns() : 0;
+    u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
 
     // Re-scan roots: a value that moved from a (SATB-exempt) root into an already
     // black object during marking is caught here.
@@ -1507,7 +1501,7 @@ static void mal_gc_cycle_remark(MalVm *vm) {
     g_gc->phase = MAL_GC_PHASE_SWEEP;
 
     if (g_gc->stats_enabled) {
-        u64 elapsed = mal_gc_now_ns() - start_ns;
+        u64 elapsed = mal_monotonic_now_ns() - start_ns;
         g_gc->remark_ns = elapsed;
         mal_gc_stat_record(elapsed);
     }
@@ -1540,7 +1534,7 @@ static void mal_gc_cycle_finish_sweep(MalVm *vm) {
 /* One incremental mark step: drain up to `budget` grey/SATB entries. Returns true
  * when marking is drained to empty (time to remark). */
 static bool mal_gc_mark_step(MalVm *vm, usize budget) {
-    u64 start_ns = g_gc->stats_enabled ? mal_gc_now_ns() : 0;
+    u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     usize worked = 0;
     while (worked < budget) {
         if (g_gc->grey_count > 0) {
@@ -1556,7 +1550,7 @@ static bool mal_gc_mark_step(MalVm *vm, usize budget) {
     bool drained = g_gc->grey_count == 0 && g_gc->satb_drained >= g_gc->satb_count;
     g_gc->bytes_at_last_step = vm->heap.bytes_allocated;
     if (g_gc->stats_enabled) {
-        u64 elapsed = mal_gc_now_ns() - start_ns;
+        u64 elapsed = mal_monotonic_now_ns() - start_ns;
         if (elapsed > g_gc->max_mark_step_ns) {
             g_gc->max_mark_step_ns = elapsed;
         }
@@ -1571,10 +1565,10 @@ static bool mal_gc_mark_step(MalVm *vm, usize budget) {
 /* One incremental sweep step: reclaim up to N blocks. Returns true when the whole
  * heap is swept (the cycle is done). */
 static bool mal_gc_sweep_step(MalVm *vm) {
-    u64 start_ns = g_gc->stats_enabled ? mal_gc_now_ns() : 0;
+    u64 start_ns = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
     bool done = mal_heap_sweep_step(&vm->heap, mal_gc_finalize_cell, MAL_GC_SWEEP_BLOCKS_PER_STEP);
     if (g_gc->stats_enabled) {
-        u64 elapsed = mal_gc_now_ns() - start_ns;
+        u64 elapsed = mal_monotonic_now_ns() - start_ns;
         if (elapsed > g_gc->max_sweep_step_ns) {
             g_gc->max_sweep_step_ns = elapsed;
         }
@@ -1625,11 +1619,11 @@ static void mal_gc_cycle_advance(MalVm *vm, usize mark_budget) {
             // Hard backstop: if allocation has reached the old STW trigger before the
             // cycle finished, finish it synchronously rather than float garbage.
             if (vm->heap.bytes_allocated >= g_gc->backstop_at) {
-                u64 s = g_gc->stats_enabled ? mal_gc_now_ns() : 0;
+                u64 s = g_gc->stats_enabled ? mal_monotonic_now_ns() : 0;
                 mal_gc_cycle_finish_sync(vm);
                 if (g_gc->stats_enabled) {
                     g_gc->sync_backstop++;
-                    mal_gc_stat_record(mal_gc_now_ns() - s);
+                    mal_gc_stat_record(mal_monotonic_now_ns() - s);
                 }
                 return;
             }

@@ -4,9 +4,12 @@
 #include <string.h>
 #include <time.h>
 
+#include "ascii.h"
 #include "array_buffer_object.h"
 #include "array_object.h"
+#include "base64.h"
 #include "builtin_data_view.h"
+#include "checked_size.h"
 #include "date_object.h"
 #include "entropy.h"
 #include "web_events_object.h"
@@ -15,15 +18,18 @@
 #include "heap.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
+#include "hex.h"
 #include "intrinsics.h"
 #include "map_object.h"
 #include "microtask.h"
+#include "monotonic_clock.h"
 #include "object.h"
 #include "object_ops.h"
 #include "property_iter.h"
 #include "property_store.h"
 #include "table.h"
-#include "web_text_encoding.h"
+#include "utf16.h"
+#include "utf8.h"
 #include "typed_array_object.h"
 #include "value.h"
 #include "value_ops.h"
@@ -34,12 +40,6 @@
  * now; per-isolate storage is a Phase-4/SMP follow-up). */
 static f64 mal_web_time_origin_ms = 0;   // wall-clock ms at install (performance.timeOrigin)
 static u64 mal_web_mono_base_ns = 0;     // CLOCK_MONOTONIC ns at install
-
-static u64 mal_web_mono_ns(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (u64) ts.tv_sec * 1000000000ull + (u64) ts.tv_nsec;
-}
 
 /* ---------------------------------------------------------------------------
  * TextEncoder / TextDecoder.
@@ -67,39 +67,32 @@ static MalValue mal_web_new_uint8array(MalVm *vm, const byte *data, usize len) {
 /* Extract the byte range of a BufferSource (TypedArray, ArrayBuffer, or
  * DataView). Returns true with *out and *out_len set (possibly empty) on success. On
  * failure it throws and returns false: a TypeError for a non-BufferSource value,
- * or for a DataView whose resizable buffer shrank out from under it. A detached
- * backing store reads as empty rather than an error. */
+ * or for an out-of-bounds DataView or one backed by a resizable buffer. A
+ * detached backing store reads as empty rather than an error. */
 static bool mal_web_buffer_source(MalVm *vm, MalValue v, const byte **out, usize *out_len) {
-    if (mal_value_is_typed_array_object(v)) {
-        MalTypedArrayObject *ta = mal_value_to_typed_array_object(v);
-        if (ta->buffer == nullptr) {
-            *out = nullptr;
-            *out_len = 0;
-            return true;
+    MalBufferSourceSpan span;
+    MalBufferSourceSpanStatus status = mal_buffer_source_span(v, &span);
+    if (status == MAL_BUFFER_SOURCE_SPAN_OK) {
+        if (mal_value_is_data_view_object(v) && span.resizable) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "DataView has a resizable or out-of-bounds ArrayBuffer");
+            return false;
         }
-        *out = ta->buffer->data == nullptr
-            ? nullptr
-            : (const byte *) ta->buffer->data + ta->byte_offset;
-        *out_len = mal_typed_array_object_byte_length(ta);
+        *out = span.data;
+        *out_len = span.length;
         return true;
     }
-    if (mal_value_is_array_buffer_object(v)) {
-        MalArrayBufferObject *ab = mal_value_to_array_buffer_object(v);
-        *out = (const byte *) ab->data;
-        *out_len = ab->detached ? 0 : ab->byte_length;
+    if (status == MAL_BUFFER_SOURCE_SPAN_DETACHED
+        || (status == MAL_BUFFER_SOURCE_SPAN_OUT_OF_BOUNDS
+            && mal_value_is_typed_array_object(v))) {
+        *out = nullptr;
+        *out_len = 0;
         return true;
     }
-    if (mal_value_is_data_view_object(v)) {
-        switch (mal_data_view_object_span(mal_value_to_data_view_object(v), out, out_len)) {
-            case MAL_DATA_VIEW_SPAN_OK:
-            case MAL_DATA_VIEW_SPAN_DETACHED:
-                return true;
-            case MAL_DATA_VIEW_SPAN_RESIZABLE:
-            case MAL_DATA_VIEW_SPAN_OUT_OF_BOUNDS:
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                    "DataView has a resizable or out-of-bounds ArrayBuffer");
-                return false;
-        }
+    if (status == MAL_BUFFER_SOURCE_SPAN_OUT_OF_BOUNDS) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "DataView has a resizable or out-of-bounds ArrayBuffer");
+        return false;
     }
     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
         "decode input must be an ArrayBuffer, TypedArray, or DataView");
@@ -144,7 +137,11 @@ static MalValue mal_web_text_encoder_encode(
         return mal_value_new_undefined();
     }
     usize out_len;
-    byte *bytes = mal_utf8_encode(mal_string_code_units(str), mal_string_length(str), &out_len);
+    byte *bytes = mal_string_to_utf8(str, &out_len);
+    if (bytes == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
     MalValue result = mal_web_new_uint8array(vm, bytes, out_len);
     free(bytes);
     return result;
@@ -177,18 +174,9 @@ static MalValue mal_web_text_encoder_encode_into(
     usize read = 0;
     usize written = 0;
     for (usize i = 0; i < len;) {
-        u32 cp = u[i];
-        usize adv = 1;
-        if (cp >= 0xD800 && cp <= 0xDBFF) {
-            if (i + 1 < len && u[i + 1] >= 0xDC00 && u[i + 1] <= 0xDFFF) {
-                cp = 0x10000 + ((cp - 0xD800) << 10) + (u[i + 1] - 0xDC00);
-                adv = 2;
-            } else {
-                cp = 0xFFFD;
-            }
-        } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
-            cp = 0xFFFD;
-        }
+        u32 cp;
+        usize adv;
+        if (!mal_utf16_read_scalar(u, len, i, &cp, &adv)) cp = 0xFFFD;
         usize n = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
         if (written + n > cap) {
             break;
@@ -228,6 +216,10 @@ typedef enum {
     MAL_TEXT_ENCODING_INVALID,
 } MalTextEncoding;
 
+static bool mal_web_is_encoding_label_whitespace(c16 unit) {
+    return unit == ' ' || unit == '\t' || unit == '\n' || unit == '\r' || unit == '\f';
+}
+
 /* Match an Encoding Standard label after trimming ASCII whitespace and folding
  * ASCII case. */
 static bool mal_web_encoding_label_matches(
@@ -240,29 +232,16 @@ static bool mal_web_encoding_label_matches(
         // WHATWG strips leading/trailing ASCII whitespace before matching.
         usize start = 0;
         usize end = len;
-        while (start < end && (u[start] == ' ' || u[start] == '\t' || u[start] == '\n'
-                                  || u[start] == '\r' || u[start] == '\f')) {
+        while (start < end && mal_web_is_encoding_label_whitespace(u[start])) {
             start++;
         }
-        while (end > start && (u[end - 1] == ' ' || u[end - 1] == '\t' || u[end - 1] == '\n'
-                                  || u[end - 1] == '\r' || u[end - 1] == '\f')) {
+        while (end > start && mal_web_is_encoding_label_whitespace(u[end - 1])) {
             end--;
         }
         if (end - start != alen) {
             continue;
         }
-        bool eq = true;
-        for (usize i = 0; i < alen; i++) {
-            c16 x = u[start + i];
-            if (x >= 'A' && x <= 'Z') {
-                x = (c16) (x + 32);
-            }
-            if (x != (c16) (unsigned char) alias[i]) {
-                eq = false;
-                break;
-            }
-        }
-        if (eq) {
+        if (mal_ascii_units_equal_ci(u + start, end - start, alias)) {
             return true;
         }
     }
@@ -385,7 +364,7 @@ static usize mal_web_utf16_stream_prefix(
         c16 unit = big_endian
             ? (c16) ((first << 8) | second)
             : (c16) ((second << 8) | first);
-        if (unit >= 0xd800 && unit <= 0xdbff) {
+        if (mal_utf16_is_lead_surrogate(unit)) {
             pending += 2;
         }
     }
@@ -655,9 +634,6 @@ static void mal_web_define_branded_method(MalVm *vm, MalObject *proto, const byt
  * btoa / atob (base64 over a Latin-1 "binary string").
  * --------------------------------------------------------------------------- */
 
-static const char mal_b64_enc[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 static MalValue mal_web_btoa(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
@@ -681,10 +657,9 @@ static MalValue mal_web_btoa(
             return mal_value_new_undefined();
         }
     }
-    usize groups;
     usize out_len;
-    if (!mal_checked_size_add(n, 2, SIZE_MAX, &groups) ||
-        !mal_checked_size_multiply(groups / 3, 4, MAL_STRING_MAX_CODE_UNITS, &out_len)) {
+    if (!mal_base64_encoded_length(
+            n, true, MAL_STRING_MAX_CODE_UNITS, &out_len)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
         return mal_value_new_undefined();
     }
@@ -695,37 +670,17 @@ static MalValue mal_web_btoa(
     }
     usize o = 0;
     for (usize i = 0; i < n; i += 3) {
-        u32 b0 = (u8) u[i];
-        u32 b1 = i + 1 < n ? (u8) u[i + 1] : 0;
-        u32 b2 = i + 2 < n ? (u8) u[i + 2] : 0;
-        u32 triple = (b0 << 16) | (b1 << 8) | b2;
-        out[o++] = (c16) (u8) mal_b64_enc[(triple >> 18) & 0x3F];
-        out[o++] = (c16) (u8) mal_b64_enc[(triple >> 12) & 0x3F];
-        out[o++] = i + 1 < n ? (c16) (u8) mal_b64_enc[(triple >> 6) & 0x3F] : '=';
-        out[o++] = i + 2 < n ? (c16) (u8) mal_b64_enc[triple & 0x3F] : '=';
+        byte input[3];
+        usize input_length = n - i < 3 ? n - i : 3;
+        for (usize j = 0; j < input_length; j++) input[j] = (byte) (u8) u[i + j];
+        byte encoded[4];
+        usize encoded_length = mal_base64_encode_block(
+            input, input_length, MAL_BASE64_ALPHABET_STANDARD, true, encoded);
+        for (usize j = 0; j < encoded_length; j++) out[o++] = (u8) encoded[j];
     }
     MalValue result = mal_value_from_string(mal_string_new_copy(&vm->heap, out, o));
     free(out);
     return result;
-}
-
-static i32 mal_b64_val(c16 c) {
-    if (c >= 'A' && c <= 'Z') {
-        return c - 'A';
-    }
-    if (c >= 'a' && c <= 'z') {
-        return c - 'a' + 26;
-    }
-    if (c >= '0' && c <= '9') {
-        return c - '0' + 52;
-    }
-    if (c == '+') {
-        return 62;
-    }
-    if (c == '/') {
-        return 63;
-    }
-    return -1;
 }
 
 static MalValue mal_web_atob(
@@ -753,7 +708,7 @@ static MalValue mal_web_atob(
     usize m = 0;
     for (usize i = 0; i < in_len; i++) {
         c16 c = in[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') {
+        if (mal_base64_is_ascii_whitespace(c)) {
             continue;
         }
         cleaned[m++] = c;
@@ -785,7 +740,8 @@ static MalValue mal_web_atob(
     u32 acc = 0;
     i32 bits = 0;
     for (usize i = 0; i < m; i++) {
-        i32 v = mal_b64_val(cleaned[i]);
+        i32 v = mal_base64_decode_digit(
+            cleaned[i], MAL_BASE64_ALPHABET_STANDARD);
         if (v < 0) {
             free(cleaned);
             free(out);
@@ -839,7 +795,7 @@ static MalValue mal_web_performance_now(
     (void) argc;
     (void) nt;
     (void) callee;
-    f64 ms = (f64) (mal_web_mono_ns() - mal_web_mono_base_ns) / 1.0e6;
+    f64 ms = (f64) (mal_monotonic_now_ns() - mal_web_mono_base_ns) / 1.0e6;
     return mal_value_from_f64(ms);
 }
 
@@ -862,15 +818,14 @@ static MalValue mal_web_crypto_random_uuid(
     }
     b[6] = (u8) ((b[6] & 0x0F) | 0x40); // version 4
     b[8] = (u8) ((b[8] & 0x3F) | 0x80); // variant 10xx
-    static const char hex[] = "0123456789abcdef";
     char out[36];
     usize o = 0;
     for (usize i = 0; i < 16; i++) {
         if (i == 4 || i == 6 || i == 8 || i == 10) {
             out[o++] = '-';
         }
-        out[o++] = hex[b[i] >> 4];
-        out[o++] = hex[b[i] & 0x0F];
+        mal_hex_encode_byte_lower((byte) b[i], out + o);
+        o += 2;
     }
     return mal_value_from_string(mal_string_new_ascii(&vm->heap, out, o));
 }
@@ -916,10 +871,6 @@ static MalValue mal_web_crypto_get_random_values(
 /* ---------------------------------------------------------------------------
  * structuredClone: a deep clone honoring circular + shared references.
  * --------------------------------------------------------------------------- */
-
-static MalKey mal_sc_index_key(u32 index) {
-    return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
-}
 
 /* Recursively clone `value`. `memo` maps every original object to its clone
  * (SameValueZero identity), which both resolves circular/shared references and —
@@ -1012,14 +963,14 @@ static MalValue mal_sc_clone(MalVm *vm, MalValue value, MalMapObject *memo) {
         MalObject *out = (MalObject *) mal_value_to_array_object(clone);
         for (u32 i = 0; i < len; i++) {
             MalValue element;
-            if (!mal_vm_get_property(vm, value, mal_sc_index_key(i), &element)) {
+            if (!mal_vm_get_property(vm, value, mal_key_index(i), &element)) {
                 return mal_value_new_undefined();
             }
             MalValue cloned = mal_sc_clone(vm, element, memo);
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
                 return mal_value_new_undefined();
             }
-            mal_object_set(out, mal_sc_index_key(i), cloned);
+            mal_object_set(out, mal_key_index(i), cloned);
         }
         return clone;
     }
@@ -1216,7 +1167,7 @@ void mal_text_encoding_globals_install(MalVm *vm, MalObject *global_this) {
 }
 
 void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
-    mal_web_mono_base_ns = mal_web_mono_ns();
+    mal_web_mono_base_ns = mal_monotonic_now_ns();
     struct timespec rt;
     clock_gettime(CLOCK_REALTIME, &rt);
     mal_web_time_origin_ms = (f64) rt.tv_sec * 1000.0 + (f64) rt.tv_nsec / 1.0e6;

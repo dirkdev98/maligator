@@ -37,9 +37,9 @@ import {
 	decodeStringConstant,
 	functionValuedRegisters,
 	globalSlotFunctions,
-	singleDefinitions,
 } from "./inline.ts";
-import { destinationCount } from "./ir-opt.ts";
+import { buildIRRegisterIndex } from "./ir-register-index.ts";
+import type { IRRegisterOperand } from "./ir-register-index.ts";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "./ir.ts";
 import { log } from "./utils.ts";
 
@@ -223,11 +223,11 @@ const BUILTIN_SUMMARIES: ReadonlyMap<string, BuiltinSummary> = new Map<
 
 interface FunctionContext {
 	/** Number of defining instructions per register. */
-	defCount: Map<number, number>;
+	defCount: ReadonlyMap<number, number>;
 	/** Every use of a register: the instruction + the operand position. */
-	usesOf: Map<number, Array<{ instruction: IRInstruction; position: number }>>;
+	usesOf: ReadonlyMap<number, ReadonlyArray<IRRegisterOperand>>;
 	/** Registers whose sole definition is a `createString` → the string index. */
-	singleDefs: Map<number, IRInstruction>;
+	singleDefs: ReadonlyMap<number, IRInstruction>;
 	/** Register → functionIndex it provably holds (for resolving call callees). */
 	funcOf: Map<number, number>;
 }
@@ -237,37 +237,15 @@ function buildFunctionContext(
 	capturedSlots: ReadonlyMap<string, number>,
 	globalSlots: ReadonlyMap<number, number>,
 ): FunctionContext {
+	const registerIndex = buildIRRegisterIndex(fn);
 	const defCount = new Map<number, number>();
-	const usesOf = new Map<
-		number,
-		Array<{ instruction: IRInstruction; position: number }>
-	>();
-	for (const block of fn.blocks) {
-		for (const instruction of block.instructions) {
-			if (!("registers" in instruction)) {
-				continue;
-			}
-			const defs = destinationCount(instruction);
-			for (let i = 0; i < defs; i++) {
-				const register = instruction.registers[i]!;
-				if (register >= 0) {
-					defCount.set(register, (defCount.get(register) ?? 0) + 1);
-				}
-			}
-			for (let position = defs; position < instruction.registers.length; position++) {
-				const register = instruction.registers[position]!;
-				if (register < 0) {
-					continue;
-				}
-				const list = usesOf.get(register) ?? usesOf.set(register, []).get(register)!;
-				list.push({ instruction, position });
-			}
-		}
+	for (const [register, definitions] of registerIndex.definitions) {
+		defCount.set(register, definitions.length);
 	}
 	return {
 		defCount,
-		usesOf,
-		singleDefs: singleDefinitions(fn),
+		usesOf: registerIndex.uses,
+		singleDefs: registerIndex.uniqueDefinitions,
 		funcOf: functionValuedRegisters(fn, capturedSlots, globalSlots),
 	};
 }

@@ -6,14 +6,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ascii.h"
 #include "array_buffer_object.h"
+#include "base64.h"
+#include "builtin_data_view.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "hex.h"
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
-#include "web_text_encoding.h"
+#include "utf8.h"
 #include "typed_array_object.h"
 #include "value.h"
 #include "value_ops.h"
@@ -29,32 +33,8 @@ typedef enum MalBufferEncoding {
     MAL_BUFFER_UTF16LE,
 } MalBufferEncoding;
 
-// DataView keeps its layout private to builtin_data_view.c. Buffer.from needs
-// only the validated view window; keep this in sync with MalDataViewObject there.
-struct MalDataViewObject {
-    MalObject object;
-    MalArrayBufferObject *buffer;
-    u32 byte_offset;
-    u32 byte_length;
-    bool length_tracking;
-};
-
 static bool mal_buffer_ascii_equal_ci(const MalString *string, const char *ascii) {
-    usize length = strlen(ascii);
-    if (mal_string_length(string) != length) {
-        return false;
-    }
-    const c16 *units = mal_string_code_units(string);
-    for (usize i = 0; i < length; i++) {
-        c16 unit = units[i];
-        if (unit >= 'A' && unit <= 'Z') {
-            unit += 'a' - 'A';
-        }
-        if (unit != (c16) (u8) ascii[i]) {
-            return false;
-        }
-    }
-    return true;
+    return mal_string_equals_ascii_ci(string, ascii);
 }
 
 static bool mal_buffer_encoding(
@@ -106,26 +86,6 @@ static bool mal_buffer_encoding(
     return true;
 }
 
-static i32 mal_buffer_hex_digit(c16 unit) {
-    if (unit >= '0' && unit <= '9') return unit - '0';
-    if (unit >= 'a' && unit <= 'f') return unit - 'a' + 10;
-    if (unit >= 'A' && unit <= 'F') return unit - 'A' + 10;
-    return -1;
-}
-
-static i32 mal_buffer_base64_digit(c16 unit) {
-    if (unit >= 'A' && unit <= 'Z') return unit - 'A';
-    if (unit >= 'a' && unit <= 'z') return unit - 'a' + 26;
-    if (unit >= '0' && unit <= '9') return unit - '0' + 52;
-    if (unit == '+' || unit == '-') return 62;
-    if (unit == '/' || unit == '_') return 63;
-    return -1;
-}
-
-static bool mal_buffer_base64_whitespace(c16 unit) {
-    return unit == 0x09 || unit == 0x0a || unit == 0x0c || unit == 0x0d || unit == 0x20;
-}
-
 /* Node's Buffer decoder is deliberately forgiving: both alphabets are accepted,
  * whitespace and unrelated characters are ignored, and an incomplete final
  * quartet contributes all complete bytes. */
@@ -143,11 +103,8 @@ static byte *mal_buffer_decode_base64(const MalString *string, usize *length_out
     for (usize i = 0; i < length; i++) {
         c16 unit = units[i];
         if (unit == '=') break;
-        i32 digit = mal_buffer_base64_digit(unit);
-        if (digit < 0) {
-            if (mal_buffer_base64_whitespace(unit)) continue;
-            continue;
-        }
+        i32 digit = mal_base64_decode_digit(unit, MAL_BASE64_ALPHABET_EITHER);
+        if (digit < 0) continue;
         accumulator = (accumulator << 6) | (u32) digit;
         sextets++;
         if (sextets == 4) {
@@ -174,7 +131,7 @@ static byte *mal_buffer_encode_string(
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);
     if (encoding == MAL_BUFFER_UTF8) {
-        return mal_utf8_encode(units, length, length_out);
+        return mal_string_to_utf8(string, length_out);
     }
     if (encoding == MAL_BUFFER_BASE64 || encoding == MAL_BUFFER_BASE64URL) {
         return mal_buffer_decode_base64(string, length_out);
@@ -187,8 +144,8 @@ static byte *mal_buffer_encode_string(
         }
         usize written = 0;
         while (written * 2 + 1 < length) {
-            i32 high = mal_buffer_hex_digit(units[written * 2]);
-            i32 low = mal_buffer_hex_digit(units[written * 2 + 1]);
+            i32 high = mal_hex_decode_digit(units[written * 2]);
+            i32 low = mal_hex_decode_digit(units[written * 2 + 1]);
             if (high < 0 || low < 0) break;
             bytes[written++] = (byte) ((high << 4) | low);
         }
@@ -227,21 +184,16 @@ static MalValue mal_buffer_string_from_bytes(
 ) {
     usize output_length = length;
     if (encoding == MAL_BUFFER_HEX) {
-        if (!mal_checked_size_multiply(
-                length, 2, MAL_STRING_MAX_CODE_UNITS, &output_length)) {
+        if (!mal_hex_encoded_length(
+                length, MAL_STRING_MAX_CODE_UNITS, &output_length)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                                "Invalid string length");
             return mal_value_new_undefined();
         }
     } else if (encoding == MAL_BUFFER_BASE64 || encoding == MAL_BUFFER_BASE64URL) {
-        usize full_length;
-        usize tail_length = length % 3 == 0
-            ? 0
-            : encoding == MAL_BUFFER_BASE64 ? 4 : length % 3 + 1;
-        if (!mal_checked_size_multiply(
-                length / 3, 4, MAL_STRING_MAX_CODE_UNITS, &full_length) ||
-            !mal_checked_size_add(
-                full_length, tail_length, MAL_STRING_MAX_CODE_UNITS, &output_length)) {
+        if (!mal_base64_encoded_length(
+                length, encoding == MAL_BUFFER_BASE64,
+                MAL_STRING_MAX_CODE_UNITS, &output_length)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                                "Invalid string length");
             return mal_value_new_undefined();
@@ -259,73 +211,40 @@ static MalValue mal_buffer_string_from_bytes(
         return mal_value_new_undefined();
     }
     if (encoding == MAL_BUFFER_UTF8) {
-        usize unit_count;
-        c16 *units = mal_utf8_decode(bytes, length, &unit_count);
-        if (units == nullptr) {
+        MalString *string = mal_string_from_utf8(&vm->heap, bytes, length);
+        if (string == nullptr) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                                "Buffer string allocation failed");
             return mal_value_new_undefined();
         }
-        MalValue value = mal_value_from_string(mal_string_new_copy(&vm->heap, units, unit_count));
-        free(units);
-        return value;
+        return mal_value_from_string(string);
     }
     if (encoding == MAL_BUFFER_HEX) {
-        static const byte digits[] = "0123456789abcdef";
         byte *ascii = malloc(output_length + 1);
         if (ascii == nullptr) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                                "Buffer string allocation failed");
             return mal_value_new_undefined();
         }
-        for (usize i = 0; i < length; i++) {
-            u8 value = (u8) bytes[i];
-            ascii[i * 2] = digits[value >> 4];
-            ascii[i * 2 + 1] = digits[value & 0xf];
-        }
+        mal_hex_encode_lower(bytes, length, ascii);
         MalValue value = mal_value_from_string(mal_string_new_ascii(&vm->heap, ascii, length * 2));
         free(ascii);
         return value;
     }
     if (encoding == MAL_BUFFER_BASE64 || encoding == MAL_BUFFER_BASE64URL) {
-        static const byte standard[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        static const byte url[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-        const byte *alphabet = encoding == MAL_BUFFER_BASE64URL ? url : standard;
         bool padding = encoding == MAL_BUFFER_BASE64;
-        usize capacity = output_length;
-        byte *ascii = malloc(capacity + 1);
+        byte *ascii = malloc(output_length + 1);
         if (ascii == nullptr) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                                "Buffer string allocation failed");
             return mal_value_new_undefined();
         }
-        usize read = 0;
-        usize written = 0;
-        while (read + 3 <= length) {
-            u32 value = ((u32) (u8) bytes[read] << 16) |
-                        ((u32) (u8) bytes[read + 1] << 8) | (u8) bytes[read + 2];
-            ascii[written++] = alphabet[(value >> 18) & 0x3f];
-            ascii[written++] = alphabet[(value >> 12) & 0x3f];
-            ascii[written++] = alphabet[(value >> 6) & 0x3f];
-            ascii[written++] = alphabet[value & 0x3f];
-            read += 3;
-        }
-        if (length - read == 1) {
-            u32 value = (u32) (u8) bytes[read] << 16;
-            ascii[written++] = alphabet[(value >> 18) & 0x3f];
-            ascii[written++] = alphabet[(value >> 12) & 0x3f];
-            if (padding) {
-                ascii[written++] = '=';
-                ascii[written++] = '=';
-            }
-        } else if (length - read == 2) {
-            u32 value = ((u32) (u8) bytes[read] << 16) |
-                        ((u32) (u8) bytes[read + 1] << 8);
-            ascii[written++] = alphabet[(value >> 18) & 0x3f];
-            ascii[written++] = alphabet[(value >> 12) & 0x3f];
-            ascii[written++] = alphabet[(value >> 6) & 0x3f];
-            if (padding) ascii[written++] = '=';
-        }
+        usize written = mal_base64_encode(
+            bytes, length,
+            encoding == MAL_BUFFER_BASE64URL
+                ? MAL_BASE64_ALPHABET_URL
+                : MAL_BASE64_ALPHABET_STANDARD,
+            padding, ascii);
         MalValue result = mal_value_from_string(mal_string_new_ascii(&vm->heap, ascii, written));
         free(ascii);
         return result;
@@ -363,7 +282,7 @@ static MalValue mal_buffer_string_from_bytes(
 static bool mal_buffer_to_integer(MalVm *vm, MalValue value, f64 *out) {
     f64 number;
     if (!mal_vm_to_number(vm, value, &number)) return false;
-    *out = isnan(number) ? 0 : trunc(number);
+    *out = mal_ops_number_to_integer_or_infinity(number);
     return true;
 }
 
@@ -563,23 +482,6 @@ static MalTypedArrayObject *mal_buffer_byte_view(MalVm *vm, MalValue value) {
     return mal_value_to_typed_array_object(value);
 }
 
-static bool mal_buffer_data_view_window(
-    MalDataViewObject *view, MalArrayBufferObject **backing_out, u32 *length_out
-) {
-    MalArrayBufferObject *backing = view->buffer;
-    if (backing == nullptr || backing->detached ||
-        (view->length_tracking
-             ? view->byte_offset > backing->byte_length
-             : (u64) view->byte_offset + view->byte_length > backing->byte_length)) {
-        return false;
-    }
-    *backing_out = backing;
-    *length_out = view->length_tracking
-        ? backing->byte_length - view->byte_offset
-        : view->byte_length;
-    return true;
-}
-
 static MalValue mal_buffer_from_impl(
     MalVm *vm, MalObject *prototype, const MalValue *args, i32 argc
 ) {
@@ -698,7 +600,7 @@ static MalValue mal_buffer_from_impl(
         mal_gc_native_rooted_begin(vm);
         MalTypedArrayObject *output = mal_value_to_typed_array_object(roots[0]);
         for (u32 i = 0; i < length; i++) {
-            MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+            MalKey key = mal_key_index(i);
             if (!mal_vm_get_property(vm, source, key, &roots[1])) {
                 mal_gc_native_rooted_end(vm);
                 mal_gc_unroot(&root);
@@ -856,15 +758,13 @@ static MalValue mal_buffer_byte_length(
             mal_value_to_typed_array_object(value)));
     }
     if (mal_value_is_data_view_object(value)) {
-        MalDataViewObject *view = mal_value_to_data_view_object(value);
-        MalArrayBufferObject *backing;
-        u32 length;
-        if (!mal_buffer_data_view_window(view, &backing, &length)) {
+        MalBufferSourceSpan span;
+        if (mal_buffer_source_span(value, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                                "Buffer.byteLength received an invalid view");
             return mal_value_new_undefined();
         }
-        return mal_value_from_f64((f64) length);
+        return mal_value_from_f64((f64) span.length);
     }
     if (mal_value_is_array_buffer_object(value)) {
         return mal_value_from_f64((f64) mal_value_to_array_buffer_object(value)->byte_length);
@@ -939,7 +839,7 @@ static MalValue mal_buffer_concat(
     } else {
         for (u32 i = 0; i < list_length; i++) {
             MalValue item;
-            MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+            MalKey key = mal_key_index(i);
             if (!mal_vm_get_property(vm, list, key, &item)) return mal_value_new_undefined();
             MalTypedArrayObject *view = mal_buffer_byte_view(vm, item);
             if (view == nullptr) return mal_value_new_undefined();
@@ -959,7 +859,7 @@ static MalValue mal_buffer_concat(
     u32 written = 0;
     for (u32 i = 0; i < list_length && written < total; i++) {
         MalValue item;
-        MalKey key = {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)};
+        MalKey key = mal_key_index(i);
         if (!mal_vm_get_property(vm, list, key, &item)) goto concat_error;
         MalTypedArrayObject *view = mal_buffer_byte_view(vm, item);
         if (view == nullptr) goto concat_error;

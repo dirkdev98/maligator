@@ -237,10 +237,6 @@ static void mal_headers_finalize(MalHeapHeader *cell) {
     h->cap = 0;
 }
 
-static MalKey mal_headers_index_key(u32 index) {
-    return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
-}
-
 static bool mal_headers_to_byte_string(MalVm *vm, MalValue input, MalValue *out) {
     MalString *string;
     if (!mal_vm_to_string(vm, input, &string)) {
@@ -303,7 +299,7 @@ static bool mal_headers_convert_inner_sequence(
             break;
         }
         mal_array_object_store(mal_value_to_array_object(*sequence_out),
-            mal_headers_index_key(index++), converted);
+            mal_key_index(index++), converted);
     }
 
     mal_gc_unroot(&element_span);
@@ -340,7 +336,7 @@ static bool mal_headers_convert_sequence(
             break;
         }
         mal_array_object_store(mal_value_to_array_object(*sequence_out),
-            mal_headers_index_key(index++), roots[1]);
+            mal_key_index(index++), roots[1]);
     }
 
     mal_gc_unroot(&roots_span);
@@ -418,10 +414,10 @@ static bool mal_headers_convert_record(
         }
         roots[4] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
         MalArrayObject *pair = mal_value_to_array_object(roots[4]);
-        mal_array_object_store(pair, mal_headers_index_key(0), roots[2]);
-        mal_array_object_store(pair, mal_headers_index_key(1), roots[3]);
+        mal_array_object_store(pair, mal_key_index(0), roots[2]);
+        mal_array_object_store(pair, mal_key_index(1), roots[3]);
         mal_array_object_store(mal_value_to_array_object(*record_out),
-            mal_headers_index_key(output++), roots[4]);
+            mal_key_index(output++), roots[4]);
     }
 
     mal_gc_unroot(&roots_span);
@@ -855,8 +851,8 @@ static MalValue mal_headers_iterator_next(
     if (iterator->kind == MAL_HEADERS_ITERATOR_ENTRIES) {
         roots[2] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 2));
         MalObject *pair = (MalObject *) mal_value_to_array_object(roots[2]);
-        mal_object_set(pair, mal_headers_index_key(0), roots[0]);
-        mal_object_set(pair, mal_headers_index_key(1), roots[1]);
+        mal_object_set(pair, mal_key_index(0), roots[0]);
+        mal_object_set(pair, mal_key_index(1), roots[1]);
     } else {
         roots[2] = iterator->kind == MAL_HEADERS_ITERATOR_KEYS ? roots[0] : roots[1];
     }
@@ -957,7 +953,7 @@ static MalValue mal_headers_method_get_set_cookie(
     u32 index = 0;
     for (i32 i = 0; i < h->count; i++) {
         if (mal_headers_name_is_set_cookie(h->entries[i].name)) {
-            mal_object_set(array, mal_headers_index_key(index++),
+            mal_object_set(array, mal_key_index(index++),
                 mal_value_from_string(h->entries[i].value));
         }
     }

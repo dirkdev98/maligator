@@ -9,35 +9,24 @@
 #include "gc.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
+#include "u16_buffer.h"
 #include "vm_ops.h"
 
 #define URL_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 #define URL_METHOD (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE)
 
-typedef struct UrlBuffer {
-    c16 *units;
-    usize length;
-    usize capacity;
-} UrlBuffer;
+typedef MalU16Buffer UrlBuffer;
 
 static void url_buffer_append(UrlBuffer *buffer, const c16 *units, usize length) {
-    if (length == 0) return;
-    usize needed = buffer->length + length;
-    if (needed > buffer->capacity) {
-        usize capacity = buffer->capacity == 0 ? 32 : buffer->capacity;
-        while (capacity < needed) capacity *= 2;
-        buffer->units = realloc(buffer->units, capacity * sizeof(c16));
-        buffer->capacity = capacity;
-    }
-    memcpy(buffer->units + buffer->length, units, length * sizeof(c16));
-    buffer->length = needed;
+    mal_u16_buffer_append_units(buffer, units, length);
 }
 
 static void url_buffer_char(UrlBuffer *buffer, c16 unit) {
-    url_buffer_append(buffer, &unit, 1);
+    mal_u16_buffer_push(buffer, unit);
 }
 
 static MalValue url_slice(MalVm *vm, MalString *source, usize start, usize end) {
@@ -265,24 +254,22 @@ static MalValue url_format(
         if (mal_string_code_units(hash)[0] != '#') url_buffer_char(&buffer, '#');
         url_buffer_append(&buffer, mal_string_code_units(hash), mal_string_length(hash));
     }
-    MalValue result = mal_value_from_string(
-        mal_string_new_copy(&vm->heap, buffer.units, buffer.length));
-    free(buffer.units);
-    return result;
-}
-
-static void url_publish(
-    MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module) {
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "default") == 0) {
-            vm->globals[slots[i].slot] = module;
-        } else {
-            MalPropertyLookup found = mal_object_get_own(
-                mal_value_to_object(module),
-                mal_intrinsic_string_key(vm, (const byte *) slots[i].name));
-            if (found.present) vm->globals[slots[i].slot] = found.desc.value;
-        }
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_u16_buffer_dispose(&buffer);
+        return mal_value_new_undefined();
     }
+    if (buffer.status != MAL_U16_BUFFER_OK) {
+        MalU16BufferStatus status = buffer.status;
+        mal_u16_buffer_dispose(&buffer);
+        if (status == MAL_U16_BUFFER_LENGTH_OVERFLOW) {
+            mal_vm_throw_error(
+                vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
+        } else {
+            mal_vm_throw_allocation_error(vm);
+        }
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, &buffer));
 }
 
 void mal_host_install_node_url(
@@ -325,7 +312,7 @@ void mal_host_install_node_url(
         module = roots[0];
         mal_gc_unroot(&root);
     }
-    url_publish(vm, slots, count, module);
+    mal_node_module_publish(vm, slots, count, module);
 }
 
 #endif /* MAL_NODE */

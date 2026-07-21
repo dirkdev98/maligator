@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -93,6 +99,20 @@ describe("configured asset inclusion", () => {
 			),
 		).toThrow(BuildConfigError);
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"rejects symlinks within directory assets",
+		() => {
+			const root = fixture();
+			symlinkSync(path.join(root, "empty.bin"), path.join(root, "tree", "linked.txt"));
+			expect(() =>
+				includeConfiguredAssets(
+					{ docs: { type: "directory", path: "tree", include: ["**/*.txt"] } },
+					root,
+				),
+			).toThrow("unsupported non-regular file 'linked.txt'");
+		},
+	);
 
 	it("emits C23 payloads, manifest rows, and the mal installer", () => {
 		const root = fixture();

@@ -140,6 +140,24 @@ check(
 	new StringDecoder().write(new Uint16Array([0x4241])) === "AB" &&
 		new StringDecoder().write(new DataView(Uint8Array.of(0x43).buffer)) === "C",
 );
+const resizedDecoderBuffer = new ArrayBuffer(4, { maxByteLength: 8 });
+new Uint8Array(resizedDecoderBuffer).set([65, 66, 67, 68]);
+const fixedDecoderView = new DataView(resizedDecoderBuffer, 1, 3);
+const trackingDecoderView = new DataView(resizedDecoderBuffer, 1);
+resizedDecoderBuffer.resize(3);
+check(
+	"length-tracking DataView uses its resized window",
+	new StringDecoder().write(trackingDecoderView) === "BC",
+);
+throwsTypeError("write rejects an out-of-bounds DataView", () =>
+	new StringDecoder().write(fixedDecoderView),
+);
+const detachedDecoderBuffer = new ArrayBuffer(1);
+const detachedDecoderView = new DataView(detachedDecoderBuffer);
+detachedDecoderBuffer.transfer();
+throwsTypeError("write rejects a detached DataView", () =>
+	new StringDecoder().write(detachedDecoderView),
+);
 
 const rawBody = new Uint8Array([
 	0, 0x7b, 0x22, 0x78, 0x22, 0x3a, 0x22, 0xe2, 0x82, 0xac, 0x22, 0x7d, 0,

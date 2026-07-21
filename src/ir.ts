@@ -1,5 +1,6 @@
 import type { ESTree } from "meriyah";
 import { isPureDataCjsModule } from "./cjs-exports.ts";
+import { ESTREE_SKIP, ESTREE_STOP, traverseEstree } from "./estree-traversal.ts";
 import { linkModules } from "./linker.ts";
 import { COMMONJS_BINDINGS } from "./semantic-analysis.ts";
 import { FUNCTION_UNIT_NODE_TYPES } from "./semantic-analysis.ts";
@@ -2591,38 +2592,18 @@ function makeInitAsyncIfTopLevelAwait(fn: IRFunction, modules: Array<SemanticFil
  * inside a function (so it runs as part of module evaluation).
  */
 function hasTopLevelAwait(ast: ESTree.Program): boolean {
-	let found = false;
-	const visit = (node: unknown, inFunction: boolean) => {
-		if (found || !node || typeof node !== "object") {
-			return;
-		}
-		if (Array.isArray(node)) {
-			for (const item of node) {
-				visit(item, inFunction);
+	return (
+		traverseEstree(ast.body, (node) => {
+			if (node.type === "AwaitExpression") return ESTREE_STOP;
+			if (
+				node.type === "FunctionDeclaration" ||
+				node.type === "FunctionExpression" ||
+				node.type === "ArrowFunctionExpression"
+			) {
+				return ESTREE_SKIP;
 			}
-			return;
-		}
-		if (!("type" in node)) {
-			return;
-		}
-		const typed = node as ESTree.Node;
-		if (typed.type === "AwaitExpression" && !inFunction) {
-			found = true;
-			return;
-		}
-		const entersFunction =
-			typed.type === "FunctionDeclaration" ||
-			typed.type === "FunctionExpression" ||
-			typed.type === "ArrowFunctionExpression";
-		for (const key of Object.keys(typed)) {
-			visit(
-				(typed as unknown as Record<string, unknown>)[key],
-				inFunction || entersFunction,
-			);
-		}
-	};
-	visit(ast.body, false);
-	return found;
+		}) === ESTREE_STOP
+	);
 }
 
 /**
@@ -2633,52 +2614,30 @@ function hasTopLevelAwait(ast: ESTree.Program): boolean {
  * `x = arguments` (or `() => arguments`) is a SyntaxError.
  */
 export function referencesArguments(node: unknown): boolean {
-	if (!node || typeof node !== "object") {
-		return false;
-	}
-	if (Array.isArray(node)) {
-		return node.some((item) => referencesArguments(item));
-	}
-	if (!("type" in node)) {
-		return false;
-	}
-	const typed = node as ESTree.Node;
-	if (typed.type === "Identifier") {
-		return typed.name === "arguments";
-	}
-	// A non-arrow function has its own `arguments`; do not descend.
-	if (typed.type === "FunctionDeclaration" || typed.type === "FunctionExpression") {
-		return false;
-	}
-	// Identifier positions that are NOT references: a non-computed member property
-	// (`x.arguments`) and a non-computed property/member key (`{arguments: 1}`).
-	if (typed.type === "MemberExpression") {
-		return (
-			referencesArguments(typed.object) ||
-			(typed.computed && referencesArguments(typed.property))
-		);
-	}
-	if (
-		typed.type === "Property" ||
-		typed.type === "MethodDefinition" ||
-		typed.type === "PropertyDefinition"
-	) {
-		const member = typed as unknown as {
-			computed?: boolean;
-			key?: unknown;
-			value?: unknown;
-		};
-		return (
-			(member.computed === true && referencesArguments(member.key)) ||
-			referencesArguments(member.value)
-		);
-	}
-	for (const key of Object.keys(typed)) {
-		if (referencesArguments((typed as unknown as Record<string, unknown>)[key])) {
-			return true;
-		}
-	}
-	return false;
+	return (
+		traverseEstree(node, (current, { parent, key }) => {
+			if (
+				current.type === "FunctionDeclaration" ||
+				current.type === "FunctionExpression"
+			) {
+				return ESTREE_SKIP;
+			}
+			if (current.type !== "Identifier" || current.name !== "arguments") return;
+			if (parent?.type === "MemberExpression" && key === "property" && !parent.computed) {
+				return;
+			}
+			if (
+				(parent?.type === "Property" ||
+					parent?.type === "MethodDefinition" ||
+					parent?.type === "PropertyDefinition") &&
+				key === "key" &&
+				!parent.computed
+			) {
+				return;
+			}
+			return ESTREE_STOP;
+		}) === ESTREE_STOP
+	);
 }
 
 /**
@@ -2689,34 +2648,19 @@ export function referencesArguments(node: unknown): boolean {
  * object literal's methods need a home-object binding threaded to them.
  */
 function referencesSuper(node: unknown): boolean {
-	if (!node || typeof node !== "object") {
-		return false;
-	}
-	if (Array.isArray(node)) {
-		return node.some((item) => referencesSuper(item));
-	}
-	if (!("type" in node)) {
-		return false;
-	}
-	const typed = node as ESTree.Node;
-	if (typed.type === "Super") {
-		return true;
-	}
-	// A non-arrow function / class body establishes its own super; do not descend.
-	if (
-		typed.type === "FunctionExpression" ||
-		typed.type === "FunctionDeclaration" ||
-		typed.type === "ClassExpression" ||
-		typed.type === "ClassDeclaration"
-	) {
-		return false;
-	}
-	for (const key of Object.keys(typed)) {
-		if (referencesSuper((typed as unknown as Record<string, unknown>)[key])) {
-			return true;
-		}
-	}
-	return false;
+	return (
+		traverseEstree(node, (current) => {
+			if (current.type === "Super") return ESTREE_STOP;
+			if (
+				current.type === "FunctionExpression" ||
+				current.type === "FunctionDeclaration" ||
+				current.type === "ClassExpression" ||
+				current.type === "ClassDeclaration"
+			) {
+				return ESTREE_SKIP;
+			}
+		}) === ESTREE_STOP
+	);
 }
 
 /**
@@ -7004,25 +6948,11 @@ const TAIL_CALL_BLOCKERS = new Set([
 ]);
 
 function containsTailCallBlocker(node: unknown): boolean {
-	if (node === null || typeof node !== "object") {
-		return false;
-	}
-	if (Array.isArray(node)) {
-		return node.some(containsTailCallBlocker);
-	}
-	const type = (node as { type?: string }).type;
-	if (type !== undefined && TAIL_CALL_BLOCKERS.has(type)) {
-		return true;
-	}
-	for (const key of Object.keys(node)) {
-		if (key === "type") {
-			continue;
-		}
-		if (containsTailCallBlocker((node as Record<string, unknown>)[key])) {
-			return true;
-		}
-	}
-	return false;
+	return (
+		traverseEstree(node, (current) =>
+			TAIL_CALL_BLOCKERS.has(current.type) ? ESTREE_STOP : undefined,
+		) === ESTREE_STOP
+	);
 }
 
 /**

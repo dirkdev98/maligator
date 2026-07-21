@@ -3,78 +3,8 @@
 #include "heap_string.h"
 #include "primitive_wrapper_object.h"
 #include "heap_symbol.h"
-#include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
-
-/**
- * Spec ToString driven through the full ToPrimitive(string) protocol: objects
- * consult @@toPrimitive (hint "string") and otherwise OrdinaryToPrimitive in
- * the order toString -> valueOf; a Symbol primitive (whether passed directly or
- * produced by ToPrimitive) is not convertible and throws a TypeError.
- *
- * Returns the resulting string, or nullptr when a TypeError/propagated throw is
- * pending in vm->completion (the caller must return undefined).
- */
-static MalString *mal_builtin_symbol_to_string(MalVm *vm, MalValue value) {
-    if (mal_value_is_object(value)) {
-        MalValue exotic;
-        if (!mal_vm_get_property(vm, value, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE), &exotic)) {
-            return nullptr;
-        }
-
-        if (!mal_value_is_nil(exotic)) {
-            if (!mal_value_is_callable(exotic)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Symbol.toPrimitive is not a function");
-                return nullptr;
-            }
-            MalValue hint = mal_value_from_string(mal_intrinsic_ascii(vm, "string"));
-            MalCompletion result = mal_vm_call_value(vm, exotic, value, &hint, 1);
-            if (result.kind != MAL_COMPLETION_NORMAL) {
-                vm->completion = result;
-                return nullptr;
-            }
-            if (mal_value_is_object(result.value)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
-                return nullptr;
-            }
-            value = result.value;
-        } else {
-            // OrdinaryToPrimitive(input, "string"): toString before valueOf.
-            const byte *methods[2] = {"toString", "valueOf"};
-            bool converted = false;
-            for (i32 i = 0; i < 2 && !converted; i++) {
-                MalValue method;
-                if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, methods[i]), &method)) {
-                    return nullptr;
-                }
-                if (mal_value_is_callable(method)) {
-                    MalCompletion result = mal_vm_call_value(vm, method, value, nullptr, 0);
-                    if (result.kind != MAL_COMPLETION_NORMAL) {
-                        vm->completion = result;
-                        return nullptr;
-                    }
-                    if (!mal_value_is_object(result.value)) {
-                        value = result.value;
-                        converted = true;
-                    }
-                }
-            }
-            if (!converted) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert object to primitive value");
-                return nullptr;
-            }
-        }
-    }
-
-    // ToString proper: a Symbol value is not convertible.
-    if (mal_value_is_symbol(value)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert a Symbol value to a string");
-        return nullptr;
-    }
-
-    return mal_ops_to_string(&vm->heap, value);
-}
 
 static MalValue mal_builtin_symbol_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
@@ -86,8 +16,7 @@ static MalValue mal_builtin_symbol_constructor(MalVm *vm, MalValue this_value, c
 
     MalString *description = nullptr;
     if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
-        description = mal_builtin_symbol_to_string(vm, args[0]);
-        if (description == nullptr) {
+        if (!mal_vm_to_string(vm, args[0], &description)) {
             return mal_value_new_undefined();
         }
     }
@@ -155,8 +84,8 @@ static MalValue mal_builtin_symbol_prototype_value_of(MalVm *vm, MalValue this_v
 static MalValue mal_builtin_symbol_for(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
 
-    MalString *key = mal_builtin_symbol_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
-    if (key == nullptr) {
+    MalString *key;
+    if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &key)) {
         return mal_value_new_undefined();
     }
     MalKey registry_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(key)};
@@ -281,18 +210,9 @@ void mal_builtin_symbol_install(MalVm *vm) {
     );
     mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_PRIMITIVE), &to_primitive_desc);
 
-    MalPropertyDesc description_desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = mal_value_from_native_function_object(mal_native_function_object_new(
-            &vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, "get description"),
-            mal_builtin_symbol_prototype_description_getter
-        )),
-        .setter = mal_value_new_undefined(),
-    };
-    mal_object_define_own(prototype, mal_intrinsic_string_key(vm, "description"), &description_desc);
+    mal_intrinsic_define_getter(
+        vm, prototype, "description", "get description",
+        mal_builtin_symbol_prototype_description_getter, MAL_PROPERTY_CONFIGURABLE);
 
     // Symbol.prototype[Symbol.toStringTag] = "Symbol"
     MalPropertyDesc tag_desc = mal_intrinsic_data_desc(

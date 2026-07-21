@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import { ESTREE_SKIP, traverseEstree } from "../estree-traversal.ts";
 import { parseScript } from "../parser.ts";
 import type { Test262File } from "./types.ts";
 
@@ -71,24 +72,18 @@ function addBindingNames(node: ESTree.Node, names: Set<string>): void {
 
 function scriptVarDeclaredNames(program: ESTree.Program): Set<string> {
 	const names = new Set<string>();
-	const visit = (value: unknown): void => {
-		if (Array.isArray(value)) {
-			for (const entry of value) visit(entry);
-			return;
-		}
-		if (value === null || typeof value !== "object") return;
-		const node = value as ESTree.Node;
+	traverseEstree(program.body, (node) => {
 		if (node.type === "FunctionDeclaration") {
 			if (node.id !== null) names.add(node.id.name);
-			return;
+			return ESTREE_SKIP;
 		}
-		if (node.type === "ClassDeclaration") return;
+		if (node.type === "ClassDeclaration") return ESTREE_SKIP;
 		if (
 			node.type === "FunctionExpression" ||
 			node.type === "ArrowFunctionExpression" ||
 			node.type === "ClassExpression"
 		) {
-			return;
+			return ESTREE_SKIP;
 		}
 		if (node.type === "VariableDeclaration") {
 			if (node.kind === "var") {
@@ -96,11 +91,9 @@ function scriptVarDeclaredNames(program: ESTree.Program): Set<string> {
 					addBindingNames(declaration.id, names);
 				}
 			}
-			return;
+			return ESTREE_SKIP;
 		}
-		for (const child of Object.values(value)) visit(child);
-	};
-	visit(program.body);
+	});
 	return names;
 }
 

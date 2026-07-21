@@ -1,11 +1,11 @@
 #include "typed_array_object.h"
 
 #include <math.h>
-#include <string.h>
 
 #include "builtin_bigint.h"
 #include "heap_bigint.h"
 #include "object_ops.h"
+#include "scalar_bits.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
@@ -112,20 +112,6 @@ u32 mal_typed_array_object_byte_length(const MalTypedArrayObject *array) {
     return mal_typed_array_object_length(array) * mal_typed_array_sizes[array->kind];
 }
 
-// Reduce a finite Number to its low `bytes*8` bits (spec ToInt8/16/32 family).
-static u64 mal_typed_array_to_uint_modular(f64 number, u32 bytes) {
-    if (!isfinite(number) || number == 0) {
-        return 0;
-    }
-    f64 truncated = trunc(number);
-    f64 modulus = pow(2.0, (f64) (bytes * 8));
-    f64 remainder = fmod(truncated, modulus);
-    if (remainder < 0) {
-        remainder += modulus;
-    }
-    return (u64) remainder;
-}
-
 // ToUint8Clamp: clamp to [0, 255] with round-half-to-even.
 static u8 mal_typed_array_to_uint8_clamp(f64 number) {
     if (isnan(number) || number <= 0) {
@@ -150,57 +136,39 @@ MalValue mal_typed_array_object_get(MalVm *vm, MalTypedArrayObject *array, u32 i
     byte *at = array->buffer->data + array->byte_offset + (usize) index * mal_typed_array_sizes[array->kind];
 
     switch (array->kind) {
-        case MAL_TA_INT8: {
-            i8 value;
-            memcpy(&value, at, 1);
-            return mal_value_from_i32(value);
-        }
+        case MAL_TA_INT8:
+            return mal_value_from_i32(mal_scalar_i8_from_bits(
+                mal_scalar_load_native_u8(at)));
         case MAL_TA_UINT8:
-        case MAL_TA_UINT8_CLAMPED: {
-            u8 value;
-            memcpy(&value, at, 1);
-            return mal_value_from_i32(value);
-        }
-        case MAL_TA_INT16: {
-            i16 value;
-            memcpy(&value, at, 2);
-            return mal_value_from_i32(value);
-        }
-        case MAL_TA_UINT16: {
-            u16 value;
-            memcpy(&value, at, 2);
-            return mal_value_from_i32(value);
-        }
-        case MAL_TA_INT32: {
-            i32 value;
-            memcpy(&value, at, 4);
-            return mal_value_from_i32(value);
-        }
+        case MAL_TA_UINT8_CLAMPED:
+            return mal_value_from_i32(mal_scalar_load_native_u8(at));
+        case MAL_TA_INT16:
+            return mal_value_from_i32(mal_scalar_i16_from_bits(
+                mal_scalar_load_native_u16(at)));
+        case MAL_TA_UINT16:
+            return mal_value_from_i32(mal_scalar_load_native_u16(at));
+        case MAL_TA_INT32:
+            return mal_value_from_i32(mal_scalar_i32_from_bits(
+                mal_scalar_load_native_u32(at)));
         case MAL_TA_UINT32: {
-            u32 value;
-            memcpy(&value, at, 4);
+            u32 value = mal_scalar_load_native_u32(at);
             return value <= INT32_MAX ? mal_value_from_i32((i32) value) : mal_ops_number_value((f64) value);
         }
-        case MAL_TA_FLOAT32: {
-            f32 value;
-            memcpy(&value, at, 4);
-            return mal_value_from_f64_convert_nan((f64) value);
-        }
-        case MAL_TA_FLOAT64: {
-            f64 value;
-            memcpy(&value, at, 8);
-            return mal_value_from_f64_convert_nan(value);
-        }
-        case MAL_TA_BIGINT64: {
-            i64 value;
-            memcpy(&value, at, 8);
-            return mal_value_from_bigint(mal_bigint_new(&vm->heap, (i128) value));
-        }
-        case MAL_TA_BIGUINT64: {
-            u64 value;
-            memcpy(&value, at, 8);
-            return mal_value_from_bigint(mal_bigint_new(&vm->heap, (i128) (u128) value));
-        }
+        case MAL_TA_FLOAT32:
+            return mal_value_from_f64_convert_nan((f64) mal_scalar_f32_from_bits(
+                mal_scalar_load_native_u32(at)));
+        case MAL_TA_FLOAT64:
+            return mal_value_from_f64_convert_nan(mal_scalar_f64_from_bits(
+                mal_scalar_load_native_u64(at)));
+        case MAL_TA_BIGINT64:
+            return mal_value_from_bigint(mal_bigint_new(
+                &vm->heap,
+                (i128) mal_scalar_i64_from_bits(
+                    mal_scalar_load_native_u64(at))));
+        case MAL_TA_BIGUINT64:
+            return mal_value_from_bigint(mal_bigint_new(
+                &vm->heap,
+                (i128) (u128) mal_scalar_load_native_u64(at)));
         default:
             return mal_value_new_undefined();
     }
@@ -210,19 +178,13 @@ void mal_typed_array_object_set(MalVm *vm, MalTypedArrayObject *array, u32 index
     u32 size = mal_typed_array_sizes[array->kind];
 
     // Coercion runs (and may throw) before the bounds check, as specced.
-    byte bytes[8];
+    u64 bits = 0;
     if (mal_typed_array_is_bigint(array->kind)) {
         i128 big;
         if (!mal_bigint_to_bigint(vm, value, &big)) {
             return;
         }
-        if (array->kind == MAL_TA_BIGINT64) {
-            i64 v = (i64) big;
-            memcpy(bytes, &v, 8);
-        } else {
-            u64 v = (u64) big;
-            memcpy(bytes, &v, 8);
-        }
+        bits = (u64) (u128) big;
     } else {
         // ToNumber runs full ToPrimitive(number) for objects (valueOf/toString
         // or @@toPrimitive) and throws on BigInt/Symbol, exactly once, before
@@ -233,37 +195,28 @@ void mal_typed_array_object_set(MalVm *vm, MalTypedArrayObject *array, u32 index
         }
         switch (array->kind) {
             case MAL_TA_INT8:
-            case MAL_TA_UINT8: {
-                u8 v = (u8) mal_typed_array_to_uint_modular(number, 1);
-                memcpy(bytes, &v, 1);
+            case MAL_TA_UINT8:
+                bits = mal_ops_number_to_uint_width(number, 8);
                 break;
-            }
-            case MAL_TA_UINT8_CLAMPED: {
-                u8 v = mal_typed_array_to_uint8_clamp(number);
-                memcpy(bytes, &v, 1);
+            case MAL_TA_UINT8_CLAMPED:
+                bits = mal_typed_array_to_uint8_clamp(number);
                 break;
-            }
             case MAL_TA_INT16:
-            case MAL_TA_UINT16: {
-                u16 v = (u16) mal_typed_array_to_uint_modular(number, 2);
-                memcpy(bytes, &v, 2);
+            case MAL_TA_UINT16:
+                bits = mal_ops_number_to_uint_width(number, 16);
                 break;
-            }
             case MAL_TA_INT32:
-            case MAL_TA_UINT32: {
-                u32 v = (u32) mal_typed_array_to_uint_modular(number, 4);
-                memcpy(bytes, &v, 4);
+            case MAL_TA_UINT32:
+                bits = mal_ops_number_to_uint32(number);
                 break;
-            }
             case MAL_TA_FLOAT32: {
                 f32 v = (f32) number;
-                memcpy(bytes, &v, 4);
+                bits = mal_scalar_f32_to_bits(v);
                 break;
             }
-            case MAL_TA_FLOAT64: {
-                memcpy(bytes, &number, 8);
+            case MAL_TA_FLOAT64:
+                bits = mal_scalar_f64_to_bits(number);
                 break;
-            }
             default:
                 return;
         }
@@ -274,5 +227,18 @@ void mal_typed_array_object_set(MalVm *vm, MalTypedArrayObject *array, u32 index
     }
 
     byte *at = array->buffer->data + array->byte_offset + (usize) index * size;
-    memcpy(at, bytes, size);
+    switch (size) {
+        case 1:
+            mal_scalar_store_native_u8(at, (u8) bits);
+            break;
+        case 2:
+            mal_scalar_store_native_u16(at, (u16) bits);
+            break;
+        case 4:
+            mal_scalar_store_native_u32(at, (u32) bits);
+            break;
+        case 8:
+            mal_scalar_store_native_u64(at, bits);
+            break;
+    }
 }

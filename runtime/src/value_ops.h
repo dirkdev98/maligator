@@ -10,6 +10,18 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value);
 
 f64 mal_ops_to_number(MalValue value);
 
+#define MAL_NUMBER_MAX_SAFE_INTEGER 9007199254740991.0
+#define MAL_NUMBER_MIN_SAFE_INTEGER (-MAL_NUMBER_MAX_SAFE_INTEGER)
+
+/** Pure-number tails; callers perform observable ToNumber coercion separately. */
+f64 mal_ops_number_to_integer_or_infinity(f64 number);
+f64 mal_ops_number_to_length(f64 number);
+/** ToIntegerOrInfinity followed by relative indexing and a [0, length] clamp. */
+f64 mal_ops_number_clamp_relative(f64 number, f64 length);
+/** Unsigned modulo 2^width conversion; width must be in [1, 32]. */
+u64 mal_ops_number_to_uint_width(f64 number, u32 width);
+u32 mal_ops_number_to_uint32(f64 number);
+
 /**
  * Number::remainder (JS `%`). Semantically `fmod`, but libm `fmod` dominates any
  * modulo-heavy loop, and real code overwhelmingly takes `%` on integer-valued
@@ -82,15 +94,7 @@ static inline i32 mal_ops_u32_to_i32(u32 value) {
 
 /** ToInt32 for a value already known to be a JS Number. */
 static inline i32 mal_ops_number_to_i32(f64 number) {
-    if (!isfinite(number) || number == 0.0) {
-        return 0;
-    }
-    if (number >= -2147483648.0 && number < 2147483648.0) {
-        return (i32) number;
-    }
-    f64 modulo = fmod(trunc(number), 4294967296.0);
-    if (modulo < 0.0) modulo += 4294967296.0;
-    return mal_ops_u32_to_i32((u32) modulo);
+    return mal_ops_u32_to_i32(mal_ops_number_to_uint32(number));
 }
 
 /**

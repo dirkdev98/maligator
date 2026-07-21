@@ -10,7 +10,7 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "posix_fs.h"
-#include "web_text_encoding.h"
+#include "utf8.h"
 #include "value.h"
 #include "vm_ops.h"
 
@@ -20,11 +20,12 @@ static const MalPropertyFlags MAL_ASSET_VISIBLE =
     MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
 
 static MalValue mal_asset_string(MalVm *vm, const char *bytes) {
-    usize count;
-    c16 *units = mal_utf8_decode((const byte *) bytes, strlen(bytes), &count);
-    MalValue value = mal_value_from_string(mal_string_new_copy(&vm->heap, units, count));
-    free(units);
-    return value;
+    MalString *string = mal_string_from_utf8(&vm->heap, (const byte *) bytes, strlen(bytes));
+    if (string == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(string);
 }
 
 static void mal_asset_throw_utf8(MalVm *vm, MalIntrinsic prototype, const char *message) {
@@ -43,20 +44,20 @@ static char *mal_asset_to_cstr(MalVm *vm, MalValue value, const char *argument) 
             vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, (const byte *) message);
         return nullptr;
     }
-    MalString *string = mal_value_to_string(value);
-    const c16 *units = mal_string_code_units(string);
-    usize unit_count = mal_string_length(string);
-    for (usize i = 0; i < unit_count; i++) {
-        if (units[i] == 0) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "Asset names and paths must not contain null bytes");
-            return nullptr;
-        }
-    }
     usize length;
-    byte *bytes = mal_utf8_encode(units, unit_count, &length);
-    bytes[length] = '\0';
-    return (char *) bytes;
+    char *bytes;
+    MalUtf8CStringResult result = mal_string_to_utf8_c_string(
+        mal_value_to_string(value), &bytes, &length);
+    if (result == MAL_UTF8_C_STRING_EMBEDDED_NUL) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Asset names and paths must not contain null bytes");
+        return nullptr;
+    }
+    if (result == MAL_UTF8_C_STRING_ALLOCATION_FAILED) {
+        mal_vm_throw_allocation_error(vm);
+        return nullptr;
+    }
+    return bytes;
 }
 
 static void mal_asset_throw_errno(MalVm *vm, int err, const char *operation, const char *path) {

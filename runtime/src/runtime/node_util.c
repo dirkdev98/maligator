@@ -16,6 +16,7 @@
 #include "object_ops.h"
 #include "property_iter.h"
 #include "property_store.h"
+#include "u16_buffer.h"
 #include "value.h"
 #include "value_ops.h"
 #include "vm_ops.h"
@@ -24,12 +25,7 @@
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 #define UTIL_INSPECT_MAX_DEPTH 8
 
-typedef struct MalUtilBuilder {
-    c16 *units;
-    usize length;
-    usize capacity;
-    bool failed;
-} MalUtilBuilder;
+typedef MalU16Buffer MalUtilBuilder;
 
 typedef struct MalUtilInspectState {
     MalVm *vm;
@@ -38,81 +34,32 @@ typedef struct MalUtilInspectState {
     i32 max_depth;
 } MalUtilInspectState;
 
-static bool util_builder_reserve(MalUtilBuilder *builder, usize extra) {
-    if (builder->failed || extra > MAL_STRING_MAX_CODE_UNITS - builder->length) {
-        builder->failed = true;
-        return false;
-    }
-    usize required = builder->length + extra;
-    if (required <= builder->capacity) {
-        return true;
-    }
-    usize capacity = builder->capacity == 0 ? 64 : builder->capacity;
-    while (capacity < required) {
-        usize grown = capacity * 2;
-        capacity = grown > capacity && grown <= MAL_STRING_MAX_CODE_UNITS
-            ? grown
-            : MAL_STRING_MAX_CODE_UNITS;
-        if (capacity < required) {
-            builder->failed = true;
-            return false;
-        }
-    }
-    c16 *units = realloc(builder->units, capacity * sizeof(c16));
-    if (units == nullptr) {
-        builder->failed = true;
-        return false;
-    }
-    builder->units = units;
-    builder->capacity = capacity;
-    return true;
-}
-
 static bool util_builder_units(
     MalUtilBuilder *builder, const c16 *units, usize length) {
-    if (!util_builder_reserve(builder, length)) {
-        return false;
-    }
-    memcpy(builder->units + builder->length, units, length * sizeof(c16));
-    builder->length += length;
-    return true;
+    return mal_u16_buffer_append_units(builder, units, length) == MAL_U16_BUFFER_OK;
 }
 
 static bool util_builder_string(MalUtilBuilder *builder, const MalString *string) {
-    return util_builder_units(
-        builder, mal_string_code_units(string), mal_string_length(string));
+    return mal_u16_buffer_append_string(builder, string) == MAL_U16_BUFFER_OK;
 }
 
 static bool util_builder_ascii(MalUtilBuilder *builder, const char *ascii) {
-    usize length = strlen(ascii);
-    if (!util_builder_reserve(builder, length)) {
-        return false;
-    }
-    for (usize i = 0; i < length; i++) {
-        builder->units[builder->length++] = (c16) (u8) ascii[i];
-    }
-    return true;
+    return mal_u16_buffer_append_ascii(
+        builder, (const byte *) ascii) == MAL_U16_BUFFER_OK;
 }
 
 static bool util_builder_code_unit(MalUtilBuilder *builder, c16 unit) {
-    if (!util_builder_reserve(builder, 1)) {
-        return false;
-    }
-    builder->units[builder->length++] = unit;
-    return true;
+    return mal_u16_buffer_push(builder, unit) == MAL_U16_BUFFER_OK;
 }
 
 static MalValue util_builder_finish(MalVm *vm, MalUtilBuilder *builder) {
-    if (builder->failed) {
-        free(builder->units);
+    if (builder->status != MAL_U16_BUFFER_OK) {
+        mal_u16_buffer_dispose(builder);
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
             "Formatted output exceeds the string length limit");
         return mal_value_new_undefined();
     }
-    MalValue value = mal_value_from_string(
-        mal_string_new_copy(&vm->heap, builder->units, builder->length));
-    free(builder->units);
-    return value;
+    return mal_value_from_string(mal_u16_buffer_finish(&vm->heap, builder));
 }
 
 static void util_inspect_value(
@@ -166,7 +113,7 @@ static void util_inspect_array(
         }
         MalPropertyResolution resolution = mal_object_resolve_property(
             (MalObject *) array,
-            (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) i)});
+            mal_key_index(i));
         if (resolution.found) {
             util_inspect_value(state, resolution.desc.value, depth + 1, true);
         } else {
@@ -363,7 +310,7 @@ static MalValue util_format_values(
             }
             MalValue inspected = util_inspect_result(vm, args[i], options);
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                free(builder.units);
+                mal_u16_buffer_dispose(&builder);
                 return mal_value_new_undefined();
             }
             util_builder_string(&builder, mal_value_to_string(inspected));
@@ -391,7 +338,7 @@ static MalValue util_format_values(
                 || conversion == 'O')) {
             if (!util_format_argument(
                     vm, &builder, args[next++], conversion, options)) {
-                free(builder.units);
+                mal_u16_buffer_dispose(&builder);
                 return mal_value_new_undefined();
             }
             i++;
@@ -411,7 +358,7 @@ static MalValue util_format_values(
         } else {
             MalValue inspected = util_inspect_result(vm, args[next], options);
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                free(builder.units);
+                mal_u16_buffer_dispose(&builder);
                 return mal_value_new_undefined();
             }
             util_builder_string(&builder, mal_value_to_string(inspected));

@@ -15,6 +15,7 @@
 #include "promise_object.h"
 #include "property_iter.h"
 #include "proxy_object.h"
+#include "rooted_collection.h"
 #include "value_ops.h"
 #include "value.h"
 #include "vm.h"
@@ -494,10 +495,6 @@ bool mal_promise_resolve_value(MalVm *vm, MalValue value, MalValue *out_promise)
 
 // --- Combinators (all / race / allSettled) -----------------------------------
 
-static MalKey mal_promise_idx(i32 index) {
-    return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32(index)};
-}
-
 /**
  * CreateDataProperty(values, index, value): define an own data property
  * directly, bypassing any inherited setter (the result arrays of all/
@@ -515,7 +512,7 @@ static void mal_promise_array_create_data(MalValue array_value, i32 index, MalVa
         .getter = mal_value_new_undefined(),
         .setter = mal_value_new_undefined(),
     };
-    mal_object_define_own(&array->object, mal_promise_idx(index), &desc);
+    mal_object_define_own(&array->object, mal_key_index(index), &desc);
 }
 
 // These internal cells back spec Records ([[value]] / alreadyCalled), so reads
@@ -1280,42 +1277,34 @@ static MalValue mal_promise_keyed_settled_reject(MalVm *vm, MalValue this_value,
     return mal_value_new_undefined();
 }
 
-/** Collect [[OwnPropertyKeys]] of `promises` into a malloc'd MalKey list
+/** Collect [[OwnPropertyKeys]] of `promises` into a rooted MalKey snapshot
  * (proxy-aware). Returns false with a pending throw on an abrupt completion. */
-static bool mal_promise_keyed_own_keys(MalVm *vm, MalValue promises, MalKey **out_keys, usize *out_count) {
+static bool mal_promise_keyed_own_keys(
+    MalVm *vm, MalValue promises, MalRootedKeySnapshot *keys
+) {
     if (mal_value_is_proxy_object(promises)) {
         MalValue keys_array;
         if (!mal_proxy_own_property_keys(vm, mal_value_to_proxy_object(promises), &keys_array)) {
             return false;
         }
         u32 length = mal_array_object_length(mal_value_to_array_object(keys_array));
-        MalKey *keys = length > 0 ? malloc(sizeof(MalKey) * length) : nullptr;
         for (u32 i = 0; i < length; i++) {
             MalValue key_value;
             mal_builtin_array_try_get(vm, keys_array, i, &key_value);
-            mal_vm_value_to_property_key(vm, key_value, &keys[i]);
+            MalKey key;
+            mal_vm_value_to_property_key(vm, key_value, &key);
+            mal_rooted_key_snapshot_append(keys, key);
         }
-        *out_keys = keys;
-        *out_count = length;
         return true;
     }
 
-    MalKey *keys = nullptr;
-    usize count = 0;
-    usize capacity = 0;
     MalPropertyIter iter;
     mal_property_iter_init(&iter, mal_value_to_object(promises), MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
     MalKey key;
     MalPropertyDesc desc;
     while (mal_property_iter_next(&iter, &key, &desc)) {
-        if (count == capacity) {
-            capacity = capacity == 0 ? 16 : capacity * 2;
-            keys = realloc(keys, sizeof(MalKey) * capacity);
-        }
-        keys[count++] = key;
+        mal_rooted_key_snapshot_append(keys, key);
     }
-    *out_keys = keys;
-    *out_count = count;
     return true;
 }
 
@@ -1364,9 +1353,10 @@ static MalValue mal_promise_all_keyed_impl(MalVm *vm, bool settled, MalValue thi
         return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
     }
 
-    MalKey *own_keys;
-    usize own_count;
-    if (!mal_promise_keyed_own_keys(vm, promises, &own_keys, &own_count)) {
+    MalRootedKeySnapshot own_keys;
+    mal_rooted_key_snapshot_init(&own_keys);
+    if (!mal_promise_keyed_own_keys(vm, promises, &own_keys)) {
+        mal_rooted_key_snapshot_dispose(&own_keys);
         return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
     }
 
@@ -1375,12 +1365,12 @@ static MalValue mal_promise_all_keyed_impl(MalVm *vm, bool settled, MalValue thi
     MalValue counter = mal_promise_counter_new(vm, 1);
     i32 index = 0;
 
-    for (usize i = 0; i < own_count; i++) {
-        MalKey key = own_keys[i];
+    for (usize i = 0; i < own_keys.count; i++) {
+        MalKey key = own_keys.keys[i];
         bool present;
         bool enumerable;
         if (!mal_promise_keyed_enumerable(vm, promises, key, &present, &enumerable)) {
-            free(own_keys);
+            mal_rooted_key_snapshot_dispose(&own_keys);
             return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
         }
         if (!enumerable) {
@@ -1389,7 +1379,7 @@ static MalValue mal_promise_all_keyed_impl(MalVm *vm, bool settled, MalValue thi
 
         MalValue next_value;
         if (!mal_vm_get_property(vm, promises, key, &next_value)) {
-            free(own_keys);
+            mal_rooted_key_snapshot_dispose(&own_keys);
             return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
         }
 
@@ -1402,7 +1392,7 @@ static MalValue mal_promise_all_keyed_impl(MalVm *vm, bool settled, MalValue thi
 
         MalCompletion resolved = mal_vm_call_value(vm, promise_resolve, this_value, &next_value, 1);
         if (resolved.kind == MAL_COMPLETION_THROW) {
-            free(own_keys);
+            mal_rooted_key_snapshot_dispose(&own_keys);
             return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
         }
 
@@ -1420,12 +1410,12 @@ static MalValue mal_promise_all_keyed_impl(MalVm *vm, bool settled, MalValue thi
             ok = mal_promise_invoke_then(vm, resolved.value, on_fulfilled, cap_reject);
         }
         if (!ok) {
-            free(own_keys);
+            mal_rooted_key_snapshot_dispose(&own_keys);
             return mal_promise_reject_abrupt(vm, cap_reject, cap_promise);
         }
         index++;
     }
-    free(own_keys);
+    mal_rooted_key_snapshot_dispose(&own_keys);
 
     i32 remaining = mal_promise_counter_get(vm, counter) - 1;
     mal_promise_counter_set(counter, remaining);

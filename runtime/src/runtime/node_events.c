@@ -5,6 +5,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "ascii.h"
 #include "array_object.h"
 #include "function_object.h"
 #include "gc.h"
@@ -24,26 +25,11 @@ static MalKey ee_name_key(MalVm *vm, const char *name) {
     return mal_intrinsic_string_key(vm, (const byte *) name);
 }
 
-static MalKey ee_index_key(u32 index) {
-    return (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)};
-}
-
 static bool ee_string_is(MalValue value, const char *ascii) {
     if (!mal_value_is_string(value)) {
         return false;
     }
-    MalString *string = mal_value_to_string(value);
-    usize length = strlen(ascii);
-    if (mal_string_length(string) != length) {
-        return false;
-    }
-    const c16 *units = mal_string_code_units(string);
-    for (usize i = 0; i < length; i++) {
-        if (units[i] != (c16) (u8) ascii[i]) {
-            return false;
-        }
-    }
-    return true;
+    return mal_string_equals_ascii(mal_value_to_string(value), ascii);
 }
 
 static bool ee_require_receiver(MalVm *vm, MalValue receiver, MalObject **out) {
@@ -152,15 +138,15 @@ static MalValue ee_copy_listeners(
     MalArrayObject *array = mal_value_to_array_object(result);
     u32 destination = 0;
     if (!mal_value_is_empty(inserted) && prepend) {
-        mal_array_object_store(array, ee_index_key(destination++), inserted);
+        mal_array_object_store(array, mal_key_index(destination++), inserted);
     }
     for (u32 i = 0; i < old_length; i++) {
         if ((i32) i != remove_index) {
-            mal_array_object_store(array, ee_index_key(destination++), ee_array_value(old, i));
+            mal_array_object_store(array, mal_key_index(destination++), ee_array_value(old, i));
         }
     }
     if (!mal_value_is_empty(inserted) && !prepend) {
-        mal_array_object_store(array, ee_index_key(destination), inserted);
+        mal_array_object_store(array, mal_key_index(destination), inserted);
     }
     mal_gc_unroot(&root);
     return result;
@@ -498,7 +484,7 @@ static MalValue ee_event_names_value(MalVm *vm, MalValue receiver) {
     while (mal_property_iter_next(&iter, &key, &desc)) {
         if (mal_value_is_array_object(desc.value)
             && mal_array_object_length(mal_value_to_array_object(desc.value)) > 0) {
-            mal_array_object_store(mal_value_to_array_object(result), ee_index_key(index++),
+            mal_array_object_store(mal_value_to_array_object(result), mal_key_index(index++),
                                    ee_key_value(vm, key));
         }
     }
@@ -578,7 +564,7 @@ static MalValue ee_listeners_common(
     mal_gc_root(&root, &result, 1);
     for (u32 i = 0; i < length; i++) {
         MalValue listener = ee_array_value(old, i);
-        mal_array_object_store(mal_value_to_array_object(result), ee_index_key(i),
+        mal_array_object_store(mal_value_to_array_object(result), mal_key_index(i),
                                raw ? listener : ee_original_listener(listener));
     }
     mal_gc_unroot(&root);

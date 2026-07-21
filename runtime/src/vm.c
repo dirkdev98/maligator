@@ -22,6 +22,7 @@
 #include "object_ops.h"
 #include "promise_object.h"
 #include "proxy_object.h"
+#include "u16_buffer.h"
 #include "value_ops.h"
 #include "vm_load.h"
 #include "vm_ops.h"
@@ -2306,38 +2307,21 @@ MalStackTrace *mal_vm_stored_stack_trace(MalVm *vm, i32 id) {
     return vm->captured_traces[id];
 }
 
-// Growable UTF-16 buffer for assembling a stack-trace string.
-typedef struct MalStackBuf {
-    c16 *units;
-    usize length;
-    usize capacity;
-} MalStackBuf;
+typedef MalU16Buffer MalStackBuf;
 
-static void mal_stack_buf_reserve(MalStackBuf *buf, usize extra) {
-    if (buf->length + extra <= buf->capacity) {
-        return;
+static void mal_stack_buf_require(MalU16BufferStatus status) {
+    // Stack formatting has no completion channel; preserve its infallible contract.
+    if (status != MAL_U16_BUFFER_OK) {
+        abort();
     }
-    usize capacity = buf->capacity == 0 ? 64 : buf->capacity;
-    while (buf->length + extra > capacity) {
-        capacity *= 2;
-    }
-    buf->units = realloc(buf->units, sizeof(c16) * capacity);
-    buf->capacity = capacity;
 }
 
 static void mal_stack_buf_push_ascii(MalStackBuf *buf, const char *text) {
-    usize length = strlen(text);
-    mal_stack_buf_reserve(buf, length);
-    for (usize i = 0; i < length; i++) {
-        buf->units[buf->length++] = (c16) (byte) text[i];
-    }
+    mal_stack_buf_require(mal_u16_buffer_append_ascii(buf, (const byte *) text));
 }
 
 static void mal_stack_buf_push_string(MalStackBuf *buf, const MalString *string) {
-    usize length = mal_string_length(string);
-    mal_stack_buf_reserve(buf, length);
-    memcpy(buf->units + buf->length, mal_string_code_units(string), sizeof(c16) * length);
-    buf->length += length;
+    mal_stack_buf_require(mal_u16_buffer_append_string(buf, string));
 }
 
 static void mal_stack_buf_push_i32(MalStackBuf *buf, i32 value) {
@@ -2426,9 +2410,7 @@ MalString *mal_vm_format_stack_frames(MalVm *vm, const MalStackTrace *trace) {
 
 done:
 
-    MalString *result = mal_string_new_copy(&vm->heap, buf.units, buf.length);
-    free(buf.units);
-    return result;
+    return mal_u16_buffer_finish(&vm->heap, &buf);
 }
 
 MalValue mal_vm_interpret_function(

@@ -2,6 +2,8 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include "bigint128.h"
+#include "endian.h"
 #include "heap_bigint.h"
 #include "heap_string.h"
 
@@ -272,7 +274,7 @@ static u16 rd_u16(Rd *r) {
         r->ok = false;
         return 0;
     }
-    u16 v = (u16) (r->buf[r->pos] | (r->buf[r->pos + 1] << 8));
+    u16 v = mal_load_u16_le(r->buf + r->pos);
     r->pos += 2;
     return v;
 }
@@ -282,8 +284,7 @@ static u32 rd_fixed_u32(Rd *r) {
         r->ok = false;
         return 0;
     }
-    u32 v = (u32) r->buf[r->pos] | ((u32) r->buf[r->pos + 1] << 8) |
-        ((u32) r->buf[r->pos + 2] << 16) | ((u32) r->buf[r->pos + 3] << 24);
+    u32 v = mal_load_u32_le(r->buf + r->pos);
     r->pos += 4;
     return v;
 }
@@ -319,10 +320,7 @@ static u64 rd_u64(Rd *r) {
         r->ok = false;
         return 0;
     }
-    u64 v = 0;
-    for (int i = 0; i < 8; i++) {
-        v |= (u64) r->buf[r->pos + (usize) i] << (8 * i);
-    }
+    u64 v = mal_load_u64_le(r->buf + r->pos);
     r->pos += 8;
     return v;
 }
@@ -1160,7 +1158,7 @@ MalLoadedDefinition *mal_vm_load_definition(const u8 *buf, usize len, const char
         u64 hi = rd_u64(&r);
         bigints[b].header.type = MAL_HEAP_BIGINT;
         bigints[b].header.storage = MAL_HEAP_STORAGE_IMMORTAL;
-        bigints[b].value = (i128) (((u128) hi << 64) | (u128) lo);
+        bigints[b].value = mal_bigint128_from_bits(((u128) hi << 64) | (u128) lo);
     }
 
     // Packed literal-template u32 stream.

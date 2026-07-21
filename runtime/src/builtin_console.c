@@ -5,13 +5,13 @@
 
 #include "heap_string.h"
 #include "property_iter.h"
-#include "web_text_encoding.h"
+#include "utf8.h"
 #include "value_ops.h"
 #include "vm.h"
 
 static void mal_builtin_console_print_string(FILE *stream, const MalString *string) {
     usize byte_len;
-    byte *bytes = mal_utf8_encode(mal_string_code_units(string), mal_string_length(string), &byte_len);
+    byte *bytes = mal_string_to_utf8(string, &byte_len);
     if (bytes == nullptr) {
         return;
     }
@@ -32,7 +32,7 @@ static void mal_builtin_console_print_object(MalVm *vm, FILE *stream, MalValue v
             }
             MalPropertyResolution resolution = mal_object_resolve_property(
                 (MalObject *) array,
-                (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)}
+                mal_key_index(index)
             );
             mal_builtin_console_print_value(vm, stream, resolution.found ? resolution.desc.value : mal_value_new_undefined(), true);
         }

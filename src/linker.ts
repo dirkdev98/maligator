@@ -1,6 +1,7 @@
 import type { ESTree } from "meriyah";
 import { detectCjsExports } from "./cjs-exports.ts";
 import type { CjsExportInfo } from "./cjs-exports.ts";
+import { traverseEstree } from "./estree-traversal.ts";
 import { BUFFER_INSTALLER_SYMBOL, PROCESS_INSTALLER_SYMBOL } from "./host-modules.ts";
 import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 
@@ -714,29 +715,14 @@ function boundNames(declaration: ESTree.Node): Array<string> {
 function collectAssignmentTargets(ast: ESTree.Program): Set<ESTree.Node> {
 	const targets = new Set<ESTree.Node>();
 
-	const visit = (node: unknown) => {
-		if (Array.isArray(node)) {
-			for (const item of node) {
-				visit(item);
-			}
-			return;
+	traverseEstree(ast.body, (node) => {
+		if (node.type === "AssignmentExpression" && node.left.type === "Identifier") {
+			targets.add(node.left);
 		}
-		if (!node || typeof node !== "object" || !("type" in node)) {
-			return;
+		if (node.type === "UpdateExpression" && node.argument.type === "Identifier") {
+			targets.add(node.argument);
 		}
-		const typed = node as ESTree.Node;
-		if (typed.type === "AssignmentExpression" && typed.left.type === "Identifier") {
-			targets.add(typed.left);
-		}
-		if (typed.type === "UpdateExpression" && typed.argument.type === "Identifier") {
-			targets.add(typed.argument);
-		}
-		for (const key of Object.keys(typed)) {
-			visit((typed as unknown as Record<string, unknown>)[key]);
-		}
-	};
-
-	visit(ast.body);
+	});
 	return targets;
 }
 

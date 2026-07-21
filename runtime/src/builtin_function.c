@@ -6,6 +6,7 @@
 
 #include "bound_function_object.h"
 #include "builtin_eval.h"
+#include "checked_size.h"
 #include "heap_string.h"
 #include "object_ops.h"
 #include "proxy_object.h"
@@ -100,9 +101,8 @@ static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_va
         return mal_value_new_undefined();
     }
     // ToLength clamp (capped at u32 for our calling convention).
-    u32 length = (length_number != length_number || length_number <= 0)
-        ? 0
-        : (length_number >= (f64) UINT32_MAX ? UINT32_MAX : (u32) length_number);
+    f64 safe_length = mal_ops_number_to_length(length_number);
+    u32 length = safe_length >= (f64) UINT32_MAX ? UINT32_MAX : (u32) safe_length;
 
     MalValue *call_args = length > 0 ? malloc(sizeof(MalValue) * length) : nullptr;
     // Each index Get can invoke a getter that collects; root the already-fetched
@@ -114,7 +114,7 @@ static MalValue mal_builtin_function_prototype_apply(MalVm *vm, MalValue this_va
     MalValue ret = mal_value_new_undefined();
     for (u32 index = 0; index < length; index++) {
         args_span.count = (i32) index;
-        if (!mal_vm_get_property(vm, arguments_value, (MalKey) {.kind = MAL_KEY_INDEX, .value = mal_value_from_i32((i32) index)}, &call_args[index])) {
+        if (!mal_vm_get_property(vm, arguments_value, mal_key_index(index), &call_args[index])) {
             goto done;
         }
     }
@@ -183,9 +183,7 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
         if (mal_ops_is_number(target_length)) {
             f64 numeric = mal_ops_to_number(target_length);
             // ToIntegerOrInfinity: NaN/±0 -> +0, ±Infinity preserved, else trunc.
-            f64 integer = (numeric != numeric || numeric == 0.0)
-                ? 0.0
-                : (isinf(numeric) ? numeric : trunc(numeric));
+            f64 integer = mal_ops_number_to_integer_or_infinity(numeric);
             length_num = integer - (f64) bound_count;
             // max(0, ·); also normalizes a -0 (e.g. trunc(-0.5)) to +0.
             if (!(length_num > 0)) {
@@ -323,12 +321,8 @@ void mal_builtin_function_install(MalVm *vm) {
     // %Function.prototype% as accessors { get/set: %ThrowTypeError%,
     // enumerable: false, configurable: true }. Every function inherits these, so
     // reading or writing `.caller`/`.arguments` on any function throws.
-    MalPropertyDesc poison = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = thrower_value,
-        .setter = thrower_value,
-    };
+    MalPropertyDesc poison = mal_intrinsic_accessor_desc(
+        thrower_value, thrower_value, MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(prototype, mal_intrinsic_string_key(vm, "caller"), &poison);
     mal_object_define_own(prototype, mal_intrinsic_string_key(vm, "arguments"), &poison);
 }

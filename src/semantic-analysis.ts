@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import { forEachEstreeChild, traverseEstree } from "./estree-traversal.ts";
 // Type-only: ts-blank-space strips this, so the module-graph (and its
 // ts-blank-space → typescript chain) is NOT pulled into the self-hostable
 // compiler cone. The buildModuleGraph value-using entry lives in
@@ -450,7 +451,7 @@ function classifyStaticArgumentsUsage(file: SemanticFile): void {
 	const parents = new Map<ESTree.Node, ESTree.Node>();
 	const candidates = new Map<Binding, Map<ESTree.Node, StaticArgumentsAccess>>();
 
-	const visit = (node: ESTree.Node, parent?: ESTree.Node): void => {
+	traverseEstree(file.ast, (node, { parent }) => {
 		if (parent) parents.set(node, parent);
 		if (node.type === "MemberExpression" && node.object.type === "Identifier") {
 			const identifier = node.object;
@@ -479,20 +480,7 @@ function classifyStaticArgumentsUsage(file: SemanticFile): void {
 				}
 			}
 		}
-		for (const key of Object.keys(node)) {
-			const value: unknown = node[key as keyof ESTree.Node];
-			if (typeof value === "object" && value !== null && "type" in value) {
-				visit(value as ESTree.Node, node);
-			} else if (Array.isArray(value)) {
-				for (const item of value) {
-					if (typeof item === "object" && item !== null && "type" in item) {
-						visit(item as ESTree.Node, node);
-					}
-				}
-			}
-		}
-	};
-	visit(file.ast);
+	});
 
 	for (const [binding, byNode] of candidates) {
 		if (
@@ -1344,20 +1332,5 @@ function recurseAst<
 	Args extends Array<unknown>,
 	Callback extends (node: ESTree.Node, ...args: Args) => void,
 >(node: ESTree.Node, callback: Callback, ...args: Args) {
-	const isNode = (value: unknown): value is ESTree.Node => {
-		return typeof value === "object" && value !== null && "type" in value;
-	};
-
-	for (const key of Object.keys(node)) {
-		const value: unknown = node[key as keyof ESTree.Node];
-		if (isNode(value)) {
-			callback(value, ...args);
-		} else if (Array.isArray(value)) {
-			for (const item of value) {
-				if (isNode(item)) {
-					callback(item, ...args);
-				}
-			}
-		}
-	}
+	forEachEstreeChild(node, (child) => callback(child, ...args));
 }

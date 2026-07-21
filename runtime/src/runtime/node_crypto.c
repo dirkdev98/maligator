@@ -3,34 +3,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ascii.h"
 #include "array_buffer_object.h"
+#include "base64.h"
 #include "builtin_data_view.h"
 #include "function_object.h"
 #include "gc.h"
 #include "entropy.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
+#include "hex.h"
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
-#include "web_text_encoding.h"
+#include "utf8.h"
 #include "typed_array_object.h"
 #include "value.h"
 #include "vm.h"
 #include "vm_ops.h"
 
 #if MAL_NODE
-
-// DataView keeps its layout private to builtin_data_view.c. The runtime crypto
-// adapter needs the view window as well as the publicly exposed backing buffer.
-// Keep this definition in sync with MalDataViewObject there.
-struct MalDataViewObject {
-    MalObject object;
-    MalArrayBufferObject *buffer;
-    u32 byte_offset;
-    u32 byte_length;
-    bool length_tracking;
-};
 
 /* ---------------------------------------------------------------------------
  * SHA-256 (FIPS 180-4). Self-contained: no OpenSSL, no Rust FFI. Operates on a
@@ -248,86 +240,23 @@ static void mal_sha1_final(MalSha1 *ctx, u8 out[20]) {
  * algorithm and output-encoding checks — both must match one fixed lowercase word,
  * so a code-unit-wise compare (no allocation, no ToLower) is enough. */
 static bool mal_node_crypto_str_is(const MalString *str, const char *ascii, usize n) {
-    if (mal_string_length(str) != n) {
-        return false;
-    }
-    const c16 *units = mal_string_code_units(str);
-    for (usize i = 0; i < n; i++) {
-        if (units[i] != (c16) (u8) ascii[i]) {
-            return false;
-        }
-    }
-    return true;
+    return strlen(ascii) == n && mal_string_equals_ascii(str, ascii);
 }
 
 static bool mal_node_crypto_str_is_utf8(const MalString *str) {
-    usize length = mal_string_length(str);
-    if (length != 4 && length != 5) return false;
-    const c16 *units = mal_string_code_units(str);
-    return (units[0] == 'u' || units[0] == 'U')
-        && (units[1] == 't' || units[1] == 'T')
-        && (units[2] == 'f' || units[2] == 'F')
-        && (length == 4
-                ? units[3] == '8'
-                : units[3] == '-' && units[4] == '8');
-}
-
-typedef struct {
-    const u8 *data;
-    usize length;
-} MalNodeCryptoByteSpan;
-
-static bool mal_node_crypto_data_view_is_out_of_bounds(const MalDataViewObject *view) {
-    MalArrayBufferObject *buffer = view->buffer;
-    if (buffer == nullptr || buffer->detached) {
-        return true;
-    }
-    if (view->length_tracking) {
-        return view->byte_offset > buffer->byte_length;
-    }
-    return (u64) view->byte_offset + view->byte_length > buffer->byte_length;
+    return mal_string_equals_ascii_ci(str, "utf8") ||
+        mal_string_equals_ascii_ci(str, "utf-8");
 }
 
 // Validate the complete view before applying its byte offset. In particular,
 // detached stores have null data, so even adding a zero offset would be undefined.
-static bool mal_node_crypto_byte_span(MalVm *vm, MalValue value, MalNodeCryptoByteSpan *out) {
-    MalArrayBufferObject *buffer;
-    u32 byte_offset = 0;
-    u32 byte_length;
-
-    if (mal_value_is_typed_array_object(value)) {
-        MalTypedArrayObject *view = mal_value_to_typed_array_object(value);
-        if (mal_typed_array_object_is_out_of_bounds(view)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                (const byte *) "crypto.hash: detached or out-of-bounds byte source");
-            return false;
-        }
-        buffer = view->buffer;
-        byte_offset = view->byte_offset;
-        byte_length = mal_typed_array_object_byte_length(view);
-    } else if (mal_value_is_data_view_object(value)) {
-        MalDataViewObject *view = mal_value_to_data_view_object(value);
-        if (mal_node_crypto_data_view_is_out_of_bounds(view)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                (const byte *) "crypto.hash: detached or out-of-bounds byte source");
-            return false;
-        }
-        buffer = view->buffer;
-        byte_offset = view->byte_offset;
-        byte_length = view->length_tracking ? buffer->byte_length - byte_offset : view->byte_length;
-    } else {
-        buffer = mal_value_to_array_buffer_object(value);
-        if (buffer->detached) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                (const byte *) "crypto.hash: detached or out-of-bounds byte source");
-            return false;
-        }
-        byte_length = buffer->byte_length;
+static bool mal_node_crypto_byte_span(MalVm *vm, MalValue value, MalBufferSourceSpan *out) {
+    if (mal_buffer_source_span(value, out) == MAL_BUFFER_SOURCE_SPAN_OK) {
+        return true;
     }
-
-    out->length = byte_length;
-    out->data = byte_length == 0 ? nullptr : (const u8 *) buffer->data + byte_offset;
-    return true;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        (const byte *) "crypto.hash: detached or out-of-bounds byte source");
+    return false;
 }
 
 typedef enum {
@@ -348,7 +277,7 @@ typedef struct {
 } MalNodeCryptoState;
 
 static bool mal_node_crypto_array_buffer_view_span(
-    MalVm *vm, MalValue value, MalNodeCryptoByteSpan *out
+    MalVm *vm, MalValue value, MalBufferSourceSpan *out
 ) {
     if (!mal_value_is_typed_array_object(value) && !mal_value_is_data_view_object(value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -420,14 +349,17 @@ static MalValue mal_node_crypto_update(
         }
         MalString *string = mal_value_to_string(data);
         usize length;
-        byte *bytes = mal_utf8_encode(
-            mal_string_code_units(string), mal_string_length(string), &length);
+        byte *bytes = mal_string_to_utf8(string, &length);
+        if (bytes == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
         mal_node_crypto_state_update(state, (const u8 *) bytes, length);
         free(bytes);
         return receiver;
     }
 
-    MalNodeCryptoByteSpan span;
+    MalBufferSourceSpan span;
     if (!mal_node_crypto_array_buffer_view_span(vm, data, &span)) {
         return mal_value_new_undefined();
     }
@@ -436,29 +368,9 @@ static MalValue mal_node_crypto_update(
 }
 
 static MalValue mal_node_crypto_base64(MalVm *vm, const u8 *bytes, usize length) {
-    static const char ALPHABET[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     char encoded[44];
-    usize input = 0;
-    usize output = 0;
-    while (input + 3 <= length) {
-        u32 word = ((u32) bytes[input] << 16) | ((u32) bytes[input + 1] << 8)
-            | bytes[input + 2];
-        encoded[output++] = ALPHABET[(word >> 18) & 63];
-        encoded[output++] = ALPHABET[(word >> 12) & 63];
-        encoded[output++] = ALPHABET[(word >> 6) & 63];
-        encoded[output++] = ALPHABET[word & 63];
-        input += 3;
-    }
-    usize remaining = length - input;
-    if (remaining > 0) {
-        u32 word = (u32) bytes[input] << 16;
-        if (remaining == 2) word |= (u32) bytes[input + 1] << 8;
-        encoded[output++] = ALPHABET[(word >> 18) & 63];
-        encoded[output++] = ALPHABET[(word >> 12) & 63];
-        encoded[output++] = remaining == 2 ? ALPHABET[(word >> 6) & 63] : '=';
-        encoded[output++] = '=';
-    }
+    usize output = mal_base64_encode(
+        (const byte *) bytes, length, MAL_BASE64_ALPHABET_STANDARD, true, encoded);
     return mal_value_from_string(
         mal_string_new_ascii(&vm->heap, (const byte *) encoded, output));
 }
@@ -554,8 +466,11 @@ static bool mal_node_crypto_hmac_init(
     if (mal_value_is_string(key)) {
         MalString *string = mal_value_to_string(key);
         usize length;
-        byte *bytes = mal_utf8_encode(
-            mal_string_code_units(string), mal_string_length(string), &length);
+        byte *bytes = mal_string_to_utf8(string, &length);
+        if (bytes == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
         if (length > sizeof(key_block)) {
             MalSha256 key_hash;
             mal_sha256_init(&key_hash);
@@ -566,7 +481,7 @@ static bool mal_node_crypto_hmac_init(
         }
         free(bytes);
     } else {
-        MalNodeCryptoByteSpan span;
+        MalBufferSourceSpan span;
         if (!mal_node_crypto_array_buffer_view_span(vm, key, &span)) return false;
         if (span.length > sizeof(key_block)) {
             MalSha256 key_hash;
@@ -625,8 +540,8 @@ static MalValue mal_node_crypto_timing_safe_equal(
     (void) receiver;
     (void) new_target;
     (void) callee;
-    MalNodeCryptoByteSpan left;
-    MalNodeCryptoByteSpan right;
+    MalBufferSourceSpan left;
+    MalBufferSourceSpan right;
     if (argc < 1 || !mal_node_crypto_array_buffer_view_span(vm, args[0], &left)) {
         return mal_value_new_undefined();
     }
@@ -700,7 +615,7 @@ static MalValue mal_node_crypto_hash(
     MalSha256 ctx;
     mal_sha256_init(&ctx);
     if (data_is_byte_source) {
-        MalNodeCryptoByteSpan span;
+        MalBufferSourceSpan span;
         if (!mal_node_crypto_byte_span(vm, data, &span)) {
             return mal_value_new_undefined();
         }
@@ -710,8 +625,11 @@ static MalValue mal_node_crypto_hash(
     } else {
         MalString *data_str = mal_value_to_string(data);
         usize byte_len;
-        byte *bytes =
-            mal_utf8_encode(mal_string_code_units(data_str), mal_string_length(data_str), &byte_len);
+        byte *bytes = mal_string_to_utf8(data_str, &byte_len);
+        if (bytes == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
         mal_sha256_update(&ctx, (const u8 *) bytes, byte_len);
         free(bytes);
     }
@@ -719,12 +637,8 @@ static MalValue mal_node_crypto_hash(
     u8 digest[32];
     mal_sha256_final(&ctx, digest);
 
-    static const char HEX[] = "0123456789abcdef";
     char hex[64];
-    for (int i = 0; i < 32; i++) {
-        hex[i * 2] = HEX[(digest[i] >> 4) & 0xF];
-        hex[i * 2 + 1] = HEX[digest[i] & 0xF];
-    }
+    mal_hex_encode_lower((const byte *) digest, countof(digest), hex);
     return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) hex, 64));
 }
 
@@ -747,15 +661,14 @@ static MalValue mal_node_crypto_random_uuid(
     bytes[6] = (u8) ((bytes[6] & 0x0f) | 0x40);
     bytes[8] = (u8) ((bytes[8] & 0x3f) | 0x80);
 
-    static const char HEX[] = "0123456789abcdef";
     char uuid[36];
     usize out = 0;
     for (usize i = 0; i < countof(bytes); i++) {
         if (i == 4 || i == 6 || i == 8 || i == 10) {
             uuid[out++] = '-';
         }
-        uuid[out++] = HEX[bytes[i] >> 4];
-        uuid[out++] = HEX[bytes[i] & 0x0f];
+        mal_hex_encode_byte_lower((byte) bytes[i], uuid + out);
+        out += 2;
     }
     return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) uuid, out));
 }

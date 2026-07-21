@@ -726,18 +726,8 @@ static MalObject *mal_builtin_set_scaffold(
 }
 
 static void mal_builtin_set_define_size(MalVm *vm, MalObject *prototype, MalNativeFunctionCallback getter) {
-    MalPropertyDesc size_desc = {
-        .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_new_undefined(),
-        .getter = mal_value_from_native_function_object(mal_native_function_object_new(
-            &vm->heap,
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, "get size"),
-            getter
-        )),
-        .setter = mal_value_new_undefined(),
-    };
-    mal_object_define_own(prototype, mal_intrinsic_string_key(vm, "size"), &size_desc);
+    mal_intrinsic_define_getter(
+        vm, prototype, "size", "get size", getter, MAL_PROPERTY_CONFIGURABLE);
 }
 
 void mal_builtin_set_install(MalVm *vm) {

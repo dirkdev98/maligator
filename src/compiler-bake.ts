@@ -3,13 +3,13 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
-	readdirSync,
 	renameSync,
 	rmSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { hashDirectoryTrees } from "./file-tree.ts";
 
 const COMPILER_WIRE_CACHE = ".cache/mal-cache/compiler-wire";
 const SOURCE_MANIFEST = "artifact.json";
@@ -45,8 +45,8 @@ interface SourceManifest {
 	outputDigest: string;
 }
 
-function compareNames(a: { name: string }, b: { name: string }): number {
-	return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+function compareNames(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
 }
 
 function isCompilerSource(name: string): boolean {
@@ -79,32 +79,20 @@ function compilerDependencyIdentity(sourceDirectory: string): string {
 }
 
 function compilerSourceHash(sourceDirectory: string, entrypoint: string): string {
-	const parts: Array<string> = [
-		compilerDependencyIdentity(sourceDirectory),
-		"entrypoint\0",
-		path.relative(sourceDirectory, entrypoint),
-		"\0",
-		hash("sha256", readFileSync(entrypoint), "hex"),
-		"\0",
-	];
-	const walk = (directory: string): void => {
-		for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
-			compareNames,
-		)) {
-			const fullPath = path.join(directory, entry.name);
-			if (entry.isDirectory()) walk(fullPath);
-			else if (isCompilerSource(entry.name)) {
-				parts.push(
-					path.relative(sourceDirectory, fullPath),
-					"\0",
-					hash("sha256", readFileSync(fullPath), "hex"),
-					"\0",
-				);
-			}
-		}
-	};
-	walk(sourceDirectory);
-	return hash("sha256", parts.join(""), "hex");
+	return hashDirectoryTrees({
+		root: sourceDirectory,
+		directories: [sourceDirectory],
+		include: (entry) => isCompilerSource(entry.name),
+		prefix: [
+			compilerDependencyIdentity(sourceDirectory),
+			"entrypoint\0",
+			path.relative(sourceDirectory, entrypoint),
+			"\0",
+			hash("sha256", readFileSync(entrypoint), "hex"),
+			"\0",
+		],
+		compareNames,
+	});
 }
 
 function cacheRoot(input: CompilerBakeInput): string {

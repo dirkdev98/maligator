@@ -3,6 +3,8 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+
+#include "ascii.h"
 #include <time.h>
 
 #include "builtin_intl.h"
@@ -41,18 +43,6 @@ static const char *const MONTH_NAMES[12] = {
 // ---------------------------------------------------------------------------
 // Numeric helpers
 // ---------------------------------------------------------------------------
-
-/** ToIntegerOrInfinity over an f64: NaN -> +0, +/-Inf preserved, else trunc toward zero (and -0 -> +0). */
-static f64 date_to_integer(f64 x) {
-    if (isnan(x)) {
-        return 0.0;
-    }
-    if (isinf(x)) {
-        return x;
-    }
-    f64 r = trunc(x);
-    return r == 0.0 ? 0.0 : r;
-}
 
 /** Positive (Euclidean) modulo for f64; matches the spec's modulo on time fields. */
 static f64 date_pmod(f64 a, f64 n) {
@@ -166,10 +156,10 @@ static f64 date_make_time(f64 hour, f64 min, f64 sec, f64 ms) {
     if (!isfinite(hour) || !isfinite(min) || !isfinite(sec) || !isfinite(ms)) {
         return NAN;
     }
-    f64 h = date_to_integer(hour);
-    f64 m = date_to_integer(min);
-    f64 s = date_to_integer(sec);
-    f64 milli = date_to_integer(ms);
+    f64 h = mal_ops_number_to_integer_or_infinity(hour);
+    f64 m = mal_ops_number_to_integer_or_infinity(min);
+    f64 s = mal_ops_number_to_integer_or_infinity(sec);
+    f64 milli = mal_ops_number_to_integer_or_infinity(ms);
     return h * MS_PER_HOUR + m * MS_PER_MINUTE + s * MS_PER_SECOND + milli;
 }
 
@@ -178,9 +168,9 @@ static f64 date_make_day(f64 year, f64 month, f64 date) {
     if (!isfinite(year) || !isfinite(month) || !isfinite(date)) {
         return NAN;
     }
-    f64 y = date_to_integer(year);
-    f64 m = date_to_integer(month);
-    f64 dt = date_to_integer(date);
+    f64 y = mal_ops_number_to_integer_or_infinity(year);
+    f64 m = mal_ops_number_to_integer_or_infinity(month);
+    f64 dt = mal_ops_number_to_integer_or_infinity(date);
     f64 ym = y + floor(m / 12.0);
     if (!isfinite(ym)) {
         return NAN;
@@ -215,7 +205,7 @@ static f64 date_make_full_year(f64 year) {
     if (isnan(year)) {
         return NAN;
     }
-    f64 ti = date_to_integer(year);
+    f64 ti = mal_ops_number_to_integer_or_infinity(year);
     if (ti >= 0.0 && ti <= 99.0) {
         return 1900.0 + ti;
     }
@@ -413,24 +403,8 @@ static f64 date_parse_iso(const c16 *u, usize len) {
 // ignored.
 // ---------------------------------------------------------------------------
 
-static bool date_is_alpha(c16 ch) {
-    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
-}
-
-static c16 date_lower(c16 ch) {
-    return (ch >= 'A' && ch <= 'Z') ? (c16) (ch + 32) : ch;
-}
-
 static bool date_token_eq_ci(const c16 *tok, usize len, const char *ascii) {
-    if (len != strlen(ascii)) {
-        return false;
-    }
-    for (usize i = 0; i < len; i++) {
-        if (date_lower(tok[i]) != (c16) ascii[i]) {
-            return false;
-        }
-    }
-    return true;
+    return mal_ascii_units_equal_ci(tok, len, ascii);
 }
 
 /** 0-based month for a token whose first three letters name a month, else -1. */
@@ -442,8 +416,7 @@ static i32 date_month_from_name(const c16 *tok, usize len) {
         return -1;
     }
     for (i32 i = 0; i < 12; i++) {
-        if (date_lower(tok[0]) == names[i][0] && date_lower(tok[1]) == names[i][1]
-            && date_lower(tok[2]) == names[i][2]) {
+        if (mal_ascii_units_equal_ci(tok, 3, names[i])) {
             return i;
         }
     }
@@ -456,8 +429,7 @@ static bool date_is_weekday_name(const c16 *tok, usize len) {
         return false;
     }
     for (i32 i = 0; i < 7; i++) {
-        if (date_lower(tok[0]) == names[i][0] && date_lower(tok[1]) == names[i][1]
-            && date_lower(tok[2]) == names[i][2]) {
+        if (mal_ascii_units_equal_ci(tok, 3, names[i])) {
             return true;
         }
     }
@@ -495,9 +467,9 @@ static f64 date_parse_legacy(const c16 *u, usize len) {
             }
             continue;
         }
-        if (date_is_alpha(ch)) {
+        if (mal_ascii_is_alpha(ch)) {
             usize start = i;
-            while (i < len && date_is_alpha(u[i])) {
+            while (i < len && mal_ascii_is_alpha(u[i])) {
                 i++;
             }
             const c16 *tok = u + start;
@@ -756,17 +728,7 @@ static bool date_this(MalVm *vm, MalValue this_value, MalDateObject **out) {
 }
 
 static bool date_string_eq_ascii(const MalString *s, const char *ascii) {
-    usize n = strlen(ascii);
-    if (mal_string_length(s) != n) {
-        return false;
-    }
-    const c16 *units = mal_string_code_units(s);
-    for (usize i = 0; i < n; i++) {
-        if (units[i] != (c16) (byte) ascii[i]) {
-            return false;
-        }
-    }
-    return true;
+    return mal_string_equals_ascii(s, ascii);
 }
 
 static MalValue date_string_value(MalVm *vm, const byte *buf, usize length) {
