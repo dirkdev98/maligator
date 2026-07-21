@@ -130,6 +130,10 @@ describe("opt-in performance statistics", () => {
 			const shape = reportLine(result.stderr, "[perf-shape-stats]", `caller=${caller} `);
 			expect(field(shape, "calls")).toBeGreaterThan(0);
 		}
+		const transitions = reportLine(result.stderr, "[perf-shape-transition-stats]");
+		expect(field(transitions, "index_lookups")).toBeGreaterThan(0);
+		expect(field(transitions, "index_hits")).toBeGreaterThan(0);
+		expect(field(transitions, "index_builds")).toBeGreaterThan(0);
 
 		const ic = reportLine(result.stderr, "[perf-ic-stats]");
 		const loadHits =

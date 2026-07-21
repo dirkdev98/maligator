@@ -83,6 +83,10 @@ typedef struct MalPerfStats {
     u64 shape_transition_max_comparisons;
     u64 shape_transition_pointer_hits;
     u64 shape_transition_content_hits;
+    u64 shape_transition_index_lookups;
+    u64 shape_transition_index_hits;
+    u64 shape_transition_index_probes;
+    u64 shape_transition_index_builds;
 
     u64 ic_load_mono_hits;
     u64 ic_load_region_hits;

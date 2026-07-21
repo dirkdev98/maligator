@@ -39,6 +39,7 @@
 
 typedef struct MalShape MalShape;
 typedef struct MalShapeTransition MalShapeTransition;
+typedef struct MalShapeTransitionIndex MalShapeTransitionIndex;
 
 typedef enum MalShapeFindCaller {
     MAL_SHAPE_FIND_GET_OWN,
@@ -69,8 +70,8 @@ struct MalShape {
     u32 inline_count;
     /** `inline_count` ordered props (insertion order); null for the empty shape. */
     MalShapeProp *props;
-    /** Parent in the transition tree (null for the empty shape). */
-    MalShape *parent;
+    /** Optional side index for high-fanout transition sets. */
+    MalShapeTransitionIndex *transition_index;
     /** Children, one per distinct added (key, attrs); singly linked. */
     MalShapeTransition *transitions;
 };

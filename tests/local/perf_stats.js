@@ -50,6 +50,20 @@ for (let i = 0; i < 40; i++) {
 }
 if (dictionary["dict-39"] !== 39) throw new Error("broken dictionary insertion");
 
+const fanoutKeys = [];
+for (let i = 0; i < 160; i++) {
+	const key = ["fanout", i].join("-");
+	fanoutKeys.push(key);
+	const object = {};
+	object[key] = i;
+}
+for (let i = 0; i < fanoutKeys.length; i++) {
+	const equalKey = ["fanout", i].join("-");
+	const object = {};
+	object[equalKey] = i;
+	if (object[fanoutKeys[i]] !== i) throw new Error("broken indexed shape transition");
+}
+
 const counter = new Counter(3);
 let total = 0;
 for (let i = 0; i < 2000; i++) {
