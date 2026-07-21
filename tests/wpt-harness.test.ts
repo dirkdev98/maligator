@@ -1,6 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -13,9 +20,12 @@ import {
 	parseWptManifest,
 	parseWptMetadata,
 	parseWptOutput,
+	parseWptPolicy,
 	resolveWptScriptPath,
 	selectWptExecutionDimensions,
 	selectWptManifestEntries,
+	shouldAbortWptRun,
+	validateWptExpectations,
 	WPT_REVISION,
 } from "./wpt/harness.ts";
 import type {
@@ -34,6 +44,16 @@ const defaultExecution: WptExecutionKey = {
 
 function hash(source: string | Buffer): string {
 	return createHash("sha256").update(source).digest("hex");
+}
+
+function listFiles(root: string, directory = root): Array<string> {
+	return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+		const absolute = path.join(directory, entry.name);
+		if (entry.isDirectory()) return listFiles(root, absolute);
+		return entry.isFile()
+			? [path.relative(root, absolute).split(path.sep).join("/")]
+			: [];
+	});
 }
 
 function testEntry(
@@ -266,6 +286,13 @@ describe("curated WPT harness", () => {
 		for (const entry of manifest.tests) {
 			expect(loadPinnedWptTest(fixtureRoot, entry).source.length).toBeGreaterThan(0);
 		}
+		const registeredFiles = new Set(
+			manifest.tests.flatMap((entry) => [
+				entry.path,
+				...entry.includes.map((include) => include.path),
+			]),
+		);
+		expect(listFiles(fixtureRoot).sort()).toEqual([...registeredFiles].sort());
 	});
 
 	it("generates adapter, includes, and test source in declaration order", () => {
@@ -552,6 +579,78 @@ promise_test(function(t) {
 		});
 	});
 
+	it("parses complete and bail policies with complete as the default", () => {
+		expect(parseWptPolicy(undefined)).toBe("complete");
+		expect(parseWptPolicy("complete")).toBe("complete");
+		expect(parseWptPolicy("bail")).toBe("bail");
+		expect(() => parseWptPolicy("fast")).toThrow("bail or complete");
+	});
+
+	it("bails only after unexpected, stale, harness, timeout, or crash outcomes", () => {
+		const passing = classifyWptResults([result({ status: "PASS" })], []);
+		const outcome = {
+			harness: {
+				path: defaultExecution.path,
+				status: "OK" as const,
+				total: 1,
+				message: null,
+			},
+			verdicts: passing.results,
+			missingExpectations: passing.missing,
+		};
+		expect(shouldAbortWptRun("bail", outcome)).toBe(false);
+		expect(
+			shouldAbortWptRun("bail", {
+				...outcome,
+				verdicts: classifyWptResults([result({ status: "FAIL" })], []).results,
+			}),
+		).toBe(true);
+		expect(
+			shouldAbortWptRun("bail", {
+				...outcome,
+				missingExpectations: [
+					{
+						...defaultExecution,
+						subtest: "stale",
+						occurrence: 1,
+						status: "FAIL",
+						milestone: "W2",
+						reason: "known defect",
+						revision: WPT_REVISION,
+					},
+				],
+			}),
+		).toBe(true);
+		expect(
+			shouldAbortWptRun("bail", {
+				...outcome,
+				harness: { ...outcome.harness, status: "ERROR" },
+			}),
+		).toBe(true);
+		expect(
+			shouldAbortWptRun("bail", {
+				...outcome,
+				verdicts: [{ ...passing.results[0]!, status: "TIMEOUT", verdict: "EXPECTED" }],
+			}),
+		).toBe(false);
+		expect(
+			shouldAbortWptRun("bail", {
+				...outcome,
+				verdicts: [{ ...passing.results[0]!, status: "TIMEOUT", verdict: "UNEXPECTED" }],
+			}),
+		).toBe(true);
+		expect(shouldAbortWptRun("bail", { ...outcome, terminalStatus: "TIMEOUT" })).toBe(
+			true,
+		);
+		expect(shouldAbortWptRun("bail", { ...outcome, terminalStatus: "CRASH" })).toBe(true);
+		expect(
+			shouldAbortWptRun("complete", {
+				...outcome,
+				harness: { ...outcome.harness, status: "ERROR" },
+			}),
+		).toBe(false);
+	});
+
 	it("isolates expectations by every final execution key", () => {
 		const base = {
 			path: "url/a.any.js",
@@ -595,5 +694,28 @@ promise_test(function(t) {
 				JSON.stringify({ schemaVersion: 1, revision: WPT_REVISION, expectations: [] }),
 			),
 		).toThrow("schema 2");
+	});
+
+	it("rejects structurally orphaned expectations", () => {
+		const expectation = {
+			...result(),
+			status: "FAIL" as const,
+			milestone: "W2",
+			reason: "known defect",
+			revision: WPT_REVISION,
+		};
+		expect(() => validateWptExpectations([expectation], [])).toThrow("not curated");
+		expect(() =>
+			validateWptExpectations(
+				[{ ...expectation, variant: "?missing" }],
+				[testEntry("// META: variant=?declared\n")],
+			),
+		).toThrow("variant is not declared");
+		expect(() =>
+			validateWptExpectations(
+				[{ ...expectation, mode: "gc-stress" }],
+				[testEntry("", { modes: ["normal"] })],
+			),
+		).toThrow("mode is not enabled");
 	});
 });

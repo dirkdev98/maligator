@@ -236,28 +236,47 @@ native artifacts remain under the explicitly selected cache root.
 
 ## Development
 
+Development requires Node.js 24 or newer, a C/C++ toolchain, and Rustup with the
+pinned Rust toolchain.
+
 ```shell
-npm install
+npm ci
 
 # Run the Node-hosted product CLI while working on the compiler.
 node ./src/index.ts build path/to/entry.ts
 
-# Tests (unit = pure TypeScript; native = linked isolate binaries).
-npm test run
-npm run test:unit
-npm run test:native
+# Default developer gate; smoke is its fast initial fuse.
+npm run test:check
 
-# Product CLI self-host integration with Node removed from PATH.
-npm run selfhost:cli
+# Standalone 30-second fuse.
+npm run test:smoke
+
+# Exhaustive gates. Ask before running either command: they include full Test262.
+npm run test:full
+npm run test:full:report
 
 npm run type-check
 npm run lint
 npm run bench
 
-# Curated Test262 regressions; the full suite is intentionally expensive.
+# Complete standards reports without baseline updates. Ask before full Test262.
+npm run test262:report
+npm run test:wpt:report
+
+# Targeted lanes remain available while developing.
+npm run test:unit                 # watch mode
+npm test run                     # one-shot unit and native projects
+npm run test:native
+npm run test:sanitize -- tests/native/example.test.ts
 npm run test262:regressions
-npm run test262
+
+# Show tier policy and list exact stage commands without executing them.
+npm run test:help
+npm run test:check -- --list
 ```
+
+See [`docs/testing.md`](docs/testing.md) for tier contents, fail-fast versus
+completion policies, full-matrix coverage, and where new tests belong.
 
 ## Structure
 

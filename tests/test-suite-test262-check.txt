@@ -1,8 +1,8 @@
+# High-signal regression complement. Keep disjoint from Test262 smoke.
 test/built-ins/AggregateError/newtarget-proto-custom.js
 test/built-ins/Array/prototype/concat/arg-length-exceeding-integer-limit.js
 test/built-ins/Array/prototype/concat/arg-length-near-integer-limit.js
 test/built-ins/Array/prototype/copyWithin/length-near-integer-limit.js
-test/built-ins/Array/prototype/every/length.js
 test/built-ins/Array/prototype/fill/length-near-integer-limit.js
 test/built-ins/Array/prototype/includes/fromIndex-equal-or-greater-length-returns-false.js
 test/built-ins/Array/prototype/indexOf/length-near-integer-limit.js
@@ -39,7 +39,6 @@ test/built-ins/AsyncGeneratorFunction/invoked-as-function-no-arguments.js
 test/built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-promise.js
 test/built-ins/AsyncIteratorPrototype/Symbol.asyncIterator/prop-desc.js
 test/built-ins/Atomics/or/non-shared-int-views-throws.js
-test/built-ins/BigInt/constructor-trailing-leading-spaces.js
 test/built-ins/Boolean/prototype/S15.6.3.1_A3.js
 test/built-ins/DataView/prototype/getUint32/index-is-out-of-range.js
 test/built-ins/Date/prototype/getUTCSeconds/name.js
@@ -47,14 +46,12 @@ test/built-ins/Error/prototype/stack/getter-error-prototype.js
 test/built-ins/FinalizationRegistry/prototype/register/return-undefined-register-object.js
 test/built-ins/Function/S15.3.2.1_A1_T10.js
 test/built-ins/Function/prototype/Symbol.hasInstance/value-negative.js
-test/built-ins/Function/prototype/apply/not-a-constructor.js
 test/built-ins/Function/prototype/bind/15.3.4.5.1-4-1.js
 test/built-ins/Function/prototype/call/S15.3.4.4_A6_T6.js
 test/built-ins/GeneratorFunction/invoked-as-function-no-arguments.js
 test/built-ins/GeneratorPrototype/return/try-finally-following-finally.js
 test/built-ins/Infinity/S15.1.1.2_A3_T2.js
 test/built-ins/Iterator/prototype/forEach/argument-effect-order.js
-test/built-ins/JSON/parse/text-object-abrupt.js
 test/built-ins/Map/prototype/get/does-not-have-mapdata-internal-slot-set.js
 test/built-ins/MapIteratorPrototype/next/length.js
 test/built-ins/Math/hypot/Math.hypot_Zero_2.js
@@ -69,12 +66,10 @@ test/built-ins/Object/hasOwn/hasown_inherited_nonwritable_configurable_enumerabl
 test/built-ins/Promise/allSettled/capability-resolve-throws-no-close.js
 test/built-ins/Promise/any/ctx-non-object.js
 test/built-ins/Promise/any/resolve-ignores-late-rejection-deferred.js
-test/built-ins/Promise/prototype/finally/species-constructor.js
 test/built-ins/Promise/race/iter-assigned-symbol-reject.js
 test/built-ins/Proxy/getPrototypeOf/trap-result-neither-object-nor-null-throws-undefined.js
 test/built-ins/Reflect/getPrototypeOf/target-is-not-object-throws.js
 test/built-ins/RegExp/S15.10.2.7_A6_T4.js
-test/built-ins/RegExp/named-groups/string-replace-escaped.js
 test/built-ins/RegExp/prototype/Symbol.replace/get-exec-err.js
 test/built-ins/RegExp/prototype/exec/S15.10.6.2_A12.js
 test/built-ins/RegExp/regexp-modifiers/add-dotAll-does-not-affect-dotAll-property.js
@@ -117,13 +112,11 @@ test/harness/assert-notsamevalue-zeros.js
 test/harness/assert-obj.js
 test/harness/assert-samevalue-nan.js
 test/harness/assert-samevalue-objects.js
-test/harness/assert-samevalue-same.js
 test/harness/assert-samevalue-tostring.js
 test/harness/assert-samevalue-zeros.js
 test/harness/assert-throws-custom-typeerror.js
 test/harness/assert-throws-custom.js
 test/harness/assert-throws-incorrect-ctor.js
-test/harness/assert-throws-native.js
 test/harness/assert-throws-no-arg.js
 test/harness/assert-throws-no-error.js
 test/harness/assert-throws-null-fn.js
@@ -138,7 +131,6 @@ test/harness/asyncHelpers-asyncTest-rejects-non-callable.js
 test/harness/asyncHelpers-asyncTest-return-not-thenable.js
 test/harness/asyncHelpers-asyncTest-returns-undefined.js
 test/harness/asyncHelpers-asyncTest-then-rejects.js
-test/harness/asyncHelpers-asyncTest-then-resolves.js
 test/harness/asyncHelpers-asyncTest-without-async-flag.js
 test/harness/asyncHelpers-throwsAsync-custom-typeerror.js
 test/harness/asyncHelpers-throwsAsync-custom.js
@@ -230,7 +222,6 @@ test/intl402/Intl/getCanonicalLocales/transformed-ext-invalid.js
 test/intl402/ListFormat/prototype/format/iterable-getiterator-throw.js
 test/intl402/Locale/prototype/hourCycle/branding.js
 test/intl402/Number/prototype/toLocaleString/returns-same-results-as-NumberFormat.js
-test/intl402/NumberFormat/prototype/format/no-instanceof.js
 test/intl402/PluralRules/prototype/resolvedOptions/return-keys-order-default.js
 test/intl402/RelativeTimeFormat/prototype/format/en-us-numeric-always.js
 test/intl402/Segmenter/instance/prototype.js
@@ -255,15 +246,11 @@ test/intl402/supportedLocalesOf-test-option-localeMatcher.js
 test/intl402/supportedLocalesOf-throws-if-element-not-string-or-object.js
 test/intl402/supportedLocalesOf-unicode-extensions-ignored.js
 test/language/arguments-object/cls-expr-async-gen-func-args-trailing-comma-undefined.js
-test/language/asi/S7.9_A6.1_T12.js
 test/language/block-scope/syntax/redeclaration/class-name-redeclaration-attempt-with-let.js
-test/language/comments/hashbang/function-constructor.js
 test/language/computed-property-names/class/static/method-constructor.js
 test/language/destructuring/binding/syntax/destructuring-array-parameters-function-arguments-length.js
-test/language/directive-prologue/14.1-3-s.js
 test/language/eval-code/direct/gen-func-expr-named-a-following-parameter-is-named-arguments-declare-arguments.js
 test/language/export/escaped-default.js
-test/language/expressions/bitwise-xor/S11.10.2_A3_T1.5.js
 test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-elem-obj-prop-id-init.js
 test/language/expressions/class/elements/new-no-sc-line-method-rs-privatename-identifier.js
 test/language/expressions/compound-assignment/11.13.2-37-s.js
@@ -277,7 +264,6 @@ test/language/import/import-defer/syntax/invalid-default-and-defer-namespace.js
 test/language/keywords/ident-ref-in.js
 test/language/line-terminators/between-tokens-ls.js
 test/language/literals/regexp/S7.8.5_A3.1_T6.js
-test/language/module-code/parse-err-invoke-anon-gen-decl.js
 test/language/punctuators/S7.7_A2_T4.js
 test/language/reserved-words/ident-name-reserved-word-literal-prop-name.js
 test/language/rest-parameters/position-invalid.js
@@ -293,7 +279,6 @@ test/language/white-space/after-regular-expression-literal-nbsp.js
 
 # Realms
 test/built-ins/Array/length/define-own-prop-length-overflow-realm.js
-test/built-ins/Array/proto-from-ctor-realm-zero.js
 test/built-ins/Array/prototype/concat/create-proto-from-ctor-realm-array.js
 test/built-ins/Array/prototype/concat/create-proto-from-ctor-realm-non-array.js
 test/built-ins/Array/prototype/filter/create-proto-from-ctor-realm-array.js
@@ -421,8 +406,6 @@ test/staging/sm/Function/function-call.js
 test/staging/sm/expressions/octal-literals.js
 test/language/expressions/function/scope-paramsbody-var-open.js
 test/language/expressions/call/scope-var-open.js
-test/harness/deepEqual-array.js
-test/intl402/Collator/prototype/resolvedOptions/basic.js
 test/built-ins/RegExp/match-indices/indices-array-non-unicode-match.js
 test/staging/sm/Array/concat-spreadable-basic.js
 test/built-ins/Array/prototype/find/resizable-buffer-shrink-mid-iteration.js

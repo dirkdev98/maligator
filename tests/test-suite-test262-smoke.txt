@@ -1,0 +1,17 @@
+# Baseline-passing syntax, harness, language, built-in, realm, and Intl coverage.
+test/harness/assert-samevalue-same.js
+test/harness/assert-throws-native.js
+test/harness/asyncHelpers-asyncTest-then-resolves.js
+test/language/asi/S7.9_A6.1_T12.js
+test/language/comments/hashbang/function-constructor.js
+test/language/directive-prologue/14.1-3-s.js
+test/language/expressions/bitwise-xor/S11.10.2_A3_T1.5.js
+test/language/module-code/parse-err-invoke-anon-gen-decl.js
+test/built-ins/Array/prototype/every/length.js
+test/built-ins/BigInt/constructor-trailing-leading-spaces.js
+test/built-ins/Function/prototype/apply/not-a-constructor.js
+test/built-ins/JSON/parse/text-object-abrupt.js
+test/built-ins/Promise/prototype/finally/species-constructor.js
+test/built-ins/RegExp/named-groups/string-replace-escaped.js
+test/built-ins/Array/proto-from-ctor-realm-zero.js
+test/intl402/NumberFormat/prototype/format/no-instanceof.js

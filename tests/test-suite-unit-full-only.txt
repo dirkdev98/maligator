@@ -1,0 +1,2 @@
+# Slow pure-TypeScript or subprocess-heavy integration tests run only in full.
+tests/toolchain.test.ts

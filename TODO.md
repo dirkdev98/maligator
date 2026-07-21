@@ -84,14 +84,6 @@ Test262 compiler and suite throughput is owned by
 - [eval, Function, and realms](docs/roadmaps/eval-realms.md)
 - [Test262 correctness](docs/roadmaps/test262.md)
 
-## Testing and tooling
-
-- [ ] Delete or formalize the unreferenced `tests/local/classify-di.cjs` and
-      `tests/local/classify-di2.cjs` probes, then add a fixture-reference audit or
-      explicit allowlist.
-- [ ] Replace the local absolute path in the semantic snapshot test with a
-      CI-portable fixture path.
-
 ## Revisit triggers
 
 These are not active tasks:

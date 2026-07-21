@@ -28,7 +28,7 @@ import * as path from "node:path";
 // Each strictness pass and backend keeps its own cache. Strict and sloppy source
 // is byte-identical (strictness flows through the parser), while compiled and
 // interpreted objects differ by emit mode. Separate directories also let a full
-// interpreted preflight prune stale entries without deleting warm compiled
+// interpreted runs prune stale entries without deleting warm compiled
 // artifacts, and vice versa. Read lazily because runVariant sets strictness after
 // this module is imported.
 function cacheDir(): string {

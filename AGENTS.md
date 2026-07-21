@@ -2,18 +2,27 @@
 
 ## Commands
 
+- `npm run test:smoke` - Optional 30-second fuse; runs first inside larger gates
+- `npm run test:check` - Default approximately two-minute developer gate; excludes slow toolchain integration
+- `npm run test:full` - Exhaustive fail-fast gate; includes full Test262, so ask before running
+- `npm run test:full:report` - Exhaustive completion policy; ask before running
+- `npm run test:help` - Show tier policy; add `-- --list` to a tier command to print exact stages
 - `npm run type-check` - TypeScript type checking
 - `npm run lint` - ESLint with auto-fix
 - `npm run lint:ci` - ESLint without auto-fix (CI)
-- `npm test` - Run all tests with Vitest (unit + native projects)
-- `npm test run` - Run all tests once with Vitest
+- `npm test` - Vitest watch mode across unit and native projects, not every repository test lane
+- `npm test run` - Run both Vitest projects once, not standards/self-host/sanitizer lanes
 - `npm run test:unit` - Fast lane: pure-TS compiler tests only (no C build; the watch loop)
 - `npm run test:native` - Native lane: build each fixture into an isolate binary/server and drive it
+- `npm run test:rust` - Full-only Rust runtime unit lane, including `node-zlib`
 - `npm run test:sanitize -- <filename>` - Platform-safe native sanitizer lane (UBSan on macOS, ASan+UBSan elsewhere)
 - `npm test -- <filename>` - Run a single test file
 - `npm run test:leak` - macOS-only GC leak audit (`leaks`), off by default
 - `npm run test262` - Full test262 suite (expensive; ask before running)
-- `npm run test262:regressions` - Curated common-case regression manifest vs the committed baseline (also runs inside the native lane)
+- `npm run test262:regressions` - Curated common-case regression manifest vs the committed baseline
+- `npm run test262:report` - Complete compiled/normal Test262 report without updating the baseline (full corpus; ask before running)
+- `npm run test:wpt:report` - Complete compiled/normal curated WPT report
+- `npm run test:wpt:matrix-report` - Complete compiled/interpreted normal/GC-stress WPT report
 - `npm run bench` - Consolidated benchmark tracker (size / language-vs-V8 / gc / http); `--update` records a baseline entry
 
 ### Manual milestone scripts (not part of `npm test`)
@@ -24,10 +33,11 @@
 
 ### Test / runtime flags
 
-- Build-time (own build dir): `MAL_ASAN`, `MAL_UBSAN`, `MAL_GC_GENERATIONAL`, `MAL_GMALLOC`.
-- Runtime GC instruments (same binary): `MAL_GC_STRESS`, `MAL_GC_VERIFY`, `MAL_GC_OFF`, `MAL_GC_THRESHOLD`, `MAL_GC_MAJOR_EVERY`, `MAL_GC_STATS`, `MAL_HOST_GC`, `MAL_GC_AT_EXIT`.
+- Build-time (own build dir): `MAL_ASAN`, `MAL_UBSAN`, `MAL_GC_GENERATIONAL`, `MAL_GC_CONCURRENT`.
+- Runtime GC instruments (same binary): `MAL_GC_STRESS`, `MAL_GC_VERIFY`, `MAL_GC_OFF`, `MAL_GC_THRESHOLD`, `MAL_GC_MAJOR_EVERY`, `MAL_GC_STATS`, `MAL_HOST_GC`, `MAL_GC_AT_EXIT`, `MAL_GMALLOC`.
 - Backend: `MAL_INTERP=1` forces the bytecode interpreter (test262 runner); the native harness takes a `compiled` flag directly.
-- test262 runner: `--filter`, `--manifest <file>`, `--variant strict|sloppy`, `--check`, `--random`. Full runs use the fixed throughput settings in `src/test262/constants.ts` and run interpreted preflight before compiled mode.
+- Test262 runner: `--filter`, `--manifest <file>`, `--exclude-manifest <file>`, `--variant strict|sloppy`, `--backend compiled|interpreted`, `--mode normal|gc-stress`, `--check`, `--policy bail|complete`, `--canonical`, `--random`.
+- WPT runner: repeatable `--test`, `--mode normal|gc-stress`, `--backend compiled|interpreted`, `--policy bail|complete`, and `--canonical`.
 
 ## Code Style
 
@@ -42,9 +52,8 @@
 ## Local verification
 
 ```
-# Run the compiler on a tmp local file exercising the new feature
-MAL_DEBUG=true node ./src/index.ts build ./tests/local/tmp2.js
-# Take the output and replace the current definitions in `test.c` and run it.
+# Build an existing focused fixture through the product CLI.
+MAL_DEBUG=true node ./src/index.ts build ./tests/local/runtime-mechanics.mjs
 ```
 
 Use https://tc39.es/ecma262/multipage/ when looking up parts of the spec.
@@ -54,8 +63,11 @@ Use https://tc39.es/ecma262/multipage/ when looking up parts of the spec.
 - Pre-1.0: freely change any API/internal contract when it improves the design or contracts (engine/host/runtime layering: see `docs/roadmaps/isolate-reactor.md`).
 
 - Prefer root-cause, correct, performant fixes over narrow test-specific workarounds.
-- Ask for explicit approval before running the full Test262 suite.
+- Treat `npm run test:check` as the normal local gate. Put unusually slow unit or subprocess integration tests in `tests/test-suite-unit-full-only.txt`; `tests/toolchain.test.ts` is the current example.
+- Keep self-hosted checks early in `test:full`, before broad native and standards matrices.
+- Ask for explicit approval before running the full Test262 suite, `test:full`, or `test:full:report`.
 - Use targeted single-test or small-batch verification during development.
+- Follow `docs/testing.md` when placing tests. If a regression could reasonably belong in more than one lane, ask the user rather than guessing.
 - Never use git worktrees.
 - When asked to commit, create unsigned local commits and do not push unless explicitly asked.
 - Work through clusters in phased semantic slices rather than stopping after the first passing case.

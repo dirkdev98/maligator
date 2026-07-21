@@ -9,8 +9,8 @@
 
 /*
  * Server test binary: start an HTTP server on an ephemeral port, print it, and run
- * the event loop forever. The runner (scripts/servertest.ts) reads the port, drives
- * it with Node's fetch, asserts, and kills the process.
+ * the event loop forever. The runner (`tests/native/server.test.ts`) reads the port,
+ * drives it with Node's fetch, asserts, and kills the process.
  */
 
 extern const MalVmDefinition mal_vm_definition;

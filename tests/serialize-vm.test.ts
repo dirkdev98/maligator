@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
+import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts";
 import {
 	deserializeVmDefinition,
 	MAX_STRING_CODE_UNITS,
 	serializeVmDefinition,
 	WIRE_OPCODES,
 	WIRE_VERSION,
-} from "./serialize-vm.ts";
+} from "../src/serialize-vm.ts";
 
 // A definition exercising the tricky encodings: variable-length operand arrays
 // (CALL / CREATE_OBJECT_SHAPED / CREATE_MODULE_NAMESPACE / CREATE_TEMPLATE_OBJECT /

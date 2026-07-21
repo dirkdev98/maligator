@@ -7,6 +7,7 @@ export const WPT_REVISION = "f0b30d60daf6a64a3b087d66732c54c8e5273dbd";
 
 export type WptMode = "normal" | "gc-stress";
 export type WptBackend = "compiled" | "interpreted";
+export type WptPolicy = "bail" | "complete";
 export type WptStatus = "PASS" | "FAIL" | "TIMEOUT" | "CRASH";
 export type WptMetadataName = "title" | "global" | "variant" | "script";
 
@@ -88,6 +89,30 @@ export interface WptPinnedTest {
 
 const MODES: Array<WptMode> = ["normal", "gc-stress"];
 const BACKENDS: Array<WptBackend> = ["compiled", "interpreted"];
+
+export function parseWptPolicy(value: string | undefined): WptPolicy {
+	if (value === undefined || value === "complete") return "complete";
+	if (value === "bail") return "bail";
+	throw new Error("--policy must be bail or complete");
+}
+
+export function shouldAbortWptRun(
+	policy: WptPolicy,
+	outcome: {
+		harness: WptHarnessResult;
+		verdicts: Array<WptClassification>;
+		missingExpectations: Array<WptExpectation>;
+		terminalStatus?: "TIMEOUT" | "CRASH";
+	},
+): boolean {
+	return (
+		policy === "bail" &&
+		(outcome.harness.status === "ERROR" ||
+			outcome.terminalStatus !== undefined ||
+			outcome.missingExpectations.length > 0 ||
+			outcome.verdicts.some((result) => result.verdict === "UNEXPECTED"))
+	);
+}
 
 export function createWptExecutionEnvironment(
 	environment: NodeJS.ProcessEnv,
@@ -464,6 +489,33 @@ export function parseWptExpectations(source: string): Array<WptExpectation> {
 			revision: WPT_REVISION,
 		};
 	});
+}
+
+export function validateWptExpectations(
+	expectations: ReadonlyArray<WptExpectation>,
+	entries: ReadonlyArray<WptManifestEntry>,
+): void {
+	const entriesByPath = new Map(entries.map((entry) => [entry.path, entry]));
+	for (const expectation of expectations) {
+		const entry = entriesByPath.get(expectation.path);
+		if (entry === undefined) {
+			throw new Error(`expectation path is not curated: ${expectation.path}`);
+		}
+		const declaredVariants = entry.metadata
+			.filter((item) => item.name === "variant")
+			.map((item) => item.value);
+		const variants = declaredVariants.length === 0 ? [""] : declaredVariants;
+		if (!variants.includes(expectation.variant)) {
+			throw new Error(
+				`expectation variant is not declared for ${expectation.path}: ${expectation.variant}`,
+			);
+		}
+		if (!entry.modes.includes(expectation.mode)) {
+			throw new Error(
+				`expectation mode is not enabled for ${expectation.path}: ${expectation.mode}`,
+			);
+		}
+	}
 }
 
 export function verifyWptCheckout(root: string, external: boolean): void {

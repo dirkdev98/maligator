@@ -1,8 +1,16 @@
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { cleanTestEnvironment } from "./test-environment.ts";
 
 export function sanitizerEnvironment(platform: NodeJS.Platform): NodeJS.ProcessEnv {
-	return platform === "darwin" ? { MAL_UBSAN: "1" } : { MAL_ASAN: "1" };
+	const undefinedBehavior = "halt_on_error=1:print_stacktrace=1";
+	return platform === "darwin"
+		? { MAL_UBSAN: "1", UBSAN_OPTIONS: undefinedBehavior }
+		: {
+				MAL_ASAN: "1",
+				ASAN_OPTIONS: "abort_on_error=1:detect_leaks=1:halt_on_error=1",
+				UBSAN_OPTIONS: undefinedBehavior,
+			};
 }
 
 export function runSanitizerTests(args = process.argv.slice(2)): number {
@@ -14,7 +22,7 @@ export function runSanitizerTests(args = process.argv.slice(2)): number {
 		["node_modules/vitest/vitest.mjs", "run", "--project", "native", ...args],
 		{
 			stdio: "inherit",
-			env: { ...process.env, ...selected },
+			env: cleanTestEnvironment(selected),
 		},
 	);
 	if (result.error !== undefined) throw result.error;

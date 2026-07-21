@@ -10,8 +10,11 @@ import {
 	parseWptExpectations,
 	parseWptManifest,
 	parseWptOutput,
+	parseWptPolicy,
 	selectWptExecutionDimensions,
 	selectWptManifestEntries,
+	shouldAbortWptRun,
+	validateWptExpectations,
 	verifyWptCheckout,
 } from "../tests/wpt/harness.ts";
 import type {
@@ -20,6 +23,7 @@ import type {
 	WptHarnessResult,
 	WptSubtestResult,
 } from "../tests/wpt/harness.ts";
+import { reexecWithCleanTestEnvironment } from "./test-environment.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 const metadataRoot = path.join(root, "tests/wpt");
@@ -34,27 +38,47 @@ const resultsPath = path.join(outputRoot, "results.json");
 const requestedPaths: Array<string> = [];
 const requestedModes: Array<string> = [];
 const requestedBackends: Array<string> = [];
+let requestedPolicy: string | undefined;
+let canonical = false;
+const usage =
+	"usage: npm run test:wpt -- [--canonical] [--test <curated-path>]... [--mode normal|gc-stress]... [--backend compiled|interpreted]... [--policy bail|complete]";
 for (let index = 2; index < process.argv.length; index++) {
 	const option = process.argv[index];
+	if (option === "-h" || option === "--help") {
+		console.log(usage);
+		process.exit(0);
+	}
+	if (option === "--canonical") {
+		if (canonical) throw new Error(`--canonical may only be specified once\n${usage}`);
+		canonical = true;
+		continue;
+	}
 	const value = process.argv[index + 1];
 	if (value === undefined || value.startsWith("--")) {
-		throw new Error(
-			"usage: npm run test:wpt -- [--test <curated-path>]... [--mode normal|gc-stress]... [--backend compiled|interpreted]...",
-		);
+		throw new Error(usage);
 	}
 	if (option === "--test") requestedPaths.push(value);
 	else if (option === "--mode") requestedModes.push(value);
 	else if (option === "--backend") requestedBackends.push(value);
-	else {
-		throw new Error(
-			"usage: npm run test:wpt -- [--test <curated-path>]... [--mode normal|gc-stress]... [--backend compiled|interpreted]...",
-		);
-	}
+	else if (option === "--policy" && requestedPolicy === undefined)
+		requestedPolicy = value;
+	else throw new Error(usage);
 	index++;
 }
+if (canonical) reexecWithCleanTestEnvironment("WPT_CANONICAL_CHILD");
+const policy = parseWptPolicy(requestedPolicy);
 
 const manifest = parseWptManifest(
 	readFileSync(path.join(metadataRoot, "curated.json"), "utf8"),
+);
+const allExpectations = parseWptExpectations(
+	readFileSync(path.join(metadataRoot, "expectations.json"), "utf8"),
+);
+validateWptExpectations(allExpectations, manifest.tests);
+
+verifyWptCheckout(checkoutRoot, externalRoot !== undefined);
+const pinnedTests = new Map(
+	manifest.tests.map((entry) => [entry.path, loadPinnedWptTest(checkoutRoot, entry)]),
 );
 const tests = selectWptManifestEntries(manifest.tests, requestedPaths);
 const dimensions = new Map(
@@ -62,14 +86,6 @@ const dimensions = new Map(
 		entry.path,
 		selectWptExecutionDimensions(entry, requestedModes, requestedBackends),
 	]),
-);
-const allExpectations = parseWptExpectations(
-	readFileSync(path.join(metadataRoot, "expectations.json"), "utf8"),
-);
-
-verifyWptCheckout(checkoutRoot, externalRoot !== undefined);
-const pinnedTests = new Map(
-	tests.map((entry) => [entry.path, loadPinnedWptTest(checkoutRoot, entry)]),
 );
 
 const executionKeys = new Set<string>();
@@ -85,6 +101,7 @@ for (const entry of tests) {
 		}
 	}
 }
+const plannedExecutions = executionKeys.size;
 const expectations = allExpectations.filter((expectation) =>
 	executionKeys.has(
 		[expectation.path, expectation.variant, expectation.backend, expectation.mode].join(
@@ -129,6 +146,7 @@ interface ExecutionReport extends WptExecutionKey {
 
 mkdirSync(buildRoot, { recursive: true });
 const executions: Array<ExecutionReport> = [];
+let aborted = false;
 for (const entry of tests) {
 	const manifestIndex = manifest.tests.indexOf(entry);
 	const pinned = pinnedTests.get(entry.path);
@@ -157,7 +175,7 @@ for (const entry of tests) {
 						[],
 						executionExpectations(execution, expectations),
 					);
-					executions.push({
+					const report: ExecutionReport = {
 						...execution,
 						target: "server-main",
 						harness: {
@@ -177,8 +195,14 @@ for (const entry of tests) {
 						results: [],
 						verdicts: [],
 						missingExpectations: classified.missing,
-					});
+					};
+					executions.push(report);
+					if (shouldAbortWptRun(policy, report)) {
+						aborted = true;
+						break;
+					}
 				}
+				if (aborted) break;
 				continue;
 			}
 			for (const { mode } of entryDimensions.filter((item) => item.backend === backend)) {
@@ -212,7 +236,7 @@ for (const entry of tests) {
 					parsed.subtests,
 					executionExpectations(execution, expectations),
 				);
-				executions.push({
+				const report: ExecutionReport = {
 					...execution,
 					target: "server-main",
 					harness: parsed.harness,
@@ -227,10 +251,18 @@ for (const entry of tests) {
 					results: parsed.subtests,
 					verdicts: classified.results,
 					missingExpectations: classified.missing,
-				});
+				};
+				executions.push(report);
+				if (shouldAbortWptRun(policy, { ...report, terminalStatus })) {
+					aborted = true;
+					break;
+				}
 			}
+			if (aborted) break;
 		}
+		if (aborted) break;
 	}
+	if (aborted) break;
 }
 
 const unexpected = executions.flatMap((execution) =>
@@ -244,8 +276,13 @@ const report = {
 	schemaVersion: 2,
 	revision: manifest.revision,
 	target: "server-main" as const,
+	policy,
+	complete: !aborted,
+	aborted,
 	executions,
 	summary: {
+		plannedExecutions,
+		completedExecutions: executions.length,
 		executions: executions.length,
 		subtests: executions.reduce(
 			(total, execution) => total + execution.results.length,
@@ -259,8 +296,8 @@ const report = {
 writeFileSync(resultsPath, `${JSON.stringify(report, null, 2)}\n`);
 
 console.log(
-	`WPT: ${report.summary.executions} executions, ${report.summary.subtests} subtests, ${report.summary.unexpected} unexpected, ${report.summary.missingExpectations} stale expectations, ${report.summary.harnessErrors} harness errors`,
+	`WPT: ${report.summary.completedExecutions}/${report.summary.plannedExecutions} executions, ${report.summary.subtests} subtests, ${report.summary.unexpected} unexpected, ${report.summary.missingExpectations} stale expectations, ${report.summary.harnessErrors} harness errors${aborted ? " (aborted)" : ""}`,
 );
-if (unexpected.length > 0 || missing.length > 0 || harnessErrors.length > 0) {
+if (aborted || unexpected.length > 0 || missing.length > 0 || harnessErrors.length > 0) {
 	process.exitCode = 1;
 }

@@ -1,0 +1,7 @@
+# High-density normal/compiled developer-gate complement.
+dom/events/AddEventListenerOptions-once.any.js
+encoding/textdecoder-fatal-streaming.any.js
+fetch/api/headers/header-setcookie.any.js
+streams/readable-streams/bad-strategies.any.js
+url/url-statics-parse.any.js
+url/urlsearchparams-foreach.any.js

@@ -4,7 +4,7 @@ import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
 import type { Test262Cache } from "./types.ts";
 
-export function test262LoadCache(): Test262Cache {
+export function test262LoadCache(corpusPaths?: ReadonlyArray<string>): Test262Cache {
 	if (!existsSync(TEST262_METADATA.cacheFile)) {
 		test262Log("No cache found.");
 		return {
@@ -16,6 +16,20 @@ export function test262LoadCache(): Test262Cache {
 	const cacheContents = JSON.parse(
 		readFileSync(TEST262_METADATA.cacheFile, "utf-8"),
 	) as Test262Cache;
+	if (cacheContents.sha !== TEST262_METADATA.revision) {
+		test262Log(
+			`Ignoring cached revision ${cacheContents.sha}; expected ${TEST262_METADATA.revision}.`,
+		);
+		return { sha: "", files: [] };
+	}
+	if (
+		corpusPaths !== undefined &&
+		(cacheContents.files.length !== corpusPaths.length ||
+			cacheContents.files.some((file, index) => file.path !== corpusPaths[index]))
+	) {
+		test262Log("Ignoring cache whose file inventory differs from the pinned corpus.");
+		return { sha: "", files: [] };
+	}
 
 	test262Log(`Using ${cacheContents.files.length} cached files at ${cacheContents.sha}.`);
 

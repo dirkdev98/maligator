@@ -1,6 +1,6 @@
 /**
- * vitest globalSetup for the native lane. Prewarms the canonical and Node-enabled
- * runtime artifact sets; individual builds still call the atomic ensure path.
+ * vitest globalSetup for the native lane. Prewarms the canonical runtime artifact
+ * set; feature-specific archives are built lazily by the tests that need them.
  */
 
 import * as path from "node:path";
@@ -34,21 +34,6 @@ export function setup(): void {
 	ensureNativeArtifacts(
 		resolveNativeBuildContext({
 			features: buildDerivationFromConfig(config).features,
-			compilerBake,
-		}),
-	);
-	const nodeConfig = resolveBuildConfig({
-		engine: {
-			eval: true,
-			regexp: true,
-			realms: true,
-			intl: { enabled: true, features: [] },
-		},
-		surface: { webPlatform: true, node: true },
-	});
-	ensureNativeArtifacts(
-		resolveNativeBuildContext({
-			features: buildDerivationFromConfig(nodeConfig).features,
 			compilerBake,
 		}),
 	);

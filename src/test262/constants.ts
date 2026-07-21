@@ -1,10 +1,10 @@
 export const TEST262_METADATA = {
 	path: ".cache/test262",
 	repository: "tc39/test262",
+	revision: "fc32f3e82cb9ec08885fdd306756b65116e8547a",
 	buildPath: ".cache/mal-build/test262",
 	cacheFile: ".cache/test262-cache.json",
 	outputFile: "scripts/test262.json",
-	preflightFile: ".cache/test262-preflight.json",
 
 	/**
 	 * Per-test binary run timeout. Loops are compilable now, so runaway tests
@@ -40,5 +40,4 @@ export const TEST262_METADATA = {
 	minimumBatchSize: 25,
 	targetBatchesPerWorker: 2,
 	compileWorkers: 8,
-	preflightRegressionLimit: 0.05,
 };

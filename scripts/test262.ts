@@ -1,5 +1,4 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as nodePath from "node:path";
 import { Worker } from "node:worker_threads";
@@ -11,8 +10,13 @@ import {
 	test262ListFiles,
 } from "../src/test262/files.ts";
 import { test262Log } from "../src/test262/log.ts";
-import { summarizeTest262Preflight } from "../src/test262/preflight.ts";
-import type { Test262PreflightSummary } from "../src/test262/preflight.ts";
+import {
+	parseTest262Policy,
+	test262BatchRegressions,
+	test262FoldedRegressions,
+	test262WorkerCount,
+} from "../src/test262/policy.ts";
+import type { Test262Variant } from "../src/test262/policy.ts";
 import {
 	getCodeStats,
 	getBatchReports,
@@ -26,40 +30,125 @@ import {
 	test262ResetStats,
 } from "../src/test262/runtime.ts";
 import type { StatsSnapshot } from "../src/test262/runtime.ts";
+import {
+	mergeTest262Manifests,
+	parseTest262Manifest,
+	selectTest262ManifestFiles,
+} from "../src/test262/selection.ts";
 import type { Test262File, Test262Output } from "../src/test262/types.ts";
+import { reexecWithCleanTestEnvironment } from "./test-environment.ts";
 
-function argValue(name: string) {
-	const index = process.argv.indexOf(name);
-	return index >= 0 ? process.argv[index + 1] : undefined;
+interface Test262Arguments {
+	backend?: string;
+	canonical: boolean;
+	check: boolean;
+	excludeManifests: Array<string>;
+	filter?: string;
+	manifests: Array<string>;
+	mode?: string;
+	policy?: string;
+	random: boolean;
+	variant?: string;
 }
 
-const random = process.argv.includes("--random");
-// Gate mode: never rewrite the committed results, and exit non-zero if any test
-// regressed (PASSED -> FAILED) against them. Used by scripts/gate.ts to run the
-// suite in several modes (compiled / --no-compiled / STRESS) without one mode's
-// flaky verdicts clobbering the committed baseline.
-const checkMode = process.argv.includes("--check");
-const filter = argValue("--filter");
-// Restrict the run to an explicit newline-separated list of test paths (the
-// committed regression manifest). Like --filter, it is a partial run: it never
-// rewrites the committed results and does not prune the artifact cache.
-const manifestPath = argValue("--manifest");
-/**
- * A full invocation first runs an interpreted preflight, then starts the
- * authoritative compiled backend unless more than 5% of non-skipped tests
- * regressed against the committed baseline. Each backend executes the spec as a
- * strict pass (default + onlyStrict + module + raw, skipping noStrict) and a
- * sloppy pass (default + noStrict scripts), each with its own artifact cache
- * namespace per backend/variant, driven through the T262_VARIANT env var (which
- * also reaches worker threads and the runtime's strictness/skip logic). The two
- * passes are folded per test - spec-compliant: a "default" test runs in both
- * modes and passes only if it passes in each - into the single committed
- * scripts/test262.json (see {@link combineRuns}).
- *
- * `--variant strict|sloppy` runs just that one pass for debugging: it logs and
- * dumps a per-pass report but never rewrites the committed results.
- */
-const onlyVariant = argValue("--variant");
+const usage = `usage: node scripts/test262.ts [options]
+
+Options:
+  --canonical                  scrub ambient test dimensions
+  --backend compiled|interpreted
+  --mode normal|gc-stress
+  --manifest <file>            include listed paths; repeat to union manifests
+  --exclude-manifest <file>    omit listed paths; repeat to union manifests
+  --filter <substring>         run matching test paths
+  --variant strict|sloppy      run one language variant for diagnostics
+  --check                      compare without updating the baseline
+  --policy bail|complete       stop on a regression or complete the selection
+  --random                     run a non-baseline random sample
+  -h, --help                   show this help`;
+
+function parseArguments(): Test262Arguments {
+	const result: Test262Arguments = {
+		canonical: false,
+		check: false,
+		excludeManifests: [],
+		manifests: [],
+		random: false,
+	};
+	const seen = new Set<string>();
+	for (let index = 2; index < process.argv.length; index++) {
+		const option = process.argv[index]!;
+		if (option === "-h" || option === "--help") {
+			console.log(usage);
+			process.exit(0);
+		}
+		const repeatable = option === "--manifest" || option === "--exclude-manifest";
+		if (!repeatable && seen.has(option)) {
+			throw new Error(`${option} may only be specified once`);
+		}
+		seen.add(option);
+		if (option === "--canonical") result.canonical = true;
+		else if (option === "--check") result.check = true;
+		else if (option === "--random") result.random = true;
+		else {
+			const value = process.argv[++index];
+			if (value === undefined || value.startsWith("--")) {
+				throw new Error(`${option} requires a value\n${usage}`);
+			}
+			if (option === "--backend") result.backend = value;
+			else if (option === "--mode") result.mode = value;
+			else if (option === "--manifest") result.manifests.push(value);
+			else if (option === "--exclude-manifest") result.excludeManifests.push(value);
+			else if (option === "--filter") result.filter = value;
+			else if (option === "--variant") result.variant = value;
+			else if (option === "--policy") result.policy = value;
+			else throw new Error(`unknown option: ${option}\n${usage}`);
+		}
+	}
+	return result;
+}
+
+const arguments_ = parseArguments();
+const requestedBackend = arguments_.backend ?? "compiled";
+if (requestedBackend !== "compiled" && requestedBackend !== "interpreted") {
+	throw new Error(`--backend only supports 'compiled' or 'interpreted'`);
+}
+const requestedMode = arguments_.mode ?? "normal";
+if (requestedMode !== "normal" && requestedMode !== "gc-stress") {
+	throw new Error(`--mode only supports 'normal' or 'gc-stress'`);
+}
+if (
+	arguments_.canonical ||
+	arguments_.backend !== undefined ||
+	arguments_.mode !== undefined
+) {
+	const tuning = Object.fromEntries(
+		["T262_COMPILE_WORKERS", "T262_OBJCACHE"].flatMap((name) => {
+			const value = process.env[name];
+			return value === undefined ? [] : [[name, value]];
+		}),
+	);
+	reexecWithCleanTestEnvironment("TEST262_CANONICAL_CHILD", {
+		...tuning,
+		...(requestedBackend === "interpreted" ? { MAL_INTERP: "1" } : {}),
+		...(requestedMode === "gc-stress" ? { MAL_GC_STRESS: "1", MAL_GC_VERIFY: "1" } : {}),
+	});
+}
+
+const random = arguments_.random;
+// Gate mode never rewrites the committed results and exits non-zero if a
+// previously passing test no longer passes.
+const checkMode = arguments_.check;
+const policy = parseTest262Policy(arguments_.policy);
+if (policy === "bail" && !checkMode) {
+	throw new Error("--policy bail requires --check");
+}
+const filter = arguments_.filter;
+// Manifest/filter runs are partial: they never rewrite committed results or
+// prune artifacts for corpus entries they did not visit.
+const manifestPaths = arguments_.manifests;
+const excludeManifestPaths = arguments_.excludeManifests;
+/** Each backend executes strict and sloppy passes. `--variant` selects one pass. */
+const onlyVariant = arguments_.variant;
 if (onlyVariant !== undefined && onlyVariant !== "strict" && onlyVariant !== "sloppy") {
 	throw new Error(`--variant only supports 'strict' or 'sloppy', got '${onlyVariant}'`);
 }
@@ -74,97 +163,78 @@ const compileWorkers = Math.max(
 	1,
 	Math.min(configuredCompileWorkers, os.availableParallelism()),
 );
-const preflightMode = process.env.T262_PREFLIGHT === "1";
-const isFullRunRequest = !filter && !manifestPath && !random && !onlyVariant;
-const preflightPath = TEST262_METADATA.preflightFile;
-
-if (isFullRunRequest && process.env.T262_ORCHESTRATED !== "1") {
-	const entrypoint = process.argv[1];
-	if (!entrypoint) {
-		throw new Error("Unable to resolve the Test262 runner entrypoint");
-	}
-	const args = [entrypoint, ...process.argv.slice(2)];
-	rmSync(preflightPath, { force: true });
-
-	test262Log("=== backend: interpreted preflight ===");
-	const interpreted = spawnSync(process.execPath, args, {
-		stdio: "inherit",
-		env: {
-			...process.env,
-			MAL_INTERP: "1",
-			T262_ORCHESTRATED: "1",
-			T262_PREFLIGHT: "1",
-		},
-	});
-	if (interpreted.status !== 0 || !existsSync(preflightPath)) {
-		test262Log("Interpreted preflight did not complete; skipping compiled mode.");
-		process.exit(interpreted.status ?? 1);
-	}
-
-	const preflight = JSON.parse(
-		readFileSync(preflightPath, "utf8"),
-	) as Test262PreflightSummary;
-	if (preflight.abortCompiled) {
-		test262Log(
-			`Interpreted preflight regressed ${preflight.regressions.length}/${preflight.ranTests} tests (${(preflight.regressionRate * 100).toFixed(2)}%); limit is ${(TEST262_METADATA.preflightRegressionLimit * 100).toFixed(0)}%. Skipping compiled mode.`,
-		);
-		process.exit(1);
-	}
-
-	test262Log(
-		`Interpreted preflight regressed ${preflight.regressions.length}/${preflight.ranTests} tests (${(preflight.regressionRate * 100).toFixed(2)}%); continuing to compiled mode.`,
-	);
-	test262Log("=== backend: compiled ===");
-	const compiled = spawnSync(process.execPath, args, {
-		stdio: "inherit",
-		env: {
-			...process.env,
-			MAL_INTERP: "0",
-			T262_ORCHESTRATED: "1",
-			T262_PREFLIGHT: "0",
-		},
-	});
-	process.exit(compiled.status ?? 1);
+const previousOutput = existsSync(TEST262_METADATA.outputFile)
+	? (JSON.parse(readFileSync(TEST262_METADATA.outputFile, "utf-8")) as Test262Output)
+	: undefined;
+if (checkMode && previousOutput === undefined) {
+	throw new Error(`Test262 check requires ${TEST262_METADATA.outputFile}`);
+}
+if (
+	previousOutput?.sha !== undefined &&
+	previousOutput.sha !== TEST262_METADATA.revision
+) {
+	const message = `Test262 baseline is ${previousOutput.sha}; pinned corpus is ${TEST262_METADATA.revision}`;
+	if (checkMode) throw new Error(message);
+	test262Log(`${message}. A full baseline-update run must replace it.`);
 }
 
-const cacheContext = test262LoadCache();
-
+const checkoutSha = test262Checkout();
+const fileList = test262ListFiles();
+const cacheContext = test262LoadCache(fileList);
 if (!cacheContext.files.length) {
-	cacheContext.sha = test262Checkout();
+	cacheContext.sha = checkoutSha;
 
-	const fileIterator = test262ListFiles();
-	cacheContext.files = await test262CollectFiles(fileIterator);
+	cacheContext.files = await test262CollectFiles(fileList);
 	test262PersistCache(cacheContext);
 }
 
 let selection = cacheContext.files;
+const includeManifest =
+	manifestPaths.length > 0
+		? mergeTest262Manifests(
+				manifestPaths.map((manifestPath) =>
+					parseTest262Manifest(readFileSync(manifestPath, "utf-8")),
+				),
+			)
+		: undefined;
+const excludeManifest =
+	excludeManifestPaths.length > 0
+		? mergeTest262Manifests(
+				excludeManifestPaths.map((manifestPath) =>
+					parseTest262Manifest(readFileSync(manifestPath, "utf-8")),
+				),
+			)
+		: undefined;
+selection = selectTest262ManifestFiles(selection, includeManifest, excludeManifest);
 if (filter) {
 	selection = selection.filter((file) => file.path.includes(filter));
 	test262Log(`Filtered to ${selection.length} files matching '${filter}'.`);
 }
-if (manifestPath) {
-	const wanted = new Set(
-		readFileSync(manifestPath, "utf-8")
-			.split("\n")
-			.map((line) => line.trim())
-			.filter((line) => line.length > 0 && !line.startsWith("#")),
-	);
-	selection = selection.filter((file) => wanted.has(file.path));
-	const missing = wanted.size - selection.length;
+if (manifestPaths.length > 0) {
 	test262Log(
-		`Manifest ${nodePath.basename(manifestPath)}: ${selection.length}/${wanted.size} files${
-			missing > 0 ? ` (${missing} not in corpus)` : ""
-		}`,
+		`Manifest${manifestPaths.length === 1 ? "" : "s"} ${manifestPaths.map((manifestPath) => nodePath.basename(manifestPath)).join(", ")}: ${selection.length}/${includeManifest?.size ?? 0} files.`,
+	);
+}
+if (excludeManifestPaths.length > 0) {
+	test262Log(
+		`Excluded ${excludeManifest?.size ?? 0} files from ${excludeManifestPaths.map((manifestPath) => nodePath.basename(manifestPath)).join(", ")}; ${selection.length} remain.`,
 	);
 }
 if (random) {
 	selection = selection.filter(() => Math.random() < 0.05);
 	test262Log(`Sampled ${selection.length} files.`);
 }
+if (selection.length === 0) {
+	throw new Error("Test262 selection is empty");
+}
 
 // A manifest/filter/random run is partial: it must not rewrite the committed
 // results or prune the artifact cache (it never visits every key).
-const isPartialRun = Boolean(filter) || Boolean(manifestPath) || random;
+const isPartialRun =
+	Boolean(filter) ||
+	manifestPaths.length > 0 ||
+	excludeManifestPaths.length > 0 ||
+	random;
 const batchSize = isPartialRun
 	? Math.min(
 			TEST262_METADATA.batchSize,
@@ -200,9 +270,13 @@ function reportProgress(processed: number) {
 async function runWithWorkers(
 	workerCount: number,
 	allBatches: Array<Array<Test262File>>,
-) {
+	variant: Test262Variant,
+): Promise<{ aborted: boolean; regressions: Array<string> }> {
 	const filesByPath = new Map(selection.map((file) => [file.path, file]));
 	let nextBatch = 0;
+	let aborted = false;
+	const regressions: Array<string> = [];
+	const previous = previousOutput?.results ?? {};
 
 	const workerUrl = new URL("../src/test262/compile-worker.ts", import.meta.url);
 
@@ -216,7 +290,7 @@ async function runWithWorkers(
 					});
 
 					const sendNext = () => {
-						if (nextBatch < allBatches.length) {
+						if (!aborted && nextBatch < allBatches.length) {
 							const batch = allBatches[nextBatch++]!;
 							thread.postMessage({
 								type: "batch",
@@ -250,6 +324,18 @@ async function runWithWorkers(
 									}
 								}
 								reportProgress(message.processed);
+								if (policy === "bail" && checkMode) {
+									const batchRegressions = test262BatchRegressions(
+										message.results,
+										filesByPath,
+										previous,
+										variant,
+									);
+									if (batchRegressions.length > 0) {
+										regressions.push(...batchRegressions);
+										aborted = true;
+									}
+								}
 								sendNext();
 							} else {
 								test262MergeStats(message.snapshot);
@@ -261,6 +347,7 @@ async function runWithWorkers(
 				}),
 		),
 	);
+	return { aborted, regressions };
 }
 
 /**
@@ -295,6 +382,8 @@ interface VariantRun {
 	/** Folded verdict per selected test path. */
 	results: Map<string, Folded>;
 	code: { compiledFiles: number; functionCount: number; instructionCount: number };
+	aborted: boolean;
+	regressions: Array<string>;
 }
 
 /**
@@ -304,7 +393,7 @@ interface VariantRun {
  * the full granular report next to the cache (uncommitted). Returns the folded
  * per-file verdicts and code totals for {@link combineRuns} to merge.
  */
-async function runVariant(variant: "strict" | "sloppy"): Promise<VariantRun> {
+async function runVariant(variant: Test262Variant): Promise<VariantRun> {
 	process.env.T262_VARIANT = variant;
 	test262Log(`=== ${variant} pass ===`);
 
@@ -314,21 +403,21 @@ async function runVariant(variant: "strict" | "sloppy"): Promise<VariantRun> {
 	}
 	startedAt = Date.now();
 	completed = 0;
-	test262Log(
-		`Throughput: batch ${batchSize}, ${compileWorkers} compile workers, generated C -O0, runtime -O2, full IR, LTO off.`,
-	);
-
 	const batches: Array<Array<Test262File>> = [];
 	for (let i = 0; i < selection.length; i += batchSize) {
 		batches.push(selection.slice(i, i + batchSize));
 	}
+	const workerCount = test262WorkerCount(compileWorkers, batches.length);
+	test262Log(
+		`Throughput: batch ${batchSize}, ${workerCount} compile workers, generated C -O0, runtime -O2, full IR, LTO off.`,
+	);
 
-	await runWithWorkers(compileWorkers, batches);
+	const run = await runWithWorkers(workerCount, batches, variant);
 
 	// A full, unfiltered run touches every current-fingerprint cache key, so any
 	// untouched entry is stale and safe to drop. Skip pruning on partial runs - they
 	// would wrongly delete entries for the batches they never visited.
-	if (!isPartialRun) {
+	if (!isPartialRun && !run.aborted) {
 		test262PruneArtifactCache();
 	}
 
@@ -340,8 +429,13 @@ async function runVariant(variant: "strict" | "sloppy"): Promise<VariantRun> {
 	const codeStats = getCodeStats();
 
 	test262Log(
-		`Took ${((Date.now() - startedAt) / 1000).toFixed(0)}s with ${compileWorkers} compile workers.`,
+		`Took ${((Date.now() - startedAt) / 1000).toFixed(0)}s with ${workerCount} compile workers.`,
 	);
+	if (run.aborted) {
+		test262Log(
+			`Bail policy: aborted after ${completed}/${selection.length} tests; ${run.regressions.length} regression(s) found.`,
+		);
+	}
 	test262Log(`Result:`, summary);
 	test262Log(
 		`Code: ${codeStats.functionCount} functions, ${codeStats.instructionCount} instructions across ${codeStats.compiledFiles} compiled files.`,
@@ -355,8 +449,13 @@ async function runVariant(variant: "strict" | "sloppy"): Promise<VariantRun> {
 		test262ReportPath(variant),
 		JSON.stringify(
 			{
-				schemaVersion: 1,
+				schemaVersion: 2,
 				variant,
+				complete: !run.aborted,
+				aborted: run.aborted,
+				processedTests: completed,
+				totalTests: selection.length,
+				regressions: run.regressions,
 				summary,
 				code: codeStats,
 				timings: getTimings(),
@@ -375,6 +474,8 @@ async function runVariant(variant: "strict" | "sloppy"): Promise<VariantRun> {
 			functionCount: codeStats.functionCount,
 			instructionCount: codeStats.instructionCount,
 		},
+		aborted: run.aborted,
+		regressions: run.regressions,
 	};
 }
 
@@ -409,20 +510,13 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 
 	const outputFile = TEST262_METADATA.outputFile;
 	const isFullRun = !isPartialRun;
-	let preflightSummary: Test262PreflightSummary | undefined;
-
+	let regressions: Array<string> = [];
+	const improvements: Array<string> = [];
 	// Compare against the committed results to surface regressions, even on
 	// partial runs.
-	if (existsSync(outputFile)) {
-		const previous = JSON.parse(readFileSync(outputFile, "utf-8")) as Test262Output;
-
-		preflightSummary = summarizeTest262Preflight(
-			combined,
-			previous.results,
-			TEST262_METADATA.preflightRegressionLimit,
-		);
-		const regressions = preflightSummary.regressions;
-		const improvements: Array<string> = [];
+	if (previousOutput) {
+		const previous = previousOutput;
+		regressions = test262FoldedRegressions(combined, previous.results);
 		for (const file of selection) {
 			const before = previous.results[file.path];
 			const after = combined.get(file.path);
@@ -447,27 +541,31 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 			for (const path of regressions.slice(0, 50)) {
 				test262Log(`  ${path}`);
 			}
-			// Gate mode surfaces a regression as a non-zero exit so a wrapper can
-			// fail the build. (Mind the known async/dynamic-import flakiness floor —
-			// see scripts/gate.ts.)
-			if (checkMode && !preflightMode) {
+			if (checkMode) {
 				process.exitCode = 1;
 			}
 		}
 	}
 
-	if (preflightMode) {
-		preflightSummary ??= summarizeTest262Preflight(
-			combined,
-			{},
-			TEST262_METADATA.preflightRegressionLimit,
-		);
-		writeFileSync(preflightPath, JSON.stringify(preflightSummary, null, 2));
-		test262Log(
-			`Preflight: ${preflightSummary.regressions.length}/${preflightSummary.ranTests} regressions (${(preflightSummary.regressionRate * 100).toFixed(2)}%).`,
-		);
-		return;
-	}
+	writeFileSync(
+		test262ReportPath("combined"),
+		JSON.stringify(
+			{
+				schemaVersion: 1,
+				backend: process.env.MAL_INTERP === "1" ? "interpreted" : "compiled",
+				mode: process.env.MAL_GC_STRESS ? "gc-stress" : "normal",
+				policy,
+				complete: true,
+				selectedTests: selection.length,
+				summary,
+				code,
+				regressions,
+				improvements,
+			},
+			null,
+			2,
+		),
+	);
 
 	if (checkMode) {
 		test262Log("Check mode: not updating the committed results.");
@@ -501,9 +599,20 @@ test262PrepareBuild();
 
 if (onlyVariant) {
 	// Single-pass debug run: report only, never touch the committed results.
-	await runVariant(onlyVariant);
+	const run = await runVariant(onlyVariant);
+	if (run.aborted) {
+		process.exitCode = 1;
+	}
 } else {
 	const strict = await runVariant("strict");
-	const sloppy = await runVariant("sloppy");
-	combineRuns(strict, sloppy);
+	if (strict.aborted) {
+		process.exitCode = 1;
+	} else {
+		const sloppy = await runVariant("sloppy");
+		if (sloppy.aborted) {
+			process.exitCode = 1;
+		} else {
+			combineRuns(strict, sloppy);
+		}
+	}
 }

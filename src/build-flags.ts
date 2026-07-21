@@ -32,11 +32,15 @@
  *
  *   # Linux / CI (ASan is the intended primary instrument; see the note above):
  *   MAL_ASAN=1 MAL_GC_STRESS=2 npm run test:native
- *   MAL_ASAN=1 MAL_GC_STRESS=2 npm run test262:regressions
+ *   MAL_ASAN=1 MAL_GC_STRESS=2 node scripts/test262.ts \
+ *     --manifest tests/test-suite-test262-smoke.txt \
+ *     --manifest tests/test-suite-test262-check.txt --check --policy complete
  *
  *   # macOS (ASan deadlocks in AsanInitInternal — use the working stack instead):
  *   MAL_GC_STRESS=2 MAL_GC_VERIFY=1 npm run test:native          # cell poison-on-free
- *   MAL_GMALLOC=1 MAL_GC_STRESS=2 npm run test262:regressions     # libc-buffer UAF
+ *   MAL_GMALLOC=1 MAL_GC_STRESS=2 node scripts/test262.ts \
+ *     --manifest tests/test-suite-test262-smoke.txt \
+ *     --manifest tests/test-suite-test262-check.txt --check --policy complete # libc-buffer UAF
  */
 
 import type { Toolchain } from "./toolchain.ts";
@@ -226,15 +230,17 @@ export function sanitizerMode(env: NodeJS.ProcessEnv = process.env): SanitizerMo
 
 /**
  * Sanitizer flags per mode; appear on BOTH compile and link (the link pulls in
- * the sanitizer runtimes). UBSan defaults to print-and-continue (no
- * `-fno-sanitize-recover`), so a benign report does not abort a passing run;
- * ASAN still halts on a real memory error. `-fno-omit-frame-pointer` keeps
- * reports readable.
+ * the sanitizer runtimes). Reports are fatal so a diagnostic cannot leave the
+ * sanitizer gate green. `-fno-omit-frame-pointer` keeps reports readable.
  */
 const SANITIZER_FLAGS: Record<SanitizerMode, Array<string>> = {
 	none: [],
-	asan: ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"],
-	ubsan: ["-fsanitize=undefined", "-fno-omit-frame-pointer"],
+	asan: [
+		"-fsanitize=address,undefined",
+		"-fno-sanitize-recover=all",
+		"-fno-omit-frame-pointer",
+	],
+	ubsan: ["-fsanitize=undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"],
 };
 
 /**

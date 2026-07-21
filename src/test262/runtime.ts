@@ -1,5 +1,12 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../build-config.ts";
@@ -122,8 +129,10 @@ export function test262NativeArtifacts(): Test262NativeArtifactPaths {
 	return test262NativeBuildInputs().artifacts;
 }
 
-export function test262ReportPath(variant: "strict" | "sloppy"): string {
-	return `${BUILD_PATH}/report-${variant}.json`;
+export function test262ReportPath(variant: "strict" | "sloppy" | "combined"): string {
+	const backend = process.env.MAL_INTERP === "1" ? "interpreted" : "compiled";
+	const mode = process.env.MAL_GC_STRESS ? "gc-stress" : "normal";
+	return `${BUILD_PATH}/report-${backend}-${mode}-${variant}.json`;
 }
 
 /**
@@ -263,8 +272,15 @@ export function test262ResetStats() {
 
 export function test262PrepareBuild() {
 	const toolchain = (selectedToolchain ??= requireToolchain({ needsCxx: true }));
-	rmSync(BUILD_PATH, { recursive: true, force: true });
 	mkdirSync(BUILD_PATH, { recursive: true });
+	for (const variant of ["strict", "sloppy", "combined"] as const) {
+		rmSync(test262ReportPath(variant), { force: true });
+	}
+	for (const name of readdirSync(BUILD_PATH)) {
+		if (!name.startsWith("report-")) {
+			rmSync(path.join(BUILD_PATH, name), { recursive: true, force: true });
+		}
+	}
 
 	test262Log(
 		`Building LibMaligator${gcGenerational() ? " (generational)" : " (non-generational)"}...`,

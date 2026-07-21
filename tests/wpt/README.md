@@ -8,6 +8,11 @@ command exits non-zero for a harness/setup error, malformed or incomplete
 transport, missing subtest, stale expectation, unexpected failure, or
 unexpected pass.
 
+The repository smoke and check tiers run deterministic compiled/normal
+partitions of this corpus. The full tier adds compiled GC verification and both
+interpreted modes. See [`docs/testing.md`](../../docs/testing.md) for tier and
+test-placement policy.
+
 The corpus is pinned to web-platform-tests/wpt revision
 `f0b30d60daf6a64a3b087d66732c54c8e5273dbd`. A minimal fixture tree containing
 only selected, unmodified upstream files and support scripts is committed under
@@ -48,6 +53,14 @@ Accepted modes are `normal` and `gc-stress`; accepted backends are `compiled`
 and `interpreted`. An explicitly requested mode that a selected manifest entry
 does not declare is an error. Interpreted executions use the same native host
 with `buildNativeBinary({ compiled: false })`.
+
+`--policy bail` stops after the first unexpected execution and writes a partial
+report. `--policy complete` is the default for the leaf runner and always writes
+the complete selected report. `npm run test:wpt:report` is the canonical
+compiled/normal coverage command. `npm run test:wpt:matrix-report` explicitly
+requests normal and GC-stress modes on compiled and interpreted backends. Both
+report commands use the committed pinned fixture and ignore ambient test/build
+dimensions; direct `npm run test:wpt` invocations retain `WPT_ROOT` support.
 
 The adapter parses repeated `META: variant` and `META: script` declarations.
 With no variant declaration it runs the empty variant; with no global declaration

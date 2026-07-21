@@ -8,14 +8,14 @@ import {
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/semantic-program.ts";
 
 test("snapshot sema changes", () => {
-	const semantic = loadEntrypointAndRunSemanticAnalysis(
-		path.join(import.meta.dirname, "./local/semantic-analysis.js"),
-		{ entryGoal: "script" },
-	);
+	const fixturePath = path.join(import.meta.dirname, "./local/semantic-analysis.js");
+	const semantic = loadEntrypointAndRunSemanticAnalysis(fixturePath, {
+		entryGoal: "script",
+	});
 
-	// This local absolute path still needs a CI-portable fixture.
-	expect(debugSemanticProgram(semantic)).toMatchInlineSnapshot(`
-		"/Users/dirk/projects/maligator/tests/local/semantic-analysis.js
+	expect(debugSemanticProgram(semantic).replaceAll(fixturePath, "<fixture>"))
+		.toMatchInlineSnapshot(`
+		"<fixture>
 		  Scope(0 Program (parent: -1)
 		    Binding(assert var global FunctionDeclaration) (usages: 34, declared: true) 
 		    Binding(isPrimitive var global FunctionDeclaration) (usages: 3, declared: true) 
