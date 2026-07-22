@@ -6,12 +6,12 @@
 // phases also retain explicit heap-allocation controls.
 
 const MOD = 1000000007;
-const SHAPE_RUNS = 120000;
+const SHAPE_RUNS = 1000000;
 
 function observed1(seed) {
 	const o = { f0: seed };
 	let result = typeof o === "object" && o === o ? o.f0 : 0;
-	if (typeof o === "object") result += 3;
+	if (typeof o === "object" && typeof o.toString === "function") result += 3;
 	return result;
 }
 
@@ -175,23 +175,23 @@ for (let i = 0; i < SHAPE_RUNS; i++) {
 	checksum = (checksum + observed16(i)) % MOD;
 	checksum = (checksum + observed32(i)) % MOD;
 }
-for (let i = 0; i < 150000; i++) checksum = (checksum + identityPair(i)) % MOD;
-for (let i = 0; i < 100000; i++) {
+for (let i = 0; i < 1250000; i++) checksum = (checksum + identityPair(i)) % MOD;
+for (let i = 0; i < 825000; i++) {
 	checksum = (checksum + reentrant(3, i)) % MOD;
 	checksum = (checksum + heapValuedSlots(i)) % MOD;
 }
-for (let i = 0; i < 60000; i++) {
+for (let i = 0; i < 500000; i++) {
 	const returned = returnedNegative(1, i);
 	checksum = (checksum + returned.a + returned.d) % MOD;
 	checksum = (checksum + storeNegative(i)) % MOD;
 	checksum = (checksum + passNegative(i)) % MOD;
 }
-for (let i = 0; i < 300000; i++) {
-	const result = partiallyReturnedOne(i, i === 299999);
+for (let i = 0; i < 2500000; i++) {
+	const result = partiallyReturnedOne(i, i === 2499999);
 	checksum = (checksum + (typeof result === "object" ? result.value : result)) % MOD;
 }
 
-const EXPECTED_CHECKSUM = 797792866;
+const EXPECTED_CHECKSUM = 812707571;
 if (checksum !== EXPECTED_CHECKSUM) {
 	throw new Error("stack-object checksum " + checksum + " expected " + EXPECTED_CHECKSUM);
 }

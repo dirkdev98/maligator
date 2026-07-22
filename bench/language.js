@@ -1,7 +1,9 @@
 // Wide-coverage language benchmark: one program folding the former micro suite
 // (loops/control-flow, object property churn, dense arrays, allocation, Array +
-// Math intrinsics, for-of + try/catch) so a single wall-time number tracks broad
-// codegen health against Node/V8. Bounded, deterministic; prints one checksum.
+// Math intrinsics, for-of + try/catch), followed by an application-like order
+// pipeline using classes, collections, JSON, typed arrays, destructuring, and
+// sorting. A single wall-time number tracks broad codegen health against Node/V8.
+// Bounded, deterministic; prints one checksum.
 
 // --- loops + integer/float arithmetic + nested control flow -----------------
 function countPrimes(limit) {
@@ -147,11 +149,111 @@ function control() {
 	return acc;
 }
 
+// --- application-like parsing, normalization, dispatch, and aggregation ------
+class StandardPricing {
+	quote(order) {
+		return order.net + 7;
+	}
+}
+
+class VolumePricing {
+	quote(order) {
+		return order.net - Math.floor(order.net / 12);
+	}
+}
+
+class PriorityPricing {
+	quote(order) {
+		return order.net + Math.max(15, order.qty * 3);
+	}
+}
+
+function makeNormalizer(taxRate = 0) {
+	return function normalize({
+		id,
+		customer = "guest",
+		qty = 1,
+		price = 0,
+		discount = 0,
+		meta,
+		...rest
+	}) {
+		return {
+			...rest,
+			id,
+			customer,
+			qty,
+			net: Math.round((qty * price - discount) * (1 + taxRate)),
+			region: meta?.region ?? "unknown",
+		};
+	};
+}
+
+function application() {
+	const regions = ["north", "south", "east", "west"];
+	const source = [];
+	for (let i = 0; i < 96; i++) {
+		source.push({
+			id: i,
+			customer: "customer-" + (i % 23),
+			qty: (i % 9) + 1,
+			price: ((i * 47) % 800) + 25,
+			discount: i % 5 === 0 ? i % 17 : 0,
+			meta: i % 13 === 0 ? null : { region: regions[i % regions.length] },
+			channel: i % 2 === 0 ? "web" : "store",
+		});
+	}
+
+	const encoded = JSON.stringify(source);
+	const normalize = makeNormalizer(0.07);
+	const rules = [new StandardPricing(), new VolumePricing(), new PriorityPricing()];
+	let checksum = 0;
+	for (let round = 0; round < 180; round++) {
+		const orders = JSON.parse(encoded).map(normalize);
+		const totals = new Map();
+		const customers = new Set();
+		const histogram = new Uint32Array(8);
+		for (const order of orders) {
+			const quoted = rules[(order.id + round) % rules.length].quote(order);
+			totals.set(order.region, (totals.get(order.region) ?? 0) + quoted);
+			customers.add(order.customer);
+			histogram[Math.min(7, Math.floor(quoted / 500))]++;
+			checksum = (checksum + quoted + order.channel.length) % 1000000007;
+		}
+
+		orders.sort((left, right) => right.net - left.net || left.id - right.id);
+		const top = orders.slice(0, 12).reduce((sum, order) => sum + order.net, 0);
+		let distribution = 0;
+		for (let i = 0; i < histogram.length; i++) distribution += histogram[i] * (i + 1);
+		const summary = JSON.stringify({
+			round,
+			top,
+			customers: customers.size,
+			north: totals.get("north") ?? 0,
+			unknown: totals.get("unknown") ?? 0,
+			distribution,
+		});
+		checksum =
+			(checksum +
+				top +
+				distribution +
+				summary.length +
+				summary.charCodeAt(round % summary.length)) %
+			1000000007;
+	}
+	return checksum;
+}
+
 const checksum =
 	(loops() % 1000000007) +
 	objects() +
 	(arrays() % 1000000007) +
 	alloc() +
 	intrinsics() +
-	control();
+	control() +
+	application();
+const EXPECTED_CHECKSUM = 3646780103;
+if (checksum !== EXPECTED_CHECKSUM) {
+	throw new Error("language checksum " + checksum + " expected " + EXPECTED_CHECKSUM);
+}
 console.log(checksum);

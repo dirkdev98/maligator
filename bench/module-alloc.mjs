@@ -22,6 +22,10 @@ const sub = (a, b) => vec(a.x - b.x, a.y - b.y, a.z - b.z);
 const scale = (a, s) => vec(a.x * s, a.y * s, a.z * s);
 const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
 const lerp = (a, b, t) => add(scale(a, 1 - t), scale(b, t));
+const drag = (velocity, coefficient) => scale(velocity, 1 - coefficient);
+const integrateVelocity = (velocity, acceleration, dt) =>
+	add(drag(velocity, 0.004), scale(acceleration, dt));
+const integratePosition = (position, velocity, dt) => add(position, scale(velocity, dt));
 
 const GRAVITY = vec(0, -9.81, 0);
 const DT = 0.016;
@@ -31,9 +35,17 @@ for (let i = 0; i < 2000000; i++) {
 	const p = vec(i % 100, (i * 3) % 100, (i * 7) % 100);
 	const v = vec((i * 5) % 50, (i * 11) % 50, (i * 13) % 50);
 	const acc = add(scale(GRAVITY, DT), scale(v, 0.5));
-	const p2 = add(p, scale(acc, DT));
+	const v2 = integrateVelocity(v, acc, DT);
+	const p2 = integratePosition(p, v2, DT);
 	const mid = lerp(p, p2, 0.5);
 	const d = sub(p2, mid);
-	checksum = (checksum + dot(d, d)) % 1000000007;
+	checksum = (checksum + dot(d, d) + dot(v2, v2) * DT) % 1000000007;
 }
-console.log(checksum);
+const roundedChecksum = Math.round(checksum * 1000);
+const EXPECTED_CHECKSUM = 75438141708;
+if (roundedChecksum !== EXPECTED_CHECKSUM) {
+	throw new Error(
+		"module checksum " + roundedChecksum + " expected " + EXPECTED_CHECKSUM,
+	);
+}
+console.log(roundedChecksum);

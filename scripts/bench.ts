@@ -11,7 +11,8 @@
  *               feature flag's marginal bytes are tracked. No V8 compare.
  *   - compiler  Node-hosted front-end throughput and serialized wire bytes for a
  *               deterministic, constant-heavy multi-function source corpus.
- *   - language  bench/language.js wall time vs Node/V8 (wide instruction coverage).
+ *   - language  bench/language.js wall time vs Node/V8 (wide instruction coverage
+ *               plus an application-like object/collection/JSON pipeline).
  *   - module    bench/module-alloc.mjs: an ES module whose top-level const-bound
  *               helpers are composed in a hot allocation loop. Wall time vs V8 plus
  *               the GC collection count — the tripwire for the const/module-scope
@@ -20,16 +21,16 @@
  *   - string    bench/string.js: broad String + RegExp tokenization, plus an
  *               adversarial tiny-slice retention phase. Wall time vs V8 and GC
  *               allocation/live-set signals.
- *   - promise   bench/promise.js: chains, pending fan-out, combinators, thenables,
- *               rejection, and await. Wall time vs V8 plus managed and native
- *               promise-bookkeeping allocation signals.
- *   - coroutine bench/coroutine.js: generator, async, and async-generator frame
- *               churn in compiled and interpreted backends. Wall time and native
- *               support-buffer allocations.
- *   - arguments bench/arguments.js: direct non-escaping `arguments.length`/`[0]`
- *               reads in hot normal/default/generator calls. Backend wall time,
- *               managed allocation, coroutine-buffer churn, bytecode, and binary
- *               bytes isolate needless argument-object/slice materialization.
+ *   - promise   bench/promise.js: chains, pending fan-out, mixed-settlement batches,
+ *               combinators, thenables, rejection/recovery, finally, and await.
+ *               Wall time vs V8 plus managed and native bookkeeping signals.
+ *   - coroutine bench/coroutine.js: generator delegation/send/return/finally,
+ *               async calls, and manual/for-await async-generator frame churn in
+ *               both backends. Wall time and native support-buffer allocations.
+ *   - arguments bench/arguments.js: direct non-escaping `arguments.length` and
+ *               static indexed reads over varied normal/default/generator call
+ *               shapes. Backend wall time, managed allocation, coroutine-buffer
+ *               churn, bytecode, and binary bytes isolate needless materialization.
  *   - stack-object bench/stack-object.js: residual fixed-shape objects whose local
  *               identity/type/prototype observations prevent scalar replacement.
  *               Compiled and interpreted wall time, managed allocation/GC signals,
@@ -77,6 +78,7 @@ import type { ExpressHttpWorkload, OhaMetrics } from "./bench-http.ts";
 
 const BASELINE_FILE = "bench/baseline.json";
 const HISTORY_LIMIT = 50;
+const MIN_NODE_COMPARISON_MS = 60;
 
 interface SizeMetrics {
 	binaryBytes: number;
@@ -278,6 +280,17 @@ function timeCommand(
 	return median(times);
 }
 
+/** Enforce enough useful Node work that process startup does not dominate ratios. */
+function timeNodeComparison(name: string, fixture: string, runs: number): number {
+	const nodeMs = timeCommand("node", [fixture], runs);
+	if (nodeMs < MIN_NODE_COMPARISON_MS) {
+		throw new Error(
+			`${name} Node median ${nodeMs.toFixed(1)}ms is below the ${MIN_NODE_COMPARISON_MS}ms process-comparison floor; increase meaningful work in ${fixture} and recalibrate with --runs 5`,
+		);
+	}
+	return nodeMs;
+}
+
 // ---- size -----------------------------------------------------------------
 
 /** The floor program: binary size is config-dominated, so the fixture is fixed. */
@@ -407,7 +420,7 @@ function benchLanguage(runs: number): LanguageMetrics {
 		name: "bench-language",
 	});
 	const malMs = timeCommand(binary, [], runs);
-	const nodeMs = timeCommand("node", ["bench/language.js"], runs);
+	const nodeMs = timeNodeComparison("language", "bench/language.js", runs);
 	return { malMs, nodeMs, ratio: malMs / nodeMs };
 }
 
@@ -426,7 +439,7 @@ function benchModule(runs: number): ModuleMetrics {
 		name: "bench-module",
 	});
 	const malMs = timeCommand(binary, [], runs);
-	const nodeMs = timeCommand("node", ["bench/module-alloc.mjs"], runs);
+	const nodeMs = timeNodeComparison("module", "bench/module-alloc.mjs", runs);
 	// One instrumented run for the allocation signal this bench exists to track:
 	// zero collections means the const-helper inlining chain scalar-replaced every
 	// transient. (Works on the default collector — no generational build needed.)
@@ -453,7 +466,7 @@ function benchString(runs: number): StringMetrics {
 		name: "bench-string",
 	});
 	const malMs = timeCommand(binary, [], runs);
-	const nodeMs = timeCommand("node", ["bench/string.js"], runs);
+	const nodeMs = timeNodeComparison("string", "bench/string.js", runs);
 	const r = spawnSync(binary, [], {
 		env: { ...process.env, MAL_GC_STATS: "1" },
 		encoding: "utf-8",
@@ -496,7 +509,7 @@ function benchPromise(runs: number): PromiseMetrics {
 		name: "bench-promise",
 	});
 	const malMs = timeCommand(binary, [], runs);
-	const nodeMs = timeCommand("node", ["bench/promise.js"], runs);
+	const nodeMs = timeNodeComparison("promise", "bench/promise.js", runs);
 	const result = spawnSync(binary, [], {
 		env: { ...process.env, MAL_GC_STATS: "1", MAL_PROMISE_STATS: "1" },
 		encoding: "utf-8",
@@ -588,7 +601,7 @@ function benchCoroutine(runs: number): CoroutineMetrics {
 	return {
 		compiled: benchCoroutineBackend(compiled, runs),
 		interpreted: benchCoroutineBackend(interpreted, runs),
-		nodeMs: timeCommand("node", ["bench/coroutine.js"], runs),
+		nodeMs: timeNodeComparison("coroutine", "bench/coroutine.js", runs),
 	};
 }
 
@@ -639,7 +652,7 @@ function benchArguments(runs: number): ArgumentsMetrics {
 	return {
 		compiled: benchArgumentsBackend(compiled, runs),
 		interpreted: benchArgumentsBackend(interpreted, runs),
-		nodeMs: timeCommand("node", ["bench/arguments.js"], runs),
+		nodeMs: timeNodeComparison("arguments", "bench/arguments.js", runs),
 	};
 }
 
@@ -702,7 +715,7 @@ function benchStackObject(runs: number): StackObjectMetrics {
 	});
 	const compiled = benchStackObjectBackend(compiledBinary, runs);
 	const interpreted = benchStackObjectBackend(interpretedBinary, runs);
-	const nodeMs = timeCommand("node", ["bench/stack-object.js"], runs);
+	const nodeMs = timeNodeComparison("stack-object", "bench/stack-object.js", runs);
 	const nodeResult = spawnSync("node", ["bench/stack-object.js"], {
 		encoding: "utf-8",
 		stdio: ["ignore", "pipe", "pipe"],
@@ -742,7 +755,7 @@ function benchInterpreter(runs: number): InterpreterMetrics {
 		compiled: false,
 	});
 	const malMs = timeCommand(binary, [], runs);
-	const nodeMs = timeCommand("node", ["bench/language.js"], runs);
+	const nodeMs = timeNodeComparison("interpreter", "bench/language.js", runs);
 	const canRss = os.platform() === "darwin";
 	const result = canRss
 		? spawnSync("/usr/bin/time", ["-l", binary], {
@@ -1018,6 +1031,7 @@ function latestMetrics(entries: Array<Entry>): Entry | undefined {
 		const entry = entries[index];
 		if (entry === undefined) continue;
 		latest.size ??= entry.size;
+		latest.compiler ??= entry.compiler;
 		latest.language ??= entry.language;
 		latest.module ??= entry.module;
 		latest.string ??= entry.string;
