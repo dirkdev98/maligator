@@ -102,6 +102,9 @@ typedef struct MalPerfStats {
     u64 array_fresh_dense_stores;
     u64 array_fresh_dense_growths;
     u64 array_fresh_dense_fallbacks;
+    u64 array_fresh_dense_exact_reserves;
+    u64 array_fresh_dense_reserved_slots;
+    u64 array_fresh_dense_growths_avoided;
 
     MalPerfTableStats tables[MAL_PERF_TABLE_ROLE_COUNT];
     MalPerfShapeStats shapes[MAL_PERF_SHAPE_CALLER_COUNT];

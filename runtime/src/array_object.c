@@ -47,12 +47,16 @@ bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed) {
     if (needed <= array->capacity) {
         return true;
     }
+    if ((usize) needed > SIZE_MAX / sizeof(MalValue)) {
+        return false;
+    }
     // Route the dense vector through the RAW space so its bytes count toward the
     // GC trigger (element-heavy workloads used to under-trigger) and so an empty
     // RAW block returns to the OS. gc_realloc_raw grows by alloc-new / copy /
     // free-old (RAW has no in-place grow); no safepoint runs inside it, so the
     // detached old buffer is never observed by the collector.
-    MalValue *grown = gc_realloc_raw(mal_gc_current_heap(), array->elements, sizeof(MalValue) * needed);
+    MalValue *grown = gc_realloc_raw(
+        mal_gc_current_heap(), array->elements, sizeof(MalValue) * (usize) needed);
     if (grown == nullptr) {
         return false;
     }
@@ -71,6 +75,35 @@ bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed) {
         capacity *= 2;
     }
     return mal_array_object_dense_reserve_exact(array, capacity);
+}
+
+bool mal_array_object_fresh_dense_reserve_exact(MalArrayObject *array, u32 needed) {
+    if (array->dense_deopted || !array->object.extensible || !array->length_writable ||
+        array->length != 0 || array->dense_count != 0 || array->capacity != 0 ||
+        array->elements != nullptr) {
+        return false;
+    }
+    if (needed == 0) {
+        return true;
+    }
+    if (!mal_array_object_dense_reserve_exact(array, needed)) {
+        return false;
+    }
+
+    MAL_PERF_COUNT(array_fresh_dense_exact_reserves);
+    MAL_PERF_ADD(array_fresh_dense_reserved_slots, needed);
+#if MAL_PERF_STATS
+    u64 geometric_capacity = 0;
+    u64 geometric_growths = 0;
+    if (mal_perf_stats_enabled) {
+        while (geometric_capacity < needed) {
+            geometric_capacity = geometric_capacity == 0 ? 4 : geometric_capacity * 2;
+            geometric_growths++;
+        }
+    }
+    MAL_PERF_ADD(array_fresh_dense_growths_avoided, geometric_growths);
+#endif
+    return true;
 }
 
 bool mal_array_object_fresh_dense_append(MalArrayObject *array, MalValue value) {

@@ -79,11 +79,16 @@ describe("String.prototype.split fresh dense results", () => {
 		});
 	});
 
-	it("attributes fresh dense stores and geometric growth without fallback", () => {
+	it("attributes exact reserves and remaining geometric growth without fallback", () => {
 		const stderr = run(instrumented, { MAL_PERF_STATS: "1" });
 		expect(stderr).toContain("[perf-array-stats]");
 		expect(perfField(stderr, "fresh_dense_stores")).toBeGreaterThan(0);
 		expect(perfField(stderr, "fresh_dense_growths")).toBeGreaterThan(0);
 		expect(perfField(stderr, "fresh_dense_fallbacks")).toBe(0);
+		expect(perfField(stderr, "fresh_dense_exact_reserves")).toBeGreaterThan(0);
+		expect(perfField(stderr, "fresh_dense_reserved_slots")).toBeGreaterThan(
+			perfField(stderr, "fresh_dense_exact_reserves"),
+		);
+		expect(perfField(stderr, "fresh_dense_growths_avoided")).toBeGreaterThan(0);
 	});
 });

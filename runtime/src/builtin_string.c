@@ -1118,6 +1118,29 @@ static void mal_builtin_string_split_append(MalArrayObject *result, MalValue val
     }
 }
 
+static u32 mal_builtin_string_split_one_unit_result_count(
+    MalString *string, MalString *separator, u32 limit
+) {
+    u32 count = 1;
+    if (count == limit) {
+        return count;
+    }
+
+    const c16 separator_unit = mal_string_code_units(separator)[0];
+    const c16 *string_units = mal_string_code_units(string);
+    usize length = mal_string_length(string);
+    for (usize i = 0; i < length; i++) {
+        // Every one-code-unit match is non-overlapping with the next position.
+        if (string_units[i] == separator_unit) {
+            count++;
+            if (count == limit) {
+                break;
+            }
+        }
+    }
+    return count;
+}
+
 static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     // @@split dispatch — only when the separator is an Object (the spec accesses
     // @@split solely "if separator is an Object", never on a string primitive).
@@ -1169,26 +1192,44 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
         return mal_value_from_array_object(result);
     }
 
+    MalValue roots[3] = {
+        mal_value_from_string(string),
+        separator_undefined ? mal_value_new_undefined() : mal_value_from_string(separator),
+        mal_value_from_array_object(result),
+    };
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 3);
+    mal_gc_native_rooted_begin(vm);
+
     // Spec step 9: an undefined separator yields the whole string.
     if (separator_undefined) {
+        (void) mal_array_object_fresh_dense_reserve_exact(result, 1);
         mal_builtin_string_split_append(result, mal_value_from_string(string));
-        return mal_value_from_array_object(result);
+        goto split_done;
     }
 
     usize length = mal_string_length(string);
     usize separator_length = mal_string_length(separator);
 
     if (separator_length == 0) {
+        u32 exact_count = length < (usize) lim ? (u32) length : lim;
+        (void) mal_array_object_fresh_dense_reserve_exact(result, exact_count);
         // Split into individual code units, stopping at the limit.
         for (usize i = 0; i < length; i++) {
             if (result_length == lim) {
-                return mal_value_from_array_object(result);
+                goto split_done;
             }
             MalValue segment = mal_builtin_string_slice(vm, string, i, 1);
             mal_builtin_string_split_append(result, segment);
             result_length++;
         }
-        return mal_value_from_array_object(result);
+        goto split_done;
+    }
+
+    if (separator_length == 1) {
+        u32 exact_count =
+            mal_builtin_string_split_one_unit_result_count(string, separator, lim);
+        (void) mal_array_object_fresh_dense_reserve_exact(result, exact_count);
     }
 
     usize segment_start = 0;
@@ -1205,7 +1246,7 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
         mal_builtin_string_split_append(result, segment);
         result_length++;
         if (result_length == lim) {
-            return mal_value_from_array_object(result);
+            goto split_done;
         }
         position += separator_length;
         segment_start = position;
@@ -1214,7 +1255,11 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
     MalValue segment =
         mal_builtin_string_slice(vm, string, segment_start, length - segment_start);
     mal_builtin_string_split_append(result, segment);
-    return mal_value_from_array_object(result);
+
+split_done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&root_span);
+    return roots[2];
 }
 
 typedef MalU16Buffer StrBuf;

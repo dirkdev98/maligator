@@ -67,6 +67,12 @@ bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed);
 bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed);
 
 /**
+ * Reserve exactly `needed` slots on a pristine private Array without publishing
+ * any elements or changing length. Returns false if the array is no longer fresh.
+ */
+bool mal_array_object_fresh_dense_reserve_exact(MalArrayObject *array, u32 needed);
+
+/**
  * Append a default-data element to an intrinsic ordinary Array that has remained
  * private to its native builder since creation. This is CreateDataProperty-style:
  * it does not resolve inherited indexed properties. Capacity grows geometrically.

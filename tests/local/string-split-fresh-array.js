@@ -77,23 +77,60 @@ check(
 	"abc".split(undefined).join("|") === "abc",
 );
 check("omitted separator keeps the receiver", "abc".split().join("|") === "abc");
+check("undefined separator respects zero limit", "abc".split(undefined, 0).length === 0);
+check(
+	"undefined separator respects one limit",
+	"abc".split(undefined, 1).join("|") === "abc",
+);
 check("zero limit is empty", "a,b".split(",", 0).length === 0);
 check("one limit stops after one segment", "a,b,c".split(",", 1).join("|") === "a");
 check("finite limit stops exactly", "a,b,c".split(",", 2).join("|") === "a|b");
+check(
+	"limit equal to result count keeps the tail",
+	"a,b,".split(",", 3).join("|") === "a|b|",
+);
+check(
+	"limit above result count keeps the tail",
+	"a,b,".split(",", 4).join("|") === "a|b|",
+);
 check(
 	"wrapped negative limit is effectively unbounded",
 	"a,b".split(",", -1).length === 2,
 );
 check("infinite limit converts to zero", "a,b".split(",", Infinity).length === 0);
+check("2^32 limit converts to zero", "a,b".split(",", 4294967296).length === 0);
+check(
+	"2^32 plus one limit converts to one",
+	"a,b".split(",", 4294967297).join("|") === "a",
+);
 check("empty separator splits code units", "abc".split("").join("|") === "a|b|c");
+check("empty separator respects zero limit", "abc".split("", 0).length === 0);
+check("empty separator respects one limit", "abc".split("", 1).join("|") === "a");
+check("empty separator respects interior limit", "abc".split("", 2).join("|") === "a|b");
+check("empty separator accepts exact limit", "abc".split("", 3).join("|") === "a|b|c");
+check("empty separator caps at source length", "abc".split("", 4).join("|") === "a|b|c");
 check("empty source with empty separator is empty", "".split("").length === 0);
 check(
 	"empty source with non-empty separator has one segment",
 	"".split(",").join("|") === "",
 );
 check(
+	"one-unit separator preserves exact adjacent limit boundaries",
+	",a,,".split(",", 3).join("|") === "|a|" &&
+		",a,,".split(",", 4).join("|") === "|a||" &&
+		",a,,".split(",", 5).join("|") === "|a||",
+);
+check(
 	"multi-unit adjacent and trailing separators are preserved",
 	"a--b----".split("--").join("|") === "a|b||",
+);
+check(
+	"multi-unit separator respects every trailing boundary",
+	"a--b----".split("--", 1).join("|") === "a" &&
+		"a--b----".split("--", 2).join("|") === "a|b" &&
+		"a--b----".split("--", 3).join("|") === "a|b|" &&
+		"a--b----".split("--", 4).join("|") === "a|b||" &&
+		"a--b----".split("--", 5).join("|") === "a|b||",
 );
 check(
 	"leading adjacent and trailing separators are preserved",
@@ -111,6 +148,15 @@ check(
 	"multi-unit separator can contain a surrogate pair",
 	"a\ud83d\ude00b\ud83d\ude00".split("\ud83d\ude00").join("|") === "a|b|",
 );
+check(
+	"one-unit surrogate separator matches exact UTF-16 code units",
+	"\ud83dx\ud83d".split("\ud83d").join("|") === "|x|",
+);
+check(
+	"empty separator limit can cut between a surrogate pair",
+	"\ud83d\ude00x".split("", 1)[0].charCodeAt(0) === 0xd83d &&
+		"\ud83d\ude00x".split("", 2)[1].charCodeAt(0) === 0xde00,
+);
 
 const largeResult = ("item,".repeat(8192) + "last").split(",");
 check(
@@ -120,6 +166,15 @@ check(
 		largeResult[4096] === "item" &&
 		largeResult[8192] === "last" &&
 		Object.keys(largeResult).length === 8193,
+);
+
+const largeCodeUnitResult = "\ud83d\ude00".repeat(2048).split("");
+check(
+	"large empty-separator result retains every UTF-16 code unit",
+	largeCodeUnitResult.length === 4096 &&
+		largeCodeUnitResult[0].charCodeAt(0) === 0xd83d &&
+		largeCodeUnitResult[2047].charCodeAt(0) === 0xde00 &&
+		largeCodeUnitResult[4095].charCodeAt(0) === 0xde00,
 );
 
 let order = "";

@@ -122,6 +122,9 @@ interface StringMetrics {
 	freshDenseStores: number;
 	freshDenseGrowths: number;
 	freshDenseFallbacks: number;
+	freshDenseExactReserves: number;
+	freshDenseReservedSlots: number;
+	freshDenseGrowthsAvoided: number;
 }
 interface PromiseMetrics {
 	malMs: number;
@@ -511,6 +514,12 @@ function benchString(runs: number): StringMetrics {
 		freshDenseStores: parsePerfArrayStat(perfStderr, "fresh_dense_stores"),
 		freshDenseGrowths: parsePerfArrayStat(perfStderr, "fresh_dense_growths"),
 		freshDenseFallbacks: parsePerfArrayStat(perfStderr, "fresh_dense_fallbacks"),
+		freshDenseExactReserves: parsePerfArrayStat(perfStderr, "fresh_dense_exact_reserves"),
+		freshDenseReservedSlots: parsePerfArrayStat(perfStderr, "fresh_dense_reserved_slots"),
+		freshDenseGrowthsAvoided: parsePerfArrayStat(
+			perfStderr,
+			"fresh_dense_growths_avoided",
+		),
 	};
 }
 
@@ -1227,6 +1236,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		);
 		console.log(
 			`  arrays    ${entry.string.freshDenseStores} fresh dense stores, ${entry.string.freshDenseGrowths} growths, ${entry.string.freshDenseFallbacks} fallbacks`,
+		);
+		console.log(
+			`  reserve   ${entry.string.freshDenseExactReserves} exact reserves, ${entry.string.freshDenseReservedSlots} slots, ${entry.string.freshDenseGrowthsAvoided} growths avoided`,
 		);
 	}
 	if (entry.promise) {
