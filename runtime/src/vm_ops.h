@@ -1127,10 +1127,6 @@ void mal_op_copy_data_properties(MalCallable *callable, const MalInstruction *in
 
 void mal_op_merge_data_properties(MalCallable *callable, const MalInstruction *instruction);
 
-void mal_op_jump(MalCallable *callable, const MalInstruction *instruction);
-
-void mal_op_jump_if(MalCallable *callable, const MalInstruction *instruction);
-
 // ---------------------------------------------------------------------------
 // Compiled coroutines (native-backend generators & async). These have no
 // interpreter counterpart: the interpreter drives GENERATOR_START/YIELD/AWAIT/

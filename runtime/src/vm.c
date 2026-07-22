@@ -1846,16 +1846,19 @@ static void mal_vm_run_until_frame_count(
 
             case MAL_OP_JUMP: {
                 bool backedge = instruction->as.jump.target_ip < frame->instruction_pointer;
-                mal_op_jump(frame, instruction);
+                frame->instruction_pointer = instruction->as.jump.target_ip;
                 if (backedge && mal_gc_poll) {
                     mal_gc_safepoint(vm);
                 }
                 break;
             }
             case MAL_OP_JUMP_IF: {
-                bool backedge = instruction->as.jump_if.target_ip < frame->instruction_pointer &&
-                    mal_value_is_truthy(frame->registers[instruction->as.jump_if.cond]);
-                mal_op_jump_if(frame, instruction);
+                bool truthy = mal_value_is_truthy(frame->registers[instruction->as.jump_if.cond]);
+                bool backedge = truthy &&
+                    instruction->as.jump_if.target_ip < frame->instruction_pointer;
+                if (truthy) {
+                    frame->instruction_pointer = instruction->as.jump_if.target_ip;
+                }
                 if (backedge && mal_gc_poll) {
                     mal_gc_safepoint(vm);
                 }

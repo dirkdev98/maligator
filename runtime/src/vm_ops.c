@@ -5216,16 +5216,6 @@ void mal_op_set_prototype(MalCallable *callable, const MalInstruction *instructi
     );
 }
 
-void mal_op_jump(MalCallable *callable, const MalInstruction *instruction) {
-    callable->instruction_pointer = instruction->as.jump.target_ip;
-}
-
-void mal_op_jump_if(MalCallable *callable, const MalInstruction *instruction) {
-    if (mal_value_is_truthy(callable->registers[instruction->as.jump_if.cond])) {
-        callable->instruction_pointer = instruction->as.jump_if.target_ip;
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Compiled coroutines (native-backend generators & async).
 // ---------------------------------------------------------------------------
