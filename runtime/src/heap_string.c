@@ -317,9 +317,14 @@ MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length) 
     return string;
 }
 
+typedef struct MalStringFlattenTask {
+    MalString *string;
+    usize source_offset;
+} MalStringFlattenTask;
+
 const c16 *mal_string_flatten(MalString *mutable) {
     usize capacity = 64;
-    MalString **stack = malloc(sizeof(MalString *) * capacity);
+    MalStringFlattenTask *stack = malloc(sizeof(MalStringFlattenTask) * capacity);
     if (stack == nullptr) {
         abort();
     }
@@ -327,10 +332,25 @@ const c16 *mal_string_flatten(MalString *mutable) {
     c16 *code_units = mal_heap_alloc_raw(mal_gc_current_heap(), sizeof(c16) * mutable->length);
     usize count = 0;
     usize offset = 0;
-    stack[count++] = mutable;
+    stack[count++] = (MalStringFlattenTask) {.string = mutable};
 
     while (count > 0) {
-        MalString *part = stack[--count];
+        MalStringFlattenTask task = stack[--count];
+        if (task.string == nullptr) {
+            // The shared child has just filled [source_offset, offset); duplicate
+            // that completed range instead of traversing the same DAG again.
+            if (task.source_offset > offset) abort();
+            usize copy_length = offset - task.source_offset;
+            usize next_offset;
+            if (!mal_checked_size_add(offset, copy_length, mutable->length, &next_offset)) {
+                abort();
+            }
+            memcpy(code_units + offset, code_units + task.source_offset, sizeof(c16) * copy_length);
+            offset = next_offset;
+            continue;
+        }
+
+        MalString *part = task.string;
         if (part->storage != MAL_STRING_STORAGE_CONS) {
             usize next_offset;
             if (!mal_checked_size_add(offset, part->length, mutable->length, &next_offset)) {
@@ -352,7 +372,8 @@ const c16 *mal_string_flatten(MalString *mutable) {
             if (!mal_checked_size_growth(capacity, required, 64, MAL_STRING_MAX_CODE_UNITS, &grown_capacity)) {
                 abort();
             }
-            MalString **grown = realloc(stack, sizeof(MalString *) * grown_capacity);
+            MalStringFlattenTask *grown =
+                realloc(stack, sizeof(MalStringFlattenTask) * grown_capacity);
             if (grown == nullptr) {
                 abort();
             }
@@ -360,8 +381,16 @@ const c16 *mal_string_flatten(MalString *mutable) {
             capacity = grown_capacity;
         }
 
-        stack[count++] = part->right;
-        stack[count++] = part->left;
+        if (part->left == part->right) {
+            stack[count++] = (MalStringFlattenTask) {
+                .string = nullptr,
+                .source_offset = offset,
+            };
+            stack[count++] = (MalStringFlattenTask) {.string = part->left};
+        } else {
+            stack[count++] = (MalStringFlattenTask) {.string = part->right};
+            stack[count++] = (MalStringFlattenTask) {.string = part->left};
+        }
     }
 
     free(stack);

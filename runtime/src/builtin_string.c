@@ -711,6 +711,8 @@ done:
     return result;
 }
 
+#define MAL_STRING_REPEAT_LAZY_MIN_CODE_UNITS ((usize) 65536)
+
 static MalValue mal_builtin_string_prototype_repeat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     f64 count = arg_count >= 1 ? mal_builtin_string_arg_to_number(vm, args[0]) : 0;
@@ -737,6 +739,51 @@ static MalValue mal_builtin_string_prototype_repeat(MalVm *vm, MalValue this_val
         mal_builtin_string_throw_length(vm);
         return mal_value_new_undefined();
     }
+    if (repeat == 1) {
+        return mal_value_from_string(string);
+    }
+
+    MalStringStorage storage = mal_string_storage(string);
+    if (result_length >= MAL_STRING_REPEAT_LAZY_MIN_CODE_UNITS &&
+        (storage == MAL_STRING_STORAGE_OWNED || storage == MAL_STRING_STORAGE_EXTERNAL)) {
+        MalValue roots[2] = {
+            mal_value_from_string(string),
+            mal_value_from_string(string),
+        };
+        MalRootSpan root_span;
+        mal_gc_root(&root_span, roots, 2);
+        mal_gc_native_rooted_begin(vm);
+
+        // Consume the count below its highest bit, doubling the completed prefix
+        // and appending one source copy for each set bit.
+        usize bit = 1;
+        while (bit <= repeat / 2) bit <<= 1;
+
+        MalString *result = string;
+        MalValue result_value = mal_value_new_undefined();
+        while ((bit >>= 1) != 0) {
+            if (!mal_string_new_cons_checked(&vm->heap, result, result, &result)) {
+                mal_builtin_string_throw_length(vm);
+                goto lazy_done;
+            }
+            roots[1] = mal_value_from_string(result);
+
+            if ((repeat & bit) != 0) {
+                if (!mal_string_new_cons_checked(&vm->heap, result, string, &result)) {
+                    mal_builtin_string_throw_length(vm);
+                    goto lazy_done;
+                }
+                roots[1] = mal_value_from_string(result);
+            }
+        }
+        result_value = roots[1];
+
+lazy_done:
+        mal_gc_native_rooted_end(vm);
+        mal_gc_unroot(&root_span);
+        return result_value;
+    }
+
     const c16 *source = mal_string_code_units(string);
     c16 *code_units = mal_heap_alloc_raw(&vm->heap, bytes);
     usize filled = length;

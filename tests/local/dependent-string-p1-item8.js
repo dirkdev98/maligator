@@ -131,6 +131,24 @@ const keyed = { [propertyRope]: 42 };
 let doubled = "z";
 for (let i = 0; i < 12; i++) doubled = doubled + doubled;
 
+const largePowerRepeat = "abcd".repeat(1 << 14);
+const largePowerSlices = [
+	largePowerRepeat.slice(0, 7),
+	largePowerRepeat.slice((1 << 15) - 3, (1 << 15) + 5),
+	largePowerRepeat.slice(-7),
+];
+const ownedSurrogateSource = String.fromCharCode(0xd83d, 0xde00, 0x78);
+const largeNonPowerRepeat = ownedSurrogateSource.repeat(21847);
+const nonPowerBoundary = 10923 * ownedSurrogateSource.length;
+const largeNonPowerSlices = [
+	largeNonPowerRepeat.slice(0, 3),
+	largeNonPowerRepeat.slice(nonPowerBoundary - 2, nonPowerBoundary + 4),
+	largeNonPowerRepeat.slice(-3),
+];
+const largePropertyKey = "key:".repeat(1 << 14);
+const largePropertyLookup = "key:".repeat(1 << 14);
+const largeKeyed = { [largePropertyKey]: 99 };
+
 const gc = globalThis.__mal_collect_garbage;
 if (typeof gc === "function") {
 	gc();
@@ -174,6 +192,37 @@ ok("rope property key", keyed["rope-key"] === 42);
 ok("rope regexp boundary", /^rope-key$/.test(propertyRope));
 ok("rope JSON boundary", JSON.stringify(splitSurrogate) === '"\ud83d\ude00"');
 ok("shared DAG flatten", doubled.length === 4096 && doubled[4095] === "z");
+ok(
+	"large power-of-two repeat slices before flatten",
+	largePowerRepeat.length === 1 << 16 &&
+		largePowerSlices[0] === "abcdabc" &&
+		largePowerSlices[1] === "bcdabcda" &&
+		largePowerSlices[2] === "bcdabcd",
+);
+ok(
+	"large non-power-of-two surrogate repeat slices before flatten",
+	largeNonPowerRepeat.length === 65541 &&
+		largeNonPowerSlices[0] === ownedSurrogateSource &&
+		largeNonPowerSlices[1] === "\ude00x\ud83d\ude00x\ud83d" &&
+		largeNonPowerSlices[2] === ownedSurrogateSource,
+);
+let largePowerScan = true;
+for (let i = 0; i < largePowerRepeat.length; i++) {
+	if (largePowerRepeat.charCodeAt(i) !== 97 + (i % 4)) largePowerScan = false;
+}
+ok("large shared power-of-two DAG full scan", largePowerScan);
+const surrogateCodeUnits = [0xd83d, 0xde00, 0x78];
+let largeNonPowerScan = true;
+for (let i = 0; i < largeNonPowerRepeat.length; i++) {
+	if (largeNonPowerRepeat.charCodeAt(i) !== surrogateCodeUnits[i % 3]) {
+		largeNonPowerScan = false;
+	}
+}
+ok("large mixed surrogate DAG full scan", largeNonPowerScan);
+ok(
+	"large repeated property key hash",
+	largeKeyed[largePropertyLookup] === 99 && largePropertyLookup.length === 1 << 16,
+);
 ok("String.prototype.charAt slice", direct.charAt === "a");
 ok("String.prototype.at slice", direct.at === "a");
 ok("String.prototype.slice", direct.slice === "alpha");
@@ -230,6 +279,6 @@ ok(
 	"substantial large slice",
 	largeSlice.length === 8192 && largeSlice.charAt(0) === "a" && largeSlice.at(-1) === "b",
 );
-ok("all dependent, copied-slice, and cons paths ran", passed === 34);
+ok("all dependent, copied-slice, and cons paths ran", passed === 39);
 
 console.log("dependent-string-p1-item8 PASS");

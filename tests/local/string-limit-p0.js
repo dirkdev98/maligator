@@ -176,6 +176,21 @@ check(
 	"repeat preserves UTF-16 code units",
 	"\ud83d\ude00x".repeat(3) === "\ud83d\ude00x\ud83d\ude00x\ud83d\ude00x",
 );
+const thresholdRepeat = "01".repeat(1 << 15);
+const thresholdPrefix = thresholdRepeat.slice(0, 7);
+const thresholdMiddle = thresholdRepeat.slice((1 << 15) - 3, (1 << 15) + 5);
+const thresholdSuffix = thresholdRepeat.slice(-7);
+check(
+	"repeat remains correct at the lazy threshold",
+	thresholdRepeat.length === 1 << 16 &&
+		thresholdPrefix === "0101010" &&
+		thresholdMiddle === "10101010" &&
+		thresholdSuffix === "1010101",
+);
+check(
+	"repeat one remains the source value",
+	thresholdRepeat.repeat(1) === thresholdRepeat,
+);
 
 check("concat remains correct", "a" + "\ud83d\ude00" + "b" === "a\ud83d\ude00b");
 check(
