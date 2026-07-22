@@ -170,6 +170,8 @@ interface ArgumentsBackendMetrics {
 	instructionCount: number;
 	bytecodeBytes: number;
 	binaryBytes: number;
+	snapshotUniqueValues: number;
+	snapshotRegisterRestores: number;
 }
 interface ArgumentsMetrics {
 	compiled: ArgumentsBackendMetrics;
@@ -613,7 +615,19 @@ function benchCoroutine(runs: number): CoroutineMetrics {
 
 // ---- arguments (implicit object/slice allocation; compiled + interpreted) --
 
-function benchArgumentsBackend(binary: string, runs: number): ArgumentsBackendMetrics {
+function parsePerfArgumentsStat(stderr: string, field: string): number {
+	const line = stderr
+		.split("\n")
+		.find((value) => value.includes("[perf-arguments-stats]"));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
+}
+
+function benchArgumentsBackend(
+	binary: string,
+	perfBinary: string,
+	runs: number,
+): ArgumentsBackendMetrics {
 	const wallMs = timeCommand(binary, [], runs);
 	const result = spawnSync(binary, [], {
 		env: {
@@ -627,6 +641,12 @@ function benchArgumentsBackend(binary: string, runs: number): ArgumentsBackendMe
 		stdio: ["ignore", "ignore", "pipe"],
 	});
 	const stderr = result.stderr ?? "";
+	const perfResult = spawnSync(perfBinary, [], {
+		env: { ...process.env, MAL_PERF_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	const perfStderr = perfResult.stderr ?? "";
 	return {
 		wallMs,
 		collections: parseGcStat(stderr, "collections"),
@@ -641,6 +661,8 @@ function benchArgumentsBackend(binary: string, runs: number): ArgumentsBackendMe
 		instructionCount: parseVmStat(stderr, "instruction_count"),
 		bytecodeBytes: parseVmStat(stderr, "bytecode_bytes"),
 		binaryBytes: fileBytes(binary),
+		snapshotUniqueValues: parsePerfArgumentsStat(perfStderr, "unique_values"),
+		snapshotRegisterRestores: parsePerfArgumentsStat(perfStderr, "register_restores"),
 	};
 }
 
@@ -655,9 +677,28 @@ function benchArguments(runs: number): ArgumentsMetrics {
 		name: "bench-arguments-ni",
 		compiled: false,
 	});
+	const previousPerfStats = process.env.MAL_PERF_STATS;
+	process.env.MAL_PERF_STATS = "1";
+	let compiledPerf: string;
+	let interpretedPerf: string;
+	try {
+		compiledPerf = buildNativeBinary({
+			fixture: "bench/arguments.js",
+			name: "bench-arguments-perf",
+			compiled: true,
+		});
+		interpretedPerf = buildNativeBinary({
+			fixture: "bench/arguments.js",
+			name: "bench-arguments-ni-perf",
+			compiled: false,
+		});
+	} finally {
+		if (previousPerfStats === undefined) delete process.env.MAL_PERF_STATS;
+		else process.env.MAL_PERF_STATS = previousPerfStats;
+	}
 	return {
-		compiled: benchArgumentsBackend(compiled, runs),
-		interpreted: benchArgumentsBackend(interpreted, runs),
+		compiled: benchArgumentsBackend(compiled, compiledPerf, runs),
+		interpreted: benchArgumentsBackend(interpreted, interpretedPerf, runs),
 		nodeMs: timeNodeComparison("arguments", "bench/arguments.js", runs),
 	};
 }
@@ -1229,6 +1270,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			);
 			console.log(
 				`               ${current.instructionCount} instructions, ${humanBytes(current.bytecodeBytes)} bytecode, ${humanBytes(current.binaryBytes)} binary`,
+			);
+			console.log(
+				`               ${current.snapshotUniqueValues} unique snapshot values, ${current.snapshotRegisterRestores} register restores`,
 			);
 		}
 		console.log(`  node        ${entry.arguments.nodeMs.toFixed(1)}ms`);

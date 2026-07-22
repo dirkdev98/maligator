@@ -764,6 +764,9 @@ typedef struct MalFunction {
     MalFunctionKind kind;
     i32 parameter_count;
 
+    /** Number of leading raw-argument snapshot instructions run at frame entry. */
+    i32 argument_snapshot_count;
+
     /**
      * Function.prototype.length: formal parameters before the first default
      * or rest parameter. parameter_count keeps the full formal count for the

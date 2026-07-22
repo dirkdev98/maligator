@@ -704,6 +704,12 @@ export function emitCompiledFunction(
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
 		lines.push(`    r${i} = ${zeroOf(reps[i]!)};`);
 	}
+	if (fn.argumentSnapshotCount > 0) {
+		lines.push(
+			`    MAL_PERF_ADD(argument_snapshot_unique_values, ${fn.argumentSnapshotCount});`,
+			`    MAL_PERF_ADD(argument_snapshot_register_restores, ${fn.argumentSnapshotCount});`,
+		);
+	}
 	// A derived constructor's rooted `this` slot starts as the (EMPTY) parameter.
 	if (thisSlot >= 0) {
 		lines.push(`    __gc_slots[${thisSlot}] = this_value;`);
@@ -891,6 +897,12 @@ function emitResumableFunction(
 	}
 	for (let i = 0; i < fn.parameterCount; i++) {
 		lines.push(`        r${i} = arg_count > ${i} ? args[${i}] : MAL_VALUE_UNDEFINED;`);
+	}
+	if (fn.argumentSnapshotCount > 0) {
+		lines.push(
+			`        MAL_PERF_ADD(argument_snapshot_unique_values, ${fn.argumentSnapshotCount});`,
+			`        MAL_PERF_ADD(argument_snapshot_register_restores, ${fn.argumentSnapshotCount});`,
+		);
 	}
 	lines.push(`    }`);
 

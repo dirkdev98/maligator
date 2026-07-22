@@ -85,6 +85,33 @@ test("direct arguments count and constant-index reads avoid object materializati
 	const definition = lowerIrProgramToVmDefinition(program);
 	expect(definition.functions[count.functionIndex]!.needsArguments).toBe(false);
 	expect(definition.functions[first.functionIndex]!.needsArguments).toBe(false);
+	expect(definition.functions[count.functionIndex]!.argumentSnapshotCount).toBe(1);
+	expect(definition.functions[first.functionIndex]!.argumentSnapshotCount).toBe(1);
+});
+
+test("repeated static arguments reads share one snapshot per count or index", () => {
+	const program = compileScript(`
+		function repeated() {
+			return arguments.length + arguments[2] + arguments.length + arguments[2] + arguments[0];
+		}
+	`);
+	const repeated = functionNamed(program, "repeated");
+	const snapshots = instructionsOf(repeated).filter(
+		(instruction) =>
+			instruction.type === "loadArgumentCount" || instruction.type === "loadArgument",
+	);
+	expect(snapshots).toEqual([
+		{ type: "loadArgumentCount", registers: [0] },
+		{ type: "loadArgument", registers: [1], index: 2 },
+		{ type: "loadArgument", registers: [2], index: 0 },
+	]);
+
+	const lowered =
+		lowerIrProgramToVmDefinition(program).functions[repeated.functionIndex]!;
+	expect(lowered.argumentSnapshotCount).toBe(3);
+	expect(
+		lowered.instructions.slice(0, 3).map((instruction) => instruction.opcode),
+	).toEqual(["LOAD_ARGUMENT_COUNT", "LOAD_ARGUMENT", "LOAD_ARGUMENT"]);
 });
 
 test("try markers lower only into exception handler ranges", () => {

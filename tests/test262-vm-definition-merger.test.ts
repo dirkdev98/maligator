@@ -13,6 +13,7 @@ function vmFunction(instructions: Array<VmInstruction>): VmFunction {
 		capturedCount: 0,
 		strict: true,
 		needsArguments: false,
+		argumentSnapshotCount: 0,
 		isDerivedConstructor: false,
 		isClassConstructor: false,
 		hasPrototype: false,

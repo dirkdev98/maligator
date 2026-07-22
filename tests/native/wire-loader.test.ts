@@ -19,6 +19,7 @@ const fn: VmFunction = {
 	capturedCount: 0,
 	strict: true,
 	needsArguments: false,
+	argumentSnapshotCount: 0,
 	isDerivedConstructor: false,
 	isClassConstructor: false,
 	hasPrototype: false,
@@ -81,14 +82,19 @@ describe("wire loader side-data validation", () => {
 	}
 
 	it("rejects an explicit count that disagrees with its arrays", () => {
-		// Empty definition tables put the first instruction at byte 28. Its explicit
+		// Empty definition tables put the first instruction at byte 29. Its explicit
 		// count follows the opcode tag and dst operand.
-		rejectsMutation("explicit-count", 28 + 1 + 1, 4); // ZigZag(2)
+		rejectsMutation("explicit-count", 29 + 1 + 1, 4); // ZigZag(2)
 	});
 
 	it("rejects mismatched paired-array lengths", () => {
 		// Skip tag, dst, explicit count, then the first array's count and one value.
-		rejectsMutation("paired-count", 28 + 1 + 1 + 1 + 1 + 1, 2);
+		rejectsMutation("paired-count", 29 + 1 + 1 + 1 + 1 + 1, 2);
+	});
+
+	it("rejects snapshot metadata that disagrees with the opcode prefix", () => {
+		// The first function starts at byte 15; its snapshot count is byte 22.
+		rejectsMutation("snapshot-prefix", 22, 1);
 	});
 
 	it("rejects malformed varints and trailing data", () => {
@@ -155,6 +161,31 @@ describe("wire loader side-data validation", () => {
 		);
 		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
 		expect(result.status).toBe(0);
+	});
+
+	it("loads and executes persisted argument snapshot prefixes", () => {
+		const snapshotDefinition: VmDefinition = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					argumentSnapshotCount: 2,
+					registerCount: 3,
+					instructions: [
+						{ opcode: "LOAD_ARGUMENT_COUNT", dst: 1 },
+						{ opcode: "LOAD_ARGUMENT", dst: 2, index: 4 },
+						{ opcode: "RETURN", value: 1 },
+					],
+				},
+			],
+		};
+		const wirePath = path.join(directory, "argument-snapshots.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(snapshotDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
 	});
 
 	it("loads unaligned fixed-width little-endian scalar fields", () => {

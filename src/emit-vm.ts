@@ -97,6 +97,7 @@ const C_HEADER_LINES = [
 	'#include "vm.h"',
 	'#include "vm_ops.h"',
 	'#include "value_ops.h"',
+	'#include "perf_stats.h"',
 	'#include "builtin_math.h"',
 	// The compiled (emit-c) for-of lowering uses the iterator-record helpers.
 	'#include "builtin_iterator.h"',
@@ -148,6 +149,7 @@ function malFunctionRow(
 		`        .captured_count = ${fn.capturedCount},`,
 		`        .strict = ${fn.strict},`,
 		`        .needs_arguments = ${fn.needsArguments},`,
+		`        .argument_snapshot_count = ${fn.argumentSnapshotCount},`,
 		`        .is_derived_constructor = ${fn.isDerivedConstructor},`,
 		`        .is_class_constructor = ${fn.isClassConstructor},`,
 		`        .has_prototype = ${fn.hasPrototype},`,

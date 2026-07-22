@@ -16,8 +16,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 11 for the non-allocating canonical typeof comparison.
-export const WIRE_VERSION = 11;
+// Bumped to 12 for persisted static-arguments snapshot prefix metadata.
+export const WIRE_VERSION = 12;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -550,6 +550,7 @@ export function serializeVmDefinition(
 }
 
 function writeFunction(w: Writer, fn: VmFunction, debug: boolean): void {
+	validateArgumentSnapshotPrefix(fn);
 	w.i32(fn.nameStringIndex);
 	w.u8(fn.isAsync && fn.isGenerator ? 3 : fn.isAsync ? 2 : fn.isGenerator ? 1 : 0);
 	w.u8(fn.strict ? 1 : 0);
@@ -557,6 +558,7 @@ function writeFunction(w: Writer, fn: VmFunction, debug: boolean): void {
 	w.u8(fn.isDerivedConstructor ? 1 : 0);
 	w.u8(fn.isClassConstructor ? 1 : 0);
 	w.u8(fn.hasPrototype ? 1 : 0);
+	w.u32(fn.argumentSnapshotCount);
 	w.i32(fn.parameterCount);
 	w.i32(fn.length);
 	w.i32(fn.registerCount);
@@ -581,6 +583,27 @@ function writeFunction(w: Writer, fn: VmFunction, debug: boolean): void {
 	for (const run of runs) {
 		w.i32(run.startIp);
 		w.i32(run.posId);
+	}
+}
+
+function validateArgumentSnapshotPrefix(fn: VmFunction): void {
+	if (
+		!Number.isInteger(fn.argumentSnapshotCount) ||
+		fn.argumentSnapshotCount < 0 ||
+		fn.argumentSnapshotCount > fn.instructions.length
+	) {
+		throw new RangeError("serialize-vm: invalid argument snapshot count");
+	}
+	const isSnapshot = (instruction: VmInstruction | undefined): boolean =>
+		instruction?.opcode === "LOAD_ARGUMENT_COUNT" ||
+		instruction?.opcode === "LOAD_ARGUMENT";
+	for (let i = 0; i < fn.argumentSnapshotCount; i++) {
+		if (!isSnapshot(fn.instructions[i])) {
+			throw new RangeError("serialize-vm: argument snapshot prefix mismatch");
+		}
+	}
+	if (isSnapshot(fn.instructions[fn.argumentSnapshotCount])) {
+		throw new RangeError("serialize-vm: argument snapshot prefix mismatch");
 	}
 }
 
@@ -1094,6 +1117,7 @@ function readFunction(r: Reader): VmFunction {
 	const isDerivedConstructor = r.u8() !== 0;
 	const isClassConstructor = r.u8() !== 0;
 	const hasPrototype = r.u8() !== 0;
+	const argumentSnapshotCount = r.count(1);
 	const parameterCount = r.i32();
 	const length = r.i32();
 	const registerCount = r.i32();
@@ -1119,7 +1143,7 @@ function readFunction(r: Reader): VmFunction {
 	}
 	const positions = expandPositions(runs, instructionCount);
 
-	return {
+	const fn: VmFunction = {
 		nameStringIndex,
 		isGenerator: kind === 1 || kind === 3,
 		isAsync: kind === 2 || kind === 3,
@@ -1129,6 +1153,7 @@ function readFunction(r: Reader): VmFunction {
 		capturedCount,
 		strict,
 		needsArguments,
+		argumentSnapshotCount,
 		isDerivedConstructor,
 		isClassConstructor,
 		hasPrototype,
@@ -1137,6 +1162,8 @@ function readFunction(r: Reader): VmFunction {
 		fileIndex,
 		positions,
 	};
+	validateArgumentSnapshotPrefix(fn);
+	return fn;
 }
 
 /** Inverse of compressPositions: fill each instruction's position forward. */

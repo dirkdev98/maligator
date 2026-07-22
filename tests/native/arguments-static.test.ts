@@ -1,7 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeAll, describe, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
 	assertExactLines,
 	buildNativeBinary,
@@ -24,6 +25,7 @@ describe("static arguments access", () => {
 			compiled: true,
 			mainFile: HOST_MAIN,
 			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 		interpreted = buildNativeBinary({
 			fixture: "tests/local/arguments-static.js",
@@ -31,6 +33,7 @@ describe("static arguments access", () => {
 			compiled: false,
 			mainFile: HOST_MAIN,
 			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 	});
 
@@ -46,6 +49,21 @@ describe("static arguments access", () => {
 				runToStdout(binary(), { env: STRESS_ENV, timeoutMs: 60000 }),
 				expected,
 			);
+		});
+		it(`${name} reports deduplicated snapshots`, () => {
+			const result = spawnSync(binary(), [], {
+				encoding: "utf8",
+				env: { ...process.env, MAL_PERF_STATS: "1" },
+			});
+			expect(result.status, result.stderr || result.stdout).toBe(0);
+			const line = result.stderr
+				.split("\n")
+				.find((candidate) => candidate.startsWith("[perf-arguments-stats]"));
+			expect(line).toBeDefined();
+			const field = (key: string): number =>
+				Number(line?.match(new RegExp(`${key}=([0-9]+)`))?.[1] ?? -1);
+			expect(field("unique_values")).toBe(24);
+			expect(field("register_restores")).toBe(field("unique_values"));
 		});
 	}
 });

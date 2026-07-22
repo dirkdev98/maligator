@@ -21,6 +21,7 @@
 #include "microtask.h"
 #include "object_ops.h"
 #include "promise_object.h"
+#include "perf_stats.h"
 #include "proxy_object.h"
 #include "u16_buffer.h"
 #include "value_ops.h"
@@ -1219,18 +1220,10 @@ bool mal_vm_push_function_frame(
     i32 params_present = param_count < arg_count ? param_count : arg_count;
 
     // Static arguments reads are emitted before parameter/default initialization.
-    // Capture all of them while the caller's marshaling area is intact; register
-    // setup below may reuse or clear that same area. Starting the frame after this
-    // prefix removes both its dispatch and the need to retain a second argument
-    // buffer for otherwise non-escaping reads.
-    i32 argument_snapshot_count = 0;
-    while (argument_snapshot_count < function->instruction_count) {
-        MalOpcode opcode = function->instructions[argument_snapshot_count].opcode;
-        if (opcode != MAL_OP_LOAD_ARGUMENT_COUNT && opcode != MAL_OP_LOAD_ARGUMENT) {
-            break;
-        }
-        argument_snapshot_count++;
-    }
+    // Capture the persisted prefix while the caller's marshaling area is intact;
+    // register setup below may reuse or clear that same area.
+    i32 argument_snapshot_count = function->argument_snapshot_count;
+    MAL_PERF_ADD(argument_snapshot_unique_values, argument_snapshot_count);
     MalValue argument_snapshots[argument_snapshot_count > 0 ? argument_snapshot_count : 1];
     for (i32 i = 0; i < argument_snapshot_count; i++) {
         const MalInstruction *instruction = &function->instructions[i];
@@ -1338,6 +1331,7 @@ bool mal_vm_push_function_frame(
             : instruction->as.load_argument.dst;
         registers[destination] = argument_snapshots[i];
     }
+    MAL_PERF_ADD(argument_snapshot_register_restores, argument_snapshot_count);
     frame->instruction_pointer = argument_snapshot_count;
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;

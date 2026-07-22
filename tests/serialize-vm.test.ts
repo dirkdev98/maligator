@@ -90,6 +90,7 @@ const mainFn: VmFunction = {
 	capturedCount: 0,
 	strict: true,
 	needsArguments: true,
+	argumentSnapshotCount: 0,
 	isDerivedConstructor: false,
 	isClassConstructor: false,
 	hasPrototype: true,
@@ -110,6 +111,7 @@ const genFn: VmFunction = {
 	capturedCount: 1,
 	strict: true,
 	needsArguments: true,
+	argumentSnapshotCount: 0,
 	isDerivedConstructor: true,
 	isClassConstructor: true,
 	hasPrototype: false,
@@ -179,6 +181,38 @@ describe("serialize-vm", () => {
 			serializeVmDefinition(definition, { debugInfo: true }),
 		);
 		expect(restored).toEqual(definition);
+	});
+
+	it("round-trips and validates persisted argument snapshot prefixes", () => {
+		const snapshotInstructions: Array<VmInstruction> = [
+			{ opcode: "LOAD_ARGUMENT_COUNT", dst: 1 },
+			{ opcode: "LOAD_ARGUMENT", dst: 2, index: 4 },
+			{ opcode: "RETURN", value: 2 },
+		];
+		const snapshotDefinition: VmDefinition = {
+			...definition,
+			functionCount: 1,
+			functions: [
+				{
+					...mainFn,
+					argumentSnapshotCount: 2,
+					registerCount: 3,
+					instructions: snapshotInstructions,
+					handlers: [],
+					positions: snapshotInstructions.map(() => 0),
+				},
+			],
+		};
+		const restored = deserializeVmDefinition(serializeVmDefinition(snapshotDefinition));
+		expect(restored.functions[0]!.argumentSnapshotCount).toBe(2);
+		expect(restored.functions[0]!.instructions).toEqual(snapshotInstructions);
+
+		expect(() =>
+			serializeVmDefinition({
+				...snapshotDefinition,
+				functions: [{ ...snapshotDefinition.functions[0]!, argumentSnapshotCount: 1 }],
+			}),
+		).toThrow("argument snapshot prefix mismatch");
 	});
 
 	it("is a fixed point (re-serializing yields identical bytes)", () => {
@@ -280,6 +314,7 @@ describe("serialize-vm", () => {
 			functions: [
 				{
 					...mainFn,
+					argumentSnapshotCount: 1,
 					instructions: [{ opcode: "LOAD_ARGUMENT", dst: 0, index: -1 }],
 				},
 			],

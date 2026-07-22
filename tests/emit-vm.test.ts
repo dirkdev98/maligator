@@ -58,6 +58,7 @@ const fn: VmFunction = {
 	capturedCount: 5,
 	strict: true,
 	needsArguments: false,
+	argumentSnapshotCount: 0,
 	isDerivedConstructor: false,
 	isClassConstructor: false,
 	hasPrototype: false,
@@ -94,6 +95,7 @@ describe("emit-vm instruction packing", () => {
 		expect(output).toContain(".bits_low = 0x00000000u, .bits_high = 0x7ff80000u");
 		expect(output).toContain(".instruction_data = mal_function_0_instruction_data");
 		expect(output).toContain(".instruction_data_count = 33");
+		expect(output).toContain(".argument_snapshot_count = 0");
 		expect(output).toContain(
 			".as.init_global_vars = { .data_offset = 23, .declaration_configurable = true }",
 		);

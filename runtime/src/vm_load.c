@@ -15,7 +15,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 11u        // non-allocating canonical typeof comparison
+#define WIRE_VERSION 12u        // static-arguments snapshot prefix metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1054,6 +1054,7 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     fn->is_derived_constructor = rd_u8(r) != 0;
     fn->is_class_constructor = rd_u8(r) != 0;
     fn->has_prototype = rd_u8(r) != 0;
+    fn->argument_snapshot_count = (i32) rd_count(r, 1);
     fn->parameter_count = rd_i32(r);
     fn->length = rd_i32(r);
     fn->register_count = rd_i32(r);
@@ -1075,6 +1076,21 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
         rd_instruction(r, &instructions[i], &side_data);
     }
     fn->instructions = instructions;
+    if ((u32) fn->argument_snapshot_count > instruction_count) {
+        r->ok = false;
+    }
+    for (i32 i = 0; r->ok && i < fn->argument_snapshot_count; i++) {
+        MalOpcode opcode = instructions[i].opcode;
+        if (opcode != MAL_OP_LOAD_ARGUMENT_COUNT && opcode != MAL_OP_LOAD_ARGUMENT) {
+            r->ok = false;
+        }
+    }
+    if (r->ok && (u32) fn->argument_snapshot_count < instruction_count) {
+        MalOpcode opcode = instructions[fn->argument_snapshot_count].opcode;
+        if (opcode == MAL_OP_LOAD_ARGUMENT_COUNT || opcode == MAL_OP_LOAD_ARGUMENT) {
+            r->ok = false;
+        }
+    }
     i32 *instruction_data = arena_array(
         L, r, side_data.count, sizeof(i32), alignof(i32));
     if (r->ok && side_data.count > 0) {

@@ -153,6 +153,12 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.promise_await_typed_continuations,
         (unsigned long long) mal_perf_stats.promise_await_typed_jobs
     );
+    fprintf(
+        stderr,
+        "[perf-arguments-stats] unique_values=%llu register_restores=%llu\n",
+        (unsigned long long) mal_perf_stats.argument_snapshot_unique_values,
+        (unsigned long long) mal_perf_stats.argument_snapshot_register_restores
+    );
     for (u32 i = 0; i < MAL_PERF_TABLE_ROLE_COUNT; i++) {
         const MalPerfTableStats *stats = &mal_perf_stats.tables[i];
         fprintf(

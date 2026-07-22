@@ -162,6 +162,9 @@ export interface VmFunction {
 	 */
 	needsArguments: boolean;
 
+	/** Number of leading raw-argument snapshot instructions run at frame entry. */
+	argumentSnapshotCount: number;
+
 	/**
 	 * A derived class constructor: `this` starts uninitialized (TDZ) and is bound
 	 * only by super(), so the construct site allocates no eager `this` and reads
@@ -1046,6 +1049,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		capturedCount: fn.nextCapturedIndex,
 		strict: fn.strict ?? fn.semanticFile.strict,
 		needsArguments,
+		argumentSnapshotCount,
 		isDerivedConstructor:
 			(fn.classContext?.isConstructor ?? false) &&
 			(fn.classContext?.isDerivedConstructor ?? false),

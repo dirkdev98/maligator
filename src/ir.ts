@@ -4048,15 +4048,23 @@ function compileFunctionParams(
 	// keeps it available to default value expressions.
 	const argumentsBinding = getArgumentsBinding(fn, node);
 	if (argumentsBinding) {
+		let lengthRegister: number | undefined;
+		const indexRegisters = new Map<number, number>();
 		for (const usage of argumentsBinding.usageNodes) {
 			const access = fn.semanticFile.staticArgumentsAccesses.get(usage);
 			if (!access) continue;
-			const destination = nextRegisterDestination(fn);
-			block.instructions.push(
-				access.kind === "length"
-					? { type: "loadArgumentCount", registers: [destination] }
-					: { type: "loadArgument", registers: [destination], index: access.index },
-			);
+			let destination =
+				access.kind === "length" ? lengthRegister : indexRegisters.get(access.index);
+			if (destination === undefined) {
+				destination = nextRegisterDestination(fn);
+				block.instructions.push(
+					access.kind === "length"
+						? { type: "loadArgumentCount", registers: [destination] }
+						: { type: "loadArgument", registers: [destination], index: access.index },
+				);
+				if (access.kind === "length") lengthRegister = destination;
+				else indexRegisters.set(access.index, destination);
+			}
 			(fn.staticArgumentsRegisters ??= new Map()).set(usage, destination);
 		}
 	}
