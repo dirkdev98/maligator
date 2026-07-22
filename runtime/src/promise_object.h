@@ -25,11 +25,16 @@ typedef struct MalPromiseReactionBlock MalPromiseReactionBlock;
  */
 typedef struct MalPromiseReaction {
     struct MalPromiseReaction *next;
+    /* Capability encoding: two callables, two undefined values (no result
+     * capability), or {direct target Promise, exact intrinsic constructor}. */
     MalValue cap_resolve;
     MalValue cap_reject;
     MalValue on_fulfilled;
     MalValue on_rejected;
 } MalPromiseReaction;
+
+static_assert(sizeof(MalPromiseReaction) == 40,
+              "MalPromiseReaction must remain a 40-byte slab node");
 
 typedef struct MalPromiseObject {
     MalObject object;

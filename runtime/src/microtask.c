@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 
+#include "builtin_promise.h"
 #include "gc.h"
 #include "vm.h"
 
@@ -148,12 +149,33 @@ bool mal_vm_has_pending_jobs(const MalVm *vm) {
  * Invoke a capability's resolve/reject function with one argument, clearing any
  * pending throw first so the call is not poisoned by the just-finished handler.
  */
-static void mal_vm_settle_capability(MalVm *vm, MalValue cap_fn, MalValue argument) {
+static void mal_vm_call_capability_function(MalVm *vm, MalValue cap_fn, MalValue argument) {
     if (!mal_value_is_callable(cap_fn)) {
         return;
     }
     vm->completion = mal_completion_normal();
     mal_vm_call_value(vm, cap_fn, mal_value_new_undefined(), &argument, 1);
+}
+
+static void mal_vm_settle_reaction_capability(
+    MalVm *vm,
+    MalValue cap_resolve,
+    MalValue cap_reject,
+    bool is_reject,
+    MalValue argument
+) {
+    // Exact-intrinsic Promise.prototype.then stores its target Promise where a
+    // callable resolve would otherwise live. The second field is the exact
+    // constructor and therefore also restores the omitted function's realm.
+    if (mal_value_is_promise_object(cap_resolve)) {
+        vm->completion = mal_completion_normal();
+        mal_promise_settle_direct_capability(
+            vm, cap_resolve, cap_reject, is_reject, argument);
+        return;
+    }
+
+    mal_vm_call_capability_function(
+        vm, is_reject ? cap_reject : cap_resolve, argument);
 }
 
 /** PromiseReactionJob: run the handler (or default), then settle the dependent. */
@@ -177,9 +199,19 @@ static void mal_vm_run_reaction_job(MalVm *vm, MalJob *job) {
     }
 
     if (result.kind == MAL_COMPLETION_THROW) {
-        mal_vm_settle_capability(vm, job->as.reaction.cap_reject, result.value);
+        mal_vm_settle_reaction_capability(
+            vm,
+            job->as.reaction.cap_resolve,
+            job->as.reaction.cap_reject,
+            true,
+            result.value);
     } else {
-        mal_vm_settle_capability(vm, job->as.reaction.cap_resolve, result.value);
+        mal_vm_settle_reaction_capability(
+            vm,
+            job->as.reaction.cap_resolve,
+            job->as.reaction.cap_reject,
+            false,
+            result.value);
     }
 }
 
@@ -190,7 +222,7 @@ static void mal_vm_run_thenable_job(MalVm *vm, MalJob *job) {
     MalCompletion result = mal_vm_call_value(
         vm, job->as.thenable.then, job->as.thenable.thenable, args, 2);
     if (result.kind == MAL_COMPLETION_THROW) {
-        mal_vm_settle_capability(vm, job->as.thenable.reject_fn, result.value);
+        mal_vm_call_capability_function(vm, job->as.thenable.reject_fn, result.value);
     }
 }
 

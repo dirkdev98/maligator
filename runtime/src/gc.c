@@ -10,6 +10,7 @@
 #include "./builtin_data_view.h"
 #include "./builtin_finalization_registry.h"
 #include "./builtin_iterator_helpers.h"
+#include "./builtin_promise.h"
 #include "./builtin_weak_ref.h"
 #include "./fiber.h"
 #include "./function_object.h"
@@ -338,12 +339,15 @@ static void mal_gc_print_stats(void) {
             stderr,
             "[promise-stats] job_allocations=%llu job_reuses=%llu "
             "reaction_allocations=%llu reaction_reuses=%llu "
+            "direct_capabilities=%llu materialized_fallback_pairs=%llu "
             "frame_allocations=%llu frame_reuses=%llu "
             "request_allocations=%llu request_reuses=%llu\n",
             (unsigned long long) mal_promise_job_allocation_count(),
             (unsigned long long) mal_promise_job_reuse_count(),
             (unsigned long long) mal_promise_reaction_allocation_count(),
             (unsigned long long) mal_promise_reaction_reuse_count(),
+            (unsigned long long) mal_promise_direct_capability_count(),
+            (unsigned long long) mal_promise_direct_fallback_pair_count(),
             (unsigned long long) mal_coroutine_buffer_allocation_count(),
             (unsigned long long) mal_coroutine_buffer_reuse_count(),
             (unsigned long long) mal_async_generator_request_allocation_count(),

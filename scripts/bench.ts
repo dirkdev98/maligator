@@ -128,6 +128,8 @@ interface PromiseMetrics {
 	jobReuses: number;
 	reactionAllocations: number;
 	reactionReuses: number;
+	directCapabilities: number;
+	materializedFallbackPairs: number;
 }
 interface CoroutineBackendMetrics {
 	wallMs: number;
@@ -497,6 +499,8 @@ function benchPromise(runs: number): PromiseMetrics {
 		jobReuses: parsePromiseStat(stderr, "job_reuses"),
 		reactionAllocations: parsePromiseStat(stderr, "reaction_allocations"),
 		reactionReuses: parsePromiseStat(stderr, "reaction_reuses"),
+		directCapabilities: parsePromiseStat(stderr, "direct_capabilities"),
+		materializedFallbackPairs: parsePromiseStat(stderr, "materialized_fallback_pairs"),
 	};
 }
 
@@ -1081,6 +1085,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		);
 		console.log(
 			`            ${entry.promise.reactionAllocations} reaction allocations${delta(entry.promise.reactionAllocations, p?.reactionAllocations)}, ${entry.promise.reactionReuses} reused`,
+		);
+		console.log(
+			`  direct    ${entry.promise.directCapabilities} capabilities${delta(entry.promise.directCapabilities, p?.directCapabilities)}, ${entry.promise.materializedFallbackPairs} fallback pairs materialized${delta(entry.promise.materializedFallbackPairs, p?.materializedFallbackPairs)}`,
 		);
 	}
 	if (entry.coroutine) {

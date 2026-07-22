@@ -41,6 +41,24 @@ void mal_promise_create_resolving(
 );
 
 /**
+ * Settle the direct result capability used only by exact-intrinsic
+ * Promise.prototype.then. `constructor` is the capability-realm %Promise%
+ * constructor retained in the reaction/job payload in place of a reject
+ * function.
+ */
+void mal_promise_settle_direct_capability(
+    MalVm *vm,
+    MalValue promise,
+    MalValue constructor,
+    bool is_reject,
+    MalValue argument
+);
+
+/** Process-wide counters exposed through MAL_PROMISE_STATS. */
+u64 mal_promise_direct_capability_count(void);
+u64 mal_promise_direct_fallback_pair_count(void);
+
+/**
  * PromiseResolve(%Promise%, value): if value is already a native Promise return
  * it, otherwise wrap it in a resolved promise. Returns false with a pending
  * throw on failure. Used by the async/await driver to normalize an awaited

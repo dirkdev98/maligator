@@ -28,6 +28,7 @@ typedef struct MalJob {
         /** NewPromiseReactionJob payload. */
         struct {
             MalValue handler;
+            /* Preserves MalPromiseReaction's capability encoding verbatim. */
             MalValue cap_resolve;
             MalValue cap_reject;
             MalValue argument;
@@ -41,6 +42,8 @@ typedef struct MalJob {
         } thenable;
     } as;
 } MalJob;
+
+static_assert(sizeof(MalJob) == 48, "MalJob must remain a 48-byte pooled node");
 
 /** Process-wide native allocation counters used by the benchmark tracker. */
 u64 mal_promise_job_allocation_count(void);

@@ -34,6 +34,17 @@ enum {
     MAL_PROMISE_REJECT_SLOT_RESOLVE_FN = 1,
 };
 
+static u64 g_direct_capabilities = 0;
+static u64 g_direct_fallback_pairs = 0;
+
+u64 mal_promise_direct_capability_count(void) {
+    return g_direct_capabilities;
+}
+
+u64 mal_promise_direct_fallback_pair_count(void) {
+    return g_direct_fallback_pairs;
+}
+
 static MalCompletion mal_promise_normal(void) {
     return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
@@ -68,6 +79,74 @@ static MalValue mal_promise_take_error(MalVm *vm, MalIntrinsic prototype_slot, c
 
 // --- Resolving functions -----------------------------------------------------
 
+/**
+ * The settlement half of CreateResolvingFunctions, after its shared
+ * [[AlreadyResolved]] guard has won. Direct then capabilities call this without
+ * materializing the initial resolving pair. Returns whether thenable callbacks
+ * had to be materialized.
+ */
+static bool mal_promise_settle_internal(
+    MalVm *vm,
+    MalValue promise_value,
+    bool is_reject,
+    MalValue argument
+) {
+    // A direct reaction result is otherwise only a C local here. Property lookup,
+    // TypeError creation, and resolving-function materialization may all collect.
+    MalValue roots[3] = {promise_value, argument, mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 3);
+
+    MalPromiseObject *promise = mal_value_to_promise_object(roots[0]);
+    if (is_reject) {
+        mal_promise_reject(vm, promise, roots[1]);
+        mal_gc_unroot(&span);
+        return false;
+    }
+
+    // Resolving a promise with itself is a chaining cycle: reject with TypeError.
+    if (roots[1] == roots[0]) {
+        MalValue error = mal_promise_take_error(
+            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Chaining cycle detected for promise");
+        mal_promise_reject(vm, promise, error);
+        mal_gc_unroot(&span);
+        return false;
+    }
+
+    if (!mal_value_is_object(roots[1])) {
+        mal_promise_fulfill(vm, promise, roots[1]);
+        mal_gc_unroot(&span);
+        return false;
+    }
+
+    // then = Get(resolution, "then"); a throwing getter rejects the promise.
+    if (!mal_vm_get_property(
+            vm, roots[1], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_THEN),
+            &roots[2])) {
+        MalValue error = vm->completion.value;
+        vm->completion = mal_promise_normal();
+        mal_promise_reject(vm, promise, error);
+        mal_gc_unroot(&span);
+        return false;
+    }
+
+    if (!mal_value_is_callable(roots[2])) {
+        mal_promise_fulfill(vm, promise, roots[1]);
+        mal_gc_unroot(&span);
+        return false;
+    }
+
+    // User thenable code must receive real callables. Materialize this fresh
+    // CreateResolvingFunctions pair only after observing a callable `then`.
+    MalValue job_resolve;
+    MalValue job_reject;
+    mal_promise_create_resolving(vm, roots[0], &job_resolve, &job_reject);
+    mal_vm_enqueue_thenable_job(vm, roots[2], roots[1], job_resolve, job_reject);
+    mal_gc_unroot(&span);
+    return true;
+}
+
 static MalValue mal_promise_resolve_function(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
@@ -79,40 +158,8 @@ static MalValue mal_promise_resolve_function(MalVm *vm, MalValue this_value, con
     mal_native_function_object_set_slot(self, MAL_PROMISE_RESOLVE_SLOT_ALREADY_RESOLVED, mal_value_new_boolean(true));
 
     MalValue promise_value = mal_native_function_object_get_slot(self, MAL_PROMISE_RESOLVE_SLOT_PROMISE);
-    MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
     MalValue resolution = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-
-    // Resolving a promise with itself is a chaining cycle: reject with TypeError.
-    if (resolution == promise_value) {
-        MalValue error = mal_promise_take_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Chaining cycle detected for promise");
-        mal_promise_reject(vm, promise, error);
-        return mal_value_new_undefined();
-    }
-
-    if (!mal_value_is_object(resolution)) {
-        mal_promise_fulfill(vm, promise, resolution);
-        return mal_value_new_undefined();
-    }
-
-    // then = Get(resolution, "then"); a throwing getter rejects the promise.
-    MalValue then;
-    if (!mal_vm_get_property(vm, resolution, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_THEN), &then)) {
-        MalValue error = vm->completion.value;
-        vm->completion = mal_promise_normal();
-        mal_promise_reject(vm, promise, error);
-        return mal_value_new_undefined();
-    }
-
-    if (!mal_value_is_callable(then)) {
-        mal_promise_fulfill(vm, promise, resolution);
-        return mal_value_new_undefined();
-    }
-
-    // Assimilate the thenable on a fresh microtask with its own resolving pair.
-    MalValue job_resolve;
-    MalValue job_reject;
-    mal_promise_create_resolving(vm, promise_value, &job_resolve, &job_reject);
-    mal_vm_enqueue_thenable_job(vm, then, resolution, job_resolve, job_reject);
+    (void) mal_promise_settle_internal(vm, promise_value, false, resolution);
     return mal_value_new_undefined();
 }
 
@@ -131,8 +178,33 @@ static MalValue mal_promise_reject_function(MalVm *vm, MalValue this_value, cons
 
     MalValue promise_value = mal_native_function_object_get_slot(self, MAL_PROMISE_REJECT_SLOT_PROMISE);
     MalValue reason = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    mal_promise_reject(vm, mal_value_to_promise_object(promise_value), reason);
+    (void) mal_promise_settle_internal(vm, promise_value, true, reason);
     return mal_value_new_undefined();
+}
+
+void mal_promise_settle_direct_capability(
+    MalVm *vm,
+    MalValue promise,
+    MalValue constructor,
+    bool is_reject,
+    MalValue argument
+) {
+#if MAL_REALMS
+    // Calling a materialized resolving function would enter its stamped realm.
+    // Preserve that behavior while bypassing generic function dispatch.
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, constructor));
+#else
+    (void) constructor;
+#endif
+
+    if (mal_promise_settle_internal(vm, promise, is_reject, argument)) {
+        g_direct_fallback_pairs++;
+    }
+
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
 }
 
 /** Give a resolving function the spec-mandated name "" and length 1. */
@@ -355,8 +427,23 @@ static MalValue mal_promise_prototype_then(MalVm *vm, MalValue this_value, const
     MalValue cap_promise;
     MalValue cap_resolve;
     MalValue cap_reject;
-    if (!mal_promise_new_capability(vm, constructor, &cap_promise, &cap_resolve, &cap_reject)) {
-        return mal_value_new_undefined();
+    if (constructor == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR]) {
+        // Direct capability encoding: cap_resolve is the target promise and
+        // cap_reject is its exact intrinsic constructor (the realm anchor/tag).
+        // Generic capabilities always have two callable fields; capability-less
+        // internal reactions have two undefined fields.
+        MalPromiseObject *promise = mal_promise_object_new(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
+        cap_promise = mal_value_from_promise_object(promise);
+        cap_resolve = cap_promise;
+        cap_reject = constructor;
+        g_direct_capabilities++;
+    } else {
+        if (!mal_promise_new_capability(
+                vm, constructor, &cap_promise, &cap_resolve, &cap_reject)) {
+            return mal_value_new_undefined();
+        }
     }
 
     MalValue on_fulfilled = arg_count >= 1 ? args[0] : mal_value_new_undefined();
