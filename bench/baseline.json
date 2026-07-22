@@ -5440,6 +5440,267 @@
           }
         }
       }
+    },
+    {
+      "commit": "756cd94",
+      "dirty": false,
+      "size": {
+        "full": {
+          "binaryBytes": 14111040,
+          "runtimeArchiveBytes": 215832,
+          "hostArchiveBytes": 65112,
+          "engineArchiveBytes": 1967320,
+          "rustArchiveBytes": 21761008
+        },
+        "no-eval": {
+          "binaryBytes": 13252264,
+          "runtimeArchiveBytes": 215832,
+          "hostArchiveBytes": 65112,
+          "engineArchiveBytes": 1113216,
+          "rustArchiveBytes": 21761008
+        },
+        "no-realms": {
+          "binaryBytes": 14109568,
+          "runtimeArchiveBytes": 215216,
+          "hostArchiveBytes": 65112,
+          "engineArchiveBytes": 1946352,
+          "rustArchiveBytes": 21761008
+        },
+        "no-intl": {
+          "binaryBytes": 3578856,
+          "runtimeArchiveBytes": 215832,
+          "hostArchiveBytes": 65112,
+          "engineArchiveBytes": 1864000,
+          "rustArchiveBytes": 8358280
+        },
+        "no-web": {
+          "binaryBytes": 13544152,
+          "runtimeArchiveBytes": 178416,
+          "hostArchiveBytes": 65112,
+          "engineArchiveBytes": 1967320,
+          "rustArchiveBytes": 21120912
+        },
+        "no-regexp": {
+          "binaryBytes": 13504624,
+          "runtimeArchiveBytes": 215832,
+          "hostArchiveBytes": 65112,
+          "engineArchiveBytes": 1924848,
+          "rustArchiveBytes": 20761496
+        },
+        "minimal": {
+          "binaryBytes": 2134936,
+          "runtimeArchiveBytes": 177872,
+          "hostArchiveBytes": 65112,
+          "engineArchiveBytes": 989208,
+          "rustArchiveBytes": 7717744
+        }
+      },
+      "compiler": {
+        "wallMs": 99.201916,
+        "sourceBytes": 163559,
+        "wireBytes": 95523,
+        "functionCount": 800
+      },
+      "language": {
+        "malMs": 296.299333,
+        "nodeMs": 118.943292,
+        "ratio": 2.491097463487054
+      },
+      "module": {
+        "malMs": 240.894167,
+        "nodeMs": 159.289084,
+        "ratio": 1.5123080687688555,
+        "collections": 0,
+        "peakLiveKb": 0
+      },
+      "string": {
+        "malMs": 503.902542,
+        "nodeMs": 116.1125,
+        "ratio": 4.339778594035956,
+        "collections": 42,
+        "allocatedMb": 182.7825698852539,
+        "peakLiveKb": 108.5625
+      },
+      "promise": {
+        "malMs": 175.881917,
+        "nodeMs": 88.127834,
+        "ratio": 1.9957589902867692,
+        "collections": 4,
+        "allocatedMb": 151.72598266601562,
+        "jobAllocations": 42033,
+        "jobReuses": 531576,
+        "reactionAllocations": 203999,
+        "reactionReuses": 110407,
+        "directCapabilities": 477608,
+        "materializedFallbackPairs": 67201,
+        "directIntrinsicCreations": 144003,
+        "directAsyncResults": 2,
+        "typedAwaitContinuations": 28800,
+        "typedAwaitJobs": 28800
+      },
+      "coroutine": {
+        "compiled": {
+          "wallMs": 467.86775,
+          "collections": 73,
+          "allocatedMb": 367.8954620361328,
+          "frameRequests": 623503,
+          "frameAllocations": 63504,
+          "frameReuses": 559999,
+          "frameReleases": 623503,
+          "framePooled": 563743,
+          "frameDropped": 59760,
+          "framePeakRetainedBytes": 1048576,
+          "requestAllocations": 2,
+          "requestReuses": 81998
+        },
+        "interpreted": {
+          "wallMs": 682.268666,
+          "collections": 73,
+          "allocatedMb": 367.8954620361328,
+          "frameRequests": 623503,
+          "frameAllocations": 63504,
+          "frameReuses": 559999,
+          "frameReleases": 623503,
+          "framePooled": 563743,
+          "frameDropped": 59760,
+          "framePeakRetainedBytes": 1048576,
+          "requestAllocations": 2,
+          "requestReuses": 81998
+        },
+        "nodeMs": 111.083083
+      },
+      "arguments": {
+        "compiled": {
+          "wallMs": 534.635875,
+          "collections": 26,
+          "allocatedMb": 116.3302001953125,
+          "frameRequests": 400000,
+          "frameAllocations": 305269,
+          "frameReuses": 94731,
+          "frameReleases": 398857,
+          "framePooled": 97344,
+          "frameDropped": 301513,
+          "framePeakRetainedBytes": 1048320,
+          "instructionCount": 0,
+          "bytecodeBytes": 0,
+          "binaryBytes": 14146224
+        },
+        "interpreted": {
+          "wallMs": 1728.924125,
+          "collections": 26,
+          "allocatedMb": 116.3302001953125,
+          "frameRequests": 400000,
+          "frameAllocations": 305286,
+          "frameReuses": 94714,
+          "frameReleases": 398874,
+          "framePooled": 97344,
+          "frameDropped": 301530,
+          "framePeakRetainedBytes": 1048320,
+          "instructionCount": 496,
+          "bytecodeBytes": 10040,
+          "binaryBytes": 14128640
+        },
+        "nodeMs": 98.139583
+      },
+      "stackObject": {
+        "compiled": {
+          "wallMs": 1122.533917,
+          "collections": 114,
+          "allocatedMb": 470.7146759033203,
+          "peakLiveKb": 89.234375,
+          "maxPauseMs": 2.161,
+          "instructionCount": 0,
+          "bytecodeBytes": 0,
+          "binaryBytes": 14219424,
+          "objectSlotCoallocations": 3500000,
+          "objectSlotGrowMigrations": 0,
+          "objectSlotDictionaryMigrations": 59,
+          "stackObjectMaterializations": 0,
+          "checksum": 812707571
+        },
+        "interpreted": {
+          "wallMs": 3300.127917,
+          "collections": 236,
+          "allocatedMb": 957.0885772705078,
+          "peakLiveKb": 89.21875,
+          "maxPauseMs": 5.749,
+          "instructionCount": 1031,
+          "bytecodeBytes": 21684,
+          "binaryBytes": 14149224,
+          "objectSlotCoallocations": 3500000,
+          "objectSlotGrowMigrations": 0,
+          "objectSlotDictionaryMigrations": 59,
+          "stackObjectMaterializations": 0,
+          "checksum": 812707571
+        },
+        "nodeMs": 93.89,
+        "checksum": 812707571
+      },
+      "interpreter": {
+        "malMs": 1227.914916,
+        "nodeMs": 118.626875,
+        "ratio": 10.351068558452711,
+        "rssMb": 15.625,
+        "instructionSize": 20,
+        "instructionCount": 1284,
+        "instructionBytes": 25680,
+        "instructionDataBytes": 644,
+        "bytecodeBytes": 26324,
+        "directLeafExecutions": 302186789,
+        "boundaryDispatches": 47092291,
+        "stateSyncs": 47092291,
+        "stateReloads": 47092291
+      },
+      "gc": {
+        "cli": {
+          "wallMs": 56.053125,
+          "rssMb": 22.640625,
+          "maxPauseMs": 4.307
+        },
+        "desktop": {
+          "wallMs": 1449.716709,
+          "rssMb": 20.890625,
+          "maxPauseMs": 4.414
+        },
+        "server": {
+          "wallMs": 4311.1485,
+          "rssMb": 20.296875,
+          "maxPauseMs": 3.849
+        }
+      },
+      "http": {
+        "malRps": 144777.68437924143,
+        "nodeRps": 110448.70703755987,
+        "ratio": 1.3108137547504963,
+        "malP99Ms": 0.9405410000000001,
+        "nodeP99Ms": 0.874792,
+        "express": {
+          "binaryBytes": 20468568,
+          "workloads": {
+            "routes": {
+              "malRps": 16726.52822607452,
+              "nodeRps": 50269.252517304885,
+              "ratio": 0.3327387496027818,
+              "malP99Ms": 3.9525,
+              "nodeP99Ms": 1.9195410000000002
+            },
+            "json": {
+              "malRps": 13143.631563222634,
+              "nodeRps": 47602.866950570984,
+              "ratio": 0.27611008338784476,
+              "malP99Ms": 4.960208,
+              "nodeP99Ms": 2.0120839999999998
+            },
+            "form": {
+              "malRps": 10088.374787169078,
+              "nodeRps": 43414.73286299975,
+              "ratio": 0.23237214931171224,
+              "malP99Ms": 5.9285,
+              "nodeP99Ms": 2.240291
+            }
+          }
+        }
+      }
     }
   ]
 }
