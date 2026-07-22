@@ -48,6 +48,42 @@ const SIDE_EFFECT_FREE_OPS = new Set<IRInstruction["type"]>([
 	"loadNewTarget",
 ]);
 
+interface OptimizationFeatures {
+	call: boolean;
+	object: boolean;
+	property: boolean;
+}
+
+/** Cheap program-wide feature summary used to avoid building irrelevant analyses. */
+function optimizationFeatures(program: IntermediateProgram): OptimizationFeatures {
+	const features: OptimizationFeatures = {
+		call: false,
+		object: false,
+		property: false,
+	};
+	for (const fn of program.functions) {
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				switch (instruction.type) {
+					case "call":
+					case "construct":
+						features.call = true;
+						break;
+					case "createObject":
+					case "createObjectShaped":
+						features.object = true;
+						break;
+					case "loadProperty":
+					case "storeProperty":
+						features.property = true;
+						break;
+				}
+			}
+		}
+	}
+	return features;
+}
+
 /** Execute the ordered IR optimization pipeline. */
 export function executeIROptimizations(program: IntermediateProgram) {
 	// Eliminate provably-redundant temporal-dead-zone checks before the main
@@ -56,51 +92,54 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	// up front against the pristine IR.
 	optEliminateRedundantTdzChecks(program);
 
-	const passes = [
-		optDropInstructionsAfterJumpsOrReturns,
-		optDropUnreferencedBlocks,
-		optLocalsToRegister,
-		optCopyPropagation,
+	const passes: Array<{
+		run: (program: IntermediateProgram) => boolean;
+		requires?: keyof OptimizationFeatures;
+	}> = [
+		{ run: optDropInstructionsAfterJumpsOrReturns },
+		{ run: optDropUnreferencedBlocks },
+		{ run: optLocalsToRegister },
+		{ run: optCopyPropagation },
 		// Fold only primitive operations whose exact JavaScript result can be
 		// computed without coercing an object or running user code. Constant jump
 		// cleanup then exposes dead blocks to the existing CFG passes.
-		optFoldPrimitiveConstants,
+		{ run: optFoldPrimitiveConstants },
 		// Rewrite `arr.forEach(cb)` into a guarded inlined loop whose `cb(...)` is a
 		// direct call. Runs before optInlineCalls so that direct call is folded in the
 		// same fixpoint round → the per-call closure + its captured env are eliminated.
-		optInlineHofCallbacks,
+		{ run: optInlineHofCallbacks, requires: "call" },
 		// Runs after copy propagation so a call's callee resolves to its function
 		// value through the move chain; before scalar replacement (inlining exposes
 		// cross-call object flow) and DCE (which drops the now-unused closure's
 		// createFunction → no closure/env allocation).
-		optInlineCalls,
+		{ run: optInlineCalls, requires: "call" },
 		// Speculative (guarded) inlining of reassignable-global direct calls (script-mode
 		// top-level functions). Runs after the static inliner so only genuinely-dynamic
 		// callees reach it; its deopt path is a normal call, folded no further.
-		optInlineSpeculative,
+		{ run: optInlineSpeculative, requires: "call" },
 		// Shape-guarded method inlining: `obj.m()` where m uniquely resolves to a known
 		// candidate; guarded by the resolved callee's function index (the loadProperty callee
 		// is already the proto-resolved method), inlined with this = receiver. Deopt = call.
-		optInlineMethod,
+		{ run: optInlineMethod, requires: "call" },
 		// Runs after copy propagation so a record's reads reference its allocation
 		// register directly (not a local copy), and before DCE so the freed key
 		// constants and unread values are cleaned up the same round.
-		optScalarReplaceObjectLiterals,
+		{ run: optScalarReplaceObjectLiterals, requires: "object" },
 		// The mutable generalization: a non-escaping object that IS written
 		// (storeProperty) becomes per-key registers (T7.4). Handled separately from
 		// the immutable pass above, which only fires on never-written records.
-		optScalarReplaceMutableObjects,
+		{ run: optScalarReplaceMutableObjects, requires: "object" },
 		// Empty functions made unreachable by inlining (their createFunction was
 		// DCE'd) — reclaims dead bodies and unblocks env elimination below.
-		optEmptyDeadFunctions,
+		{ run: optEmptyDeadFunctions },
 		// After inlining consolidates a closure's captured reads into its definer,
 		// internalize single-store immutable slots to direct register access and drop
 		// the now-unused env — completing closure+env elimination for capturing
 		// closures. Before DCE so the dropped stores / freed closures are cleaned up.
-		optEliminateCapturedSlots,
-		optDeadInstructionElimination,
-		optCombineLinearBlocks,
-		optPatchJumpsToDirectJumpBlocks,
+		{ run: optEliminateCapturedSlots },
+		{ run: optDeadInstructionElimination },
+		{ run: optCombineLinearBlocks },
+		{ run: optPatchJumpsToDirectJumpBlocks },
 	];
 
 	// Run all passes until a full round no longer changes the program. The cap is a safety net
@@ -108,8 +147,10 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	const maxRounds = 20;
 	for (let round = 0; round < maxRounds; ++round) {
 		let changed = false;
+		const features = optimizationFeatures(program);
 		for (const pass of passes) {
-			changed = pass(program) || changed;
+			if (pass.requires !== undefined && !features[pass.requires]) continue;
+			changed = pass.run(program) || changed;
 		}
 
 		if (!changed) {
@@ -120,9 +161,10 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	// This is intentionally outside the transform fixpoint: it classifies the
 	// residual identity-observed objects left after scalar replacement, and keys
 	// the proof to the exact allocation instruction before register reuse.
-	annotateStackObjectSites(program);
-	optStaticPropertyKeys(program);
-	optImmediateCallOperands(program);
+	const residualFeatures = optimizationFeatures(program);
+	if (residualFeatures.object) annotateStackObjectSites(program);
+	if (residualFeatures.property) optStaticPropertyKeys(program);
+	if (residualFeatures.call) optImmediateCallOperands(program);
 	optDeadInstructionElimination(program);
 
 	if (debugEnabled) debugIntermediateProgram(program);
