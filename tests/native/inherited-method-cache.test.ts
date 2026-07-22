@@ -19,6 +19,8 @@ describe("inherited built-in method and native call caches", () => {
 	let accessor: string;
 	let ordinaryCompiled: string;
 	let ordinaryInterpreted: string;
+	let primitiveCompiled: string;
+	let primitiveInterpreted: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -60,6 +62,18 @@ describe("inherited built-in method and native call caches", () => {
 		ordinaryInterpreted = buildNativeBinary({
 			fixture: "tests/local/inherited-ordinary-cache.js",
 			name: "inherited-ordinary-cache-ni",
+			compiled: false,
+			outDir,
+		});
+		primitiveCompiled = buildNativeBinary({
+			fixture: "tests/local/primitive-load-cache.js",
+			name: "primitive-load-cache",
+			compiled: true,
+			outDir,
+		});
+		primitiveInterpreted = buildNativeBinary({
+			fixture: "tests/local/primitive-load-cache.js",
+			name: "primitive-load-cache-ni",
 			compiled: false,
 			outDir,
 		});
@@ -114,4 +128,24 @@ describe("inherited built-in method and native call caches", () => {
 			]);
 		},
 	);
+
+	it.each([
+		["compiled", () => primitiveCompiled],
+		["interpreted", () => primitiveInterpreted],
+	])("caches primitive methods and exotic lengths in %s mode", (_name, binary) => {
+		assertExactLines(runToStdout(binary()), ["primitive-load-cache PASS"]);
+	});
+
+	it.each([
+		["compiled", () => primitiveCompiled],
+		["interpreted", () => primitiveInterpreted],
+	])("keeps special load caches sound under GC stress in %s mode", (_name, binary) => {
+		assertExactLines(
+			runToStdout(binary(), {
+				env: { MAL_HOST_GC: "1", ...STRESS_ENV },
+				timeoutMs: 60_000,
+			}),
+			["primitive-load-cache PASS"],
+		);
+	});
 });

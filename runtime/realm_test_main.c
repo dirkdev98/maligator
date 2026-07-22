@@ -352,11 +352,35 @@ int main(void) {
         date_method_two == own_data_property(
             &vm, realm_two->intrinsics[MAL_INTRINSIC_DATE_PROTOTYPE], "toString");
 
+    MalInlineCache primitive_method_cache = {0};
+    mal_realm_switch(&vm, realm_one);
+    MalValue primitive_method_one = mal_vm_array_fast_load(
+        &vm, mal_value_from_i32(1), to_string_key, &primitive_method_cache);
+    MalValue primitive_method_one_hit = mal_vm_array_fast_load(
+        &vm, mal_value_from_i32(2), to_string_key, &primitive_method_cache);
+    mal_realm_switch(&vm, realm_two);
+    MalValue primitive_method_two = mal_vm_array_fast_load(
+        &vm, mal_value_from_i32(3), to_string_key, &primitive_method_cache);
+    mal_realm_switch(&vm, realm_one);
+    MalValue primitive_method_one_again = mal_vm_array_fast_load(
+        &vm, mal_value_from_i32(4), to_string_key, &primitive_method_cache);
+    bool cross_realm_primitive_cache =
+        primitive_method_cache.mode == MAL_IC_MODE_PRIMITIVE_VALUE &&
+        primitive_method_one == primitive_method_one_hit &&
+        primitive_method_one == primitive_method_one_again &&
+        primitive_method_one != primitive_method_two &&
+        primitive_method_one == own_data_property(
+            &vm, realm_one->intrinsics[MAL_INTRINSIC_NUMBER_PROTOTYPE], "toString") &&
+        primitive_method_two == own_data_property(
+            &vm, realm_two->intrinsics[MAL_INTRINSIC_NUMBER_PROTOTYPE], "toString") &&
+        realm_is_current(&vm, realm_one);
+
     struct {
         const char *name;
         bool ok;
     } checks[] = {
         {"realm records are distinct", realm_one != realm_two},
+        {"primitive method cache is realm-exact", cross_realm_primitive_cache},
         {"global objects are distinct", global_one != global_two},
         {"global slot arrays are distinct", realm_one->globals != realm_two->globals},
         {"intrinsic arrays are distinct", realm_one->intrinsics != realm_two->intrinsics},

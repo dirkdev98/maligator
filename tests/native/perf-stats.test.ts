@@ -150,6 +150,14 @@ describe("opt-in performance statistics", () => {
 			field(ic, "load_slow_mono_hits");
 		expect(loadHits).toBeGreaterThan(0);
 		expect(field(ic, "load_fallbacks")).toBeGreaterThan(0);
+		expect(field(ic, "load_primitive_hits")).toBeGreaterThan(3000);
+		expect(field(ic, "load_string_length_hits")).toBeGreaterThan(1000);
+		expect(field(ic, "load_array_length_hits")).toBeGreaterThan(1000);
+		expect(
+			field(ic, "load_primitive_hits") +
+				field(ic, "load_string_length_hits") +
+				field(ic, "load_array_length_hits"),
+		).toBeGreaterThan(field(ic, "load_fallbacks"));
 		expect(field(ic, "store_fallbacks")).toBeGreaterThan(0);
 	});
 
@@ -183,5 +191,8 @@ describe("opt-in performance statistics", () => {
 		expect(field(ic, "store_mono_hits")).toBeGreaterThan(0);
 		expect(field(ic, "load_slow_mono_hits")).toBe(0);
 		expect(field(ic, "store_slow_mono_hits")).toBe(0);
+		expect(field(ic, "load_primitive_hits")).toBeGreaterThan(3000);
+		expect(field(ic, "load_string_length_hits")).toBeGreaterThan(1000);
+		expect(field(ic, "load_array_length_hits")).toBeGreaterThan(1000);
 	});
 });

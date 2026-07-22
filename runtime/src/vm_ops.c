@@ -3252,34 +3252,34 @@ MalValue mal_vm_op_load_property(MalVm *vm, MalValue object_value, MalValue key_
     return mal_vm_op_load_property_keyed(vm, object_value, key);
 }
 
-// Primitive kinds for the method inline cache (0 = not a cacheable primitive:
-// object, undefined, or null). Each maps to a prototype intrinsic below.
-enum {
-    MAL_PRIM_KIND_STRING = 1,
-    MAL_PRIM_KIND_NUMBER,
-    MAL_PRIM_KIND_BOOLEAN,
-    MAL_PRIM_KIND_SYMBOL,
-    MAL_PRIM_KIND_BIGINT,
-};
-
-static u8 mal_primitive_method_kind(MalVm *vm, MalValue value) {
-    if (mal_value_is_string(value)) return MAL_PRIM_KIND_STRING;
-    if (mal_vm_value_is_number(value)) return MAL_PRIM_KIND_NUMBER;
-    if (mal_value_is_boolean(value)) return MAL_PRIM_KIND_BOOLEAN;
-    if (mal_value_is_symbol(value)) return MAL_PRIM_KIND_SYMBOL;
-    if (mal_value_is_bigint(value)) return MAL_PRIM_KIND_BIGINT;
-    (void) vm;
-    return 0;
+static bool mal_ic_key_is_immortal(MalValue key) {
+    return mal_value_is_heap(key) &&
+        mal_value_to_heap(key)->storage == MAL_HEAP_STORAGE_IMMORTAL;
 }
 
-static MalIntrinsic mal_primitive_method_proto_slot(u8 kind) {
-    switch (kind) {
-        case MAL_PRIM_KIND_STRING: return MAL_INTRINSIC_STRING_PROTOTYPE;
-        case MAL_PRIM_KIND_NUMBER: return MAL_INTRINSIC_NUMBER_PROTOTYPE;
-        case MAL_PRIM_KIND_BOOLEAN: return MAL_INTRINSIC_BOOLEAN_PROTOTYPE;
-        case MAL_PRIM_KIND_SYMBOL: return MAL_INTRINSIC_SYMBOL_PROTOTYPE;
-        default: return MAL_INTRINSIC_BIGINT_PROTOTYPE; // MAL_PRIM_KIND_BIGINT
+static void mal_ic_record_special(
+    MalVm *vm, MalInlineCache *ic, u8 mode, u8 prim_kind, MalValue key,
+    MalValue value, const MalObject *prototype
+) {
+    ic->prototype = prototype;
+    ic->key = key;
+    ic->value = value;
+    ic->slot = MAL_IC_VALUE_SLOT;
+    ic->prim_kind = prim_kind;
+    ic->poly_count = 0;
+    ic->megamorphic = false;
+    ic->mode = mode;
+    ic->receiver_type = 0;
+#if MAL_REALMS
+    if (mode == MAL_IC_MODE_PRIMITIVE_VALUE) {
+        ic->realm = vm->current_realm;
+    } else {
+        ic->obj = nullptr;
     }
+#else
+    ic->obj = nullptr;
+    (void) vm;
+#endif
 }
 
 // Record a resolved plain-object data slot (shape -> slot for `key`) in the site
@@ -3289,7 +3289,8 @@ static MalIntrinsic mal_primitive_method_proto_slot(u8 kind) {
 // A key change (computed-key site) or a site currently holding a protector-gated
 // special entry (prim-method / watched-value) restarts monomorphic for this slot.
 static void mal_ic_record(MalInlineCache *ic, const MalShape *shape, MalValue key, u32 slot) {
-    if (key != ic->key || ic->shape == nullptr || ic->slot == MAL_IC_VALUE_SLOT || ic->prim_kind != 0) {
+    if (ic->mode != MAL_IC_MODE_SHAPE || key != ic->key || ic->shape == nullptr ||
+        ic->slot == MAL_IC_VALUE_SLOT || ic->prim_kind != 0) {
         ic->shape = shape;
         ic->key = key;
         ic->slot = slot;
@@ -3381,16 +3382,24 @@ static void mal_ic_try_record_inherited_value(
 
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
     MAL_PERF_COUNT(ic_load_fallbacks);
+    MalValue special_value;
+    if (mal_vm_special_try_load(vm, object_value, key_value, ic, &special_value)) {
+        return special_value;
+    }
     MalValue inherited_value;
     if (mal_vm_inherited_try_load(object_value, key_value, ic, &inherited_value)) {
         return inherited_value;
     }
     // Array `.length`: an exotic own field (not a shape slot, and arrays are not
-    // MAL_HEAP_OBJECT), so read it directly instead of the generic keyed resolver.
-    // Out of line rather than in the inline fast path: keeping the length check off
-    // every compiled property site avoids bloating the monomorphic object hot path.
+    // MAL_HEAP_OBJECT). Read it directly and record an exact-key mode so subsequent
+    // accesses can read the current length in the caller's inline fast path.
     if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT) && mal_value_is_string(key_value)
         && mal_array_key_is_length((MalKey){.kind = MAL_KEY_STRING, .value = key_value})) {
+        if (mal_ic_key_is_immortal(key_value)) {
+            mal_ic_record_special(
+                vm, ic, MAL_IC_MODE_ARRAY_LENGTH, 0, key_value,
+                mal_value_new_undefined(), nullptr);
+        }
         return mal_ops_number_value((f64) ((const MalArrayObject *) mal_value_to_heap(object_value))->length);
     }
     if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
@@ -3416,7 +3425,7 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         }
         // Polymorphic overflow: a previously-seen alternate shape for the same key
         // (matches the inline fast path in mal_vm_array_fast_load).
-        if (ic->poly_count > 0 && key_value == ic->key) {
+        if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key_value == ic->key) {
             for (u8 i = 0; i < ic->poly_count; i++) {
                 if (object->shape == ic->poly_shape[i]) {
                     MAL_PERF_COUNT(ic_load_poly_hits);
@@ -3505,15 +3514,16 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
     // symbol/bigint resolves on that kind's prototype every time otherwise (the
     // dominant cost of string/number-method-heavy loops). Cache the resolved method
     // while `mal_primitive_method_protector` holds (no watched prototype mutated).
-    u8 prim_kind = mal_primitive_method_kind(vm, object_value);
+    u8 prim_kind = mal_vm_primitive_method_kind(object_value);
     if (prim_kind != 0) {
-        if (mal_primitive_method_protector && ic->prim_kind == prim_kind && key_value == ic->key
-#if MAL_REALMS
-            && ic->realm == vm->current_realm
-#endif
-        ) {
-            MAL_PERF_COUNT(ic_load_primitive_hits);
-            return ic->value;
+        if (prim_kind == MAL_PRIM_KIND_STRING && mal_value_is_string(key_value) &&
+            mal_array_key_is_length((MalKey){.kind = MAL_KEY_STRING, .value = key_value})) {
+            if (mal_ic_key_is_immortal(key_value)) {
+                mal_ic_record_special(
+                    vm, ic, MAL_IC_MODE_STRING_LENGTH, 0, key_value,
+                    mal_value_new_undefined(), nullptr);
+            }
+            return mal_value_from_i32((i32) mal_value_to_string(object_value)->length);
         }
         MalValue result = mal_vm_op_load_property(vm, object_value, key_value);
         // Cache only a plain DATA method resolved on the (watched) prototype chain:
@@ -3522,25 +3532,20 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         // accessor (whose getter must run each time).
         if (mal_primitive_method_protector
             && vm->completion.kind != MAL_COMPLETION_THROW
-            && mal_value_is_string(key_value)
-            && mal_value_to_heap(key_value)->storage == MAL_HEAP_STORAGE_IMMORTAL) {
+            && mal_value_is_string(key_value) && mal_ic_key_is_immortal(key_value)) {
             MalKey key = {.kind = MAL_KEY_STRING, .value = key_value};
             bool string_exotic = prim_kind == MAL_PRIM_KIND_STRING &&
                 (mal_array_key_is_length(key) ||
                     mal_vm_string_is_canonical_numeric_index(vm, mal_value_to_string(key_value)));
             if (!string_exotic) {
                 MalObject *proto =
-                    mal_value_to_object(vm->intrinsics[mal_primitive_method_proto_slot(prim_kind)]);
+                    mal_value_to_object(vm->intrinsics[mal_vm_primitive_method_proto_slot(prim_kind)]);
                 MalPropertyResolution res = mal_object_resolve_property(proto, key);
-                if (res.found && !(res.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-                    ic->prim_kind = prim_kind;
-                    ic->key = key_value;
-                    ic->value = result; // == res.desc.value (non-shadowed data method)
-                    ic->shape = nullptr; // not an object-shape entry — avoid a false store/load hit
-                    ic->mode = MAL_IC_MODE_SHAPE;
-#if MAL_REALMS
-                    ic->realm = vm->current_realm;
-#endif
+                if (res.found && !(res.desc.flags & MAL_PROPERTY_ACCESSOR) &&
+                    res.desc.value == result) {
+                    mal_ic_record_special(
+                        vm, ic, MAL_IC_MODE_PRIMITIVE_VALUE, prim_kind,
+                        key_value, result, proto);
                     MAL_PERF_COUNT(ic_load_primitive_fills);
                 }
             }
@@ -3603,7 +3608,8 @@ void mal_vm_op_store_property_ic(
     MAL_PERF_COUNT(ic_store_fallbacks);
     if (mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
         MalObject *object = (MalObject *) mal_value_to_heap(object_value);
-        if (object->shape == ic->shape && key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
+        if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape &&
+            key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
             MAL_PERF_COUNT(ic_store_slow_mono_hits);
             // hit: overwrite an existing shaped data slot (shape + key unchanged).
             // (A value-sentinel entry is a load-only cache — never index slots with it.)
@@ -3614,7 +3620,7 @@ void mal_vm_op_store_property_ic(
         }
         // Polymorphic overflow: an alternate shape for the same key. Entries are only
         // added for default-writable data slots (below), so this overwrite is sound.
-        if (ic->poly_count > 0 && key_value == ic->key) {
+        if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key_value == ic->key) {
             for (u8 i = 0; i < ic->poly_count; i++) {
                 if (object->shape == ic->poly_shape[i]) {
                     MAL_PERF_COUNT(ic_store_poly_hits);
@@ -3675,7 +3681,8 @@ int mal_vm_object_region_add_variant(const MalObject *o, const MalInlineCache *c
     // value-slot entry (watched intrinsic) or a site that cached a different shape (dictionary
     // / miss / a shape not yet in this run) disqualifies it — the run keeps the per-site IC.
     for (u32 i = 0; i < k; i++) {
-        if (ics[i]->shape != shape || ics[i]->slot == MAL_IC_VALUE_SLOT) {
+        if (ics[i]->mode != MAL_IC_MODE_SHAPE || ics[i]->shape != shape ||
+            ics[i]->slot == MAL_IC_VALUE_SLOT) {
             return -1;
         }
     }

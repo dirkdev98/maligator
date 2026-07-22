@@ -103,6 +103,8 @@ typedef struct MalPerfStats {
     u64 ic_load_primitive_hits;
     u64 ic_load_primitive_fills;
     u64 ic_load_primitive_uncacheable;
+    u64 ic_load_string_length_hits;
+    u64 ic_load_array_length_hits;
     u64 ic_load_watched_hits;
     u64 ic_load_watched_fills;
     u64 ic_load_other_generic;
@@ -168,6 +170,18 @@ static inline void mal_perf_ic_load_region_hit(void) {
 
 static inline void mal_perf_ic_load_inherited_hit(void) {
     MAL_PERF_COUNT(ic_load_inherited_hits);
+}
+
+static inline void mal_perf_ic_load_primitive_hit(void) {
+    MAL_PERF_COUNT(ic_load_primitive_hits);
+}
+
+static inline void mal_perf_ic_load_string_length_hit(void) {
+    MAL_PERF_COUNT(ic_load_string_length_hits);
+}
+
+static inline void mal_perf_ic_load_array_length_hit(void) {
+    MAL_PERF_COUNT(ic_load_array_length_hits);
 }
 
 static inline void mal_perf_ic_store_mono_hit(void) {

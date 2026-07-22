@@ -65,6 +65,26 @@ for (let i = 0; i < fanoutKeys.length; i++) {
 }
 
 const counter = new Counter(3);
+const stringMethod = String.prototype.charCodeAt;
+const numberMethod = Number.prototype.toFixed;
+
+function loadStringMethod(value) {
+	return value.charCodeAt;
+}
+
+function loadNumberMethod(value) {
+	return value.toFixed;
+}
+
+function loadStringLength(value) {
+	return value.length;
+}
+
+function loadArrayLength(value) {
+	return value.length;
+}
+
+const lengthArray = [1, 2, 3];
 let total = 0;
 for (let i = 0; i < 2000; i++) {
 	const object = objects[i % objects.length];
@@ -74,6 +94,10 @@ for (let i = 0; i < 2000; i++) {
 	total += object[dynamicKey];
 	total += map.get(mapKeys[i % mapKeys.length]);
 	total += counter.read();
+	if (loadStringMethod("stats") !== stringMethod) throw new Error("string method cache");
+	if (loadNumberMethod(i) !== numberMethod) throw new Error("number method cache");
+	total += loadStringLength(i % 2 === 0 ? "s" : "stats");
+	total += loadArrayLength(lengthArray);
 }
 
 if (total <= 0) throw new Error("expected work");

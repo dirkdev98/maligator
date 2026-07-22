@@ -320,16 +320,21 @@ void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_val
  * flags, so the site carries no interior padding.
  */
 typedef struct MalInlineCache {
-    const struct MalShape *shape;
+    union {
+        const struct MalShape *shape;
+        // Exact current-realm primitive prototype for a primitive-value entry.
+        const struct MalObject *prototype;
+    };
     MalValue key; // the exact key value cached — a computed-key site (o[k]) varies
     // `value` caches a resolved property value for the two protector-gated modes:
-    //  - primitive-method: `prim_kind` nonzero — `value` is `key` on that primitive
-    //    kind's (unmodified) prototype chain.
+    //  - primitive-method: `mode == MAL_IC_MODE_PRIMITIVE_VALUE` — `value` is
+    //    `key` on that primitive kind's (unmodified) prototype chain.
     //  - watched-intrinsic own property: `prim_kind` 0 and `slot == MAL_IC_VALUE_SLOT`
     //    — `value` is `key`'s own value on a watched intrinsic (String, Math, …),
     //    which lives in the overflow table (no shape slot).
-    // Both are valid only while `mal_primitive_method_protector` holds. Under
-    // MAL_REALMS a primitive-method entry is additionally tagged with its realm.
+    // Both value modes are valid only while `mal_primitive_method_protector`
+    // holds. Under MAL_REALMS a primitive-method entry is additionally tagged
+    // with its exact realm; `prototype` guards the current intrinsic in all builds.
     // A plain object-shape entry has `prim_kind` 0 and a real `slot` (uses
     // object->slots).
     MalValue value;
@@ -378,6 +383,42 @@ static_assert(sizeof(MalInlineCache) <= 80, "MalInlineCache outgrew 80 bytes");
 
 #define MAL_IC_MODE_SHAPE 0u
 #define MAL_IC_MODE_INHERITED_VALUE 1u
+#define MAL_IC_MODE_PRIMITIVE_VALUE 2u
+#define MAL_IC_MODE_STRING_LENGTH 3u
+#define MAL_IC_MODE_ARRAY_LENGTH 4u
+
+// Primitive kinds for MAL_IC_MODE_PRIMITIVE_VALUE (0 = not cacheable).
+enum {
+    MAL_PRIM_KIND_STRING = 1,
+    MAL_PRIM_KIND_NUMBER,
+    MAL_PRIM_KIND_BOOLEAN,
+    MAL_PRIM_KIND_SYMBOL,
+    MAL_PRIM_KIND_BIGINT,
+};
+
+static inline u8 mal_vm_primitive_method_kind(MalValue value) {
+    if (mal_value_is_string(value)) return MAL_PRIM_KIND_STRING;
+    // +/-Infinity and -0 have dedicated static tags rather than the f64 tag.
+    if (mal_value_is_int32(value) || mal_value_is_f64_or_nan(value) ||
+        value == MAL_VALUE_NEGATIVE_ZERO || value == MAL_VALUE_POSITIVE_INFINITY ||
+        value == MAL_VALUE_NEGATIVE_INFINITY) {
+        return MAL_PRIM_KIND_NUMBER;
+    }
+    if (mal_value_is_boolean(value)) return MAL_PRIM_KIND_BOOLEAN;
+    if (mal_value_is_symbol(value)) return MAL_PRIM_KIND_SYMBOL;
+    if (mal_value_is_bigint(value)) return MAL_PRIM_KIND_BIGINT;
+    return 0;
+}
+
+static inline MalIntrinsic mal_vm_primitive_method_proto_slot(u8 kind) {
+    switch (kind) {
+        case MAL_PRIM_KIND_STRING: return MAL_INTRINSIC_STRING_PROTOTYPE;
+        case MAL_PRIM_KIND_NUMBER: return MAL_INTRINSIC_NUMBER_PROTOTYPE;
+        case MAL_PRIM_KIND_BOOLEAN: return MAL_INTRINSIC_BOOLEAN_PROTOTYPE;
+        case MAL_PRIM_KIND_SYMBOL: return MAL_INTRINSIC_SYMBOL_PROTOTYPE;
+        default: return MAL_INTRINSIC_BIGINT_PROTOTYPE;
+    }
+}
 
 // Megamorphic stub cache: a shared, per-VM, direct-mapped (shape, key) -> data slot
 // table consulted when a per-site cache has gone megamorphic (saw more shapes than
@@ -402,11 +443,10 @@ static inline u32 mal_stub_hash(const struct MalShape *shape, MalValue key) {
 }
 
 /**
- * Inline-cached property load/store for the compiled backend. The fast path
- * applies only to a plain object (MAL_HEAP_OBJECT) whose own property is a
- * shaped data slot; everything else (arrays, proxies, typed arrays, prototype
- * lookups, accessors, index/symbol keys) falls through to the generic op, which
- * also refills the cache when it resolves an ownable shaped data property.
+ * Inline-cached property load/store miss handlers. Generated code and the
+ * interpreter first probe plain-object slots and guarded value/length entries;
+ * everything else falls through here for polymorphic probes, generic semantics,
+ * and cache refill. Stores remain limited to plain shaped data slots.
  */
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic);
 
@@ -478,7 +518,8 @@ static inline MalObject *mal_vm_as_object(MalValue v) {
  */
 static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key, const MalInlineCache *ic,
                                           MalValue *out) {
-    if (object->shape == ic->shape && key == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
+    if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key == ic->key &&
+        ic->slot != MAL_IC_VALUE_SLOT) {
         mal_perf_ic_load_mono_hit();
         *out = object->slots[ic->slot];
         return true;
@@ -523,6 +564,49 @@ static inline bool mal_vm_watched_try_load(MalValue receiver, MalValue key,
 }
 
 /**
+ * Protector/type-gated value and exotic-length entries. Fill sites admit only
+ * immortal exact keys, so identity is stable and a computed-key site cannot use
+ * a result cached for equal-looking collectable or alternating keys. Length is
+ * read from the receiver on every hit; only the resolution is cached.
+ */
+static inline bool mal_vm_special_try_load(MalVm *vm, MalValue receiver, MalValue key,
+                                           const MalInlineCache *ic, MalValue *out) {
+    if (key != ic->key) {
+        return false;
+    }
+    if (ic->mode == MAL_IC_MODE_PRIMITIVE_VALUE) {
+        if (!mal_primitive_method_protector ||
+            mal_vm_primitive_method_kind(receiver) != ic->prim_kind
+#if MAL_REALMS
+            || ic->realm != vm->current_realm
+#endif
+        ) {
+            return false;
+        }
+        MalIntrinsic slot = mal_vm_primitive_method_proto_slot(ic->prim_kind);
+        if (ic->prototype != (const MalObject *) mal_value_to_heap(vm->intrinsics[slot])) {
+            return false;
+        }
+        *out = ic->value;
+        mal_perf_ic_load_primitive_hit();
+        return true;
+    }
+    if (ic->mode == MAL_IC_MODE_STRING_LENGTH && mal_value_is_string(receiver)) {
+        *out = mal_value_from_i32((i32) mal_value_to_string(receiver)->length);
+        mal_perf_ic_load_string_length_hit();
+        return true;
+    }
+    if (ic->mode == MAL_IC_MODE_ARRAY_LENGTH &&
+        mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT)) {
+        const MalArrayObject *array = (const MalArrayObject *) mal_value_to_heap(receiver);
+        *out = mal_ops_number_value((f64) array->length);
+        mal_perf_ic_load_array_length_hit();
+        return true;
+    }
+    return false;
+}
+
+/**
  * Monomorphic shape-slot overwrite of an existing writable data slot (barriered).
  * Returns true when applied; false (miss / value-slot / accessor / read-only / fresh
  * key) leaves the store to the general [[Set]]. A successful overwrite runs no user
@@ -531,7 +615,8 @@ static inline bool mal_vm_watched_try_load(MalValue receiver, MalValue key,
  */
 static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalValue value,
                                            const MalInlineCache *ic) {
-    if (object->shape == ic->shape && key == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
+    if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key == ic->key &&
+        ic->slot != MAL_IC_VALUE_SLOT) {
         mal_perf_ic_store_mono_hit();
         mal_gc_write_barrier(object->slots[ic->slot]);
         object->slots[ic->slot] = value;
@@ -574,6 +659,9 @@ static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, 
         return out;
     }
     if (mal_vm_watched_try_load(object_value, key_value, ic, &out)) {
+        return out;
+    }
+    if (mal_vm_special_try_load(vm, object_value, key_value, ic, &out)) {
         return out;
     }
     // Everything past the monomorphic hit (polymorphic overflow, megamorphic stub

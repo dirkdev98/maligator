@@ -191,7 +191,8 @@ static void mal_perf_stats_print(void) {
         "load_poly_hits=%llu load_mega_hits=%llu load_mega_misses=%llu "
         "load_shape_hits=%llu load_shape_fills=%llu load_shape_uncacheable=%llu "
         "load_plain_generic=%llu load_primitive_hits=%llu load_primitive_fills=%llu "
-        "load_primitive_uncacheable=%llu load_watched_hits=%llu load_watched_fills=%llu "
+        "load_primitive_uncacheable=%llu load_string_length_hits=%llu "
+        "load_array_length_hits=%llu load_watched_hits=%llu load_watched_fills=%llu "
         "load_other_generic=%llu inherited_fills=%llu inherited_reject_basic=%llu "
         "inherited_reject_key=%llu inherited_reject_receiver=%llu "
         "inherited_reject_resolution=%llu inherited_reject_chain=%llu "
@@ -214,6 +215,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_load_primitive_hits,
         (unsigned long long) mal_perf_stats.ic_load_primitive_fills,
         (unsigned long long) mal_perf_stats.ic_load_primitive_uncacheable,
+        (unsigned long long) mal_perf_stats.ic_load_string_length_hits,
+        (unsigned long long) mal_perf_stats.ic_load_array_length_hits,
         (unsigned long long) mal_perf_stats.ic_load_watched_hits,
         (unsigned long long) mal_perf_stats.ic_load_watched_fills,
         (unsigned long long) mal_perf_stats.ic_load_other_generic,
