@@ -1093,7 +1093,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         case MAL_HEAP_PROMISE_OBJECT: {
             // A promise collected while still pending owns its reaction nodes.
             MalPromiseObject *promise = (MalPromiseObject *) cell;
-            mal_promise_free_reactions(promise->reactions_head);
+            mal_promise_free_reactions(g_gc_vm, promise->reactions_head);
             promise->reactions_head = nullptr;
             promise->reactions_tail = nullptr;
             break;

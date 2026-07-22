@@ -1,5 +1,6 @@
 #include "promise_object.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 
 #include "gc.h"
@@ -7,6 +8,78 @@
 #include "vm.h"
 
 #define MAL_PROMISE_REACTION_POOL_LIMIT 4096
+#define MAL_PROMISE_REACTION_BLOCK_SIZE 32768
+
+struct MalPromiseReactionBlock {
+    MalPromiseReactionBlock *next;
+    MalPromiseReaction *free_list;
+    u32 next_unused;
+    u32 live_count;
+    MalPromiseReaction reactions[];
+};
+
+static_assert(
+    (MAL_PROMISE_REACTION_BLOCK_SIZE & (MAL_PROMISE_REACTION_BLOCK_SIZE - 1)) == 0,
+    "Promise reaction block size must be a power of two");
+
+#define MAL_PROMISE_REACTIONS_PER_BLOCK \
+    ((u32) ((MAL_PROMISE_REACTION_BLOCK_SIZE - sizeof(MalPromiseReactionBlock)) / \
+            sizeof(MalPromiseReaction)))
+
+static bool mal_promise_reaction_block_has_capacity(const MalPromiseReactionBlock *block) {
+    return block->free_list != nullptr || block->next_unused < MAL_PROMISE_REACTIONS_PER_BLOCK;
+}
+
+static MalPromiseReaction *mal_promise_allocate_reaction(MalVm *vm) {
+    MalPromiseReactionBlock *block = vm->reaction_active_block;
+    if (block == nullptr || !mal_promise_reaction_block_has_capacity(block)) {
+        for (block = vm->reaction_blocks; block != nullptr; block = block->next) {
+            if (mal_promise_reaction_block_has_capacity(block)) {
+                break;
+            }
+        }
+        if (block == nullptr) {
+            block = aligned_alloc(
+                MAL_PROMISE_REACTION_BLOCK_SIZE, MAL_PROMISE_REACTION_BLOCK_SIZE);
+            block->next = vm->reaction_blocks;
+            block->free_list = nullptr;
+            block->next_unused = 0;
+            block->live_count = 0;
+            vm->reaction_blocks = block;
+        }
+        vm->reaction_active_block = block;
+    }
+
+    MalPromiseReaction *reaction;
+    if (block->free_list != nullptr) {
+        reaction = block->free_list;
+        block->free_list = reaction->next;
+    } else {
+        reaction = &block->reactions[block->next_unused++];
+    }
+    block->live_count++;
+    return reaction;
+}
+
+static void mal_promise_release_reaction(MalVm *vm, MalPromiseReaction *reaction) {
+    MalPromiseReactionBlock *block = (MalPromiseReactionBlock *) (
+        (uintptr_t) reaction & ~((uintptr_t) MAL_PROMISE_REACTION_BLOCK_SIZE - 1));
+    reaction->next = block->free_list;
+    block->free_list = reaction;
+    block->live_count--;
+    vm->reaction_active_block = block;
+    if (block->live_count != 0) {
+        return;
+    }
+
+    MalPromiseReactionBlock **link = &vm->reaction_blocks;
+    while (*link != block) {
+        link = &(*link)->next;
+    }
+    *link = block->next;
+    vm->reaction_active_block = nullptr;
+    free(block);
+}
 
 MalPromiseObject *mal_promise_object_new(MalHeap *heap, MalObject *prototype) {
     MalPromiseObject *promise = mal_heap_alloc(heap, sizeof(MalPromiseObject), MAL_HEAP_PROMISE_OBJECT);
@@ -31,7 +104,7 @@ void mal_promise_append_reaction(
 ) {
     MalPromiseReaction *reaction = vm->reaction_pool;
     if (reaction == nullptr) {
-        reaction = malloc(sizeof(MalPromiseReaction));
+        reaction = mal_promise_allocate_reaction(vm);
         mal_promise_note_reaction_allocation();
     } else {
         vm->reaction_pool = reaction->next;
@@ -52,22 +125,26 @@ void mal_promise_append_reaction(
     promise->reactions_tail = reaction;
 
     // Old promise gaining young refs: remember it so a minor collection traces
-    // the malloc-owned list through the managed promise.
+    // the native reaction list through the managed promise.
     mal_gc_card(&promise->object.header, on_fulfilled);
     mal_gc_card(&promise->object.header, on_rejected);
     mal_gc_card(&promise->object.header, cap_resolve);
     mal_gc_card(&promise->object.header, cap_reject);
 }
 
-/** Free a reaction list without scheduling it (the discarded-on-settle list). */
-void mal_promise_free_reactions(MalPromiseReaction *list) {
+/** Free a pending reaction list without scheduling it. */
+void mal_promise_free_reactions(MalVm *vm, MalPromiseReaction *list) {
     while (list != nullptr) {
         MalPromiseReaction *next = list->next;
         mal_gc_write_barrier(list->on_fulfilled);
         mal_gc_write_barrier(list->on_rejected);
         mal_gc_write_barrier(list->cap_resolve);
         mal_gc_write_barrier(list->cap_reject);
-        free(list);
+        list->on_fulfilled = mal_value_new_undefined();
+        list->on_rejected = mal_value_new_undefined();
+        list->cap_resolve = mal_value_new_undefined();
+        list->cap_reject = mal_value_new_undefined();
+        mal_promise_release_reaction(vm, list);
         list = next;
     }
 }
@@ -83,7 +160,7 @@ static void mal_promise_recycle_reaction(MalVm *vm, MalPromiseReaction *reaction
     reaction->cap_reject = mal_value_new_undefined();
 
     if (vm->reaction_pool_count >= MAL_PROMISE_REACTION_POOL_LIMIT) {
-        free(reaction);
+        mal_promise_release_reaction(vm, reaction);
         return;
     }
     reaction->next = vm->reaction_pool;
@@ -92,14 +169,16 @@ static void mal_promise_recycle_reaction(MalVm *vm, MalPromiseReaction *reaction
 }
 
 void mal_promise_free_reaction_pool(MalVm *vm) {
-    MalPromiseReaction *reaction = vm->reaction_pool;
-    while (reaction != nullptr) {
-        MalPromiseReaction *next = reaction->next;
-        free(reaction);
-        reaction = next;
+    MalPromiseReactionBlock *block = vm->reaction_blocks;
+    while (block != nullptr) {
+        MalPromiseReactionBlock *next = block->next;
+        free(block);
+        block = next;
     }
     vm->reaction_pool = nullptr;
     vm->reaction_pool_count = 0;
+    vm->reaction_blocks = nullptr;
+    vm->reaction_active_block = nullptr;
 }
 
 static void mal_promise_barrier_reactions(MalPromiseReaction *reaction) {

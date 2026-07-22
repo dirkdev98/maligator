@@ -17,6 +17,8 @@ typedef enum MalPromiseState {
     MAL_PROMISE_REJECTED,
 } MalPromiseState;
 
+typedef struct MalPromiseReactionBlock MalPromiseReactionBlock;
+
 /**
  * A paired pending PromiseReaction: one registration's two optional handlers and
  * shared dependent capability. The promise owns a FIFO list of these nodes.
@@ -87,7 +89,7 @@ void mal_promise_reject(MalVm *vm, MalPromiseObject *promise, MalValue reason);
  * Free a pending reaction list directly. The GC finalizer uses this for a promise
  * collected while still pending.
  */
-void mal_promise_free_reactions(MalPromiseReaction *list);
+void mal_promise_free_reactions(MalVm *vm, MalPromiseReaction *list);
 
 /** Free the VM's cleared, untraced reaction freelist at teardown. */
 void mal_promise_free_reaction_pool(MalVm *vm);

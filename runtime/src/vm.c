@@ -345,6 +345,8 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->job_pool_count = 0;
     vm->reaction_pool = nullptr;
     vm->reaction_pool_count = 0;
+    vm->reaction_blocks = nullptr;
+    vm->reaction_active_block = nullptr;
     vm->coroutine_buffer_pool = nullptr;
     vm->coroutine_buffer_pool_bytes = 0;
     vm->coroutine_buffer_pool_count = 0;

@@ -33,6 +33,23 @@ const rejected = new Promise((resolve, rejectPromise) => {
 	reject = rejectPromise;
 });
 
+let releaseLarge;
+const large = new Promise((resolve) => {
+	releaseLarge = resolve;
+});
+let largeSum = 0;
+for (let i = 0; i < 5000; i++) {
+	large.then((value) => {
+		largeSum += value + i;
+	});
+}
+
+function abandonPendingReactions() {
+	const pending = new Promise(() => {});
+	for (let i = 0; i < 1000; i++) pending.then(() => i);
+}
+abandonPendingReactions();
+
 for (let i = 0; i < 64; i++) {
 	fulfilled.then(
 		(value) => events.push("f" + i + ":" + value),
@@ -50,6 +67,7 @@ for (let i = 0; i < 64; i++) {
 
 fulfill("ok");
 reject("bad");
+releaseLarge(3);
 
 const gc = globalThis.__mal_collect_garbage;
 let chain = Promise.resolve(0);
@@ -70,7 +88,13 @@ for (let i = 0; i < 128; i++) {
 
 chain.then((value) => {
 	Promise.resolve().then(() => {
-		if (failed || !resolvingMetadata || value !== 128 || events.length !== 128) {
+		if (
+			failed ||
+			!resolvingMetadata ||
+			value !== 128 ||
+			events.length !== 128 ||
+			largeSum !== 12512500
+		) {
 			throw new Error("promise pool state mismatch");
 		}
 		for (let i = 0; i < 64; i++) {

@@ -11,7 +11,7 @@ import {
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-promise-pool-"));
 const expected = ["promise-pool PASS"];
-const hostGc = { MAL_HOST_GC: "1" };
+const hostGc = { MAL_HOST_GC: "1", MAL_GC_AT_EXIT: "1" };
 
 describe("pooled promise reactions and jobs", () => {
 	let compiled: string;

@@ -1215,6 +1215,9 @@ typedef struct MalVm {
     /** Cleared, untraced pending-reaction nodes retained for reuse. */
     struct MalPromiseReaction *reaction_pool;
     u32 reaction_pool_count;
+    /** Reclaimable blocks backing active and pooled Promise reaction nodes. */
+    struct MalPromiseReactionBlock *reaction_blocks;
+    struct MalPromiseReactionBlock *reaction_active_block;
 
     /** Byte-bounded, untraced pool of cleared suspendable-frame value buffers. */
     struct MalCoroutineBuffer *coroutine_buffer_pool;
