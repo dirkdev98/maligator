@@ -21,6 +21,7 @@ function callAbsWithMutation() {
 	return Math.abs(replaceAbsDuringArgumentEvaluation());
 }
 if (callAbsWithMutation() !== 4) throw new Error("loaded Math callee was not retained");
-if (callAbsWithMutation() !== 72) throw new Error("replacement Math callee was not observed");
+if (callAbsWithMutation() !== 72)
+	throw new Error("replacement Math callee was not observed");
 Math.abs = originalAbs;
 console.log("watched-intrinsic-cache-monkey-patch PASS");

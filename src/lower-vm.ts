@@ -949,12 +949,14 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 	) {
 		argumentSnapshotCount++;
 	}
-	const needsArguments = instructions.slice(argumentSnapshotCount).some(
-		(instruction) =>
-			instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
-			instruction.opcode === "CREATE_REST_ARGUMENTS" ||
-			instruction.opcode === "LOAD_ARGUMENT",
-	);
+	const needsArguments = instructions
+		.slice(argumentSnapshotCount)
+		.some(
+			(instruction) =>
+				instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
+				instruction.opcode === "CREATE_REST_ARGUMENTS" ||
+				instruction.opcode === "LOAD_ARGUMENT",
+		);
 
 	// GC root-frame minimization (C1): the native backend spills only registers
 	// live at a safepoint, not every boxed register. The aggregate-only API avoids
