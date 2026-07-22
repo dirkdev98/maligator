@@ -628,17 +628,8 @@ MalValue mal_ops_remainder(MalValue left, MalValue right) {
 }
 
 MalValue mal_ops_exponentiate(MalValue left, MalValue right) {
-    double base = mal_ops_to_number(left);
-    double exponent = mal_ops_to_number(right);
-
-    // Number::exponentiate deviates from C pow in two cases: a NaN exponent is
-    // always NaN (C returns 1 for pow(1, NaN)), and an infinite exponent with a
-    // base of magnitude 1 is NaN (C returns 1).
-    if (isnan(exponent) || (isinf(exponent) && (base == 1.0 || base == -1.0))) {
-        return mal_ops_number_value(NAN);
-    }
-
-    return mal_ops_number_value(pow(base, exponent));
+    return mal_ops_number_value(
+        mal_number_exponentiate(mal_ops_to_number(left), mal_ops_to_number(right)));
 }
 
 MalValue mal_ops_bit_and(MalValue left, MalValue right) {

@@ -1502,9 +1502,17 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_LOAD_NEW_TARGET:
                 mal_op_load_new_target(frame, instruction);
                 break;
-            case MAL_OP_BINARY:
-                mal_op_binary(frame, instruction);
+            case MAL_OP_BINARY: {
+                MalValue left = frame->registers[instruction->as.binary.left];
+                MalValue right = frame->registers[instruction->as.binary.right];
+                MalValue result;
+                if (!mal_vm_try_binary_number_fast(instruction->as.binary.op, left, right, &result)) {
+                    mal_perf_binary_number_fallback(instruction->as.binary.op);
+                    result = mal_vm_binary_op(frame->vm, instruction->as.binary.op, left, right);
+                }
+                frame->registers[instruction->as.binary.dst] = result;
                 break;
+            }
             case MAL_OP_UNARY:
                 mal_op_unary(frame, instruction);
                 break;

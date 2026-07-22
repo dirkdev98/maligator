@@ -51,6 +51,15 @@ static inline f64 mal_number_remainder(f64 a, f64 b) {
     return fmod(a, b);
 }
 
+/** Number::exponentiate for operands that have already passed ToNumeric. */
+static inline f64 mal_number_exponentiate(f64 base, f64 exponent) {
+    // Number::exponentiate differs from C pow for these two cases.
+    if (isnan(exponent) || (isinf(exponent) && (base == 1.0 || base == -1.0))) {
+        return NAN;
+    }
+    return pow(base, exponent);
+}
+
 /**
  * Whether the value is a JS Number (any of: int32, f64, NaN, -0, ±Infinity),
  * and the f64 recovery of a value already known to be one (precondition:

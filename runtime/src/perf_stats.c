@@ -117,6 +117,19 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.property_ensure_inserts,
         (unsigned long long) mal_perf_stats.property_ensure_hits
     );
+    fprintf(
+        stderr,
+        "[perf-binary-stats] arithmetic_hits=%llu arithmetic_fallbacks=%llu "
+        "comparison_hits=%llu comparison_fallbacks=%llu bitwise_hits=%llu "
+        "bitwise_fallbacks=%llu other_fallbacks=%llu\n",
+        (unsigned long long) mal_perf_stats.binary_number_arithmetic_hits,
+        (unsigned long long) mal_perf_stats.binary_number_arithmetic_fallbacks,
+        (unsigned long long) mal_perf_stats.binary_number_comparison_hits,
+        (unsigned long long) mal_perf_stats.binary_number_comparison_fallbacks,
+        (unsigned long long) mal_perf_stats.binary_number_bitwise_hits,
+        (unsigned long long) mal_perf_stats.binary_number_bitwise_fallbacks,
+        (unsigned long long) mal_perf_stats.binary_number_other_fallbacks
+    );
     for (u32 i = 0; i < MAL_PERF_TABLE_ROLE_COUNT; i++) {
         const MalPerfTableStats *stats = &mal_perf_stats.tables[i];
         fprintf(

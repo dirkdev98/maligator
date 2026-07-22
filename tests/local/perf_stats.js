@@ -101,4 +101,7 @@ for (let i = 0; i < 2000; i++) {
 }
 
 if (total <= 0) throw new Error("expected work");
+let binaryProbe = total;
+binaryProbe = (binaryProbe << 3) ^ (binaryProbe >>> 2);
+if (typeof binaryProbe !== "number") throw new Error("expected numeric binary probe");
 console.log("perf-stats PASS 1/1");

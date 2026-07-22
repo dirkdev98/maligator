@@ -74,6 +74,14 @@ typedef struct MalPerfStats {
     u64 property_ensure_inserts;
     u64 property_ensure_hits;
 
+    u64 binary_number_arithmetic_hits;
+    u64 binary_number_arithmetic_fallbacks;
+    u64 binary_number_comparison_hits;
+    u64 binary_number_comparison_fallbacks;
+    u64 binary_number_bitwise_hits;
+    u64 binary_number_bitwise_fallbacks;
+    u64 binary_number_other_fallbacks;
+
     MalPerfTableStats tables[MAL_PERF_TABLE_ROLE_COUNT];
     MalPerfShapeStats shapes[MAL_PERF_SHAPE_CALLER_COUNT];
     u64 shape_transition_calls;

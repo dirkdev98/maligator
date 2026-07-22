@@ -237,6 +237,142 @@ void mal_op_catch(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_binary(MalCallable *callable, const MalInstruction *instruction);
 
 /**
+ * Portable-interpreter fast path for a binary operation over two boxed Numbers.
+ * It performs no coercion and returns false for every other operand/operator, so
+ * the caller can preserve the generic operation's observable fallback exactly.
+ */
+static inline bool mal_vm_try_binary_number_fast(
+    MalBinaryOp op, MalValue left, MalValue right, MalValue *out
+) {
+    if (!mal_ops_is_number(left) || !mal_ops_is_number(right)) {
+        return false;
+    }
+
+    f64 l = mal_ops_number_as_f64(left);
+    f64 r = mal_ops_number_as_f64(right);
+    switch (op) {
+        case MAL_BIN_ADD:
+            MAL_PERF_COUNT(binary_number_arithmetic_hits);
+            *out = mal_ops_number_value(l + r);
+            return true;
+        case MAL_BIN_SUB:
+            MAL_PERF_COUNT(binary_number_arithmetic_hits);
+            *out = mal_ops_number_value(l - r);
+            return true;
+        case MAL_BIN_MUL:
+            MAL_PERF_COUNT(binary_number_arithmetic_hits);
+            *out = mal_ops_number_value(l * r);
+            return true;
+        case MAL_BIN_DIV:
+            MAL_PERF_COUNT(binary_number_arithmetic_hits);
+            *out = mal_ops_number_value(l / r);
+            return true;
+        case MAL_BIN_REM:
+            MAL_PERF_COUNT(binary_number_arithmetic_hits);
+            *out = mal_ops_number_value(mal_number_remainder(l, r));
+            return true;
+        case MAL_BIN_POW:
+            MAL_PERF_COUNT(binary_number_arithmetic_hits);
+            *out = mal_ops_number_value(mal_number_exponentiate(l, r));
+            return true;
+        case MAL_BIN_BIT_AND:
+            MAL_PERF_COUNT(binary_number_bitwise_hits);
+            *out = mal_value_from_i32(mal_ops_number_to_i32(l) & mal_ops_number_to_i32(r));
+            return true;
+        case MAL_BIN_BIT_OR:
+            MAL_PERF_COUNT(binary_number_bitwise_hits);
+            *out = mal_value_from_i32(mal_ops_number_to_i32(l) | mal_ops_number_to_i32(r));
+            return true;
+        case MAL_BIN_BIT_XOR:
+            MAL_PERF_COUNT(binary_number_bitwise_hits);
+            *out = mal_value_from_i32(mal_ops_number_to_i32(l) ^ mal_ops_number_to_i32(r));
+            return true;
+        case MAL_BIN_SHL: {
+            MAL_PERF_COUNT(binary_number_bitwise_hits);
+            u32 result = (u32) mal_ops_number_to_i32(l) << (mal_ops_number_to_i32(r) & 0x1F);
+            *out = mal_value_from_i32(mal_ops_u32_to_i32(result));
+            return true;
+        }
+        case MAL_BIN_SHR:
+            MAL_PERF_COUNT(binary_number_bitwise_hits);
+            *out = mal_value_from_i32(
+                mal_ops_number_to_i32(l) >> (mal_ops_number_to_i32(r) & 0x1F));
+            return true;
+        case MAL_BIN_USHR: {
+            MAL_PERF_COUNT(binary_number_bitwise_hits);
+            u32 result = (u32) mal_ops_number_to_i32(l) >> (mal_ops_number_to_i32(r) & 0x1F);
+            *out = result <= INT32_MAX ? mal_value_from_i32((i32) result) : mal_ops_number_value((f64) result);
+            return true;
+        }
+        case MAL_BIN_LT:
+            MAL_PERF_COUNT(binary_number_comparison_hits);
+            *out = mal_value_new_boolean(l < r);
+            return true;
+        case MAL_BIN_LTE:
+            MAL_PERF_COUNT(binary_number_comparison_hits);
+            *out = mal_value_new_boolean(l <= r);
+            return true;
+        case MAL_BIN_GT:
+            MAL_PERF_COUNT(binary_number_comparison_hits);
+            *out = mal_value_new_boolean(l > r);
+            return true;
+        case MAL_BIN_GTE:
+            MAL_PERF_COUNT(binary_number_comparison_hits);
+            *out = mal_value_new_boolean(l >= r);
+            return true;
+        case MAL_BIN_EQ:
+        case MAL_BIN_STRICT_EQ:
+            MAL_PERF_COUNT(binary_number_comparison_hits);
+            *out = mal_value_new_boolean(l == r);
+            return true;
+        case MAL_BIN_NEQ:
+        case MAL_BIN_STRICT_NEQ:
+            MAL_PERF_COUNT(binary_number_comparison_hits);
+            *out = mal_value_new_boolean(l != r);
+            return true;
+        case MAL_BIN_IN:
+        case MAL_BIN_INSTANCEOF:
+            return false;
+    }
+    return false;
+}
+
+static inline void mal_perf_binary_number_fallback(MalBinaryOp op) {
+    switch (op) {
+        case MAL_BIN_ADD:
+        case MAL_BIN_SUB:
+        case MAL_BIN_MUL:
+        case MAL_BIN_DIV:
+        case MAL_BIN_REM:
+        case MAL_BIN_POW:
+            MAL_PERF_COUNT(binary_number_arithmetic_fallbacks);
+            return;
+        case MAL_BIN_LT:
+        case MAL_BIN_LTE:
+        case MAL_BIN_GT:
+        case MAL_BIN_GTE:
+        case MAL_BIN_EQ:
+        case MAL_BIN_NEQ:
+        case MAL_BIN_STRICT_EQ:
+        case MAL_BIN_STRICT_NEQ:
+            MAL_PERF_COUNT(binary_number_comparison_fallbacks);
+            return;
+        case MAL_BIN_BIT_AND:
+        case MAL_BIN_BIT_OR:
+        case MAL_BIN_BIT_XOR:
+        case MAL_BIN_SHL:
+        case MAL_BIN_SHR:
+        case MAL_BIN_USHR:
+            MAL_PERF_COUNT(binary_number_bitwise_fallbacks);
+            return;
+        case MAL_BIN_IN:
+        case MAL_BIN_INSTANCEOF:
+            MAL_PERF_COUNT(binary_number_other_fallbacks);
+            return;
+    }
+}
+
+/**
  * Value-returning core of a binary operator, shared by mal_op_binary and the
  * compiled-function backend. Throws (via vm->completion) on bad `in`/
  * `instanceof` operands or BigInt domain errors, returning undefined.

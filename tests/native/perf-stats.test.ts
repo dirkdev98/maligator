@@ -194,5 +194,11 @@ describe("opt-in performance statistics", () => {
 		expect(field(ic, "load_primitive_hits")).toBeGreaterThan(3000);
 		expect(field(ic, "load_string_length_hits")).toBeGreaterThan(1000);
 		expect(field(ic, "load_array_length_hits")).toBeGreaterThan(1000);
+
+		const binary = reportLine(result.stderr, "[perf-binary-stats]");
+		expect(field(binary, "arithmetic_hits")).toBeGreaterThan(0);
+		expect(field(binary, "comparison_hits")).toBeGreaterThan(0);
+		expect(field(binary, "bitwise_hits")).toBeGreaterThan(0);
+		expect(field(binary, "arithmetic_fallbacks")).toBeGreaterThan(0);
 	});
 });
