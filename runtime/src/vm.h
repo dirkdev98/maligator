@@ -755,9 +755,9 @@ typedef struct MalFunction {
     bool strict;
 
     /**
-     * The function reads its arguments through the frame (materializes an
-     * `arguments` object or a rest parameter). When false, the activation skips
-     * allocating and copying the arguments slice entirely.
+     * The function retains its arguments after frame entry (materializes an
+     * `arguments` object, collects a rest parameter, or has a non-prefix raw
+     * read). Entry snapshots do not require a retained slice.
      */
     bool needs_arguments;
 

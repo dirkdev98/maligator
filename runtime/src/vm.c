@@ -1135,6 +1135,32 @@ bool mal_vm_push_function_frame(
     i32 base = vm->value_stack_size - arg_count;
     i32 params_present = param_count < arg_count ? param_count : arg_count;
 
+    // Static arguments reads are emitted before parameter/default initialization.
+    // Capture all of them while the caller's marshaling area is intact; register
+    // setup below may reuse or clear that same area. Starting the frame after this
+    // prefix removes both its dispatch and the need to retain a second argument
+    // buffer for otherwise non-escaping reads.
+    i32 argument_snapshot_count = 0;
+    while (argument_snapshot_count < function->instruction_count) {
+        MalOpcode opcode = function->instructions[argument_snapshot_count].opcode;
+        if (opcode != MAL_OP_LOAD_ARGUMENT_COUNT && opcode != MAL_OP_LOAD_ARGUMENT) {
+            break;
+        }
+        argument_snapshot_count++;
+    }
+    MalValue argument_snapshots[argument_snapshot_count > 0 ? argument_snapshot_count : 1];
+    for (i32 i = 0; i < argument_snapshot_count; i++) {
+        const MalInstruction *instruction = &function->instructions[i];
+        if (instruction->opcode == MAL_OP_LOAD_ARGUMENT_COUNT) {
+            argument_snapshots[i] = mal_value_from_i32(arg_count);
+        } else {
+            i32 index = instruction->as.load_argument.index;
+            argument_snapshots[i] = index >= 0 && index < arg_count
+                ? vm->value_stack[base + index]
+                : mal_value_new_undefined();
+        }
+    }
+
     // Generators (and async, later) keep their activation on the heap: it
     // outlives the synchronous call stack across suspends. Everything else
     // carves a window from the value stack.
@@ -1222,7 +1248,14 @@ bool mal_vm_push_function_frame(
     frame->generator = nullptr;
     frame->is_construct = false;
     frame->new_target = mal_value_new_undefined();
-    frame->instruction_pointer = 0;
+    for (i32 i = 0; i < argument_snapshot_count; i++) {
+        const MalInstruction *instruction = &function->instructions[i];
+        i32 destination = instruction->opcode == MAL_OP_LOAD_ARGUMENT_COUNT
+            ? instruction->as.load_argument_count.dst
+            : instruction->as.load_argument.dst;
+        registers[destination] = argument_snapshots[i];
+    }
+    frame->instruction_pointer = argument_snapshot_count;
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;
     frame->enter_seq = vm->frame_seq++;

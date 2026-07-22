@@ -8,6 +8,9 @@ function count() {
 function atTwo() {
 	return arguments[2];
 }
+function severalSnapshots() {
+	return arguments[2] * 100 + arguments[0] * 10 + arguments.length;
+}
 function defaultFromArguments(value = arguments[0]) {
 	return value;
 }
@@ -49,6 +52,7 @@ async function asyncCount() {
 assert(count(1, 2, 3) === 3, "count");
 assert(atTwo(1, 2, 3) === 3, "constant index");
 assert(atTwo(1) === undefined, "out of range");
+assert(severalSnapshots(4, 5, 6) === 643, "multiple entry snapshots");
 assert(defaultFromArguments(7) === 7, "default parameter");
 assert(withRest(1, 2, 3) === 33, "rest parameter");
 assert(escaped(4, 5) === 24, "escape fallback");

@@ -155,9 +155,9 @@ export interface VmFunction {
 	strict: boolean;
 
 	/**
-	 * Whether the function ever reads its passed arguments through the frame —
-	 * i.e. it materializes an `arguments` object or collects a rest parameter.
-	 * When false the activation skips allocating/copying the arguments slice.
+	 * Whether the function retains its passed arguments after frame entry — i.e.
+	 * it materializes an `arguments` object, collects a rest parameter, or has a
+	 * non-prefix raw read. Entry snapshots do not require the retained slice.
 	 */
 	needsArguments: boolean;
 
@@ -938,10 +938,18 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		},
 	);
 
-	// These are the only ops that read frame->arguments; if neither appears the
-	// activation never needs the arguments slice. Derived from the emitted
-	// stream so it can't drift from the actual reads.
-	const needsArguments = instructions.some(
+	// Classified length/index reads form an entry prefix. Frame creation snapshots
+	// that prefix before parameter initialization and starts interpretation after it,
+	// so those reads need no retained argument slice. Any later raw read remains a
+	// conservative fallback alongside materialization and rest collection.
+	let argumentSnapshotCount = 0;
+	while (
+		instructions[argumentSnapshotCount]?.opcode === "LOAD_ARGUMENT_COUNT" ||
+		instructions[argumentSnapshotCount]?.opcode === "LOAD_ARGUMENT"
+	) {
+		argumentSnapshotCount++;
+	}
+	const needsArguments = instructions.slice(argumentSnapshotCount).some(
 		(instruction) =>
 			instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
 			instruction.opcode === "CREATE_REST_ARGUMENTS" ||
