@@ -146,9 +146,15 @@ static bool mal_builtin_string_matches_at(const MalString *string, const MalStri
         return false;
     }
 
+    const c16 *string_units = mal_string_code_units(string) + position;
+    const c16 *search_units = mal_string_code_units(search);
+    if (search_length == 1) {
+        return string_units[0] == search_units[0];
+    }
+
     return memcmp(
-        mal_string_code_units(string) + position,
-        mal_string_code_units(search),
+        string_units,
+        search_units,
         (usize) sizeof(c16) * search_length
     ) == 0;
 }
@@ -160,7 +166,18 @@ static bool mal_builtin_string_matches_at(const MalString *string, const MalStri
 static i64 mal_builtin_string_find(const MalString *string, const MalString *search, usize from) {
     usize length = mal_string_length(string);
     usize search_length = mal_string_length(search);
-    if (search_length > length) {
+    if (search_length > length || from > length - search_length) {
+        return -1;
+    }
+
+    if (search_length == 1) {
+        const c16 *string_units = mal_string_code_units(string);
+        c16 search_unit = mal_string_code_units(search)[0];
+        for (usize position = from; position < length; position++) {
+            if (string_units[position] == search_unit) {
+                return (i64) position;
+            }
+        }
         return -1;
     }
 
@@ -1109,10 +1126,11 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
     usize segment_start = 0;
     usize position = 0;
     while (position + separator_length <= length) {
-        if (!mal_builtin_string_matches_at(string, separator, position)) {
-            position++;
-            continue;
+        i64 match_position = mal_builtin_string_find(string, separator, position);
+        if (match_position < 0) {
+            break;
         }
+        position = (usize) match_position;
 
         mal_array_object_store(
             result,
@@ -1214,12 +1232,12 @@ static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, 
     usize position = 0;
     bool done = false;
     while (position <= length && !done) {
-        bool match = search_length == 0
-            ? true // an empty search matches at every position, including the end
-            : (position + search_length <= length && mal_builtin_string_matches_at(string, search, position));
-        if (!match) {
-            position++;
-            continue;
+        if (search_length != 0) {
+            i64 match_position = mal_builtin_string_find(string, search, position);
+            if (match_position < 0) {
+                break;
+            }
+            position = (usize) match_position;
         }
 
         // Gap before the match, then the (substituted or functional) replacement.
