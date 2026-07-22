@@ -27,8 +27,9 @@ typedef enum MalRegExpFlag {
 /**
  * A RegExp object: an ordinary object plus the [[RegExpMatcher]] (the compiled
  * regress handle, host-owned), [[OriginalSource]], and
- * [[OriginalFlags]]. `lastIndex` is a spec data property, stored on the object's
- * property table (not a C field). See builtin_regexp.c for the abstract ops.
+ * [[OriginalFlags]]. `lastIndex` is a spec data property, stored in the object's
+ * ordinary shaped/dictionary property storage (not a C field). See
+ * builtin_regexp.c for the abstract ops.
  */
 typedef struct MalRegExpObject {
     MalObject object;

@@ -28,9 +28,9 @@
  * existing 48-byte managed-cell class; larger and grown objects use a separate
  * buffer. Object identity is the MalObject address, which never moves, so a
  * coallocated slot migrates rather than reallocating its cell. Index (array) keys never enter a shape;
- * anything a shape can't represent (delete, non-default attrs, accessors, a
- * sealed/frozen object, an integer key) drops the object to dictionary mode (a
- * plain MalTable — exactly today's behavior), so the change is additive.
+ * anything a shape can't represent (delete, accessors, descriptor transitions,
+ * a sealed/frozen object, an integer key) drops the object to dictionary mode
+ * (a plain MalTable — exactly today's behavior), so the change is additive.
  *
  * Shapes form a transition tree rooted at the immortal empty shape; adding a
  * named property (key + attrs) transitions to a child, interned so every object
@@ -58,7 +58,7 @@ typedef struct MalShapeProp {
     MalValue key;
     /** Inline slot index in the object's slots buffer. */
     u32 slot;
-    /** MalPropertyFlags for a default data property (writable/enumerable/configurable). */
+    /** MalPropertyFlags for the data property (writable/enumerable/configurable). */
     u8 attrs;
 } MalShapeProp;
 
@@ -88,7 +88,7 @@ MalShape *mal_shape_empty(void);
 i32 mal_shape_find(const MalShape *shape, MalKey key, MalShapeFindCaller caller);
 
 /**
- * The child shape reached by adding a default data property `key` with `attrs`,
+ * The child shape reached by adding a data property `key` with `attrs`,
  * interned: repeated additions of the same (key, attrs) from the same parent
  * return the same child. The new property occupies slot `shape->inline_count`.
  */

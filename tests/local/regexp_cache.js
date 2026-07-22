@@ -51,6 +51,28 @@ check(
 		lockedDescriptor.configurable === false,
 );
 
+const shaped = /a/g;
+shaped.extra = 1;
+let incompatibleLastIndex = false;
+try {
+	Object.defineProperty(shaped, "lastIndex", {
+		value: 1,
+		writable: true,
+		enumerable: true,
+		configurable: true,
+	});
+} catch (error) {
+	incompatibleLastIndex = error instanceof TypeError;
+}
+check(
+	"lastIndex keeps non-default own-property semantics",
+	Reflect.ownKeys(shaped)[0] === "lastIndex" &&
+		Object.keys(shaped).join(",") === "extra" &&
+		Reflect.deleteProperty(shaped, "lastIndex") === false &&
+		incompatibleLastIndex &&
+		shaped.lastIndex === 0,
+);
+
 let invalidCount = 0;
 for (let i = 0; i < 2; i++) {
 	try {

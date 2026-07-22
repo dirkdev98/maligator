@@ -355,15 +355,17 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
     if (key.kind == MAL_KEY_STRING && mal_object_desc_is_default_data(desc)) {
         i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DEFINE_OWN);
         if (idx >= 0) {
-            // Existing shaped data property (always writable+configurable): a
-            // default-data redefine is compatible, so just update the value.
-            u32 slot = object->shape->props[idx].slot;
-            mal_gc_write_barrier(object->slots[slot]); // SATB: shade overwritten ref
-            object->slots[slot] = desc->value;
-            mal_gc_card(&object->header, desc->value); // old object -> young value
-            return MAL_DEFINE_OWN_APPLIED;
-        }
-        if (object->overflow == nullptr
+            const MalShapeProp *prop = &object->shape->props[idx];
+            if (mal_shape_attrs_are_default(prop->attrs)) {
+                // A default-data redefine is compatible, so just update the value.
+                mal_gc_write_barrier(object->slots[prop->slot]); // SATB: shade overwritten ref
+                object->slots[prop->slot] = desc->value;
+                mal_gc_card(&object->header, desc->value); // old object -> young value
+                return MAL_DEFINE_OWN_APPLIED;
+            }
+            // Selected built-ins may start with non-default shaped data properties.
+            // Dictionarize below so the full descriptor compatibility rules apply.
+        } else if (object->overflow == nullptr
             && object->shape->inline_count < MAL_SHAPE_MAX_INLINE_SLOTS) {
             // Pure shaped (or empty) object with no dictionary props: grow the
             // shape and the inline slots. Coallocated managed cells cannot move,

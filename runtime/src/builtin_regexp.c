@@ -241,8 +241,10 @@ static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern
     re->flags = flags_str;
     re->flag_bits = bits;
     // lastIndex is a { writable, !enumerable, !configurable } own data property.
-    MalPropertyDesc desc = mal_intrinsic_data_desc(mal_value_from_i32(0), MAL_PROPERTY_WRITABLE);
-    mal_object_define_own((MalObject *) re, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), &desc);
+    MalShape *shape = mal_shape_add_property(
+        mal_shape_empty(), mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), MAL_PROPERTY_WRITABLE);
+    MalValue last_index = mal_value_from_i32(0);
+    mal_object_set_shaped_values((MalObject *) re, shape, &last_index, 1);
     return true;
 }
 
