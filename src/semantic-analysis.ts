@@ -119,6 +119,16 @@ export interface Binding {
 	imported?: true;
 }
 
+interface SemanticAnalysisCandidates {
+	directEvalCalls: Array<ESTree.CallExpression>;
+	hasImplicitArguments: boolean;
+}
+
+const semanticAnalysisWorkCounts = {
+	directEvalCandidates: 0,
+	staticArgumentsTraversals: 0,
+};
+
 /**
  * Util to dump the full scope + bindings for a program.
  */
@@ -253,14 +263,28 @@ function injectCommonJsBindings(file: SemanticFile) {
  * Exec all analyze steps for a file.
  */
 export function analyzeFile(file: SemanticFile) {
+	const candidates: SemanticAnalysisCandidates = {
+		directEvalCalls: [],
+		hasImplicitArguments: false,
+	};
 	createScopesFromNode(file.ast, file);
 	collectBindingsForNode(file.ast, file);
 	if (file.commonjs) {
 		injectCommonJsBindings(file);
 	}
-	registerBindingUsage(file.ast, file);
-	detectDirectEval(file.ast, file);
-	classifyStaticArgumentsUsage(file);
+	registerBindingUsage(file.ast, file, candidates);
+	for (const call of candidates.directEvalCalls) {
+		const callee = call.callee as unknown as ESTree.Identifier;
+		if (file.nodeToBinding.get(callee)?.undeclared) {
+			semanticAnalysisWorkCounts.directEvalCandidates++;
+			const hasImplicitArguments = detectDirectEval(call, file);
+			candidates.hasImplicitArguments ||= hasImplicitArguments;
+		}
+	}
+	if (candidates.hasImplicitArguments) {
+		semanticAnalysisWorkCounts.staticArgumentsTraversals++;
+		classifyStaticArgumentsUsage(file);
+	}
 	calculateBindingScopedTo(file);
 }
 
@@ -285,36 +309,24 @@ export const FUNCTION_UNIT_NODE_TYPES = new Set<ESTree.Node["type"]>([
  * the rationale; relies on `registerBindingUsage` having resolved the callee
  * binding first (a global `eval` resolves to an `undeclared` binding).
  */
-function detectDirectEval(node: ESTree.Node, file: SemanticFile) {
-	if (node.type === "CallExpression") {
-		// meriyah types `callee` loosely; cast as the rest of the compiler does.
-		const callee = node.callee as unknown as ESTree.Node;
-		if (callee.type === "Identifier" && callee.name === "eval") {
-			const binding = file.nodeToBinding.get(callee);
-			// `undeclared` == resolves to the global eval, not a shadowing local. A
-			// local `eval` (or an imported one) is a normal call, not direct eval.
-			if (binding?.undeclared) {
-				const argumentsBinding = resolveArgumentsBinding(file.nodeToScope.get(node));
-				if (argumentsBinding) {
-					// Eval source can dynamically name `arguments`; record a non-static
-					// use and retain the binding for direct-eval scope marshaling.
-					argumentsBinding.usageNodes.push(node);
-					file.nodeToBinding.set(node, argumentsBinding);
-				}
-				// Mark this call's enclosing function and every function above it: a
-				// nested direct eval can still address an outer function's locals.
-				let scope: Scope | null | undefined = file.nodeToScope.get(node);
-				while (scope) {
-					if (FUNCTION_UNIT_NODE_TYPES.has(scope.node.type)) {
-						file.hasDirectEval.add(scope.node);
-					}
-					scope = scope.parent;
-				}
-			}
-		}
+function detectDirectEval(node: ESTree.CallExpression, file: SemanticFile): boolean {
+	const argumentsBinding = resolveArgumentsBinding(file.nodeToScope.get(node));
+	if (argumentsBinding) {
+		// Eval source can dynamically name `arguments`; record a non-static
+		// use and retain the binding for direct-eval scope marshaling.
+		argumentsBinding.usageNodes.push(node);
+		file.nodeToBinding.set(node, argumentsBinding);
 	}
-
-	recurseAst(node, detectDirectEval, file);
+	// Mark this call's enclosing function and every function above it: a
+	// nested direct eval can still address an outer function's locals.
+	let scope: Scope | null | undefined = file.nodeToScope.get(node);
+	while (scope) {
+		if (FUNCTION_UNIT_NODE_TYPES.has(scope.node.type)) {
+			file.hasDirectEval.add(scope.node);
+		}
+		scope = scope.parent;
+	}
+	return argumentsBinding?.implicit === "arguments";
 }
 
 /** Resolve the `arguments` binding visible at a direct-eval call site. */
@@ -1046,10 +1058,23 @@ function extractBindingsAndRegister(
  * Note that we also collect a usage for the declaration. So we have to handle this downstream
  * or fix that here at some point.
  */
-function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
+function registerBindingUsage(
+	node: ESTree.Node,
+	file: SemanticFile,
+	candidates: SemanticAnalysisCandidates,
+) {
 	const scope = file.nodeToScope.get(node);
 	if (!scope) {
 		return;
+	}
+
+	if (node.type === "CallExpression" && !node.optional) {
+		// Optional `eval?.()` is indirect eval. Member and sequence callees are
+		// indirect too, so only a bare identifier can reach the direct-eval pass.
+		const callee = node.callee as unknown as ESTree.Node;
+		if (callee.type === "Identifier" && callee.name === "eval") {
+			candidates.directEvalCalls.push(node);
+		}
 	}
 
 	// Set when name resolution walks past a `with` statement's dynamic scope: the
@@ -1122,7 +1147,7 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 	if (node.type === "ExportNamedDeclaration") {
 		if (node.declaration) {
 			// `export const/function/class` — the real usages live in the declaration.
-			return registerBindingUsage(node.declaration, file);
+			return registerBindingUsage(node.declaration, file, candidates);
 		}
 		if (node.source) {
 			// `export { x } from "m"` — specifiers name the source module's exports.
@@ -1130,18 +1155,18 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 		}
 		// `export { a, b as c }` — each specifier's local is a usage of a local binding.
 		for (const specifier of node.specifiers) {
-			registerBindingUsage(specifier.local, file);
+			registerBindingUsage(specifier.local, file, candidates);
 		}
 		return;
 	}
 
 	if (node.type === "ExportDefaultDeclaration") {
-		return registerBindingUsage(node.declaration, file);
+		return registerBindingUsage(node.declaration, file, candidates);
 	}
 
 	if (node.type === "MemberExpression" && !node.computed) {
 		// Skip the property from member expressions, except when they are computed.
-		return registerBindingUsage(node.object, file);
+		return registerBindingUsage(node.object, file, candidates);
 	}
 
 	if ((node.type === "Property" || node.type === "MethodDefinition") && !node.computed) {
@@ -1149,13 +1174,16 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 		// members; only the value side contains references. Shorthand pattern
 		// properties share the key node as their value, so the value walk still
 		// registers those usages.
-		return registerBindingUsage(node.value, file);
+		return registerBindingUsage(node.value, file, candidates);
 	}
 
 	if (node.type === "Identifier") {
 		const binding = resolveBindingByName(scope, node.name);
 		binding.usageNodes.push(node);
 		file.nodeToBinding.set(node, binding);
+		if (binding.implicit === "arguments") {
+			candidates.hasImplicitArguments = true;
+		}
 		if (crossedDynamic) {
 			file.withDynamicNodes.add(node);
 		}
@@ -1215,7 +1243,7 @@ function registerBindingUsage(node: ESTree.Node, file: SemanticFile) {
 		}
 	}
 
-	recurseAst(node, registerBindingUsage, file);
+	recurseAst(node, registerBindingUsage, file, candidates);
 }
 
 /**
@@ -1334,3 +1362,13 @@ function recurseAst<
 >(node: ESTree.Node, callback: Callback, ...args: Args) {
 	forEachEstreeChild(node, (child) => callback(child, ...args));
 }
+
+export const semanticAnalysisTestHooks = {
+	resetWorkCounts() {
+		semanticAnalysisWorkCounts.directEvalCandidates = 0;
+		semanticAnalysisWorkCounts.staticArgumentsTraversals = 0;
+	},
+	workCounts() {
+		return { ...semanticAnalysisWorkCounts };
+	},
+};
