@@ -132,6 +132,15 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-interpreter-stats] direct_leaf_executions=%llu boundary_dispatches=%llu "
+        "state_syncs=%llu state_reloads=%llu\n",
+        (unsigned long long) mal_perf_stats.interpreter_direct_leaf_executions,
+        (unsigned long long) mal_perf_stats.interpreter_boundary_dispatches,
+        (unsigned long long) mal_perf_stats.interpreter_state_syncs,
+        (unsigned long long) mal_perf_stats.interpreter_state_reloads
+    );
+    fprintf(
+        stderr,
         "[perf-promise-stats] await_typed_continuations=%llu await_typed_jobs=%llu\n",
         (unsigned long long) mal_perf_stats.promise_await_typed_continuations,
         (unsigned long long) mal_perf_stats.promise_await_typed_jobs

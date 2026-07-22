@@ -199,6 +199,10 @@ interface InterpreterMetrics {
 	nodeMs: number;
 	ratio: number;
 	rssMb: number;
+	directLeafExecutions: number;
+	boundaryDispatches: number;
+	stateSyncs: number;
+	stateReloads: number;
 	instructionSize: number;
 	instructionCount: number;
 	instructionBytes: number;
@@ -723,6 +727,14 @@ function parseVmStat(stderr: string, field: string): number {
 	return match ? Number(match[1]) : 0;
 }
 
+function parsePerfInterpreterStat(stderr: string, field: string): number {
+	const line = stderr
+		.split("\n")
+		.find((value) => value.includes("[perf-interpreter-stats]"));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
+}
+
 function benchInterpreter(runs: number): InterpreterMetrics {
 	const binary = buildNativeBinary({
 		fixture: "bench/language.js",
@@ -744,6 +756,21 @@ function benchInterpreter(runs: number): InterpreterMetrics {
 				stdio: ["ignore", "ignore", "pipe"],
 			});
 	const stderr = result.stderr ?? "";
+	const perfBinary = buildNativeBinary({
+		fixture: "bench/language.js",
+		name: "bench-interpreter",
+		compiled: false,
+		environment: { ...process.env, MAL_PERF_STATS: "1" },
+	});
+	const perfResult = spawnSync(perfBinary, [], {
+		env: { ...process.env, MAL_PERF_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	if (perfResult.status !== 0) {
+		throw new Error(`instrumented interpreter failed (status ${perfResult.status})`);
+	}
+	const perfStderr = perfResult.stderr ?? "";
 	return {
 		malMs,
 		nodeMs,
@@ -754,6 +781,10 @@ function benchInterpreter(runs: number): InterpreterMetrics {
 		instructionBytes: parseVmStat(stderr, "instruction_bytes"),
 		instructionDataBytes: parseVmStat(stderr, "instruction_data_bytes"),
 		bytecodeBytes: parseVmStat(stderr, "bytecode_bytes"),
+		directLeafExecutions: parsePerfInterpreterStat(perfStderr, "direct_leaf_executions"),
+		boundaryDispatches: parsePerfInterpreterStat(perfStderr, "boundary_dispatches"),
+		stateSyncs: parsePerfInterpreterStat(perfStderr, "state_syncs"),
+		stateReloads: parsePerfInterpreterStat(perfStderr, "state_reloads"),
 	};
 }
 
@@ -1208,6 +1239,12 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		console.log(`  node      ${entry.interpreter.nodeMs.toFixed(1)}ms`);
 		console.log(
 			`  ratio     ${entry.interpreter.ratio.toFixed(2)}x${delta(entry.interpreter.ratio, p?.ratio)}`,
+		);
+		console.log(
+			`  dispatch  ${entry.interpreter.directLeafExecutions} direct leaves, ${entry.interpreter.boundaryDispatches} helper boundaries`,
+		);
+		console.log(
+			`            ${entry.interpreter.stateSyncs} state syncs, ${entry.interpreter.stateReloads} state reloads`,
 		);
 		console.log(
 			`  bytecode  ${entry.interpreter.instructionCount} instructions x ${entry.interpreter.instructionSize}B = ${humanBytes(entry.interpreter.instructionBytes)}${delta(entry.interpreter.instructionBytes, p?.instructionBytes)}`,

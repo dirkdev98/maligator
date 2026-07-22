@@ -200,5 +200,13 @@ describe("opt-in performance statistics", () => {
 		expect(field(binary, "comparison_hits")).toBeGreaterThan(0);
 		expect(field(binary, "bitwise_hits")).toBeGreaterThan(0);
 		expect(field(binary, "arithmetic_fallbacks")).toBeGreaterThan(0);
+
+		const interpreter = reportLine(result.stderr, "[perf-interpreter-stats]");
+		expect(field(interpreter, "direct_leaf_executions")).toBeGreaterThan(0);
+		expect(field(interpreter, "boundary_dispatches")).toBeGreaterThan(0);
+		expect(field(interpreter, "state_syncs")).toBeGreaterThanOrEqual(
+			field(interpreter, "boundary_dispatches"),
+		);
+		expect(field(interpreter, "state_reloads")).toBeGreaterThan(0);
 	});
 });

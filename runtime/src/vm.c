@@ -1404,6 +1404,26 @@ static bool mal_vm_unwind_to_handler(MalVm *vm, i32 target_frame_count) {
     return false;
 }
 
+// Direct leaves write through the frame's published register buffer, so only the
+// shadow instruction pointer needs publishing before a helper, throw, or GC seam.
+// Every such seam leaves the inner loop; the outer loop then reloads all locals.
+#define MAL_VM_INTERPRETER_DIRECT_LEAF() \
+    MAL_PERF_COUNT(interpreter_direct_leaf_executions)
+
+#define MAL_VM_INTERPRETER_BOUNDARY(call) \
+    do { \
+        frame->instruction_pointer = instruction_pointer; \
+        MAL_PERF_COUNT(interpreter_state_syncs); \
+        MAL_PERF_COUNT(interpreter_boundary_dispatches); \
+        call; \
+    } while (0)
+
+#define MAL_VM_INTERPRETER_SYNC() \
+    do { \
+        frame->instruction_pointer = instruction_pointer; \
+        MAL_PERF_COUNT(interpreter_state_syncs); \
+    } while (0)
+
 static void mal_vm_run_until_frame_count(
     MalVm *vm,
     i32 target_frame_count
@@ -1413,139 +1433,196 @@ static void mal_vm_run_until_frame_count(
 ) {
     while (vm->frame_count > target_frame_count) {
         MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
-        const MalInstruction *instruction =
-            &frame->function->instructions[frame->instruction_pointer++];
+        const MalInstruction *instructions = frame->function->instructions;
+        MalValue *registers = frame->registers;
+        i32 instruction_pointer = frame->instruction_pointer;
+        MAL_PERF_COUNT(interpreter_state_reloads);
+
+        while (true) {
+            const MalInstruction *instruction = &instructions[instruction_pointer++];
 
         switch (instruction->opcode) {
             case MAL_OP_MOVE:
-                mal_op_move(frame, instruction);
-                break;
+                registers[instruction->as.move.dst] = registers[instruction->as.move.src];
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
 
             case MAL_OP_CREATE_NUMBER:
-                mal_op_create_number(frame, instruction);
-                break;
-            case MAL_OP_CREATE_F64:
-                mal_op_create_f64(frame, instruction);
-                break;
+                registers[instruction->as.create_number.dst] =
+                    mal_value_from_i32(instruction->as.create_number.value);
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            case MAL_OP_CREATE_F64: {
+                u64 bits = (u64) instruction->as.create_f64.bits_low |
+                    ((u64) instruction->as.create_f64.bits_high << 32);
+                f64 value;
+                memcpy(&value, &bits, sizeof(value));
+                registers[instruction->as.create_f64.dst] = mal_value_from_f64_convert_nan(value);
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            }
             case MAL_OP_CREATE_BOOLEAN:
-                mal_op_create_boolean(frame, instruction);
-                break;
+                registers[instruction->as.create_boolean.dst] =
+                    mal_value_new_boolean(instruction->as.create_boolean.value != 0);
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_CREATE_STRING:
-                mal_op_create_string(frame, instruction);
-                break;
+                registers[instruction->as.create_string.dst] = mal_value_from_string(
+                    &vm->definition->string_constants[instruction->as.create_string.string_index]);
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_CREATE_BIGINT:
-                mal_op_create_bigint(frame, instruction);
-                break;
+                registers[instruction->as.create_bigint.dst] = mal_value_from_bigint(
+                    &vm->definition->bigint_constants[instruction->as.create_bigint.bigint_index]);
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_CREATE_OBJECT:
-                mal_op_create_object(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_create_object(frame, instruction));
                 break;
             case MAL_OP_CREATE_OBJECT_SHAPED:
-                mal_op_create_object_shaped(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_create_object_shaped(frame, instruction));
                 break;
             case MAL_OP_CREATE_ARRAY:
-                mal_op_create_array(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_create_array(frame, instruction));
                 break;
             case MAL_OP_INSTANTIATE_LITERAL_TEMPLATE:
-                mal_op_instantiate_literal_template(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_instantiate_literal_template(frame, instruction));
                 break;
             case MAL_OP_CREATE_MODULE_NAMESPACE:
-                mal_op_create_module_namespace(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_create_module_namespace(frame, instruction));
                 break;
             case MAL_OP_CREATE_TEMPLATE_OBJECT:
-                mal_op_create_template_object(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_create_template_object(frame, instruction));
                 break;
             case MAL_OP_WITH_ENTER:
-                mal_op_with_enter(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_with_enter(frame, instruction));
                 break;
             case MAL_OP_WITH_EXIT:
-                mal_op_with_exit(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_with_exit(frame, instruction));
                 break;
             case MAL_OP_WITH_GET:
-                mal_op_with_get(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_with_get(frame, instruction));
                 break;
             case MAL_OP_WITH_RESOLVE_BASE:
-                mal_op_with_resolve_base(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_with_resolve_base(frame, instruction));
                 break;
             case MAL_OP_WITH_SET:
-                mal_op_with_set(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_with_set(frame, instruction));
                 break;
             case MAL_OP_IS_EMPTY:
-                mal_op_is_empty(frame, instruction);
-                break;
+                registers[instruction->as.is_empty.dst] = mal_value_new_boolean(
+                    mal_value_is_empty(registers[instruction->as.is_empty.src]));
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_CREATE_UNDEFINED:
-                mal_op_create_undefined(frame, instruction);
-                break;
+                registers[instruction->as.create_undefined.dst] = mal_value_new_undefined();
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_CREATE_EMPTY:
-                mal_op_create_empty(frame, instruction);
-                break;
+                registers[instruction->as.create_empty.dst] = mal_value_new_empty();
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_CREATE_NULL:
-                mal_op_create_null(frame, instruction);
-                break;
+                registers[instruction->as.create_null.dst] = mal_value_new_null();
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_CREATE_FUNCTION:
-                mal_op_create_function(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_create_function(frame, instruction));
                 break;
             case MAL_OP_CREATE_ARGUMENTS_OBJECT:
-                mal_op_create_arguments_object(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_create_arguments_object(frame, instruction));
                 break;
             case MAL_OP_LOAD_ARGUMENT_COUNT:
-                mal_op_load_argument_count(frame, instruction);
-                break;
-            case MAL_OP_LOAD_ARGUMENT:
-                mal_op_load_argument(frame, instruction);
-                break;
+                registers[instruction->as.load_argument_count.dst] =
+                    mal_value_from_i32(frame->argument_count);
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            case MAL_OP_LOAD_ARGUMENT: {
+                i32 index = instruction->as.load_argument.index;
+                registers[instruction->as.load_argument.dst] =
+                    index >= 0 && index < frame->argument_count
+                    ? frame->arguments[index]
+                    : mal_value_new_undefined();
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            }
             case MAL_OP_LOAD_THIS:
-                mal_op_load_this(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_load_this(frame, instruction));
                 break;
             case MAL_OP_LOAD_CALLEE:
-                mal_op_load_callee(frame, instruction);
-                break;
+                registers[instruction->as.load_callee.dst] = frame->callee;
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_LOAD_NEW_TARGET:
-                mal_op_load_new_target(frame, instruction);
-                break;
+                registers[instruction->as.load_new_target.dst] = frame->new_target;
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_BINARY: {
-                MalValue left = frame->registers[instruction->as.binary.left];
-                MalValue right = frame->registers[instruction->as.binary.right];
+                MalValue left = registers[instruction->as.binary.left];
+                MalValue right = registers[instruction->as.binary.right];
                 MalValue result;
                 if (!mal_vm_try_binary_number_fast(instruction->as.binary.op, left, right, &result)) {
                     mal_perf_binary_number_fallback(instruction->as.binary.op);
-                    result = mal_vm_binary_op(frame->vm, instruction->as.binary.op, left, right);
+                    MAL_VM_INTERPRETER_BOUNDARY(
+                        result = mal_vm_binary_op(frame->vm, instruction->as.binary.op, left, right));
+                    frame->registers[instruction->as.binary.dst] = result;
+                    break;
                 }
-                frame->registers[instruction->as.binary.dst] = result;
-                break;
+                registers[instruction->as.binary.dst] = result;
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             }
             case MAL_OP_UNARY:
-                mal_op_unary(frame, instruction);
+                if (instruction->as.unary.op == MAL_UNARY_NOT) {
+                    registers[instruction->as.unary.dst] = mal_value_new_boolean(
+                        !mal_value_is_truthy(registers[instruction->as.unary.src]));
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_unary(frame, instruction));
                 break;
-            case MAL_OP_TYPEOF_COMPARE:
-                mal_op_typeof_compare(frame, instruction);
-                break;
+            case MAL_OP_TYPEOF_COMPARE: {
+                bool result = mal_vm_typeof_compare(
+                    registers[instruction->as.typeof_compare.src],
+                    instruction->as.typeof_compare.expected);
+                registers[instruction->as.typeof_compare.dst] = mal_value_new_boolean(
+                    instruction->as.typeof_compare.negated ? !result : result);
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
+            }
 
             case MAL_OP_STORE_GLOBAL:
-                mal_op_store_global(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_store_global(frame, instruction));
                 break;
             case MAL_OP_LOAD_GLOBAL:
-                mal_op_load_global(frame, instruction);
-                break;
+                registers[instruction->as.load_global.dst] =
+                    vm->globals[instruction->as.load_global.index];
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_LOAD_INTRINSIC:
-                mal_op_load_intrinsic(frame, instruction);
-                break;
+                registers[instruction->as.load_intrinsic.dst] =
+                    vm->intrinsics[instruction->as.load_intrinsic.intrinsic];
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_LOAD_PROPERTY:
-                mal_op_load_property(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_load_property(frame, instruction));
                 break;
             case MAL_OP_LOAD_PROPERTY_STATIC:
-                mal_op_load_property_static(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_load_property_static(frame, instruction));
                 break;
             case MAL_OP_STORE_PROPERTY:
-                mal_op_store_property(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_store_property(frame, instruction));
                 break;
             case MAL_OP_STORE_PROPERTY_STATIC:
-                mal_op_store_property_static(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_store_property_static(frame, instruction));
                 break;
             case MAL_OP_TO_PROPERTY_KEY:
-                mal_op_to_property_key(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_to_property_key(frame, instruction));
                 break;
             case MAL_OP_CALL_SPREAD: {
                 i32 frame_count = vm->frame_count;
+                MAL_VM_INTERPRETER_SYNC();
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 mal_op_call_spread(frame, instruction);
                 if (vm->frame_count == frame_count &&
                     vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
@@ -1555,6 +1632,8 @@ static void mal_vm_run_until_frame_count(
             }
             case MAL_OP_CONSTRUCT_SPREAD: {
                 i32 frame_count = vm->frame_count;
+                MAL_VM_INTERPRETER_SYNC();
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 mal_op_construct_spread(frame, instruction);
                 if (vm->frame_count == frame_count &&
                     vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
@@ -1564,6 +1643,8 @@ static void mal_vm_run_until_frame_count(
             }
             case MAL_OP_CONSTRUCT_SUPER: {
                 i32 frame_count = vm->frame_count;
+                MAL_VM_INTERPRETER_SYNC();
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 mal_op_construct_super(frame, instruction);
                 if (vm->frame_count == frame_count &&
                     vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
@@ -1572,40 +1653,44 @@ static void mal_vm_run_until_frame_count(
                 break;
             }
             case MAL_OP_STORE_SUPER_PROPERTY:
-                mal_op_store_super_property(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_store_super_property(frame, instruction));
                 break;
             case MAL_OP_LOAD_SUPER_PROPERTY:
-                mal_op_load_super_property(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_load_super_property(frame, instruction));
                 break;
             case MAL_OP_LOAD_PROTOTYPE:
-                mal_op_load_prototype(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_load_prototype(frame, instruction));
                 break;
             case MAL_OP_MERGE_DATA_PROPERTIES:
-                mal_op_merge_data_properties(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_merge_data_properties(frame, instruction));
                 break;
             case MAL_OP_GET_ITERATOR:
-                mal_op_get_iterator(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_get_iterator(frame, instruction));
                 break;
             case MAL_OP_GET_ASYNC_ITERATOR:
-                mal_op_get_async_iterator(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_get_async_iterator(frame, instruction));
                 break;
             case MAL_OP_ITERATOR_NEXT:
+                MAL_VM_INTERPRETER_SYNC();
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 mal_op_iterator_next(frame, instruction);
                 if (vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
                     mal_gc_safepoint(vm);
                 }
                 break;
             case MAL_OP_ITERATOR_STEP:
-                mal_op_iterator_step(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_iterator_step(frame, instruction));
                 break;
             case MAL_OP_ITERATOR_CLOSE:
-                mal_op_iterator_close(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_iterator_close(frame, instruction));
                 break;
             case MAL_OP_FOR_IN_KEYS:
-                mal_op_for_in_keys(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_for_in_keys(frame, instruction));
                 break;
 
             case MAL_OP_GENERATOR_START: {
+                MAL_VM_INTERPRETER_SYNC();
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 // The parameter prologue has run; capture this activation into a
                 // generator object, suspend it, and hand the generator back to
                 // the caller like a return. The instance inherits the generator
@@ -1657,6 +1742,8 @@ static void mal_vm_run_until_frame_count(
             }
 
             case MAL_OP_YIELD: {
+                MAL_VM_INTERPRETER_SYNC();
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 // Suspend the generator frame, leaving the yielded value on the
                 // generator and recording where the resume value/mode land. The
                 // instruction pointer was already advanced past the yield, so a
@@ -1700,6 +1787,8 @@ static void mal_vm_run_until_frame_count(
             }
 
             case MAL_OP_ASYNC_START: {
+                MAL_VM_INTERPRETER_SYNC();
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 // Set up the async function's result promise + hidden state and
                 // hand the promise to the caller, then keep running this frame
                 // synchronously until its first await / return / throw.
@@ -1708,6 +1797,8 @@ static void mal_vm_run_until_frame_count(
             }
 
             case MAL_OP_AWAIT: {
+                MAL_VM_INTERPRETER_SYNC();
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 // Suspend the async frame on the awaited value (mirrors YIELD),
                 // then schedule its resumption when the value settles. The
                 // instruction pointer already points past the await, so a resume
@@ -1737,93 +1828,103 @@ static void mal_vm_run_until_frame_count(
                 break;
             }
             case MAL_OP_DELETE_PROPERTY:
-                mal_op_delete_property(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_delete_property(frame, instruction));
                 break;
             case MAL_OP_DEFINE_ACCESSOR:
-                mal_op_define_accessor(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_define_accessor(frame, instruction));
                 break;
             case MAL_OP_DEFINE_PROPERTY:
-                mal_op_define_property(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_define_property(frame, instruction));
                 break;
             case MAL_OP_SET_FUNCTION_NAME:
-                mal_op_set_function_name(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_set_function_name(frame, instruction));
                 break;
             case MAL_OP_CREATE_PRIVATE_NAME:
-                mal_op_create_private_name(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_create_private_name(frame, instruction));
                 break;
             case MAL_OP_CREATE_PRIVATE_NAMES:
-                mal_op_create_private_names(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_create_private_names(frame, instruction));
                 break;
             case MAL_OP_DEFINE_PRIVATE:
-                mal_op_define_private(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_define_private(frame, instruction));
                 break;
             case MAL_OP_INIT_PRIVATE_FIELDS:
-                mal_op_init_private_fields(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_init_private_fields(frame, instruction));
                 break;
             case MAL_OP_LOAD_PRIVATE:
-                mal_op_load_private(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_load_private(frame, instruction));
                 break;
             case MAL_OP_STORE_PRIVATE:
-                mal_op_store_private(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_store_private(frame, instruction));
                 break;
             case MAL_OP_HAS_PRIVATE:
-                mal_op_has_private(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_has_private(frame, instruction));
                 break;
             case MAL_OP_SET_PROTOTYPE:
-                mal_op_set_prototype(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_set_prototype(frame, instruction));
                 break;
             case MAL_OP_LOAD_UNDECLARED:
-                mal_op_load_undeclared(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_load_undeclared(frame, instruction));
                 break;
             case MAL_OP_LOAD_GLOBAL_PROPERTY:
-                mal_op_load_global_property(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_load_global_property(frame, instruction));
                 break;
             case MAL_OP_STORE_GLOBAL_PROPERTY:
-                mal_op_store_global_property(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_store_global_property(frame, instruction));
                 break;
             case MAL_OP_INIT_GLOBAL_VARS:
-                mal_op_init_global_vars(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_init_global_vars(frame, instruction));
                 break;
             case MAL_OP_THROW_IF_TDZ:
-                mal_op_throw_if_tdz(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_throw_if_tdz(frame, instruction));
                 break;
             case MAL_OP_REQUIRE_COERCIBLE:
-                mal_op_require_coercible(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_require_coercible(frame, instruction));
                 break;
             case MAL_OP_CHECK_SUPER_CLASS:
-                mal_op_check_super_class(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_check_super_class(frame, instruction));
                 break;
             case MAL_OP_CREATE_REST_ARGUMENTS:
-                mal_op_create_rest_arguments(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_create_rest_arguments(frame, instruction));
                 break;
             case MAL_OP_ARRAY_REST:
-                mal_op_array_rest(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_array_rest(frame, instruction));
                 break;
             case MAL_OP_COPY_DATA_PROPERTIES:
-                mal_op_copy_data_properties(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_copy_data_properties(frame, instruction));
                 break;
 
             case MAL_OP_LOAD_CAPTURED:
-                mal_op_load_captured(frame, instruction);
-                break;
+                registers[instruction->as.load_captured.dst] = mal_vm_load_captured(
+                    frame->env,
+                    instruction->as.load_captured.owner_function_index,
+                    instruction->as.load_captured.index);
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_GUARD_FUNCTION_INDEX:
-                mal_op_guard_function_index(frame, instruction);
-                break;
+                registers[instruction->as.guard_function_index.dst] = mal_value_new_boolean(
+                    mal_vm_callee_has_index(
+                        registers[instruction->as.guard_function_index.callee],
+                        instruction->as.guard_function_index.function_index));
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
             case MAL_OP_STORE_CAPTURED:
-                mal_op_store_captured(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_store_captured(frame, instruction));
                 break;
             case MAL_OP_ENV_PUSH:
-                mal_op_env_push(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_env_push(frame, instruction));
                 break;
             case MAL_OP_ENV_COPY:
-                mal_op_env_copy(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_env_copy(frame, instruction));
                 break;
             case MAL_OP_ENV_POP:
-                mal_op_env_pop(frame);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_env_pop(frame));
                 break;
 
             case MAL_OP_CALL: {
                 i32 frame_count = vm->frame_count;
+                MAL_VM_INTERPRETER_SYNC();
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 mal_op_call(frame, instruction);
                 if (vm->frame_count == frame_count &&
                     vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
@@ -1833,6 +1934,8 @@ static void mal_vm_run_until_frame_count(
             }
             case MAL_OP_CONSTRUCT: {
                 i32 frame_count = vm->frame_count;
+                MAL_VM_INTERPRETER_SYNC();
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 mal_op_construct(frame, instruction);
                 if (vm->frame_count == frame_count &&
                     vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
@@ -1842,38 +1945,55 @@ static void mal_vm_run_until_frame_count(
             }
 
             case MAL_OP_THROW:
-                mal_op_throw(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_throw(frame, instruction));
                 break;
             case MAL_OP_CATCH:
-                mal_op_catch(frame, instruction);
+                MAL_VM_INTERPRETER_BOUNDARY(mal_op_catch(frame, instruction));
                 break;
             case MAL_OP_TRY_BEGIN:
             case MAL_OP_TRY_END:
                 // Markers only; protected ranges live in the handler table.
-                break;
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
+                continue;
 
             case MAL_OP_JUMP: {
-                bool backedge = instruction->as.jump.target_ip < frame->instruction_pointer;
-                frame->instruction_pointer = instruction->as.jump.target_ip;
+                bool backedge = instruction->as.jump.target_ip < instruction_pointer;
+                instruction_pointer = instruction->as.jump.target_ip;
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
                 if (backedge && mal_gc_poll) {
+                    MAL_VM_INTERPRETER_SYNC();
                     mal_gc_safepoint(vm);
+                    frame = &vm->frames[vm->frame_count - 1];
+                    instructions = frame->function->instructions;
+                    registers = frame->registers;
+                    instruction_pointer = frame->instruction_pointer;
+                    MAL_PERF_COUNT(interpreter_state_reloads);
                 }
-                break;
+                continue;
             }
             case MAL_OP_JUMP_IF: {
-                bool truthy = mal_value_is_truthy(frame->registers[instruction->as.jump_if.cond]);
+                bool truthy = mal_value_is_truthy(registers[instruction->as.jump_if.cond]);
                 bool backedge = truthy &&
-                    instruction->as.jump_if.target_ip < frame->instruction_pointer;
+                    instruction->as.jump_if.target_ip < instruction_pointer;
                 if (truthy) {
-                    frame->instruction_pointer = instruction->as.jump_if.target_ip;
+                    instruction_pointer = instruction->as.jump_if.target_ip;
                 }
+                MAL_VM_INTERPRETER_DIRECT_LEAF();
                 if (backedge && mal_gc_poll) {
+                    MAL_VM_INTERPRETER_SYNC();
                     mal_gc_safepoint(vm);
+                    frame = &vm->frames[vm->frame_count - 1];
+                    instructions = frame->function->instructions;
+                    registers = frame->registers;
+                    instruction_pointer = frame->instruction_pointer;
+                    MAL_PERF_COUNT(interpreter_state_reloads);
                 }
-                break;
+                continue;
             }
 
             case MAL_OP_RETURN: {
+                MAL_VM_INTERPRETER_SYNC();
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
                 MalValue return_value = frame->registers[instruction->as.ret.value];
                 if (frame->is_construct && !mal_value_is_object(return_value)) {
                     // ECMA-262 [[Construct]] step 13: a return statement whose value
@@ -2001,7 +2121,7 @@ static void mal_vm_run_until_frame_count(
 #if MAL_REALMS
                 mal_vm_restore_surviving_realm(vm, outer_realm);
 #endif
-                continue;
+                break;
             }
 
             // No handler within this run loop; eagerly pop the frames it owns
@@ -2016,12 +2136,18 @@ static void mal_vm_run_until_frame_count(
 #endif
             return;
         }
+        break;
+        }
     }
 #if MAL_REALMS
     // Also cover a normal loop exit at a C seam with no surviving interpreter frame.
     mal_vm_restore_surviving_realm(vm, outer_realm);
 #endif
 }
+
+#undef MAL_VM_INTERPRETER_SYNC
+#undef MAL_VM_INTERPRETER_BOUNDARY
+#undef MAL_VM_INTERPRETER_DIRECT_LEAF
 
 /**
  * Print strings as display text instead of the quoted debug representation.
