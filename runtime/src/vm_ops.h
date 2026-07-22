@@ -321,13 +321,21 @@ static inline bool mal_vm_try_binary_number_fast(
             *out = mal_value_new_boolean(l >= r);
             return true;
         case MAL_BIN_EQ:
-        case MAL_BIN_STRICT_EQ:
             MAL_PERF_COUNT(binary_number_comparison_hits);
             *out = mal_value_new_boolean(l == r);
             return true;
+        case MAL_BIN_STRICT_EQ:
+            MAL_PERF_COUNT(binary_number_comparison_hits);
+            MAL_PERF_COUNT(interpreter_strict_direct_hits);
+            *out = mal_value_new_boolean(l == r);
+            return true;
         case MAL_BIN_NEQ:
+            MAL_PERF_COUNT(binary_number_comparison_hits);
+            *out = mal_value_new_boolean(l != r);
+            return true;
         case MAL_BIN_STRICT_NEQ:
             MAL_PERF_COUNT(binary_number_comparison_hits);
+            MAL_PERF_COUNT(interpreter_strict_direct_hits);
             *out = mal_value_new_boolean(l != r);
             return true;
         case MAL_BIN_IN:
@@ -335,6 +343,28 @@ static inline bool mal_vm_try_binary_number_fast(
             return false;
     }
     return false;
+}
+
+/**
+ * Strict equality is a pure leaf unless two distinct strings need a content
+ * comparison. That comparison may flatten cons strings, so it retains the
+ * synchronized generic boundary.
+ */
+static inline bool mal_vm_try_binary_strict_fast(
+    MalBinaryOp op, MalValue left, MalValue right, MalValue *out
+) {
+    if (op != MAL_BIN_STRICT_EQ && op != MAL_BIN_STRICT_NEQ) {
+        return false;
+    }
+    if (left != right && mal_value_is_string(left) && mal_value_is_string(right)) {
+        MAL_PERF_COUNT(interpreter_strict_string_fallbacks);
+        return false;
+    }
+
+    bool equal = mal_ops_strict_equal_bool(left, right);
+    MAL_PERF_COUNT(interpreter_strict_direct_hits);
+    *out = mal_value_new_boolean(op == MAL_BIN_STRICT_EQ ? equal : !equal);
+    return true;
 }
 
 static inline void mal_perf_binary_number_fallback(MalBinaryOp op) {

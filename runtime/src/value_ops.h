@@ -3,6 +3,7 @@
 #include <math.h>
 #include "./defaults.h"
 #include "heap.h"
+#include "heap_bigint.h"
 #include "heap_string.h"
 #include "value.h"
 
@@ -144,6 +145,33 @@ static inline MalValue mal_ops_number_value(f64 value) {
 
     // Also maps infinities to their static encodings.
     return mal_value_from_f64_convert_nan(value);
+}
+
+/** Canonical Strict Equality Comparison (7.2.15). String comparison may flatten. */
+static inline bool mal_ops_strict_equal_bool(MalValue left, MalValue right) {
+    // NaN must precede bit identity because every NaN has one canonical encoding.
+    if (mal_value_is_nan(left) || mal_value_is_nan(right)) {
+        return false;
+    }
+
+    if (left == right) {
+        return true;
+    }
+
+    if (mal_value_is_string(left) && mal_value_is_string(right)) {
+        return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
+    }
+
+    if (mal_value_is_bigint(left) || mal_value_is_bigint(right)) {
+        return mal_value_is_bigint(left) && mal_value_is_bigint(right) &&
+            mal_bigint_value(mal_value_to_bigint(left)) == mal_bigint_value(mal_value_to_bigint(right));
+    }
+
+    if (mal_ops_is_number(left) && mal_ops_is_number(right)) {
+        return mal_ops_number_as_f64(left) == mal_ops_number_as_f64(right);
+    }
+
+    return false;
 }
 
 /** Returns false without allocating when string concatenation exceeds the engine limit. */

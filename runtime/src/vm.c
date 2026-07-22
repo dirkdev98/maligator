@@ -1561,7 +1561,8 @@ static void mal_vm_run_until_frame_count(
                 MalValue left = registers[instruction->as.binary.left];
                 MalValue right = registers[instruction->as.binary.right];
                 MalValue result;
-                if (!mal_vm_try_binary_number_fast(instruction->as.binary.op, left, right, &result)) {
+                if (!mal_vm_try_binary_number_fast(instruction->as.binary.op, left, right, &result) &&
+                    !mal_vm_try_binary_strict_fast(instruction->as.binary.op, left, right, &result)) {
                     mal_perf_binary_number_fallback(instruction->as.binary.op);
                     MAL_VM_INTERPRETER_BOUNDARY(
                         result = mal_vm_binary_op(frame->vm, instruction->as.binary.op, left, right));

@@ -205,6 +205,8 @@ interface InterpreterMetrics {
 	boundaryDispatches: number;
 	stateSyncs: number;
 	stateReloads: number;
+	strictDirectHits: number;
+	strictStringFallbacks: number;
 	instructionSize: number;
 	instructionCount: number;
 	instructionBytes: number;
@@ -798,6 +800,11 @@ function benchInterpreter(runs: number): InterpreterMetrics {
 		boundaryDispatches: parsePerfInterpreterStat(perfStderr, "boundary_dispatches"),
 		stateSyncs: parsePerfInterpreterStat(perfStderr, "state_syncs"),
 		stateReloads: parsePerfInterpreterStat(perfStderr, "state_reloads"),
+		strictDirectHits: parsePerfInterpreterStat(perfStderr, "strict_direct_hits"),
+		strictStringFallbacks: parsePerfInterpreterStat(
+			perfStderr,
+			"strict_string_fallbacks",
+		),
 	};
 }
 
@@ -1259,6 +1266,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		);
 		console.log(
 			`            ${entry.interpreter.stateSyncs} state syncs, ${entry.interpreter.stateReloads} state reloads`,
+		);
+		console.log(
+			`            ${entry.interpreter.strictDirectHits} direct strict hits, ${entry.interpreter.strictStringFallbacks} string fallbacks`,
 		);
 		console.log(
 			`  bytecode  ${entry.interpreter.instructionCount} instructions x ${entry.interpreter.instructionSize}B = ${humanBytes(entry.interpreter.instructionBytes)}${delta(entry.interpreter.instructionBytes, p?.instructionBytes)}`,

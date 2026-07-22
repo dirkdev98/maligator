@@ -133,11 +133,14 @@ static void mal_perf_stats_print(void) {
     fprintf(
         stderr,
         "[perf-interpreter-stats] direct_leaf_executions=%llu boundary_dispatches=%llu "
-        "state_syncs=%llu state_reloads=%llu\n",
+        "state_syncs=%llu state_reloads=%llu strict_direct_hits=%llu "
+        "strict_string_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.interpreter_direct_leaf_executions,
         (unsigned long long) mal_perf_stats.interpreter_boundary_dispatches,
         (unsigned long long) mal_perf_stats.interpreter_state_syncs,
-        (unsigned long long) mal_perf_stats.interpreter_state_reloads
+        (unsigned long long) mal_perf_stats.interpreter_state_reloads,
+        (unsigned long long) mal_perf_stats.interpreter_strict_direct_hits,
+        (unsigned long long) mal_perf_stats.interpreter_strict_string_fallbacks
     );
     fprintf(
         stderr,

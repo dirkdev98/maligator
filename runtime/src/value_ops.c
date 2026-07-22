@@ -413,40 +413,6 @@ bool mal_ops_add_checked(MalHeap *heap, MalValue left, MalValue right, MalValue 
     return true;
 }
 
-static bool mal_ops_strict_equal_bool(MalValue left, MalValue right) {
-    // NaN is never strictly equal to anything, including itself. This has to
-    // run before the bitwise short-circuit below, since all NaNs share the
-    // canonical MAL_VALUE_NAN encoding and would otherwise compare equal.
-    if (mal_value_is_nan(left) || mal_value_is_nan(right)) {
-        return false;
-    }
-
-    if (left == right) {
-        return true;
-    }
-
-    if (mal_value_is_string(left) && mal_value_is_string(right)) {
-        return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
-    }
-
-    // BigInt is its own type: equal by value to another BigInt, never strictly
-    // equal to a Number (heap pointers differ, so this must be explicit).
-    if (mal_value_is_bigint(left) || mal_value_is_bigint(right)) {
-        return mal_value_is_bigint(left) && mal_value_is_bigint(right) &&
-            mal_ops_bigint_of(left) == mal_ops_bigint_of(right);
-    }
-
-    if (mal_value_is_f64_or_nan(left) && mal_value_is_f64_or_nan(right)) {
-        return mal_ops_to_f64(left) == mal_ops_to_f64(right);
-    }
-
-    if (mal_ops_is_number(left) && mal_ops_is_number(right)) {
-        return mal_ops_to_f64(left) == mal_ops_to_f64(right);
-    }
-
-    return false;
-}
-
 static bool mal_ops_equal_bool(MalValue left, MalValue right) {
     if (mal_ops_strict_equal_bool(left, right)) {
         return true;
