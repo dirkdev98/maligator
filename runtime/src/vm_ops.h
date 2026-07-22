@@ -543,6 +543,14 @@ typedef struct MalInlineCache {
 // One per property-access site; keep it at/under 80 bytes.
 static_assert(sizeof(MalInlineCache) <= 80, "MalInlineCache outgrew 80 bytes");
 
+/** Return an already-allocated interpreter cache entry without filling or allocating. */
+static inline MalInlineCache *mal_vm_interp_ic_existing(
+    MalCallable *callable, i32 instruction_index
+) {
+    MalInlineCache *caches = callable->vm->interp_ic[callable->function_index];
+    return caches != nullptr ? &caches[instruction_index] : nullptr;
+}
+
 // `slot` sentinel marking a protector-gated value entry (`value` holds the result,
 // there is no object slot). A real shape slot is a small inline index.
 #define MAL_IC_VALUE_SLOT UINT32_MAX
@@ -772,6 +780,16 @@ static inline bool mal_vm_special_try_load(MalVm *vm, MalValue receiver, MalValu
     return false;
 }
 
+/** Apply only a proven, nonallocating property-load cache hit. */
+static inline bool mal_vm_property_try_load(MalVm *vm, MalValue receiver, MalValue key,
+                                            const MalInlineCache *ic, MalValue *out) {
+    MalObject *object = mal_vm_as_object(receiver);
+    return (object != nullptr && mal_vm_object_try_load(object, key, ic, out)) ||
+        mal_vm_inherited_try_load(receiver, key, ic, out) ||
+        mal_vm_watched_try_load(receiver, key, ic, out) ||
+        mal_vm_special_try_load(vm, receiver, key, ic, out);
+}
+
 /**
  * Monomorphic shape-slot overwrite of an existing writable data slot (barriered).
  * Returns true when applied; false (miss / value-slot / accessor / read-only / fresh
@@ -790,6 +808,13 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
         return true;
     }
     return false;
+}
+
+/** Apply only a proven existing writable-slot store, including both GC barriers. */
+static inline bool mal_vm_property_try_store(MalValue receiver, MalValue key, MalValue value,
+                                             const MalInlineCache *ic) {
+    MalObject *object = mal_vm_as_object(receiver);
+    return object != nullptr && mal_vm_object_try_store(object, key, value, ic);
 }
 
 /**
@@ -816,18 +841,8 @@ static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, 
     // key compare and a slot load in the caller, not an out-of-line call. The
     // value-slot (watched-intrinsic) and miss cases defer to mal_vm_op_load_property_ic,
     // which also refills the cache.
-    MalObject *object = mal_vm_as_object(object_value);
     MalValue out;
-    if (object != nullptr && mal_vm_object_try_load(object, key_value, ic, &out)) {
-        return out;
-    }
-    if (mal_vm_inherited_try_load(object_value, key_value, ic, &out)) {
-        return out;
-    }
-    if (mal_vm_watched_try_load(object_value, key_value, ic, &out)) {
-        return out;
-    }
-    if (mal_vm_special_try_load(vm, object_value, key_value, ic, &out)) {
+    if (mal_vm_property_try_load(vm, object_value, key_value, ic, &out)) {
         return out;
     }
     // Everything past the monomorphic hit (polymorphic overflow, megamorphic stub
@@ -865,8 +880,7 @@ static inline void mal_vm_array_fast_store(MalVm *vm, MalValue object_value, Mal
     // mal_vm_op_store_property_ic): a repeat `o.k = v` overwrite of an existing default
     // (writable) data slot is a barriered slot store in the caller. Everything else
     // (miss, value-slot, accessor, fresh key) defers.
-    MalObject *object = mal_vm_as_object(object_value);
-    if (object != nullptr && mal_vm_object_try_store(object, key_value, value, ic)) {
+    if (mal_vm_property_try_store(object_value, key_value, value, ic)) {
         return;
     }
     // Polymorphic overflow + miss/refill live out of line in mal_vm_op_store_property_ic

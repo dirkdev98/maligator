@@ -207,6 +207,10 @@ interface InterpreterMetrics {
 	stateReloads: number;
 	strictDirectHits: number;
 	strictStringFallbacks: number;
+	localLoadIcHits: number;
+	localStoreIcHits: number;
+	loadIcSyncFallbacks: number;
+	storeIcSyncFallbacks: number;
 	instructionSize: number;
 	instructionCount: number;
 	instructionBytes: number;
@@ -805,6 +809,10 @@ function benchInterpreter(runs: number): InterpreterMetrics {
 			perfStderr,
 			"strict_string_fallbacks",
 		),
+		localLoadIcHits: parsePerfInterpreterStat(perfStderr, "local_load_ic_hits"),
+		localStoreIcHits: parsePerfInterpreterStat(perfStderr, "local_store_ic_hits"),
+		loadIcSyncFallbacks: parsePerfInterpreterStat(perfStderr, "load_ic_sync_fallbacks"),
+		storeIcSyncFallbacks: parsePerfInterpreterStat(perfStderr, "store_ic_sync_fallbacks"),
 	};
 }
 
@@ -1269,6 +1277,12 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		);
 		console.log(
 			`            ${entry.interpreter.strictDirectHits} direct strict hits, ${entry.interpreter.strictStringFallbacks} string fallbacks`,
+		);
+		console.log(
+			`            ${entry.interpreter.localLoadIcHits} local load IC hits, ${entry.interpreter.localStoreIcHits} local store IC hits`,
+		);
+		console.log(
+			`            ${entry.interpreter.loadIcSyncFallbacks} synchronized load fallbacks, ${entry.interpreter.storeIcSyncFallbacks} synchronized store fallbacks`,
 		);
 		console.log(
 			`  bytecode  ${entry.interpreter.instructionCount} instructions x ${entry.interpreter.instructionSize}B = ${humanBytes(entry.interpreter.instructionBytes)}${delta(entry.interpreter.instructionBytes, p?.instructionBytes)}`,

@@ -1605,18 +1605,70 @@ static void mal_vm_run_until_frame_count(
                     vm->intrinsics[instruction->as.load_intrinsic.intrinsic];
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
-            case MAL_OP_LOAD_PROPERTY:
+            case MAL_OP_LOAD_PROPERTY: {
+                MalValue object = registers[instruction->as.load_property.object];
+                MalValue key = registers[instruction->as.load_property.key];
+                MalValue result;
+                MalInlineCache *ic = mal_vm_interp_ic_existing(
+                    frame, instruction_pointer - 1);
+                if (ic != nullptr && mal_vm_property_try_load(vm, object, key, ic, &result)) {
+                    registers[instruction->as.load_property.dst] = result;
+                    MAL_PERF_COUNT(interpreter_local_load_ic_hits);
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
+                MAL_PERF_COUNT(interpreter_load_ic_sync_fallbacks);
                 MAL_VM_INTERPRETER_BOUNDARY(mal_op_load_property(frame, instruction));
                 break;
-            case MAL_OP_LOAD_PROPERTY_STATIC:
+            }
+            case MAL_OP_LOAD_PROPERTY_STATIC: {
+                MalValue object = registers[instruction->as.load_property_static.object];
+                MalValue key = mal_value_from_string(&vm->definition->string_constants[
+                    instruction->as.load_property_static.string_index]);
+                MalValue result;
+                MalInlineCache *ic = mal_vm_interp_ic_existing(
+                    frame, instruction_pointer - 1);
+                if (ic != nullptr && mal_vm_property_try_load(vm, object, key, ic, &result)) {
+                    registers[instruction->as.load_property_static.dst] = result;
+                    MAL_PERF_COUNT(interpreter_local_load_ic_hits);
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
+                MAL_PERF_COUNT(interpreter_load_ic_sync_fallbacks);
                 MAL_VM_INTERPRETER_BOUNDARY(mal_op_load_property_static(frame, instruction));
                 break;
-            case MAL_OP_STORE_PROPERTY:
+            }
+            case MAL_OP_STORE_PROPERTY: {
+                MalValue object = registers[instruction->as.store_property.object];
+                MalValue key = registers[instruction->as.store_property.key];
+                MalValue value = registers[instruction->as.store_property.value];
+                MalInlineCache *ic = mal_vm_interp_ic_existing(
+                    frame, instruction_pointer - 1);
+                if (ic != nullptr && mal_vm_property_try_store(object, key, value, ic)) {
+                    MAL_PERF_COUNT(interpreter_local_store_ic_hits);
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
+                MAL_PERF_COUNT(interpreter_store_ic_sync_fallbacks);
                 MAL_VM_INTERPRETER_BOUNDARY(mal_op_store_property(frame, instruction));
                 break;
-            case MAL_OP_STORE_PROPERTY_STATIC:
+            }
+            case MAL_OP_STORE_PROPERTY_STATIC: {
+                MalValue object = registers[instruction->as.store_property_static.object];
+                MalValue key = mal_value_from_string(&vm->definition->string_constants[
+                    instruction->as.store_property_static.string_index]);
+                MalValue value = registers[instruction->as.store_property_static.value];
+                MalInlineCache *ic = mal_vm_interp_ic_existing(
+                    frame, instruction_pointer - 1);
+                if (ic != nullptr && mal_vm_property_try_store(object, key, value, ic)) {
+                    MAL_PERF_COUNT(interpreter_local_store_ic_hits);
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
+                MAL_PERF_COUNT(interpreter_store_ic_sync_fallbacks);
                 MAL_VM_INTERPRETER_BOUNDARY(mal_op_store_property_static(frame, instruction));
                 break;
+            }
             case MAL_OP_TO_PROPERTY_KEY:
                 MAL_VM_INTERPRETER_BOUNDARY(mal_op_to_property_key(frame, instruction));
                 break;

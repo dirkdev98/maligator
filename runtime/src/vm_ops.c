@@ -3704,7 +3704,12 @@ int mal_vm_object_region_add_variant(const MalObject *o, const MalInlineCache *c
  * back. The function's cache array is allocated on first use. */
 static MalInlineCache *mal_interp_ic(MalCallable *callable) {
     MalVm *vm = callable->vm;
-    i32 function_index = (i32) (callable->function - vm->definition->functions);
+    MalInlineCache *existing = mal_vm_interp_ic_existing(
+        callable, callable->instruction_pointer - 1);
+    if (existing != nullptr) {
+        return existing;
+    }
+    i32 function_index = callable->function_index;
     MalInlineCache *caches = vm->interp_ic[function_index];
     if (caches == nullptr) {
         caches = calloc((usize) callable->function->instruction_count, sizeof(MalInlineCache));

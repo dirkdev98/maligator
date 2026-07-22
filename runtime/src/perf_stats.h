@@ -88,6 +88,10 @@ typedef struct MalPerfStats {
     u64 interpreter_state_reloads;
     u64 interpreter_strict_direct_hits;
     u64 interpreter_strict_string_fallbacks;
+    u64 interpreter_local_load_ic_hits;
+    u64 interpreter_local_store_ic_hits;
+    u64 interpreter_load_ic_sync_fallbacks;
+    u64 interpreter_store_ic_sync_fallbacks;
 
     u64 promise_await_typed_continuations;
     u64 promise_await_typed_jobs;
