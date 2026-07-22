@@ -27,14 +27,19 @@
 #include "vm_load.h"
 #include "vm_ops.h"
 
+static u64 g_coroutine_buffer_requests = 0;
 static u64 g_coroutine_buffer_allocations = 0;
 static u64 g_coroutine_buffer_reuses = 0;
+static u64 g_coroutine_buffer_releases = 0;
+static u64 g_coroutine_buffer_pooled = 0;
+static u64 g_coroutine_buffer_dropped = 0;
+static u64 g_coroutine_buffer_peak_retained_bytes = 0;
 static u64 g_loaded_instruction_count = 0;
 static u64 g_loaded_instruction_data_count = 0;
 
 #define MAL_COROUTINE_POOL_MAX_BYTES ((usize) 1024 * 1024)
 #define MAL_COROUTINE_POOL_MAX_BUFFER_BYTES ((usize) 64 * 1024)
-#define MAL_COROUTINE_POOL_MAX_BUFFERS 256
+#define MAL_COROUTINE_POOL_POWER_CLASS_COUNT 13
 
 typedef struct MalCoroutineBuffer {
     struct MalCoroutineBuffer *next;
@@ -43,12 +48,26 @@ typedef struct MalCoroutineBuffer {
     MalValue values[];
 } MalCoroutineBuffer;
 
+static_assert(
+    MAL_COROUTINE_POOL_CLASS_COUNT == MAL_COROUTINE_POOL_POWER_CLASS_COUNT + 1,
+    "coroutine pool class count mismatch"
+);
+static_assert(
+    offsetof(MalCoroutineBuffer, values) + sizeof(MalValue) * 4096 <
+        MAL_COROUTINE_POOL_MAX_BUFFER_BYTES,
+    "coroutine power classes must fit the per-buffer limit"
+);
+
 u64 mal_vm_loaded_instruction_count(void) {
     return g_loaded_instruction_count;
 }
 
 u64 mal_vm_loaded_instruction_data_count(void) {
     return g_loaded_instruction_data_count;
+}
+
+u64 mal_coroutine_buffer_request_count(void) {
+    return g_coroutine_buffer_requests;
 }
 
 u64 mal_coroutine_buffer_allocation_count(void) {
@@ -59,6 +78,22 @@ u64 mal_coroutine_buffer_reuse_count(void) {
     return g_coroutine_buffer_reuses;
 }
 
+u64 mal_coroutine_buffer_release_count(void) {
+    return g_coroutine_buffer_releases;
+}
+
+u64 mal_coroutine_buffer_pooled_count(void) {
+    return g_coroutine_buffer_pooled;
+}
+
+u64 mal_coroutine_buffer_dropped_count(void) {
+    return g_coroutine_buffer_dropped;
+}
+
+u64 mal_coroutine_buffer_peak_retained_bytes(void) {
+    return g_coroutine_buffer_peak_retained_bytes;
+}
+
 static usize mal_coroutine_buffer_bytes(usize capacity) {
     return offsetof(MalCoroutineBuffer, values) + sizeof(MalValue) * capacity;
 }
@@ -67,29 +102,59 @@ static MalCoroutineBuffer *mal_coroutine_buffer_from_values(MalValue *values) {
     return (MalCoroutineBuffer *) ((byte *) values - offsetof(MalCoroutineBuffer, values));
 }
 
+/**
+ * Map a requested slot count to one directly-indexed retention class. Power-of-two
+ * classes cover the common register/argument buffers; the final exact class uses
+ * every slot that still fits the 64 KiB per-buffer policy. An out-of-range return
+ * means the allocation remains exact-sized and will not be retained.
+ */
+static u32 mal_coroutine_buffer_class(usize required, usize *capacity_out) {
+    usize capacity = 1;
+    for (u32 index = 0; index < MAL_COROUTINE_POOL_POWER_CLASS_COUNT; index++) {
+        if (required <= capacity) {
+            *capacity_out = capacity;
+            return index;
+        }
+        capacity *= 2;
+    }
+
+    usize max_capacity =
+        (MAL_COROUTINE_POOL_MAX_BUFFER_BYTES - offsetof(MalCoroutineBuffer, values)) /
+        sizeof(MalValue);
+    if (required <= max_capacity) {
+        *capacity_out = max_capacity;
+        return MAL_COROUTINE_POOL_POWER_CLASS_COUNT;
+    }
+    *capacity_out = required;
+    return MAL_COROUTINE_POOL_CLASS_COUNT;
+}
+
 MalValue *mal_vm_alloc_coroutine_buffer(MalVm *vm, i32 slot_count) {
     usize required = (usize) slot_count;
-    MalCoroutineBuffer **link = &vm->coroutine_buffer_pool;
-    MalCoroutineBuffer *buffer = nullptr;
-    while (*link != nullptr) {
-        if ((*link)->capacity >= required) {
-            buffer = *link;
-            *link = buffer->next;
-            vm->coroutine_buffer_pool_bytes -= mal_coroutine_buffer_bytes(buffer->capacity);
-            vm->coroutine_buffer_pool_count--;
-            g_coroutine_buffer_reuses++;
-            break;
-        }
-        link = &(*link)->next;
+    usize capacity;
+    u32 class_index = mal_coroutine_buffer_class(required, &capacity);
+    MalCoroutineBuffer *buffer = class_index < MAL_COROUTINE_POOL_CLASS_COUNT
+        ? vm->coroutine_buffer_pools[class_index]
+        : nullptr;
+    g_coroutine_buffer_requests++;
+
+    if (buffer != nullptr) {
+        vm->coroutine_buffer_pools[class_index] = buffer->next;
+        vm->coroutine_buffer_pool_bytes -= mal_coroutine_buffer_bytes(buffer->capacity);
+        vm->coroutine_buffer_pool_count--;
+        g_coroutine_buffer_reuses++;
     }
 
     if (buffer == nullptr) {
-        buffer = malloc(mal_coroutine_buffer_bytes(required));
-        buffer->capacity = required;
+        buffer = malloc(mal_coroutine_buffer_bytes(capacity));
+        buffer->capacity = capacity;
         g_coroutine_buffer_allocations++;
     }
     buffer->next = nullptr;
     buffer->used = required;
+    // A class may have spare capacity, but only the requested, initialized prefix
+    // is exposed to the frame/root descriptor. A later larger request initializes
+    // its entire newly visible prefix before returning the pointer.
     for (usize i = 0; i < required; i++) {
         buffer->values[i] = mal_value_new_undefined();
     }
@@ -101,6 +166,7 @@ void mal_vm_release_coroutine_buffer(MalVm *vm, MalValue *values) {
         return;
     }
     MalCoroutineBuffer *buffer = mal_coroutine_buffer_from_values(values);
+    g_coroutine_buffer_releases++;
     for (usize i = 0; i < buffer->used; i++) {
         mal_gc_write_barrier(buffer->values[i]);
         buffer->values[i] = mal_value_new_undefined();
@@ -108,26 +174,35 @@ void mal_vm_release_coroutine_buffer(MalVm *vm, MalValue *values) {
     buffer->used = 0;
 
     usize bytes = mal_coroutine_buffer_bytes(buffer->capacity);
-    if (bytes > MAL_COROUTINE_POOL_MAX_BUFFER_BYTES ||
-        vm->coroutine_buffer_pool_count >= MAL_COROUTINE_POOL_MAX_BUFFERS ||
+    usize class_capacity;
+    u32 class_index = mal_coroutine_buffer_class(buffer->capacity, &class_capacity);
+    if (class_index >= MAL_COROUTINE_POOL_CLASS_COUNT ||
+        class_capacity != buffer->capacity ||
         vm->coroutine_buffer_pool_bytes > MAL_COROUTINE_POOL_MAX_BYTES - bytes) {
+        g_coroutine_buffer_dropped++;
         free(buffer);
         return;
     }
-    buffer->next = vm->coroutine_buffer_pool;
-    vm->coroutine_buffer_pool = buffer;
+    buffer->next = vm->coroutine_buffer_pools[class_index];
+    vm->coroutine_buffer_pools[class_index] = buffer;
     vm->coroutine_buffer_pool_bytes += bytes;
     vm->coroutine_buffer_pool_count++;
+    g_coroutine_buffer_pooled++;
+    if (vm->coroutine_buffer_pool_bytes > g_coroutine_buffer_peak_retained_bytes) {
+        g_coroutine_buffer_peak_retained_bytes = vm->coroutine_buffer_pool_bytes;
+    }
 }
 
 void mal_vm_free_coroutine_buffer_pool(MalVm *vm) {
-    MalCoroutineBuffer *buffer = vm->coroutine_buffer_pool;
-    while (buffer != nullptr) {
-        MalCoroutineBuffer *next = buffer->next;
-        free(buffer);
-        buffer = next;
+    for (u32 index = 0; index < MAL_COROUTINE_POOL_CLASS_COUNT; index++) {
+        MalCoroutineBuffer *buffer = vm->coroutine_buffer_pools[index];
+        while (buffer != nullptr) {
+            MalCoroutineBuffer *next = buffer->next;
+            free(buffer);
+            buffer = next;
+        }
+        vm->coroutine_buffer_pools[index] = nullptr;
     }
-    vm->coroutine_buffer_pool = nullptr;
     vm->coroutine_buffer_pool_bytes = 0;
     vm->coroutine_buffer_pool_count = 0;
 }
@@ -348,7 +423,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->reaction_pool_count = 0;
     vm->reaction_blocks = nullptr;
     vm->reaction_active_block = nullptr;
-    vm->coroutine_buffer_pool = nullptr;
+    for (u32 i = 0; i < MAL_COROUTINE_POOL_CLASS_COUNT; i++) {
+        vm->coroutine_buffer_pools[i] = nullptr;
+    }
     vm->coroutine_buffer_pool_bytes = 0;
     vm->coroutine_buffer_pool_count = 0;
     vm->async_generator_request_pool = nullptr;

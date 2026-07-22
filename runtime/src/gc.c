@@ -350,6 +350,20 @@ static void mal_gc_print_stats(void) {
             (unsigned long long) mal_async_generator_request_reuse_count()
         );
     }
+    if (getenv("MAL_COROUTINE_STATS") != nullptr) {
+        fprintf(
+            stderr,
+            "[coroutine-stats] requests=%llu allocations=%llu reuses=%llu "
+            "releases=%llu pooled=%llu dropped=%llu peak_retained_bytes=%llu\n",
+            (unsigned long long) mal_coroutine_buffer_request_count(),
+            (unsigned long long) mal_coroutine_buffer_allocation_count(),
+            (unsigned long long) mal_coroutine_buffer_reuse_count(),
+            (unsigned long long) mal_coroutine_buffer_release_count(),
+            (unsigned long long) mal_coroutine_buffer_pooled_count(),
+            (unsigned long long) mal_coroutine_buffer_dropped_count(),
+            (unsigned long long) mal_coroutine_buffer_peak_retained_bytes()
+        );
+    }
     if (getenv("MAL_VM_STATS") != nullptr) {
         u64 instruction_count = mal_vm_loaded_instruction_count();
         u64 instruction_data_count = mal_vm_loaded_instruction_data_count();

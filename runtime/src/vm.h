@@ -8,6 +8,8 @@
 #include "intrinsics.h"
 #include "value.h"
 
+#define MAL_COROUTINE_POOL_CLASS_COUNT 14
+
 typedef enum MalOpcode {
     MAL_OP_MOVE,
     MAL_OP_RETURN,
@@ -1241,8 +1243,12 @@ typedef struct MalVm {
     struct MalPromiseReactionBlock *reaction_blocks;
     struct MalPromiseReactionBlock *reaction_active_block;
 
-    /** Byte-bounded, untraced pool of cleared suspendable-frame value buffers. */
-    struct MalCoroutineBuffer *coroutine_buffer_pool;
+    /**
+     * Byte-bounded, untraced size-class pools of cleared suspendable-frame value
+     * buffers. Classes are indexed directly; the final class is the largest
+     * capacity permitted by the per-buffer retention policy.
+     */
+    struct MalCoroutineBuffer *coroutine_buffer_pools[MAL_COROUTINE_POOL_CLASS_COUNT];
     usize coroutine_buffer_pool_bytes;
     u32 coroutine_buffer_pool_count;
 
@@ -1697,8 +1703,13 @@ u64 mal_vm_loaded_instruction_count(void);
 u64 mal_vm_loaded_instruction_data_count(void);
 
 /** Native suspendable-frame allocation counters used by benchmark telemetry. */
+u64 mal_coroutine_buffer_request_count(void);
 u64 mal_coroutine_buffer_allocation_count(void);
 u64 mal_coroutine_buffer_reuse_count(void);
+u64 mal_coroutine_buffer_release_count(void);
+u64 mal_coroutine_buffer_pooled_count(void);
+u64 mal_coroutine_buffer_dropped_count(void);
+u64 mal_coroutine_buffer_peak_retained_bytes(void);
 MalValue *mal_vm_alloc_coroutine_buffer(MalVm *vm, i32 slot_count);
 void mal_vm_release_coroutine_buffer(MalVm *vm, MalValue *values);
 void mal_vm_free_coroutine_buffer_pool(MalVm *vm);

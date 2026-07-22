@@ -133,8 +133,13 @@ interface CoroutineBackendMetrics {
 	wallMs: number;
 	collections: number;
 	allocatedMb: number;
+	frameRequests: number;
 	frameAllocations: number;
 	frameReuses: number;
+	frameReleases: number;
+	framePooled: number;
+	frameDropped: number;
+	framePeakRetainedBytes: number;
 	requestAllocations: number;
 	requestReuses: number;
 }
@@ -147,8 +152,13 @@ interface ArgumentsBackendMetrics {
 	wallMs: number;
 	collections: number;
 	allocatedMb: number;
+	frameRequests: number;
 	frameAllocations: number;
 	frameReuses: number;
+	frameReleases: number;
+	framePooled: number;
+	frameDropped: number;
+	framePeakRetainedBytes: number;
 	instructionCount: number;
 	bytecodeBytes: number;
 	binaryBytes: number;
@@ -458,6 +468,12 @@ function parsePromiseStat(stderr: string, field: string): number {
 	return match ? Number(match[1]) : 0;
 }
 
+function parseCoroutineStat(stderr: string, field: string): number {
+	const line = stderr.split("\n").find((value) => value.includes("[coroutine-stats]"));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
+}
+
 function benchPromise(runs: number): PromiseMetrics {
 	const binary = buildNativeBinary({
 		fixture: "bench/promise.js",
@@ -489,7 +505,12 @@ function benchPromise(runs: number): PromiseMetrics {
 function benchCoroutineBackend(binary: string, runs: number): CoroutineBackendMetrics {
 	const wallMs = timeCommand(binary, [], runs);
 	const result = spawnSync(binary, [], {
-		env: { ...process.env, MAL_GC_STATS: "1", MAL_PROMISE_STATS: "1" },
+		env: {
+			...process.env,
+			MAL_GC_STATS: "1",
+			MAL_PROMISE_STATS: "1",
+			MAL_COROUTINE_STATS: "1",
+		},
 		encoding: "utf-8",
 		stdio: ["ignore", "ignore", "pipe"],
 	});
@@ -498,8 +519,13 @@ function benchCoroutineBackend(binary: string, runs: number): CoroutineBackendMe
 		wallMs,
 		collections: parseGcStat(stderr, "collections"),
 		allocatedMb: parseGcStat(stderr, "allocated_bytes") / (1024 * 1024),
+		frameRequests: parseCoroutineStat(stderr, "requests"),
 		frameAllocations: parsePromiseStat(stderr, "frame_allocations"),
 		frameReuses: parsePromiseStat(stderr, "frame_reuses"),
+		frameReleases: parseCoroutineStat(stderr, "releases"),
+		framePooled: parseCoroutineStat(stderr, "pooled"),
+		frameDropped: parseCoroutineStat(stderr, "dropped"),
+		framePeakRetainedBytes: parseCoroutineStat(stderr, "peak_retained_bytes"),
 		requestAllocations: parsePromiseStat(stderr, "request_allocations"),
 		requestReuses: parsePromiseStat(stderr, "request_reuses"),
 	};
@@ -532,6 +558,7 @@ function benchArgumentsBackend(binary: string, runs: number): ArgumentsBackendMe
 			...process.env,
 			MAL_GC_STATS: "1",
 			MAL_PROMISE_STATS: "1",
+			MAL_COROUTINE_STATS: "1",
 			MAL_VM_STATS: "1",
 		},
 		encoding: "utf-8",
@@ -542,8 +569,13 @@ function benchArgumentsBackend(binary: string, runs: number): ArgumentsBackendMe
 		wallMs,
 		collections: parseGcStat(stderr, "collections"),
 		allocatedMb: parseGcStat(stderr, "allocated_bytes") / (1024 * 1024),
+		frameRequests: parseCoroutineStat(stderr, "requests"),
 		frameAllocations: parsePromiseStat(stderr, "frame_allocations"),
 		frameReuses: parsePromiseStat(stderr, "frame_reuses"),
+		frameReleases: parseCoroutineStat(stderr, "releases"),
+		framePooled: parseCoroutineStat(stderr, "pooled"),
+		frameDropped: parseCoroutineStat(stderr, "dropped"),
+		framePeakRetainedBytes: parseCoroutineStat(stderr, "peak_retained_bytes"),
 		instructionCount: parseVmStat(stderr, "instruction_count"),
 		bytecodeBytes: parseVmStat(stderr, "bytecode_bytes"),
 		binaryBytes: fileBytes(binary),
@@ -1066,6 +1098,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			console.log(
 				`               ${current.requestAllocations} request allocations${delta(current.requestAllocations, prior?.requestAllocations)}, ${current.requestReuses} reused`,
 			);
+			console.log(
+				`               ${current.frameRequests} requested, ${current.frameReleases} released, ${current.framePooled} pooled, ${current.frameDropped} dropped, ${humanBytes(current.framePeakRetainedBytes)} peak retained`,
+			);
 		}
 		console.log(`  node        ${entry.coroutine.nodeMs.toFixed(1)}ms`);
 	}
@@ -1080,6 +1115,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			);
 			console.log(
 				`               ${current.frameAllocations} frame allocations${delta(current.frameAllocations, prior?.frameAllocations)}, ${current.frameReuses} reused`,
+			);
+			console.log(
+				`               ${current.frameRequests} requested, ${current.frameReleases} released, ${current.framePooled} pooled, ${current.frameDropped} dropped, ${humanBytes(current.framePeakRetainedBytes)} peak retained`,
 			);
 			console.log(
 				`               ${current.instructionCount} instructions, ${humanBytes(current.bytecodeBytes)} bytecode, ${humanBytes(current.binaryBytes)} binary`,
