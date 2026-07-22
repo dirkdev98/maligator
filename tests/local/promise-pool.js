@@ -2,6 +2,29 @@ let failed = false;
 const events = [];
 let fulfill;
 let reject;
+let resolvingMetadata = false;
+new Promise((resolve, rejectPromise) => {
+	const resolveKeys = Reflect.ownKeys(resolve);
+	const rejectKeys = Reflect.ownKeys(rejectPromise);
+	const resolveLength = Object.getOwnPropertyDescriptor(resolve, "length");
+	const resolveName = Object.getOwnPropertyDescriptor(resolve, "name");
+	resolvingMetadata =
+		resolve.length === 1 &&
+		resolve.name === "" &&
+		rejectPromise.length === 1 &&
+		rejectPromise.name === "" &&
+		resolveKeys[0] === "length" &&
+		resolveKeys[1] === "name" &&
+		rejectKeys[0] === "length" &&
+		rejectKeys[1] === "name" &&
+		resolveLength.writable === false &&
+		resolveLength.enumerable === false &&
+		resolveLength.configurable === true &&
+		resolveName.writable === false &&
+		resolveName.enumerable === false &&
+		resolveName.configurable === true;
+	resolve();
+});
 const fulfilled = new Promise((resolve) => {
 	fulfill = resolve;
 });
@@ -47,7 +70,7 @@ for (let i = 0; i < 128; i++) {
 
 chain.then((value) => {
 	Promise.resolve().then(() => {
-		if (failed || value !== 128 || events.length !== 128) {
+		if (failed || !resolvingMetadata || value !== 128 || events.length !== 128) {
 			throw new Error("promise pool state mismatch");
 		}
 		for (let i = 0; i < 64; i++) {

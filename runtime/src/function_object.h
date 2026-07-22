@@ -165,6 +165,17 @@ MalNativeFunctionObject *mal_native_function_object_new_with_slots(
     i32 slot_count
 );
 
+/** Allocate a native function with explicit arity and copied internal slots. */
+MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity(
+    MalHeap *heap,
+    MalObject *prototype,
+    MalString *name,
+    i32 length,
+    MalNativeFunctionCallback callback,
+    const MalValue *slots,
+    i32 slot_count
+);
+
 /**
  * Return the display name attached to a native function object.
  */

@@ -120,7 +120,21 @@ MalNativeFunctionObject *mal_native_function_object_new_with_slots(
     const MalValue *slots,
     i32 slot_count
 ) {
-    MalNativeFunctionObject *function = mal_native_function_object_new(heap, prototype, name, callback);
+    return mal_native_function_object_new_with_slots_arity(
+        heap, prototype, name, 0, callback, slots, slot_count);
+}
+
+MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity(
+    MalHeap *heap,
+    MalObject *prototype,
+    MalString *name,
+    i32 length,
+    MalNativeFunctionCallback callback,
+    const MalValue *slots,
+    i32 slot_count
+) {
+    MalNativeFunctionObject *function =
+        mal_native_function_object_new_arity(heap, prototype, name, length, callback);
     if (slot_count > 0) {
         function->slots = mal_heap_alloc_raw(heap, sizeof(MalValue) * slot_count);
         function->slot_count = slot_count;

@@ -42,25 +42,6 @@ static MalObject *mal_promise_function_prototype(MalVm *vm) {
     return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
 }
 
-/**
- * Re-establish a built-in function's own `length` and `name` data properties in
- * the spec order (`length` before `name`). The generic native-function
- * constructor defines `name` first and forces `length` to 0, so rewrite both:
- * delete them, then re-add `length` then `name`. Both are { writable: false,
- * enumerable: false, configurable: true }.
- */
-static void mal_promise_fixup_fn_order(MalVm *vm, MalObject *object, i32 length, const byte *name) {
-    mal_object_delete_own(object, mal_intrinsic_string_key(vm, "length"));
-    mal_object_delete_own(object, mal_intrinsic_string_key(vm, "name"));
-    mal_intrinsic_define_data(vm, object, "length", mal_value_from_i32(length), MAL_PROPERTY_CONFIGURABLE);
-    mal_intrinsic_define_data(vm, object, "name", mal_value_from_string(mal_intrinsic_ascii(vm, name)), MAL_PROPERTY_CONFIGURABLE);
-}
-
-/** Order-fixup for an anonymous ("") built-in function. */
-static void mal_promise_fixup_anon_fn(MalVm *vm, MalObject *object, i32 length) {
-    mal_promise_fixup_fn_order(vm, object, length, "");
-}
-
 /** Allocate an anonymous built-in closure with captured slots, correct length/name. */
 static MalValue mal_promise_new_closure(
     MalVm *vm,
@@ -69,9 +50,9 @@ static MalValue mal_promise_new_closure(
     i32 slot_count,
     i32 length
 ) {
-    MalNativeFunctionObject *fn = mal_native_function_object_new_with_slots(
-        &vm->heap, mal_promise_function_prototype(vm), mal_intrinsic_ascii(vm, ""), callback, slots, slot_count);
-    mal_promise_fixup_anon_fn(vm, (MalObject *) fn, length);
+    MalNativeFunctionObject *fn = mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_promise_function_prototype(vm),
+        mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY), length, callback, slots, slot_count);
     return mal_value_from_native_function_object(fn);
 }
 
@@ -159,15 +140,15 @@ static MalNativeFunctionObject *mal_promise_new_resolving_fn(
     const MalValue *slots,
     i32 slot_count
 ) {
-    MalNativeFunctionObject *fn = mal_native_function_object_new_with_slots(
+    MalNativeFunctionObject *fn = mal_native_function_object_new_with_slots_arity(
         &vm->heap,
         mal_promise_function_prototype(vm),
-        mal_intrinsic_ascii(vm, ""),
+        mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY),
+        1,
         callback,
         slots,
         slot_count
     );
-    mal_promise_fixup_anon_fn(vm, (MalObject *) fn, 1);
     return fn;
 }
 
@@ -1452,10 +1433,6 @@ void mal_builtin_promise_install(MalVm *vm) {
         1,
         mal_promise_constructor
     );
-
-    // CreateBuiltinFunction order: `length` before `name` (the generic native
-    // constructor defines them name-first).
-    mal_promise_fixup_fn_order(vm, (MalObject *) constructor, 1, "Promise");
 
     vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR] = mal_value_from_native_function_object(constructor);
     vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE] = mal_value_from_object(prototype);
