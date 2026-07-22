@@ -72,6 +72,72 @@ MalString *mal_string_new_external(MalHeap *heap, const c16 *code_units, usize l
 #define MAL_STRING_SLICE_SMALL_PARENT_CODE_UNITS ((usize) 4096)
 #define MAL_STRING_SLICE_MAX_RETAINED_RATIO ((usize) 8)
 
+typedef struct MalStringRangePart {
+    MalString *string;
+    usize offset;
+} MalStringRangePart;
+
+static MalString *mal_string_copy_range(
+    MalHeap *heap,
+    MalString *parent,
+    usize offset,
+    usize length
+) {
+    usize capacity = 64;
+    MalStringRangePart *stack = malloc(sizeof(MalStringRangePart) * capacity);
+    if (stack == nullptr) abort();
+
+    c16 *code_units = mal_heap_alloc_raw(heap, sizeof(c16) * length);
+    usize count = 0;
+    usize end = offset + length;
+    stack[count++] = (MalStringRangePart) {.string = parent, .offset = 0};
+
+    while (count > 0) {
+        MalStringRangePart current = stack[--count];
+        MalString *part = current.string;
+        usize part_end = current.offset + part->length;
+        if (part_end <= offset || current.offset >= end) continue;
+
+        if (part->storage != MAL_STRING_STORAGE_CONS) {
+            usize copy_start = current.offset > offset ? current.offset : offset;
+            usize copy_end = part_end < end ? part_end : end;
+            memcpy(
+                code_units + copy_start - offset,
+                part->code_units + copy_start - current.offset,
+                sizeof(c16) * (copy_end - copy_start)
+            );
+            continue;
+        }
+
+        usize required = count + 2;
+        if (required > capacity) {
+            usize grown_capacity;
+            if (!mal_checked_size_growth(
+                    capacity, required, 64, MAL_STRING_MAX_CODE_UNITS, &grown_capacity
+                )) {
+                abort();
+            }
+            MalStringRangePart *grown =
+                realloc(stack, sizeof(MalStringRangePart) * grown_capacity);
+            if (grown == nullptr) abort();
+            stack = grown;
+            capacity = grown_capacity;
+        }
+
+        stack[count++] = (MalStringRangePart) {
+            .string = part->right,
+            .offset = current.offset + part->left->length,
+        };
+        stack[count++] = (MalStringRangePart) {
+            .string = part->left,
+            .offset = current.offset,
+        };
+    }
+
+    free(stack);
+    return mal_string_new_owned(heap, code_units, length);
+}
+
 static void mal_string_resolve_slice(
     MalString *parent,
     usize offset,
@@ -142,17 +208,35 @@ static MalString *mal_string_new_dependent_resolved(
 }
 
 MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, usize length) {
-    const c16 *code_units;
-    MalString *flat_parent;
-    mal_string_resolve_slice(parent, offset, length, &code_units, &flat_parent);
+    if (parent == nullptr) abort();
+    usize end;
+    if (!mal_checked_size_add(offset, length, parent->length, &end) ||
+        end > parent->length) {
+        abort();
+    }
 
     // Empty strings retain no useful backing data. Copying also keeps a zero-length
     // slice from pinning an otherwise unreachable parent.
     if (length == 0) {
-        return mal_string_new_copy(heap, code_units, 0);
+        return mal_string_new_ascii(heap, "", 0);
+    }
+    if (offset == 0 && length == parent->length) {
+        return parent;
     }
 
     usize minimum_dependent_length =
+        (parent->length + MAL_STRING_SLICE_MAX_RETAINED_RATIO - 1) /
+        MAL_STRING_SLICE_MAX_RETAINED_RATIO;
+    if (parent->storage == MAL_STRING_STORAGE_CONS &&
+        parent->length > MAL_STRING_SLICE_SMALL_PARENT_CODE_UNITS &&
+        length < minimum_dependent_length) {
+        return mal_string_copy_range(heap, parent, offset, length);
+    }
+
+    const c16 *code_units;
+    MalString *flat_parent;
+    mal_string_resolve_slice(parent, offset, length, &code_units, &flat_parent);
+    minimum_dependent_length =
         (flat_parent->length + MAL_STRING_SLICE_MAX_RETAINED_RATIO - 1) /
         MAL_STRING_SLICE_MAX_RETAINED_RATIO;
     bool use_dependent =
@@ -162,9 +246,6 @@ MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, 
 
     if (!use_dependent) {
         return mal_string_new_copy(heap, code_units, length);
-    }
-    if (offset == 0 && length == parent->length) {
-        return parent;
     }
     return mal_string_new_dependent_resolved(heap, flat_parent, code_units, length);
 }
