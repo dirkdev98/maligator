@@ -32,6 +32,25 @@ check(
 	!new RegExp("a").test("A") && new RegExp("a", "i").test("A"),
 );
 
+const locked = /a/g;
+locked.lastIndex = 2;
+const writableDescriptor = Object.getOwnPropertyDescriptor(locked, "lastIndex");
+Object.defineProperty(locked, "lastIndex", { writable: false });
+const lockedSet = Reflect.set(locked, "lastIndex", 7);
+const lockedDescriptor = Object.getOwnPropertyDescriptor(locked, "lastIndex");
+check(
+	"lastIndex updates preserve descriptor state",
+	writableDescriptor.value === 2 &&
+		writableDescriptor.writable === true &&
+		writableDescriptor.enumerable === false &&
+		writableDescriptor.configurable === false &&
+		lockedSet === false &&
+		lockedDescriptor.value === 2 &&
+		lockedDescriptor.writable === false &&
+		lockedDescriptor.enumerable === false &&
+		lockedDescriptor.configurable === false,
+);
+
 let invalidCount = 0;
 for (let i = 0; i < 2; i++) {
 	try {

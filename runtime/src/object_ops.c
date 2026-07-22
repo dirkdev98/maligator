@@ -285,11 +285,19 @@ MalPropertyLookup mal_object_get_own(const MalObject *object, MalKey key) {
     return (MalPropertyLookup){.present = false, .entry = nullptr};
 }
 
-MalPropertyResolution mal_object_resolve_property(const MalObject *object, MalKey key) {
+static MalPropertyResolution mal_object_resolve_property_with_entry(
+    const MalObject *object, MalKey key, void **entry_out
+) {
+    if (entry_out != nullptr) {
+        *entry_out = nullptr;
+    }
     for (const MalObject *cursor = object; cursor != nullptr; cursor = cursor->prototype) {
         MalPropertyLookup lookup = mal_object_get_own(cursor, key);
 
         if (lookup.present) {
+            if (entry_out != nullptr) {
+                *entry_out = lookup.entry;
+            }
             return (MalPropertyResolution) {
                 .found = true,
                 .own = cursor == object,
@@ -300,6 +308,10 @@ MalPropertyResolution mal_object_resolve_property(const MalObject *object, MalKe
     }
 
     return (MalPropertyResolution) {.found = false, .own = false, .holder = nullptr};
+}
+
+MalPropertyResolution mal_object_resolve_property(const MalObject *object, MalKey key) {
+    return mal_object_resolve_property_with_entry(object, key, nullptr);
 }
 
 MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const MalPropertyDesc *desc) {
@@ -463,7 +475,9 @@ bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
     if (object->watched_method_proto) {
         mal_primitive_method_protector = false;
     }
-    MalPropertyResolution resolution = mal_object_resolve_property(object, key);
+    void *resolved_entry;
+    MalPropertyResolution resolution =
+        mal_object_resolve_property_with_entry(object, key, &resolved_entry);
 
     if (!resolution.found) {
         if (!object->extensible) {
@@ -503,6 +517,13 @@ bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
             mal_gc_card(&object->header, value); // old object -> young value
             return true;
         }
+    }
+
+    if (resolved_entry != nullptr) {
+        resolution.desc.value = value;
+        mal_property_write_entry(object->overflow, resolved_entry, &resolution.desc);
+        mal_gc_card_desc(&object->header, &resolution.desc);
+        return true;
     }
 
     resolution.desc.value = value;
