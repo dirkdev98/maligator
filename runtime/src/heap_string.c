@@ -340,7 +340,14 @@ bool mal_string_equals(const MalString *left, const MalString *right) {
         MAL_PERF_COUNT(string_length_misses);
         return false;
     }
-    if (mal_string_hash(left) != mal_string_hash(right)) {
+    // Hashing is only a useful prefilter when both hashes already exist. Computing
+    // either one here adds a full code-unit pass before memcmp, and dependent
+    // strings cannot cache that work because their union word retains the parent.
+    bool left_hash_cached = left->storage != MAL_STRING_STORAGE_DEPENDENT &&
+        left->storage != MAL_STRING_STORAGE_CONS && left->hash_valid;
+    bool right_hash_cached = right->storage != MAL_STRING_STORAGE_DEPENDENT &&
+        right->storage != MAL_STRING_STORAGE_CONS && right->hash_valid;
+    if (left_hash_cached && right_hash_cached && left->hash != right->hash) {
         MAL_PERF_COUNT(string_hash_misses);
         return false;
     }
