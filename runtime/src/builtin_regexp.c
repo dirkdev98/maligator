@@ -1700,6 +1700,51 @@ static MalValue regexp_proto_match_all(MalVm *vm, MalValue this_value, const Mal
     return mal_value_from_regexp_string_iterator_object(iterator);
 }
 
+static bool regexp_string_iterator_advance(
+    MalVm *vm, MalRegExpStringIteratorObject *iterator,
+    MalValue *value_out, bool *done_out
+) {
+    *value_out = mal_value_new_undefined();
+    *done_out = false;
+    if (iterator->done) {
+        *done_out = true;
+        return true;
+    }
+
+    bool ok;
+    MalValue match = regexp_exec_abstract(vm, iterator->regexp, iterator->string, false, &ok);
+    if (!ok) {
+        return false;
+    }
+    if (mal_value_is_null(match)) {
+        iterator->done = true;
+        *done_out = true;
+        return true;
+    }
+    if (!iterator->global) {
+        iterator->done = true;
+        *value_out = match;
+        return true;
+    }
+
+    MalString *match_str;
+    if (!regexp_get_index_string(vm, match, 0, &match_str)) {
+        return false;
+    }
+    if (mal_string_length(match_str) == 0) {
+        i64 this_index;
+        if (!regexp_get_last_index(vm, iterator->regexp, &this_index)) {
+            return false;
+        }
+        i64 next_index = regexp_advance_string_index(iterator->string, this_index, iterator->unicode);
+        if (!regexp_set_last_index(vm, iterator->regexp, next_index)) {
+            return false;
+        }
+    }
+    *value_out = match;
+    return true;
+}
+
 static MalValue regexp_string_iterator_next(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) args;
     (void) arg_count;
@@ -1709,40 +1754,43 @@ static MalValue regexp_string_iterator_next(MalVm *vm, MalValue this_value, cons
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "not a RegExp String Iterator");
         return mal_value_new_undefined();
     }
-    MalRegExpStringIteratorObject *iterator = mal_value_to_regexp_string_iterator_object(this_value);
-    if (iterator->done) {
-        return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
-    }
-
-    bool ok;
-    MalValue match = regexp_exec_abstract(vm, iterator->regexp, iterator->string, false, &ok);
-    if (!ok) {
+    MalValue value;
+    bool done;
+    if (!regexp_string_iterator_advance(
+            vm, mal_value_to_regexp_string_iterator_object(this_value), &value, &done)) {
         return mal_value_new_undefined();
     }
-    if (mal_value_is_null(match)) {
-        iterator->done = true;
-        return mal_vm_create_iter_result(vm, mal_value_new_undefined(), true);
-    }
-    if (!iterator->global) {
-        iterator->done = true;
-        return mal_vm_create_iter_result(vm, match, false);
-    }
+    return mal_vm_create_iter_result(vm, value, done);
+}
 
-    MalString *match_str;
-    if (!regexp_get_index_string(vm, match, 0, &match_str)) {
-        return mal_value_new_undefined();
+int mal_regexp_try_exact_iterator_step(
+    MalVm *vm, MalValue iterator, MalValue next_method,
+    MalValue *value_out, bool *done_out
+) {
+    if (!mal_value_is_regexp_string_iterator_object(iterator) ||
+        !mal_value_is_native_function_object(next_method)) {
+        return 0;
     }
-    if (mal_string_length(match_str) == 0) {
-        i64 this_index;
-        if (!regexp_get_last_index(vm, iterator->regexp, &this_index)) {
-            return mal_value_new_undefined();
-        }
-        i64 next_index = regexp_advance_string_index(iterator->string, this_index, iterator->unicode);
-        if (!regexp_set_last_index(vm, iterator->regexp, next_index)) {
-            return mal_value_new_undefined();
-        }
+    MalNativeFunctionCallback callback =
+        mal_native_function_object_callback(mal_value_to_native_function_object(next_method));
+    if (callback != regexp_string_iterator_next) {
+        return 0;
     }
-    return mal_vm_create_iter_result(vm, match, false);
+#if MAL_REALMS
+    if (mal_vm_callee_realm(vm, next_method) != vm->current_realm) {
+        return 0;
+    }
+#endif
+
+    MalCalleeRoots roots;
+    mal_gc_callee_roots_begin(
+        &roots, iterator, mal_value_new_undefined(), next_method, nullptr, 0);
+    vm->gc_native_frames++;
+    bool ok = regexp_string_iterator_advance(
+        vm, mal_value_to_regexp_string_iterator_object(iterator), value_out, done_out);
+    vm->gc_native_frames--;
+    mal_gc_callee_roots_end(&roots);
+    return ok ? 1 : -1;
 }
 
 static MalNativeFunctionCallback regexp_exact_string_protocol_callback(i32 symbol_slot) {
@@ -1993,6 +2041,18 @@ bool mal_regexp_try_exact_string_dispatch(
     (void) extra_count;
     (void) out;
     return false;
+}
+
+int mal_regexp_try_exact_iterator_step(
+    MalVm *vm, MalValue iterator, MalValue next_method,
+    MalValue *value_out, bool *done_out
+) {
+    (void) vm;
+    (void) iterator;
+    (void) next_method;
+    (void) value_out;
+    (void) done_out;
+    return 0;
 }
 
 #endif // MAL_REGEXP

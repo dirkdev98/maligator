@@ -164,6 +164,39 @@ check(
 		"subject".match(capturedMatch) === "late replacement",
 );
 
+const manualIterator = "aba".matchAll(/a/g);
+const manualFirst = manualIterator.next();
+const manualSecond = manualIterator.next();
+check(
+	"manual RegExp iterator next returns distinct result objects",
+	manualFirst !== manualSecond &&
+		manualFirst.value.index === 0 &&
+		manualSecond.value.index === 2,
+);
+
+const overriddenIterator = "aba".matchAll(/a/g);
+const originalNext = overriddenIterator.next;
+let overriddenNextCalls = 0;
+overriddenIterator.next = function () {
+	overriddenNextCalls++;
+	return originalNext.call(this);
+};
+check(
+	"RegExp iteration observes an overridden next method",
+	[...overriddenIterator].length === 2 && overriddenNextCalls === 3,
+);
+
+const capturedNextIterator = "aba".matchAll(/a/g);
+let capturedNextCount = 0;
+for (const match of capturedNextIterator) {
+	capturedNextCount += match.index;
+	capturedNextIterator.next = () => ({ done: true });
+}
+check(
+	"RegExp iteration keeps its initially captured next method",
+	capturedNextCount === 2,
+);
+
 let passed = 0;
 for (const [name, condition] of results) {
 	if (condition) passed++;

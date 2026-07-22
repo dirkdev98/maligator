@@ -2,6 +2,7 @@
 
 #include "array_object.h"
 #include "builtin_array.h"
+#include "builtin_regexp.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
@@ -418,6 +419,12 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
             vm->gc_native_frames--;
             return ok;
         }
+    }
+
+    int regexp_step = mal_regexp_try_exact_iterator_step(
+        vm, record->iterator, record->next_method, value_out, done_out);
+    if (regexp_step != 0) {
+        return regexp_step > 0;
     }
 
     MalCompletion completion = mal_vm_call_value(vm, record->next_method, record->iterator, nullptr, 0);

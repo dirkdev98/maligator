@@ -30,3 +30,13 @@ bool mal_regexp_try_exact_string_dispatch(
     MalVm *vm, MalValue regexp, i32 symbol_slot, MalValue string,
     const MalValue *extra, i32 extra_count, MalValue *out
 );
+
+/**
+ * Advance an exact RegExp String Iterator without materializing its disposable
+ * IteratorResult wrapper. Returns 1 on success, 0 when generic stepping is
+ * required, and -1 when the exact step threw.
+ */
+int mal_regexp_try_exact_iterator_step(
+    MalVm *vm, MalValue iterator, MalValue next_method,
+    MalValue *value_out, bool *done_out
+);
