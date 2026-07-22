@@ -434,7 +434,7 @@ MalArrayObject *mal_intrinsic_new_array(MalVm *vm, u32 length) {
 
 MalArrayObject *mal_intrinsic_new_dense_array(MalVm *vm, u32 length) {
     MalArrayObject *array = mal_intrinsic_new_array(vm, length);
-    mal_array_object_dense_reserve(array, length);
+    mal_array_object_dense_reserve_exact(array, length);
     return array;
 }
 

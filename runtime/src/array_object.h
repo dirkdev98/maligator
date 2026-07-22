@@ -60,6 +60,12 @@ bool mal_array_object_dense_has(const MalArrayObject *array, u32 index);
  */
 bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed);
 
+/**
+ * Reserve exactly the requested dense capacity instead of growing geometrically.
+ * Intended for fresh arrays whose final dense length is known in advance.
+ */
+bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed);
+
 /** Result of attempting a dense default-data store. */
 typedef enum MalArrayDenseStore {
     MAL_ARRAY_DENSE_APPLIED,     // stored in the vector (length already updated)

@@ -42,6 +42,24 @@ bool mal_array_object_dense_has(const MalArrayObject *array, u32 index) {
     return mal_array_object_dense_get(array, index, &ignored);
 }
 
+bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed) {
+    if (needed <= array->capacity) {
+        return true;
+    }
+    // Route the dense vector through the RAW space so its bytes count toward the
+    // GC trigger (element-heavy workloads used to under-trigger) and so an empty
+    // RAW block returns to the OS. gc_realloc_raw grows by alloc-new / copy /
+    // free-old (RAW has no in-place grow); no safepoint runs inside it, so the
+    // detached old buffer is never observed by the collector.
+    MalValue *grown = gc_realloc_raw(mal_gc_current_heap(), array->elements, sizeof(MalValue) * needed);
+    if (grown == nullptr) {
+        return false;
+    }
+    array->elements = grown;
+    array->capacity = needed;
+    return true;
+}
+
 /** Ensure `elements` has room for at least `needed` slots (geometric growth). */
 bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed) {
     if (needed <= array->capacity) {
@@ -51,18 +69,7 @@ bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed) {
     while (capacity < needed) {
         capacity *= 2;
     }
-    // Route the dense vector through the RAW space so its bytes count toward the
-    // GC trigger (element-heavy workloads used to under-trigger) and so an empty
-    // RAW block returns to the OS. gc_realloc_raw grows by alloc-new / copy /
-    // free-old (RAW has no in-place grow); no safepoint runs inside it, so the
-    // detached old buffer is never observed by the collector.
-    MalValue *grown = gc_realloc_raw(mal_gc_current_heap(), array->elements, sizeof(MalValue) * capacity);
-    if (grown == nullptr) {
-        return false;
-    }
-    array->elements = grown;
-    array->capacity = capacity;
-    return true;
+    return mal_array_object_dense_reserve_exact(array, capacity);
 }
 
 MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index, MalValue value) {
