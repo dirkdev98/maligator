@@ -2207,6 +2207,17 @@ interface CapturedSlotUse {
 	instruction: IRInstruction;
 }
 
+export interface CapturedSlotOptimizationFacts {
+	/** Functions containing a structurally valid captured load or store. */
+	readonly accessFunctions: ReadonlySet<IRFunction>;
+	/** Functions containing a captured store targeting their own environment. */
+	readonly storeOwnerFunctions: ReadonlySet<IRFunction>;
+	/** Functions that currently declare at least one captured slot. */
+	readonly environmentFunctions: ReadonlySet<IRFunction>;
+	/** Captured/private-name instructions referencing each owning environment. */
+	readonly environmentReferenceCounts: ReadonlyMap<number, number>;
+}
+
 /**
  * Replace captured slots that are provably internal to their owner with direct
  * register access, then drop the env of any function left with no captured access.
@@ -2214,21 +2225,26 @@ interface CapturedSlotUse {
  * owner function, there is exactly one store, and its source register is
  * single-assignment (a stable value at every read).
  */
-export function optEliminateCapturedSlots(program: IntermediateProgram): boolean {
-	// Gather, per (owner, idx), every load and store across the whole program, plus
-	// each function's single-definition register set.
+export function optEliminateCapturedSlots(
+	program: IntermediateProgram,
+	facts: CapturedSlotOptimizationFacts,
+): boolean {
+	// Gather, per (owner, idx), every load and store from the sparse access set,
+	// plus definition counts only for functions with a possible owner-local store.
 	const loadsBySlot = new Map<string, Array<CapturedSlotUse>>();
 	const storesBySlot = new Map<string, Array<{ use: CapturedSlotUse; source: number }>>();
 	const defCountByFn = new Map<number, Map<number, number>>();
-	const slotOwners = new Set<string>();
+	const environmentReferenceCounts = new Map(facts.environmentReferenceCounts);
 
-	for (const fn of program.functions) {
+	for (const fn of facts.storeOwnerFunctions) {
 		const defCount = new Map<number, number>();
 		for (const [register, definitions] of buildIRRegisterIndex(fn).definitions) {
 			defCount.set(register, definitions.length);
 		}
 		defCountByFn.set(fn.functionIndex, defCount);
+	}
 
+	for (const fn of facts.accessFunctions) {
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				if (
@@ -2237,7 +2253,6 @@ export function optEliminateCapturedSlots(program: IntermediateProgram): boolean
 					instruction.index !== undefined
 				) {
 					const key = capturedSlotKey(instruction.functionIndex, instruction.index);
-					slotOwners.add(`${instruction.functionIndex}`);
 					if (instruction.type === "loadCaptured") {
 						(loadsBySlot.get(key) ?? loadsBySlot.set(key, []).get(key)!).push({
 							fn,
@@ -2254,9 +2269,9 @@ export function optEliminateCapturedSlots(program: IntermediateProgram): boolean
 		}
 	}
 
-	// Rewrite the loads of each internalizable slot to read the stored register, and
-	// mark the slot's store for removal. Track which (owner) functions had a slot
-	// internalized so we can re-check their env afterwards.
+	// Rewrite the loads of each internalizable slot to read the stored register and
+	// mark the slot's store for removal. Keep the precomputed environment reference
+	// counts exact as those instructions disappear.
 	const dropStore = new Set<IRInstruction>();
 	let changed = false;
 	for (const [key, stores] of storesBySlot) {
@@ -2288,8 +2303,16 @@ export function optEliminateCapturedSlots(program: IntermediateProgram): boolean
 			mutable.registers = [mutable.registers[0]!, store.source];
 			delete mutable.functionIndex;
 			delete mutable.index;
+			environmentReferenceCounts.set(
+				ownerIndex,
+				(environmentReferenceCounts.get(ownerIndex) ?? 1) - 1,
+			);
 		}
 		dropStore.add(store.use.instruction);
+		environmentReferenceCounts.set(
+			ownerIndex,
+			(environmentReferenceCounts.get(ownerIndex) ?? 1) - 1,
+		);
 		changed = true;
 	}
 
@@ -2306,26 +2329,8 @@ export function optEliminateCapturedSlots(program: IntermediateProgram): boolean
 	}
 
 	// Any function with no remaining captured access of its own slots needs no env.
-	for (const fn of program.functions) {
-		if ((fn.nextCapturedIndex ?? 0) === 0) {
-			continue;
-		}
-		let usesOwnEnv = false;
-		for (const otherFn of program.functions) {
-			for (const block of otherFn.blocks) {
-				for (const instruction of block.instructions) {
-					if (
-						(instruction.type === "loadCaptured" ||
-							instruction.type === "storeCaptured" ||
-							instruction.type === "createPrivateNames") &&
-						instruction.functionIndex === fn.functionIndex
-					) {
-						usesOwnEnv = true;
-					}
-				}
-			}
-		}
-		if (!usesOwnEnv) {
+	for (const fn of facts.environmentFunctions) {
+		if ((environmentReferenceCounts.get(fn.functionIndex) ?? 0) === 0) {
 			fn.nextCapturedIndex = 0; // no env allocation needed
 			changed = true;
 		}

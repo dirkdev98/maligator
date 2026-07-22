@@ -7,6 +7,7 @@ import {
 	optInlineMethod,
 	optInlineSpeculative,
 } from "./inline.ts";
+import type { CapturedSlotOptimizationFacts } from "./inline.ts";
 import { buildIRRegisterIndex, destinationCount } from "./ir-register-index.ts";
 import { debugIntermediateProgram } from "./ir.ts";
 import type {
@@ -54,16 +55,36 @@ interface OptimizationFeatures {
 	call: boolean;
 	object: boolean;
 	property: boolean;
+	typeofComparisonFunctions: ReadonlySet<IRFunction>;
+	capturedSlots: CapturedSlotOptimizationFacts;
 }
 
-/** Cheap program-wide feature summary used to avoid building irrelevant analyses. */
+/** Cheap feature summary used to avoid building irrelevant per-function analyses. */
 function optimizationFeatures(program: IntermediateProgram): OptimizationFeatures {
+	const typeofComparisonFunctions = new Set<IRFunction>();
+	const capturedAccessFunctions = new Set<IRFunction>();
+	const capturedStoreOwnerFunctions = new Set<IRFunction>();
+	const capturedEnvironmentFunctions = new Set<IRFunction>();
+	const environmentReferenceCounts = new Map<number, number>();
 	const features: OptimizationFeatures = {
 		call: false,
 		object: false,
 		property: false,
+		typeofComparisonFunctions,
+		capturedSlots: {
+			accessFunctions: capturedAccessFunctions,
+			storeOwnerFunctions: capturedStoreOwnerFunctions,
+			environmentFunctions: capturedEnvironmentFunctions,
+			environmentReferenceCounts,
+		},
 	};
 	for (const fn of program.functions) {
+		let hasTypeof = false;
+		let hasEquality = false;
+		let hasString = false;
+		if (fn.nextCapturedIndex > 0) {
+			capturedEnvironmentFunctions.add(fn);
+		}
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
 				switch (instruction.type) {
@@ -79,12 +100,63 @@ function optimizationFeatures(program: IntermediateProgram): OptimizationFeature
 					case "storeProperty":
 						features.property = true;
 						break;
+					case "unary":
+						hasTypeof ||= instruction.operator === "typeof";
+						break;
+					case "binary":
+						hasEquality ||=
+							instruction.operator === "===" ||
+							instruction.operator === "!==" ||
+							instruction.operator === "==" ||
+							instruction.operator === "!=";
+						break;
+					case "createString":
+						hasString = true;
+						break;
+					case "loadCaptured":
+					case "storeCaptured": {
+						if (instruction.functionIndex !== undefined) {
+							environmentReferenceCounts.set(
+								instruction.functionIndex,
+								(environmentReferenceCounts.get(instruction.functionIndex) ?? 0) + 1,
+							);
+						}
+						if (
+							instruction.functionIndex === undefined ||
+							instruction.index === undefined
+						) {
+							break;
+						}
+						capturedAccessFunctions.add(fn);
+						if (
+							instruction.type === "storeCaptured" &&
+							instruction.functionIndex === fn.functionIndex
+						) {
+							capturedStoreOwnerFunctions.add(fn);
+						}
+						break;
+					}
+					case "createPrivateNames": {
+						environmentReferenceCounts.set(
+							instruction.functionIndex,
+							(environmentReferenceCounts.get(instruction.functionIndex) ?? 0) + 1,
+						);
+						break;
+					}
 				}
 			}
+		}
+		if (hasTypeof && hasEquality && hasString) {
+			typeofComparisonFunctions.add(fn);
 		}
 	}
 	return features;
 }
+
+const optimizationIndexBuildCounts = {
+	typeofComparisons: 0,
+	capturedSlots: 0,
+};
 
 /** Execute the ordered IR optimization pipeline. */
 export function executeIROptimizations(program: IntermediateProgram) {
@@ -95,8 +167,9 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	optEliminateRedundantTdzChecks(program);
 
 	const passes: Array<{
-		run: (program: IntermediateProgram) => boolean;
-		requires?: keyof OptimizationFeatures;
+		run: (program: IntermediateProgram, features: OptimizationFeatures) => boolean;
+		requires?: "call" | "object" | "property";
+		refreshFeatures?: boolean;
 	}> = [
 		{ run: optDropInstructionsAfterJumpsOrReturns },
 		{ run: optDropUnreferencedBlocks },
@@ -104,7 +177,13 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		{ run: optCopyPropagation },
 		// A fused predicate must execute where the original typeof did: moving the
 		// observation to its later comparison could see a reassigned source.
-		{ run: optFuseTypeofComparisons },
+		{
+			run: (program, features) => {
+				optimizationIndexBuildCounts.typeofComparisons +=
+					features.typeofComparisonFunctions.size;
+				return optFuseTypeofComparisons(program, features.typeofComparisonFunctions);
+			},
+		},
 		// Fold only primitive operations whose exact JavaScript result can be
 		// computed without coercing an object or running user code. Constant jump
 		// cleanup then exposes dead blocks to the existing CFG passes.
@@ -141,7 +220,22 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		// internalize single-store immutable slots to direct register access and drop
 		// the now-unused env — completing closure+env elimination for capturing
 		// closures. Before DCE so the dropped stores / freed closures are cleaned up.
-		{ run: optEliminateCapturedSlots },
+		{
+			// Inlining and dead-function cleanup above can move or remove captured
+			// accesses, so refresh before using sparse candidates from this round.
+			refreshFeatures: true,
+			run: (program, features) => {
+				const facts = features.capturedSlots;
+				if (
+					facts.storeOwnerFunctions.size === 0 &&
+					facts.environmentFunctions.size === 0
+				) {
+					return false;
+				}
+				optimizationIndexBuildCounts.capturedSlots += facts.storeOwnerFunctions.size;
+				return optEliminateCapturedSlots(program, facts);
+			},
+		},
 		{ run: optDeadInstructionElimination },
 		{ run: optCombineLinearBlocks },
 		{ run: optPatchJumpsToDirectJumpBlocks },
@@ -152,10 +246,11 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	const maxRounds = 20;
 	for (let round = 0; round < maxRounds; ++round) {
 		let changed = false;
-		const features = optimizationFeatures(program);
+		let features = optimizationFeatures(program);
 		for (const pass of passes) {
+			if (pass.refreshFeatures) features = optimizationFeatures(program);
 			if (pass.requires !== undefined && !features[pass.requires]) continue;
-			changed = pass.run(program) || changed;
+			changed = pass.run(program, features) || changed;
 		}
 
 		if (!changed) {
@@ -1369,6 +1464,13 @@ export const irOptTestHooks = {
 	combineLinearBlocksInFunction,
 	eliminateRedundantTdzChecksInFunction,
 	foldPrimitiveConstants: optFoldPrimitiveConstants,
+	resetOptimizationIndexBuildCounts() {
+		optimizationIndexBuildCounts.typeofComparisons = 0;
+		optimizationIndexBuildCounts.capturedSlots = 0;
+	},
+	optimizationIndexBuildCounts() {
+		return { ...optimizationIndexBuildCounts };
+	},
 };
 
 /** Whether a function contains any `with`-statement op (dynamic scoping). */
@@ -1488,9 +1590,12 @@ function canonicalTypeofResult(value: string): IRTypeofResult | undefined {
  * the two instructions. Any other live use of the produced string keeps the
  * generic allocating typeof operation.
  */
-function optFuseTypeofComparisons(program: IntermediateProgram): boolean {
+function optFuseTypeofComparisons(
+	program: IntermediateProgram,
+	candidates: ReadonlySet<IRFunction>,
+): boolean {
 	let changed = false;
-	for (const fn of program.functions) {
+	for (const fn of candidates) {
 		const { uniqueDefinitions, uses } = buildIRRegisterIndex(fn);
 		const replacements = new Map<IRInstruction, IRInstruction>();
 
