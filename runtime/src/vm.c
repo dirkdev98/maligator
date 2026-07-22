@@ -1332,12 +1332,6 @@ static void mal_vm_run_until_frame_count(
 #endif
 ) {
     while (vm->frame_count > target_frame_count) {
-        // GC safepoint poll. Polling once per dispatched
-        // instruction covers both loop back-edges and call returns. Near-free
-        // until the collector raises mal_gc_poll.
-        if (mal_gc_poll) {
-            mal_gc_safepoint(vm);
-        }
         MalVmFrame *frame = &vm->frames[vm->frame_count - 1];
         const MalInstruction *instruction =
             &frame->function->instructions[frame->instruction_pointer++];
@@ -1459,15 +1453,33 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_TO_PROPERTY_KEY:
                 mal_op_to_property_key(frame, instruction);
                 break;
-            case MAL_OP_CALL_SPREAD:
+            case MAL_OP_CALL_SPREAD: {
+                i32 frame_count = vm->frame_count;
                 mal_op_call_spread(frame, instruction);
+                if (vm->frame_count == frame_count &&
+                    vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
+                    mal_gc_safepoint(vm);
+                }
                 break;
-            case MAL_OP_CONSTRUCT_SPREAD:
+            }
+            case MAL_OP_CONSTRUCT_SPREAD: {
+                i32 frame_count = vm->frame_count;
                 mal_op_construct_spread(frame, instruction);
+                if (vm->frame_count == frame_count &&
+                    vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
+                    mal_gc_safepoint(vm);
+                }
                 break;
-            case MAL_OP_CONSTRUCT_SUPER:
+            }
+            case MAL_OP_CONSTRUCT_SUPER: {
+                i32 frame_count = vm->frame_count;
                 mal_op_construct_super(frame, instruction);
+                if (vm->frame_count == frame_count &&
+                    vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
+                    mal_gc_safepoint(vm);
+                }
                 break;
+            }
             case MAL_OP_STORE_SUPER_PROPERTY:
                 mal_op_store_super_property(frame, instruction);
                 break;
@@ -1488,6 +1500,9 @@ static void mal_vm_run_until_frame_count(
                 break;
             case MAL_OP_ITERATOR_NEXT:
                 mal_op_iterator_next(frame, instruction);
+                if (vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
+                    mal_gc_safepoint(vm);
+                }
                 break;
             case MAL_OP_ITERATOR_STEP:
                 mal_op_iterator_step(frame, instruction);
@@ -1716,12 +1731,24 @@ static void mal_vm_run_until_frame_count(
                 mal_op_env_pop(frame);
                 break;
 
-            case MAL_OP_CALL:
+            case MAL_OP_CALL: {
+                i32 frame_count = vm->frame_count;
                 mal_op_call(frame, instruction);
+                if (vm->frame_count == frame_count &&
+                    vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
+                    mal_gc_safepoint(vm);
+                }
                 break;
-            case MAL_OP_CONSTRUCT:
+            }
+            case MAL_OP_CONSTRUCT: {
+                i32 frame_count = vm->frame_count;
                 mal_op_construct(frame, instruction);
+                if (vm->frame_count == frame_count &&
+                    vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
+                    mal_gc_safepoint(vm);
+                }
                 break;
+            }
 
             case MAL_OP_THROW:
                 mal_op_throw(frame, instruction);
@@ -1734,12 +1761,23 @@ static void mal_vm_run_until_frame_count(
                 // Markers only; protected ranges live in the handler table.
                 break;
 
-            case MAL_OP_JUMP:
+            case MAL_OP_JUMP: {
+                bool backedge = instruction->as.jump.target_ip < frame->instruction_pointer;
                 mal_op_jump(frame, instruction);
+                if (backedge && mal_gc_poll) {
+                    mal_gc_safepoint(vm);
+                }
                 break;
-            case MAL_OP_JUMP_IF:
+            }
+            case MAL_OP_JUMP_IF: {
+                bool backedge = instruction->as.jump_if.target_ip < frame->instruction_pointer &&
+                    mal_value_is_truthy(frame->registers[instruction->as.jump_if.cond]);
                 mal_op_jump_if(frame, instruction);
+                if (backedge && mal_gc_poll) {
+                    mal_gc_safepoint(vm);
+                }
                 break;
+            }
 
             case MAL_OP_RETURN: {
                 MalValue return_value = frame->registers[instruction->as.ret.value];
@@ -1821,6 +1859,9 @@ static void mal_vm_run_until_frame_count(
                     } else {
                         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = return_value};
                     }
+                }
+                if (vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
+                    mal_gc_safepoint(vm);
                 }
                 break;
             }

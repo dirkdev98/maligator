@@ -406,7 +406,7 @@ void mal_gc_init(MalVm *vm) {
         if (g->stress_interval < 1) {
             g->stress_interval = 1;
         }
-        mal_gc_poll = true; // make the interpreter poll fire at every dispatch
+        mal_gc_poll = true; // make the next loop/call safepoint collect
     } else if (getenv("MAL_GC_OFF") == nullptr) {
         // Auto-collection (default): the allocator raises mal_gc_poll when
         // bytes_allocated reaches mal_gc_next_at; the next safepoint collects.
