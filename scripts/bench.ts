@@ -125,6 +125,13 @@ interface StringMetrics {
 	freshDenseExactReserves: number;
 	freshDenseReservedSlots: number;
 	freshDenseGrowthsAvoided: number;
+	searchCalls: number;
+	searchMultiUnitCalls: number;
+	searchCandidates: number;
+	searchFirstUnitRejects: number;
+	searchLastUnitRejects: number;
+	searchMemcmpCalls: number;
+	searchMemcmpCodeUnits: number;
 }
 interface PromiseMetrics {
 	malMs: number;
@@ -453,6 +460,12 @@ function parsePerfArrayStat(stderr: string, field: string): number {
 	return match ? Number(match[1]) : 0;
 }
 
+function parsePerfStringStat(stderr: string, field: string): number {
+	const line = stderr.split("\n").find((value) => value.includes("[perf-string-stats]"));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
+}
+
 function benchModule(runs: number): ModuleMetrics {
 	const binary = buildNativeBinary({
 		fixture: "bench/module-alloc.mjs",
@@ -520,6 +533,13 @@ function benchString(runs: number): StringMetrics {
 			perfStderr,
 			"fresh_dense_growths_avoided",
 		),
+		searchCalls: parsePerfStringStat(perfStderr, "search_calls"),
+		searchMultiUnitCalls: parsePerfStringStat(perfStderr, "search_multi_unit_calls"),
+		searchCandidates: parsePerfStringStat(perfStderr, "search_candidates"),
+		searchFirstUnitRejects: parsePerfStringStat(perfStderr, "search_first_unit_rejects"),
+		searchLastUnitRejects: parsePerfStringStat(perfStderr, "search_last_unit_rejects"),
+		searchMemcmpCalls: parsePerfStringStat(perfStderr, "search_memcmp_calls"),
+		searchMemcmpCodeUnits: parsePerfStringStat(perfStderr, "search_memcmp_code_units"),
 	};
 }
 
@@ -1239,6 +1259,12 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		);
 		console.log(
 			`  reserve   ${entry.string.freshDenseExactReserves} exact reserves, ${entry.string.freshDenseReservedSlots} slots, ${entry.string.freshDenseGrowthsAvoided} growths avoided`,
+		);
+		console.log(
+			`  search    ${entry.string.searchCalls} calls, ${entry.string.searchMultiUnitCalls} multi-unit, ${entry.string.searchCandidates} candidates`,
+		);
+		console.log(
+			`  filter    ${entry.string.searchFirstUnitRejects} first-unit rejects, ${entry.string.searchLastUnitRejects} last-unit rejects, ${entry.string.searchMemcmpCalls} interior compares (${entry.string.searchMemcmpCodeUnits} code units)`,
 		);
 	}
 	if (entry.promise) {

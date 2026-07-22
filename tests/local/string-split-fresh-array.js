@@ -149,6 +149,25 @@ check(
 	"a\ud83d\ude00b\ud83d\ude00".split("\ud83d\ude00").join("|") === "a|b|",
 );
 check(
+	"multi-unit search compares exact UTF-16 units after a start offset",
+	"\ud83dA\ude00\ud83dA".indexOf("\ud83dA", 1) === 3 &&
+		"abaacaba".includes("ab", 1) &&
+		"abaacaba".indexOf("ab", 1) === 5 &&
+		"axcabc".indexOf("abc") === 3,
+);
+check(
+	"multi-unit search and split preserve embedded NUL",
+	"xxa\0bxx".indexOf("a\0b") === 2 && "a\0ba\0b".split("a\0b").join("|") === "||",
+);
+check(
+	"overlapping candidates remain eligible while split matches stay non-overlapping",
+	"aaa".indexOf("aa", 1) === 1 && "aaaaa".split("aa").join("|") === "||a",
+);
+check(
+	"empty search needles still match at clamped start offsets",
+	"abc".indexOf("", 2) === 2 && "abc".indexOf("", 99) === 3 && "abc".includes("", 99),
+);
+check(
 	"one-unit surrogate separator matches exact UTF-16 code units",
 	"\ud83dx\ud83d".split("\ud83d").join("|") === "|x|",
 );

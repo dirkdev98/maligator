@@ -73,7 +73,10 @@ static void mal_perf_stats_print(void) {
         "string_equals_calls=%llu string_pointer_hits=%llu string_length_misses=%llu "
         "string_hash_misses=%llu string_memcmp_calls=%llu string_memcmp_code_units=%llu "
         "hash_calls=%llu hash_cached_hits=%llu hash_computes=%llu "
-        "hash_dependent_computes=%llu hash_cons_flattens=%llu\n",
+        "hash_dependent_computes=%llu hash_cons_flattens=%llu "
+        "search_calls=%llu search_multi_unit_calls=%llu search_candidates=%llu "
+        "search_first_unit_rejects=%llu search_last_unit_rejects=%llu "
+        "search_memcmp_calls=%llu search_memcmp_code_units=%llu\n",
         (unsigned long long) mal_perf_stats.key_equals_calls,
         (unsigned long long) mal_perf_stats.key_pointer_hits,
         (unsigned long long) mal_perf_stats.key_string_fallbacks,
@@ -88,7 +91,14 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_hash_cached_hits,
         (unsigned long long) mal_perf_stats.string_hash_computes,
         (unsigned long long) mal_perf_stats.string_hash_dependent_computes,
-        (unsigned long long) mal_perf_stats.string_hash_cons_flattens
+        (unsigned long long) mal_perf_stats.string_hash_cons_flattens,
+        (unsigned long long) mal_perf_stats.string_search_calls,
+        (unsigned long long) mal_perf_stats.string_search_multi_unit_calls,
+        (unsigned long long) mal_perf_stats.string_search_candidates,
+        (unsigned long long) mal_perf_stats.string_search_first_unit_rejects,
+        (unsigned long long) mal_perf_stats.string_search_last_unit_rejects,
+        (unsigned long long) mal_perf_stats.string_search_memcmp_calls,
+        (unsigned long long) mal_perf_stats.string_search_memcmp_code_units
     );
     fprintf(
         stderr,

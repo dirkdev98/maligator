@@ -12,6 +12,7 @@
 #include "ecma_whitespace.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
+#include "perf_stats.h"
 #include "primitive_wrapper_object.h"
 #include "rooted_collection.h"
 #include "u16_buffer.h"
@@ -164,10 +165,15 @@ static bool mal_builtin_string_matches_at(const MalString *string, const MalStri
  * found. An empty search matches immediately.
  */
 static i64 mal_builtin_string_find(const MalString *string, const MalString *search, usize from) {
+    MAL_PERF_COUNT(string_search_calls);
     usize length = mal_string_length(string);
     usize search_length = mal_string_length(search);
     if (search_length > length || from > length - search_length) {
         return -1;
+    }
+
+    if (search_length == 0) {
+        return (i64) from;
     }
 
     if (search_length == 1) {
@@ -181,8 +187,33 @@ static i64 mal_builtin_string_find(const MalString *string, const MalString *sea
         return -1;
     }
 
+    MAL_PERF_COUNT(string_search_multi_unit_calls);
+    const c16 *string_units = mal_string_code_units(string);
+    const c16 *search_units = mal_string_code_units(search);
+    c16 first_unit = search_units[0];
+    c16 last_unit = search_units[search_length - 1];
+    usize last_offset = search_length - 1;
+    usize interior_length = search_length - 2;
     for (usize position = from; position + search_length <= length; position++) {
-        if (mal_builtin_string_matches_at(string, search, position)) {
+        MAL_PERF_COUNT(string_search_candidates);
+        if (string_units[position] != first_unit) {
+            MAL_PERF_COUNT(string_search_first_unit_rejects);
+            continue;
+        }
+        if (string_units[position + last_offset] != last_unit) {
+            MAL_PERF_COUNT(string_search_last_unit_rejects);
+            continue;
+        }
+        if (interior_length == 0) {
+            return (i64) position;
+        }
+        MAL_PERF_COUNT(string_search_memcmp_calls);
+        MAL_PERF_ADD(string_search_memcmp_code_units, interior_length);
+        if (memcmp(
+                string_units + position + 1,
+                search_units + 1,
+                sizeof(c16) * interior_length
+            ) == 0) {
             return (i64) position;
         }
     }

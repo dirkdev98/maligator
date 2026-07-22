@@ -82,6 +82,7 @@ describe("String.prototype.split fresh dense results", () => {
 	it("attributes exact reserves and remaining geometric growth without fallback", () => {
 		const stderr = run(instrumented, { MAL_PERF_STATS: "1" });
 		expect(stderr).toContain("[perf-array-stats]");
+		expect(stderr).toContain("[perf-string-stats]");
 		expect(perfField(stderr, "fresh_dense_stores")).toBeGreaterThan(0);
 		expect(perfField(stderr, "fresh_dense_growths")).toBeGreaterThan(0);
 		expect(perfField(stderr, "fresh_dense_fallbacks")).toBe(0);
@@ -90,5 +91,11 @@ describe("String.prototype.split fresh dense results", () => {
 			perfField(stderr, "fresh_dense_exact_reserves"),
 		);
 		expect(perfField(stderr, "fresh_dense_growths_avoided")).toBeGreaterThan(0);
+		expect(perfField(stderr, "search_multi_unit_calls")).toBeGreaterThan(0);
+		expect(perfField(stderr, "search_candidates")).toBeGreaterThan(0);
+		expect(perfField(stderr, "search_first_unit_rejects")).toBeGreaterThan(0);
+		expect(perfField(stderr, "search_last_unit_rejects")).toBeGreaterThan(0);
+		expect(perfField(stderr, "search_memcmp_calls")).toBeGreaterThan(0);
+		expect(perfField(stderr, "search_memcmp_code_units")).toBeGreaterThan(0);
 	});
 });
