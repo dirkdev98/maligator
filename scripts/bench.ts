@@ -119,6 +119,9 @@ interface StringMetrics {
 	collections: number;
 	allocatedMb: number;
 	peakLiveKb: number;
+	freshDenseStores: number;
+	freshDenseGrowths: number;
+	freshDenseFallbacks: number;
 }
 interface PromiseMetrics {
 	malMs: number;
@@ -441,6 +444,12 @@ function parseGcStat(stderr: string, field: string): number {
 	return m ? Number(m[1]) : 0;
 }
 
+function parsePerfArrayStat(stderr: string, field: string): number {
+	const line = stderr.split("\n").find((value) => value.includes("[perf-array-stats]"));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
+}
+
 function benchModule(runs: number): ModuleMetrics {
 	const binary = buildNativeBinary({
 		fixture: "bench/module-alloc.mjs",
@@ -481,6 +490,17 @@ function benchString(runs: number): StringMetrics {
 		stdio: ["ignore", "ignore", "pipe"],
 	});
 	const stderr = r.stderr ?? "";
+	const perfBinary = buildNativeBinary({
+		fixture: "bench/string.js",
+		name: "bench-string-perf",
+		environment: { ...process.env, MAL_PERF_STATS: "1" },
+	});
+	const perfResult = spawnSync(perfBinary, [], {
+		env: { ...process.env, MAL_PERF_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	const perfStderr = perfResult.stderr ?? "";
 	return {
 		malMs,
 		nodeMs,
@@ -488,6 +508,9 @@ function benchString(runs: number): StringMetrics {
 		collections: parseGcStat(stderr, "collections"),
 		allocatedMb: parseGcStat(stderr, "allocated_bytes") / (1024 * 1024),
 		peakLiveKb: parseGcStat(stderr, "peak_live_bytes") / 1024,
+		freshDenseStores: parsePerfArrayStat(perfStderr, "fresh_dense_stores"),
+		freshDenseGrowths: parsePerfArrayStat(perfStderr, "fresh_dense_growths"),
+		freshDenseFallbacks: parsePerfArrayStat(perfStderr, "fresh_dense_fallbacks"),
 	};
 }
 
@@ -1201,6 +1224,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		);
 		console.log(
 			`  gc        ${entry.string.collections} collections, ${entry.string.allocatedMb.toFixed(1)}MB allocated${delta(entry.string.allocatedMb, p?.allocatedMb)}, ${entry.string.peakLiveKb.toFixed(1)}KB peak live`,
+		);
+		console.log(
+			`  arrays    ${entry.string.freshDenseStores} fresh dense stores, ${entry.string.freshDenseGrowths} growths, ${entry.string.freshDenseFallbacks} fallbacks`,
 		);
 	}
 	if (entry.promise) {

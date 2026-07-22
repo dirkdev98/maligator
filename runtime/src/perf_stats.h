@@ -99,6 +99,10 @@ typedef struct MalPerfStats {
     u64 promise_await_typed_continuations;
     u64 promise_await_typed_jobs;
 
+    u64 array_fresh_dense_stores;
+    u64 array_fresh_dense_growths;
+    u64 array_fresh_dense_fallbacks;
+
     MalPerfTableStats tables[MAL_PERF_TABLE_ROLE_COUNT];
     MalPerfShapeStats shapes[MAL_PERF_SHAPE_CALLER_COUNT];
     u64 shape_transition_calls;

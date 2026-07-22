@@ -66,6 +66,15 @@ bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed);
  */
 bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed);
 
+/**
+ * Append a default-data element to an intrinsic ordinary Array that has remained
+ * private to its native builder since creation. This is CreateDataProperty-style:
+ * it does not resolve inherited indexed properties. Capacity grows geometrically.
+ * Returns false without changing the array if the fresh/contiguous contract no
+ * longer holds or the dense vector cannot grow.
+ */
+bool mal_array_object_fresh_dense_append(MalArrayObject *array, MalValue value);
+
 /** Result of attempting a dense default-data store. */
 typedef enum MalArrayDenseStore {
     MAL_ARRAY_DENSE_APPLIED,     // stored in the vector (length already updated)

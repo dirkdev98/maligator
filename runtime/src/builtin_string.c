@@ -1112,6 +1112,12 @@ static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_
 #endif
 }
 
+static void mal_builtin_string_split_append(MalArrayObject *result, MalValue value) {
+    if (!mal_array_object_fresh_dense_append(result, value)) {
+        mal_array_object_store(result, mal_key_index(mal_array_object_length(result)), value);
+    }
+}
+
 static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     // @@split dispatch — only when the separator is an Object (the spec accesses
     // @@split solely "if separator is an Object", never on a string primitive).
@@ -1130,8 +1136,6 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
         }
     }
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
-    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
-    u32 result_length = 0;
 
     // lim = ToUint32(limit) (spec step 6, after ToString(this) at step 3). Skip
     // it if ToString(this) already threw so that first completion is preserved
@@ -1151,11 +1155,14 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
     bool separator_undefined = arg_count == 0 || mal_value_is_undefined(args[0]);
     MalString *separator = separator_undefined ? nullptr : mal_builtin_string_coerce(vm, args[0]);
 
-    // Any coercion above (this / limit / separator) may have thrown; return a
-    // harmless empty array so the call boundary observes the first pending throw.
+    // Any coercion above (this / limit / separator) may have thrown. Result creation
+    // follows all observable coercions in this fallback.
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return mal_value_from_array_object(result);
+        return mal_value_new_undefined();
     }
+
+    MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
+    u32 result_length = 0;
 
     // Spec step 8: a zero limit yields the empty array.
     if (lim == 0) {
@@ -1164,7 +1171,7 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
 
     // Spec step 9: an undefined separator yields the whole string.
     if (separator_undefined) {
-        mal_array_object_store(result, mal_key_index(0), mal_value_from_string(string));
+        mal_builtin_string_split_append(result, mal_value_from_string(string));
         return mal_value_from_array_object(result);
     }
 
@@ -1177,11 +1184,9 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
             if (result_length == lim) {
                 return mal_value_from_array_object(result);
             }
-            mal_array_object_store(
-                result,
-                mal_key_index(result_length++),
-                mal_builtin_string_slice(vm, string, i, 1)
-            );
+            MalValue segment = mal_builtin_string_slice(vm, string, i, 1);
+            mal_builtin_string_split_append(result, segment);
+            result_length++;
         }
         return mal_value_from_array_object(result);
     }
@@ -1195,11 +1200,10 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
         }
         position = (usize) match_position;
 
-        mal_array_object_store(
-            result,
-            mal_key_index(result_length++),
-            mal_builtin_string_slice(vm, string, segment_start, position - segment_start)
-        );
+        MalValue segment =
+            mal_builtin_string_slice(vm, string, segment_start, position - segment_start);
+        mal_builtin_string_split_append(result, segment);
+        result_length++;
         if (result_length == lim) {
             return mal_value_from_array_object(result);
         }
@@ -1207,11 +1211,9 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
         segment_start = position;
     }
 
-    mal_array_object_store(
-        result,
-        mal_key_index(result_length),
-        mal_builtin_string_slice(vm, string, segment_start, length - segment_start)
-    );
+    MalValue segment =
+        mal_builtin_string_slice(vm, string, segment_start, length - segment_start);
+    mal_builtin_string_split_append(result, segment);
     return mal_value_from_array_object(result);
 }
 

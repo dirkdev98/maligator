@@ -5,6 +5,7 @@
 #include "gc.h"
 #include "heap_string.h"
 #include "object_ops.h"
+#include "perf_stats.h"
 
 // Largest gap (new index minus the current dense_count) the dense vector will span
 // with holes. A store beyond this is treated as sparse: the array deoptimizes to
@@ -70,6 +71,33 @@ bool mal_array_object_dense_reserve(MalArrayObject *array, u32 needed) {
         capacity *= 2;
     }
     return mal_array_object_dense_reserve_exact(array, capacity);
+}
+
+bool mal_array_object_fresh_dense_append(MalArrayObject *array, MalValue value) {
+    u32 index = array->dense_count;
+    if (array->dense_deopted || !array->object.extensible || !array->length_writable ||
+        array->length != index) {
+        MAL_PERF_COUNT(array_fresh_dense_fallbacks);
+        return false;
+    }
+
+    bool grows = index == array->capacity;
+    if (!mal_array_object_dense_reserve(array, index + 1)) {
+        MAL_PERF_COUNT(array_fresh_dense_fallbacks);
+        return false;
+    }
+    if (grows) {
+        MAL_PERF_COUNT(array_fresh_dense_growths);
+    }
+
+    // This slot was outside the traced [0, dense_count) region, so no SATB deletion
+    // barrier is needed. Publish the value before extending that traced region.
+    array->elements[index] = value;
+    array->dense_count = index + 1;
+    array->length = index + 1;
+    mal_gc_card(&array->object.header, value); // old array -> young element
+    MAL_PERF_COUNT(array_fresh_dense_stores);
+    return true;
 }
 
 MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index, MalValue value) {

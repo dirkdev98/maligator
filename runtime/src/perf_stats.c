@@ -159,6 +159,14 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.argument_snapshot_unique_values,
         (unsigned long long) mal_perf_stats.argument_snapshot_register_restores
     );
+    fprintf(
+        stderr,
+        "[perf-array-stats] fresh_dense_stores=%llu fresh_dense_growths=%llu "
+        "fresh_dense_fallbacks=%llu\n",
+        (unsigned long long) mal_perf_stats.array_fresh_dense_stores,
+        (unsigned long long) mal_perf_stats.array_fresh_dense_growths,
+        (unsigned long long) mal_perf_stats.array_fresh_dense_fallbacks
+    );
     for (u32 i = 0; i < MAL_PERF_TABLE_ROLE_COUNT; i++) {
         const MalPerfTableStats *stats = &mal_perf_stats.tables[i];
         fprintf(
