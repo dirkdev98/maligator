@@ -102,18 +102,10 @@ static MalValue async_resource_run_in_async_scope(
 static MalNativeFunctionObject *async_resource_function_with_brand(
     MalVm *vm, const char *name, i32 length, MalNativeFunctionCallback callback,
     MalValue brand) {
-    MalNativeFunctionObject *function = mal_native_function_object_new_with_slots(
+    return mal_native_function_object_new_with_slots_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, (const byte *) name), callback, &brand, 1);
-    MalValue function_value = mal_value_from_native_function_object(function);
-    MalRootSpan root;
-    mal_gc_root(&root, &function_value, 1);
-    function->length = length;
-    mal_intrinsic_define_data(vm, (MalObject *) function, (const byte *) "length",
-                              mal_value_from_i32(length), MAL_PROPERTY_CONFIGURABLE);
-    mal_gc_unroot(&root);
-    return function;
+        mal_intrinsic_ascii(vm, (const byte *) name), length, callback, &brand, 1);
 }
 
 void mal_host_install_node_async_hooks(

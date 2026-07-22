@@ -1569,14 +1569,11 @@ void mal_host_install_node_stream(
     MalValue base_on;
     if (stream_get(vm, roots[1], "on", &base_on)) {
         MalValue slot = base_on;
-        MalNativeFunctionObject *on = mal_native_function_object_new_with_slots(
+        MalNativeFunctionObject *on = mal_native_function_object_new_with_slots_arity(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "on"), stream_on, &slot, 1);
-        on->length = 2;
+            mal_intrinsic_ascii(vm, (const byte *) "on"), 2, stream_on, &slot, 1);
         roots[12] = mal_value_from_native_function_object(on);
-        mal_intrinsic_define_data(vm, (MalObject *) on, (const byte *) "length",
-                                  mal_value_from_i32(2), MAL_PROPERTY_CONFIGURABLE);
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[3]),
                                   (const byte *) "on", roots[12], STREAM_METHOD);
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[3]),
@@ -1591,15 +1588,12 @@ void mal_host_install_node_stream(
             break;
         }
         MalValue slot = base;
-        MalNativeFunctionObject *method = mal_native_function_object_new_with_slots(
+        MalNativeFunctionObject *method = mal_native_function_object_new_with_slots_arity(
             &vm->heap,
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
             mal_intrinsic_ascii(vm, (const byte *) flowing_listener_methods[i]),
-            stream_on, &slot, 1);
-        method->length = 2;
+            2, stream_on, &slot, 1);
         roots[12] = mal_value_from_native_function_object(method);
-        mal_intrinsic_define_data(vm, (MalObject *) method, (const byte *) "length",
-                                  mal_value_from_i32(2), MAL_PROPERTY_CONFIGURABLE);
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[3]),
                                   (const byte *) flowing_listener_methods[i],
                                   roots[12], STREAM_METHOD);

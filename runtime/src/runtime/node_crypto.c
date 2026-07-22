@@ -677,18 +677,10 @@ static MalNativeFunctionObject *mal_node_crypto_function_with_slots(
     MalVm *vm, const char *name, i32 length, MalNativeFunctionCallback callback,
     const MalValue *slots, i32 slot_count
 ) {
-    MalNativeFunctionObject *function = mal_native_function_object_new_with_slots(
+    return mal_native_function_object_new_with_slots_arity(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, (const byte *) name), callback, slots, slot_count);
-    MalValue rooted = mal_value_from_native_function_object(function);
-    MalRootSpan root;
-    mal_gc_root(&root, &rooted, 1);
-    function->length = length;
-    mal_intrinsic_define_data(vm, (MalObject *) function, (const byte *) "length",
-        mal_value_from_i32(length), MAL_PROPERTY_CONFIGURABLE);
-    mal_gc_unroot(&root);
-    return function;
+        mal_intrinsic_ascii(vm, (const byte *) name), length, callback, slots, slot_count);
 }
 
 void mal_host_install_node_crypto(

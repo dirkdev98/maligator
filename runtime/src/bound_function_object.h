@@ -41,6 +41,15 @@ MalBoundFunctionObject *mal_bound_function_object_new(
     i32 bound_count
 );
 
+/** Install the bound function's `length`, then `name`, in coallocated shape slots. */
+void mal_bound_function_object_init_metadata(
+    MalBoundFunctionObject *bound,
+    MalKey length_key,
+    MalValue length,
+    MalKey name_key,
+    MalValue name
+);
+
 /**
  * Unwrap a bound function chain, prepending each level's bound arguments.
  *

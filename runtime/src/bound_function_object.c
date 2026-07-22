@@ -1,8 +1,13 @@
 #include "bound_function_object.h"
 
+#include <assert.h>
 #include <stdlib.h>
 
+#include "gc.h"
 #include "value.h"
+
+static_assert(sizeof(MalBoundFunctionObject) % alignof(MalValue) == 0,
+              "bound function trailing metadata slots are misaligned");
 
 MalBoundFunctionObject *mal_bound_function_object_new(
     MalHeap *heap,
@@ -12,7 +17,9 @@ MalBoundFunctionObject *mal_bound_function_object_new(
     const MalValue *bound_args,
     i32 bound_count
 ) {
-    MalBoundFunctionObject *bound = mal_heap_alloc(heap, sizeof(MalBoundFunctionObject), MAL_HEAP_BOUND_FUNCTION_OBJECT);
+    MalBoundFunctionObject *bound = mal_heap_alloc(
+        heap, sizeof(MalBoundFunctionObject) + 2 * sizeof(MalValue),
+        MAL_HEAP_BOUND_FUNCTION_OBJECT);
     mal_object_init(heap, &bound->object, MAL_HEAP_BOUND_FUNCTION_OBJECT, prototype);
 
     bound->target = target;
@@ -24,6 +31,30 @@ MalBoundFunctionObject *mal_bound_function_object_new(
     }
 
     return bound;
+}
+
+void mal_bound_function_object_init_metadata(
+    MalBoundFunctionObject *bound,
+    MalKey length_key,
+    MalValue length,
+    MalKey name_key,
+    MalValue name
+) {
+    MalObject *object = &bound->object;
+    assert(object->shape == mal_shape_empty());
+    assert(object->slots == nullptr);
+    assert(object->overflow == nullptr);
+    MalShape *shape = mal_shape_add_property(
+        mal_shape_empty(), length_key, MAL_PROPERTY_CONFIGURABLE);
+    shape = mal_shape_add_property(shape, name_key, MAL_PROPERTY_CONFIGURABLE);
+    object->shape = shape;
+    object->slots = (MalValue *) (bound + 1);
+    object->slots[0] = length;
+    object->slots[1] = name;
+    // Target metadata lookup can run user code and collect after the bound cell
+    // was allocated, so it may already be old when these slots are installed.
+    mal_gc_card(&object->header, length);
+    mal_gc_card(&object->header, name);
 }
 
 MalBoundResolution mal_bound_function_object_resolve(

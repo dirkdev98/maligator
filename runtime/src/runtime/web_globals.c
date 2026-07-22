@@ -601,12 +601,8 @@ static MalObject *mal_web_install_class(
 static MalNativeFunctionObject *mal_web_branded_function(
     MalVm *vm, const byte *name, i32 length, MalNativeFunctionCallback fn, MalValue brand) {
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    MalNativeFunctionObject *function = mal_native_function_object_new_with_slots(
-        &vm->heap, fn_proto, mal_intrinsic_ascii(vm, name), fn, &brand, 1);
-    function->length = length;
-    mal_intrinsic_define_data(vm, (MalObject *) function, (const byte *) "length",
-        mal_value_from_i32(length), MAL_PROPERTY_CONFIGURABLE);
-    return function;
+    return mal_native_function_object_new_with_slots_arity(
+        &vm->heap, fn_proto, mal_intrinsic_ascii(vm, name), length, fn, &brand, 1);
 }
 
 /* Define a readonly accessor whose getter carries `brand` in slot 0. */

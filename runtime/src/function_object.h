@@ -92,22 +92,30 @@ typedef struct MalNativeFunctionObject {
 } MalNativeFunctionObject;
 
 /**
- * Initialize script function object state in caller-provided storage.
+ * Initialize script function object state and metadata in caller-provided storage.
  */
 void mal_function_object_init(
     MalHeap *heap,
     MalFunctionObject *function,
     MalObject *prototype,
-    i32 function_index
+    i32 function_index,
+    i32 length,
+    MalString *name,
+    MalKey length_key,
+    MalKey name_key
 );
 
 /**
- * Allocate and initialize a new script function object.
+ * Allocate a script function with coallocated `length` and `name` shape slots.
  */
 MalFunctionObject *mal_function_object_new(
     MalHeap *heap,
     MalObject *prototype,
-    i32 function_index
+    i32 function_index,
+    i32 length,
+    MalString *name,
+    MalKey length_key,
+    MalKey name_key
 );
 
 /**
@@ -116,8 +124,9 @@ MalFunctionObject *mal_function_object_new(
 i32 mal_function_object_function_index(const MalFunctionObject *function);
 
 /**
- * Initialize native function object state in caller-provided storage. `length`
- * is the arity exposed as the `length` own property.
+ * Initialize native function object state and metadata in caller-provided storage.
+ * `length` is the arity exposed as the `length` own property; a null `name`
+ * installs only `length`.
  */
 void mal_native_function_object_init(
     MalHeap *heap,

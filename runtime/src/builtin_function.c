@@ -154,6 +154,9 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
         bound_count
     );
     MalValue bound_value = mal_value_from_bound_function_object(bound);
+    MalValue bound_roots[2] = {bound_value, mal_value_new_undefined()};
+    MalRootSpan bound_root;
+    mal_gc_root(&bound_root, bound_roots, countof(bound_roots));
 
     // SetFunctionLength: L = max(0, ToIntegerOrInfinity(target.length) - bound
     // args), but ONLY when target HAS AN OWN "length" property that is a Number
@@ -166,6 +169,7 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
         bool present;
         MalPropertyDesc desc;
         if (!mal_proxy_get_own_property_descriptor(vm, mal_value_to_proxy_object(this_value), length_key, &present, &desc)) {
+            mal_gc_unroot(&bound_root);
             return mal_value_new_undefined();
         }
         has_own_length = present;
@@ -177,6 +181,7 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     if (has_own_length) {
         MalValue target_length;
         if (!mal_vm_get_property(vm, this_value, length_key, &target_length)) {
+            mal_gc_unroot(&bound_root);
             return mal_value_new_undefined();
         }
         // mal_ops_is_number covers int32, f64, NaN, ±0 and the ±Infinity statics.
@@ -191,24 +196,24 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
             }
         }
     }
-    MalPropertyDesc length_desc = mal_intrinsic_data_desc(mal_ops_number_value(length_num), MAL_PROPERTY_CONFIGURABLE);
-    mal_object_define_own((MalObject *) bound, length_key, &length_desc);
-
     // SetFunctionName: "bound " ++ (target.name if a string, else "").
-    MalValue target_name;
-    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, "name"), &target_name)) {
+    MalKey name_key = mal_intrinsic_string_key(vm, "name");
+    if (!mal_vm_get_property(vm, this_value, name_key, &bound_roots[1])) {
+        mal_gc_unroot(&bound_root);
         return mal_value_new_undefined();
     }
     MalValue prefix = mal_value_from_string(mal_intrinsic_ascii(vm, "bound "));
-    MalValue name_value = mal_value_is_string(target_name)
-        ? mal_vm_add(vm, prefix, target_name)
+    MalValue name_value = mal_value_is_string(bound_roots[1])
+        ? mal_vm_add(vm, prefix, bound_roots[1])
         : prefix;
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&bound_root);
         return mal_value_new_undefined();
     }
-    MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
-    mal_object_define_own((MalObject *) bound, mal_intrinsic_string_key(vm, "name"), &name_desc);
+    mal_bound_function_object_init_metadata(
+        bound, length_key, mal_ops_number_value(length_num), name_key, name_value);
 
+    mal_gc_unroot(&bound_root);
     return bound_value;
 }
 

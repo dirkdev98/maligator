@@ -351,21 +351,27 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
         }
     }
 
-    // Shape fast path: a default data property under a string key.
-    if (key.kind == MAL_KEY_STRING && mal_object_desc_is_default_data(desc)) {
+    // Shape fast path: exact-attribute data redefinitions stay shaped. This is
+    // especially important for SetFunctionName updating the configurable `name`
+    // slot installed at function creation.
+    if (key.kind == MAL_KEY_STRING && !mal_object_desc_is_accessor(*desc)) {
         i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DEFINE_OWN);
         if (idx >= 0) {
             const MalShapeProp *prop = &object->shape->props[idx];
-            if (mal_shape_attrs_are_default(prop->attrs)) {
-                // A default-data redefine is compatible, so just update the value.
+            if (prop->attrs == (u8) desc->flags) {
+                MalPropertyDesc current =
+                    mal_object_data_desc(object->slots[prop->slot], prop->attrs);
+                if (!mal_object_define_is_compatible(current, *desc)) {
+                    return MAL_DEFINE_OWN_REJECTED;
+                }
                 mal_gc_write_barrier(object->slots[prop->slot]); // SATB: shade overwritten ref
                 object->slots[prop->slot] = desc->value;
                 mal_gc_card(&object->header, desc->value); // old object -> young value
                 return MAL_DEFINE_OWN_APPLIED;
             }
-            // Selected built-ins may start with non-default shaped data properties.
-            // Dictionarize below so the full descriptor compatibility rules apply.
-        } else if (object->overflow == nullptr
+            // An attribute transition needs the dictionary's full descriptor
+            // compatibility machinery.
+        } else if (mal_object_desc_is_default_data(desc) && object->overflow == nullptr
             && object->shape->inline_count < MAL_SHAPE_MAX_INLINE_SLOTS) {
             // Pure shaped (or empty) object with no dictionary props: grow the
             // shape and the inline slots. Coallocated managed cells cannot move,

@@ -164,6 +164,96 @@ if (typeof Iterator === "function") {
 	);
 }
 
+function hasFunctionMetadata(fn, length, name) {
+	const lengthDescriptor = Object.getOwnPropertyDescriptor(fn, "length");
+	const nameDescriptor = Object.getOwnPropertyDescriptor(fn, "name");
+	const keys = Reflect.ownKeys(fn);
+	return (
+		fn.length === length &&
+		fn.name === name &&
+		keys[0] === "length" &&
+		keys[1] === "name" &&
+		lengthDescriptor.value === length &&
+		lengthDescriptor.writable === false &&
+		lengthDescriptor.enumerable === false &&
+		lengthDescriptor.configurable === true &&
+		nameDescriptor.value === name &&
+		nameDescriptor.writable === false &&
+		nameDescriptor.enumerable === false &&
+		nameDescriptor.configurable === true
+	);
+}
+
+function scriptMetadata(first, second) {
+	return first + second;
+}
+const nativeMetadata = Array.prototype.map;
+const boundMetadata = scriptMetadata.bind(undefined, 1);
+const computedMetadataKey = "computed" + "Metadata";
+const computedMetadata = {
+	[computedMetadataKey]: (value) => value,
+}[computedMetadataKey];
+checks.push(
+	hasFunctionMetadata(scriptMetadata, 2, "scriptMetadata"),
+	hasFunctionMetadata(nativeMetadata, 1, "map"),
+	hasFunctionMetadata(boundMetadata, 1, "bound scriptMetadata"),
+	hasFunctionMetadata(computedMetadata, 1, "computedMetadata"),
+);
+
+const redefinedMetadata = (value) => value;
+Object.defineProperty(redefinedMetadata, "name", {
+	value: "redefined",
+	configurable: true,
+});
+checks.push(hasFunctionMetadata(redefinedMetadata, 1, "redefined"));
+
+const deletedMetadata = (value) => value;
+checks.push(
+	delete deletedMetadata.name,
+	Reflect.ownKeys(deletedMetadata).join("|") === "length",
+	Reflect.defineProperty(deletedMetadata, "name", {
+		value: "restored",
+		configurable: true,
+	}),
+	hasFunctionMetadata(deletedMetadata, 1, "restored"),
+);
+
+const nonExtensibleMetadata = (value) => value;
+Object.preventExtensions(nonExtensibleMetadata);
+checks.push(
+	hasFunctionMetadata(nonExtensibleMetadata, 1, "nonExtensibleMetadata"),
+	!Object.isExtensible(nonExtensibleMetadata),
+	delete nonExtensibleMetadata.name,
+	!Reflect.defineProperty(nonExtensibleMetadata, "name", {
+		value: "blocked",
+		configurable: true,
+	}),
+);
+
+const sealedMetadata = (value) => value;
+Object.seal(sealedMetadata);
+checks.push(
+	Object.isSealed(sealedMetadata),
+	!Object.getOwnPropertyDescriptor(sealedMetadata, "length").configurable,
+	!Object.getOwnPropertyDescriptor(sealedMetadata, "name").configurable,
+);
+
+const frozenMetadata = scriptMetadata.bind(undefined);
+Object.freeze(frozenMetadata);
+checks.push(
+	Object.isFrozen(frozenMetadata),
+	!Object.getOwnPropertyDescriptor(frozenMetadata, "length").writable,
+	!Object.getOwnPropertyDescriptor(frozenMetadata, "name").writable,
+);
+
+let metadataChurn = 0;
+for (let index = 0; index < 256; index++) {
+	const fn = (first, second) => first + second + index;
+	const bound = fn.bind(undefined, index);
+	metadataChurn += fn.length + bound.length;
+}
+checks.push(metadataChurn === 768);
+
 const shapedA = {};
 const shapedB = {};
 shapedA[["shared", "Key"].join("")] = 1;

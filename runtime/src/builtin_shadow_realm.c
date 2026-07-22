@@ -158,7 +158,7 @@ static bool mal_shadow_realm_wrap_value(
     MalNativeFunctionObject *wrapper = mal_native_function_object_new_with_slots(
         &vm->heap,
         mal_value_to_object(destination_realm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        nullptr,
+        mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY),
         mal_shadow_realm_wrapped_call,
         roots,
         1

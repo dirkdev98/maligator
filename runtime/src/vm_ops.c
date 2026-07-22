@@ -1116,27 +1116,23 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
             break;
     }
 
+    const MalFunction *definition = &vm->definition->functions[function_index];
+    MalString *name = definition->name_string_index >= 0 &&
+            definition->name_string_index < vm->definition->string_constant_count
+        ? &vm->definition->string_constants[definition->name_string_index]
+        : mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY);
     MalFunctionObject *function = mal_function_object_new(
         &vm->heap,
         mal_value_to_object(vm->intrinsics[prototype_slot]),
-        function_index
+        function_index,
+        definition->length,
+        name,
+        mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH),
+        mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME)
     );
     // The closure captures the creating frame's environment chain so its body
     // resolves captured bindings by owner function index.
     function->creation_env = creation_env;
-
-    // Materialize `length` and `name` as real { writable: false, enumerable:
-    // false, configurable: true } own data properties (not synthetic) so the
-    // reflective machinery and delete observe them with the right attributes.
-    const MalFunction *definition = &vm->definition->functions[function_index];
-    MalPropertyDesc length_desc = mal_intrinsic_data_desc(mal_value_from_i32(definition->length), MAL_PROPERTY_CONFIGURABLE);
-    mal_object_define_own(&function->object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH), &length_desc);
-
-    MalValue name_value = definition->name_string_index >= 0 && definition->name_string_index < vm->definition->string_constant_count
-        ? mal_value_from_string(&vm->definition->string_constants[definition->name_string_index])
-        : mal_value_from_string(mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY));
-    MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
-    mal_object_define_own(&function->object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME), &name_desc);
 
     return mal_value_from_function_object(function);
 }

@@ -1126,17 +1126,9 @@ static MalNativeFunctionObject *mal_buffer_method(
     MalVm *vm, const byte *name, i32 length, MalNativeFunctionCallback callback,
     MalValue prototype
 ) {
-    MalNativeFunctionObject *function = mal_native_function_object_new_with_slots(
+    return mal_native_function_object_new_with_slots_arity(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, name), callback, &prototype, 1);
-    MalValue function_value = mal_value_from_native_function_object(function);
-    MalRootSpan root;
-    mal_gc_root(&root, &function_value, 1);
-    function->length = length;
-    mal_intrinsic_define_data(vm, (MalObject *) function, "length", mal_value_from_i32(length),
-                              MAL_PROPERTY_CONFIGURABLE);
-    mal_gc_unroot(&root);
-    return function;
+        mal_intrinsic_ascii(vm, name), length, callback, &prototype, 1);
 }
 
 static void mal_buffer_define_method(

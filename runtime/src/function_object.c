@@ -1,35 +1,50 @@
 #include "function_object.h"
 
+#include <assert.h>
+
 #include "gc.h"
 #include "heap_string.h"
-#include "object_ops.h"
 #include "value.h"
 
-// Built-in functions expose `name` and `length` as own data properties
-// { writable: false, enumerable: false, configurable: true } that the
-// descriptor/hasOwnProperty/delete machinery can see (the synthetic resolver
-// alone is invisible to them, and would also defeat configurable:true delete).
-static void mal_native_function_define_name(MalObject *object, MalString *name, MalKey key) {
-    if (name == nullptr) {
+static_assert(sizeof(MalFunctionObject) % alignof(MalValue) == 0,
+              "script function trailing metadata slots are misaligned");
+static_assert(sizeof(MalNativeFunctionObject) % alignof(MalValue) == 0,
+              "native function trailing metadata slots are misaligned");
+
+/** Install the spec function metadata directly in a shared non-default shape. */
+static void mal_function_init_metadata(
+    MalObject *object,
+    MalKey length_key,
+    MalValue length,
+    MalKey name_key,
+    MalString *name,
+    MalValue *coallocated_slots
+) {
+    assert(object->shape == mal_shape_empty());
+    assert(object->slots == nullptr);
+    assert(object->overflow == nullptr);
+    assert(length_key.kind == MAL_KEY_STRING);
+    assert(name == nullptr || name_key.kind == MAL_KEY_STRING);
+
+    MalShape *shape = mal_shape_add_property(
+        mal_shape_empty(), length_key, MAL_PROPERTY_CONFIGURABLE);
+    MalValue values[2] = {length, mal_value_new_undefined()};
+    u32 count = 1;
+    if (name != nullptr) {
+        shape = mal_shape_add_property(shape, name_key, MAL_PROPERTY_CONFIGURABLE);
+        values[1] = mal_value_from_string(name);
+        count = 2;
+    }
+
+    if (coallocated_slots == nullptr) {
+        mal_object_set_shaped_values(object, shape, values, count);
         return;
     }
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_from_string(name),
-        .getter = mal_value_new_undefined(),
-        .setter = mal_value_new_undefined(),
-    };
-    mal_object_define_own(object, key, &desc);
-}
-
-static void mal_native_function_define_length(MalObject *object, i32 length, MalKey key) {
-    MalPropertyDesc desc = {
-        .flags = MAL_PROPERTY_CONFIGURABLE,
-        .value = mal_value_from_i32(length),
-        .getter = mal_value_new_undefined(),
-        .setter = mal_value_new_undefined(),
-    };
-    mal_object_define_own(object, key, &desc);
+    object->shape = shape;
+    object->slots = coallocated_slots;
+    for (u32 i = 0; i < count; i++) {
+        object->slots[i] = values[i];
+    }
 }
 
 static void mal_native_function_init_state(
@@ -52,22 +67,7 @@ static void mal_native_function_init_state(
 #endif
 }
 
-static void mal_native_function_object_init_with_keys(
-    MalHeap *heap,
-    MalNativeFunctionObject *function,
-    MalObject *prototype,
-    MalString *name,
-    i32 length,
-    MalNativeFunctionCallback callback,
-    MalKey length_key,
-    MalKey name_key
-) {
-    mal_native_function_init_state(heap, function, prototype, name, length, callback);
-    mal_native_function_define_length(&function->object, length, length_key);
-    mal_native_function_define_name(&function->object, name, name_key);
-}
-
-void mal_function_object_init(
+static void mal_function_init_state(
     MalHeap *heap,
     MalFunctionObject *function,
     MalObject *prototype,
@@ -81,13 +81,55 @@ void mal_function_object_init(
 #endif
 }
 
+static void mal_native_function_metadata_keys(
+    MalHeap *heap,
+    bool has_name,
+    MalKey *length_key,
+    MalKey *name_key
+) {
+    *length_key = (MalKey) {
+        .kind = MAL_KEY_STRING,
+        .value = mal_value_from_string(mal_string_new_ascii(heap, "length", 6)),
+    };
+    *name_key = (MalKey) {0};
+    if (has_name) {
+        *name_key = (MalKey) {
+            .kind = MAL_KEY_STRING,
+            .value = mal_value_from_string(mal_string_new_ascii(heap, "name", 4)),
+        };
+    }
+}
+
+void mal_function_object_init(
+    MalHeap *heap,
+    MalFunctionObject *function,
+    MalObject *prototype,
+    i32 function_index,
+    i32 length,
+    MalString *name,
+    MalKey length_key,
+    MalKey name_key
+) {
+    mal_function_init_state(heap, function, prototype, function_index);
+    mal_function_init_metadata(
+        &function->object, length_key, mal_value_from_i32(length), name_key, name, nullptr);
+}
+
 MalFunctionObject *mal_function_object_new(
     MalHeap *heap,
     MalObject *prototype,
-    i32 function_index
+    i32 function_index,
+    i32 length,
+    MalString *name,
+    MalKey length_key,
+    MalKey name_key
 ) {
-    MalFunctionObject *function = mal_heap_alloc(heap, sizeof(MalFunctionObject), MAL_HEAP_FUNCTION_OBJECT);
-    mal_function_object_init(heap, function, prototype, function_index);
+    MalFunctionObject *function = mal_heap_alloc(
+        heap, sizeof(MalFunctionObject) + 2 * sizeof(MalValue), MAL_HEAP_FUNCTION_OBJECT);
+    mal_function_init_state(heap, function, prototype, function_index);
+    mal_function_init_metadata(
+        &function->object, length_key, mal_value_from_i32(length), name_key, name,
+        (MalValue *) (function + 1));
 
     return function;
 }
@@ -107,16 +149,11 @@ void mal_native_function_object_init(
     mal_native_function_init_state(heap, function, prototype, name, length, callback);
     // Per spec (CreateBuiltinFunction / SetFunctionLength then SetFunctionName),
     // `length` is the earlier own property and `name` follows it.
-    MalKey length_key = {
-        .kind = MAL_KEY_STRING,
-        .value = mal_value_from_string(mal_string_new_ascii(heap, "length", 6)),
-    };
-    mal_native_function_define_length(&function->object, length, length_key);
-    MalKey name_key = {
-        .kind = MAL_KEY_STRING,
-        .value = mal_value_from_string(mal_string_new_ascii(heap, "name", 4)),
-    };
-    mal_native_function_define_name(&function->object, name, name_key);
+    MalKey length_key;
+    MalKey name_key;
+    mal_native_function_metadata_keys(heap, name != nullptr, &length_key, &name_key);
+    mal_function_init_metadata(
+        &function->object, length_key, mal_value_from_i32(length), name_key, name, nullptr);
 }
 
 MalNativeFunctionObject *mal_native_function_object_new(
@@ -125,10 +162,7 @@ MalNativeFunctionObject *mal_native_function_object_new(
     MalString *name,
     MalNativeFunctionCallback callback
 ) {
-    MalNativeFunctionObject *function = mal_heap_alloc(heap, sizeof(MalNativeFunctionObject), MAL_HEAP_NATIVE_FUNCTION_OBJECT);
-    mal_native_function_object_init(heap, function, prototype, name, 0, callback);
-
-    return function;
+    return mal_native_function_object_new_arity(heap, prototype, name, 0, callback);
 }
 
 MalNativeFunctionObject *mal_native_function_object_new_arity(
@@ -138,8 +172,17 @@ MalNativeFunctionObject *mal_native_function_object_new_arity(
     i32 length,
     MalNativeFunctionCallback callback
 ) {
-    MalNativeFunctionObject *function = mal_heap_alloc(heap, sizeof(MalNativeFunctionObject), MAL_HEAP_NATIVE_FUNCTION_OBJECT);
-    mal_native_function_object_init(heap, function, prototype, name, length, callback);
+    MalKey length_key;
+    MalKey name_key;
+    mal_native_function_metadata_keys(heap, name != nullptr, &length_key, &name_key);
+    u32 metadata_count = name == nullptr ? 1 : 2;
+    MalNativeFunctionObject *function = mal_heap_alloc(
+        heap, sizeof(MalNativeFunctionObject) + metadata_count * sizeof(MalValue),
+        MAL_HEAP_NATIVE_FUNCTION_OBJECT);
+    mal_native_function_init_state(heap, function, prototype, name, length, callback);
+    mal_function_init_metadata(
+        &function->object, length_key, mal_value_from_i32(length), name_key, name,
+        (MalValue *) (function + 1));
 
     return function;
 }
@@ -189,10 +232,14 @@ MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity_keys(
     MalKey length_key,
     MalKey name_key
 ) {
+    u32 metadata_count = name == nullptr ? 1 : 2;
     MalNativeFunctionObject *function =
-        mal_heap_alloc(heap, sizeof(MalNativeFunctionObject), MAL_HEAP_NATIVE_FUNCTION_OBJECT);
-    mal_native_function_object_init_with_keys(
-        heap, function, prototype, name, length, callback, length_key, name_key);
+        mal_heap_alloc(heap, sizeof(MalNativeFunctionObject) + metadata_count * sizeof(MalValue),
+                       MAL_HEAP_NATIVE_FUNCTION_OBJECT);
+    mal_native_function_init_state(heap, function, prototype, name, length, callback);
+    mal_function_init_metadata(
+        &function->object, length_key, mal_value_from_i32(length), name_key, name,
+        (MalValue *) (function + 1));
     if (slot_count > 0) {
         function->slots = mal_heap_alloc_raw(heap, sizeof(MalValue) * slot_count);
         function->slot_count = slot_count;
