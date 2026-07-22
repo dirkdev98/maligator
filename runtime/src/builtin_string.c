@@ -877,6 +877,10 @@ static int mal_builtin_string_regex_dispatch(
     if (!mal_value_is_object(arg)) {
         return 0;
     }
+    if (mal_regexp_try_exact_string_dispatch(
+            vm, arg, symbol_slot, this_value, extra, extra_count, out)) {
+        return 1;
+    }
     MalValue method;
     if (!mal_vm_get_property(vm, arg, mal_intrinsic_symbol_key(vm, symbol_slot), &method)) {
         *out = mal_value_new_undefined();
@@ -947,11 +951,15 @@ static MalValue mal_builtin_string_match_like(MalVm *vm, MalValue this_value, Ma
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
+    MalValue s_value = mal_value_from_string(s);
+    if (mal_regexp_try_exact_string_dispatch(
+            vm, rx, symbol_slot, s_value, nullptr, 0, &out)) {
+        return out;
+    }
     MalValue method;
     if (!mal_vm_get_property(vm, rx, mal_intrinsic_symbol_key(vm, symbol_slot), &method)) {
         return mal_value_new_undefined();
     }
-    MalValue s_value = mal_value_from_string(s);
     MalCompletion completion = mal_vm_call_value(vm, method, rx, &s_value, 1);
     return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
 #else
@@ -1035,11 +1043,16 @@ static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
+    MalValue s_value = mal_value_from_string(s);
+    MalValue out;
+    if (mal_regexp_try_exact_string_dispatch(
+            vm, rx, MAL_INTRINSIC_SYMBOL_MATCH_ALL, s_value, nullptr, 0, &out)) {
+        return out;
+    }
     MalValue method;
     if (!mal_vm_get_property(vm, rx, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_MATCH_ALL), &method)) {
         return mal_value_new_undefined();
     }
-    MalValue s_value = mal_value_from_string(s);
     MalCompletion completion = mal_vm_call_value(vm, method, rx, &s_value, 1);
     return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
 #else

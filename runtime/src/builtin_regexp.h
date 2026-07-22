@@ -20,3 +20,13 @@ void mal_builtin_regexp_install(MalVm *vm);
  * regex-literal lowering (mal_vm_op_create_regex) and String.prototype.
  */
 MalValue mal_regexp_create(MalVm *vm, MalString *pattern, MalString *flags);
+
+/**
+ * Invoke an unmodified built-in RegExp String-protocol method without generic
+ * property/call dispatch. Returns false when any observable customization means
+ * the caller must use the ordinary protocol path.
+ */
+bool mal_regexp_try_exact_string_dispatch(
+    MalVm *vm, MalValue regexp, i32 symbol_slot, MalValue string,
+    const MalValue *extra, i32 extra_count, MalValue *out
+);

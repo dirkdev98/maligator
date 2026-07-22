@@ -112,6 +112,58 @@ for (const [name, method, symbol, expected] of [
 	}
 }
 
+const ownMatch = /a/;
+let ownMatchCalls = 0;
+ownMatch[Symbol.match] = function (value) {
+	ownMatchCalls++;
+	return value + ":own";
+};
+check(
+	"match observes an own RegExp protocol method",
+	"subject".match(ownMatch) === "subject:own" && ownMatchCalls === 1,
+);
+
+const originalSearch = RegExp.prototype[Symbol.search];
+const getterSearch = /b/;
+let searchGetterCalls = 0;
+Object.defineProperty(getterSearch, Symbol.search, {
+	configurable: true,
+	get() {
+		searchGetterCalls++;
+		return originalSearch;
+	},
+});
+check(
+	"search observes an own RegExp protocol getter",
+	"abc".search(getterSearch) === 1 && searchGetterCalls === 1,
+);
+
+const originalMatch = RegExp.prototype[Symbol.match];
+let prototypeMatchCalls = 0;
+RegExp.prototype[Symbol.match] = function (value) {
+	prototypeMatchCalls++;
+	return value + ":prototype";
+};
+check(
+	"match observes a replaced RegExp prototype method",
+	"subject".match(/subject/) === "subject:prototype" && prototypeMatchCalls === 1,
+);
+RegExp.prototype[Symbol.match] = originalMatch;
+
+const capturedMatch = /subject/;
+const mutatingSubject = {
+	toString() {
+		capturedMatch[Symbol.match] = () => "late replacement";
+		return "subject";
+	},
+};
+const capturedResult = String.prototype.match.call(mutatingSubject, capturedMatch);
+check(
+	"match captures the protocol method before subject coercion",
+	capturedResult[0] === "subject" &&
+		"subject".match(capturedMatch) === "late replacement",
+);
+
 let passed = 0;
 for (const [name, condition] of results) {
 	if (condition) passed++;

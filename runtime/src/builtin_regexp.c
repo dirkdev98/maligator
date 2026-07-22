@@ -1745,6 +1745,80 @@ static MalValue regexp_string_iterator_next(MalVm *vm, MalValue this_value, cons
     return mal_vm_create_iter_result(vm, match, false);
 }
 
+static MalNativeFunctionCallback regexp_exact_string_protocol_callback(i32 symbol_slot) {
+    switch (symbol_slot) {
+        case MAL_INTRINSIC_SYMBOL_MATCH:
+            return regexp_proto_match;
+        case MAL_INTRINSIC_SYMBOL_MATCH_ALL:
+            return regexp_proto_match_all;
+        case MAL_INTRINSIC_SYMBOL_SEARCH:
+            return regexp_proto_search;
+        case MAL_INTRINSIC_SYMBOL_REPLACE:
+            return regexp_proto_replace;
+        case MAL_INTRINSIC_SYMBOL_SPLIT:
+            return regexp_proto_split;
+        default:
+            return nullptr;
+    }
+}
+
+bool mal_regexp_try_exact_string_dispatch(
+    MalVm *vm, MalValue regexp, i32 symbol_slot, MalValue string,
+    const MalValue *extra, i32 extra_count, MalValue *out
+) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW ||
+        !mal_value_is_regexp_object(regexp) || extra_count < 0 || extra_count > 2) {
+        return false;
+    }
+
+    MalObject *object = (MalObject *) mal_value_to_regexp_object(regexp);
+    MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE]);
+    if (mal_object_get_prototype(object) != prototype) {
+        return false;
+    }
+
+    MalKey key = mal_intrinsic_symbol_key(vm, (MalIntrinsic) symbol_slot);
+    if (mal_object_get_own(object, key).present) {
+        return false;
+    }
+    MalPropertyLookup lookup = mal_object_get_own(prototype, key);
+    if (!lookup.present || (lookup.desc.flags & MAL_PROPERTY_ACCESSOR) != 0 ||
+        !mal_value_is_native_function_object(lookup.desc.value)) {
+        return false;
+    }
+
+    MalNativeFunctionCallback callback =
+        mal_native_function_object_callback(mal_value_to_native_function_object(lookup.desc.value));
+    if (callback != regexp_exact_string_protocol_callback(symbol_slot)) {
+        return false;
+    }
+#if MAL_REALMS
+    if (mal_vm_callee_realm(vm, lookup.desc.value) != vm->current_realm) {
+        return false;
+    }
+#endif
+
+    MalValue args[3];
+    args[0] = string;
+    for (i32 i = 0; i < extra_count; i++) {
+        args[i + 1] = extra[i];
+    }
+    i32 arg_count = extra_count + 1;
+
+    MalCalleeRoots roots;
+    mal_gc_callee_roots_begin(
+        &roots, regexp, mal_value_new_undefined(), lookup.desc.value, args, arg_count);
+    vm->gc_native_frames++;
+    MalValue result = callback(
+        vm, regexp, args, arg_count, mal_value_new_undefined(), lookup.desc.value);
+    vm->gc_native_frames--;
+    mal_gc_callee_roots_end(&roots);
+    *out = vm->completion.kind == MAL_COMPLETION_THROW
+        ? mal_value_new_undefined()
+        : result;
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Install
 // ---------------------------------------------------------------------------
@@ -1905,6 +1979,20 @@ void mal_builtin_regexp_install(MalVm *vm) {
 // engine.regexp:false — no RegExp global (typeof RegExp === "undefined").
 void mal_builtin_regexp_install(MalVm *vm) {
     (void) vm;
+}
+
+bool mal_regexp_try_exact_string_dispatch(
+    MalVm *vm, MalValue regexp, i32 symbol_slot, MalValue string,
+    const MalValue *extra, i32 extra_count, MalValue *out
+) {
+    (void) vm;
+    (void) regexp;
+    (void) symbol_slot;
+    (void) string;
+    (void) extra;
+    (void) extra_count;
+    (void) out;
+    return false;
 }
 
 #endif // MAL_REGEXP
