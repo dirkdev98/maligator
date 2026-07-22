@@ -3,6 +3,7 @@
 #include "array_object.h"
 #include "builtin_array.h"
 #include "function_object.h"
+#include "gc.h"
 #include "heap_string.h"
 #include "map_object.h"
 #include "value_ops.h"
@@ -13,12 +14,20 @@ MalNativeFunctionCallback mal_array_iterator_next_callback = nullptr;
 #include "utf16.h"
 
 MalValue mal_vm_create_iter_result(MalVm *vm, MalValue value, bool done) {
-    MalObject *result = mal_intrinsic_new_object(vm);
-    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
-    mal_intrinsic_define_data(vm, result, "value", value, flags);
-    mal_intrinsic_define_data(vm, result, "done", mal_value_new_boolean(done), flags);
-
-    return mal_value_from_object(result);
+    MalValue values[2] = {value, mal_value_new_boolean(done)};
+    MalRootSpan span;
+    mal_gc_root(&span, values, 2);
+    if (vm->iterator_result_shape == nullptr) {
+        MalString *keys[2] = {
+            mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_VALUE),
+            mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_DONE),
+        };
+        vm->iterator_result_shape = mal_shape_from_string_keys(keys, 2);
+    }
+    MalValue result =
+        mal_vm_create_object_shaped(vm, vm->iterator_result_shape, values, 2);
+    mal_gc_unroot(&span);
+    return result;
 }
 
 static MalIntrinsic mal_vm_iterator_prototype_slot(MalIteratorKind kind) {

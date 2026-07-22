@@ -1144,6 +1144,9 @@ typedef struct MalVm {
      */
     struct MalStubEntry *load_stub;
 
+    /** Shared final shape for CreateIterResultObject's `{ value, done }` layout. */
+    struct MalShape *iterator_result_shape;
+
     /** Bounded plain interpreted-function call cache; see vm_ops.c. */
     MalInterpCallCacheEntry *interp_call_cache;
 

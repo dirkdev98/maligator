@@ -8,6 +8,24 @@ function* sequence(seed) {
 	}
 }
 
+const resultMetadata = sequence(1).next();
+const resultKeys = Reflect.ownKeys(resultMetadata);
+const valueDescriptor = Object.getOwnPropertyDescriptor(resultMetadata, "value");
+const doneDescriptor = Object.getOwnPropertyDescriptor(resultMetadata, "done");
+if (
+	resultKeys.length !== 2 ||
+	resultKeys[0] !== "value" ||
+	resultKeys[1] !== "done" ||
+	!valueDescriptor.writable ||
+	!valueDescriptor.enumerable ||
+	!valueDescriptor.configurable ||
+	!doneDescriptor.writable ||
+	!doneDescriptor.enumerable ||
+	!doneDescriptor.configurable
+) {
+	throw new Error("iterator result metadata");
+}
+
 for (let i = 0; i < 2000; i++) {
 	for (const value of sequence(i)) checksum = (checksum + value) % 1000000007;
 

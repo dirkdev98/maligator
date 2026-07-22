@@ -64,6 +64,8 @@ static const byte *const mal_hot_intrinsic_names[MAL_HOT_KEY_COUNT] = {
     [MAL_HOT_KEY_GROUPS] = (const byte *) "groups",
     [MAL_HOT_KEY_INDEX] = (const byte *) "index",
     [MAL_HOT_KEY_INPUT] = (const byte *) "input",
+    [MAL_HOT_KEY_VALUE] = (const byte *) "value",
+    [MAL_HOT_KEY_DONE] = (const byte *) "done",
     [MAL_HOT_KEY_CALLEE] = (const byte *) "callee",
     [MAL_HOT_KEY_EXEC] = (const byte *) "exec",
     [MAL_HOT_KEY_READABLE_STATE] = (const byte *) "_readableState",
@@ -120,6 +122,10 @@ static MalHotIntrinsicKey mal_hot_intrinsic_key(const byte *name, usize length) 
             return memcmp(name, "index", 5) == 0 ? MAL_HOT_KEY_INDEX : MAL_HOT_KEY_COUNT;
         case MAL_HOT_KEY_SIGNATURE(5, 'i', 't'):
             return memcmp(name, "input", 5) == 0 ? MAL_HOT_KEY_INPUT : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(5, 'v', 'e'):
+            return memcmp(name, "value", 5) == 0 ? MAL_HOT_KEY_VALUE : MAL_HOT_KEY_COUNT;
+        case MAL_HOT_KEY_SIGNATURE(4, 'd', 'e'):
+            return memcmp(name, "done", 4) == 0 ? MAL_HOT_KEY_DONE : MAL_HOT_KEY_COUNT;
         case MAL_HOT_KEY_SIGNATURE(6, 'c', 'e'):
             return memcmp(name, "callee", 6) == 0 ? MAL_HOT_KEY_CALLEE : MAL_HOT_KEY_COUNT;
         case MAL_HOT_KEY_SIGNATURE(4, 'e', 'c'):
