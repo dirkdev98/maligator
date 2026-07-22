@@ -10,6 +10,7 @@ import type { Binding } from "./semantic-analysis.ts";
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];
 type IRUnaryOperator = Extract<IRInstruction, { type: "unary" }>["operator"];
 type IRIntrinsic = Extract<IRInstruction, { type: "loadIntrinsic" }>["intrinsic"];
+type IRTypeofResult = Extract<IRInstruction, { type: "typeofCompare" }>["expected"];
 
 const VM_VALUE_UNDEFINED = -1;
 const VM_VALUE_NULL = -2;
@@ -723,6 +724,13 @@ export type VmInstruction =
 			dst: number;
 			src: number;
 			operator: IRUnaryOperator;
+	  }
+	| {
+			opcode: "TYPEOF_COMPARE";
+			dst: number;
+			src: number;
+			expected: IRTypeofResult;
+			negated: boolean;
 	  };
 
 export interface VmDefinitionStats {
@@ -1671,6 +1679,14 @@ function lowerInstructionToVmInstruction(
 				dst: instruction.registers[0],
 				src: instruction.registers[1],
 				operator: instruction.operator,
+			};
+		case "typeofCompare":
+			return {
+				opcode: "TYPEOF_COMPARE",
+				dst: instruction.registers[0],
+				src: instruction.registers[1],
+				expected: instruction.expected,
+				negated: instruction.negated,
 			};
 		case "loadLocal":
 		case "storeLocal":

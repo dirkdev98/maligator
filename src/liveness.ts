@@ -35,8 +35,9 @@ import { log } from "./utils.ts";
  * array, object, function, ...); `call`/`construct`/spreads (run arbitrary code);
  * property get/set/delete and `toPropertyKey`/`requireCoercible` (getters,
  * setters, proxy traps, ToPrimitive, and error throws all allocate); `binary`/
- * `unary` (valueOf/toString); iterator ops; `await`/`yield` (suspension is a
- * collection point); `throwIfTdz` (allocates the ReferenceError when it fires).
+ * `unary` (valueOf/toString or a typeof result string); iterator ops;
+ * `await`/`yield` (suspension is a collection point); `throwIfTdz` (allocates
+ * the ReferenceError when it fires).
  */
 const GC_FREE_INSTRUCTION_TYPES = new Set<IRInstruction["type"]>([
 	// Control flow / structural markers — no runtime allocation.
@@ -58,6 +59,7 @@ const GC_FREE_INSTRUCTION_TYPES = new Set<IRInstruction["type"]>([
 	"createUndefined",
 	"createEmpty",
 	"isEmpty",
+	"typeofCompare",
 	// Slot moves of already-boxed values (no allocation, no user code).
 	"move",
 	"loadLocal",

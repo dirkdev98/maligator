@@ -533,6 +533,16 @@ export type IRImmediateValue =
 	| { kind: "number"; value: number }
 	| { kind: "string"; index: number };
 
+export type IRTypeofResult =
+	| "undefined"
+	| "object"
+	| "boolean"
+	| "number"
+	| "string"
+	| "symbol"
+	| "bigint"
+	| "function";
+
 export type IRInstruction =
 	| {
 			/**
@@ -1310,6 +1320,16 @@ export type IRInstruction =
 			registers: [number, number];
 
 			operator: "!" | "-" | "+" | "~" | "typeof";
+	  }
+	| {
+			// Non-allocating comparison against one of the canonical typeof results.
+			type: "typeofCompare";
+
+			// [destination, operand]
+			registers: [number, number];
+
+			expected: IRTypeofResult;
+			negated: boolean;
 	  };
 
 type IRBinaryOperator = Extract<IRInstruction, { type: "binary" }>["operator"];

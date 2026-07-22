@@ -251,6 +251,16 @@ void mal_op_unary(MalCallable *callable, const MalInstruction *instruction);
  */
 MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value);
 
+/** Classify a value using the exact result categories of the typeof operator. */
+MalTypeofResult mal_vm_typeof_result(MalValue value);
+
+/** Non-allocating canonical typeof predicate used by both execution backends. */
+static inline bool mal_vm_typeof_compare(MalValue value, MalTypeofResult expected) {
+    return mal_vm_typeof_result(value) == expected;
+}
+
+void mal_op_typeof_compare(MalCallable *callable, const MalInstruction *instruction);
+
 void mal_op_store_global(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_load_global(MalCallable *callable, const MalInstruction *instruction);

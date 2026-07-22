@@ -1430,6 +1430,9 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_UNARY:
                 mal_op_unary(frame, instruction);
                 break;
+            case MAL_OP_TYPEOF_COMPARE:
+                mal_op_typeof_compare(frame, instruction);
+                break;
 
             case MAL_OP_STORE_GLOBAL:
                 mal_op_store_global(frame, instruction);

@@ -29,6 +29,7 @@ const instructions: Array<VmInstruction> = [
 	{ opcode: "STORE_PROPERTY_STATIC", object: 10, value: 7, stringIndex: 1 },
 	{ opcode: "BINARY", dst: 8, left: 0, right: 1, operator: ">>>" },
 	{ opcode: "UNARY", dst: 9, src: 8, operator: "typeof" },
+	{ opcode: "TYPEOF_COMPARE", dst: 9, src: 8, expected: "number", negated: true },
 	{ opcode: "TRY_BEGIN", handlerIp: 0 },
 	{
 		opcode: "CREATE_OBJECT_SHAPED",
@@ -165,10 +166,11 @@ describe("serialize-vm", () => {
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-3)).toEqual([
+		expect(WIRE_OPCODES.slice(-4)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
+			"TYPEOF_COMPARE",
 		]);
 	});
 

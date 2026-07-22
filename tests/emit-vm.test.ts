@@ -44,6 +44,7 @@ const instructions: Array<VmInstruction> = [
 	},
 	{ opcode: "CREATE_PRIVATE_NAMES", ownerFunctionIndex: 0, capturedIndices: [1, 4] },
 	{ opcode: "INIT_PRIVATE_FIELDS", object: 6, keyRegisters: [8, 9] },
+	{ opcode: "TYPEOF_COMPARE", dst: 7, src: 6, expected: "number", negated: true },
 	{ opcode: "RETURN", value: 6 },
 ];
 
@@ -102,6 +103,9 @@ describe("emit-vm instruction packing", () => {
 		expect(output).toContain(
 			".as.init_private_fields = { .object = 6, .data_offset = 30 }",
 		);
+		expect(output).toContain(
+			".as.typeof_compare = { .dst = 7, .src = 6, .expected = MAL_TYPEOF_NUMBER, .negated = true }",
+		);
 	});
 
 	it("emits and references shared side tables in batches", () => {
@@ -114,6 +118,7 @@ describe("emit-vm instruction packing", () => {
 		const output = emitVmDefinition(definition);
 		expect(output).toContain("mal_vm_op_create_private_names(vm, env, 0, 2");
 		expect(output).toContain("mal_vm_op_init_private_fields(vm, r6, 2");
+		expect(output).toContain("mal_vm_typeof_compare(r6, MAL_TYPEOF_NUMBER)");
 	});
 
 	it("uses a null side table when a function has no variable operands", () => {

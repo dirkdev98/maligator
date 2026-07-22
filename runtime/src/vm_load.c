@@ -15,7 +15,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 10u        // bulk private names and uninitialized private fields
+#define WIRE_VERSION 11u        // non-allocating canonical typeof comparison
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -114,6 +114,7 @@ typedef enum WireOp {
     WIRE_INIT_GLOBAL_VARS,
     WIRE_CREATE_PRIVATE_NAMES,
     WIRE_INIT_PRIVATE_FIELDS,
+    WIRE_TYPEOF_COMPARE,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -128,6 +129,18 @@ static const MalBinaryOp wire_binops[] = {
 /* Wire tag -> MalUnaryOp. MUST match WIRE_UNOPS in serialize-vm.ts. */
 static const MalUnaryOp wire_unops[] = {
     MAL_UNARY_NOT, MAL_UNARY_NEGATE, MAL_UNARY_PLUS, MAL_UNARY_BIT_NOT, MAL_UNARY_TYPEOF,
+};
+
+/* Wire tag -> MalTypeofResult. MUST match WIRE_TYPEOF_RESULTS in serialize-vm.ts. */
+static const MalTypeofResult wire_typeof_results[] = {
+    MAL_TYPEOF_UNDEFINED,
+    MAL_TYPEOF_OBJECT,
+    MAL_TYPEOF_BOOLEAN,
+    MAL_TYPEOF_NUMBER,
+    MAL_TYPEOF_STRING,
+    MAL_TYPEOF_SYMBOL,
+    MAL_TYPEOF_BIGINT,
+    MAL_TYPEOF_FUNCTION,
 };
 
 /* Wire tag -> MAL_INTRINSIC_*. MUST match WIRE_INTRINSICS in serialize-vm.ts. */
@@ -997,6 +1010,19 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             } else {
                 r->ok = false;
             }
+            return;
+        }
+        case WIRE_TYPEOF_COMPARE: {
+            o->opcode = MAL_OP_TYPEOF_COMPARE;
+            o->as.typeof_compare.dst = rd_i32(r);
+            o->as.typeof_compare.src = rd_i32(r);
+            u8 idx = rd_u8(r);
+            if (r->ok && idx < countof(wire_typeof_results)) {
+                o->as.typeof_compare.expected = wire_typeof_results[idx];
+            } else {
+                r->ok = false;
+            }
+            o->as.typeof_compare.negated = rd_u8(r) != 0;
             return;
         }
         case WIRE_OP_COUNT:

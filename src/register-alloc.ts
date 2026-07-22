@@ -164,6 +164,7 @@ function producedRep(
 		case "createF64":
 			return "number";
 		case "createBoolean":
+		case "typeofCompare":
 			return "boolean";
 		case "move":
 			return repOf(instruction.registers[1]);

@@ -127,6 +127,36 @@ describe("wire loader side-data validation", () => {
 		expect(result.status).toBe(0);
 	});
 
+	it("loads canonical typeof comparison operands", () => {
+		const typeofDefinition: VmDefinition = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					registerCount: 2,
+					instructions: [
+						{ opcode: "CREATE_UNDEFINED", dst: 1 },
+						{
+							opcode: "TYPEOF_COMPARE",
+							dst: 0,
+							src: 1,
+							expected: "undefined",
+							negated: false,
+						},
+						{ opcode: "RETURN", value: 0 },
+					],
+				},
+			],
+		};
+		const wirePath = path.join(directory, "typeof-compare.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(typeofDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status).toBe(0);
+	});
+
 	it("loads unaligned fixed-width little-endian scalar fields", () => {
 		const scalarDefinition: VmDefinition = {
 			...definition,

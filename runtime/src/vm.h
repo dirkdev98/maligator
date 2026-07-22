@@ -111,6 +111,7 @@ typedef enum MalOpcode {
     MAL_OP_INIT_GLOBAL_VARS,
     MAL_OP_CREATE_PRIVATE_NAMES,
     MAL_OP_INIT_PRIVATE_FIELDS,
+    MAL_OP_TYPEOF_COMPARE,
 } MalOpcode;
 
 /** Packed literal-template stream tags; mirrored by src/ir.ts. */
@@ -160,6 +161,18 @@ typedef enum MalUnaryOp {
     MAL_UNARY_BIT_NOT,
     MAL_UNARY_TYPEOF,
 } MalUnaryOp;
+
+typedef enum MalTypeofResult {
+    MAL_TYPEOF_UNDEFINED,
+    MAL_TYPEOF_OBJECT,
+    MAL_TYPEOF_BOOLEAN,
+    MAL_TYPEOF_NUMBER,
+    MAL_TYPEOF_STRING,
+    MAL_TYPEOF_SYMBOL,
+    MAL_TYPEOF_BIGINT,
+    MAL_TYPEOF_FUNCTION,
+    MAL_TYPEOF_RESULT_COUNT,
+} MalTypeofResult;
 
 typedef enum MalCompletionKind {
     MAL_COMPLETION_NORMAL,
@@ -652,6 +665,12 @@ typedef struct MalInstruction {
             i32 dst, src;
             MalUnaryOp op;
         } unary;
+
+        struct {
+            i32 dst, src;
+            MalTypeofResult expected;
+            bool negated;
+        } typeof_compare;
     } as;
 } MalInstruction;
 

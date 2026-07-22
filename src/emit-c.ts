@@ -1,4 +1,9 @@
-import { emitBinaryOperator, emitIntrinsic, emitUnaryOperator } from "./emit-vm.ts";
+import {
+	emitBinaryOperator,
+	emitIntrinsic,
+	emitTypeofResult,
+	emitUnaryOperator,
+} from "./emit-vm.ts";
 import { decodeVmValueOperand } from "./lower-vm.ts";
 import type { VmExceptionHandler, VmFunction, VmInstruction } from "./lower-vm.ts";
 
@@ -400,6 +405,9 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 					// !, typeof, void, delete — not numeric
 					disqualUse.add(instruction.src);
 				}
+				break;
+			case "TYPEOF_COMPARE":
+				disqualUse.add(instruction.src);
 				break;
 			default:
 				// An opcode the backend can't lower yet: the function won't compile.
@@ -1031,6 +1039,7 @@ function producedRep(
 		case "CREATE_BOOLEAN":
 			return "boolean";
 		case "GUARD_FUNCTION_INDEX":
+		case "TYPEOF_COMPARE":
 			return "boolean";
 		case "MOVE":
 			return reps[instruction.src] ?? null;
@@ -2003,6 +2012,16 @@ function emitInstruction(
 				lowered.push(completionCheck);
 			}
 			return lowered;
+		}
+		case "TYPEOF_COMPARE": {
+			const { dst, src, expected, negated } = instruction;
+			const predicate = `mal_vm_typeof_compare(${boxed(src)}, ${emitTypeofResult(expected)})`;
+			const result = negated ? `!(${predicate})` : predicate;
+			return [
+				reps[dst] === "boolean"
+					? `r${dst} = ${result};`
+					: `r${dst} = mal_value_new_boolean(${result});`,
+			];
 		}
 		case "UNARY": {
 			const { dst, src, operator } = instruction;

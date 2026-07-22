@@ -877,6 +877,8 @@ function emitInstruction(instruction: VmInstruction, dataOffset?: number) {
 			return `{ .opcode = MAL_OP_BINARY, .as.binary = { .dst = ${instruction.dst}, .left = ${instruction.left}, .right = ${instruction.right}, .op = ${emitBinaryOperator(instruction.operator)} } }`;
 		case "UNARY":
 			return `{ .opcode = MAL_OP_UNARY, .as.unary = { .dst = ${instruction.dst}, .src = ${instruction.src}, .op = ${emitUnaryOperator(instruction.operator)} } }`;
+		case "TYPEOF_COMPARE":
+			return `{ .opcode = MAL_OP_TYPEOF_COMPARE, .as.typeof_compare = { .dst = ${instruction.dst}, .src = ${instruction.src}, .expected = ${emitTypeofResult(instruction.expected)}, .negated = ${instruction.negated} } }`;
 	}
 
 	throw new Error(`Unknown vm instruction ${(instruction as { opcode: string }).opcode}`);
@@ -1036,6 +1038,29 @@ export function emitUnaryOperator(
 	}
 
 	throw new Error("Unknown unary operator");
+}
+
+export function emitTypeofResult(
+	result: Extract<VmInstruction, { opcode: "TYPEOF_COMPARE" }>["expected"],
+) {
+	switch (result) {
+		case "undefined":
+			return "MAL_TYPEOF_UNDEFINED";
+		case "object":
+			return "MAL_TYPEOF_OBJECT";
+		case "boolean":
+			return "MAL_TYPEOF_BOOLEAN";
+		case "number":
+			return "MAL_TYPEOF_NUMBER";
+		case "string":
+			return "MAL_TYPEOF_STRING";
+		case "symbol":
+			return "MAL_TYPEOF_SYMBOL";
+		case "bigint":
+			return "MAL_TYPEOF_BIGINT";
+		case "function":
+			return "MAL_TYPEOF_FUNCTION";
+	}
 }
 
 /**

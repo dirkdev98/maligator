@@ -315,6 +315,10 @@ export function escapeOfRegister(
 					raise(position === 1 ? "none" : "retained"); // [dst, object]
 					break;
 				}
+				case "typeofCompare": {
+					raise(position === 1 ? "none" : "retained");
+					break;
+				}
 				case "storeProperty":
 				case "defineProperty":
 				case "defineAccessor": {
@@ -769,6 +773,11 @@ function classifyShapedStackAlloc(
 				}
 				case "loadPrototype": {
 					if (position !== 1) return undefined; // [dst, object]
+					break;
+				}
+				case "typeofCompare": {
+					if (position !== 1) return undefined;
+					identityObserved = true;
 					break;
 				}
 				case "storeProperty": {

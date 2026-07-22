@@ -14,6 +14,7 @@ import type {
 	IRFunction,
 	IRImmediateValue,
 	IRInstruction,
+	IRTypeofResult,
 } from "./ir.ts";
 import { debugEnabled, isNil } from "./utils.ts";
 
@@ -46,6 +47,7 @@ const SIDE_EFFECT_FREE_OPS = new Set<IRInstruction["type"]>([
 	"loadIntrinsic",
 	"loadThis",
 	"loadNewTarget",
+	"typeofCompare",
 ]);
 
 interface OptimizationFeatures {
@@ -100,6 +102,9 @@ export function executeIROptimizations(program: IntermediateProgram) {
 		{ run: optDropUnreferencedBlocks },
 		{ run: optLocalsToRegister },
 		{ run: optCopyPropagation },
+		// A fused predicate must execute where the original typeof did: moving the
+		// observation to its later comparison could see a reassigned source.
+		{ run: optFuseTypeofComparisons },
 		// Fold only primitive operations whose exact JavaScript result can be
 		// computed without coercing an object or running user code. Constant jump
 		// cleanup then exposes dead blocks to the existing CFG passes.
@@ -525,6 +530,10 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 								break;
 							case "unary":
 								if (position !== 1 || use.operator !== "typeof") safe = false;
+								else observed = true;
+								break;
+							case "typeofCompare":
+								if (position !== 1) safe = false;
 								else observed = true;
 								break;
 							case "binary":
@@ -1453,6 +1462,103 @@ function optCopyPropagation(program: IntermediateProgram): boolean {
 		}
 	}
 
+	return changed;
+}
+
+function canonicalTypeofResult(value: string): IRTypeofResult | undefined {
+	switch (value) {
+		case "undefined":
+		case "object":
+		case "boolean":
+		case "number":
+		case "string":
+		case "symbol":
+		case "bigint":
+		case "function":
+			return value;
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Fuse `typeof value` followed by equality with a canonical result string. The
+ * predicate replaces the original typeof producer and the binary comparison
+ * becomes a move, preserving the observation point if `value` changes between
+ * the two instructions. Any other live use of the produced string keeps the
+ * generic allocating typeof operation.
+ */
+function optFuseTypeofComparisons(program: IntermediateProgram): boolean {
+	let changed = false;
+	for (const fn of program.functions) {
+		const { uniqueDefinitions, uses } = buildIRRegisterIndex(fn);
+		const replacements = new Map<IRInstruction, IRInstruction>();
+
+		for (const block of fn.blocks) {
+			for (const comparison of block.instructions) {
+				if (
+					comparison.type !== "binary" ||
+					(comparison.operator !== "===" &&
+						comparison.operator !== "!==" &&
+						comparison.operator !== "==" &&
+						comparison.operator !== "!=")
+				) {
+					continue;
+				}
+
+				for (const [typeofPosition, stringPosition] of [
+					[1, 2],
+					[2, 1],
+				] as const) {
+					const typeofRegister = comparison.registers[typeofPosition];
+					const producer = uniqueDefinitions.get(typeofRegister);
+					const string = uniqueDefinitions.get(comparison.registers[stringPosition]);
+					if (
+						producer?.type !== "unary" ||
+						producer.operator !== "typeof" ||
+						string?.type !== "createString" ||
+						replacements.has(producer)
+					) {
+						continue;
+					}
+					const expected = canonicalTypeofResult(
+						decodeStringConstant(program, string.stringIndex),
+					);
+					if (expected === undefined) continue;
+
+					const producerHasOtherLiveUse = (uses.get(typeofRegister) ?? []).some(
+						({ instruction: use, position }) => {
+							if (use === comparison && position === typeofPosition) return false;
+							if (use.type !== "move" || position !== 1) return true;
+							return (uses.get(use.registers[0])?.length ?? 0) !== 0;
+						},
+					);
+					if (producerHasOtherLiveUse) continue;
+
+					replacements.set(producer, {
+						type: "typeofCompare",
+						registers: [producer.registers[0], producer.registers[1]],
+						expected,
+						negated: comparison.operator === "!==" || comparison.operator === "!=",
+					});
+					replacements.set(comparison, {
+						type: "move",
+						registers: [comparison.registers[0], producer.registers[0]],
+					});
+					break;
+				}
+			}
+		}
+
+		if (replacements.size > 0) {
+			for (const block of fn.blocks) {
+				block.instructions = block.instructions.map(
+					(instruction) => replacements.get(instruction) ?? instruction,
+				);
+			}
+			changed = true;
+		}
+	}
 	return changed;
 }
 

@@ -189,6 +189,7 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "ARRAY_REST":
 		case "BINARY":
 		case "UNARY":
+		case "TYPEOF_COMPARE":
 			return { ...instruction };
 	}
 	return assertNever(instruction);

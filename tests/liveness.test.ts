@@ -56,6 +56,14 @@ test("isSafepoint: allocations and calls are safepoints, scalar/moves are not", 
 		false,
 	);
 	expect(isSafepoint({ type: "move", registers: [0, 1] } as never)).toBe(false);
+	expect(
+		isSafepoint({
+			type: "typeofCompare",
+			registers: [0, 1],
+			expected: "object",
+			negated: false,
+		} as never),
+	).toBe(false);
 	expect(isSafepoint({ type: "jump", blocks: [0] } as never)).toBe(false);
 	expect(isSafepoint({ type: "loadLocal", registers: [0, 1] } as never)).toBe(false);
 	// Construction and suspension are collection points too.

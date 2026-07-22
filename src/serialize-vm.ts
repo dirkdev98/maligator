@@ -16,8 +16,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 10 for bulk private-name and uninitialized private-field operations.
-export const WIRE_VERSION = 10;
+// Bumped to 11 for the non-allocating canonical typeof comparison.
+export const WIRE_VERSION = 11;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -121,6 +121,7 @@ export const WIRE_OPCODES = [
 	"INIT_GLOBAL_VARS",
 	"CREATE_PRIVATE_NAMES",
 	"INIT_PRIVATE_FIELDS",
+	"TYPEOF_COMPARE",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -155,6 +156,21 @@ const BINOP_TAG = new Map<string, number>(WIRE_BINOPS.map((op, i) => [op, i]));
 /** Unary-operator wire order; mirrored by the C `wire_unops[]` table. */
 export const WIRE_UNOPS = ["!", "-", "+", "~", "typeof"] as const;
 const UNOP_TAG = new Map<string, number>(WIRE_UNOPS.map((op, i) => [op, i]));
+
+/** Canonical typeof-result order; mirrored by `wire_typeof_results` in vm_load.c. */
+export const WIRE_TYPEOF_RESULTS = [
+	"undefined",
+	"object",
+	"boolean",
+	"number",
+	"string",
+	"symbol",
+	"bigint",
+	"function",
+] as const;
+const TYPEOF_RESULT_TAG = new Map<string, number>(
+	WIRE_TYPEOF_RESULTS.map((result, i) => [result, i]),
+);
 
 /**
  * Intrinsic wire order = a u16 index into this array; the C `wire_intrinsics[]`
@@ -944,6 +960,17 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.u8(tag);
 			return;
 		}
+		case "TYPEOF_COMPARE": {
+			const tag = TYPEOF_RESULT_TAG.get(i.expected);
+			if (tag === undefined) {
+				throw new Error(`serialize-vm: unknown typeof result ${i.expected}`);
+			}
+			w.i32(i.dst);
+			w.i32(i.src);
+			w.u8(tag);
+			w.u8(i.negated ? 1 : 0);
+			return;
+		}
 	}
 	throw new Error(`serialize-vm: unhandled opcode ${(i as { opcode: string }).opcode}`);
 }
@@ -1439,6 +1466,15 @@ function readInstruction(r: Reader): VmInstruction {
 					{ opcode: "UNARY" }
 				>["operator"],
 			};
+		case "TYPEOF_COMPARE": {
+			const dst = r.i32();
+			const src = r.i32();
+			const expected = WIRE_TYPEOF_RESULTS[r.u8()];
+			if (expected === undefined) {
+				throw new RangeError("serialize-vm: invalid typeof result");
+			}
+			return { opcode, dst, src, expected, negated: r.u8() !== 0 };
+		}
 	}
 	throw new Error(`serialize-vm: unhandled opcode tag for ${String(opcode)}`);
 }

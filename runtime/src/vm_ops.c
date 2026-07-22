@@ -2308,33 +2308,48 @@ void mal_op_binary(MalCallable *callable, const MalInstruction *instruction) {
     );
 }
 
-static const byte *mal_vm_typeof_tag(MalValue value) {
+MalTypeofResult mal_vm_typeof_result(MalValue value) {
     if (mal_value_is_undefined(value)) {
-        return "undefined";
+        return MAL_TYPEOF_UNDEFINED;
     }
     if (mal_value_is_null(value)) {
-        return "object";
+        return MAL_TYPEOF_OBJECT;
     }
     if (mal_value_is_boolean(value)) {
-        return "boolean";
+        return MAL_TYPEOF_BOOLEAN;
     }
     if (mal_value_is_string(value)) {
-        return "string";
+        return MAL_TYPEOF_STRING;
     }
     if (mal_value_is_symbol(value)) {
-        return "symbol";
+        return MAL_TYPEOF_SYMBOL;
     }
     if (mal_value_is_bigint(value)) {
-        return "bigint";
+        return MAL_TYPEOF_BIGINT;
     }
     if (mal_value_is_callable(value)) {
-        return "function";
+        return MAL_TYPEOF_FUNCTION;
     }
     if (mal_value_is_object(value)) {
-        return "object";
+        return MAL_TYPEOF_OBJECT;
     }
 
-    return "number";
+    return MAL_TYPEOF_NUMBER;
+}
+
+static const byte *mal_vm_typeof_tag(MalTypeofResult result) {
+    switch (result) {
+        case MAL_TYPEOF_UNDEFINED: return "undefined";
+        case MAL_TYPEOF_OBJECT: return "object";
+        case MAL_TYPEOF_BOOLEAN: return "boolean";
+        case MAL_TYPEOF_NUMBER: return "number";
+        case MAL_TYPEOF_STRING: return "string";
+        case MAL_TYPEOF_SYMBOL: return "symbol";
+        case MAL_TYPEOF_BIGINT: return "bigint";
+        case MAL_TYPEOF_FUNCTION: return "function";
+        case MAL_TYPEOF_RESULT_COUNT: break;
+    }
+    return "undefined";
 }
 
 // Value-returning core of a unary operator, shared by mal_op_unary and the
@@ -2381,7 +2396,7 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
             }
             return mal_ops_bit_xor(value, mal_value_from_i32(-1));
         case MAL_UNARY_TYPEOF: {
-            const byte *tag = mal_vm_typeof_tag(value);
+            const byte *tag = mal_vm_typeof_tag(mal_vm_typeof_result(value));
             usize length = 0;
             while (tag[length] != '\0') {
                 length++;
@@ -2399,6 +2414,15 @@ void mal_op_unary(MalCallable *callable, const MalInstruction *instruction) {
         instruction->as.unary.op,
         callable->registers[instruction->as.unary.src]
     );
+}
+
+void mal_op_typeof_compare(MalCallable *callable, const MalInstruction *instruction) {
+    bool result = mal_vm_typeof_compare(
+        callable->registers[instruction->as.typeof_compare.src],
+        instruction->as.typeof_compare.expected
+    );
+    callable->registers[instruction->as.typeof_compare.dst] =
+        mal_value_new_boolean(instruction->as.typeof_compare.negated ? !result : result);
 }
 
 void mal_op_store_global(MalCallable *callable, const MalInstruction *instruction) {

@@ -33,6 +33,113 @@ checks.push(
 	parseUrl("/path").pathname === "/path",
 );
 
+const undefinedValue = undefined;
+const objectValue = {};
+const booleanValue = true;
+const numberValue = 1;
+const stringValue = "value";
+const symbolValue = Symbol("value");
+const bigintValue = 1n;
+const functionValue = function () {};
+
+checks.push(
+	typeof undefinedValue === "undefined",
+	"undefined" === typeof undefinedValue,
+	typeof undefinedValue == "undefined",
+	"undefined" == typeof undefinedValue,
+	!(typeof undefinedValue !== "undefined"),
+	!("undefined" !== typeof undefinedValue),
+	!(typeof undefinedValue != "undefined"),
+	!("undefined" != typeof undefinedValue),
+	typeof objectValue === "object",
+	"object" === typeof objectValue,
+	typeof objectValue == "object",
+	"object" == typeof objectValue,
+	!(typeof objectValue !== "object"),
+	!("object" !== typeof objectValue),
+	!(typeof objectValue != "object"),
+	!("object" != typeof objectValue),
+	typeof booleanValue === "boolean",
+	"boolean" === typeof booleanValue,
+	typeof booleanValue == "boolean",
+	"boolean" == typeof booleanValue,
+	!(typeof booleanValue !== "boolean"),
+	!("boolean" !== typeof booleanValue),
+	!(typeof booleanValue != "boolean"),
+	!("boolean" != typeof booleanValue),
+	typeof numberValue === "number",
+	"number" === typeof numberValue,
+	typeof numberValue == "number",
+	"number" == typeof numberValue,
+	!(typeof numberValue !== "number"),
+	!("number" !== typeof numberValue),
+	!(typeof numberValue != "number"),
+	!("number" != typeof numberValue),
+	typeof stringValue === "string",
+	"string" === typeof stringValue,
+	typeof stringValue == "string",
+	"string" == typeof stringValue,
+	!(typeof stringValue !== "string"),
+	!("string" !== typeof stringValue),
+	!(typeof stringValue != "string"),
+	!("string" != typeof stringValue),
+	typeof symbolValue === "symbol",
+	"symbol" === typeof symbolValue,
+	typeof symbolValue == "symbol",
+	"symbol" == typeof symbolValue,
+	!(typeof symbolValue !== "symbol"),
+	!("symbol" !== typeof symbolValue),
+	!(typeof symbolValue != "symbol"),
+	!("symbol" != typeof symbolValue),
+	typeof bigintValue === "bigint",
+	"bigint" === typeof bigintValue,
+	typeof bigintValue == "bigint",
+	"bigint" == typeof bigintValue,
+	!(typeof bigintValue !== "bigint"),
+	!("bigint" !== typeof bigintValue),
+	!(typeof bigintValue != "bigint"),
+	!("bigint" != typeof bigintValue),
+	typeof functionValue === "function",
+	"function" === typeof functionValue,
+	typeof functionValue == "function",
+	"function" == typeof functionValue,
+	!(typeof functionValue !== "function"),
+	!("function" !== typeof functionValue),
+	!(typeof functionValue != "function"),
+	!("function" != typeof functionValue),
+	typeof null === "object",
+);
+
+let mutableTypeofValue = 1;
+const savedTypeof = typeof mutableTypeofValue;
+mutableTypeofValue = function () {};
+
+let getterReads = 0;
+const getterSource = {
+	get value() {
+		getterReads++;
+		return 1;
+	},
+};
+let callReads = 0;
+function callSource() {
+	callReads++;
+	return null;
+}
+const dynamicTypeofTag = "number";
+const standaloneTypeof = typeof numberValue;
+checks.push(
+	savedTypeof === "number",
+	typeof getterSource.value === "number",
+	getterReads === 1,
+	typeof callSource() === "object",
+	callReads === 1,
+	typeof numberValue === dynamicTypeofTag,
+	!(typeof numberValue === "Number"),
+	standaloneTypeof.length === 6,
+	standaloneTypeof.charCodeAt(0) === 110,
+);
+
 checkAccessor(ArrayBuffer.prototype, "byteLength", "get byteLength");
 checkAccessor(DataView.prototype, "byteOffset", "get byteOffset");
 checkAccessor(Map.prototype, "size", "get size");
