@@ -862,6 +862,8 @@ export type IRInstruction =
 
 			// [destination, object, key]
 			registers: [number, number, number];
+			stackObjectSiteId?: number;
+			stackObjectSlot?: number;
 	  }
 	| {
 			type: "loadPropertyStatic";
@@ -869,6 +871,8 @@ export type IRInstruction =
 			// [destination, object]
 			registers: [number, number];
 			stringIndex: number;
+			stackObjectSiteId?: number;
+			stackObjectSlot?: number;
 	  }
 	| {
 			type: "loadSuperProperty";
@@ -882,6 +886,8 @@ export type IRInstruction =
 
 			// [object, key, value]
 			registers: [number, number, number];
+			stackObjectSiteId?: number;
+			stackObjectSlot?: number;
 	  }
 	| {
 			type: "storePropertyStatic";
@@ -889,6 +895,8 @@ export type IRInstruction =
 			// [object, value]
 			registers: [number, number];
 			stringIndex: number;
+			stackObjectSiteId?: number;
+			stackObjectSlot?: number;
 	  }
 	| {
 			type: "toPropertyKey";

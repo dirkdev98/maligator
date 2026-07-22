@@ -218,6 +218,11 @@ export interface VmFunction {
 	 * functions retain ordinary heap allocation semantics.
 	 */
 	stackObjectSites?: ReadonlyArray<{ instructionIndex: number; slotCount: number }>;
+	stackObjectAccesses?: ReadonlyArray<{
+		instructionIndex: number;
+		allocationInstructionIndex: number;
+		slot: number;
+	}>;
 
 	/**
 	 * COMPILE-ONLY: partial-escape materializations keyed to RETURN instruction
@@ -891,6 +896,11 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		returnInstructionIndex: number;
 		siteId: number;
 	}> = [];
+	const pendingStackObjectAccesses: Array<{
+		instructionIndex: number;
+		siteId: number;
+		slot: number;
+	}> = [];
 	let currentPos = -1;
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
@@ -949,6 +959,20 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 					siteId: instruction.stackObjectMaterializeSiteId,
 				});
 			}
+			if (
+				(instruction.type === "loadProperty" ||
+					instruction.type === "loadPropertyStatic" ||
+					instruction.type === "storeProperty" ||
+					instruction.type === "storePropertyStatic") &&
+				instruction.stackObjectSiteId !== undefined &&
+				instruction.stackObjectSlot !== undefined
+			) {
+				pendingStackObjectAccesses.push({
+					instructionIndex,
+					siteId: instruction.stackObjectSiteId,
+					slot: instruction.stackObjectSlot,
+				});
+			}
 			positions.push(currentPos);
 		}
 	}
@@ -962,6 +986,15 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 				throw new Error(`Unknown stack-object materialization site id ${siteId}`);
 			}
 			return { returnInstructionIndex, allocationInstructionIndex };
+		},
+	);
+	const stackObjectAccesses = pendingStackObjectAccesses.map(
+		({ instructionIndex, siteId, slot }) => {
+			const allocationInstructionIndex = stackObjectSiteInstructionById.get(siteId);
+			if (allocationInstructionIndex === undefined) {
+				throw new Error(`Unknown stack-object access site id ${siteId}`);
+			}
+			return { instructionIndex, allocationInstructionIndex, slot };
 		},
 	);
 
@@ -1016,6 +1049,8 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		positions,
 		gcRootRegisters,
 		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
+		stackObjectAccesses:
+			stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,
 		stackObjectMaterializations:
 			stackObjectMaterializations.length > 0 ? stackObjectMaterializations : undefined,
 	};

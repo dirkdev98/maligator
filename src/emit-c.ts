@@ -531,6 +531,7 @@ export function emitCompiledFunction(
 		stackObjectSites.set(site.instructionIndex, {
 			objectName: `__stack_object_${site.instructionIndex}`,
 			slotsOffset: nextStackSlot,
+			slotCount: site.slotCount,
 		});
 		nextStackSlot += site.slotCount;
 	}
@@ -548,6 +549,25 @@ export function emitCompiledFunction(
 			);
 		}
 		stackObjectMaterializations.set(materialization.returnInstructionIndex, site);
+	}
+	const stackObjectAccesses = new Map<
+		number,
+		{ site: StackObjectSite; slot: number }
+	>();
+	for (const access of fn.stackObjectAccesses ?? []) {
+		const instruction = fn.instructions[access.instructionIndex];
+		const site = stackObjectSites.get(access.allocationInstructionIndex);
+		if (
+			(instruction?.opcode !== "LOAD_PROPERTY_STATIC" &&
+				instruction?.opcode !== "STORE_PROPERTY_STATIC") ||
+			site === undefined ||
+			access.slot < 0 ||
+			access.slot >= site.slotCount ||
+			stackObjectAccesses.has(access.instructionIndex)
+		) {
+			throw new Error(`Invalid stack-object access metadata at instruction ${access.instructionIndex}`);
+		}
+		stackObjectAccesses.set(access.instructionIndex, { site, slot: access.slot });
 	}
 	const totalSlots = nextStackSlot;
 
@@ -571,6 +591,7 @@ export function emitCompiledFunction(
 		thisSlot,
 		null,
 		stackObjectSites,
+		stackObjectAccesses,
 		stackObjectMaterializations,
 	);
 	if (body === null) {
@@ -791,6 +812,7 @@ function emitResumableFunction(
 		gcUnlink,
 		-1,
 		coro,
+		new Map(),
 		new Map(),
 		new Map(),
 	);
@@ -1067,6 +1089,7 @@ interface RegionAccess {
 interface StackObjectSite {
 	objectName: string;
 	slotsOffset: number;
+	slotCount: number;
 }
 
 /**
@@ -1153,6 +1176,7 @@ function emitBody(
 	thisSlot: number,
 	coro: CoroutineContext | null,
 	stackObjectSites: ReadonlyMap<number, StackObjectSite>,
+	stackObjectAccesses: ReadonlyMap<number, { site: StackObjectSite; slot: number }>,
 	stackObjectMaterializations: ReadonlyMap<number, StackObjectSite>,
 ): Array<string> | null {
 	const jumpTargets = new Set<number>();
@@ -1359,6 +1383,7 @@ function emitBody(
 			coro,
 			regionGuard.get(ip),
 			stackObjectSites.get(ip),
+			stackObjectAccesses.get(ip),
 			stackObjectMaterializations.get(ip),
 			mathUnaryCalls.has(ip),
 		);
@@ -1391,6 +1416,7 @@ function emitInstruction(
 	coro: CoroutineContext | null,
 	region: RegionAccess | undefined,
 	stackObjectSite: StackObjectSite | undefined,
+	stackObjectAccess: { site: StackObjectSite; slot: number } | undefined,
 	stackObjectMaterialization: StackObjectSite | undefined,
 	mathUnaryCall: boolean,
 ): Array<string> | null {
@@ -1654,6 +1680,10 @@ function emitInstruction(
 		}
 		case "LOAD_PROPERTY":
 		case "LOAD_PROPERTY_STATIC": {
+			if (stackObjectAccess !== undefined) {
+				const { site, slot } = stackObjectAccess;
+				return [`r${instruction.dst} = __gc_slots[${site.slotsOffset + slot}];`];
+			}
 			const key =
 				instruction.opcode === "LOAD_PROPERTY_STATIC"
 					? `mal_value_from_string(&mal_strings${suffix}[${instruction.stringIndex}])`
@@ -1731,6 +1761,12 @@ function emitInstruction(
 		}
 		case "STORE_PROPERTY":
 		case "STORE_PROPERTY_STATIC": {
+			if (stackObjectAccess !== undefined) {
+				const { site, slot } = stackObjectAccess;
+				return [
+					`__gc_slots[${site.slotsOffset + slot}] = ${boxed(instruction.value)};`,
+				];
+			}
 			const key =
 				instruction.opcode === "STORE_PROPERTY_STATIC"
 					? `mal_value_from_string(&mal_strings${suffix}[${instruction.stringIndex}])`

@@ -247,11 +247,18 @@ describe("stack-object native metadata and C emission", () => {
 				`function f() { const o = { x: "heap:" + 1 }; return typeof o === "object" && o === o ? o.x : ""; } globalThis.keep = f;`,
 			),
 		);
+		const fn = definition.functions.find(
+			(candidate) => (candidate.stackObjectAccesses?.length ?? 0) > 0,
+		)!;
+		expect(fn.stackObjectAccesses).toHaveLength(1);
+		const access = fn.stackObjectAccesses![0]!;
+		expect(fn.instructions[access.instructionIndex]?.opcode).toBe("LOAD_PROPERTY_STATIC");
 		const source = emitVmDefinition(definition, { compiled: true });
 		expect(source).toContain("MalObject __stack_object_");
 		expect(source).toContain("MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_OBJECT)");
 		expect(source).toMatch(/\.slots = &__gc_slots\[\d+\]/);
 		expect(source).toContain("mal_value_from_object(&__stack_object_");
+		expect(source).toMatch(/r\d+ = __gc_slots\[\d+\];/);
 		expect(source).not.toContain("= mal_vm_create_object_shaped(vm");
 	});
 
@@ -315,6 +322,7 @@ describe("stack-object native metadata and C emission", () => {
 			),
 		);
 		expect(decoded.functions.every((fn) => fn.stackObjectSites === undefined)).toBe(true);
+		expect(decoded.functions.every((fn) => fn.stackObjectAccesses === undefined)).toBe(true);
 		expect(
 			decoded.functions.every((fn) => fn.stackObjectMaterializations === undefined),
 		).toBe(true);

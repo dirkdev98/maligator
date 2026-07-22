@@ -271,11 +271,15 @@ function optStaticPropertyKeys(program: IntermediateProgram): boolean {
 								type: "loadPropertyStatic",
 								registers: [instruction.registers[0], instruction.registers[1]],
 								stringIndex: key.stringIndex,
+								stackObjectSiteId: instruction.stackObjectSiteId,
+								stackObjectSlot: instruction.stackObjectSlot,
 							}
 						: {
 								type: "storePropertyStatic",
 								registers: [instruction.registers[0], instruction.registers[2]],
 								stringIndex: key.stringIndex,
+								stackObjectSiteId: instruction.stackObjectSiteId,
+								stackObjectSlot: instruction.stackObjectSlot,
 							};
 				replacements.push({ block, index: i, instruction: replacement });
 			}
@@ -316,6 +320,15 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 				) {
 					delete instruction.stackObject;
 					delete instruction.stackObjectSiteId;
+				}
+				if (
+					instruction.type === "loadProperty" ||
+					instruction.type === "loadPropertyStatic" ||
+					instruction.type === "storeProperty" ||
+					instruction.type === "storePropertyStatic"
+				) {
+					delete instruction.stackObjectSiteId;
+					delete instruction.stackObjectSlot;
 				}
 			}
 		}
@@ -456,8 +469,13 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 				const keyStringIndices =
 					allocation.type === "createObjectShaped" ? allocation.keyStringIndices : [];
 				const ownKeys = new Set(keyStringIndices);
+				const slotByKey = new Map(keyStringIndices.map((key, slot) => [key, slot]));
 				const aliases = new Set<number>([objectRegister]);
 				const worklist = [objectRegister];
+				const stackAccesses = new Map<
+					Extract<IRInstruction, { type: "loadProperty" | "storeProperty" }>,
+					number
+				>();
 				const materializingReturns = new Set<
 					Extract<IRInstruction, { type: "return" }>
 				>();
@@ -487,6 +505,8 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 								const key = constantString(use.registers[2]);
 								if (position !== 1 || key === undefined || !ownKeys.has(key)) {
 									safe = false;
+								} else {
+									stackAccesses.set(use, slotByKey.get(key)!);
 								}
 								break;
 							}
@@ -494,6 +514,8 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 								const key = constantString(use.registers[1]);
 								if (position !== 0 || key === undefined || !ownKeys.has(key)) {
 									safe = false;
+								} else {
+									stackAccesses.set(use, slotByKey.get(key)!);
 								}
 								break;
 							}
@@ -561,10 +583,14 @@ export function annotateStackObjectSites(program: IntermediateProgram): void {
 					(observed || partialEscape) &&
 					stackObjectSlots + keyStringIndices.length <= maxStackObjectSlots
 				) {
+					const siteId = nextStackObjectSiteId++;
 					allocation.stackObject = true;
+					allocation.stackObjectSiteId = siteId;
+					for (const [instruction, slot] of stackAccesses) {
+						instruction.stackObjectSiteId = siteId;
+						instruction.stackObjectSlot = slot;
+					}
 					if (partialEscape) {
-						const siteId = nextStackObjectSiteId++;
-						allocation.stackObjectSiteId = siteId;
 						for (const instruction of materializingReturns) {
 							instruction.stackObjectMaterializeSiteId = siteId;
 						}
