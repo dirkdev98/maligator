@@ -1646,7 +1646,7 @@ function emitInstruction(
 						: []),
 					`static MalInlineCache __ic_${ip};`,
 					`MalValue __v_${ip};`,
-					`if ((${reg.name} && mal_vm_object_try_load(${reg.name}, ${key}, &__ic_${ip}, &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip})) {`,
+					`if ((${reg.name} && mal_vm_object_try_load(${reg.name}, ${key}, &__ic_${ip}, &__v_${ip})) || mal_vm_inherited_try_load(${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip}) || mal_vm_watched_try_load(${boxed(instruction.object)}, ${key}, &__ic_${ip}, &__v_${ip})) {`,
 					`  r${instruction.dst} = __v_${ip};`,
 					`} else {`,
 					`  r${instruction.dst} = mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${key}, &__ic_${ip});`,

@@ -499,6 +499,19 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
     return true;
 }
 
+/** Guarded own-value hit for watched built-ins whose properties live in overflow tables. */
+static inline bool mal_vm_watched_try_load(MalValue receiver, MalValue key,
+                                           const MalInlineCache *ic, MalValue *out) {
+    if (!mal_primitive_method_protector || ic->mode != MAL_IC_MODE_SHAPE ||
+        ic->slot != MAL_IC_VALUE_SLOT || ic->prim_kind != 0 || key != ic->key ||
+        !mal_value_is_object(receiver) || mal_value_to_object(receiver) != ic->obj) {
+        return false;
+    }
+    *out = ic->value;
+    MAL_PERF_COUNT(ic_load_watched_hits);
+    return true;
+}
+
 /**
  * Monomorphic shape-slot overwrite of an existing writable data slot (barriered).
  * Returns true when applied; false (miss / value-slot / accessor / read-only / fresh
@@ -548,6 +561,9 @@ static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, 
         return out;
     }
     if (mal_vm_inherited_try_load(object_value, key_value, ic, &out)) {
+        return out;
+    }
+    if (mal_vm_watched_try_load(object_value, key_value, ic, &out)) {
         return out;
     }
     // Everything past the monomorphic hit (polymorphic overflow, megamorphic stub

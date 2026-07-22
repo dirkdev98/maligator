@@ -15,6 +15,7 @@ describe("inherited built-in method and native call caches", () => {
 	let compiled: string;
 	let interpreted: string;
 	let monkeyPatch: string;
+	let watchedMonkeyPatch: string;
 	let accessor: string;
 	let ordinaryCompiled: string;
 	let ordinaryInterpreted: string;
@@ -35,6 +36,12 @@ describe("inherited built-in method and native call caches", () => {
 		monkeyPatch = buildNativeBinary({
 			fixture: "tests/local/inherited-method-cache-monkey-patch.js",
 			name: "inherited-method-cache-monkey-patch",
+			compiled: true,
+			outDir,
+		});
+		watchedMonkeyPatch = buildNativeBinary({
+			fixture: "tests/local/watched-intrinsic-cache-monkey-patch.js",
+			name: "watched-intrinsic-cache-monkey-patch",
 			compiled: true,
 			outDir,
 		});
@@ -83,6 +90,12 @@ describe("inherited built-in method and native call caches", () => {
 	it("invalidates on Date.prototype assignment", () => {
 		assertExactLines(runToStdout(monkeyPatch), [
 			"inherited-method-cache-monkey-patch PASS",
+		]);
+	});
+
+	it("invalidates watched intrinsic own values", () => {
+		assertExactLines(runToStdout(watchedMonkeyPatch), [
+			"watched-intrinsic-cache-monkey-patch PASS",
 		]);
 	});
 
