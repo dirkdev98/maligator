@@ -737,18 +737,18 @@ static MalValue mal_builtin_string_prototype_repeat(MalVm *vm, MalValue this_val
         mal_builtin_string_throw_length(vm);
         return mal_value_new_undefined();
     }
-    c16 *code_units = malloc(bytes);
-    if (code_units == nullptr) {
-        mal_builtin_string_throw_length(vm);
-        return mal_value_new_undefined();
-    }
-    for (usize i = 0; i < repeat; i++) {
-        memcpy(code_units + i * length, mal_string_code_units(string), (usize) sizeof(c16) * length);
+    const c16 *source = mal_string_code_units(string);
+    c16 *code_units = mal_heap_alloc_raw(&vm->heap, bytes);
+    usize filled = length;
+    memcpy(code_units, source, sizeof(c16) * length);
+    while (filled < result_length) {
+        usize remaining = result_length - filled;
+        usize copy_length = filled < remaining ? filled : remaining;
+        memcpy(code_units + filled, code_units, sizeof(c16) * copy_length);
+        filled += copy_length;
     }
 
-    MalValue result = mal_builtin_string_from_units(vm, code_units, result_length);
-    free(code_units);
-    return result;
+    return mal_value_from_string(mal_string_new_owned(&vm->heap, code_units, result_length));
 }
 
 static MalValue mal_builtin_string_trim_impl(MalVm *vm, MalValue this_value, bool trim_start, bool trim_end) {

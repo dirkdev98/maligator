@@ -171,6 +171,12 @@ check(
 );
 check("typed-array hex remains correct", new Uint8Array([0, 255]).toHex() === "00ff");
 
+check("repeat fills non-power-of-two results", "ab".repeat(7) === "ababababababab");
+check(
+	"repeat preserves UTF-16 code units",
+	"\ud83d\ude00x".repeat(3) === "\ud83d\ude00x\ud83d\ude00x\ud83d\ude00x",
+);
+
 check("concat remains correct", "a" + "\ud83d\ude00" + "b" === "a\ud83d\ude00b");
 check(
 	"String.prototype.concat remains correct",
