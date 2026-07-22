@@ -3683,7 +3683,7 @@ static MalInlineCache *mal_interp_ic(MalCallable *callable) {
 }
 
 void mal_op_load_property(MalCallable *callable, const MalInstruction *instruction) {
-    callable->registers[instruction->as.load_property.dst] = mal_vm_op_load_property_ic(
+    callable->registers[instruction->as.load_property.dst] = mal_vm_array_fast_load(
         callable->vm,
         callable->registers[instruction->as.load_property.object],
         callable->registers[instruction->as.load_property.key],
@@ -3694,7 +3694,7 @@ void mal_op_load_property(MalCallable *callable, const MalInstruction *instructi
 void mal_op_load_property_static(MalCallable *callable, const MalInstruction *instruction) {
     MalValue key = mal_value_from_string(
         &callable->vm->definition->string_constants[instruction->as.load_property_static.string_index]);
-    callable->registers[instruction->as.load_property_static.dst] = mal_vm_op_load_property_ic(
+    callable->registers[instruction->as.load_property_static.dst] = mal_vm_array_fast_load(
         callable->vm,
         callable->registers[instruction->as.load_property_static.object],
         key,
@@ -3881,7 +3881,7 @@ void mal_vm_op_store_property(MalVm *vm, MalValue object_value, MalValue key_val
 }
 
 void mal_op_store_property(MalCallable *callable, const MalInstruction *instruction) {
-    mal_vm_op_store_property_ic(
+    mal_vm_array_fast_store(
         callable->vm,
         callable->registers[instruction->as.store_property.object],
         callable->registers[instruction->as.store_property.key],
@@ -3894,7 +3894,7 @@ void mal_op_store_property(MalCallable *callable, const MalInstruction *instruct
 void mal_op_store_property_static(MalCallable *callable, const MalInstruction *instruction) {
     MalValue key = mal_value_from_string(
         &callable->vm->definition->string_constants[instruction->as.store_property_static.string_index]);
-    mal_vm_op_store_property_ic(
+    mal_vm_array_fast_store(
         callable->vm,
         callable->registers[instruction->as.store_property_static.object],
         key,

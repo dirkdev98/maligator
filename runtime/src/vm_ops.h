@@ -547,6 +547,9 @@ static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, 
     if (object != nullptr && mal_vm_object_try_load(object, key_value, ic, &out)) {
         return out;
     }
+    if (mal_vm_inherited_try_load(object_value, key_value, ic, &out)) {
+        return out;
+    }
     // Everything past the monomorphic hit (polymorphic overflow, megamorphic stub
     // probe, and the miss/refill) lives in mal_vm_op_load_property_ic, out of line:
     // keeping this inline fast path tiny stops the poly/mega logic from bloating

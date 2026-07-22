@@ -31,6 +31,7 @@ function withoutPerfStats(): NodeJS.ProcessEnv {
 describe("opt-in performance statistics", () => {
 	let binary: string;
 	let defaultBinary: string;
+	let interpretedBinary: string;
 
 	beforeAll(() => {
 		defaultBinary = buildNativeBinary({
@@ -44,6 +45,13 @@ describe("opt-in performance statistics", () => {
 			fixture: "tests/local/perf_stats.js",
 			name: "perf-stats",
 			compiled: true,
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
+		interpretedBinary = buildNativeBinary({
+			fixture: "tests/local/perf_stats.js",
+			name: "perf-stats-interpreted",
+			compiled: false,
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
@@ -160,5 +168,20 @@ describe("opt-in performance statistics", () => {
 		assertPassLine(result.stdout, "perf-stats");
 		const intrinsics = reportLine(result.stderr, "[perf-intrinsic-stats]");
 		expect(field(intrinsics, "cache_hits")).toBeGreaterThan(0);
+	});
+
+	it("uses inline-cache fast paths in the interpreter", () => {
+		const result = spawnSync(interpretedBinary, [], {
+			env: { ...process.env, MAL_PERF_STATS: "1" },
+			encoding: "utf-8",
+		});
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		assertPassLine(result.stdout, "perf-stats");
+
+		const ic = reportLine(result.stderr, "[perf-ic-stats]");
+		expect(field(ic, "load_mono_hits")).toBeGreaterThan(0);
+		expect(field(ic, "store_mono_hits")).toBeGreaterThan(0);
+		expect(field(ic, "load_slow_mono_hits")).toBe(0);
+		expect(field(ic, "store_slow_mono_hits")).toBe(0);
 	});
 });
