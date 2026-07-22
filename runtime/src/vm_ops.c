@@ -3474,7 +3474,11 @@ MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue k
         }
         // Prototype / overflow / index / symbol key: resolve with the converted key.
         MAL_PERF_COUNT(ic_load_plain_generic);
-        return mal_vm_op_load_property_keyed(vm, object_value, key);
+        MalValue result = mal_vm_op_load_property_keyed(vm, object_value, key);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_ic_try_record_inherited_value(vm, object_value, key_value, result, ic);
+        }
+        return result;
     }
 
     // Primitive-method inline cache: a method-name load on a string/number/boolean/

@@ -87,5 +87,19 @@ ok("cross-realm native wrapper first", invokeRealm(fromRealmOne) === 53);
 ok("cross-realm native wrapper second", invokeRealm(fromRealmTwo) === 59);
 ok("cross-realm native wrapper returns", invokeRealm(fromRealmOne) === 53);
 
+function loadToString(object) {
+	return object.toString;
+}
+const plain = { value: 1 };
+const originalToString = Object.prototype.toString;
+for (let i = 0; i < 20; i++) {
+	ok("plain object inherited warm", loadToString(plain) === originalToString);
+}
+Object.prototype.toString = function () {
+	return "patched";
+};
+ok("plain object inherited invalidation", loadToString(plain)() === "patched");
+Object.prototype.toString = originalToString;
+
 ok("checks ran", passed > 4000);
 console.log("inherited-method-cache PASS");
