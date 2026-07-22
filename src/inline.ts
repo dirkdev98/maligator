@@ -20,7 +20,8 @@
  * object / rest parameter, owns no captured-slot env, contains no `this` /
  * `new.target` / `with` (caller-relative or dynamic-scope constructs), is free of
  * direct `eval` (C3, file-scoped), and is at most `MAX_INLINE_INSTRUCTIONS` real
- * instructions.
+ * instructions. Classified `arguments.length` / constant-index reads are admitted:
+ * a non-spread call site supplies their exact raw argument values during substitution.
  */
 
 import { buildIRRegisterIndex } from "./ir-register-index.ts";
@@ -47,8 +48,6 @@ function disqualifies(instruction: IRInstruction): boolean {
 		case "loadCallee":
 		case "createArgumentsObject":
 		case "createRestArguments":
-		case "loadArgumentCount":
-		case "loadArgument":
 		case "withEnter":
 		case "withExit":
 		case "withGet":
@@ -580,8 +579,6 @@ function methodDisqualifies(instruction: IRInstruction): boolean {
 		case "loadCallee":
 		case "createArgumentsObject":
 		case "createRestArguments":
-		case "loadArgumentCount":
-		case "loadArgument":
 		case "withEnter":
 		case "withExit":
 		case "withGet":
@@ -844,7 +841,16 @@ export function findHofInlineSites(program: IntermediateProgram): ProgramHofSite
 			return cached;
 		}
 		const target = program.functions.find((fn) => fn.functionIndex === index);
-		const ok = target !== undefined && isInlinableTarget(target);
+		const ok =
+			target !== undefined &&
+			isInlinableTarget(target) &&
+			!target.blocks.some((block) =>
+				block.instructions.some(
+					(instruction) =>
+						instruction.type === "loadArgumentCount" ||
+						instruction.type === "loadArgument",
+				),
+			);
 		eligibleCache.set(index, ok);
 		return ok;
 	};
@@ -957,7 +963,8 @@ const MULTI_BLOCK_TERMINATORS = new Set(["jump", "return", "throw"]);
 
 /**
  * Whether a target with branches/multiple returns is safe to splice block-wise.
- * The body *shape* (no `this`/`arguments`/`with`/eval/captured env, size-bounded)
+ * The body *shape* (no `this`/materialized arguments/`with`/eval/captured env,
+ * size-bounded)
  * is already vetted by `isInlinableTarget`; here we additionally require
  * inline-able *control flow*: branch targets are `jump`/`jumpIf` (remappable by a
  * constant block offset) and every block ends in an unconditional terminator —
@@ -1040,6 +1047,27 @@ function withRegisterOffset(instruction: IRInstruction, offset: number): IRInstr
 		r >= 0 ? r + offset : r,
 	);
 	return { ...instruction, registers } as IRInstruction;
+}
+
+function inlineInstruction(
+	instruction: IRInstruction,
+	offset: number,
+	args: ReadonlyArray<number>,
+): IRInstruction {
+	if (instruction.type === "loadArgumentCount") {
+		return {
+			type: "createNumber",
+			registers: [instruction.registers[0] + offset],
+			value: args.length,
+		};
+	}
+	if (instruction.type === "loadArgument") {
+		const destination = instruction.registers[0] + offset;
+		return instruction.index < args.length
+			? { type: "move", registers: [destination, args[instruction.index]!] }
+			: { type: "createUndefined", registers: [destination] };
+	}
+	return withRegisterOffset(instruction, offset);
 }
 
 /**
@@ -1173,7 +1201,7 @@ function buildInlinedBlocks(
 				);
 				continue;
 			}
-			instructions.push(withRegisterOffset(instruction, offset));
+			instructions.push(inlineInstruction(instruction, offset, args));
 		}
 		out.push({ instructions });
 	});
@@ -1302,7 +1330,7 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 					inlined.push(
 						instruction.type === "sourcePos"
 							? rewrap(instruction)
-							: withRegisterOffset(instruction, offset),
+							: inlineInstruction(instruction, offset, args),
 					);
 				}
 				const returnInstruction = body[body.length - 1] as {

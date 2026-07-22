@@ -135,15 +135,16 @@ test("a callee that uses new.target is not inlinable", () => {
 	).toBe(0);
 });
 
-test("a callee that materializes arguments is not inlinable", () => {
-	expect(
-		nestedCount(
-			`(function (){ function g(){ return arguments.length; } return g(1); })();`,
-		),
-	).toBe(0);
+test("classified frame-argument reads become call-site values when inlined", () => {
+	const fn = optimizedNested(
+		`(function (){ function g(){ return arguments.length + arguments[1]; } return g(10, 20, 30); })();`,
+	);
+	expect(countType(fn, "call")).toBe(0);
+	expect(countType(fn, "loadArgumentCount")).toBe(0);
+	expect(countType(fn, "loadArgument")).toBe(0);
 });
 
-test("methods that read frame arguments are not guarded-inline candidates", () => {
+test("methods that read classified frame arguments are guarded-inline candidates", () => {
 	const source = `
 		const obj = {
 			count(){ return arguments.length; },
@@ -168,7 +169,7 @@ test("methods that read frame arguments are not guarded-inline candidates", () =
 
 	expect(instructionTypes).toContain("loadArgumentCount");
 	expect(instructionTypes).toContain("loadArgument");
-	expect([...findMethodInlineSites(ir).byCaller.values()].flat()).toEqual([]);
+	expect([...findMethodInlineSites(ir).byCaller.values()].flat()).toHaveLength(2);
 });
 
 test("a generator target is not inlinable", () => {
