@@ -250,6 +250,31 @@ MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name) {
     return atom;
 }
 
+MalString *mal_intrinsic_code_unit(MalVm *vm, c16 code_unit) {
+    if (code_unit > UINT8_MAX) {
+        return mal_string_new_copy(&vm->heap, &code_unit, 1);
+    }
+
+    MalString *cached = vm->code_unit_strings[code_unit];
+    if (cached != nullptr) {
+        return cached;
+    }
+
+    MalString probe;
+    mal_string_init_external(&probe, &code_unit, 1);
+    MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(&probe)};
+    MalTableLookup lookup = mal_table_lookup(vm->atoms, key);
+    if (lookup.present) {
+        cached = mal_value_to_string(mal_table_entry_key(vm->atoms, lookup.entry).value);
+    } else {
+        cached = mal_string_new_copy(&vm->heap, &code_unit, 1);
+        MalKey atom_key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(cached)};
+        (void) mal_table_upsert_entry(vm->atoms, atom_key, nullptr);
+    }
+    vm->code_unit_strings[code_unit] = cached;
+    return cached;
+}
+
 MalString *mal_intrinsic_hot_ascii(MalVm *vm, MalHotIntrinsicKey key) {
     MAL_PERF_COUNT(intrinsic_hot_direct_calls);
     MalString *atom = vm->hot_intrinsic_keys[key];

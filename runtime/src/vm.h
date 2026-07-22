@@ -1283,6 +1283,13 @@ typedef struct MalVm {
     MalString *hot_intrinsic_keys[MAL_HOT_KEY_COUNT];
 
     /**
+     * Lazily interned Latin-1 one-code-unit strings. The atom table owns and roots
+     * each populated entry; direct indexing removes allocation and content probes
+     * from character extraction, iteration, RegExp, and string-spread paths.
+     */
+    MalString *code_unit_strings[256];
+
+    /**
      * Contiguous register/argument storage for non-suspendable frames. Each such
      * frame carves a window [stack_base, stack_base+slots); return pops it by
      * restoring value_stack_size. Fixed capacity — overflow throws a RangeError

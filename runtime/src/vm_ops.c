@@ -2780,9 +2780,9 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
             if (key.kind == MAL_KEY_INDEX) {
                 i32 index = mal_value_to_i32(key.value);
                 if (index >= 0 && (usize) index < mal_string_length(string)) {
-                    *out = mal_value_from_string(
-                        mal_string_new_slice(&vm->heap, string, (usize) index, 1)
-                    );
+                    *out = mal_value_from_string(mal_intrinsic_code_unit(
+                        vm, mal_string_code_units(string)[(usize) index]
+                    ));
                 }
                 return true;
             }
@@ -4756,7 +4756,9 @@ MalValue mal_vm_op_copy_data_properties(
             mal_object_set(
                 copy,
                 key,
-                mal_value_from_string(mal_string_new_slice(&vm->heap, string, i, 1))
+                mal_value_from_string(
+                    mal_intrinsic_code_unit(vm, mal_string_code_units(string)[i])
+                )
             );
         }
     } else if (mal_value_is_object(source)) {
@@ -4823,7 +4825,9 @@ void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue 
         MalString *string = mal_value_to_string(source);
         for (usize i = 0; i < mal_string_length(string); i++) {
             MalPropertyDesc desc = mal_intrinsic_data_desc(
-                mal_value_from_string(mal_string_new_slice(&vm->heap, string, i, 1)),
+                mal_value_from_string(
+                    mal_intrinsic_code_unit(vm, mal_string_code_units(string)[i])
+                ),
                 MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
             );
             mal_object_define_own(target, mal_key_index(i), &desc);

@@ -35,7 +35,9 @@ static bool mal_builtin_array_try_get_wide(MalVm *vm, MalValue this_value, f64 i
             return false;
         }
 
-        *out = mal_value_from_string(mal_string_new_slice(&vm->heap, string, (usize) index, 1));
+        *out = mal_value_from_string(
+            mal_intrinsic_code_unit(vm, mal_string_code_units(string)[(usize) index])
+        );
         return true;
     }
 
@@ -72,7 +74,9 @@ bool mal_builtin_array_try_get(MalVm *vm, MalValue this_value, u32 index, MalVal
             return false;
         }
 
-        *out = mal_value_from_string(mal_string_new_slice(&vm->heap, string, index, 1));
+        *out = mal_value_from_string(
+            mal_intrinsic_code_unit(vm, mal_string_code_units(string)[index])
+        );
         return true;
     }
 

@@ -390,6 +390,9 @@ void mal_intrinsics_init(MalVm *vm);
  */
 MalString *mal_intrinsic_ascii(MalVm *vm, const byte *name);
 
+/** Return a one-code-unit string, interning Latin-1 values in a VM-local cache. */
+MalString *mal_intrinsic_code_unit(MalVm *vm, c16 code_unit);
+
 /** Return a measured hot atom directly by its compile-time identifier. */
 MalString *mal_intrinsic_hot_ascii(MalVm *vm, MalHotIntrinsicKey key);
 

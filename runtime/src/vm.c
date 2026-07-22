@@ -375,6 +375,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     for (u32 i = 0; i < MAL_HOT_KEY_COUNT; i++) {
         vm->hot_intrinsic_keys[i] = nullptr;
     }
+    for (u32 i = 0; i < 256; i++) {
+        vm->code_unit_strings[i] = nullptr;
+    }
 
     mal_intrinsics_init(vm);
 

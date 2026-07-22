@@ -123,6 +123,11 @@ static MalValue mal_builtin_string_slice(MalVm *vm, MalString *string, usize off
     if (length == 0) {
         return mal_builtin_string_empty(vm);
     }
+    if (length == 1) {
+        return mal_value_from_string(
+            mal_intrinsic_code_unit(vm, mal_string_code_units(string)[offset])
+        );
+    }
     return mal_value_from_string(mal_string_new_slice(&vm->heap, string, offset, length));
 }
 
