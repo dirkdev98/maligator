@@ -157,7 +157,7 @@ static bool mal_builtin_iterator_array_advance(
 
     // Length reads live each step, so growth during iteration is visited.
     MalValue length_value;
-    if (!mal_vm_get_property(vm, iterator->target, mal_intrinsic_string_key(vm, "length"), &length_value)) {
+    if (!mal_vm_get_property(vm, iterator->target, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH), &length_value)) {
         return false;
     }
 
@@ -378,7 +378,7 @@ bool mal_vm_get_iterator_from_method(
     MalValue roots[2] = {completion.value, mal_value_new_undefined()};
     MalRootSpan roots_span;
     mal_gc_root(&roots_span, roots, 2);
-    if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, "next"), &roots[1])) {
+    if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT), &roots[1])) {
         mal_gc_unroot(&roots_span);
         return false;
     }
@@ -427,7 +427,7 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
     }
 
     MalValue done;
-    if (!mal_vm_get_property(vm, completion.value, mal_intrinsic_string_key(vm, "done"), &done)) {
+    if (!mal_vm_get_property(vm, completion.value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_DONE), &done)) {
         return false;
     }
 
@@ -436,7 +436,8 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
         return true;
     }
 
-    return mal_vm_get_property(vm, completion.value, mal_intrinsic_string_key(vm, "value"), value_out);
+    return mal_vm_get_property(
+        vm, completion.value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_VALUE), value_out);
 }
 
 static bool mal_vm_iterator_close_normal_impl(MalVm *vm, const MalIteratorRecord *record);

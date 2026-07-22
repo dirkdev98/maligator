@@ -74,8 +74,8 @@ static MalValue mal_async_from_sync_next(MalVm *vm, MalValue this_value, const M
 
     MalValue done_value;
     MalValue value_value;
-    if (!mal_vm_get_property(vm, step.value, mal_intrinsic_string_key(vm, "done"), &done_value) ||
-        !mal_vm_get_property(vm, step.value, mal_intrinsic_string_key(vm, "value"), &value_value)) {
+    if (!mal_vm_get_property(vm, step.value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_DONE), &done_value) ||
+        !mal_vm_get_property(vm, step.value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_VALUE), &value_value)) {
         return mal_afs_reject_pending(vm, cap_promise, cap_reject);
     }
     bool done = mal_value_is_truthy(done_value);
@@ -133,7 +133,7 @@ bool mal_vm_async_iterator_from_method(
         return false;
     }
     MalValue next;
-    if (!mal_vm_get_property(vm, completion.value, mal_intrinsic_string_key(vm, "next"), &next)) {
+    if (!mal_vm_get_property(vm, completion.value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT), &next)) {
         return false;
     }
     if (method_is_async) {

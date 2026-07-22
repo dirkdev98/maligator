@@ -96,7 +96,7 @@ static MalValue mal_promise_resolve_function(MalVm *vm, MalValue this_value, con
 
     // then = Get(resolution, "then"); a throwing getter rejects the promise.
     MalValue then;
-    if (!mal_vm_get_property(vm, resolution, mal_intrinsic_string_key(vm, "then"), &then)) {
+    if (!mal_vm_get_property(vm, resolution, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_THEN), &then)) {
         MalValue error = vm->completion.value;
         vm->completion = mal_promise_normal();
         mal_promise_reject(vm, promise, error);
@@ -313,7 +313,7 @@ void mal_promise_perform_then(
 /** SpeciesConstructor(O, %Promise%) for the result capability of then. */
 static MalValue mal_promise_species_constructor(MalVm *vm, MalValue object) {
     MalValue constructor;
-    if (!mal_vm_get_property(vm, object, mal_intrinsic_string_key(vm, "constructor"), &constructor)) {
+    if (!mal_vm_get_property(vm, object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CONSTRUCTOR), &constructor)) {
         return mal_value_new_undefined();
     }
     if (mal_value_is_undefined(constructor)) {
@@ -372,7 +372,7 @@ static MalValue mal_promise_prototype_catch(MalVm *vm, MalValue this_value, cons
     // catch(onRejected) === this.then(undefined, onRejected) through the real
     // (possibly overridden) then, so Get it rather than calling perform_then.
     MalValue then;
-    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, "then"), &then)) {
+    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_THEN), &then)) {
         return mal_value_new_undefined();
     }
     MalValue then_args[2] = {mal_value_new_undefined(), arg_count >= 1 ? args[0] : mal_value_new_undefined()};
@@ -394,7 +394,7 @@ static MalValue mal_promise_resolve_static(MalVm *vm, MalValue this_value, const
     MalValue x = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     if (mal_value_is_promise_object(x)) {
         MalValue x_constructor;
-        if (!mal_vm_get_property(vm, x, mal_intrinsic_string_key(vm, "constructor"), &x_constructor)) {
+        if (!mal_vm_get_property(vm, x, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CONSTRUCTOR), &x_constructor)) {
             return mal_value_new_undefined();
         }
         if (x_constructor == this_value) {
@@ -451,7 +451,7 @@ bool mal_promise_resolve_value(MalVm *vm, MalValue value, MalValue *out_promise)
     // matching the current spec's single-tick await on a native promise).
     if (mal_value_is_promise_object(value)) {
         MalValue constructor;
-        if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, "constructor"), &constructor)) {
+        if (!mal_vm_get_property(vm, value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CONSTRUCTOR), &constructor)) {
             mal_gc_unroot(&value_root);
             return false;
         }
@@ -548,7 +548,7 @@ static MalValue mal_promise_reject_abrupt(MalVm *vm, MalValue cap_reject, MalVal
 /** Invoke nextPromise.then(onFulfilled, onRejected). Returns false (pending throw) on failure. */
 static bool mal_promise_invoke_then(MalVm *vm, MalValue promise, MalValue on_fulfilled, MalValue on_rejected) {
     MalValue then_fn;
-    if (!mal_vm_get_property(vm, promise, mal_intrinsic_string_key(vm, "then"), &then_fn)) {
+    if (!mal_vm_get_property(vm, promise, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_THEN), &then_fn)) {
         return false;
     }
     MalValue then_args[2] = {on_fulfilled, on_rejected};
@@ -1067,7 +1067,7 @@ static MalValue mal_promise_finally_react(MalVm *vm, MalValue callee, MalValue p
     );
 
     MalValue then_fn;
-    if (!mal_vm_get_property(vm, inner, mal_intrinsic_string_key(vm, "then"), &then_fn)) {
+    if (!mal_vm_get_property(vm, inner, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_THEN), &then_fn)) {
         return mal_value_new_undefined();
     }
     MalCompletion completion = mal_vm_call_value(vm, then_fn, inner, &thunk, 1);
@@ -1113,7 +1113,7 @@ static MalValue mal_promise_prototype_finally(MalVm *vm, MalValue this_value, co
     }
 
     MalValue then_fn;
-    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, "then"), &then_fn)) {
+    if (!mal_vm_get_property(vm, this_value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_THEN), &then_fn)) {
         return mal_value_new_undefined();
     }
     MalValue then_args[2] = {then_finally, catch_finally};

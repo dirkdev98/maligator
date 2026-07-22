@@ -1083,7 +1083,7 @@ bool mal_vm_get_prototype_from_constructor(
 ) {
     MalValue prototype;
     if (!mal_vm_get_property(
-            vm, constructor, mal_intrinsic_string_key(vm, "prototype"), &prototype)) {
+            vm, constructor, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE), &prototype)) {
         return false;
     }
     if (mal_value_is_object(prototype)) {
@@ -1472,7 +1472,7 @@ static void mal_vm_run_until_frame_count(
                 ]);
                 MalValue prototype_value;
                 if (mal_value_is_object(frame->callee) &&
-                    mal_vm_get_property(vm, frame->callee, mal_intrinsic_string_key(vm, "prototype"), &prototype_value) &&
+                    mal_vm_get_property(vm, frame->callee, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE), &prototype_value) &&
                     mal_value_is_object(prototype_value)) {
                     generator_prototype = mal_value_to_object(prototype_value);
                 }

@@ -2916,7 +2916,7 @@ static MalValue mal_array_from_async_step(MalVm *vm, MalValue this_value, const 
                 return mal_value_new_undefined();
             }
             MalValue done_value;
-            if (!mal_vm_get_property(vm, resumed, mal_intrinsic_string_key(vm, "done"), &done_value)) {
+            if (!mal_vm_get_property(vm, resumed, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_DONE), &done_value)) {
                 mal_from_async_call1(vm, reject, vm->completion.value);
                 return mal_value_new_undefined();
             }
@@ -2929,7 +2929,7 @@ static MalValue mal_array_from_async_step(MalVm *vm, MalValue this_value, const 
                 return mal_value_new_undefined();
             }
             MalValue next_value;
-            if (!mal_vm_get_property(vm, resumed, mal_intrinsic_string_key(vm, "value"), &next_value)) {
+            if (!mal_vm_get_property(vm, resumed, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_VALUE), &next_value)) {
                 mal_from_async_call1(vm, reject, vm->completion.value);
                 return mal_value_new_undefined();
             }

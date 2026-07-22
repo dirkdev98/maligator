@@ -1134,7 +1134,7 @@ MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creati
 
     MalValue name_value = definition->name_string_index >= 0 && definition->name_string_index < vm->definition->string_constant_count
         ? mal_value_from_string(&vm->definition->string_constants[definition->name_string_index])
-        : mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+        : mal_value_from_string(mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY));
     MalPropertyDesc name_desc = mal_intrinsic_data_desc(name_value, MAL_PROPERTY_CONFIGURABLE);
     mal_object_define_own(&function->object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME), &name_desc);
 
@@ -1167,7 +1167,7 @@ void mal_vm_op_set_function_name(MalVm *vm, MalValue func, MalValue key, u8 pref
     if (mal_value_is_symbol(key)) {
         MalString *description = mal_symbol_description(mal_value_to_symbol(key));
         if (description == nullptr) {
-            name_value = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+            name_value = mal_value_from_string(mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY));
         } else {
             name_value = mal_vm_add(
                 vm, mal_value_from_string(description),
