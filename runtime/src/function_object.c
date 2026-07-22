@@ -9,7 +9,7 @@
 // { writable: false, enumerable: false, configurable: true } that the
 // descriptor/hasOwnProperty/delete machinery can see (the synthetic resolver
 // alone is invisible to them, and would also defeat configurable:true delete).
-static void mal_native_function_define_name(MalHeap *heap, MalObject *object, MalString *name) {
+static void mal_native_function_define_name(MalObject *object, MalString *name, MalKey key) {
     if (name == nullptr) {
         return;
     }
@@ -19,19 +19,52 @@ static void mal_native_function_define_name(MalHeap *heap, MalObject *object, Ma
         .getter = mal_value_new_undefined(),
         .setter = mal_value_new_undefined(),
     };
-    MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(mal_string_new_ascii(heap, "name", 4))};
     mal_object_define_own(object, key, &desc);
 }
 
-static void mal_native_function_define_length(MalHeap *heap, MalObject *object, i32 length) {
+static void mal_native_function_define_length(MalObject *object, i32 length, MalKey key) {
     MalPropertyDesc desc = {
         .flags = MAL_PROPERTY_CONFIGURABLE,
         .value = mal_value_from_i32(length),
         .getter = mal_value_new_undefined(),
         .setter = mal_value_new_undefined(),
     };
-    MalKey key = {.kind = MAL_KEY_STRING, .value = mal_value_from_string(mal_string_new_ascii(heap, "length", 6))};
     mal_object_define_own(object, key, &desc);
+}
+
+static void mal_native_function_init_state(
+    MalHeap *heap,
+    MalNativeFunctionObject *function,
+    MalObject *prototype,
+    MalString *name,
+    i32 length,
+    MalNativeFunctionCallback callback
+) {
+    mal_object_init(heap, &function->object, MAL_HEAP_NATIVE_FUNCTION_OBJECT, prototype);
+    function->name = name;
+    function->callback = callback;
+    function->length = length;
+    function->is_constructor = false;
+    function->slots = nullptr;
+    function->slot_count = 0;
+#if MAL_REALMS
+    function->realm = heap->current_realm;
+#endif
+}
+
+static void mal_native_function_object_init_with_keys(
+    MalHeap *heap,
+    MalNativeFunctionObject *function,
+    MalObject *prototype,
+    MalString *name,
+    i32 length,
+    MalNativeFunctionCallback callback,
+    MalKey length_key,
+    MalKey name_key
+) {
+    mal_native_function_init_state(heap, function, prototype, name, length, callback);
+    mal_native_function_define_length(&function->object, length, length_key);
+    mal_native_function_define_name(&function->object, name, name_key);
 }
 
 void mal_function_object_init(
@@ -71,20 +104,19 @@ void mal_native_function_object_init(
     i32 length,
     MalNativeFunctionCallback callback
 ) {
-    mal_object_init(heap, &function->object, MAL_HEAP_NATIVE_FUNCTION_OBJECT, prototype);
-    function->name = name;
-    function->callback = callback;
-    function->length = length;
-    function->is_constructor = false;
-    function->slots = nullptr;
-    function->slot_count = 0;
-#if MAL_REALMS
-    function->realm = heap->current_realm;
-#endif
+    mal_native_function_init_state(heap, function, prototype, name, length, callback);
     // Per spec (CreateBuiltinFunction / SetFunctionLength then SetFunctionName),
     // `length` is the earlier own property and `name` follows it.
-    mal_native_function_define_length(heap, &function->object, length);
-    mal_native_function_define_name(heap, &function->object, name);
+    MalKey length_key = {
+        .kind = MAL_KEY_STRING,
+        .value = mal_value_from_string(mal_string_new_ascii(heap, "length", 6)),
+    };
+    mal_native_function_define_length(&function->object, length, length_key);
+    MalKey name_key = {
+        .kind = MAL_KEY_STRING,
+        .value = mal_value_from_string(mal_string_new_ascii(heap, "name", 4)),
+    };
+    mal_native_function_define_name(&function->object, name, name_key);
 }
 
 MalNativeFunctionObject *mal_native_function_object_new(
@@ -143,6 +175,31 @@ MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity(
         }
     }
 
+    return function;
+}
+
+MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity_keys(
+    MalHeap *heap,
+    MalObject *prototype,
+    MalString *name,
+    i32 length,
+    MalNativeFunctionCallback callback,
+    const MalValue *slots,
+    i32 slot_count,
+    MalKey length_key,
+    MalKey name_key
+) {
+    MalNativeFunctionObject *function =
+        mal_heap_alloc(heap, sizeof(MalNativeFunctionObject), MAL_HEAP_NATIVE_FUNCTION_OBJECT);
+    mal_native_function_object_init_with_keys(
+        heap, function, prototype, name, length, callback, length_key, name_key);
+    if (slot_count > 0) {
+        function->slots = mal_heap_alloc_raw(heap, sizeof(MalValue) * slot_count);
+        function->slot_count = slot_count;
+        for (i32 i = 0; i < slot_count; i++) {
+            function->slots[i] = slots[i];
+        }
+    }
     return function;
 }
 

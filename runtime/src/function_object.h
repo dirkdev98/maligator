@@ -176,6 +176,19 @@ MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity(
     i32 slot_count
 );
 
+/** Explicit-arity slots constructor using caller-supplied canonical metadata keys. */
+MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity_keys(
+    MalHeap *heap,
+    MalObject *prototype,
+    MalString *name,
+    i32 length,
+    MalNativeFunctionCallback callback,
+    const MalValue *slots,
+    i32 slot_count,
+    MalKey length_key,
+    MalKey name_key
+);
+
 /**
  * Return the display name attached to a native function object.
  */

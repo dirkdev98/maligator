@@ -50,9 +50,11 @@ static MalValue mal_promise_new_closure(
     i32 slot_count,
     i32 length
 ) {
-    MalNativeFunctionObject *fn = mal_native_function_object_new_with_slots_arity(
+    MalNativeFunctionObject *fn = mal_native_function_object_new_with_slots_arity_keys(
         &vm->heap, mal_promise_function_prototype(vm),
-        mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY), length, callback, slots, slot_count);
+        mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY), length, callback, slots, slot_count,
+        mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH),
+        mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME));
     return mal_value_from_native_function_object(fn);
 }
 
@@ -140,14 +142,16 @@ static MalNativeFunctionObject *mal_promise_new_resolving_fn(
     const MalValue *slots,
     i32 slot_count
 ) {
-    MalNativeFunctionObject *fn = mal_native_function_object_new_with_slots_arity(
+    MalNativeFunctionObject *fn = mal_native_function_object_new_with_slots_arity_keys(
         &vm->heap,
         mal_promise_function_prototype(vm),
         mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY),
         1,
         callback,
         slots,
-        slot_count
+        slot_count,
+        mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LENGTH),
+        mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NAME)
     );
     return fn;
 }
