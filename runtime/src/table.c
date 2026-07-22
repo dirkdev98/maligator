@@ -20,6 +20,7 @@ typedef struct MalTableEntry {
     MalValue key;
     void *data;
     MalValue value;
+    u32 hash_fingerprint;
     bool live;
 } MalTableEntry;
 
@@ -86,18 +87,24 @@ static u64 mal_table_hash_value(MalValue value) {
     return mal_table_hash_mix(value);
 }
 
+static inline u32 mal_table_hash_fingerprint(u64 hash) {
+    return (u32) (hash >> 32);
+}
+
 // The hash slot for `key`: either the slot holding a live entry equal to `key`,
 // or the first empty slot on its probe chain (slots only ever reference live
 // entries — a delete rebuilds the chains — so probing stops at the first empty).
-static usize mal_table_find_slot(const MalTable *table, MalValue key) {
+static usize mal_table_find_slot(const MalTable *table, MalValue key, u64 hash) {
     usize mask = table->slot_capacity - 1;
-    usize index = mal_table_hash_value(key) & mask;
+    usize index = hash & mask;
+    u32 fingerprint = mal_table_hash_fingerprint(hash);
     u64 probes = 0;
 
     while (table->slots[index] != MAL_TABLE_EMPTY) {
         probes++;
         MalTableEntry *entry = &table->entries[table->slots[index]];
-        if (entry->live && mal_key_value_equals(entry->key, key)) {
+        if (entry->live && entry->hash_fingerprint == fingerprint &&
+            mal_key_value_equals(entry->key, key)) {
             break;
         }
 
@@ -254,7 +261,8 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
     if (stats != nullptr) {
         stats->lookups++;
     }
-    usize index = mal_table_find_slot(table, key.value);
+    u64 hash = mal_table_hash_value(key.value);
+    usize index = mal_table_find_slot(table, key.value, hash);
     i32 entry = table->slots[index];
 
     if (entry == MAL_TABLE_EMPTY) {
@@ -275,7 +283,8 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     if (stats != nullptr) {
         stats->upserts++;
     }
-    usize index = mal_table_find_slot(table, key.value);
+    u64 hash = mal_table_hash_value(key.value);
+    usize index = mal_table_find_slot(table, key.value, hash);
     if (table->slots[index] != MAL_TABLE_EMPTY) {
         if (stats != nullptr) {
             stats->upsert_hits++;
@@ -288,7 +297,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     // invalidates the empty index found above.
     mal_table_grow_entries_if_needed(table);
     if (mal_table_grow_slots_if_needed(table)) {
-        index = mal_table_find_slot(table, key.value);
+        index = mal_table_find_slot(table, key.value, hash);
     }
 
     u32 entry_index = table->entry_count++;
@@ -296,6 +305,7 @@ void *mal_table_upsert_entry(MalTable *table, MalKey key, bool *inserted) {
     entry->key = key.value;
     entry->data = nullptr;
     entry->value = mal_value_new_undefined();
+    entry->hash_fingerprint = mal_table_hash_fingerprint(hash);
     entry->live = true;
 
     table->slots[index] = (i32) entry_index;
@@ -313,7 +323,8 @@ bool mal_table_delete(MalTable *table, MalKey key) {
     if (stats != nullptr) {
         stats->deletes++;
     }
-    usize index = mal_table_find_slot(table, key.value);
+    u64 hash = mal_table_hash_value(key.value);
+    usize index = mal_table_find_slot(table, key.value, hash);
     i32 entry_index = table->slots[index];
 
     if (entry_index == MAL_TABLE_EMPTY) {
@@ -438,7 +449,10 @@ bool mal_table_entry_matches(
         return false;
     }
     const MalTableEntry *candidate = &table->entries[index];
-    return candidate->live && mal_key_value_equals(candidate->key, key.value);
+    u64 hash = mal_table_hash_value(key.value);
+    return candidate->live &&
+        candidate->hash_fingerprint == mal_table_hash_fingerprint(hash) &&
+        mal_key_value_equals(candidate->key, key.value);
 }
 
 void mal_table_iter_init(MalTableIter *iter, MalTable *table, MalTableIterKind kind) {
