@@ -41,12 +41,12 @@ void mal_promise_create_resolving(
 );
 
 /**
- * Settle the direct result capability used only by exact-intrinsic
- * Promise.prototype.then. `constructor` is the capability-realm %Promise%
- * constructor retained in the reaction/job payload in place of a reject
- * function.
+ * Settle a bare exact-intrinsic Promise without first materializing its
+ * resolving functions. `constructor` is the target realm's %Promise%
+ * constructor; direct .then capabilities retain it in their reaction/job
+ * payload, while intrinsic statics/await/async results pass the current one.
  */
-void mal_promise_settle_direct_capability(
+void mal_promise_settle_direct(
     MalVm *vm,
     MalValue promise,
     MalValue constructor,
@@ -57,6 +57,11 @@ void mal_promise_settle_direct_capability(
 /** Process-wide counters exposed through MAL_PROMISE_STATS. */
 u64 mal_promise_direct_capability_count(void);
 u64 mal_promise_direct_fallback_pair_count(void);
+u64 mal_promise_direct_intrinsic_creation_count(void);
+u64 mal_promise_direct_async_result_count(void);
+
+/** Record creation of a bare async-function result Promise. */
+void mal_promise_note_direct_async_result(void);
 
 /**
  * PromiseResolve(%Promise%, value): if value is already a native Promise return

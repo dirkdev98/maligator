@@ -35,8 +35,7 @@ MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype
     generator->resume_mode_register = -1;
     generator->yielded_value = mal_value_new_undefined();
     generator->is_async = false;
-    generator->async_resolve = mal_value_new_undefined();
-    generator->async_reject = mal_value_new_undefined();
+    generator->async_promise = mal_value_new_undefined();
     generator->awaited_by = nullptr;
     generator->is_async_generator = false;
     generator->agen_running = false;

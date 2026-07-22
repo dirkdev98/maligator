@@ -36,6 +36,8 @@ enum {
 
 static u64 g_direct_capabilities = 0;
 static u64 g_direct_fallback_pairs = 0;
+static u64 g_direct_intrinsic_creations = 0;
+static u64 g_direct_async_results = 0;
 
 u64 mal_promise_direct_capability_count(void) {
     return g_direct_capabilities;
@@ -43,6 +45,18 @@ u64 mal_promise_direct_capability_count(void) {
 
 u64 mal_promise_direct_fallback_pair_count(void) {
     return g_direct_fallback_pairs;
+}
+
+u64 mal_promise_direct_intrinsic_creation_count(void) {
+    return g_direct_intrinsic_creations;
+}
+
+u64 mal_promise_direct_async_result_count(void) {
+    return g_direct_async_results;
+}
+
+void mal_promise_note_direct_async_result(void) {
+    g_direct_async_results++;
 }
 
 static MalCompletion mal_promise_normal(void) {
@@ -81,8 +95,8 @@ static MalValue mal_promise_take_error(MalVm *vm, MalIntrinsic prototype_slot, c
 
 /**
  * The settlement half of CreateResolvingFunctions, after its shared
- * [[AlreadyResolved]] guard has won. Direct then capabilities call this without
- * materializing the initial resolving pair. Returns whether thenable callbacks
+ * [[AlreadyResolved]] guard has won. Direct intrinsic paths call this without
+ * materializing an initial resolving pair. Returns whether thenable callbacks
  * had to be materialized.
  */
 static bool mal_promise_settle_internal(
@@ -91,7 +105,7 @@ static bool mal_promise_settle_internal(
     bool is_reject,
     MalValue argument
 ) {
-    // A direct reaction result is otherwise only a C local here. Property lookup,
+    // A direct target is otherwise only a C local here. Property lookup,
     // TypeError creation, and resolving-function materialization may all collect.
     MalValue roots[3] = {promise_value, argument, mal_value_new_undefined()};
     MalRootSpan span;
@@ -182,7 +196,7 @@ static MalValue mal_promise_reject_function(MalVm *vm, MalValue this_value, cons
     return mal_value_new_undefined();
 }
 
-void mal_promise_settle_direct_capability(
+void mal_promise_settle_direct(
     MalVm *vm,
     MalValue promise,
     MalValue constructor,
@@ -205,6 +219,33 @@ void mal_promise_settle_direct_capability(
 #if MAL_REALMS
     mal_vm_realm_switch_to(vm, saved_realm);
 #endif
+}
+
+/** Allocate and settle a bare Promise using the current realm's intrinsics. */
+static MalValue mal_promise_new_settled_intrinsic(
+    MalVm *vm,
+    bool is_reject,
+    MalValue argument
+) {
+    // The argument may otherwise live only in a native callback's C locals while
+    // allocating the promise and inspecting/assimilating an object resolution.
+    MalRootSpan argument_root;
+    mal_gc_root(&argument_root, &argument, 1);
+
+    MalPromiseObject *promise = mal_promise_object_new(
+        &vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
+    MalValue promise_value = mal_value_from_promise_object(promise);
+    mal_promise_settle_direct(
+        vm,
+        promise_value,
+        vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
+        is_reject,
+        argument);
+    g_direct_intrinsic_creations++;
+
+    mal_gc_unroot(&argument_root);
+    return promise_value;
 }
 
 /** Give a resolving function the spec-mandated name "" and length 1. */
@@ -489,6 +530,10 @@ static MalValue mal_promise_resolve_static(MalVm *vm, MalValue this_value, const
         }
     }
 
+    if (this_value == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR]) {
+        return mal_promise_new_settled_intrinsic(vm, false, x);
+    }
+
     MalValue cap_promise;
     MalValue cap_resolve;
     MalValue cap_reject;
@@ -512,6 +557,11 @@ static MalValue mal_promise_reject_static(MalVm *vm, MalValue this_value, const 
         return mal_value_new_undefined();
     }
 
+    MalValue reason = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    if (this_value == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR]) {
+        return mal_promise_new_settled_intrinsic(vm, true, reason);
+    }
+
     MalValue cap_promise;
     MalValue cap_resolve;
     MalValue cap_reject;
@@ -519,7 +569,6 @@ static MalValue mal_promise_reject_static(MalVm *vm, MalValue this_value, const 
         return mal_value_new_undefined();
     }
 
-    MalValue reason = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     mal_vm_call_value(vm, cap_reject, mal_value_new_undefined(), &reason, 1);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
@@ -549,19 +598,9 @@ bool mal_promise_resolve_value(MalVm *vm, MalValue value, MalValue *out_promise)
         }
     }
 
-    MalValue cap_promise;
-    MalValue cap_resolve;
-    MalValue cap_reject;
-    if (!mal_promise_new_capability(vm, vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], &cap_promise, &cap_resolve, &cap_reject)) {
-        mal_gc_unroot(&value_root);
-        return false;
-    }
-    mal_vm_call_value(vm, cap_resolve, mal_value_new_undefined(), &value, 1);
+    MalValue promise = mal_promise_new_settled_intrinsic(vm, false, value);
     mal_gc_unroot(&value_root);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return false;
-    }
-    *out_promise = cap_promise;
+    *out_promise = promise;
     return true;
 }
 

@@ -130,6 +130,8 @@ interface PromiseMetrics {
 	reactionReuses: number;
 	directCapabilities: number;
 	materializedFallbackPairs: number;
+	directIntrinsicCreations: number;
+	directAsyncResults: number;
 }
 interface CoroutineBackendMetrics {
 	wallMs: number;
@@ -501,6 +503,8 @@ function benchPromise(runs: number): PromiseMetrics {
 		reactionReuses: parsePromiseStat(stderr, "reaction_reuses"),
 		directCapabilities: parsePromiseStat(stderr, "direct_capabilities"),
 		materializedFallbackPairs: parsePromiseStat(stderr, "materialized_fallback_pairs"),
+		directIntrinsicCreations: parsePromiseStat(stderr, "direct_intrinsic_creations"),
+		directAsyncResults: parsePromiseStat(stderr, "direct_async_results"),
 	};
 }
 
@@ -1088,6 +1092,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		);
 		console.log(
 			`  direct    ${entry.promise.directCapabilities} capabilities${delta(entry.promise.directCapabilities, p?.directCapabilities)}, ${entry.promise.materializedFallbackPairs} fallback pairs materialized${delta(entry.promise.materializedFallbackPairs, p?.materializedFallbackPairs)}`,
+		);
+		console.log(
+			`            ${entry.promise.directIntrinsicCreations} intrinsic creations${delta(entry.promise.directIntrinsicCreations, p?.directIntrinsicCreations)}, ${entry.promise.directAsyncResults} async results${delta(entry.promise.directAsyncResults, p?.directAsyncResults)}`,
 		);
 	}
 	if (entry.coroutine) {

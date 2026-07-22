@@ -26,6 +26,12 @@ function run(binary: string, env: NodeJS.ProcessEnv = {}) {
 		);
 	}
 	expect(result.stderr).toContain("Uncaught (in promise) Error: direct-unhandled-marker");
+	expect(result.stderr).toContain(
+		"Uncaught (in promise) Error: direct-intrinsic-unhandled-marker",
+	);
+	expect(result.stderr).toContain(
+		"Uncaught (in promise) Error: direct-async-unhandled-marker",
+	);
 	return result.stderr;
 }
 
@@ -88,8 +94,12 @@ describe("direct Promise.prototype.then capabilities", () => {
 		});
 		const direct = Number(stderr.match(/direct_capabilities=(\d+)/)?.[1] ?? 0);
 		const fallback = Number(stderr.match(/materialized_fallback_pairs=(\d+)/)?.[1] ?? 0);
+		const intrinsic = Number(stderr.match(/direct_intrinsic_creations=(\d+)/)?.[1] ?? 0);
+		const asyncResults = Number(stderr.match(/direct_async_results=(\d+)/)?.[1] ?? 0);
 		expect(direct).toBeGreaterThan(0);
 		expect(fallback).toBeGreaterThan(0);
 		expect(fallback).toBeLessThan(direct);
+		expect(intrinsic).toBeGreaterThan(0);
+		expect(asyncResults).toBeGreaterThan(0);
 	});
 });

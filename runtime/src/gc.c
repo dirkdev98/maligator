@@ -340,6 +340,7 @@ static void mal_gc_print_stats(void) {
             "[promise-stats] job_allocations=%llu job_reuses=%llu "
             "reaction_allocations=%llu reaction_reuses=%llu "
             "direct_capabilities=%llu materialized_fallback_pairs=%llu "
+            "direct_intrinsic_creations=%llu direct_async_results=%llu "
             "frame_allocations=%llu frame_reuses=%llu "
             "request_allocations=%llu request_reuses=%llu\n",
             (unsigned long long) mal_promise_job_allocation_count(),
@@ -348,6 +349,8 @@ static void mal_gc_print_stats(void) {
             (unsigned long long) mal_promise_reaction_reuse_count(),
             (unsigned long long) mal_promise_direct_capability_count(),
             (unsigned long long) mal_promise_direct_fallback_pair_count(),
+            (unsigned long long) mal_promise_direct_intrinsic_creation_count(),
+            (unsigned long long) mal_promise_direct_async_result_count(),
             (unsigned long long) mal_coroutine_buffer_allocation_count(),
             (unsigned long long) mal_coroutine_buffer_reuse_count(),
             (unsigned long long) mal_async_generator_request_allocation_count(),
@@ -820,8 +823,7 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
                 mal_gc_trace_frame(&gen->frame);
             }
             mal_gc_mark_value(gen->yielded_value);
-            mal_gc_mark_value(gen->async_resolve);
-            mal_gc_mark_value(gen->async_reject);
+            mal_gc_mark_value(gen->async_promise);
             if (gen->awaited_by != nullptr) {
                 mal_gc_shade(&gen->awaited_by->object.header);
             }

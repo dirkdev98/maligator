@@ -2,6 +2,7 @@
 
 #include "builtin_promise.h"
 #include "function_object.h"
+#include "gc.h"
 #include "generator_object.h"
 #include "intrinsics.h"
 #include "promise_object.h"
@@ -39,22 +40,21 @@ static MalValue mal_async_on_rejected(MalVm *vm, MalValue this_value, const MalV
 void mal_async_function_start(MalVm *vm, MalVmFrame *frame) {
     MalPromiseObject *promise = mal_promise_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
     MalValue promise_value = mal_value_from_promise_object(promise);
-
-    MalValue resolve;
-    MalValue reject;
-    mal_promise_create_resolving(vm, promise_value, &resolve, &reject);
+    MalRootSpan promise_root;
+    mal_gc_root(&promise_root, &promise_value, 1);
 
     // The hidden async state reuses the generator suspendable-frame object.
     MalGeneratorObject *state = mal_generator_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     state->is_async = true;
-    state->async_resolve = resolve;
-    state->async_reject = reject;
+    state->async_promise = promise_value;
     state->state = MAL_GENERATOR_EXECUTING;
     frame->generator = state;
 
     // Link the result promise back to this async state so an awaiting function
     // can record itself as our `awaited_by` (async stack stitching).
+    promise = mal_value_to_promise_object(promise_value);
     promise->async_owner = state;
+    mal_promise_note_direct_async_result();
 
     // Hand the result promise to the caller now (the body keeps running in this
     // frame until its first await/return/throw). Clearing the caller link makes
@@ -69,6 +69,7 @@ void mal_async_function_start(MalVm *vm, MalVmFrame *frame) {
     }
     frame->return_register = -1;
     frame->caller_frame_index = -1;
+    mal_gc_unroot(&promise_root);
 }
 
 void mal_async_function_await(MalVm *vm, MalGeneratorObject *state, MalValue awaited) {
@@ -113,11 +114,21 @@ void mal_async_function_await(MalVm *vm, MalGeneratorObject *state, MalValue awa
 }
 
 void mal_async_function_settle_return(MalVm *vm, MalGeneratorObject *state, MalValue value) {
-    mal_vm_call_value(vm, state->async_resolve, mal_value_new_undefined(), &value, 1);
+    mal_promise_settle_direct(
+        vm,
+        state->async_promise,
+        vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
+        false,
+        value);
     vm->completion = mal_async_normal();
 }
 
 void mal_async_function_settle_throw(MalVm *vm, MalGeneratorObject *state, MalValue reason) {
-    mal_vm_call_value(vm, state->async_reject, mal_value_new_undefined(), &reason, 1);
+    mal_promise_settle_direct(
+        vm,
+        state->async_promise,
+        vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR],
+        true,
+        reason);
     vm->completion = mal_async_normal();
 }

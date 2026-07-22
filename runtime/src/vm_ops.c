@@ -5378,19 +5378,18 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
     MalValue *out_promise) {
     MalPromiseObject *promise = mal_promise_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
     MalValue promise_value = mal_value_from_promise_object(promise);
-
-    MalValue resolve;
-    MalValue reject;
-    mal_promise_create_resolving(vm, promise_value, &resolve, &reject);
+    MalRootSpan promise_root;
+    mal_gc_root(&promise_root, &promise_value, 1);
 
     // The hidden async state reuses the generator suspendable-frame object.
     MalGeneratorObject *state = mal_generator_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
     state->is_async = true;
-    state->async_resolve = resolve;
-    state->async_reject = reject;
+    state->async_promise = promise_value;
     state->state = MAL_GENERATOR_EXECUTING;
     // Link the result promise back to this async state for async stack stitching.
+    promise = mal_value_to_promise_object(promise_value);
     promise->async_owner = state;
+    mal_promise_note_direct_async_result();
 
     state->frame.vm = vm;
     state->frame.function_index = function_index;
@@ -5419,6 +5418,7 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
     mal_gc_remember_if_old(&state->object.header);
 
     *out_promise = promise_value;
+    mal_gc_unroot(&promise_root);
     return state;
 }
 

@@ -169,7 +169,7 @@ static void mal_vm_settle_reaction_capability(
     // constructor and therefore also restores the omitted function's realm.
     if (mal_value_is_promise_object(cap_resolve)) {
         vm->completion = mal_completion_normal();
-        mal_promise_settle_direct_capability(
+        mal_promise_settle_direct(
             vm, cap_resolve, cap_reject, is_reject, argument);
         return;
     }

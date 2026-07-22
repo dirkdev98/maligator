@@ -52,12 +52,11 @@ typedef struct MalGeneratorObject {
      * Async-function activations reuse this same suspendable-frame machinery
      * (an async function is, in effect, a generator driven by an internal
      * promise driver). When is_async is set, this object is the async
-     * function's hidden state: AWAIT suspends here, and async_resolve /
-     * async_reject are the result promise's resolving functions, invoked when
-     * the body returns or throws. Such an object is never exposed to user code.
+     * function's hidden state: AWAIT suspends here, and async_promise is the
+     * direct intrinsic result Promise settled when the body returns or throws.
+     * Such an object is never exposed to user code.
      */
-    MalValue async_resolve;
-    MalValue async_reject;
+    MalValue async_promise;
 
     /**
      * Async stack stitching: for a suspended async function, the async state
@@ -79,7 +78,7 @@ typedef struct MalGeneratorObject {
 
     /* State + flags clustered so the enum/bools share one trailing word. */
     MalGeneratorState state;
-    /** See async_resolve: this object is an async function's hidden state. */
+    /** See async_promise: this object is an async function's hidden state. */
     bool is_async : 1;
     /** `async function*`: sets is_async too, so await works. */
     bool is_async_generator : 1;
