@@ -32,6 +32,15 @@ bool mal_regexp_try_exact_string_dispatch(
 );
 
 /**
+ * Handle String.prototype.matchAll's validation and exact dispatch for a
+ * canonical RegExp. Returns false when observable customization requires the
+ * ordinary IsRegExp / flags / protocol path.
+ */
+bool mal_regexp_try_canonical_match_all(
+    MalVm *vm, MalValue regexp, MalValue string, MalValue *out
+);
+
+/**
  * Advance an exact RegExp String Iterator without materializing its disposable
  * IteratorResult wrapper. Returns 1 on success, 0 when generic stepping is
  * required, and -1 when the exact step threw.

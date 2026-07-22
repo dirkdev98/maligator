@@ -146,6 +146,70 @@ static bool regexp_parse_flags(const MalString *flags, u32 *out_bits) {
     return true;
 }
 
+static MalShape *regexp_instance_shape(MalVm *vm) {
+    if (vm->regexp_instance_shape == nullptr) {
+        vm->regexp_instance_shape = mal_shape_add_property(
+            mal_shape_empty(), mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX),
+            MAL_PROPERTY_WRITABLE);
+    }
+    return vm->regexp_instance_shape;
+}
+
+// Exact type + layout reject subclasses, proxies, own overrides, descriptor
+// changes, and deleted/re-added symbol/index properties. The monotonic protector
+// proves the current realm's RegExp prototype and constructor are still built-ins.
+static bool regexp_canonical_instance(
+    MalVm *vm, MalValue value, MalRegExpObject **out
+) {
+    if (!mal_primitive_method_protector || !mal_value_is_regexp_object(value)) {
+        return false;
+    }
+    MalRegExpObject *re = mal_value_to_regexp_object(value);
+    MalObject *object = (MalObject *) re;
+    if (mal_object_get_prototype(object) !=
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE]) ||
+        object->shape != regexp_instance_shape(vm) || object->overflow != nullptr ||
+        !mal_object_is_extensible(object)) {
+        return false;
+    }
+    *out = re;
+    return true;
+}
+
+// RegExp.prototype.flags returns flags in d g i m s u v y order, which can
+// differ from [[OriginalFlags]]. Reuse that internal string when it is already
+// canonical; otherwise materialize the same primitive string as the generic
+// eight-getter algorithm.
+static MalString *regexp_canonical_flags_string(MalVm *vm, MalRegExpObject *re) {
+    static const struct {
+        u32 bit;
+        c16 ch;
+    } table[] = {
+        {MAL_REGEXP_JS_HAS_INDICES, 'd'}, {MAL_REGEXP_JS_GLOBAL, 'g'},
+        {MAL_REGEXP_JS_IGNORE_CASE, 'i'}, {MAL_REGEXP_JS_MULTILINE, 'm'},
+        {MAL_REGEXP_JS_DOT_ALL, 's'}, {MAL_REGEXP_JS_UNICODE, 'u'},
+        {MAL_REGEXP_JS_UNICODE_SETS, 'v'}, {MAL_REGEXP_JS_STICKY, 'y'},
+    };
+    c16 units[8];
+    usize length = 0;
+    for (usize i = 0; i < countof(table); i++) {
+        if ((re->flag_bits & table[i].bit) != 0) {
+            units[length++] = table[i].ch;
+        }
+    }
+    if (mal_string_length(re->flags) == length) {
+        const c16 *original = mal_string_code_units(re->flags);
+        usize i = 0;
+        while (i < length && original[i] == units[i]) {
+            i++;
+        }
+        if (i == length) {
+            return re->flags;
+        }
+    }
+    return mal_string_new_copy(&vm->heap, units, length);
+}
+
 // Translate JS flag bits to the regress-facing i/m/s/u/v subset.
 static u32 regexp_regress_flags(u32 js) {
     u32 r = 0;
@@ -241,10 +305,9 @@ static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern
     re->flags = flags_str;
     re->flag_bits = bits;
     // lastIndex is a { writable, !enumerable, !configurable } own data property.
-    MalShape *shape = mal_shape_add_property(
-        mal_shape_empty(), mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), MAL_PROPERTY_WRITABLE);
     MalValue last_index = mal_value_from_i32(0);
-    mal_object_set_shaped_values((MalObject *) re, shape, &last_index, 1);
+    mal_object_set_shaped_values(
+        (MalObject *) re, regexp_instance_shape(vm), &last_index, 1);
     return true;
 }
 
@@ -542,6 +605,12 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
 // RegExpExec(R, S): use a user-defined `exec` if callable; else RegExpBuiltinExec.
 // Returns object or null; sets *ok=false (with a pending throw) on error.
 static MalValue regexp_exec_abstract(MalVm *vm, MalValue r, MalString *s, bool match_only, bool *ok) {
+    MalRegExpObject *canonical;
+    if (regexp_canonical_instance(vm, r, &canonical)) {
+        MalValue result = regexp_builtin_exec(vm, canonical, r, s, match_only);
+        *ok = !regexp_threw(vm);
+        return result;
+    }
     MalValue exec_fn;
     if (!mal_vm_get_property(vm, r, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_EXEC), &exec_fn)) {
         *ok = false;
@@ -794,6 +863,10 @@ static MalValue regexp_proto_get_flags(MalVm *vm, MalValue this_value, const Mal
     if (!mal_value_is_object(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "RegExp.prototype.flags getter called on non-object");
         return mal_value_new_undefined();
+    }
+    MalRegExpObject *canonical;
+    if (regexp_canonical_instance(vm, this_value, &canonical)) {
+        return mal_value_from_string(regexp_canonical_flags_string(vm, canonical));
     }
     static const struct {
         const char *name;
@@ -1667,21 +1740,38 @@ static MalValue regexp_proto_match_all(MalVm *vm, MalValue this_value, const Mal
         return mal_value_new_undefined();
     }
 
-    bool ok;
-    MalValue constructor = regexp_species_constructor(vm, this_value, &ok);
-    if (!ok) {
-        return mal_value_new_undefined();
+    MalValue matcher;
+    bool global;
+    bool unicode;
+    MalRegExpObject *canonical;
+    if (regexp_canonical_instance(vm, this_value, &canonical)) {
+        MalString *flags = regexp_canonical_flags_string(vm, canonical);
+        matcher = mal_regexp_create(vm, canonical->source, flags);
+        if (regexp_threw(vm)) {
+            return mal_value_new_undefined();
+        }
+        global = (canonical->flag_bits & MAL_REGEXP_JS_GLOBAL) != 0;
+        unicode = (canonical->flag_bits &
+            (MAL_REGEXP_JS_UNICODE | MAL_REGEXP_JS_UNICODE_SETS)) != 0;
+    } else {
+        bool ok;
+        MalValue constructor = regexp_species_constructor(vm, this_value, &ok);
+        if (!ok) {
+            return mal_value_new_undefined();
+        }
+        MalString *flags;
+        if (!regexp_flags_string(vm, this_value, &flags)) {
+            return mal_value_new_undefined();
+        }
+        MalValue ctor_args[2] = {this_value, mal_value_from_string(flags)};
+        MalCompletion matcher_completion = mal_vm_construct_value(vm, constructor, ctor_args, 2);
+        if (matcher_completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+        matcher = matcher_completion.value;
+        global = regexp_flags_has(flags, 'g');
+        unicode = regexp_flags_has(flags, 'u') || regexp_flags_has(flags, 'v');
     }
-    MalString *flags;
-    if (!regexp_flags_string(vm, this_value, &flags)) {
-        return mal_value_new_undefined();
-    }
-    MalValue ctor_args[2] = {this_value, mal_value_from_string(flags)};
-    MalCompletion matcher_completion = mal_vm_construct_value(vm, constructor, ctor_args, 2);
-    if (matcher_completion.kind == MAL_COMPLETION_THROW) {
-        return mal_value_new_undefined();
-    }
-    MalValue matcher = matcher_completion.value;
 
     i64 last_index;
     if (!regexp_get_last_index(vm, this_value, &last_index)) {
@@ -1690,9 +1780,6 @@ static MalValue regexp_proto_match_all(MalVm *vm, MalValue this_value, const Mal
     if (!regexp_set_last_index(vm, matcher, last_index)) {
         return mal_value_new_undefined();
     }
-
-    bool global = regexp_flags_has(flags, 'g');
-    bool unicode = regexp_flags_has(flags, 'u') || regexp_flags_has(flags, 'v');
 
     MalObject *iterator_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_STRING_ITERATOR_PROTOTYPE]);
     MalRegExpStringIteratorObject *iterator =
@@ -1867,6 +1954,24 @@ bool mal_regexp_try_exact_string_dispatch(
     return true;
 }
 
+bool mal_regexp_try_canonical_match_all(
+    MalVm *vm, MalValue regexp, MalValue string, MalValue *out
+) {
+    MalRegExpObject *canonical;
+    if (vm->completion.kind == MAL_COMPLETION_THROW ||
+        !regexp_canonical_instance(vm, regexp, &canonical)) {
+        return false;
+    }
+    if ((canonical->flag_bits & MAL_REGEXP_JS_GLOBAL) == 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "matchAll must be called with a global RegExp");
+        *out = mal_value_new_undefined();
+        return true;
+    }
+    return mal_regexp_try_exact_string_dispatch(
+        vm, regexp, MAL_INTRINSIC_SYMBOL_MATCH_ALL, string, nullptr, 0, out);
+}
+
 // ---------------------------------------------------------------------------
 // Install
 // ---------------------------------------------------------------------------
@@ -2039,6 +2144,16 @@ bool mal_regexp_try_exact_string_dispatch(
     (void) string;
     (void) extra;
     (void) extra_count;
+    (void) out;
+    return false;
+}
+
+bool mal_regexp_try_canonical_match_all(
+    MalVm *vm, MalValue regexp, MalValue string, MalValue *out
+) {
+    (void) vm;
+    (void) regexp;
+    (void) string;
     (void) out;
     return false;
 }

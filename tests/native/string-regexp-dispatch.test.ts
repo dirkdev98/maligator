@@ -6,6 +6,7 @@ import {
 	assertResultPass,
 	buildNativeBinary,
 	runToStdout,
+	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-string-regexp-dispatch-"));
@@ -34,5 +35,13 @@ describe("String RegExp symbol dispatch", () => {
 
 	it("uses current-spec dispatch in interpreted code", () => {
 		assertResultPass(runToStdout(interpreted));
+	});
+
+	it("uses current-spec compiled dispatch under GC stress", () => {
+		assertResultPass(runToStdout(compiled, { env: STRESS_ENV }));
+	});
+
+	it("uses current-spec interpreted dispatch under GC stress", () => {
+		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV }));
 	});
 });

@@ -991,6 +991,10 @@ static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_
     }
     MalValue regexp = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     if (mal_value_is_object(regexp)) {
+        MalValue out;
+        if (mal_regexp_try_canonical_match_all(vm, regexp, this_value, &out)) {
+            return out;
+        }
         // A non-global RegExp argument is a TypeError (matchAll iterates globally).
         bool is_regexp = mal_builtin_string_is_regexp(vm, regexp);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -1021,7 +1025,6 @@ static MalValue mal_builtin_string_prototype_match_all(MalVm *vm, MalValue this_
                 return mal_value_new_undefined();
             }
         }
-        MalValue out;
         int dispatched = mal_builtin_string_regex_dispatch(vm, this_value, regexp, MAL_INTRINSIC_SYMBOL_MATCH_ALL, nullptr, 0, &out);
         if (dispatched != 0) {
             return out;

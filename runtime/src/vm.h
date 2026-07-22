@@ -1166,6 +1166,9 @@ typedef struct MalVm {
     /** Shared final shape for CreateIterResultObject's `{ value, done }` layout. */
     struct MalShape *iterator_result_shape;
 
+    /** Canonical RegExp instance layout: the sole shaped `lastIndex` property. */
+    struct MalShape *regexp_instance_shape;
+
     /** Shared final named-property layouts for RegExp match/indices arrays. */
     struct MalShape *regexp_result_shape;
     struct MalShape *regexp_result_indices_shape;

@@ -13,22 +13,38 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-regexp-cache-"));
 
 describe("compiled RegExp pattern cache", () => {
-	let bin: string;
+	let compiled: string;
+	let interpreted: string;
 
 	beforeAll(() => {
-		bin = buildNativeBinary({
+		compiled = buildNativeBinary({
 			fixture: "tests/local/regexp_cache.js",
 			name: "regexp-cache",
 			mainFile: HOST_MAIN,
 			outDir,
 		});
+		interpreted = buildNativeBinary({
+			fixture: "tests/local/regexp_cache.js",
+			name: "regexp-cache-interpreted",
+			compiled: false,
+			mainFile: HOST_MAIN,
+			outDir,
+		});
 	});
 
-	it("preserves object identity, state, flags, and invalid-pattern behavior", () => {
-		assertResultPass(runToStdout(bin));
+	it("preserves object identity, state, flags, and invalid-pattern behavior in compiled code", () => {
+		assertResultPass(runToStdout(compiled));
 	});
 
-	it("preserves behavior under GC stress", () => {
-		assertResultPass(runToStdout(bin, { env: STRESS_ENV }));
+	it("preserves object identity, state, flags, and invalid-pattern behavior in interpreted code", () => {
+		assertResultPass(runToStdout(interpreted));
+	});
+
+	it("preserves compiled behavior under GC stress", () => {
+		assertResultPass(runToStdout(compiled, { env: STRESS_ENV }));
+	});
+
+	it("preserves interpreted behavior under GC stress", () => {
+		assertResultPass(runToStdout(interpreted, { env: STRESS_ENV }));
 	});
 });
