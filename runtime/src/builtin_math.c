@@ -67,6 +67,91 @@ MAL_BUILTIN_MATH_UNARY(fround, (f64) (float) x)
 
 #undef MAL_BUILTIN_MATH_UNARY
 
+bool mal_builtin_math_unary_fast(
+    MalValue callee, MalMathUnaryOp *cached_op, MalValue argument, MalValue *result
+) {
+    if (!mal_value_is_native_function_object(callee) || !mal_ops_is_number(argument)) {
+        return false;
+    }
+    MalNativeFunctionCallback callback = mal_native_function_object_callback(
+        mal_value_to_native_function_object(callee));
+    f64 x = mal_ops_number_as_f64(argument);
+
+#define MAL_MATH_UNARY_CASE(op, name, expression) \
+    case MAL_MATH_UNARY_##op: \
+        if (callback == mal_builtin_math_##name) { \
+            *result = mal_ops_number_value(expression); \
+            return true; \
+        } \
+        break;
+    switch (*cached_op) {
+        MAL_MATH_UNARY_CASE(ABS, abs, fabs(x))
+        MAL_MATH_UNARY_CASE(FLOOR, floor, floor(x))
+        MAL_MATH_UNARY_CASE(CEIL, ceil, ceil(x))
+        MAL_MATH_UNARY_CASE(TRUNC, trunc, trunc(x))
+        MAL_MATH_UNARY_CASE(SQRT, sqrt, sqrt(x))
+        MAL_MATH_UNARY_CASE(CBRT, cbrt, cbrt(x))
+        MAL_MATH_UNARY_CASE(SIGN, sign, isnan(x) ? NAN : (x > 0 ? 1 : (x < 0 ? -1 : x)))
+        MAL_MATH_UNARY_CASE(LOG, log, log(x))
+        MAL_MATH_UNARY_CASE(LOG2, log2, log2(x))
+        MAL_MATH_UNARY_CASE(LOG10, log10, log10(x))
+        MAL_MATH_UNARY_CASE(EXP, exp, exp(x))
+        MAL_MATH_UNARY_CASE(SIN, sin, sin(x))
+        MAL_MATH_UNARY_CASE(COS, cos, cos(x))
+        MAL_MATH_UNARY_CASE(TAN, tan, tan(x))
+        MAL_MATH_UNARY_CASE(ASIN, asin, asin(x))
+        MAL_MATH_UNARY_CASE(ACOS, acos, acos(x))
+        MAL_MATH_UNARY_CASE(ATAN, atan, atan(x))
+        MAL_MATH_UNARY_CASE(SINH, sinh, sinh(x))
+        MAL_MATH_UNARY_CASE(COSH, cosh, cosh(x))
+        MAL_MATH_UNARY_CASE(TANH, tanh, tanh(x))
+        MAL_MATH_UNARY_CASE(ASINH, asinh, asinh(x))
+        MAL_MATH_UNARY_CASE(ACOSH, acosh, acosh(x))
+        MAL_MATH_UNARY_CASE(ATANH, atanh, atanh(x))
+        MAL_MATH_UNARY_CASE(LOG1P, log1p, log1p(x))
+        MAL_MATH_UNARY_CASE(EXPM1, expm1, expm1(x))
+        MAL_MATH_UNARY_CASE(FROUND, fround, (f64) (float) x)
+        default: break;
+    }
+#undef MAL_MATH_UNARY_CASE
+
+#define MAL_MATH_UNARY_RESOLVE(op, name, expression) \
+    if (callback == mal_builtin_math_##name) { \
+        *cached_op = MAL_MATH_UNARY_##op; \
+        *result = mal_ops_number_value(expression); \
+        return true; \
+    }
+    MAL_MATH_UNARY_RESOLVE(ABS, abs, fabs(x))
+    MAL_MATH_UNARY_RESOLVE(FLOOR, floor, floor(x))
+    MAL_MATH_UNARY_RESOLVE(CEIL, ceil, ceil(x))
+    MAL_MATH_UNARY_RESOLVE(TRUNC, trunc, trunc(x))
+    MAL_MATH_UNARY_RESOLVE(SQRT, sqrt, sqrt(x))
+    MAL_MATH_UNARY_RESOLVE(CBRT, cbrt, cbrt(x))
+    MAL_MATH_UNARY_RESOLVE(SIGN, sign, isnan(x) ? NAN : (x > 0 ? 1 : (x < 0 ? -1 : x)))
+    MAL_MATH_UNARY_RESOLVE(LOG, log, log(x))
+    MAL_MATH_UNARY_RESOLVE(LOG2, log2, log2(x))
+    MAL_MATH_UNARY_RESOLVE(LOG10, log10, log10(x))
+    MAL_MATH_UNARY_RESOLVE(EXP, exp, exp(x))
+    MAL_MATH_UNARY_RESOLVE(SIN, sin, sin(x))
+    MAL_MATH_UNARY_RESOLVE(COS, cos, cos(x))
+    MAL_MATH_UNARY_RESOLVE(TAN, tan, tan(x))
+    MAL_MATH_UNARY_RESOLVE(ASIN, asin, asin(x))
+    MAL_MATH_UNARY_RESOLVE(ACOS, acos, acos(x))
+    MAL_MATH_UNARY_RESOLVE(ATAN, atan, atan(x))
+    MAL_MATH_UNARY_RESOLVE(SINH, sinh, sinh(x))
+    MAL_MATH_UNARY_RESOLVE(COSH, cosh, cosh(x))
+    MAL_MATH_UNARY_RESOLVE(TANH, tanh, tanh(x))
+    MAL_MATH_UNARY_RESOLVE(ASINH, asinh, asinh(x))
+    MAL_MATH_UNARY_RESOLVE(ACOSH, acosh, acosh(x))
+    MAL_MATH_UNARY_RESOLVE(ATANH, atanh, atanh(x))
+    MAL_MATH_UNARY_RESOLVE(LOG1P, log1p, log1p(x))
+    MAL_MATH_UNARY_RESOLVE(EXPM1, expm1, expm1(x))
+    MAL_MATH_UNARY_RESOLVE(FROUND, fround, (f64) (float) x)
+#undef MAL_MATH_UNARY_RESOLVE
+    *cached_op = MAL_MATH_UNARY_NONE;
+    return false;
+}
+
 // Math.round: spec rounds halves toward +Infinity, but preserves -0 for
 // arguments in (-0.5, -0] and returns the argument unchanged for NaN, the
 // infinities, integers, and magnitudes so large that x + 0.5 would lose

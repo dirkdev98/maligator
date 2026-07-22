@@ -97,6 +97,7 @@ const C_HEADER_LINES = [
 	'#include "vm.h"',
 	'#include "vm_ops.h"',
 	'#include "value_ops.h"',
+	'#include "builtin_math.h"',
 	// The compiled (emit-c) for-of lowering uses the iterator-record helpers.
 	'#include "builtin_iterator.h"',
 	// for-await lowering uses mal_vm_get_async_iterator.

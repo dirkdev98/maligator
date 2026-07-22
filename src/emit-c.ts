@@ -1180,6 +1180,61 @@ function emitBody(
 	}
 	const handlerTargets = exceptionHandlerTargets(fn.instructions.length, fn.handlers);
 
+	// A direct Math method call retains the loaded callee across argument evaluation.
+	// Track that provenance only within straight-line regions; the runtime still guards
+	// the exact native callback, so mutation before or during argument evaluation falls
+	// back or invokes the already-loaded original method exactly as required.
+	const mathUnaryCalls = new Set<number>();
+	{
+		const mathObjects = new Set<number>();
+		const mathCallees = new Set<number>();
+		for (let ip = 0; ip < fn.instructions.length; ip++) {
+			if (jumpTargets.has(ip)) {
+				mathObjects.clear();
+				mathCallees.clear();
+			}
+			const instruction = fn.instructions[ip]!;
+			if (
+				instruction.opcode === "CALL" &&
+				mathCallees.has(instruction.callee) &&
+				mathObjects.has(instruction.thisValue) &&
+				instruction.arguments.length === 1
+			) {
+				mathUnaryCalls.add(ip);
+			}
+
+			const moveFromMathObject =
+				instruction.opcode === "MOVE" && mathObjects.has(instruction.src);
+			const moveFromMathCallee =
+				instruction.opcode === "MOVE" && mathCallees.has(instruction.src);
+			const loadFromMath =
+				instruction.opcode === "LOAD_PROPERTY_STATIC" &&
+				mathObjects.has(instruction.object);
+			for (const register of writeRegisters(instruction)) {
+				mathObjects.delete(register);
+				mathCallees.delete(register);
+			}
+			if (
+				(instruction.opcode === "LOAD_INTRINSIC" && instruction.intrinsic === "Math") ||
+				moveFromMathObject
+			) {
+				mathObjects.add(instruction.dst);
+			}
+			if (loadFromMath || moveFromMathCallee) {
+				mathCallees.add(instruction.dst);
+			}
+			if (
+				instruction.opcode === "JUMP" ||
+				instruction.opcode === "JUMP_IF" ||
+				instruction.opcode === "RETURN" ||
+				instruction.opcode === "THROW"
+			) {
+				mathObjects.clear();
+				mathCallees.clear();
+			}
+		}
+	}
+
 	// Guarded property-access regions. Group consecutive LOAD/STORE_PROPERTY on the same
 	// object register within a straight-line window under one hoisted receiver guard: an
 	// index-form (number-rep key) run guards a dense array (`mal_vm_as_array`), a string-key
@@ -1305,6 +1360,7 @@ function emitBody(
 			regionGuard.get(ip),
 			stackObjectSites.get(ip),
 			stackObjectMaterializations.get(ip),
+			mathUnaryCalls.has(ip),
 		);
 		if (emitted === null) {
 			return null;
@@ -1336,6 +1392,7 @@ function emitInstruction(
 	region: RegionAccess | undefined,
 	stackObjectSite: StackObjectSite | undefined,
 	stackObjectMaterialization: StackObjectSite | undefined,
+	mathUnaryCall: boolean,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -1961,6 +2018,22 @@ function emitInstruction(
 					? "nullptr"
 					: `((MalValue[]){ ${args.map(boxedOperand).join(", ")} })`;
 			const tmp = `call_result_${ip}`;
+			if (mathUnaryCall) {
+				const argument = instruction.arguments[0]!;
+				return [
+					`static MalMathUnaryOp __math_${ip};`,
+					`MalValue __math_result_${ip};`,
+					`if (mal_builtin_math_unary_fast(${boxedOperand(instruction.callee)}, &__math_${ip}, ${boxedOperand(argument)}, &__math_result_${ip})) {`,
+					`  r${instruction.dst} = __math_result_${ip};`,
+					`} else {`,
+					`  static MalCallCache __cc_${ip};`,
+					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`}`,
+					poll,
+				];
+			}
 			// A per-site monomorphic call cache: a repeat call to the same compiled callee
 			// skips the dispatch chain (see mal_vm_call_cached). The identity guard keeps it
 			// sound for bound/native/proxy/interpreted callees (they stay on the slow path).
