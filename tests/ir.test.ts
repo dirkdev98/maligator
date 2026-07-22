@@ -87,6 +87,35 @@ test("direct arguments count and constant-index reads avoid object materializati
 	expect(definition.functions[first.functionIndex]!.needsArguments).toBe(false);
 });
 
+test("try markers lower only into exception handler ranges", () => {
+	const program = compileScript(`
+		function guarded(value) {
+			try {
+				if (value) throw value;
+				return 2;
+			} catch (error) {
+				return error;
+			}
+		}
+	`);
+	const guarded = functionNamed(program, "guarded");
+	executeIROptimizations(program);
+	allocateRegisters(program);
+	const lowered = lowerIrProgramToVmDefinition(program).functions[guarded.functionIndex]!;
+
+	expect(
+		lowered.instructions.some(
+			(instruction) =>
+				instruction.opcode === "TRY_BEGIN" || instruction.opcode === "TRY_END",
+		),
+	).toBe(false);
+	expect(lowered.handlers).toHaveLength(1);
+	const handler = lowered.handlers[0]!;
+	expect(handler.startIp).toBeLessThan(handler.endIp);
+	expect(lowered.instructions[handler.handlerIp]?.opcode).toBe("CATCH");
+	expect(lowered.positions).toHaveLength(lowered.instructions.length);
+});
+
 test("observable arguments object uses make direct reads fall back together", () => {
 	const program = compileScript(`
 		function escape(flag){ return flag ? arguments[0] : arguments; }

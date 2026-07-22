@@ -378,10 +378,12 @@ export type VmInstruction =
 			dst: number;
 	  }
 	| {
+			/** Legacy wire opcode; new lowering stores only the handler table. */
 			opcode: "TRY_BEGIN";
 			handlerIp: number;
 	  }
 	| {
+			/** Legacy wire opcode; new lowering stores only the handler table. */
 			opcode: "TRY_END";
 	  }
 	| {
@@ -861,21 +863,27 @@ function buildHostInstalls(
  * absolute instructions.
  */
 function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunction {
-	// sourcePos markers carry no opcode and are stripped here, so block start IPs
-	// must count only the real (non-marker) instructions that survive.
+	// Source-position and exception-range markers carry no executable opcode, so
+	// block start IPs count only instructions that survive flattening.
 	const blockStartIps = new Map<number, number>();
 	let nextInstructionPointer = 0;
 
 	for (let i = 0; i < fn.blocks.length; ++i) {
 		blockStartIps.set(i, nextInstructionPointer);
 		for (const instruction of fn.blocks[i]!.instructions) {
-			if (instruction.type !== "sourcePos") {
+			if (
+				instruction.type !== "sourcePos" &&
+				instruction.type !== "tryBegin" &&
+				instruction.type !== "tryEnd"
+			) {
 				nextInstructionPointer += 1;
 			}
 		}
 	}
 
 	const instructions: Array<VmInstruction> = [];
+	const handlers: Array<VmExceptionHandler> = [];
+	const openExceptionRanges: Array<{ startIp: number; handlerIp: number }> = [];
 	const positions: Array<number> = [];
 	const stackObjectSites: Array<{ instructionIndex: number; slotCount: number }> = [];
 	const stackObjectSiteInstructionById = new Map<number, number>();
@@ -888,6 +896,22 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		for (const instruction of block.instructions) {
 			if (instruction.type === "sourcePos") {
 				currentPos = instruction.pos;
+				continue;
+			}
+			if (instruction.type === "tryBegin") {
+				const handlerIp = blockStartIps.get(instruction.blocks[0]);
+				if (handlerIp === undefined) {
+					throw new Error(`Unknown handler target block ${instruction.blocks[0]}`);
+				}
+				openExceptionRanges.push({ startIp: instructions.length, handlerIp });
+				continue;
+			}
+			if (instruction.type === "tryEnd") {
+				const range = openExceptionRanges.pop();
+				if (range === undefined) {
+					throw new Error(`Unbalanced try marker at instruction ${instructions.length}`);
+				}
+				handlers.push({ ...range, endIp: instructions.length });
 				continue;
 			}
 			const instructionIndex = instructions.length;
@@ -927,6 +951,9 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 			}
 			positions.push(currentPos);
 		}
+	}
+	if (openExceptionRanges.length > 0) {
+		throw new Error("Unbalanced try marker at end of function");
 	}
 	const stackObjectMaterializations = pendingStackObjectMaterializations.map(
 		({ returnInstructionIndex, siteId }) => {
@@ -984,7 +1011,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		isClassConstructor: fn.classContext?.isConstructor ?? false,
 		hasPrototype: fn.hasPrototype ?? true,
 		instructions,
-		handlers: collectExceptionHandlers(instructions),
+		handlers,
 		fileIndex,
 		positions,
 		gcRootRegisters,
@@ -992,40 +1019,6 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		stackObjectMaterializations:
 			stackObjectMaterializations.length > 0 ? stackObjectMaterializations : undefined,
 	};
-}
-
-/**
- * Convert the TRY_BEGIN / TRY_END marker positions in the flattened
- * instruction stream into static exception handler ranges. Doing this after
- * flattening keeps the ranges correct under all block-level optimizations.
- */
-function collectExceptionHandlers(instructions: Array<VmInstruction>) {
-	const handlers: Array<VmExceptionHandler> = [];
-	const openRanges: Array<{ startIp: number; handlerIp: number }> = [];
-
-	for (let ip = 0; ip < instructions.length; ++ip) {
-		const instruction = instructions[ip]!;
-		if (instruction.opcode === "TRY_BEGIN") {
-			openRanges.push({ startIp: ip, handlerIp: instruction.handlerIp });
-		} else if (instruction.opcode === "TRY_END") {
-			const range = openRanges.pop();
-			if (!range) {
-				throw new Error(`Unbalanced try markers at instruction ${ip}`);
-			}
-
-			handlers.push({
-				startIp: range.startIp,
-				endIp: ip,
-				handlerIp: range.handlerIp,
-			});
-		}
-	}
-
-	if (openRanges.length > 0) {
-		throw new Error("Unbalanced try markers at end of function");
-	}
-
-	return handlers;
 }
 
 /**
@@ -1247,20 +1240,10 @@ function lowerInstructionToVmInstruction(
 				dst: instruction.registers[0],
 			};
 		case "tryBegin": {
-			const handlerIp = blockStartIps.get(instruction.blocks[0]);
-			if (handlerIp === undefined) {
-				throw new Error(`Unknown handler target block ${instruction.blocks[0]}`);
-			}
-
-			return {
-				opcode: "TRY_BEGIN",
-				handlerIp,
-			};
+			throw new Error("tryBegin marker must be stripped before lowering");
 		}
 		case "tryEnd":
-			return {
-				opcode: "TRY_END",
-			};
+			throw new Error("tryEnd marker must be stripped before lowering");
 		case "generatorStart":
 			return {
 				opcode: "GENERATOR_START",
