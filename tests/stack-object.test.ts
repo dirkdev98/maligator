@@ -322,7 +322,9 @@ describe("stack-object native metadata and C emission", () => {
 			),
 		);
 		expect(decoded.functions.every((fn) => fn.stackObjectSites === undefined)).toBe(true);
-		expect(decoded.functions.every((fn) => fn.stackObjectAccesses === undefined)).toBe(true);
+		expect(decoded.functions.every((fn) => fn.stackObjectAccesses === undefined)).toBe(
+			true,
+		);
 		expect(
 			decoded.functions.every((fn) => fn.stackObjectMaterializations === undefined),
 		).toBe(true);

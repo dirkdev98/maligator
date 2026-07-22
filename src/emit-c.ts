@@ -550,10 +550,7 @@ export function emitCompiledFunction(
 		}
 		stackObjectMaterializations.set(materialization.returnInstructionIndex, site);
 	}
-	const stackObjectAccesses = new Map<
-		number,
-		{ site: StackObjectSite; slot: number }
-	>();
+	const stackObjectAccesses = new Map<number, { site: StackObjectSite; slot: number }>();
 	for (const access of fn.stackObjectAccesses ?? []) {
 		const instruction = fn.instructions[access.instructionIndex];
 		const site = stackObjectSites.get(access.allocationInstructionIndex);
@@ -565,7 +562,9 @@ export function emitCompiledFunction(
 			access.slot >= site.slotCount ||
 			stackObjectAccesses.has(access.instructionIndex)
 		) {
-			throw new Error(`Invalid stack-object access metadata at instruction ${access.instructionIndex}`);
+			throw new Error(
+				`Invalid stack-object access metadata at instruction ${access.instructionIndex}`,
+			);
 		}
 		stackObjectAccesses.set(access.instructionIndex, { site, slot: access.slot });
 	}
@@ -1763,9 +1762,7 @@ function emitInstruction(
 		case "STORE_PROPERTY_STATIC": {
 			if (stackObjectAccess !== undefined) {
 				const { site, slot } = stackObjectAccess;
-				return [
-					`__gc_slots[${site.slotsOffset + slot}] = ${boxed(instruction.value)};`,
-				];
+				return [`__gc_slots[${site.slotsOffset + slot}] = ${boxed(instruction.value)};`];
 			}
 			const key =
 				instruction.opcode === "STORE_PROPERTY_STATIC"

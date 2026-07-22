@@ -1049,8 +1049,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		positions,
 		gcRootRegisters,
 		stackObjectSites: stackObjectSites.length > 0 ? stackObjectSites : undefined,
-		stackObjectAccesses:
-			stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,
+		stackObjectAccesses: stackObjectAccesses.length > 0 ? stackObjectAccesses : undefined,
 		stackObjectMaterializations:
 			stackObjectMaterializations.length > 0 ? stackObjectMaterializations : undefined,
 	};
