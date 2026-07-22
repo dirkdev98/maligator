@@ -63,6 +63,24 @@ MalObject *mal_object_new_shaped_one(MalHeap *heap, MalObject *prototype, MalSha
     return object;
 }
 
+void mal_object_set_shaped_values(
+    MalObject *object, MalShape *shape, const MalValue *values, u32 count
+) {
+    assert(object->shape == mal_shape_empty());
+    assert(object->slots == nullptr);
+    assert(object->overflow == nullptr);
+    assert(shape->inline_count == count);
+    object->shape = shape;
+    if (count == 0) {
+        return;
+    }
+    object->slots = malloc(sizeof(MalValue) * count);
+    object->slots_owned = true;
+    for (u32 i = 0; i < count; i++) {
+        object->slots[i] = values[i];
+    }
+}
+
 void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
     if (object->slots_owned) {
         object->slots = realloc(object->slots, sizeof(MalValue) * new_count);

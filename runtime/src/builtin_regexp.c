@@ -388,8 +388,13 @@ static MalValue regexp_build_indices(MalVm *vm, MalRegExpObject *re, MalString *
         }
         groups_value = mal_value_from_object(groups);
     }
-    MalPropertyDesc groups_desc = mal_intrinsic_data_desc(groups_value, REGEXP_WEC);
-    mal_object_define_own((MalObject *) indices, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_GROUPS), &groups_desc);
+    if (vm->regexp_indices_shape == nullptr) {
+        MalString *keys[1] = {mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_GROUPS)};
+        vm->regexp_indices_shape = mal_shape_from_string_keys(keys, 1);
+    }
+    mal_object_set_shaped_values(
+        (MalObject *) indices, vm->regexp_indices_shape, &groups_value, 1
+    );
 
     return mal_value_from_object((MalObject *) indices);
 }
@@ -494,11 +499,6 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
     MalArrayObject *array = mal_intrinsic_new_dense_array(vm, (u32) ngroups);
     MalObject *array_object = (MalObject *) array;
 
-    MalPropertyDesc index_desc = mal_intrinsic_data_desc(mal_value_from_f64((f64) match_start), REGEXP_WEC);
-    mal_object_define_own(array_object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_INDEX), &index_desc);
-    MalPropertyDesc input_desc = mal_intrinsic_data_desc(mal_value_from_string(s), REGEXP_WEC);
-    mal_object_define_own(array_object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_INPUT), &input_desc);
-
     for (int32_t i = 0; i < ngroups; i++) {
         int32_t cs = caps[2 * i];
         int32_t ce = caps[2 * i + 1];
@@ -507,14 +507,29 @@ static MalValue regexp_builtin_exec(MalVm *vm, MalRegExpObject *re, MalValue r_v
     }
 
     MalValue groups = regexp_build_groups(vm, re, s);
-    MalPropertyDesc groups_desc = mal_intrinsic_data_desc(groups, REGEXP_WEC);
-    mal_object_define_own(array_object, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_GROUPS), &groups_desc);
-
+    MalValue named_values[4] = {
+        mal_value_from_f64((f64) match_start),
+        mal_value_from_string(s),
+        groups,
+        mal_value_new_undefined(),
+    };
     if (has_indices) {
-        MalValue indices = regexp_build_indices(vm, re, s, caps, ngroups);
-        MalPropertyDesc indices_desc = mal_intrinsic_data_desc(indices, REGEXP_WEC);
-        mal_object_define_own(array_object, mal_intrinsic_string_key(vm, (const byte *) "indices"), &indices_desc);
+        named_values[3] = regexp_build_indices(vm, re, s, caps, ngroups);
     }
+    MalShape **shape_slot = has_indices
+        ? &vm->regexp_result_indices_shape
+        : &vm->regexp_result_shape;
+    u32 named_count = has_indices ? 4 : 3;
+    if (*shape_slot == nullptr) {
+        MalString *keys[4] = {
+            mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_INDEX),
+            mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_INPUT),
+            mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_GROUPS),
+            mal_intrinsic_ascii(vm, (const byte *) "indices"),
+        };
+        *shape_slot = mal_shape_from_string_keys(keys, named_count);
+    }
+    mal_object_set_shaped_values(array_object, *shape_slot, named_values, named_count);
 
     if (heap_caps) {
         free(caps);

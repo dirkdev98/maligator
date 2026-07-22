@@ -85,7 +85,12 @@ MalObject *mal_object_try_new(MalHeap *heap, MalObject *prototype);
 /** Allocate an ordinary object directly in a known shape. A one-slot shape uses
  * the slack in the object's existing 48-byte managed-cell class. */
 MalObject *mal_object_new_shaped_one(MalHeap *heap, MalObject *prototype, MalShape *shape,
-                                     MalValue value);
+                                      MalValue value);
+
+/** Install a known final shape and bulk-copy its values into one exact slot buffer. */
+void mal_object_set_shaped_values(
+    MalObject *object, MalShape *shape, const MalValue *values, u32 count
+);
 
 /** Grow shaped slot storage without reallocating coallocated managed cells. */
 void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count);

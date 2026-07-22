@@ -288,6 +288,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->interp_ic = calloc((usize) vm->function_capacity, sizeof(struct MalInlineCache *));
     vm->load_stub = calloc((usize) MAL_STUB_CACHE_SIZE, sizeof(MalStubEntry));
     vm->iterator_result_shape = nullptr;
+    vm->regexp_result_shape = nullptr;
+    vm->regexp_result_indices_shape = nullptr;
+    vm->regexp_indices_shape = nullptr;
     vm->interp_call_cache = calloc(
         (usize) MAL_INTERP_CALL_CACHE_SIZE, sizeof(MalInterpCallCacheEntry));
     vm->global_property_cache = calloc(

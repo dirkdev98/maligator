@@ -1147,6 +1147,11 @@ typedef struct MalVm {
     /** Shared final shape for CreateIterResultObject's `{ value, done }` layout. */
     struct MalShape *iterator_result_shape;
 
+    /** Shared final named-property layouts for RegExp match/indices arrays. */
+    struct MalShape *regexp_result_shape;
+    struct MalShape *regexp_result_indices_shape;
+    struct MalShape *regexp_indices_shape;
+
     /** Bounded plain interpreted-function call cache; see vm_ops.c. */
     MalInterpCallCacheEntry *interp_call_cache;
 
