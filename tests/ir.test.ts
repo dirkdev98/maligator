@@ -84,7 +84,7 @@ test("direct arguments count and constant-index reads avoid object materializati
 
 	const definition = lowerIrProgramToVmDefinition(program);
 	expect(definition.functions[count.functionIndex]!.needsArguments).toBe(false);
-	expect(definition.functions[first.functionIndex]!.needsArguments).toBe(true);
+	expect(definition.functions[first.functionIndex]!.needsArguments).toBe(false);
 });
 
 test("observable arguments object uses make direct reads fall back together", () => {
