@@ -82,6 +82,9 @@ typedef struct MalPerfStats {
     u64 binary_number_bitwise_fallbacks;
     u64 binary_number_other_fallbacks;
 
+    u64 promise_await_typed_continuations;
+    u64 promise_await_typed_jobs;
+
     MalPerfTableStats tables[MAL_PERF_TABLE_ROLE_COUNT];
     MalPerfShapeStats shapes[MAL_PERF_SHAPE_CALLER_COUNT];
     u64 shape_transition_calls;

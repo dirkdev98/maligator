@@ -4,6 +4,8 @@
 
 #include "builtin_promise.h"
 #include "gc.h"
+#include "generator_object.h"
+#include "perf_stats.h"
 #include "vm.h"
 
 static u64 g_job_allocations = 0;
@@ -56,7 +58,7 @@ static MalJob *mal_job_new(MalVm *vm, MalJobKind kind) {
 }
 
 static void mal_job_recycle(MalVm *vm, MalJob *job) {
-    if (job->kind == MAL_JOB_PROMISE_REACTION) {
+    if (job->kind == MAL_JOB_PROMISE_REACTION || job->kind == MAL_JOB_ASYNC_AWAIT) {
         mal_gc_write_barrier(job->as.reaction.handler);
         mal_gc_write_barrier(job->as.reaction.cap_resolve);
         mal_gc_write_barrier(job->as.reaction.cap_reject);
@@ -123,6 +125,22 @@ void mal_vm_enqueue_reaction_job(
     job->as.reaction.cap_resolve = cap_resolve;
     job->as.reaction.cap_reject = cap_reject;
     job->as.reaction.argument = argument;
+    mal_vm_enqueue(vm, job);
+}
+
+void mal_vm_enqueue_await_job(
+    MalVm *vm,
+    MalValue state,
+    bool is_reject,
+    MalValue argument
+) {
+    MalJob *job = mal_job_new(vm, MAL_JOB_ASYNC_AWAIT);
+    job->as.reaction.handler = state;
+    job->is_reject = is_reject;
+    job->as.reaction.cap_resolve = mal_value_new_undefined();
+    job->as.reaction.cap_reject = mal_value_new_undefined();
+    job->as.reaction.argument = argument;
+    MAL_PERF_COUNT(promise_await_typed_jobs);
     mal_vm_enqueue(vm, job);
 }
 
@@ -215,6 +233,16 @@ static void mal_vm_run_reaction_job(MalVm *vm, MalJob *job) {
     }
 }
 
+/** Async await fulfillment/rejection reaction without materialized callbacks. */
+static void mal_vm_run_await_job(MalVm *vm, MalJob *job) {
+    vm->completion = mal_completion_normal();
+    mal_vm_resume_generator(
+        vm,
+        (MalGeneratorObject *) mal_value_to_heap(job->as.reaction.handler),
+        job->as.reaction.argument,
+        job->is_reject ? MAL_GENERATOR_RESUME_THROW : MAL_GENERATOR_RESUME_NEXT);
+}
+
 /** PromiseResolveThenableJob: call then(thenable, resolve, reject), routing a throw to reject. */
 static void mal_vm_run_thenable_job(MalVm *vm, MalJob *job) {
     MalValue args[2] = {job->as.thenable.resolve_fn, job->as.thenable.reject_fn};
@@ -237,10 +265,16 @@ void mal_vm_drain_microtasks(MalVm *vm) {
         // Keep the dequeued job's MalValues reachable: the handler can trigger a
         // collection, and its capabilities are settled afterwards.
         vm->active_job = job;
-        if (job->kind == MAL_JOB_PROMISE_REACTION) {
-            mal_vm_run_reaction_job(vm, job);
-        } else {
-            mal_vm_run_thenable_job(vm, job);
+        switch (job->kind) {
+            case MAL_JOB_PROMISE_REACTION:
+                mal_vm_run_reaction_job(vm, job);
+                break;
+            case MAL_JOB_PROMISE_RESOLVE_THENABLE:
+                mal_vm_run_thenable_job(vm, job);
+                break;
+            case MAL_JOB_ASYNC_AWAIT:
+                mal_vm_run_await_job(vm, job);
+                break;
         }
         mal_job_recycle(vm, job);
 

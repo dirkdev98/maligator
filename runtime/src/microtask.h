@@ -11,6 +11,7 @@ typedef struct MalVm MalVm;
 typedef enum MalJobKind {
     MAL_JOB_PROMISE_REACTION,
     MAL_JOB_PROMISE_RESOLVE_THENABLE,
+    MAL_JOB_ASYNC_AWAIT,
 } MalJobKind;
 
 #define MAL_PROMISE_JOB_POOL_LIMIT 4096
@@ -25,7 +26,7 @@ typedef struct MalJob {
     MalJobKind kind;
     bool is_reject;
     union {
-        /** NewPromiseReactionJob payload. */
+        /** Promise reaction or typed async-await payload. */
         struct {
             MalValue handler;
             /* Preserves MalPromiseReaction's capability encoding verbatim. */
@@ -63,6 +64,14 @@ void mal_vm_enqueue_reaction_job(
     bool is_reject,
     MalValue cap_resolve,
     MalValue cap_reject,
+    MalValue argument
+);
+
+/** Append a typed async-await resumption job to the microtask queue. */
+void mal_vm_enqueue_await_job(
+    MalVm *vm,
+    MalValue state,
+    bool is_reject,
     MalValue argument
 );
 

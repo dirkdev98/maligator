@@ -1,40 +1,13 @@
 #include "async_function.h"
 
 #include "builtin_promise.h"
-#include "function_object.h"
 #include "gc.h"
 #include "generator_object.h"
-#include "intrinsics.h"
 #include "promise_object.h"
 #include "vm.h"
 
-// Resume-closure internal slot: the hidden async state to resume.
-enum {
-    MAL_ASYNC_RESUME_SLOT_STATE = 0,
-};
-
 static MalCompletion mal_async_normal(void) {
     return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-}
-
-static MalGeneratorObject *mal_async_state_from_callee(MalValue callee) {
-    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
-    MalValue state = mal_native_function_object_get_slot(self, MAL_ASYNC_RESUME_SLOT_STATE);
-    return (MalGeneratorObject *) mal_value_to_heap(state);
-}
-
-static MalValue mal_async_on_fulfilled(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    mal_vm_resume_generator(vm, mal_async_state_from_callee(callee), arg_count >= 1 ? args[0] : mal_value_new_undefined(), MAL_GENERATOR_RESUME_NEXT);
-    return mal_value_new_undefined();
-}
-
-static MalValue mal_async_on_rejected(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    (void) new_target;
-    mal_vm_resume_generator(vm, mal_async_state_from_callee(callee), arg_count >= 1 ? args[0] : mal_value_new_undefined(), MAL_GENERATOR_RESUME_THROW);
-    return mal_value_new_undefined();
 }
 
 void mal_async_function_start(MalVm *vm, MalVmFrame *frame) {
@@ -102,15 +75,7 @@ void mal_async_function_await(MalVm *vm, MalGeneratorObject *state, MalValue awa
         }
     }
 
-    MalValue state_value = mal_value_from_object((MalObject *) state);
-    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    MalValue on_fulfilled = mal_value_from_native_function_object(
-        mal_native_function_object_new_with_slots(&vm->heap, function_prototype, nullptr, mal_async_on_fulfilled, &state_value, 1));
-    MalValue on_rejected = mal_value_from_native_function_object(
-        mal_native_function_object_new_with_slots(&vm->heap, function_prototype, nullptr, mal_async_on_rejected, &state_value, 1));
-
-    // No result capability: the reactions resume the function themselves.
-    mal_promise_perform_then(vm, promise, on_fulfilled, on_rejected, mal_value_new_undefined(), mal_value_new_undefined());
+    mal_promise_perform_await(vm, promise, state);
 }
 
 void mal_async_function_settle_return(MalVm *vm, MalGeneratorObject *state, MalValue value) {

@@ -26,7 +26,9 @@ typedef struct MalPromiseReactionBlock MalPromiseReactionBlock;
 typedef struct MalPromiseReaction {
     struct MalPromiseReaction *next;
     /* Capability encoding: two callables, two undefined values (no result
-     * capability), or {direct target Promise, exact intrinsic constructor}. */
+     * capability), {direct target Promise, exact intrinsic constructor}, or
+     * {internal await tag, generator state}. The int32 tag cannot collide with
+     * any valid user-created PromiseCapability resolve function. */
     MalValue cap_resolve;
     MalValue cap_reject;
     MalValue on_fulfilled;
@@ -76,6 +78,13 @@ void mal_promise_append_reaction(
     MalValue on_rejected,
     MalValue cap_resolve,
     MalValue cap_reject
+);
+
+/** Append a typed async-function continuation without allocating JS callbacks. */
+void mal_promise_append_await_reaction(
+    MalVm *vm,
+    MalPromiseObject *promise,
+    MalValue state
 );
 
 /**

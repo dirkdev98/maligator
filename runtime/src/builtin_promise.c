@@ -12,6 +12,7 @@
 #include "microtask.h"
 #include "object.h"
 #include "object_ops.h"
+#include "perf_stats.h"
 #include "promise_object.h"
 #include "property_iter.h"
 #include "proxy_object.h"
@@ -419,6 +420,30 @@ void mal_promise_perform_then(
             break;
         case MAL_PROMISE_REJECTED:
             mal_vm_enqueue_reaction_job(vm, reject_handler, true, cap_resolve, cap_reject, promise->result);
+            break;
+    }
+}
+
+void mal_promise_perform_await(
+    MalVm *vm,
+    MalValue promise_value,
+    MalGeneratorObject *state
+) {
+    MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
+    MalValue state_value = mal_value_from_object((MalObject *) state);
+
+    promise->is_handled = true;
+    MAL_PERF_COUNT(promise_await_typed_continuations);
+
+    switch (promise->state) {
+        case MAL_PROMISE_PENDING:
+            mal_promise_append_await_reaction(vm, promise, state_value);
+            break;
+        case MAL_PROMISE_FULFILLED:
+            mal_vm_enqueue_await_job(vm, state_value, false, promise->result);
+            break;
+        case MAL_PROMISE_REJECTED:
+            mal_vm_enqueue_await_job(vm, state_value, true, promise->result);
             break;
     }
 }

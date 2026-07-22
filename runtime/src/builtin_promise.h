@@ -4,6 +4,7 @@
 #include "value.h"
 
 typedef struct MalVm MalVm;
+typedef struct MalGeneratorObject MalGeneratorObject;
 
 /**
  * Install the Promise constructor and prototype. Requires the well-known
@@ -72,11 +73,21 @@ void mal_promise_note_direct_async_result(void);
 bool mal_promise_resolve_value(MalVm *vm, MalValue value, MalValue *out_promise);
 
 /**
+ * Register a typed async-function continuation against an intrinsic Promise.
+ * The caller must first normalize the awaited value with
+ * mal_promise_resolve_value. Settlement queues a direct await job rather than
+ * allocating callable fulfillment/rejection closures.
+ */
+void mal_promise_perform_await(
+    MalVm *vm,
+    MalValue promise,
+    MalGeneratorObject *state
+);
+
+/**
  * PerformPromiseThen on a Promise value: register on_fulfilled / on_rejected
  * (callables, or undefined for the default pass-through/rethrow) against an
- * optional result capability (pass undefined cap functions for none — the
- * async driver's reactions resume the function themselves and need no
- * dependent promise). Exposed for the async/await driver.
+ * optional result capability (pass undefined cap functions for none).
  */
 void mal_promise_perform_then(
     MalVm *vm,

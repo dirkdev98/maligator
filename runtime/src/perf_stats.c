@@ -130,6 +130,12 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.binary_number_bitwise_fallbacks,
         (unsigned long long) mal_perf_stats.binary_number_other_fallbacks
     );
+    fprintf(
+        stderr,
+        "[perf-promise-stats] await_typed_continuations=%llu await_typed_jobs=%llu\n",
+        (unsigned long long) mal_perf_stats.promise_await_typed_continuations,
+        (unsigned long long) mal_perf_stats.promise_await_typed_jobs
+    );
     for (u32 i = 0; i < MAL_PERF_TABLE_ROLE_COUNT; i++) {
         const MalPerfTableStats *stats = &mal_perf_stats.tables[i];
         fprintf(

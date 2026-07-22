@@ -466,6 +466,45 @@ async function asyncAwaitThenable() {
 	};
 	return value + 1;
 }
+async function asyncAwaitExactPromise() {
+	const exact = Promise.resolve(54);
+	let thenCalls = 0;
+	exact.then = () => {
+		thenCalls++;
+		throw new Error("await called overridden exact .then");
+	};
+	const value = await exact;
+	ok("await exact Promise bypasses overridden .then", thenCalls === 0);
+	return value + 1;
+}
+
+let awaitSubclassThenCalls = 0;
+class AwaitSubclass extends Promise {
+	then(onFulfilled, onRejected) {
+		awaitSubclassThenCalls++;
+		ok(
+			"await subclass normalization receives callable pair",
+			typeof onFulfilled === "function" && typeof onRejected === "function",
+		);
+		return super.then(onFulfilled, onRejected);
+	}
+}
+async function asyncAwaitSubclass() {
+	return await new AwaitSubclass((resolve) => resolve(55));
+}
+
+const awaitRejectFirstReason = { kind: "await reject first" };
+let awaitRejectFirstCalls = 0;
+async function asyncAwaitRejectFirstThenable() {
+	return await {
+		then(resolve, reject) {
+			awaitRejectFirstCalls++;
+			reject(awaitRejectFirstReason);
+			resolve(56);
+			throw new Error("ignored after await reject");
+		},
+	};
+}
 
 const asyncFulfilled = asyncFulfill();
 ok(
@@ -496,6 +535,50 @@ fulfilled(
 	(value) => value === 50,
 );
 fulfilled("await assimilates thenable", asyncAwaitThenable(), (value) => value === 53);
+fulfilled(
+	"await exact Promise uses typed continuation",
+	asyncAwaitExactPromise(),
+	(value) => value === 55,
+);
+fulfilled(
+	"await subclass normalizes through intrinsic Promise",
+	asyncAwaitSubclass(),
+	(value) => value === 55 && awaitSubclassThenCalls === 1,
+);
+rejected(
+	"await rejecting thenable settles once",
+	asyncAwaitRejectFirstThenable(),
+	(reason) => reason === awaitRejectFirstReason && awaitRejectFirstCalls === 1,
+);
+
+let awaitChangedConstructorGets = 0;
+const awaitChangedConstructorPromise = Promise.resolve(57);
+Object.defineProperty(awaitChangedConstructorPromise, "constructor", {
+	get() {
+		awaitChangedConstructorGets++;
+		return {};
+	},
+});
+fulfilled(
+	"await changed-constructor Promise normalizes",
+	(async () => await awaitChangedConstructorPromise)(),
+	(value) => value === 57 && awaitChangedConstructorGets === 2,
+);
+
+const awaitThenGetterError = { kind: "await then getter" };
+let awaitThenGetterCount = 0;
+const awaitThrowingThenGetter = {};
+Object.defineProperty(awaitThrowingThenGetter, "then", {
+	get() {
+		awaitThenGetterCount++;
+		throw awaitThenGetterError;
+	},
+});
+rejected(
+	"await throwing then getter rejects once",
+	(async () => await awaitThrowingThenGetter)(),
+	(reason) => reason === awaitThenGetterError && awaitThenGetterCount === 1,
+);
 
 const awaitConstructorError = { kind: "await constructor getter" };
 const awaitPoisonedPromise = Promise.resolve(54);
@@ -593,7 +676,11 @@ if (typeof ShadowRealm === "function") {
 
 	const runInnerAsync = realm.evaluate(`(report) => {
 		const reason = {};
-		async function fulfill() { return (await 60) + 1; }
+		async function fulfill() {
+			const exact = Promise.resolve(60);
+			exact.then = () => report(false);
+			return (await exact) + 1;
+		}
 		async function reject() { throw reason; }
 		let cycle;
 		async function selfResolve() { await 0; return cycle; }

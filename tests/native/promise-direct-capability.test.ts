@@ -39,6 +39,7 @@ describe("direct Promise.prototype.then capabilities", () => {
 	let compiled: string;
 	let interpreted: string;
 	let concurrent: string;
+	let instrumented: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -59,6 +60,13 @@ describe("direct Promise.prototype.then capabilities", () => {
 			compiled: true,
 			outDir,
 			environment: { ...process.env, MAL_GC_CONCURRENT: "1" },
+		});
+		instrumented = buildNativeBinary({
+			fixture: "tests/local/promise-direct-capability.js",
+			name: "promise-direct-capability-perf",
+			compiled: true,
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 	});
 
@@ -101,5 +109,15 @@ describe("direct Promise.prototype.then capabilities", () => {
 		expect(fallback).toBeLessThan(direct);
 		expect(intrinsic).toBeGreaterThan(0);
 		expect(asyncResults).toBeGreaterThan(0);
+	});
+
+	it("reports typed await continuations and jobs", () => {
+		const stderr = run(instrumented, { MAL_PERF_STATS: "1" });
+		const continuations = Number(
+			stderr.match(/await_typed_continuations=(\d+)/)?.[1] ?? 0,
+		);
+		const jobs = Number(stderr.match(/await_typed_jobs=(\d+)/)?.[1] ?? 0);
+		expect(continuations).toBeGreaterThan(0);
+		expect(jobs).toBe(continuations);
 	});
 });

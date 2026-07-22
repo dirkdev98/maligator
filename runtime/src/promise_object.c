@@ -10,6 +10,10 @@
 #define MAL_PROMISE_REACTION_POOL_LIMIT 4096
 #define MAL_PROMISE_REACTION_BLOCK_SIZE 32768
 
+static inline MalValue mal_promise_await_reaction_tag(void) {
+    return mal_value_from_i32(INT32_MIN);
+}
+
 struct MalPromiseReactionBlock {
     MalPromiseReactionBlock *next;
     MalPromiseReaction *free_list;
@@ -94,7 +98,7 @@ MalPromiseObject *mal_promise_object_new(MalHeap *heap, MalObject *prototype) {
     return promise;
 }
 
-void mal_promise_append_reaction(
+static void mal_promise_append_reaction_internal(
     MalVm *vm,
     MalPromiseObject *promise,
     MalValue on_fulfilled,
@@ -130,6 +134,32 @@ void mal_promise_append_reaction(
     mal_gc_card(&promise->object.header, on_rejected);
     mal_gc_card(&promise->object.header, cap_resolve);
     mal_gc_card(&promise->object.header, cap_reject);
+}
+
+void mal_promise_append_reaction(
+    MalVm *vm,
+    MalPromiseObject *promise,
+    MalValue on_fulfilled,
+    MalValue on_rejected,
+    MalValue cap_resolve,
+    MalValue cap_reject
+) {
+    mal_promise_append_reaction_internal(
+        vm, promise, on_fulfilled, on_rejected, cap_resolve, cap_reject);
+}
+
+void mal_promise_append_await_reaction(
+    MalVm *vm,
+    MalPromiseObject *promise,
+    MalValue state
+) {
+    mal_promise_append_reaction_internal(
+        vm,
+        promise,
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_promise_await_reaction_tag(),
+        state);
 }
 
 /** Free a pending reaction list without scheduling it. */
@@ -194,9 +224,13 @@ static void mal_promise_barrier_reactions(MalPromiseReaction *reaction) {
 static void mal_promise_trigger_reactions(MalVm *vm, MalPromiseReaction *list, bool is_reject, MalValue argument) {
     while (list != nullptr) {
         MalPromiseReaction *next = list->next;
-        MalValue handler = is_reject ? list->on_rejected : list->on_fulfilled;
-        mal_vm_enqueue_reaction_job(
-            vm, handler, is_reject, list->cap_resolve, list->cap_reject, argument);
+        if (list->cap_resolve == mal_promise_await_reaction_tag()) {
+            mal_vm_enqueue_await_job(vm, list->cap_reject, is_reject, argument);
+        } else {
+            MalValue handler = is_reject ? list->on_rejected : list->on_fulfilled;
+            mal_vm_enqueue_reaction_job(
+                vm, handler, is_reject, list->cap_resolve, list->cap_reject, argument);
+        }
         mal_promise_recycle_reaction(vm, list);
         list = next;
     }

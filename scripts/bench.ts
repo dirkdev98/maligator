@@ -132,6 +132,8 @@ interface PromiseMetrics {
 	materializedFallbackPairs: number;
 	directIntrinsicCreations: number;
 	directAsyncResults: number;
+	typedAwaitContinuations: number;
+	typedAwaitJobs: number;
 }
 interface CoroutineBackendMetrics {
 	wallMs: number;
@@ -472,6 +474,12 @@ function parsePromiseStat(stderr: string, field: string): number {
 	return match ? Number(match[1]) : 0;
 }
 
+function parsePerfPromiseStat(stderr: string, field: string): number {
+	const line = stderr.split("\n").find((value) => value.includes("[perf-promise-stats]"));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
+}
+
 function parseCoroutineStat(stderr: string, field: string): number {
 	const line = stderr.split("\n").find((value) => value.includes("[coroutine-stats]"));
 	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
@@ -491,6 +499,24 @@ function benchPromise(runs: number): PromiseMetrics {
 		stdio: ["ignore", "ignore", "pipe"],
 	});
 	const stderr = result.stderr ?? "";
+	const previousPerfStats = process.env.MAL_PERF_STATS;
+	process.env.MAL_PERF_STATS = "1";
+	let perfBinary: string;
+	try {
+		perfBinary = buildNativeBinary({
+			fixture: "bench/promise.js",
+			name: "bench-promise-perf",
+		});
+	} finally {
+		if (previousPerfStats === undefined) delete process.env.MAL_PERF_STATS;
+		else process.env.MAL_PERF_STATS = previousPerfStats;
+	}
+	const perfResult = spawnSync(perfBinary, [], {
+		env: { ...process.env, MAL_PERF_STATS: "1" },
+		encoding: "utf-8",
+		stdio: ["ignore", "ignore", "pipe"],
+	});
+	const perfStderr = perfResult.stderr ?? "";
 	return {
 		malMs,
 		nodeMs,
@@ -505,6 +531,11 @@ function benchPromise(runs: number): PromiseMetrics {
 		materializedFallbackPairs: parsePromiseStat(stderr, "materialized_fallback_pairs"),
 		directIntrinsicCreations: parsePromiseStat(stderr, "direct_intrinsic_creations"),
 		directAsyncResults: parsePromiseStat(stderr, "direct_async_results"),
+		typedAwaitContinuations: parsePerfPromiseStat(
+			perfStderr,
+			"await_typed_continuations",
+		),
+		typedAwaitJobs: parsePerfPromiseStat(perfStderr, "await_typed_jobs"),
 	};
 }
 
@@ -1095,6 +1126,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		);
 		console.log(
 			`            ${entry.promise.directIntrinsicCreations} intrinsic creations${delta(entry.promise.directIntrinsicCreations, p?.directIntrinsicCreations)}, ${entry.promise.directAsyncResults} async results${delta(entry.promise.directAsyncResults, p?.directAsyncResults)}`,
+		);
+		console.log(
+			`  await     ${entry.promise.typedAwaitContinuations} typed continuations, ${entry.promise.typedAwaitJobs} typed jobs`,
 		);
 	}
 	if (entry.coroutine) {
