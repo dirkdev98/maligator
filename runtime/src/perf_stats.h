@@ -132,6 +132,12 @@ typedef struct MalPerfStats {
     u64 array_fresh_dense_reserved_slots;
     u64 array_fresh_dense_growths_avoided;
 
+    u64 node_event_singleton_inserts;
+    u64 node_event_listener_array_allocations;
+    u64 node_event_listener_array_copied_entries;
+    u64 node_event_listener_promotions;
+    u64 node_event_listener_demotions;
+
     u64 http_response_index_lookups;
     u64 http_response_index_hits;
     u64 http_response_index_misses;

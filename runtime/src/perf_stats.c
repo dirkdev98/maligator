@@ -214,6 +214,16 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-node-events-stats] singleton_inserts=%llu listener_array_allocations=%llu "
+        "listener_array_copied_entries=%llu promotions=%llu demotions=%llu\n",
+        (unsigned long long) mal_perf_stats.node_event_singleton_inserts,
+        (unsigned long long) mal_perf_stats.node_event_listener_array_allocations,
+        (unsigned long long) mal_perf_stats.node_event_listener_array_copied_entries,
+        (unsigned long long) mal_perf_stats.node_event_listener_promotions,
+        (unsigned long long) mal_perf_stats.node_event_listener_demotions
+    );
+    fprintf(
+        stderr,
         "[perf-http-stats] response_index_lookups=%llu response_index_hits=%llu "
         "response_index_misses=%llu response_index_probes=%llu "
         "response_index_max_probes=%llu response_index_peak_entries=%llu "

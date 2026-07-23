@@ -70,6 +70,32 @@ check(emitter.listenerCount("work") === 2, "listenerCount");
 check(emitter.listenerCount("work", tail) === 1, "listenerCount listener filter");
 check(EventEmitter.listenerCount(emitter, "work") === 2, "static listenerCount");
 
+const representation = new EventEmitter();
+function representationFirst() {}
+function representationSecond() {}
+representation.on("shape", representationFirst);
+check(
+	representation._events.shape === representationFirst,
+	"singleton listener callable representation",
+);
+representation.prependListener("shape", representationSecond);
+check(
+	Array.isArray(representation._events.shape) &&
+		representation._events.shape[0] === representationSecond &&
+		representation._events.shape[1] === representationFirst,
+	"second listener promotes to ordered array",
+);
+representation.removeListener("shape", representationSecond);
+check(
+	representation._events.shape === representationFirst,
+	"removal demotes array to callable",
+);
+representation.removeListener("shape", representationFirst);
+check(
+	representation._events.shape === undefined && representation._eventsCount === 0,
+	"last removal deletes singleton event",
+);
+
 const onceEmitter = new EventEmitter();
 let onceCalls = 0;
 function original() {
@@ -78,6 +104,7 @@ function original() {
 onceEmitter.once("tick", original);
 const raw = onceEmitter.rawListeners("tick")[0];
 check(raw !== original && raw.listener === original, "raw once wrapper");
+check(onceEmitter._events.tick === raw, "once wrapper singleton representation");
 check(onceEmitter.listeners("tick")[0] === original, "listeners unwrap once");
 raw();
 raw();

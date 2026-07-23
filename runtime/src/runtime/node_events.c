@@ -13,6 +13,7 @@
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
+#include "perf_stats.h"
 #include "property_iter.h"
 #include "property_store.h"
 #include "value.h"
@@ -87,17 +88,30 @@ static i32 ee_event_count(MalVm *vm, MalValue receiver) {
         : 0;
 }
 
-static MalArrayObject *ee_listener_array(MalObject *events, MalKey event) {
+static MalValue ee_listener_value(MalObject *events, MalKey event) {
     MalPropertyLookup lookup = mal_object_get_own(events, event);
-    return lookup.present && mal_value_is_array_object(lookup.desc.value)
-        ? mal_value_to_array_object(lookup.desc.value)
-        : nullptr;
+    return lookup.present ? lookup.desc.value : mal_value_new_undefined();
 }
 
 static MalValue ee_array_value(MalArrayObject *array, u32 index) {
     MalValue value = mal_value_new_undefined();
     mal_array_object_dense_get(array, index, &value);
     return value;
+}
+
+static u32 ee_listener_length(MalValue listeners) {
+    if (mal_value_is_callable(listeners)) {
+        return 1;
+    }
+    return mal_value_is_array_object(listeners)
+        ? mal_array_object_length(mal_value_to_array_object(listeners))
+        : 0;
+}
+
+static MalValue ee_listener_at(MalValue listeners, u32 index) {
+    return mal_value_is_callable(listeners)
+        ? listeners
+        : ee_array_value(mal_value_to_array_object(listeners), index);
 }
 
 static MalValue ee_key_value(MalVm *vm, MalKey key) {
@@ -130,13 +144,16 @@ static MalValue ee_original_listener(MalValue raw) {
         : raw;
 }
 
-static MalValue ee_copy_listeners(
-    MalVm *vm, MalArrayObject *old, i32 remove_index, MalValue inserted, bool prepend) {
-    u32 old_length = old == nullptr ? 0 : mal_array_object_length(old);
+static MalValue ee_copy_listener_array(
+    MalVm *vm, MalValue old, i32 remove_index, MalValue inserted, bool prepend) {
+    u32 old_length = ee_listener_length(old);
     u32 new_length = old_length + (mal_value_is_empty(inserted) ? 0u : 1u)
         - (remove_index >= 0 ? 1u : 0u);
     MalValue result =
         mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, new_length));
+    MAL_PERF_COUNT(node_event_listener_array_allocations);
+    MAL_PERF_ADD(node_event_listener_array_copied_entries,
+                 old_length - (remove_index >= 0 ? 1u : 0u));
     MalRootSpan root;
     mal_gc_root(&root, &result, 1);
     MalArrayObject *array = mal_value_to_array_object(result);
@@ -146,7 +163,8 @@ static MalValue ee_copy_listeners(
     }
     for (u32 i = 0; i < old_length; i++) {
         if ((i32) i != remove_index) {
-            mal_array_object_store(array, mal_key_index(destination++), ee_array_value(old, i));
+            mal_array_object_store(array, mal_key_index(destination++),
+                                   ee_listener_at(old, i));
         }
     }
     if (!mal_value_is_empty(inserted) && !prepend) {
@@ -168,8 +186,10 @@ static bool ee_emit_key(
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return false;
     }
-    MalArrayObject *listeners = events == nullptr ? nullptr : ee_listener_array(events, event);
-    u32 length = listeners == nullptr ? 0 : mal_array_object_length(listeners);
+    MalValue listeners = events == nullptr
+        ? mal_value_new_undefined()
+        : ee_listener_value(events, event);
+    u32 length = ee_listener_length(listeners);
     if (length == 0) {
         if (ee_event_is(vm, event, "error")) {
             if (argc > 0) {
@@ -183,9 +203,14 @@ static bool ee_emit_key(
         return false;
     }
 
-    MalValue snapshot = mal_value_from_array_object(listeners);
+    MalValue snapshot = listeners;
     MalRootSpan root;
     mal_gc_root(&root, &snapshot, 1);
+    if (mal_value_is_callable(snapshot)) {
+        mal_vm_call_value(vm, snapshot, receiver, args, argc);
+        mal_gc_unroot(&root);
+        return true;
+    }
     for (u32 i = 0; i < length; i++) {
         MalValue listener = ee_array_value(mal_value_to_array_object(snapshot), i);
         mal_vm_call_value(vm, listener, receiver, args, argc);
@@ -202,15 +227,14 @@ static bool ee_has_listeners(MalVm *vm, MalValue receiver, const char *name) {
     if (events == nullptr) {
         return false;
     }
-    MalArrayObject *array = ee_listener_array(events, ee_name_key(vm, name));
-    return array != nullptr && mal_array_object_length(array) > 0;
+    return ee_listener_length(ee_listener_value(events, ee_name_key(vm, name))) > 0;
 }
 
-static void ee_store_listener_array(MalVm *vm, MalValue receiver, MalObject *events,
-                                    MalKey event, MalValue array, bool was_absent) {
+static void ee_store_listener(MalVm *vm, MalValue receiver, MalObject *events,
+                              MalKey event, MalValue listeners, bool was_absent) {
     MalRootSpan root;
-    mal_gc_root(&root, &array, 1);
-    mal_object_set(events, event, array);
+    mal_gc_root(&root, &listeners, 1);
+    mal_object_set(events, event, listeners);
     if (was_absent) {
         ee_set_event_count(vm, receiver, ee_event_count(vm, receiver) + 1);
     }
@@ -253,8 +277,9 @@ static MalValue ee_add(
     }
 
     MalObject *events = ee_events(vm, roots[0], true);
-    MalArrayObject *old = ee_listener_array(events, event);
-    bool absent = old == nullptr || mal_array_object_length(old) == 0;
+    MalValue old = ee_listener_value(events, event);
+    u32 old_length = ee_listener_length(old);
+    bool absent = old_length == 0;
     if (once) {
         MalValue slots[] = {roots[0], event.value, roots[2], mal_value_new_boolean(false)};
         MalNativeFunctionObject *wrapper = mal_native_function_object_new_with_slots(
@@ -268,8 +293,16 @@ static MalValue ee_add(
     } else {
         roots[3] = roots[2];
     }
-    MalValue next = ee_copy_listeners(vm, old, -1, roots[3], prepend);
-    ee_store_listener_array(vm, roots[0], events, event, next, absent);
+    if (absent) {
+        MAL_PERF_COUNT(node_event_singleton_inserts);
+        ee_store_listener(vm, roots[0], events, event, roots[3], true);
+    } else {
+        if (mal_value_is_callable(old)) {
+            MAL_PERF_COUNT(node_event_listener_promotions);
+        }
+        MalValue next = ee_copy_listener_array(vm, old, -1, roots[3], prepend);
+        ee_store_listener(vm, roots[0], events, event, next, false);
+    }
     mal_gc_unroot(&root);
     return receiver;
 }
@@ -280,14 +313,15 @@ static bool ee_remove_one(
     if (events == nullptr) {
         return false;
     }
-    MalArrayObject *old = ee_listener_array(events, event);
-    if (old == nullptr) {
+    MalValue old = ee_listener_value(events, event);
+    u32 old_length = ee_listener_length(old);
+    if (old_length == 0) {
         return false;
     }
     i32 found = -1;
     MalValue original = mal_value_new_undefined();
-    for (i32 i = (i32) mal_array_object_length(old) - 1; i >= 0; i--) {
-        MalValue raw = ee_array_value(old, (u32) i);
+    for (i32 i = (i32) old_length - 1; i >= 0; i--) {
+        MalValue raw = ee_listener_at(old, (u32) i);
         MalValue candidate = ee_original_listener(raw);
         if (mal_ops_same_value(raw, listener) || mal_ops_same_value(candidate, listener)) {
             found = i;
@@ -299,16 +333,20 @@ static bool ee_remove_one(
         return false;
     }
 
-    MalValue roots[] = {mal_value_from_array_object(old), original, event.value};
+    MalValue roots[] = {old, original, event.value};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    u32 old_length = mal_array_object_length(old);
     if (old_length == 1) {
         mal_object_delete_own(events, event);
         ee_set_event_count(vm, receiver, ee_event_count(vm, receiver) - 1);
+    } else if (old_length == 2) {
+        MalValue remaining = ee_listener_at(old, found == 0 ? 1u : 0u);
+        MAL_PERF_COUNT(node_event_listener_demotions);
+        ee_store_listener(vm, receiver, events, event, remaining, false);
     } else {
-        MalValue next = ee_copy_listeners(vm, old, found, mal_value_new_empty(), false);
-        ee_store_listener_array(vm, receiver, events, event, next, false);
+        MalValue next =
+            ee_copy_listener_array(vm, old, found, mal_value_new_empty(), false);
+        ee_store_listener(vm, receiver, events, event, next, false);
     }
 
     if (emit_meta && ee_has_listeners(vm, receiver, "removeListener")) {
@@ -454,17 +492,19 @@ static MalValue ee_remove_listener(
 
 static void ee_remove_all_key(MalVm *vm, MalValue receiver, MalKey event) {
     MalObject *events = ee_events(vm, receiver, false);
-    MalArrayObject *array = events == nullptr ? nullptr : ee_listener_array(events, event);
-    u32 length = array == nullptr ? 0 : mal_array_object_length(array);
+    MalValue listeners = events == nullptr
+        ? mal_value_new_undefined()
+        : ee_listener_value(events, event);
+    u32 length = ee_listener_length(listeners);
     if (length == 0) {
         return;
     }
-    MalValue snapshot = mal_value_from_array_object(array);
+    MalValue snapshot = listeners;
     MalRootSpan root;
     mal_gc_root(&root, &snapshot, 1);
     for (i32 i = (i32) length - 1;
          i >= 0 && vm->completion.kind != MAL_COMPLETION_THROW; i--) {
-        MalValue raw = ee_array_value(mal_value_to_array_object(snapshot), (u32) i);
+        MalValue raw = ee_listener_at(snapshot, (u32) i);
         ee_remove_one(vm, receiver, event, raw, true);
     }
     mal_gc_unroot(&root);
@@ -486,8 +526,7 @@ static MalValue ee_event_names_value(MalVm *vm, MalValue receiver) {
     MalPropertyDesc desc;
     u32 index = 0;
     while (mal_property_iter_next(&iter, &key, &desc)) {
-        if (mal_value_is_array_object(desc.value)
-            && mal_array_object_length(mal_value_to_array_object(desc.value)) > 0) {
+        if (ee_listener_length(desc.value) > 0) {
             mal_array_object_store(mal_value_to_array_object(result), mal_key_index(index++),
                                    ee_key_value(vm, key));
         }
@@ -561,13 +600,15 @@ static MalValue ee_listeners_common(
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
-    MalArrayObject *old = events == nullptr ? nullptr : ee_listener_array(events, event);
-    u32 length = old == nullptr ? 0 : mal_array_object_length(old);
+    MalValue old = events == nullptr
+        ? mal_value_new_undefined()
+        : ee_listener_value(events, event);
+    u32 length = ee_listener_length(old);
     MalValue result = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, length));
     MalRootSpan root;
     mal_gc_root(&root, &result, 1);
     for (u32 i = 0; i < length; i++) {
-        MalValue listener = ee_array_value(old, i);
+        MalValue listener = ee_listener_at(old, i);
         mal_array_object_store(mal_value_to_array_object(result), mal_key_index(i),
                                raw ? listener : ee_original_listener(listener));
     }
@@ -603,14 +644,14 @@ static i32 ee_listener_count_value(
     if (events == nullptr) {
         return 0;
     }
-    MalArrayObject *array = ee_listener_array(events, event);
-    u32 length = array == nullptr ? 0 : mal_array_object_length(array);
+    MalValue listeners = ee_listener_value(events, event);
+    u32 length = ee_listener_length(listeners);
     if (mal_value_is_undefined(listener)) {
         return (i32) length;
     }
     i32 count = 0;
     for (u32 i = 0; i < length; i++) {
-        MalValue raw = ee_array_value(array, i);
+        MalValue raw = ee_listener_at(listeners, i);
         if (mal_ops_same_value(raw, listener)
             || mal_ops_same_value(ee_original_listener(raw), listener)) {
             count++;
