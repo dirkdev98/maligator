@@ -1248,6 +1248,45 @@ bool mal_vm_get_prototype_from_constructor(
     return true;
 }
 
+static void mal_vm_execute_argument_snapshot_plan(
+    MalVm *vm,
+    const MalFunction *function,
+    i32 argument_base,
+    i32 argument_count,
+    MalValue *registers,
+    bool aliases_arguments
+) {
+    MalValue scratch = mal_value_new_undefined();
+    MAL_PERF_ADD(argument_snapshot_logical_values, function->argument_snapshot_count);
+    for (i32 i = 0; i < function->argument_snapshot_plan_count; i++) {
+        const MalArgumentSnapshotMove *move = &function->argument_snapshot_plan[i];
+        if (move->destination < 0) {
+            scratch = move->source < argument_count
+                ? vm->value_stack[argument_base + move->source]
+                : mal_value_new_undefined();
+            MAL_PERF_COUNT(argument_snapshot_temporary_copies);
+            continue;
+        }
+
+        MalValue value;
+        if (move->source == MAL_ARGUMENT_SNAPSHOT_SOURCE_COUNT) {
+            value = mal_value_from_i32(argument_count);
+        } else if (move->source == MAL_ARGUMENT_SNAPSHOT_SOURCE_SCRATCH) {
+            value = scratch;
+        } else if (move->source < argument_count) {
+            // A present aliased self-move is already in its final register.
+            if (aliases_arguments && move->source == move->destination) {
+                continue;
+            }
+            value = vm->value_stack[argument_base + move->source];
+        } else {
+            value = mal_value_new_undefined();
+        }
+        registers[move->destination] = value;
+        MAL_PERF_COUNT(argument_snapshot_destination_writes);
+    }
+}
+
 bool mal_vm_push_function_frame(
     MalVm *vm,
     i32 function_index,
@@ -1277,23 +1316,7 @@ bool mal_vm_push_function_frame(
     i32 base = vm->value_stack_size - arg_count;
     i32 params_present = param_count < arg_count ? param_count : arg_count;
 
-    // Static arguments reads are emitted before parameter/default initialization.
-    // Capture the persisted prefix while the caller's marshaling area is intact;
-    // register setup below may reuse or clear that same area.
     i32 argument_snapshot_count = function->argument_snapshot_count;
-    MAL_PERF_ADD(argument_snapshot_unique_values, argument_snapshot_count);
-    MalValue argument_snapshots[argument_snapshot_count > 0 ? argument_snapshot_count : 1];
-    for (i32 i = 0; i < argument_snapshot_count; i++) {
-        const MalInstruction *instruction = &function->instructions[i];
-        if (instruction->opcode == MAL_OP_LOAD_ARGUMENT_COUNT) {
-            argument_snapshots[i] = mal_value_from_i32(arg_count);
-        } else {
-            i32 index = instruction->as.load_argument.index;
-            argument_snapshots[i] = index >= 0 && index < arg_count
-                ? vm->value_stack[base + index]
-                : mal_value_new_undefined();
-        }
-    }
 
     // Generators (and async, later) keep their activation on the heap: it
     // outlives the synchronous call stack across suspends. Everything else
@@ -1328,6 +1351,8 @@ bool mal_vm_push_function_frame(
         for (i32 i = 0; wants_args && i < arg_count; i++) {
             arguments[i] = vm->value_stack[base + i];
         }
+        mal_vm_execute_argument_snapshot_plan(
+            vm, function, base, arg_count, registers, false);
         vm->value_stack_size = base;
         stack_base = -1;
     } else if (wants_args) {
@@ -1346,6 +1371,8 @@ bool mal_vm_push_function_frame(
         for (i32 i = 0; i < params_present; i++) {
             registers[i] = arguments[i];
         }
+        mal_vm_execute_argument_snapshot_plan(
+            vm, function, base, arg_count, registers, false);
         vm->value_stack_size = register_base + register_count;
         stack_base = base;
     } else {
@@ -1358,7 +1385,15 @@ bool mal_vm_push_function_frame(
         }
         registers = &vm->value_stack[base];
         arguments = nullptr;
-        for (i32 i = params_present; i < register_count; i++) {
+        // Execute before clearing locals: extra marshaled arguments can overlap
+        // snapshot destinations, including cycles. The persisted plan preserves
+        // those sources with one scalar scratch only when required.
+        mal_vm_execute_argument_snapshot_plan(
+            vm, function, base, arg_count, registers, true);
+        for (i32 i = params_present; i < param_count; i++) {
+            registers[i] = mal_value_new_undefined();
+        }
+        for (i32 i = param_count + argument_snapshot_count; i < register_count; i++) {
             registers[i] = mal_value_new_undefined();
         }
         vm->value_stack_size = base + register_count;
@@ -1382,14 +1417,6 @@ bool mal_vm_push_function_frame(
     frame->generator = nullptr;
     frame->is_construct = false;
     frame->new_target = mal_value_new_undefined();
-    for (i32 i = 0; i < argument_snapshot_count; i++) {
-        const MalInstruction *instruction = &function->instructions[i];
-        i32 destination = instruction->opcode == MAL_OP_LOAD_ARGUMENT_COUNT
-            ? instruction->as.load_argument_count.dst
-            : instruction->as.load_argument.dst;
-        registers[destination] = argument_snapshots[i];
-    }
-    MAL_PERF_ADD(argument_snapshot_register_restores, argument_snapshot_count);
     frame->instruction_pointer = argument_snapshot_count;
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;

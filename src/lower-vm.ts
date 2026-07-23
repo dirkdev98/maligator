@@ -142,6 +142,17 @@ export interface VmExceptionHandler {
 	handlerIp: number;
 }
 
+export const ARGUMENT_SNAPSHOT_SOURCE_COUNT = -1;
+export const ARGUMENT_SNAPSHOT_SOURCE_SCRATCH = -2;
+
+/** One operation in the cycle-safe parallel move performed at frame entry. */
+export interface VmArgumentSnapshotMove {
+	/** A negative value saves the source to scratch; `~destination` is restored later. */
+	destination: number;
+	/** Argument index, or one of the ARGUMENT_SNAPSHOT_SOURCE_* sentinels. */
+	source: number;
+}
+
 /**
  * Keep inline with the C struct
  */
@@ -164,6 +175,9 @@ export interface VmFunction {
 
 	/** Number of leading raw-argument snapshot instructions run at frame entry. */
 	argumentSnapshotCount: number;
+
+	/** Precomputed parallel-move schedule for the entry snapshot prefix. */
+	argumentSnapshotPlan: Array<VmArgumentSnapshotMove>;
 
 	/**
 	 * A derived class constructor: `this` starts uninitialized (TDZ) and is bound
@@ -238,6 +252,117 @@ export interface VmFunction {
 		returnInstructionIndex: number;
 		allocationInstructionIndex: number;
 	}>;
+}
+
+/**
+ * Schedule the snapshot prefix as a parallel move. Snapshot destinations are a
+ * dense, distinct range after the pinned parameters, which lets frame setup
+ * preserve them without a per-call initialized-register bitmap.
+ */
+export function buildArgumentSnapshotPlan(
+	fn: Pick<
+		VmFunction,
+		"argumentSnapshotCount" | "instructions" | "parameterCount" | "registerCount"
+	>,
+): Array<VmArgumentSnapshotMove> {
+	const snapshots: Array<{ destination: number; source: number | null }> = [];
+	if (
+		!Number.isInteger(fn.argumentSnapshotCount) ||
+		fn.argumentSnapshotCount < 0 ||
+		fn.argumentSnapshotCount > fn.instructions.length
+	) {
+		throw new RangeError("invalid argument snapshot count");
+	}
+	if (fn.parameterCount + fn.argumentSnapshotCount > fn.registerCount) {
+		throw new RangeError("argument snapshot destinations exceed register count");
+	}
+	for (let i = 0; i < fn.argumentSnapshotCount; i++) {
+		const instruction = fn.instructions[i];
+		if (
+			instruction?.opcode !== "LOAD_ARGUMENT_COUNT" &&
+			instruction?.opcode !== "LOAD_ARGUMENT"
+		) {
+			throw new RangeError("argument snapshot prefix mismatch");
+		}
+		const destination = instruction.dst;
+		if (destination !== fn.parameterCount + i) {
+			throw new RangeError(
+				"argument snapshot destinations must be dense after parameters",
+			);
+		}
+		if (
+			instruction.opcode === "LOAD_ARGUMENT" &&
+			(!Number.isInteger(instruction.index) || instruction.index > 0x7fffffff)
+		) {
+			throw new RangeError("invalid argument snapshot source index");
+		}
+		if (instruction.opcode === "LOAD_ARGUMENT" && instruction.index < 0) {
+			throw new RangeError("negative argument index");
+		}
+		snapshots.push({
+			destination,
+			source: instruction.opcode === "LOAD_ARGUMENT" ? instruction.index : null,
+		});
+	}
+	const next = fn.instructions[fn.argumentSnapshotCount];
+	if (next?.opcode === "LOAD_ARGUMENT_COUNT" || next?.opcode === "LOAD_ARGUMENT") {
+		throw new RangeError("argument snapshot prefix mismatch");
+	}
+
+	const remaining = [...snapshots];
+	const plan: Array<VmArgumentSnapshotMove> = [];
+	const emitDirect = (move: (typeof remaining)[number]): void => {
+		plan.push({
+			destination: move.destination,
+			source: move.source ?? ARGUMENT_SNAPSHOT_SOURCE_COUNT,
+		});
+	};
+	const readyIndex = (): number => {
+		const sources = new Set(
+			remaining.flatMap((move) => (move.source === null ? [] : [move.source])),
+		);
+		return remaining.findIndex((move) => !sources.has(move.destination));
+	};
+
+	while (remaining.length > 0) {
+		// A present self-move is already in place; when missing, runtime writes
+		// undefined. It never destroys a source and cannot participate in a cycle.
+		const selfIndex = remaining.findIndex(
+			(move) => move.source !== null && move.source === move.destination,
+		);
+		if (selfIndex >= 0) {
+			emitDirect(remaining.splice(selfIndex, 1)[0]!);
+			continue;
+		}
+
+		const ready = readyIndex();
+		if (ready >= 0) {
+			emitDirect(remaining.splice(ready, 1)[0]!);
+			continue;
+		}
+
+		// Every remaining destination is still a source, so break one cycle. The
+		// destination becomes safe after following ready moves around that cycle.
+		const cycle = remaining.find((move) => move.source !== null);
+		if (!cycle || cycle.source === null) {
+			throw new Error("unable to schedule argument snapshots");
+		}
+		plan.push({ destination: ~cycle.destination, source: cycle.source });
+		remaining.splice(remaining.indexOf(cycle), 1);
+		while (remaining.some((move) => move.source === cycle.destination)) {
+			const nextReady = readyIndex();
+			if (nextReady < 0) {
+				throw new Error("unable to resolve argument snapshot cycle");
+			}
+			emitDirect(remaining.splice(nextReady, 1)[0]!);
+		}
+		plan.push({
+			destination: cycle.destination,
+			source: ARGUMENT_SNAPSHOT_SOURCE_SCRATCH,
+		});
+	}
+
+	return plan;
 }
 
 /**
@@ -1032,6 +1157,12 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 				instruction.opcode === "CREATE_REST_ARGUMENTS" ||
 				instruction.opcode === "LOAD_ARGUMENT",
 		);
+	const argumentSnapshotPlan = buildArgumentSnapshotPlan({
+		argumentSnapshotCount,
+		instructions,
+		parameterCount: fn.parameterCount,
+		registerCount: fn.nextRegisterDestination,
+	});
 
 	// GC root-frame minimization (C1): the native backend spills only registers
 	// live at a safepoint, not every boxed register. The aggregate-only API avoids
@@ -1054,6 +1185,7 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		strict: fn.strict ?? fn.semanticFile.strict,
 		needsArguments,
 		argumentSnapshotCount,
+		argumentSnapshotPlan,
 		isDerivedConstructor:
 			(fn.classContext?.isConstructor ?? false) &&
 			(fn.classContext?.isDerivedConstructor ?? false),

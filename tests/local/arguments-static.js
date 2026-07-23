@@ -19,6 +19,15 @@ function severalSnapshots() {
 		arguments.length
 	);
 }
+function swapCycle() {
+	return arguments[1] * 10 + arguments[0];
+}
+function threeCycle() {
+	return arguments[1] * 100 + arguments[2] * 10 + arguments[0];
+}
+function countOverlap() {
+	return arguments.length * 10 + arguments[0];
+}
 function repeatedSnapshots() {
 	const first = arguments[0] === undefined ? 7 : arguments[0];
 	const fifth = arguments[4] === undefined ? 3 : arguments[4];
@@ -81,11 +90,18 @@ async function asyncIndex() {
 	await 0;
 	return before + arguments[2] + arguments.length;
 }
+const recursiveCount = function recurse(remaining) {
+	if (remaining === 0) return arguments.length;
+	return recurse(remaining - 1, 99);
+};
 
 assert(count(1, 2, 3) === 3, "count");
 assert(atTwo(1, 2, 3) === 3, "constant index");
 assert(atTwo(1) === undefined, "out of range");
 assert(severalSnapshots(4, 5, 6) === 643, "multiple entry snapshots");
+assert(swapCycle(4, 7) === 74, "two-way snapshot cycle");
+assert(threeCycle(4, 7, 8) === 784, "three-way snapshot cycle");
+assert(countOverlap(6) === 16, "count snapshot overlap");
 assert(repeatedSnapshots() === 73, "omitted repeated snapshots");
 assert(repeatedSnapshots(2, 3, 4, 5, 6) === 5528, "wide repeated snapshots");
 assert(defaultFromArguments() === 9, "omitted default parameter");
@@ -96,6 +112,7 @@ assert(mutated(1) === 9, "mutation fallback");
 assert(lexicalArrow(2)(5) === 4, "lexical arrow lifetime");
 assert(nested(3) === 5, "nested ownership");
 assert(evalArguments(4, 6) === 6, "direct eval");
+assert(recursiveCount(1) === 2, "recursive snapshots");
 assert(countGenerator(1, 2, 3).next().value === 3, "generator count");
 assert(indexGenerator(8).next().value === 8, "generator index");
 assert(repeatedGenerator().next().value === 4, "omitted repeated generator");

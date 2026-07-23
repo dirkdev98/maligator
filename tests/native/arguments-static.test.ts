@@ -50,7 +50,7 @@ describe("static arguments access", () => {
 				expected,
 			);
 		});
-		it(`${name} reports deduplicated snapshots`, () => {
+		it(`${name} reports snapshot move costs`, () => {
 			const result = spawnSync(binary(), [], {
 				encoding: "utf8",
 				env: { ...process.env, MAL_PERF_STATS: "1" },
@@ -62,8 +62,11 @@ describe("static arguments access", () => {
 			expect(line).toBeDefined();
 			const field = (key: string): number =>
 				Number(line?.match(new RegExp(`${key}=([0-9]+)`))?.[1] ?? -1);
-			expect(field("unique_values")).toBe(24);
-			expect(field("register_restores")).toBe(field("unique_values"));
+			expect(field("logical_values")).toBe(33);
+			expect(field("destination_writes")).toBe(
+				field("logical_values") - (name === "interpreted" ? 1 : 0),
+			);
+			expect(field("temporary_copies")).toBe(name === "interpreted" ? 2 : 0);
 		});
 	}
 });

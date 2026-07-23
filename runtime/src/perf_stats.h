@@ -101,8 +101,9 @@ typedef struct MalPerfStats {
     u64 interpreter_load_ic_sync_fallbacks;
     u64 interpreter_store_ic_sync_fallbacks;
 
-    u64 argument_snapshot_unique_values;
-    u64 argument_snapshot_register_restores;
+    u64 argument_snapshot_logical_values;
+    u64 argument_snapshot_destination_writes;
+    u64 argument_snapshot_temporary_copies;
 
     u64 promise_await_typed_continuations;
     u64 promise_await_typed_jobs;

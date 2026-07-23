@@ -1,4 +1,4 @@
-import { compressPositions } from "./lower-vm.ts";
+import { buildArgumentSnapshotPlan, compressPositions } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 
 /**
@@ -12,13 +12,13 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  * writer wrote them, so no in-buffer offsets are needed. The opcode / operator /
  * intrinsic tag orderings below are the cross-language contract — the C loader
  * mirrors them. Existing tags and operand layouts are immutable; new opcodes are
- * appended so version-12 inputs remain readable. WIRE_VERSION is bumped only for
+ * appended so version-13 inputs remain readable. WIRE_VERSION is bumped only for
  * an incompatible layout change, which deliberately rejects stale buffers.
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 12 for persisted static-arguments snapshot prefix metadata.
-export const WIRE_VERSION = 12;
+// Bumped to 13 for persisted static-arguments entry move plans.
+export const WIRE_VERSION = 13;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -561,6 +561,11 @@ function writeFunction(w: Writer, fn: VmFunction, debug: boolean): void {
 	w.u8(fn.isClassConstructor ? 1 : 0);
 	w.u8(fn.hasPrototype ? 1 : 0);
 	w.u32(fn.argumentSnapshotCount);
+	w.u32(fn.argumentSnapshotPlan.length);
+	for (const move of fn.argumentSnapshotPlan) {
+		w.i32(move.destination);
+		w.i32(move.source);
+	}
 	w.i32(fn.parameterCount);
 	w.i32(fn.length);
 	w.i32(fn.registerCount);
@@ -589,23 +594,23 @@ function writeFunction(w: Writer, fn: VmFunction, debug: boolean): void {
 }
 
 function validateArgumentSnapshotPrefix(fn: VmFunction): void {
+	let expected;
+	try {
+		expected = buildArgumentSnapshotPlan(fn);
+	} catch (error) {
+		throw new RangeError(
+			`serialize-vm: ${error instanceof Error ? error.message : "invalid argument snapshots"}`,
+		);
+	}
 	if (
-		!Number.isInteger(fn.argumentSnapshotCount) ||
-		fn.argumentSnapshotCount < 0 ||
-		fn.argumentSnapshotCount > fn.instructions.length
+		expected.length !== fn.argumentSnapshotPlan.length ||
+		expected.some(
+			(move, i) =>
+				move.destination !== fn.argumentSnapshotPlan[i]?.destination ||
+				move.source !== fn.argumentSnapshotPlan[i]?.source,
+		)
 	) {
-		throw new RangeError("serialize-vm: invalid argument snapshot count");
-	}
-	const isSnapshot = (instruction: VmInstruction | undefined): boolean =>
-		instruction?.opcode === "LOAD_ARGUMENT_COUNT" ||
-		instruction?.opcode === "LOAD_ARGUMENT";
-	for (let i = 0; i < fn.argumentSnapshotCount; i++) {
-		if (!isSnapshot(fn.instructions[i])) {
-			throw new RangeError("serialize-vm: argument snapshot prefix mismatch");
-		}
-	}
-	if (isSnapshot(fn.instructions[fn.argumentSnapshotCount])) {
-		throw new RangeError("serialize-vm: argument snapshot prefix mismatch");
+		throw new RangeError("serialize-vm: argument snapshot plan mismatch");
 	}
 }
 
@@ -1123,6 +1128,11 @@ function readFunction(r: Reader): VmFunction {
 	const isClassConstructor = r.u8() !== 0;
 	const hasPrototype = r.u8() !== 0;
 	const argumentSnapshotCount = r.count(1);
+	const argumentSnapshotPlanCount = r.count(2);
+	const argumentSnapshotPlan: VmFunction["argumentSnapshotPlan"] = [];
+	for (let i = 0; i < argumentSnapshotPlanCount; i++) {
+		argumentSnapshotPlan.push({ destination: r.i32(), source: r.i32() });
+	}
 	const parameterCount = r.i32();
 	const length = r.i32();
 	const registerCount = r.i32();
@@ -1159,6 +1169,7 @@ function readFunction(r: Reader): VmFunction {
 		strict,
 		needsArguments,
 		argumentSnapshotCount,
+		argumentSnapshotPlan,
 		isDerivedConstructor,
 		isClassConstructor,
 		hasPrototype,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildArgumentSnapshotPlan } from "../src/lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts";
 import {
 	deserializeVmDefinition,
@@ -91,6 +92,7 @@ const mainFn: VmFunction = {
 	strict: true,
 	needsArguments: true,
 	argumentSnapshotCount: 0,
+	argumentSnapshotPlan: [],
 	isDerivedConstructor: false,
 	isClassConstructor: false,
 	hasPrototype: true,
@@ -112,6 +114,7 @@ const genFn: VmFunction = {
 	strict: true,
 	needsArguments: true,
 	argumentSnapshotCount: 0,
+	argumentSnapshotPlan: [],
 	isDerivedConstructor: true,
 	isClassConstructor: true,
 	hasPrototype: false,
@@ -198,6 +201,10 @@ describe("serialize-vm", () => {
 				{
 					...mainFn,
 					argumentSnapshotCount: 2,
+					argumentSnapshotPlan: [
+						{ destination: 1, source: -1 },
+						{ destination: 2, source: 4 },
+					],
 					registerCount: 3,
 					instructions: snapshotInstructions,
 					handlers: [],
@@ -215,6 +222,57 @@ describe("serialize-vm", () => {
 				functions: [{ ...snapshotDefinition.functions[0]!, argumentSnapshotCount: 1 }],
 			}),
 		).toThrow("argument snapshot prefix mismatch");
+	});
+
+	it("precomputes cycle-safe argument snapshot move plans", () => {
+		const plan = (snapshotInstructions: Array<VmInstruction>, registerCount: number) =>
+			buildArgumentSnapshotPlan({
+				argumentSnapshotCount: snapshotInstructions.length,
+				instructions: snapshotInstructions,
+				parameterCount: 0,
+				registerCount,
+			});
+
+		expect(
+			plan(
+				[
+					{ opcode: "LOAD_ARGUMENT", dst: 0, index: 1 },
+					{ opcode: "LOAD_ARGUMENT", dst: 1, index: 0 },
+				],
+				2,
+			),
+		).toEqual([
+			{ destination: -1, source: 1 },
+			{ destination: 1, source: 0 },
+			{ destination: 0, source: -2 },
+		]);
+		expect(
+			plan(
+				[
+					{ opcode: "LOAD_ARGUMENT", dst: 0, index: 1 },
+					{ opcode: "LOAD_ARGUMENT", dst: 1, index: 2 },
+					{ opcode: "LOAD_ARGUMENT", dst: 2, index: 0 },
+				],
+				3,
+			),
+		).toEqual([
+			{ destination: -1, source: 1 },
+			{ destination: 1, source: 2 },
+			{ destination: 2, source: 0 },
+			{ destination: 0, source: -2 },
+		]);
+		expect(
+			plan(
+				[
+					{ opcode: "LOAD_ARGUMENT_COUNT", dst: 0 },
+					{ opcode: "LOAD_ARGUMENT", dst: 1, index: 0 },
+				],
+				2,
+			),
+		).toEqual([
+			{ destination: 1, source: 0 },
+			{ destination: 0, source: -1 },
+		]);
 	});
 
 	it("is a fixed point (re-serializing yields identical bytes)", () => {
@@ -317,7 +375,7 @@ describe("serialize-vm", () => {
 				{
 					...mainFn,
 					argumentSnapshotCount: 1,
-					instructions: [{ opcode: "LOAD_ARGUMENT", dst: 0, index: -1 }],
+					instructions: [{ opcode: "LOAD_ARGUMENT", dst: 1, index: -1 }],
 				},
 			],
 			functionCount: 1,

@@ -134,6 +134,8 @@ function malFunctionRow(
 	instructionsSymbol: string,
 	instructionDataSymbol: string,
 	instructionDataCount: number,
+	argumentSnapshotPlanSymbol: string,
+	argumentSnapshotPlanCount: number,
 	handlersSymbol: string,
 	compiledSymbol: string,
 	debug: { positionsSymbol: string; positionCount: number; fileIndex: number },
@@ -150,6 +152,8 @@ function malFunctionRow(
 		`        .strict = ${fn.strict},`,
 		`        .needs_arguments = ${fn.needsArguments},`,
 		`        .argument_snapshot_count = ${fn.argumentSnapshotCount},`,
+		`        .argument_snapshot_plan_count = ${argumentSnapshotPlanCount},`,
+		`        .argument_snapshot_plan = ${argumentSnapshotPlanSymbol},`,
 		`        .is_derived_constructor = ${fn.isDerivedConstructor},`,
 		`        .is_class_constructor = ${fn.isClassConstructor},`,
 		`        .has_prototype = ${fn.hasPrototype},`,
@@ -165,6 +169,14 @@ function malFunctionRow(
 		`        .positions = ${debug.positionsSymbol},`,
 		"    },",
 	];
+}
+
+function argumentSnapshotPlanBody(fn: VmFunction): string {
+	return fn.argumentSnapshotPlan
+		.map(
+			(move) => `    { .destination = ${move.destination}, .source = ${move.source} },`,
+		)
+		.join("\n");
 }
 
 /** The body (rows, no braces) of a function's MalLineEntry position table. */
@@ -316,6 +328,13 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 	for (let i = 0; i < definition.functions.length; ++i) {
 		const fn = definition.functions[i]!;
 		if (!omitBytecode[i]) {
+			if (fn.argumentSnapshotPlan.length > 0) {
+				lines.push(
+					`static const MalArgumentSnapshotMove mal_function_${i}_argument_snapshot_plan${suffix}[] = {`,
+				);
+				lines.push(argumentSnapshotPlanBody(fn));
+				lines.push("};", "");
+			}
 			const sideData = instructionDataByFunction[i]!;
 			if (sideData.data.length > 0) {
 				lines.push(
@@ -363,6 +382,10 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 					? `mal_function_${i}_instruction_data${suffix}`
 					: "nullptr",
 				instructionDataByFunction[i]!.data.length,
+				!omitBytecode[i] && fn.argumentSnapshotPlan.length > 0
+					? `mal_function_${i}_argument_snapshot_plan${suffix}`
+					: "nullptr",
+				omitBytecode[i] ? 0 : fn.argumentSnapshotPlan.length,
 				fn.handlers.length > 0 ? `mal_function_${i}_handlers${suffix}` : "nullptr",
 				compiled[i] !== null ? compiled[i]!.symbol : "nullptr",
 				{
@@ -633,6 +656,8 @@ export function emitBatch(
 		const instructionSymbols: Array<string> = [];
 		const instructionDataSymbols: Array<string> = [];
 		const instructionDataCounts: Array<number> = [];
+		const argumentSnapshotPlanSymbols: Array<string> = [];
+		const argumentSnapshotPlanCounts: Array<number> = [];
 		const handlerSymbols: Array<string> = [];
 		for (let i = 0; i < definition.functions.length; ++i) {
 			const fn = definition.functions[i]!;
@@ -640,6 +665,8 @@ export function emitBatch(
 				instructionSymbols.push("nullptr");
 				instructionDataSymbols.push("nullptr");
 				instructionDataCounts.push(0);
+				argumentSnapshotPlanSymbols.push("nullptr");
+				argumentSnapshotPlanCounts.push(0);
 				handlerSymbols.push("nullptr");
 				continue;
 			}
@@ -653,6 +680,16 @@ export function emitBatch(
 					: "nullptr",
 			);
 			instructionDataCounts.push(sideData.data.length);
+			argumentSnapshotPlanSymbols.push(
+				fn.argumentSnapshotPlan.length > 0
+					? intern(
+							"argument_snapshot_plan",
+							"MalArgumentSnapshotMove",
+							argumentSnapshotPlanBody(fn),
+						)
+					: "nullptr",
+			);
+			argumentSnapshotPlanCounts.push(fn.argumentSnapshotPlan.length);
 			handlerSymbols.push(
 				fn.handlers.length > 0
 					? intern("handlers", "MalExceptionHandler", handlerArrayBody(fn))
@@ -668,6 +705,8 @@ export function emitBatch(
 					instructionSymbols[i]!,
 					instructionDataSymbols[i]!,
 					instructionDataCounts[i]!,
+					argumentSnapshotPlanSymbols[i]!,
+					argumentSnapshotPlanCounts[i]!,
 					handlerSymbols[i]!,
 					compiled[i] !== null ? compiled[i]!.symbol : "nullptr",
 					// The batch path strips debug info (test262 does not use it).

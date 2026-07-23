@@ -12,11 +12,11 @@
  * into the runtime structs. The per-opcode operand layout, the opcode tag
  * ordering (WireOp below), and the operator/intrinsic tables mirror
  * serialize-vm.ts exactly. Existing tags/layouts are immutable and new opcodes
- * append, preserving version-12 input; WIRE_VERSION guards incompatible changes.
+ * append, preserving version-13 input; WIRE_VERSION guards incompatible changes.
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 12u        // static-arguments snapshot prefix metadata
+#define WIRE_VERSION 13u        // static-arguments entry move plans
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1061,12 +1061,23 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     fn->is_class_constructor = rd_u8(r) != 0;
     fn->has_prototype = rd_u8(r) != 0;
     fn->argument_snapshot_count = (i32) rd_count(r, 1);
+    u32 argument_snapshot_plan_count = rd_count(r, 2);
+    fn->argument_snapshot_plan_count = (i32) argument_snapshot_plan_count;
+    MalArgumentSnapshotMove *argument_snapshot_plan = arena_array(
+        L, r, argument_snapshot_plan_count, sizeof(MalArgumentSnapshotMove),
+        alignof(MalArgumentSnapshotMove));
+    for (u32 i = 0; r->ok && i < argument_snapshot_plan_count; i++) {
+        argument_snapshot_plan[i].destination = rd_i32(r);
+        argument_snapshot_plan[i].source = rd_i32(r);
+    }
+    fn->argument_snapshot_plan = argument_snapshot_plan;
     fn->parameter_count = rd_i32(r);
     fn->length = rd_i32(r);
     fn->register_count = rd_i32(r);
     fn->captured_count = rd_i32(r);
     fn->file_index = rd_i32(r);
     if (fn->parameter_count < 0 || fn->register_count < fn->parameter_count ||
+        fn->argument_snapshot_count > fn->register_count - fn->parameter_count ||
         fn->captured_count < 0) {
         r->ok = false;
         return;
@@ -1089,6 +1100,13 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
         MalOpcode opcode = instructions[i].opcode;
         if (opcode != MAL_OP_LOAD_ARGUMENT_COUNT && opcode != MAL_OP_LOAD_ARGUMENT) {
             r->ok = false;
+            continue;
+        }
+        i32 destination = opcode == MAL_OP_LOAD_ARGUMENT_COUNT
+            ? instructions[i].as.load_argument_count.dst
+            : instructions[i].as.load_argument.dst;
+        if (destination != fn->parameter_count + i) {
+            r->ok = false;
         }
     }
     if (r->ok && (u32) fn->argument_snapshot_count < instruction_count) {
@@ -1097,6 +1115,96 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
             r->ok = false;
         }
     }
+    if (r->ok && (
+        (u32) fn->argument_snapshot_count > UINT32_MAX / 2 ||
+        argument_snapshot_plan_count < (u32) fn->argument_snapshot_count ||
+        argument_snapshot_plan_count > (u32) fn->argument_snapshot_count * 2
+    )) {
+        r->ok = false;
+    }
+    bool *snapshot_destinations = fn->argument_snapshot_count > 0
+        ? calloc((usize) fn->argument_snapshot_count, sizeof(bool))
+        : nullptr;
+    if (r->ok && fn->argument_snapshot_count > 0 && snapshot_destinations == nullptr) {
+        r->ok = false;
+    }
+    bool scratch_live = false;
+    i32 scratch_destination = -1;
+    i32 scratch_source = -1;
+    i32 destination_writes = 0;
+    for (u32 i = 0; r->ok && i < argument_snapshot_plan_count; i++) {
+        i32 destination = argument_snapshot_plan[i].destination;
+        i32 source = argument_snapshot_plan[i].source;
+        if (destination < 0) {
+            i32 saved_destination = ~destination;
+            if (scratch_live || source < 0 || saved_destination < fn->parameter_count ||
+                saved_destination >= fn->parameter_count + fn->argument_snapshot_count) {
+                r->ok = false;
+                break;
+            }
+            i32 dense_index = saved_destination - fn->parameter_count;
+            const MalInstruction *snapshot = &instructions[dense_index];
+            if (snapshot->opcode != MAL_OP_LOAD_ARGUMENT ||
+                snapshot->as.load_argument.index != source ||
+                (source >= fn->parameter_count &&
+                 source < fn->parameter_count + fn->argument_snapshot_count &&
+                 snapshot_destinations[source - fn->parameter_count])) {
+                r->ok = false;
+                break;
+            }
+            scratch_live = true;
+            scratch_destination = saved_destination;
+            scratch_source = source;
+            continue;
+        }
+        if (destination < fn->parameter_count ||
+            destination >= fn->parameter_count + fn->argument_snapshot_count ||
+            (source < 0 && source != MAL_ARGUMENT_SNAPSHOT_SOURCE_COUNT &&
+             source != MAL_ARGUMENT_SNAPSHOT_SOURCE_SCRATCH)) {
+            r->ok = false;
+            break;
+        }
+        if (source == MAL_ARGUMENT_SNAPSHOT_SOURCE_SCRATCH) {
+            if (!scratch_live || destination != scratch_destination) {
+                r->ok = false;
+                break;
+            }
+            scratch_live = false;
+            scratch_destination = -1;
+        } else if (source >= fn->parameter_count &&
+                   source < fn->parameter_count + fn->argument_snapshot_count &&
+                   snapshot_destinations[source - fn->parameter_count]) {
+            // This aliased argument slot has already been overwritten by an
+            // earlier destination write, so the plan is not a parallel move.
+            r->ok = false;
+            break;
+        }
+        i32 dense_index = destination - fn->parameter_count;
+        const MalInstruction *snapshot = &instructions[dense_index];
+        i32 expected_source = snapshot->opcode == MAL_OP_LOAD_ARGUMENT_COUNT
+            ? MAL_ARGUMENT_SNAPSHOT_SOURCE_COUNT
+            : snapshot->as.load_argument.index;
+        i32 actual_source = source == MAL_ARGUMENT_SNAPSHOT_SOURCE_SCRATCH
+            ? scratch_source
+            : source;
+        if (actual_source != expected_source) {
+            r->ok = false;
+            break;
+        }
+        if (snapshot_destinations[dense_index]) {
+            r->ok = false;
+            break;
+        }
+        snapshot_destinations[dense_index] = true;
+        destination_writes++;
+        if (source == MAL_ARGUMENT_SNAPSHOT_SOURCE_SCRATCH) {
+            scratch_source = -1;
+        }
+    }
+    if (r->ok && (scratch_live || destination_writes != fn->argument_snapshot_count)) {
+        r->ok = false;
+    }
+    free(snapshot_destinations);
     i32 *instruction_data = arena_array(
         L, r, side_data.count, sizeof(i32), alignof(i32));
     if (r->ok && side_data.count > 0) {

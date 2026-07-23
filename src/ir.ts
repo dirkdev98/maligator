@@ -7017,6 +7017,7 @@ function prepareTailCallLoop(
 	fn.tcoEligible =
 		!fn.isGenerator &&
 		fn.argumentsObjectRegister === undefined &&
+		(fn.staticArgumentsRegisters?.size ?? 0) === 0 &&
 		functionNode.params.every((param) => param.type === "Identifier") &&
 		!containsTailCallBlocker(functionNode.body);
 }

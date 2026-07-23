@@ -706,8 +706,8 @@ export function emitCompiledFunction(
 	}
 	if (fn.argumentSnapshotCount > 0) {
 		lines.push(
-			`    MAL_PERF_ADD(argument_snapshot_unique_values, ${fn.argumentSnapshotCount});`,
-			`    MAL_PERF_ADD(argument_snapshot_register_restores, ${fn.argumentSnapshotCount});`,
+			`    MAL_PERF_ADD(argument_snapshot_logical_values, ${fn.argumentSnapshotCount});`,
+			`    MAL_PERF_ADD(argument_snapshot_destination_writes, ${fn.argumentSnapshotCount});`,
 		);
 	}
 	// A derived constructor's rooted `this` slot starts as the (EMPTY) parameter.
@@ -900,8 +900,8 @@ function emitResumableFunction(
 	}
 	if (fn.argumentSnapshotCount > 0) {
 		lines.push(
-			`        MAL_PERF_ADD(argument_snapshot_unique_values, ${fn.argumentSnapshotCount});`,
-			`        MAL_PERF_ADD(argument_snapshot_register_restores, ${fn.argumentSnapshotCount});`,
+			`        MAL_PERF_ADD(argument_snapshot_logical_values, ${fn.argumentSnapshotCount});`,
+			`        MAL_PERF_ADD(argument_snapshot_destination_writes, ${fn.argumentSnapshotCount});`,
 		);
 	}
 	lines.push(`    }`);

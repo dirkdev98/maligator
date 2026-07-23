@@ -190,8 +190,9 @@ interface ArgumentsBackendMetrics {
 	instructionCount: number;
 	bytecodeBytes: number;
 	binaryBytes: number;
-	snapshotUniqueValues: number;
-	snapshotRegisterRestores: number;
+	snapshotLogicalValues: number;
+	snapshotDestinationWrites: number;
+	snapshotTemporaryCopies: number;
 }
 interface ArgumentsMetrics {
 	compiled: ArgumentsBackendMetrics;
@@ -737,8 +738,9 @@ function benchArgumentsBackend(
 		instructionCount: parseVmStat(stderr, "instruction_count"),
 		bytecodeBytes: parseVmStat(stderr, "bytecode_bytes"),
 		binaryBytes: fileBytes(binary),
-		snapshotUniqueValues: parsePerfArgumentsStat(perfStderr, "unique_values"),
-		snapshotRegisterRestores: parsePerfArgumentsStat(perfStderr, "register_restores"),
+		snapshotLogicalValues: parsePerfArgumentsStat(perfStderr, "logical_values"),
+		snapshotDestinationWrites: parsePerfArgumentsStat(perfStderr, "destination_writes"),
+		snapshotTemporaryCopies: parsePerfArgumentsStat(perfStderr, "temporary_copies"),
 	};
 }
 
@@ -1373,7 +1375,7 @@ function report(entry: Entry, previous: Entry | undefined): void {
 				`               ${current.instructionCount} instructions, ${humanBytes(current.bytecodeBytes)} bytecode, ${humanBytes(current.binaryBytes)} binary`,
 			);
 			console.log(
-				`               ${current.snapshotUniqueValues} unique snapshot values, ${current.snapshotRegisterRestores} register restores`,
+				`               ${current.snapshotLogicalValues} logical snapshots, ${current.snapshotDestinationWrites} destination writes, ${current.snapshotTemporaryCopies} temporary copies`,
 			);
 		}
 		console.log(`  node        ${entry.arguments.nodeMs.toFixed(1)}ms`);

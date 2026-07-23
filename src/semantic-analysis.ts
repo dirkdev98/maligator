@@ -368,7 +368,9 @@ function staticArgumentsIndex(member: ESTree.MemberExpression): number | undefin
 	const value = member.property.value;
 	const index =
 		typeof value === "number" ? value : typeof value === "string" ? Number(value) : -1;
-	if (!Number.isInteger(index) || index < 0 || index > 0xfffffffe) {
+	// The VM calling convention and LOAD_ARGUMENT operand use signed i32 counts.
+	// Larger canonical array indices are always absent and use the object fallback.
+	if (!Number.isInteger(index) || index < 0 || index > 0x7fffffff) {
 		return undefined;
 	}
 	if (typeof value === "string" && String(index) !== value) {

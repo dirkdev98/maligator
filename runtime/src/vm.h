@@ -768,6 +768,19 @@ typedef MalValue (*MalCompiledFunction)(
     struct MalGeneratorObject *resume_state
 );
 
+enum {
+    MAL_ARGUMENT_SNAPSHOT_SOURCE_COUNT = -1,
+    MAL_ARGUMENT_SNAPSHOT_SOURCE_SCRATCH = -2,
+};
+
+/** One operation in a function's cycle-safe argument snapshot entry plan. */
+typedef struct MalArgumentSnapshotMove {
+    /** Negative means save source to scratch; the eventual destination is ~this. */
+    i32 destination;
+    /** Raw argument index, count sentinel, or scratch sentinel. */
+    i32 source;
+} MalArgumentSnapshotMove;
+
 typedef struct MalFunction {
     i32 name_string_index;
     MalFunctionKind kind;
@@ -775,6 +788,9 @@ typedef struct MalFunction {
 
     /** Number of leading raw-argument snapshot instructions run at frame entry. */
     i32 argument_snapshot_count;
+
+    i32 argument_snapshot_plan_count;
+    const MalArgumentSnapshotMove *argument_snapshot_plan;
 
     /**
      * Function.prototype.length: formal parameters before the first default
