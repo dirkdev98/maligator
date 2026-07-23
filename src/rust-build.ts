@@ -10,6 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { platformLinkArgs } from "./build-flags.ts";
 import type { NativeFeatureSpec } from "./build-flags.ts";
 import { hashDirectoryTrees, legacyLocaleNameComparator } from "./file-tree.ts";
 import type { NativeBuildContext } from "./native-build-context.ts";
@@ -70,9 +71,13 @@ export function resolveRustArtifacts(context: NativeBuildContext): RustArtifacts
 		cacheKey,
 		targetDirectory,
 		library,
-		linkArgs: context.features.webPlatformEnabled
-			? [library, ...context.toolchain.probes.cxxLinkArgs]
-			: [library],
+		linkArgs: [
+			library,
+			...(context.features.webPlatformEnabled
+				? context.toolchain.probes.cxxLinkArgs
+				: []),
+			...platformLinkArgs(),
+		],
 		cargoArguments,
 		cargoFeatures,
 		features: context.features,

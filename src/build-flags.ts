@@ -404,7 +404,7 @@ export function runtimeCcFlags(
 ): Array<string> {
 	return [
 		...(process.platform === "linux"
-			? ["-D_POSIX_C_SOURCE=200809L", "-D_DEFAULT_SOURCE", "-pthread"]
+			? ["-D_GNU_SOURCE", "-pthread"]
 			: []),
 		...optFlags(plan, env),
 		...SANITIZER_FLAGS[sanitizerMode(env)],
@@ -421,7 +421,7 @@ export function ccExtraFlags(
 ): Array<string> {
 	return [
 		...(process.platform === "linux"
-			? ["-D_POSIX_C_SOURCE=200809L", "-D_DEFAULT_SOURCE", "-pthread"]
+			? ["-D_GNU_SOURCE", "-pthread"]
 			: []),
 		...optFlags(plan, env),
 		...SANITIZER_FLAGS[sanitizerMode(env)],
@@ -439,6 +439,19 @@ export function ccExtraFlags(
  */
 export function sanitizerCcFlags(): Array<string> {
 	return SANITIZER_FLAGS[sanitizerMode()];
+}
+
+/**
+ * System libraries appended at the very end of every final link. macOS folds libm
+ * (and pthread/dl) into libSystem, so nothing is needed there; glibc keeps libm
+ * separate, so the runtime's <math.h> users (builtin_math.c et al.) need an
+ * explicit `-lm`. These must trail the runtime archives so the linker resolves the
+ * archives' math references left-to-right.
+ */
+export function platformLinkArgs(
+	platform: NodeJS.Platform = process.platform,
+): Array<string> {
+	return platform === "linux" ? ["-lm"] : [];
 }
 
 const GMALLOC_PATH = "/usr/lib/libgmalloc.dylib";
