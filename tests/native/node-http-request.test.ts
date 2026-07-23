@@ -46,7 +46,17 @@ describe("node:http request bridge", () => {
 	});
 
 	function field(line: string, name: string): number {
-		return Number(line.match(new RegExp(`(?:^|\\s)${name}=([0-9]+)`))?.[1] ?? 0);
+		const matches = [
+			...line.matchAll(new RegExp(`(?:^|\\s)${name}=([0-9]+)(?=\\s|$)`, "g")),
+		];
+		if (matches.length !== 1) {
+			throw new Error(`expected exactly one ${name} field in: ${line}`);
+		}
+		const value = Number(matches[0]![1]);
+		if (!Number.isSafeInteger(value)) {
+			throw new Error(`invalid ${name} field in: ${line}`);
+		}
+		return value;
 	}
 
 	async function checkBridge(base: string): Promise<void> {
@@ -56,6 +66,10 @@ describe("node:http request bridge", () => {
 		expect(metadata.status).toBe(201);
 		expect(metadata.headers.get("x-reply")).toBe("response-header");
 		expect(await metadata.text()).toBe("ab");
+
+		const socketShape = await fetch(`${base}/socket-shape`);
+		expect(socketShape.status).toBe(200);
+		expect(await socketShape.text()).toBe("ok");
 
 		const echo = await fetch(`${base}/echo`, {
 			method: "POST",
@@ -185,5 +199,9 @@ describe("node:http request bridge", () => {
 		expect(field(line, "dispatch_enqueues")).toBe(field(line, "dispatch_dequeues"));
 		expect(field(line, "completion_enqueues")).toBe(field(line, "completion_dequeues"));
 		expect(field(line, "request_inserts")).toBe(field(line, "request_removes"));
+		expect(field(line, "bulk_shaped_objects")).toBe(79);
+		expect(field(line, "bulk_shaped_slots")).toBe(237);
+		expect(field(line, "property_definitions_avoided")).toBe(237);
+		expect(field(line, "shape_transitions_avoided")).toBe(234);
 	});
 });

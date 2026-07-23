@@ -461,6 +461,36 @@ static MalValue http_ascii_value(MalVm *vm, const char *bytes, usize length) {
         mal_string_new_ascii(&vm->heap, (const byte *) bytes, length));
 }
 
+static MalValue http_server_socket_facade(MalVm *vm) {
+    bool shape_cached = vm->node_http_socket_shape != nullptr;
+    if (!shape_cached) {
+        MalString *keys[] = {
+            mal_intrinsic_ascii(vm, (const byte *) "encrypted"),
+            mal_intrinsic_ascii(vm, (const byte *) "readable"),
+            mal_intrinsic_ascii(vm, (const byte *) "writable"),
+        };
+        vm->node_http_socket_shape =
+            mal_shape_from_string_keys(keys, (u32) countof(keys));
+    }
+    MalValue values[] = {
+        mal_value_new_boolean(false),
+        mal_value_new_boolean(true),
+        mal_value_new_boolean(true),
+    };
+    // Keep the active realm's Object prototype. The slot values are immediates,
+    // and no GC safepoint occurs between allocation and the bulk fill.
+    MalObject *socket = mal_intrinsic_new_object(vm);
+    mal_object_set_shaped_values(
+        socket, vm->node_http_socket_shape, values, (u32) countof(values));
+    MAL_PERF_COUNT(http_bulk_shaped_objects);
+    MAL_PERF_ADD(http_bulk_shaped_slots, countof(values));
+    MAL_PERF_ADD(http_property_definitions_avoided, countof(values));
+    if (shape_cached) {
+        MAL_PERF_ADD(http_shape_transitions_avoided, countof(values));
+    }
+    return mal_value_from_object(socket);
+}
+
 static bool http_response_name(
     MalVm *vm, MalValue value, char **out, usize *out_length) {
     MalString *string;
@@ -1486,10 +1516,7 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
         mal_gc_unroot(&root);
         goto fail;
     }
-    roots[4] = mal_value_from_object(mal_intrinsic_new_object(vm));
-    http_define_own(vm, roots[4], "encrypted", mal_value_new_boolean(false));
-    http_define_own(vm, roots[4], "readable", mal_value_new_boolean(true));
-    http_define_own(vm, roots[4], "writable", mal_value_new_boolean(true));
+    roots[4] = http_server_socket_facade(vm);
     roots[5] = mal_value_from_object(mal_intrinsic_new_object(vm));
     roots[6] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
 

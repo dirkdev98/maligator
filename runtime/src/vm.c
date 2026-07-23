@@ -437,6 +437,7 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
     vm->regexp_result_shape = nullptr;
     vm->regexp_result_indices_shape = nullptr;
     vm->regexp_indices_shape = nullptr;
+    vm->node_http_socket_shape = nullptr;
     vm->interp_call_cache = calloc(
         (usize) MAL_INTERP_CALL_CACHE_SIZE, sizeof(MalInterpCallCacheEntry));
     vm->global_property_cache = calloc(

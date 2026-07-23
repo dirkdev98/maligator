@@ -3,6 +3,13 @@ const http = require("node:http");
 const concurrentResponses = [];
 let completedResponse;
 
+Object.defineProperty(Object.prototype, "__httpSocketRealmMarker", {
+	value: "request-realm",
+	writable: true,
+	enumerable: false,
+	configurable: true,
+});
+
 function throwsMessage(callback, message) {
 	try {
 		callback();
@@ -13,6 +20,38 @@ function throwsMessage(callback, message) {
 }
 
 const server = http.createServer(function (request, response) {
+	if (request.url === "/socket-shape") {
+		const socket = request.socket;
+		const visibleDataProperty = (name, value) => {
+			const descriptor = Object.getOwnPropertyDescriptor(socket, name);
+			return (
+				descriptor !== undefined &&
+				descriptor.value === value &&
+				descriptor.writable === true &&
+				descriptor.enumerable === true &&
+				descriptor.configurable === true &&
+				descriptor.get === undefined &&
+				descriptor.set === undefined
+			);
+		};
+		const checks = [
+			Object.getOwnPropertyNames(socket).join(",") === "encrypted,readable,writable",
+			Object.keys(socket).join(",") === "encrypted,readable,writable",
+			visibleDataProperty("encrypted", false),
+			visibleDataProperty("readable", true),
+			visibleDataProperty("writable", true),
+			Object.getPrototypeOf(socket) === Object.prototype,
+			socket.__httpSocketRealmMarker === "request-realm",
+			!Object.prototype.hasOwnProperty.call(socket, "__httpSocketRealmMarker"),
+			request.socket === request.connection,
+			request.socket === response.socket,
+			response.socket === response.connection,
+		];
+		response.statusCode = checks.every(Boolean) ? 200 : 500;
+		response.end(checks.every(Boolean) ? "ok" : "socket shape mismatch");
+		return;
+	}
+
 	if (request.url === "/metadata") {
 		const valid =
 			this === server &&

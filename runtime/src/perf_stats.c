@@ -231,7 +231,9 @@ static void mal_perf_stats_print(void) {
         "response_index_rehashes=%llu drain_calls=%llu request_state_scans=%llu "
         "close_scans=%llu close_request_state_scans=%llu request_remove_scans=%llu "
         "dispatch_enqueues=%llu dispatch_dequeues=%llu completion_enqueues=%llu "
-        "completion_dequeues=%llu request_inserts=%llu request_removes=%llu\n",
+        "completion_dequeues=%llu request_inserts=%llu request_removes=%llu "
+        "bulk_shaped_objects=%llu bulk_shaped_slots=%llu "
+        "property_definitions_avoided=%llu shape_transitions_avoided=%llu\n",
         (unsigned long long) mal_perf_stats.http_response_index_lookups,
         (unsigned long long) mal_perf_stats.http_response_index_hits,
         (unsigned long long) mal_perf_stats.http_response_index_misses,
@@ -251,7 +253,11 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.http_completion_enqueues,
         (unsigned long long) mal_perf_stats.http_completion_dequeues,
         (unsigned long long) mal_perf_stats.http_request_inserts,
-        (unsigned long long) mal_perf_stats.http_request_removes
+        (unsigned long long) mal_perf_stats.http_request_removes,
+        (unsigned long long) mal_perf_stats.http_bulk_shaped_objects,
+        (unsigned long long) mal_perf_stats.http_bulk_shaped_slots,
+        (unsigned long long) mal_perf_stats.http_property_definitions_avoided,
+        (unsigned long long) mal_perf_stats.http_shape_transitions_avoided
     );
     for (u32 i = 0; i < MAL_PERF_TABLE_ROLE_COUNT; i++) {
         const MalPerfTableStats *stats = &mal_perf_stats.tables[i];
