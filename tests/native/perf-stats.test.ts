@@ -208,6 +208,7 @@ describe("opt-in performance statistics", () => {
 			field(interpreter, "boundary_dispatches"),
 		);
 		expect(field(interpreter, "state_reloads")).toBeGreaterThan(0);
+		expect(field(interpreter, "normal_helper_continuations")).toBeGreaterThan(0);
 		expect(field(interpreter, "strict_direct_hits")).toBeGreaterThan(0);
 	});
 });

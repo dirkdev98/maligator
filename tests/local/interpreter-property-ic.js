@@ -77,6 +77,17 @@ Object.defineProperty(throwingAccessor, "value", {
 		throw accessorError;
 	},
 });
+function catchPropertyInFrame(object) {
+	try {
+		return object.value;
+	} catch (error) {
+		return error;
+	}
+}
+check(
+	catchPropertyInFrame(throwingAccessor) === accessorError,
+	"accessor throw caught in helper frame",
+);
 let caughtError;
 try {
 	loadStatic(throwingAccessor);
@@ -114,6 +125,7 @@ try {
 	caughtError = error;
 }
 check(caughtError === proxyError, "proxy load throw resumes at catch");
+check(catchPropertyInFrame(proxy) === proxyError, "proxy throw caught in helper frame");
 caughtError = undefined;
 try {
 	storeStatic(proxy, 13);

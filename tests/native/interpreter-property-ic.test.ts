@@ -56,5 +56,6 @@ describe("localized interpreter property inline caches", () => {
 		expect(field(stats, "local_store_ic_hits")).toBeGreaterThan(4000);
 		expect(field(stats, "load_ic_sync_fallbacks")).toBeGreaterThan(0);
 		expect(field(stats, "store_ic_sync_fallbacks")).toBeGreaterThan(0);
+		expect(field(stats, "normal_helper_continuations")).toBeGreaterThan(0);
 	});
 });

@@ -57,6 +57,18 @@ Object.defineProperty(getterHolder, "value", {
 });
 check(getterHolder.value === 31 && reentries === 2, "getter reentry");
 
+let interpreterSlice2Global = 0;
+const genericHolder = Object.create(null);
+genericHolder.answer = 41;
+function normalSynchronizedHelpers(holder, key) {
+	interpreterSlice2Global = holder[key] + 1;
+	return interpreterSlice2Global;
+}
+check(
+	normalSynchronizedHelpers(genericHolder, "answer") === 42,
+	"generic property and global helpers",
+);
+
 const marker = {};
 let caught = false;
 try {
@@ -100,7 +112,19 @@ async function resumeAcrossAwait(value) {
 	return after;
 }
 
-resumeAcrossAwait(6).then((result) => {
-	check(result.value === 13 && result.label === "awaited", "async resume boundary");
-	console.log("interpreter-dispatch-state PASS " + checks);
-});
+async function* queuedReentry() {
+	yield nestedCall(40);
+	yield nestedCall(50);
+	return nestedCall(60);
+}
+
+const queued = queuedReentry();
+Promise.all([resumeAcrossAwait(6), queued.next(), queued.next(), queued.next()]).then(
+	([result, first, second, third]) => {
+		check(result.value === 13 && result.label === "awaited", "async resume boundary");
+		check(first.value === 41 && !first.done, "queued async generator first yield");
+		check(second.value === 51 && !second.done, "queued async generator frame reentry");
+		check(third.value === 61 && third.done, "queued async generator frame replacement");
+		console.log("interpreter-dispatch-state PASS " + checks);
+	},
+);

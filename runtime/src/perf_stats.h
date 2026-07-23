@@ -93,6 +93,7 @@ typedef struct MalPerfStats {
     u64 interpreter_boundary_dispatches;
     u64 interpreter_state_syncs;
     u64 interpreter_state_reloads;
+    u64 interpreter_normal_helper_continuations;
     u64 interpreter_strict_direct_hits;
     u64 interpreter_strict_string_fallbacks;
     u64 interpreter_local_load_ic_hits;

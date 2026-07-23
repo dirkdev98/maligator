@@ -227,6 +227,7 @@ interface InterpreterMetrics {
 	boundaryDispatches: number;
 	stateSyncs: number;
 	stateReloads: number;
+	normalHelperContinuations: number;
 	strictDirectHits: number;
 	strictStringFallbacks: number;
 	localLoadIcHits: number;
@@ -920,6 +921,10 @@ function benchInterpreter(runs: number): InterpreterMetrics {
 		boundaryDispatches: parsePerfInterpreterStat(perfStderr, "boundary_dispatches"),
 		stateSyncs: parsePerfInterpreterStat(perfStderr, "state_syncs"),
 		stateReloads: parsePerfInterpreterStat(perfStderr, "state_reloads"),
+		normalHelperContinuations: parsePerfInterpreterStat(
+			perfStderr,
+			"normal_helper_continuations",
+		),
 		strictDirectHits: parsePerfInterpreterStat(perfStderr, "strict_direct_hits"),
 		strictStringFallbacks: parsePerfInterpreterStat(
 			perfStderr,
@@ -1414,6 +1419,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		);
 		console.log(
 			`            ${entry.interpreter.stateSyncs} state syncs, ${entry.interpreter.stateReloads} state reloads`,
+		);
+		console.log(
+			`            ${entry.interpreter.normalHelperContinuations} normal helpers continued locally`,
 		);
 		console.log(
 			`            ${entry.interpreter.strictDirectHits} direct strict hits, ${entry.interpreter.strictStringFallbacks} string fallbacks`,
