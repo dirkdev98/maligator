@@ -212,6 +212,23 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.array_fresh_dense_reserved_slots,
         (unsigned long long) mal_perf_stats.array_fresh_dense_growths_avoided
     );
+    fprintf(
+        stderr,
+        "[perf-http-stats] response_index_lookups=%llu response_index_hits=%llu "
+        "response_index_misses=%llu response_index_probes=%llu "
+        "response_index_max_probes=%llu response_index_peak_entries=%llu "
+        "response_index_inserts=%llu response_index_removes=%llu "
+        "response_index_rehashes=%llu\n",
+        (unsigned long long) mal_perf_stats.http_response_index_lookups,
+        (unsigned long long) mal_perf_stats.http_response_index_hits,
+        (unsigned long long) mal_perf_stats.http_response_index_misses,
+        (unsigned long long) mal_perf_stats.http_response_index_probes,
+        (unsigned long long) mal_perf_stats.http_response_index_max_probes,
+        (unsigned long long) mal_perf_stats.http_response_index_peak_entries,
+        (unsigned long long) mal_perf_stats.http_response_index_inserts,
+        (unsigned long long) mal_perf_stats.http_response_index_removes,
+        (unsigned long long) mal_perf_stats.http_response_index_rehashes
+    );
     for (u32 i = 0; i < MAL_PERF_TABLE_ROLE_COUNT; i++) {
         const MalPerfTableStats *stats = &mal_perf_stats.tables[i];
         fprintf(

@@ -1,5 +1,17 @@
 const http = require("node:http");
 
+const concurrentResponses = [];
+let completedResponse;
+
+function throwsMessage(callback, message) {
+	try {
+		callback();
+		return false;
+	} catch (error) {
+		return error.message === message;
+	}
+}
+
 const server = http.createServer(function (request, response) {
 	if (request.url === "/metadata") {
 		const valid =
@@ -16,6 +28,67 @@ const server = http.createServer(function (request, response) {
 		response.setHeader("X-Reply", "response-header");
 		response.write("a");
 		response.end(Buffer.from("b"));
+		return;
+	}
+
+	if (request.url.startsWith("/concurrent/")) {
+		concurrentResponses.push({ response, id: request.url.slice(12) });
+		if (concurrentResponses.length === 16) {
+			const batch = concurrentResponses.splice(0);
+			for (const entry of batch) {
+				entry.response.setHeader("X-Index", entry.id);
+				entry.response.setHeader("X-Removed", "yes");
+				entry.response.removeHeader("X-Removed");
+				if (
+					entry.response.getHeader("x-index") !== entry.id ||
+					!entry.response.hasHeader("X-Index") ||
+					entry.response.hasHeader("X-Removed") ||
+					entry.response.getHeaders()["x-index"] !== entry.id ||
+					entry.response.getHeaderNames()[0] !== "x-index"
+				) {
+					entry.response.statusCode = 500;
+				}
+				entry.response.write("batch:");
+				entry.response.end(entry.id);
+			}
+			completedResponse = batch[0].response;
+		}
+		return;
+	}
+
+	if (request.url === "/receiver-check") {
+		const prototype = http.ServerResponse.prototype;
+		const forged = {};
+		const constructed = new http.ServerResponse();
+		const checks = [
+			prototype.getHeader.call(forged, "x") === undefined,
+			prototype.hasHeader.call(forged, "x") === false,
+			prototype.removeHeader.call(forged, "x") === undefined,
+			Object.keys(prototype.getHeaders.call(forged)).length === 0,
+			prototype.getHeaderNames.call(forged).length === 0,
+			throwsMessage(
+				() => prototype.setHeader.call(forged, "x", "y"),
+				"ServerResponse is not writable",
+			),
+			throwsMessage(() => prototype.write.call(forged, "x"), "write after end"),
+			throwsMessage(() => prototype.end.call(forged), "write after end"),
+			constructed.getHeader("x") === undefined,
+			completedResponse.getHeader("x-index") === undefined,
+			throwsMessage(
+				() => completedResponse.setHeader("x", "y"),
+				"ServerResponse is not writable",
+			),
+		];
+		response.statusCode = checks.every(Boolean) ? 200 : 500;
+		response.end(checks.every(Boolean) ? "ok" : "receiver mismatch");
+		return;
+	}
+
+	if (request.url === "/async") {
+		setTimeout(() => {
+			response.setHeader("X-Async", "yes");
+			response.end(response.getHeader("x-async"));
+		}, 0);
 		return;
 	}
 
@@ -54,6 +127,12 @@ const server = http.createServer(function (request, response) {
 	if (request.url === "/close") {
 		response.on("finish", () => server.close());
 		response.end("closed");
+		return;
+	}
+
+	if (request.url === "/connection-close") {
+		response.setHeader("Connection", "close");
+		response.end("connection-closed");
 		return;
 	}
 

@@ -132,6 +132,16 @@ typedef struct MalPerfStats {
     u64 array_fresh_dense_reserved_slots;
     u64 array_fresh_dense_growths_avoided;
 
+    u64 http_response_index_lookups;
+    u64 http_response_index_hits;
+    u64 http_response_index_misses;
+    u64 http_response_index_probes;
+    u64 http_response_index_max_probes;
+    u64 http_response_index_peak_entries;
+    u64 http_response_index_inserts;
+    u64 http_response_index_removes;
+    u64 http_response_index_rehashes;
+
     MalPerfTableStats tables[MAL_PERF_TABLE_ROLE_COUNT];
     MalPerfShapeStats shapes[MAL_PERF_SHAPE_CALLER_COUNT];
     u64 shape_transition_calls;

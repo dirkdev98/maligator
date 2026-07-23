@@ -22,6 +22,7 @@
 #include "net.h"
 #include "object.h"
 #include "object_ops.h"
+#include "perf_stats.h"
 #include "server.h"
 #include "utf8.h"
 #include "typed_array_object.h"
@@ -88,6 +89,8 @@ typedef struct MalNodeHttpRequestState {
     bool response_in_flight;
     bool ending;
     bool ended;
+    bool response_indexed;
+    struct MalNodeHttpRequestState *response_index_next;
     struct MalNodeHttpRequestState *next;
 } MalNodeHttpRequestState;
 
@@ -120,8 +123,85 @@ typedef struct MalNodeHttpClientState {
 static MalNodeHttpServerState *http_servers;
 static MalNodeHttpRequestState *http_requests;
 static MalNodeHttpRequestState *http_requests_tail;
+static MalNodeHttpRequestState **http_response_index;
+static usize http_response_index_capacity;
+static usize http_response_index_count;
 static MalNodeHttpClientState *http_clients;
 static bool http_roots_installed;
+
+#define HTTP_RESPONSE_INDEX_INITIAL_CAPACITY 16
+
+static usize http_response_index_bucket(MalObject *object, usize capacity) {
+    uintptr_t hash = (uintptr_t) object >> 3;
+    hash ^= hash >> 17;
+    hash *= (uintptr_t) 0xed5ad4bbU;
+    hash ^= hash >> 11;
+    return (usize) hash & (capacity - 1);
+}
+
+static bool http_response_index_resize(usize capacity) {
+    MalNodeHttpRequestState **buckets = calloc(capacity, sizeof(*buckets));
+    if (buckets == nullptr) return false;
+    for (usize i = 0; i < http_response_index_capacity; i++) {
+        MalNodeHttpRequestState *state = http_response_index[i];
+        while (state != nullptr) {
+            MalNodeHttpRequestState *next = state->response_index_next;
+            MalObject *object = mal_value_to_object(state->response);
+            usize bucket = http_response_index_bucket(object, capacity);
+            state->response_index_next = buckets[bucket];
+            buckets[bucket] = state;
+            state = next;
+        }
+    }
+    free(http_response_index);
+    http_response_index = buckets;
+    http_response_index_capacity = capacity;
+    MAL_PERF_COUNT(http_response_index_rehashes);
+    return true;
+}
+
+static bool http_response_index_insert(MalNodeHttpRequestState *state) {
+    if (http_response_index_capacity == 0) {
+        if (!http_response_index_resize(HTTP_RESPONSE_INDEX_INITIAL_CAPACITY)) {
+            return false;
+        }
+    } else if (http_response_index_count >= http_response_index_capacity * 3 / 4) {
+        if (http_response_index_capacity <= SIZE_MAX / 2) {
+            // Chaining remains correct at the current capacity when optional
+            // growth cannot allocate; only the first table allocation is fatal.
+            (void) http_response_index_resize(http_response_index_capacity * 2);
+        }
+    }
+    MalObject *object = mal_value_to_object(state->response);
+    usize bucket = http_response_index_bucket(object, http_response_index_capacity);
+    state->response_index_next = http_response_index[bucket];
+    http_response_index[bucket] = state;
+    state->response_indexed = true;
+    http_response_index_count++;
+    MAL_PERF_COUNT(http_response_index_inserts);
+#if MAL_PERF_STATS
+    if (mal_perf_stats_enabled
+        && http_response_index_count > mal_perf_stats.http_response_index_peak_entries) {
+        mal_perf_stats.http_response_index_peak_entries = http_response_index_count;
+    }
+#endif
+    return true;
+}
+
+static void http_response_index_remove(MalNodeHttpRequestState *state) {
+    if (!state->response_indexed) return;
+    MalObject *object = mal_value_to_object(state->response);
+    usize bucket = http_response_index_bucket(object, http_response_index_capacity);
+    MalNodeHttpRequestState **link = &http_response_index[bucket];
+    while (*link != nullptr && *link != state) link = &(*link)->response_index_next;
+    if (*link == state) {
+        *link = state->response_index_next;
+        http_response_index_count--;
+        MAL_PERF_COUNT(http_response_index_removes);
+    }
+    state->response_indexed = false;
+    state->response_index_next = nullptr;
+}
 
 static char *http_copy_bytes(const char *bytes, usize length) {
     char *copy = malloc(length + 1);
@@ -132,6 +212,7 @@ static char *http_copy_bytes(const char *bytes, usize length) {
 }
 
 static void http_request_free(MalNodeHttpRequestState *request) {
+    http_response_index_remove(request);
     free(request->method);
     free(request->target);
     for (usize i = 0; i < request->header_count; i++) {
@@ -160,15 +241,37 @@ static void http_request_remove(MalNodeHttpRequestState **link) {
 }
 
 static MalNodeHttpRequestState *http_response_state(MalValue receiver) {
-    if (!mal_value_is_object(receiver)) return nullptr;
+    MAL_PERF_COUNT(http_response_index_lookups);
+    if (!mal_value_is_object(receiver) || http_response_index_capacity == 0) {
+        MAL_PERF_COUNT(http_response_index_misses);
+        return nullptr;
+    }
     MalObject *object = mal_value_to_object(receiver);
-    for (MalNodeHttpRequestState *state = http_requests; state != nullptr;
-         state = state->next) {
-        if (!mal_value_is_undefined(state->response)
-            && mal_value_to_object(state->response) == object) {
+    usize bucket = http_response_index_bucket(object, http_response_index_capacity);
+    usize probes = 0;
+    for (MalNodeHttpRequestState *state = http_response_index[bucket]; state != nullptr;
+         state = state->response_index_next) {
+        probes++;
+        if (mal_value_to_object(state->response) == object) {
+            MAL_PERF_COUNT(http_response_index_hits);
+            MAL_PERF_ADD(http_response_index_probes, probes);
+#if MAL_PERF_STATS
+            if (mal_perf_stats_enabled
+                && probes > mal_perf_stats.http_response_index_max_probes) {
+                mal_perf_stats.http_response_index_max_probes = probes;
+            }
+#endif
             return state;
         }
     }
+    MAL_PERF_COUNT(http_response_index_misses);
+    MAL_PERF_ADD(http_response_index_probes, probes);
+#if MAL_PERF_STATS
+    if (mal_perf_stats_enabled
+        && probes > mal_perf_stats.http_response_index_max_probes) {
+        mal_perf_stats.http_response_index_max_probes = probes;
+    }
+#endif
     return nullptr;
 }
 
@@ -1322,6 +1425,10 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
         nullptr, 0);
     if (response_completion.kind == MAL_COMPLETION_THROW) goto fail;
     state->response = response_completion.value;
+    if (!http_response_index_insert(state)) {
+        mal_vm_throw_allocation_error(vm);
+        goto fail;
+    }
 
     MalValue roots[] = {
         state->request, state->response, mal_value_new_undefined(),
