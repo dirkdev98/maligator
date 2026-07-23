@@ -1661,6 +1661,15 @@ static void mal_vm_run_until_frame_count(
                 MalValue object = registers[instruction->as.load_property.object];
                 MalValue key = registers[instruction->as.load_property.key];
                 MalValue result;
+                if (mal_value_is_int32(key) &&
+                    mal_value_is_heap_type(object, MAL_HEAP_ARRAY_OBJECT) &&
+                    mal_vm_array_try_load(
+                        (const MalArrayObject *) mal_value_to_heap(object),
+                        (f64) mal_value_to_i32(key), &result)) {
+                    registers[instruction->as.load_property.dst] = result;
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
                 MalInlineCache *ic = mal_vm_interp_ic_existing(
                     frame, instruction_pointer - 1);
                 if (ic != nullptr && mal_vm_property_try_load(vm, object, key, ic, &result)) {
@@ -1694,6 +1703,14 @@ static void mal_vm_run_until_frame_count(
                 MalValue object = registers[instruction->as.store_property.object];
                 MalValue key = registers[instruction->as.store_property.key];
                 MalValue value = registers[instruction->as.store_property.value];
+                if (mal_value_is_int32(key) &&
+                    mal_value_is_heap_type(object, MAL_HEAP_ARRAY_OBJECT) &&
+                    mal_vm_array_try_store(
+                        (MalArrayObject *) mal_value_to_heap(object),
+                        (f64) mal_value_to_i32(key), value)) {
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
                 MalInlineCache *ic = mal_vm_interp_ic_existing(
                     frame, instruction_pointer - 1);
                 if (ic != nullptr && mal_vm_property_try_store(object, key, value, ic)) {
