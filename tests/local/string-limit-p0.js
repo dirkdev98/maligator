@@ -39,6 +39,11 @@ check(
 	"concat rejects one code unit past the limit",
 	throwsRangeError(() => atLimit + "x"),
 );
+const maxSplit = atLimit.split(atLimit, 0xffffffff);
+check(
+	"split accepts maximum source, separator, and uint32 limit",
+	maxSplit.length === 2 && maxSplit[0] === "" && maxSplit[1] === "",
+);
 check(
 	"Array join rejects delimiter overflow",
 	throwsRangeError(() => [halfLimit, halfLimit].join()),

@@ -125,6 +125,10 @@ check(
 	"a--b----".split("--").join("|") === "a|b||",
 );
 check(
+	"separator longer than the source leaves one segment",
+	"a".split("long separator").join("|") === "a",
+);
+check(
 	"multi-unit separator respects every trailing boundary",
 	"a--b----".split("--", 1).join("|") === "a" &&
 		"a--b----".split("--", 2).join("|") === "a|b" &&
@@ -175,6 +179,30 @@ check(
 	"empty separator limit can cut between a surrogate pair",
 	"\ud83d\ude00x".split("", 1)[0].charCodeAt(0) === 0xd83d &&
 		"\ud83d\ude00x".split("", 2)[1].charCodeAt(0) === 0xde00,
+);
+
+const exactOneUnitPlan = ("x,".repeat(64) + "tail").split(",");
+const overflowOneUnitPlan = ("x,".repeat(65) + "tail").split(",");
+check(
+	"one-unit split preserves the exact planner boundary and overflow",
+	exactOneUnitPlan.length === 65 &&
+		exactOneUnitPlan[63] === "x" &&
+		exactOneUnitPlan[64] === "tail" &&
+		overflowOneUnitPlan.length === 66 &&
+		overflowOneUnitPlan[64] === "x" &&
+		overflowOneUnitPlan[65] === "tail",
+);
+
+const exactMultiUnitPlan = ("x--".repeat(64) + "tail").split("--");
+const overflowMultiUnitPlan = ("x--".repeat(65) + "tail").split("--");
+check(
+	"multi-unit split preserves the exact planner boundary and overflow",
+	exactMultiUnitPlan.length === 65 &&
+		exactMultiUnitPlan[63] === "x" &&
+		exactMultiUnitPlan[64] === "tail" &&
+		overflowMultiUnitPlan.length === 66 &&
+		overflowMultiUnitPlan[64] === "x" &&
+		overflowMultiUnitPlan[65] === "tail",
 );
 
 const largeResult = ("item,".repeat(8192) + "last").split(",");

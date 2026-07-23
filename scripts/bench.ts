@@ -132,6 +132,8 @@ interface StringMetrics {
 	searchLastUnitRejects: number;
 	searchMemcmpCalls: number;
 	searchMemcmpCodeUnits: number;
+	splitPlannedMatches: number;
+	splitPlanOverflows: number;
 }
 interface PromiseMetrics {
 	malMs: number;
@@ -553,6 +555,8 @@ function benchString(runs: number): StringMetrics {
 		searchLastUnitRejects: parsePerfStringStat(perfStderr, "search_last_unit_rejects"),
 		searchMemcmpCalls: parsePerfStringStat(perfStderr, "search_memcmp_calls"),
 		searchMemcmpCodeUnits: parsePerfStringStat(perfStderr, "search_memcmp_code_units"),
+		splitPlannedMatches: parsePerfStringStat(perfStderr, "split_planned_matches"),
+		splitPlanOverflows: parsePerfStringStat(perfStderr, "split_plan_overflows"),
 	};
 }
 
@@ -1311,6 +1315,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		);
 		console.log(
 			`  filter    ${entry.string.searchFirstUnitRejects} first-unit rejects, ${entry.string.searchLastUnitRejects} last-unit rejects, ${entry.string.searchMemcmpCalls} interior compares (${entry.string.searchMemcmpCodeUnits} code units)`,
+		);
+		console.log(
+			`  split     ${entry.string.splitPlannedMatches} planned matches, ${entry.string.splitPlanOverflows} overflow fallbacks`,
 		);
 	}
 	if (entry.promise) {

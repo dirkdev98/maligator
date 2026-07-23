@@ -1149,27 +1149,51 @@ static void mal_builtin_string_split_append(MalArrayObject *result, MalValue val
     }
 }
 
-static u32 mal_builtin_string_split_one_unit_result_count(
-    MalString *string, MalString *separator, u32 limit
+#define MAL_STRING_SPLIT_MATCH_PLAN_CAPACITY 64u
+
+static bool mal_builtin_string_split_plan_matches(
+    MalString *string, MalString *separator, u32 limit,
+    usize *match_offsets, u32 *match_count
 ) {
-    u32 count = 1;
-    if (count == limit) {
-        return count;
+    usize length = mal_string_length(string);
+    usize separator_length = mal_string_length(separator);
+    usize position = 0;
+    *match_count = 0;
+
+    if (separator_length > length) return true;
+
+    if (separator_length == 1) {
+        const c16 separator_unit = mal_string_code_units(separator)[0];
+        const c16 *string_units = mal_string_code_units(string);
+        while (position < length) {
+            if (string_units[position] != separator_unit) {
+                position++;
+                continue;
+            }
+            if (*match_count == MAL_STRING_SPLIT_MATCH_PLAN_CAPACITY) {
+                MAL_PERF_COUNT(string_split_plan_overflows);
+                return false;
+            }
+            match_offsets[(*match_count)++] = position++;
+            MAL_PERF_COUNT(string_split_planned_matches);
+            if (*match_count == limit) return true;
+        }
+        return true;
     }
 
-    const c16 separator_unit = mal_string_code_units(separator)[0];
-    const c16 *string_units = mal_string_code_units(string);
-    usize length = mal_string_length(string);
-    for (usize i = 0; i < length; i++) {
-        // Every one-code-unit match is non-overlapping with the next position.
-        if (string_units[i] == separator_unit) {
-            count++;
-            if (count == limit) {
-                break;
-            }
+    while (position <= length - separator_length) {
+        i64 match_position = mal_builtin_string_find(string, separator, position);
+        if (match_position < 0) break;
+        if (*match_count == MAL_STRING_SPLIT_MATCH_PLAN_CAPACITY) {
+            MAL_PERF_COUNT(string_split_plan_overflows);
+            return false;
         }
+        match_offsets[(*match_count)++] = (usize) match_position;
+        MAL_PERF_COUNT(string_split_planned_matches);
+        if (*match_count == limit) return true;
+        position = (usize) match_position + separator_length;
     }
-    return count;
+    return true;
 }
 
 static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -1257,10 +1281,31 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
         goto split_done;
     }
 
-    if (separator_length == 1) {
-        u32 exact_count =
-            mal_builtin_string_split_one_unit_result_count(string, separator, lim);
+    // 64 offsets use 512 bytes on 64-bit targets and cover common structured-text
+    // splits while keeping worst-case native stack use fixed. Overflow restarts the
+    // existing bounded-memory geometric path below.
+    usize match_offsets[MAL_STRING_SPLIT_MATCH_PLAN_CAPACITY];
+    u32 match_count;
+    if (mal_builtin_string_split_plan_matches(
+            string, separator, lim, match_offsets, &match_count)) {
+        u32 exact_count = match_count == lim ? lim : match_count + 1;
         (void) mal_array_object_fresh_dense_reserve_exact(result, exact_count);
+
+        usize segment_start = 0;
+        for (u32 i = 0; i < match_count; i++) {
+            usize match_position = match_offsets[i];
+            MalValue segment = mal_builtin_string_slice(
+                vm, string, segment_start, match_position - segment_start);
+            mal_builtin_string_split_append(result, segment);
+            result_length++;
+            if (result_length == lim) goto split_done;
+            segment_start = match_position + separator_length;
+        }
+
+        MalValue segment =
+            mal_builtin_string_slice(vm, string, segment_start, length - segment_start);
+        mal_builtin_string_split_append(result, segment);
+        goto split_done;
     }
 
     usize segment_start = 0;
