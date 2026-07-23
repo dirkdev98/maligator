@@ -40,23 +40,82 @@ function stackSiteCount(program: IntermediateProgram): number {
 	).length;
 }
 
+function objectAllocationCount(program: IntermediateProgram): number {
+	return instructions(program).filter(
+		(instruction) =>
+			instruction.type === "createObject" || instruction.type === "createObjectShaped",
+	).length;
+}
+
+describe("scalar-replaced object observations", () => {
+	it.each([
+		[
+			"standalone typeof",
+			`function f() { const o = {}; return typeof o; } globalThis.keep = f;`,
+			0,
+		],
+		[
+			"same-site aliases",
+			`function f(value) { const o = { x: value }; const alias = o; return typeof alias === "object" && o === alias && o !== alias === false ? alias.x : 0; } globalThis.keep = f;`,
+			0,
+		],
+		[
+			"distinct fresh sites",
+			`function f(value) { const left = { x: value }; const right = { x: value + 1 }; return left !== right && left === right === false ? left.x + right.x : 0; } globalThis.keep = f;`,
+			0,
+		],
+		[
+			"per-iteration same-site identity",
+			`function f(n) { let total = 0; for (let i = 0; i < n; i++) { const o = { x: i }; const alias = o; if (typeof o === "object" && o === alias) total += alias.x; } return total; } globalThis.keep = f;`,
+			0,
+		],
+	])("eliminates %s", (_name, source, expected) => {
+		expect(objectAllocationCount(optimized(source))).toBe(expected);
+	});
+
+	it.each([
+		[
+			"ambiguous branch merge",
+			`function f(c) { const left = { x: 1 }; const right = { x: 2 }; let value = left; if (c) value = right; return value === left ? value.x : 0; } globalThis.keep = f;`,
+			2,
+		],
+		[
+			"loop-carried reassignment",
+			`function f(n) { const first = { x: 1 }; let value = first; while (n-- > 0) value = { x: n }; return value === first ? value.x : 0; } globalThis.keep = f;`,
+			2,
+		],
+		[
+			"escaping comparison peer",
+			`function f() { const left = { x: 1 }; const right = { x: 2 }; globalThis.saved = right; return left !== right ? left.x : 0; } globalThis.keep = f;`,
+			2,
+		],
+		[
+			"inherited read",
+			`function f() { const o = { x: 1 }; return typeof o === "object" && typeof o.toString === "function" ? o.x : 0; } globalThis.keep = f;`,
+			1,
+		],
+	])("rejects %s", (_name, source, expected) => {
+		expect(objectAllocationCount(optimized(source))).toBe(expected);
+	});
+});
+
 describe("closed fixed-shape stack-object proof", () => {
 	it.each([
 		[
 			"empty identity-observed object",
-			`function f(a) { const o = {}; return typeof o === "object" && o === o ? a : 0; } globalThis.keep = f;`,
+			`function f(a, escape) { const o = {}; if (escape) return o; return typeof o === "object" && o === o ? a : 0; } globalThis.keep = f;`,
 		],
 		[
 			"typeof with static own load",
-			`function f(a) { const o = { x: a }; return typeof o === "object" ? o.x : 0; } globalThis.keep = f;`,
+			`function f(a, escape) { const o = { x: a }; if (escape) return o; return typeof o === "object" ? o.x : 0; } globalThis.keep = f;`,
 		],
 		[
 			"strict identity and existing own store",
-			`function f(a) { const o = { x: a }; o.x = a + 1; return o === o ? o.x : 0; } globalThis.keep = f;`,
+			`function f(a, escape) { const o = { x: a }; o.x = a + 1; if (escape) return o; return o === o ? o.x : 0; } globalThis.keep = f;`,
 		],
 		[
 			"single-definition move alias",
-			`function f(a) { const o = { x: a }; const alias = o; return typeof alias === "object" ? alias.x : 0; } globalThis.keep = f;`,
+			`function f(a, escape) { const o = { x: a }; const alias = o; if (escape) return alias; return typeof alias === "object" ? alias.x : 0; } globalThis.keep = f;`,
 		],
 	])("accepts %s", (_name, source) => {
 		expect(stackSiteCount(optimized(source))).toBe(1);
@@ -74,7 +133,7 @@ describe("closed fixed-shape stack-object proof", () => {
 
 	it("accepts loadPrototype as a non-retaining identity observation", () => {
 		const program = optimized(
-			`function f() { const o = { x: 1 }; return typeof o; } globalThis.keep = f;`,
+			`function f(escape) { const o = { x: 1 }; if (escape) return o; return typeof o; } globalThis.keep = f;`,
 		);
 		const unary = instructions(program).find(
 			(instruction): instruction is Extract<IRInstruction, { type: "unary" }> =>
@@ -183,10 +242,10 @@ describe("closed fixed-shape stack-object proof", () => {
 		const sites = Array.from(
 			{ length: 257 },
 			(_, index) =>
-				`const o${index} = { x: ${index} }; total += typeof o${index} === "object" ? o${index}.x : 0;`,
+				`const o${index} = { x: ${index} }; if (escape === ${index}) return o${index}; total += typeof o${index} === "object" ? o${index}.x : 0;`,
 		).join("\n");
 		const program = optimized(
-			`function f() { let total = 0; ${sites} return total; } globalThis.keep = f;`,
+			`function f(escape) { let total = 0; ${sites} return total; } globalThis.keep = f;`,
 		);
 		expect(stackSiteCount(program)).toBe(256);
 	});
@@ -244,7 +303,7 @@ describe("stack-object native metadata and C emission", () => {
 	it("emits an immortal stack MalObject backed by activation root slots", () => {
 		const definition = compileSemanticProgramToVmDefinition(
 			semantic(
-				`function f() { const o = { x: "heap:" + 1 }; return typeof o === "object" && o === o ? o.x : ""; } globalThis.keep = f;`,
+				`function f(escape) { const o = { x: "heap:" + 1 }; if (escape) return o; return typeof o === "object" && o === o ? o.x : ""; } globalThis.keep = f;`,
 			),
 		);
 		const fn = definition.functions.find(
@@ -265,7 +324,7 @@ describe("stack-object native metadata and C emission", () => {
 	it("emits an empty stack MalObject without activation slots", () => {
 		const definition = compileSemanticProgramToVmDefinition(
 			semantic(
-				`function f(a) { const o = {}; return typeof o === "object" && o === o ? a : 0; } globalThis.keep = f;`,
+				`function f(a, escape) { const o = {}; if (escape) return o; return typeof o === "object" && o === o ? a : 0; } globalThis.keep = f;`,
 			),
 		);
 		const source = emitVmDefinition(definition, { compiled: true });

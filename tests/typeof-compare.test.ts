@@ -86,6 +86,7 @@ describe("typeof comparison fusion", () => {
 			function timing(value) {
 				const saved = typeof value;
 				value = {};
+				globalThis.mutated = value;
 				return saved === "number";
 			}
 			globalThis.timing = timing;

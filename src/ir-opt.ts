@@ -9,7 +9,7 @@ import {
 } from "./inline.ts";
 import type { CapturedSlotOptimizationFacts } from "./inline.ts";
 import { buildIRRegisterIndex, destinationCount } from "./ir-register-index.ts";
-import { debugIntermediateProgram } from "./ir.ts";
+import { debugIntermediateProgram, getOrCreateStringConstant } from "./ir.ts";
 import type {
 	IntermediateProgram,
 	IRFunction,
@@ -1786,20 +1786,21 @@ function optFuseTypeofComparisons(
  *
  * A `createObjectShaped` builds an immutable record with statically-known, unique,
  * non-index string keys (`staticObjectShape` already excludes spread, computed
- * keys, accessors, methods, `__proto__`, duplicates and index-like names). When
- * such a record never escapes — its destination register is used ONLY as the
- * object operand of `loadProperty` reads, each with a constant key that is an own
- * key of the record — the object is unobservable: its identity is never taken and
- * every read resolves to a known slot. We then delete the allocation and rewrite
- * each read `loadProperty [d, obj, keyᵢ]` into `move [d, valueᵢ]`, where `valueᵢ`
- * is the register the literal stored for that key. The now-dead key constants and
- * any unread values are removed by the following DCE pass.
+ * keys, accessors, methods, `__proto__`, duplicates and index-like names). The
+ * empty `createObject` is the zero-field equivalent. Before this pass, statically
+ * decidable type and identity observations are folded only for allocations that
+ * satisfy this pass or its mutable counterpart. Once the remaining uses are only
+ * constant-own-key reads and single-definition aliases, the object is
+ * unobservable. We delete the allocation and rewrite each read
+ * `loadProperty [d, obj, keyᵢ]` into `move [d, valueᵢ]`, where `valueᵢ` is the
+ * register the literal stored for that key. The now-dead key constants and any
+ * unread values are removed by the following DCE pass.
  *
  * This removes the allocation entirely — the GC never sees the object — which is
  * the Phase-7 lever that beats merely shrinking root frames. It is conservative by
  * construction: any use we do not recognise (escaping into a call/return/store,
- * mutation via `storeProperty`, a computed or foreign key, `delete`, an identity
- * compare, …) leaves the site untouched.
+ * mutation via `storeProperty`, a computed or foreign key, `delete`, or an
+ * observation the shared proof cannot decide) leaves the site untouched.
  *
  * Gating: skipped for functions that can observe locals dynamically — `with`
  * (sloppy scope) and direct `eval` (C3) — and for generator/async bodies, where a
@@ -1832,9 +1833,228 @@ function optScalarReplaceObjectLiterals(program: IntermediateProgram): boolean {
 		if (functionUsesWith(fn) || fn.semanticFile.hasDirectEval.size > 0) {
 			continue;
 		}
+		changed = foldScalarReplaceableObjectObservationsInFunction(program, fn) || changed;
 		changed = scalarReplaceObjectLiteralsInFunction(fn) || changed;
 	}
 	return changed;
+}
+
+interface ScalarReplaceableAllocation {
+	allocation: Extract<IRInstruction, { type: "createObject" | "createObjectShaped" }>;
+	aliases: Set<number>;
+	observations: Set<IRInstruction>;
+	comparisonDependencies: Set<ScalarReplaceableAllocation>;
+	valid: boolean;
+}
+
+/**
+ * Fold observations that do not require materializing a fresh ordinary object.
+ * The proof deliberately covers the union of the immutable and mutable scalar
+ * replacement contracts below. An observation is folded only when every object
+ * identity it mentions survives that complete closed-object proof.
+ */
+function foldScalarReplaceableObjectObservationsInFunction(
+	program: IntermediateProgram,
+	fn: IRFunction,
+): boolean {
+	const registerIndex = buildIRRegisterIndex(fn);
+	const singleDefinition = registerIndex.uniqueDefinitions;
+	const usesOf = registerIndex.uses;
+	const facts: Array<ScalarReplaceableAllocation> = [];
+
+	for (const block of fn.blocks) {
+		for (const allocation of block.instructions) {
+			if (
+				(allocation.type !== "createObject" &&
+					allocation.type !== "createObjectShaped") ||
+				singleDefinition.get(allocation.registers[0]) !== allocation
+			) {
+				continue;
+			}
+			const fact: ScalarReplaceableAllocation = {
+				allocation,
+				aliases: new Set([allocation.registers[0]]),
+				observations: new Set(),
+				comparisonDependencies: new Set(),
+				valid: true,
+			};
+			const worklist = [allocation.registers[0]];
+			while (worklist.length > 0) {
+				const alias = worklist.pop()!;
+				for (const { instruction: use, position } of usesOf.get(alias) ?? []) {
+					if (use.type !== "move" || position !== 1) continue;
+					const target = use.registers[0];
+					if (singleDefinition.get(target) !== use) {
+						fact.valid = false;
+						continue;
+					}
+					if (!fact.aliases.has(target)) {
+						fact.aliases.add(target);
+						worklist.push(target);
+					}
+				}
+			}
+			facts.push(fact);
+		}
+	}
+
+	const ownerByAlias = new Map<number, ScalarReplaceableAllocation | undefined>();
+	for (const fact of facts) {
+		for (const alias of fact.aliases) {
+			const existing = ownerByAlias.get(alias);
+			if (existing === undefined && !ownerByAlias.has(alias)) {
+				ownerByAlias.set(alias, fact);
+			} else if (existing !== fact) {
+				if (existing !== undefined) existing.valid = false;
+				fact.valid = false;
+				ownerByAlias.set(alias, undefined);
+			}
+		}
+	}
+
+	const constantString = (register: number): number | undefined => {
+		const definition = singleDefinition.get(register);
+		return definition?.type === "createString" ? definition.stringIndex : undefined;
+	};
+
+	for (const fact of facts) {
+		const ownKeys = new Set(
+			fact.allocation.type === "createObjectShaped"
+				? fact.allocation.keyStringIndices
+				: [],
+		);
+		const readKeys: Array<number> = [];
+		const storedKeys: Array<number> = [];
+		let hasStore = false;
+
+		for (const alias of fact.aliases) {
+			for (const { instruction: use, position } of usesOf.get(alias) ?? []) {
+				if (
+					use.type === "move" &&
+					position === 1 &&
+					ownerByAlias.get(use.registers[0]) === fact
+				) {
+					continue;
+				}
+				if (use.type === "loadProperty" && position === 1) {
+					const key = constantString(use.registers[2]);
+					if (key === undefined) fact.valid = false;
+					else {
+						readKeys.push(key);
+					}
+					continue;
+				}
+				if (use.type === "storeProperty" && position === 0) {
+					const key = constantString(use.registers[1]);
+					if (key === undefined) fact.valid = false;
+					else {
+						hasStore = true;
+						storedKeys.push(key);
+					}
+					continue;
+				}
+				if (use.type === "unary" && position === 1 && use.operator === "typeof") {
+					fact.observations.add(use);
+					continue;
+				}
+				if (use.type === "typeofCompare" && position === 1) {
+					fact.observations.add(use);
+					continue;
+				}
+				if (
+					use.type === "binary" &&
+					(position === 1 || position === 2) &&
+					(use.operator === "===" || use.operator === "!==")
+				) {
+					const other = ownerByAlias.get(use.registers[position === 1 ? 2 : 1]);
+					if (other === undefined) fact.valid = false;
+					else fact.comparisonDependencies.add(other);
+					fact.observations.add(use);
+					continue;
+				}
+				fact.valid = false;
+			}
+		}
+
+		// Observation folding never relies on a missing-key read: even a key that
+		// Object.prototype lacks today could be inherited after arbitrary user code.
+		if (readKeys.some((key) => !ownKeys.has(key))) {
+			fact.valid = false;
+		} else if (!hasStore) {
+			if (fact.allocation.type === "createObject" && readKeys.length > 0) {
+				fact.valid = false;
+			}
+		} else {
+			for (const key of storedKeys) {
+				if (
+					!ownKeys.has(key) &&
+					PROTOTYPE_POLLUTING_KEYS.has(decodeStringConstant(program, key))
+				) {
+					fact.valid = false;
+				}
+			}
+		}
+	}
+
+	let invalidated = true;
+	while (invalidated) {
+		invalidated = false;
+		for (const fact of facts) {
+			if (
+				fact.valid &&
+				[...fact.comparisonDependencies].some((dependency) => !dependency.valid)
+			) {
+				fact.valid = false;
+				invalidated = true;
+			}
+		}
+	}
+
+	const replacements = new Map<IRInstruction, IRInstruction>();
+	for (const fact of facts) {
+		if (!fact.valid) continue;
+		for (const observation of fact.observations) {
+			if (replacements.has(observation)) continue;
+			switch (observation.type) {
+				case "unary":
+					replacements.set(observation, {
+						type: "createString",
+						registers: [observation.registers[0]],
+						stringIndex: getOrCreateStringConstant(program, "object"),
+					});
+					break;
+				case "typeofCompare":
+					replacements.set(observation, {
+						type: "createBoolean",
+						registers: [observation.registers[0]],
+						value: (observation.expected === "object") !== observation.negated,
+					});
+					break;
+				case "binary": {
+					const left = ownerByAlias.get(observation.registers[1]);
+					const right = ownerByAlias.get(observation.registers[2]);
+					if (left === undefined || right === undefined || !left.valid || !right.valid) {
+						break;
+					}
+					const equal = left === right;
+					replacements.set(observation, {
+						type: "createBoolean",
+						registers: [observation.registers[0]],
+						value: observation.operator === "===" ? equal : !equal,
+					});
+					break;
+				}
+			}
+		}
+	}
+	if (replacements.size === 0) return false;
+
+	for (const block of fn.blocks) {
+		block.instructions = block.instructions.map(
+			(instruction) => replacements.get(instruction) ?? instruction,
+		);
+	}
+	return true;
 }
 
 function scalarReplaceObjectLiteralsInFunction(fn: IRFunction): boolean {
@@ -1900,14 +2120,18 @@ function scalarReplaceObjectLiteralsInFunction(fn: IRFunction): boolean {
 
 	for (const block of fn.blocks) {
 		for (const instruction of block.instructions) {
-			if (instruction.type !== "createObjectShaped") {
+			if (
+				instruction.type !== "createObject" &&
+				instruction.type !== "createObjectShaped"
+			) {
 				continue;
 			}
 			const objectRegister = instruction.registers[0];
 			if (defCount.get(objectRegister) !== 1) {
 				continue; // not single-assignment — can't reason about its contents
 			}
-			const keys = instruction.keyStringIndices;
+			const keys =
+				instruction.type === "createObjectShaped" ? instruction.keyStringIndices : [];
 			// registers = [destination, ...valueRegisters], parallel to keys.
 			const valueRegisters = instruction.registers.slice(1);
 

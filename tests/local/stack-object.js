@@ -48,6 +48,24 @@ function simultaneous(seed) {
 	);
 }
 
+function foldedObservations(seed) {
+	const left = { value: seed };
+	const alias = left;
+	const right = { value: seed + 1 };
+	return (
+		typeof alias === "object" &&
+		left === alias &&
+		left !== right &&
+		(left === right) === false &&
+		left.value + right.value === seed * 2 + 1
+	);
+}
+
+function foldedTypeof() {
+	const object = {};
+	return typeof object;
+}
+
 function recursive(depth) {
 	const o = { depth, text: "depth:" + depth };
 	const nested = depth === 0 ? 0 : recursive(depth - 1);
@@ -109,6 +127,8 @@ function callEscape(seed) {
 check("loop reuse", loopReuse());
 check("empty observed object", emptyObserved(40));
 check("simultaneous stack sites", simultaneous(41));
+check("folded object observations", foldedObservations(42));
+check("folded standalone typeof", foldedTypeof() === "object");
 check("recursion and reentrancy", recursive(6) === 70);
 check("branch normal", branchAndException(false) === 21);
 check("branch exception", branchAndException(true) === 28);
