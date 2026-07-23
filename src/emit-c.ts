@@ -2099,9 +2099,9 @@ function emitInstruction(
 					poll,
 				];
 			}
-			// A per-site monomorphic call cache: a repeat call to the same compiled callee
-			// skips the dispatch chain (see mal_vm_call_cached). The identity guard keeps it
-			// sound for bound/native/proxy/interpreted callees (they stay on the slow path).
+			// A per-site polymorphic call cache: exact native callees and ordinary compiled
+			// closures sharing a function index skip the dispatch chain. Bound, proxy, and
+			// interpreted callees stay on the slow path.
 			return [
 				`static MalCallCache __cc_${ip};`,
 				`MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,

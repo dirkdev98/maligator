@@ -107,6 +107,13 @@ typedef struct MalPerfStats {
     u64 argument_snapshot_destination_writes;
     u64 argument_snapshot_temporary_copies;
 
+    u64 call_cache_probes;
+    u64 call_cache_exact_identity_hits;
+    u64 call_cache_compiled_family_hits;
+    u64 call_cache_dispatch_misses;
+    u64 call_cache_compiled_fills;
+    u64 call_cache_native_fills;
+
     u64 coroutine_buffer_release_clear_slots;
     u64 coroutine_buffer_allocation_init_slots;
 

@@ -1,4 +1,8 @@
 let passed = 0;
+function realmCallCacheThis() {
+	return globalThis;
+}
+globalThis.__realmCallCacheThis = realmCallCacheThis;
 function ok(name, condition) {
 	if (!condition) throw new Error("FAIL " + name);
 	passed++;

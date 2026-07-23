@@ -322,6 +322,18 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-call-cache-stats] probes=%llu exact_identity_hits=%llu "
+        "compiled_family_hits=%llu dispatch_misses=%llu compiled_fills=%llu "
+        "native_fills=%llu\n",
+        (unsigned long long) mal_perf_stats.call_cache_probes,
+        (unsigned long long) mal_perf_stats.call_cache_exact_identity_hits,
+        (unsigned long long) mal_perf_stats.call_cache_compiled_family_hits,
+        (unsigned long long) mal_perf_stats.call_cache_dispatch_misses,
+        (unsigned long long) mal_perf_stats.call_cache_compiled_fills,
+        (unsigned long long) mal_perf_stats.call_cache_native_fills
+    );
+    fprintf(
+        stderr,
         "[perf-ic-stats] load_mono_hits=%llu load_region_hits=%llu "
         "load_inherited_hits=%llu load_fallbacks=%llu load_slow_mono_hits=%llu "
         "load_poly_hits=%llu load_mega_hits=%llu load_mega_misses=%llu "

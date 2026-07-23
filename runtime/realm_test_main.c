@@ -375,6 +375,59 @@ int main(void) {
             &vm, realm_two->intrinsics[MAL_INTRINSIC_NUMBER_PROTOTYPE], "toString") &&
         realm_is_current(&vm, realm_one);
 
+    i32 call_cache_function_index = -1;
+    MalString *call_cache_function_name = mal_intrinsic_ascii(&vm, "realmCallCacheThis");
+    for (i32 i = 0; i < vm.definition->function_count; i++) {
+        i32 name_index = vm.definition->functions[i].name_string_index;
+        if (name_index >= 0 &&
+            mal_string_equals(&vm.definition->string_constants[name_index], call_cache_function_name)) {
+            call_cache_function_index = i;
+            break;
+        }
+    }
+    MalValue call_cache_closures[2] = {
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan call_cache_closures_root;
+    mal_gc_root(&call_cache_closures_root, call_cache_closures, 2);
+    MalCompletion call_cache_one = {.kind = MAL_COMPLETION_THROW};
+    MalCompletion call_cache_two = {.kind = MAL_COMPLETION_THROW};
+    bool call_cache_overflow_realm = false;
+    if (call_cache_function_index >= 0 &&
+        vm.definition->functions[call_cache_function_index].compiled != nullptr) {
+        mal_realm_switch(&vm, realm_one);
+        call_cache_closures[0] = mal_vm_op_create_function(
+            &vm, call_cache_function_index, nullptr);
+        mal_realm_switch(&vm, realm_two);
+        call_cache_closures[1] = mal_vm_op_create_function(
+            &vm, call_cache_function_index, nullptr);
+        mal_realm_switch(&vm, realm_one);
+        MalCallCache call_cache = {0};
+        call_cache_one = mal_vm_call_cached(
+            &vm, &call_cache, call_cache_closures[0], mal_value_new_undefined(), nullptr, 0);
+        call_cache_two = mal_vm_call_cached(
+            &vm, &call_cache, call_cache_closures[1], mal_value_new_undefined(), nullptr, 0);
+        vm.native_call_depth = MAL_NATIVE_CALL_DEPTH_LIMIT;
+        MalCompletion call_cache_overflow = mal_vm_call_cached(
+            &vm, &call_cache, call_cache_closures[1], mal_value_new_undefined(), nullptr, 0);
+        call_cache_overflow_realm =
+            call_cache_overflow.kind == MAL_COMPLETION_THROW &&
+            mal_value_is_object(call_cache_overflow.value) &&
+            mal_object_get_prototype(mal_value_to_object(call_cache_overflow.value)) ==
+                mal_value_to_object(realm_two->intrinsics[MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE]) &&
+            realm_is_current(&vm, realm_one);
+        vm.native_call_depth = 0;
+        vm.completion = (MalCompletion) {
+            .kind = MAL_COMPLETION_NORMAL,
+            .value = mal_value_new_undefined(),
+        };
+    }
+    bool cross_realm_compiled_call_cache =
+        call_cache_one.kind == MAL_COMPLETION_NORMAL && call_cache_one.value == global_one &&
+        call_cache_two.kind == MAL_COMPLETION_NORMAL && call_cache_two.value == global_two &&
+        realm_is_current(&vm, realm_one);
+
     struct {
         const char *name;
         bool ok;
@@ -416,10 +469,15 @@ int main(void) {
          eval_functions_use_target_realms},
         {"evaluated cross-realm call enters, creates, and restores",
          evaluated_cross_realm_call},
+        {"compiled call-cache family uses each closure realm",
+         cross_realm_compiled_call_cache},
+        {"compiled call-cache overflow uses the current closure realm",
+         call_cache_overflow_realm},
         {"inherited Date method cache separates direct prototypes by realm",
          cross_realm_date_cache},
     };
 
+    mal_gc_unroot(&call_cache_closures_root);
     mal_gc_unroot(&dates_root);
     mal_gc_unroot(&evaluated_call_root);
     mal_gc_unroot(&eval_sources_root);

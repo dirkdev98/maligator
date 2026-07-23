@@ -75,6 +75,9 @@ typedef struct MalHeap {
     /** Bytes of managed cells that survived the last sweep; sizes the next
      * auto-collection trigger. Zero until the first collection. */
     usize live_bytes;
+    /** Process-unique heap lifetime identity. Static native call caches use this
+     * with epoch so exact object identities never cross VM lifetimes. */
+    u64 identity;
     /** Bumped at the start of every sweep. A cell address can only be freed and
      * reused across a sweep, so callers that cache a raw cell pointer by identity
      * (the native backend's call-site cache) tag it with the epoch and treat a

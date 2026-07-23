@@ -1,11 +1,14 @@
 #include "./heap.h"
 
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
 #include "./gc.h"
+
+static _Atomic(u64) g_next_heap_identity = 1;
 
 /* Request an auto-collection once the heap has grown to the trigger. The poll is
  * honored at the next safepoint; mal_gc_next_at is SIZE_MAX when auto-collection
@@ -339,6 +342,10 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->free_blocks = nullptr;
     heap->bytes_allocated = 0;
     heap->live_bytes = 0;
+    do {
+        heap->identity = atomic_fetch_add(&g_next_heap_identity, 1);
+    } while (heap->identity == 0);
+    heap->epoch = 0;
     heap->fail_next_cell_allocation = false;
 #if MAL_GC_CONCURRENT
     heap->sweep_chunk = nullptr;

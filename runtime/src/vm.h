@@ -1850,35 +1850,28 @@ MalCompletion mal_vm_call_value(
 );
 
 /** Polymorphic call-cache ways: a site accumulates up to this many distinct compiled
- * callees before it stops caching and the overflow stays on the full dispatch path. */
+ * function indices or exact native callees before overflow stays on full dispatch. */
 #define MAL_CALL_CACHE_WAYS 4u
 
 /**
  * Polymorphic call-site cache for the native backend. A CALL site whose callee is a plain
- * compiled user function (not bound / native / proxy / interpreted) caches it by identity, so
- * a repeat call to a previously-seen callee skips the full dispatch chain in mal_vm_call_value
- * (proxy/bound/native probing, bound-arg resolution + free, function/env unwrap) and enters
- * the compiled body directly. Up to MAL_CALL_CACHE_WAYS callees are held (a dispatch-table /
- * callback site sees a handful); `callee[v]` is the cached function-object value and
- * `function_index[v]` + `env[v]` its immutable identity (the MalFunction is re-derived from the
- * index each hit, since eval/new Function reallocs the function array). A zero-initialized
- * cache has count 0, so the first call takes the slow path and fills a way.
+ * compiled user function (not bound / native / proxy / interpreted) caches its function index.
+ * A later ordinary compiled closure with that index skips the full dispatch chain in
+ * mal_vm_call_value, but the body, creation environment, realm, callee, and this binding are
+ * all re-derived from the current closure. Native ways remain exact-identity callback caches.
+ * A zero-initialized cache has count 0, so the first call takes the slow path and fills a way.
  *
- * `epoch` is the heap epoch the ways were filled in. A function object is collectable, so its
- * address could be freed and reused after a GC — a raw `callee` bit-compare would then
- * false-hit a stale body/env (an ABA hazard). A cell is only freed across a sweep, which bumps
- * the epoch, so a changed epoch invalidates every way (the ways are cleared on the next fill).
+ * Exact `callee` guards are unrooted. `heap_identity` prevents reuse across VM lifetimes and
+ * `epoch` prevents reuse after a sweep in one heap. Compiled family probes do not dereference
+ * cached pointers and therefore remain valid hints across either boundary.
  */
 typedef struct MalCallCache {
     MalValue callee[MAL_CALL_CACHE_WAYS];
-    union {
-        MalEnv *env;
-        MalNativeFunctionCallback native;
-    } target[MAL_CALL_CACHE_WAYS];
     i32 function_index[MAL_CALL_CACHE_WAYS];
     u8 kind[MAL_CALL_CACHE_WAYS];
     u32 count;
     u32 epoch;
+    u64 heap_identity;
 } MalCallCache;
 
 #define MAL_CALL_CACHE_COMPILED 0u
