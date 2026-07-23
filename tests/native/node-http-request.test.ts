@@ -179,5 +179,11 @@ describe("node:http request bridge", () => {
 		expect(field(line, "response_index_max_probes")).toBeLessThan(
 			field(line, "response_index_peak_entries"),
 		);
+		expect(field(line, "request_state_scans")).toBe(0);
+		expect(field(line, "close_request_state_scans")).toBe(0);
+		expect(field(line, "request_remove_scans")).toBe(0);
+		expect(field(line, "dispatch_enqueues")).toBe(field(line, "dispatch_dequeues"));
+		expect(field(line, "completion_enqueues")).toBe(field(line, "completion_dequeues"));
+		expect(field(line, "request_inserts")).toBe(field(line, "request_removes"));
 	});
 });

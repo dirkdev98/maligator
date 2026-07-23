@@ -61,6 +61,12 @@ typedef struct MalNodeHttpResponseHeader {
     MalValue value;
 } MalNodeHttpResponseHeader;
 
+typedef enum MalNodeHttpRequestReadyKind {
+    HTTP_REQUEST_READY_NONE,
+    HTTP_REQUEST_READY_DISPATCH,
+    HTTP_REQUEST_READY_COMPLETION,
+} MalNodeHttpRequestReadyKind;
+
 typedef struct MalNodeHttpRequestState {
     MalVm *vm;
     MalValue server_receiver;
@@ -90,7 +96,10 @@ typedef struct MalNodeHttpRequestState {
     bool ending;
     bool ended;
     bool response_indexed;
+    MalNodeHttpRequestReadyKind ready_kind;
     struct MalNodeHttpRequestState *response_index_next;
+    struct MalNodeHttpRequestState *ready_next;
+    struct MalNodeHttpRequestState *previous;
     struct MalNodeHttpRequestState *next;
 } MalNodeHttpRequestState;
 
@@ -227,17 +236,49 @@ static void http_request_free(MalNodeHttpRequestState *request) {
     free(request);
 }
 
-static void http_request_remove(MalNodeHttpRequestState **link) {
-    MalNodeHttpRequestState *request = *link;
-    *link = request->next;
-    if (http_requests_tail == request) {
-        http_requests_tail = nullptr;
-        for (MalNodeHttpRequestState *cursor = http_requests; cursor != nullptr;
-             cursor = cursor->next) {
-            http_requests_tail = cursor;
-        }
+static void http_request_remove(MalNodeHttpRequestState *request) {
+    if (request->previous == nullptr) {
+        http_requests = request->next;
+    } else {
+        request->previous->next = request->next;
     }
+    if (request->next == nullptr) {
+        http_requests_tail = request->previous;
+    } else {
+        request->next->previous = request->previous;
+    }
+    MAL_PERF_COUNT(http_request_removes);
     http_request_free(request);
+}
+
+static bool http_request_enqueue_ready(
+    MalNodeHttpRequestState *request, MalNodeHttpRequestReadyKind kind) {
+    // The root list owns request lifetime; this intrusive queue only grants one
+    // dispatch or completion macrotask at a time.
+    if (request->ready_kind != HTTP_REQUEST_READY_NONE) return false;
+    MalHost *host = mal_host(request->vm);
+    if (host == nullptr) return false;
+    request->ready_kind = kind;
+    request->ready_next = nullptr;
+    if (host->ready_http_requests_tail == nullptr) {
+        host->ready_http_requests = request;
+    } else {
+        host->ready_http_requests_tail->ready_next = request;
+    }
+    host->ready_http_requests_tail = request;
+    if (kind == HTTP_REQUEST_READY_DISPATCH) {
+        MAL_PERF_COUNT(http_dispatch_enqueues);
+    } else {
+        host->pending_http_completions++;
+        MAL_PERF_COUNT(http_completion_enqueues);
+    }
+    return true;
+}
+
+static void http_request_queue_completion(MalNodeHttpRequestState *request) {
+    if (request->finish_pending) return;
+    if (!http_request_enqueue_ready(request, HTTP_REQUEST_READY_COMPLETION)) return;
+    request->finish_pending = true;
 }
 
 static MalNodeHttpRequestState *http_response_state(MalValue receiver) {
@@ -325,7 +366,10 @@ static void http_queue_request(
     } else {
         http_requests_tail->next = state;
     }
+    state->previous = http_requests_tail;
     http_requests_tail = state;
+    MAL_PERF_COUNT(http_request_inserts);
+    (void) http_request_enqueue_ready(state, HTTP_REQUEST_READY_DISPATCH);
     return;
 
 fail_state:
@@ -1244,7 +1288,7 @@ static MalValue http_client_end(
 static void http_response_complete(void *data) {
     MalNodeHttpRequestState *state = data;
     state->response_in_flight = false;
-    state->finish_pending = true;
+    http_request_queue_completion(state);
 }
 
 static MalValue http_response_end(
@@ -1405,7 +1449,7 @@ static void http_request_fail(MalNodeHttpRequestState *state, const char *messag
         state->conn = nullptr;
         state->ended = true;
     } else if (!state->ended && state->conn == nullptr) {
-        state->finish_pending = true;
+        http_request_queue_completion(state);
     }
 }
 
@@ -1761,6 +1805,7 @@ static bool http_client_drain(MalVm *vm) {
 }
 
 bool mal_node_http_drain(MalVm *vm) {
+    MAL_PERF_COUNT(http_drain_calls);
     if (http_client_drain(vm)) return true;
     MalNodeHttpServerState **link = &http_servers;
     while (*link != nullptr) {
@@ -1775,15 +1820,8 @@ bool mal_node_http_drain(MalVm *vm) {
             return true;
         }
         if (state->close_ready) {
-            bool response_ready = false;
-            for (MalNodeHttpRequestState *request = http_requests;
-                 request != nullptr; request = request->next) {
-                if (request->vm == vm && request->finish_pending) {
-                    response_ready = true;
-                    break;
-                }
-            }
-            if (response_ready) {
+            MAL_PERF_COUNT(http_close_scans);
+            if (mal_host(vm)->pending_http_completions > 0) {
                 link = &state->next;
                 continue;
             }
@@ -1798,19 +1836,23 @@ bool mal_node_http_drain(MalVm *vm) {
         }
         link = &state->next;
     }
-    MalNodeHttpRequestState **request_link = &http_requests;
-    while (*request_link != nullptr) {
-        MalNodeHttpRequestState *request = *request_link;
-        if (request->vm != vm) {
-            request_link = &request->next;
-            continue;
+    MalHost *host = mal_host(vm);
+    MalNodeHttpRequestState *request = host->ready_http_requests;
+    if (request != nullptr) {
+        host->ready_http_requests = request->ready_next;
+        if (host->ready_http_requests == nullptr) {
+            host->ready_http_requests_tail = nullptr;
         }
-        if (request->pending) {
+        MalNodeHttpRequestReadyKind kind = request->ready_kind;
+        request->ready_kind = HTTP_REQUEST_READY_NONE;
+        request->ready_next = nullptr;
+        if (kind == HTTP_REQUEST_READY_DISPATCH) {
+            MAL_PERF_COUNT(http_dispatch_dequeues);
             http_request_dispatch(vm, request);
-            return true;
-        }
-        if (request->finish_pending) {
+        } else {
             request->finish_pending = false;
+            host->pending_http_completions--;
+            MAL_PERF_COUNT(http_completion_dequeues);
 #if MAL_REALMS
             MalRealm *saved_realm = vm->current_realm;
             mal_realm_switch(vm, request->realm);
@@ -1824,10 +1866,9 @@ bool mal_node_http_drain(MalVm *vm) {
 #if MAL_REALMS
             mal_realm_switch(vm, saved_realm);
 #endif
-            http_request_remove(request_link);
-            return true;
+            http_request_remove(request);
         }
-        request_link = &request->next;
+        return true;
     }
     return false;
 }

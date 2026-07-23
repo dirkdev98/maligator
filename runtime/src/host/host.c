@@ -120,5 +120,6 @@ bool mal_host_has_pending_work(MalHost *host) {
             mal_host_posted_pending(&host->posted_tasks) > 0 ||
             mal_dns_queued(&host->dns) > 0 ||
             mal_host_tasks_pending(&host->tasks) > 0 ||
-            mal_host_operations_pending(&host->tasks) > 0);
+            mal_host_operations_pending(&host->tasks) > 0 ||
+            host->ready_http_requests != nullptr);
 }

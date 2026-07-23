@@ -343,7 +343,7 @@ static void conn_write_cb(void *data) {
     MalHttpConn *c = data;
 
     while (c->wsent < c->wlen) {
-        ssize_t n = write(c->fd, c->wbuf + c->wsent, c->wlen - c->wsent);
+        ssize_t n = mal_net_write(c->fd, c->wbuf + c->wsent, c->wlen - c->wsent);
         if (n > 0) {
             c->wsent += (usize) n;
             continue;

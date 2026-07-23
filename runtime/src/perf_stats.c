@@ -218,7 +218,10 @@ static void mal_perf_stats_print(void) {
         "response_index_misses=%llu response_index_probes=%llu "
         "response_index_max_probes=%llu response_index_peak_entries=%llu "
         "response_index_inserts=%llu response_index_removes=%llu "
-        "response_index_rehashes=%llu\n",
+        "response_index_rehashes=%llu drain_calls=%llu request_state_scans=%llu "
+        "close_scans=%llu close_request_state_scans=%llu request_remove_scans=%llu "
+        "dispatch_enqueues=%llu dispatch_dequeues=%llu completion_enqueues=%llu "
+        "completion_dequeues=%llu request_inserts=%llu request_removes=%llu\n",
         (unsigned long long) mal_perf_stats.http_response_index_lookups,
         (unsigned long long) mal_perf_stats.http_response_index_hits,
         (unsigned long long) mal_perf_stats.http_response_index_misses,
@@ -227,7 +230,18 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.http_response_index_peak_entries,
         (unsigned long long) mal_perf_stats.http_response_index_inserts,
         (unsigned long long) mal_perf_stats.http_response_index_removes,
-        (unsigned long long) mal_perf_stats.http_response_index_rehashes
+        (unsigned long long) mal_perf_stats.http_response_index_rehashes,
+        (unsigned long long) mal_perf_stats.http_drain_calls,
+        (unsigned long long) mal_perf_stats.http_request_state_scans,
+        (unsigned long long) mal_perf_stats.http_close_scans,
+        (unsigned long long) mal_perf_stats.http_close_request_state_scans,
+        (unsigned long long) mal_perf_stats.http_request_remove_scans,
+        (unsigned long long) mal_perf_stats.http_dispatch_enqueues,
+        (unsigned long long) mal_perf_stats.http_dispatch_dequeues,
+        (unsigned long long) mal_perf_stats.http_completion_enqueues,
+        (unsigned long long) mal_perf_stats.http_completion_dequeues,
+        (unsigned long long) mal_perf_stats.http_request_inserts,
+        (unsigned long long) mal_perf_stats.http_request_removes
     );
     for (u32 i = 0; i < MAL_PERF_TABLE_ROLE_COUNT; i++) {
         const MalPerfTableStats *stats = &mal_perf_stats.tables[i];
