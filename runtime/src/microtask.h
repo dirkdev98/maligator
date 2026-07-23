@@ -14,8 +14,6 @@ typedef enum MalJobKind {
     MAL_JOB_ASYNC_AWAIT,
 } MalJobKind;
 
-#define MAL_PROMISE_JOB_POOL_LIMIT 4096
-
 /**
  * A queued microtask. Jobs are drained FIFO at a baseline frame count by
  * mal_vm_drain_microtasks; running one may enqueue further jobs (the queue
@@ -46,7 +44,7 @@ typedef struct MalJob {
 
 static_assert(sizeof(MalJob) == 48, "MalJob must remain a 48-byte pooled node");
 
-/** Process-wide native allocation counters used by the benchmark tracker. */
+/** Process-wide Promise pool counters used by the benchmark tracker. */
 u64 mal_promise_job_allocation_count(void);
 u64 mal_promise_reaction_allocation_count(void);
 u64 mal_promise_job_reuse_count(void);
@@ -54,7 +52,7 @@ u64 mal_promise_reaction_reuse_count(void);
 void mal_promise_note_reaction_allocation(void);
 void mal_promise_note_reaction_reuse(void);
 
-/** Free the VM's cleared, untraced job freelist at teardown. */
+/** Free every VM-owned job block at teardown. */
 void mal_vm_free_job_pool(MalVm *vm);
 
 /** Append a promise-reaction job to the microtask queue. */

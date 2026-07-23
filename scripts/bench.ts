@@ -149,6 +149,11 @@ interface PromiseMetrics {
 	directAsyncResults: number;
 	typedAwaitContinuations: number;
 	typedAwaitJobs: number;
+	jobSlabHits: number;
+	jobSlabFreshSlots: number;
+	jobSlabBlockAllocations: number;
+	jobSlabBlockFrees: number;
+	jobSlabPeakRetainedBytes: number;
 }
 interface CoroutineBackendMetrics {
 	wallMs: number;
@@ -613,6 +618,17 @@ function benchPromise(runs: number): PromiseMetrics {
 			"await_typed_continuations",
 		),
 		typedAwaitJobs: parsePerfPromiseStat(perfStderr, "await_typed_jobs"),
+		jobSlabHits: parsePerfPromiseStat(perfStderr, "job_slab_hits"),
+		jobSlabFreshSlots: parsePerfPromiseStat(perfStderr, "job_slab_fresh_slots"),
+		jobSlabBlockAllocations: parsePerfPromiseStat(
+			perfStderr,
+			"job_slab_block_allocations",
+		),
+		jobSlabBlockFrees: parsePerfPromiseStat(perfStderr, "job_slab_block_frees"),
+		jobSlabPeakRetainedBytes: parsePerfPromiseStat(
+			perfStderr,
+			"job_slab_peak_retained_bytes",
+		),
 	};
 }
 
@@ -1281,10 +1297,16 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			`  managed   ${entry.promise.collections} collections, ${entry.promise.allocatedMb.toFixed(1)}MB allocated${delta(entry.promise.allocatedMb, p?.allocatedMb)}`,
 		);
 		console.log(
-			`  native    ${entry.promise.jobAllocations} job allocations${delta(entry.promise.jobAllocations, p?.jobAllocations)}, ${entry.promise.jobReuses} reused`,
+			`  native    ${entry.promise.jobAllocations} fresh job slots${delta(entry.promise.jobAllocations, p?.jobAllocations)}, ${entry.promise.jobReuses} reused`,
 		);
 		console.log(
 			`            ${entry.promise.reactionAllocations} reaction allocations${delta(entry.promise.reactionAllocations, p?.reactionAllocations)}, ${entry.promise.reactionReuses} reused`,
+		);
+		console.log(
+			`  job slab  ${entry.promise.jobSlabBlockAllocations} blocks allocated, ${entry.promise.jobSlabBlockFrees} freed, ${humanBytes(entry.promise.jobSlabPeakRetainedBytes)} peak retained`,
+		);
+		console.log(
+			`            ${entry.promise.jobSlabFreshSlots} fresh slots, ${entry.promise.jobSlabHits} slab hits`,
 		);
 		console.log(
 			`  direct    ${entry.promise.directCapabilities} capabilities${delta(entry.promise.directCapabilities, p?.directCapabilities)}, ${entry.promise.materializedFallbackPairs} fallback pairs materialized${delta(entry.promise.materializedFallbackPairs, p?.materializedFallbackPairs)}`,

@@ -1,5 +1,6 @@
 #include "microtask.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 
 #include "builtin_promise.h"
@@ -12,6 +13,27 @@ static u64 g_job_allocations = 0;
 static u64 g_reaction_allocations = 0;
 static u64 g_job_reuses = 0;
 static u64 g_reaction_reuses = 0;
+
+// Six blocks hold 4,092 jobs, matching the old 4,096-node pool's 192 KiB budget.
+#define MAL_PROMISE_JOB_BLOCK_SIZE 32768
+#define MAL_PROMISE_JOB_RETAINED_BLOCK_LIMIT 6
+
+typedef struct MalJobBlock MalJobBlock;
+
+struct MalJobBlock {
+    MalJobBlock *next;
+    MalJob *free_list;
+    u32 next_unused;
+    u32 live_count;
+    MalJob jobs[];
+};
+
+static_assert(
+    (MAL_PROMISE_JOB_BLOCK_SIZE & (MAL_PROMISE_JOB_BLOCK_SIZE - 1)) == 0,
+    "Promise job block size must be a power of two");
+
+#define MAL_PROMISE_JOBS_PER_BLOCK \
+    ((u32) ((MAL_PROMISE_JOB_BLOCK_SIZE - sizeof(MalJobBlock)) / sizeof(MalJob)))
 
 u64 mal_promise_job_allocation_count(void) {
     return g_job_allocations;
@@ -41,20 +63,87 @@ static MalCompletion mal_completion_normal(void) {
     return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 }
 
-static MalJob *mal_job_new(MalVm *vm, MalJobKind kind) {
-    MalJob *job = vm->job_pool;
-    if (job == nullptr) {
-        job = malloc(sizeof(MalJob));
-        g_job_allocations++;
-    } else {
-        vm->job_pool = job->next;
-        vm->job_pool_count--;
-        g_job_reuses++;
+static bool mal_job_block_has_capacity(const MalJobBlock *block) {
+    return block->free_list != nullptr || block->next_unused < MAL_PROMISE_JOBS_PER_BLOCK;
+}
+
+static MalJobBlock *mal_job_find_block(MalVm *vm) {
+    MalJobBlock *block = vm->job_active_block;
+    if (block != nullptr && mal_job_block_has_capacity(block)) {
+        return block;
     }
+    for (block = vm->job_blocks; block != nullptr; block = block->next) {
+        if (mal_job_block_has_capacity(block)) {
+            vm->job_active_block = block;
+            return block;
+        }
+    }
+
+    block = aligned_alloc(MAL_PROMISE_JOB_BLOCK_SIZE, MAL_PROMISE_JOB_BLOCK_SIZE);
+    block->next = vm->job_blocks;
+    block->free_list = nullptr;
+    block->next_unused = 0;
+    block->live_count = 0;
+    vm->job_blocks = block;
+    vm->job_active_block = block;
+    MAL_PERF_COUNT(promise_job_slab_block_allocations);
+    return block;
+}
+
+static MalJob *mal_job_new(MalVm *vm, MalJobKind kind) {
+    MalJobBlock *block = mal_job_find_block(vm);
+    if (block->live_count == 0 && block->next_unused != 0) {
+        vm->job_idle_block_count--;
+    }
+
+    MalJob *job;
+    if (block->free_list == nullptr) {
+        job = &block->jobs[block->next_unused++];
+        g_job_allocations++;
+        MAL_PERF_COUNT(promise_job_slab_fresh_slots);
+    } else {
+        job = block->free_list;
+        block->free_list = job->next;
+        g_job_reuses++;
+        MAL_PERF_COUNT(promise_job_slab_hits);
+    }
+    block->live_count++;
     job->next = nullptr;
     job->kind = kind;
     job->is_reject = false;
     return job;
+}
+
+static void mal_job_release(MalVm *vm, MalJob *job) {
+    MalJobBlock *block = (MalJobBlock *) (
+        (uintptr_t) job & ~((uintptr_t) MAL_PROMISE_JOB_BLOCK_SIZE - 1));
+    job->next = block->free_list;
+    block->free_list = job;
+    block->live_count--;
+    vm->job_active_block = block;
+    if (block->live_count != 0) {
+        return;
+    }
+
+    if (vm->job_idle_block_count < MAL_PROMISE_JOB_RETAINED_BLOCK_LIMIT) {
+        vm->job_idle_block_count++;
+        u64 retained_bytes =
+            (u64) vm->job_idle_block_count * MAL_PROMISE_JOB_BLOCK_SIZE;
+        if (mal_perf_stats_enabled &&
+            retained_bytes > mal_perf_stats.promise_job_slab_peak_retained_bytes) {
+            mal_perf_stats.promise_job_slab_peak_retained_bytes = retained_bytes;
+        }
+        return;
+    }
+
+    MalJobBlock **link = &vm->job_blocks;
+    while (*link != block) {
+        link = &(*link)->next;
+    }
+    *link = block->next;
+    vm->job_active_block = nullptr;
+    free(block);
+    MAL_PERF_COUNT(promise_job_slab_block_frees);
 }
 
 static void mal_job_recycle(MalVm *vm, MalJob *job) {
@@ -82,24 +171,20 @@ static void mal_job_recycle(MalVm *vm, MalJob *job) {
     // before it can be freed by the bounded-pool overflow path.
     vm->active_job = nullptr;
 
-    if (vm->job_pool_count >= MAL_PROMISE_JOB_POOL_LIMIT) {
-        free(job);
-        return;
-    }
-    job->next = vm->job_pool;
-    vm->job_pool = job;
-    vm->job_pool_count++;
+    mal_job_release(vm, job);
 }
 
 void mal_vm_free_job_pool(MalVm *vm) {
-    MalJob *job = vm->job_pool;
-    while (job != nullptr) {
-        MalJob *next = job->next;
-        free(job);
-        job = next;
+    MalJobBlock *block = vm->job_blocks;
+    while (block != nullptr) {
+        MalJobBlock *next = block->next;
+        free(block);
+        MAL_PERF_COUNT(promise_job_slab_block_frees);
+        block = next;
     }
-    vm->job_pool = nullptr;
-    vm->job_pool_count = 0;
+    vm->job_blocks = nullptr;
+    vm->job_active_block = nullptr;
+    vm->job_idle_block_count = 0;
 }
 
 static void mal_vm_enqueue(MalVm *vm, MalJob *job) {

@@ -50,6 +50,16 @@ function abandonPendingReactions() {
 }
 abandonPendingReactions();
 
+async function awaitMixedJobs() {
+	const value = await Promise.resolve({
+		then(resolve) {
+			resolve(41);
+		},
+	});
+	return value + 1;
+}
+const awaited = awaitMixedJobs();
+
 for (let i = 0; i < 64; i++) {
 	fulfilled.then(
 		(value) => events.push("f" + i + ":" + value),
@@ -86,12 +96,13 @@ for (let i = 0; i < 128; i++) {
 	});
 }
 
-chain.then((value) => {
+Promise.all([chain, awaited]).then(([value, awaitedValue]) => {
 	Promise.resolve().then(() => {
 		if (
 			failed ||
 			!resolvingMetadata ||
 			value !== 128 ||
+			awaitedValue !== 42 ||
 			events.length !== 128 ||
 			largeSum !== 12512500
 		) {

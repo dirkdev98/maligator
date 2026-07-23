@@ -1227,9 +1227,11 @@ typedef struct MalVm {
      */
     struct MalJob *job_head;
     struct MalJob *job_tail;
-    /** Cleared, untraced jobs retained for reuse; bounded by the microtask layer. */
-    struct MalJob *job_pool;
-    u32 job_pool_count;
+    /** Reclaimable isolate-owned blocks backing queued, active, and free jobs. */
+    struct MalJobBlock *job_blocks;
+    struct MalJobBlock *job_active_block;
+    /** Completely idle blocks retained for reuse; bounded by the microtask layer. */
+    u32 job_idle_block_count;
 
     /**
      * The job currently being run by the microtask drain, unlinked from the queue

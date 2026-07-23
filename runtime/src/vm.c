@@ -418,8 +418,9 @@ void mal_vm_init(MalVm *vm, const MalVmDefinition *definition) {
 
     vm->job_head = nullptr;
     vm->job_tail = nullptr;
-    vm->job_pool = nullptr;
-    vm->job_pool_count = 0;
+    vm->job_blocks = nullptr;
+    vm->job_active_block = nullptr;
+    vm->job_idle_block_count = 0;
     vm->reaction_pool = nullptr;
     vm->reaction_pool_count = 0;
     vm->reaction_blocks = nullptr;
@@ -635,12 +636,8 @@ void mal_vm_free(MalVm *vm) {
 
     // Free any microtasks left queued (e.g. the program exited with pending
     // jobs). The MalValues they hold live in the heap, freed below.
-    MalJob *job = vm->job_head;
-    while (job != nullptr) {
-        MalJob *next = job->next;
-        free(job);
-        job = next;
-    }
+    // Jobs are slab-owned; the block teardown below releases queued and pooled
+    // nodes together after their heap values no longer need tracing.
     vm->job_head = nullptr;
     vm->job_tail = nullptr;
 

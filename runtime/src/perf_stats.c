@@ -159,9 +159,17 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
-        "[perf-promise-stats] await_typed_continuations=%llu await_typed_jobs=%llu\n",
+        "[perf-promise-stats] await_typed_continuations=%llu await_typed_jobs=%llu "
+        "job_slab_hits=%llu job_slab_fresh_slots=%llu "
+        "job_slab_block_allocations=%llu job_slab_block_frees=%llu "
+        "job_slab_peak_retained_bytes=%llu\n",
         (unsigned long long) mal_perf_stats.promise_await_typed_continuations,
-        (unsigned long long) mal_perf_stats.promise_await_typed_jobs
+        (unsigned long long) mal_perf_stats.promise_await_typed_jobs,
+        (unsigned long long) mal_perf_stats.promise_job_slab_hits,
+        (unsigned long long) mal_perf_stats.promise_job_slab_fresh_slots,
+        (unsigned long long) mal_perf_stats.promise_job_slab_block_allocations,
+        (unsigned long long) mal_perf_stats.promise_job_slab_block_frees,
+        (unsigned long long) mal_perf_stats.promise_job_slab_peak_retained_bytes
     );
     fprintf(
         stderr,
