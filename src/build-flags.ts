@@ -403,9 +403,7 @@ export function runtimeCcFlags(
 	env: NodeJS.ProcessEnv = process.env,
 ): Array<string> {
 	return [
-		...(process.platform === "linux"
-			? ["-D_GNU_SOURCE", "-pthread"]
-			: []),
+		...platformCcFlags(),
 		...optFlags(plan, env),
 		...SANITIZER_FLAGS[sanitizerMode(env)],
 		...gcDefines(env),
@@ -420,9 +418,7 @@ export function ccExtraFlags(
 	env: NodeJS.ProcessEnv = process.env,
 ): Array<string> {
 	return [
-		...(process.platform === "linux"
-			? ["-D_GNU_SOURCE", "-pthread"]
-			: []),
+		...platformCcFlags(),
 		...optFlags(plan, env),
 		...SANITIZER_FLAGS[sanitizerMode(env)],
 		...gcDefines(env),
@@ -439,6 +435,20 @@ export function ccExtraFlags(
  */
 export function sanitizerCcFlags(): Array<string> {
 	return SANITIZER_FLAGS[sanitizerMode()];
+}
+
+/**
+ * Platform feature-test macros and threading flags that must reach EVERY C
+ * translation unit linked into a runtime binary. glibc gates POSIX/GNU
+ * declarations (clock_gettime, kill, usleep, pthread_getattr_np, …) behind
+ * `_GNU_SOURCE` and needs `-pthread` for its threading; macOS exposes them with no
+ * feature macro. Applied uniformly across the runtime archives, the harness mains,
+ * and the emitted translation unit so all objects agree on the same glibc surface.
+ */
+export function platformCcFlags(
+	platform: NodeJS.Platform = process.platform,
+): Array<string> {
+	return platform === "linux" ? ["-D_GNU_SOURCE", "-pthread"] : [];
 }
 
 /**
