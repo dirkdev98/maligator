@@ -84,6 +84,8 @@ typedef struct MalGeneratorObject {
     bool is_async_generator : 1;
     /** Guards against re-entrant driving while the body is mid-step (awaiting). */
     bool agen_running : 1;
+    /** The current call must still package a terminal yield as done:false. */
+    bool terminal_yield_pending : 1;
 } MalGeneratorObject;
 
 /**

@@ -39,6 +39,7 @@ MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype
     generator->awaited_by = nullptr;
     generator->is_async_generator = false;
     generator->agen_running = false;
+    generator->terminal_yield_pending = false;
     generator->agen_queue_head = nullptr;
     generator->agen_queue_tail = nullptr;
 
@@ -48,6 +49,10 @@ MalGeneratorObject *mal_generator_object_new(MalHeap *heap, MalObject *prototype
 void mal_generator_release_frame(MalVm *vm, MalGeneratorObject *generator) {
     MalVmFrame *frame = &generator->frame;
     if (mal_gc_marking_active && frame->function != nullptr) {
+        // Runtime eval may have reallocated the live function table since this
+        // suspended/compiled frame last resumed. Refresh before SATB reads its
+        // register count; the index remains the stable frame identity.
+        frame->function = &vm->live_definition.functions[frame->function_index];
         mal_gc_satb_shade_frame(frame);
     }
     mal_vm_release_coroutine_buffer(vm, frame->registers);

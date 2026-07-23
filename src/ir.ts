@@ -989,6 +989,11 @@ export type IRInstruction =
 	  }
 	| {
 			type: "yield";
+			/**
+			 * COMPILE-ONLY: resumption can only perform the standard completed-generator
+			 * next/return/throw behavior, so the runtime may release the activation now.
+			 */
+			terminal?: true;
 
 			// [valueDst, modeDst, yieldedSrc] — yieldedSrc is handed out; on
 			// resume the sent value lands in valueDst and the resume mode code in

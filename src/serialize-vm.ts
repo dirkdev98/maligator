@@ -11,8 +11,9 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  * The codec is sequential: the reader walks sections in the exact order the
  * writer wrote them, so no in-buffer offsets are needed. The opcode / operator /
  * intrinsic tag orderings below are the cross-language contract — the C loader
- * mirrors them, and {@link WIRE_VERSION} is bumped on any change so a stale
- * buffer is rejected rather than mis-decoded.
+ * mirrors them. Existing tags and operand layouts are immutable; new opcodes are
+ * appended so version-12 inputs remain readable. WIRE_VERSION is bumped only for
+ * an incompatible layout change, which deliberately rejects stale buffers.
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
@@ -122,6 +123,7 @@ export const WIRE_OPCODES = [
 	"CREATE_PRIVATE_NAMES",
 	"INIT_PRIVATE_FIELDS",
 	"TYPEOF_COMPARE",
+	"TERMINAL_YIELD",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -744,6 +746,9 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.valueDst);
 			w.i32(i.modeDst);
 			return;
+		case "TERMINAL_YIELD":
+			w.i32(i.yieldedSrc);
+			return;
 		case "AWAIT":
 			w.i32(i.awaitedSrc);
 			w.i32(i.valueDst);
@@ -1310,6 +1315,8 @@ function readInstruction(r: Reader): VmInstruction {
 			return { opcode };
 		case "YIELD":
 			return { opcode, yieldedSrc: r.i32(), valueDst: r.i32(), modeDst: r.i32() };
+		case "TERMINAL_YIELD":
+			return { opcode, yieldedSrc: r.i32() };
 		case "AWAIT":
 			return { opcode, awaitedSrc: r.i32(), valueDst: r.i32(), modeDst: r.i32() };
 		case "LOAD_INTRINSIC": {

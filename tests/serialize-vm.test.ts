@@ -119,11 +119,12 @@ const genFn: VmFunction = {
 		{ opcode: "ASYNC_START" },
 		{ opcode: "AWAIT", awaitedSrc: 0, valueDst: 1, modeDst: 2 },
 		{ opcode: "YIELD", yieldedSrc: 1, valueDst: 0, modeDst: 2 },
+		{ opcode: "TERMINAL_YIELD", yieldedSrc: 1 },
 		{ opcode: "RETURN", value: 0 },
 	],
 	handlers: [],
 	fileIndex: 1,
-	positions: [0, 0, 0, 0],
+	positions: [0, 0, 0, 0, 0],
 };
 
 const definition: VmDefinition = {
@@ -168,11 +169,12 @@ describe("serialize-vm", () => {
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-4)).toEqual([
+		expect(WIRE_OPCODES.slice(-5)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
 			"TYPEOF_COMPARE",
+			"TERMINAL_YIELD",
 		]);
 	});
 

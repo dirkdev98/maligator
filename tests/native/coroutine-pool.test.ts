@@ -14,6 +14,7 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-coroutine-pool-"));
 const expected = ["coroutine-pool PASS"];
 const retentionExpected = ["coroutine-pool-retention PASS"];
 const fairnessExpected = ["coroutine-pool-fairness PASS"];
+const terminalYieldExpected = ["terminal-yield PASS"];
 const hostGc = { MAL_HOST_GC: "1" };
 
 interface CoroutineStats {
@@ -74,6 +75,9 @@ describe("pooled suspendable-frame support", () => {
 	let retentionInterpreted: string;
 	let fairnessCompiled: string;
 	let fairnessInterpreted: string;
+	let terminalYieldCompiled: string;
+	let terminalYieldInterpreted: string;
+	let terminalYieldConcurrent: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -112,6 +116,59 @@ describe("pooled suspendable-frame support", () => {
 			compiled: false,
 			outDir,
 		});
+		terminalYieldCompiled = buildNativeBinary({
+			fixture: "tests/local/terminal-yield.js",
+			name: "terminal-yield",
+			compiled: true,
+			outDir,
+		});
+		terminalYieldInterpreted = buildNativeBinary({
+			fixture: "tests/local/terminal-yield.js",
+			name: "terminal-yield-ni",
+			compiled: false,
+			outDir,
+		});
+		terminalYieldConcurrent = buildNativeBinary({
+			fixture: "tests/local/terminal-yield.js",
+			name: "terminal-yield-concurrent",
+			compiled: true,
+			outDir,
+			environment: { ...process.env, MAL_GC_CONCURRENT: "1" },
+		});
+	});
+
+	it.each([
+		["compiled", () => terminalYieldCompiled],
+		["interpreted", () => terminalYieldInterpreted],
+	] as const)(
+		"releases compiler-proven terminal %s frames before GC",
+		(_name, binary) => {
+			const stats = runWithStats(binary(), terminalYieldExpected);
+			assertBoundedPool(stats);
+			expect(stats.releases).toBe(stats.requests);
+			expect(stats.reuses).toBeGreaterThanOrEqual(4000);
+		},
+	);
+
+	it.each([
+		["compiled", () => terminalYieldCompiled],
+		["interpreted", () => terminalYieldInterpreted],
+	] as const)("preserves terminal-yield %s results under GC stress", (_name, binary) => {
+		assertExactLines(runToStdout(binary(), { env: STRESS_ENV }), terminalYieldExpected);
+	});
+
+	it("releases an eval-spliced terminal frame under concurrent GC", () => {
+		assertExactLines(
+			runToStdout(terminalYieldConcurrent, {
+				env: {
+					...hostGc,
+					...STRESS_ENV,
+					MAL_GC_THRESHOLD: "262144",
+					MAL_GC_MAJOR_EVERY: "1",
+				},
+			}),
+			terminalYieldExpected,
+		);
 	});
 
 	it.each([

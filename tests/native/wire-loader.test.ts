@@ -163,6 +163,29 @@ describe("wire loader side-data validation", () => {
 		expect(result.status).toBe(0);
 	});
 
+	it("loads an appended terminal-yield operand", () => {
+		const terminalDefinition: VmDefinition = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					instructions: [
+						{ opcode: "CREATE_UNDEFINED", dst: 0 },
+						{ opcode: "RETURN", value: 0 },
+						{ opcode: "TERMINAL_YIELD", yieldedSrc: 0 },
+					],
+				},
+			],
+		};
+		const wirePath = path.join(directory, "terminal-yield.malw");
+		writeFileSync(
+			wirePath,
+			serializeVmDefinition(terminalDefinition, { debugInfo: false }),
+		);
+		const result = spawnSync(driver, [wirePath], { encoding: "utf8" });
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+	});
+
 	it("loads and executes persisted argument snapshot prefixes", () => {
 		const snapshotDefinition: VmDefinition = {
 			...definition,

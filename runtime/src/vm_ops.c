@@ -5317,6 +5317,16 @@ void mal_vm_op_yield_compiled(
     }
 }
 
+void mal_vm_op_terminal_yield_compiled(
+    MalVm *vm, MalGeneratorObject *generator, MalValue yielded) {
+    mal_gc_write_barrier(generator->yielded_value);
+    generator->yielded_value = yielded;
+    generator->state = MAL_GENERATOR_COMPLETED;
+    generator->terminal_yield_pending = true;
+    mal_gc_remember_if_old(&generator->object.header);
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+}
+
 void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generator, MalValue value) {
     // COMPLETED before freeing: the finalizer frees the buffers only while
     // suspended, so marking first keeps a swept-after-completion object from

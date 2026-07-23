@@ -114,6 +114,7 @@ typedef enum MalOpcode {
     MAL_OP_CREATE_PRIVATE_NAMES,
     MAL_OP_INIT_PRIVATE_FIELDS,
     MAL_OP_TYPEOF_COMPARE,
+    MAL_OP_TERMINAL_YIELD,
 } MalOpcode;
 
 /** Packed literal-template stream tags; mirrored by src/ir.ts. */
@@ -487,6 +488,14 @@ typedef struct MalInstruction {
         struct {
             i32 yielded_src, value_dst, mode_dst;
         } yield;
+
+        /**
+         * A synchronous yield whose continuation is only ordinary completion.
+         * The yielded result remains done:false, but there is no resume point.
+         */
+        struct {
+            i32 yielded_src;
+        } terminal_yield;
 
         /**
          * await <src>: suspend the async-function frame on the value in

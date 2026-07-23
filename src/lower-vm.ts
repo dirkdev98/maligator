@@ -408,6 +408,10 @@ export type VmInstruction =
 			modeDst: number;
 	  }
 	| {
+			opcode: "TERMINAL_YIELD";
+			yieldedSrc: number;
+	  }
+	| {
 			opcode: "AWAIT";
 			awaitedSrc: number;
 			valueDst: number;
@@ -1299,6 +1303,12 @@ function lowerInstructionToVmInstruction(
 				opcode: "ASYNC_START",
 			};
 		case "yield":
+			if (instruction.terminal) {
+				return {
+					opcode: "TERMINAL_YIELD",
+					yieldedSrc: instruction.registers[2],
+				};
+			}
 			return {
 				opcode: "YIELD",
 				valueDst: instruction.registers[0],

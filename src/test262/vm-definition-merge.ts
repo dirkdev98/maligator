@@ -152,6 +152,7 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "GENERATOR_START":
 		case "ASYNC_START":
 		case "YIELD":
+		case "TERMINAL_YIELD":
 		case "AWAIT":
 		case "LOAD_INTRINSIC":
 		case "ENV_PUSH":

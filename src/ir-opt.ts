@@ -266,8 +266,121 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	if (residualFeatures.property) optStaticPropertyKeys(program);
 	if (residualFeatures.call) optImmediateCallOperands(program);
 	optDeadInstructionElimination(program);
+	annotateTerminalYieldSites(program);
 
 	if (debugEnabled) debugIntermediateProgram(program);
+}
+
+/**
+ * Mark only the canonical tail-yield shape emitted by compileYieldExpression.
+ * The exact shape is the proof: throw(value), return(value), and an ordinary
+ * next path that returns undefined without executing code. Any exception region,
+ * extra register use, async/delegated yield, or cleanup changes that shape and is
+ * conservatively rejected.
+ */
+export function annotateTerminalYieldSites(program: IntermediateProgram): void {
+	for (const fn of program.functions) {
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (instruction.type === "yield") delete instruction.terminal;
+			}
+		}
+		if (!fn.isGenerator || fn.isAsync) continue;
+		if (
+			fn.blocks.some((block) =>
+				block.instructions.some(
+					(instruction) =>
+						instruction.type === "tryBegin" ||
+						instruction.type === "tryEnd" ||
+						instruction.type === "catch",
+				),
+			)
+		) {
+			continue;
+		}
+
+		const registerIndex = buildIRRegisterIndex(fn);
+		for (const block of fn.blocks) {
+			for (let index = 0; index < block.instructions.length; index++) {
+				const yieldInstruction = block.instructions[index];
+				if (yieldInstruction?.type !== "yield") continue;
+				const [valueDst, modeDst] = yieldInstruction.registers;
+				const dispatch = block.instructions.slice(index + 1);
+				if (dispatch.length !== 7) continue;
+				const [
+					throwConst,
+					throwCompare,
+					throwJump,
+					returnConst,
+					returnCompare,
+					returnJump,
+					nextJump,
+				] = dispatch;
+				if (
+					throwConst?.type !== "createNumber" ||
+					throwConst.value !== 1 ||
+					throwCompare?.type !== "binary" ||
+					throwCompare.operator !== "===" ||
+					throwCompare.registers[1] !== modeDst ||
+					throwCompare.registers[2] !== throwConst.registers[0] ||
+					throwJump?.type !== "jumpIf" ||
+					throwJump.registers[0] !== throwCompare.registers[0] ||
+					returnConst?.type !== "createNumber" ||
+					returnConst.value !== 2 ||
+					returnCompare?.type !== "binary" ||
+					returnCompare.operator !== "===" ||
+					returnCompare.registers[1] !== modeDst ||
+					returnCompare.registers[2] !== returnConst.registers[0] ||
+					returnJump?.type !== "jumpIf" ||
+					returnJump.registers[0] !== returnCompare.registers[0] ||
+					nextJump?.type !== "jump"
+				) {
+					continue;
+				}
+
+				const throwBlock = fn.blocks[throwJump.blocks[0]];
+				const returnBlock = fn.blocks[returnJump.blocks[0]];
+				const nextBlock = fn.blocks[nextJump.blocks[0]];
+				const nextInstructions = nextBlock?.instructions.filter(
+					(instruction) => instruction.type !== "sourcePos",
+				);
+				if (
+					throwBlock?.instructions.length !== 1 ||
+					throwBlock.instructions[0]?.type !== "throw" ||
+					throwBlock.instructions[0].registers[0] !== valueDst ||
+					returnBlock?.instructions.length !== 1 ||
+					returnBlock.instructions[0]?.type !== "return" ||
+					returnBlock.instructions[0].registers[0] !== valueDst ||
+					nextInstructions?.length !== 2 ||
+					nextInstructions[0]?.type !== "createUndefined" ||
+					nextInstructions[1]?.type !== "return" ||
+					nextInstructions[1].registers[0] !== nextInstructions[0].registers[0]
+				) {
+					continue;
+				}
+
+				const valueUses = registerIndex.uses.get(valueDst) ?? [];
+				const modeUses = registerIndex.uses.get(modeDst) ?? [];
+				if (
+					valueUses.length !== 2 ||
+					!valueUses.every(
+						(use) =>
+							use.instruction === throwBlock.instructions[0] ||
+							use.instruction === returnBlock.instructions[0],
+					) ||
+					modeUses.length !== 2 ||
+					!modeUses.every(
+						(use) =>
+							use.instruction === throwCompare || use.instruction === returnCompare,
+					)
+				) {
+					continue;
+				}
+
+				yieldInstruction.terminal = true;
+			}
+		}
+	}
 }
 
 const MAX_IMMEDIATE_I28 = 0x07ff_ffff;

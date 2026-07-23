@@ -11,7 +11,8 @@
  * Inverse of src/emit-vm.ts + src/serialize-vm.ts: decode the flat wire buffer
  * into the runtime structs. The per-opcode operand layout, the opcode tag
  * ordering (WireOp below), and the operator/intrinsic tables mirror
- * serialize-vm.ts exactly; WIRE_VERSION is the staleness guard.
+ * serialize-vm.ts exactly. Existing tags/layouts are immutable and new opcodes
+ * append, preserving version-12 input; WIRE_VERSION guards incompatible changes.
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
@@ -115,6 +116,7 @@ typedef enum WireOp {
     WIRE_CREATE_PRIVATE_NAMES,
     WIRE_INIT_PRIVATE_FIELDS,
     WIRE_TYPEOF_COMPARE,
+    WIRE_TERMINAL_YIELD,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -648,6 +650,10 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.yield.yielded_src = rd_i32(r);
             o->as.yield.value_dst = rd_i32(r);
             o->as.yield.mode_dst = rd_i32(r);
+            return;
+        case WIRE_TERMINAL_YIELD:
+            o->opcode = MAL_OP_TERMINAL_YIELD;
+            o->as.terminal_yield.yielded_src = rd_i32(r);
             return;
         case WIRE_AWAIT:
             o->opcode = MAL_OP_AWAIT;

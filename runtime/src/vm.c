@@ -1891,6 +1891,28 @@ static void mal_vm_run_until_frame_count(
                 break;
             }
 
+            case MAL_OP_TERMINAL_YIELD: {
+                MAL_VM_INTERPRETER_SYNC();
+                MAL_PERF_COUNT(interpreter_boundary_dispatches);
+                MalGeneratorObject *generator = frame->generator;
+                mal_gc_write_barrier(generator->yielded_value);
+                generator->yielded_value = frame->registers[instruction->as.terminal_yield.yielded_src];
+                generator->state = MAL_GENERATOR_COMPLETED;
+                generator->terminal_yield_pending = true;
+                generator->frame = *frame;
+                mal_gc_remember_if_old(&generator->object.header);
+
+                // The result remains { done: false }, but no later call can resume
+                // this activation. Pop before returning its storage to the pool.
+                vm->frame_count--;
+                mal_generator_release_frame(vm, generator);
+                vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+#if MAL_REALMS
+                mal_vm_restore_surviving_realm(vm, outer_realm);
+#endif
+                break;
+            }
+
             case MAL_OP_ASYNC_START: {
                 MAL_VM_INTERPRETER_SYNC();
                 MAL_PERF_COUNT(interpreter_boundary_dispatches);

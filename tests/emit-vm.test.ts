@@ -110,6 +110,26 @@ describe("emit-vm instruction packing", () => {
 		);
 	});
 
+	it("emits terminal yields for interpreted and compiled generators", () => {
+		const terminal = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					isGenerator: true,
+					instructions: [
+						{ opcode: "GENERATOR_START" },
+						{ opcode: "TERMINAL_YIELD", yieldedSrc: 6 },
+					] as Array<VmInstruction>,
+				},
+			],
+		};
+		expect(emitVmDefinition(terminal, { compiled: false })).toContain(
+			".opcode = MAL_OP_TERMINAL_YIELD, .as.terminal_yield = { .yielded_src = 6 }",
+		);
+		expect(emitVmDefinition(terminal)).toContain("mal_vm_op_terminal_yield_compiled");
+	});
+
 	it("emits and references shared side tables in batches", () => {
 		const output = emitBatch([definition, definition], { compiled: false });
 		expect(output).toContain("static const i32 mal_shared_insn_data_");

@@ -1335,6 +1335,11 @@ void mal_vm_op_yield_compiled(
     MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
     i32 mode_dst, i32 resume_ip, MalEnv *env);
 
+// TERMINAL_YIELD (compiled): preserve a final done:false result while completing
+// the generator. The emitted caller unlinks its root frame, then releases storage.
+void mal_vm_op_terminal_yield_compiled(
+    MalVm *vm, MalGeneratorObject *generator, MalValue yielded);
+
 // Coroutine RETURN (compiled): mark COMPLETED (before freeing, so the finalizer's
 // suspended-only free avoids a double-free), free the register buffer, and route
 // the value — async generator / async settle their promise, a plain generator

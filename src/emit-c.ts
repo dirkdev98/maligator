@@ -2472,6 +2472,15 @@ function emitInstruction(
 				`${gcUnlink}return ${coroReturnValue};`,
 			];
 		}
+		case "TERMINAL_YIELD": {
+			if (coro === null || coro.isAsyncFunction || coro.isAsyncGenerator) {
+				return null;
+			}
+			return [
+				`mal_vm_op_terminal_yield_compiled(vm, __coro, ${boxed(instruction.yieldedSrc)});`,
+				`${gcUnlink}mal_generator_release_frame(vm, __coro); return ${coroReturnValue};`,
+			];
+		}
 		case "ASYNC_START": {
 			// Create the result promise + hidden async state adopting this
 			// activation's buffer; unlike GENERATOR_START the body keeps running (no
