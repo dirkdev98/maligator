@@ -32,6 +32,9 @@ function run(binary: string, env: NodeJS.ProcessEnv = {}) {
 	expect(result.stderr).toContain(
 		"Uncaught (in promise) Error: direct-async-unhandled-marker",
 	);
+	expect(result.stderr).toContain(
+		"Uncaught (in promise) Error: combinator-handler-unhandled-marker",
+	);
 	return result.stderr;
 }
 
@@ -121,9 +124,17 @@ describe("direct Promise.prototype.then capabilities", () => {
 		const adoptionFallbacks = Number(
 			stderr.match(/native_adoption_guard_fallbacks=(\d+)/)?.[1] ?? 0,
 		);
+		const speciesHits = Number(stderr.match(/intrinsic_species_hits=(\d+)/)?.[1] ?? 0);
+		const discardedRegistrations = Number(
+			stderr.match(/discarded_dependent_registrations=(\d+)/)?.[1] ?? 0,
+		);
+		const guardedFallbacks = Number(stderr.match(/guarded_fallbacks=(\d+)/)?.[1] ?? 0);
 		expect(continuations).toBeGreaterThan(0);
 		expect(jobs).toBe(continuations);
 		expect(adoptionHits).toBeGreaterThan(0);
 		expect(adoptionFallbacks).toBeGreaterThan(0);
+		expect(speciesHits).toBeGreaterThan(0);
+		expect(discardedRegistrations).toBeGreaterThan(0);
+		expect(guardedFallbacks).toBeGreaterThan(0);
 	});
 });

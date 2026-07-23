@@ -92,10 +92,9 @@ static MalValue mal_promise_take_error(MalVm *vm, MalIntrinsic prototype_slot, c
     return error;
 }
 
-/* Skipping the captured intrinsic then call also skips its species work. An
- * empty own layout, that function's realm-exact prototype, and the monotonic
- * protector prove constructor/@@species and the prototype chain unchanged. */
-static bool mal_promise_can_adopt_native(
+/* An empty own layout, the captured function's realm-exact prototype, and the
+ * monotonic protector prove then/constructor/@@species unchanged. */
+static bool mal_promise_is_canonical_intrinsic(
     MalVm *vm,
     MalValue value,
     MalValue captured_then
@@ -176,7 +175,7 @@ static bool mal_promise_settle_internal(
 
     if (mal_value_is_promise_object(roots[1])) {
         if (mal_value_is_callable(roots[2]) &&
-            mal_promise_can_adopt_native(vm, roots[1], roots[2])) {
+            mal_promise_is_canonical_intrinsic(vm, roots[1], roots[2])) {
             MAL_PERF_COUNT(promise_native_adoption_hits);
             mal_vm_enqueue_promise_adoption_job(
                 vm,
@@ -475,7 +474,7 @@ bool mal_promise_try_perform_native_adoption(
     MalValue target,
     MalValue target_constructor
 ) {
-    if (!mal_promise_can_adopt_native(vm, source, captured_then)) {
+    if (!mal_promise_is_canonical_intrinsic(vm, source, captured_then)) {
         return false;
     }
 
@@ -543,16 +542,22 @@ static MalValue mal_promise_species_constructor(MalVm *vm, MalValue object) {
 
 static MalValue mal_promise_prototype_then(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
-    (void) callee;
 
     if (!mal_value_is_promise_object(this_value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Promise.prototype.then called on non-Promise");
         return mal_value_new_undefined();
     }
 
-    MalValue constructor = mal_promise_species_constructor(vm, this_value);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return mal_value_new_undefined();
+    MalValue constructor;
+    if (mal_promise_is_canonical_intrinsic(vm, this_value, callee)) {
+        constructor = vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR];
+        MAL_PERF_COUNT(promise_intrinsic_species_hits);
+    } else {
+        MAL_PERF_COUNT(promise_guarded_fallbacks);
+        constructor = mal_promise_species_constructor(vm, this_value);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
     }
 
     MalValue cap_promise;
@@ -761,14 +766,45 @@ static MalValue mal_promise_reject_abrupt(MalVm *vm, MalValue cap_reject, MalVal
     return cap_promise;
 }
 
-/** Invoke nextPromise.then(onFulfilled, onRejected). Returns false (pending throw) on failure. */
-static bool mal_promise_invoke_then(MalVm *vm, MalValue promise, MalValue on_fulfilled, MalValue on_rejected) {
-    MalValue then_fn;
-    if (!mal_vm_get_property(vm, promise, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_THEN), &then_fn)) {
+/** Invoke nextPromise.then(onFulfilled, onRejected). When discard_safe is true,
+ * both runtime-owned handlers are proven to complete normally with undefined,
+ * so a canonical current-realm Promise needs neither the protected intrinsic
+ * property lookup nor its otherwise-unobservable dependent. */
+static bool mal_promise_invoke_then(
+    MalVm *vm,
+    MalValue promise,
+    MalValue on_fulfilled,
+    MalValue on_rejected,
+    bool discard_safe
+) {
+    MalValue roots[4] = {promise, on_fulfilled, on_rejected, mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 4);
+    if (discard_safe) {
+        if (mal_promise_is_canonical_intrinsic(
+                vm,
+                roots[0],
+                vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR])) {
+            mal_promise_perform_then(
+                vm,
+                roots[0],
+                roots[1],
+                roots[2],
+                mal_value_new_undefined(),
+                mal_value_new_undefined());
+            MAL_PERF_COUNT(promise_discarded_dependent_registrations);
+            mal_gc_unroot(&span);
+            return true;
+        }
+        MAL_PERF_COUNT(promise_guarded_fallbacks);
+    }
+    if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_THEN), &roots[3])) {
+        mal_gc_unroot(&span);
         return false;
     }
-    MalValue then_args[2] = {on_fulfilled, on_rejected};
-    MalCompletion completion = mal_vm_call_value(vm, then_fn, promise, then_args, 2);
+    MalValue then_args[2] = {roots[1], roots[2]};
+    MalCompletion completion = mal_vm_call_value(vm, roots[3], roots[0], then_args, 2);
+    mal_gc_unroot(&span);
     if (completion.kind == MAL_COMPLETION_THROW) {
         return false;
     }
@@ -876,6 +912,7 @@ static MalValue mal_promise_all(MalVm *vm, MalValue this_value, const MalValue *
     if (!ctx.ok) {
         return ctx.result_promise;
     }
+    bool discard_safe = this_value == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR];
 
     MalValue values = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
     MalValue counter = mal_promise_counter_new(vm, 1);
@@ -926,7 +963,7 @@ static MalValue mal_promise_all(MalVm *vm, MalValue this_value, const MalValue *
         MalValue element_slots[5] = {mal_value_new_boolean(false), mal_value_from_i32(index), values, counter, ctx.cap_resolve};
         MalValue on_fulfilled = mal_promise_new_closure(vm, mal_promise_all_element, element_slots, 5, 1);
 
-        if (!mal_promise_invoke_then(vm, next_promise, on_fulfilled, ctx.cap_reject)) {
+        if (!mal_promise_invoke_then(vm, next_promise, on_fulfilled, ctx.cap_reject, discard_safe)) {
             mal_vm_iterator_close(vm, &ctx.iterator);
             ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
             goto done;
@@ -949,6 +986,7 @@ static MalValue mal_promise_race(MalVm *vm, MalValue this_value, const MalValue 
     if (!ctx.ok) {
         return ctx.result_promise;
     }
+    bool discard_safe = this_value == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR];
 
     // ctx (caps + iterator record) is held across the step / promiseResolve / .then
     // re-entry; root its 6 contiguous MalValues and lift GC suppression.
@@ -977,7 +1015,7 @@ static MalValue mal_promise_race(MalVm *vm, MalValue this_value, const MalValue 
         }
 
         // First settlement of any element wins; capability ignores the rest.
-        if (!mal_promise_invoke_then(vm, next_promise, ctx.cap_resolve, ctx.cap_reject)) {
+        if (!mal_promise_invoke_then(vm, next_promise, ctx.cap_resolve, ctx.cap_reject, discard_safe)) {
             mal_vm_iterator_close(vm, &ctx.iterator);
             ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
             goto done;
@@ -1045,6 +1083,7 @@ static MalValue mal_promise_all_settled(MalVm *vm, MalValue this_value, const Ma
     if (!ctx.ok) {
         return ctx.result_promise;
     }
+    bool discard_safe = this_value == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR];
 
     MalValue values = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
     MalValue counter = mal_promise_counter_new(vm, 1);
@@ -1094,7 +1133,7 @@ static MalValue mal_promise_all_settled(MalVm *vm, MalValue this_value, const Ma
         MalValue on_fulfilled = mal_promise_new_closure(vm, mal_promise_settled_fulfill, element_slots, 5, 1);
         MalValue on_rejected = mal_promise_new_closure(vm, mal_promise_settled_reject, element_slots, 5, 1);
 
-        if (!mal_promise_invoke_then(vm, next_promise, on_fulfilled, on_rejected)) {
+        if (!mal_promise_invoke_then(vm, next_promise, on_fulfilled, on_rejected, discard_safe)) {
             mal_vm_iterator_close(vm, &ctx.iterator);
             ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
             goto done;
@@ -1200,7 +1239,7 @@ static MalValue mal_promise_any(MalVm *vm, MalValue this_value, const MalValue *
         MalValue on_rejected = mal_promise_new_closure(vm, mal_promise_any_reject_element, element_slots, 5, 1);
 
         // First fulfillment wins (cap.resolve directly); rejections collect.
-        if (!mal_promise_invoke_then(vm, next_promise, ctx.cap_resolve, on_rejected)) {
+        if (!mal_promise_invoke_then(vm, next_promise, ctx.cap_resolve, on_rejected, false)) {
             mal_vm_iterator_close(vm, &ctx.iterator);
             ret = mal_promise_reject_abrupt(vm, ctx.cap_reject, ctx.result_promise);
             goto done;
@@ -1538,6 +1577,7 @@ static MalValue mal_promise_all_keyed_impl(MalVm *vm, bool settled, MalValue thi
     if (!mal_promise_new_capability(vm, this_value, &cap_promise, &cap_resolve, &cap_reject)) {
         return mal_value_new_undefined();
     }
+    bool discard_safe = this_value == vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR];
 
     MalValue promise_resolve;
     if (!mal_vm_get_property(vm, this_value, mal_intrinsic_string_key(vm, "resolve"), &promise_resolve)) {
@@ -1605,10 +1645,10 @@ static MalValue mal_promise_all_keyed_impl(MalVm *vm, bool settled, MalValue thi
         if (settled) {
             MalValue on_fulfilled = mal_promise_new_closure(vm, mal_promise_keyed_settled_fulfill, element_slots, 6, 1);
             MalValue on_rejected = mal_promise_new_closure(vm, mal_promise_keyed_settled_reject, element_slots, 6, 1);
-            ok = mal_promise_invoke_then(vm, resolved.value, on_fulfilled, on_rejected);
+            ok = mal_promise_invoke_then(vm, resolved.value, on_fulfilled, on_rejected, discard_safe);
         } else {
             MalValue on_fulfilled = mal_promise_new_closure(vm, mal_promise_keyed_all_element, element_slots, 6, 1);
-            ok = mal_promise_invoke_then(vm, resolved.value, on_fulfilled, cap_reject);
+            ok = mal_promise_invoke_then(vm, resolved.value, on_fulfilled, cap_reject, discard_safe);
         }
         if (!ok) {
             mal_rooted_key_snapshot_dispose(&own_keys);

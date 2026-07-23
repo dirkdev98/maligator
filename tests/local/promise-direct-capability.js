@@ -226,6 +226,67 @@ fulfilled(
 	(values) => values[0] === 2 && values[1] === 3,
 );
 
+fulfilled(
+	"Promise.all intrinsic discarded dependents",
+	Promise.all([Promise.resolve(4), 5]),
+	(values) => values[0] === 4 && values[1] === 5,
+);
+fulfilled(
+	"Promise.race intrinsic discarded dependents",
+	Promise.race([Promise.resolve(6), Promise.resolve(7)]),
+	(value) => value === 6,
+);
+fulfilled(
+	"Promise.allSettled intrinsic discarded dependents",
+	Promise.allSettled([Promise.resolve(8), Promise.reject(9)]),
+	(values) =>
+		values[0].status === "fulfilled" &&
+		values[0].value === 8 &&
+		values[1].status === "rejected" &&
+		values[1].reason === 9,
+);
+
+let releaseCombinatorPending;
+const combinatorPending = new Promise((resolve) => {
+	releaseCombinatorPending = resolve;
+});
+const combinatorPendingResult = Promise.all([combinatorPending]);
+if (typeof __mal_collect_garbage === "function") __mal_collect_garbage();
+releaseCombinatorPending(10);
+fulfilled(
+	"discarded dependent reaction survives pending GC",
+	combinatorPendingResult,
+	(values) => values[0] === 10,
+);
+
+let observedCombinatorThenGets = 0;
+const observedCombinatorSource = Promise.resolve(11);
+Object.defineProperty(observedCombinatorSource, "then", {
+	get() {
+		observedCombinatorThenGets++;
+		return Promise.prototype.then;
+	},
+});
+fulfilled(
+	"combinator guarded fallback observes own then",
+	Promise.all([observedCombinatorSource]),
+	(values) => values[0] === 11 && observedCombinatorThenGets === 1,
+);
+
+function ThrowingCombinatorCapability(executor) {
+	executor(
+		() => {
+			throw new Error("combinator-handler-unhandled-marker");
+		},
+		() => {
+			throw new Error("combinator-handler-unhandled-marker");
+		},
+	);
+	this.kind = "throwing combinator capability";
+}
+ThrowingCombinatorCapability.resolve = (value) => value;
+Promise.race.call(ThrowingCombinatorCapability, [Promise.resolve(12)]);
+
 const exact = Promise.resolve(20).then((value) => value + 22);
 ok(
 	"exact intrinsic then result",
@@ -533,6 +594,47 @@ fulfilled(
 
 checks.push(
 	settledAdoption
+		.then(() => {
+			const originalConstructor = Object.getOwnPropertyDescriptor(
+				Promise.prototype,
+				"constructor",
+			);
+			let constructorGets = 0;
+			Object.defineProperty(Promise.prototype, "constructor", {
+				configurable: true,
+				get() {
+					constructorGets++;
+					return Promise;
+				},
+			});
+			const result = Promise.resolve(66).then((value) => value + 1);
+			Object.defineProperty(Promise.prototype, "constructor", originalConstructor);
+			return result.then((value) => {
+				ok(
+					"mutated Promise.prototype.constructor takes guarded fallback",
+					value === 67 && constructorGets === 1,
+				);
+			});
+		})
+		.then(() => {
+			const originalSpecies = Object.getOwnPropertyDescriptor(Promise, Symbol.species);
+			let speciesGets = 0;
+			Object.defineProperty(Promise, Symbol.species, {
+				configurable: true,
+				get() {
+					speciesGets++;
+					return Promise;
+				},
+			});
+			const result = Promise.resolve(67).then((value) => value + 1);
+			Object.defineProperty(Promise, Symbol.species, originalSpecies);
+			return result.then((value) => {
+				ok(
+					"mutated Promise Symbol.species takes guarded fallback",
+					value === 68 && speciesGets === 1,
+				);
+			});
+		})
 		.then(() => {
 			const originalThen = Promise.prototype.then;
 			Promise.prototype.then = function (onFulfilled, onRejected) {
