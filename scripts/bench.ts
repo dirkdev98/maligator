@@ -161,6 +161,8 @@ interface PromiseMetrics {
 	intrinsicSpeciesHits: number;
 	discardedDependentRegistrations: number;
 	guardedFallbacks: number;
+	resolvingPairs: number;
+	directAsyncGeneratorRequests: number;
 }
 interface CoroutineBackendMetrics {
 	wallMs: number;
@@ -663,6 +665,11 @@ function benchPromise(runs: number): PromiseMetrics {
 			"discarded_dependent_registrations",
 		),
 		guardedFallbacks: parsePerfPromiseStat(perfStderr, "guarded_fallbacks"),
+		resolvingPairs: parsePerfPromiseStat(perfStderr, "resolving_pairs"),
+		directAsyncGeneratorRequests: parsePerfPromiseStat(
+			perfStderr,
+			"async_generator_direct_requests",
+		),
 	};
 }
 
@@ -1364,6 +1371,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			`  kernel    ${entry.promise.intrinsicSpeciesHits} intrinsic species hits${delta(entry.promise.intrinsicSpeciesHits, p?.intrinsicSpeciesHits)}, ${entry.promise.discardedDependentRegistrations} discarded dependent registrations${delta(entry.promise.discardedDependentRegistrations, p?.discardedDependentRegistrations)}`,
 		);
 		console.log(`            ${entry.promise.guardedFallbacks} guarded fallbacks`);
+		console.log(
+			`  resolving ${entry.promise.resolvingPairs} callback pairs${delta(entry.promise.resolvingPairs, p?.resolvingPairs)}, ${entry.promise.directAsyncGeneratorRequests} direct async-generator requests${delta(entry.promise.directAsyncGeneratorRequests, p?.directAsyncGeneratorRequests)}`,
+		);
 		console.log(
 			`            ${entry.promise.directIntrinsicCreations} intrinsic creations${delta(entry.promise.directIntrinsicCreations, p?.directIntrinsicCreations)}, ${entry.promise.directAsyncResults} async results${delta(entry.promise.directAsyncResults, p?.directAsyncResults)}`,
 		);

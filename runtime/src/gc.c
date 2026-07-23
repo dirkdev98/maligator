@@ -828,12 +828,13 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
                 mal_gc_shade(&gen->awaited_by->object.header);
             }
             // Pending async-generator requests (malloc'd nodes, traced via the
-            // owner): each holds a settle capability + the resume value, live until
-            // the driver dequeues it. Missing this swept queued resolve/reject
-            // functions out from under a pending next/throw/return.
+            // owner): each holds its direct result Promise, request-realm Promise
+            // constructor anchor, and resume value until the driver dequeues it.
+            // This common cell trace covers major, remembered-owner minor, and
+            // concurrent marking.
             for (MalAsyncGeneratorRequest *req = gen->agen_queue_head; req != nullptr; req = req->next) {
-                mal_gc_mark_value(req->resolve);
-                mal_gc_mark_value(req->reject);
+                mal_gc_mark_value(req->promise);
+                mal_gc_mark_value(req->promise_constructor);
                 mal_gc_mark_value(req->value);
             }
             break;

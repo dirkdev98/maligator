@@ -169,7 +169,8 @@ static void mal_perf_stats_print(void) {
         "job_slab_block_allocations=%llu job_slab_block_frees=%llu "
         "job_slab_peak_retained_bytes=%llu native_adoption_hits=%llu "
         "native_adoption_guard_fallbacks=%llu intrinsic_species_hits=%llu "
-        "discarded_dependent_registrations=%llu guarded_fallbacks=%llu\n",
+        "discarded_dependent_registrations=%llu guarded_fallbacks=%llu "
+        "resolving_pairs=%llu async_generator_direct_requests=%llu\n",
         (unsigned long long) mal_perf_stats.promise_await_typed_continuations,
         (unsigned long long) mal_perf_stats.promise_await_typed_jobs,
         (unsigned long long) mal_perf_stats.promise_job_slab_hits,
@@ -181,7 +182,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.promise_native_adoption_guard_fallbacks,
         (unsigned long long) mal_perf_stats.promise_intrinsic_species_hits,
         (unsigned long long) mal_perf_stats.promise_discarded_dependent_registrations,
-        (unsigned long long) mal_perf_stats.promise_guarded_fallbacks
+        (unsigned long long) mal_perf_stats.promise_guarded_fallbacks,
+        (unsigned long long) mal_perf_stats.promise_resolving_pairs,
+        (unsigned long long) mal_perf_stats.promise_async_generator_direct_requests
     );
     fprintf(
         stderr,

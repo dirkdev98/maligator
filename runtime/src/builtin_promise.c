@@ -314,6 +314,7 @@ static MalNativeFunctionObject *mal_promise_new_resolving_fn(
 }
 
 void mal_promise_create_resolving(MalVm *vm, MalValue promise, MalValue *out_resolve, MalValue *out_reject) {
+    MAL_PERF_COUNT(promise_resolving_pairs);
     MalValue resolve_slots[2] = {promise, mal_value_new_boolean(false)};
     MalNativeFunctionObject *resolve = mal_promise_new_resolving_fn(vm, mal_promise_resolve_function, resolve_slots, 2);
     MalValue resolve_value = mal_value_from_native_function_object(resolve);

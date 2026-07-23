@@ -78,6 +78,45 @@ async function batchWork(batchCount, width) {
 	return (checksum + finalized * 19) % MOD;
 }
 
+async function asyncGeneratorWork(count) {
+	let release;
+	const gate = new Promise((resolve) => {
+		release = resolve;
+	});
+	async function* sequence() {
+		await gate;
+		for (let i = 0; i < count; i++) yield (i * 13 + 5) % MOD;
+		return count;
+	}
+
+	const iterator = sequence();
+	const pending = [];
+	for (let i = 0; i <= count; i++) pending.push(iterator.next());
+	release();
+	const results = await Promise.all(pending);
+	let checksum = 0;
+	for (let i = 0; i < count; i++) {
+		const result = results[i];
+		if (result.done || result.value !== (i * 13 + 5) % MOD) {
+			throw new Error("async generator result " + i);
+		}
+		checksum = (checksum + result.value) % MOD;
+	}
+	if (!results[count].done || results[count].value !== count) {
+		throw new Error("async generator completion");
+	}
+
+	const returned = await sequence().return(71);
+	if (!returned.done || returned.value !== 71) throw new Error("async generator return");
+	try {
+		await sequence().throw(73);
+		throw new Error("async generator throw did not reject");
+	} catch (reason) {
+		if (reason !== 73) throw reason;
+	}
+	return (checksum + count + returned.value + 73) % MOD;
+}
+
 const thenable = {
 	then(resolve) {
 		resolve(12345);
@@ -91,12 +130,13 @@ Promise.all([
 	batchWork(2400, 24),
 	Promise.resolve(thenable),
 	Promise.reject(99).catch((value) => value + 1),
+	asyncGeneratorWork(48000),
 ]).then((values) => {
-	let checksum = values[0] + values[2] + values[3] + values[4] + values[5];
+	let checksum = values[0] + values[2] + values[3] + values[4] + values[5] + values[6];
 	for (let i = 0; i < values[1].length; i++) {
 		checksum = (checksum + values[1][i]) % MOD;
 	}
-	const EXPECTED_CHECKSUM = 704811838;
+	const EXPECTED_CHECKSUM = 680787877;
 	if (checksum !== EXPECTED_CHECKSUM) {
 		throw new Error("promise checksum " + checksum + " expected " + EXPECTED_CHECKSUM);
 	}

@@ -89,13 +89,15 @@ typedef struct MalGeneratorObject {
 } MalGeneratorObject;
 
 /**
- * A queued next/throw/return on an async generator: the capability to settle
- * and the resume mode/value to deliver to the body.
+ * A queued next/throw/return on an async generator: the intrinsic Promise the
+ * engine settles directly, its request realm's %Promise% constructor anchor,
+ * and the resume mode/value to deliver to the body. This remains the same three
+ * MalValue fields as the former resolve/reject/value capability representation.
  */
 typedef struct MalAsyncGeneratorRequest {
     struct MalAsyncGeneratorRequest *next;
-    MalValue resolve;
-    MalValue reject;
+    MalValue promise;
+    MalValue promise_constructor;
     i32 mode;
     MalValue value;
 } MalAsyncGeneratorRequest;

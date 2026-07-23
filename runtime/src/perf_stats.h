@@ -122,6 +122,8 @@ typedef struct MalPerfStats {
     u64 promise_intrinsic_species_hits;
     u64 promise_discarded_dependent_registrations;
     u64 promise_guarded_fallbacks;
+    u64 promise_resolving_pairs;
+    u64 promise_async_generator_direct_requests;
 
     u64 array_fresh_dense_stores;
     u64 array_fresh_dense_growths;
