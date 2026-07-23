@@ -92,6 +92,34 @@ static MalValue mal_promise_take_error(MalVm *vm, MalIntrinsic prototype_slot, c
     return error;
 }
 
+/* Skipping the captured intrinsic then call also skips its species work. An
+ * empty own layout, that function's realm-exact prototype, and the monotonic
+ * protector prove constructor/@@species and the prototype chain unchanged. */
+static bool mal_promise_can_adopt_native(
+    MalVm *vm,
+    MalValue value,
+    MalValue captured_then
+) {
+    if (!mal_primitive_method_protector || !mal_value_is_promise_object(value)) {
+        return false;
+    }
+
+    MalObject *object = &mal_value_to_promise_object(value)->object;
+    if (object->shape != mal_shape_empty() || object->overflow != nullptr) {
+        return false;
+    }
+
+#if MAL_REALMS
+    MalRealm *realm = mal_vm_callee_realm(vm, captured_then);
+    MalObject *promise_prototype =
+        mal_value_to_object(realm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]);
+#else
+    MalObject *promise_prototype =
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]);
+#endif
+    return object->prototype == promise_prototype;
+}
+
 // --- Resolving functions -----------------------------------------------------
 
 /**
@@ -144,6 +172,22 @@ static bool mal_promise_settle_internal(
         mal_promise_reject(vm, promise, error);
         mal_gc_unroot(&span);
         return false;
+    }
+
+    if (mal_value_is_promise_object(roots[1])) {
+        if (mal_value_is_callable(roots[2]) &&
+            mal_promise_can_adopt_native(vm, roots[1], roots[2])) {
+            MAL_PERF_COUNT(promise_native_adoption_hits);
+            mal_vm_enqueue_promise_adoption_job(
+                vm,
+                roots[2],
+                roots[1],
+                roots[0],
+                vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR]);
+            mal_gc_unroot(&span);
+            return false;
+        }
+        MAL_PERF_COUNT(promise_native_adoption_guard_fallbacks);
     }
 
     if (!mal_value_is_callable(roots[2])) {
@@ -422,6 +466,27 @@ void mal_promise_perform_then(
             mal_vm_enqueue_reaction_job(vm, reject_handler, true, cap_resolve, cap_reject, promise->result);
             break;
     }
+}
+
+bool mal_promise_try_perform_native_adoption(
+    MalVm *vm,
+    MalValue captured_then,
+    MalValue source,
+    MalValue target,
+    MalValue target_constructor
+) {
+    if (!mal_promise_can_adopt_native(vm, source, captured_then)) {
+        return false;
+    }
+
+    mal_promise_perform_then(
+        vm,
+        source,
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        target,
+        target_constructor);
+    return true;
 }
 
 void mal_promise_perform_await(

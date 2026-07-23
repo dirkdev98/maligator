@@ -244,6 +244,21 @@ void mal_vm_enqueue_thenable_job(
     mal_vm_enqueue(vm, job);
 }
 
+void mal_vm_enqueue_promise_adoption_job(
+    MalVm *vm,
+    MalValue captured_then,
+    MalValue source,
+    MalValue target,
+    MalValue target_constructor
+) {
+    MalJob *job = mal_job_new(vm, MAL_JOB_PROMISE_RESOLVE_THENABLE);
+    job->as.thenable.then = captured_then;
+    job->as.thenable.thenable = source;
+    job->as.thenable.resolve_fn = target;
+    job->as.thenable.reject_fn = target_constructor;
+    mal_vm_enqueue(vm, job);
+}
+
 bool mal_vm_has_pending_jobs(const MalVm *vm) {
     return vm->job_head != nullptr;
 }
@@ -330,6 +345,46 @@ static void mal_vm_run_await_job(MalVm *vm, MalJob *job) {
 
 /** PromiseResolveThenableJob: call then(thenable, resolve, reject), routing a throw to reject. */
 static void mal_vm_run_thenable_job(MalVm *vm, MalJob *job) {
+    // Exact native adoption uses the otherwise-impossible non-callable resolve
+    // field to retain the direct target capability without materialized callbacks.
+    if (mal_value_is_promise_object(job->as.thenable.resolve_fn)) {
+        if (mal_promise_try_perform_native_adoption(
+                vm,
+                job->as.thenable.then,
+                job->as.thenable.thenable,
+                job->as.thenable.resolve_fn,
+                job->as.thenable.reject_fn)) {
+            return;
+        }
+
+        // Promise Resolve Functions captured `then` before this job was queued,
+        // but constructor/species mutations before execution remain observable.
+        MAL_PERF_COUNT(promise_native_adoption_guard_fallbacks);
+        MalValue resolve_fn;
+        MalValue reject_fn;
+#if MAL_REALMS
+        MalRealm *saved_realm = vm->current_realm;
+        mal_vm_realm_switch_to(
+            vm, mal_vm_callee_realm(vm, job->as.thenable.reject_fn));
+#endif
+        mal_promise_create_resolving(
+            vm, job->as.thenable.resolve_fn, &resolve_fn, &reject_fn);
+#if MAL_REALMS
+        mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+        MalValue args[2] = {resolve_fn, reject_fn};
+        MalRootSpan span;
+        mal_gc_root(&span, args, 2);
+        vm->completion = mal_completion_normal();
+        MalCompletion result = mal_vm_call_value(
+            vm, job->as.thenable.then, job->as.thenable.thenable, args, 2);
+        if (result.kind == MAL_COMPLETION_THROW) {
+            mal_vm_call_capability_function(vm, reject_fn, result.value);
+        }
+        mal_gc_unroot(&span);
+        return;
+    }
+
     MalValue args[2] = {job->as.thenable.resolve_fn, job->as.thenable.reject_fn};
     vm->completion = mal_completion_normal();
     MalCompletion result = mal_vm_call_value(

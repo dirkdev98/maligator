@@ -389,6 +389,163 @@ rejected(
 	(error) => error instanceof TypeError && /Chaining cycle/.test(error.message),
 );
 
+const settledAdoption = Promise.resolve().then(() => Promise.resolve(61));
+fulfilled("canonical settled Promise adoption", settledAdoption, (value) => value === 61);
+
+const adoptedRejectReason = { kind: "adopted rejection" };
+rejected(
+	"canonical rejected Promise adoption",
+	Promise.resolve().then(() => Promise.reject(adoptedRejectReason)),
+	(reason) => reason === adoptedRejectReason,
+);
+
+let releaseAdoption;
+const pendingAdoptionSource = new Promise((resolve) => {
+	releaseAdoption = resolve;
+});
+const pendingAdoptionOrder = [];
+pendingAdoptionSource.then(() => pendingAdoptionOrder.push("source"));
+const pendingAdoption = Promise.resolve().then(() => pendingAdoptionSource);
+Promise.resolve().then(() =>
+	Promise.resolve().then(() => {
+		releaseAdoption(62);
+	}),
+);
+if (typeof __mal_collect_garbage === "function") __mal_collect_garbage();
+fulfilled(
+	"canonical pending Promise adoption retains FIFO and GC reachability",
+	pendingAdoption,
+	(value) => value === 62 && pendingAdoptionOrder.join(",") === "source",
+);
+
+const adoptionJobOrder = [];
+const orderingAdoptionSource = Promise.resolve(63);
+const orderingAdoption = Promise.resolve().then(() => {
+	adoptionJobOrder.push("handler");
+	return orderingAdoptionSource;
+});
+Promise.resolve().then(() => {
+	adoptionJobOrder.push("peer");
+	Promise.resolve().then(() => {
+		adoptionJobOrder.push("child");
+		Promise.resolve().then(() => adoptionJobOrder.push("grandchild"));
+	});
+});
+fulfilled(
+	"canonical adoption preserves the PromiseResolveThenableJob turn",
+	orderingAdoption,
+	(value) => {
+		adoptionJobOrder.push("dependent");
+		return (
+			value === 63 &&
+			adoptionJobOrder.join(",") === "handler,peer,child,grandchild,dependent"
+		);
+	},
+);
+
+let adoptionThenGets = 0;
+let adoptionThenCalls = 0;
+const overriddenAdoptionSource = Promise.resolve(64);
+Object.defineProperty(overriddenAdoptionSource, "then", {
+	get() {
+		adoptionThenGets++;
+		return (resolve) => {
+			adoptionThenCalls++;
+			resolve(65);
+		};
+	},
+});
+const overriddenAdoption = Promise.resolve().then(() => overriddenAdoptionSource);
+fulfilled(
+	"native Promise adoption observes own then override",
+	overriddenAdoption,
+	(value) => value === 65 && adoptionThenGets === 1 && adoptionThenCalls === 1,
+);
+
+let subclassAdoptionThenCalls = 0;
+class AdoptionSubclass extends Promise {
+	then(onFulfilled, onRejected) {
+		subclassAdoptionThenCalls++;
+		return super.then(onFulfilled, onRejected);
+	}
+}
+const subclassAdoption = Promise.resolve().then(
+	() => new AdoptionSubclass((resolve) => resolve(66)),
+);
+fulfilled(
+	"native Promise adoption observes subclass prototype method",
+	subclassAdoption,
+	(value) => value === 66 && subclassAdoptionThenCalls === 1,
+);
+
+const adoptionMutationReason = { kind: "adoption constructor mutation" };
+let resolveMutationTarget;
+const adoptionMutationSource = Promise.resolve(67);
+const adoptionMutationTarget = new Promise((resolve) => {
+	resolveMutationTarget = resolve;
+});
+resolveMutationTarget(adoptionMutationSource);
+let adoptionConstructorGets = 0;
+Object.defineProperty(adoptionMutationSource, "constructor", {
+	get() {
+		adoptionConstructorGets++;
+		throw adoptionMutationReason;
+	},
+});
+rejected(
+	"native adoption observes constructor mutation after then capture",
+	adoptionMutationTarget,
+	(reason) => reason === adoptionMutationReason && adoptionConstructorGets === 1,
+);
+
+const adoptionRealm = new ShadowRealm();
+const startRealmAdoptionFallback = adoptionRealm.evaluate(`
+	() => {
+		globalThis.adoptionRealmResult = "pending";
+		const pair = Proxy.revocable({}, {});
+		const source = Promise.resolve(pair.proxy);
+		let resolveTarget;
+		const target = new Promise((resolve) => { resolveTarget = resolve; });
+		resolveTarget(source);
+		source.constructor = undefined;
+		pair.revoke();
+		target.then(
+			() => { globalThis.adoptionRealmResult = "fulfilled"; },
+			(error) => {
+				globalThis.adoptionRealmResult =
+					error instanceof TypeError ? "inner TypeError" : "foreign TypeError";
+			},
+		);
+	}
+`);
+const readRealmAdoptionFallback = adoptionRealm.evaluate(
+	"() => globalThis.adoptionRealmResult",
+);
+startRealmAdoptionFallback();
+fulfilled(
+	"native adoption fallback creates callbacks in the target realm",
+	Promise.resolve()
+		.then(() => {})
+		.then(() => {})
+		.then(() => readRealmAdoptionFallback()),
+	(value) => value === "inner TypeError",
+);
+
+checks.push(
+	settledAdoption
+		.then(() => {
+			const originalThen = Promise.prototype.then;
+			Promise.prototype.then = function (onFulfilled, onRejected) {
+				return originalThen.call(this, onFulfilled, onRejected);
+			};
+			Promise.prototype.then = originalThen;
+			return Promise.resolve().then(() => Promise.resolve(68));
+		})
+		.then((value) => {
+			ok("restored intrinsic method takes guarded adoption fallback", value === 68);
+		}),
+);
+
 let repeatedCalls = 0;
 const repeatedThenable = {
 	then(resolve, reject) {

@@ -117,7 +117,13 @@ describe("direct Promise.prototype.then capabilities", () => {
 			stderr.match(/await_typed_continuations=(\d+)/)?.[1] ?? 0,
 		);
 		const jobs = Number(stderr.match(/await_typed_jobs=(\d+)/)?.[1] ?? 0);
+		const adoptionHits = Number(stderr.match(/native_adoption_hits=(\d+)/)?.[1] ?? 0);
+		const adoptionFallbacks = Number(
+			stderr.match(/native_adoption_guard_fallbacks=(\d+)/)?.[1] ?? 0,
+		);
 		expect(continuations).toBeGreaterThan(0);
 		expect(jobs).toBe(continuations);
+		expect(adoptionHits).toBeGreaterThan(0);
+		expect(adoptionFallbacks).toBeGreaterThan(0);
 	});
 });

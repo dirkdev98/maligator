@@ -82,6 +82,15 @@ void mal_vm_enqueue_thenable_job(
     MalValue reject_fn
 );
 
+/** Append an exact native-Promise adoption job using the thenable payload. */
+void mal_vm_enqueue_promise_adoption_job(
+    MalVm *vm,
+    MalValue captured_then,
+    MalValue source,
+    MalValue target,
+    MalValue target_constructor
+);
+
 /** True when at least one microtask is queued. */
 bool mal_vm_has_pending_jobs(const MalVm *vm);
 

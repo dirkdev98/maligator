@@ -97,3 +97,16 @@ void mal_promise_perform_then(
     MalValue cap_resolve,
     MalValue cap_reject
 );
+
+/**
+ * Adopt an exact native Promise without invoking captured_then when its
+ * constructor/species proof still holds at job execution time. Returns false
+ * when the caller must invoke captured_then with materialized callbacks.
+ */
+bool mal_promise_try_perform_native_adoption(
+    MalVm *vm,
+    MalValue captured_then,
+    MalValue source,
+    MalValue target,
+    MalValue target_constructor
+);

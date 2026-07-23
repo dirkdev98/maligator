@@ -154,6 +154,8 @@ interface PromiseMetrics {
 	jobSlabBlockAllocations: number;
 	jobSlabBlockFrees: number;
 	jobSlabPeakRetainedBytes: number;
+	nativeAdoptionHits: number;
+	nativeAdoptionGuardFallbacks: number;
 }
 interface CoroutineBackendMetrics {
 	wallMs: number;
@@ -628,6 +630,11 @@ function benchPromise(runs: number): PromiseMetrics {
 		jobSlabPeakRetainedBytes: parsePerfPromiseStat(
 			perfStderr,
 			"job_slab_peak_retained_bytes",
+		),
+		nativeAdoptionHits: parsePerfPromiseStat(perfStderr, "native_adoption_hits"),
+		nativeAdoptionGuardFallbacks: parsePerfPromiseStat(
+			perfStderr,
+			"native_adoption_guard_fallbacks",
 		),
 	};
 }
@@ -1310,6 +1317,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 		);
 		console.log(
 			`  direct    ${entry.promise.directCapabilities} capabilities${delta(entry.promise.directCapabilities, p?.directCapabilities)}, ${entry.promise.materializedFallbackPairs} fallback pairs materialized${delta(entry.promise.materializedFallbackPairs, p?.materializedFallbackPairs)}`,
+		);
+		console.log(
+			`  adoption  ${entry.promise.nativeAdoptionHits} canonical hits, ${entry.promise.nativeAdoptionGuardFallbacks} guarded fallbacks`,
 		);
 		console.log(
 			`            ${entry.promise.directIntrinsicCreations} intrinsic creations${delta(entry.promise.directIntrinsicCreations, p?.directIntrinsicCreations)}, ${entry.promise.directAsyncResults} async results${delta(entry.promise.directAsyncResults, p?.directAsyncResults)}`,
