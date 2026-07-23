@@ -168,6 +168,8 @@ interface CoroutineBackendMetrics {
 	framePooled: number;
 	frameDropped: number;
 	framePeakRetainedBytes: number;
+	frameReleaseClearSlots: number;
+	frameAllocationInitSlots: number;
 	requestAllocations: number;
 	requestReuses: number;
 }
@@ -187,6 +189,8 @@ interface ArgumentsBackendMetrics {
 	framePooled: number;
 	frameDropped: number;
 	framePeakRetainedBytes: number;
+	frameReleaseClearSlots: number;
+	frameAllocationInitSlots: number;
 	instructionCount: number;
 	bytecodeBytes: number;
 	binaryBytes: number;
@@ -572,6 +576,14 @@ function parseCoroutineStat(stderr: string, field: string): number {
 	return match ? Number(match[1]) : 0;
 }
 
+function parsePerfCoroutineStat(stderr: string, field: string): number {
+	const line = stderr
+		.split("\n")
+		.find((value) => value.includes("[perf-coroutine-stats]"));
+	const match = line?.match(new RegExp(`${field}=([0-9]+)`));
+	return match ? Number(match[1]) : 0;
+}
+
 function benchPromise(runs: number): PromiseMetrics {
 	const binary = buildNativeBinary({
 		fixture: "bench/promise.js",
@@ -667,6 +679,8 @@ function benchCoroutineBackend(binary: string, runs: number): CoroutineBackendMe
 		framePooled: parseCoroutineStat(stderr, "pooled"),
 		frameDropped: parseCoroutineStat(stderr, "dropped"),
 		framePeakRetainedBytes: parseCoroutineStat(stderr, "peak_retained_bytes"),
+		frameReleaseClearSlots: parsePerfCoroutineStat(stderr, "release_clear_slots"),
+		frameAllocationInitSlots: parsePerfCoroutineStat(stderr, "allocation_init_slots"),
 		requestAllocations: parsePromiseStat(stderr, "request_allocations"),
 		requestReuses: parsePromiseStat(stderr, "request_reuses"),
 	};
@@ -735,6 +749,8 @@ function benchArgumentsBackend(
 		framePooled: parseCoroutineStat(stderr, "pooled"),
 		frameDropped: parseCoroutineStat(stderr, "dropped"),
 		framePeakRetainedBytes: parseCoroutineStat(stderr, "peak_retained_bytes"),
+		frameReleaseClearSlots: parsePerfCoroutineStat(perfStderr, "release_clear_slots"),
+		frameAllocationInitSlots: parsePerfCoroutineStat(perfStderr, "allocation_init_slots"),
 		instructionCount: parseVmStat(stderr, "instruction_count"),
 		bytecodeBytes: parseVmStat(stderr, "bytecode_bytes"),
 		binaryBytes: fileBytes(binary),
@@ -1353,6 +1369,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			console.log(
 				`               ${current.frameRequests} requested, ${current.frameReleases} released, ${current.framePooled} pooled, ${current.frameDropped} dropped, ${humanBytes(current.framePeakRetainedBytes)} peak retained`,
 			);
+			console.log(
+				`               ${current.frameReleaseClearSlots} release clear slots, ${current.frameAllocationInitSlots} allocation init slots`,
+			);
 		}
 		console.log(`  node        ${entry.coroutine.nodeMs.toFixed(1)}ms`);
 	}
@@ -1370,6 +1389,9 @@ function report(entry: Entry, previous: Entry | undefined): void {
 			);
 			console.log(
 				`               ${current.frameRequests} requested, ${current.frameReleases} released, ${current.framePooled} pooled, ${current.frameDropped} dropped, ${humanBytes(current.framePeakRetainedBytes)} peak retained`,
+			);
+			console.log(
+				`               ${current.frameReleaseClearSlots} release clear slots, ${current.frameAllocationInitSlots} allocation init slots`,
 			);
 			console.log(
 				`               ${current.instructionCount} instructions, ${humanBytes(current.bytecodeBytes)} bytecode, ${humanBytes(current.binaryBytes)} binary`,

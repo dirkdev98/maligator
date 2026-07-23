@@ -105,6 +105,9 @@ typedef struct MalPerfStats {
     u64 argument_snapshot_destination_writes;
     u64 argument_snapshot_temporary_copies;
 
+    u64 coroutine_buffer_release_clear_slots;
+    u64 coroutine_buffer_allocation_init_slots;
+
     u64 promise_await_typed_continuations;
     u64 promise_await_typed_jobs;
     u64 promise_job_slab_hits;

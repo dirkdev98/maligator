@@ -14,6 +14,7 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-coroutine-pool-"));
 const expected = ["coroutine-pool PASS"];
 const retentionExpected = ["coroutine-pool-retention PASS"];
 const fairnessExpected = ["coroutine-pool-fairness PASS"];
+const reuseExpected = ["coroutine-buffer-reuse PASS"];
 const terminalYieldExpected = ["terminal-yield PASS"];
 const hostGc = { MAL_HOST_GC: "1" };
 
@@ -75,6 +76,9 @@ describe("pooled suspendable-frame support", () => {
 	let retentionInterpreted: string;
 	let fairnessCompiled: string;
 	let fairnessInterpreted: string;
+	let reuseCompiled: string;
+	let reuseInterpreted: string;
+	let reuseConcurrent: string;
 	let terminalYieldCompiled: string;
 	let terminalYieldInterpreted: string;
 	let terminalYieldConcurrent: string;
@@ -116,6 +120,26 @@ describe("pooled suspendable-frame support", () => {
 			compiled: false,
 			outDir,
 		});
+		reuseCompiled = buildNativeBinary({
+			fixture: "tests/local/coroutine-buffer-reuse.js",
+			name: "coroutine-buffer-reuse",
+			compiled: true,
+			outDir,
+		});
+		reuseInterpreted = buildNativeBinary({
+			fixture: "tests/local/coroutine-buffer-reuse.js",
+			name: "coroutine-buffer-reuse-ni",
+			compiled: false,
+			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
+		});
+		reuseConcurrent = buildNativeBinary({
+			fixture: "tests/local/coroutine-buffer-reuse.js",
+			name: "coroutine-buffer-reuse-concurrent",
+			compiled: true,
+			outDir,
+			environment: { ...process.env, MAL_GC_CONCURRENT: "1" },
+		});
 		terminalYieldCompiled = buildNativeBinary({
 			fixture: "tests/local/terminal-yield.js",
 			name: "terminal-yield",
@@ -135,6 +159,60 @@ describe("pooled suspendable-frame support", () => {
 			outDir,
 			environment: { ...process.env, MAL_GC_CONCURRENT: "1" },
 		});
+	});
+
+	it.each([
+		["compiled", () => reuseCompiled],
+		["interpreted", () => reuseInterpreted],
+	] as const)(
+		"keeps smaller/equal/larger %s reuse prefixes undefined",
+		(_name, binary) => {
+			assertExactLines(runToStdout(binary(), { env: hostGc }), reuseExpected);
+		},
+	);
+
+	it.each([
+		["compiled", () => reuseCompiled],
+		["interpreted", () => reuseInterpreted],
+	] as const)("keeps reused %s prefixes undefined under GC stress", (_name, binary) => {
+		assertExactLines(
+			runToStdout(binary(), { env: { ...hostGc, ...STRESS_ENV } }),
+			reuseExpected,
+		);
+	});
+
+	it("keeps reused prefixes undefined under concurrent GC", () => {
+		assertExactLines(
+			runToStdout(reuseConcurrent, {
+				env: {
+					...hostGc,
+					...STRESS_ENV,
+					MAL_GC_THRESHOLD: "262144",
+					MAL_GC_MAJOR_EVERY: "1",
+				},
+			}),
+			reuseExpected,
+		);
+	});
+
+	it("initializes only newly exposed slots", () => {
+		const result = spawnSync(reuseInterpreted, [], {
+			env: {
+				...process.env,
+				...hostGc,
+				MAL_PERF_STATS: "1",
+				MAL_GC_STATS: "1",
+				MAL_COROUTINE_STATS: "1",
+			},
+			encoding: "utf-8",
+		});
+		expect(result.status, result.stderr).toBe(0);
+		assertExactLines(result.stdout, reuseExpected);
+		const stat = (field: string): number =>
+			Number(result.stderr.match(new RegExp(`${field}=([0-9]+)`))?.[1] ?? -1);
+		expect(stat("reuses")).toBeGreaterThan(0);
+		expect(stat("allocation_init_slots")).toBeGreaterThan(0);
+		expect(stat("allocation_init_slots")).toBeLessThan(stat("release_clear_slots"));
 	});
 
 	it.each([

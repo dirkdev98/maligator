@@ -186,6 +186,12 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-coroutine-stats] release_clear_slots=%llu allocation_init_slots=%llu\n",
+        (unsigned long long) mal_perf_stats.coroutine_buffer_release_clear_slots,
+        (unsigned long long) mal_perf_stats.coroutine_buffer_allocation_init_slots
+    );
+    fprintf(
+        stderr,
         "[perf-array-stats] fresh_dense_stores=%llu fresh_dense_growths=%llu "
         "fresh_dense_fallbacks=%llu fresh_dense_exact_reserves=%llu "
         "fresh_dense_reserved_slots=%llu fresh_dense_growths_avoided=%llu\n",

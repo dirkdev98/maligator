@@ -45,7 +45,8 @@ static u64 g_loaded_instruction_data_count = 0;
 typedef struct MalCoroutineBuffer {
     struct MalCoroutineBuffer *next;
     usize capacity;
-    usize used;
+    u32 used;
+    u32 initialized;
     MalValue values[];
 } MalCoroutineBuffer;
 
@@ -156,15 +157,22 @@ MalValue *mal_vm_alloc_coroutine_buffer(MalVm *vm, i32 slot_count) {
     if (buffer == nullptr) {
         buffer = malloc(mal_coroutine_buffer_bytes(capacity));
         buffer->capacity = capacity;
+        buffer->initialized = 0;
         g_coroutine_buffer_allocations++;
     }
     buffer->next = nullptr;
-    buffer->used = required;
-    // A class may have spare capacity, but only the requested, initialized prefix
-    // is exposed to the frame/root descriptor. A later larger request initializes
-    // its entire newly visible prefix before returning the pointer.
-    for (usize i = 0; i < required; i++) {
+    buffer->used = (u32) required;
+    // Release leaves every previously exposed slot undefined. Preserve that cleared
+    // prefix across smaller/equal reuses and initialize only a newly exposed suffix.
+    MAL_PERF_ADD(
+        coroutine_buffer_allocation_init_slots,
+        required > buffer->initialized ? required - buffer->initialized : 0
+    );
+    for (usize i = buffer->initialized; i < required; i++) {
         buffer->values[i] = mal_value_new_undefined();
+    }
+    if (required > buffer->initialized) {
+        buffer->initialized = (u32) required;
     }
     return buffer->values;
 }
@@ -221,6 +229,7 @@ void mal_vm_release_coroutine_buffer(MalVm *vm, MalValue *values) {
     }
     MalCoroutineBuffer *buffer = mal_coroutine_buffer_from_values(values);
     g_coroutine_buffer_releases++;
+    MAL_PERF_ADD(coroutine_buffer_release_clear_slots, buffer->used);
     for (usize i = 0; i < buffer->used; i++) {
         mal_gc_write_barrier(buffer->values[i]);
         buffer->values[i] = mal_value_new_undefined();
