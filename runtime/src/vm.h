@@ -1250,10 +1250,11 @@ typedef struct MalVm {
 
     /**
      * Byte-bounded, untraced size-class pools of cleared suspendable-frame value
-     * buffers. Classes are indexed directly; the final class is the largest
-     * capacity permitted by the per-buffer retention policy.
+     * buffers and their retained-byte totals. Classes are indexed directly; the
+     * final class is the largest capacity permitted by the per-buffer policy.
      */
     struct MalCoroutineBuffer *coroutine_buffer_pools[MAL_COROUTINE_POOL_CLASS_COUNT];
+    usize coroutine_buffer_pool_class_bytes[MAL_COROUTINE_POOL_CLASS_COUNT];
     usize coroutine_buffer_pool_bytes;
     u32 coroutine_buffer_pool_count;
 

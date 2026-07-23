@@ -13,6 +13,7 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-coroutine-pool-"));
 const expected = ["coroutine-pool PASS"];
 const retentionExpected = ["coroutine-pool-retention PASS"];
+const fairnessExpected = ["coroutine-pool-fairness PASS"];
 const hostGc = { MAL_HOST_GC: "1" };
 
 interface CoroutineStats {
@@ -71,6 +72,8 @@ describe("pooled suspendable-frame support", () => {
 	let interpreted: string;
 	let retentionCompiled: string;
 	let retentionInterpreted: string;
+	let fairnessCompiled: string;
+	let fairnessInterpreted: string;
 
 	beforeAll(() => {
 		compiled = buildNativeBinary({
@@ -97,6 +100,18 @@ describe("pooled suspendable-frame support", () => {
 			compiled: false,
 			outDir,
 		});
+		fairnessCompiled = buildNativeBinary({
+			fixture: "tests/local/coroutine-pool-fairness.js",
+			name: "coroutine-pool-fairness",
+			compiled: true,
+			outDir,
+		});
+		fairnessInterpreted = buildNativeBinary({
+			fixture: "tests/local/coroutine-pool-fairness.js",
+			name: "coroutine-pool-fairness-ni",
+			compiled: false,
+			outDir,
+		});
 	});
 
 	it.each([
@@ -106,6 +121,15 @@ describe("pooled suspendable-frame support", () => {
 		const stats = runWithStats(binary(), retentionExpected);
 		assertBoundedPool(stats);
 		expect(stats.reuses).toBeGreaterThanOrEqual(4000);
+	});
+
+	it.each([
+		["compiled", () => fairnessCompiled],
+		["interpreted", () => fairnessInterpreted],
+	] as const)("fairly admits a later active %s size class", (_name, binary) => {
+		const stats = runWithStats(binary(), fairnessExpected);
+		assertBoundedPool(stats);
+		expect(stats.reuses).toBeGreaterThanOrEqual(32);
 	});
 
 	it("reuses compiled frames and preserves queued async-generator requests", () => {
