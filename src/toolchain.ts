@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 
-const CACHE_SCHEMA = 2;
+const CACHE_SCHEMA = 3;
 const C2X_FLAGS = ["-std=c2x"];
 const LTO_FLAGS = ["-flto"];
 
@@ -277,9 +277,30 @@ function probeCapabilities(
 	platform: NodeJS.Platform,
 	needsCxx: boolean,
 ): ToolchainProbes {
+	// The runtime relies on real C23, not just the __STDC_VERSION__ stamp: the
+	// bool/true/false keywords with no <stdbool.h> (defaults.h), nullptr, and
+	// #embed (compiler_wire.c inlines the baked compiler). GCC 12 accepts
+	// -std=c2x and sets __STDC_VERSION__ to 202000L but supports none of these, so
+	// probe the features themselves or the macro would green-light a compiler the
+	// build then fails on deep inside the runtime archive.
+	writeFileSync(path.join(probeDir, "c2x-embed.bin"), "mal");
 	writeFileSync(
 		path.join(probeDir, "main.c"),
-		"#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202000L\n#error C2x required\n#endif\nint main(void) { return 0; }\n",
+		[
+			"#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202000L",
+			"#error C2x required",
+			"#endif",
+			"static const unsigned char mal_probe_embed[] = {",
+			'#embed "c2x-embed.bin"',
+			"};",
+			"int main(void) {",
+			"  bool ok = true;",
+			"  ok = false;",
+			"  void *p = nullptr;",
+			"  return (ok && p == nullptr && sizeof(mal_probe_embed) == 3) ? 0 : 1;",
+			"}",
+			"",
+		].join("\n"),
 	);
 	const c2x = compile(
 		tools.cc,
@@ -569,17 +590,32 @@ function installationSuggestions(
 	report: ToolchainReport,
 	platform: NodeJS.Platform,
 ): Array<string> {
-	const missing = new Set(
-		report.issues.filter((issue) => issue.required).map((issue) => issue.tool),
-	);
+	const required = report.issues.filter((issue) => issue.required);
+	const missing = new Set(required.map((issue) => issue.tool));
 	const suggestions: Array<string> = [];
-	if (["cc", "cxx", "ar"].some((tool) => missing.has(tool))) {
+	// A present-but-too-old compiler fails the C2x capability probe rather than
+	// being absent; build-essential/xcode won't help it, so only offer them when a
+	// tool is genuinely missing from PATH.
+	const absent = (tool: keyof ToolchainTools): boolean =>
+		missing.has(tool) && report.tools[tool] === undefined;
+	if (absent("cc") || absent("cxx") || absent("ar")) {
 		if (platform === "darwin")
 			suggestions.push("Install Apple build tools: xcode-select --install");
 		else if (platform === "linux") {
 			suggestions.push("Debian/Ubuntu: sudo apt install build-essential");
 			suggestions.push("Fedora/RHEL: sudo dnf install gcc gcc-c++ binutils");
 		}
+	}
+	if (required.some((issue) => issue.tool === "cc" && issue.message.includes("C2x"))) {
+		suggestions.push(
+			"The C compiler is too old for the C23 features the runtime uses (the bool/true/false keywords, nullptr, #embed).",
+		);
+		if (platform === "linux")
+			suggestions.push(
+				"Install clang >= 19 (or gcc >= 15) and select it: sudo apt install clang-19 && export CC=clang-19 CXX=clang++-19",
+			);
+		else if (platform === "darwin")
+			suggestions.push("Update the Apple command-line tools: xcode-select --install");
 	}
 	if (["rustup", "cargo", "rustc"].some((tool) => missing.has(tool))) {
 		suggestions.push(

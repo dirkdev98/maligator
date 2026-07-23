@@ -154,7 +154,10 @@ Every native build performs the same discovery and capability checks used by
 directly with `CC` and collected into three static archives with `ar`. Maligator
 requires:
 
-- A C compiler and archive tool with C2x compile/link support
+- A C compiler and archive tool with real C23 support — the runtime uses the
+  `bool`/`true`/`false` keywords (no `<stdbool.h>`), `nullptr`, and `#embed`, so
+  Apple clang, clang >= 19, or gcc >= 15 works; gcc <= 14 accepts `-std=c2x` but
+  lacks `#embed` and is rejected by the `doctor` C2x probe
 - Rustup and the `cargo`/`rustc` selected by `runtime/rust/rust-toolchain.toml`
 - A C++ compiler/runtime only when `surface.webPlatform` is enabled
 
@@ -169,10 +172,12 @@ typed result containing the executable path, exact artifact bundle, and context,
 callers such as size tracking cannot accidentally resolve and measure a different
 build.
 
-On macOS, install Apple build tools with `xcode-select --install`. On Debian/Ubuntu,
-install `build-essential`; on Fedora/RHEL, install `gcc`, `gcc-c++`, and `binutils`.
-Install Rust through Rustup, then enter `runtime/rust` and run `rustup show` to
-install/select the pinned toolchain.
+On macOS, install Apple build tools with `xcode-select --install`. On Linux, install
+a C23-capable compiler and select it: on Debian/Ubuntu the stock `build-essential`
+(gcc 12) is too old, so `sudo apt install clang-19` and build with
+`CC=clang-19 CXX=clang++-19` (or use gcc >= 15 where available). Install Rust through
+Rustup, then enter `runtime/rust` and run `rustup show` to install/select the pinned
+toolchain.
 
 The distributed self-hosted CLI embeds the runtime C sources, Rust crate, and a
 prebuilt eval compiler wire. It materializes those content-addressed assets on
