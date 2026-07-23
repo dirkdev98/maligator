@@ -44,6 +44,23 @@ function generatorWork(count) {
 	return checksum;
 }
 
+function* terminalSequence(seed) {
+	yield (seed * 29 + 5) % MOD;
+}
+
+function terminalGeneratorWork(count) {
+	let checksum = 0;
+	const retained = [];
+	for (let i = 0; i < count; i++) {
+		const iterator = terminalSequence(i);
+		const step = iterator.next();
+		if (step.done) throw new Error("terminal generator completed before its yield");
+		checksum = (checksum + step.value) % MOD;
+		retained.push(iterator);
+	}
+	return checksum;
+}
+
 async function asyncStep(seed) {
 	let value = seed;
 	for (let i = 0; i < 3; i++) value = (value + (await ((seed + i) & 15))) % MOD;
@@ -94,13 +111,16 @@ async function asyncIterationWork(count) {
 }
 
 const generatorChecksum = generatorWork(280000);
+const terminalGeneratorChecksum = terminalGeneratorWork(180000);
 Promise.all([
 	asyncBatch(43000),
 	manualAsyncGeneratorWork(13000),
 	asyncIterationWork(7500),
 ]).then((values) => {
-	const checksum = (generatorChecksum + values[0] + values[1] + values[2]) % MOD;
-	const EXPECTED_CHECKSUM = 28854625;
+	const checksum =
+		(generatorChecksum + terminalGeneratorChecksum + values[0] + values[1] + values[2]) %
+		MOD;
+	const EXPECTED_CHECKSUM = 827141342;
 	if (checksum !== EXPECTED_CHECKSUM) {
 		throw new Error("coroutine checksum " + checksum + " expected " + EXPECTED_CHECKSUM);
 	}
