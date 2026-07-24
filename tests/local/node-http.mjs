@@ -13,6 +13,10 @@ const expectedMethods =
 	"ACL,BIND,CHECKOUT,CONNECT,COPY,DELETE,GET,HEAD,LINK,LOCK,M-SEARCH,MERGE,MKACTIVITY,MKCALENDAR,MKCOL,MOVE,NOTIFY,OPTIONS,PATCH,POST,PROPFIND,PROPPATCH,PURGE,PUT,QUERY,REBIND,REPORT,SEARCH,SOURCE,SUBSCRIBE,TRACE,UNBIND,UNLINK,UNLOCK,UNSUBSCRIBE";
 const incoming = new IncomingMessage();
 const response = new ServerResponse();
+const responseReceiver = {};
+const calledResponse = ServerResponse.call(responseReceiver);
+class DerivedResponse extends ServerResponse {}
+const derivedResponse = new DerivedResponse();
 let listenerReceiver;
 function listener() {
 	listenerReceiver = this;
@@ -49,6 +53,15 @@ const checks = [
 	response instanceof ServerResponse,
 	response instanceof Stream,
 	response instanceof Events,
+	calledResponse === responseReceiver,
+	Object.getPrototypeOf(calledResponse) === Object.prototype,
+	Object.getOwnPropertyNames(calledResponse).join(",") ===
+		"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,statusCode,statusMessage,headersSent,finished,writableEnded,writableFinished",
+	calledResponse.statusCode === 200,
+	derivedResponse instanceof DerivedResponse,
+	derivedResponse instanceof ServerResponse,
+	derivedResponse instanceof Stream,
+	Object.getPrototypeOf(derivedResponse) === DerivedResponse.prototype,
 	Object.getPrototypeOf(Server.prototype) === Events.prototype,
 	Object.getPrototypeOf(Server) === Events,
 	Server.length === 2 && createServer.length === 2,

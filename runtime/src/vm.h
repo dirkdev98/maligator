@@ -1211,9 +1211,10 @@ typedef struct MalVm {
     struct MalShape *node_http_incoming_message_source_shape;
     struct MalShape *node_http_incoming_message_final_shape;
 
-    /** Canonical node:http ServerResponse layout before/after dispatch fields. */
-    struct MalShape *node_http_server_response_source_shape;
-    struct MalShape *node_http_server_response_final_shape;
+    /** Canonical node:http ServerResponse parent/constructor/dispatch layouts. */
+    struct MalShape *node_http_server_response_parent_shape;
+    struct MalShape *node_http_server_response_constructor_shape;
+    struct MalShape *node_http_server_response_dispatch_shape;
 
     /** Bounded plain interpreted-function call cache; see vm_ops.c. */
     MalInterpCallCacheEntry *interp_call_cache;

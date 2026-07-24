@@ -132,6 +132,12 @@ const server = http.createServer(function (request, response) {
 			response.__httpResponseRealmMarker === "request-realm",
 			!Object.prototype.hasOwnProperty.call(response, "__httpResponseRealmMarker"),
 			response._malStreamKind === 0,
+			visibleDataProperty(response, "statusCode", 200),
+			visibleDataProperty(response, "statusMessage", undefined),
+			visibleDataProperty(response, "headersSent", false),
+			visibleDataProperty(response, "finished", false),
+			visibleDataProperty(response, "writableEnded", false),
+			visibleDataProperty(response, "writableFinished", false),
 		];
 		response.statusCode = checks.every(Boolean) ? 200 : 500;
 		response.end(checks.every(Boolean) ? "ok" : "response shape mismatch");
@@ -164,6 +170,26 @@ const server = http.createServer(function (request, response) {
 		);
 		const socketDescriptor = Object.getOwnPropertyDescriptor(response, "socket");
 		const connectionDescriptor = Object.getOwnPropertyDescriptor(response, "connection");
+		const constructorDefaults = [
+			["statusCode", 200],
+			["statusMessage", undefined],
+			["headersSent", false],
+			["finished", false],
+			["writableEnded", false],
+			["writableFinished", false],
+		];
+		const constructorDescriptorsMatch = constructorDefaults.every(([name, value]) => {
+			const descriptor = Object.getOwnPropertyDescriptor(response, name);
+			return (
+				descriptor !== undefined &&
+				descriptor.value === value &&
+				descriptor.writable === true &&
+				descriptor.enumerable === true &&
+				descriptor.configurable === true &&
+				descriptor.get === undefined &&
+				descriptor.set === undefined
+			);
+		});
 		const checks = [
 			!Object.prototype.hasOwnProperty.call(request, "_malStreamKind"),
 			request._malStreamKind === undefined,
@@ -187,6 +213,7 @@ const server = http.createServer(function (request, response) {
 			response._malStreamKind === undefined,
 			names.slice(-8).join(",") ===
 				"statusCode,statusMessage,headersSent,finished,writableEnded,writableFinished,socket,connection",
+			constructorDescriptorsMatch,
 			socketDescriptor.value === request.socket,
 			socketDescriptor.writable === true,
 			socketDescriptor.enumerable === true,

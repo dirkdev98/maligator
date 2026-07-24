@@ -582,27 +582,39 @@ static void http_incoming_message_dispatch_shapes(MalVm *vm) {
     vm->node_http_incoming_message_final_shape = shape;
 }
 
-static void http_server_response_dispatch_shapes(MalVm *vm) {
-    if (vm->node_http_server_response_source_shape != nullptr) return;
+static void http_server_response_shapes(MalVm *vm) {
+    if (vm->node_http_server_response_parent_shape != nullptr) return;
 
-    static const char *source_names[] = {
+    static const char *parent_names[] = {
         "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
+    };
+    static const char *constructor_names[] = {
         "statusCode", "statusMessage", "headersSent", "finished", "writableEnded",
         "writableFinished",
     };
-    static_assert(countof(source_names) + 2 <= MAL_SHAPE_MAX_INLINE_SLOTS,
-                  "ServerResponse dispatch shape exceeds inline slots");
+    static const char *dispatch_names[] = {"socket", "connection"};
+    static_assert(countof(parent_names) + countof(constructor_names)
+                      + countof(dispatch_names) <= MAL_SHAPE_MAX_INLINE_SLOTS,
+                   "ServerResponse dispatch shape exceeds inline slots");
     MalShape *shape = mal_shape_empty();
-    for (usize i = 0; i < countof(source_names); ++i) {
+    for (usize i = 0; i < countof(parent_names); ++i) {
         shape = mal_shape_add_property(
-            shape, mal_intrinsic_string_key(vm, (const byte *) source_names[i]),
+            shape, mal_intrinsic_string_key(vm, (const byte *) parent_names[i]),
             HTTP_VISIBLE);
     }
-    vm->node_http_server_response_source_shape = shape;
-    shape = mal_shape_add_property(
-        shape, mal_intrinsic_string_key(vm, (const byte *) "socket"), HTTP_VISIBLE);
-    vm->node_http_server_response_final_shape = mal_shape_add_property(
-        shape, mal_intrinsic_string_key(vm, (const byte *) "connection"), HTTP_VISIBLE);
+    vm->node_http_server_response_parent_shape = shape;
+    for (usize i = 0; i < countof(constructor_names); ++i) {
+        shape = mal_shape_add_property(
+            shape, mal_intrinsic_string_key(vm, (const byte *) constructor_names[i]),
+            HTTP_VISIBLE);
+    }
+    vm->node_http_server_response_constructor_shape = shape;
+    for (usize i = 0; i < countof(dispatch_names); ++i) {
+        shape = mal_shape_add_property(
+            shape, mal_intrinsic_string_key(vm, (const byte *) dispatch_names[i]),
+            HTTP_VISIBLE);
+    }
+    vm->node_http_server_response_dispatch_shape = shape;
 }
 
 static bool http_response_name(
@@ -1746,12 +1758,12 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
 
     // Preserve construction and any unusual constructor layout. Only the exact
     // canonical source shape can append both dispatch fields with one slot growth.
-    http_server_response_dispatch_shapes(vm);
+    http_server_response_shapes(vm);
     MalValue response_values[] = {roots[4], roots[4]};
     if (mal_object_try_append_shaped_values(
             mal_value_to_object(roots[1]),
-            vm->node_http_server_response_source_shape,
-            vm->node_http_server_response_final_shape,
+            vm->node_http_server_response_constructor_shape,
+            vm->node_http_server_response_dispatch_shape,
             response_values, (u32) countof(response_values))) {
         MAL_PERF_COUNT(http_response_shape_append_batches);
         MAL_PERF_ADD(http_response_shape_append_slots, countof(response_values));
@@ -2332,12 +2344,31 @@ static MalValue http_server_response_constructor(
     MalValue result = http_construct(vm, receiver, new_target, callee,
                                      MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR);
     if (mal_value_is_object(result)) {
-        http_define_own(vm, result, "statusCode", mal_value_from_i32(200));
-        http_define_own(vm, result, "statusMessage", mal_value_new_undefined());
-        http_define_own(vm, result, "headersSent", mal_value_new_boolean(false));
-        http_define_own(vm, result, "finished", mal_value_new_boolean(false));
-        http_define_own(vm, result, "writableEnded", mal_value_new_boolean(false));
-        http_define_own(vm, result, "writableFinished", mal_value_new_boolean(false));
+        http_server_response_shapes(vm);
+        MalValue values[] = {
+            mal_value_from_i32(200), mal_value_new_undefined(),
+            mal_value_new_boolean(false), mal_value_new_boolean(false),
+            mal_value_new_boolean(false), mal_value_new_boolean(false),
+        };
+        if (mal_object_try_append_shaped_values(
+                mal_value_to_object(result),
+                vm->node_http_server_response_parent_shape,
+                vm->node_http_server_response_constructor_shape,
+                values, (u32) countof(values))) {
+            MAL_PERF_COUNT(http_response_constructor_shape_append_batches);
+            MAL_PERF_ADD(http_response_constructor_shape_append_slots,
+                         countof(values));
+            MAL_PERF_ADD(http_response_constructor_slot_growths_avoided,
+                         countof(values) - 1);
+        } else {
+            MAL_PERF_COUNT(http_response_constructor_shape_append_fallbacks);
+            http_define_own(vm, result, "statusCode", values[0]);
+            http_define_own(vm, result, "statusMessage", values[1]);
+            http_define_own(vm, result, "headersSent", values[2]);
+            http_define_own(vm, result, "finished", values[3]);
+            http_define_own(vm, result, "writableEnded", values[4]);
+            http_define_own(vm, result, "writableFinished", values[5]);
+        }
     }
     return result;
 }

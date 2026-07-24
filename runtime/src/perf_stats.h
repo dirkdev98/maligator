@@ -186,6 +186,10 @@ typedef struct MalPerfStats {
     u64 http_incoming_message_shape_append_slots;
     u64 http_incoming_message_shape_append_fallbacks;
     u64 http_incoming_message_slot_growths_avoided;
+    u64 http_response_constructor_shape_append_batches;
+    u64 http_response_constructor_shape_append_slots;
+    u64 http_response_constructor_shape_append_fallbacks;
+    u64 http_response_constructor_slot_growths_avoided;
     u64 http_response_shape_append_batches;
     u64 http_response_shape_append_slots;
     u64 http_response_shape_append_fallbacks;

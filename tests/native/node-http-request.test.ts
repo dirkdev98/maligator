@@ -258,6 +258,10 @@ describe("node:http request bridge", () => {
 		expect(field(line, "incoming_message_shape_append_slots")).toBe(1148);
 		expect(field(line, "incoming_message_shape_append_fallbacks")).toBe(1);
 		expect(field(line, "incoming_message_slot_growths_avoided")).toBe(1066);
+		expect(field(line, "response_constructor_shape_append_batches")).toBe(83);
+		expect(field(line, "response_constructor_shape_append_slots")).toBe(498);
+		expect(field(line, "response_constructor_shape_append_fallbacks")).toBe(1);
+		expect(field(line, "response_constructor_slot_growths_avoided")).toBe(415);
 		expect(field(line, "response_shape_append_batches")).toBe(82);
 		expect(field(line, "response_shape_append_slots")).toBe(164);
 		expect(field(line, "response_shape_append_fallbacks")).toBe(1);
