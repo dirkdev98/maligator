@@ -1451,25 +1451,16 @@ MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, 
     const byte *tag = "[object Object]";
     // IsArray (step 4) is proxy-aware and runs before the @@toStringTag Get; a
     // revoked Proxy throws a TypeError here.
-    bool proxy_is_array = false;
-    if (mal_value_is_proxy_object(this_value)) {
-        MalValue unwrapped = this_value;
-        while (mal_value_is_proxy_object(unwrapped)) {
-            MalValue inner = mal_proxy_unwrap_target(unwrapped);
-            if (mal_value_is_proxy_object(inner) && inner == unwrapped) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot perform IsArray on a revoked Proxy");
-                return mal_value_new_undefined();
-            }
-            unwrapped = inner;
-        }
-        proxy_is_array = mal_value_is_array_object(unwrapped);
+    bool is_array;
+    if (!mal_vm_is_array(vm, this_value, &is_array)) {
+        return mal_value_new_undefined();
     }
 
     if (mal_value_is_undefined(this_value)) {
         tag = "[object Undefined]";
     } else if (mal_value_is_null(this_value)) {
         tag = "[object Null]";
-    } else if (mal_value_is_array_object(this_value) || proxy_is_array) {
+    } else if (is_array) {
         tag = "[object Array]";
     } else if (mal_value_is_callable(this_value)) {
         tag = "[object Function]";

@@ -415,15 +415,11 @@ static MalValue mal_builtin_array_constructor(MalVm *vm, MalValue this_value, co
 static MalValue mal_builtin_array_is_array(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    // IsArray (7.2.2): a Proxy answers for its target chain; a revoked Proxy throws.
-    if (mal_value_is_proxy_object(value)) {
-        value = mal_proxy_unwrap_target(value);
-        if (mal_value_is_proxy_object(value)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot perform IsArray on a revoked Proxy");
-            return mal_value_new_undefined();
-        }
+    bool is_array;
+    if (!mal_vm_is_array(vm, value, &is_array)) {
+        return mal_value_new_undefined();
     }
-    return mal_value_new_boolean(mal_value_is_array_object(value));
+    return mal_value_new_boolean(is_array);
 }
 
 static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -744,7 +740,11 @@ static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u
  */
 static bool mal_builtin_array_species_create(MalVm *vm, MalValue original, f64 length, MalValue *out) {
     MalValue constructor = mal_value_new_undefined();
-    if (mal_value_is_array_object(original)) {
+    bool is_array;
+    if (!mal_vm_is_array(vm, original, &is_array)) {
+        return false;
+    }
+    if (is_array) {
         if (!mal_vm_get_property(vm, original, mal_intrinsic_string_key(vm, "constructor"), &constructor)) {
             return false;
         }
@@ -1598,16 +1598,8 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
     for (i32 i = -1; i < arg_count; i++) {
         MalValue source = i < 0 ? this_value : args[i];
 
-        // A defined @@isConcatSpreadable overrides the IsArray default.
-        MalValue spread_target = source;
-        if (mal_value_is_proxy_object(spread_target)) {
-            spread_target = mal_proxy_unwrap_target(spread_target);
-            if (mal_value_is_proxy_object(spread_target)) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot perform IsArray on a revoked Proxy");
-                return mal_value_new_undefined();
-            }
-        }
-        bool spreadable = mal_value_is_array_object(spread_target);
+        // A defined @@isConcatSpreadable overrides the IsArray fallback.
+        bool spreadable = false;
         if (mal_value_is_object(source)) {
             MalValue spreadable_value;
             if (!mal_vm_get_property(vm, source, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_IS_CONCAT_SPREADABLE), &spreadable_value)) {
@@ -1616,6 +1608,8 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
 
             if (!mal_value_is_undefined(spreadable_value)) {
                 spreadable = mal_value_is_truthy(spreadable_value);
+            } else if (!mal_vm_is_array(vm, source, &spreadable)) {
+                return mal_value_new_undefined();
             }
         }
 
@@ -1963,7 +1957,11 @@ static void mal_builtin_array_flatten_into(MalVm *vm, MalValue result, u32 *coun
             continue;
         }
 
-        if (depth > 0 && mal_value_is_array_object(element)) {
+        bool should_flatten = false;
+        if (depth > 0 && !mal_vm_is_array(vm, element, &should_flatten)) {
+            return;
+        }
+        if (should_flatten) {
             mal_builtin_array_flatten_into(vm, result, count, element, depth - 1);
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
                 return;
@@ -2006,7 +2004,11 @@ static MalValue mal_builtin_array_flat(MalVm *vm, MalValue this_value, const Mal
             }
             continue;
         }
-        if (depth > 0 && mal_value_is_array_object(element)) {
+        bool should_flatten = false;
+        if (depth > 0 && !mal_vm_is_array(vm, element, &should_flatten)) {
+            break;
+        }
+        if (should_flatten) {
             mal_builtin_array_flatten_into(vm, result, &count, element, depth - 1);
         } else {
             mal_builtin_array_create_data_property(vm, result, count++, element);
@@ -2035,8 +2037,15 @@ done:
  * Shared by `mal_builtin_array_flat_map` and the guarded-inlining append intrinsic.
  */
 static bool mal_array_flat_map_append(MalVm *vm, MalValue result, u32 *count, MalValue mapped) {
-    if (mal_value_is_array_object(mapped)) {
-        u32 mapped_length = mal_array_object_length(mal_value_to_array_object(mapped));
+    bool should_flatten;
+    if (!mal_vm_is_array(vm, mapped, &should_flatten)) {
+        return false;
+    }
+    if (should_flatten) {
+        u32 mapped_length;
+        if (!mal_builtin_array_this_length(vm, mapped, &mapped_length)) {
+            return false;
+        }
         for (u32 inner = 0; inner < mapped_length; inner++) {
             MalValue inner_element;
             if (mal_builtin_array_try_get(vm, mapped, inner, &inner_element)) {

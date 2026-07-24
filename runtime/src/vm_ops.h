@@ -62,6 +62,9 @@ bool mal_vm_get_own_property(
 /** Spec IsExtensible over ordinary and Proxy objects. */
 bool mal_vm_is_extensible_object(MalVm *vm, MalValue object, bool *extensible_out);
 
+/** Spec IsArray: recurse through Proxy targets and throw for a revoked Proxy. */
+bool mal_vm_is_array(MalVm *vm, MalValue value, bool *is_array_out);
+
 /**
  * Spec-flavored Get(receiver, key) over any value: nil receivers throw,
  * primitives resolve against their prototype intrinsics (string length and

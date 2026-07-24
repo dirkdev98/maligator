@@ -3240,6 +3240,21 @@ bool mal_vm_is_constructor(MalVm *vm, MalValue value) {
     return false;
 }
 
+bool mal_vm_is_array(MalVm *vm, MalValue value, bool *is_array_out) {
+    while (mal_value_is_proxy_object(value)) {
+        MalProxyObject *proxy = mal_value_to_proxy_object(value);
+        if (proxy->revoked || mal_value_is_null(proxy->handler)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Cannot perform IsArray on a revoked Proxy");
+            return false;
+        }
+        value = proxy->target;
+    }
+
+    *is_array_out = mal_value_is_array_object(value);
+    return true;
+}
+
 // Spec Set with an already-converted key (defined below); the store inline cache
 // converts once and reuses it on the slow path to avoid a second ToPropertyKey.
 static void mal_vm_op_store_property_keyed(

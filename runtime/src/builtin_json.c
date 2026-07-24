@@ -215,20 +215,6 @@ static bool mal_json_push_indent(MalJsonState *state, MalJsonBuilder *builder, u
     return true;
 }
 
-/** IsArray (7.2.2): unwrap a Proxy to its target; a revoked Proxy throws. */
-static bool mal_json_is_array(MalVm *vm, MalValue value, bool *out) {
-    while (mal_value_is_proxy_object(value)) {
-        MalValue target = mal_proxy_unwrap_target(value);
-        if (mal_value_is_proxy_object(target) && target == value) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot perform IsArray on a revoked Proxy");
-            return false;
-        }
-        value = target;
-    }
-    *out = mal_value_is_array_object(value);
-    return true;
-}
-
 /** Push value to the cycle stack, throwing a TypeError if it is already present. */
 static bool mal_json_stack_push(MalJsonState *state, MalValue value) {
     for (usize i = 0; i < state->stack_count; i++) {
@@ -518,7 +504,7 @@ static MalJsonResult mal_json_serialize_property(MalJsonState *state, MalJsonBui
     }
     if (mal_value_is_object(value) && !mal_value_is_callable(value)) {
         bool is_array;
-        if (!mal_json_is_array(vm, value, &is_array)) {
+        if (!mal_vm_is_array(vm, value, &is_array)) {
             return MAL_JSON_THROW;
         }
         return is_array
@@ -601,7 +587,7 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
             state.replacer_fn = replacer;
         } else {
             bool is_array;
-            if (!mal_json_is_array(vm, replacer, &is_array)) {
+            if (!mal_vm_is_array(vm, replacer, &is_array)) {
                 return mal_value_new_undefined();
             }
             if (is_array && !mal_json_build_property_list(&state, replacer)) {
@@ -1015,7 +1001,7 @@ static bool mal_json_internalize(MalVm *vm, MalValue reviver, MalValue holder, M
 
     if (mal_value_is_object(value)) {
         bool is_array;
-        if (!mal_json_is_array(vm, value, &is_array)) {
+        if (!mal_vm_is_array(vm, value, &is_array)) {
             return false;
         }
         if (is_array) {
