@@ -1059,11 +1059,14 @@ export type IRInstruction =
 	| {
 			type: "defineProperty";
 
-			// [object, key, value]; defines an own writable + configurable
-			// data property, used for class members.
+			// [object, key, value]; defines an own data property. Ordinary
+			// object/class members use the writable/configurable defaults; class
+			// constructor prototype wiring overrides both to false.
 			registers: [number, number, number];
 
 			enumerable: boolean;
+			writable?: boolean;
+			configurable?: boolean;
 	  }
 	| {
 			// SetFunctionName([func], [key]): set an anonymous function/class value's
@@ -3504,8 +3507,11 @@ function compileClass(
 			enumerable: false,
 		});
 		cursor.block.instructions.push({
-			type: "storeProperty",
+			type: "defineProperty",
 			registers: [ctor, prototypeKey, prototype],
+			enumerable: false,
+			writable: false,
+			configurable: false,
 		});
 		// constructorParent: the superclass, or %Function.prototype% for extends null.
 		let constructorParent = parent;

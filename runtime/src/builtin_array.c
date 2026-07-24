@@ -717,7 +717,8 @@ done:
  */
 static bool mal_builtin_array_create_data_property_wide(MalVm *vm, MalValue target, f64 index, MalValue value) {
     if (mal_value_is_proxy_object(target)) {
-        mal_vm_op_define_property(vm, target, mal_value_from_f64(index), value, true);
+        mal_vm_op_define_property(
+            vm, target, mal_value_from_f64(index), value, true, true, true);
         return vm->completion.kind != MAL_COMPLETION_THROW;
     }
     // [[DefineOwnProperty]] (not [[Set]]): overwrites a configurable property and

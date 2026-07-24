@@ -527,6 +527,8 @@ typedef struct MalInstruction {
         struct {
             i32 object, key, value;
             bool enumerable;
+            bool writable;
+            bool configurable;
         } define_property;
 
         struct {

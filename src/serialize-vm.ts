@@ -12,13 +12,13 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  * writer wrote them, so no in-buffer offsets are needed. The opcode / operator /
  * intrinsic tag orderings below are the cross-language contract — the C loader
  * mirrors them. Existing tags and operand layouts are immutable; new opcodes are
- * appended so version-13 inputs remain readable. WIRE_VERSION is bumped only for
+ * appended so older inputs remain readable. WIRE_VERSION is bumped only for
  * an incompatible layout change, which deliberately rejects stale buffers.
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 13 for persisted static-arguments entry move plans.
-export const WIRE_VERSION = 13;
+// Bumped to 14 for DEFINE_PROPERTY descriptor attributes.
+export const WIRE_VERSION = 14;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -912,6 +912,8 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.key);
 			w.i32(i.value);
 			w.u8(i.enumerable ? 1 : 0);
+			w.u8(i.writable ? 1 : 0);
+			w.u8(i.configurable ? 1 : 0);
 			return;
 		case "SET_FUNCTION_NAME":
 			w.i32(i.func);
@@ -1444,6 +1446,8 @@ function readInstruction(r: Reader): VmInstruction {
 				key: r.i32(),
 				value: r.i32(),
 				enumerable: r.u8() !== 0,
+				writable: r.u8() !== 0,
+				configurable: r.u8() !== 0,
 			};
 		case "SET_PROTOTYPE":
 			return { opcode, object: r.i32(), prototype: r.i32(), literal: r.u8() !== 0 };

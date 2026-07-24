@@ -12,11 +12,11 @@
  * into the runtime structs. The per-opcode operand layout, the opcode tag
  * ordering (WireOp below), and the operator/intrinsic tables mirror
  * serialize-vm.ts exactly. Existing tags/layouts are immutable and new opcodes
- * append, preserving version-13 input; WIRE_VERSION guards incompatible changes.
+ * append where possible; WIRE_VERSION guards incompatible changes.
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 13u        // static-arguments entry move plans
+#define WIRE_VERSION 14u        // DEFINE_PROPERTY descriptor attributes
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -866,6 +866,8 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.define_property.key = rd_i32(r);
             o->as.define_property.value = rd_i32(r);
             o->as.define_property.enumerable = rd_u8(r) != 0;
+            o->as.define_property.writable = rd_u8(r) != 0;
+            o->as.define_property.configurable = rd_u8(r) != 0;
             return;
         case WIRE_SET_FUNCTION_NAME:
             o->opcode = MAL_OP_SET_FUNCTION_NAME;

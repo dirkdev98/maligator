@@ -63,3 +63,35 @@ test("object literal methods are non-constructible without depending on sibling 
 	expect(withoutSuper.functions[1]?.hasPrototype).toBe(false);
 	expect(withSuper.functions[1]?.hasPrototype).toBe(false);
 });
+
+test("class heritage defines the constructor prototype without ordinary assignment", () => {
+	const ir = compile(`class B {}; class D extends B {}`);
+	const prototypeDefinitions = ir.functions
+		.flatMap((fn) => fn.blocks)
+		.flatMap((block) => block.instructions)
+		.filter(
+			(instruction) =>
+				instruction.type === "defineProperty" && instruction.writable === false,
+		);
+	expect(prototypeDefinitions).toHaveLength(1);
+	expect(prototypeDefinitions[0]).toMatchObject({
+		type: "defineProperty",
+		enumerable: false,
+		writable: false,
+		configurable: false,
+	});
+
+	executeIROptimizations(ir);
+	allocateRegisters(ir);
+	const roundTripped = deserializeVmDefinition(
+		serializeVmDefinition(lowerIrProgramToVmDefinition(ir)),
+	);
+	expect(
+		roundTripped.functions
+			.flatMap((fn) => fn.instructions)
+			.filter(
+				(instruction) =>
+					instruction.opcode === "DEFINE_PROPERTY" && !instruction.writable,
+			),
+	).toHaveLength(1);
+});

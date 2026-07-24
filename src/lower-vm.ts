@@ -711,6 +711,8 @@ export type VmInstruction =
 			key: number;
 			value: number;
 			enumerable: boolean;
+			writable: boolean;
+			configurable: boolean;
 	  }
 	| {
 			opcode: "SET_FUNCTION_NAME";
@@ -1655,6 +1657,8 @@ function lowerInstructionToVmInstruction(
 				key: instruction.registers[1],
 				value: instruction.registers[2],
 				enumerable: instruction.enumerable,
+				writable: instruction.writable ?? true,
+				configurable: instruction.configurable ?? true,
 			};
 		case "setFunctionName":
 			return {

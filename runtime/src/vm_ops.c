@@ -4921,13 +4921,21 @@ void mal_op_define_accessor(MalCallable *callable, const MalInstruction *instruc
     );
 }
 
-void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool enumerable) {
+void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_value,
+                               MalValue value, bool enumerable, bool writable,
+                               bool configurable) {
     MalKey key;
     if (!mal_value_is_object(object_value) || !mal_vm_value_to_property_key(vm, key_value, &key)) {
         return;
     }
 
-    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE;
+    MalPropertyFlags flags = MAL_PROPERTY_NONE;
+    if (writable) {
+        flags |= MAL_PROPERTY_WRITABLE;
+    }
+    if (configurable) {
+        flags |= MAL_PROPERTY_CONFIGURABLE;
+    }
     if (enumerable) {
         flags |= MAL_PROPERTY_ENUMERABLE;
     }
@@ -4977,7 +4985,9 @@ void mal_op_define_property(MalCallable *callable, const MalInstruction *instruc
         callable->registers[instruction->as.define_property.object],
         callable->registers[instruction->as.define_property.key],
         callable->registers[instruction->as.define_property.value],
-        instruction->as.define_property.enumerable
+        instruction->as.define_property.enumerable,
+        instruction->as.define_property.writable,
+        instruction->as.define_property.configurable
     );
 }
 

@@ -1629,7 +1629,7 @@ function emitInstruction(
 			// Object-literal define semantics; cannot run user code, so no
 			// completion check (matching the interpreter's mal_op_define_property).
 			return [
-				`mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable});`,
+				`mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`,
 			];
 		case "DEFINE_ACCESSOR":
 			// Object-literal / class getter or setter; no user code run.
