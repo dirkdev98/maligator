@@ -5889,13 +5889,30 @@ function compileForOfStatement(
 	statement: ESTree.ForOfStatement,
 ) {
 	const entryCursor: IRCursor = { block };
+	const perIter = setupPerIterationScope(program, fn, statement);
+	const lexicalHead =
+		statement.left.type === "VariableDeclaration" && statement.left.kind !== "var";
+	if (perIter && lexicalHead) {
+		entryCursor.block.instructions.push({
+			type: "envPush",
+			scopeId: perIter.scopeId,
+			slotCount: perIter.slotCount,
+		});
+	}
+	if (lexicalHead) {
+		const scope = fn.semanticFile.nodeToScope.get(statement);
+		if (scope) {
+			// ForIn/OfHeadEvaluation evaluates the RHS with every ForDeclaration
+			// bound name present but uninitialized, including destructuring names.
+			emitTdzHoleInits(program, fn, entryCursor.block, scope.bindings);
+		}
+	}
 	const iterable = compileExpression(program, fn, entryCursor, statement.right);
 	if (iterable === -1) {
 		return;
 	}
 	resetEvalCompletion(fn, entryCursor.block);
 
-	const perIter = setupPerIterationScope(program, fn, statement);
 	if (statement.await) {
 		compileForAwaitOfLoop(
 			program,
@@ -5905,6 +5922,7 @@ function compileForOfStatement(
 			statement.left,
 			statement.body,
 			perIter,
+			lexicalHead && perIter !== null,
 		);
 	} else {
 		compileForInOfLoop(
@@ -5915,6 +5933,7 @@ function compileForOfStatement(
 			statement.left,
 			statement.body,
 			perIter,
+			lexicalHead && perIter !== null,
 		);
 	}
 }
@@ -5932,6 +5951,22 @@ function compileForInStatement(
 	statement: ESTree.ForInStatement,
 ) {
 	const entryCursor: IRCursor = { block };
+	const perIter = setupPerIterationScope(program, fn, statement);
+	const lexicalHead =
+		statement.left.type === "VariableDeclaration" && statement.left.kind !== "var";
+	if (perIter && lexicalHead) {
+		entryCursor.block.instructions.push({
+			type: "envPush",
+			scopeId: perIter.scopeId,
+			slotCount: perIter.slotCount,
+		});
+	}
+	if (lexicalHead) {
+		const scope = fn.semanticFile.nodeToScope.get(statement);
+		if (scope) {
+			emitTdzHoleInits(program, fn, entryCursor.block, scope.bindings);
+		}
+	}
 	const source = compileExpression(program, fn, entryCursor, statement.right);
 	if (source === -1) {
 		return;
@@ -5944,7 +5979,6 @@ function compileForInStatement(
 	});
 	resetEvalCompletion(fn, entryCursor.block);
 
-	const perIter = setupPerIterationScope(program, fn, statement);
 	compileForInOfLoop(
 		program,
 		fn,
@@ -5953,6 +5987,7 @@ function compileForInStatement(
 		statement.left,
 		statement.body,
 		perIter,
+		lexicalHead && perIter !== null,
 	);
 }
 
@@ -5969,6 +6004,7 @@ function compileForInOfLoop(
 	left: ESTree.ForOfStatement["left"],
 	body: ESTree.Statement,
 	perIter: { scopeId: number; slotCount: number } | null,
+	perIterEnvEntered: boolean,
 ) {
 	const labels = takePendingLabels(fn);
 	const iteratorRegister = nextRegisterDestination(fn);
@@ -5977,10 +6013,7 @@ function compileForInOfLoop(
 		type: "getIterator",
 		registers: [iteratorRegister, nextRegister, iterable],
 	});
-
-	// Enter the per-iteration scope (each iteration rebinds captured head and direct
-	// body bindings into a fresh env via the ENV_COPY in the bind block below).
-	if (perIter) {
+	if (perIter && !perIterEnvEntered) {
 		entryCursor.block.instructions.push({
 			type: "envPush",
 			scopeId: perIter.scopeId,
@@ -6125,6 +6158,7 @@ function compileForAwaitOfLoop(
 	left: ESTree.ForOfStatement["left"],
 	body: ESTree.Statement,
 	perIter: { scopeId: number; slotCount: number } | null,
+	perIterEnvEntered: boolean,
 ) {
 	const labels = takePendingLabels(fn);
 	const iteratorRegister = nextRegisterDestination(fn);
@@ -6133,8 +6167,7 @@ function compileForAwaitOfLoop(
 		type: "getAsyncIterator",
 		registers: [iteratorRegister, nextRegister, iterable],
 	});
-
-	if (perIter) {
+	if (perIter && !perIterEnvEntered) {
 		entryCursor.block.instructions.push({
 			type: "envPush",
 			scopeId: perIter.scopeId,

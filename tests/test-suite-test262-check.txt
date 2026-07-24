@@ -428,11 +428,15 @@ test/language/arguments-object/cls-decl-meth-static-args-trailing-comma-single-a
 test/language/eval-code/direct/var-env-func-init-multi.js
 test/language/global-code/decl-func-dup.js
 test/language/statements/do-while/cptn-normal.js
+test/language/statements/for-in/head-const-bound-names-fordecl-tdz.js
+test/language/statements/for-in/head-let-bound-names-fordecl-tdz.js
 test/language/statements/for-of/cptn-expr-no-itr.js
 test/language/statements/for-of/dstr/array-elem-put-let.js
 test/language/statements/for-of/dstr/array-rest-put-let.js
 test/language/statements/for-of/dstr/obj-id-put-let.js
 test/language/statements/for-of/dstr/obj-prop-put-let.js
+test/language/statements/for-of/head-const-bound-names-fordecl-tdz.js
+test/language/statements/for-of/head-let-bound-names-fordecl-tdz.js
 test/language/statements/function/S14_A5_T2.js
 test/language/statements/if/cptn-else-false-nrml.js
 test/language/statements/let/block-local-closure-set-before-initialization.js
