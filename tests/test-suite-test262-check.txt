@@ -254,6 +254,10 @@ test/language/computed-property-names/class/static/method-constructor.js
 test/language/destructuring/binding/syntax/destructuring-array-parameters-function-arguments-length.js
 test/language/eval-code/direct/gen-func-expr-named-a-following-parameter-is-named-arguments-declare-arguments.js
 test/language/export/escaped-default.js
+test/language/expressions/assignment/dstr/array-elem-put-let.js
+test/language/expressions/assignment/dstr/array-rest-put-let.js
+test/language/expressions/assignment/dstr/obj-id-put-let.js
+test/language/expressions/assignment/dstr/obj-prop-put-let.js
 test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-elem-obj-prop-id-init.js
 test/language/expressions/class/elements/new-no-sc-line-method-rs-privatename-identifier.js
 test/language/expressions/compound-assignment/11.13.2-37-s.js
@@ -425,6 +429,10 @@ test/language/eval-code/direct/var-env-func-init-multi.js
 test/language/global-code/decl-func-dup.js
 test/language/statements/do-while/cptn-normal.js
 test/language/statements/for-of/cptn-expr-no-itr.js
+test/language/statements/for-of/dstr/array-elem-put-let.js
+test/language/statements/for-of/dstr/array-rest-put-let.js
+test/language/statements/for-of/dstr/obj-id-put-let.js
+test/language/statements/for-of/dstr/obj-prop-put-let.js
 test/language/statements/function/S14_A5_T2.js
 test/language/statements/if/cptn-else-false-nrml.js
 test/staging/sm/statements/for-inof-name-iteration-expression-contains-index-string.js

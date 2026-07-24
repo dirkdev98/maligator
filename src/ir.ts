@@ -4544,6 +4544,20 @@ function compileStaticIdentifierTarget(
 		? globalPropertyLocation(program, binding.name)
 		: null;
 
+	if (isAssign && !binding.undeclared && (isTdzBinding(binding) || fn.inParameterExpression)) {
+		// PutValue → SetMutableBinding on a still-uninitialized lexical binding is a
+		// ReferenceError, and the spec runs that check before the const-immutability
+		// TypeError below. Mirrors the read-side guard in compileStaticIdentifier;
+		// harmless once initialized (the slot no longer holds the EMPTY sentinel).
+		const location = hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
+		const current = loadRegisterFromLocation(fn, cursor.block, location);
+		cursor.block.instructions.push({
+			type: "throwIfTdz",
+			registers: [current],
+			nameStringIndex: getOrCreateStringConstant(program, binding.name),
+		});
+	}
+
 	if (isAssign && binding.kind === "const" && !binding.undeclared) {
 		// Destructuring assignment to a const binding is a TypeError, matching the
 		// plain-assignment path (PutValue → SetMutableBinding on an immutable
