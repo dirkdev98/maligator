@@ -1,6 +1,7 @@
 # High-signal regression complement. Keep disjoint from Test262 smoke.
 test/built-ins/AggregateError/newtarget-proto-custom.js
 test/built-ins/Array/fromAsync/sync-iterable-with-rejecting-thenable-closes.js
+test/built-ins/Array/of/does-not-use-prototype-properties.js
 test/built-ins/Array/prototype/concat/arg-length-exceeding-integer-limit.js
 test/built-ins/Array/prototype/concat/arg-length-near-integer-limit.js
 test/built-ins/Array/prototype/copyWithin/length-near-integer-limit.js

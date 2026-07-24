@@ -406,7 +406,7 @@ static MalValue mal_builtin_array_constructor(MalVm *vm, MalValue this_value, co
 
     MalArrayObject *array = mal_intrinsic_new_dense_array(vm, (u32) arg_count);
     for (i32 i = 0; i < arg_count; i++) {
-        mal_object_set((MalObject *) array, mal_key_index(i), args[i]);
+        mal_array_object_store(array, mal_key_index(i), args[i]);
     }
 
     return mal_value_from_array_object(array);
@@ -439,7 +439,7 @@ static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalVa
     if (plain_mode) {
         MalArrayObject *array = mal_intrinsic_new_dense_array(vm, length);
         for (i32 i = 0; i < arg_count; i++) {
-            mal_object_set((MalObject *) array, mal_key_index(i), args[i]);
+            mal_array_object_store(array, mal_key_index(i), args[i]);
         }
         return mal_value_from_array_object(array);
     }
@@ -671,7 +671,7 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
 
         bool ok;
         if (plain_mode) {
-            ok = mal_object_set(mal_value_to_object(roots[0]), mal_key_index(index), element);
+            ok = mal_array_object_store(mal_value_to_array_object(roots[0]), mal_key_index(index), element);
         } else {
             ok = mal_builtin_array_create_data_property(vm, roots[0], index, element);
         }
