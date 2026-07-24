@@ -302,6 +302,84 @@ function iterableFrom(next, close) {
 
 {
 	const events = [];
+	function iterable(name, value) {
+		return {
+			[Symbol.iterator]() {
+				return {
+					next() {
+						return { done: false, value };
+					},
+					return() {
+						events.push(name);
+						return {};
+					},
+				};
+			},
+		};
+	}
+	function* nested() {
+		const outer = iterable("outer", iterable("inner", undefined));
+		const [[value = yield]] = outer;
+		return value;
+	}
+	const iterator = nested();
+	iterator.next();
+	const result = iterator.return(17);
+	ok(
+		"generator return closes nested pattern iterators inside out",
+		result.done && result.value === 17 && events.join(",") === "inner,outer",
+	);
+}
+
+{
+	const original = { name: "resume-throw" };
+	let closeCalls = 0;
+	function* suspended() {
+		const [value = yield] = iterableFrom(
+			function () {
+				return { done: false, value: undefined };
+			},
+			function () {
+				closeCalls++;
+				throw new Error("secondary");
+			},
+		);
+		return value;
+	}
+	const iterator = suspended();
+	iterator.next();
+	ok(
+		"generator throw preserves the throw completion while closing once",
+		caughtValue(function () {
+			iterator.throw(original);
+		}) === original && closeCalls === 1,
+	);
+}
+
+{
+	function* suspended(returnMethod) {
+		const [value = yield] = iterableFrom(function () {
+			return { done: false, value: undefined };
+		}, returnMethod);
+		return value;
+	}
+	const missing = suspended(undefined);
+	missing.next();
+	const missingResult = missing.return(23);
+	ok("generator return permits a missing return method", missingResult.value === 23);
+
+	const nonCallable = suspended(1);
+	nonCallable.next();
+	ok(
+		"generator return rejects a non-callable return method",
+		caughtValue(function () {
+			nonCallable.return(24);
+		}) instanceof TypeError,
+	);
+}
+
+{
+	const events = [];
 	let receiver;
 	class Base {}
 	Object.defineProperty(Base.prototype, "value", {

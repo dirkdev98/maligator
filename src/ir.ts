@@ -467,8 +467,9 @@ interface IRLoopContext {
 	 * carry no target but sit on the same stack so abrupt completions route
 	 * through enclosing finalizers in lexical order. "with" entries likewise carry
 	 * no target; they pop the active with-object as control leaves the body.
+	 * "iterator" entries track a destructuring iterator across suspension.
 	 */
-	kind: "loop" | "switch" | "finally" | "label" | "with";
+	kind: "loop" | "switch" | "finally" | "label" | "with" | "iterator";
 	breakJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
 	continueJumps: Array<Extract<IRInstruction, { type: "jump" }>>;
 
@@ -482,6 +483,10 @@ interface IRLoopContext {
 	 * emit the spec IteratorClose before leaving the loop.
 	 */
 	iteratorRegister?: number;
+	/** Stable IteratorRecord.[[Done]] state for conditional, single-shot cleanup. */
+	iteratorDoneRegister?: number;
+	/** Non-throw exits propagate return() failures and validate its result. */
+	iteratorCloseNormal?: boolean;
 
 	/**
 	 * For a loop whose lexical head bindings are captured by a closure: the
@@ -4703,6 +4708,7 @@ function compileIteratorDrainInto(
 	one: number,
 	iteratorRegister: number,
 	nextRegister: number,
+	doneRegister = nextRegisterDestination(fn),
 ) {
 	const headerIdx = fn.blocks.push({ instructions: [] }) - 1;
 	cursor.block.instructions.push({
@@ -4712,7 +4718,6 @@ function compileIteratorDrainInto(
 
 	const header = fn.blocks[headerIdx]!;
 	const valueRegister = nextRegisterDestination(fn);
-	const doneRegister = nextRegisterDestination(fn);
 	header.instructions.push({
 		type: "iteratorStep",
 		registers: [valueRegister, doneRegister, iteratorRegister, nextRegister],
@@ -4758,6 +4763,7 @@ function compileIteratorRest(
 	cursor: IRCursor,
 	iteratorRegister: number,
 	nextRegister: number,
+	doneRegister?: number,
 ): number {
 	const rest = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
@@ -4767,7 +4773,16 @@ function compileIteratorRest(
 	});
 	const index = compileNumberLiteral(fn, cursor, 0);
 	const one = compileNumberLiteral(fn, cursor, 1);
-	compileIteratorDrainInto(fn, cursor, rest, index, one, iteratorRegister, nextRegister);
+	compileIteratorDrainInto(
+		fn,
+		cursor,
+		rest,
+		index,
+		one,
+		iteratorRegister,
+		nextRegister,
+		doneRegister,
+	);
 
 	return rest;
 }
@@ -4801,25 +4816,14 @@ function compileWithIteratorCloseOnThrow(
 	const caught = nextRegisterDestination(fn);
 	handler.instructions.push({ type: "catch", registers: [caught] });
 
-	let rethrowJump: Extract<IRInstruction, { type: "jumpIf" }> | undefined;
-	if (doneRegister !== undefined) {
-		rethrowJump = {
-			type: "jumpIf",
-			registers: [doneRegister],
-			blocks: [-1],
-		};
-		handler.instructions.push(rethrowJump);
-	}
-	handler.instructions.push(
-		{ type: "iteratorClose", registers: [iteratorRegister] },
-		{ type: "throw", registers: [caught] },
+	const rethrowBlock = emitIteratorCloseForCompletion(
+		fn,
+		handler,
+		iteratorRegister,
+		false,
+		doneRegister,
 	);
-
-	if (rethrowJump) {
-		const rethrowIdx =
-			fn.blocks.push({ instructions: [{ type: "throw", registers: [caught] }] }) - 1;
-		rethrowJump.blocks[0] = rethrowIdx;
-	}
+	rethrowBlock.instructions.push({ type: "throw", registers: [caught] });
 
 	const continuationIdx = fn.blocks.push({ instructions: [] }) - 1;
 	tryExit.instructions.push({ type: "jump", blocks: [continuationIdx] });
@@ -4837,37 +4841,44 @@ function compileCapturedMemberReference(
 	cursor: IRCursor,
 	target: ESTree.MemberExpression,
 	iteratorRegister: number,
+	doneRegister?: number,
 ): CompiledMemberReference {
 	let compiled: CompiledMemberReference = { object: -1, key: -1 };
 	let slots: { object: number; key: number; receiver?: number } | undefined;
 
-	compileWithIteratorCloseOnThrow(fn, cursor, iteratorRegister, () => {
-		compiled = compileMemberObjectAndKey(program, fn, cursor, target);
-		if (compiled.object === -1 || compiled.key === -1) {
-			return;
-		}
+	compileWithIteratorCloseOnThrow(
+		fn,
+		cursor,
+		iteratorRegister,
+		() => {
+			compiled = compileMemberObjectAndKey(program, fn, cursor, target);
+			if (compiled.object === -1 || compiled.key === -1) {
+				return;
+			}
 
-		slots = {
-			object: fn.nextLocalIndex++,
-			key: fn.nextLocalIndex++,
-			receiver: compiled.receiver === undefined ? undefined : fn.nextLocalIndex++,
-		};
-		cursor.block.instructions.push(
-			{
-				type: "storeLocal",
-				registers: [compiled.object],
-				index: slots.object,
-			},
-			{ type: "storeLocal", registers: [compiled.key], index: slots.key },
-		);
-		if (compiled.receiver !== undefined && slots.receiver !== undefined) {
-			cursor.block.instructions.push({
-				type: "storeLocal",
-				registers: [compiled.receiver],
-				index: slots.receiver,
-			});
-		}
-	});
+			slots = {
+				object: fn.nextLocalIndex++,
+				key: fn.nextLocalIndex++,
+				receiver: compiled.receiver === undefined ? undefined : fn.nextLocalIndex++,
+			};
+			cursor.block.instructions.push(
+				{
+					type: "storeLocal",
+					registers: [compiled.object],
+					index: slots.object,
+				},
+				{ type: "storeLocal", registers: [compiled.key], index: slots.key },
+			);
+			if (compiled.receiver !== undefined && slots.receiver !== undefined) {
+				cursor.block.instructions.push({
+					type: "storeLocal",
+					registers: [compiled.receiver],
+					index: slots.receiver,
+				});
+			}
+		},
+		doneRegister,
+	);
 
 	if (!slots) {
 		return compiled;
@@ -4908,8 +4919,22 @@ function compileArrayPatternTarget(
 		type: "getIterator",
 		registers: [iteratorRegister, nextRegister, value],
 	});
+	const doneRegister = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "createBoolean",
+		registers: [doneRegister],
+		value: false,
+	});
+	const iteratorScope: IRLoopContext = {
+		kind: "iterator",
+		breakJumps: [],
+		continueJumps: [],
+		iteratorRegister,
+		iteratorDoneRegister: doneRegister,
+		iteratorCloseNormal: true,
+	};
+	(fn.loops ??= []).push(iteratorScope);
 
-	let lastDoneRegister = -1;
 	for (const element of pattern.elements) {
 		if (element?.type === "RestElement") {
 			// Assignment rest evaluates its reference before it starts draining. Keep
@@ -4922,12 +4947,20 @@ function compileArrayPatternTarget(
 							cursor,
 							element.argument,
 							iteratorRegister,
+							doneRegister,
 						)
 					: undefined;
 
 			// Rest is last by grammar and exhausts the iterator: next() and the
 			// eventual store are outside the close-on-reference-abrupt range.
-			const rest = compileIteratorRest(fn, cursor, iteratorRegister, nextRegister);
+			const rest = compileIteratorRest(
+				fn,
+				cursor,
+				iteratorRegister,
+				nextRegister,
+				doneRegister,
+			);
+			fn.loops.pop();
 			if (capturedMember) {
 				if (capturedMember.object !== -1 && capturedMember.key !== -1) {
 					compileMemberStore(cursor, capturedMember, rest);
@@ -4960,6 +4993,7 @@ function compileArrayPatternTarget(
 					cursor,
 					memberTarget,
 					iteratorRegister,
+					doneRegister,
 				)
 			: undefined;
 
@@ -4967,12 +5001,10 @@ function compileArrayPatternTarget(
 		// to undefined; the extra next() calls past done are a known
 		// deviation from the spec's [[Done]] tracking.
 		const elementValue = nextRegisterDestination(fn);
-		const doneRegister = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
 			type: "iteratorStep",
 			registers: [elementValue, doneRegister, iteratorRegister, nextRegister],
 		});
-		lastDoneRegister = doneRegister;
 
 		if (element) {
 			if (capturedMember) {
@@ -5006,53 +5038,25 @@ function compileArrayPatternTarget(
 					doneRegister,
 				);
 			} else {
-				compilePatternTarget(program, fn, cursor, element, elementValue, false);
+				compileWithIteratorCloseOnThrow(
+					fn,
+					cursor,
+					iteratorRegister,
+					() => compilePatternTarget(program, fn, cursor, element, elementValue, false),
+					doneRegister,
+				);
 			}
 		}
 	}
 
-	// IteratorClose when the pattern did not exhaust the iterator. With no
-	// elements the iterator is trivially unexhausted; otherwise the last
-	// step's done flag decides. Assignment-target abrupt completions have already
-	// closed through their protected ranges above.
-	if (lastDoneRegister === -1) {
-		cursor.block.instructions.push({
-			type: "iteratorClose",
-			registers: [iteratorRegister],
-			normal: true,
-		});
-		return;
-	}
-
-	const skipJump: Extract<IRInstruction, { type: "jumpIf" }> = {
-		type: "jumpIf",
-		registers: [lastDoneRegister],
-		blocks: [-1],
-	};
-	cursor.block.instructions.push(skipJump);
-
-	const closeIdx = fn.blocks.push({ instructions: [] }) - 1;
-	cursor.block.instructions.push({
-		type: "jump",
-		blocks: [closeIdx],
-	});
-	const joinJump: Extract<IRInstruction, { type: "jump" }> = {
-		type: "jump",
-		blocks: [-1],
-	};
-	fn.blocks[closeIdx]!.instructions.push(
-		{
-			type: "iteratorClose",
-			registers: [iteratorRegister],
-			normal: true,
-		},
-		joinJump,
+	cursor.block = emitIteratorCloseForCompletion(
+		fn,
+		cursor.block,
+		iteratorRegister,
+		true,
+		doneRegister,
 	);
-
-	const joinIdx = fn.blocks.push({ instructions: [] }) - 1;
-	skipJump.blocks[0] = joinIdx;
-	joinJump.blocks[0] = joinIdx;
-	cursor.block = fn.blocks[joinIdx]!;
+	fn.loops.pop();
 }
 
 /**
@@ -6032,6 +6036,7 @@ function compileForInOfLoop(
 		breakJumps: [],
 		continueJumps: [],
 		iteratorRegister,
+		iteratorCloseNormal: true,
 		labels,
 		perIterationScopeId: perIter?.scopeId,
 		perIterationSlotCount: perIter?.slotCount,
@@ -6041,6 +6046,7 @@ function compileForInOfLoop(
 	const header = fn.blocks[headerIdx]!;
 	const valueRegister = nextRegisterDestination(fn);
 	const doneRegister = nextRegisterDestination(fn);
+	loop.iteratorDoneRegister = doneRegister;
 	header.instructions.push({
 		type: "iteratorStep",
 		registers: [valueRegister, doneRegister, iteratorRegister, nextRegister],
@@ -6116,11 +6122,14 @@ function compileForInOfLoop(
 		type: "catch",
 		registers: [caughtRegister],
 	});
-	handlerBlock.instructions.push({
-		type: "iteratorClose",
-		registers: [iteratorRegister],
-	});
-	handlerBlock.instructions.push({
+	const rethrowBlock = emitIteratorCloseForCompletion(
+		fn,
+		handlerBlock,
+		iteratorRegister,
+		false,
+		doneRegister,
+	);
+	rethrowBlock.instructions.push({
 		type: "throw",
 		registers: [caughtRegister],
 	});
@@ -6809,6 +6818,49 @@ function compileIfStatement(
 const COMPLETION_NORMAL = 0;
 
 /**
+ * Close one synchronous iterator for the supplied completion kind. A tracked
+ * [[Done]] flag skips exhausted iterators and is set before return() so a close
+ * failure cannot cause an enclosing handler to close the same iterator again.
+ */
+function emitIteratorCloseForCompletion(
+	fn: IRFunction,
+	block: IRBlock,
+	iteratorRegister: number,
+	normal: boolean,
+	doneRegister?: number,
+): IRBlock {
+	if (doneRegister === undefined) {
+		block.instructions.push({
+			type: "iteratorClose",
+			registers: [iteratorRegister],
+			normal,
+		});
+		return block;
+	}
+
+	const skipJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [doneRegister],
+		blocks: [-1],
+	};
+	block.instructions.push(skipJump);
+
+	const closeBlock: IRBlock = { instructions: [] };
+	const closeIdx = fn.blocks.push(closeBlock) - 1;
+	block.instructions.push({ type: "jump", blocks: [closeIdx] });
+	closeBlock.instructions.push(
+		{ type: "createBoolean", registers: [doneRegister], value: true },
+		{ type: "iteratorClose", registers: [iteratorRegister], normal },
+	);
+
+	const continuation: IRBlock = { instructions: [] };
+	const continuationIdx = fn.blocks.push(continuation) - 1;
+	skipJump.blocks[0] = continuationIdx;
+	closeBlock.instructions.push({ type: "jump", blocks: [continuationIdx] });
+	return continuation;
+}
+
+/**
  * Set a finalizer's pending completion and jump into it. Each distinct routing
  * `key` (e.g. "return", "break", "continue:outer") gets a unique kind code and
  * an epilogue arm carrying its re-dispatch; NORMAL (key "normal") needs no arm
@@ -6881,10 +6933,13 @@ function emitReturn(fn: IRFunction, block: IRBlock, valueRegister: number) {
 		}
 
 		if (scope.iteratorRegister !== undefined) {
-			block.instructions.push({
-				type: "iteratorClose",
-				registers: [scope.iteratorRegister],
-			});
+			block = emitIteratorCloseForCompletion(
+				fn,
+				block,
+				scope.iteratorRegister,
+				scope.iteratorCloseNormal === true,
+				scope.iteratorDoneRegister,
+			);
 		}
 	}
 
@@ -6922,10 +6977,13 @@ function emitBreak(fn: IRFunction, block: IRBlock, label?: string) {
 
 		// Leaving this loop closes its for-of iterator.
 		if (scope.iteratorRegister !== undefined) {
-			block.instructions.push({
-				type: "iteratorClose",
-				registers: [scope.iteratorRegister],
-			});
+			block = emitIteratorCloseForCompletion(
+				fn,
+				block,
+				scope.iteratorRegister,
+				scope.iteratorCloseNormal === true,
+				scope.iteratorDoneRegister,
+			);
 		}
 
 		const isTarget =
@@ -6978,6 +7036,16 @@ function emitContinue(fn: IRFunction, block: IRBlock, label?: string) {
 			block.instructions.push({ type: "withExit", registers: [] });
 			continue;
 		}
+		if (scope.kind === "iterator") {
+			block = emitIteratorCloseForCompletion(
+				fn,
+				block,
+				scope.iteratorRegister!,
+				scope.iteratorCloseNormal === true,
+				scope.iteratorDoneRegister,
+			);
+			continue;
+		}
 
 		if (scope.kind === "switch" || scope.kind === "label") {
 			continue;
@@ -6988,10 +7056,13 @@ function emitContinue(fn: IRFunction, block: IRBlock, label?: string) {
 			// An inner loop being left to reach a labeled outer loop closes its
 			// for-of iterator and restores the enclosing env (per-iteration scope).
 			if (scope.iteratorRegister !== undefined) {
-				block.instructions.push({
-					type: "iteratorClose",
-					registers: [scope.iteratorRegister],
-				});
+				block = emitIteratorCloseForCompletion(
+					fn,
+					block,
+					scope.iteratorRegister,
+					scope.iteratorCloseNormal === true,
+					scope.iteratorDoneRegister,
+				);
 			}
 			if (scope.perIterationScopeId !== undefined) {
 				block.instructions.push({ type: "envPop" });
@@ -8392,7 +8463,8 @@ function compileIdentifierAssignment(
 	}
 
 	if (binding.kind === "const") {
-		const location = hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
+		const location =
+			hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
 		// SetMutableBinding checks initialization before immutability. Compound
 		// assignment also performs GetValue, the RHS, and the operator before its
 		// failing PutValue; plain assignment evaluates only the RHS first.
@@ -10899,7 +10971,9 @@ function isTdzBinding(binding: Binding): boolean {
  * is not, and only the runtime EMPTY check can tell them apart).
  */
 function bindingNeedsTdzGuard(fn: IRFunction, binding: Binding): boolean {
-	return !binding.undeclared && (isTdzBinding(binding) || (fn.inParameterExpression ?? false));
+	return (
+		!binding.undeclared && (isTdzBinding(binding) || (fn.inParameterExpression ?? false))
+	);
 }
 
 /**
@@ -10943,7 +11017,13 @@ function emitWriteTdzGuard(
 		return;
 	}
 	const location = hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
-	emitTdzGuard(program, fn, block, binding, loadRegisterFromLocation(fn, block, location));
+	emitTdzGuard(
+		program,
+		fn,
+		block,
+		binding,
+		loadRegisterFromLocation(fn, block, location),
+	);
 }
 
 /**

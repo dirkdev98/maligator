@@ -432,6 +432,9 @@ test/language/statements/for-in/head-const-bound-names-fordecl-tdz.js
 test/language/statements/for-in/head-let-bound-names-fordecl-tdz.js
 test/language/statements/for-of/cptn-expr-no-itr.js
 test/language/statements/for-of/dstr/array-elem-put-let.js
+test/language/statements/for-of/dstr/array-elem-trlg-iter-rest-rtrn-close-err.js
+test/language/statements/for-of/dstr/array-elem-trlg-iter-rest-rtrn-close-null.js
+test/language/statements/for-of/dstr/array-elem-trlg-iter-rest-rtrn-close.js
 test/language/statements/for-of/dstr/array-rest-put-let.js
 test/language/statements/for-of/dstr/obj-id-put-let.js
 test/language/statements/for-of/dstr/obj-prop-put-let.js
