@@ -692,6 +692,170 @@ check(
 		}),
 );
 
+const prototypeSetCalls = [];
+const prototypeSetHandler = {
+	set(target, key, value, receiver) {
+		prototypeSetCalls.push([this, target, key, value, receiver]);
+		return true;
+	},
+};
+const prototypeSetTarget = {};
+const prototypeSetProxy = new Proxy(prototypeSetTarget, prototypeSetHandler);
+const prototypeSetObject = Object.create(prototypeSetProxy);
+const prototypeSetArray = [];
+Object.setPrototypeOf(prototypeSetArray, prototypeSetProxy);
+prototypeSetObject.value = 11;
+prototypeSetArray[0] = 12;
+check(
+	"ordinary Set dispatches Proxy prototypes with the original receiver",
+	prototypeSetCalls.length === 2 &&
+		prototypeSetCalls[0][0] === prototypeSetHandler &&
+		prototypeSetCalls[0][1] === prototypeSetTarget &&
+		prototypeSetCalls[0][2] === "value" &&
+		prototypeSetCalls[0][3] === 11 &&
+		prototypeSetCalls[0][4] === prototypeSetObject &&
+		prototypeSetCalls[1][0] === prototypeSetHandler &&
+		prototypeSetCalls[1][1] === prototypeSetTarget &&
+		prototypeSetCalls[1][2] === "0" &&
+		prototypeSetCalls[1][3] === 12 &&
+		prototypeSetCalls[1][4] === prototypeSetArray,
+);
+
+let inheritedSetterReceiver;
+const inheritedSetterTarget = {
+	set value(next) {
+		forceGc();
+		inheritedSetterReceiver = this;
+		this.seen = next;
+	},
+};
+const inheritedSetterObject = Object.create(
+	new Proxy(new Proxy(inheritedSetterTarget, {}), { set: undefined }),
+);
+inheritedSetterObject.value = 13;
+check(
+	"missing nested Proxy set traps forward the original receiver",
+	inheritedSetterReceiver === inheritedSetterObject && inheritedSetterObject.seen === 13,
+);
+
+const prototypeHasCalls = [];
+const prototypeHasHandler = {
+	has(target, key) {
+		forceGc();
+		prototypeHasCalls.push([this, target, key]);
+		return key === "present";
+	},
+};
+const prototypeHasTarget = Object.create([]);
+const prototypeHasProxy = new Proxy(prototypeHasTarget, prototypeHasHandler);
+const prototypeHasObject = Object.create(prototypeHasProxy);
+const prototypeHasArray = [];
+Object.setPrototypeOf(prototypeHasArray, prototypeHasProxy);
+check(
+	"ordinary HasProperty dispatches Proxy prototypes and exotic target prototypes",
+	"present" in prototypeHasObject &&
+		!("0" in prototypeHasArray) &&
+		"length" in new Proxy(Object.create(Array.prototype), {}) &&
+		prototypeHasCalls.length === 2 &&
+		prototypeHasCalls[0][0] === prototypeHasHandler &&
+		prototypeHasCalls[0][1] === prototypeHasTarget &&
+		prototypeHasCalls[0][2] === "present" &&
+		prototypeHasCalls[1][2] === "0",
+);
+
+const rejectedPrototype = new Proxy({}, { set: () => false });
+const sloppyRejected = Object.create(rejectedPrototype);
+const reflectedRejected = !Reflect.set(sloppyRejected, "value", 1);
+let strictRejected = false;
+try {
+	(function () {
+		"use strict";
+		Object.create(rejectedPrototype).value = 1;
+	})();
+} catch (error) {
+	strictRejected = error instanceof TypeError;
+}
+check(
+	"Proxy prototype Set rejection preserves boolean and strict PutValue behavior",
+	reflectedRejected && !("value" in sloppyRejected) && strictRejected,
+);
+
+const proxySuperHome = {
+	write() {
+		super.forwarded = 14;
+	},
+};
+Object.setPrototypeOf(
+	proxySuperHome,
+	new Proxy(
+		{},
+		{
+			set(target, key, value, receiver) {
+				Object.defineProperty(receiver, "superValue", {
+					value: [key, value],
+					configurable: true,
+				});
+				return true;
+			},
+		},
+	),
+);
+const proxySuper = Object.create(proxySuperHome);
+proxySuper.write();
+check(
+	"super assignment dispatches Proxy prototypes with derived receiver",
+	proxySuper.superValue &&
+		proxySuper.superValue[0] === "forwarded" &&
+		proxySuper.superValue[1] === 14,
+);
+
+const fixedLengthReceiver = [];
+Object.defineProperty(fixedLengthReceiver, "length", { writable: false });
+check(
+	"receiver array index creation honors non-writable length",
+	!Reflect.set({}, "0", 1, fixedLengthReceiver) &&
+		!("0" in fixedLengthReceiver) &&
+		fixedLengthReceiver.length === 0,
+);
+
+const typedTarget = new Uint8Array(1);
+Object.setPrototypeOf(typedTarget, { 1: "hidden", "-1": "hidden" });
+const typedReceiver = {};
+check(
+	"typed array canonical indices use integer-indexed Set and HasProperty",
+	"0" in typedTarget &&
+		!("1" in typedTarget) &&
+		!("-1" in typedTarget) &&
+		Reflect.set(typedTarget, "0", 21, typedReceiver) &&
+		typedReceiver[0] === 21 &&
+		typedTarget[0] === 0 &&
+		Reflect.set(typedTarget, "-1", 22, typedReceiver) &&
+		typedReceiver["-1"] === 22,
+);
+
+const receiverDescriptorTarget = { value: 1 };
+const receiverDescriptor = {};
+Object.defineProperty(receiverDescriptor, "value", {
+	value: 2,
+	writable: false,
+	configurable: true,
+});
+check(
+	"OrdinarySetWithOwnDescriptor respects receiver-side descriptors and primitives",
+	!Reflect.set(receiverDescriptorTarget, "value", 3, receiverDescriptor) &&
+		receiverDescriptor.value === 2 &&
+		!Reflect.set(receiverDescriptorTarget, "value", 3, 1),
+);
+
+const revokedSetPrototype = Proxy.revocable({}, {});
+const revokedSetObject = Object.create(revokedSetPrototype.proxy);
+revokedSetPrototype.revoke();
+check(
+	"ordinary Set and HasProperty propagate Proxy prototype revocation",
+	throwsTypeError(() => Reflect.set(revokedSetObject, "x", 1)) &&
+		throwsTypeError(() => "x" in revokedSetObject),
+);
+
 let passed = 0;
 for (const [name, ok] of results) {
 	if (ok) passed++;

@@ -2780,11 +2780,17 @@ static bool mal_vm_ordinary_get(MalVm *vm, MalObject *start, MalKey key, MalValu
         if (lookup.present) {
             return mal_vm_desc_read(vm, lookup.desc, receiver, out);
         }
-        MalObject *proto = cursor->prototype;
-        if (proto != nullptr && mal_value_is_proxy_object(mal_value_from_object(proto))) {
-            return mal_proxy_get(vm, mal_value_to_proxy_object(mal_value_from_object(proto)), key, receiver, out);
+        MalObject *parent = mal_object_get_prototype(cursor);
+        if (parent == nullptr) {
+            return true;
         }
-        cursor = proto;
+        if (parent->header.type != MAL_HEAP_OBJECT) {
+            // OrdinaryGet delegates to an exotic prototype's actual [[Get]], so
+            // Proxy traps and synthetic own properties remain observable.
+            return mal_vm_get_property_with_receiver(
+                vm, mal_value_from_object(parent), key, receiver, out);
+        }
+        cursor = parent;
     }
     return true;
 }
@@ -2909,27 +2915,20 @@ bool mal_vm_has_property(MalVm *vm, MalValue object_value, MalKey key) {
         return mal_proxy_has(vm, mal_value_to_proxy_object(object_value), key);
     }
 
-    // Ordinary objects have no synthetic or string-wrapper-exotic own properties
-    // (see mal_vm_get_property_with_receiver). OrdinaryHasProperty walks the
-    // prototype chain, but a Proxy reached in that chain must dispatch to its own
-    // [[HasProperty]] (trap or target) — resolve_property's table-only walk would
-    // wrongly treat it as an ordinary object (e.g. `"x" in Object.create(proxy)`).
-    if (mal_value_heap_type(object_value) == MAL_HEAP_OBJECT) {
-        for (MalObject *cursor = mal_value_to_object(object_value); cursor != nullptr;
-             cursor = mal_object_get_prototype(cursor)) {
-            if (cursor->header.type == MAL_HEAP_PROXY_OBJECT) {
-                return mal_proxy_has(vm, (MalProxyObject *) cursor, key);
-            }
-            if (mal_object_get_own(cursor, key).present) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     MalValue synthetic;
     if (mal_vm_resolve_synthetic_property(vm, object_value, key, &synthetic)) {
         return true;
+    }
+
+    // Integer-indexed exotic [[HasProperty]] answers every canonical numeric
+    // index itself. An invalid or out-of-bounds index is false; it must not fall
+    // through to a same-named property on the TypedArray prototype.
+    if (mal_value_is_typed_array_object(object_value) &&
+        (key.kind == MAL_KEY_INDEX ||
+         (key.kind == MAL_KEY_STRING &&
+          mal_vm_string_is_canonical_numeric_index(
+              vm, mal_value_to_string(key.value))))) {
+        return false;
     }
 
     // String wrapper exotic index/length own properties precede the prototype
@@ -2939,7 +2938,22 @@ bool mal_vm_has_property(MalVm *vm, MalValue object_value, MalKey key) {
         return true;
     }
 
-    return mal_object_resolve_property(mal_value_to_object(object_value), key).found;
+    for (MalObject *cursor = mal_value_to_object(object_value); cursor != nullptr;) {
+        if (mal_object_get_own(cursor, key).present) {
+            return true;
+        }
+        MalObject *parent = mal_object_get_prototype(cursor);
+        if (parent == nullptr) {
+            return false;
+        }
+        if (parent->header.type != MAL_HEAP_OBJECT) {
+            // OrdinaryHasProperty delegates to an exotic prototype's actual
+            // [[HasProperty]], rather than flattening it into table probes.
+            return mal_vm_has_property(vm, mal_value_from_object(parent), key);
+        }
+        cursor = parent;
+    }
+    return false;
 }
 
 // ArraySetLength value handling (10.4.2.4 steps 3-15): ToUint32 must round-trip
@@ -2981,6 +2995,10 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
     // index is out of bounds / the buffer detached) and never creates a table
     // property, but only when the receiver is the TypedArray itself — a distinct
     // receiver takes OrdinarySetWithOwnDescriptor below (writing to the receiver).
+    bool typed_array_canonical_string =
+        mal_value_is_typed_array_object(target) && key.kind == MAL_KEY_STRING &&
+        mal_vm_string_is_canonical_numeric_index(
+            vm, mal_value_to_string(key.value));
     if (mal_value_is_typed_array_object(target) && target == receiver) {
         if (key.kind == MAL_KEY_INDEX) {
             i32 index = mal_value_to_i32(key.value);
@@ -2988,8 +3006,7 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
                 mal_typed_array_object_set(vm, mal_value_to_typed_array_object(target), (u32) index, value);
                 return true;
             }
-        } else if (key.kind == MAL_KEY_STRING &&
-                   mal_vm_string_is_canonical_numeric_index(vm, mal_value_to_string(key.value))) {
+        } else if (typed_array_canonical_string) {
             // An invalid integer-index key: [[Set]] is a no-op but returns true,
             // never creating an ordinary property.
             return true;
@@ -3030,14 +3047,34 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
         }
     }
 
-    MalObject *object = mal_value_to_object(target);
-    MalPropertyResolution resolution = mal_object_resolve_property(object, key);
+    bool own_present;
+    MalPropertyDesc own_desc;
+    if (!mal_vm_get_own_property(vm, target, key, &own_present, &own_desc)) {
+        return false;
+    }
+    if (!own_present) {
+        MalObject *parent = mal_object_get_prototype(mal_value_to_object(target));
+        // Integer-indexed [[Set]] with a distinct receiver calls
+        // OrdinarySetWithOwnDescriptor directly for any canonical numeric string;
+        // it does not consult the TypedArray's prototype after an invalid index.
+        if (!typed_array_canonical_string && parent != nullptr) {
+            // OrdinarySetWithOwnDescriptor step 2 preserves Receiver while
+            // dispatching the prototype's actual [[Set]] internal method.
+            return mal_vm_set_property(
+                vm, mal_value_from_object(parent), key, value, receiver);
+        }
+        own_desc = mal_intrinsic_data_desc(
+            mal_value_new_undefined(),
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                MAL_PROPERTY_CONFIGURABLE);
+    }
 
-    if (resolution.found && (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-        if (!mal_value_is_callable(resolution.desc.setter)) {
+    if (own_desc.flags & MAL_PROPERTY_ACCESSOR) {
+        if (!mal_value_is_callable(own_desc.setter)) {
             return false;
         }
-        MalCompletion completion = mal_vm_call_value(vm, resolution.desc.setter, receiver, &value, 1);
+        MalCompletion completion =
+            mal_vm_call_value(vm, own_desc.setter, receiver, &value, 1);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             vm->completion = completion;
             return false;
@@ -3045,44 +3082,7 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
         return true;
     }
 
-    // Data (or absent) property. When the receiver is the target, defer to the
-    // pragmatic ordinary set (which honors array/exotic storage and the
-    // non-writable / non-extensible checks).
-    if (target == receiver) {
-        if (mal_value_is_array_object(target)) {
-            MalArrayObject *array = mal_value_to_array_object(target);
-            if (mal_array_key_is_length(key)) {
-                return mal_vm_array_set_length(vm, array, value);
-            }
-            return mal_array_object_set(array, key, value);
-        }
-        // OrdinarySet recurses into the prototype's [[Set]] when the receiver has
-        // no own binding. A TypedArray in the prototype chain absorbs a write to a
-        // canonical-numeric-index string (NaN/Infinity/fractional/-0/…) — never a
-        // valid integer index — as a no-op that returns true, rather than letting a
-        // plain own property be created on the receiver (TypedArray [[Set]] step 1
-        // with SameValue(O, Receiver) false and IsValidIntegerIndex false). Only
-        // when there is no own property to update (an own property is set directly).
-        if (!resolution.own && key.kind == MAL_KEY_STRING &&
-            mal_vm_string_is_canonical_numeric_index(vm, mal_value_to_string(key.value))) {
-            for (MalObject *proto = mal_object_get_prototype(object); proto != nullptr;
-                 proto = mal_object_get_prototype(proto)) {
-                if (proto->header.type == MAL_HEAP_TYPED_ARRAY_OBJECT) {
-                    return true;
-                }
-                // A proxy has its own [[Set]] trap; don't shortcut it — fall back to
-                // the ordinary set (matching prior behavior, no new divergence).
-                if (proto->header.type == MAL_HEAP_PROXY_OBJECT) {
-                    break;
-                }
-            }
-        }
-        return mal_object_set(object, key, value);
-    }
-
-    // Distinct receiver: OrdinarySetWithOwnDescriptor writes the data value onto
-    // the receiver, respecting its own descriptor.
-    if (resolution.found && !(resolution.desc.flags & MAL_PROPERTY_WRITABLE)) {
+    if (!(own_desc.flags & MAL_PROPERTY_WRITABLE)) {
         return false;
     }
     if (!mal_value_is_object(receiver)) {
@@ -3118,17 +3118,61 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
         }
         return ok;
     }
-    MalObject *receiver_object = mal_value_to_object(receiver);
-    MalPropertyLookup own = mal_object_get_own(receiver_object, key);
-    if (own.present) {
-        if ((own.desc.flags & MAL_PROPERTY_ACCESSOR) || !(own.desc.flags & MAL_PROPERTY_WRITABLE)) {
+    bool receiver_present;
+    MalPropertyDesc receiver_desc;
+    if (!mal_vm_get_own_property(
+            vm, receiver, key, &receiver_present, &receiver_desc)) {
+        return false;
+    }
+    if (receiver_present) {
+        if ((receiver_desc.flags & MAL_PROPERTY_ACCESSOR) ||
+            !(receiver_desc.flags & MAL_PROPERTY_WRITABLE)) {
             return false;
         }
-        own.desc.value = value;
-        return mal_object_define_own(receiver_object, key, &own.desc) == MAL_DEFINE_OWN_APPLIED;
+        if (mal_value_is_array_object(receiver) && mal_array_key_is_length(key)) {
+            return mal_vm_array_set_length(
+                vm, mal_value_to_array_object(receiver), value);
+        }
+        if (mal_value_is_array_object(receiver) && key.kind == MAL_KEY_INDEX) {
+            return mal_array_object_store(
+                mal_value_to_array_object(receiver), key, value);
+        }
+        if (mal_value_is_typed_array_object(receiver) && key.kind == MAL_KEY_INDEX) {
+            i32 index = mal_value_to_i32(key.value);
+            if (index < 0) {
+                return false;
+            }
+            mal_typed_array_object_set(
+                vm, mal_value_to_typed_array_object(receiver), (u32) index, value);
+            return vm->completion.kind != MAL_COMPLETION_THROW;
+        }
+        receiver_desc.value = value;
+        return mal_object_define_own(
+                   mal_value_to_object(receiver), key, &receiver_desc) ==
+            MAL_DEFINE_OWN_APPLIED;
     }
-    MalPropertyDesc desc = mal_intrinsic_data_desc(value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
-    return mal_object_define_own(receiver_object, key, &desc) == MAL_DEFINE_OWN_APPLIED;
+    if (mal_value_is_module_namespace_object(receiver)) {
+        return false;
+    }
+    if (mal_value_is_typed_array_object(receiver) &&
+        (key.kind == MAL_KEY_INDEX ||
+         (key.kind == MAL_KEY_STRING &&
+          mal_vm_string_is_canonical_numeric_index(
+              vm, mal_value_to_string(key.value))))) {
+        return false;
+    }
+    if (mal_value_is_array_object(receiver) && key.kind == MAL_KEY_INDEX) {
+        return mal_array_object_store(
+            mal_value_to_array_object(receiver), key, value);
+    }
+    MalPropertyDesc desc = mal_intrinsic_data_desc(
+        value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                   MAL_PROPERTY_CONFIGURABLE);
+    if (mal_object_define_own(mal_value_to_object(receiver), key, &desc) !=
+        MAL_DEFINE_OWN_APPLIED) {
+        return false;
+    }
+    return true;
 }
 
 /**
@@ -3878,56 +3922,9 @@ static void mal_vm_op_store_property_keyed(
         }
     }
 
-    // Accessor properties anywhere on the prototype chain take the write.
-    MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(object_value), key);
-    if (resolution.found && (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-        if (!mal_value_is_callable(resolution.desc.setter)) {
-            if (strict) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set property which has only a getter");
-            }
-            return;
-        }
-
-        MalCompletion completion = mal_vm_call_value(vm, resolution.desc.setter, object_value, &value, 1);
-        if (completion.kind != MAL_COMPLETION_NORMAL) {
-            vm->completion = completion;
-        }
+    bool stored = mal_vm_set_property(vm, object_value, key, value, object_value);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return;
-    }
-
-    bool stored;
-    if (mal_value_is_array_object(object_value)) {
-        MalArrayObject *array = mal_value_to_array_object(object_value);
-        if (mal_array_key_is_length(key)) {
-            // ArraySetLength validates the value (ToNumber/ToUint32, RangeError on
-            // a bad length) before applying; a RangeError/abrupt is already pending.
-            stored = mal_vm_array_set_length(vm, array, value);
-            if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                return;
-            }
-        } else {
-            stored = mal_array_object_set(array, key, value);
-        }
-    } else {
-        // OrdinarySet recurses into the prototype's [[Set]] when the receiver has no
-        // own binding. A TypedArray in the prototype chain absorbs a write to a
-        // canonical-numeric-index string (NaN/Infinity/fractional/-0/…, never a valid
-        // integer index) as a no-op that returns true, rather than creating a plain
-        // own property on the receiver (TypedArray [[Set]] with SameValue(O,Receiver)
-        // false and IsValidIntegerIndex false).
-        if (!resolution.own && key.kind == MAL_KEY_STRING &&
-            mal_vm_string_is_canonical_numeric_index(vm, mal_value_to_string(key.value))) {
-            for (MalObject *proto = mal_object_get_prototype(mal_value_to_object(object_value));
-                 proto != nullptr; proto = mal_object_get_prototype(proto)) {
-                if (proto->header.type == MAL_HEAP_TYPED_ARRAY_OBJECT) {
-                    return; // absorbed, no property created, no strict throw
-                }
-                if (proto->header.type == MAL_HEAP_PROXY_OBJECT) {
-                    break; // a proxy proto has its own [[Set]]; don't shortcut it
-                }
-            }
-        }
-        stored = mal_object_set(mal_value_to_object(object_value), key, value);
     }
 
     if (!stored && strict) {
@@ -3990,71 +3987,11 @@ void mal_vm_op_store_super_property(
         return;
     }
 
-    // OrdinarySetWithOwnDescriptor: the super base chain provides the
-    // controlling descriptor, the write applies to the receiver.
-    if (mal_value_is_object(object_value)) {
-        MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(object_value), key);
-
-        if (resolution.found && (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-            if (!mal_value_is_callable(resolution.desc.setter)) {
-                if (strict) {
-                    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set property which has only a getter");
-                }
-                return;
-            }
-
-            MalCompletion completion = mal_vm_call_value(vm, resolution.desc.setter, receiver, &value, 1);
-            if (completion.kind != MAL_COMPLETION_NORMAL) {
-                vm->completion = completion;
-            }
-            return;
-        }
-
-        if (resolution.found && !(resolution.desc.flags & MAL_PROPERTY_WRITABLE)) {
-            if (strict) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
-            }
-            return;
-        }
+    bool stored = mal_vm_set_property(vm, object_value, key, value, receiver);
+    if (!stored && vm->completion.kind != MAL_COMPLETION_THROW && strict) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Cannot assign to read only property");
     }
-
-    if (!mal_value_is_object(receiver)) {
-        if (strict) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot create property on a primitive");
-        }
-        return;
-    }
-
-    MalObject *receiver_object = mal_value_to_object(receiver);
-    MalPropertyLookup own = mal_object_get_own(receiver_object, key);
-    if (own.present) {
-        bool rejected = (own.desc.flags & MAL_PROPERTY_ACCESSOR) ||
-            !(own.desc.flags & MAL_PROPERTY_WRITABLE);
-        if (rejected) {
-            if (strict) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
-            }
-            return;
-        }
-
-        own.desc.value = value;
-        mal_object_define_own(receiver_object, key, &own.desc);
-        return;
-    }
-
-    if (!mal_object_is_extensible(receiver_object)) {
-        if (strict) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot add property to a non-extensible object");
-        }
-        return;
-    }
-
-    // CreateDataProperty on the receiver, ignoring its inherited properties.
-    // Routed through define_own (not a direct table write) so it honors the shape
-    // representation instead of forcing the receiver to dictionary mode.
-    MalPropertyDesc desc = mal_intrinsic_data_desc(
-        value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_object_define_own(receiver_object, key, &desc);
 }
 
 MalValue mal_vm_op_load_super_property(
