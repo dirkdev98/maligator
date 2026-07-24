@@ -1484,6 +1484,8 @@ MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, 
         tag = "[object Null]";
     } else if (is_array) {
         tag = "[object Array]";
+    } else if (mal_value_is_object(this_value) && mal_value_to_object(this_value)->is_arguments) {
+        tag = "[object Arguments]";
     } else if (mal_value_is_callable(this_value)) {
         tag = "[object Function]";
     } else if (mal_value_is_date_object(this_value)) {

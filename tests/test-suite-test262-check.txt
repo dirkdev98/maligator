@@ -194,8 +194,10 @@ test/language/statements/for-of/cptn-expr-no-itr.js
 test/language/statements/for-of/dstr/obj-prop-put-let.js
 test/language/statements/let/block-local-closure-set-before-initialization.js
 
-# Object, proxy, and coercion internals (20)
+# Object, proxy, and coercion internals (22)
 test/built-ins/Object/create/properties-arg-to-object.js
+test/built-ins/Object/defineProperties/15.2.3.7-2-16.js
+test/built-ins/Object/defineProperties/15.2.3.7-2-18.js
 test/built-ins/Object/defineProperties/15.2.3.7-5-b-70.js
 test/built-ins/Object/defineProperty/15.2.3.6-3-54.js
 test/built-ins/Object/defineProperty/15.2.3.6-4-329.js

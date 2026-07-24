@@ -8104,7 +8104,17 @@ function compileExpression(
 			// strictness); only a module's top-level `this` is undefined. A DIRECT
 			// eval instead inherits the caller's `this` (threaded onto the eval
 			// entry frame), so its top-level `this` is a plain loadThis.
-			const scope = fn.semanticFile.nodeToScope.get(expression);
+			let scope = fn.semanticFile.nodeToScope.get(expression);
+			while (
+				scope &&
+				scope.node.type !== "Program" &&
+				scope.node.type !== "FunctionDeclaration" &&
+				scope.node.type !== "FunctionExpression" &&
+				scope.node.type !== "PropertyDefinition" &&
+				scope.node.type !== "StaticBlock"
+			) {
+				scope = scope.parent ?? undefined;
+			}
 			if (
 				scope?.node.type === "Program" &&
 				fn.semanticFile.type === "script" &&

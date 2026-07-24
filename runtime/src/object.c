@@ -32,6 +32,7 @@ void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObje
     object->extensible = true;
     object->fast_elements_proto = false;
     object->is_raw_json = false;
+    object->is_arguments = false;
     object->immutable_prototype = false;
     object->watched_method_proto = false;
     object->slots_owned = false;

@@ -1299,6 +1299,7 @@ MalValue mal_create_arguments_object(
     MalObject *arguments = mal_object_new(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])
     );
+    arguments->is_arguments = true;
 
     // Indexed args first (enumerable, writable, configurable data properties)...
     for (i32 i = 0; i < arg_count; i++) {

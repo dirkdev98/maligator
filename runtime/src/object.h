@@ -38,6 +38,8 @@ typedef struct MalObject {
      * property), so it stays invisible to getOwnPropertyNames/Symbols.
      */
     bool is_raw_json : 1;
+    /** Arguments exotic-object brand used by Object.prototype.toString. */
+    bool is_arguments : 1;
     /**
      * Immutable-prototype exotic object (e.g. %Object.prototype%): [[SetPrototypeOf]]
      * rejects any change to a different prototype (SetImmutablePrototype).
