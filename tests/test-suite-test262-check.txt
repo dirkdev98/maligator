@@ -58,6 +58,8 @@ test/built-ins/Math/hypot/Math.hypot_Zero_2.js
 test/built-ins/NaN/S15.1.1.1_A3_T2.js
 test/built-ins/NativeErrors/SyntaxError/is-a-constructor.js
 test/built-ins/Number/prototype/toFixed/length.js
+test/built-ins/Object/create/properties-arg-to-object-bigint.js
+test/built-ins/Object/create/properties-arg-to-object.js
 test/built-ins/Object/defineProperties/15.2.3.7-5-b-70.js
 test/built-ins/Object/defineProperty/15.2.3.6-3-54.js
 test/built-ins/Object/defineProperty/15.2.3.6-4-329.js

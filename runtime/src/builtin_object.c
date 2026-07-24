@@ -1029,16 +1029,23 @@ static MalValue mal_builtin_object_create(MalVm *vm, MalValue this_value, const 
     }
 
     MalObject *prototype = mal_value_is_object(prototype_value) ? mal_value_to_object(prototype_value) : nullptr;
-    MalValue result = mal_value_from_object(mal_object_new(&vm->heap, prototype));
 
+    // 3. If Properties is not undefined: ObjectDefineProperties(obj, Properties),
+    // whose first step is ToObject(Properties). undefined is skipped, null still
+    // throws, and any other primitive boxes (its wrapper has no enumerable own
+    // properties). Coerce before allocating result so the fresh object is never
+    // live across the wrapper allocation.
     MalValue properties = mal_builtin_object_arg(args, arg_count, 1);
-    if (!mal_value_is_undefined(properties)) {
-        if (!mal_value_is_object(properties)) {
-            mal_vm_throw_error(
-                vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "Object.create properties must be an object");
+    if (!mal_value_is_undefined(properties) && !mal_value_is_object(properties)) {
+        if (mal_value_is_null(properties)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot convert undefined or null to object");
             return mal_value_new_undefined();
         }
+        properties = mal_builtin_object_box_primitive(vm, properties);
+    }
+
+    MalValue result = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    if (!mal_value_is_undefined(properties)) {
         if (!mal_builtin_object_define_properties_impl(vm, result, properties)) {
             return mal_value_new_undefined();
         }
