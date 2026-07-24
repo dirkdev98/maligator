@@ -87,6 +87,7 @@ test/built-ins/Promise/any/ctx-non-object.js
 test/built-ins/Promise/any/resolve-ignores-late-rejection-deferred.js
 test/built-ins/Promise/race/iter-assigned-symbol-reject.js
 test/built-ins/Proxy/getPrototypeOf/trap-result-neither-object-nor-null-throws-undefined.js
+test/built-ins/Proxy/setPrototypeOf/internals-call-order.js
 test/built-ins/Proxy/set/call-parameters-prototype-index.js
 test/built-ins/Reflect/getPrototypeOf/target-is-not-object-throws.js
 test/built-ins/RegExp/S15.10.2.7_A6_T4.js

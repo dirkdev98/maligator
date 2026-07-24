@@ -856,6 +856,93 @@ check(
 		throwsTypeError(() => "x" in revokedSetObject),
 );
 
+const setPrototypeOrder = [];
+const nestedPrototype = {};
+const nestedPrototypeTarget = new Proxy(Object.create(nestedPrototype), {
+	isExtensible() {
+		forceGc();
+		setPrototypeOrder.push("isExtensible");
+		return false;
+	},
+	getPrototypeOf() {
+		forceGc();
+		setPrototypeOrder.push("getPrototypeOf");
+		return nestedPrototype;
+	},
+});
+Object.preventExtensions(nestedPrototypeTarget);
+const nestedPrototypeHandler = {
+	setPrototypeOf(target, prototype) {
+		forceGc();
+		setPrototypeOrder.push("setPrototypeOf");
+		return (
+			this === nestedPrototypeHandler &&
+			target === nestedPrototypeTarget &&
+			prototype === nestedPrototype
+		);
+	},
+};
+const nestedPrototypeProxy = new Proxy(nestedPrototypeTarget, nestedPrototypeHandler);
+check(
+	"Proxy SetPrototypeOf orders nested target internal methods under GC",
+	Reflect.setPrototypeOf(nestedPrototypeProxy, nestedPrototype) &&
+		setPrototypeOrder.join("|") === "setPrototypeOf|isExtensible|getPrototypeOf",
+);
+
+const setPrototypeAbrupt = {};
+const abruptPrototypeTarget = new Proxy(
+	{},
+	{
+		isExtensible() {
+			forceGc();
+			throw setPrototypeAbrupt;
+		},
+	},
+);
+const abruptPrototypeProxy = new Proxy(abruptPrototypeTarget, {
+	setPrototypeOf() {
+		return true;
+	},
+});
+let observedSetPrototypeAbrupt;
+try {
+	Reflect.setPrototypeOf(abruptPrototypeProxy, null);
+} catch (error) {
+	observedSetPrototypeAbrupt = error;
+}
+check(
+	"Proxy SetPrototypeOf preserves nested abrupt completion identity",
+	observedSetPrototypeAbrupt === setPrototypeAbrupt,
+);
+
+const rejectedSetPrototype = new Proxy({}, { setPrototypeOf: () => false });
+let rejectedObjectSetPrototype = false;
+let rejectedProtoSetter = false;
+try {
+	Object.setPrototypeOf(rejectedSetPrototype, null);
+} catch (error) {
+	rejectedObjectSetPrototype = error instanceof TypeError;
+}
+try {
+	rejectedSetPrototype.__proto__ = null;
+} catch (error) {
+	rejectedProtoSetter = error instanceof TypeError;
+}
+check(
+	"Proxy SetPrototypeOf false is reflected or thrown by its caller",
+	!Reflect.setPrototypeOf(rejectedSetPrototype, null) &&
+		rejectedObjectSetPrototype &&
+		rejectedProtoSetter,
+);
+
+const cyclePrototypeBase = {};
+const cyclePrototypeChild = Object.create(cyclePrototypeBase);
+check(
+	"ordinary SetPrototypeOf rejects cycles without mutation",
+	!Reflect.setPrototypeOf(cyclePrototypeBase, cyclePrototypeChild) &&
+		Object.getPrototypeOf(cyclePrototypeBase) === Object.prototype,
+);
+
 let passed = 0;
 for (const [name, ok] of results) {
 	if (ok) passed++;

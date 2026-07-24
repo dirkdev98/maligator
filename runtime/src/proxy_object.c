@@ -1003,45 +1003,87 @@ bool mal_proxy_get_prototype_of(MalVm *vm, MalProxyObject *proxy, MalValue *out)
 
 // ---- setPrototypeOf -------------------------------------------------------
 
+static bool mal_proxy_set_prototype_of_snapshot(
+    MalVm *vm, MalValue target, MalValue handler, MalValue proto,
+    bool *success_out) {
+    MalValue trap;
+    if (!mal_proxy_get_trap_from_handler(vm, handler, "setPrototypeOf", &trap)) {
+        return false;
+    }
+    if (mal_value_is_undefined(trap)) {
+        if (mal_value_is_proxy_object(target)) {
+            return mal_proxy_set_prototype_of(
+                vm, mal_value_to_proxy_object(target), proto, success_out);
+        }
+        MalObject *proto_object = mal_value_is_object(proto) ? mal_value_to_object(proto) : nullptr;
+        *success_out = mal_object_set_prototype(
+            mal_value_to_object(target), proto_object);
+        return true;
+    }
+
+    MalValue call_roots[3] = {trap, target, proto};
+    MalRootSpan call_span;
+    mal_gc_root(&call_span, call_roots, 3);
+    MalCompletion completion = mal_vm_call_value(
+        vm, call_roots[0], handler, &call_roots[1], 2);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        vm->completion = completion;
+        mal_gc_unroot(&call_span);
+        return false;
+    }
+    bool result = mal_value_is_truthy(completion.value);
+    mal_gc_unroot(&call_span);
+    if (!result) {
+        return true;
+    }
+
+    bool extensible;
+    if (!mal_vm_is_extensible_object(vm, target, &extensible)) {
+        return false;
+    }
+    if (extensible) {
+        *success_out = true;
+        return true;
+    }
+
+    MalValue target_proto;
+    if (mal_value_is_proxy_object(target)) {
+        if (!mal_proxy_get_prototype_of(
+                vm, mal_value_to_proxy_object(target), &target_proto)) {
+            return false;
+        }
+    } else {
+        MalObject *current = mal_object_get_prototype(mal_value_to_object(target));
+        target_proto = current != nullptr
+            ? mal_value_from_object(current)
+            : mal_value_new_null();
+    }
+    if (!mal_proxy_same_value(proto, target_proto)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "proxy setPrototypeOf trap changed the prototype of a non-extensible target");
+        return false;
+    }
+
+    *success_out = true;
+    return true;
+}
+
 bool mal_proxy_set_prototype_of(MalVm *vm, MalProxyObject *proxy, MalValue proto, bool *success_out) {
     *success_out = false;
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
     }
-    MalValue trap;
-    if (!mal_proxy_get_trap(vm, proxy, "setPrototypeOf", &trap)) {
+    if (!mal_proxy_dispatch_enter(vm)) {
         return false;
     }
-    if (mal_value_is_undefined(trap)) {
-        if (mal_value_is_proxy_object(proxy->target)) {
-            return mal_proxy_set_prototype_of(vm, mal_value_to_proxy_object(proxy->target), proto, success_out);
-        }
-        MalObject *proto_object = mal_value_is_object(proto) ? mal_value_to_object(proto) : nullptr;
-        *success_out = mal_object_set_prototype(mal_value_to_object(proxy->target), proto_object);
-        return true;
-    }
-
-    MalValue args[2] = {proxy->target, proto};
-    MalCompletion completion = mal_vm_call_value(vm, trap, proxy->handler, args, 2);
-    if (completion.kind != MAL_COMPLETION_NORMAL) {
-        vm->completion = completion;
-        return false;
-    }
-    bool result = mal_value_is_truthy(completion.value);
-
-    // Invariant: for a non-extensible (non-proxy) target a successful
-    // setPrototypeOf must leave the prototype equal to the target's prototype.
-    if (result && !mal_value_is_proxy_object(proxy->target) && !mal_object_is_extensible(mal_value_to_object(proxy->target))) {
-        MalObject *cur = mal_object_get_prototype(mal_value_to_object(proxy->target));
-        MalValue actual = cur != nullptr ? mal_value_from_object(cur) : mal_value_new_null();
-        if (!mal_proxy_same_value(proto, actual)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "proxy setPrototypeOf trap changed the prototype of a non-extensible target");
-            return false;
-        }
-    }
-
-    *success_out = result;
-    return true;
+    MalValue roots[3] = {proxy->target, proxy->handler, proto};
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 3);
+    bool ok = mal_proxy_set_prototype_of_snapshot(
+        vm, roots[0], roots[1], roots[2], success_out);
+    mal_gc_unroot(&roots_span);
+    mal_proxy_dispatch_leave(vm);
+    return ok;
 }
 
 // ---- isExtensible ---------------------------------------------------------
