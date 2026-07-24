@@ -338,27 +338,40 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
             any = true;
         }
     } else {
-        // EnumerableOwnProperties snapshots [[OwnPropertyKeys]] first, then
-        // rechecks [[GetOwnProperty]] before each Get. This includes Proxy traps
-        // and permits an initially non-enumerable later key to become visible.
+        // K is EnumerableOwnProperties(value, KEY): snapshot [[OwnPropertyKeys]],
+        // then resolve every enumerable own String key via [[GetOwnProperty]]
+        // BEFORE any Get. Filtering and serialization must not interleave: a
+        // getter run while serializing an earlier key may delete or redefine a
+        // later key, but that key is already fixed in K, so SerializeJSONProperty
+        // still Gets it (undefined for a deleted property) and runs the replacer.
+        // Deferring the enumerability check into the loop would instead drop the
+        // deleted key and would reorder Proxy getOwnPropertyDescriptor traps after
+        // get traps.
+        MalRootedKeySnapshot own_keys;
+        mal_rooted_key_snapshot_init(&own_keys);
+        ok = mal_rooted_key_snapshot_own_keys(vm, value, &own_keys);
+
         MalRootedKeySnapshot keys;
         mal_rooted_key_snapshot_init(&keys);
-        ok = mal_rooted_key_snapshot_own_keys(vm, value, &keys);
-
-        for (usize i = 0; ok && i < keys.count; i++) {
-            if (keys.keys[i].kind == MAL_KEY_SYMBOL) {
+        for (usize i = 0; ok && i < own_keys.count; i++) {
+            if (own_keys.keys[i].kind == MAL_KEY_SYMBOL) {
                 continue;
             }
             bool present;
             MalPropertyDesc desc;
             if (!mal_vm_get_own_property(
-                    vm, value, keys.keys[i], &present, &desc)) {
+                    vm, value, own_keys.keys[i], &present, &desc)) {
                 ok = false;
                 break;
             }
             if (!present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) {
                 continue;
             }
+            mal_rooted_key_snapshot_append(&keys, own_keys.keys[i]);
+        }
+        mal_rooted_key_snapshot_dispose(&own_keys);
+
+        for (usize i = 0; ok && i < keys.count; i++) {
             MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, keys.keys[i].value));
             MalJsonBuilder member = {.vm = vm};
             MalJsonResult result = mal_json_serialize_property(state, &member, keys.keys[i], key_string, value, depth + 1);

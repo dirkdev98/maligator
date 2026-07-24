@@ -52,6 +52,7 @@ test/built-ins/GeneratorFunction/invoked-as-function-no-arguments.js
 test/built-ins/GeneratorPrototype/return/try-finally-following-finally.js
 test/built-ins/Infinity/S15.1.1.2_A3_T2.js
 test/built-ins/Iterator/prototype/forEach/argument-effect-order.js
+test/built-ins/JSON/stringify/replacer-function-object-deleted-property.js
 test/built-ins/Map/prototype/get/does-not-have-mapdata-internal-slot-set.js
 test/built-ins/MapIteratorPrototype/next/length.js
 test/built-ins/Math/hypot/Math.hypot_Zero_2.js
