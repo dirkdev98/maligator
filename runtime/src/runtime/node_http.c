@@ -50,6 +50,7 @@ typedef struct MalNodeHttpServerState {
 
 typedef struct MalNodeHttpCopiedHeader {
     char *name;
+    char *lower_name;
     usize name_len;
     char *value;
     usize value_len;
@@ -79,7 +80,6 @@ typedef struct MalNodeHttpRequestState {
     char *target;
     usize target_len;
     int minor_version;
-    MalNodeHttpCopiedHeader headers[MAL_HTTP_MAX_HEADERS];
     usize header_count;
     byte *body;
     usize body_len;
@@ -101,7 +101,13 @@ typedef struct MalNodeHttpRequestState {
     struct MalNodeHttpRequestState *ready_next;
     struct MalNodeHttpRequestState *previous;
     struct MalNodeHttpRequestState *next;
+    MalNodeHttpCopiedHeader headers[];
 } MalNodeHttpRequestState;
+
+static_assert(offsetof(MalNodeHttpRequestState, headers) == sizeof(MalNodeHttpRequestState),
+              "request header descriptors must immediately follow request state");
+static_assert(offsetof(MalNodeHttpRequestState, headers) % alignof(MalNodeHttpCopiedHeader) == 0,
+              "request header descriptors must be aligned");
 
 typedef struct MalNodeHttpClientState {
     MalVm *vm;
@@ -220,19 +226,43 @@ static char *http_copy_bytes(const char *bytes, usize length) {
     return copy;
 }
 
+static bool http_request_snapshot_add_string(usize *size, usize length) {
+    if (length == SIZE_MAX) return false;
+    usize allocation_length = length + 1;
+    if (*size > SIZE_MAX - allocation_length) return false;
+    *size += allocation_length;
+    return true;
+}
+
+static char *http_request_snapshot_copy(
+    char **cursor, const char *bytes, usize length, bool lowercase) {
+    char *copy = *cursor;
+    if (lowercase) {
+        for (usize i = 0; i < length; i++) {
+            char ch = bytes[i];
+            copy[i] = ch >= 'A' && ch <= 'Z' ? (char) (ch + 0x20) : ch;
+        }
+    } else {
+        memcpy(copy, bytes, length);
+    }
+    copy[length] = '\0';
+    *cursor += length + 1;
+    MAL_PERF_COUNT(http_request_copy_operations);
+    MAL_PERF_ADD(http_request_copy_bytes, length + 1);
+    return copy;
+}
+
 static void http_request_free(MalNodeHttpRequestState *request) {
     http_response_index_remove(request);
-    free(request->method);
-    free(request->target);
-    for (usize i = 0; i < request->header_count; i++) {
-        free(request->headers[i].name);
-        free(request->headers[i].value);
-    }
     for (usize i = 0; i < request->response_header_count; i++) {
         free(request->response_headers[i].name);
     }
+    if (request->body != nullptr) {
+        MAL_PERF_COUNT(http_request_body_direct_frees);
+    }
     free(request->body);
     free(request->response_body);
+    MAL_PERF_COUNT(http_request_state_direct_frees);
     free(request);
 }
 
@@ -325,8 +355,28 @@ static void http_queue_request(
     usize body_len) {
     (void) vm;
     MalNodeHttpServerState *server = data;
-    MalNodeHttpRequestState *state = calloc(1, sizeof(MalNodeHttpRequestState));
+    if (req->header_count > MAL_HTTP_MAX_HEADERS
+        || req->header_count > (SIZE_MAX - (usize) sizeof(MalNodeHttpRequestState))
+            / (usize) sizeof(MalNodeHttpCopiedHeader)) {
+        goto fail;
+    }
+    usize snapshot_size = (usize) sizeof(MalNodeHttpRequestState)
+        + req->header_count * (usize) sizeof(MalNodeHttpCopiedHeader);
+    if (!http_request_snapshot_add_string(&snapshot_size, req->method_len)
+        || !http_request_snapshot_add_string(&snapshot_size, req->target_len)) {
+        goto fail;
+    }
+    for (usize i = 0; i < req->header_count; i++) {
+        if (!http_request_snapshot_add_string(&snapshot_size, req->headers[i].name_len)
+            || !http_request_snapshot_add_string(&snapshot_size, req->headers[i].name_len)
+            || !http_request_snapshot_add_string(&snapshot_size, req->headers[i].value_len)) {
+            goto fail;
+        }
+    }
+
+    MalNodeHttpRequestState *state = calloc(1, snapshot_size);
     if (state == nullptr) goto fail;
+    MAL_PERF_COUNT(http_request_state_allocations);
     state->vm = server->vm;
     state->server_receiver = server->receiver;
 #if MAL_REALMS
@@ -341,25 +391,29 @@ static void http_queue_request(
     state->minor_version = req->minor_version;
     state->header_count = req->header_count;
     state->body_len = body_len;
-    state->method = http_copy_bytes(req->method, req->method_len);
-    state->target = http_copy_bytes(req->target, req->target_len);
-    if (state->method == nullptr || state->target == nullptr) goto fail_state;
+    char *cursor = (char *) &state->headers[req->header_count];
+    state->method = http_request_snapshot_copy(
+        &cursor, req->method, req->method_len, false);
+    state->target = http_request_snapshot_copy(
+        &cursor, req->target, req->target_len, false);
     for (usize i = 0; i < req->header_count; i++) {
         state->headers[i].name_len = req->headers[i].name_len;
         state->headers[i].value_len = req->headers[i].value_len;
-        state->headers[i].name = http_copy_bytes(
-            req->headers[i].name, req->headers[i].name_len);
-        state->headers[i].value = http_copy_bytes(
-            req->headers[i].value, req->headers[i].value_len);
-        if (state->headers[i].name == nullptr
-            || state->headers[i].value == nullptr) {
-            goto fail_state;
-        }
+        state->headers[i].name = http_request_snapshot_copy(
+            &cursor, req->headers[i].name, req->headers[i].name_len, false);
+        state->headers[i].lower_name = http_request_snapshot_copy(
+            &cursor, req->headers[i].name, req->headers[i].name_len, true);
+        state->headers[i].value = http_request_snapshot_copy(
+            &cursor, req->headers[i].value, req->headers[i].value_len, false);
     }
+    MAL_PERF_ADD(http_request_packed_headers, req->header_count);
     if (body_len > 0) {
         state->body = malloc(body_len);
         if (state->body == nullptr) goto fail_state;
+        MAL_PERF_COUNT(http_request_body_allocations);
         memcpy(state->body, body, body_len);
+        MAL_PERF_COUNT(http_request_copy_operations);
+        MAL_PERF_ADD(http_request_copy_bytes, body_len);
     }
     if (http_requests_tail == nullptr) {
         http_requests = state;
@@ -1438,17 +1492,7 @@ static bool http_request_headers(
     MalArrayObject *raw = mal_value_to_array_object(roots[1]);
     for (usize i = 0; i < state->header_count; i++) {
         MalNodeHttpCopiedHeader *header = &state->headers[i];
-        char *lower = malloc(header->name_len == 0 ? 1 : header->name_len);
-        if (lower == nullptr) {
-            mal_gc_unroot(&root);
-            return false;
-        }
-        for (usize j = 0; j < header->name_len; j++) {
-            char ch = header->name[j];
-            lower[j] = ch >= 'A' && ch <= 'Z' ? (char) (ch + 0x20) : ch;
-        }
-        roots[2] = http_ascii_value(vm, lower, header->name_len);
-        free(lower);
+        roots[2] = http_ascii_value(vm, header->lower_name, header->name_len);
         roots[3] = http_ascii_value(vm, header->value, header->value_len);
         mal_object_set(mal_value_to_object(roots[0]), mal_key_from_value(roots[2]), roots[3]);
         roots[4] = http_ascii_value(vm, header->name, header->name_len);
@@ -1557,6 +1601,7 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
     if (state->body_len > 0) {
         byte *body = state->body;
         state->body = nullptr;
+        MAL_PERF_COUNT(http_request_body_transfers);
         roots[5] = mal_node_buffer_from_owned_bytes(vm, body, state->body_len);
         if (vm->completion.kind == MAL_COMPLETION_THROW
             || !http_call_method(vm, roots[0], "push", &roots[5], 1)) {

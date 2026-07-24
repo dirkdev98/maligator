@@ -232,6 +232,10 @@ static void mal_perf_stats_print(void) {
         "close_scans=%llu close_request_state_scans=%llu request_remove_scans=%llu "
         "dispatch_enqueues=%llu dispatch_dequeues=%llu completion_enqueues=%llu "
         "completion_dequeues=%llu request_inserts=%llu request_removes=%llu "
+        "request_state_allocations=%llu request_body_allocations=%llu "
+        "request_packed_headers=%llu request_copy_operations=%llu "
+        "request_copy_bytes=%llu request_body_transfers=%llu "
+        "request_state_direct_frees=%llu request_body_direct_frees=%llu "
         "bulk_shaped_objects=%llu bulk_shaped_slots=%llu "
         "property_definitions_avoided=%llu shape_transitions_avoided=%llu\n",
         (unsigned long long) mal_perf_stats.http_response_index_lookups,
@@ -254,6 +258,14 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.http_completion_dequeues,
         (unsigned long long) mal_perf_stats.http_request_inserts,
         (unsigned long long) mal_perf_stats.http_request_removes,
+        (unsigned long long) mal_perf_stats.http_request_state_allocations,
+        (unsigned long long) mal_perf_stats.http_request_body_allocations,
+        (unsigned long long) mal_perf_stats.http_request_packed_headers,
+        (unsigned long long) mal_perf_stats.http_request_copy_operations,
+        (unsigned long long) mal_perf_stats.http_request_copy_bytes,
+        (unsigned long long) mal_perf_stats.http_request_body_transfers,
+        (unsigned long long) mal_perf_stats.http_request_state_direct_frees,
+        (unsigned long long) mal_perf_stats.http_request_body_direct_frees,
         (unsigned long long) mal_perf_stats.http_bulk_shaped_objects,
         (unsigned long long) mal_perf_stats.http_bulk_shaped_slots,
         (unsigned long long) mal_perf_stats.http_property_definitions_avoided,

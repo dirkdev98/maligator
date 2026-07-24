@@ -20,6 +20,18 @@ function throwsMessage(callback, message) {
 }
 
 const server = http.createServer(function (request, response) {
+	if (request.url === "/header-snapshot") {
+		const valid =
+			request.rawHeaders.join("|") ===
+				"Host|127.0.0.1|X-Mixed|first|x-MIXED|second|X-Order|third|Connection|close" &&
+			request.headers.host === "127.0.0.1" &&
+			request.headers["x-mixed"] === "second" &&
+			request.headers["x-order"] === "third";
+		response.statusCode = valid ? 200 : 500;
+		response.end(valid ? "ok" : "header snapshot mismatch");
+		return;
+	}
+
 	if (request.url === "/socket-shape") {
 		const socket = request.socket;
 		const visibleDataProperty = (name, value) => {

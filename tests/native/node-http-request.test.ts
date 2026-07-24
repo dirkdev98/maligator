@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
+import { createConnection } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -60,6 +61,27 @@ describe("node:http request bridge", () => {
 	}
 
 	async function checkBridge(base: string): Promise<void> {
+		const port = Number(new URL(base).port);
+		const headerSnapshot = await new Promise<string>((resolve, reject) => {
+			const socket = createConnection({ host: "127.0.0.1", port }, () => {
+				socket.write(
+					"GET /header-snapshot HTTP/1.1\r\n" +
+						"Host: 127.0.0.1\r\n" +
+						"X-Mixed: first\r\n" +
+						"x-MIXED: second\r\n" +
+						"X-Order: third\r\n" +
+						"Connection: close\r\n\r\n",
+				);
+			});
+			let response = "";
+			socket.setEncoding("utf8");
+			socket.on("data", (chunk: string) => (response += chunk));
+			socket.on("end", () => resolve(response));
+			socket.once("error", reject);
+		});
+		expect(headerSnapshot).toContain("HTTP/1.1 200 OK");
+		expect(headerSnapshot).toContain("\r\n\r\nok");
+
 		const metadata = await fetch(`${base}/metadata`, {
 			headers: { "x-test": "request-header" },
 		});
@@ -199,9 +221,23 @@ describe("node:http request bridge", () => {
 		expect(field(line, "dispatch_enqueues")).toBe(field(line, "dispatch_dequeues"));
 		expect(field(line, "completion_enqueues")).toBe(field(line, "completion_dequeues"));
 		expect(field(line, "request_inserts")).toBe(field(line, "request_removes"));
-		expect(field(line, "bulk_shaped_objects")).toBe(79);
-		expect(field(line, "bulk_shaped_slots")).toBe(237);
-		expect(field(line, "property_definitions_avoided")).toBe(237);
-		expect(field(line, "shape_transitions_avoided")).toBe(234);
+		expect(field(line, "request_state_allocations")).toBe(80);
+		expect(field(line, "request_state_direct_frees")).toBe(80);
+		expect(field(line, "request_body_allocations")).toBe(1);
+		expect(field(line, "request_body_transfers")).toBe(1);
+		expect(field(line, "request_body_direct_frees")).toBe(0);
+		expect(field(line, "request_packed_headers")).toBeGreaterThan(80);
+		expect(field(line, "request_copy_operations")).toBe(
+			field(line, "request_state_allocations") * 2 +
+				field(line, "request_packed_headers") * 3 +
+				field(line, "request_body_allocations"),
+		);
+		expect(field(line, "request_copy_bytes")).toBeGreaterThan(
+			field(line, "request_copy_operations"),
+		);
+		expect(field(line, "bulk_shaped_objects")).toBe(80);
+		expect(field(line, "bulk_shaped_slots")).toBe(240);
+		expect(field(line, "property_definitions_avoided")).toBe(240);
+		expect(field(line, "shape_transitions_avoided")).toBe(237);
 	});
 });

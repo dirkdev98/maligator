@@ -165,6 +165,14 @@ typedef struct MalPerfStats {
     u64 http_completion_dequeues;
     u64 http_request_inserts;
     u64 http_request_removes;
+    u64 http_request_state_allocations;
+    u64 http_request_body_allocations;
+    u64 http_request_packed_headers;
+    u64 http_request_copy_operations;
+    u64 http_request_copy_bytes;
+    u64 http_request_body_transfers;
+    u64 http_request_state_direct_frees;
+    u64 http_request_body_direct_frees;
     u64 http_bulk_shaped_objects;
     u64 http_bulk_shaped_slots;
     u64 http_property_definitions_avoided;
