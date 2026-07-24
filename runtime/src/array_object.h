@@ -127,7 +127,16 @@ void mal_array_object_set_length(MalArrayObject *array, u32 length);
 bool mal_array_key_is_length(MalKey key);
 
 /**
- * Store with JS array semantics: index stores grow the length field, "length"
- * stores update the length field instead of defining a property.
+ * CreateDataProperty populator with JS array semantics: an index defines an own
+ * element (ignoring the prototype chain) and grows the length field; a "length"
+ * key updates the length field. Use for internal result arrays (CreateArrayFromList,
+ * Object.keys, spread, ...), where a poisoned inherited index must not intercept.
  */
 bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value);
+
+/**
+ * [[Set]] variant of mal_array_object_store: an index write is an OrdinarySet
+ * that honors the prototype chain (an inherited non-writable/accessor index
+ * rejects it) and grows the length field. Use for spec Set on a user array.
+ */
+bool mal_array_object_set(MalArrayObject *array, MalKey key, MalValue value);

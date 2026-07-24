@@ -3054,7 +3054,7 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
             if (mal_array_key_is_length(key)) {
                 return mal_vm_array_set_length(vm, array, value);
             }
-            return mal_array_object_store(array, key, value);
+            return mal_array_object_set(array, key, value);
         }
         // OrdinarySet recurses into the prototype's [[Set]] when the receiver has
         // no own binding. A TypedArray in the prototype chain absorbs a write to a
@@ -3891,7 +3891,7 @@ static void mal_vm_op_store_property_keyed(
                 return;
             }
         } else {
-            stored = mal_array_object_store(array, key, value);
+            stored = mal_array_object_set(array, key, value);
         }
     } else {
         // OrdinarySet recurses into the prototype's [[Set]] when the receiver has no

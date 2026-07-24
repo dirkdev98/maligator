@@ -273,27 +273,11 @@ bool mal_array_key_is_length(MalKey key) {
         code_units[5] == 'h';
 }
 
-bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
-    if (key.kind == MAL_KEY_INDEX) {
-        i32 index = mal_value_to_i32(key.value);
-        bool grows = index >= 0 && (u32) index >= array->length;
-        // Growing an index past length also writes length, which is refused when
-        // length is non-writable.
-        if (grows && !array->length_writable) {
-            return false;
-        }
-        // Store the element FIRST and commit the length grow only if it succeeded:
-        // a non-extensible array rejects a fresh index, and a rejected store must
-        // not bump length (ArrayDefineOwnProperty 10.4.2.1 steps 3-4).
-        if (!mal_object_set(&array->object, key, value)) {
-            return false;
-        }
-        if (grows) {
-            array->length = (u32) index + 1;
-        }
-        return true;
-    }
-
+/**
+ * "length" and ordinary-key tail shared by the index-define store and the index
+ * [[Set]] variant. Only the integer-index branch differs between them.
+ */
+static bool mal_array_object_store_tail(MalArrayObject *array, MalKey key, MalValue value) {
     if (mal_array_key_is_length(key)) {
         // Accept an int32 or an f64 that is a valid array length (some callers
         // pass 𝔽(len) as a double); other numbers are left for [[Set]] to ignore.
@@ -319,4 +303,65 @@ bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
     }
 
     return mal_object_set(&array->object, key, value);
+}
+
+bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
+    if (key.kind == MAL_KEY_INDEX) {
+        i32 index = mal_value_to_i32(key.value);
+        bool grows = index >= 0 && (u32) index >= array->length;
+        // Growing an index past length also writes length, which is refused when
+        // length is non-writable.
+        if (grows && !array->length_writable) {
+            return false;
+        }
+        // CreateDataProperty, NOT [[Set]]: this is the internal result-array
+        // populator (CreateArrayFromList and friends — Object.keys, spread,
+        // Array.from, regexp match arrays, ...). It must define an own element and
+        // ignore the prototype chain, so a poisoned inherited index on
+        // Array.prototype (a non-writable data or accessor "0") cannot intercept
+        // the write. A default-data define at an integer index still takes the
+        // dense fast path, so nothing here costs the common case. The element is
+        // defined FIRST and the length grow committed only on success: a
+        // non-extensible array rejects a fresh index and must not bump length
+        // (ArrayDefineOwnProperty 10.4.2.1 steps 3-4).
+        MalPropertyDesc desc = {
+            .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+            .value = value,
+            .getter = mal_value_new_undefined(),
+            .setter = mal_value_new_undefined(),
+        };
+        if (mal_object_define_own(&array->object, key, &desc) != MAL_DEFINE_OWN_APPLIED) {
+            return false;
+        }
+        if (grows) {
+            array->length = (u32) index + 1;
+        }
+        return true;
+    }
+
+    return mal_array_object_store_tail(array, key, value);
+}
+
+bool mal_array_object_set(MalArrayObject *array, MalKey key, MalValue value) {
+    if (key.kind == MAL_KEY_INDEX) {
+        i32 index = mal_value_to_i32(key.value);
+        bool grows = index >= 0 && (u32) index >= array->length;
+        if (grows && !array->length_writable) {
+            return false;
+        }
+        // Genuine [[Set]]: OrdinarySet walks the prototype chain, so an inherited
+        // non-writable data property or a getter-only accessor at this index
+        // rejects the write (e.g. `Array.prototype.push` onto an array that
+        // inherits a frozen index must throw). Store first, commit length only on
+        // success (ArrayDefineOwnProperty 10.4.2.1 steps 3-4).
+        if (!mal_object_set(&array->object, key, value)) {
+            return false;
+        }
+        if (grows) {
+            array->length = (u32) index + 1;
+        }
+        return true;
+    }
+
+    return mal_array_object_store_tail(array, key, value);
 }

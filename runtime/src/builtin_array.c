@@ -153,7 +153,7 @@ static bool mal_builtin_array_set_or_throw(MalVm *vm, MalValue receiver, MalKey 
     }
 
     bool stored = mal_value_is_array_object(receiver)
-        ? mal_array_object_store(mal_value_to_array_object(receiver), key, value)
+        ? mal_array_object_set(mal_value_to_array_object(receiver), key, value)
         : mal_object_set(mal_value_to_object(receiver), key, value);
     if (!stored) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
