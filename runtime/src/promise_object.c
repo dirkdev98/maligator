@@ -14,6 +14,10 @@ static inline MalValue mal_promise_await_reaction_tag(void) {
     return mal_value_from_i32(INT32_MIN);
 }
 
+static inline MalValue mal_promise_async_generator_return_reaction_tag(void) {
+    return mal_value_from_i32(INT32_MIN + 1);
+}
+
 struct MalPromiseReactionBlock {
     MalPromiseReactionBlock *next;
     MalPromiseReaction *free_list;
@@ -162,6 +166,21 @@ void mal_promise_append_await_reaction(
         state);
 }
 
+void mal_promise_append_async_generator_return_reaction(
+    MalVm *vm,
+    MalPromiseObject *promise,
+    MalValue generator,
+    MalValue realm_anchor
+) {
+    mal_promise_append_reaction_internal(
+        vm,
+        promise,
+        realm_anchor,
+        mal_value_new_undefined(),
+        mal_promise_async_generator_return_reaction_tag(),
+        generator);
+}
+
 /** Free a pending reaction list without scheduling it. */
 void mal_promise_free_reactions(MalVm *vm, MalPromiseReaction *list) {
     while (list != nullptr) {
@@ -226,6 +245,13 @@ static void mal_promise_trigger_reactions(MalVm *vm, MalPromiseReaction *list, b
         MalPromiseReaction *next = list->next;
         if (list->cap_resolve == mal_promise_await_reaction_tag()) {
             mal_vm_enqueue_await_job(vm, list->cap_reject, is_reject, argument);
+        } else if (list->cap_resolve == mal_promise_async_generator_return_reaction_tag()) {
+            mal_vm_enqueue_async_generator_return_job(
+                vm,
+                list->cap_reject,
+                list->on_fulfilled,
+                is_reject,
+                argument);
         } else {
             MalValue handler = is_reject ? list->on_rejected : list->on_fulfilled;
             mal_vm_enqueue_reaction_job(

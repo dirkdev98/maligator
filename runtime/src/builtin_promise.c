@@ -513,6 +513,32 @@ void mal_promise_perform_await(
     }
 }
 
+void mal_promise_perform_async_generator_return(
+    MalVm *vm,
+    MalValue promise_value,
+    MalGeneratorObject *generator
+) {
+    MalPromiseObject *promise = mal_value_to_promise_object(promise_value);
+    MalValue generator_value = mal_value_from_object((MalObject *) generator);
+    MalValue realm_anchor = vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR];
+
+    promise->is_handled = true;
+    switch (promise->state) {
+        case MAL_PROMISE_PENDING:
+            mal_promise_append_async_generator_return_reaction(
+                vm, promise, generator_value, realm_anchor);
+            break;
+        case MAL_PROMISE_FULFILLED:
+            mal_vm_enqueue_async_generator_return_job(
+                vm, generator_value, realm_anchor, false, promise->result);
+            break;
+        case MAL_PROMISE_REJECTED:
+            mal_vm_enqueue_async_generator_return_job(
+                vm, generator_value, realm_anchor, true, promise->result);
+            break;
+    }
+}
+
 /** SpeciesConstructor(O, %Promise%) for the result capability of then. */
 static MalValue mal_promise_species_constructor(MalVm *vm, MalValue object) {
     MalValue constructor;

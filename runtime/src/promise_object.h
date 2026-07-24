@@ -27,8 +27,8 @@ typedef struct MalPromiseReaction {
     struct MalPromiseReaction *next;
     /* Capability encoding: two callables, two undefined values (no result
      * capability), {direct target Promise, exact intrinsic constructor}, or
-     * {internal await tag, generator state}. The int32 tag cannot collide with
-     * any valid user-created PromiseCapability resolve function. */
+     * {internal continuation tag, generator state}. The int32 tags cannot
+     * collide with any valid user-created PromiseCapability resolve function. */
     MalValue cap_resolve;
     MalValue cap_reject;
     MalValue on_fulfilled;
@@ -85,6 +85,14 @@ void mal_promise_append_await_reaction(
     MalVm *vm,
     MalPromiseObject *promise,
     MalValue state
+);
+
+/** Append a typed AsyncGeneratorAwaitReturn continuation. */
+void mal_promise_append_async_generator_return_reaction(
+    MalVm *vm,
+    MalPromiseObject *promise,
+    MalValue generator,
+    MalValue realm_anchor
 );
 
 /**

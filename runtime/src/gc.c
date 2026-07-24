@@ -863,7 +863,9 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
 
 /** Trace a microtask job's live MalValue fields (queued or currently running). */
 static void mal_gc_mark_job(MalJob *job) {
-    if (job->kind == MAL_JOB_PROMISE_REACTION || job->kind == MAL_JOB_ASYNC_AWAIT) {
+    if (job->kind == MAL_JOB_PROMISE_REACTION ||
+        job->kind == MAL_JOB_ASYNC_AWAIT ||
+        job->kind == MAL_JOB_ASYNC_GENERATOR_RETURN) {
         mal_gc_mark_value(job->as.reaction.handler);
         mal_gc_mark_value(job->as.reaction.cap_resolve);
         mal_gc_mark_value(job->as.reaction.cap_reject);

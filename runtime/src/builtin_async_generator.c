@@ -144,6 +144,60 @@ static void mal_agen_resolve_result(
     mal_gc_unroot(&span);
 }
 
+/** Await the front return completion without removing it from the FIFO queue. */
+static void mal_agen_await_return(MalVm *vm, MalGeneratorObject *agen) {
+    MalValue promise;
+    if (!mal_promise_resolve_value(vm, agen->agen_queue_head->value, &promise)) {
+        MalValue error = vm->completion.value;
+        vm->completion = mal_agen_normal();
+        agen->agen_running = false;
+
+        MalValue request_promise;
+        MalValue promise_constructor;
+        i32 mode;
+        MalValue request_value;
+        mal_agen_dequeue(
+            vm,
+            agen,
+            &request_promise,
+            &promise_constructor,
+            &mode,
+            &request_value);
+        mal_agen_settle(vm, request_promise, promise_constructor, true, error);
+        mal_async_generator_resume_next(vm, agen);
+        return;
+    }
+
+    // This is the runtime's draining-queue state: later requests remain queued
+    // until the typed Promise reaction completes this return request.
+    agen->agen_running = true;
+    mal_promise_perform_async_generator_return(vm, promise, agen);
+}
+
+void mal_async_generator_await_return_complete(
+    MalVm *vm,
+    MalGeneratorObject *agen,
+    bool is_reject,
+    MalValue value
+) {
+    agen->agen_running = false;
+
+    MalValue promise;
+    MalValue promise_constructor;
+    i32 mode;
+    MalValue request_value;
+    if (mal_agen_dequeue(
+            vm, agen, &promise, &promise_constructor, &mode, &request_value)) {
+        if (is_reject) {
+            mal_agen_settle(vm, promise, promise_constructor, true, value);
+        } else {
+            mal_agen_resolve_result(vm, promise, promise_constructor, value, true);
+        }
+    }
+
+    mal_async_generator_resume_next(vm, agen);
+}
+
 void mal_async_generator_resume_next(MalVm *vm, MalGeneratorObject *agen) {
     if (agen->agen_running) {
         return;
@@ -157,6 +211,11 @@ void mal_async_generator_resume_next(MalVm *vm, MalGeneratorObject *agen) {
         }
 
         if (agen->state == MAL_GENERATOR_COMPLETED) {
+            if (agen->agen_queue_head->mode == MAL_GENERATOR_RESUME_RETURN) {
+                mal_agen_await_return(vm, agen);
+                return;
+            }
+
             MalValue promise;
             MalValue promise_constructor;
             i32 mode;
@@ -166,13 +225,12 @@ void mal_async_generator_resume_next(MalVm *vm, MalGeneratorObject *agen) {
             if (mode == MAL_GENERATOR_RESUME_THROW) {
                 mal_agen_settle(vm, promise, promise_constructor, true, value);
             } else {
-                // next() on a done generator yields { undefined, true }; return()
-                // yields { value, true }.
+                // next() on a done generator yields { undefined, true }.
                 mal_agen_resolve_result(
                     vm,
                     promise,
                     promise_constructor,
-                    mode == MAL_GENERATOR_RESUME_RETURN ? value : mal_value_new_undefined(),
+                    mal_value_new_undefined(),
                     true);
             }
             continue;

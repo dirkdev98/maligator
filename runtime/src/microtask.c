@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include "builtin_async_generator.h"
 #include "builtin_promise.h"
 #include "gc.h"
 #include "generator_object.h"
@@ -147,7 +148,9 @@ static void mal_job_release(MalVm *vm, MalJob *job) {
 }
 
 static void mal_job_recycle(MalVm *vm, MalJob *job) {
-    if (job->kind == MAL_JOB_PROMISE_REACTION || job->kind == MAL_JOB_ASYNC_AWAIT) {
+    if (job->kind == MAL_JOB_PROMISE_REACTION ||
+        job->kind == MAL_JOB_ASYNC_AWAIT ||
+        job->kind == MAL_JOB_ASYNC_GENERATOR_RETURN) {
         mal_gc_write_barrier(job->as.reaction.handler);
         mal_gc_write_barrier(job->as.reaction.cap_resolve);
         mal_gc_write_barrier(job->as.reaction.cap_reject);
@@ -226,6 +229,22 @@ void mal_vm_enqueue_await_job(
     job->as.reaction.cap_reject = mal_value_new_undefined();
     job->as.reaction.argument = argument;
     MAL_PERF_COUNT(promise_await_typed_jobs);
+    mal_vm_enqueue(vm, job);
+}
+
+void mal_vm_enqueue_async_generator_return_job(
+    MalVm *vm,
+    MalValue generator,
+    MalValue realm_anchor,
+    bool is_reject,
+    MalValue argument
+) {
+    MalJob *job = mal_job_new(vm, MAL_JOB_ASYNC_GENERATOR_RETURN);
+    job->as.reaction.handler = generator;
+    job->is_reject = is_reject;
+    job->as.reaction.cap_resolve = realm_anchor;
+    job->as.reaction.cap_reject = mal_value_new_undefined();
+    job->as.reaction.argument = argument;
     mal_vm_enqueue(vm, job);
 }
 
@@ -343,6 +362,24 @@ static void mal_vm_run_await_job(MalVm *vm, MalJob *job) {
         job->is_reject ? MAL_GENERATOR_RESUME_THROW : MAL_GENERATOR_RESUME_NEXT);
 }
 
+/** AsyncGeneratorAwaitReturn's realm-capturing fulfillment/rejection closure. */
+static void mal_vm_run_async_generator_return_job(MalVm *vm, MalJob *job) {
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(
+        vm, mal_vm_callee_realm(vm, job->as.reaction.cap_resolve));
+#endif
+    vm->completion = mal_completion_normal();
+    mal_async_generator_await_return_complete(
+        vm,
+        (MalGeneratorObject *) mal_value_to_heap(job->as.reaction.handler),
+        job->is_reject,
+        job->as.reaction.argument);
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+}
+
 /** PromiseResolveThenableJob: call then(thenable, resolve, reject), routing a throw to reject. */
 static void mal_vm_run_thenable_job(MalVm *vm, MalJob *job) {
     // Exact native adoption uses the otherwise-impossible non-callable resolve
@@ -414,6 +451,9 @@ void mal_vm_drain_microtasks(MalVm *vm) {
                 break;
             case MAL_JOB_ASYNC_AWAIT:
                 mal_vm_run_await_job(vm, job);
+                break;
+            case MAL_JOB_ASYNC_GENERATOR_RETURN:
+                mal_vm_run_async_generator_return_job(vm, job);
                 break;
         }
         mal_job_recycle(vm, job);

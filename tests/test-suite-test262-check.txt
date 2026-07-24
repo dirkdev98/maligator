@@ -42,6 +42,9 @@ test/built-ins/AsyncFromSyncIteratorPrototype/return/result-object-error.js
 test/built-ins/AsyncFromSyncIteratorPrototype/throw/iterator-result-rejected-promise-close.js
 test/built-ins/AsyncFunction/AsyncFunctionPrototype-is-not-callable.js
 test/built-ins/AsyncGeneratorFunction/invoked-as-function-no-arguments.js
+test/built-ins/AsyncGeneratorPrototype/return/return-state-completed-broken-promise.js
+test/built-ins/AsyncGeneratorPrototype/return/return-suspendedStart-broken-promise.js
+test/built-ins/AsyncGeneratorPrototype/return/return-suspendedStart-promise.js
 test/built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-promise.js
 test/built-ins/AsyncIteratorPrototype/Symbol.asyncIterator/prop-desc.js
 test/built-ins/Atomics/or/non-shared-int-views-throws.js

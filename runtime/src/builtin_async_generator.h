@@ -33,6 +33,14 @@ void mal_async_generator_yield(MalVm *vm, MalGeneratorObject *agen);
 void mal_async_generator_return(MalVm *vm, MalGeneratorObject *agen, MalValue value);
 void mal_async_generator_throw_done(MalVm *vm, MalGeneratorObject *agen, MalValue reason);
 
+/** Complete the front return request after AsyncGeneratorAwaitReturn settles. */
+void mal_async_generator_await_return_complete(
+    MalVm *vm,
+    MalGeneratorObject *agen,
+    bool is_reject,
+    MalValue value
+);
+
 /** Release pending requests and the VM's cleared request-node pool. */
 void mal_async_generator_free_requests(MalVm *vm, MalAsyncGeneratorRequest *requests);
 void mal_async_generator_free_request_pool(MalVm *vm);

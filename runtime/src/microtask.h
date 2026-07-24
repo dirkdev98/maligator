@@ -6,12 +6,13 @@
 typedef struct MalVm MalVm;
 
 /**
- * The two kinds of spec PromiseJob we enqueue onto the microtask queue.
+ * Promise jobs and typed async continuations enqueued on the microtask queue.
  */
 typedef enum MalJobKind {
     MAL_JOB_PROMISE_REACTION,
     MAL_JOB_PROMISE_RESOLVE_THENABLE,
     MAL_JOB_ASYNC_AWAIT,
+    MAL_JOB_ASYNC_GENERATOR_RETURN,
 } MalJobKind;
 
 /**
@@ -69,6 +70,15 @@ void mal_vm_enqueue_reaction_job(
 void mal_vm_enqueue_await_job(
     MalVm *vm,
     MalValue state,
+    bool is_reject,
+    MalValue argument
+);
+
+/** Append an AsyncGeneratorAwaitReturn fulfillment/rejection continuation. */
+void mal_vm_enqueue_async_generator_return_job(
+    MalVm *vm,
+    MalValue generator,
+    MalValue realm_anchor,
     bool is_reject,
     MalValue argument
 );

@@ -84,6 +84,13 @@ void mal_promise_perform_await(
     MalGeneratorObject *state
 );
 
+/** Register the typed continuation used by AsyncGeneratorAwaitReturn. */
+void mal_promise_perform_async_generator_return(
+    MalVm *vm,
+    MalValue promise,
+    MalGeneratorObject *generator
+);
+
 /**
  * PerformPromiseThen on a Promise value: register on_fulfilled / on_rejected
  * (callables, or undefined for the default pass-through/rethrow) against an

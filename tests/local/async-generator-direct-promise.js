@@ -77,6 +77,45 @@ ok(
 );
 rejected("throw rejects request Promise", thrown, (reason) => reason === throwReason);
 
+let releaseAwaitedReturn;
+const awaitedReturnValue = new IntrinsicPromise((resolve) => {
+	releaseAwaitedReturn = resolve;
+});
+const awaitedReturnIterator = basic();
+const awaitedReturnQueue = [
+	awaitedReturnIterator.return(awaitedReturnValue),
+	awaitedReturnIterator.next(),
+	awaitedReturnIterator.return(IntrinsicPromise.resolve(61)),
+];
+
+const suspendedStartError = new Error("suspended-start broken return");
+const suspendedStartBroken = IntrinsicPromise.resolve(0);
+Object.defineProperty(suspendedStartBroken, "constructor", {
+	get() {
+		throw suspendedStartError;
+	},
+});
+rejected(
+	"suspended-start return rejects broken Promise",
+	basic().return(suspendedStartBroken),
+	(reason) => reason === suspendedStartError,
+);
+
+async function* empty() {}
+const completedIterator = empty();
+const completedError = new Error("completed broken return");
+const completedBroken = IntrinsicPromise.resolve(0);
+Object.defineProperty(completedBroken, "constructor", {
+	get() {
+		throw completedError;
+	},
+});
+rejected(
+	"completed return rejects broken Promise",
+	completedIterator.next().then(() => completedIterator.return(completedBroken)),
+	(reason) => reason === completedError,
+);
+
 let genericThrew = false;
 let genericPromise;
 try {
@@ -191,6 +230,19 @@ if (typeof __mal_collect_garbage === "function") {
 releaseReturn();
 releaseThrow();
 releaseMany();
+releaseAwaitedReturn(59);
+
+fulfilled(
+	"awaited return preserves queue order",
+	IntrinsicPromise.all(awaitedReturnQueue),
+	(results) =>
+		results[0].value === 59 &&
+		results[0].done === true &&
+		results[1].value === undefined &&
+		results[1].done === true &&
+		results[2].value === 61 &&
+		results[2].done === true,
+);
 
 fulfilled("pending return queue order", IntrinsicPromise.all(returnQueue), (results) => {
 	return (
