@@ -800,6 +800,10 @@ typedef struct MalFunction {
     i32 argument_snapshot_plan_count;
     const MalArgumentSnapshotMove *argument_snapshot_plan;
 
+    /** Captured binding slot per mapped argument index; empty for unmapped functions. */
+    i32 mapped_argument_count;
+    const i32 *mapped_argument_slots;
+
     /**
      * Function.prototype.length: formal parameters before the first default
      * or rest parameter. parameter_count keeps the full formal count for the
@@ -817,6 +821,7 @@ typedef struct MalFunction {
      * read). Entry snapshots do not require a retained slice.
      */
     bool needs_arguments;
+    bool mapped_arguments;
 
     /**
      * A derived class constructor. Its `this` is uninitialized (the EMPTY

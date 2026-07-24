@@ -14,6 +14,8 @@ const fn: VmFunction = {
 	isGenerator: false,
 	isAsync: false,
 	parameterCount: 0,
+	mappedArguments: false,
+	mappedArgumentSlots: [],
 	length: 0,
 	registerCount: 1,
 	capturedCount: 0,
@@ -83,19 +85,19 @@ describe("wire loader side-data validation", () => {
 	}
 
 	it("rejects an explicit count that disagrees with its arrays", () => {
-		// Empty definition tables put the first instruction at byte 30. Its explicit
+		// Empty definition tables put the first instruction at byte 32. Its explicit
 		// count follows the opcode tag and dst operand.
-		rejectsMutation("explicit-count", 30 + 1 + 1, 4); // ZigZag(2)
+		rejectsMutation("explicit-count", 32 + 1 + 1, 4); // ZigZag(2)
 	});
 
 	it("rejects mismatched paired-array lengths", () => {
 		// Skip tag, dst, explicit count, then the first array's count and one value.
-		rejectsMutation("paired-count", 30 + 1 + 1 + 1 + 1 + 1, 2);
+		rejectsMutation("paired-count", 32 + 1 + 1 + 1 + 1 + 1, 2);
 	});
 
 	it("rejects snapshot metadata that disagrees with the opcode prefix", () => {
-		// The first function starts at byte 15; its snapshot count is byte 22.
-		rejectsMutation("snapshot-prefix", 22, 1);
+		// The first function starts at byte 15; its snapshot count is byte 23.
+		rejectsMutation("snapshot-prefix", 23, 1);
 	});
 
 	it("rejects a snapshot plan that clobbers an aliased source", () => {

@@ -1410,6 +1410,8 @@ function emitBody(
 			stackObjectAccesses.get(ip),
 			stackObjectMaterializations.get(ip),
 			mathUnaryCalls.has(ip),
+			fn.mappedArguments,
+			fn.mappedArgumentSlots,
 		);
 		if (emitted === null) {
 			return null;
@@ -1443,6 +1445,8 @@ function emitInstruction(
 	stackObjectAccess: { site: StackObjectSite; slot: number } | undefined,
 	stackObjectMaterialization: StackObjectSite | undefined,
 	mathUnaryCall: boolean,
+	mappedArguments: boolean,
+	mappedArgumentSlots: Array<number>,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -1871,11 +1875,8 @@ function emitInstruction(
 				throwCheck,
 			];
 		case "CREATE_ARGUMENTS_OBJECT":
-			// The unmapped `arguments` object (this engine never maps parameters). A
-			// strict function poisons `.callee`; a sloppy one exposes the invoked
-			// function, which reaches the compiled frame via the `callee` parameter.
 			return [
-				`r${instruction.dst} = mal_create_arguments_object(vm, args, arg_count, callee, ${strict});`,
+				`r${instruction.dst} = mal_create_arguments_object(vm, args, arg_count, callee, env, ${mappedArguments}, ${mappedArgumentSlots.length}, ${mappedArgumentSlots.length > 0 ? `(const i32[]){ ${mappedArgumentSlots.join(", ")} }` : "nullptr"});`,
 			];
 		case "LOAD_ARGUMENT_COUNT":
 			return [`r${instruction.dst} = mal_value_from_i32(arg_count);`];

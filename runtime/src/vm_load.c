@@ -16,7 +16,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 14u        // DEFINE_PROPERTY descriptor attributes
+#define WIRE_VERSION 15u        // mapped Arguments metadata
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 /* Wire opcode tags. MUST match WIRE_OPCODES in src/serialize-vm.ts (index order). */
@@ -1063,6 +1063,7 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     fn->is_derived_constructor = rd_u8(r) != 0;
     fn->is_class_constructor = rd_u8(r) != 0;
     fn->has_prototype = rd_u8(r) != 0;
+    fn->mapped_arguments = rd_u8(r) != 0;
     fn->argument_snapshot_count = (i32) rd_count(r, 1);
     u32 argument_snapshot_plan_count = rd_count(r, 2);
     fn->argument_snapshot_plan_count = (i32) argument_snapshot_plan_count;
@@ -1074,6 +1075,14 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
         argument_snapshot_plan[i].source = rd_i32(r);
     }
     fn->argument_snapshot_plan = argument_snapshot_plan;
+    u32 mapped_argument_count = rd_count(r, 1);
+    fn->mapped_argument_count = (i32) mapped_argument_count;
+    i32 *mapped_argument_slots = arena_array(
+        L, r, mapped_argument_count, sizeof(i32), alignof(i32));
+    for (u32 i = 0; r->ok && i < mapped_argument_count; i++) {
+        mapped_argument_slots[i] = rd_i32(r);
+    }
+    fn->mapped_argument_slots = mapped_argument_slots;
     fn->parameter_count = rd_i32(r);
     fn->length = rd_i32(r);
     fn->register_count = rd_i32(r);
@@ -1081,9 +1090,18 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
     fn->file_index = rd_i32(r);
     if (fn->parameter_count < 0 || fn->register_count < fn->parameter_count ||
         fn->argument_snapshot_count > fn->register_count - fn->parameter_count ||
-        fn->captured_count < 0) {
+        fn->captured_count < 0 || fn->mapped_argument_count > fn->parameter_count ||
+        (!fn->mapped_arguments && fn->mapped_argument_count != 0) ||
+        (fn->mapped_arguments && fn->strict)) {
         r->ok = false;
         return;
+    }
+    for (i32 i = 0; i < fn->mapped_argument_count; i++) {
+        if (fn->mapped_argument_slots[i] < -1 ||
+            fn->mapped_argument_slots[i] >= fn->captured_count) {
+            r->ok = false;
+            return;
+        }
     }
     fn->compiled = nullptr; // loaded code is always interpreted
 

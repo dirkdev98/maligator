@@ -161,6 +161,8 @@ export interface VmFunction {
 	isGenerator: boolean;
 	isAsync: boolean;
 	parameterCount: number;
+	mappedArguments: boolean;
+	mappedArgumentSlots: Array<number>;
 	length: number;
 	registerCount: number;
 	capturedCount: number;
@@ -1181,6 +1183,8 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		isGenerator: fn.isGenerator ?? false,
 		isAsync: fn.isAsync ?? false,
 		parameterCount: fn.parameterCount,
+		mappedArguments: fn.mappedArguments ?? false,
+		mappedArgumentSlots: fn.mappedArgumentSlots ?? [],
 		length: fn.length,
 		registerCount: fn.nextRegisterDestination,
 		capturedCount: fn.nextCapturedIndex,

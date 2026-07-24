@@ -17,8 +17,8 @@ import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
  */
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
-// Bumped to 14 for DEFINE_PROPERTY descriptor attributes.
-export const WIRE_VERSION = 14;
+// Bumped to 15 for mapped Arguments function metadata.
+export const WIRE_VERSION = 15;
 // Keep in sync with runtime/src/heap_string.h.
 export const MAX_STRING_CODE_UNITS = 16 * 1024 * 1024;
 
@@ -562,6 +562,7 @@ export function serializeVmDefinition(
 
 function writeFunction(w: Writer, fn: VmFunction, debug: boolean): void {
 	validateArgumentSnapshotPrefix(fn);
+	validateMappedArguments(fn);
 	w.i32(fn.nameStringIndex);
 	w.u8(fn.isAsync && fn.isGenerator ? 3 : fn.isAsync ? 2 : fn.isGenerator ? 1 : 0);
 	w.u8(fn.strict ? 1 : 0);
@@ -569,12 +570,15 @@ function writeFunction(w: Writer, fn: VmFunction, debug: boolean): void {
 	w.u8(fn.isDerivedConstructor ? 1 : 0);
 	w.u8(fn.isClassConstructor ? 1 : 0);
 	w.u8(fn.hasPrototype ? 1 : 0);
+	w.u8(fn.mappedArguments ? 1 : 0);
 	w.u32(fn.argumentSnapshotCount);
 	w.u32(fn.argumentSnapshotPlan.length);
 	for (const move of fn.argumentSnapshotPlan) {
 		w.i32(move.destination);
 		w.i32(move.source);
 	}
+	w.u32(fn.mappedArgumentSlots.length);
+	for (const slot of fn.mappedArgumentSlots) w.i32(slot);
 	w.i32(fn.parameterCount);
 	w.i32(fn.length);
 	w.i32(fn.registerCount);
@@ -620,6 +624,17 @@ function validateArgumentSnapshotPrefix(fn: VmFunction): void {
 		)
 	) {
 		throw new RangeError("serialize-vm: argument snapshot plan mismatch");
+	}
+}
+
+function validateMappedArguments(fn: VmFunction): void {
+	if (
+		fn.mappedArgumentSlots.length > fn.parameterCount ||
+		(!fn.mappedArguments && fn.mappedArgumentSlots.length !== 0) ||
+		(fn.mappedArguments && fn.strict) ||
+		fn.mappedArgumentSlots.some((slot) => slot < -1 || slot >= fn.capturedCount)
+	) {
+		throw new RangeError("serialize-vm: invalid mapped arguments metadata");
 	}
 }
 
@@ -1138,12 +1153,16 @@ function readFunction(r: Reader): VmFunction {
 	const isDerivedConstructor = r.u8() !== 0;
 	const isClassConstructor = r.u8() !== 0;
 	const hasPrototype = r.u8() !== 0;
+	const mappedArguments = r.u8() !== 0;
 	const argumentSnapshotCount = r.count(1);
 	const argumentSnapshotPlanCount = r.count(2);
 	const argumentSnapshotPlan: VmFunction["argumentSnapshotPlan"] = [];
 	for (let i = 0; i < argumentSnapshotPlanCount; i++) {
 		argumentSnapshotPlan.push({ destination: r.i32(), source: r.i32() });
 	}
+	const mappedArgumentCount = r.count(1);
+	const mappedArgumentSlots: Array<number> = [];
+	for (let i = 0; i < mappedArgumentCount; i++) mappedArgumentSlots.push(r.i32());
 	const parameterCount = r.i32();
 	const length = r.i32();
 	const registerCount = r.i32();
@@ -1174,6 +1193,7 @@ function readFunction(r: Reader): VmFunction {
 		isGenerator: kind === 1 || kind === 3,
 		isAsync: kind === 2 || kind === 3,
 		parameterCount,
+		mappedArguments,
 		length,
 		registerCount,
 		capturedCount,
@@ -1181,6 +1201,7 @@ function readFunction(r: Reader): VmFunction {
 		needsArguments,
 		argumentSnapshotCount,
 		argumentSnapshotPlan,
+		mappedArgumentSlots,
 		isDerivedConstructor,
 		isClassConstructor,
 		hasPrototype,
@@ -1190,6 +1211,7 @@ function readFunction(r: Reader): VmFunction {
 		positions,
 	};
 	validateArgumentSnapshotPrefix(fn);
+	validateMappedArguments(fn);
 	return fn;
 }
 

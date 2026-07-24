@@ -315,6 +315,7 @@ export function mergeVmDefinitions(definitions: Array<VmDefinition>): MergedVmDe
 				positions: fn.positions.map((position) => shifted(position, base.position)),
 				gcRootRegisters:
 					fn.gcRootRegisters === undefined ? undefined : [...fn.gcRootRegisters],
+				mappedArgumentSlots: [...fn.mappedArgumentSlots],
 			})),
 		);
 	}

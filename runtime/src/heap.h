@@ -126,6 +126,8 @@ typedef enum MalHeapType : u8 {
      */
     MAL_HEAP_BIGINT,
     MAL_HEAP_OBJECT,
+    /** Arguments exotic object with a mutable formal-parameter map. */
+    MAL_HEAP_ARGUMENTS_OBJECT,
 #if MAL_REALMS
     /**
      * ShadowRealm instances (MalShadowRealmObject): an ordinary object holding a

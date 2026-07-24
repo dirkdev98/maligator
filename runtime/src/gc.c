@@ -5,6 +5,7 @@
 
 #include "./array_buffer_object.h"
 #include "./array_object.h"
+#include "./arguments_object.h"
 #include "./bound_function_object.h"
 #include "./builtin_async_generator.h"
 #include "./builtin_data_view.h"
@@ -679,6 +680,9 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
     }
 
     switch (cell->type) {
+        case MAL_HEAP_ARGUMENTS_OBJECT:
+            mal_gc_trace_env(((MalArgumentsObject *) cell)->env);
+            break;
         case MAL_HEAP_ARRAY_OBJECT: {
             // Dense element vector: trace the live region [0, dense_count). Hole
             // sentinels are static (non-pointer) values, so marking them is a no-op.

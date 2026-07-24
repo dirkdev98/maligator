@@ -157,12 +157,13 @@ test/language/statements/for-await-of/iterator-close-non-throw-get-method-abrupt
 test/language/statements/for-await-of/iterator-close-non-throw-get-method-non-callable.js
 test/language/statements/for-of/dstr/array-elem-trlg-iter-rest-rtrn-close-err.js
 
-# Binding, coercion, and eval environments (35)
+# Binding, coercion, and eval environments (36)
 test/built-ins/JSON/stringify/replacer-function-object-deleted-property.js
 test/built-ins/Object/create/properties-arg-to-object-bigint.js
 test/built-ins/eval/no-construct.js
 test/built-ins/global/S10.2.3_A1.3_T4.js
 test/language/arguments-object/cls-decl-meth-static-args-trailing-comma-single-args.js
+test/language/arguments-object/mapped/nonconfigurable-descriptors-define-failure.js
 test/language/block-scope/syntax/redeclaration/class-name-redeclaration-attempt-with-let.js
 test/language/computed-property-names/class/static/method-constructor.js
 test/language/destructuring/binding/syntax/destructuring-array-parameters-function-arguments-length.js

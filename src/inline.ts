@@ -2279,6 +2279,9 @@ export function optEliminateCapturedSlots(
 			continue; // mutated (or never read with a single store): leave it
 		}
 		const ownerIndex = Number(key.split(":")[0]);
+		if ((program.functions[ownerIndex]?.mappedArgumentSlots?.length ?? 0) > 0) {
+			continue;
+		}
 		const store = stores[0]!;
 		const loads = loadsBySlot.get(key) ?? [];
 		// Every access must be in the owner function.
@@ -2330,7 +2333,10 @@ export function optEliminateCapturedSlots(
 
 	// Any function with no remaining captured access of its own slots needs no env.
 	for (const fn of facts.environmentFunctions) {
-		if ((environmentReferenceCounts.get(fn.functionIndex) ?? 0) === 0) {
+		if (
+			(environmentReferenceCounts.get(fn.functionIndex) ?? 0) === 0 &&
+			(fn.mappedArgumentSlots?.length ?? 0) === 0
+		) {
 			fn.nextCapturedIndex = 0; // no env allocation needed
 			changed = true;
 		}

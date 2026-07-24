@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "array_object.h"
+#include "arguments_object.h"
 #include "async_function.h"
 #include "bound_function_object.h"
 #include "bigint128.h"
@@ -406,9 +407,15 @@ bool mal_vm_get_own_property(
         return true;
     }
 
-    MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(object_value), key);
+    MalObject *object = mal_value_to_object(object_value);
+    MalPropertyLookup lookup = mal_object_get_own(object, key);
     if (lookup.present) {
         *desc_out = lookup.desc;
+        if (mal_object_is_mapped_arguments(object)) {
+            MalArgumentsObject *arguments = (MalArgumentsObject *) object;
+            i32 slot = mal_arguments_object_mapped_slot(arguments, key);
+            if (slot >= 0) desc_out->value = arguments->env->slots[slot];
+        }
         *present_out = true;
     }
     return true;
@@ -1282,12 +1289,13 @@ void mal_op_env_pop(MalCallable *callable) {
     callable->env = callable->env->parent;
 }
 
-// Build an arguments object (CreateUnmappedArgumentsObject) over `args`: an array
+// Build an arguments object over `args`: an array
 // of the call arguments plus an own @@iterator (%Array.prototype.values%) and a
-// `callee` slot — poisoned with %ThrowTypeError% when strict, otherwise exposing
-// the function. Shared by the interpreter op and compiled code.
+// `callee` slot — poisoned for an unmapped object, otherwise exposing the
+// function. Shared by the interpreter op and compiled code.
 MalValue mal_create_arguments_object(
-    MalVm *vm, const MalValue *args, i32 arg_count, MalValue callee, bool strict
+    MalVm *vm, const MalValue *args, i32 arg_count, MalValue callee, MalEnv *env,
+    bool mapped, i32 mapped_argument_count, const i32 *mapped_argument_slots
 ) {
     // The arguments object is an ordinary object whose [[Prototype]] is
     // %Object.prototype% (CreateUnmappedArgumentsObject step 2 / mapped step 8) —
@@ -1296,9 +1304,12 @@ MalValue mal_create_arguments_object(
     // configurable), so `arguments[i] = v` for i >= length adds an indexed
     // property WITHOUT changing length (unlike an array's magic length), and
     // Array.isArray(arguments) is false.
-    MalObject *arguments = mal_object_new(
-        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])
-    );
+    MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    MalObject *arguments = mapped
+        ? (MalObject *) mal_arguments_object_new(
+            &vm->heap, prototype, env, mapped_argument_slots,
+            mapped_argument_count, arg_count)
+        : mal_object_new(&vm->heap, prototype);
     arguments->is_arguments = true;
 
     // Indexed args first (enumerable, writable, configurable data properties)...
@@ -1334,7 +1345,7 @@ MalValue mal_create_arguments_object(
     // %ThrowTypeError% (non-enumerable, non-configurable); a mapped (sloppy)
     // one exposes the function as a writable, configurable data property.
     MalKey callee_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_CALLEE);
-    if (strict) {
+    if (!mapped) {
         MalValue thrower = vm->intrinsics[MAL_INTRINSIC_THROW_TYPE_ERROR];
         MalPropertyDesc callee_desc = {
             .flags = MAL_PROPERTY_ACCESSOR,
@@ -1362,7 +1373,9 @@ void mal_op_create_arguments_object(MalCallable *callable, const MalInstruction 
 
     callable->arguments_object = mal_create_arguments_object(
         callable->vm, callable->arguments, callable->argument_count,
-        callable->callee, callable->function->strict
+        callable->callee, callable->env, callable->function->mapped_arguments,
+        callable->function->mapped_argument_count,
+        callable->function->mapped_argument_slots
     );
     callable->registers[instruction->as.create_arguments_object.dst] = callable->arguments_object;
 }
@@ -2777,9 +2790,19 @@ bool mal_vm_to_numeric(MalVm *vm, MalValue value, MalValue *out) {
  */
 static bool mal_vm_ordinary_get(MalVm *vm, MalObject *start, MalKey key, MalValue receiver, MalValue *out) {
     for (MalObject *cursor = start; cursor != nullptr;) {
-        MalPropertyLookup lookup = mal_object_get_own(cursor, key);
-        if (lookup.present) {
-            return mal_vm_desc_read(vm, lookup.desc, receiver, out);
+        bool present;
+        MalPropertyDesc desc;
+        if (cursor->header.type == MAL_HEAP_ARGUMENTS_OBJECT) {
+            if (!mal_vm_get_own_property(vm, mal_value_from_object(cursor), key, &present, &desc)) {
+                return false;
+            }
+        } else {
+            MalPropertyLookup lookup = mal_object_get_own(cursor, key);
+            present = lookup.present;
+            desc = lookup.desc;
+        }
+        if (present) {
+            return mal_vm_desc_read(vm, desc, receiver, out);
         }
         MalObject *parent = mal_object_get_prototype(cursor);
         if (parent == nullptr) {
@@ -3147,9 +3170,21 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
             return vm->completion.kind != MAL_COMPLETION_THROW;
         }
         receiver_desc.value = value;
-        return mal_object_define_own(
-                   mal_value_to_object(receiver), key, &receiver_desc) ==
+        bool applied = mal_object_define_own(
+                           mal_value_to_object(receiver), key, &receiver_desc) ==
             MAL_DEFINE_OWN_APPLIED;
+        if (applied && target == receiver &&
+            mal_value_heap_type(target) == MAL_HEAP_ARGUMENTS_OBJECT) {
+            MalArgumentsObject *arguments =
+                (MalArgumentsObject *) mal_value_to_object(target);
+            i32 slot = mal_arguments_object_mapped_slot(arguments, key);
+            if (slot >= 0) {
+                mal_gc_write_barrier(arguments->env->slots[slot]);
+                arguments->env->slots[slot] = value;
+                mal_gc_card(&arguments->env->header, value);
+            }
+        }
+        return applied;
     }
     if (mal_value_is_module_namespace_object(receiver)) {
         return false;
@@ -3190,7 +3225,11 @@ bool mal_vm_delete_property(MalVm *vm, MalValue object_value, MalKey key) {
     MalObject *object = mal_value_to_object(object_value);
 
     if (mal_object_get_own(object, key).present) {
-        return mal_object_delete_own(object, key);
+        bool deleted = mal_object_delete_own(object, key);
+        if (deleted && mal_object_is_mapped_arguments(object)) {
+            mal_arguments_object_unmap((MalArgumentsObject *) object, key);
+        }
+        return deleted;
     }
 
     MalPropertyDesc string_exotic;

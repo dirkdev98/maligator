@@ -123,6 +123,41 @@ const sloppy = (0, eval)(
 );
 assert(sloppy(4), "sloppy arguments.callee");
 
+const mappedSuite = (0, eval)(`(function () {
+	function descriptor(value) {
+		var args = arguments;
+		args[0] = 2;
+		if (value !== 2) return false;
+		value = 3;
+		if (args[0] !== 3) return false;
+		Object.defineProperty(args, "0", { configurable: false });
+		value = 4;
+		if (Object.getOwnPropertyDescriptor(args, "0").value !== 4) return false;
+		Object.defineProperty(args, "0", { writable: false });
+		value = 5;
+		return args[0] === 4;
+	}
+	function deleted(value) { delete arguments[0]; value = 2; return arguments[0]; }
+	function duplicate(value, value) { arguments[0] = 3; arguments[1] = 4; return value; }
+	function missing(value) { value = 3; return Object.hasOwn(arguments, "0"); }
+	function unmapped(value = 1) { arguments[0] = 4; return value; }
+	function closure(value) {
+		var args = arguments;
+		return [function (next) { value = next; }, function () { return args[0]; }];
+	}
+	var pair = closure(1);
+	pair[0](7);
+	if (!descriptor(1)) return "descriptor";
+	if (deleted(1) !== undefined) return "delete";
+	if (duplicate(1, 2) !== 4) return "duplicate";
+	if (missing()) return "missing";
+	if (unmapped(2) !== 2) return "unmapped";
+	if (pair[1]() !== 7) return "closure";
+	return true;
+})`);
+const mappedResult = mappedSuite();
+assert(mappedResult === true, "mapped arguments exotic semantics: " + mappedResult);
+
 asyncCount(1, 2, 3).then((value) => {
 	assert(value === 6, "async count lifetime");
 	asyncIndex(1, 2, 4).then((indexValue) => {

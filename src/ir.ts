@@ -423,6 +423,10 @@ export interface IRFunction {
 	 */
 	parameterCount: number;
 
+	/** Captured binding slot for each mapped Arguments index, or undefined when unmapped. */
+	mappedArgumentSlots?: Array<number>;
+	mappedArguments?: boolean;
+
 	/**
 	 * The Function.prototype.length value: formal parameters before the first
 	 * default or rest parameter. Differs from parameterCount, which keeps the
@@ -4073,12 +4077,57 @@ function compileFunctionParams(
 	// initialization never mutates; creating it before the parameter logic
 	// keeps it available to default value expressions.
 	const argumentsBinding = getArgumentsBinding(fn, node);
+	const canMapArguments =
+		!(fn.strict ?? fn.semanticFile.strict) &&
+		node.params.every((param) => param.type === "Identifier");
+	const mappedParameterIndices = new Set<number>();
+	if (canMapArguments) {
+		const names = new Set<string>();
+		for (let i = node.params.length - 1; i >= 0; i--) {
+			const param = node.params[i]!;
+			if (param.type !== "Identifier" || names.has(param.name)) continue;
+			names.add(param.name);
+			mappedParameterIndices.add(i);
+		}
+	}
+	const materializesArguments =
+		argumentsBinding?.usageNodes.some((usage) => {
+			const access = fn.semanticFile.staticArgumentsAccesses.get(usage);
+			return (
+				access === undefined ||
+				(access.kind === "index" && mappedParameterIndices.has(access.index))
+			);
+		}) ?? false;
+	if (materializesArguments && canMapArguments) {
+		fn.mappedArguments = true;
+		const mappedNames = new Set<string>();
+		fn.mappedArgumentSlots = new Array<number>(node.params.length).fill(-1);
+		for (let i = node.params.length - 1; i >= 0; i--) {
+			const param = node.params[i]!;
+			if (param.type !== "Identifier" || mappedNames.has(param.name)) continue;
+			mappedNames.add(param.name);
+			const binding = fn.semanticFile.nodeToBinding.get(param);
+			if (!binding) continue;
+			binding.scopedTo = "captured";
+			const location = getOrCreateBindingLocation(program, fn, binding);
+			if (location.type !== "captured")
+				throw new Error("Mapped parameter must be captured");
+			fn.mappedArgumentSlots[i] = location.index;
+		}
+	}
 	if (argumentsBinding) {
 		let lengthRegister: number | undefined;
 		const indexRegisters = new Map<number, number>();
 		for (const usage of argumentsBinding.usageNodes) {
 			const access = fn.semanticFile.staticArgumentsAccesses.get(usage);
 			if (!access) continue;
+			if (
+				fn.mappedArguments &&
+				access.kind === "index" &&
+				mappedParameterIndices.has(access.index)
+			) {
+				continue;
+			}
 			let destination =
 				access.kind === "length" ? lengthRegister : indexRegisters.get(access.index);
 			if (destination === undefined) {
@@ -4094,12 +4143,7 @@ function compileFunctionParams(
 			(fn.staticArgumentsRegisters ??= new Map()).set(usage, destination);
 		}
 	}
-	if (
-		argumentsBinding &&
-		argumentsBinding.usageNodes.some(
-			(usage) => !fn.semanticFile.staticArgumentsAccesses.has(usage),
-		)
-	) {
+	if (argumentsBinding && materializesArguments) {
 		const destination = nextRegisterDestination(fn);
 		fn.argumentsObjectRegister = destination;
 		block.instructions.push({
@@ -10172,10 +10216,7 @@ function compileMemberExpression(
 		const access = fn.semanticFile.staticArgumentsAccesses.get(memberExpression.object);
 		if (access?.member === memberExpression) {
 			const snapshot = fn.staticArgumentsRegisters?.get(memberExpression.object);
-			if (snapshot === undefined) {
-				throw new Error("Missing static arguments snapshot register");
-			}
-			return snapshot;
+			if (snapshot !== undefined) return snapshot;
 		}
 	}
 	if (memberExpression.property.type === "PrivateIdentifier") {

@@ -53,6 +53,8 @@ const fn: VmFunction = {
 	isGenerator: false,
 	isAsync: false,
 	parameterCount: 0,
+	mappedArguments: false,
+	mappedArgumentSlots: [],
 	length: 0,
 	registerCount: 12,
 	capturedCount: 5,

@@ -206,10 +206,11 @@ void mal_op_create_arguments_object(MalCallable *callable, const MalInstruction 
 void mal_op_load_argument_count(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_load_argument(MalCallable *callable, const MalInstruction *instruction);
 
-// Build an unmapped arguments object over `args`; shared by the interpreter op
-// and compiled code. `callee` is exposed only in sloppy mode (strict poisons it).
+// Build an arguments object over `args`; a non-empty map aliases indexed
+// properties to captured formal bindings. Shared by both execution backends.
 MalValue mal_create_arguments_object(
-    MalVm *vm, const MalValue *args, i32 arg_count, MalValue callee, bool strict
+    MalVm *vm, const MalValue *args, i32 arg_count, MalValue callee, MalEnv *env,
+    bool mapped, i32 mapped_argument_count, const i32 *mapped_argument_slots
 );
 
 void mal_op_load_this(MalCallable *callable, const MalInstruction *instruction);

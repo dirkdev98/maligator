@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 #include "builtin_error.h"
+#include "arguments_object.h"
 #include "builtin_iterator.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
@@ -118,6 +119,19 @@ MalDefineOwnStatus mal_builtin_object_try_define_parsed(
     MalVm *vm, MalObject *target, MalKey key,
     const MalPropertyDescriptorParse *parsed) {
     MalPropertyDescriptorParse parse = *parsed;
+    MalArgumentsObject *mapped_arguments = nullptr;
+    i32 mapped_slot = -1;
+    if (mal_object_is_mapped_arguments(target)) {
+        mapped_arguments = (MalArgumentsObject *) target;
+        mapped_slot = mal_arguments_object_mapped_slot(mapped_arguments, key);
+        if (mapped_slot >= 0) {
+            if (!parse.has_value && parse.has_writable &&
+                !(parse.desc.flags & MAL_PROPERTY_WRITABLE)) {
+                parse.has_value = true;
+                parse.desc.value = mapped_arguments->env->slots[mapped_slot];
+            }
+        }
+    }
     // String exotic [[DefineOwnProperty]]: an index/length own property is not
     // in the table. It is non-configurable (and non-writable), so the only
     // permitted redefinition is one compatible with the current exotic
@@ -292,6 +306,17 @@ MalDefineOwnStatus mal_builtin_object_try_define_parsed(
     MalDefineOwnStatus status = mal_object_define_own(target, key, &desc);
     if (status == MAL_DEFINE_OWN_APPLIED && grows_array_length) {
         mal_array_object_set_length((MalArrayObject *) target, mal_key_index_value(key) + 1);
+    }
+    if (status == MAL_DEFINE_OWN_APPLIED && mapped_slot >= 0) {
+        if (parse.has_value) {
+            mal_gc_write_barrier(mapped_arguments->env->slots[mapped_slot]);
+            mapped_arguments->env->slots[mapped_slot] = parse.desc.value;
+            mal_gc_card(&mapped_arguments->env->header, parse.desc.value);
+        }
+        if ((parse.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+            (parse.has_writable && !(parse.desc.flags & MAL_PROPERTY_WRITABLE))) {
+            mal_arguments_object_unmap(mapped_arguments, key);
+        }
     }
     return status;
 }
@@ -660,6 +685,15 @@ static MalValue mal_builtin_object_own_descriptor(MalVm *vm, MalValue target, Ma
     MalPropertyDesc string_exotic;
     if (mal_primitive_wrapper_string_exotic_own(&vm->heap, mal_value_to_object(target), key, &string_exotic)) {
         return mal_builtin_object_descriptor_object(vm, string_exotic);
+    }
+
+    if (mal_value_heap_type(target) == MAL_HEAP_ARGUMENTS_OBJECT) {
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_vm_get_own_property(vm, target, key, &present, &desc) || !present) {
+            return mal_value_new_undefined();
+        }
+        return mal_builtin_object_descriptor_object(vm, desc);
     }
 
     MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(target), key);

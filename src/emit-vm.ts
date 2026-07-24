@@ -136,6 +136,7 @@ function malFunctionRow(
 	instructionDataCount: number,
 	argumentSnapshotPlanSymbol: string,
 	argumentSnapshotPlanCount: number,
+	mappedArgumentSlotsSymbol: string,
 	handlersSymbol: string,
 	compiledSymbol: string,
 	debug: { positionsSymbol: string; positionCount: number; fileIndex: number },
@@ -154,6 +155,9 @@ function malFunctionRow(
 		`        .argument_snapshot_count = ${fn.argumentSnapshotCount},`,
 		`        .argument_snapshot_plan_count = ${argumentSnapshotPlanCount},`,
 		`        .argument_snapshot_plan = ${argumentSnapshotPlanSymbol},`,
+		`        .mapped_arguments = ${fn.mappedArguments},`,
+		`        .mapped_argument_count = ${mappedArgumentSlotsSymbol === "nullptr" ? 0 : fn.mappedArgumentSlots.length},`,
+		`        .mapped_argument_slots = ${mappedArgumentSlotsSymbol},`,
 		`        .is_derived_constructor = ${fn.isDerivedConstructor},`,
 		`        .is_class_constructor = ${fn.isClassConstructor},`,
 		`        .has_prototype = ${fn.hasPrototype},`,
@@ -328,6 +332,12 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 	for (let i = 0; i < definition.functions.length; ++i) {
 		const fn = definition.functions[i]!;
 		if (!omitBytecode[i]) {
+			if (fn.mappedArgumentSlots.length > 0) {
+				lines.push(
+					`static const i32 mal_function_${i}_mapped_argument_slots${suffix}[] = { ${fn.mappedArgumentSlots.join(", ")} };`,
+					"",
+				);
+			}
 			if (fn.argumentSnapshotPlan.length > 0) {
 				lines.push(
 					`static const MalArgumentSnapshotMove mal_function_${i}_argument_snapshot_plan${suffix}[] = {`,
@@ -386,6 +396,9 @@ export function emitVmDefinition(definition: VmDefinition, options: EmitOptions 
 					? `mal_function_${i}_argument_snapshot_plan${suffix}`
 					: "nullptr",
 				omitBytecode[i] ? 0 : fn.argumentSnapshotPlan.length,
+				!omitBytecode[i] && fn.mappedArgumentSlots.length > 0
+					? `mal_function_${i}_mapped_argument_slots${suffix}`
+					: "nullptr",
 				fn.handlers.length > 0 ? `mal_function_${i}_handlers${suffix}` : "nullptr",
 				compiled[i] !== null ? compiled[i]!.symbol : "nullptr",
 				{
@@ -658,6 +671,7 @@ export function emitBatch(
 		const instructionDataCounts: Array<number> = [];
 		const argumentSnapshotPlanSymbols: Array<string> = [];
 		const argumentSnapshotPlanCounts: Array<number> = [];
+		const mappedArgumentSlotsSymbols: Array<string> = [];
 		const handlerSymbols: Array<string> = [];
 		for (let i = 0; i < definition.functions.length; ++i) {
 			const fn = definition.functions[i]!;
@@ -667,6 +681,7 @@ export function emitBatch(
 				instructionDataCounts.push(0);
 				argumentSnapshotPlanSymbols.push("nullptr");
 				argumentSnapshotPlanCounts.push(0);
+				mappedArgumentSlotsSymbols.push("nullptr");
 				handlerSymbols.push("nullptr");
 				continue;
 			}
@@ -690,6 +705,15 @@ export function emitBatch(
 					: "nullptr",
 			);
 			argumentSnapshotPlanCounts.push(fn.argumentSnapshotPlan.length);
+			mappedArgumentSlotsSymbols.push(
+				fn.mappedArgumentSlots.length > 0
+					? intern(
+							"mapped_argument_slots",
+							"i32",
+							`    ${fn.mappedArgumentSlots.join(", ")}`,
+						)
+					: "nullptr",
+			);
 			handlerSymbols.push(
 				fn.handlers.length > 0
 					? intern("handlers", "MalExceptionHandler", handlerArrayBody(fn))
@@ -707,6 +731,7 @@ export function emitBatch(
 					instructionDataCounts[i]!,
 					argumentSnapshotPlanSymbols[i]!,
 					argumentSnapshotPlanCounts[i]!,
+					mappedArgumentSlotsSymbols[i]!,
 					handlerSymbols[i]!,
 					compiled[i] !== null ? compiled[i]!.symbol : "nullptr",
 					// The batch path strips debug info (test262 does not use it).
