@@ -298,8 +298,7 @@ bool mal_value_is_callable(MalValue value) {
     if ((value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_CALLABLE) {
         return true;
     }
-    // A proxy (an OBJECT-class value) is callable iff its (non-revoked) target
-    // chain ends at a callable.
+    // A proxy (an OBJECT-class value) has the [[Call]] slot captured at creation.
     if (mal_value_is_proxy_object(value)) {
         return mal_proxy_target_is_callable(value);
     }

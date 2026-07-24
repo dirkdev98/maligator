@@ -299,6 +299,7 @@ test/language/white-space/after-regular-expression-literal-nbsp.js
 
 # Realms
 test/built-ins/Array/length/define-own-prop-length-overflow-realm.js
+test/built-ins/Array/of/proto-from-ctor-realm.js
 test/built-ins/Array/prototype/concat/create-proto-from-ctor-realm-array.js
 test/built-ins/Array/prototype/concat/create-proto-from-ctor-realm-non-array.js
 test/built-ins/Array/prototype/filter/create-proto-from-ctor-realm-array.js

@@ -22,6 +22,8 @@ typedef struct MalProxyObject {
     MalObject object;
     MalValue target;
     MalValue handler;
+    bool callable;
+    bool constructor;
     bool revoked;
 } MalProxyObject;
 
@@ -37,15 +39,15 @@ MalProxyObject *mal_proxy_object_new(MalVm *vm, MalValue target, MalValue handle
 
 /**
  * Resolve a proxy to its [[ProxyTarget]], unwrapping nested proxies. Used by the
- * call/construct dispatchers and IsCallable/IsConstructor to decide behavior by
- * the eventual non-proxy target. Returns the value unchanged if not a proxy.
+ * call/construct dispatchers to reach the eventual non-proxy target. Returns the
+ * value unchanged if not a proxy.
  */
 MalValue mal_proxy_unwrap_target(MalValue value);
 
 /**
- * Whether a (possibly proxy) value is ultimately callable: a callable target
- * behind any chain of proxies. A revoked proxy is reported non-callable here so
- * the call site reaches the trap path and throws the revoked TypeError.
+ * Whether a (possibly proxy) value has [[Call]]. Proxy callability is fixed when
+ * the proxy is created and survives revocation; invoking a revoked callable proxy
+ * still reaches its [[Call]] path and throws.
  */
 bool mal_proxy_target_is_callable(MalValue value);
 

@@ -386,6 +386,10 @@ static bool mal_builtin_array_same_value_zero(MalValue left, MalValue right) {
     return mal_value_is_nan(left) && mal_value_is_nan(right);
 }
 
+static bool mal_builtin_array_create_data_property_wide(MalVm *vm, MalValue target, f64 index, MalValue value);
+static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u32 index, MalValue value);
+static bool mal_builtin_array_from_set_length(MalVm *vm, MalValue a, u32 length);
+
 static MalValue mal_builtin_array_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     // A single Number argument is the new array's length: ToUint32(len) must
@@ -423,17 +427,50 @@ static MalValue mal_builtin_array_is_array(MalVm *vm, MalValue this_value, const
 }
 
 static MalValue mal_builtin_array_of(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) this_value;
-    MalArrayObject *array = mal_intrinsic_new_dense_array(vm, (u32) arg_count);
-    for (i32 i = 0; i < arg_count; i++) {
-        mal_object_set((MalObject *) array, mal_key_index(i), args[i]);
+    (void) new_target;
+    (void) callee;
+    u32 length = (u32) arg_count;
+    bool plain_mode = !mal_vm_is_constructor(vm, this_value)
+        || this_value == vm->intrinsics[MAL_INTRINSIC_ARRAY_CONSTRUCTOR];
+
+    // The exact active %Array% and the non-constructor fallback both perform an
+    // unobservable ArrayCreate. Keep that dense fast path; every other constructor
+    // must observe Construct(C, « len »), CreateDataPropertyOrThrow, and Set(length).
+    if (plain_mode) {
+        MalArrayObject *array = mal_intrinsic_new_dense_array(vm, length);
+        for (i32 i = 0; i < arg_count; i++) {
+            mal_object_set((MalObject *) array, mal_key_index(i), args[i]);
+        }
+        return mal_value_from_array_object(array);
     }
 
-    return mal_value_from_array_object(array);
-}
+    MalValue len_arg = mal_value_from_u32(length);
+    MalCompletion constructed = mal_vm_construct_value(vm, this_value, &len_arg, 1);
+    if (constructed.kind != MAL_COMPLETION_NORMAL) {
+        vm->completion = constructed;
+        return mal_value_new_undefined();
+    }
 
-static bool mal_builtin_array_create_data_property_wide(MalVm *vm, MalValue target, f64 index, MalValue value);
-static bool mal_builtin_array_create_data_property(MalVm *vm, MalValue target, u32 index, MalValue value);
+    MalValue result = constructed.value;
+    MalRootSpan span;
+    mal_gc_root(&span, &result, 1);
+    mal_gc_native_rooted_begin(vm);
+    for (u32 index = 0; index < length; index++) {
+        if (!mal_builtin_array_create_data_property(vm, result, index, args[index])) {
+            goto done;
+        }
+    }
+    if (!mal_builtin_array_from_set_length(vm, result, length)) {
+        goto done;
+    }
+
+done:
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&span);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? mal_value_new_undefined()
+        : result;
+}
 
 /**
  * Apply the Array.from mapFn when present; returns false when it threw.
@@ -661,6 +698,10 @@ done:
  * (returns false with a pending TypeError) when it refuses the property.
  */
 static bool mal_builtin_array_create_data_property_wide(MalVm *vm, MalValue target, f64 index, MalValue value) {
+    if (mal_value_is_proxy_object(target)) {
+        mal_vm_op_define_property(vm, target, mal_value_from_f64(index), value, true);
+        return vm->completion.kind != MAL_COMPLETION_THROW;
+    }
     // [[DefineOwnProperty]] (not [[Set]]): overwrites a configurable property and
     // ignores the prototype chain, but rejects an incompatible (e.g. non-writable
     // non-configurable) existing one.

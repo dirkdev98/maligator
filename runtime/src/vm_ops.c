@@ -3219,13 +3219,13 @@ bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
 }
 
 bool mal_vm_is_constructor(MalVm *vm, MalValue value) {
-    value = mal_proxy_unwrap_target(value);
-    if (mal_value_is_proxy_object(value)) {
-        // A revoked proxy unwraps to itself; it is not a constructor.
-        return false;
-    }
     while (mal_value_is_bound_function_object(value)) {
         value = mal_value_to_bound_function_object(value)->target;
+    }
+    if (mal_value_is_proxy_object(value)) {
+        // ProxyCreate fixes the presence of [[Construct]] from its target. A
+        // revoked constructor proxy remains a constructor whose [[Construct]] throws.
+        return mal_value_to_proxy_object(value)->constructor;
     }
     if (mal_value_is_native_function_object(value)) {
         return mal_native_function_object_is_constructor(mal_value_to_native_function_object(value));

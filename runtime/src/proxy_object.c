@@ -29,6 +29,10 @@ MalProxyObject *mal_proxy_object_new(MalVm *vm, MalValue target, MalValue handle
     mal_object_init(&vm->heap, &proxy->object, MAL_HEAP_PROXY_OBJECT, nullptr);
     proxy->target = target;
     proxy->handler = handler;
+    // ProxyCreate installs [[Call]]/[[Construct]] from the target once. Revocation
+    // clears the target slot but does not change either internal-method presence.
+    proxy->callable = mal_value_is_callable(target);
+    proxy->constructor = mal_vm_is_constructor(vm, target);
     proxy->revoked = false;
     return proxy;
 }
@@ -45,12 +49,8 @@ MalValue mal_proxy_unwrap_target(MalValue value) {
 }
 
 bool mal_proxy_target_is_callable(MalValue value) {
-    while (mal_value_is_proxy_object(value)) {
-        MalProxyObject *proxy = mal_value_to_proxy_object(value);
-        if (proxy->revoked) {
-            return false;
-        }
-        value = proxy->target;
+    if (mal_value_is_proxy_object(value)) {
+        return mal_value_to_proxy_object(value)->callable;
     }
     return mal_value_is_callable(value);
 }

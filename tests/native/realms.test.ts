@@ -13,6 +13,8 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-realms-"));
 
 describe("generic realm runtime API", () => {
 	let bin: string;
+	let arrayOfCompiled: string;
+	let arrayOfInterpreted: string;
 	let dynamicCompiled: string;
 	let dynamicInterpreted: string;
 
@@ -21,6 +23,22 @@ describe("generic realm runtime API", () => {
 			fixture: "tests/local/array-to-object.js",
 			name: "realm",
 			mainFile: "runtime/realm_test_main.c",
+			outDir,
+			realmsEnabled: true,
+		});
+		arrayOfCompiled = buildNativeBinary({
+			fixture: "tests/local/array-of-cross-realm.js",
+			name: "array-of-cross-realm",
+			compiled: true,
+			mainFile: "runtime/test262_main.c",
+			outDir,
+			realmsEnabled: true,
+		});
+		arrayOfInterpreted = buildNativeBinary({
+			fixture: "tests/local/array-of-cross-realm.js",
+			name: "array-of-cross-realm-ni",
+			compiled: false,
+			mainFile: "runtime/test262_main.c",
 			outDir,
 			realmsEnabled: true,
 		});
@@ -48,6 +66,26 @@ describe("generic realm runtime API", () => {
 
 	it("survives MAL_GC_STRESS + MAL_GC_VERIFY", () => {
 		assertPassLine(runToStdout(bin, { env: STRESS_ENV }), "realm");
+	});
+
+	it.each([
+		["compiled", () => arrayOfCompiled],
+		["interpreted", () => arrayOfInterpreted],
+	] as const)("preserves %s Array.of constructor realms", (_name, binary) => {
+		assertPassLine(
+			runToStdout(binary(), { env: { MAL_TEST262: "1" } }),
+			"array-of-cross-realm",
+		);
+	});
+
+	it.each([
+		["compiled", () => arrayOfCompiled],
+		["interpreted", () => arrayOfInterpreted],
+	] as const)("roots %s Array.of results under GC stress", (_name, binary) => {
+		assertPassLine(
+			runToStdout(binary(), { env: { ...STRESS_ENV, MAL_TEST262: "1" } }),
+			"array-of-cross-realm",
+		);
 	});
 
 	it.each([

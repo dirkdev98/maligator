@@ -157,10 +157,10 @@ MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right);
 bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value);
 
 /**
- * Spec IsConstructor: bound functions defer to their target, a proxy to its
- * target chain, native functions consult their [[Construct]] flag, ordinary
- * script functions are constructors iff non-generator/non-async. Mirrors the
- * pragmatic check Reflect.construct uses.
+ * Spec IsConstructor: bound functions defer to their target, proxies retain the
+ * [[Construct]] slot fixed at creation (including after revocation), native
+ * functions consult their [[Construct]] flag, and ordinary script functions are
+ * constructors iff non-generator/non-async.
  */
 bool mal_vm_is_constructor(MalVm *vm, MalValue value);
 
