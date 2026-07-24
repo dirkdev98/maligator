@@ -87,12 +87,37 @@ const server = http.createServer(function (request, response) {
 		if (concurrentResponses.length === 16) {
 			const batch = concurrentResponses.splice(0);
 			for (const entry of batch) {
+				let nameCoercions = 0;
+				const mixedName = {
+					toString() {
+						nameCoercions++;
+						return "x-InDeX";
+					},
+				};
 				entry.response.setHeader("X-Index", entry.id);
+				entry.response.setHeader(mixedName, entry.id);
+				const setCoercedOnce = nameCoercions === 1;
+				const mixedValue = entry.response.getHeader(mixedName);
+				const getCoercedOnce = nameCoercions === 2;
+				const mixedPresent = entry.response.hasHeader(mixedName);
+				const hasCoercedOnce = nameCoercions === 3;
 				entry.response.setHeader("X-Removed", "yes");
+				entry.response.removeHeader("X-Missing");
+				entry.response.removeHeader(mixedName);
+				const removeCoercedOnce = nameCoercions === 4;
+				entry.response.setHeader("X-InDeX", entry.id);
+				const readdedOrder = entry.response.getHeaderNames().join(",");
 				entry.response.removeHeader("X-Removed");
 				if (
-					entry.response.getHeader("x-index") !== entry.id ||
-					!entry.response.hasHeader("X-Index") ||
+					mixedValue !== entry.id ||
+					!mixedPresent ||
+					!setCoercedOnce ||
+					!getCoercedOnce ||
+					!hasCoercedOnce ||
+					!removeCoercedOnce ||
+					readdedOrder !== "x-removed,x-index" ||
+					entry.response.getHeader("X-iNdEx") !== entry.id ||
+					!entry.response.hasHeader("x-INDeX") ||
 					entry.response.hasHeader("X-Removed") ||
 					entry.response.getHeaders()["x-index"] !== entry.id ||
 					entry.response.getHeaderNames()[0] !== "x-index"

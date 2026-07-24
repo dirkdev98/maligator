@@ -62,6 +62,11 @@ typedef struct MalNodeHttpResponseHeader {
     MalValue value;
 } MalNodeHttpResponseHeader;
 
+typedef struct MalNodeHttpResponseNameView {
+    const c16 *units;
+    usize length;
+} MalNodeHttpResponseNameView;
+
 typedef enum MalNodeHttpRequestReadyKind {
     HTTP_REQUEST_READY_NONE,
     HTTP_REQUEST_READY_DISPATCH,
@@ -582,13 +587,77 @@ static bool http_response_name(
     return true;
 }
 
-static i64 http_response_header_index(
+static bool http_response_name_view(
+    MalVm *vm, MalValue value, MalNodeHttpResponseNameView *out) {
+    MAL_PERF_COUNT(http_response_header_name_coercions);
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    usize length = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    if (length == 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Header name must not be empty");
+        return false;
+    }
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        bool valid = unit > 0x20 && unit < 0x7f && unit != '(' && unit != ')'
+            && unit != '<' && unit != '>' && unit != '@' && unit != ','
+            && unit != ';' && unit != ':' && unit != '\\' && unit != '"'
+            && unit != '/' && unit != '[' && unit != ']' && unit != '?'
+            && unit != '=' && unit != '{' && unit != '}';
+        if (!valid) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "Invalid HTTP header name");
+            return false;
+        }
+    }
+    out->units = units;
+    out->length = length;
+    return true;
+}
+
+static char *http_response_name_materialize(
+    MalVm *vm, const MalNodeHttpResponseNameView *view) {
+    char *name = malloc(view->length + 1);
+    if (name == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return nullptr;
+    }
+    for (usize i = 0; i < view->length; i++) {
+        name[i] = (char) mal_ascii_to_lower(view->units[i]);
+    }
+    name[view->length] = '\0';
+    MAL_PERF_COUNT(http_response_header_name_materializations);
+    return name;
+}
+
+static i64 http_response_header_byte_index(
     const MalNodeHttpRequestState *state, const char *name, usize length) {
     for (usize i = 0; i < state->response_header_count; i++) {
         if (state->response_headers[i].name_len == length
             && memcmp(state->response_headers[i].name, name, length) == 0) {
             return (i64) i;
         }
+    }
+    return -1;
+}
+
+static i64 http_response_header_view_index(
+    const MalNodeHttpRequestState *state,
+    const MalNodeHttpResponseNameView *view) {
+    for (usize i = 0; i < state->response_header_count; i++) {
+        const MalNodeHttpResponseHeader *header = &state->response_headers[i];
+        if (header->name_len != view->length) continue;
+        bool equal = true;
+        for (usize j = 0; j < view->length; j++) {
+            if ((c16) (u8) header->name[j]
+                != mal_ascii_to_lower(view->units[j])) {
+                equal = false;
+                break;
+            }
+        }
+        if (equal) return (i64) i;
     }
     return -1;
 }
@@ -609,24 +678,26 @@ static MalValue http_response_set_header(
                            "setHeader requires a name and value");
         return mal_value_new_undefined();
     }
-    char *name;
-    usize length;
-    if (!http_response_name(vm, args[0], &name, &length)) {
+    MalNodeHttpResponseNameView name;
+    if (!http_response_name_view(vm, args[0], &name)) {
         return mal_value_new_undefined();
     }
-    i64 index = http_response_header_index(state, name, length);
+    i64 index = http_response_header_view_index(state, &name);
     if (index < 0) {
         if (state->response_header_count == MAL_HTTP_MAX_HEADERS) {
-            free(name);
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                                "Too many response headers");
             return mal_value_new_undefined();
         }
+        char *stored_name = http_response_name_materialize(vm, &name);
+        if (stored_name == nullptr) return mal_value_new_undefined();
         index = (i64) state->response_header_count++;
-        state->response_headers[index].name = name;
-        state->response_headers[index].name_len = length;
+        state->response_headers[index].name = stored_name;
+        state->response_headers[index].name_len = name.length;
+        MAL_PERF_COUNT(http_response_header_insertions);
     } else {
-        free(name);
+        MAL_PERF_COUNT(http_response_header_replacements);
+        MAL_PERF_COUNT(http_response_header_allocation_free_lookups);
     }
     state->response_headers[index].value = args[1];
     return receiver;
@@ -639,13 +710,12 @@ static MalValue http_response_get_header(
     (void) callee;
     MalNodeHttpRequestState *state = http_response_state(receiver);
     if (state == nullptr || argc < 1) return mal_value_new_undefined();
-    char *name;
-    usize length;
-    if (!http_response_name(vm, args[0], &name, &length)) {
+    MalNodeHttpResponseNameView name;
+    if (!http_response_name_view(vm, args[0], &name)) {
         return mal_value_new_undefined();
     }
-    i64 index = http_response_header_index(state, name, length);
-    free(name);
+    i64 index = http_response_header_view_index(state, &name);
+    MAL_PERF_COUNT(http_response_header_allocation_free_lookups);
     return index < 0 ? mal_value_new_undefined()
                      : state->response_headers[index].value;
 }
@@ -670,13 +740,12 @@ static MalValue http_response_remove_header(
     if (state == nullptr || state->ending || state->ended || argc < 1) {
         return mal_value_new_undefined();
     }
-    char *name;
-    usize length;
-    if (!http_response_name(vm, args[0], &name, &length)) {
+    MalNodeHttpResponseNameView name;
+    if (!http_response_name_view(vm, args[0], &name)) {
         return mal_value_new_undefined();
     }
-    i64 index = http_response_header_index(state, name, length);
-    free(name);
+    i64 index = http_response_header_view_index(state, &name);
+    MAL_PERF_COUNT(http_response_header_allocation_free_lookups);
     if (index >= 0) {
         free(state->response_headers[index].name);
         for (usize i = (usize) index + 1; i < state->response_header_count; i++) {
@@ -1433,7 +1502,7 @@ static MalValue http_response_end(
     http_define(vm, receiver, "headersSent", mal_value_new_boolean(true));
     http_define(vm, receiver, "finished", mal_value_new_boolean(true));
     http_define(vm, receiver, "writableEnded", mal_value_new_boolean(true));
-    i64 connection_header = http_response_header_index(state, "connection", 10);
+    i64 connection_header = http_response_header_byte_index(state, "connection", 10);
     if (connection_header >= 0
         && http_string_equal_ci(
             state->response_headers[connection_header].value, "close")) {

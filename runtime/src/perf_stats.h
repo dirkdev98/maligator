@@ -154,6 +154,11 @@ typedef struct MalPerfStats {
     u64 http_response_index_inserts;
     u64 http_response_index_removes;
     u64 http_response_index_rehashes;
+    u64 http_response_header_name_coercions;
+    u64 http_response_header_name_materializations;
+    u64 http_response_header_insertions;
+    u64 http_response_header_replacements;
+    u64 http_response_header_allocation_free_lookups;
     u64 http_drain_calls;
     u64 http_request_state_scans;
     u64 http_close_scans;

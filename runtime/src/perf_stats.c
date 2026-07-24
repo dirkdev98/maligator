@@ -228,7 +228,11 @@ static void mal_perf_stats_print(void) {
         "response_index_misses=%llu response_index_probes=%llu "
         "response_index_max_probes=%llu response_index_peak_entries=%llu "
         "response_index_inserts=%llu response_index_removes=%llu "
-        "response_index_rehashes=%llu drain_calls=%llu request_state_scans=%llu "
+        "response_index_rehashes=%llu response_header_name_coercions=%llu "
+        "response_header_name_materializations=%llu response_header_insertions=%llu "
+        "response_header_replacements=%llu "
+        "response_header_allocation_free_lookups=%llu drain_calls=%llu "
+        "request_state_scans=%llu "
         "close_scans=%llu close_request_state_scans=%llu request_remove_scans=%llu "
         "dispatch_enqueues=%llu dispatch_dequeues=%llu completion_enqueues=%llu "
         "completion_dequeues=%llu request_inserts=%llu request_removes=%llu "
@@ -247,6 +251,11 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.http_response_index_inserts,
         (unsigned long long) mal_perf_stats.http_response_index_removes,
         (unsigned long long) mal_perf_stats.http_response_index_rehashes,
+        (unsigned long long) mal_perf_stats.http_response_header_name_coercions,
+        (unsigned long long) mal_perf_stats.http_response_header_name_materializations,
+        (unsigned long long) mal_perf_stats.http_response_header_insertions,
+        (unsigned long long) mal_perf_stats.http_response_header_replacements,
+        (unsigned long long) mal_perf_stats.http_response_header_allocation_free_lookups,
         (unsigned long long) mal_perf_stats.http_drain_calls,
         (unsigned long long) mal_perf_stats.http_request_state_scans,
         (unsigned long long) mal_perf_stats.http_close_scans,

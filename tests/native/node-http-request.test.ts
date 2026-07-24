@@ -215,6 +215,11 @@ describe("node:http request bridge", () => {
 		expect(field(line, "response_index_max_probes")).toBeLessThan(
 			field(line, "response_index_peak_entries"),
 		);
+		expect(field(line, "response_header_name_coercions")).toBe(779);
+		expect(field(line, "response_header_name_materializations")).toBe(202);
+		expect(field(line, "response_header_insertions")).toBe(202);
+		expect(field(line, "response_header_replacements")).toBe(64);
+		expect(field(line, "response_header_allocation_free_lookups")).toBe(577);
 		expect(field(line, "request_state_scans")).toBe(0);
 		expect(field(line, "close_request_state_scans")).toBe(0);
 		expect(field(line, "request_remove_scans")).toBe(0);
