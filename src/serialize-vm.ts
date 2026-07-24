@@ -156,7 +156,16 @@ export const WIRE_BINOPS = [
 const BINOP_TAG = new Map<string, number>(WIRE_BINOPS.map((op, i) => [op, i]));
 
 /** Unary-operator wire order; mirrored by the C `wire_unops[]` table. */
-export const WIRE_UNOPS = ["!", "-", "+", "~", "typeof"] as const;
+export const WIRE_UNOPS = [
+	"!",
+	"-",
+	"+",
+	"~",
+	"typeof",
+	"tonumeric",
+	"increment",
+	"decrement",
+] as const;
 const UNOP_TAG = new Map<string, number>(WIRE_UNOPS.map((op, i) => [op, i]));
 
 /** Canonical typeof-result order; mirrored by `wire_typeof_results` in vm_load.c. */

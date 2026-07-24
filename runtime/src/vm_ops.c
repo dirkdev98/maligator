@@ -2354,6 +2354,25 @@ static const byte *mal_vm_typeof_tag(MalTypeofResult result) {
 // object's valueOf/toString and a Symbol's TypeError are honored) before the
 // per-type arithmetic.
 MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
+    // UpdateExpression coercion: ToNumeric keeps a BigInt as a BigInt (unlike
+    // unary `+`), running an object's valueOf and throwing on a Symbol exactly
+    // once. INCREMENT/DECREMENT then act on that already-numeric value.
+    if (op == MAL_UNARY_TO_NUMERIC) {
+        MalValue numeric;
+        if (!mal_vm_to_numeric(vm, value, &numeric)) {
+            return mal_value_new_undefined();
+        }
+        return numeric;
+    }
+    if (op == MAL_UNARY_INCREMENT || op == MAL_UNARY_DECREMENT) {
+        if (mal_value_is_bigint(value)) {
+            i128 unit = op == MAL_UNARY_INCREMENT ? (i128) 1 : (i128) -1;
+            return mal_value_from_bigint(mal_bigint_new(&vm->heap,
+                mal_bigint128_add(mal_bigint_value(mal_value_to_bigint(value)), unit)));
+        }
+        f64 unit = op == MAL_UNARY_INCREMENT ? 1.0 : -1.0;
+        return mal_value_from_f64_convert_nan(mal_ops_to_number(value) + unit);
+    }
     // `!`, typeof, and the unary numeric ops all need an object operand reduced
     // to a primitive first; only the numeric ops require a *numeric* primitive,
     // so route just those through ToNumeric (which also throws on a Symbol).

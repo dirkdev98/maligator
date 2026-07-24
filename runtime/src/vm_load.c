@@ -131,6 +131,7 @@ static const MalBinaryOp wire_binops[] = {
 /* Wire tag -> MalUnaryOp. MUST match WIRE_UNOPS in serialize-vm.ts. */
 static const MalUnaryOp wire_unops[] = {
     MAL_UNARY_NOT, MAL_UNARY_NEGATE, MAL_UNARY_PLUS, MAL_UNARY_BIT_NOT, MAL_UNARY_TYPEOF,
+    MAL_UNARY_TO_NUMERIC, MAL_UNARY_INCREMENT, MAL_UNARY_DECREMENT,
 };
 
 /* Wire tag -> MalTypeofResult. MUST match WIRE_TYPEOF_RESULTS in serialize-vm.ts. */

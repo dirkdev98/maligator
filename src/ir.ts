@@ -1324,7 +1324,15 @@ export type IRInstruction =
 			// [destination, operand]
 			registers: [number, number];
 
-			operator: "!" | "-" | "+" | "~" | "typeof";
+			operator:
+				| "!"
+				| "-"
+				| "+"
+				| "~"
+				| "typeof"
+				| "tonumeric"
+				| "increment"
+				| "decrement";
 	  }
 	| {
 			// Non-allocating comparison against one of the canonical typeof results.
@@ -9030,7 +9038,10 @@ function compileUpdateExpression(
 	cursor: IRCursor,
 	expression: ESTree.UpdateExpression,
 ): number {
-	const operator = expression.operator === "++" ? "+" : "-";
+	// UpdateExpression coerces with ToNumeric (not ToNumber): a BigInt operand
+	// stays a BigInt, and the step then adds the unit of its own numeric type.
+	// `oldValue` is the ToNumeric result, so postfix returns the coerced value.
+	const step = expression.operator === "++" ? "increment" : "decrement";
 
 	if (expression.argument.type === "Identifier") {
 		const binding = fn.semanticFile.nodeToBinding.get(expression.argument);
@@ -9054,14 +9065,13 @@ function compileUpdateExpression(
 			cursor.block.instructions.push({
 				type: "unary",
 				registers: [oldValue, current],
-				operator: "+",
+				operator: "tonumeric",
 			});
-			const one = compileNumberLiteral(fn, cursor, 1);
 			const newValue = nextRegisterDestination(fn);
 			cursor.block.instructions.push({
-				type: "binary",
-				registers: [newValue, oldValue, one],
-				operator,
+				type: "unary",
+				registers: [newValue, oldValue],
+				operator: step,
 			});
 			compileWithDynamicWrite(program, fn, cursor, expression.argument, newValue, true);
 			return expression.prefix ? newValue : oldValue;
@@ -9074,15 +9084,14 @@ function compileUpdateExpression(
 		cursor.block.instructions.push({
 			type: "unary",
 			registers: [oldValue, current],
-			operator: "+",
+			operator: "tonumeric",
 		});
 
-		const one = compileNumberLiteral(fn, cursor, 1);
 		const newValue = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
-			type: "binary",
-			registers: [newValue, oldValue, one],
-			operator,
+			type: "unary",
+			registers: [newValue, oldValue],
+			operator: step,
 		});
 		storeRegisterAtLocation(cursor.block, location, newValue);
 
@@ -9116,15 +9125,14 @@ function compileUpdateExpression(
 		cursor.block.instructions.push({
 			type: "unary",
 			registers: [oldValue, current],
-			operator: "+",
+			operator: "tonumeric",
 		});
 
-		const one = compileNumberLiteral(fn, cursor, 1);
 		const newValue = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
-			type: "binary",
-			registers: [newValue, oldValue, one],
-			operator,
+			type: "unary",
+			registers: [newValue, oldValue],
+			operator: step,
 		});
 
 		if (isPrivate) {

@@ -1078,6 +1078,12 @@ export function emitUnaryOperator(
 			return "MAL_UNARY_BIT_NOT";
 		case "typeof":
 			return "MAL_UNARY_TYPEOF";
+		case "tonumeric":
+			return "MAL_UNARY_TO_NUMERIC";
+		case "increment":
+			return "MAL_UNARY_INCREMENT";
+		case "decrement":
+			return "MAL_UNARY_DECREMENT";
 	}
 
 	throw new Error("Unknown unary operator");

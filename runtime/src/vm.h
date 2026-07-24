@@ -163,6 +163,12 @@ typedef enum MalUnaryOp {
     MAL_UNARY_PLUS,
     MAL_UNARY_BIT_NOT,
     MAL_UNARY_TYPEOF,
+    // ToNumeric plus the `++`/`--` step: the update-expression coercion keeps a
+    // BigInt as a BigInt (unlike unary `+`, which throws) and then adds the
+    // unit of the operand's own numeric type.
+    MAL_UNARY_TO_NUMERIC,
+    MAL_UNARY_INCREMENT,
+    MAL_UNARY_DECREMENT,
 } MalUnaryOp;
 
 typedef enum MalTypeofResult {

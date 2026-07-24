@@ -120,8 +120,12 @@ export function cF64Literal(value: number): string {
 	return value.toExponential();
 }
 
-/** Unary `+` on a BigInt throws, so it needs a completion check after. */
-const THROWING_UNARY_OPERATORS = new Set(["+"]);
+/**
+ * Unary ops that can raise: `+` on a BigInt, and `tonumeric` (the
+ * UpdateExpression coercion) on a Symbol or a throwing `valueOf`. Both need a
+ * completion check after the call.
+ */
+const THROWING_UNARY_OPERATORS = new Set(["+", "tonumeric"]);
 
 /**
  * Binary operators emitted as native C on two `number`-rep operands. Arithmetic
