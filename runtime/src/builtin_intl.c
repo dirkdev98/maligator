@@ -908,8 +908,14 @@ static bool intl_number_option(MalVm *vm, MalValue value, i32 minimum, i32 maxim
     return true;
 }
 
+/** SetNumberFormatDigitOptions for roundingPriority "auto" with standard
+ * notation. Reads mnid, mnfd, mxfd, mnsd, mxsd in that (observable) order. When
+ * either significant-digit option is present significant-digit rounding wins
+ * (*has_significant true) and the fraction outputs are left untouched; otherwise
+ * the fraction outputs are resolved with their existing defaults. */
 static bool intl_number_format_digits(
-    MalVm *vm, MalValue options, bool percent, i32 *minimum_integer, i32 *minimum_fraction, i32 *maximum_fraction
+    MalVm *vm, MalValue options, bool percent, i32 *minimum_integer, i32 *minimum_fraction, i32 *maximum_fraction,
+    i32 *minimum_significant, i32 *maximum_significant, bool *has_significant
 ) {
     MalValue value;
     bool present;
@@ -921,16 +927,41 @@ static bool intl_number_format_digits(
         *minimum_integer = 1;
     }
 
-    MalValue minimum_value;
-    MalValue maximum_value;
-    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "minimumFractionDigits"), &minimum_value) ||
-        !mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "maximumFractionDigits"), &maximum_value)) {
+    MalValue mnfd_value;
+    MalValue mxfd_value;
+    MalValue mnsd_value;
+    MalValue mxsd_value;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "minimumFractionDigits"), &mnfd_value) ||
+        !mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "maximumFractionDigits"), &mxfd_value) ||
+        !mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "minimumSignificantDigits"), &mnsd_value) ||
+        !mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "maximumSignificantDigits"), &mxsd_value)) {
         return false;
     }
+
+    *has_significant = !mal_value_is_undefined(mnsd_value) || !mal_value_is_undefined(mxsd_value);
+    if (*has_significant) {
+        bool mnsd_present;
+        bool mxsd_present;
+        if (!intl_number_option(vm, mnsd_value, 1, 21, minimum_significant, &mnsd_present)) {
+            return false;
+        }
+        if (!mnsd_present) {
+            *minimum_significant = 1;
+        }
+        // maximumSignificantDigits is bounded below by the resolved minimum.
+        if (!intl_number_option(vm, mxsd_value, *minimum_significant, 21, maximum_significant, &mxsd_present)) {
+            return false;
+        }
+        if (!mxsd_present) {
+            *maximum_significant = 21;
+        }
+        return true;
+    }
+
     bool minimum_present;
     bool maximum_present;
-    if (!intl_number_option(vm, minimum_value, 0, 100, minimum_fraction, &minimum_present) ||
-        !intl_number_option(vm, maximum_value, 0, 100, maximum_fraction, &maximum_present)) {
+    if (!intl_number_option(vm, mnfd_value, 0, 100, minimum_fraction, &minimum_present) ||
+        !intl_number_option(vm, mxfd_value, 0, 100, maximum_fraction, &maximum_present)) {
         return false;
     }
     i32 maximum_default = percent ? 0 : 3;
@@ -1347,6 +1378,8 @@ static MalValue intl_number_format_value(MalVm *vm, MalIntlObject *nf, f64 numbe
     i32 min_integer = intl_data_int(vm, nf->data, "minimumIntegerDigits", 1);
     i32 min_fraction = intl_data_int(vm, nf->data, "minimumFractionDigits", 0);
     i32 max_fraction = intl_data_int(vm, nf->data, "maximumFractionDigits", percent ? 0 : 3);
+    i32 min_significant = intl_data_int(vm, nf->data, "minimumSignificantDigits", 0);
+    i32 max_significant = intl_data_int(vm, nf->data, "maximumSignificantDigits", 0);
     bool grouping = intl_data_bool(vm, nf->data, "useGrouping", true);
 
     byte locale_buf[160];
@@ -1356,8 +1389,8 @@ static MalValue intl_number_format_value(MalVm *vm, MalIntlObject *nf, f64 numbe
     }
     byte out[256];
     i32 n = mal_i18n_number_format(
-        locale_buf, locale_len, number, percent ? 1 : 0, min_integer, min_fraction, max_fraction, grouping ? 1 : 0,
-        out, (i32) sizeof(out)
+        locale_buf, locale_len, number, percent ? 1 : 0, min_integer, min_fraction, max_fraction,
+        min_significant, max_significant, grouping ? 1 : 0, out, (i32) sizeof(out)
     );
     if (n < 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format number");
@@ -1367,7 +1400,10 @@ static MalValue intl_number_format_value(MalVm *vm, MalIntlObject *nf, f64 numbe
         return intl_string_from_utf8(vm, out, (usize) n);
     }
     byte *big = malloc((usize) n);
-    mal_i18n_number_format(locale_buf, locale_len, number, percent ? 1 : 0, min_integer, min_fraction, max_fraction, grouping ? 1 : 0, big, n);
+    mal_i18n_number_format(
+        locale_buf, locale_len, number, percent ? 1 : 0, min_integer, min_fraction, max_fraction,
+        min_significant, max_significant, grouping ? 1 : 0, big, n
+    );
     MalValue result = intl_string_from_utf8(vm, big, (usize) n);
     free(big);
     return result;
@@ -1397,7 +1433,13 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
     i32 min_integer;
     i32 min_fraction;
     i32 max_fraction;
-    if (!intl_number_format_digits(vm, options, percent, &min_integer, &min_fraction, &max_fraction)) {
+    i32 min_significant = 0;
+    i32 max_significant = 0;
+    bool has_significant;
+    if (!intl_number_format_digits(
+            vm, options, percent, &min_integer, &min_fraction, &max_fraction,
+            &min_significant, &max_significant, &has_significant
+        )) {
         return mal_value_new_undefined();
     }
     bool grouping = true;
@@ -1414,8 +1456,13 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
     intl_resolved_set(vm, resolved, "numberingSystem", mal_value_from_string(mal_intrinsic_ascii(vm, "latn")));
     intl_resolved_set(vm, resolved, "style", mal_value_from_string(style));
     intl_resolved_set(vm, resolved, "minimumIntegerDigits", mal_value_from_i32(min_integer));
-    intl_resolved_set(vm, resolved, "minimumFractionDigits", mal_value_from_i32(min_fraction));
-    intl_resolved_set(vm, resolved, "maximumFractionDigits", mal_value_from_i32(max_fraction));
+    if (has_significant) {
+        intl_resolved_set(vm, resolved, "minimumSignificantDigits", mal_value_from_i32(min_significant));
+        intl_resolved_set(vm, resolved, "maximumSignificantDigits", mal_value_from_i32(max_significant));
+    } else {
+        intl_resolved_set(vm, resolved, "minimumFractionDigits", mal_value_from_i32(min_fraction));
+        intl_resolved_set(vm, resolved, "maximumFractionDigits", mal_value_from_i32(max_fraction));
+    }
     intl_resolved_set(vm, resolved, "useGrouping", mal_value_new_boolean(grouping));
 
     MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_NUMBER_FORMAT_PROTOTYPE);
@@ -1469,7 +1516,8 @@ static MalValue intl_number_format_resolved_options(MalVm *vm, MalValue this_val
         return mal_value_new_undefined();
     }
     static const char *const keys[] = {
-        "locale", "numberingSystem", "style", "minimumIntegerDigits", "minimumFractionDigits", "maximumFractionDigits", "useGrouping",
+        "locale", "numberingSystem", "style", "minimumIntegerDigits", "minimumFractionDigits", "maximumFractionDigits",
+        "minimumSignificantDigits", "maximumSignificantDigits", "useGrouping",
     };
     return intl_resolved_copy(vm, nf->data, keys, countof(keys));
 }

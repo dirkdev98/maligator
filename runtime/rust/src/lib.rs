@@ -35,7 +35,8 @@ pub mod zlib;
 /// ABI version. Bump on any breaking change to the C header so the C side can
 /// assert the linked archive matches `mal_i18n.h`.
 /// v2: added `mal_i18n_collator_free` / `mal_i18n_plural_rules_free` (gc_todo.md D2).
-pub const MAL_I18N_ABI_VERSION: u32 = 2;
+/// v3: `mal_i18n_number_format` gained min/max significant-digit parameters.
+pub const MAL_I18N_ABI_VERSION: u32 = 3;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]
@@ -283,9 +284,23 @@ pub unsafe extern "C" fn mal_i18n_plural_rules_free(handle: *mut core::ffi::c_vo
 // Intl.NumberFormat — decimal + percent (style currency/unit/compact are TODO).
 // ---------------------------------------------------------------------------
 
+/// Rounds `decimal` at `position` using ECMA-402's default rounding mode,
+/// halfExpand (round to nearest, ties away from zero). The icu_decimal re-export
+/// does not expose fixed_decimal's rounding-mode enum, so dispatch by hand.
+#[cfg(feature = "intl-number-format")]
+fn round_half_expand(decimal: &mut icu_decimal::input::Decimal, position: i16) {
+    if decimal.digit_at(position - 1) >= 5 {
+        decimal.expand(position);
+    } else {
+        decimal.trunc(position);
+    }
+}
+
 /// Format `number` for `locale`. percent != 0 scales by 100 and appends '%'.
-/// Honors min integer / min+max fraction digits and grouping. Writes UTF-8 into
-/// `out`; returns the full length, or -1 on failure.
+/// Honors minimumIntegerDigits and grouping. When `max_significant` > 0 the
+/// significant-digit options drive rounding (halfExpand) and padding; otherwise
+/// min+max fraction digits do. Writes UTF-8 into `out`; returns the full length,
+/// or -1 on failure.
 #[cfg(feature = "intl-number-format")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_number_format(
@@ -296,6 +311,8 @@ pub unsafe extern "C" fn mal_i18n_number_format(
     min_integer: i32,
     min_fraction: i32,
     max_fraction: i32,
+    min_significant: i32,
+    max_significant: i32,
     grouping: i32,
     out: *mut u8,
     out_cap: i32,
@@ -310,17 +327,30 @@ pub unsafe extern "C" fn mal_i18n_number_format(
     let value = if percent != 0 { number * 100.0 } else { number };
 
     // Rust's Display for f64 is the shortest round-trip decimal (never
-    // scientific), which Decimal parses; rounding to maxFractionDigits follows.
+    // scientific), which Decimal parses; rounding follows.
     let rendered = format!("{}", value);
     let mut decimal = match Decimal::try_from_str(&rendered) {
         Ok(d) => d,
         Err(_) => return -1,
     };
-    // maximumFractionDigits: round at 10^-max_fraction; minimumFractionDigits:
-    // pad the fraction to 10^-min_fraction; minimumIntegerDigits: pad the integer
-    // part out to 10^(min_integer-1).
-    decimal.round(-(max_fraction as i16));
-    decimal.pad_end(-(min_fraction as i16));
+    if max_significant > 0 {
+        // Significant-digit rounding: keep max_significant digits starting at the
+        // most significant one, then pad the tail out to min_significant.
+        if !decimal.is_zero() {
+            let msd = decimal.nonzero_magnitude_start();
+            round_half_expand(&mut decimal, msd - (max_significant as i16) + 1);
+        }
+        // Drop rounding's trailing zeros, then pad back up to min_significant.
+        decimal.trim_end();
+        let msd = decimal.nonzero_magnitude_start();
+        decimal.pad_end(msd - (min_significant as i16) + 1);
+    } else {
+        // maximumFractionDigits: round at 10^-max_fraction; minimumFractionDigits:
+        // pad the fraction to 10^-min_fraction.
+        decimal.round(-(max_fraction as i16));
+        decimal.pad_end(-(min_fraction as i16));
+    }
+    // minimumIntegerDigits: pad the integer part out to 10^(min_integer-1).
     if min_integer > 1 {
         decimal.pad_start((min_integer - 1) as i16);
     }
