@@ -4544,18 +4544,8 @@ function compileStaticIdentifierTarget(
 		? globalPropertyLocation(program, binding.name)
 		: null;
 
-	if (isAssign && !binding.undeclared && (isTdzBinding(binding) || fn.inParameterExpression)) {
-		// PutValue → SetMutableBinding on a still-uninitialized lexical binding is a
-		// ReferenceError, and the spec runs that check before the const-immutability
-		// TypeError below. Mirrors the read-side guard in compileStaticIdentifier;
-		// harmless once initialized (the slot no longer holds the EMPTY sentinel).
-		const location = hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
-		const current = loadRegisterFromLocation(fn, cursor.block, location);
-		cursor.block.instructions.push({
-			type: "throwIfTdz",
-			registers: [current],
-			nameStringIndex: getOrCreateStringConstant(program, binding.name),
-		});
+	if (isAssign) {
+		emitWriteTdzGuard(program, fn, cursor.block, binding, hostGlobalLocation);
 	}
 
 	if (isAssign && binding.kind === "const" && !binding.undeclared) {
@@ -8369,11 +8359,26 @@ function compileIdentifierAssignment(
 	}
 
 	if (binding.kind === "const") {
-		// Assignment to a const or imported binding is a TypeError (modules and
-		// our pipeline are always strict). A plain assignment still evaluates its
-		// right-hand side for its side effects before throwing.
+		const location = hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
+		// SetMutableBinding checks initialization before immutability. Compound
+		// assignment also performs GetValue, the RHS, and the operator before its
+		// failing PutValue; plain assignment evaluates only the RHS first.
 		if (assignmentExpression.operator === "=") {
 			compileExpression(program, fn, cursor, assignmentExpression.right);
+			emitWriteTdzGuard(program, fn, cursor.block, binding, hostGlobalLocation);
+		} else {
+			const current = loadRegisterFromLocation(fn, cursor.block, location);
+			emitTdzGuard(program, fn, cursor.block, binding, current);
+			const right = compileExpression(program, fn, cursor, assignmentExpression.right);
+			if (right === -1) {
+				return -1;
+			}
+			const value = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "binary",
+				registers: [value, current, right],
+				operator: assignmentOperatorToBinaryOperator(assignmentExpression.operator),
+			});
 		}
 		return emitThrowTypeError(program, fn, cursor, "Assignment to constant variable.");
 	}
@@ -8390,24 +8395,32 @@ function compileIdentifierAssignment(
 			// NamedEvaluation: anonymous right hand sides take the target name.
 			binding.name,
 		);
+		if (value === -1) {
+			// The right hand side is not supported yet; skip the store instead of
+			// emitting an invalid register reference.
+			return -1;
+		}
+		// PutValue runs after the RHS, so its TDZ check fires only once the RHS
+		// side effects have happened — a plain `x = <rhw>; let x` throws here.
+		emitWriteTdzGuard(program, fn, cursor.block, binding, hostGlobalLocation);
 	} else {
 		const binaryOperator = assignmentOperatorToBinaryOperator(
 			assignmentExpression.operator,
 		);
 		const current = loadRegisterFromLocation(fn, cursor.block, location);
+		// A compound assignment GetValues the target before the RHS, so a still-
+		// uninitialized `x += …; let x` throws on that read, before any RHS work.
+		emitTdzGuard(program, fn, cursor.block, binding, current);
 		const right = compileExpression(program, fn, cursor, assignmentExpression.right);
+		if (right === -1) {
+			return -1;
+		}
 		value = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
 			type: "binary",
 			registers: [value, current, right],
 			operator: binaryOperator,
 		});
-	}
-
-	if (value === -1) {
-		// The right hand side is not supported yet; skip the store instead of
-		// emitting an invalid register reference.
-		return -1;
 	}
 
 	storeRegisterAtLocation(cursor.block, location, value);
@@ -8430,6 +8443,7 @@ function compileLogicalAssignment(
 	const left = assignmentExpression.left;
 
 	let location: BindingLocation | undefined;
+	let identifierBinding: Binding | undefined;
 	let nameHint: string | undefined;
 	let member: CompiledMemberReference | undefined;
 	let privateMember: { object: number; name: string } | undefined;
@@ -8457,8 +8471,10 @@ function compileLogicalAssignment(
 		}
 
 		location = hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
+		identifierBinding = binding;
 		nameHint = binding.name;
 		current = loadRegisterFromLocation(fn, cursor.block, location);
+		emitTdzGuard(program, fn, cursor.block, binding, current);
 	} else if (
 		left.type === "MemberExpression" &&
 		left.property.type === "PrivateIdentifier"
@@ -8520,7 +8536,11 @@ function compileLogicalAssignment(
 	cursor.block.instructions.push({ type: "move", registers: [result, right] });
 
 	if (location) {
-		storeRegisterAtLocation(cursor.block, location, right);
+		if (identifierBinding?.kind === "const") {
+			emitThrowTypeError(program, fn, cursor, "Assignment to constant variable.");
+		} else {
+			storeRegisterAtLocation(cursor.block, location, right);
+		}
 	} else if (privateMember) {
 		compilePrivateMemberStore(
 			program,
@@ -9066,11 +9086,6 @@ function compileUpdateExpression(
 			? globalPropertyLocation(program, binding.name)
 			: null;
 
-		if (binding.kind === "const") {
-			// `x++` / `--x` on a const or imported binding is a TypeError.
-			return emitThrowTypeError(program, fn, cursor, "Assignment to constant variable.");
-		}
-
 		// Direct-eval free identifier: read and write through the with-dynamic path
 		// so the update lands on the caller scope object (then global).
 		if (program.evalDirect && identifierIsFree(fn, expression.argument)) {
@@ -9094,6 +9109,7 @@ function compileUpdateExpression(
 		const location =
 			hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
 		const current = loadRegisterFromLocation(fn, cursor.block, location);
+		emitTdzGuard(program, fn, cursor.block, binding, current);
 		const oldValue = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
 			type: "unary",
@@ -9107,6 +9123,9 @@ function compileUpdateExpression(
 			registers: [newValue, oldValue],
 			operator: step,
 		});
+		if (binding.kind === "const") {
+			return emitThrowTypeError(program, fn, cursor, "Assignment to constant variable.");
+		}
 		storeRegisterAtLocation(cursor.block, location, newValue);
 
 		return expression.prefix ? newValue : oldValue;
@@ -10790,19 +10809,7 @@ function compileStaticIdentifier(
 	const location = getOrCreateBindingLocation(program, fn, binding);
 	const destination = loadRegisterFromLocation(fn, cursor.block, location);
 
-	if (isTdzBinding(binding) || fn.inParameterExpression) {
-		// A let/const/class read before its declaration runs is in the temporal
-		// dead zone: throw ReferenceError. Harmless once initialized; bindings
-		// that are not hole-inited (catch params, loop vars) never read empty.
-		// While compiling a parameter default (inParameterExpression), any read
-		// is guarded too: a not-yet-initialized parameter reads EMPTY and must
-		// throw, while outer/earlier bindings are never EMPTY here (no-op check).
-		cursor.block.instructions.push({
-			type: "throwIfTdz",
-			registers: [destination],
-			nameStringIndex: getOrCreateStringConstant(program, identifier.name),
-		});
-	}
+	emitTdzGuard(program, fn, cursor.block, binding, destination);
 
 	return destination;
 }
@@ -10849,6 +10856,61 @@ function isTdzBinding(binding: Binding): boolean {
 		(binding.kind === "let" || binding.kind === "const") &&
 		binding.declarationNode?.type !== "FunctionDeclaration"
 	);
+}
+
+/**
+ * Whether accessing this binding must guard against the temporal dead zone.
+ * Mirrors the read-side condition in compileStaticIdentifier: a lexical binding
+ * whose slot may still hold EMPTY, or any binding reached while compiling a
+ * parameter default (an earlier-declared parameter is initialized, a later one
+ * is not, and only the runtime EMPTY check can tell them apart).
+ */
+function bindingNeedsTdzGuard(fn: IRFunction, binding: Binding): boolean {
+	return !binding.undeclared && (isTdzBinding(binding) || (fn.inParameterExpression ?? false));
+}
+
+/**
+ * PutValue → SetMutableBinding on a still-uninitialized lexical binding is a
+ * ReferenceError, and the spec runs that check before the const-immutability
+ * TypeError. Guard the value already loaded from the binding's slot — the read a
+ * compound/update/logical form performs anyway — so the check reuses that load.
+ * A no-op once the slot holds a real value.
+ */
+function emitTdzGuard(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	binding: Binding,
+	current: number,
+) {
+	if (!bindingNeedsTdzGuard(fn, binding)) {
+		return;
+	}
+	block.instructions.push({
+		type: "throwIfTdz",
+		registers: [current],
+		nameStringIndex: getOrCreateStringConstant(program, binding.name),
+	});
+}
+
+/**
+ * The same guard for a write path that does not otherwise read the target (a
+ * plain `=` or a destructuring-assignment leaf): load the current slot value
+ * purely to check the EMPTY sentinel before the store. The load is deferred past
+ * the predicate so an undeclared binding never allocates a slot.
+ */
+function emitWriteTdzGuard(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	binding: Binding,
+	hostGlobalLocation: BindingLocation | null,
+) {
+	if (!bindingNeedsTdzGuard(fn, binding)) {
+		return;
+	}
+	const location = hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
+	emitTdzGuard(program, fn, block, binding, loadRegisterFromLocation(fn, block, location));
 }
 
 /**

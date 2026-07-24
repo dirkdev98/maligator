@@ -435,4 +435,7 @@ test/language/statements/for-of/dstr/obj-id-put-let.js
 test/language/statements/for-of/dstr/obj-prop-put-let.js
 test/language/statements/function/S14_A5_T2.js
 test/language/statements/if/cptn-else-false-nrml.js
+test/language/statements/let/block-local-closure-set-before-initialization.js
+test/language/statements/let/function-local-closure-set-before-initialization.js
+test/language/statements/let/global-closure-set-before-initialization.js
 test/staging/sm/statements/for-inof-name-iteration-expression-contains-index-string.js
