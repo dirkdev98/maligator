@@ -6192,6 +6192,7 @@ function compileForAwaitOfLoop(
 		breakJumps: [],
 		continueJumps: [],
 		iteratorRegister,
+		iteratorCloseNormal: true,
 		labels,
 		perIterationScopeId: perIter?.scopeId,
 		perIterationSlotCount: perIter?.slotCount,

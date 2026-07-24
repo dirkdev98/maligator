@@ -1,5 +1,6 @@
 # High-signal regression complement. Keep disjoint from Test262 smoke.
 test/built-ins/AggregateError/newtarget-proto-custom.js
+test/built-ins/Array/fromAsync/sync-iterable-with-rejecting-thenable-closes.js
 test/built-ins/Array/prototype/concat/arg-length-exceeding-integer-limit.js
 test/built-ins/Array/prototype/concat/arg-length-near-integer-limit.js
 test/built-ins/Array/prototype/copyWithin/length-near-integer-limit.js
@@ -33,7 +34,12 @@ test/built-ins/Array/prototype/unshift/throws-if-integer-limit-exceeded.js
 test/built-ins/Array/prototype/with/length-exceeding-array-length-limit.js
 test/built-ins/ArrayBuffer/prototype/resize/this-is-detached.js
 test/built-ins/ArrayIteratorPrototype/next/args-mapped-expansion-before-exhaustion.js
+test/built-ins/AsyncFromSyncIteratorPrototype/next/for-await-iterator-next-rejected-promise-close.js
+test/built-ins/AsyncFromSyncIteratorPrototype/next/for-await-next-rejected-promise-close.js
+test/built-ins/AsyncFromSyncIteratorPrototype/next/yield-iterator-next-rejected-promise-close.js
+test/built-ins/AsyncFromSyncIteratorPrototype/next/yield-next-rejected-promise-close.js
 test/built-ins/AsyncFromSyncIteratorPrototype/return/result-object-error.js
+test/built-ins/AsyncFromSyncIteratorPrototype/throw/iterator-result-rejected-promise-close.js
 test/built-ins/AsyncFunction/AsyncFunctionPrototype-is-not-callable.js
 test/built-ins/AsyncGeneratorFunction/invoked-as-function-no-arguments.js
 test/built-ins/AsyncGeneratorPrototype/return/return-suspendedYield-promise.js
@@ -430,6 +436,8 @@ test/language/global-code/decl-func-dup.js
 test/language/statements/do-while/cptn-normal.js
 test/language/statements/for-in/head-const-bound-names-fordecl-tdz.js
 test/language/statements/for-in/head-let-bound-names-fordecl-tdz.js
+test/language/statements/for-await-of/iterator-close-non-throw-get-method-abrupt.js
+test/language/statements/for-await-of/iterator-close-non-throw-get-method-non-callable.js
 test/language/statements/for-of/cptn-expr-no-itr.js
 test/language/statements/for-of/dstr/array-elem-put-let.js
 test/language/statements/for-of/dstr/array-elem-trlg-iter-rest-rtrn-close-err.js
