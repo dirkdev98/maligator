@@ -487,6 +487,8 @@ interface IRLoopContext {
 	iteratorDoneRegister?: number;
 	/** Non-throw exits propagate return() failures and validate its result. */
 	iteratorCloseNormal?: boolean;
+	/** Async iterators await return() before completing the enclosing exit. */
+	iteratorCloseAsync?: boolean;
 
 	/**
 	 * For a loop whose lexical head bindings are captured by a closure: the
@@ -4792,6 +4794,7 @@ function compileIteratorRest(
  * outside this helper: a throw from next() must not close the iterator.
  */
 function compileWithIteratorCloseOnThrow(
+	program: IntermediateProgram,
 	fn: IRFunction,
 	cursor: IRCursor,
 	iteratorRegister: number,
@@ -4817,6 +4820,7 @@ function compileWithIteratorCloseOnThrow(
 	handler.instructions.push({ type: "catch", registers: [caught] });
 
 	const rethrowBlock = emitIteratorCloseForCompletion(
+		program,
 		fn,
 		handler,
 		iteratorRegister,
@@ -4847,6 +4851,7 @@ function compileCapturedMemberReference(
 	let slots: { object: number; key: number; receiver?: number } | undefined;
 
 	compileWithIteratorCloseOnThrow(
+		program,
 		fn,
 		cursor,
 		iteratorRegister,
@@ -5009,6 +5014,7 @@ function compileArrayPatternTarget(
 		if (element) {
 			if (capturedMember) {
 				compileWithIteratorCloseOnThrow(
+					program,
 					fn,
 					cursor,
 					iteratorRegister,
@@ -5031,6 +5037,7 @@ function compileArrayPatternTarget(
 				);
 			} else if (isAssign) {
 				compileWithIteratorCloseOnThrow(
+					program,
 					fn,
 					cursor,
 					iteratorRegister,
@@ -5039,6 +5046,7 @@ function compileArrayPatternTarget(
 				);
 			} else {
 				compileWithIteratorCloseOnThrow(
+					program,
 					fn,
 					cursor,
 					iteratorRegister,
@@ -5050,6 +5058,7 @@ function compileArrayPatternTarget(
 	}
 
 	cursor.block = emitIteratorCloseForCompletion(
+		program,
 		fn,
 		cursor.block,
 		iteratorRegister,
@@ -5269,11 +5278,11 @@ function compileStatementsToBlock(
 				break;
 			}
 			case "BreakStatement": {
-				compileBreakStatement(fn, block, statement);
+				compileBreakStatement(program, fn, block, statement);
 				break;
 			}
 			case "ContinueStatement": {
-				compileContinueStatement(fn, block, statement);
+				compileContinueStatement(program, fn, block, statement);
 				break;
 			}
 			case "VariableDeclaration": {
@@ -6123,6 +6132,7 @@ function compileForInOfLoop(
 		registers: [caughtRegister],
 	});
 	const rethrowBlock = emitIteratorCloseForCompletion(
+		program,
 		fn,
 		handlerBlock,
 		iteratorRegister,
@@ -6172,9 +6182,15 @@ function compileForAwaitOfLoop(
 	const labels = takePendingLabels(fn);
 	const iteratorRegister = nextRegisterDestination(fn);
 	const nextRegister = nextRegisterDestination(fn);
+	const doneRegister = nextRegisterDestination(fn);
 	entryCursor.block.instructions.push({
 		type: "getAsyncIterator",
 		registers: [iteratorRegister, nextRegister, iterable],
+	});
+	entryCursor.block.instructions.push({
+		type: "createBoolean",
+		registers: [doneRegister],
+		value: false,
 	});
 	if (perIter && !perIterEnvEntered) {
 		entryCursor.block.instructions.push({
@@ -6192,7 +6208,9 @@ function compileForAwaitOfLoop(
 		breakJumps: [],
 		continueJumps: [],
 		iteratorRegister,
+		iteratorDoneRegister: doneRegister,
 		iteratorCloseNormal: true,
+		iteratorCloseAsync: true,
 		labels,
 		perIterationScopeId: perIter?.scopeId,
 		perIterationSlotCount: perIter?.slotCount,
@@ -6208,9 +6226,8 @@ function compileForAwaitOfLoop(
 		type: "iteratorNext",
 		registers: [rawRegister, iteratorRegister, nextRegister],
 	});
-	const resultRegister = compileAwaitRegister(fn, headerCursor, rawRegister);
+	const resultRegister = compileAwaitRegister(program, fn, headerCursor, rawRegister);
 
-	const doneRegister = nextRegisterDestination(fn);
 	const doneKey = nextRegisterDestination(fn);
 	headerCursor.block.instructions.push({
 		type: "createString",
@@ -6280,17 +6297,22 @@ function compileForAwaitOfLoop(
 	bodyLastBlock.instructions.push({ type: "jump", blocks: [backIdx] });
 	tryBegin.blocks[1] = backIdx;
 
-	// Handler: close the iterator (sync return; an async return-await is a known
-	// deviation), rethrow the original completion.
+	// Handler: await the close, but preserve the original throw over every close
+	// failure as required by AsyncIteratorClose.
 	const handlerBlock: IRBlock = { instructions: [] };
 	tryBegin.blocks[0] = fn.blocks.push(handlerBlock) - 1;
 	const caughtRegister = nextRegisterDestination(fn);
 	handlerBlock.instructions.push({ type: "catch", registers: [caughtRegister] });
-	handlerBlock.instructions.push({
-		type: "iteratorClose",
-		registers: [iteratorRegister],
-	});
-	handlerBlock.instructions.push({ type: "throw", registers: [caughtRegister] });
+	const rethrowBlock = emitIteratorCloseForCompletion(
+		program,
+		fn,
+		handlerBlock,
+		iteratorRegister,
+		false,
+		doneRegister,
+		true,
+	);
+	rethrowBlock.instructions.push({ type: "throw", registers: [caughtRegister] });
 
 	const exitIdx = fn.blocks.push({ instructions: [] }) - 1;
 	if (perIter) {
@@ -6376,6 +6398,7 @@ function compileLabeledStatement(
 }
 
 function compileBreakStatement(
+	program: IntermediateProgram,
 	fn: IRFunction,
 	block: IRBlock,
 	statement: ESTree.BreakStatement,
@@ -6390,10 +6413,11 @@ function compileBreakStatement(
 	}
 
 	// Routes through any enclosing finalizers before reaching the target.
-	emitBreak(fn, block, label);
+	emitBreak(program, fn, block, label);
 }
 
 function compileContinueStatement(
+	program: IntermediateProgram,
 	fn: IRFunction,
 	block: IRBlock,
 	statement: ESTree.ContinueStatement,
@@ -6407,7 +6431,7 @@ function compileContinueStatement(
 		return;
 	}
 
-	emitContinue(fn, block, label);
+	emitContinue(program, fn, block, label);
 }
 
 /**
@@ -6818,25 +6842,192 @@ function compileIfStatement(
  */
 const COMPLETION_NORMAL = 0;
 
+/** Throw unless value is an ECMAScript Object, returning the success block. */
+function emitIteratorResultObjectCheck(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	value: number,
+): IRBlock {
+	const valid: IRBlock = { instructions: [] };
+	const validIdx = fn.blocks.push(valid) - 1;
+	const invalid: IRBlock = { instructions: [] };
+	const invalidIdx = fn.blocks.push(invalid) - 1;
+	const typeName = nextRegisterDestination(fn);
+	const isFunction = nextRegisterDestination(fn);
+	const isObject = nextRegisterDestination(fn);
+	const notObject = nextRegisterDestination(fn);
+	const nullValue = nextRegisterDestination(fn);
+	const isNull = nextRegisterDestination(fn);
+	const functionName = nextRegisterDestination(fn);
+	const objectName = nextRegisterDestination(fn);
+
+	block.instructions.push(
+		{ type: "unary", registers: [typeName, value], operator: "typeof" },
+		{
+			type: "createString",
+			registers: [functionName],
+			stringIndex: getOrCreateStringConstant(program, "function"),
+		},
+		{ type: "binary", registers: [isFunction, typeName, functionName], operator: "===" },
+		{ type: "jumpIf", registers: [isFunction], blocks: [validIdx] },
+		{
+			type: "createString",
+			registers: [objectName],
+			stringIndex: getOrCreateStringConstant(program, "object"),
+		},
+		{ type: "binary", registers: [isObject, typeName, objectName], operator: "===" },
+		{ type: "unary", registers: [notObject, isObject], operator: "!" },
+		{ type: "jumpIf", registers: [notObject], blocks: [invalidIdx] },
+		{ type: "createNull", registers: [nullValue] },
+		{ type: "binary", registers: [isNull, value, nullValue], operator: "===" },
+		{ type: "jumpIf", registers: [isNull], blocks: [invalidIdx] },
+		{ type: "jump", blocks: [validIdx] },
+	);
+
+	const typeError = nextRegisterDestination(fn);
+	const error = nextRegisterDestination(fn);
+	const message = nextRegisterDestination(fn);
+	invalid.instructions.push(
+		{ type: "loadIntrinsic", registers: [typeError], intrinsic: "TypeError" },
+		{
+			type: "createString",
+			registers: [message],
+			stringIndex: getOrCreateStringConstant(
+				program,
+				"Iterator return result is not an object",
+			),
+		},
+		{ type: "construct", registers: [error, typeError, message] },
+		{ type: "throw", registers: [error] },
+	);
+	return valid;
+}
+
 /**
- * Close one synchronous iterator for the supplied completion kind. A tracked
- * [[Done]] flag skips exhausted iterators and is set before return() so a close
- * failure cannot cause an enclosing handler to close the same iterator again.
+ * AsyncIteratorClose: call return(), await its result, and apply the supplied
+ * completion precedence. A throw completion still waits for cleanup but wins
+ * over getter/call/await failures; a normal completion propagates those failures
+ * and rejects a fulfilled primitive.
+ */
+function emitAsyncIteratorClose(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	iteratorRegister: number,
+	normal: boolean,
+): IRBlock {
+	const tryBegin: Extract<IRInstruction, { type: "tryBegin" }> | undefined = normal
+		? undefined
+		: { type: "tryBegin", blocks: [-1, -1] };
+	if (tryBegin) block.instructions.push(tryBegin);
+
+	const returnKey = nextRegisterDestination(fn);
+	const returnMethod = nextRegisterDestination(fn);
+	const undefinedValue = nextRegisterDestination(fn);
+	const noReturn = nextRegisterDestination(fn);
+	block.instructions.push(
+		{
+			type: "createString",
+			registers: [returnKey],
+			stringIndex: getOrCreateStringConstant(program, "return"),
+		},
+		{ type: "loadProperty", registers: [returnMethod, iteratorRegister, returnKey] },
+		{ type: "createUndefined", registers: [undefinedValue] },
+		{
+			type: "binary",
+			registers: [noReturn, returnMethod, undefinedValue],
+			operator: "==",
+		},
+	);
+	const noReturnJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [noReturn],
+		blocks: [-1],
+	};
+	block.instructions.push(noReturnJump);
+
+	const result = nextRegisterDestination(fn);
+	block.instructions.push({
+		type: "call",
+		registers: [result, returnMethod, iteratorRegister],
+	});
+
+	// A return resumption while this await is in flight must not recursively
+	// close the same iterator. Outer iterator/finally cleanup remains visible.
+	const closingScopeIndex = fn.loops?.findLastIndex(
+		(scope) => scope.iteratorRegister === iteratorRegister,
+	);
+	const closingScope =
+		closingScopeIndex === undefined || closingScopeIndex < 0
+			? undefined
+			: fn.loops!.splice(closingScopeIndex, 1)[0];
+	const closeCursor: IRCursor = { block };
+	const awaited = compileAwaitRegister(program, fn, closeCursor, result);
+	if (closingScope && closingScopeIndex !== undefined) {
+		fn.loops!.splice(closingScopeIndex, 0, closingScope);
+	}
+
+	if (normal) {
+		closeCursor.block = emitIteratorResultObjectCheck(
+			program,
+			fn,
+			closeCursor.block,
+			awaited,
+		);
+		const continuation: IRBlock = { instructions: [] };
+		const continuationIdx = fn.blocks.push(continuation) - 1;
+		noReturnJump.blocks[0] = continuationIdx;
+		closeCursor.block.instructions.push({ type: "jump", blocks: [continuationIdx] });
+		return continuation;
+	}
+
+	const tryExit: IRBlock = { instructions: [{ type: "tryEnd" }] };
+	const tryExitIdx = fn.blocks.push(tryExit) - 1;
+	tryBegin!.blocks[1] = tryExitIdx;
+	noReturnJump.blocks[0] = tryExitIdx;
+	closeCursor.block.instructions.push({ type: "jump", blocks: [tryExitIdx] });
+
+	const handler: IRBlock = { instructions: [] };
+	tryBegin!.blocks[0] = fn.blocks.push(handler) - 1;
+	const ignored = nextRegisterDestination(fn);
+	handler.instructions.push({ type: "catch", registers: [ignored] });
+
+	const continuation: IRBlock = { instructions: [] };
+	const continuationIdx = fn.blocks.push(continuation) - 1;
+	tryExit.instructions.push({ type: "jump", blocks: [continuationIdx] });
+	handler.instructions.push({ type: "jump", blocks: [continuationIdx] });
+	return continuation;
+}
+
+/**
+ * Close one iterator for the supplied completion kind. A tracked [[Done]] flag
+ * skips exhausted iterators and is set before return() so a close failure cannot
+ * cause an enclosing handler to close the same iterator again.
  */
 function emitIteratorCloseForCompletion(
+	program: IntermediateProgram,
 	fn: IRFunction,
 	block: IRBlock,
 	iteratorRegister: number,
 	normal: boolean,
 	doneRegister?: number,
+	async = false,
 ): IRBlock {
-	if (doneRegister === undefined) {
-		block.instructions.push({
+	const emitClose = (target: IRBlock) => {
+		if (async) {
+			return emitAsyncIteratorClose(program, fn, target, iteratorRegister, normal);
+		}
+		target.instructions.push({
 			type: "iteratorClose",
 			registers: [iteratorRegister],
 			normal,
 		});
-		return block;
+		return target;
+	};
+
+	if (doneRegister === undefined) {
+		return emitClose(block);
 	}
 
 	const skipJump: Extract<IRInstruction, { type: "jumpIf" }> = {
@@ -6849,15 +7040,17 @@ function emitIteratorCloseForCompletion(
 	const closeBlock: IRBlock = { instructions: [] };
 	const closeIdx = fn.blocks.push(closeBlock) - 1;
 	block.instructions.push({ type: "jump", blocks: [closeIdx] });
-	closeBlock.instructions.push(
-		{ type: "createBoolean", registers: [doneRegister], value: true },
-		{ type: "iteratorClose", registers: [iteratorRegister], normal },
-	);
+	closeBlock.instructions.push({
+		type: "createBoolean",
+		registers: [doneRegister],
+		value: true,
+	});
+	const closeEnd = emitClose(closeBlock);
 
 	const continuation: IRBlock = { instructions: [] };
 	const continuationIdx = fn.blocks.push(continuation) - 1;
 	skipJump.blocks[0] = continuationIdx;
-	closeBlock.instructions.push({ type: "jump", blocks: [continuationIdx] });
+	closeEnd.instructions.push({ type: "jump", blocks: [continuationIdx] });
 	return continuation;
 }
 
@@ -6913,7 +7106,12 @@ function routeThroughFinalizer(
  * takes over the return: its epilogue resumes the walk from its own position
  * once the finally body has run.
  */
-function emitReturn(fn: IRFunction, block: IRBlock, valueRegister: number) {
+function emitReturn(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	valueRegister: number,
+) {
 	const scopes = fn.loops ?? [];
 	for (let i = scopes.length - 1; i >= 0; i--) {
 		const scope = scopes[i]!;
@@ -6923,7 +7121,7 @@ function emitReturn(fn: IRFunction, block: IRBlock, valueRegister: number) {
 				block,
 				scope,
 				"return",
-				(b) => emitReturn(fn, b, scope.completionValueReg!),
+				(b) => emitReturn(program, fn, b, scope.completionValueReg!),
 				valueRegister,
 			);
 			return;
@@ -6935,11 +7133,13 @@ function emitReturn(fn: IRFunction, block: IRBlock, valueRegister: number) {
 
 		if (scope.iteratorRegister !== undefined) {
 			block = emitIteratorCloseForCompletion(
+				program,
 				fn,
 				block,
 				scope.iteratorRegister,
 				scope.iteratorCloseNormal === true,
 				scope.iteratorDoneRegister,
+				scope.iteratorCloseAsync === true,
 			);
 		}
 	}
@@ -6956,7 +7156,12 @@ function emitReturn(fn: IRFunction, block: IRBlock, valueRegister: number) {
  * scope when a label is given; for-of iterators of every loop left on the way
  * out (including the target) are closed.
  */
-function emitBreak(fn: IRFunction, block: IRBlock, label?: string) {
+function emitBreak(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	label?: string,
+) {
 	const scopes = fn.loops ?? [];
 	for (let i = scopes.length - 1; i >= 0; i--) {
 		const scope = scopes[i]!;
@@ -6966,7 +7171,7 @@ function emitBreak(fn: IRFunction, block: IRBlock, label?: string) {
 				block,
 				scope,
 				label === undefined ? "break" : `break:${label}`,
-				(b) => emitBreak(fn, b, label),
+				(b) => emitBreak(program, fn, b, label),
 			);
 			return;
 		}
@@ -6979,11 +7184,13 @@ function emitBreak(fn: IRFunction, block: IRBlock, label?: string) {
 		// Leaving this loop closes its for-of iterator.
 		if (scope.iteratorRegister !== undefined) {
 			block = emitIteratorCloseForCompletion(
+				program,
 				fn,
 				block,
 				scope.iteratorRegister,
 				scope.iteratorCloseNormal === true,
 				scope.iteratorDoneRegister,
+				scope.iteratorCloseAsync === true,
 			);
 		}
 
@@ -7016,7 +7223,12 @@ function emitBreak(fn: IRFunction, block: IRBlock, label?: string) {
  * Inner loops left on the way to a labeled outer loop close their for-of
  * iterators; the target loop's iterator stays open (it re-steps from the header).
  */
-function emitContinue(fn: IRFunction, block: IRBlock, label?: string) {
+function emitContinue(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	block: IRBlock,
+	label?: string,
+) {
 	const scopes = fn.loops ?? [];
 	for (let i = scopes.length - 1; i >= 0; i--) {
 		const scope = scopes[i]!;
@@ -7026,7 +7238,7 @@ function emitContinue(fn: IRFunction, block: IRBlock, label?: string) {
 				block,
 				scope,
 				label === undefined ? "continue" : `continue:${label}`,
-				(b) => emitContinue(fn, b, label),
+				(b) => emitContinue(program, fn, b, label),
 			);
 			return;
 		}
@@ -7039,11 +7251,13 @@ function emitContinue(fn: IRFunction, block: IRBlock, label?: string) {
 		}
 		if (scope.kind === "iterator") {
 			block = emitIteratorCloseForCompletion(
+				program,
 				fn,
 				block,
 				scope.iteratorRegister!,
 				scope.iteratorCloseNormal === true,
 				scope.iteratorDoneRegister,
+				scope.iteratorCloseAsync === true,
 			);
 			continue;
 		}
@@ -7058,11 +7272,13 @@ function emitContinue(fn: IRFunction, block: IRBlock, label?: string) {
 			// for-of iterator and restores the enclosing env (per-iteration scope).
 			if (scope.iteratorRegister !== undefined) {
 				block = emitIteratorCloseForCompletion(
+					program,
 					fn,
 					block,
 					scope.iteratorRegister,
 					scope.iteratorCloseNormal === true,
 					scope.iteratorDoneRegister,
+					scope.iteratorCloseAsync === true,
 				);
 			}
 			if (scope.perIterationScopeId !== undefined) {
@@ -7247,7 +7463,7 @@ function compileReturnStatement(
 		statement.argument ?? { type: "Identifier", name: "undefined" },
 	);
 
-	emitReturn(fn, cursor.block, returnRegister);
+	emitReturn(program, fn, cursor.block, returnRegister);
 }
 
 /**
@@ -7446,7 +7662,7 @@ function compileYieldStarExpression(
 	const stepAndContinue = (block: IRBlock) => {
 		if (isAsync) {
 			const stepCursor: IRCursor = { block };
-			const awaited = compileAwaitRegister(fn, stepCursor, result);
+			const awaited = compileAwaitRegister(program, fn, stepCursor, result);
 			stepCursor.block.instructions.push({ type: "move", registers: [result, awaited] });
 			stepCursor.block.instructions.push({ type: "jump", blocks: [checkIdx] });
 		} else {
@@ -7519,10 +7735,10 @@ function compileYieldStarExpression(
 	// ? Await(value)"), so a returned promise resolves before it leaves yield*.
 	if (isAsync) {
 		const noReturnCursor: IRCursor = { block: noReturn };
-		const awaited = compileAwaitRegister(fn, noReturnCursor, sentValue);
-		emitReturn(fn, noReturnCursor.block, awaited);
+		const awaited = compileAwaitRegister(program, fn, noReturnCursor, sentValue);
+		emitReturn(program, fn, noReturnCursor.block, awaited);
 	} else {
-		emitReturn(fn, noReturn, sentValue);
+		emitReturn(program, fn, noReturn, sentValue);
 	}
 
 	// check: FIRST validate the (already-awaited, for async) inner result is an
@@ -7634,7 +7850,7 @@ function compileYieldStarExpression(
 			modeEquals(checkBody, RESUME_MODE_RETURN, unwrapAwaitIdx);
 			checkBody.instructions.push({ type: "jump", blocks: [headerIdx] });
 			const unwrapCursor: IRCursor = { block: unwrapAwait };
-			const awaited = compileAwaitRegister(fn, unwrapCursor, sentValue);
+			const awaited = compileAwaitRegister(program, fn, unwrapCursor, sentValue);
 			unwrapCursor.block.instructions.push({
 				type: "move",
 				registers: [sentValue, awaited],
@@ -7657,7 +7873,7 @@ function compileYieldStarExpression(
 		modeEquals(doneBlock, RESUME_MODE_RETURN, doneReturnIdx);
 		doneBlock.instructions.push({ type: "move", registers: [exprResult, doneValue] });
 		doneBlock.instructions.push({ type: "jump", blocks: [continuationIdx] });
-		emitReturn(fn, doneReturn, doneValue);
+		emitReturn(program, fn, doneReturn, doneValue);
 	}
 
 	cursor.block = continuation;
@@ -7688,7 +7904,7 @@ function compileYieldExpression(
 	// AsyncGeneratorYield: an async generator awaits the operand before handing
 	// it out (so `yield somePromise` yields the resolved value).
 	if (fn.isAsync && fn.isGenerator) {
-		yieldedSrc = compileAwaitRegister(fn, cursor, yieldedSrc);
+		yieldedSrc = compileAwaitRegister(program, fn, cursor, yieldedSrc);
 	}
 
 	const valueDst = nextRegisterDestination(fn);
@@ -7698,7 +7914,14 @@ function compileYieldExpression(
 		registers: [valueDst, modeDst, yieldedSrc],
 	});
 
-	return emitResumeDispatch(fn, cursor, valueDst, modeDst, fn.isAsync && fn.isGenerator);
+	return emitResumeDispatch(
+		program,
+		fn,
+		cursor,
+		valueDst,
+		modeDst,
+		fn.isAsync && fn.isGenerator,
+	);
 }
 
 /**
@@ -7710,6 +7933,7 @@ function compileYieldExpression(
  * return() unwinds.
  */
 function emitResumeDispatch(
+	program: IntermediateProgram,
 	fn: IRFunction,
 	cursor: IRCursor,
 	valueDst: number,
@@ -7729,10 +7953,10 @@ function emitResumeDispatch(
 	const returnIdx = fn.blocks.push(returnBlock) - 1;
 	if (awaitReturnValue) {
 		const returnCursor: IRCursor = { block: returnBlock };
-		const awaited = compileAwaitRegister(fn, returnCursor, valueDst);
-		emitReturn(fn, returnCursor.block, awaited);
+		const awaited = compileAwaitRegister(program, fn, returnCursor, valueDst);
+		emitReturn(program, fn, returnCursor.block, awaited);
 	} else {
-		emitReturn(fn, returnBlock, valueDst);
+		emitReturn(program, fn, returnBlock, valueDst);
 	}
 
 	const continuation: IRBlock = { instructions: [] };
@@ -7788,11 +8012,12 @@ function compileAwaitExpression(
 	expression: ESTree.AwaitExpression,
 ): number {
 	const awaitedSrc = compileExpression(program, fn, cursor, expression.argument);
-	return compileAwaitRegister(fn, cursor, awaitedSrc);
+	return compileAwaitRegister(program, fn, cursor, awaitedSrc);
 }
 
 /** Suspend on the value in awaitedSrc and continue with the settled value. */
 function compileAwaitRegister(
+	program: IntermediateProgram,
 	fn: IRFunction,
 	cursor: IRCursor,
 	awaitedSrc: number,
@@ -7804,7 +8029,7 @@ function compileAwaitRegister(
 		registers: [valueDst, modeDst, awaitedSrc],
 	});
 
-	return emitResumeDispatch(fn, cursor, valueDst, modeDst);
+	return emitResumeDispatch(program, fn, cursor, valueDst, modeDst);
 }
 
 /**
