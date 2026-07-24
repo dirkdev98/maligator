@@ -550,6 +550,38 @@ static MalValue http_server_socket_facade(MalVm *vm) {
     return mal_value_from_object(socket);
 }
 
+static void http_incoming_message_dispatch_shapes(MalVm *vm) {
+    if (vm->node_http_incoming_message_source_shape != nullptr) return;
+
+    static const char *source_names[] = {
+        "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
+        "_readableState", "_malReadableQueue", "_malBlockedPipes",
+        "_malReadableIndex", "_malFlowing", "_malPaused", "readable",
+        "readableEnded",
+    };
+    static const char *dispatch_names[] = {
+        "method", "url", "headers", "rawHeaders", "httpVersion",
+        "httpVersionMajor", "httpVersionMinor", "complete", "aborted", "upgrade",
+        "trailers", "rawTrailers", "socket", "connection",
+    };
+    static_assert(countof(source_names) + countof(dispatch_names)
+                      <= MAL_SHAPE_MAX_INLINE_SLOTS,
+                  "IncomingMessage dispatch shape exceeds inline slots");
+    MalShape *shape = mal_shape_empty();
+    for (usize i = 0; i < countof(source_names); ++i) {
+        shape = mal_shape_add_property(
+            shape, mal_intrinsic_string_key(vm, (const byte *) source_names[i]),
+            HTTP_VISIBLE);
+    }
+    vm->node_http_incoming_message_source_shape = shape;
+    for (usize i = 0; i < countof(dispatch_names); ++i) {
+        shape = mal_shape_add_property(
+            shape, mal_intrinsic_string_key(vm, (const byte *) dispatch_names[i]),
+            HTTP_VISIBLE);
+    }
+    vm->node_http_incoming_message_final_shape = shape;
+}
+
 static void http_server_response_dispatch_shapes(MalVm *vm) {
     if (vm->node_http_server_response_source_shape != nullptr) return;
 
@@ -1625,6 +1657,17 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
     mal_realm_switch(vm, state->realm);
 #endif
     state->pending = false;
+    MalValue request_values[] = {
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan request_values_root;
+    mal_gc_root(&request_values_root, request_values, countof(request_values));
     MalCompletion request_completion = mal_vm_construct_value(
         vm, vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR],
         nullptr, 0);
@@ -1647,6 +1690,7 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
+    http_incoming_message_dispatch_shapes(vm);
     if (!http_request_headers(vm, state, &roots[2], &roots[3])) {
         mal_vm_throw_allocation_error(vm);
         mal_gc_unroot(&root);
@@ -1656,24 +1700,49 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
     roots[5] = mal_value_from_object(mal_intrinsic_new_object(vm));
     roots[6] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
 
-    http_define_own(vm, roots[0], "method",
-                http_ascii_value(vm, state->method, state->method_len));
-    http_define_own(vm, roots[0], "url",
-                http_ascii_value(vm, state->target, state->target_len));
-    http_define_own(vm, roots[0], "headers", roots[2]);
-    http_define_own(vm, roots[0], "rawHeaders", roots[3]);
-    http_define_own(vm, roots[0], "httpVersion",
-                http_ascii_value(vm, state->minor_version == 0 ? "1.0" : "1.1", 3));
-    http_define_own(vm, roots[0], "httpVersionMajor", mal_value_from_i32(1));
-    http_define_own(vm, roots[0], "httpVersionMinor",
-                mal_value_from_i32(state->minor_version));
-    http_define_own(vm, roots[0], "complete", mal_value_new_boolean(true));
-    http_define_own(vm, roots[0], "aborted", mal_value_new_boolean(false));
-    http_define_own(vm, roots[0], "upgrade", mal_value_new_boolean(false));
-    http_define_own(vm, roots[0], "trailers", roots[5]);
-    http_define_own(vm, roots[0], "rawTrailers", roots[6]);
-    http_define_own(vm, roots[0], "socket", roots[4]);
-    http_define_own(vm, roots[0], "connection", roots[4]);
+    request_values[0] = http_ascii_value(vm, state->method, state->method_len);
+    request_values[1] = http_ascii_value(vm, state->target, state->target_len);
+    request_values[2] = roots[2];
+    request_values[3] = roots[3];
+    request_values[4] = http_ascii_value(
+        vm, state->minor_version == 0 ? "1.0" : "1.1", 3);
+    request_values[5] = mal_value_from_i32(1);
+    request_values[6] = mal_value_from_i32(state->minor_version);
+    request_values[7] = mal_value_new_boolean(true);
+    request_values[8] = mal_value_new_boolean(false);
+    request_values[9] = mal_value_new_boolean(false);
+    request_values[10] = roots[5];
+    request_values[11] = roots[6];
+    request_values[12] = roots[4];
+    request_values[13] = roots[4];
+
+    if (mal_object_try_append_shaped_values(
+            mal_value_to_object(roots[0]),
+            vm->node_http_incoming_message_source_shape,
+            vm->node_http_incoming_message_final_shape,
+            request_values, (u32) countof(request_values))) {
+        MAL_PERF_COUNT(http_incoming_message_shape_append_batches);
+        MAL_PERF_ADD(http_incoming_message_shape_append_slots,
+                     countof(request_values));
+        MAL_PERF_ADD(http_incoming_message_slot_growths_avoided,
+                     countof(request_values) - 1);
+    } else {
+        MAL_PERF_COUNT(http_incoming_message_shape_append_fallbacks);
+        http_define_own(vm, roots[0], "method", request_values[0]);
+        http_define_own(vm, roots[0], "url", request_values[1]);
+        http_define_own(vm, roots[0], "headers", request_values[2]);
+        http_define_own(vm, roots[0], "rawHeaders", request_values[3]);
+        http_define_own(vm, roots[0], "httpVersion", request_values[4]);
+        http_define_own(vm, roots[0], "httpVersionMajor", request_values[5]);
+        http_define_own(vm, roots[0], "httpVersionMinor", request_values[6]);
+        http_define_own(vm, roots[0], "complete", request_values[7]);
+        http_define_own(vm, roots[0], "aborted", request_values[8]);
+        http_define_own(vm, roots[0], "upgrade", request_values[9]);
+        http_define_own(vm, roots[0], "trailers", request_values[10]);
+        http_define_own(vm, roots[0], "rawTrailers", request_values[11]);
+        http_define_own(vm, roots[0], "socket", request_values[12]);
+        http_define_own(vm, roots[0], "connection", request_values[13]);
+    }
 
     // Preserve construction and any unusual constructor layout. Only the exact
     // canonical source shape can append both dispatch fields with one slot growth.
@@ -1720,12 +1789,14 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
         goto fail;
     }
     mal_gc_unroot(&root);
+    mal_gc_unroot(&request_values_root);
 #if MAL_REALMS
     mal_realm_switch(vm, saved_realm);
 #endif
     return;
 
 fail:
+    mal_gc_unroot(&request_values_root);
     vm->completion = (MalCompletion) {
         .kind = MAL_COMPLETION_NORMAL,
         .value = mal_value_new_undefined(),

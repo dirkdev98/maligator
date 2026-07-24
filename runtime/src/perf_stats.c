@@ -242,6 +242,10 @@ static void mal_perf_stats_print(void) {
         "request_state_direct_frees=%llu request_body_direct_frees=%llu "
         "bulk_shaped_objects=%llu bulk_shaped_slots=%llu "
         "property_definitions_avoided=%llu shape_transitions_avoided=%llu "
+        "incoming_message_shape_append_batches=%llu "
+        "incoming_message_shape_append_slots=%llu "
+        "incoming_message_shape_append_fallbacks=%llu "
+        "incoming_message_slot_growths_avoided=%llu "
         "response_shape_append_batches=%llu response_shape_append_slots=%llu "
         "response_shape_append_fallbacks=%llu response_slot_growths_avoided=%llu\n",
         (unsigned long long) mal_perf_stats.http_response_index_lookups,
@@ -281,6 +285,10 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.http_bulk_shaped_slots,
         (unsigned long long) mal_perf_stats.http_property_definitions_avoided,
         (unsigned long long) mal_perf_stats.http_shape_transitions_avoided,
+        (unsigned long long) mal_perf_stats.http_incoming_message_shape_append_batches,
+        (unsigned long long) mal_perf_stats.http_incoming_message_shape_append_slots,
+        (unsigned long long) mal_perf_stats.http_incoming_message_shape_append_fallbacks,
+        (unsigned long long) mal_perf_stats.http_incoming_message_slot_growths_avoided,
         (unsigned long long) mal_perf_stats.http_response_shape_append_batches,
         (unsigned long long) mal_perf_stats.http_response_shape_append_slots,
         (unsigned long long) mal_perf_stats.http_response_shape_append_fallbacks,

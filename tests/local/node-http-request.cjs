@@ -10,6 +10,13 @@ Object.defineProperty(Object.prototype, "__httpSocketRealmMarker", {
 	configurable: true,
 });
 
+Object.defineProperty(http.IncomingMessage.prototype, "__httpRequestRealmMarker", {
+	value: "request-realm",
+	writable: true,
+	enumerable: false,
+	configurable: true,
+});
+
 Object.defineProperty(http.ServerResponse.prototype, "__httpResponseRealmMarker", {
 	value: "request-realm",
 	writable: true,
@@ -72,8 +79,8 @@ const server = http.createServer(function (request, response) {
 	}
 
 	if (request.url === "/response-shape") {
-		const visibleDataProperty = (name, value) => {
-			const descriptor = Object.getOwnPropertyDescriptor(response, name);
+		const visibleDataProperty = (receiver, name, value) => {
+			const descriptor = Object.getOwnPropertyDescriptor(receiver, name);
 			return (
 				descriptor !== undefined &&
 				descriptor.value === value &&
@@ -85,12 +92,39 @@ const server = http.createServer(function (request, response) {
 			);
 		};
 		const checks = [
+			Object.getOwnPropertyNames(request).join(",") ===
+				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,_readableState,_malReadableQueue,_malBlockedPipes,_malReadableIndex,_malFlowing,_malPaused,readable,readableEnded,method,url,headers,rawHeaders,httpVersion,httpVersionMajor,httpVersionMinor,complete,aborted,upgrade,trailers,rawTrailers,socket,connection",
+			Object.keys(request).join(",") ===
+				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,_readableState,_malReadableQueue,_malBlockedPipes,_malReadableIndex,_malFlowing,_malPaused,readable,readableEnded,method,url,headers,rawHeaders,httpVersion,httpVersionMajor,httpVersionMinor,complete,aborted,upgrade,trailers,rawTrailers,socket,connection",
+			visibleDataProperty(request, "method", "GET"),
+			visibleDataProperty(request, "url", "/response-shape"),
+			visibleDataProperty(request, "headers", request.headers),
+			visibleDataProperty(request, "rawHeaders", request.rawHeaders),
+			visibleDataProperty(request, "httpVersion", "1.1"),
+			visibleDataProperty(request, "httpVersionMajor", 1),
+			visibleDataProperty(request, "httpVersionMinor", 1),
+			visibleDataProperty(request, "complete", true),
+			visibleDataProperty(request, "aborted", false),
+			visibleDataProperty(request, "upgrade", false),
+			visibleDataProperty(request, "trailers", request.trailers),
+			visibleDataProperty(request, "rawTrailers", request.rawTrailers),
+			visibleDataProperty(request, "socket", request.socket),
+			visibleDataProperty(request, "connection", request.socket),
+			request.socket === request.connection,
+			request.socket === response.socket,
+			Object.getPrototypeOf(request) === http.IncomingMessage.prototype,
+			request instanceof http.IncomingMessage,
+			request.__httpRequestRealmMarker === "request-realm",
+			!Object.prototype.hasOwnProperty.call(request, "__httpRequestRealmMarker"),
+			Array.isArray(request.rawHeaders),
+			Array.isArray(request.rawTrailers),
+			request.trailers !== request.headers,
 			Object.getOwnPropertyNames(response).join(",") ===
 				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,statusCode,statusMessage,headersSent,finished,writableEnded,writableFinished,socket,connection",
 			Object.keys(response).join(",") ===
 				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,statusCode,statusMessage,headersSent,finished,writableEnded,writableFinished,socket,connection",
-			visibleDataProperty("socket", request.socket),
-			visibleDataProperty("connection", request.socket),
+			visibleDataProperty(response, "socket", request.socket),
+			visibleDataProperty(response, "connection", request.socket),
 			response.socket === response.connection,
 			response.socket === request.socket,
 			Object.getPrototypeOf(response) === http.ServerResponse.prototype,
@@ -105,6 +139,10 @@ const server = http.createServer(function (request, response) {
 	}
 
 	if (request.url === "/prepare-unusual-response") {
+		Object.defineProperty(http.IncomingMessage.prototype, "_malStreamKind", {
+			set(_value) {},
+			configurable: true,
+		});
 		Object.defineProperty(http.ServerResponse.prototype, "_malStreamKind", {
 			set(_value) {},
 			configurable: true,
@@ -114,11 +152,37 @@ const server = http.createServer(function (request, response) {
 	}
 
 	if (request.url === "/unusual-response-shape") {
+		delete http.IncomingMessage.prototype._malStreamKind;
 		delete http.ServerResponse.prototype._malStreamKind;
+		const requestNames = Object.getOwnPropertyNames(request);
 		const names = Object.getOwnPropertyNames(response);
+		const methodDescriptor = Object.getOwnPropertyDescriptor(request, "method");
+		const requestSocketDescriptor = Object.getOwnPropertyDescriptor(request, "socket");
+		const requestConnectionDescriptor = Object.getOwnPropertyDescriptor(
+			request,
+			"connection",
+		);
 		const socketDescriptor = Object.getOwnPropertyDescriptor(response, "socket");
 		const connectionDescriptor = Object.getOwnPropertyDescriptor(response, "connection");
 		const checks = [
+			!Object.prototype.hasOwnProperty.call(request, "_malStreamKind"),
+			request._malStreamKind === undefined,
+			requestNames.slice(-14).join(",") ===
+				"method,url,headers,rawHeaders,httpVersion,httpVersionMajor,httpVersionMinor,complete,aborted,upgrade,trailers,rawTrailers,socket,connection",
+			methodDescriptor.value === "GET",
+			methodDescriptor.writable === true,
+			methodDescriptor.enumerable === true,
+			methodDescriptor.configurable === true,
+			requestSocketDescriptor.value === request.connection,
+			requestSocketDescriptor.writable === true,
+			requestSocketDescriptor.enumerable === true,
+			requestSocketDescriptor.configurable === true,
+			requestConnectionDescriptor.value === request.socket,
+			requestConnectionDescriptor.writable === true,
+			requestConnectionDescriptor.enumerable === true,
+			requestConnectionDescriptor.configurable === true,
+			Object.getPrototypeOf(request) === http.IncomingMessage.prototype,
+			request.__httpRequestRealmMarker === "request-realm",
 			!Object.prototype.hasOwnProperty.call(response, "_malStreamKind"),
 			response._malStreamKind === undefined,
 			names.slice(-8).join(",") ===
