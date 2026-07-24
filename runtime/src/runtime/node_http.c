@@ -550,6 +550,29 @@ static MalValue http_server_socket_facade(MalVm *vm) {
     return mal_value_from_object(socket);
 }
 
+static void http_server_response_dispatch_shapes(MalVm *vm) {
+    if (vm->node_http_server_response_source_shape != nullptr) return;
+
+    static const char *source_names[] = {
+        "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
+        "statusCode", "statusMessage", "headersSent", "finished", "writableEnded",
+        "writableFinished",
+    };
+    static_assert(countof(source_names) + 2 <= MAL_SHAPE_MAX_INLINE_SLOTS,
+                  "ServerResponse dispatch shape exceeds inline slots");
+    MalShape *shape = mal_shape_empty();
+    for (usize i = 0; i < countof(source_names); ++i) {
+        shape = mal_shape_add_property(
+            shape, mal_intrinsic_string_key(vm, (const byte *) source_names[i]),
+            HTTP_VISIBLE);
+    }
+    vm->node_http_server_response_source_shape = shape;
+    shape = mal_shape_add_property(
+        shape, mal_intrinsic_string_key(vm, (const byte *) "socket"), HTTP_VISIBLE);
+    vm->node_http_server_response_final_shape = mal_shape_add_property(
+        shape, mal_intrinsic_string_key(vm, (const byte *) "connection"), HTTP_VISIBLE);
+}
+
 static bool http_response_name(
     MalVm *vm, MalValue value, char **out, usize *out_length) {
     MalString *string;
@@ -1652,11 +1675,24 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
     http_define_own(vm, roots[0], "socket", roots[4]);
     http_define_own(vm, roots[0], "connection", roots[4]);
 
-    // ServerResponse's constructor already installed its six default state
-    // fields. Dispatch only adds the connection-specific fields; redefining all
-    // defaults here made every request repeat six shape searches and writes.
-    http_define_own(vm, roots[1], "socket", roots[4]);
-    http_define_own(vm, roots[1], "connection", roots[4]);
+    // Preserve construction and any unusual constructor layout. Only the exact
+    // canonical source shape can append both dispatch fields with one slot growth.
+    http_server_response_dispatch_shapes(vm);
+    MalValue response_values[] = {roots[4], roots[4]};
+    if (mal_object_try_append_shaped_values(
+            mal_value_to_object(roots[1]),
+            vm->node_http_server_response_source_shape,
+            vm->node_http_server_response_final_shape,
+            response_values, (u32) countof(response_values))) {
+        MAL_PERF_COUNT(http_response_shape_append_batches);
+        MAL_PERF_ADD(http_response_shape_append_slots, countof(response_values));
+        MAL_PERF_ADD(http_response_slot_growths_avoided,
+                     countof(response_values) - 1);
+    } else {
+        MAL_PERF_COUNT(http_response_shape_append_fallbacks);
+        http_define_own(vm, roots[1], "socket", roots[4]);
+        http_define_own(vm, roots[1], "connection", roots[4]);
+    }
 
     MalValue emit_args[] = {
         mal_value_from_string(

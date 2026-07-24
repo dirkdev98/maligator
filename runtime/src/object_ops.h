@@ -63,6 +63,16 @@ MalPropertyResolution mal_object_resolve_property(const MalObject *object, MalKe
 MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const MalPropertyDesc *desc);
 
 /**
+ * Append default data properties to an ordinary shaped object in one slot growth.
+ * The expected shapes make this a guarded fast path: any mismatch returns false
+ * without changing the object.
+ */
+bool mal_object_try_append_shaped_values(
+    MalObject *object, MalShape *expected_source, MalShape *expected_final,
+    const MalValue *values, u32 count
+);
+
+/**
  * Perform an ordinary own-property deletion.
  */
 bool mal_object_delete_own(MalObject *object, MalKey key);

@@ -10,6 +10,13 @@ Object.defineProperty(Object.prototype, "__httpSocketRealmMarker", {
 	configurable: true,
 });
 
+Object.defineProperty(http.ServerResponse.prototype, "__httpResponseRealmMarker", {
+	value: "request-realm",
+	writable: true,
+	enumerable: false,
+	configurable: true,
+});
+
 function throwsMessage(callback, message) {
 	try {
 		callback();
@@ -61,6 +68,74 @@ const server = http.createServer(function (request, response) {
 		];
 		response.statusCode = checks.every(Boolean) ? 200 : 500;
 		response.end(checks.every(Boolean) ? "ok" : "socket shape mismatch");
+		return;
+	}
+
+	if (request.url === "/response-shape") {
+		const visibleDataProperty = (name, value) => {
+			const descriptor = Object.getOwnPropertyDescriptor(response, name);
+			return (
+				descriptor !== undefined &&
+				descriptor.value === value &&
+				descriptor.writable === true &&
+				descriptor.enumerable === true &&
+				descriptor.configurable === true &&
+				descriptor.get === undefined &&
+				descriptor.set === undefined
+			);
+		};
+		const checks = [
+			Object.getOwnPropertyNames(response).join(",") ===
+				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,statusCode,statusMessage,headersSent,finished,writableEnded,writableFinished,socket,connection",
+			Object.keys(response).join(",") ===
+				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,statusCode,statusMessage,headersSent,finished,writableEnded,writableFinished,socket,connection",
+			visibleDataProperty("socket", request.socket),
+			visibleDataProperty("connection", request.socket),
+			response.socket === response.connection,
+			response.socket === request.socket,
+			Object.getPrototypeOf(response) === http.ServerResponse.prototype,
+			response instanceof http.ServerResponse,
+			response.__httpResponseRealmMarker === "request-realm",
+			!Object.prototype.hasOwnProperty.call(response, "__httpResponseRealmMarker"),
+			response._malStreamKind === 0,
+		];
+		response.statusCode = checks.every(Boolean) ? 200 : 500;
+		response.end(checks.every(Boolean) ? "ok" : "response shape mismatch");
+		return;
+	}
+
+	if (request.url === "/prepare-unusual-response") {
+		Object.defineProperty(http.ServerResponse.prototype, "_malStreamKind", {
+			set(_value) {},
+			configurable: true,
+		});
+		response.end("prepared");
+		return;
+	}
+
+	if (request.url === "/unusual-response-shape") {
+		delete http.ServerResponse.prototype._malStreamKind;
+		const names = Object.getOwnPropertyNames(response);
+		const socketDescriptor = Object.getOwnPropertyDescriptor(response, "socket");
+		const connectionDescriptor = Object.getOwnPropertyDescriptor(response, "connection");
+		const checks = [
+			!Object.prototype.hasOwnProperty.call(response, "_malStreamKind"),
+			response._malStreamKind === undefined,
+			names.slice(-8).join(",") ===
+				"statusCode,statusMessage,headersSent,finished,writableEnded,writableFinished,socket,connection",
+			socketDescriptor.value === request.socket,
+			socketDescriptor.writable === true,
+			socketDescriptor.enumerable === true,
+			socketDescriptor.configurable === true,
+			connectionDescriptor.value === request.socket,
+			connectionDescriptor.writable === true,
+			connectionDescriptor.enumerable === true,
+			connectionDescriptor.configurable === true,
+			Object.getPrototypeOf(response) === http.ServerResponse.prototype,
+			response.__httpResponseRealmMarker === "request-realm",
+		];
+		response.statusCode = checks.every(Boolean) ? 200 : 500;
+		response.end(checks.every(Boolean) ? "ok" : "response fallback mismatch");
 		return;
 	}
 

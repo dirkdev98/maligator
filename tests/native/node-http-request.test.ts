@@ -93,6 +93,16 @@ describe("node:http request bridge", () => {
 		expect(socketShape.status).toBe(200);
 		expect(await socketShape.text()).toBe("ok");
 
+		const responseShape = await fetch(`${base}/response-shape`);
+		expect(responseShape.status).toBe(200);
+		expect(await responseShape.text()).toBe("ok");
+
+		const prepareUnusual = await fetch(`${base}/prepare-unusual-response`);
+		expect(await prepareUnusual.text()).toBe("prepared");
+		const unusualShape = await fetch(`${base}/unusual-response-shape`);
+		expect(unusualShape.status).toBe(200);
+		expect(await unusualShape.text()).toBe("ok");
+
 		const echo = await fetch(`${base}/echo`, {
 			method: "POST",
 			body: "request-body",
@@ -226,8 +236,8 @@ describe("node:http request bridge", () => {
 		expect(field(line, "dispatch_enqueues")).toBe(field(line, "dispatch_dequeues"));
 		expect(field(line, "completion_enqueues")).toBe(field(line, "completion_dequeues"));
 		expect(field(line, "request_inserts")).toBe(field(line, "request_removes"));
-		expect(field(line, "request_state_allocations")).toBe(80);
-		expect(field(line, "request_state_direct_frees")).toBe(80);
+		expect(field(line, "request_state_allocations")).toBe(83);
+		expect(field(line, "request_state_direct_frees")).toBe(83);
 		expect(field(line, "request_body_allocations")).toBe(1);
 		expect(field(line, "request_body_transfers")).toBe(1);
 		expect(field(line, "request_body_direct_frees")).toBe(0);
@@ -240,9 +250,13 @@ describe("node:http request bridge", () => {
 		expect(field(line, "request_copy_bytes")).toBeGreaterThan(
 			field(line, "request_copy_operations"),
 		);
-		expect(field(line, "bulk_shaped_objects")).toBe(80);
-		expect(field(line, "bulk_shaped_slots")).toBe(240);
-		expect(field(line, "property_definitions_avoided")).toBe(240);
-		expect(field(line, "shape_transitions_avoided")).toBe(237);
+		expect(field(line, "bulk_shaped_objects")).toBe(83);
+		expect(field(line, "bulk_shaped_slots")).toBe(249);
+		expect(field(line, "property_definitions_avoided")).toBe(249);
+		expect(field(line, "shape_transitions_avoided")).toBe(246);
+		expect(field(line, "response_shape_append_batches")).toBe(82);
+		expect(field(line, "response_shape_append_slots")).toBe(164);
+		expect(field(line, "response_shape_append_fallbacks")).toBe(1);
+		expect(field(line, "response_slot_growths_avoided")).toBe(82);
 	});
 });

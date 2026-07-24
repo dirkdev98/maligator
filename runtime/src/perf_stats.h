@@ -182,6 +182,10 @@ typedef struct MalPerfStats {
     u64 http_bulk_shaped_slots;
     u64 http_property_definitions_avoided;
     u64 http_shape_transitions_avoided;
+    u64 http_response_shape_append_batches;
+    u64 http_response_shape_append_slots;
+    u64 http_response_shape_append_fallbacks;
+    u64 http_response_slot_growths_avoided;
 
     MalPerfTableStats tables[MAL_PERF_TABLE_ROLE_COUNT];
     MalPerfShapeStats shapes[MAL_PERF_SHAPE_CALLER_COUNT];

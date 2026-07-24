@@ -1207,6 +1207,10 @@ typedef struct MalVm {
     /** Shared `{ encrypted, readable, writable }` node:http socket facade layout. */
     struct MalShape *node_http_socket_shape;
 
+    /** Canonical node:http ServerResponse layout before/after dispatch fields. */
+    struct MalShape *node_http_server_response_source_shape;
+    struct MalShape *node_http_server_response_final_shape;
+
     /** Bounded plain interpreted-function call cache; see vm_ops.c. */
     MalInterpCallCacheEntry *interp_call_cache;
 
