@@ -136,6 +136,17 @@ static bool mal_builtin_array_set_or_throw(MalVm *vm, MalValue receiver, MalKey 
         return false;
     }
 
+    if (mal_value_is_proxy_object(receiver)) {
+        if (mal_vm_set_property(vm, receiver, key, value, receiver)) {
+            return true;
+        }
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return false;
+        }
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
+        return false;
+    }
+
     MalPropertyResolution resolution = mal_object_resolve_property(mal_value_to_object(receiver), key);
     if (resolution.found && (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
         if (!mal_value_is_callable(resolution.desc.setter)) {
@@ -169,6 +180,17 @@ static bool mal_builtin_array_set_or_throw(MalVm *vm, MalValue receiver, MalKey 
 static bool mal_builtin_array_delete_or_throw(MalVm *vm, MalValue receiver, MalKey key) {
     if (!mal_value_is_object(receiver)) {
         return true;
+    }
+
+    if (mal_value_is_proxy_object(receiver)) {
+        if (mal_vm_delete_property(vm, receiver, key)) {
+            return true;
+        }
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return false;
+        }
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot delete property");
+        return false;
     }
 
     MalPropertyDesc string_exotic;
@@ -2394,6 +2416,12 @@ static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const M
         }
     }
 
+    // Set the removed array's length before mutating O. This is observable when
+    // a species constructor returns a Proxy or an object with an inherited setter.
+    if (!mal_builtin_array_set_or_throw(vm, removed, mal_intrinsic_string_key(vm, "length"), mal_ops_number_value(delete_count))) {
+        goto removed_done;
+    }
+
     if (insert_count < delete_count) {
         for (f64 from = start + delete_count; from < length; from++) {
             f64 to = from - delete_count + insert_count;
@@ -2443,10 +2471,6 @@ static MalValue mal_builtin_array_splice(MalVm *vm, MalValue this_value, const M
         goto removed_done;
     }
 
-    // Set the removed array's length (matters for a species-constructed receiver).
-    if (!mal_builtin_array_set_or_throw(vm, removed, mal_intrinsic_string_key(vm, "length"), mal_ops_number_value(delete_count))) {
-        goto removed_done;
-    }
     ret = removed;
 removed_done:
     mal_gc_unroot(&removed_span);

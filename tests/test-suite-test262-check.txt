@@ -31,6 +31,7 @@ test/built-ins/Array/prototype/slice/create-proxy.js
 test/built-ins/Array/prototype/splice/create-non-array-invalid-len.js
 test/built-ins/Array/prototype/splice/create-proxy.js
 test/built-ins/Array/prototype/splice/length-near-integer-limit-grow-array.js
+test/built-ins/Array/prototype/splice/property-traps-order-with-species.js
 test/built-ins/Array/prototype/splice/throws-if-integer-limit-exceeded.js
 test/built-ins/Array/prototype/toReversed/length-exceeding-array-length-limit.js
 test/built-ins/Array/prototype/toSorted/length-exceeding-array-length-limit.js
