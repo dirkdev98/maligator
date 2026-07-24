@@ -30,14 +30,13 @@ static MalValue mal_builtin_function_forward_completion(MalVm *vm, MalCompletion
 
 static MalValue mal_builtin_function_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    (void) new_target;
-    (void) callee;
     // `Function(...)` and `new Function(...)` both produce the dynamically
     // compiled function (the result is the function, not an instance).
     MalRootSpan args_span;
     mal_gc_root(&args_span, (MalValue *) args, arg_count);
     mal_gc_native_rooted_begin(vm);
-    MalValue result = mal_vm_construct_function(vm, args, arg_count, MAL_DYNAMIC_FUNCTION_NORMAL);
+    MalValue result = mal_vm_construct_function(
+        vm, args, arg_count, MAL_DYNAMIC_FUNCTION_NORMAL, new_target, callee);
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&args_span);
     return result;

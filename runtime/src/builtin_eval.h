@@ -78,4 +78,5 @@ typedef enum {
  * ToString or compile throw, sets vm->completion and returns undefined.
  */
 MalValue mal_vm_construct_function(MalVm *vm, const MalValue *args, i32 arg_count,
-                                   MalDynamicFunctionKind kind);
+                                   MalDynamicFunctionKind kind, MalValue new_target,
+                                   MalValue constructor);

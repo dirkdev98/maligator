@@ -311,6 +311,7 @@ test/built-ins/Array/prototype/splice/create-proto-from-ctor-realm-array.js
 test/built-ins/Array/prototype/splice/create-proto-from-ctor-realm-non-array.js
 test/built-ins/ArrayBuffer/proto-from-ctor-realm.js
 test/built-ins/AsyncFunction/proto-from-ctor-realm.js
+test/built-ins/AsyncGeneratorFunction/proto-from-ctor-realm-prototype.js
 test/built-ins/DataView/proto-from-ctor-realm-sab.js
 test/built-ins/DataView/proto-from-ctor-realm.js
 test/built-ins/Error/isError/errors-other-realm.js

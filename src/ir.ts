@@ -1151,8 +1151,8 @@ export type IRInstruction =
 			nameStringIndex: number;
 	  }
 	| {
-			// Sloppy-mode read of an unresolved name: the global object property, or
-			// ReferenceError if absent. (Strict reads use loadUndeclared.)
+			// Runtime resolution of a statically undeclared name: the global object
+			// property, or ReferenceError if absent. This applies in both modes.
 			type: "loadGlobalProperty";
 			registers: [number];
 			nameStringIndex: number;
@@ -8634,6 +8634,10 @@ function compileIdentifierAssignment(
 	const hostGlobalLocation = retainHostGlobal(program, binding)
 		? globalPropertyLocation(program, binding.name)
 		: null;
+	const runtimeGlobalLocation =
+		binding.undeclared && !isIRIntrinsic(binding.name)
+			? globalPropertyLocation(program, binding.name)
+			: null;
 	if (binding.undeclared && !isIRIntrinsic(binding.name) && !hostGlobalLocation) {
 		// Sloppy `x = v` for an unresolved x creates/sets a global property and
 		// evaluates to v. (Compound forms read first, so an absent global still
@@ -8644,21 +8648,19 @@ function compileIdentifierAssignment(
 			return value;
 		}
 
-		// PutValue on an unresolvable reference throws ReferenceError; plain
-		// assignments still evaluate the right hand side first, compound
-		// forms throw on the read before it.
 		if (assignmentExpression.operator === "=") {
+			// PutValue on an unresolvable strict reference throws after the RHS.
 			compileExpression(program, fn, cursor, assignmentExpression.right);
+			const destination = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "loadUndeclared",
+				registers: [destination],
+				nameStringIndex: getOrCreateStringConstant(program, binding.name),
+			});
+			return destination;
 		}
-
-		const destination = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
-			type: "loadUndeclared",
-			registers: [destination],
-			nameStringIndex: getOrCreateStringConstant(program, binding.name),
-		});
-
-		return destination;
+		// A compound assignment continues below: it must resolve a property that
+		// can have appeared on the global object at runtime, then read and store it.
 	}
 
 	if (binding.immutableSelfReference) {
@@ -8714,7 +8716,10 @@ function compileIdentifierAssignment(
 		return emitThrowTypeError(program, fn, cursor, "Assignment to constant variable.");
 	}
 
-	const location = hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
+	const location =
+		hostGlobalLocation ??
+		runtimeGlobalLocation ??
+		getOrCreateBindingLocation(program, fn, binding);
 
 	let value: number;
 	if (assignmentExpression.operator === "=") {
@@ -8789,19 +8794,11 @@ function compileLogicalAssignment(
 		const hostGlobalLocation = retainHostGlobal(program, binding)
 			? globalPropertyLocation(program, binding.name)
 			: null;
-		if (binding.undeclared && !isIRIntrinsic(binding.name) && !hostGlobalLocation) {
-			// GetValue on an unresolvable reference throws ReferenceError before
-			// the operator can short-circuit.
-			const destination = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
-				type: "loadUndeclared",
-				registers: [destination],
-				nameStringIndex: getOrCreateStringConstant(program, binding.name),
-			});
-			return destination;
-		}
-
-		location = hostGlobalLocation ?? getOrCreateBindingLocation(program, fn, binding);
+		location =
+			hostGlobalLocation ??
+			(binding.undeclared && !isIRIntrinsic(binding.name)
+				? globalPropertyLocation(program, binding.name)
+				: getOrCreateBindingLocation(program, fn, binding));
 		identifierBinding = binding;
 		nameHint = binding.name;
 		current = loadRegisterFromLocation(fn, cursor.block, location);

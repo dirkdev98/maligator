@@ -130,12 +130,11 @@ static MalValue mal_builtin_generator_return(MalVm *vm, MalValue this_value, con
  */
 static MalValue mal_builtin_generator_function_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
-    (void) new_target;
-    (void) callee;
     MalRootSpan args_span;
     mal_gc_root(&args_span, (MalValue *) args, arg_count);
     mal_gc_native_rooted_begin(vm);
-    MalValue result = mal_vm_construct_function(vm, args, arg_count, MAL_DYNAMIC_FUNCTION_GENERATOR);
+    MalValue result = mal_vm_construct_function(
+        vm, args, arg_count, MAL_DYNAMIC_FUNCTION_GENERATOR, new_target, callee);
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&args_span);
     return result;

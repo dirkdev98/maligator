@@ -141,10 +141,46 @@ done:
     return loaded;
 }
 
-MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
-    MalValue roots[2] = {source, mal_value_new_undefined()};
+static MalValue run_loaded_source(
+    MalVm *vm, MalLoadedDefinition *loaded, MalValue function_prototype
+) {
+    MalValue roots[3] = {
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        function_prototype,
+    };
     MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, 2);
+    mal_gc_root(&root_span, roots, 3);
+    MalValue result = mal_value_new_undefined();
+
+    retain_loaded(vm, loaded);
+    i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
+    if (entry < 0) {
+        goto done;
+    }
+    roots[0] = mal_vm_op_create_function(vm, entry, nullptr);
+    MalCompletion run = mal_vm_call_value(
+        vm, roots[0], mal_value_new_undefined(), nullptr, 0);
+    roots[1] = run.value;
+    if (run.kind == MAL_COMPLETION_THROW) {
+        vm->completion = run;
+        goto done;
+    }
+    if (mal_value_is_object(roots[2]) && mal_value_is_object(roots[1])) {
+        mal_object_set_prototype(
+            mal_value_to_object(roots[1]), mal_value_to_object(roots[2]));
+    }
+    result = roots[1];
+
+done:
+    mal_gc_unroot(&root_span);
+    return result;
+}
+
+MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
+    MalValue roots[1] = {source};
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, roots, 1);
     MalValue result = mal_value_new_undefined();
 
     // Indirect eval: always sloppy (no containing strict context), never a
@@ -153,18 +189,7 @@ MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
     if (loaded == nullptr) {
         goto done;
     }
-    retain_loaded(vm, loaded);
-    i32 entry = mal_vm_splice_definition(vm, mal_loaded_definition_get(loaded));
-    if (entry < 0) {
-        goto done; // splice set a pending RangeError
-    }
-    roots[1] = mal_vm_op_create_function(vm, entry, nullptr);
-    MalCompletion run = mal_vm_call_value(vm, roots[1], mal_value_new_undefined(), nullptr, 0);
-    if (run.kind == MAL_COMPLETION_THROW) {
-        vm->completion = run;
-        goto done;
-    }
-    result = run.value;
+    result = run_loaded_source(vm, loaded, mal_value_new_undefined());
 
 done:
     mal_gc_unroot(&root_span);
@@ -289,7 +314,8 @@ static MalValue eval_ascii(MalVm *vm, const char *text) {
 }
 
 MalValue mal_vm_construct_function(MalVm *vm, const MalValue *args, i32 arg_count,
-                                    MalDynamicFunctionKind kind) {
+                                    MalDynamicFunctionKind kind, MalValue new_target,
+                                    MalValue constructor) {
     // CreateDynamicFunction: the last argument is the body, the rest are the
     // parameter list (each ToString'd, joined by ","). Assemble the source
     // `(<kind> anonymous(<params>\n) {\n<body>\n})` — the wrapping parens make
@@ -299,16 +325,21 @@ MalValue mal_vm_construct_function(MalVm *vm, const MalValue *args, i32 arg_coun
     // path, so it inherits the matching %GeneratorFunction/AsyncFunction% wiring.
     MalRootSpan args_span;
     mal_gc_root(&args_span, (MalValue *) args, arg_count);
-    MalValue roots[5] = {
+    MalValue roots[7] = {
         mal_value_new_undefined(),
         mal_value_new_undefined(),
         mal_value_new_undefined(),
         mal_value_new_undefined(),
+        mal_value_new_undefined(),
+        mal_value_is_undefined(new_target) ? constructor : new_target,
         mal_value_new_undefined(),
     };
     MalRootSpan roots_span;
-    mal_gc_root(&roots_span, roots, 5);
+    mal_gc_root(&roots_span, roots, 7);
     MalValue result = mal_value_new_undefined();
+#if MAL_REALMS
+    MalRealm *constructor_realm = vm->current_realm;
+#endif
 
     roots[0] = eval_ascii(vm, ""); // params
     roots[1] = eval_ascii(vm, ""); // body
@@ -374,7 +405,42 @@ MalValue mal_vm_construct_function(MalVm *vm, const MalValue *args, i32 arg_coun
         goto done;
     }
 
-    result = mal_vm_eval_source(vm, roots[2]);
+    MalLoadedDefinition *loaded = compile_source(vm, roots[2], false, false, false, false);
+    if (loaded == nullptr) {
+#if MAL_EVAL
+        // The baked compiler may belong to the realm where eval was first used.
+        // CreateDynamicFunction parse/early errors belong to the active constructor.
+#if MAL_REALMS
+        mal_vm_realm_switch_to(vm, constructor_realm);
+#endif
+        mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
+                           "CreateDynamicFunction: invalid source text");
+#endif
+        goto done;
+    }
+
+    MalIntrinsic fallback_proto;
+    switch (kind) {
+    case MAL_DYNAMIC_FUNCTION_GENERATOR:
+        fallback_proto = MAL_INTRINSIC_GENERATOR_FUNCTION_PROTOTYPE;
+        break;
+    case MAL_DYNAMIC_FUNCTION_ASYNC:
+        fallback_proto = MAL_INTRINSIC_ASYNC_FUNCTION_PROTOTYPE;
+        break;
+    case MAL_DYNAMIC_FUNCTION_ASYNC_GENERATOR:
+        fallback_proto = MAL_INTRINSIC_ASYNC_GENERATOR_FUNCTION_PROTOTYPE;
+        break;
+    default:
+        fallback_proto = MAL_INTRINSIC_FUNCTION_PROTOTYPE;
+        break;
+    }
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, roots[5], fallback_proto, &prototype)) {
+        goto done;
+    }
+    roots[6] = mal_value_from_object(prototype);
+    result = run_loaded_source(vm, loaded, roots[6]);
 
 done:
     mal_gc_unroot(&roots_span);
