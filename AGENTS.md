@@ -58,14 +58,15 @@ MAL_DEBUG=true node ./src/index.ts build ./tests/local/runtime-mechanics.mjs
 
 Use https://tc39.es/ecma262/multipage/ when looking up parts of the spec.
 
-## Unlinked fix queues
+## Importing fix queues
 
-For a fix queue in a separate clone such as `../maligator-work-tree` (not a Git linked worktree):
+For a fix queue maintained in a separate clone:
 
-- Fetch `origin` in both clones and require the primary `main` to have no remote-only commits before starting.
-- Track the last imported source hash; select later non-merge commits in first-parent order because cherry-picked hashes differ from source hashes.
-- In the primary clone, run `git fetch ../maligator-work-tree <branch>` and cherry-pick the explicit source hashes in order, omitting merge commits.
-- Compare the result with `git diff --exit-code <last-source-hash> HEAD`, scan for stale source-hash references, then run focused tests and `npm run test:check` before pushing.
+- Treat the source clone as read-only; fetch its branch into the primary clone with `git fetch <source-clone> <branch>`.
+- Require the primary `main` to have no remote-only commits before starting.
+- Track the last imported source hash and select later non-merge commits in first-parent order because cherry-picked hashes differ from source hashes.
+- Cherry-pick the explicit source hashes in order, compare the result with `git diff --exit-code <last-source-hash> HEAD`, and scan for stale source-hash references.
+- Run focused tests and `npm run test:check` before pushing.
 
 ## Working Preferences
 
