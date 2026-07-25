@@ -2452,6 +2452,20 @@ function emitInstruction(
 				poll, // call-return safepoint
 			];
 		}
+		case "CONSTRUCT_SUPER_EXPLICIT": {
+			const completion = `construct_super_explicit_${ip}`;
+			const boundThis = `bound_super_this_${ip}`;
+			return [
+				`MalValue ${boundThis};`,
+				`MalCompletion ${completion} = mal_vm_op_construct_super(vm, ${boxed(instruction.parent)}, ${boxed(instruction.argumentsArray)}, ${boxed(instruction.newTarget)}, ${boxed(instruction.dst)}, &${boundThis});`,
+				`if (${completion}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+				`r${instruction.dst} = ${boundThis};`,
+				poll,
+			];
+		}
+		case "SET_THIS":
+			if (thisSlot < 0) return null;
+			return [`${thisRef} = ${boxed(instruction.value)};`];
 		case "GENERATOR_START": {
 			// Resumable functions only. Build the generator/async-generator instance
 			// adopting this activation's buffer, then suspend at the next instruction

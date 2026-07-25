@@ -1937,13 +1937,6 @@ MalCompletion mal_vm_op_construct_super(
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Class constructor cannot be invoked without 'new'");
         return vm->completion;
     }
-    // BindThisValue: `this` may be bound only once. A second super() (this is no
-    // longer the uninitialized EMPTY sentinel) is a ReferenceError.
-    if (!mal_value_is_empty(current_this)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, "Super constructor may only be called once");
-        return vm->completion;
-    }
-
     // Marshal the super arguments onto the value stack (bounds-checked); the value
     // stack is fixed-capacity, so the args pointer stays valid across the construct.
     i32 base = vm->value_stack_size;
@@ -1957,6 +1950,13 @@ MalCompletion mal_vm_op_construct_super(
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
         return completion;
+    }
+
+    // BindThisValue checks initialization after Construct, so a repeated super()
+    // still runs the parent constructor's observable side effects first.
+    if (!mal_value_is_empty(current_this)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_REFERENCE_ERROR_PROTOTYPE, "Super constructor may only be called once");
+        return vm->completion;
     }
 
     // BindThisValue: the derived constructor's `this` is the object the super
@@ -1988,6 +1988,31 @@ void mal_op_construct_super(MalCallable *callable, const MalInstruction *instruc
     }
     vm->frames[caller_frame_index].this_value = bound_this;
     vm->frames[caller_frame_index].registers[instruction->as.construct_super.dst] = bound_this;
+}
+
+void mal_op_construct_super_explicit(MalCallable *callable, const MalInstruction *instruction) {
+    MalVm *vm = callable->vm;
+    i32 caller_frame_index = vm->frame_count - 1;
+    MalValue bound_this;
+    // Two-address encoding: dst carries current_this into the op and receives
+    // the newly bound value. new_target is explicit because lexical arrows and
+    // direct eval execute in frames that do not own the constructor environment.
+    MalCompletion completion = mal_vm_op_construct_super(
+        vm,
+        callable->registers[instruction->as.construct_super_explicit.parent],
+        callable->registers[instruction->as.construct_super_explicit.arguments_array],
+        callable->registers[instruction->as.construct_super_explicit.new_target],
+        callable->registers[instruction->as.construct_super_explicit.dst],
+        &bound_this
+    );
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        return;
+    }
+    vm->frames[caller_frame_index].registers[instruction->as.construct_super_explicit.dst] = bound_this;
+}
+
+void mal_op_set_this(MalCallable *callable, const MalInstruction *instruction) {
+    callable->this_value = callable->registers[instruction->as.set_this.value];
 }
 
 // GetThisBinding for a derived constructor: `this` is uninitialized (the EMPTY

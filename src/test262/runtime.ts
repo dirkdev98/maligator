@@ -762,7 +762,7 @@ async function runBatchBinary(
 	let stdout = "";
 	// Stress collection at every poll and Guard Malloc are deliberately slower,
 	// so scale both the per-test and overall budgets to avoid spurious TIMEOUTs.
-	const timeoutScale = gmallocEnabled() ? 12 : process.env.MAL_GC_STRESS ? 4 : 1;
+	const timeoutScale = gmallocEnabled() ? 12 : process.env.MAL_GC_STRESS ? 8 : 1;
 	const runTimeoutMs = TEST262_METADATA.runTimeoutMs * timeoutScale;
 	try {
 		const result = await execFileAsync(binPath, ["--all", String(runTimeoutMs)], {

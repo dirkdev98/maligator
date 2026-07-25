@@ -115,6 +115,8 @@ typedef enum MalOpcode {
     MAL_OP_INIT_PRIVATE_FIELDS,
     MAL_OP_TYPEOF_COMPARE,
     MAL_OP_TERMINAL_YIELD,
+    MAL_OP_CONSTRUCT_SUPER_EXPLICIT,
+    MAL_OP_SET_THIS,
 } MalOpcode;
 
 /** Packed literal-template stream tags; mirrored by src/ir.ts. */
@@ -674,6 +676,14 @@ typedef struct MalInstruction {
         struct {
             i32 dst, parent, arguments_array;
         } construct_super;
+
+        struct {
+            i32 dst, parent, arguments_array, new_target;
+        } construct_super_explicit;
+
+        struct {
+            i32 value;
+        } set_this;
 
         struct {
             i32 dst, left, right;

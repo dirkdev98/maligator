@@ -139,6 +139,7 @@ const USE_ONLY_FIRST_REGISTER = new Set([
 	"withEnter",
 	"checkSuperClass",
 	"requireCoercible",
+	"setThis",
 	// A temporal-dead-zone guard: throws if its operand is the TDZ sentinel and
 	// otherwise passes the value through unchanged (lowers to THROW_IF_TDZ { src },
 	// no destination — like requireCoercible). Modelling it as a definition would

@@ -117,6 +117,8 @@ typedef enum WireOp {
     WIRE_INIT_PRIVATE_FIELDS,
     WIRE_TYPEOF_COMPARE,
     WIRE_TERMINAL_YIELD,
+    WIRE_CONSTRUCT_SUPER_EXPLICIT,
+    WIRE_SET_THIS,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -846,6 +848,17 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.construct_super.dst = rd_i32(r);
             o->as.construct_super.parent = rd_i32(r);
             o->as.construct_super.arguments_array = rd_i32(r);
+            return;
+        case WIRE_CONSTRUCT_SUPER_EXPLICIT:
+            o->opcode = MAL_OP_CONSTRUCT_SUPER_EXPLICIT;
+            o->as.construct_super_explicit.dst = rd_i32(r);
+            o->as.construct_super_explicit.parent = rd_i32(r);
+            o->as.construct_super_explicit.arguments_array = rd_i32(r);
+            o->as.construct_super_explicit.new_target = rd_i32(r);
+            return;
+        case WIRE_SET_THIS:
+            o->opcode = MAL_OP_SET_THIS;
+            o->as.set_this.value = rd_i32(r);
             return;
         case WIRE_MERGE_DATA_PROPERTIES:
             o->opcode = MAL_OP_MERGE_DATA_PROPERTIES;

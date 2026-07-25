@@ -124,6 +124,8 @@ export const WIRE_OPCODES = [
 	"INIT_PRIVATE_FIELDS",
 	"TYPEOF_COMPARE",
 	"TERMINAL_YIELD",
+	"CONSTRUCT_SUPER_EXPLICIT",
+	"SET_THIS",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -911,6 +913,15 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.parent);
 			w.i32(i.argumentsArray);
 			return;
+		case "CONSTRUCT_SUPER_EXPLICIT":
+			w.i32(i.dst);
+			w.i32(i.parent);
+			w.i32(i.argumentsArray);
+			w.i32(i.newTarget);
+			return;
+		case "SET_THIS":
+			w.i32(i.value);
+			return;
 		case "MERGE_DATA_PROPERTIES":
 			w.i32(i.target);
 			w.i32(i.src);
@@ -1450,6 +1461,16 @@ function readInstruction(r: Reader): VmInstruction {
 			return { opcode, dst: r.i32(), callee: r.i32(), argumentsArray: r.i32() };
 		case "CONSTRUCT_SUPER":
 			return { opcode, dst: r.i32(), parent: r.i32(), argumentsArray: r.i32() };
+		case "CONSTRUCT_SUPER_EXPLICIT":
+			return {
+				opcode,
+				dst: r.i32(),
+				parent: r.i32(),
+				argumentsArray: r.i32(),
+				newTarget: r.i32(),
+			};
+		case "SET_THIS":
+			return { opcode, value: r.i32() };
 		case "MERGE_DATA_PROPERTIES":
 			return { opcode, target: r.i32(), src: r.i32() };
 		case "DEFINE_ACCESSOR":

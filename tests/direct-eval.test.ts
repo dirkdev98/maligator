@@ -125,6 +125,8 @@ test("direct eval is a conservative use of lexical arguments through an arrow", 
 test("contextual eval parsing inherits super, new.target, and private names", () => {
 	const context = {
 		allowSuperProperty: true,
+		allowSuperCall: false,
+		hasInstanceInitializer: false,
 		allowNewTarget: true,
 		privateNames: [{ name: "#value", flags: 2 }],
 	};
@@ -136,6 +138,28 @@ test("contextual eval parsing inherits super, new.target, and private names", ()
 	).not.toThrow();
 	expect(() =>
 		parseScript("return 1;", { strict: true, directEvalContext: context }),
+	).toThrow(SyntaxError);
+});
+
+test("contextual eval parsing allows super calls only in a derived constructor", () => {
+	const inherited = {
+		allowSuperProperty: true,
+		allowSuperCall: true,
+		hasInstanceInitializer: true,
+		allowNewTarget: true,
+		privateNames: [{ name: "#value", flags: 2 }],
+	};
+	expect(() =>
+		parseScript("super(); this.#value;", {
+			strict: true,
+			directEvalContext: inherited,
+		}),
+	).not.toThrow();
+	expect(() =>
+		parseScript("super();", {
+			strict: true,
+			directEvalContext: { ...inherited, allowSuperCall: false },
+		}),
 	).toThrow(SyntaxError);
 });
 

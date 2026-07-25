@@ -8,8 +8,12 @@ import {
 	DIRECT_EVAL_PRIVATE_STATIC,
 	directEvalDirtyTrackerKey,
 	directEvalHomeScopeKey,
+	directEvalInstanceInitializerScopeKey,
 	directEvalPrivateScopeKey,
 	directEvalScopeObjectKey,
+	directEvalSuperConstructorScopeKey,
+	directEvalSuperNewTargetScopeKey,
+	directEvalSuperThisStateScopeKey,
 	encodeDirectEvalContext,
 } from "./direct-eval-context.ts";
 import type {
@@ -349,6 +353,12 @@ interface IRClassContext {
 	isConstructor?: boolean;
 	isDerivedConstructor?: boolean;
 	instanceFieldPlan?: Array<IRInstanceFieldPlanEntry>;
+
+	/** Shared derived-constructor environment used by lexical arrows and eval. */
+	usesSharedSuperState?: boolean;
+	superThisStateBinding?: Binding;
+	superNewTargetBinding?: Binding;
+	instanceInitializerBinding?: Binding;
 }
 
 export interface IRFunction {
@@ -1066,6 +1076,20 @@ export type IRInstruction =
 			registers: [number, number, number];
 	  }
 	| {
+			type: "constructSuperExplicit";
+
+			// [destination, parent, arguments_array, new_target, current_this]. The
+			// final operand aliases destination: the packed VM op is two-address, while
+			// the duplicate keeps its read-before-write dependency explicit in IR.
+			registers: [number, number, number, number, number];
+	  }
+	| {
+			type: "setThis";
+
+			// [value] — synchronize the current activation's this binding.
+			registers: [number];
+	  }
+	| {
 			type: "mergeDataProperties";
 
 			// [target, source] — object spread {...source} into target.
@@ -1610,6 +1634,8 @@ export function compileSemanticProgramToIr(
 		evalDirect: options.evalDirect ?? false,
 		directEvalContext: options.directEvalContext ?? {
 			allowSuperProperty: false,
+			allowSuperCall: false,
+			hasInstanceInitializer: false,
 			allowNewTarget: false,
 			privateNames: [],
 		},
@@ -1937,6 +1963,31 @@ function prepareDirectEvalClassContext(
 		homeObjectBinding = createCapturedBinding(program, fn, "__eval_home");
 		bindings.push({ key: directEvalHomeScopeKey(), binding: homeObjectBinding });
 	}
+	let superBinding: Binding | undefined;
+	let superThisStateBinding: Binding | undefined;
+	let superNewTargetBinding: Binding | undefined;
+	let instanceInitializerBinding: Binding | undefined;
+	if (inherited.allowSuperCall) {
+		superBinding = createCapturedBinding(program, fn, "__eval_super");
+		superThisStateBinding = createCapturedBinding(program, fn, "__eval_super_this");
+		superNewTargetBinding = createCapturedBinding(program, fn, "__eval_super_new_target");
+		bindings.push(
+			{ key: directEvalSuperConstructorScopeKey(), binding: superBinding },
+			{ key: directEvalSuperThisStateScopeKey(), binding: superThisStateBinding },
+			{ key: directEvalSuperNewTargetScopeKey(), binding: superNewTargetBinding },
+		);
+		if (inherited.hasInstanceInitializer) {
+			instanceInitializerBinding = createCapturedBinding(
+				program,
+				fn,
+				"__eval_instance_initializer",
+			);
+			bindings.push({
+				key: directEvalInstanceInitializerScopeKey(),
+				binding: instanceInitializerBinding,
+			});
+		}
+	}
 
 	const privateNames = new Map<string, IRPrivateName>();
 	for (let index = 0; index < inherited.privateNames.length; index++) {
@@ -1966,11 +2017,16 @@ function prepareDirectEvalClassContext(
 		privateNames.set(inheritedName.name, entry);
 	}
 
-	if (homeObjectBinding || privateNames.size > 0) {
+	if (homeObjectBinding || superBinding || privateNames.size > 0) {
 		fn.classContext = {
 			isStatic: false,
 			homeObjectBinding,
+			superBinding,
 			privateNames: privateNames.size > 0 ? privateNames : undefined,
+			usesSharedSuperState: inherited.allowSuperCall,
+			superThisStateBinding,
+			superNewTargetBinding,
+			instanceInitializerBinding,
 		};
 	}
 	return bindings;
@@ -2886,6 +2942,12 @@ function inheritedPrivateEnvironment(
 	const homeObjectBinding = isArrow ? context.homeObjectBinding : undefined;
 	const instanceBrandBinding = isArrow ? context.instanceBrandBinding : undefined;
 	const staticBrandBinding = isArrow ? context.staticBrandBinding : undefined;
+	const usesSharedSuperState = isArrow ? context.usesSharedSuperState : undefined;
+	const superThisStateBinding = isArrow ? context.superThisStateBinding : undefined;
+	const superNewTargetBinding = isArrow ? context.superNewTargetBinding : undefined;
+	const instanceInitializerBinding = isArrow
+		? context.instanceInitializerBinding
+		: undefined;
 	if (!hasPrivateNames && !superBinding && !classBinding && !homeObjectBinding) {
 		return undefined;
 	}
@@ -2897,6 +2959,10 @@ function inheritedPrivateEnvironment(
 		homeObjectBinding,
 		instanceBrandBinding,
 		staticBrandBinding,
+		usesSharedSuperState,
+		superThisStateBinding,
+		superNewTargetBinding,
+		instanceInitializerBinding,
 	};
 }
 
@@ -3037,6 +3103,18 @@ function compileNewFunctionExpression(
 
 	program.functions.push(compiledFn);
 	program.nodeToFunctionCache.set(functionNode, { fnIndex: compiledFn.functionIndex });
+	if (
+		classContext?.isConstructor &&
+		classContext.isDerivedConstructor &&
+		classContext.usesSharedSuperState
+	) {
+		classContext.superThisStateBinding =
+			getLexicalThisBinding(compiledFn, functionNode) ??
+			createCapturedBinding(program, compiledFn, "__super_this_state");
+		classContext.superNewTargetBinding =
+			getLexicalNewTargetBinding(compiledFn, functionNode) ??
+			createCapturedBinding(program, compiledFn, "__super_new_target");
+	}
 
 	const paramsCursor = compileFunctionParams(program, compiledFn, functionNode);
 
@@ -3075,6 +3153,13 @@ function compileNewFunctionExpression(
 	}
 
 	endFunction(compiledFn);
+	if (
+		classContext?.isConstructor &&
+		classContext.isDerivedConstructor &&
+		classContext.superThisStateBinding
+	) {
+		synchronizeSharedConstructorReturns(program, compiledFn);
+	}
 
 	return compiledFn.functionIndex;
 }
@@ -3223,7 +3308,7 @@ function emitLexicalProviderCaptures(
 ): void {
 	const scope = fn.semanticFile.nodeToScope.get(node);
 	const thisBinding = scope?.bindings.find((binding) => binding.implicit === "this");
-	if (thisBinding?.scopedTo === "captured") {
+	if (thisBinding?.scopedTo === "captured" && !fn.classContext?.superThisStateBinding) {
 		const value = nextRegisterDestination(fn);
 		cursor.block.instructions.push({ type: "loadThis", registers: [value] });
 		storeRegisterAtLocation(
@@ -3236,7 +3321,10 @@ function emitLexicalProviderCaptures(
 	const newTargetBinding = scope?.bindings.find(
 		(binding) => binding.implicit === "new.target",
 	);
-	if (newTargetBinding?.scopedTo === "captured") {
+	if (
+		newTargetBinding?.scopedTo === "captured" &&
+		!fn.classContext?.superNewTargetBinding
+	) {
 		const value = newTargetIsUndefined
 			? compileUndefined(fn, cursor)
 			: nextRegisterDestination(fn);
@@ -3386,6 +3474,43 @@ function buildStaticInitializer(
 		cursor.block = initFn.blocks.at(-1)!;
 	}
 
+	endFunction(initFn);
+	return initFn.functionIndex;
+}
+
+/** Build the caller-owned InitializeInstanceElements closure used by eval/arrow super(). */
+function buildInstanceInitializer(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	constructorContext: IRClassContext,
+): number {
+	const initFn: IRFunction = {
+		semanticFile: fn.semanticFile,
+		functionIndex: program.functions.length,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+		classContext: {
+			...constructorContext,
+			isConstructor: false,
+			isDerivedConstructor: false,
+			usesSharedSuperState: false,
+			superThisStateBinding: undefined,
+			superNewTargetBinding: undefined,
+			instanceInitializerBinding: undefined,
+		},
+		hasPrototype: false,
+		strict: true,
+		parameterCount: 0,
+		length: 0,
+		nextRegisterDestination: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	program.functions.push(initFn);
+
+	const block: IRBlock = { instructions: [] };
+	initFn.blocks.push(block);
+	emitInstanceElementInit(program, initFn, { block }, constructorContext);
 	endFunction(initFn);
 	return initFn.functionIndex;
 }
@@ -3587,6 +3712,20 @@ function compileClass(
 		(member): member is ESTree.MethodDefinition =>
 			member.type === "MethodDefinition" && member.kind === "constructor",
 	);
+	const constructorScope =
+		constructorNode?.value.type === "FunctionExpression"
+			? fn.semanticFile.nodeToScope.get(constructorNode.value)
+			: undefined;
+	const usesSharedSuperState = Boolean(
+		parent !== -1 &&
+		constructorNode &&
+		(fn.semanticFile.hasDirectEval.has(constructorNode.value) ||
+			constructorScope?.bindings.some((binding) => binding.implicit === "this")),
+	);
+	const instanceInitializerBinding =
+		usesSharedSuperState && (instanceBrandBinding || instanceFieldPlan.length > 0)
+			? createCapturedBinding(program, fn, `__instance_init_${classId}`)
+			: undefined;
 	// NamedEvaluation: anonymous class expressions take the binding name.
 	const className = classNode.id?.name ?? nameHint ?? "";
 	const constructorContext: IRClassContext = {
@@ -3595,6 +3734,8 @@ function compileClass(
 		isConstructor: true,
 		isDerivedConstructor: parent !== -1,
 		instanceFieldPlan,
+		usesSharedSuperState,
+		instanceInitializerBinding,
 	};
 	const constructorIndex =
 		constructorNode && constructorNode.value.type === "FunctionExpression"
@@ -3612,6 +3753,20 @@ function compileClass(
 					className,
 					constructorContext,
 				);
+	if (instanceInitializerBinding) {
+		const initializerIndex = buildInstanceInitializer(program, fn, constructorContext);
+		const initializer = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createFunction",
+			registers: [initializer],
+			functionIndex: initializerIndex,
+		});
+		storeRegisterAtLocation(
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, instanceInitializerBinding),
+			initializer,
+		);
+	}
 
 	const ctor = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
@@ -4149,6 +4304,76 @@ function endFunction(fn: IRFunction) {
 	}
 }
 
+function superThisStateKey(): string {
+	return "\0maligator.super.this";
+}
+
+function loadSharedSuperThis(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	checkInitialized: boolean,
+): number {
+	const binding = fn.classContext?.superThisStateBinding;
+	if (!binding) {
+		throw new Error("Missing shared super this binding");
+	}
+	const state = loadRegisterFromLocation(
+		fn,
+		cursor.block,
+		getOrCreateBindingLocation(program, fn, binding),
+	);
+	const key = compileStaticString(program, fn, cursor, superThisStateKey());
+	const value = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadProperty",
+		registers: [value, state, key],
+	});
+	if (checkInitialized) {
+		cursor.block.instructions.push({
+			type: "throwIfTdz",
+			registers: [value],
+			nameStringIndex: getOrCreateStringConstant(program, "this"),
+		});
+	}
+	return value;
+}
+
+function storeSharedSuperThis(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	value: number,
+): void {
+	const binding = fn.classContext?.superThisStateBinding;
+	if (!binding) {
+		throw new Error("Missing shared super this binding");
+	}
+	const state = loadRegisterFromLocation(
+		fn,
+		cursor.block,
+		getOrCreateBindingLocation(program, fn, binding),
+	);
+	const key = compileStaticString(program, fn, cursor, superThisStateKey());
+	cursor.block.instructions.push({
+		type: "storeProperty",
+		registers: [state, key, value],
+	});
+}
+
+function synchronizeSharedConstructorReturns(
+	program: IntermediateProgram,
+	fn: IRFunction,
+): void {
+	for (const block of fn.blocks) {
+		const returnInstruction = block.instructions.at(-1);
+		if (returnInstruction?.type !== "return") continue;
+		block.instructions.pop();
+		const value = loadSharedSuperThis(program, fn, { block }, false);
+		block.instructions.push({ type: "setThis", registers: [value] }, returnInstruction);
+	}
+}
+
 /**
  * A function's own strictness: its body scope's, which sema marks strict for a
  * `"use strict"` directive or by inheritance from strict surrounding code. A
@@ -4355,7 +4580,24 @@ function compileFunctionParams(
 	// nested arrow) is compiled — so the slot's owner is this function and the
 	// arrow's `loadCaptured` walks to it. (Arrows never own such a binding.)
 	const thisBinding = getLexicalThisBinding(fn, node);
-	if (thisBinding && thisBinding.scopedTo === "captured") {
+	const sharedThisBinding = fn.classContext?.isConstructor
+		? fn.classContext.superThisStateBinding
+		: undefined;
+	if (sharedThisBinding) {
+		const state = nextRegisterDestination(fn);
+		const empty = nextRegisterDestination(fn);
+		block.instructions.push(
+			{ type: "createObject", registers: [state] },
+			{ type: "createEmpty", registers: [empty] },
+		);
+		const key = compileStaticString(program, fn, cursor, superThisStateKey());
+		block.instructions.push({ type: "storeProperty", registers: [state, key, empty] });
+		storeRegisterAtLocation(
+			block,
+			getOrCreateBindingLocation(program, fn, sharedThisBinding),
+			state,
+		);
+	} else if (thisBinding && thisBinding.scopedTo === "captured") {
 		const location = getOrCreateBindingLocation(program, fn, thisBinding);
 		if (fn.classContext?.isConstructor && fn.classContext.isDerivedConstructor) {
 			// A derived constructor's `this` is uninitialized until super() (which
@@ -4378,7 +4620,10 @@ function compileFunctionParams(
 	// it into its captured slot at entry. new.target is fixed for the activation
 	// (set at [[Construct]], undefined otherwise), so the entry snapshot is valid
 	// even for a derived constructor.
-	const newTargetBinding = getLexicalNewTargetBinding(fn, node);
+	const newTargetBinding =
+		(fn.classContext?.isConstructor
+			? fn.classContext.superNewTargetBinding
+			: undefined) ?? getLexicalNewTargetBinding(fn, node);
 	if (newTargetBinding && newTargetBinding.scopedTo === "captured") {
 		const newTargetRegister = nextRegisterDestination(fn);
 		block.instructions.push({ type: "loadNewTarget", registers: [newTargetRegister] });
@@ -8420,6 +8665,9 @@ function compileExpression(
 			return compileIdentifier(program, fn, cursor, expression);
 		}
 		case "ThisExpression": {
+			if (fn.classContext?.superThisStateBinding) {
+				return loadSharedSuperThis(program, fn, cursor, true);
+			}
 			// An arrow inherits `this` lexically: semantic analysis bound this node to
 			// an implicit `this` binding on the enclosing non-arrow function, captured
 			// through the closure env. Read it like any captured binding. (Unbound
@@ -8466,6 +8714,13 @@ function compileExpression(
 			return destination;
 		}
 		case "MetaProperty": {
+			if (fn.classContext?.superNewTargetBinding && !fn.inFieldInitializer) {
+				return loadRegisterFromLocation(
+					fn,
+					cursor.block,
+					getOrCreateBindingLocation(program, fn, fn.classContext.superNewTargetBinding),
+				);
+			}
 			// new.target: the active frame's new.target. import.meta is gated by
 			// the syntax scan and never reaches here. An arrow inherits new.target
 			// lexically — sema bound it to an implicit "new.target" binding on the
@@ -10649,7 +10904,9 @@ function compileMemberObjectAndKey(
 		// computed key. Keep it in the reference so reads and later writes use the
 		// same receiver even if evaluation invokes arbitrary code.
 		const lexicalThisBinding = fn.semanticFile.nodeToBinding.get(memberExpression.object);
-		if (lexicalThisBinding?.implicit === "this") {
+		if (fn.classContext?.superThisStateBinding) {
+			receiver = loadSharedSuperThis(program, fn, cursor, true);
+		} else if (lexicalThisBinding?.implicit === "this") {
 			receiver = loadRegisterFromLocation(
 				fn,
 				cursor.block,
@@ -10886,6 +11143,12 @@ function inheritedContextForDirectEval(
 		classContext?.classBinding ||
 		classContext?.superBinding,
 	);
+	const allowSuperCall = Boolean(
+		!fn.inFieldInitializer &&
+		classContext?.superBinding &&
+		classContext.superThisStateBinding &&
+		classContext.superNewTargetBinding,
+	);
 	const privateNames: Array<DirectEvalPrivateNameContext> = [];
 	for (const [name, entry] of classContext?.privateNames ?? []) {
 		let flags = entry.static ? DIRECT_EVAL_PRIVATE_STATIC : 0;
@@ -10918,7 +11181,13 @@ function inheritedContextForDirectEval(
 		allowNewTarget = unit !== null && unit !== undefined;
 	}
 
-	return { allowSuperProperty, allowNewTarget, privateNames };
+	return {
+		allowSuperProperty,
+		allowSuperCall,
+		hasInstanceInitializer: Boolean(classContext?.instanceInitializerBinding),
+		allowNewTarget,
+		privateNames,
+	};
 }
 
 function storeDirectEvalScopeValue(
@@ -10974,6 +11243,26 @@ function marshalDirectEvalInheritedContext(
 				scopeObject,
 				directEvalHomeScopeKey(),
 				home,
+			);
+		}
+	}
+	if (context.allowSuperCall) {
+		const classContext = fn.classContext;
+		const inheritedValues: Array<[string, Binding | undefined]> = [
+			[directEvalSuperConstructorScopeKey(), classContext?.superBinding],
+			[directEvalSuperThisStateScopeKey(), classContext?.superThisStateBinding],
+			[directEvalSuperNewTargetScopeKey(), classContext?.superNewTargetBinding],
+			[directEvalInstanceInitializerScopeKey(), classContext?.instanceInitializerBinding],
+		];
+		for (const [key, binding] of inheritedValues) {
+			if (!binding) continue;
+			storeDirectEvalScopeValue(
+				program,
+				fn,
+				cursor,
+				scopeObject,
+				key,
+				loadCapturedBinding(program, fn, cursor, binding),
 			);
 		}
 	}
@@ -11112,7 +11401,9 @@ function compileDirectEval(
 	// function it is the frame's `this`.
 	let callerThis: number;
 	const lexicalThisBinding = fn.semanticFile.directEvalThisBindings.get(callExpression);
-	if (lexicalThisBinding) {
+	if (fn.classContext?.superThisStateBinding) {
+		callerThis = loadSharedSuperThis(program, fn, cursor, false);
+	} else if (lexicalThisBinding) {
 		callerThis = loadRegisterFromLocation(
 			fn,
 			cursor.block,
@@ -11151,7 +11442,13 @@ function compileDirectEval(
 	let callerNewTarget: number;
 	const lexicalNewTargetBinding =
 		fn.semanticFile.directEvalNewTargetBindings.get(callExpression);
-	if (lexicalNewTargetBinding) {
+	if (fn.classContext?.superNewTargetBinding) {
+		callerNewTarget = loadRegisterFromLocation(
+			fn,
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, fn.classContext.superNewTargetBinding),
+		);
+	} else if (lexicalNewTargetBinding) {
 		callerNewTarget = loadRegisterFromLocation(
 			fn,
 			cursor.block,
@@ -11463,11 +11760,7 @@ function compileCall(
 	return destination;
 }
 
-/**
- * Compile super(...) as a plain call of the captured parent constructor on
- * the current this. The spec's this-substitution for object returns from the
- * parent is approximated away.
- */
+/** Compile SuperCall with the active derived-constructor environment. */
 function compileSuperCall(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -11493,6 +11786,41 @@ function compileSuperCall(
 		callExpression.arguments,
 	);
 	const destination = nextRegisterDestination(fn);
+	if (fn.classContext?.superThisStateBinding && fn.classContext.superNewTargetBinding) {
+		const newTarget = loadRegisterFromLocation(
+			fn,
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, fn.classContext.superNewTargetBinding),
+		);
+		const currentThis = loadSharedSuperThis(program, fn, cursor, false);
+		cursor.block.instructions.push({
+			type: "move",
+			registers: [destination, currentThis],
+		});
+		cursor.block.instructions.push({
+			type: "constructSuperExplicit",
+			registers: [destination, parent, argumentsArray, newTarget, destination],
+		});
+		storeSharedSuperThis(program, fn, cursor, destination);
+
+		if (fn.classContext.instanceInitializerBinding) {
+			const initializer = loadRegisterFromLocation(
+				fn,
+				cursor.block,
+				getOrCreateBindingLocation(
+					program,
+					fn,
+					fn.classContext.instanceInitializerBinding,
+				),
+			);
+			const ignored = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "call",
+				registers: [ignored, initializer, destination],
+			});
+		}
+		return destination;
+	}
 	cursor.block.instructions.push({
 		type: "constructSuper",
 		registers: [destination, parent, argumentsArray],

@@ -689,6 +689,17 @@ export type VmInstruction =
 			argumentsArray: number;
 	  }
 	| {
+			opcode: "CONSTRUCT_SUPER_EXPLICIT";
+			dst: number;
+			parent: number;
+			argumentsArray: number;
+			newTarget: number;
+	  }
+	| {
+			opcode: "SET_THIS";
+			value: number;
+	  }
+	| {
 			opcode: "MERGE_DATA_PROPERTIES";
 			target: number;
 			src: number;
@@ -1632,6 +1643,16 @@ function lowerInstructionToVmInstruction(
 				parent: instruction.registers[1],
 				argumentsArray: instruction.registers[2],
 			};
+		case "constructSuperExplicit":
+			return {
+				opcode: "CONSTRUCT_SUPER_EXPLICIT",
+				dst: instruction.registers[0],
+				parent: instruction.registers[1],
+				argumentsArray: instruction.registers[2],
+				newTarget: instruction.registers[3],
+			};
+		case "setThis":
+			return { opcode: "SET_THIS", value: instruction.registers[0] };
 		case "mergeDataProperties":
 			return {
 				opcode: "MERGE_DATA_PROPERTIES",

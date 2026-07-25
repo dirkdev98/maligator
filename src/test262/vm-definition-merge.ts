@@ -145,6 +145,8 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "CALL_SPREAD":
 		case "CONSTRUCT_SPREAD":
 		case "CONSTRUCT_SUPER":
+		case "CONSTRUCT_SUPER_EXPLICIT":
+		case "SET_THIS":
 		case "THROW":
 		case "CATCH":
 		case "TRY_BEGIN":

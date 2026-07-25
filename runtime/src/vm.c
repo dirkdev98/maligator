@@ -1874,6 +1874,13 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_construct_super(frame, instruction));
                 break;
             }
+            case MAL_OP_CONSTRUCT_SUPER_EXPLICIT: {
+                MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_construct_super_explicit(frame, instruction));
+                break;
+            }
+            case MAL_OP_SET_THIS:
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_set_this(frame, instruction));
+                break;
             case MAL_OP_STORE_SUPER_PROPERTY:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_store_super_property(frame, instruction));
                 break;

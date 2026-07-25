@@ -78,6 +78,14 @@ const instructions: Array<VmInstruction> = [
 	},
 	{ opcode: "CREATE_PRIVATE_NAMES", ownerFunctionIndex: 0, capturedIndices: [0, 2] },
 	{ opcode: "INIT_PRIVATE_FIELDS", object: 10, keyRegisters: [3, 7] },
+	{
+		opcode: "CONSTRUCT_SUPER_EXPLICIT",
+		dst: 11,
+		parent: 5,
+		argumentsArray: 12,
+		newTarget: 6,
+	},
+	{ opcode: "SET_THIS", value: 11 },
 	{ opcode: "RETURN", value: 11 },
 ];
 
@@ -176,12 +184,14 @@ describe("serialize-vm", () => {
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-5)).toEqual([
+		expect(WIRE_OPCODES.slice(-7)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
 			"TYPEOF_COMPARE",
 			"TERMINAL_YIELD",
+			"CONSTRUCT_SUPER_EXPLICIT",
+			"SET_THIS",
 		]);
 	});
 

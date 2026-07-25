@@ -70,6 +70,7 @@ const GC_FREE_INSTRUCTION_TYPES = new Set<IRInstruction["type"]>([
 	"storeGlobal",
 	"loadNewTarget",
 	"loadIntrinsic",
+	"setThis",
 ]);
 
 /** Whether GC can run at this instruction (so live values must be rooted). */

@@ -175,7 +175,7 @@ test/language/statements/for-await-of/iterator-close-non-throw-get-method-abrupt
 test/language/statements/for-await-of/iterator-close-non-throw-get-method-non-callable.js
 test/language/statements/for-of/dstr/array-elem-trlg-iter-rest-rtrn-close-err.js
 
-# Binding, coercion, and eval environments (42)
+# Binding, coercion, and eval environments (44)
 test/built-ins/JSON/stringify/replacer-function-object-deleted-property.js
 test/built-ins/Object/create/properties-arg-to-object-bigint.js
 test/built-ins/eval/no-construct.js
@@ -190,6 +190,7 @@ test/language/eval-code/direct/new.target-fn.js
 test/language/eval-code/direct/super-prop-method.js
 test/language/eval-code/direct/var-env-func-init-multi.js
 test/language/export/escaped-default.js
+test/language/expressions/arrow-function/lexical-super-call-from-within-constructor.js
 test/language/expressions/assignment/assignment-operator-calls-putvalue-lref--rval-.js
 test/language/expressions/assignment/dstr/array-elem-put-let.js
 test/language/expressions/assignment/dstr/obj-prop-put-let.js
@@ -218,6 +219,7 @@ test/language/statements/for-in/head-const-bound-names-fordecl-tdz.js
 test/language/statements/for-of/cptn-expr-no-itr.js
 test/language/statements/for-of/dstr/obj-prop-put-let.js
 test/language/statements/let/block-local-closure-set-before-initialization.js
+test/staging/sm/class/derivedConstructorArrowEvalSuperCall.js
 
 # Object, proxy, and coercion internals (22)
 test/built-ins/Object/create/properties-arg-to-object.js

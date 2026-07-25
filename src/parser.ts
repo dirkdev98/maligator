@@ -70,7 +70,23 @@ function contextualEvalProgram(
 	let prefix: string;
 	let suffix: string;
 	let extractBody: (program: ESTree.Program) => Array<ESTree.Statement>;
-	if (context.privateNames.length > 0) {
+	if (context.allowSuperCall) {
+		const declarations = context.privateNames.map((entry) => `${entry.name};`).join("");
+		prefix = `class __MaligatorEvalContext extends Object {${declarations} constructor() {\n`;
+		suffix = "\n} }";
+		extractBody = (program) => {
+			const declaration = program.body[0];
+			if (declaration?.type !== "ClassDeclaration")
+				throw new SyntaxError("Invalid eval wrapper");
+			const method = declaration.body.body.at(-1);
+			const methodBody =
+				method?.type === "MethodDefinition" ? method.value.body : undefined;
+			if (methodBody?.type !== "BlockStatement") {
+				throw new SyntaxError("Invalid eval wrapper");
+			}
+			return methodBody.body;
+		};
+	} else if (context.privateNames.length > 0) {
 		const declarations = context.privateNames.map((entry) => `${entry.name};`).join("");
 		prefix = `class __MaligatorEvalContext {${declarations} __eval__() {\n`;
 		suffix = "\n} }";
@@ -163,6 +179,7 @@ export function parseScript(
 	const contextual =
 		directEvalContext &&
 		(directEvalContext.allowSuperProperty ||
+			directEvalContext.allowSuperCall ||
 			directEvalContext.allowNewTarget ||
 			directEvalContext.privateNames.length > 0);
 	return {

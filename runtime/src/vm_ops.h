@@ -234,6 +234,10 @@ void mal_op_construct_spread(MalCallable *callable, const MalInstruction *instru
  */
 void mal_op_construct_super(MalCallable *callable, const MalInstruction *instruction);
 
+void mal_op_construct_super_explicit(MalCallable *callable, const MalInstruction *instruction);
+
+void mal_op_set_this(MalCallable *callable, const MalInstruction *instruction);
+
 void mal_op_throw(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_catch(MalCallable *callable, const MalInstruction *instruction);

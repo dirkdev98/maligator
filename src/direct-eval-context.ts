@@ -11,6 +11,8 @@ export interface DirectEvalPrivateNameContext {
 
 export interface DirectEvalContext {
 	allowSuperProperty: boolean;
+	allowSuperCall: boolean;
+	hasInstanceInitializer: boolean;
 	allowNewTarget: boolean;
 	privateNames: Array<DirectEvalPrivateNameContext>;
 }
@@ -20,7 +22,11 @@ export type DirectEvalPrivateSlot = "brand" | "field" | "method" | "get" | "set"
 const DIRECT_EVAL_CONTEXT_SEPARATOR = "\0";
 
 export function encodeDirectEvalContext(context: DirectEvalContext): string {
-	const flags = (context.allowSuperProperty ? 1 : 0) | (context.allowNewTarget ? 2 : 0);
+	const flags =
+		(context.allowSuperProperty ? 1 : 0) |
+		(context.allowNewTarget ? 2 : 0) |
+		(context.allowSuperCall ? 4 : 0) |
+		(context.hasInstanceInitializer ? 8 : 0);
 	return [
 		String(flags),
 		...context.privateNames.map((entry) => `${entry.flags}:${entry.name}`),
@@ -45,6 +51,8 @@ export function decodeDirectEvalContext(encoded: string | undefined): DirectEval
 	return {
 		allowSuperProperty: (flags & 1) !== 0,
 		allowNewTarget: (flags & 2) !== 0,
+		allowSuperCall: (flags & 4) !== 0,
+		hasInstanceInitializer: (flags & 8) !== 0,
 		privateNames,
 	};
 }
@@ -59,6 +67,22 @@ export function directEvalScopeObjectKey(): string {
 
 export function directEvalDirtyTrackerKey(): string {
 	return "\0maligator.eval.dirty";
+}
+
+export function directEvalSuperConstructorScopeKey(): string {
+	return "\0maligator.eval.super.constructor";
+}
+
+export function directEvalSuperThisStateScopeKey(): string {
+	return "\0maligator.eval.super.this";
+}
+
+export function directEvalSuperNewTargetScopeKey(): string {
+	return "\0maligator.eval.super.newTarget";
+}
+
+export function directEvalInstanceInitializerScopeKey(): string {
+	return "\0maligator.eval.super.initialize";
 }
 
 export function directEvalPrivateScopeKey(

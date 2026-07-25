@@ -490,7 +490,8 @@ function structuralEffects(fn: IRFunction): {
 				type === "callSpread" ||
 				type === "construct" ||
 				type === "constructSpread" ||
-				type === "constructSuper"
+				type === "constructSuper" ||
+				type === "constructSuperExplicit"
 			) {
 				mayGC = true;
 				mayThrow = true;
