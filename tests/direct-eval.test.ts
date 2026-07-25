@@ -121,3 +121,46 @@ test("direct eval is a conservative use of lexical arguments through an arrow", 
 	expect(binding?.scopedTo).toBe("captured");
 	expect(binding?.usageNodes).toContain(evalCall);
 });
+
+test("contextual eval parsing inherits super, new.target, and private names", () => {
+	const context = {
+		allowSuperProperty: true,
+		allowNewTarget: true,
+		privateNames: [{ name: "#value", flags: 2 }],
+	};
+	expect(() =>
+		parseScript("super.value; new.target; this.#value;", {
+			strict: true,
+			directEvalContext: context,
+		}),
+	).not.toThrow();
+	expect(() =>
+		parseScript("return 1;", { strict: true, directEvalContext: context }),
+	).toThrow(SyntaxError);
+});
+
+test("direct eval conservatively captures every visible lexical environment", () => {
+	const file = analyze(`
+		function outer() {
+			let outerValue = 1;
+			return function inner() { return eval("outerValue"); };
+		}
+	`);
+	const evalCall = file.scopes
+		.flatMap((scope) => scope.bindings)
+		.find((binding) => binding.name === "outerValue")!;
+	const call = findNode(file.ast, "CallExpression")!;
+	expect(evalCall.scopedTo).toBe("captured");
+	expect(evalCall.usageNodes).toContain(call);
+});
+
+test("direct eval in an arrow captures lexical this and new.target", () => {
+	const file = analyze(`
+		function C() {
+			return () => eval("[this, new.target]");
+		}
+	`);
+	const call = findNode(file.ast, "CallExpression") as ESTree.CallExpression;
+	expect(file.directEvalThisBindings.get(call)?.scopedTo).toBe("captured");
+	expect(file.directEvalNewTargetBindings.get(call)?.scopedTo).toBe("captured");
+});

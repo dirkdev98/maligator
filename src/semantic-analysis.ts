@@ -1,4 +1,5 @@
 import type { ESTree } from "meriyah";
+import type { DirectEvalContext } from "./direct-eval-context.ts";
 import { forEachEstreeChild, traverseEstree } from "./estree-traversal.ts";
 // Type-only: ts-blank-space strips this, so the module-graph (and its
 // ts-blank-space → typescript chain) is NOT pulled into the self-hostable
@@ -69,6 +70,11 @@ export interface SemanticFile {
 	 * locals and is deliberately NOT flagged. Query via `functionHasDirectEval`.
 	 */
 	hasDirectEval: Set<ESTree.Node>;
+	/** This/new.target bindings conservatively captured for direct eval in arrows. */
+	directEvalThisBindings: Map<ESTree.CallExpression, Binding>;
+	directEvalNewTargetBindings: Map<ESTree.CallExpression, Binding>;
+	/** The Program is a direct-eval entry and inherits caller frame context. */
+	evalDirect?: boolean;
 }
 
 export type StaticArgumentsAccess =
@@ -181,7 +187,13 @@ export function analyzeSourceAndRunSemanticAnalysis(
 	contents: string,
 	virtualPath: string,
 	parsed?: Pick<SemanticFile, "type" | "strict" | "ast">,
-	options: { eval?: { callerStrict: boolean } } = {},
+	options: {
+		eval?: {
+			callerStrict: boolean;
+			direct?: boolean;
+			directEvalContext?: DirectEvalContext;
+		};
+	} = {},
 ): SemanticProgram {
 	const program: SemanticProgram = {
 		entrypointPath: virtualPath,
@@ -200,7 +212,10 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		parseResult = parsed;
 	} else if (options.eval) {
 		const strict = options.eval.callerStrict;
-		const result = parseScript(contents, { strict });
+		const result = parseScript(contents, {
+			strict,
+			directEvalContext: options.eval.directEvalContext,
+		});
 		parseResult =
 			!strict && hasUseStrictDirective(result.ast) ? { ...result, strict: true } : result;
 	} else {
@@ -218,6 +233,9 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		withDynamicNodes: new Set(),
 		staticArgumentsAccesses: new Map(),
 		hasDirectEval: new Set(),
+		directEvalThisBindings: new Map(),
+		directEvalNewTargetBindings: new Map(),
+		evalDirect: options.eval?.direct,
 	};
 
 	program.files.push(file);
@@ -317,16 +335,80 @@ function detectDirectEval(node: ESTree.CallExpression, file: SemanticFile): bool
 		argumentsBinding.usageNodes.push(node);
 		file.nodeToBinding.set(node, argumentsBinding);
 	}
+	const lexicalOwner = resolveDirectEvalLexicalOwner(
+		file.nodeToScope.get(node),
+		file.evalDirect ?? false,
+	);
+	if (lexicalOwner) {
+		const thisBinding = ensureImplicitBinding(lexicalOwner, "this", node);
+		const newTargetBinding = ensureImplicitBinding(lexicalOwner, "new.target", node);
+		file.directEvalThisBindings.set(node, thisBinding);
+		file.directEvalNewTargetBindings.set(node, newTargetBinding);
+	}
 	// Mark this call's enclosing function and every function above it: a
-	// nested direct eval can still address an outer function's locals.
+	// nested direct eval can still address an outer function's locals. Record a
+	// conservative use of every visible binding for the same reason, so bindings
+	// across a function boundary are captured and can be marshaled to eval.
+	const visibleNames = new Set<string>();
 	let scope: Scope | null | undefined = file.nodeToScope.get(node);
 	while (scope) {
+		for (const binding of scope.bindings) {
+			if (visibleNames.has(binding.name)) continue;
+			visibleNames.add(binding.name);
+			if (
+				!binding.undeclared &&
+				!binding.implicit &&
+				!binding.usageNodes.includes(node)
+			) {
+				binding.usageNodes.push(node);
+			}
+		}
 		if (FUNCTION_UNIT_NODE_TYPES.has(scope.node.type)) {
 			file.hasDirectEval.add(scope.node);
 		}
 		scope = scope.parent;
 	}
 	return argumentsBinding?.implicit === "arguments";
+}
+
+function ensureImplicitBinding(
+	owner: Scope,
+	implicit: "this" | "new.target",
+	usage: ESTree.Node,
+): Binding {
+	let binding = owner.bindings.find((candidate) => candidate.implicit === implicit);
+	if (!binding) {
+		binding = {
+			kind: "const",
+			name: implicit,
+			implicit,
+			declarationNode: owner.node,
+			usageNodes: [],
+		};
+		owner.bindings.push(binding);
+	}
+	binding.usageNodes.push(usage);
+	return binding;
+}
+
+function resolveDirectEvalLexicalOwner(
+	scope: Scope | undefined,
+	allowProgram: boolean,
+): Scope | null {
+	const providesContext = (node: ESTree.Node) => FUNCTION_UNIT_NODE_TYPES.has(node.type);
+	let current: Scope | null | undefined = scope;
+	while (current && !providesContext(current.node)) current = current.parent;
+	if (current?.node.type !== "ArrowFunctionExpression") return null;
+
+	let owner = current.parent;
+	while (
+		owner &&
+		(owner.node.type === "ArrowFunctionExpression" || !providesContext(owner.node))
+	) {
+		owner = owner.parent;
+	}
+	if (!owner || (owner.node.type === "Program" && !allowProgram)) return null;
+	return owner;
 }
 
 /** Resolve the `arguments` binding visible at a direct-eval call site. */
@@ -1191,7 +1273,7 @@ function registerBindingUsage(
 		}
 	}
 
-	if (node.type === "ThisExpression") {
+	if (node.type === "ThisExpression" || node.type === "Super") {
 		// Arrow functions inherit `this` lexically — they have no own `this`
 		// binding. When a `this` is lexically inside an arrow, resolve it to an
 		// implicit `this` binding on the nearest enclosing non-arrow `this`-provider
@@ -1200,20 +1282,9 @@ function registerBindingUsage(
 		// directly in a non-arrow function — or whose owner is the program scope
 		// (top-level `this` is globalThis/undefined, handled in IR) — keeps its
 		// own-frame `loadThis` path and is left unbound here.
-		const owner = resolveLexicalThisOwner(scope);
+		const owner = resolveLexicalThisOwner(scope, file.evalDirect ?? false);
 		if (owner) {
-			let binding = owner.bindings.find((b) => b.implicit === "this");
-			if (!binding) {
-				binding = {
-					kind: "const",
-					name: "this",
-					implicit: "this",
-					declarationNode: owner.node,
-					usageNodes: [],
-				};
-				owner.bindings.push(binding);
-			}
-			binding.usageNodes.push(node);
+			const binding = ensureImplicitBinding(owner, "this", node);
 			file.nodeToBinding.set(node, binding);
 		}
 	}
@@ -1227,20 +1298,9 @@ function registerBindingUsage(
 		node.meta?.name === "new" &&
 		node.property?.name === "target"
 	) {
-		const owner = resolveLexicalThisOwner(scope);
+		const owner = resolveLexicalThisOwner(scope, file.evalDirect ?? false);
 		if (owner) {
-			let binding = owner.bindings.find((b) => b.implicit === "new.target");
-			if (!binding) {
-				binding = {
-					kind: "const",
-					name: "new.target",
-					implicit: "new.target",
-					declarationNode: owner.node,
-					usageNodes: [],
-				};
-				owner.bindings.push(binding);
-			}
-			binding.usageNodes.push(node);
+			const binding = ensureImplicitBinding(owner, "new.target", node);
 			file.nodeToBinding.set(node, binding);
 		}
 	}
@@ -1256,7 +1316,7 @@ function registerBindingUsage(
  * non-arrow provider; a program-scope owner returns null (top-level `this` is not
  * captured — IR resolves it directly).
  */
-function resolveLexicalThisOwner(scope: Scope): Scope | null {
+function resolveLexicalThisOwner(scope: Scope, allowProgram = false): Scope | null {
 	const providesThis = (type: string) =>
 		type === "ArrowFunctionExpression" ||
 		type === "FunctionDeclaration" ||
@@ -1282,18 +1342,7 @@ function resolveLexicalThisOwner(scope: Scope): Scope | null {
 	) {
 		owner = owner.parent;
 	}
-	if (
-		!owner ||
-		owner.node.type === "Program" ||
-		// A class field initializer / static block runs inside the constructor or
-		// static initializer (it has no own prologue to snapshot `this` into), so
-		// capturing its `this` lexically for a nested arrow is not handled yet.
-		// Such arrows keep the own-frame loadThis path — correct when invoked with
-		// the field's `this` as receiver (e.g. `C.f()`); a follow-up will snapshot
-		// `this` in the initializer so detached calls also see the lexical `this`.
-		owner.node.type === "PropertyDefinition" ||
-		owner.node.type === "StaticBlock"
-	) {
+	if (!owner || (owner.node.type === "Program" && !allowProgram)) {
 		return null;
 	}
 	return owner;
@@ -1329,12 +1378,17 @@ function calculateBindingScopedTo(file: SemanticFile) {
 	};
 
 	const calculateScopedTo = (
+		binding: Binding,
 		declarationScope: Scope,
 		usageScopes: Array<Scope>,
 	): Binding["scopedTo"] => {
 		// A CommonJS module's program scope is its wrapper function's scope, so
 		// top-level bindings are wrapper locals/captures rather than globals.
-		if (declarationScope.node.type === "Program" && !file.commonjs) {
+		if (
+			declarationScope.node.type === "Program" &&
+			!file.commonjs &&
+			!(file.evalDirect && binding.implicit)
+		) {
 			return "global";
 		}
 
@@ -1350,7 +1404,7 @@ function calculateBindingScopedTo(file: SemanticFile) {
 	for (const scope of file.scopes) {
 		for (const binding of scope.bindings) {
 			const usageScopes = binding.usageNodes.map((node) => file.nodeToScope.get(node)!);
-			binding.scopedTo = calculateScopedTo(scope, usageScopes);
+			binding.scopedTo = calculateScopedTo(binding, scope, usageScopes);
 		}
 	}
 }

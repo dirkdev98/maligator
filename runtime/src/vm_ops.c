@@ -1032,6 +1032,13 @@ void mal_op_with_resolve_base(MalCallable *callable, const MalInstruction *instr
 // Shared: assign to a name found on a with-object environment record. Returns
 // whether a binding was found (a miss lets the caller fall back to the static
 // binding). `with` is sloppy-only, so a rejected set silently no-ops.
+//
+// Direct eval's marshaled scope carries a second env slot: a dirty tracker,
+// keyed the same as the scope object, that records real Set evidence for its
+// caller's writeback (rather than the caller inferring "was this assigned"
+// from value equality, which is wrong for NaN and for a same-value Set through
+// an accessor). Ordinary `with` env records have slot_count 1, so this is a
+// no-op for them.
 bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue value) {
     MalValue name = mal_value_from_string(&vm->definition->string_constants[name_string_index]);
     MalKey key;
@@ -1043,6 +1050,10 @@ bool mal_vm_op_with_set(MalVm *vm, MalEnv *env, i32 name_string_index, MalValue 
             MalValue object = e->slots[0];
             if (mal_vm_with_has_binding(vm, object, key)) {
                 mal_vm_set_property(vm, object, key, value, object);
+                if (e->slot_count > 1 && mal_value_is_object(e->slots[1])) {
+                    mal_vm_set_property(
+                        vm, e->slots[1], key, mal_value_new_boolean(true), e->slots[1]);
+                }
                 return true;
             }
         }

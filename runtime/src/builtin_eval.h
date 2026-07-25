@@ -54,10 +54,15 @@ MalCompletion mal_shadow_realm_eval_script(MalVm *vm, MalRealm *caller_realm,
  * scope, then run it with `scope_object` (the caller's marshaled bindings)
  * injected as a with-scope. On a parse/compile/runtime throw, sets vm->completion
  * and returns undefined.
+ *
+ * `dirty_tracker` is a plain object, keyed the same as `scope_object`, that
+ * mal_vm_op_with_set marks (own property = true) only for names actually Set
+ * during this eval — the caller's writeback evidence. Pass undefined to disable.
  */
 MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, bool caller_strict,
-                            bool in_param_expr, bool in_field_initializer, MalValue caller_this,
-                            MalValue caller_new_target);
+                             bool in_param_expr, bool in_field_initializer, MalValue caller_this,
+                             MalValue caller_new_target, MalValue direct_eval_context,
+                             MalValue dirty_tracker);
 
 /**
  * Which dynamic-function constructor is assembling source — selects the wrapper

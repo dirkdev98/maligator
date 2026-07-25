@@ -1,4 +1,5 @@
 import { compileSemanticProgramToVmDefinition } from "./compile-core.ts";
+import { decodeDirectEvalContext } from "./direct-eval-context.ts";
 import { referencesArguments } from "./ir.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "./semantic-analysis.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
@@ -55,13 +56,22 @@ export function compileSourceToBuffer(
 		 * non-arrow function) is a SyntaxError (ContainsArguments early error).
 		 */
 		inFieldInitializer?: boolean;
+		/** Encoded inherited method/private syntax and identity shape for direct eval. */
+		directEvalContext?: string;
 	} = {},
 ): Uint8Array {
+	const directEvalContext = decodeDirectEvalContext(options.directEvalContext);
 	const semantic = analyzeSourceAndRunSemanticAnalysis(
 		source,
 		options.virtualPath ?? "eval",
 		undefined,
-		{ eval: { callerStrict: options.callerStrict ?? false } },
+		{
+			eval: {
+				callerStrict: options.callerStrict ?? false,
+				direct: options.direct ?? false,
+				directEvalContext,
+			},
+		},
 	);
 	if (options.inParamExpr && declaresArguments(semantic)) {
 		throw new SyntaxError(
@@ -75,6 +85,7 @@ export function compileSourceToBuffer(
 		ir: {
 			evalCompletion: options.completionValue,
 			evalDirect: options.direct,
+			directEvalContext,
 		},
 	});
 	return serializeVmDefinition(definition, { debugInfo: options.debugInfo });

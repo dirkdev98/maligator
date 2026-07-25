@@ -1,5 +1,22 @@
 import type { ESTree } from "meriyah";
 import { isPureDataCjsModule } from "./cjs-exports.ts";
+import {
+	DIRECT_EVAL_PRIVATE_FIELD,
+	DIRECT_EVAL_PRIVATE_GETTER,
+	DIRECT_EVAL_PRIVATE_METHOD,
+	DIRECT_EVAL_PRIVATE_SETTER,
+	DIRECT_EVAL_PRIVATE_STATIC,
+	directEvalDirtyTrackerKey,
+	directEvalHomeScopeKey,
+	directEvalPrivateScopeKey,
+	directEvalScopeObjectKey,
+	encodeDirectEvalContext,
+} from "./direct-eval-context.ts";
+import type {
+	DirectEvalContext,
+	DirectEvalPrivateNameContext,
+	DirectEvalPrivateSlot,
+} from "./direct-eval-context.ts";
 import { ESTREE_SKIP, ESTREE_STOP, traverseEstree } from "./estree-traversal.ts";
 import { linkModules } from "./linker.ts";
 import { COMMONJS_BINDINGS } from "./semantic-analysis.ts";
@@ -34,6 +51,11 @@ export interface IntermediateProgram {
 	 * indirect eval and ordinary programs.
 	 */
 	evalDirect: boolean;
+	/** Inherited syntax/private shape for a dynamically compiled direct eval. */
+	directEvalContext: DirectEvalContext;
+	/** Internal values captured by a direct-eval entry for precise writeback. */
+	directEvalScopeObjectBinding?: Binding;
+	directEvalDirtyTrackerBinding?: Binding;
 
 	/**
 	 * The functions that we have compiled.
@@ -269,8 +291,14 @@ type IRInstanceFieldPlanEntry =
 			fieldBinding: Binding;
 			valueNode: ESTree.Expression | null;
 			nameHint: string;
+			initializerNode: ESTree.PropertyDefinition;
 	  }
-	| { private: false; key: IRInstanceFieldKey; valueNode: ESTree.Expression | null };
+	| {
+			private: false;
+			key: IRInstanceFieldKey;
+			valueNode: ESTree.Expression | null;
+			initializerNode: ESTree.PropertyDefinition;
+	  };
 
 /**
  * A static class element in source order, run once by the static initializer
@@ -278,7 +306,7 @@ type IRInstanceFieldPlanEntry =
  */
 type IRStaticElement =
 	| { kind: "field"; entry: IRInstanceFieldPlanEntry }
-	| { kind: "block"; body: Array<ESTree.Statement> };
+	| { kind: "block"; node: ESTree.StaticBlock; body: Array<ESTree.Statement> };
 
 /**
  * Class body context carried by constructor and method functions so super
@@ -1569,13 +1597,22 @@ export function debugIntermediateProgram(program: IntermediateProgram) {
  */
 export function compileSemanticProgramToIr(
 	semantic: SemanticProgram,
-	options: { evalCompletion?: boolean; evalDirect?: boolean } = {},
+	options: {
+		evalCompletion?: boolean;
+		evalDirect?: boolean;
+		directEvalContext?: DirectEvalContext;
+	} = {},
 ) {
 	const program: IntermediateProgram = {
 		semantic,
 
 		evalCompletion: options.evalCompletion ?? false,
 		evalDirect: options.evalDirect ?? false,
+		directEvalContext: options.directEvalContext ?? {
+			allowSuperProperty: false,
+			allowNewTarget: false,
+			privateNames: [],
+		},
 
 		functions: [],
 		stringConstants: [],
@@ -1820,6 +1857,9 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 	};
 
 	program.functions.push(fn);
+	const inheritedContextBindings = program.evalDirect
+		? prepareDirectEvalClassContext(program, fn)
+		: [];
 
 	// Eval entry: reserve the completion register up front so body
 	// ExpressionStatements can move into it; endFunction returns it.
@@ -1829,10 +1869,22 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 
 	// A prologue block (TDZ inits + namespace objects) only when needed, so a
 	// module with only var/function top-levels compiles exactly as before.
-	if (moduleNeedsPrologue(program, initFile)) {
+	if (moduleNeedsPrologue(program, initFile) || program.evalDirect) {
 		const prologue: IRBlock = { instructions: [] };
 		fn.blocks.push(prologue);
-		emitModulePrologue(program, fn, prologue, initFile);
+		if (moduleNeedsPrologue(program, initFile)) {
+			emitModulePrologue(program, fn, prologue, initFile);
+		}
+		if (program.evalDirect) {
+			const prologueCursor = { block: prologue };
+			emitDirectEvalContextBindings(
+				program,
+				fn,
+				prologueCursor,
+				inheritedContextBindings,
+			);
+			emitLexicalProviderCaptures(program, fn, prologueCursor, initFile.ast, false);
+		}
 		const bodyEntry = compileStatementsToBlock(program, fn, initFile.ast.body, true);
 		prologue.instructions.push({ type: "jump", blocks: [bodyEntry] });
 	} else {
@@ -1853,6 +1905,96 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 	endFunction(fn);
 
 	return fn.functionIndex;
+}
+
+interface DirectEvalContextBinding {
+	key: string;
+	binding: Binding;
+}
+
+function prepareDirectEvalClassContext(
+	program: IntermediateProgram,
+	fn: IRFunction,
+): Array<DirectEvalContextBinding> {
+	const inherited = program.directEvalContext;
+	const bindings: Array<DirectEvalContextBinding> = [];
+	program.directEvalScopeObjectBinding = createCapturedBinding(
+		program,
+		fn,
+		"__eval_scope",
+	);
+	program.directEvalDirtyTrackerBinding = createCapturedBinding(
+		program,
+		fn,
+		"__eval_dirty",
+	);
+	bindings.push(
+		{ key: directEvalScopeObjectKey(), binding: program.directEvalScopeObjectBinding },
+		{ key: directEvalDirtyTrackerKey(), binding: program.directEvalDirtyTrackerBinding },
+	);
+	let homeObjectBinding: Binding | undefined;
+	if (inherited.allowSuperProperty) {
+		homeObjectBinding = createCapturedBinding(program, fn, "__eval_home");
+		bindings.push({ key: directEvalHomeScopeKey(), binding: homeObjectBinding });
+	}
+
+	const privateNames = new Map<string, IRPrivateName>();
+	for (let index = 0; index < inherited.privateNames.length; index++) {
+		const inheritedName = inherited.privateNames[index]!;
+		const makeBinding = (slot: DirectEvalPrivateSlot): Binding => {
+			const binding = createCapturedBinding(
+				program,
+				fn,
+				`__eval_private_${index}_${slot}`,
+			);
+			bindings.push({ key: directEvalPrivateScopeKey(index, slot), binding });
+			return binding;
+		};
+		const entry: IRPrivateName = {
+			static: (inheritedName.flags & DIRECT_EVAL_PRIVATE_STATIC) !== 0,
+			brandBinding: makeBinding("brand"),
+		};
+		if (inheritedName.flags & DIRECT_EVAL_PRIVATE_FIELD)
+			entry.fieldBinding = makeBinding("field");
+		if (inheritedName.flags & DIRECT_EVAL_PRIVATE_METHOD) {
+			entry.methodBinding = makeBinding("method");
+		}
+		if (inheritedName.flags & DIRECT_EVAL_PRIVATE_GETTER)
+			entry.getBinding = makeBinding("get");
+		if (inheritedName.flags & DIRECT_EVAL_PRIVATE_SETTER)
+			entry.setBinding = makeBinding("set");
+		privateNames.set(inheritedName.name, entry);
+	}
+
+	if (homeObjectBinding || privateNames.size > 0) {
+		fn.classContext = {
+			isStatic: false,
+			homeObjectBinding,
+			privateNames: privateNames.size > 0 ? privateNames : undefined,
+		};
+	}
+	return bindings;
+}
+
+function emitDirectEvalContextBindings(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	bindings: Array<DirectEvalContextBinding>,
+): void {
+	for (const { key, binding } of bindings) {
+		const value = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "withGet",
+			registers: [value],
+			nameStringIndex: getOrCreateStringConstant(program, key),
+		});
+		storeRegisterAtLocation(
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, binding),
+			value,
+		);
+	}
 }
 
 /**
@@ -3009,6 +3151,7 @@ function emitFieldInstall(
 	cursor: IRCursor,
 	entry: IRInstanceFieldPlanEntry,
 ) {
+	emitLexicalProviderCaptures(program, fn, cursor, entry.initializerNode, true);
 	const nameHint = entry.private
 		? entry.nameHint
 		: entry.key.kind === "name"
@@ -3068,6 +3211,44 @@ function emitFieldInstall(
 		registers: [thisRegister, key, value],
 		enumerable: true,
 	});
+}
+
+/** Snapshot a field/static-block provider for arrows that capture its context. */
+function emitLexicalProviderCaptures(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	node: ESTree.PropertyDefinition | ESTree.StaticBlock | ESTree.Program,
+	newTargetIsUndefined: boolean,
+): void {
+	const scope = fn.semanticFile.nodeToScope.get(node);
+	const thisBinding = scope?.bindings.find((binding) => binding.implicit === "this");
+	if (thisBinding?.scopedTo === "captured") {
+		const value = nextRegisterDestination(fn);
+		cursor.block.instructions.push({ type: "loadThis", registers: [value] });
+		storeRegisterAtLocation(
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, thisBinding),
+			value,
+		);
+	}
+
+	const newTargetBinding = scope?.bindings.find(
+		(binding) => binding.implicit === "new.target",
+	);
+	if (newTargetBinding?.scopedTo === "captured") {
+		const value = newTargetIsUndefined
+			? compileUndefined(fn, cursor)
+			: nextRegisterDestination(fn);
+		if (!newTargetIsUndefined) {
+			cursor.block.instructions.push({ type: "loadNewTarget", registers: [value] });
+		}
+		storeRegisterAtLocation(
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, newTargetBinding),
+			value,
+		);
+	}
 }
 
 /**
@@ -3199,6 +3380,7 @@ function buildStaticInitializer(
 			continue;
 		}
 
+		emitLexicalProviderCaptures(program, initFn, cursor, element.node, true);
 		const entryBlock = compileStatementsToBlock(program, initFn, element.body, true);
 		cursor.block.instructions.push({ type: "jump", blocks: [entryBlock] });
 		cursor.block = initFn.blocks.at(-1)!;
@@ -3287,7 +3469,7 @@ function compileClass(
 
 	for (const member of classNode.body.body) {
 		if (member.type === "StaticBlock") {
-			staticElements.push({ kind: "block", body: member.body });
+			staticElements.push({ kind: "block", node: member, body: member.body });
 			continue;
 		}
 
@@ -3312,6 +3494,7 @@ function compileClass(
 					fieldBinding: privateEntry.fieldBinding,
 					valueNode,
 					nameHint: name,
+					initializerNode: member,
 				};
 			} else if (member.computed && !member.static) {
 				// Instance computed keys are evaluated once, at class definition.
@@ -3325,15 +3508,22 @@ function compileClass(
 					private: false,
 					key: { kind: "captured", binding: keyBinding },
 					valueNode,
+					initializerNode: member,
 				};
 			} else if (member.computed) {
 				// Static computed keys evaluate inline in the once-run static init.
-				entry = { private: false, key: { kind: "node", node: member.key }, valueNode };
+				entry = {
+					private: false,
+					key: { kind: "node", node: member.key },
+					valueNode,
+					initializerNode: member,
+				};
 			} else {
 				entry = {
 					private: false,
 					key: { kind: "name", name: classFieldKeyName(member.key) },
 					valueNode,
+					initializerNode: member,
 				};
 			}
 
@@ -4355,7 +4545,10 @@ function compileIdentifierTarget(
 	value: number,
 	isAssign = false,
 ) {
-	if (fn.semanticFile.withDynamicNodes.has(identifier)) {
+	if (
+		fn.semanticFile.withDynamicNodes.has(identifier) ||
+		(program.evalDirect && identifierIsFree(fn, identifier))
+	) {
 		compileWithDynamicWrite(program, fn, cursor, identifier, value, isAssign);
 		return;
 	}
@@ -4596,6 +4789,7 @@ function compileWithBaseStore(
 		type: "storeProperty",
 		registers: [base, key, value],
 	});
+	emitDirectEvalDirtyMark(program, fn, cursor, base, key);
 	const foundJoin: Extract<IRInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
@@ -4621,6 +4815,57 @@ function compileWithBaseStore(
 		throwJoin.blocks[0] = joinIdx;
 	}
 	cursor.block = fn.blocks[joinIdx]!;
+}
+
+/** Record a Set only when a captured with-reference targets the injected eval scope. */
+function emitDirectEvalDirtyMark(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	base: number,
+	key: number,
+): void {
+	const scopeBinding = program.directEvalScopeObjectBinding;
+	const dirtyBinding = program.directEvalDirtyTrackerBinding;
+	if (!scopeBinding || !dirtyBinding) return;
+
+	const evalScope = loadCapturedBinding(program, fn, cursor, scopeBinding);
+	const isEvalScope = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "binary",
+		registers: [isEvalScope, base, evalScope],
+		operator: "===",
+	});
+	const markJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [isEvalScope],
+		blocks: [-1],
+	};
+	const skipJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(markJump, skipJump);
+
+	const markIndex = fn.blocks.push({ instructions: [] }) - 1;
+	cursor.block = fn.blocks[markIndex]!;
+	const dirtyTracker = loadCapturedBinding(program, fn, cursor, dirtyBinding);
+	const assigned = nextRegisterDestination(fn);
+	cursor.block.instructions.push(
+		{ type: "createBoolean", registers: [assigned], value: true },
+		{ type: "storeProperty", registers: [dirtyTracker, key, assigned] },
+	);
+	const markJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(markJoin);
+
+	const joinIndex = fn.blocks.push({ instructions: [] }) - 1;
+	markJump.blocks[0] = markIndex;
+	skipJump.blocks[0] = joinIndex;
+	markJoin.blocks[0] = joinIndex;
+	cursor.block = fn.blocks[joinIndex]!;
 }
 
 function compileStaticIdentifierTarget(
@@ -8703,29 +8948,13 @@ function compileIdentifierAssignment(
 		assignmentExpression.left.type === "Identifier" &&
 		identifierIsFree(fn, assignmentExpression.left)
 	) {
-		const left = assignmentExpression.left;
-		let value: number;
-		if (assignmentExpression.operator === "=") {
-			value = compileExpression(
-				program,
-				fn,
-				cursor,
-				assignmentExpression.right,
-				left.name,
-			);
-		} else {
-			// Compound: the current value is itself a with-intercepted read.
-			const current = compileWithDynamicRead(program, fn, cursor, left);
-			const right = compileExpression(program, fn, cursor, assignmentExpression.right);
-			value = nextRegisterDestination(fn);
-			cursor.block.instructions.push({
-				type: "binary",
-				registers: [value, current, right],
-				operator: assignmentOperatorToBinaryOperator(assignmentExpression.operator),
-			});
-		}
-		compileWithDynamicWrite(program, fn, cursor, left, value, true);
-		return value;
+		return compileWithDynamicAssignment(
+			program,
+			fn,
+			cursor,
+			assignmentExpression,
+			assignmentExpression.left,
+		);
 	}
 
 	const binding = fn.semanticFile.nodeToBinding.get(assignmentExpression.left);
@@ -8885,6 +9114,9 @@ function compileLogicalAssignment(
 	let nameHint: string | undefined;
 	let member: CompiledMemberReference | undefined;
 	let privateMember: { object: number; name: string } | undefined;
+	let withReference:
+		| { base: number; key: number; identifier: ESTree.Identifier }
+		| undefined;
 	let current: number;
 
 	if (left.type === "Identifier") {
@@ -8893,18 +9125,39 @@ function compileLogicalAssignment(
 			return -1;
 		}
 
-		const hostGlobalLocation = retainHostGlobal(program, binding)
-			? globalPropertyLocation(program, binding.name)
-			: null;
-		location =
-			hostGlobalLocation ??
-			(binding.undeclared && !isIRIntrinsic(binding.name)
-				? globalPropertyLocation(program, binding.name)
-				: getOrCreateBindingLocation(program, fn, binding));
 		identifierBinding = binding;
 		nameHint = binding.name;
-		current = loadRegisterFromLocation(fn, cursor.block, location);
-		emitTdzGuard(program, fn, cursor.block, binding, current);
+		if (
+			fn.semanticFile.withDynamicNodes.has(left) ||
+			(program.evalDirect && identifierIsFree(fn, left))
+		) {
+			const nameStringIndex = getOrCreateStringConstant(program, left.name);
+			const base = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "withResolveBase",
+				registers: [base],
+				nameStringIndex,
+			});
+			const key = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "createString",
+				registers: [key],
+				stringIndex: nameStringIndex,
+			});
+			withReference = { base, key, identifier: left };
+			current = compileWithBaseRead(program, fn, cursor, base, key, left);
+		} else {
+			const hostGlobalLocation = retainHostGlobal(program, binding)
+				? globalPropertyLocation(program, binding.name)
+				: null;
+			location =
+				hostGlobalLocation ??
+				(binding.undeclared && !isIRIntrinsic(binding.name)
+					? globalPropertyLocation(program, binding.name)
+					: getOrCreateBindingLocation(program, fn, binding));
+			current = loadRegisterFromLocation(fn, cursor.block, location);
+			emitTdzGuard(program, fn, cursor.block, binding, current);
+		}
 	} else if (
 		left.type === "MemberExpression" &&
 		left.property.type === "PrivateIdentifier"
@@ -8965,7 +9218,17 @@ function compileLogicalAssignment(
 	}
 	cursor.block.instructions.push({ type: "move", registers: [result, right] });
 
-	if (location) {
+	if (withReference) {
+		compileWithBaseStore(
+			program,
+			fn,
+			cursor,
+			withReference.base,
+			withReference.key,
+			withReference.identifier,
+			right,
+		);
+	} else if (location) {
 		if (identifierBinding?.kind === "const") {
 			emitThrowTypeError(program, fn, cursor, "Assignment to constant variable.");
 		} else {
@@ -10057,7 +10320,11 @@ function compileObjectExpression(
 		// through arrows but stopping at nested non-arrow functions — not the
 		// method FunctionExpression node itself, which is a super boundary.
 		const value = property.value as ESTree.FunctionExpression;
-		return referencesSuper(value.body) || referencesSuper(value.params);
+		return (
+			fn.semanticFile.hasDirectEval.has(value) ||
+			referencesSuper(value.body) ||
+			referencesSuper(value.params)
+		);
 	});
 	if (usesSuper) {
 		homeObjectBinding = createCapturedBinding(
@@ -10381,8 +10648,17 @@ function compileMemberObjectAndKey(
 		// SuperProperty evaluation obtains the this binding before evaluating a
 		// computed key. Keep it in the reference so reads and later writes use the
 		// same receiver even if evaluation invokes arbitrary code.
-		receiver = nextRegisterDestination(fn);
-		cursor.block.instructions.push({ type: "loadThis", registers: [receiver] });
+		const lexicalThisBinding = fn.semanticFile.nodeToBinding.get(memberExpression.object);
+		if (lexicalThisBinding?.implicit === "this") {
+			receiver = loadRegisterFromLocation(
+				fn,
+				cursor.block,
+				getOrCreateBindingLocation(program, fn, lexicalThisBinding),
+			);
+		} else {
+			receiver = nextRegisterDestination(fn);
+			cursor.block.instructions.push({ type: "loadThis", registers: [receiver] });
+		}
 	} else {
 		object = compileExpression(program, fn, cursor, memberExpression.object);
 	}
@@ -10573,10 +10849,10 @@ function compileSpreadArgumentsArray(
 /**
  * The bindings a direct eval can see in the caller — the current function's
  * params/locals and the block bindings in scope at the call site (nearest
- * shadows outer). Globals and undeclared names are excluded: the eval'd code
- * reaches those through the global fallback. Enclosing-function bindings are not
- * generally marshaled yet; lexical `arguments` through an arrow is the exception,
- * because semantic classification promotes that binding to a captured slot.
+ * shadows outer). Undeclared names are excluded: the eval'd code reaches those
+ * through the global fallback. Semantic analysis conservatively treats the eval
+ * as a use of every visible binding, so enclosing-function values are captured
+ * and globals backed by internal slots can be marshaled too.
  */
 function visibleBindingsForDirectEval(
 	fn: IRFunction,
@@ -10586,16 +10862,9 @@ function visibleBindingsForDirectEval(
 	let scope: Scope | null | undefined = fn.semanticFile.nodeToScope.get(callNode);
 	while (scope) {
 		for (const binding of scope.bindings) {
-			if (
-				!result.has(binding.name) &&
-				!binding.undeclared &&
-				binding.scopedTo !== "global"
-			) {
+			if (!result.has(binding.name) && !binding.undeclared && !binding.implicit) {
 				result.set(binding.name, binding);
 			}
-		}
-		if (FUNCTION_UNIT_NODE_TYPES.has(scope.node.type)) {
-			break; // stop at the current function; enclosing scopes are not marshaled yet
 		}
 		scope = scope.parent;
 	}
@@ -10606,12 +10875,146 @@ function visibleBindingsForDirectEval(
 	return result;
 }
 
+function inheritedContextForDirectEval(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	callNode: ESTree.CallExpression,
+): DirectEvalContext {
+	const classContext = fn.classContext;
+	const allowSuperProperty = Boolean(
+		classContext?.homeObjectBinding ||
+		classContext?.classBinding ||
+		classContext?.superBinding,
+	);
+	const privateNames: Array<DirectEvalPrivateNameContext> = [];
+	for (const [name, entry] of classContext?.privateNames ?? []) {
+		let flags = entry.static ? DIRECT_EVAL_PRIVATE_STATIC : 0;
+		if (entry.fieldBinding) flags |= DIRECT_EVAL_PRIVATE_FIELD;
+		if (entry.methodBinding) flags |= DIRECT_EVAL_PRIVATE_METHOD;
+		if (entry.getBinding) flags |= DIRECT_EVAL_PRIVATE_GETTER;
+		if (entry.setBinding) flags |= DIRECT_EVAL_PRIVATE_SETTER;
+		privateNames.push({ name, flags });
+	}
+
+	let unit: Scope | null | undefined = fn.semanticFile.nodeToScope.get(callNode);
+	while (unit && !FUNCTION_UNIT_NODE_TYPES.has(unit.node.type)) unit = unit.parent;
+	let allowNewTarget = false;
+	if (unit?.node.type === "Program") {
+		allowNewTarget = program.evalDirect && program.directEvalContext.allowNewTarget;
+	} else if (unit?.node.type === "ArrowFunctionExpression") {
+		let owner = unit.parent;
+		while (
+			owner &&
+			(owner.node.type === "ArrowFunctionExpression" ||
+				!FUNCTION_UNIT_NODE_TYPES.has(owner.node.type))
+		) {
+			owner = owner.parent;
+		}
+		allowNewTarget =
+			owner?.node.type === "Program"
+				? program.evalDirect && program.directEvalContext.allowNewTarget
+				: owner !== null && owner !== undefined;
+	} else {
+		allowNewTarget = unit !== null && unit !== undefined;
+	}
+
+	return { allowSuperProperty, allowNewTarget, privateNames };
+}
+
+function storeDirectEvalScopeValue(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	scopeObject: number,
+	keyName: string,
+	value: number,
+): void {
+	const key = compileStaticString(program, fn, cursor, keyName);
+	cursor.block.instructions.push({
+		type: "storeProperty",
+		registers: [scopeObject, key, value],
+	});
+}
+
+function loadDirectEvalHomeObject(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+): number {
+	const classContext = fn.classContext;
+	if (classContext?.homeObjectBinding) {
+		return loadCapturedBinding(program, fn, cursor, classContext.homeObjectBinding);
+	}
+	if (!classContext?.classBinding) return -1;
+	const constructor = loadCapturedBinding(program, fn, cursor, classContext.classBinding);
+	if (classContext.isStatic) return constructor;
+	const prototypeKey = compileStaticString(program, fn, cursor, "prototype");
+	const prototype = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadProperty",
+		registers: [prototype, constructor, prototypeKey],
+	});
+	return prototype;
+}
+
+function marshalDirectEvalInheritedContext(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	scopeObject: number,
+	context: DirectEvalContext,
+): void {
+	if (context.allowSuperProperty) {
+		const home = loadDirectEvalHomeObject(program, fn, cursor);
+		if (home >= 0) {
+			storeDirectEvalScopeValue(
+				program,
+				fn,
+				cursor,
+				scopeObject,
+				directEvalHomeScopeKey(),
+				home,
+			);
+		}
+	}
+
+	for (let index = 0; index < context.privateNames.length; index++) {
+		const inheritedName = context.privateNames[index]!;
+		const entry = fn.classContext?.privateNames?.get(inheritedName.name);
+		if (!entry) continue;
+		const slots: Array<[DirectEvalPrivateSlot, Binding | undefined]> = [
+			["brand", entry.brandBinding],
+			["field", entry.fieldBinding],
+			["method", entry.methodBinding],
+			["get", entry.getBinding],
+			["set", entry.setBinding],
+		];
+		for (const [slot, binding] of slots) {
+			if (!binding) continue;
+			storeDirectEvalScopeValue(
+				program,
+				fn,
+				cursor,
+				scopeObject,
+				directEvalPrivateScopeKey(index, slot),
+				loadCapturedBinding(program, fn, cursor, binding),
+			);
+		}
+	}
+}
+
 /**
  * Compile a direct `eval(arg, ...)`: snapshot the caller's visible bindings into
  * a scope object, invoke the direct-eval intrinsic (which pushes the object as a
  * with-scope and compiles the source so free identifiers resolve against it),
  * then write the (possibly mutated) bindings back. Reuses the with machinery and
  * ordinary binding loads/stores — no new opcodes, no caller-env plumbing.
+ *
+ * A sibling `dirtyTracker` object, keyed the same as the scope, rides along so
+ * the runtime's withSet can record real Set evidence per name (see
+ * mal_vm_op_with_set) — global writeback below reads that instead of inferring
+ * "was this assigned" from value equality, which is wrong for NaN (NaN !== NaN)
+ * and would skip an actual same-value Set through an accessor's setter.
  */
 function compileDirectEval(
 	program: IntermediateProgram,
@@ -10620,9 +11023,44 @@ function compileDirectEval(
 	callExpression: ESTree.CallExpression,
 ): number {
 	const bindings = visibleBindingsForDirectEval(fn, callExpression);
+	const inheritedContext = inheritedContextForDirectEval(program, fn, callExpression);
 
 	const scopeObject = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "createObject", registers: [scopeObject] });
+	const nullPrototype = nextRegisterDestination(fn);
+	cursor.block.instructions.push(
+		{ type: "createNull", registers: [nullPrototype] },
+		{
+			type: "setPrototype",
+			registers: [scopeObject, nullPrototype],
+			literal: false,
+		},
+	);
+	const dirtyTracker = nextRegisterDestination(fn);
+	cursor.block.instructions.push(
+		{ type: "createObject", registers: [dirtyTracker] },
+		{
+			type: "setPrototype",
+			registers: [dirtyTracker, nullPrototype],
+			literal: false,
+		},
+	);
+	storeDirectEvalScopeValue(
+		program,
+		fn,
+		cursor,
+		scopeObject,
+		directEvalScopeObjectKey(),
+		scopeObject,
+	);
+	storeDirectEvalScopeValue(
+		program,
+		fn,
+		cursor,
+		scopeObject,
+		directEvalDirtyTrackerKey(),
+		dirtyTracker,
+	);
 
 	// Marshal each visible binding's current value onto the scope object by name.
 	for (const [name, binding] of bindings) {
@@ -10634,6 +11072,7 @@ function compileDirectEval(
 			registers: [scopeObject, key, value],
 		});
 	}
+	marshalDirectEvalInheritedContext(program, fn, cursor, scopeObject, inheritedContext);
 
 	const callee = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
@@ -10671,29 +11110,62 @@ function compileDirectEval(
 	// a compiled caller — which has no interpreter frame to read — threads them.
 	// Match ThisExpression: top-level `this` in a script is globalThis; inside any
 	// function it is the frame's `this`.
-	const callerThis = nextRegisterDestination(fn);
-	const providesThis = (type: string) =>
-		type === "ArrowFunctionExpression" ||
-		type === "FunctionDeclaration" ||
-		type === "FunctionExpression" ||
-		type === "PropertyDefinition" ||
-		type === "StaticBlock" ||
-		type === "Program";
-	let owner: Scope | null | undefined = fn.semanticFile.nodeToScope.get(callExpression);
-	while (owner && !providesThis(owner.node.type)) {
-		owner = owner.parent;
-	}
-	if (owner?.node.type === "Program" && fn.semanticFile.type === "script") {
-		cursor.block.instructions.push({
-			type: "loadIntrinsic",
-			registers: [callerThis],
-			intrinsic: "globalThis",
-		});
+	let callerThis: number;
+	const lexicalThisBinding = fn.semanticFile.directEvalThisBindings.get(callExpression);
+	if (lexicalThisBinding) {
+		callerThis = loadRegisterFromLocation(
+			fn,
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, lexicalThisBinding),
+		);
 	} else {
-		cursor.block.instructions.push({ type: "loadThis", registers: [callerThis] });
+		let owner: Scope | null | undefined = fn.semanticFile.nodeToScope.get(callExpression);
+		while (owner && !FUNCTION_UNIT_NODE_TYPES.has(owner.node.type)) owner = owner.parent;
+		while (owner?.node.type === "ArrowFunctionExpression") {
+			owner = owner.parent;
+			while (owner && !FUNCTION_UNIT_NODE_TYPES.has(owner.node.type))
+				owner = owner.parent;
+		}
+		callerThis = nextRegisterDestination(fn);
+		if (
+			owner?.node.type === "Program" &&
+			fn.semanticFile.type === "script" &&
+			!fn.semanticFile.commonjs &&
+			!program.evalDirect
+		) {
+			cursor.block.instructions.push({
+				type: "loadIntrinsic",
+				registers: [callerThis],
+				intrinsic: "globalThis",
+			});
+		} else if (owner?.node.type === "Program" && !program.evalDirect) {
+			cursor.block.instructions.push({
+				type: "createUndefined",
+				registers: [callerThis],
+			});
+		} else {
+			cursor.block.instructions.push({ type: "loadThis", registers: [callerThis] });
+		}
 	}
-	const callerNewTarget = nextRegisterDestination(fn);
-	cursor.block.instructions.push({ type: "loadNewTarget", registers: [callerNewTarget] });
+
+	let callerNewTarget: number;
+	const lexicalNewTargetBinding =
+		fn.semanticFile.directEvalNewTargetBindings.get(callExpression);
+	if (lexicalNewTargetBinding) {
+		callerNewTarget = loadRegisterFromLocation(
+			fn,
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, lexicalNewTargetBinding),
+		);
+	} else if (fn.inFieldInitializer || !inheritedContext.allowNewTarget) {
+		callerNewTarget = compileUndefined(fn, cursor);
+	} else {
+		callerNewTarget = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadNewTarget",
+			registers: [callerNewTarget],
+		});
+	}
 
 	// A field-initializer eval inherits the "no arguments" context: `arguments`
 	// in the eval'd code is a SyntaxError. Pass the flag so the eval compile
@@ -10704,6 +11176,12 @@ function compileDirectEval(
 		registers: [inFieldInitializer],
 		value: fn.inFieldInitializer ?? false,
 	});
+	const inheritedContextRegister = compileStaticString(
+		program,
+		fn,
+		cursor,
+		encodeDirectEvalContext(inheritedContext),
+	);
 
 	const result = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
@@ -10719,6 +11197,8 @@ function compileDirectEval(
 			callerThis,
 			callerNewTarget,
 			inFieldInitializer,
+			inheritedContextRegister,
+			dirtyTracker,
 		],
 	});
 
@@ -10735,6 +11215,43 @@ function compileDirectEval(
 			type: "loadProperty",
 			registers: [value, scopeObject, key],
 		});
+		if (location.type === "globalProperty") {
+			// Write back only when eval actually Set this binding, per the dirty
+			// tracker — not value equality (=== treats NaN as "changed" when it
+			// isn't, and treats a same-value Set through an accessor as "unchanged"
+			// when the setter must still run).
+			const dirty = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "loadProperty",
+				registers: [dirty, dirtyTracker, key],
+			});
+			const dirtyJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+				type: "jumpIf",
+				registers: [dirty],
+				blocks: [-1],
+			};
+			const skipJump: Extract<IRInstruction, { type: "jump" }> = {
+				type: "jump",
+				blocks: [-1],
+			};
+			cursor.block.instructions.push(dirtyJump, skipJump);
+
+			const writeBlock: IRBlock = { instructions: [] };
+			const writeIndex = fn.blocks.push(writeBlock) - 1;
+			storeRegisterAtLocation(writeBlock, location, value);
+			const joinJump: Extract<IRInstruction, { type: "jump" }> = {
+				type: "jump",
+				blocks: [-1],
+			};
+			writeBlock.instructions.push(joinJump);
+
+			const joinIndex = fn.blocks.push({ instructions: [] }) - 1;
+			dirtyJump.blocks[0] = writeIndex;
+			skipJump.blocks[0] = joinIndex;
+			joinJump.blocks[0] = joinIndex;
+			cursor.block = fn.blocks[joinIndex]!;
+			continue;
+		}
 		storeRegisterAtLocation(cursor.block, location, value);
 	}
 

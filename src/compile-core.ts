@@ -1,3 +1,4 @@
+import type { DirectEvalContext } from "./direct-eval-context.ts";
 import { executeIROptimizations } from "./ir-opt.ts";
 import { compileSemanticProgramToIr } from "./ir.ts";
 import type { IntermediateProgram } from "./ir.ts";
@@ -16,6 +17,7 @@ export interface CompileCoreOptions {
 	ir?: {
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
+		directEvalContext?: DirectEvalContext;
 	};
 	afterOptimization?: (program: IntermediateProgram) => void;
 	runPhase?: <T>(phase: CompileCorePhase, run: () => T) => T;

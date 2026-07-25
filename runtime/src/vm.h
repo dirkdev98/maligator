@@ -1939,9 +1939,13 @@ MalValue mal_vm_interpret_function(
  * free identifiers resolve against the caller's marshaled scope. Returns the
  * script completion value; a throw is left in vm->completion. Pass undefined for
  * scope_object to run with no injected scope.
+ *
+ * `dirty_tracker` rides along as the with-object's second env slot (see
+ * mal_vm_op_with_set): pass undefined to disable dirty tracking for this run.
  */
 MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue scope_object,
-                                     MalValue this_value, MalValue new_target);
+                                     MalValue this_value, MalValue new_target,
+                                     MalValue dirty_tracker);
 
 /**
  * `new callee(args)` as a value: allocate the instance, run the constructor

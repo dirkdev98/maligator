@@ -100,32 +100,34 @@ done:
 // the caller scope). Returns nullptr with a pending throw on a compile or load
 // failure.
 static MalLoadedDefinition *compile_source(MalVm *vm, MalValue source, bool direct, bool caller_strict,
-                                            bool in_param_expr, bool in_field_initializer) {
-    MalValue roots[6] = {source, mal_value_new_boolean(direct),
-                         mal_value_new_boolean(caller_strict),
-                         mal_value_new_boolean(in_param_expr),
-                         mal_value_new_boolean(in_field_initializer),
-                         mal_value_new_undefined()};
+                                             bool in_param_expr, bool in_field_initializer,
+                                             MalValue direct_eval_context) {
+    MalValue roots[7] = {source, mal_value_new_boolean(direct),
+                          mal_value_new_boolean(caller_strict),
+                          mal_value_new_boolean(in_param_expr),
+                          mal_value_new_boolean(in_field_initializer),
+                          direct_eval_context,
+                          mal_value_new_undefined()};
     MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, 6);
+    mal_gc_root(&root_span, roots, 7);
     MalLoadedDefinition *loaded = nullptr;
 
     if (!ensure_compiler(vm)) {
         goto done;
     }
     MalCompletion compiled =
-        mal_vm_call_value(vm, vm->compiler_fn, mal_value_new_undefined(), roots, 5);
-    roots[5] = compiled.value;
+        mal_vm_call_value(vm, vm->compiler_fn, mal_value_new_undefined(), roots, 6);
+    roots[6] = compiled.value;
     if (compiled.kind == MAL_COMPLETION_THROW) {
         vm->completion = compiled;
         goto done;
     }
-    if (!mal_value_is_typed_array_object(roots[5])) {
+    if (!mal_value_is_typed_array_object(roots[6])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,
                             "eval: compiler did not return a byte buffer");
         goto done;
     }
-    MalTypedArrayObject *buffer = mal_value_to_typed_array_object(roots[5]);
+    MalTypedArrayObject *buffer = mal_value_to_typed_array_object(roots[6]);
     usize len = mal_typed_array_object_byte_length(buffer);
     const u8 *data = buffer->buffer->data + buffer->byte_offset;
     const char *err = "ok";
@@ -185,7 +187,8 @@ MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
 
     // Indirect eval: always sloppy (no containing strict context), never a
     // parameter-expression or field-initializer context.
-    MalLoadedDefinition *loaded = compile_source(vm, roots[0], false, false, false, false);
+    MalLoadedDefinition *loaded = compile_source(
+        vm, roots[0], false, false, false, false, mal_value_new_undefined());
     if (loaded == nullptr) {
         goto done;
     }
@@ -237,7 +240,8 @@ MalCompletion mal_shadow_realm_eval_script(MalVm *vm, MalRealm *caller_realm,
     *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_NONE;
     mal_vm_realm_switch_to(vm, caller_realm);
 
-    MalLoadedDefinition *loaded = compile_source(vm, source, false, false, false, false);
+    MalLoadedDefinition *loaded = compile_source(
+        vm, source, false, false, false, false, mal_value_new_undefined());
     if (loaded == nullptr) {
 #if MAL_EVAL
         // The baked compiler's errors can belong to the realm in which it was
@@ -283,14 +287,16 @@ done:
 // lands between pushing the frame and executing its body.
 MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, bool caller_strict,
                              bool in_param_expr, bool in_field_initializer, MalValue caller_this,
-                             MalValue caller_new_target) {
-    MalValue roots[4] = {source, scope_object, caller_this, caller_new_target};
+                             MalValue caller_new_target, MalValue direct_eval_context,
+                             MalValue dirty_tracker) {
+    MalValue roots[6] = {
+        source, scope_object, caller_this, caller_new_target, direct_eval_context, dirty_tracker};
     MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, 4);
+    mal_gc_root(&root_span, roots, 6);
     MalValue result = mal_value_new_undefined();
 
     MalLoadedDefinition *loaded = compile_source(vm, roots[0], true, caller_strict, in_param_expr,
-                                                  in_field_initializer);
+                                                   in_field_initializer, roots[4]);
     if (loaded == nullptr) {
         goto done;
     }
@@ -301,7 +307,7 @@ MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, b
     }
     // Runs the entry with the caller scope injected into its with-stack and the
     // caller's this/new.target bound; leaves the completion in vm->completion.
-    result = mal_vm_run_entry_with_scope(vm, entry, roots[1], roots[2], roots[3]);
+    result = mal_vm_run_entry_with_scope(vm, entry, roots[1], roots[2], roots[3], roots[5]);
 
 done:
     mal_gc_unroot(&root_span);
@@ -405,7 +411,8 @@ MalValue mal_vm_construct_function(MalVm *vm, const MalValue *args, i32 arg_coun
         goto done;
     }
 
-    MalLoadedDefinition *loaded = compile_source(vm, roots[2], false, false, false, false);
+    MalLoadedDefinition *loaded = compile_source(
+        vm, roots[2], false, false, false, false, mal_value_new_undefined());
     if (loaded == nullptr) {
 #if MAL_EVAL
         // The baked compiler may belong to the realm where eval was first used.
@@ -487,12 +494,16 @@ static MalValue mal_builtin_direct_eval(MalVm *vm, MalValue this_value, const Ma
     MalValue caller_this = arg_count >= 5 ? args[4] : mal_value_new_undefined();
     MalValue caller_new_target = arg_count >= 6 ? args[5] : mal_value_new_undefined();
     bool in_field_initializer = arg_count >= 7 && mal_value_is_truthy(args[6]);
-    MalValue roots[4] = {source, scope, caller_this, caller_new_target};
+    MalValue direct_eval_context = arg_count >= 8 ? args[7] : mal_value_new_undefined();
+    MalValue dirty_tracker = arg_count >= 9 ? args[8] : mal_value_new_undefined();
+    MalValue roots[6] = {
+        source, scope, caller_this, caller_new_target, direct_eval_context, dirty_tracker};
     MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, 4);
+    mal_gc_root(&root_span, roots, 6);
     mal_gc_native_rooted_begin(vm);
     MalValue result = mal_vm_eval_direct(vm, roots[0], roots[1], caller_strict, in_param_expr,
-                                          in_field_initializer, roots[2], roots[3]);
+                                           in_field_initializer, roots[2], roots[3], roots[4],
+                                           roots[5]);
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&root_span);
     return result;

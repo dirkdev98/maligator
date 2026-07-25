@@ -81,6 +81,52 @@ const evalResult = eval(
 );
 ok("eval-added string constants and global entries are safe", evalResult === 1001);
 ok("eval-added global remains observable", evalAddedGlobal === 1001);
+
+const untouchedNaNResult = (0, eval)(
+	"var evalUntouchedNaN = NaN;" +
+		"Object.defineProperty(globalThis, 'evalUntouchedNaN', { writable: false });" +
+		"eval('1')",
+);
+ok("direct eval does not rewrite untouched NaN globals", untouchedNaNResult === 1);
+delete globalThis.evalUntouchedNaN;
+
+globalThis.evalSameValueSetterCalls = 0;
+(0, eval)(
+	"var evalSameValue = 1;" +
+		"Object.defineProperty(globalThis, 'evalSameValue', {" +
+		"get() { return 1; }," +
+		"set(value) { globalThis.evalSameValueSetterCalls++; }," +
+		"configurable: true" +
+		"});" +
+		"eval('evalSameValue = 1')",
+);
+ok(
+	"same-value eval assignment invokes the global setter",
+	evalSameValueSetterCalls === 1,
+);
+delete globalThis.evalSameValue;
+delete globalThis.evalSameValueSetterCalls;
+
+const evalWritebackForms = (0, eval)(
+	"var evalWriteback = 1; var evalWritebackStages = [];" +
+		"eval('evalWriteback++'); evalWritebackStages.push(evalWriteback);" +
+		"eval('with ({}) { evalWriteback += 2; }'); evalWritebackStages.push(evalWriteback);" +
+		"evalWriteback = 0; eval('evalWriteback ||= 7'); evalWritebackStages.push(evalWriteback);" +
+		"eval('({ value: evalWriteback } = { value: 9 })'); evalWritebackStages.push(evalWriteback);" +
+		"eval('for (evalWriteback of [11]) {}'); evalWritebackStages.push(evalWriteback);" +
+		"evalWritebackStages",
+);
+ok("direct-eval update writes through to globals", evalWritebackForms[0] === 2);
+ok("direct-eval nested with writes through to globals", evalWritebackForms[1] === 4);
+ok(
+	"direct-eval logical assignment writes through to globals",
+	evalWritebackForms[2] === 7,
+);
+ok("direct-eval destructuring writes through to globals", evalWritebackForms[3] === 9);
+ok("direct-eval for-of writes through to globals", evalWritebackForms[4] === 11);
+delete globalThis.evalWriteback;
+delete globalThis.evalWritebackStages;
+
 const sloppyStoreResult = (0, eval)(
 	"var sloppyCachedGlobal = 5;" +
 		"Object.defineProperty(globalThis, 'sloppyCachedGlobal', { writable: false });" +

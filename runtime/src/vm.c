@@ -3025,7 +3025,8 @@ MalValue mal_vm_interpret_function(
 }
 
 MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue scope_object,
-                                     MalValue this_value, MalValue new_target) {
+                                     MalValue this_value, MalValue new_target,
+                                     MalValue dirty_tracker) {
     // Push the (spliced) eval entry, then inject the caller scope object into the
     // fresh frame's with-stack BEFORE running its body, so direct-eval free
     // identifiers (compiled as with-dynamic reads) resolve against it. Mirrors
@@ -3042,7 +3043,12 @@ MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue sco
     frame->new_target = new_target;
     // The caller's scope object resolves free names in the eval'd code: expose it as
     // a with object environment record on the frame's env chain (WITH_GET walks it).
-    frame->env = mal_env_new_with_object(vm, frame->env, scope_object);
+    // The second slot carries the caller's dirty tracker (mal_vm_op_with_set marks
+    // it on a real Set) — a plain with-enter (mal_env_new_with_object) never has one.
+    MalEnv *scope_env = mal_env_new(vm, frame->env, MAL_ENV_WITH_OBJECT, 2);
+    scope_env->slots[0] = scope_object;
+    scope_env->slots[1] = dirty_tracker;
+    frame->env = scope_env;
 
     mal_vm_run_until_frame_count(
         vm,
