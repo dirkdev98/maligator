@@ -4524,8 +4524,9 @@ function compileWithBaseRead(
 
 /**
  * Store `value` to a captured with-base: if `base` is a real object (not EMPTY)
- * [[Set]] the property on it (sloppy, so a rejected set silently no-ops — `with`
- * is sloppy-only); otherwise fall back to the static store.
+ * call the Object Environment Record's SetMutableBinding semantics; otherwise
+ * fall back to the static store. A strict nested function can resolve through a
+ * `with` environment even though the `with` statement itself is sloppy-only.
  */
 function compileWithBaseStore(
 	program: IntermediateProgram,
@@ -4550,9 +4551,47 @@ function compileWithBaseStore(
 	};
 	cursor.block.instructions.push(missJump, foundJump);
 
-	// Found: [[Set]] on the captured base object.
+	// Found: SetMutableBinding on the captured with-object. In strict code a
+	// binding that vanished between GetValue and PutValue (a getter that deleted
+	// it during a compound read) is unresolvable, so PutValue re-checks
+	// HasProperty and throws a ReferenceError instead of recreating the property.
 	const foundIdx = fn.blocks.push({ instructions: [] }) - 1;
 	cursor.block = fn.blocks[foundIdx]!;
+	const stillExists = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "binary",
+		registers: [stillExists, key, base],
+		operator: "in",
+	});
+	let throwJoin: Extract<IRInstruction, { type: "jump" }> | undefined;
+	if (!isSloppyFunction(fn)) {
+		const storeJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+			type: "jumpIf",
+			registers: [stillExists],
+			blocks: [-1],
+		};
+		const throwJump: Extract<IRInstruction, { type: "jump" }> = {
+			type: "jump",
+			blocks: [-1],
+		};
+		cursor.block.instructions.push(storeJump, throwJump);
+
+		const throwIdx = fn.blocks.push({ instructions: [] }) - 1;
+		cursor.block = fn.blocks[throwIdx]!;
+		const undeclared = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadUndeclared",
+			registers: [undeclared],
+			nameStringIndex: getOrCreateStringConstant(program, identifier.name),
+		});
+		throwJoin = { type: "jump", blocks: [-1] };
+		cursor.block.instructions.push(throwJoin);
+
+		const storeIdx = fn.blocks.push({ instructions: [] }) - 1;
+		storeJump.blocks[0] = storeIdx;
+		throwJump.blocks[0] = throwIdx;
+		cursor.block = fn.blocks[storeIdx]!;
+	}
 	cursor.block.instructions.push({
 		type: "storeProperty",
 		registers: [base, key, value],
@@ -4578,6 +4617,9 @@ function compileWithBaseStore(
 	missJump.blocks[0] = missIdx;
 	foundJoin.blocks[0] = joinIdx;
 	missJoin.blocks[0] = joinIdx;
+	if (throwJoin) {
+		throwJoin.blocks[0] = joinIdx;
+	}
 	cursor.block = fn.blocks[joinIdx]!;
 }
 
@@ -9474,10 +9516,36 @@ function compileUpdateExpression(
 			? globalPropertyLocation(program, binding.name)
 			: null;
 
-		// Direct-eval free identifier: read and write through the with-dynamic path
-		// so the update lands on the caller scope object (then global).
-		if (program.evalDirect && identifierIsFree(fn, expression.argument)) {
-			const current = compileWithDynamicRead(program, fn, cursor, expression.argument);
+		// A with-intercepted update must retain the environment reference resolved
+		// before GetValue, even if its getter deletes the binding.
+		if (
+			fn.semanticFile.withDynamicNodes.has(expression.argument) ||
+			(program.evalDirect && identifierIsFree(fn, expression.argument))
+		) {
+			const nameStringIndex = getOrCreateStringConstant(
+				program,
+				expression.argument.name,
+			);
+			const base = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "withResolveBase",
+				registers: [base],
+				nameStringIndex,
+			});
+			const key = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "createString",
+				registers: [key],
+				stringIndex: nameStringIndex,
+			});
+			const current = compileWithBaseRead(
+				program,
+				fn,
+				cursor,
+				base,
+				key,
+				expression.argument,
+			);
 			const oldValue = nextRegisterDestination(fn);
 			cursor.block.instructions.push({
 				type: "unary",
@@ -9490,7 +9558,7 @@ function compileUpdateExpression(
 				registers: [newValue, oldValue],
 				operator: step,
 			});
-			compileWithDynamicWrite(program, fn, cursor, expression.argument, newValue, true);
+			compileWithBaseStore(program, fn, cursor, base, key, expression.argument, newValue);
 			return expression.prefix ? newValue : oldValue;
 		}
 

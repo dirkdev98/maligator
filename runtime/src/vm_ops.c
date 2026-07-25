@@ -4586,6 +4586,16 @@ void mal_vm_op_store_global_property(
     }
 
     MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+    if (!own.present) {
+        bool still_exists = mal_vm_has_property(vm, global, key);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+        if (!still_exists && strict) {
+            // Object Environment Record SetMutableBinding re-checks HasProperty:
+            // a binding deleted between GetValue and PutValue is unresolvable.
+            mal_vm_op_load_undeclared(vm, name_string_index);
+            return;
+        }
+    }
     mal_vm_op_store_property(vm, global, key.value, value, strict);
 }
 

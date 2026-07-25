@@ -175,7 +175,7 @@ test/language/statements/for-await-of/iterator-close-non-throw-get-method-abrupt
 test/language/statements/for-await-of/iterator-close-non-throw-get-method-non-callable.js
 test/language/statements/for-of/dstr/array-elem-trlg-iter-rest-rtrn-close-err.js
 
-# Binding, coercion, and eval environments (36)
+# Binding, coercion, and eval environments (39)
 test/built-ins/JSON/stringify/replacer-function-object-deleted-property.js
 test/built-ins/Object/create/properties-arg-to-object-bigint.js
 test/built-ins/eval/no-construct.js
@@ -188,14 +188,17 @@ test/language/destructuring/binding/syntax/destructuring-array-parameters-functi
 test/language/eval-code/direct/gen-func-expr-named-a-following-parameter-is-named-arguments-declare-arguments.js
 test/language/eval-code/direct/var-env-func-init-multi.js
 test/language/export/escaped-default.js
+test/language/expressions/assignment/assignment-operator-calls-putvalue-lref--rval-.js
 test/language/expressions/assignment/dstr/array-elem-put-let.js
 test/language/expressions/assignment/dstr/obj-prop-put-let.js
 test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-elem-obj-prop-id-init.js
 test/language/expressions/class/elements/new-no-sc-line-method-rs-privatename-identifier.js
 test/language/expressions/compound-assignment/11.13.2-37-s.js
+test/language/expressions/compound-assignment/compound-assignment-operator-calls-putvalue-lref--v-.js
 test/language/expressions/less-than-or-equal/S11.8.3_A3.1_T1.2.js
 test/language/expressions/postfix-decrement/bigint.js
 test/language/expressions/prefix-increment/bigint.js
+test/language/expressions/prefix-increment/operator-prefix-increment-x-calls-putvalue-lhs-newvalue-.js
 test/language/function-code/10.4.3-1-54gs.js
 test/language/future-reserved-words/interface.js
 test/language/global-code/decl-func-dup.js
