@@ -4366,11 +4366,15 @@ function synchronizeSharedConstructorReturns(
 	fn: IRFunction,
 ): void {
 	for (const block of fn.blocks) {
-		const returnInstruction = block.instructions.at(-1);
-		if (returnInstruction?.type !== "return") continue;
-		block.instructions.pop();
-		const value = loadSharedSuperThis(program, fn, { block }, false);
-		block.instructions.push({ type: "setThis", registers: [value] }, returnInstruction);
+		const rewritten: IRBlock = { instructions: [] };
+		for (const instruction of block.instructions) {
+			if (instruction.type === "return") {
+				const value = loadSharedSuperThis(program, fn, { block: rewritten }, false);
+				rewritten.instructions.push({ type: "setThis", registers: [value] });
+			}
+			rewritten.instructions.push(instruction);
+		}
+		block.instructions = rewritten.instructions;
 	}
 }
 
