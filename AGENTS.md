@@ -58,6 +58,15 @@ MAL_DEBUG=true node ./src/index.ts build ./tests/local/runtime-mechanics.mjs
 
 Use https://tc39.es/ecma262/multipage/ when looking up parts of the spec.
 
+## Unlinked fix queues
+
+For a fix queue in a separate clone such as `../maligator-work-tree` (not a Git linked worktree):
+
+- Fetch `origin` in both clones and require the primary `main` to have no remote-only commits before starting.
+- Track the last imported source hash; select later non-merge commits in first-parent order because cherry-picked hashes differ from source hashes.
+- In the primary clone, run `git fetch ../maligator-work-tree <branch>` and cherry-pick the explicit source hashes in order, omitting merge commits.
+- Compare the result with `git diff --exit-code <last-source-hash> HEAD`, scan for stale source-hash references, then run focused tests and `npm run test:check` before pushing.
+
 ## Working Preferences
 
 - Pre-1.0: freely change any API/internal contract when it improves the design or contracts (engine/host/runtime layering: see `docs/roadmaps/isolate-reactor.md`).
