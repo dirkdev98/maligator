@@ -36,7 +36,8 @@ pub mod zlib;
 /// assert the linked archive matches `mal_i18n.h`.
 /// v2: added `mal_i18n_collator_free` / `mal_i18n_plural_rules_free` (gc_todo.md D2).
 /// v3: `mal_i18n_number_format` gained min/max significant-digit parameters.
-pub const MAL_I18N_ABI_VERSION: u32 = 3;
+/// v4: `mal_i18n_number_format` gained a sign_display parameter.
+pub const MAL_I18N_ABI_VERSION: u32 = 4;
 
 /// Returns the ABI version baked into this archive.
 #[no_mangle]
@@ -296,11 +297,28 @@ fn round_half_expand(decimal: &mut icu_decimal::input::Decimal, position: i16) {
     }
 }
 
+/// Maps the C-side sign_display code to `icu_decimal::input::SignDisplay`: 0
+/// auto, 1 never, 2 always, 3 exceptZero, 4 negative (mirrors ECMA-402's
+/// signDisplay values and fixed_decimal's SignDisplay variant order).
+#[cfg(feature = "intl-number-format")]
+fn sign_display_from_code(code: i32) -> icu_decimal::input::SignDisplay {
+    use icu_decimal::input::SignDisplay;
+    match code {
+        1 => SignDisplay::Never,
+        2 => SignDisplay::Always,
+        3 => SignDisplay::ExceptZero,
+        4 => SignDisplay::Negative,
+        _ => SignDisplay::Auto,
+    }
+}
+
 /// Format `number` for `locale`. percent != 0 scales by 100 and appends '%'.
 /// Honors minimumIntegerDigits and grouping. When `max_significant` > 0 the
 /// significant-digit options drive rounding (halfExpand) and padding; otherwise
-/// min+max fraction digits do. Writes UTF-8 into `out`; returns the full length,
-/// or -1 on failure.
+/// min+max fraction digits do. sign_display is applied to the rounded value (see
+/// sign_display_from_code) so negative zero and values rounded to zero are
+/// handled per ECMA-402. Writes UTF-8 into `out`; returns the full length, or -1
+/// on failure.
 #[cfg(feature = "intl-number-format")]
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_number_format(
@@ -314,6 +332,7 @@ pub unsafe extern "C" fn mal_i18n_number_format(
     min_significant: i32,
     max_significant: i32,
     grouping: i32,
+    sign_display: i32,
     out: *mut u8,
     out_cap: i32,
 ) -> i32 {
@@ -354,6 +373,9 @@ pub unsafe extern "C" fn mal_i18n_number_format(
     if min_integer > 1 {
         decimal.pad_start((min_integer - 1) as i16);
     }
+    // Applied after rounding so a value that rounds to zero (or -0) is judged
+    // by its final displayed magnitude, per ECMA-402 FormatNumericToString.
+    decimal.apply_sign_display(sign_display_from_code(sign_display));
 
     let mut options = DecimalFormatterOptions::default();
     options.grouping_strategy = Some(if grouping != 0 { GroupingStrategy::Auto } else { GroupingStrategy::Never });

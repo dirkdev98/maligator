@@ -49,7 +49,7 @@ test/language/expressions/function/scope-paramsbody-var-open.js
 test/staging/sm/Array/concat-spreadable-basic.js
 test/staging/sm/String/replace-math.js
 
-# Harness and Intl integration (32)
+# Harness and Intl integration (43)
 test/harness/assert-notsamevalue-tostring.js
 test/harness/assert-throws-custom-typeerror.js
 test/harness/assertRelativeDateMs.js
@@ -71,12 +71,23 @@ test/intl402/DurationFormat/prototype/format/not-a-constructor.js
 test/intl402/Intl/getCanonicalLocales/transformed-ext-invalid.js
 test/intl402/ListFormat/prototype/format/iterable-getiterator-throw.js
 test/intl402/Locale/prototype/hourCycle/branding.js
+test/intl402/NumberFormat/constructor-signDisplay-negative.js
+test/intl402/NumberFormat/constructor-signDisplay.js
 test/intl402/NumberFormat/default-minimum-singificant-digits.js
 test/intl402/NumberFormat/prototype/format/format-max-min-fraction-significant-digits.js
 test/intl402/NumberFormat/prototype/format/format-rounding-mode-half-expand.js
 test/intl402/NumberFormat/prototype/format/format-rounding-priority-auto.js
 test/intl402/NumberFormat/prototype/format/format-significant-digits-precision.js
 test/intl402/NumberFormat/prototype/format/format-significant-digits.js
+test/intl402/NumberFormat/prototype/format/signDisplay-de-DE.js
+test/intl402/NumberFormat/prototype/format/signDisplay-en-US.js
+test/intl402/NumberFormat/prototype/format/signDisplay-ja-JP.js
+test/intl402/NumberFormat/prototype/format/signDisplay-ko-KR.js
+test/intl402/NumberFormat/prototype/format/signDisplay-negative-de-DE.js
+test/intl402/NumberFormat/prototype/format/signDisplay-negative-en-US.js
+test/intl402/NumberFormat/prototype/format/signDisplay-negative-ja-JP.js
+test/intl402/NumberFormat/prototype/format/signDisplay-negative-ko-KR.js
+test/intl402/NumberFormat/prototype/format/signDisplay-rounding.js
 test/intl402/NumberFormat/significant-digits-options-get-sequence.js
 test/intl402/PluralRules/prototype/resolvedOptions/return-keys-order-default.js
 test/intl402/RelativeTimeFormat/prototype/format/en-us-numeric-always.js

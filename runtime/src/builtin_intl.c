@@ -1354,23 +1354,82 @@ static bool intl_data_bool(MalVm *vm, MalValue data, const char *key, bool fallb
     return fallback;
 }
 
-/** Locale-agnostic ±∞ / NaN rendering for non-finite inputs (en symbols). */
-static MalValue intl_nonfinite_number(MalVm *vm, f64 number) {
-    if (isnan(number)) {
-        return mal_value_from_string(mal_intrinsic_ascii(vm, "NaN"));
+/** signDisplay values in FFI-code order (mirrors mal_i18n.h / SignDisplay in lib.rs). */
+static const char *const INTL_SIGN_DISPLAYS[] = {"auto", "never", "always", "exceptZero", "negative"};
+
+/** Maps a resolved signDisplay string to its mal_i18n_number_format code (0..4). */
+static i32 intl_sign_display_code(MalString *sign_display) {
+    if (sign_display != nullptr) {
+        for (usize i = 0; i < countof(INTL_SIGN_DISPLAYS); i++) {
+            if (intl_string_eq_ascii(sign_display, INTL_SIGN_DISPLAYS[i])) {
+                return (i32) i;
+            }
+        }
     }
+    return 0; // "auto"
+}
+
+typedef enum IntlSignTag { INTL_SIGN_NONE, INTL_SIGN_POSITIVE, INTL_SIGN_NEGATIVE } IntlSignTag;
+
+/**
+ * Mirrors fixed_decimal's Decimal::apply_sign_display for the two non-finite
+ * shapes the Rust formatter never sees (NaN, +/-Infinity): NaN has no sign and
+ * counts as zero-valued (so exceptZero/negative suppress it like a
+ * rounded-to-zero value), while Infinity's sign follows the input's sign bit
+ * and never counts as zero.
+ */
+static IntlSignTag intl_apply_sign_display(i32 sign_display_code, IntlSignTag sign, bool is_zero) {
+    switch (sign_display_code) {
+        case 1: // never
+            return INTL_SIGN_NONE;
+        case 2: // always
+            return sign == INTL_SIGN_NEGATIVE ? INTL_SIGN_NEGATIVE : INTL_SIGN_POSITIVE;
+        case 3: // exceptZero
+            if (is_zero) {
+                return INTL_SIGN_NONE;
+            }
+            return sign == INTL_SIGN_NEGATIVE ? INTL_SIGN_NEGATIVE : INTL_SIGN_POSITIVE;
+        case 4: // negative
+            if (sign != INTL_SIGN_NEGATIVE || is_zero) {
+                return INTL_SIGN_NONE;
+            }
+            return INTL_SIGN_NEGATIVE;
+        default: // auto
+            return sign == INTL_SIGN_NEGATIVE ? INTL_SIGN_NEGATIVE : INTL_SIGN_NONE;
+    }
+}
+
+/** Locale-agnostic ±∞ / NaN rendering for non-finite inputs (en symbols), honoring signDisplay. */
+static MalValue intl_nonfinite_number(MalVm *vm, f64 number, i32 sign_display_code) {
+    if (isnan(number)) {
+        IntlSignTag tag = intl_apply_sign_display(sign_display_code, INTL_SIGN_NONE, true);
+        c16 units[4];
+        usize n = 0;
+        if (tag == INTL_SIGN_POSITIVE) {
+            units[n++] = '+';
+        }
+        units[n++] = 'N';
+        units[n++] = 'a';
+        units[n++] = 'N';
+        return mal_value_from_string(mal_string_new_copy(&vm->heap, units, n));
+    }
+    IntlSignTag start = number < 0 ? INTL_SIGN_NEGATIVE : INTL_SIGN_NONE;
+    IntlSignTag tag = intl_apply_sign_display(sign_display_code, start, false);
     c16 units[2];
     usize n = 0;
-    if (number < 0) {
+    if (tag == INTL_SIGN_NEGATIVE) {
         units[n++] = '-';
+    } else if (tag == INTL_SIGN_POSITIVE) {
+        units[n++] = '+';
     }
     units[n++] = 0x221E; // U+221E INFINITY
     return mal_value_from_string(mal_string_new_copy(&vm->heap, units, n));
 }
 
 static MalValue intl_number_format_value(MalVm *vm, MalIntlObject *nf, f64 number) {
+    i32 sign_display_code = intl_sign_display_code(intl_data_string(vm, nf->data, "signDisplay"));
     if (!isfinite(number)) {
-        return intl_nonfinite_number(vm, number);
+        return intl_nonfinite_number(vm, number, sign_display_code);
     }
     MalString *locale = intl_data_string(vm, nf->data, "locale");
     MalString *style = intl_data_string(vm, nf->data, "style");
@@ -1390,7 +1449,7 @@ static MalValue intl_number_format_value(MalVm *vm, MalIntlObject *nf, f64 numbe
     byte out[256];
     i32 n = mal_i18n_number_format(
         locale_buf, locale_len, number, percent ? 1 : 0, min_integer, min_fraction, max_fraction,
-        min_significant, max_significant, grouping ? 1 : 0, out, (i32) sizeof(out)
+        min_significant, max_significant, grouping ? 1 : 0, sign_display_code, out, (i32) sizeof(out)
     );
     if (n < 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not format number");
@@ -1402,7 +1461,7 @@ static MalValue intl_number_format_value(MalVm *vm, MalIntlObject *nf, f64 numbe
     byte *big = malloc((usize) n);
     mal_i18n_number_format(
         locale_buf, locale_len, number, percent ? 1 : 0, min_integer, min_fraction, max_fraction,
-        min_significant, max_significant, grouping ? 1 : 0, big, n
+        min_significant, max_significant, grouping ? 1 : 0, sign_display_code, big, n
     );
     MalValue result = intl_string_from_utf8(vm, big, (usize) n);
     free(big);
@@ -1450,6 +1509,12 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
     if (!grouping_present) {
         grouping = true;
     }
+    MalString *sign_display = intl_option_enum(
+        vm, options, "signDisplay", INTL_SIGN_DISPLAYS, countof(INTL_SIGN_DISPLAYS), "auto", &ok
+    );
+    if (!ok) {
+        return mal_value_new_undefined();
+    }
 
     MalObject *resolved = mal_intrinsic_new_object(vm);
     intl_resolved_set(vm, resolved, "locale", mal_value_from_string(locale));
@@ -1464,6 +1529,7 @@ static MalValue intl_number_format_constructor(MalVm *vm, MalValue this_value, c
         intl_resolved_set(vm, resolved, "maximumFractionDigits", mal_value_from_i32(max_fraction));
     }
     intl_resolved_set(vm, resolved, "useGrouping", mal_value_new_boolean(grouping));
+    intl_resolved_set(vm, resolved, "signDisplay", mal_value_from_string(sign_display));
 
     MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_NUMBER_FORMAT_PROTOTYPE);
     if (prototype == nullptr) {
@@ -1517,7 +1583,7 @@ static MalValue intl_number_format_resolved_options(MalVm *vm, MalValue this_val
     }
     static const char *const keys[] = {
         "locale", "numberingSystem", "style", "minimumIntegerDigits", "minimumFractionDigits", "maximumFractionDigits",
-        "minimumSignificantDigits", "maximumSignificantDigits", "useGrouping",
+        "minimumSignificantDigits", "maximumSignificantDigits", "useGrouping", "signDisplay",
     };
     return intl_resolved_copy(vm, nf->data, keys, countof(keys));
 }
