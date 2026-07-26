@@ -48,6 +48,11 @@ MalValue mal_builtin_object_parsed_descriptor_object(
  */
 MalDefineOwnStatus mal_builtin_object_try_define(MalVm *vm, MalObject *target, MalKey key, MalValue descriptor_value);
 
+/** Apply an already converted internal property descriptor to a non-Proxy target. */
+MalDefineOwnStatus mal_builtin_object_try_define_parsed(
+    MalVm *vm, MalObject *target, MalKey key,
+    const MalPropertyDescriptorParse *parsed);
+
 /**
  * ToObject for a primitive: wrap a string/number/boolean/symbol/bigint in its
  * matching wrapper object (undefined/null/object return undefined). Used by the

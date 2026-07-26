@@ -1,6 +1,7 @@
 #pragma once
 
 #include "./defaults.h"
+#include "builtin_object.h"
 #include "object.h"
 #include "table.h"
 #include "vm.h"
@@ -63,6 +64,9 @@ bool mal_proxy_has(MalVm *vm, MalProxyObject *proxy, MalKey key);
 bool mal_proxy_delete(MalVm *vm, MalProxyObject *proxy, MalKey key);
 bool mal_proxy_get_own_property_descriptor(MalVm *vm, MalProxyObject *proxy, MalKey key, bool *present_out, MalPropertyDesc *desc_out);
 bool mal_proxy_define_own_property(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue descriptor_value);
+bool mal_proxy_define_own_property_parsed(
+    MalVm *vm, MalProxyObject *proxy, MalKey key,
+    const MalPropertyDescriptorParse *parsed);
 bool mal_proxy_own_property_keys(MalVm *vm, MalProxyObject *proxy, MalValue *out_array);
 bool mal_proxy_get_prototype_of(MalVm *vm, MalProxyObject *proxy, MalValue *out);
 bool mal_proxy_set_prototype_of(MalVm *vm, MalProxyObject *proxy, MalValue proto, bool *success_out);

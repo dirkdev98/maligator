@@ -726,6 +726,31 @@ check(
 		}),
 );
 
+const nestedDefineString = new String("str");
+const nestedDefineStringProxy = new Proxy(
+	new Proxy(nestedDefineString, { defineProperty: null }),
+	{ defineProperty: undefined },
+);
+check(
+	"missing nested Proxy define traps forward to String exotic properties",
+	Reflect.defineProperty(nestedDefineStringProxy, "4", { value: 4 }) &&
+		nestedDefineString[4] === 4 &&
+		throwsTypeError(() =>
+			Object.defineProperty(nestedDefineStringProxy, "0", { value: "x" }),
+		),
+);
+
+function nestedDefineFunction() {}
+const nestedDefineFunctionProxy = new Proxy(new Proxy(nestedDefineFunction, {}), {});
+check(
+	"missing nested Proxy define traps preserve lazy function prototype invariants",
+	throwsTypeError(() =>
+		Object.defineProperty(nestedDefineFunctionProxy, "prototype", {
+			set() {},
+		}),
+	),
+);
+
 const prototypeSetCalls = [];
 const prototypeSetHandler = {
 	set(target, key, value, receiver) {

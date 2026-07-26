@@ -114,12 +114,10 @@ done:
     return ok;
 }
 
-MalDefineOwnStatus mal_builtin_object_try_define(MalVm *vm, MalObject *target, MalKey key, MalValue descriptor_value) {
-    MalPropertyDescriptorParse parse;
-    if (!mal_builtin_object_to_property_descriptor(vm, descriptor_value, &parse)) {
-        return MAL_DEFINE_OWN_REJECTED;
-    }
-
+MalDefineOwnStatus mal_builtin_object_try_define_parsed(
+    MalVm *vm, MalObject *target, MalKey key,
+    const MalPropertyDescriptorParse *parsed) {
+    MalPropertyDescriptorParse parse = *parsed;
     // String exotic [[DefineOwnProperty]]: an index/length own property is not
     // in the table. It is non-configurable (and non-writable), so the only
     // permitted redefinition is one compatible with the current exotic
@@ -291,6 +289,26 @@ MalDefineOwnStatus mal_builtin_object_try_define(MalVm *vm, MalObject *target, M
     if (status == MAL_DEFINE_OWN_APPLIED && grows_array_length) {
         mal_array_object_set_length((MalArrayObject *) target, (u32) mal_value_to_i32(key.value) + 1);
     }
+    return status;
+}
+
+MalDefineOwnStatus mal_builtin_object_try_define(
+    MalVm *vm, MalObject *target, MalKey key, MalValue descriptor_value) {
+    MalPropertyDescriptorParse parsed;
+    if (!mal_builtin_object_to_property_descriptor(vm, descriptor_value, &parsed)) {
+        return MAL_DEFINE_OWN_REJECTED;
+    }
+    MalValue roots[3] = {
+        parsed.desc.value, parsed.desc.getter, parsed.desc.setter,
+    };
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 3);
+    parsed.desc.value = roots[0];
+    parsed.desc.getter = roots[1];
+    parsed.desc.setter = roots[2];
+    MalDefineOwnStatus status =
+        mal_builtin_object_try_define_parsed(vm, target, key, &parsed);
+    mal_gc_unroot(&roots_span);
     return status;
 }
 

@@ -648,11 +648,36 @@ static bool mal_proxy_define_own_property_snapshot(
     }
     if (mal_value_is_undefined(trap)) {
         if (mal_value_is_proxy_object(target)) {
-            return mal_proxy_define_own_property(
-                vm, mal_value_to_proxy_object(target), key, descriptor_value);
+            return mal_proxy_define_own_property_parsed(
+                vm, mal_value_to_proxy_object(target), key, parsed);
         }
-        MalDefineOwnStatus status = mal_builtin_object_try_define(
-            vm, mal_value_to_object(target), key, descriptor_value);
+
+        bool present = false;
+        MalPropertyDesc current = {0};
+        // Script functions lazily materialize their non-configurable
+        // "prototype" property. Module namespace [[DefineOwnProperty]] compares
+        // against its synthetic current descriptor.
+        if ((mal_value_is_function_object(target) ||
+             mal_value_is_module_namespace_object(target)) &&
+            !mal_vm_get_own_property(vm, target, key, &present, &current)) {
+            return false;
+        }
+        if (mal_value_is_module_namespace_object(target)) {
+            if (!present ||
+                (parsed->has_configurable &&
+                 (parsed->desc.flags & MAL_PROPERTY_CONFIGURABLE)) ||
+                (parsed->has_enumerable &&
+                 !(parsed->desc.flags & MAL_PROPERTY_ENUMERABLE)) ||
+                mal_proxy_descriptor_is_accessor(parsed) ||
+                (parsed->has_writable &&
+                 !(parsed->desc.flags & MAL_PROPERTY_WRITABLE))) {
+                return false;
+            }
+            return !parsed->has_value ||
+                mal_proxy_same_value(parsed->desc.value, current.value);
+        }
+        MalDefineOwnStatus status = mal_builtin_object_try_define_parsed(
+            vm, mal_value_to_object(target), key, parsed);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             return false;
         }
@@ -736,37 +761,50 @@ done:
     return ok;
 }
 
-bool mal_proxy_define_own_property(MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue descriptor_value) {
-    MalValue roots[9] = {
+bool mal_proxy_define_own_property_parsed(
+    MalVm *vm, MalProxyObject *proxy, MalKey key,
+    const MalPropertyDescriptorParse *parsed) {
+    MalValue roots[8] = {
         mal_value_from_proxy_object(proxy),
-        descriptor_value,
         key.value,
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
+        parsed->desc.value,
+        parsed->desc.getter,
+        parsed->desc.setter,
         mal_value_new_undefined(),
         mal_value_new_undefined(),
         mal_value_new_undefined(),
     };
     MalRootSpan roots_span;
-    mal_gc_root(&roots_span, roots, 9);
-    key.value = roots[2];
-    MalPropertyDescriptorParse parsed;
-    bool ok = mal_builtin_object_to_property_descriptor(vm, roots[1], &parsed);
+    mal_gc_root(&roots_span, roots, 8);
+    key.value = roots[1];
+    MalPropertyDescriptorParse rooted = *parsed;
+    rooted.desc.value = roots[2];
+    rooted.desc.getter = roots[3];
+    rooted.desc.setter = roots[4];
+    proxy = mal_value_to_proxy_object(roots[0]);
+    bool ok = !mal_proxy_check_revoked(vm, proxy) && mal_proxy_dispatch_enter(vm);
     if (ok) {
-        roots[3] = parsed.desc.value;
-        roots[4] = parsed.desc.getter;
-        roots[5] = parsed.desc.setter;
-        proxy = mal_value_to_proxy_object(roots[0]);
-        ok = !mal_proxy_check_revoked(vm, proxy) && mal_proxy_dispatch_enter(vm);
-    }
-    if (ok) {
-        roots[6] = proxy->target;
-        roots[7] = proxy->handler;
-        roots[8] = mal_builtin_object_parsed_descriptor_object(vm, &parsed);
+        roots[5] = proxy->target;
+        roots[6] = proxy->handler;
+        roots[7] = mal_builtin_object_parsed_descriptor_object(vm, &rooted);
         ok = mal_proxy_define_own_property_snapshot(
-            vm, roots[6], roots[7], key, &parsed, roots[8]);
+            vm, roots[5], roots[6], key, &rooted, roots[7]);
         mal_proxy_dispatch_leave(vm);
+    }
+    mal_gc_unroot(&roots_span);
+    return ok;
+}
+
+bool mal_proxy_define_own_property(
+    MalVm *vm, MalProxyObject *proxy, MalKey key, MalValue descriptor_value) {
+    MalValue roots[2] = {descriptor_value, key.value};
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 2);
+    key.value = roots[1];
+    MalPropertyDescriptorParse parsed;
+    bool ok = mal_builtin_object_to_property_descriptor(vm, roots[0], &parsed);
+    if (ok) {
+        ok = mal_proxy_define_own_property_parsed(vm, proxy, key, &parsed);
     }
     mal_gc_unroot(&roots_span);
     return ok;
