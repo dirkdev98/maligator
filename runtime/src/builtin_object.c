@@ -158,11 +158,15 @@ MalDefineOwnStatus mal_builtin_object_try_define_parsed(
         // runs the value's user coercion and may throw.
         u32 new_length = 0;
         if (parse.has_value) {
+            f64 uint32_number;
+            if (!mal_vm_to_number(vm, parse.desc.value, &uint32_number)) {
+                return MAL_DEFINE_OWN_REJECTED;
+            }
+            new_length = mal_ops_number_to_uint32(uint32_number);
             f64 number_length;
             if (!mal_vm_to_number(vm, parse.desc.value, &number_length)) {
                 return MAL_DEFINE_OWN_REJECTED;
             }
-            new_length = (u32) number_length;
             if ((f64) new_length != number_length) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
                 return MAL_DEFINE_OWN_REJECTED;
@@ -208,8 +212,8 @@ MalDefineOwnStatus mal_builtin_object_try_define_parsed(
     if (target->header.type == MAL_HEAP_TYPED_ARRAY_OBJECT) {
         MalTypedArrayObject *typed_array = (MalTypedArrayObject *) target;
         if (key.kind == MAL_KEY_INDEX) {
-            i32 index = mal_value_to_i32(key.value);
-            if (index < 0 || (u32) index >= mal_typed_array_object_length(typed_array)) {
+            u32 index = mal_key_index_value(key);
+            if (index >= mal_typed_array_object_length(typed_array)) {
                 return MAL_DEFINE_OWN_REJECTED;
             }
             if (parse.has_get || parse.has_set ||
@@ -219,7 +223,7 @@ MalDefineOwnStatus mal_builtin_object_try_define_parsed(
                 return MAL_DEFINE_OWN_REJECTED;
             }
             if (parse.has_value) {
-                mal_typed_array_object_set(vm, typed_array, (u32) index, parse.desc.value);
+                mal_typed_array_object_set(vm, typed_array, index, parse.desc.value);
             }
             return MAL_DEFINE_OWN_APPLIED;
         }
@@ -276,8 +280,8 @@ MalDefineOwnStatus mal_builtin_object_try_define_parsed(
     bool grows_array_length = false;
     if (target->header.type == MAL_HEAP_ARRAY_OBJECT && key.kind == MAL_KEY_INDEX) {
         MalArrayObject *array = (MalArrayObject *) target;
-        i32 index = mal_value_to_i32(key.value);
-        if (index >= 0 && (u32) index >= mal_array_object_length(array)) {
+        u32 index = mal_key_index_value(key);
+        if (index >= mal_array_object_length(array)) {
             if (!array->length_writable) {
                 return MAL_DEFINE_OWN_REJECTED;
             }
@@ -287,7 +291,7 @@ MalDefineOwnStatus mal_builtin_object_try_define_parsed(
 
     MalDefineOwnStatus status = mal_object_define_own(target, key, &desc);
     if (status == MAL_DEFINE_OWN_APPLIED && grows_array_length) {
-        mal_array_object_set_length((MalArrayObject *) target, (u32) mal_value_to_i32(key.value) + 1);
+        mal_array_object_set_length((MalArrayObject *) target, mal_key_index_value(key) + 1);
     }
     return status;
 }
@@ -624,10 +628,10 @@ static MalValue mal_builtin_object_own_descriptor(MalVm *vm, MalValue target, Ma
     // never an ordinary table property).
     if (mal_value_is_typed_array_object(target) && key.kind == MAL_KEY_INDEX) {
         MalTypedArrayObject *typed_array = mal_value_to_typed_array_object(target);
-        i32 index = mal_value_to_i32(key.value);
-        if (index >= 0 && (u32) index < mal_typed_array_object_length(typed_array)) {
+        u32 index = mal_key_index_value(key);
+        if (index < mal_typed_array_object_length(typed_array)) {
             MalPropertyDesc desc = {
-                .value = mal_typed_array_object_get(vm, typed_array, (u32) index),
+                .value = mal_typed_array_object_get(vm, typed_array, index),
                 .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
             };
             return mal_builtin_object_descriptor_object(vm, desc);

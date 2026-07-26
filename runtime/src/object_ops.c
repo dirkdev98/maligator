@@ -253,9 +253,9 @@ MalPropertyLookup mal_object_get_own(const MalObject *object, MalKey key) {
     if (key.kind == MAL_KEY_INDEX && object->header.type == MAL_HEAP_ARRAY_OBJECT) {
         const MalArrayObject *array = (const MalArrayObject *) object;
         if (mal_array_object_is_dense(array)) {
-            i32 index = mal_value_to_i32(key.value);
+            u32 index = mal_key_index_value(key);
             MalValue value;
-            if (index >= 0 && mal_array_object_dense_get(array, (u32) index, &value)) {
+            if (mal_array_object_dense_get(array, index, &value)) {
                 return (MalPropertyLookup){
                     .present = true,
                     .entry = nullptr,
@@ -334,14 +334,14 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
     if (key.kind == MAL_KEY_INDEX && object->header.type == MAL_HEAP_ARRAY_OBJECT) {
         MalArrayObject *array = (MalArrayObject *) object;
         if (!array->dense_deopted) {
-            i32 index = mal_value_to_i32(key.value);
-            if (index >= 0 && mal_object_desc_is_default_data(desc)) {
+            u32 index = mal_key_index_value(key);
+            if (mal_object_desc_is_default_data(desc)) {
                 // Defining a NEW index on a non-extensible array is rejected;
                 // overwriting an existing element is allowed.
-                if (!object->extensible && !mal_array_object_dense_has(array, (u32) index)) {
+                if (!object->extensible && !mal_array_object_dense_has(array, index)) {
                     return MAL_DEFINE_OWN_REJECTED;
                 }
-                if (mal_array_object_dense_store(array, (u32) index, desc->value) ==
+                if (mal_array_object_dense_store(array, index, desc->value) ==
                     MAL_ARRAY_DENSE_APPLIED) {
                     return MAL_DEFINE_OWN_APPLIED;
                 }
@@ -496,10 +496,7 @@ bool mal_object_delete_own(MalObject *object, MalKey key) {
     if (key.kind == MAL_KEY_INDEX && object->header.type == MAL_HEAP_ARRAY_OBJECT) {
         MalArrayObject *array = (MalArrayObject *) object;
         if (mal_array_object_is_dense(array)) {
-            i32 index = mal_value_to_i32(key.value);
-            if (index >= 0) {
-                mal_array_object_dense_delete(array, (u32) index);
-            }
+            mal_array_object_dense_delete(array, mal_key_index_value(key));
             return true;
         }
     }

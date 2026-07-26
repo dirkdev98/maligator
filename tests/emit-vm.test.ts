@@ -83,6 +83,31 @@ const definition: VmDefinition = {
 };
 
 describe("emit-vm instruction packing", () => {
+	it("emits complete data-property descriptor attributes", () => {
+		const descriptorDefinition = {
+			...definition,
+			functions: [
+				{
+					...fn,
+					instructions: [
+						{
+							opcode: "DEFINE_PROPERTY" as const,
+							object: 1,
+							key: 2,
+							value: 3,
+							enumerable: true,
+							writable: false,
+							configurable: false,
+						},
+					],
+				},
+			],
+		};
+		expect(emitVmDefinition(descriptorDefinition, { compiled: false })).toContain(
+			".as.define_property = { .object = 1, .key = 2, .value = 3, .enumerable = true, .writable = false, .configurable = false }",
+		);
+	});
+
 	it("emits one flattened side table and raw f64 words", () => {
 		const output = emitVmDefinition(definition, { compiled: false });
 		expect(output).toContain(

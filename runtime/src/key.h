@@ -38,6 +38,12 @@ static inline MalKeyKind mal_key_kind_of(MalValue value) {
     if (mal_value_is_int32(value)) {
         return MAL_KEY_INDEX;
     }
+    if (mal_value_is_f64(value)) {
+        f64 number = mal_value_to_f64(value);
+        if (number >= 0 && number < (f64) UINT32_MAX && (f64) (u32) number == number) {
+            return MAL_KEY_INDEX;
+        }
+    }
     if (mal_value_is_nil(value) || mal_value_is_boolean(value)) {
         return MAL_KEY_STATIC;
     }
@@ -49,24 +55,27 @@ static inline MalKey mal_key_from_value(MalValue value) {
 }
 
 /**
- * Construct an integer property key in the engine's explicit 0..INT32_MAX
- * property-index domain. Larger ECMAScript property names remain string keys.
+ * Construct an integer property key in ECMAScript's 0..2^32-2 array-index
+ * domain. Values above INT32_MAX use the existing exact f64 Number encoding.
  */
 static inline MalKey mal_key_index_signed(i64 index) {
-    if (index < 0 || index > INT32_MAX) {
+    if (index < 0 || (u64) index >= UINT32_MAX) {
         abort();
     }
     return (MalKey) {
         .kind = MAL_KEY_INDEX,
-        .value = mal_value_from_i32((i32) index),
+        .value = mal_value_from_u32((u32) index),
     };
 }
 
 static inline MalKey mal_key_index_unsigned(u64 index) {
-    if (index > INT32_MAX) {
+    if (index >= UINT32_MAX) {
         abort();
     }
-    return mal_key_index_signed((i64) index);
+    return (MalKey) {
+        .kind = MAL_KEY_INDEX,
+        .value = mal_value_from_u32((u32) index),
+    };
 }
 
 // Select before conversion so unsigned callers cannot wrap through i32.
@@ -75,6 +84,15 @@ static inline MalKey mal_key_index_unsigned(u64 index) {
     u64: mal_key_index_unsigned, \
     default: mal_key_index_signed \
 )(index)
+
+static inline u32 mal_key_index_value(MalKey key) {
+    if (key.kind != MAL_KEY_INDEX) {
+        abort();
+    }
+    return mal_value_is_int32(key.value)
+        ? (u32) mal_value_to_i32(key.value)
+        : (u32) mal_value_to_f64(key.value);
+}
 
 /** String keys compare by code units; all other key values compare by bits. */
 bool mal_key_value_equals(MalValue left, MalValue right);

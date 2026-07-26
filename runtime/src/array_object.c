@@ -203,13 +203,13 @@ static u32 mal_array_object_shrink(MalArrayObject *array, u32 new_length) {
             continue;
         }
 
-        i32 index = mal_value_to_i32(key.value);
-        if (index >= 0 && (u32) index >= new_length) {
+        u32 index = mal_key_index_value(key);
+        if (index >= new_length) {
             if (count == capacity) {
                 capacity = capacity == 0 ? 8 : capacity * 2;
                 indices = realloc(indices, sizeof(u32) * capacity);
             }
-            indices[count++] = (u32) index;
+            indices[count++] = index;
         }
     }
 
@@ -307,8 +307,8 @@ static bool mal_array_object_store_tail(MalArrayObject *array, MalKey key, MalVa
 
 bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
     if (key.kind == MAL_KEY_INDEX) {
-        i32 index = mal_value_to_i32(key.value);
-        bool grows = index >= 0 && (u32) index >= array->length;
+        u32 index = mal_key_index_value(key);
+        bool grows = index >= array->length;
         // Growing an index past length also writes length, which is refused when
         // length is non-writable.
         if (grows && !array->length_writable) {
@@ -334,7 +334,7 @@ bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
             return false;
         }
         if (grows) {
-            array->length = (u32) index + 1;
+            array->length = index + 1;
         }
         return true;
     }
@@ -344,8 +344,8 @@ bool mal_array_object_store(MalArrayObject *array, MalKey key, MalValue value) {
 
 bool mal_array_object_set(MalArrayObject *array, MalKey key, MalValue value) {
     if (key.kind == MAL_KEY_INDEX) {
-        i32 index = mal_value_to_i32(key.value);
-        bool grows = index >= 0 && (u32) index >= array->length;
+        u32 index = mal_key_index_value(key);
+        bool grows = index >= array->length;
         if (grows && !array->length_writable) {
             return false;
         }
@@ -358,7 +358,7 @@ bool mal_array_object_set(MalArrayObject *array, MalKey key, MalValue value) {
             return false;
         }
         if (grows) {
-            array->length = (u32) index + 1;
+            array->length = index + 1;
         }
         return true;
     }

@@ -78,6 +78,9 @@ test/built-ins/Number/prototype/toFixed/length.js
 test/built-ins/Object/create/properties-arg-to-object-bigint.js
 test/built-ins/Object/create/properties-arg-to-object.js
 test/built-ins/Object/defineProperties/15.2.3.7-5-b-70.js
+test/built-ins/Object/defineProperties/15.2.3.7-6-a-179.js
+test/built-ins/Object/defineProperties/15.2.3.7-6-a-219.js
+test/built-ins/Object/defineProperties/15.2.3.7-6-a-252.js
 test/built-ins/Object/defineProperty/15.2.3.6-3-54.js
 test/built-ins/Object/defineProperty/15.2.3.6-4-329.js
 test/built-ins/Object/defineProperty/15.2.3.6-4-584.js
@@ -311,6 +314,9 @@ test/language/white-space/after-regular-expression-literal-nbsp.js
 
 # Realms
 test/built-ins/Array/length/define-own-prop-length-overflow-realm.js
+test/built-ins/Array/length/S15.4.5.2_A3_T4.js
+test/built-ins/Array/length/define-own-prop-length-coercion-order.js
+test/built-ins/Array/length/define-own-prop-length-coercion-order-set.js
 test/built-ins/Array/of/proto-from-ctor-realm.js
 test/built-ins/Array/prototype/concat/create-proto-from-ctor-realm-array.js
 test/built-ins/Array/prototype/concat/create-proto-from-ctor-realm-non-array.js

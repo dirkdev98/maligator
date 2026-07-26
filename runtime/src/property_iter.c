@@ -124,11 +124,7 @@ static bool mal_property_iter_next_storage(MalPropertyIter *iter, MalKey *key_ou
 }
 
 static u32 mal_property_iter_index_value(MalKey key) {
-    if (mal_value_is_int32(key.value)) {
-        return (u32) mal_value_to_i32(key.value);
-    }
-
-    return (u32) key.value;
+    return mal_key_index_value(key);
 }
 
 static bool mal_property_iter_next_index(MalPropertyIter *iter, MalKey *key_out, MalPropertyDesc *desc_out) {

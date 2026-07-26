@@ -58,7 +58,7 @@ MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right) {
     return result;
 }
 
-static bool mal_vm_string_to_array_index(MalString *string, i32 *index_out) {
+static bool mal_vm_string_to_array_index(MalString *string, u32 *index_out) {
     usize length = mal_string_length(string);
     const c16 *code_units = mal_string_code_units(string);
 
@@ -78,12 +78,12 @@ static bool mal_vm_string_to_array_index(MalString *string, i32 *index_out) {
         }
 
         value = value * 10 + (u64) (code_unit - '0');
-        if (value > INT32_MAX) {
+        if (value >= UINT32_MAX) {
             return false;
         }
     }
 
-    *index_out = (i32) value;
+    *index_out = (u32) value;
     return true;
 }
 
@@ -104,7 +104,7 @@ bool mal_vm_string_is_canonical_numeric_index(MalVm *vm, MalString *string) {
 }
 
 static bool mal_vm_string_to_property_key(MalValue value, MalKey *key_out) {
-    i32 index = 0;
+    u32 index = 0;
     if (mal_vm_string_to_array_index(mal_value_to_string(value), &index)) {
         *key_out = mal_key_index(index);
         return true;
@@ -269,8 +269,8 @@ bool mal_vm_own_property_keys(MalVm *vm, MalValue object_value, MalValue *keys_o
             continue;
         }
         if (string_wrapper && key.kind == MAL_KEY_INDEX) {
-            i32 index = mal_value_to_i32(key.value);
-            if (index >= 0 && (u32) index < string_length) {
+            u32 index = mal_key_index_value(key);
+            if (index < string_length) {
                 continue;
             }
         }
@@ -368,12 +368,12 @@ bool mal_vm_get_own_property(
 
     if (mal_value_is_typed_array_object(object_value) && key.kind == MAL_KEY_INDEX) {
         MalTypedArrayObject *array = mal_value_to_typed_array_object(object_value);
-        i32 index = mal_value_to_i32(key.value);
-        if (index >= 0 && (u32) index < mal_typed_array_object_length(array)) {
+        u32 index = mal_key_index_value(key);
+        if (index < mal_typed_array_object_length(array)) {
             *desc_out = (MalPropertyDesc) {
                 .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
                     MAL_PROPERTY_CONFIGURABLE,
-                .value = mal_typed_array_object_get(vm, array, (u32) index),
+                .value = mal_typed_array_object_get(vm, array, index),
                 .getter = mal_value_new_undefined(),
                 .setter = mal_value_new_undefined(),
             };
@@ -2563,9 +2563,9 @@ static bool mal_vm_resolve_synthetic_property(MalVm *vm, MalValue object_value, 
     // correct `in` result.
     if (mal_value_is_typed_array_object(object_value) && key.kind == MAL_KEY_INDEX) {
         MalTypedArrayObject *array = mal_value_to_typed_array_object(object_value);
-        i32 index = mal_value_to_i32(key.value);
-        if (index >= 0 && (u32) index < mal_typed_array_object_length(array)) {
-            *value_out = mal_typed_array_object_get(vm, array, (u32) index);
+        u32 index = mal_key_index_value(key);
+        if (index < mal_typed_array_object_length(array)) {
+            *value_out = mal_typed_array_object_get(vm, array, index);
             return true;
         }
     }
@@ -2823,8 +2823,8 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
             }
 
             if (key.kind == MAL_KEY_INDEX) {
-                i32 index = mal_value_to_i32(key.value);
-                if (index >= 0 && (usize) index < mal_string_length(string)) {
+                u32 index = mal_key_index_value(key);
+                if ((usize) index < mal_string_length(string)) {
                     *out = mal_value_from_string(mal_intrinsic_code_unit(
                         vm, mal_string_code_units(string)[(usize) index]
                     ));
@@ -2860,8 +2860,8 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
     // path, which consults the prototype chain. This is the arr[i] read hot path.
     if (key.kind == MAL_KEY_INDEX && mal_value_heap_type(object_value) == MAL_HEAP_ARRAY_OBJECT) {
         const MalArrayObject *array = (const MalArrayObject *) mal_value_to_object(object_value);
-        i32 index = mal_value_to_i32(key.value);
-        if (index >= 0 && mal_array_object_dense_get(array, (u32) index, out)) {
+        u32 index = mal_key_index_value(key);
+        if (mal_array_object_dense_get(array, index, out)) {
             return true;
         }
     }
@@ -2963,11 +2963,15 @@ bool mal_vm_has_property(MalVm *vm, MalValue object_value, MalKey key) {
 // when the length is not fully set; a non-configurable element can block the
 // shrink, leaving length at that element + 1.
 static bool mal_vm_array_set_length(MalVm *vm, MalArrayObject *array, MalValue value) {
+    f64 uint32_number;
+    if (!mal_vm_to_number(vm, value, &uint32_number)) {
+        return false;
+    }
+    u32 new_length = mal_ops_number_to_uint32(uint32_number);
     f64 number_length;
     if (!mal_vm_to_number(vm, value, &number_length)) {
         return false;
     }
-    u32 new_length = mal_ops_number_to_uint32(number_length);
     if ((f64) new_length != number_length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid array length");
         return false;
@@ -3001,11 +3005,9 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
             vm, mal_value_to_string(key.value));
     if (mal_value_is_typed_array_object(target) && target == receiver) {
         if (key.kind == MAL_KEY_INDEX) {
-            i32 index = mal_value_to_i32(key.value);
-            if (index >= 0) {
-                mal_typed_array_object_set(vm, mal_value_to_typed_array_object(target), (u32) index, value);
-                return true;
-            }
+            u32 index = mal_key_index_value(key);
+            mal_typed_array_object_set(vm, mal_value_to_typed_array_object(target), index, value);
+            return true;
         } else if (typed_array_canonical_string) {
             // An invalid integer-index key: [[Set]] is a no-op but returns true,
             // never creating an ordinary property.
@@ -3018,13 +3020,13 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
     if (target == receiver && key.kind == MAL_KEY_INDEX &&
         mal_value_heap_type(target) == MAL_HEAP_ARRAY_OBJECT) {
         MalArrayObject *array = (MalArrayObject *) mal_value_to_object(target);
-        i32 index = mal_value_to_i32(key.value);
-        if (index >= 0) {
+        u32 index = mal_key_index_value(key);
+        if (index < UINT32_MAX) {
             // (a) Overwrite of a present element: an own writable data property shadows
             // any inherited accessor, so this is sound regardless of the prototype
             // chain or the protector.
-            if (mal_array_object_dense_has(array, (u32) index)) {
-                mal_array_object_dense_store(array, (u32) index, value);
+            if (mal_array_object_dense_has(array, index)) {
+                mal_array_object_dense_store(array, index, value);
                 return true;
             }
             // (b) Fresh-index store (append / hole-fill): sound to store directly only
@@ -3036,10 +3038,10 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
                 array->object.extensible && array->length_writable &&
                 array->object.prototype ==
                     mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])) {
-                if (mal_array_object_dense_store(array, (u32) index, value) ==
+                if (mal_array_object_dense_store(array, index, value) ==
                     MAL_ARRAY_DENSE_APPLIED) {
-                    if ((u32) index >= array->length) {
-                        array->length = (u32) index + 1;
+                    if (index >= array->length) {
+                        array->length = index + 1;
                     }
                     return true;
                 }
@@ -3134,16 +3136,13 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
                 vm, mal_value_to_array_object(receiver), value);
         }
         if (mal_value_is_array_object(receiver) && key.kind == MAL_KEY_INDEX) {
-            return mal_array_object_store(
+            return mal_array_object_set(
                 mal_value_to_array_object(receiver), key, value);
         }
         if (mal_value_is_typed_array_object(receiver) && key.kind == MAL_KEY_INDEX) {
-            i32 index = mal_value_to_i32(key.value);
-            if (index < 0) {
-                return false;
-            }
+            u32 index = mal_key_index_value(key);
             mal_typed_array_object_set(
-                vm, mal_value_to_typed_array_object(receiver), (u32) index, value);
+                vm, mal_value_to_typed_array_object(receiver), index, value);
             return vm->completion.kind != MAL_COMPLETION_THROW;
         }
         receiver_desc.value = value;
@@ -3884,11 +3883,8 @@ static void mal_vm_op_store_property_keyed(
     // never define an ordinary property.
     if (mal_value_is_typed_array_object(object_value)) {
         if (key.kind == MAL_KEY_INDEX) {
-            i32 index = mal_value_to_i32(key.value);
-            if (index >= 0) {
-                mal_typed_array_object_set(vm, mal_value_to_typed_array_object(object_value), (u32) index, value);
-                return;
-            }
+            mal_typed_array_object_set(vm, mal_value_to_typed_array_object(object_value), mal_key_index_value(key), value);
+            return;
         } else if (key.kind == MAL_KEY_STRING &&
                    mal_vm_string_is_canonical_numeric_index(vm, mal_value_to_string(key.value))) {
             // An invalid integer-index key (e.g. "-1"/"1.5"/"-0"): the write is a
@@ -3901,12 +3897,12 @@ static void mal_vm_op_store_property_keyed(
     // skipping the prototype-chain resolve(s) the slow path below performs.
     if (key.kind == MAL_KEY_INDEX && mal_value_heap_type(object_value) == MAL_HEAP_ARRAY_OBJECT) {
         MalArrayObject *array = (MalArrayObject *) mal_value_to_object(object_value);
-        i32 index = mal_value_to_i32(key.value);
-        if (index >= 0) {
+        u32 index = mal_key_index_value(key);
+        if (index < UINT32_MAX) {
             // Overwrite of a present element: an own writable data property shadows
             // any inherited accessor — sound regardless of the prototype / protector.
-            if (mal_array_object_dense_has(array, (u32) index)) {
-                mal_array_object_dense_store(array, (u32) index, value);
+            if (mal_array_object_dense_has(array, index)) {
+                mal_array_object_dense_store(array, index, value);
                 return;
             }
             // Fresh-index store (append / hole-fill): sound to store directly only when
@@ -3917,10 +3913,10 @@ static void mal_vm_op_store_property_keyed(
                 array->object.extensible && array->length_writable &&
                 array->object.prototype ==
                     mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])) {
-                if (mal_array_object_dense_store(array, (u32) index, value) ==
+                if (mal_array_object_dense_store(array, index, value) ==
                     MAL_ARRAY_DENSE_APPLIED) {
-                    if ((u32) index >= array->length) {
-                        array->length = (u32) index + 1;
+                    if (index >= array->length) {
+                        array->length = index + 1;
                     }
                     return;
                 }
@@ -4351,7 +4347,7 @@ MalValue mal_vm_op_delete_property(MalVm *vm, MalValue object_value, MalValue ke
         if (mal_value_is_string(object_value)) {
             MalString *string = mal_value_to_string(object_value);
             if (mal_array_key_is_length(key) ||
-                (key.kind == MAL_KEY_INDEX && (usize) mal_value_to_i32(key.value) < mal_string_length(string))) {
+                (key.kind == MAL_KEY_INDEX && (usize) mal_key_index_value(key) < mal_string_length(string))) {
                 deleted = false;
             }
         }
@@ -4981,9 +4977,9 @@ void mal_vm_op_define_property(MalVm *vm, MalValue object_value, MalValue key_va
     // grows length (CreateDataProperty on a fresh array must keep length in step).
     if (mal_value_is_array_object(object_value) && key.kind == MAL_KEY_INDEX) {
         MalArrayObject *array = mal_value_to_array_object(object_value);
-        i32 index = mal_value_to_i32(key.value);
-        if (index >= 0 && (u32) index >= mal_array_object_length(array)) {
-            mal_array_object_set_length(array, (u32) index + 1);
+        u32 index = mal_key_index_value(key);
+        if (index >= mal_array_object_length(array)) {
+            mal_array_object_set_length(array, index + 1);
         }
     }
 }

@@ -831,12 +831,18 @@ static inline void mal_vm_object_slot_store(MalObject *object, u32 slot, MalValu
     mal_gc_card(&object->header, value);
 }
 
+static inline bool mal_vm_array_try_load(const MalArrayObject *arr, f64 index, MalValue *out);
+static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalValue value);
+
 static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic) {
-    if (mal_value_is_int32(key_value) && mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
-        i32 index = mal_value_to_i32(key_value);
+    if ((mal_value_is_int32(key_value) || mal_value_is_f64(key_value)) &&
+        mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
+        f64 index = mal_value_is_int32(key_value)
+            ? (f64) mal_value_to_i32(key_value)
+            : mal_value_to_f64(key_value);
         MalValue out;
-        if (index >= 0 &&
-            mal_array_object_dense_get((const MalArrayObject *) mal_value_to_heap(object_value), (u32) index, &out)) {
+        if (mal_vm_array_try_load(
+                (const MalArrayObject *) mal_value_to_heap(object_value), index, &out)) {
             return out;
         }
     }
@@ -856,27 +862,14 @@ static inline MalValue mal_vm_array_fast_load(MalVm *vm, MalValue object_value, 
 }
 
 static inline void mal_vm_array_fast_store(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic) {
-    if (mal_value_is_int32(key_value) && mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
-        i32 index = mal_value_to_i32(key_value);
-        if (index >= 0) {
-            MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(object_value);
-            // Overwrite of a present element — own data shadows any inherited accessor.
-            if (mal_array_object_dense_has(array, (u32) index)) {
-                mal_array_object_dense_store(array, (u32) index, value);
-                return;
-            }
-            // Fresh-index store — sound only on the default %Array.prototype% with the
-            // fast-elements protector up, extensible, and a writable length.
-            if (!array->dense_deopted && mal_array_elements_protector &&
-                array->object.extensible && array->length_writable &&
-                array->object.prototype == mal_array_prototype_object) {
-                if (mal_array_object_dense_store(array, (u32) index, value) == MAL_ARRAY_DENSE_APPLIED) {
-                    if ((u32) index >= array->length) {
-                        array->length = (u32) index + 1;
-                    }
-                    return;
-                }
-            }
+    if ((mal_value_is_int32(key_value) || mal_value_is_f64(key_value)) &&
+        mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT)) {
+        f64 index = mal_value_is_int32(key_value)
+            ? (f64) mal_value_to_i32(key_value)
+            : mal_value_to_f64(key_value);
+        if (mal_vm_array_try_store(
+                (MalArrayObject *) mal_value_to_heap(object_value), index, value)) {
+            return;
         }
     }
     // Inline the monomorphic object-shape hit (mirrors the top of
@@ -917,9 +910,11 @@ static inline MalArrayObject *mal_vm_as_array(MalValue v) {
  * dense region (the caller then takes the general path). Never runs user code.
  */
 static inline bool mal_vm_array_try_load(const MalArrayObject *arr, f64 index, MalValue *out) {
-    i64 i = (i64) index;
-    if ((f64) i == index && i >= 0 && i <= UINT32_MAX) {
-        return mal_array_object_dense_get(arr, (u32) i, out);
+    if (index >= 0 && index < (f64) UINT32_MAX) {
+        u32 i = (u32) index;
+        if ((f64) i == index) {
+            return mal_array_object_dense_get(arr, i, out);
+        }
     }
     return false;
 }
@@ -932,9 +927,11 @@ static inline bool mal_vm_array_try_load(const MalArrayObject *arr, f64 index, M
  * Mirrors the dense arms of mal_vm_array_fast_store_index exactly.
  */
 static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalValue value) {
-    i64 i = (i64) index;
-    if ((f64) i == index && i >= 0 && i <= UINT32_MAX) {
-        u32 k = (u32) i;
+    if (index >= 0 && index < (f64) UINT32_MAX) {
+        u32 k = (u32) index;
+        if ((f64) k != index) {
+            return false;
+        }
         if (mal_array_object_dense_has(arr, k)) {
             mal_array_object_dense_store(arr, k, value);
             return true;

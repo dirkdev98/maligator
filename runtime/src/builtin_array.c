@@ -121,7 +121,7 @@ static bool mal_builtin_array_set_or_throw(MalVm *vm, MalValue receiver, MalKey 
     // property: route it through the element setter (ToNumber-coerces, then
     // writes or silently drops when out of bounds) per IntegerIndexedElementSet.
     if (mal_value_is_typed_array_object(receiver) && key.kind == MAL_KEY_INDEX) {
-        mal_typed_array_object_set(vm, mal_value_to_typed_array_object(receiver), (u32) mal_value_to_i32(key.value), value);
+        mal_typed_array_object_set(vm, mal_value_to_typed_array_object(receiver), mal_key_index_value(key), value);
         return vm->completion.kind != MAL_COMPLETION_THROW;
     }
 

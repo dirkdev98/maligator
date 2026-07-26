@@ -147,7 +147,7 @@ static byte *mal_ncp_env_key(MalVm *vm, MalKey key, usize *len) {
         return (byte *) out;
     }
     char index[16];
-    int n = snprintf(index, sizeof(index), "%d", mal_value_to_i32(key.value));
+    int n = snprintf(index, sizeof(index), "%u", mal_key_index_value(key));
     byte *out = malloc((usize) n + 1);
     memcpy(out, index, (usize) n + 1);
     *len = (usize) n;
