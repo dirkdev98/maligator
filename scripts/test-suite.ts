@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { cleanTestEnvironment } from "./test-environment.ts";
 
@@ -14,13 +14,21 @@ interface Command {
 }
 
 const root = path.resolve(import.meta.dirname, "..");
-const smokeFuseMs = 30_000;
+const coldSmokeRun = [
+	".cache/mal-cache/compiler-wire",
+	".cache/mal-cache/runtime",
+	".cache/mal-cache/rust",
+	".cache/mal-cache/test262-artifacts",
+	".cache/test262/.git",
+	".cache/test262-cache.json",
+].some((entry) => !existsSync(path.join(root, entry)));
+const smokeFuseMs = coldSmokeRun ? 60_000 : 30_000;
 const usage = `usage: node scripts/test-suite.ts [smoke|check|full] [options]
 
 Tiers are cumulative: check starts with smoke; full starts with smoke and check.
 
 Commands:
-  npm run test:smoke          approximately 30-second fail-fast fuse
+  npm run test:smoke          30-second warm / 60-second cold fail-fast fuse
   npm run test:check          approximately two-minute default developer gate
   npm run test:full           exhaustive fail-fast gate; approval required
   npm run test:full:report    exhaustive completion gate; approval required
@@ -422,6 +430,10 @@ if (list) {
 		console.log(`${command.name}:\n  ${formatCommand(command)}`);
 	}
 	process.exit(0);
+}
+
+if (coldSmokeRun) {
+	console.log("[test-suite] cold caches detected; smoke fuse extended to 60s");
 }
 
 let failures = 0;

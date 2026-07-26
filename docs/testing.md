@@ -6,11 +6,11 @@ and the full tier is exhaustive rather than interactive.
 
 ## Tiers
 
-| Tier  | Command              | Policy                  | Intended use                                                                                  |
-| ----- | -------------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
-| Smoke | `npm run test:smoke` | Bail, 30-second fuse    | Fast compiler/native/Test262/WPT cross-section                                                |
-| Check | `npm run test:check` | Bail, about two minutes | Default local and pre-push gate                                                               |
-| Full  | `npm run test:full`  | Bail, unbounded         | Self-hosting, complete native coverage, standards matrices, sanitizers, collectors, and leaks |
+| Tier  | Command              | Policy                    | Intended use                                                                                  |
+| ----- | -------------------- | ------------------------- | --------------------------------------------------------------------------------------------- |
+| Smoke | `npm run test:smoke` | Bail, 30s warm / 60s cold | Fast compiler/native/Test262/WPT cross-section                                                |
+| Check | `npm run test:check` | Bail, about two minutes   | Default local and pre-push gate                                                               |
+| Full  | `npm run test:full`  | Bail, unbounded           | Self-hosting, complete native coverage, standards matrices, sanitizers, collectors, and leaks |
 
 `test:check` excludes every entry in `tests/test-suite-unit-full-only.txt`. The current
 entry, `tests/toolchain.test.ts`, creates fake C/Rust toolchains and repeatedly
@@ -24,10 +24,10 @@ differential follows the two-minute matrix, before the remaining exhaustive
 lanes. This keeps fast self-host transfer failures high in the fail-fast order.
 
 The smoke fuse measures its cumulative stages and fails if they exceed 30
-seconds. It does not kill a native build in progress because terminating an npm
-wrapper can orphan compiler descendants. The budget is a warm developer target;
-a cacheless native or Test262 bootstrap can exceed it and is reported as a fuse
-failure rather than being silently excluded from the measurement.
+seconds on a warm run. It allows 60 seconds when the reusable native or Test262
+cache roots are missing. It does not kill a native build in progress because
+terminating an npm wrapper can orphan compiler descendants. Both budgets include
+cache population rather than silently excluding it from the measurement.
 
 ## Policies
 
@@ -143,6 +143,8 @@ they want before adding the test.
 ## Maintaining Selections
 
 - Smoke and check manifests must be deterministic, duplicate-free, and disjoint.
+- Curate the Test262 regression manifests manually. Baseline updates, full-suite
+  reports, and newly passing tests must never add or remove entries automatically.
 - `npm run test262:regressions` unions the Test262 smoke and check manifests, so
   the direct lane covers the same curated set as the cumulative check tier.
 - Every Test262 manifest path must exist in the pinned corpus; missing paths fail.

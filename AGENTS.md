@@ -2,7 +2,7 @@
 
 ## Commands
 
-- `npm run test:smoke` - Optional 30-second fuse; runs first inside larger gates
+- `npm run test:smoke` - Optional 30-second warm / 60-second cold fuse; runs first inside larger gates
 - `npm run test:check` - Default approximately two-minute developer gate; excludes slow toolchain integration
 - `npm run test:full` - Exhaustive fail-fast gate; includes full Test262, so ask before running
 - `npm run test:full:report` - Exhaustive completion policy; ask before running
