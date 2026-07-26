@@ -3193,6 +3193,12 @@ bool mal_vm_delete_property(MalVm *vm, MalValue object_value, MalKey key) {
         return mal_object_delete_own(object, key);
     }
 
+    MalPropertyDesc string_exotic;
+    if (mal_primitive_wrapper_string_exotic_own(
+            &vm->heap, object, key, &string_exotic)) {
+        return false;
+    }
+
     MalValue synthetic;
     if (mal_vm_resolve_synthetic_property(vm, object_value, key, &synthetic)) {
         return false;
@@ -4353,6 +4359,9 @@ MalValue mal_vm_op_delete_property(MalVm *vm, MalValue object_value, MalValue ke
         deleted = mal_vm_delete_property(vm, object_value, key);
     }
 
+    if (!deleted && vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
     if (!deleted && strict) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot delete property");
         return mal_value_new_undefined();

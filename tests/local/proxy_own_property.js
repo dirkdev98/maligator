@@ -297,6 +297,40 @@ check(
 	"delete snapshots rooted target and handler before GetMethod",
 	revokingMutation("deleteProperty", (proxy) => Reflect.deleteProperty(proxy, "x")),
 );
+
+const deleteAbruptMarker = {};
+let deleteAbruptPreserved = false;
+try {
+	(function (proxy) {
+		"use strict";
+		delete proxy.x;
+	})(
+		new Proxy(
+			{},
+			{
+				deleteProperty() {
+					forceGc();
+					throw deleteAbruptMarker;
+				},
+			},
+		),
+	);
+} catch (error) {
+	deleteAbruptPreserved = error === deleteAbruptMarker;
+}
+check("strict delete preserves the trap abrupt completion", deleteAbruptPreserved);
+
+const nestedStringDelete = new Proxy(new Proxy(new String("str"), {}), {
+	deleteProperty: null,
+});
+check(
+	"null delete trap forwards through proxies to String exotic properties",
+	!Reflect.deleteProperty(nestedStringDelete, "length") &&
+		throwsTypeError(() => {
+			"use strict";
+			delete nestedStringDelete[0];
+		}),
+);
 check(
 	"defineProperty snapshots rooted target and handler before GetMethod",
 	revokingMutation("defineProperty", (proxy) =>
