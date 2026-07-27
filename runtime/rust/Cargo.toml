@@ -63,6 +63,12 @@ flate2 = { version = "1", default-features = false, features = [
 	"zlib-rs",
 ], optional = true }
 brotli-decompressor = { version = "5", optional = true }
+rustls = { version = "0.23", default-features = false, features = [
+	"ring",
+	"std",
+	"tls12",
+], optional = true }
+rustls-pemfile = { version = "2", optional = true }
 
 [features]
 # On by default so dev/test262 builds carry the full Intl + web + RegExp surface.
@@ -82,6 +88,7 @@ regexp = ["dep:regress"]
 # node:zlib phase 1: decompression-only flat primitives. The C/JS adapters remain
 # outside this feature; Node builds select it through normalizeNativeFeatures.
 node-zlib = ["dep:flate2", "dep:brotli-decompressor"]
+node-tls = ["dep:rustls", "dep:rustls-pemfile"]
 
 # The always-on Intl floor: locale parsing/negotiation (Intl.Locale,
 # getCanonicalLocales, maximize/minimize) + result stringification. Every service

@@ -632,6 +632,11 @@ static void net_write_complete(MalVm *vm, MalNodeNetSocketState *state, u64 toke
 
 static void net_dispatch_progress(
     MalVm *vm, MalNodeNetSocketState *state, MalTcpProgress *progress) {
+    if (progress->kind == MAL_TCP_SECURE_CONNECTED) {
+        net_set(vm, state->receiver, "encrypted", mal_value_new_boolean(true));
+        net_emit(vm, state->receiver, "secureConnect", nullptr, 0);
+        return;
+    }
     if (progress->kind == MAL_TCP_CONNECTED) {
         state->connected = true;
         net_set(vm, state->receiver, "connecting", mal_value_new_boolean(false));
@@ -659,6 +664,19 @@ static void net_dispatch_progress(
             net_call_method(vm, state->receiver, "push", &buffer, 1);
         }
     }
+}
+
+bool mal_node_net_start_tls(
+    MalVm *vm, MalValue socket,
+    const byte *server_name, usize server_name_length,
+    const byte *ca_pem, usize ca_pem_length,
+    const byte *alpn, usize alpn_length, bool insecure) {
+    MalNodeNetSocketState *state = net_state(socket);
+    return state != nullptr && state->vm == vm && state->connected
+        && !state->destroyed && !state->resolving
+        && mal_tcp_start_tls(mal_host(vm), state->operation,
+            server_name, server_name_length, ca_pem, ca_pem_length,
+            alpn, alpn_length, insecure);
 }
 
 static void net_dispatch_terminal(

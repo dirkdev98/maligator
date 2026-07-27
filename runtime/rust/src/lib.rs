@@ -32,6 +32,9 @@ pub mod url;
 #[cfg(feature = "node-zlib")]
 pub mod zlib;
 
+#[cfg(feature = "node-tls")]
+pub mod tls;
+
 /// ABI version. Bump on any breaking change to the C header so the C side can
 /// assert the linked archive matches `mal_i18n.h`.
 /// v2: added `mal_i18n_collator_free` / `mal_i18n_plural_rules_free` (gc_todo.md D2).

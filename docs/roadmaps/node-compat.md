@@ -170,10 +170,12 @@ staged acceptance rather than a package-specific shim:
        compiled/interpreted execution and GC stress. The external-service Vitest
        lane remains explicitly skipped rather than entering deterministic gates.
 4. [x] Complete the Buffer big-endian/64-bit wire primitives used by postgres.js.
-5. Complete the crypto operations required by PostgreSQL MD5 and SCRAM-SHA-256
-   authentication.
-6. Add `tls.connect` over an existing socket and accept the same query against a
-   TLS-required server.
+5. [x] Complete the crypto operations required by PostgreSQL MD5 and SCRAM-SHA-256
+       authentication, with deterministic real-wire exchanges through the unchanged
+       driver.
+6. [x] Add Rustls-backed `tls.connect` over an existing socket and accept the same
+       SCRAM query through direct TLS with PostgreSQL ALPN, explicit CA verification,
+       and the driver's `require` mode.
 7. Cover pooling, cancellation, prepared statements, COPY streams, subscriptions,
    reconnect timers, interpreted execution, and GC stress.
 

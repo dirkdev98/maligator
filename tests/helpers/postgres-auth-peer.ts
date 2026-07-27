@@ -1,12 +1,17 @@
 import { createHash, createHmac, pbkdf2Sync, timingSafeEqual } from "node:crypto";
-import { createServer } from "node:net";
+import { createServer as createNetServer } from "node:net";
 import type { Server, Socket } from "node:net";
+import { createServer as createTlsServer } from "node:tls";
 
 export type PostgresAuthMode = "cleartext" | "md5" | "scram";
 
 interface PostgresAuthPeer {
 	port: number;
 	close(): Promise<void>;
+}
+
+interface PostgresAuthPeerOptions {
+	tls?: { certificate: string; key: string };
 }
 
 const password = "postgres";
@@ -98,10 +103,11 @@ function scramProof(clientFirstBare: string, serverFirst: string, clientFinal: s
 
 export async function startPostgresAuthPeer(
 	mode: PostgresAuthMode,
+	options: PostgresAuthPeerOptions = {},
 ): Promise<PostgresAuthPeer> {
 	let failure: Error | undefined;
 	const sockets = new Set<Socket>();
-	const server: Server = createServer((socket) => {
+	const connection = (socket: Socket) => {
 		sockets.add(socket);
 		socket.once("close", () => sockets.delete(socket));
 		let buffered = Buffer.alloc(0);
@@ -201,7 +207,17 @@ export async function startPostgresAuthPeer(
 			}
 		});
 		socket.once("error", fail);
-	});
+	};
+	const server: Server = options.tls
+		? createTlsServer(
+				{
+					ALPNProtocols: ["postgresql"],
+					cert: options.tls.certificate,
+					key: options.tls.key,
+				},
+				connection,
+			)
+		: createNetServer(connection);
 	await new Promise<void>((resolve, reject) => {
 		server.once("error", reject);
 		server.listen(0, "127.0.0.1", resolve);

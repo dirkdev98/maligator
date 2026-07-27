@@ -9,6 +9,7 @@ typedef struct MalHost MalHost;
 
 typedef enum MalTcpProgressKind {
     MAL_TCP_CONNECTED = 1,
+    MAL_TCP_SECURE_CONNECTED,
     MAL_TCP_DATA,
     MAL_TCP_WRITE_COMPLETE,
 } MalTcpProgressKind;
@@ -42,5 +43,10 @@ bool mal_tcp_read_resume(MalHost *host, MalHostHandle operation);
 bool mal_tcp_set_keep_alive(
     MalHost *host, MalHostHandle operation, bool enabled, u32 initial_delay_ms);
 bool mal_tcp_set_no_delay(MalHost *host, MalHostHandle operation, bool enabled);
+bool mal_tcp_start_tls(
+    MalHost *host, MalHostHandle operation,
+    const byte *server_name, usize server_name_length,
+    const byte *ca_pem, usize ca_pem_length,
+    const byte *alpn, usize alpn_length, bool insecure);
 bool mal_tcp_cancel(MalHost *host, MalHostHandle operation);
 void mal_tcp_shutdown(MalHost *host);

@@ -6,13 +6,18 @@ const sql = postgres({
 	connect_timeout: 5,
 	database: "postgres",
 	fetch_types: false,
-	host: "127.0.0.1",
+	host: process.env.PGHOST || "127.0.0.1",
 	max: 1,
 	max_lifetime: null,
 	pass: "postgres",
 	port: Number(process.env.PGPORT),
 	prepare: false,
-	ssl: false,
+	ssl: process.env.PGSSL_CA
+		? { ca: process.env.PGSSL_CA, servername: "localhost" }
+		: process.env.PGSSL_INSECURE === "1"
+			? "require"
+			: false,
+	sslnegotiation: process.env.PGSSL_DIRECT === "1" ? "direct" : "postgres",
 	user: "postgres",
 });
 

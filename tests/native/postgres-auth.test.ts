@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -8,6 +8,9 @@ import { startPostgresAuthPeer } from "../helpers/postgres-auth-peer.ts";
 import type { PostgresAuthMode } from "../helpers/postgres-auth-peer.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-postgres-auth-"));
+const tlsCa = readFileSync("tests/fixtures/tls/localhost-cert.pem", "utf8");
+const tlsCertificate = readFileSync("tests/fixtures/tls/localhost-server-cert.pem", "utf8");
+const tlsKey = readFileSync("tests/fixtures/tls/localhost-server-key.pem", "utf8");
 
 function run(binary: string, port: number, env = process.env): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -63,5 +66,27 @@ describe("postgres.js authentication", () => {
 
 	it("keeps SCRAM state rooted under GC stress", async () => {
 		await check("scram", STRESS_ENV);
+	});
+
+	it("authenticates SCRAM over direct TLS with ALPN", async () => {
+		for (const binary of binaries) {
+			for (const insecure of [false, true]) {
+				const peer = await startPostgresAuthPeer("scram", {
+					tls: { certificate: tlsCertificate, key: tlsKey },
+				});
+				try {
+					expect(
+						await run(binary, peer.port, {
+							PGHOST: "localhost",
+							PGSSL_CA: insecure ? "" : tlsCa,
+							PGSSL_DIRECT: "1",
+							PGSSL_INSECURE: insecure ? "1" : "0",
+						}),
+					).toContain("RESULT 1/1");
+				} finally {
+					await peer.close();
+				}
+			}
+		}
 	});
 });
