@@ -1,7 +1,7 @@
 // Implicit-arguments allocation benchmark. Direct static reads across omitted,
 // unary, binary, and wider call shapes can use frame metadata/values without
-// materializing an arguments object or retained argument slice. Normal/default
-// calls cover the hot stack path; generators expose heap-resident buffers.
+// eagerly materializing an arguments object. Missing reads lazily fall back to
+// the real object for inherited properties. Generators expose heap buffers.
 
 const MOD = 1000000007;
 

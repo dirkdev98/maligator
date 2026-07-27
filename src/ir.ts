@@ -31,6 +31,7 @@ import type {
 	Scope,
 	SemanticFile,
 	SemanticProgram,
+	StaticArgumentsAccess,
 } from "./semantic-analysis.ts";
 import { debugEnabled, log } from "./utils.ts";
 
@@ -401,6 +402,10 @@ export interface IRFunction {
 	argumentsObjectRegister?: number;
 	/** Prologue snapshots for statically classified direct arguments reads. */
 	staticArgumentsRegisters?: Map<ESTree.Node, number>;
+	/** Live parameter bindings for statically classified mapped index reads. */
+	staticMappedArgumentBindings?: Map<ESTree.Node, Binding>;
+	/** Register cache for the lazily created missing-index arguments object. */
+	staticArgumentsFallbackRegister?: number;
 	classContext?: IRClassContext;
 
 	/**
@@ -802,6 +807,14 @@ export type IRInstruction =
 			// Direct non-escaping `arguments[index]` from the retained argument slice.
 			type: "loadArgument";
 			registers: [number];
+			index: number;
+	  }
+	| {
+			// Direct static index read. Supplied indexes use the optional live mapped
+			// value; missing indexes lazily materialize and cache the arguments object.
+			type: "loadStaticArgument";
+			// [destination, mapped value or -1, in-place fallback cache]
+			registers: [number, number, number];
 			index: number;
 	  }
 	| {
@@ -4661,34 +4674,33 @@ function compileFunctionParams(
 	const canMapArguments =
 		!(fn.strict ?? fn.semanticFile.strict) &&
 		node.params.every((param) => param.type === "Identifier");
-	const mappedParameterIndices = new Set<number>();
+	const mappedParameterBindings = new Map<number, Binding>();
 	if (canMapArguments) {
 		const names = new Set<string>();
 		for (let i = node.params.length - 1; i >= 0; i--) {
 			const param = node.params[i]!;
 			if (param.type !== "Identifier" || names.has(param.name)) continue;
 			names.add(param.name);
-			mappedParameterIndices.add(i);
+			const binding = fn.semanticFile.nodeToBinding.get(param);
+			if (binding) mappedParameterBindings.set(i, binding);
 		}
 	}
 	const materializesArguments =
-		argumentsBinding?.usageNodes.some((usage) => {
+		argumentsBinding?.usageNodes.some(
+			(usage) => fn.semanticFile.staticArgumentsAccesses.get(usage) === undefined,
+		) ?? false;
+	let hasStaticIndex = false;
+	if (argumentsBinding && !materializesArguments) {
+		for (const usage of argumentsBinding.usageNodes) {
 			const access = fn.semanticFile.staticArgumentsAccesses.get(usage);
-			return (
-				access === undefined ||
-				(access.kind === "index" && mappedParameterIndices.has(access.index))
-			);
-		}) ?? false;
-	if (materializesArguments && canMapArguments) {
+			if (access?.kind === "index") hasStaticIndex = true;
+		}
+	}
+	const needsStaticFallback = hasStaticIndex;
+	if ((materializesArguments || needsStaticFallback) && canMapArguments) {
 		fn.mappedArguments = true;
-		const mappedNames = new Set<string>();
 		fn.mappedArgumentSlots = new Array<number>(node.params.length).fill(-1);
-		for (let i = node.params.length - 1; i >= 0; i--) {
-			const param = node.params[i]!;
-			if (param.type !== "Identifier" || mappedNames.has(param.name)) continue;
-			mappedNames.add(param.name);
-			const binding = fn.semanticFile.nodeToBinding.get(param);
-			if (!binding) continue;
+		for (const [i, binding] of mappedParameterBindings) {
 			binding.scopedTo = "captured";
 			const location = getOrCreateBindingLocation(program, fn, binding);
 			if (location.type !== "captured")
@@ -4696,21 +4708,22 @@ function compileFunctionParams(
 			fn.mappedArgumentSlots[i] = location.index;
 		}
 	}
-	if (argumentsBinding) {
-		let lengthRegister: number | undefined;
+	if (argumentsBinding && !materializesArguments) {
+		let argumentCountRegister: number | undefined;
 		const indexRegisters = new Map<number, number>();
 		for (const usage of argumentsBinding.usageNodes) {
 			const access = fn.semanticFile.staticArgumentsAccesses.get(usage);
 			if (!access) continue;
-			if (
-				fn.mappedArguments &&
-				access.kind === "index" &&
-				mappedParameterIndices.has(access.index)
-			) {
+			const mappedBinding =
+				access.kind === "index" ? mappedParameterBindings.get(access.index) : undefined;
+			if (mappedBinding) {
+				(fn.staticMappedArgumentBindings ??= new Map()).set(usage, mappedBinding);
 				continue;
 			}
 			let destination =
-				access.kind === "length" ? lengthRegister : indexRegisters.get(access.index);
+				access.kind === "length"
+					? argumentCountRegister
+					: indexRegisters.get(access.index);
 			if (destination === undefined) {
 				destination = nextRegisterDestination(fn);
 				block.instructions.push(
@@ -4718,13 +4731,17 @@ function compileFunctionParams(
 						? { type: "loadArgumentCount", registers: [destination] }
 						: { type: "loadArgument", registers: [destination], index: access.index },
 				);
-				if (access.kind === "length") lengthRegister = destination;
+				if (access.kind === "length") argumentCountRegister = destination;
 				else indexRegisters.set(access.index, destination);
 			}
 			(fn.staticArgumentsRegisters ??= new Map()).set(usage, destination);
 		}
 	}
-	if (argumentsBinding && materializesArguments) {
+	if (argumentsBinding && needsStaticFallback) {
+		const emptyFallback = compileUndefined(fn, cursor);
+		fn.argumentsObjectRegister = emptyFallback;
+		fn.staticArgumentsFallbackRegister = emptyFallback;
+	} else if (argumentsBinding && materializesArguments) {
 		const destination = nextRegisterDestination(fn);
 		fn.argumentsObjectRegister = destination;
 		block.instructions.push({
@@ -11162,13 +11179,13 @@ function compileMemberExpression(
 	cursor: IRCursor,
 	memberExpression: ESTree.MemberExpression,
 ): number {
-	if (memberExpression.object.type === "Identifier") {
-		const access = fn.semanticFile.staticArgumentsAccesses.get(memberExpression.object);
-		if (access?.member === memberExpression) {
-			const snapshot = fn.staticArgumentsRegisters?.get(memberExpression.object);
-			if (snapshot !== undefined) return snapshot;
-		}
-	}
+	const staticArgumentsResult = compileStaticArgumentsMember(
+		program,
+		fn,
+		cursor,
+		memberExpression,
+	);
+	if (staticArgumentsResult !== undefined) return staticArgumentsResult;
 	if (memberExpression.property.type === "PrivateIdentifier") {
 		// Private access is never on super and never computed.
 		const object = compileExpression(program, fn, cursor, memberExpression.object);
@@ -11183,6 +11200,41 @@ function compileMemberExpression(
 
 	const member = compileMemberObjectAndKey(program, fn, cursor, memberExpression);
 	return compileMemberLoad(fn, cursor, member);
+}
+
+function compileStaticArgumentsMember(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	memberExpression: ESTree.MemberExpression,
+): number | undefined {
+	if (memberExpression.object.type !== "Identifier") return undefined;
+	const usage = memberExpression.object;
+	const access: StaticArgumentsAccess | undefined =
+		fn.semanticFile.staticArgumentsAccesses.get(usage);
+	if (access?.member !== memberExpression) return undefined;
+
+	const mappedBinding = fn.staticMappedArgumentBindings?.get(usage);
+	const snapshot = fn.staticArgumentsRegisters?.get(usage);
+	if (access.kind === "length") return snapshot;
+	const fallbackRegister = fn.staticArgumentsFallbackRegister;
+	if (fallbackRegister === undefined || (!mappedBinding && snapshot === undefined)) {
+		return undefined;
+	}
+	const direct = mappedBinding
+		? loadRegisterFromLocation(
+				fn,
+				cursor.block,
+				getOrCreateBindingLocation(program, fn, mappedBinding),
+			)
+		: snapshot!;
+	const result = nextRegisterDestination(fn);
+	cursor.block.instructions.push({
+		type: "loadStaticArgument",
+		registers: [result, direct, fallbackRegister],
+		index: access.index,
+	});
+	return result;
 }
 
 interface CompiledMemberReference {

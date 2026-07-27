@@ -119,6 +119,7 @@ typedef enum WireOp {
     WIRE_TERMINAL_YIELD,
     WIRE_CONSTRUCT_SUPER_EXPLICIT,
     WIRE_SET_THIS,
+    WIRE_LOAD_STATIC_ARGUMENT,
     WIRE_OP_COUNT,
 } WireOp;
 
@@ -600,6 +601,16 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
             o->as.load_argument.dst = rd_i32(r);
             o->as.load_argument.index = rd_i32(r);
             if (o->as.load_argument.index < 0) {
+                r->ok = false;
+            }
+            return;
+        case WIRE_LOAD_STATIC_ARGUMENT:
+            o->opcode = MAL_OP_LOAD_STATIC_ARGUMENT;
+            o->as.load_static_argument.dst = rd_i32(r);
+            o->as.load_static_argument.direct = rd_i32(r);
+            o->as.load_static_argument.fallback = rd_i32(r);
+            o->as.load_static_argument.index = rd_i32(r);
+            if (o->as.load_static_argument.index < 0) {
                 r->ok = false;
             }
             return;

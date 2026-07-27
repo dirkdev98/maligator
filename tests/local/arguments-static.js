@@ -28,6 +28,13 @@ function threeCycle() {
 function countOverlap() {
 	return arguments.length * 10 + arguments[0];
 }
+function missingStatic(value) {
+	value = 9;
+	return arguments[0];
+}
+function twoMissingStatic() {
+	return arguments[0] + arguments[1];
+}
 function repeatedSnapshots() {
 	const first = arguments[0] === undefined ? 7 : arguments[0];
 	const fifth = arguments[4] === undefined ? 3 : arguments[4];
@@ -102,6 +109,25 @@ assert(severalSnapshots(4, 5, 6) === 643, "multiple entry snapshots");
 assert(swapCycle(4, 7) === 74, "two-way snapshot cycle");
 assert(threeCycle(4, 7, 8) === 784, "three-way snapshot cycle");
 assert(countOverlap(6) === 16, "count snapshot overlap");
+let missingReceiver;
+Object.defineProperty(Object.prototype, "0", {
+	configurable: true,
+	get() {
+		missingReceiver = this;
+		return 20;
+	},
+});
+Object.defineProperty(Object.prototype, "1", {
+	configurable: true,
+	get() {
+		return this === missingReceiver ? 22 : -20;
+	},
+});
+assert(missingStatic() === 20, "missing static prototype read");
+missingReceiver = undefined;
+assert(twoMissingStatic() === 42, "missing static reads share arguments identity");
+delete Object.prototype[0];
+delete Object.prototype[1];
 assert(repeatedSnapshots() === 73, "omitted repeated snapshots");
 assert(repeatedSnapshots(2, 3, 4, 5, 6) === 5528, "wide repeated snapshots");
 assert(defaultFromArguments() === 9, "omitted default parameter");
@@ -122,6 +148,30 @@ const sloppy = (0, eval)(
 	"(function sloppy(){ return arguments.callee === sloppy && arguments[0] === 4; })",
 );
 assert(sloppy(4), "sloppy arguments.callee");
+
+const mappedStaticSuite = (0, eval)(`(function () {
+	function mappedStatic(value) {
+		value = 9;
+		return arguments[0];
+	}
+	function duplicateStatic(value, value) {
+		value = 7;
+		return arguments[0] * 10 + arguments[1];
+	}
+	function missingMapped(value) {
+		value = 9;
+		return arguments[0];
+	}
+	if (mappedStatic(3) !== 9) return "mapped";
+	if (duplicateStatic(2, 3) !== 27) return "duplicate";
+	Object.defineProperty(Object.prototype, "0", { configurable: true, get: function () { return 11; } });
+	var missingMappedResult = missingMapped();
+	delete Object.prototype[0];
+	if (missingMappedResult !== 11) return "missing mapped";
+	return true;
+})`);
+const mappedStaticResult = mappedStaticSuite();
+assert(mappedStaticResult === true, "mapped static semantics: " + mappedStaticResult);
 
 const mappedSuite = (0, eval)(`(function () {
 	function descriptor(value) {

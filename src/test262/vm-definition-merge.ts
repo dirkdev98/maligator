@@ -139,6 +139,7 @@ function cloneInstruction(instruction: VmInstruction, base: RebaseBases): VmInst
 		case "CREATE_ARGUMENTS_OBJECT":
 		case "LOAD_ARGUMENT_COUNT":
 		case "LOAD_ARGUMENT":
+		case "LOAD_STATIC_ARGUMENT":
 		case "LOAD_THIS":
 		case "LOAD_NEW_TARGET":
 		case "LOAD_CALLEE":

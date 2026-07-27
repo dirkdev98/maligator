@@ -144,6 +144,13 @@ test("classified frame-argument reads become call-site values when inlined", () 
 	expect(countType(fn, "loadArgument")).toBe(0);
 });
 
+test("a missing static arguments index keeps the call fallback", () => {
+	const fn = optimizedNested(
+		`(function (){ function g(){ return arguments[1]; } return g(10); })();`,
+	);
+	expect(countType(fn, "call")).toBe(1);
+});
+
 test("methods that read classified frame arguments are guarded-inline candidates", () => {
 	const source = `
 		const obj = {

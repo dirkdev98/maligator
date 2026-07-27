@@ -479,6 +479,13 @@ export type VmInstruction =
 			index: number;
 	  }
 	| {
+			opcode: "LOAD_STATIC_ARGUMENT";
+			dst: number;
+			direct: number;
+			fallback: number;
+			index: number;
+	  }
+	| {
 			opcode: "LOAD_THIS";
 			dst: number;
 	  }
@@ -1153,10 +1160,9 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 		},
 	);
 
-	// Classified length/index reads form an entry prefix. Frame creation snapshots
-	// that prefix before parameter initialization and starts interpretation after it,
-	// so those reads need no retained argument slice. Any later raw read remains a
-	// conservative fallback alongside materialization and rest collection.
+	// Classified length/legacy index reads form an entry prefix. Frame creation
+	// snapshots that prefix before parameter initialization and starts interpretation
+	// after it. Fused static reads retain arguments for their lazy missing-index path.
 	let argumentSnapshotCount = 0;
 	while (
 		instructions[argumentSnapshotCount]?.opcode === "LOAD_ARGUMENT_COUNT" ||
@@ -1170,7 +1176,8 @@ function lowerFunctionToVmFunction(fn: IRFunction, fileIndex: number): VmFunctio
 			(instruction) =>
 				instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
 				instruction.opcode === "CREATE_REST_ARGUMENTS" ||
-				instruction.opcode === "LOAD_ARGUMENT",
+				instruction.opcode === "LOAD_ARGUMENT" ||
+				instruction.opcode === "LOAD_STATIC_ARGUMENT",
 		);
 	const argumentSnapshotPlan = buildArgumentSnapshotPlan({
 		argumentSnapshotCount,
@@ -1370,6 +1377,14 @@ function lowerInstructionToVmInstruction(
 			return {
 				opcode: "LOAD_ARGUMENT",
 				dst: instruction.registers[0],
+				index: instruction.index,
+			};
+		case "loadStaticArgument":
+			return {
+				opcode: "LOAD_STATIC_ARGUMENT",
+				dst: instruction.registers[0],
+				direct: instruction.registers[1],
+				fallback: instruction.registers[2],
 				index: instruction.index,
 			};
 		case "loadThis":

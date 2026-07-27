@@ -205,6 +205,7 @@ void mal_op_create_function(MalCallable *callable, const MalInstruction *instruc
 void mal_op_create_arguments_object(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_load_argument_count(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_load_argument(MalCallable *callable, const MalInstruction *instruction);
+void mal_op_load_static_argument(MalCallable *callable, const MalInstruction *instruction);
 
 // Build an arguments object over `args`; a non-empty map aliases indexed
 // properties to captured formal bindings. Shared by both execution backends.
@@ -1333,7 +1334,8 @@ MalValue *mal_coroutine_alloc_registers(MalVm *vm, i32 slot_count);
 // generator; the compiled body hands it back to the caller.
 MalGeneratorObject *mal_vm_op_generator_start_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
-    MalValue *registers, i32 resume_ip, bool is_async_generator);
+    MalValue *registers, const MalValue *arguments, i32 argument_count,
+    i32 resume_ip, bool is_async_generator);
 
 // YIELD (compiled): record the yielded value, resume registers, and resume IP on
 // the coroutine, save the current env, mark SUSPENDED_YIELD, and (for an async
@@ -1358,7 +1360,8 @@ void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generato
 // promise in *out_promise). Unlike GENERATOR_START the body does not suspend
 // here — it keeps running until the first await / return / throw.
 MalGeneratorObject *mal_vm_op_async_start_compiled(
-    MalVm *vm, i32 function_index, MalValue this_value, MalEnv *env, MalValue *registers,
+    MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
+    MalValue *registers, const MalValue *arguments, i32 argument_count,
     MalValue *out_promise);
 
 // AWAIT (compiled): record the resume registers, resume point, and env on the

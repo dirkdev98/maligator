@@ -1406,6 +1406,34 @@ void mal_op_load_argument(MalCallable *callable, const MalInstruction *instructi
         : mal_value_new_undefined();
 }
 
+void mal_op_load_static_argument(MalCallable *callable, const MalInstruction *instruction) {
+    i32 index = instruction->as.load_static_argument.index;
+    i32 direct = instruction->as.load_static_argument.direct;
+    MalValue fallback = callable->registers[instruction->as.load_static_argument.fallback];
+    if (index < callable->argument_count) {
+        callable->registers[instruction->as.load_static_argument.dst] = direct >= 0
+            ? callable->registers[direct]
+            : callable->arguments[index];
+        return;
+    }
+
+    if (mal_value_is_undefined(fallback)) {
+        if (mal_value_is_undefined(callable->arguments_object)) {
+            callable->arguments_object = mal_create_arguments_object(
+                callable->vm, callable->arguments, callable->argument_count,
+                callable->callee, callable->env, callable->function->mapped_arguments,
+                callable->function->mapped_argument_count,
+                callable->function->mapped_argument_slots
+            );
+        }
+        fallback = callable->arguments_object;
+    }
+    callable->registers[instruction->as.load_static_argument.fallback] = fallback;
+    callable->registers[instruction->as.load_static_argument.dst] = mal_vm_op_load_property(
+        callable->vm, fallback, mal_value_from_i32(index)
+    );
+}
+
 void mal_op_load_this(MalCallable *callable, const MalInstruction *instruction) {
     // GetThisBinding: `this` in a derived constructor is in a TDZ until super()
     // binds it. Reading it (directly, or as the receiver of a super property
@@ -5336,9 +5364,26 @@ MalValue *mal_coroutine_alloc_registers(MalVm *vm, i32 slot_count) {
     return mal_vm_alloc_coroutine_buffer(vm, slot_count);
 }
 
+static MalValue *mal_compiled_coroutine_arguments(
+    MalVm *vm, i32 function_index, const MalValue *arguments, i32 argument_count
+) {
+    if (!vm->live_definition.functions[function_index].needs_arguments || argument_count == 0) {
+        return nullptr;
+    }
+    MalValue *owned = mal_vm_alloc_coroutine_buffer(vm, argument_count);
+    for (i32 i = 0; i < argument_count; i++) {
+        owned[i] = arguments[i];
+    }
+    return owned;
+}
+
 MalGeneratorObject *mal_vm_op_generator_start_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
-    MalValue *registers, i32 resume_ip, bool is_async_generator) {
+    MalValue *registers, const MalValue *arguments, i32 argument_count,
+    i32 resume_ip, bool is_async_generator) {
+    MalValue *owned_arguments = mal_compiled_coroutine_arguments(
+        vm, function_index, arguments, argument_count
+    );
     // The instance inherits the generator function's own .prototype (which
     // inherits %GeneratorPrototype% / %AsyncGeneratorPrototype%), else the
     // intrinsic prototype. `registers` is already published as a GC root by the
@@ -5359,17 +5404,15 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
         generator->is_async_generator = true;
     }
 
-    // Adopt the register buffer as the suspended activation. arguments/with_objects
-    // stay null (the compiled body materializes an arguments object into a register
-    // and keeps its with-stack inside the register buffer); the trace scans exactly
-    // frame.function->register_count register slots (the with/self slots beyond it
-    // are covered by the compiled root frame, which spans the whole buffer).
+    // Adopt the register buffer and any argument slice needed after suspension.
     generator->frame.vm = vm;
     generator->frame.function_index = function_index;
     generator->frame.function = &vm->live_definition.functions[function_index];
     generator->frame.registers = registers;
-    generator->frame.arguments = nullptr;
-    generator->frame.argument_count = 0;
+    generator->frame.arguments = owned_arguments;
+    generator->frame.argument_count = generator->frame.function->needs_arguments
+        ? argument_count
+        : 0;
     generator->frame.stack_base = -1;
     generator->frame.this_value = this_value;
     generator->frame.arguments_object = mal_value_new_undefined();
@@ -5496,8 +5539,12 @@ void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator
 }
 
 MalGeneratorObject *mal_vm_op_async_start_compiled(
-    MalVm *vm, i32 function_index, MalValue this_value, MalEnv *env, MalValue *registers,
+    MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
+    MalValue *registers, const MalValue *arguments, i32 argument_count,
     MalValue *out_promise) {
+    MalValue *owned_arguments = mal_compiled_coroutine_arguments(
+        vm, function_index, arguments, argument_count
+    );
     MalPromiseObject *promise = mal_promise_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
     MalValue promise_value = mal_value_from_promise_object(promise);
     MalRootSpan promise_root;
@@ -5517,12 +5564,14 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
     state->frame.function_index = function_index;
     state->frame.function = &vm->live_definition.functions[function_index];
     state->frame.registers = registers;
-    state->frame.arguments = nullptr;
-    state->frame.argument_count = 0;
+    state->frame.arguments = owned_arguments;
+    state->frame.argument_count = state->frame.function->needs_arguments
+        ? argument_count
+        : 0;
     state->frame.stack_base = -1;
     state->frame.this_value = this_value;
     state->frame.arguments_object = mal_value_new_undefined();
-    state->frame.callee = mal_value_new_undefined();
+    state->frame.callee = callee;
     state->frame.generator = state;
     state->frame.env = env;
     state->frame.is_construct = false;

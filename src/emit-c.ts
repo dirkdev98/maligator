@@ -332,6 +332,7 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 			case "CREATE_ARGUMENTS_OBJECT": // reads the raw args, no register operand
 			case "LOAD_ARGUMENT_COUNT": // reads arg_count, no register operand
 			case "LOAD_ARGUMENT": // reads the raw args, no register operand
+			case "LOAD_STATIC_ARGUMENT": // register reads are boxed boundaries
 			case "CREATE_REST_ARGUMENTS": // reads the raw args, no register operand
 			case "DEFINE_PROPERTY": // object is the literal; key/value boxed boundary reads
 			case "LOAD_THIS":
@@ -876,6 +877,9 @@ function emitResumableFunction(
 	lines.push(`    if (resume_state != nullptr) {`);
 	lines.push(`        __gc_slots = resume_state->frame.registers;`);
 	lines.push(`        env = resume_state->frame.env;`);
+	lines.push(`        args = resume_state->frame.arguments;`);
+	lines.push(`        arg_count = resume_state->frame.argument_count;`);
+	lines.push(`        callee = resume_state->frame.callee;`);
 	lines.push(
 		`        __gc_frame = (MalRootFrame){ .prev = mal_root_frame_head, .desc = &__gc_desc, .slots = __gc_slots, .env = env };`,
 	);
@@ -1890,6 +1894,23 @@ function emitInstruction(
 			return [
 				`r${instruction.dst} = arg_count > ${instruction.index} ? args[${instruction.index}] : MAL_VALUE_UNDEFINED;`,
 			];
+		case "LOAD_STATIC_ARGUMENT": {
+			const direct =
+				instruction.direct >= 0
+					? boxed(instruction.direct)
+					: `args[${instruction.index}]`;
+			return [
+				`if (arg_count > ${instruction.index}) {`,
+				`  r${instruction.dst} = ${direct};`,
+				`} else {`,
+				`  if (mal_value_is_undefined(r${instruction.fallback})) {`,
+				`    r${instruction.fallback} = mal_create_arguments_object(vm, args, arg_count, callee, env, ${mappedArguments}, ${mappedArgumentSlots.length}, ${mappedArgumentSlots.length > 0 ? `(const i32[]){ ${mappedArgumentSlots.join(", ")} }` : "nullptr"});`,
+				`  }`,
+				`  r${instruction.dst} = mal_vm_op_load_property(vm, r${instruction.fallback}, mal_value_from_i32(${instruction.index}));`,
+				`}`,
+				throwCheck,
+			];
+		}
 		case "CREATE_REST_ARGUMENTS":
 			// A rest parameter `function f(...rest)`: the call arguments from
 			// startIndex onward. Reads the raw args, never throws.
@@ -2482,7 +2503,7 @@ function emitInstruction(
 				return null;
 			}
 			return [
-				`__coro = mal_vm_op_generator_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __gc_slots, ${ip + 1}, ${coro.isAsyncGenerator});`,
+				`__coro = mal_vm_op_generator_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __gc_slots, args, arg_count, ${ip + 1}, ${coro.isAsyncGenerator});`,
 				`__gc_slots[${coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
 				`${gcUnlink}return mal_value_from_object((MalObject *) __coro);`,
 			];
@@ -2516,7 +2537,7 @@ function emitInstruction(
 				return null;
 			}
 			return [
-				`__coro = mal_vm_op_async_start_compiled(vm, ${coro.functionIndex}, this_value, env, __gc_slots, &__async_result_promise);`,
+				`__coro = mal_vm_op_async_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __gc_slots, args, arg_count, &__async_result_promise);`,
 				`__gc_slots[${coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
 			];
 		}

@@ -117,6 +117,7 @@ typedef enum MalOpcode {
     MAL_OP_TERMINAL_YIELD,
     MAL_OP_CONSTRUCT_SUPER_EXPLICIT,
     MAL_OP_SET_THIS,
+    MAL_OP_LOAD_STATIC_ARGUMENT,
 } MalOpcode;
 
 /** Packed literal-template stream tags; mirrored by src/ir.ts. */
@@ -345,6 +346,10 @@ typedef struct MalInstruction {
         struct {
             i32 dst, index;
         } load_argument;
+
+        struct {
+            i32 dst, direct, fallback, index;
+        } load_static_argument;
 
         struct {
             i32 dst;

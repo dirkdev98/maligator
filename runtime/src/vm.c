@@ -1717,6 +1717,21 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
+            case MAL_OP_LOAD_STATIC_ARGUMENT: {
+                i32 index = instruction->as.load_static_argument.index;
+                if (index < frame->argument_count) {
+                    i32 direct = instruction->as.load_static_argument.direct;
+                    registers[instruction->as.load_static_argument.dst] = direct >= 0
+                        ? registers[direct]
+                        : frame->arguments[index];
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(
+                    mal_op_load_static_argument(frame, instruction)
+                );
+                break;
+            }
             case MAL_OP_LOAD_THIS:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_load_this(frame, instruction));
                 break;

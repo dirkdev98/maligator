@@ -68,6 +68,13 @@ const instructions: Array<VmInstruction> = [
 	{ opcode: "SET_PROTOTYPE", object: 10, prototype: 13, literal: true },
 	{ opcode: "LOAD_ARGUMENT_COUNT", dst: 14 },
 	{ opcode: "LOAD_ARGUMENT", dst: 14, index: 2 },
+	{
+		opcode: "LOAD_STATIC_ARGUMENT",
+		dst: 14,
+		direct: -1,
+		fallback: 13,
+		index: 2,
+	},
 	{ opcode: "TRY_END" },
 	{ opcode: "ENV_PUSH", scopeId: -2, slotCount: 1 },
 	{ opcode: "ENV_POP" },
@@ -184,7 +191,7 @@ describe("serialize-vm", () => {
 	it("covers every opcode in the wire table", () => {
 		// Guard: the canonical opcode list and the lowering union stay in sync.
 		expect(new Set(WIRE_OPCODES).size).toBe(WIRE_OPCODES.length);
-		expect(WIRE_OPCODES.slice(-7)).toEqual([
+		expect(WIRE_OPCODES.slice(-8)).toEqual([
 			"INIT_GLOBAL_VARS",
 			"CREATE_PRIVATE_NAMES",
 			"INIT_PRIVATE_FIELDS",
@@ -192,6 +199,7 @@ describe("serialize-vm", () => {
 			"TERMINAL_YIELD",
 			"CONSTRUCT_SUPER_EXPLICIT",
 			"SET_THIS",
+			"LOAD_STATIC_ARGUMENT",
 		]);
 	});
 

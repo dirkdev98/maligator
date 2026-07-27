@@ -283,7 +283,7 @@ test("implicit arguments reads observe assignment through binding storage", () =
 	});
 });
 
-test("direct arguments count and constant-index reads avoid object materialization", () => {
+test("direct arguments reads avoid eager object materialization", () => {
 	const program = compileScript(`
 		function count(){ return arguments.length; }
 		function first(){ return arguments[0]; }
@@ -296,22 +296,26 @@ test("direct arguments count and constant-index reads avoid object materializati
 		registers: [0],
 	});
 	expect(instructionsOf(first)).toContainEqual({
-		type: "loadArgument",
-		registers: [0],
+		type: "loadStaticArgument",
+		registers: [2, 0, 1],
 		index: 0,
 	});
-	for (const fn of [count, first]) {
-		expect(fn.argumentsObjectRegister).toBeUndefined();
-		expect(
-			instructionsOf(fn).some(
-				(instruction) => instruction.type === "createArgumentsObject",
-			),
-		).toBe(false);
-	}
+	expect(count.argumentsObjectRegister).toBeUndefined();
+	expect(
+		instructionsOf(count).some(
+			(instruction) => instruction.type === "createArgumentsObject",
+		),
+	).toBe(false);
+	expect(first.argumentsObjectRegister).toBeDefined();
+	expect(
+		instructionsOf(first).some(
+			(instruction) => instruction.type === "createArgumentsObject",
+		),
+	).toBe(false);
 
 	const definition = lowerIrProgramToVmDefinition(program);
 	expect(definition.functions[count.functionIndex]!.needsArguments).toBe(false);
-	expect(definition.functions[first.functionIndex]!.needsArguments).toBe(false);
+	expect(definition.functions[first.functionIndex]!.needsArguments).toBe(true);
 	expect(definition.functions[count.functionIndex]!.argumentSnapshotCount).toBe(1);
 	expect(definition.functions[first.functionIndex]!.argumentSnapshotCount).toBe(1);
 });
@@ -332,6 +336,11 @@ test("repeated static arguments reads share one snapshot per count or index", ()
 		{ type: "loadArgument", registers: [1], index: 2 },
 		{ type: "loadArgument", registers: [2], index: 0 },
 	]);
+	expect(
+		instructionsOf(repeated).filter(
+			(instruction) => instruction.type === "loadStaticArgument",
+		),
+	).toHaveLength(3);
 
 	const lowered =
 		lowerIrProgramToVmDefinition(program).functions[repeated.functionIndex]!;

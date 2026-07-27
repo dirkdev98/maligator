@@ -64,7 +64,10 @@ export function isInlinableTarget(fn: IRFunction): boolean {
 	if (fn.isGenerator || fn.isAsync) {
 		return false; // suspendable: not a straight-line body
 	}
-	if (fn.argumentsObjectRegister !== undefined) {
+	if (
+		fn.argumentsObjectRegister !== undefined &&
+		fn.staticArgumentsFallbackRegister === undefined
+	) {
 		return false; // materializes its own `arguments`
 	}
 	if ((fn.nextCapturedIndex ?? 0) > 0) {
@@ -320,18 +323,29 @@ export interface ProgramInlineCandidates {
 	byCaller: Map<number, Array<InlineCandidate>>;
 }
 
+function staticArgumentsAreSupplied(fn: IRFunction, argumentCount: number): boolean {
+	return !fn.blocks.some((block) =>
+		block.instructions.some(
+			(instruction) =>
+				instruction.type === "loadStaticArgument" && instruction.index >= argumentCount,
+		),
+	);
+}
+
 /** Find direct `call` sites across the program whose callee is a statically-known,
  * inlinable function. */
 export function findInlinableCalls(
 	program: IntermediateProgram,
 ): ProgramInlineCandidates {
+	const targetOf = new Map<number, IRFunction>();
+	for (const fn of program.functions) targetOf.set(fn.functionIndex, fn);
 	const eligibleCache = new Map<number, boolean>();
 	const isEligible = (index: number): boolean => {
 		const cached = eligibleCache.get(index);
 		if (cached !== undefined) {
 			return cached;
 		}
-		const target = program.functions.find((fn) => fn.functionIndex === index);
+		const target = targetOf.get(index);
 		const ok = target !== undefined && isInlinableTarget(target);
 		eligibleCache.set(index, ok);
 		return ok;
@@ -352,6 +366,14 @@ export function findInlinableCalls(
 				const target = funcOf.get(calleeRegister);
 				if (target === undefined || target === fn.functionIndex || !isEligible(target)) {
 					continue; // unknown callee / direct self-recursion / ineligible target
+				}
+				if (
+					!staticArgumentsAreSupplied(
+						targetOf.get(target)!,
+						instruction.registers.length - 3,
+					)
+				) {
+					continue;
 				}
 				candidates.push({ call: instruction, target });
 			}
@@ -512,6 +534,14 @@ export function findSpeculativeInlineSites(
 				if (target === undefined || target === fn.functionIndex || !eligible(target)) {
 					continue; // no candidate / direct self-recursion / not inlinable
 				}
+				if (
+					!staticArgumentsAreSupplied(
+						targetOf.get(target)!,
+						instruction.registers.length - 3,
+					)
+				) {
+					continue;
+				}
 				sites.push({ call: instruction, target, nameStringIndex: key.stringIndex });
 			}
 		}
@@ -605,7 +635,10 @@ function isInlinableMethodTarget(fn: IRFunction): boolean {
 	if (fn.isGenerator || fn.isAsync) {
 		return false;
 	}
-	if (fn.argumentsObjectRegister !== undefined) {
+	if (
+		fn.argumentsObjectRegister !== undefined &&
+		fn.staticArgumentsFallbackRegister === undefined
+	) {
 		return false;
 	}
 	if ((fn.nextCapturedIndex ?? 0) > 0) {
@@ -719,6 +752,14 @@ export function findMethodInlineSites(program: IntermediateProgram): ProgramMeth
 				}
 				const target = methods.get(key.stringIndex);
 				if (target === undefined || target === fn.functionIndex || !eligible(target)) {
+					continue;
+				}
+				if (
+					!staticArgumentsAreSupplied(
+						targetOf.get(target)!,
+						instruction.registers.length - 3,
+					)
+				) {
 					continue;
 				}
 				sites.push({
@@ -848,7 +889,8 @@ export function findHofInlineSites(program: IntermediateProgram): ProgramHofSite
 				block.instructions.some(
 					(instruction) =>
 						instruction.type === "loadArgumentCount" ||
-						instruction.type === "loadArgument",
+						instruction.type === "loadArgument" ||
+						instruction.type === "loadStaticArgument",
 				),
 			);
 		eligibleCache.set(index, ok);
@@ -1066,6 +1108,12 @@ function inlineInstruction(
 		return instruction.index < args.length
 			? { type: "move", registers: [destination, args[instruction.index]!] }
 			: { type: "createUndefined", registers: [destination] };
+	}
+	if (instruction.type === "loadStaticArgument") {
+		return {
+			type: "move",
+			registers: [instruction.registers[0] + offset, instruction.registers[1] + offset],
+		};
 	}
 	return withRegisterOffset(instruction, offset);
 }

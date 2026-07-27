@@ -126,6 +126,7 @@ export const WIRE_OPCODES = [
 	"TERMINAL_YIELD",
 	"CONSTRUCT_SUPER_EXPLICIT",
 	"SET_THIS",
+	"LOAD_STATIC_ARGUMENT",
 ] as const;
 
 const OPCODE_TAG = new Map<string, number>(WIRE_OPCODES.map((name, i) => [name, i]));
@@ -712,6 +713,13 @@ function writeInstruction(w: Writer, i: VmInstruction): void {
 			w.i32(i.dst);
 			w.i32(i.index);
 			return;
+		case "LOAD_STATIC_ARGUMENT":
+			if (i.index < 0) throw new RangeError("serialize-vm: negative argument index");
+			w.i32(i.dst);
+			w.i32(i.direct);
+			w.i32(i.fallback);
+			w.i32(i.index);
+			return;
 		case "CREATE_OBJECT_SHAPED":
 			if (
 				i.count < 1 ||
@@ -1285,6 +1293,14 @@ function readInstruction(r: Reader): VmInstruction {
 			const index = r.i32();
 			if (index < 0) throw new RangeError("serialize-vm: negative argument index");
 			return { opcode, dst, index };
+		}
+		case "LOAD_STATIC_ARGUMENT": {
+			const dst = r.i32();
+			const direct = r.i32();
+			const fallback = r.i32();
+			const index = r.i32();
+			if (index < 0) throw new RangeError("serialize-vm: negative argument index");
+			return { opcode, dst, direct, fallback, index };
 		}
 		case "LOAD_THIS":
 			return { opcode, dst: r.i32() };
