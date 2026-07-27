@@ -253,6 +253,63 @@ void mal_op_binary(MalCallable *callable, const MalInstruction *instruction);
 static inline bool mal_vm_try_binary_number_fast(
     MalBinaryOp op, MalValue left, MalValue right, MalValue *out
 ) {
+    if (op == MAL_BIN_ADD && mal_value_is_int32(left) && mal_value_is_int32(right)) {
+        i64 result = (i64) mal_value_to_i32(left) + (i64) mal_value_to_i32(right);
+        MAL_PERF_COUNT(binary_number_arithmetic_hits);
+        *out = result >= INT32_MIN && result <= INT32_MAX
+            ? mal_value_from_i32((i32) result)
+            : mal_ops_number_value((f64) result);
+        return true;
+    }
+
+    if (op == MAL_BIN_SUB && mal_value_is_int32(left) && mal_value_is_int32(right)) {
+        i64 result = (i64) mal_value_to_i32(left) - (i64) mal_value_to_i32(right);
+        MAL_PERF_COUNT(binary_number_arithmetic_hits);
+        *out = result >= INT32_MIN && result <= INT32_MAX
+            ? mal_value_from_i32((i32) result)
+            : mal_ops_number_value((f64) result);
+        return true;
+    }
+
+    if (op == MAL_BIN_MUL && mal_value_is_int32(left) && mal_value_is_int32(right)) {
+        i32 l = mal_value_to_i32(left);
+        i32 r = mal_value_to_i32(right);
+        MAL_PERF_COUNT(binary_number_arithmetic_hits);
+        if ((l == 0 || r == 0) && ((l < 0) != (r < 0))) {
+            *out = MAL_VALUE_NEGATIVE_ZERO;
+            return true;
+        }
+        i64 result = (i64) l * (i64) r;
+        *out = result >= INT32_MIN && result <= INT32_MAX
+            ? mal_value_from_i32((i32) result)
+            : mal_ops_number_value((f64) result);
+        return true;
+    }
+
+    if (op >= MAL_BIN_LT && op <= MAL_BIN_STRICT_NEQ &&
+        mal_value_is_int32(left) && mal_value_is_int32(right)) {
+        i32 l = mal_value_to_i32(left);
+        i32 r = mal_value_to_i32(right);
+        bool result;
+        switch (op) {
+            case MAL_BIN_LT: result = l < r; break;
+            case MAL_BIN_LTE: result = l <= r; break;
+            case MAL_BIN_GT: result = l > r; break;
+            case MAL_BIN_GTE: result = l >= r; break;
+            case MAL_BIN_EQ:
+            case MAL_BIN_STRICT_EQ: result = l == r; break;
+            case MAL_BIN_NEQ:
+            case MAL_BIN_STRICT_NEQ: result = l != r; break;
+            default: return false;
+        }
+        MAL_PERF_COUNT(binary_number_comparison_hits);
+        if (op == MAL_BIN_STRICT_EQ || op == MAL_BIN_STRICT_NEQ) {
+            MAL_PERF_COUNT(interpreter_strict_direct_hits);
+        }
+        *out = mal_value_new_boolean(result);
+        return true;
+    }
+
     if (!mal_ops_is_number(left) || !mal_ops_is_number(right)) {
         return false;
     }

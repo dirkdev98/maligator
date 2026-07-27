@@ -137,4 +137,44 @@ const skippedRight = {
 };
 fallback.push(capture(() => subtract(throwingLeft, skippedRight), marker));
 
-console.log(JSON.stringify({ numeric, fallback, coercions }));
+const int32AddEdges = [
+	add(2147483647, 1),
+	add(-2147483648, -1),
+	add(2147483647, -2147483648),
+	add(-1, 1),
+].map(repr);
+const int32SubtractEdges = [
+	subtract(2147483647, -1),
+	subtract(-2147483648, 1),
+	subtract(-2147483648, 2147483647),
+	subtract(0, 0),
+].map(repr);
+const int32MultiplyEdges = [
+	multiply(0, -3),
+	multiply(-3, 0),
+	multiply(-2147483648, -1),
+	multiply(46341, 46341),
+	multiply(2147483647, 2147483647),
+].map(repr);
+const int32ComparisonEdges = [
+	lessThan(-2147483648, 2147483647),
+	lessEqual(2147483647, 2147483647),
+	greaterThan(2147483647, -2147483648),
+	greaterEqual(-2147483648, -2147483648),
+	equal(-2147483648, -2147483648),
+	notEqual(-2147483648, 2147483647),
+	strictEqual(2147483647, 2147483647),
+	strictNotEqual(2147483647, -2147483648),
+].map(repr);
+
+console.log(
+	JSON.stringify({
+		numeric,
+		fallback,
+		coercions,
+		int32AddEdges,
+		int32SubtractEdges,
+		int32MultiplyEdges,
+		int32ComparisonEdges,
+	}),
+);
