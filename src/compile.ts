@@ -5,17 +5,16 @@ import { analyzeSourceAndRunSemanticAnalysis } from "./semantic-analysis.ts";
 import type { SemanticProgram } from "./semantic-analysis.ts";
 import { serializeVmDefinition } from "./serialize-vm.ts";
 
-/**
- * Whether the (eval'd) program declares `arguments` at its top level — a
- * top-level `var`/`let`/`const`/`function arguments`. Used to reject declaring
- * `arguments` in a parameter-expression eval.
- */
-function declaresArguments(semantic: SemanticProgram): boolean {
+/** VarDeclaredNames of the eval script, represented by its hoisted Program bindings. */
+function varDeclaredNames(semantic: SemanticProgram): Set<string> {
 	const programScope = semantic.files[0]?.scopes[0];
-	return (
-		programScope?.bindings.some(
-			(binding) => binding.name === "arguments" && !binding.undeclared,
-		) ?? false
+	return new Set(
+		programScope?.bindings
+			.filter(
+				(binding) =>
+					binding.kind === "var" && !binding.undeclared && binding.implicit === undefined,
+			)
+			.map((binding) => binding.name) ?? [],
 	);
 }
 
@@ -45,9 +44,8 @@ export function compileSourceToBuffer(
 		 */
 		callerStrict?: boolean;
 		/**
-		 * The direct eval is in a parameter expression. Declaring `arguments` at
-		 * the eval's top level then targets the parameter environment (which always
-		 * binds `arguments`) — a SyntaxError. Other behavior is unaffected.
+		 * Retained as a positional compatibility slot in the baked `__compile` ABI.
+		 * Parameter-environment conflicts are carried by `directEvalContext`.
 		 */
 		inParamExpr?: boolean;
 		/**
@@ -73,10 +71,14 @@ export function compileSourceToBuffer(
 			},
 		},
 	);
-	if (options.inParamExpr && declaresArguments(semantic)) {
-		throw new SyntaxError(
-			"Declaring 'arguments' in a parameter-expression eval is not allowed",
+	if (options.direct && !semantic.files[0]?.strict) {
+		const conflictNames = new Set(directEvalContext.varConflictNames);
+		const conflict = [...varDeclaredNames(semantic)].find((name) =>
+			conflictNames.has(name),
 		);
+		if (conflict !== undefined) {
+			throw new SyntaxError(`Eval var declaration conflicts with '${conflict}'`);
+		}
 	}
 	if (options.inFieldInitializer && referencesArguments(semantic.files[0]?.ast.body)) {
 		throw new SyntaxError("'arguments' is not allowed in a class field initializer");

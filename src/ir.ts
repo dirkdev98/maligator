@@ -284,10 +284,8 @@ interface IRPrivateName {
 type IRInstanceFieldKey =
 	// Non-computed public key, the own-property name.
 	| { kind: "name"; name: string }
-	// Instance computed key, evaluated once at class definition and captured.
-	| { kind: "captured"; binding: Binding }
-	// Static computed key, evaluated inline in the once-run static initializer.
-	| { kind: "node"; node: ESTree.Expression };
+	// Computed key, converted once at class definition and captured.
+	| { kind: "captured"; binding: Binding };
 
 type IRInstanceFieldPlanEntry =
 	| {
@@ -1638,6 +1636,7 @@ export function compileSemanticProgramToIr(
 			hasInstanceInitializer: false,
 			allowNewTarget: false,
 			privateNames: [],
+			varConflictNames: [],
 		},
 
 		functions: [],
@@ -3089,6 +3088,7 @@ function compileNewFunctionExpression(
 		),
 		blocks: [],
 		classContext,
+		inFieldInitializer: isArrow ? fn.inFieldInitializer : undefined,
 		hasPrototype,
 		strict: functionStrict(fn.semanticFile, functionNode),
 		isGenerator,
@@ -3275,21 +3275,14 @@ function emitFieldInstall(
 		return;
 	}
 
-	let key: number;
-	if (entry.key.kind === "name") {
-		key = compileStaticString(program, fn, cursor, entry.key.name);
-	} else if (entry.key.kind === "captured") {
-		key = loadRegisterFromLocation(
-			fn,
-			cursor.block,
-			getOrCreateBindingLocation(program, fn, entry.key.binding),
-		);
-	} else {
-		key = compileExpression(program, fn, cursor, entry.key.node);
-		if (key === -1) {
-			key = compileUndefined(fn, cursor);
-		}
-	}
+	const key =
+		entry.key.kind === "name"
+			? compileStaticString(program, fn, cursor, entry.key.name)
+			: loadRegisterFromLocation(
+					fn,
+					cursor.block,
+					getOrCreateBindingLocation(program, fn, entry.key.binding),
+				);
 
 	cursor.block.instructions.push({
 		type: "defineProperty",
@@ -3533,6 +3526,18 @@ function compileClass(
 	nameHint?: string,
 ): number {
 	const classId = program.functions.length;
+	const selfBinding = classNode.id
+		? fn.semanticFile.nodeToBinding.get(classNode.id)
+		: undefined;
+	if (selfBinding && !selfBinding.undeclared) {
+		// ClassDefinitionEvaluation creates the immutable inner name before
+		// evaluating heritage. Reserve its owner here so heritage closures capture
+		// this frame, and leave it in the TDZ through class-element evaluation.
+		const location = getOrCreateBindingLocation(program, fn, selfBinding);
+		const empty = nextRegisterDestination(fn);
+		cursor.block.instructions.push({ type: "createEmpty", registers: [empty] });
+		storeRegisterAtLocation(cursor.block, location, empty);
+	}
 
 	let superBinding: Binding | undefined;
 	let parent = -1;
@@ -3572,7 +3577,7 @@ function compileClass(
 	let staticBrandBinding: Binding | undefined;
 	const instanceFieldPlan: Array<IRInstanceFieldPlanEntry> = [];
 	const staticElements: Array<IRStaticElement> = [];
-	const computedInstanceKeys: Array<{ binding: Binding; node: ESTree.Expression }> = [];
+	const computedFieldKeys = new Map<ESTree.PropertyDefinition, Binding>();
 
 	const ensurePrivateEntry = (name: string, isStatic: boolean): IRPrivateName => {
 		const brandBinding = isStatic
@@ -3621,25 +3626,18 @@ function compileClass(
 					nameHint: name,
 					initializerNode: member,
 				};
-			} else if (member.computed && !member.static) {
-				// Instance computed keys are evaluated once, at class definition.
+			} else if (member.computed) {
+				// Every public computed field key is converted once during class
+				// definition, then loaded by instance or static initialization.
 				const keyBinding = createCapturedBinding(
 					program,
 					fn,
-					`__fk_${classId}_${computedInstanceKeys.length}`,
+					`__fk_${classId}_${computedFieldKeys.size}`,
 				);
-				computedInstanceKeys.push({ binding: keyBinding, node: member.key });
+				computedFieldKeys.set(member, keyBinding);
 				entry = {
 					private: false,
 					key: { kind: "captured", binding: keyBinding },
-					valueNode,
-					initializerNode: member,
-				};
-			} else if (member.computed) {
-				// Static computed keys evaluate inline in the once-run static init.
-				entry = {
-					private: false,
-					key: { kind: "node", node: member.key },
 					valueNode,
 					initializerNode: member,
 				};
@@ -3706,6 +3704,41 @@ function compileClass(
 		privateNames: privateNames.size > 0 ? privateNames : undefined,
 		instanceBrandBinding,
 		staticBrandBinding,
+	};
+	const compileComputedKey = (
+		keyNode: ESTree.Expression | ESTree.PrivateIdentifier,
+	): number => {
+		if (keyNode.type === "PrivateIdentifier") return -1;
+		const savedClassContext = fn.classContext;
+		fn.classContext = {
+			...(savedClassContext ?? { isStatic: false }),
+			privateNames: sharedContext.privateNames,
+		};
+		try {
+			return compileExpression(program, fn, cursor, keyNode);
+		} finally {
+			fn.classContext = savedClassContext;
+		}
+	};
+	const compileComputedPropertyKey = (
+		keyNode: ESTree.Expression | ESTree.PrivateIdentifier,
+	): number => {
+		let key = compileComputedKey(keyNode);
+		if (key === -1) {
+			key = compileUndefined(fn, cursor);
+		}
+		const coercible = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "createBoolean",
+			registers: [coercible],
+			value: true,
+		});
+		const propertyKey = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "toPropertyKey",
+			registers: [propertyKey, coercible, key],
+		});
+		return propertyKey;
 	};
 
 	const constructorNode = classNode.body.body.find(
@@ -3783,21 +3816,6 @@ function compileClass(
 		);
 	}
 
-	// Bind the class's own name to the constructor now, before static elements
-	// run, so the class body can reference itself by name (e.g. `static x = C`
-	// or `static { C.foo() }`). This is the class's inner name binding; the
-	// outer declaration store (if any) happens after compileClass and is
-	// redundant. The sema field-init/static-block scope boundary marks such
-	// references as captures, so the static initializer reaches this slot.
-	const selfBinding = fn.semanticFile.nodeToBinding.get(classNode);
-	if (selfBinding && !selfBinding.undeclared) {
-		storeRegisterAtLocation(
-			cursor.block,
-			getOrCreateBindingLocation(program, fn, selfBinding),
-			ctor,
-		);
-	}
-
 	// Mint the per-evaluation private symbols (brand markers and field keys).
 	// Only this class's own names are minted here; inherited names were minted
 	// by their declaring class.
@@ -3806,16 +3824,6 @@ function compileClass(
 		staticBrandBinding,
 		...[...ownNames.values()].map((entry) => entry.fieldBinding),
 	]);
-
-	// Evaluate computed instance field keys once, here at class definition.
-	for (const { binding, node } of computedInstanceKeys) {
-		const key = compileExpression(program, fn, cursor, node);
-		storeRegisterAtLocation(
-			cursor.block,
-			getOrCreateBindingLocation(program, fn, binding),
-			key === -1 ? compileUndefined(fn, cursor) : key,
-		);
-	}
 
 	// Wire the prototype chains. `extends null` is a heritage class whose
 	// protoParent is null and whose constructorParent is %Function.prototype%
@@ -3892,6 +3900,19 @@ function compileClass(
 	}
 
 	for (const member of classNode.body.body) {
+		if (member.type === "PropertyDefinition") {
+			const binding = computedFieldKeys.get(member);
+			if (binding) {
+				const propertyKey = compileComputedPropertyKey(member.key);
+				storeRegisterAtLocation(
+					cursor.block,
+					getOrCreateBindingLocation(program, fn, binding),
+					propertyKey,
+				);
+			}
+			continue;
+		}
+
 		if (
 			member.type !== "MethodDefinition" ||
 			member.kind === "constructor" ||
@@ -3920,6 +3941,11 @@ function compileClass(
 		const accessorPrefix =
 			member.kind === "get" ? "get " : member.kind === "set" ? "set " : "";
 		const methodName = memberStaticName === "" ? "" : accessorPrefix + memberStaticName;
+		const key = isPrivate
+			? -1
+			: member.computed
+				? compileComputedPropertyKey(member.key)
+				: compileClassMemberKey(program, fn, cursor, member);
 		const methodIndex = compileNewFunctionExpression(
 			program,
 			fn,
@@ -3954,7 +3980,6 @@ function compileClass(
 		}
 
 		const target = member.static ? ctor : prototype;
-		const key = compileClassMemberKey(program, fn, cursor, member);
 		// A computed-key method/accessor is an anonymous function definition; its
 		// name comes from the (already-evaluated) key at runtime, prefixed
 		// "get "/"set " for accessors. Static keys were named at creation.
@@ -3980,6 +4005,17 @@ function compileClass(
 				enumerable: false,
 			});
 		}
+	}
+
+	// Class element evaluation observes the inner name's TDZ. Initialize it only
+	// after computed keys and methods are processed, but before static elements
+	// run and can reference the class by name.
+	if (selfBinding && !selfBinding.undeclared) {
+		storeRegisterAtLocation(
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, selfBinding),
+			ctor,
+		);
 	}
 
 	// Run static field initializers and static blocks (and install the static
@@ -6075,13 +6111,14 @@ function compileFunctionDeclaration(
 		return;
 	}
 
+	// Nested compilation may reach this captured declaration through direct eval.
+	const location = getOrCreateBindingLocation(program, fn, binding);
 	const fnIndex = compileNewFunction(
 		program,
 		binding,
 		statement,
 		inheritedPrivateEnvironment(fn, false),
 	);
-	const location = getOrCreateBindingLocation(program, fn, binding);
 
 	const destination = nextRegisterDestination(fn);
 	block.instructions.push({
@@ -11121,9 +11158,17 @@ function visibleBindingsForDirectEval(
 ): Map<string, Binding> {
 	const result = new Map<string, Binding>();
 	let scope: Scope | null | undefined = fn.semanticFile.nodeToScope.get(callNode);
+	let unit: Scope | null | undefined = scope;
+	while (unit && !FUNCTION_UNIT_NODE_TYPES.has(unit.node.type)) unit = unit.parent;
+	const topLevelEval = unit?.node.type === "Program";
 	while (scope) {
 		for (const binding of scope.bindings) {
-			if (!result.has(binding.name) && !binding.undeclared && !binding.implicit) {
+			if (
+				!result.has(binding.name) &&
+				!binding.undeclared &&
+				!binding.implicit &&
+				(!topLevelEval || !isScriptGlobalProperty(fn.semanticFile, binding))
+			) {
 				result.set(binding.name, binding);
 			}
 		}
@@ -11163,8 +11208,56 @@ function inheritedContextForDirectEval(
 		privateNames.push({ name, flags });
 	}
 
-	let unit: Scope | null | undefined = fn.semanticFile.nodeToScope.get(callNode);
+	const callScope = fn.semanticFile.nodeToScope.get(callNode);
+	let unit: Scope | null | undefined = callScope;
 	while (unit && !FUNCTION_UNIT_NODE_TYPES.has(unit.node.type)) unit = unit.parent;
+	const varConflictNames = new Set(
+		program.evalDirect ? program.directEvalContext.varConflictNames : [],
+	);
+	if (
+		fn.inParameterExpression &&
+		unit &&
+		(unit.node.type === "FunctionDeclaration" ||
+			unit.node.type === "FunctionExpression" ||
+			unit.node.type === "ArrowFunctionExpression")
+	) {
+		for (const binding of unit.bindings) {
+			if (
+				!binding.undeclared &&
+				binding.kind === "var" &&
+				binding.implicit !== "arguments"
+			) {
+				varConflictNames.add(binding.name);
+			}
+		}
+	}
+
+	let lexicalScope = callScope;
+	while (lexicalScope) {
+		const includeUnit =
+			lexicalScope !== unit ||
+			unit?.node.type === "Program" ||
+			unit?.node.type === "StaticBlock" ||
+			unit?.node.type === "PropertyDefinition";
+		if (includeUnit && !lexicalScope.dynamic) {
+			for (const binding of lexicalScope.bindings) {
+				const simpleCatchParameter =
+					lexicalScope.node.type === "CatchClause" &&
+					lexicalScope.node.param?.type === "Identifier" &&
+					binding.declarationNode === lexicalScope.node.param;
+				if (
+					binding.kind !== "var" &&
+					!binding.undeclared &&
+					binding.implicit === undefined &&
+					!simpleCatchParameter
+				) {
+					varConflictNames.add(binding.name);
+				}
+			}
+		}
+		if (lexicalScope === unit) break;
+		lexicalScope = lexicalScope.parent ?? undefined;
+	}
 	let allowNewTarget = false;
 	if (unit?.node.type === "Program") {
 		allowNewTarget = program.evalDirect && program.directEvalContext.allowNewTarget;
@@ -11191,6 +11284,7 @@ function inheritedContextForDirectEval(
 		hasInstanceInitializer: Boolean(classContext?.instanceInitializerBinding),
 		allowNewTarget,
 		privateNames,
+		varConflictNames: [...varConflictNames],
 	};
 }
 

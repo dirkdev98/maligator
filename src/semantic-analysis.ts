@@ -909,11 +909,14 @@ function collectBindingsForNode(node: ESTree.Node, file: SemanticFile) {
 		}
 	}
 
-	if (node.type === "ClassDeclaration") {
-		if ("id" in node && node.id) {
-			// Register a class a binding in their parent scope.
+	if ((node.type === "ClassDeclaration" || node.type === "ClassExpression") && node.id) {
+		if (node.type === "ClassDeclaration") {
+			// The declaration binding lives outside ClassDefinitionEvaluation.
 			extractBindingsAndRegister(file, scope.parent!, node, "let");
 		}
+		// Named classes also have an immutable inner binding visible to heritage
+		// expressions and the class body, distinct from a declaration's outer name.
+		extractBindingsAndRegister(file, scope, node.id, "const");
 	}
 
 	if (node.type === "ImportDeclaration") {

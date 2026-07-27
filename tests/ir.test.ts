@@ -30,6 +30,233 @@ function instructionsOf(fn: IRFunction): Array<IRInstruction> {
 	return fn.blocks.flatMap((block) => block.instructions);
 }
 
+test("generator class computed keys suspend in class-element source order", () => {
+	const program = compileScript(`
+		function* define() {
+			class C {
+				[(yield 11)];
+				[(yield 22)]() {}
+				static [(yield 33)] = initializeStatic();
+				get [(yield 44)]() {}
+			}
+			return C;
+		}
+	`);
+	const define = functionNamed(program, "define");
+	const defineInstructions = instructionsOf(define);
+	const yieldedValues = defineInstructions.flatMap((instruction) => {
+		if (instruction.type !== "yield") return [];
+		const source = defineInstructions.find(
+			(candidate) =>
+				candidate.type === "createNumber" &&
+				candidate.registers[0] === instruction.registers[2],
+		);
+		return source?.type === "createNumber" ? [source.value] : [];
+	});
+
+	expect(yieldedValues).toEqual([11, 22, 33, 44]);
+	expect(
+		defineInstructions.filter((instruction) => instruction.type === "toPropertyKey"),
+	).toHaveLength(4);
+	expect(
+		program.functions
+			.filter((fn) => fn !== define)
+			.flatMap(instructionsOf)
+			.some((instruction) => instruction.type === "toPropertyKey"),
+	).toBe(false);
+	const constructorInstructions = instructionsOf(functionNamed(program, "C"));
+	const instanceFieldDefinition = constructorInstructions.find(
+		(instruction) =>
+			instruction.type === "defineProperty" && instruction.enumerable === true,
+	);
+	expect(instanceFieldDefinition?.type).toBe("defineProperty");
+	if (instanceFieldDefinition?.type !== "defineProperty") return;
+	expect(constructorInstructions).toContainEqual(
+		expect.objectContaining({
+			type: "loadCaptured",
+			registers: [instanceFieldDefinition.registers[1]],
+		}),
+	);
+
+	const staticInitializer = program.functions.find((fn) => {
+		if (fn === define) return false;
+		const instructions = instructionsOf(fn);
+		return (
+			instructions.some((instruction) => instruction.type === "loadThis") &&
+			instructions.some((instruction) => instruction.type === "loadCaptured") &&
+			instructions.some((instruction) => instruction.type === "call") &&
+			instructions.some(
+				(instruction) =>
+					instruction.type === "defineProperty" && instruction.enumerable === true,
+			)
+		);
+	});
+	expect(staticInitializer).toBeDefined();
+	if (!staticInitializer) return;
+	const staticInstructions = instructionsOf(staticInitializer);
+	const fieldDefinition = staticInstructions.find(
+		(instruction) =>
+			instruction.type === "defineProperty" && instruction.enumerable === true,
+	);
+	expect(fieldDefinition?.type).toBe("defineProperty");
+	if (fieldDefinition?.type !== "defineProperty") return;
+	expect(staticInstructions).toContainEqual(
+		expect.objectContaining({
+			type: "loadCaptured",
+			registers: [fieldDefinition.registers[1]],
+		}),
+	);
+	expect(
+		staticInstructions.some(
+			(instruction) =>
+				instruction.type === "call" &&
+				instruction.registers[0] === fieldDefinition.registers[2],
+		),
+	).toBe(true);
+	expect(
+		staticInstructions.some(
+			(instruction) =>
+				instruction.type === "yield" || instruction.type === "toPropertyKey",
+		),
+	).toBe(false);
+});
+
+test("async class computed keys await in class-element source order", () => {
+	const program = compileScript(`
+		async function define() {
+			const C = class {
+				[await 11];
+				[await 22]() {}
+				static [await 33];
+			};
+			return C;
+		}
+	`);
+	const define = functionNamed(program, "define");
+	const defineInstructions = instructionsOf(define);
+	const awaitedValues = defineInstructions.flatMap((instruction) => {
+		if (instruction.type !== "await") return [];
+		const source = defineInstructions.find(
+			(candidate) =>
+				candidate.type === "createNumber" &&
+				candidate.registers[0] === instruction.registers[2],
+		);
+		return source?.type === "createNumber" ? [source.value] : [];
+	});
+
+	expect(awaitedValues).toEqual([11, 22, 33]);
+	expect(
+		defineInstructions.filter((instruction) => instruction.type === "toPropertyKey"),
+	).toHaveLength(3);
+	expect(
+		program.functions
+			.filter((fn) => fn !== define)
+			.flatMap(instructionsOf)
+			.some((instruction) => instruction.type === "await"),
+	).toBe(false);
+});
+
+test("computed field keys retain the class private environment", () => {
+	const program = compileScript(`
+		let read;
+		class C {
+			static #value = 42;
+			static [(class {}, read = () => C.#value)];
+		}
+	`);
+
+	expect(
+		program.functions
+			.flatMap(instructionsOf)
+			.some((instruction) => instruction.type === "loadPrivate"),
+	).toBe(true);
+});
+
+test("named class inner bindings stay in the TDZ through computed keys", () => {
+	const program = compileScript(`
+		(class Inner {
+			[Inner]() {}
+			static value = Inner;
+		});
+	`);
+	const instructions = instructionsOf(program.functions[0]!);
+	const nameStringIndex = program.stringConstants.findIndex(
+		(value) => String.fromCharCode(...value) === "Inner",
+	);
+	const guardIndex = instructions.findIndex(
+		(instruction) =>
+			instruction.type === "throwIfTdz" &&
+			instruction.nameStringIndex === nameStringIndex,
+	);
+	expect(guardIndex).toBeGreaterThanOrEqual(0);
+	const guard = instructions[guardIndex];
+	if (guard?.type !== "throwIfTdz") return;
+	const load = instructions.find(
+		(instruction) =>
+			(instruction.type === "loadLocal" || instruction.type === "loadCaptured") &&
+			instruction.registers[0] === guard.registers[0],
+	);
+	expect(load).toBeDefined();
+	if (load?.type !== "loadLocal" && load?.type !== "loadCaptured") return;
+	const stores = instructions.flatMap((instruction, index) => {
+		if (load.type === "loadLocal") {
+			return instruction.type === "storeLocal" && instruction.index === load.index
+				? [{ instruction, index }]
+				: [];
+		}
+		return instruction.type === "storeCaptured" &&
+			instruction.functionIndex === load.functionIndex &&
+			instruction.index === load.index
+			? [{ instruction, index }]
+			: [];
+	});
+	expect(stores).toHaveLength(2);
+	expect(stores[0]!.index).toBeLessThan(guardIndex);
+	expect(stores[1]!.index).toBeGreaterThan(guardIndex);
+	expect(instructions).toContainEqual(
+		expect.objectContaining({
+			type: "createEmpty",
+			registers: [stores[0]!.instruction.registers[0]],
+		}),
+	);
+	expect(instructions).toContainEqual(
+		expect.objectContaining({
+			type: "createFunction",
+			registers: [stores[1]!.instruction.registers[0]],
+		}),
+	);
+});
+
+test("named class inner assignments use const TDZ semantics", () => {
+	const program = compileScript(`(class Inner extends (Inner = Object) {});`);
+	const innerScope = program.semantic.files[0]!.scopes.find(
+		(scope) => scope.node.type === "ClassExpression",
+	);
+	const binding = innerScope?.bindings.find((candidate) => candidate.name === "Inner");
+	expect(binding).toMatchObject({ kind: "const" });
+	expect(binding?.immutableSelfReference).toBeUndefined();
+
+	const nameStringIndex = program.stringConstants.findIndex(
+		(value) => String.fromCharCode(...value) === "Inner",
+	);
+	expect(instructionsOf(program.functions[0]!)).toContainEqual(
+		expect.objectContaining({
+			type: "throwIfTdz",
+			nameStringIndex,
+		}),
+	);
+});
+
+test("field initializer context propagates through lexical arrows", () => {
+	const program = compileScript(`
+		class C {
+			field = () => eval("arguments");
+		}
+	`);
+
+	expect(program.functions.some((fn) => fn.inFieldInitializer)).toBe(true);
+});
+
 test("implicit arguments reads observe assignment through binding storage", () => {
 	const program = compileScript("function f(){ arguments=42; return arguments } f()");
 	const fn = functionNamed(program, "f");
@@ -195,6 +422,64 @@ test("direct eval conservatively materializes and marshals implicit arguments", 
 	expect(argumentsNameIndex).toBeGreaterThanOrEqual(0);
 });
 
+test("direct eval marshals global lexical but not global property bindings", () => {
+	const program = compileScript(`
+		var propertyBacked = 1;
+		let lexical = 2;
+		eval("propertyBacked + lexical");
+	`);
+	const instructions = instructionsOf(program.functions[0]!);
+	const nameIndex = (name: string) =>
+		program.stringConstants.findIndex((value) => String.fromCharCode(...value) === name);
+	const propertyNameIndex = nameIndex("propertyBacked");
+	const lexicalNameIndex = nameIndex("lexical");
+
+	expect(propertyNameIndex).toBeGreaterThanOrEqual(0);
+	expect(lexicalNameIndex).toBeGreaterThanOrEqual(0);
+	expect(instructions).not.toContainEqual(
+		expect.objectContaining({
+			type: "loadGlobalProperty",
+			nameStringIndex: propertyNameIndex,
+		}),
+	);
+	const lexicalLoad = instructions.find(
+		(instruction) => instruction.type === "loadGlobal",
+	);
+	const lexicalKey = instructions.find(
+		(instruction) =>
+			instruction.type === "createString" && instruction.stringIndex === lexicalNameIndex,
+	);
+	expect(lexicalLoad?.type).toBe("loadGlobal");
+	expect(lexicalKey?.type).toBe("createString");
+	if (lexicalLoad?.type !== "loadGlobal" || lexicalKey?.type !== "createString") {
+		return;
+	}
+	expect(
+		instructions.some(
+			(instruction) =>
+				instruction.type === "storeProperty" &&
+				instruction.registers.includes(lexicalKey.registers[0]) &&
+				instruction.registers.includes(lexicalLoad.registers[0]),
+		),
+	).toBe(true);
+});
+
+test("nested direct eval marshals script-global property bindings", () => {
+	const program = compileScript(`
+		var globalValue = 1;
+		function read() { return eval("globalValue"); }
+		read();
+	`);
+	const instructions = instructionsOf(functionNamed(program, "read"));
+	const nameStringIndex = program.stringConstants.findIndex(
+		(value) => String.fromCharCode(...value) === "globalValue",
+	);
+
+	expect(instructions).toContainEqual(
+		expect.objectContaining({ type: "loadGlobalProperty", nameStringIndex }),
+	);
+});
+
 test("contiguous global var initializations batch after scalar declaration checks", () => {
 	const program = compileScript(
 		"before = x; var x, y, z; function f(){ return local; var local; }",
@@ -254,6 +539,38 @@ test("hoisted closures do not claim captured var storage from their owner", () =
 	);
 
 	expect(read.nextCapturedIndex).toBe(0);
+	expect(load).toMatchObject({
+		type: "loadCaptured",
+		functionIndex: outer.functionIndex,
+	});
+	if (load?.type !== "loadCaptured") return;
+	expect(instructionsOf(outer)).toContainEqual(
+		expect.objectContaining({
+			type: "storeCaptured",
+			functionIndex: outer.functionIndex,
+			index: load.index,
+		}),
+	);
+});
+
+test("captured block functions reserve storage before compiling nested direct eval", () => {
+	const program = compileScript(`
+		function outer() {
+			"use strict";
+			{
+				function capturedBlock() { return eval("capturedBlock"); }
+				return capturedBlock;
+			}
+		}
+		outer();
+	`);
+	const outer = functionNamed(program, "outer");
+	const capturedBlock = functionNamed(program, "capturedBlock");
+	const load = instructionsOf(capturedBlock).find(
+		(instruction) => instruction.type === "loadCaptured",
+	);
+
+	expect(capturedBlock.nextCapturedIndex).toBe(0);
 	expect(load).toMatchObject({
 		type: "loadCaptured",
 		functionIndex: outer.functionIndex,

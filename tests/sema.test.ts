@@ -47,7 +47,7 @@ test("snapshot sema changes", () => {
 		    Binding(verifyPrimordialProperty var global Identifier) (usages: 1, declared: true) 
 		    Binding(verifyPrimordialCallableProperty var global Identifier) (usages: 1, declared: true) 
 		    Binding(x var global FunctionDeclaration) (usages: 1, declared: true) 
-		    Binding(TestClass let global ClassDeclaration) (usages: 1, declared: true) 
+		    Binding(TestClass let global ClassDeclaration) (usages: 0, declared: true)\x20
 		    Binding(varInNestedBlocks var global FunctionDeclaration) (usages: 1, declared: true) 
 		    Binding(varShadowsParam var global FunctionDeclaration) (usages: 1, declared: true) 
 		    Binding(multipleVarSameName var global FunctionDeclaration) (usages: 1, declared: true) 
@@ -315,6 +315,7 @@ test("snapshot sema changes", () => {
 		    Binding(arg var local Identifier) (usages: 1, declared: true) 
 		  Scope(139 BlockStatement (parent: 138)
 		  Scope(140 ClassDeclaration (parent: 0)
+		    Binding(TestClass const local Identifier) (usages: 1, declared: true)\x20
 		  Scope(141 PropertyDefinition (parent: 140)
 		  Scope(142 PropertyDefinition (parent: 140)
 		  Scope(143 PropertyDefinition (parent: 140)

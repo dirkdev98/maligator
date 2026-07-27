@@ -15,6 +15,7 @@ export interface DirectEvalContext {
 	hasInstanceInitializer: boolean;
 	allowNewTarget: boolean;
 	privateNames: Array<DirectEvalPrivateNameContext>;
+	varConflictNames: Array<string>;
 }
 
 export type DirectEvalPrivateSlot = "brand" | "field" | "method" | "get" | "set";
@@ -30,6 +31,7 @@ export function encodeDirectEvalContext(context: DirectEvalContext): string {
 	return [
 		String(flags),
 		...context.privateNames.map((entry) => `${entry.flags}:${entry.name}`),
+		...[...new Set(context.varConflictNames)].map((name) => `v:${name}`),
 	].join(DIRECT_EVAL_CONTEXT_SEPARATOR);
 }
 
@@ -37,11 +39,20 @@ export function decodeDirectEvalContext(encoded: string | undefined): DirectEval
 	const parts = encoded ? encoded.split(DIRECT_EVAL_CONTEXT_SEPARATOR) : ["0"];
 	const flags = Number(parts[0]);
 	const privateNames: Array<DirectEvalPrivateNameContext> = [];
+	const varConflictNames = new Set<string>();
 	for (let index = 1; index < parts.length; index++) {
 		const part = parts[index]!;
 		const separator = part.indexOf(":");
 		if (separator < 0) {
 			throw new SyntaxError("Invalid inherited direct-eval context");
+		}
+		if (part.slice(0, separator) === "v") {
+			const name = part.slice(separator + 1);
+			if (!name) {
+				throw new SyntaxError("Invalid inherited direct-eval context");
+			}
+			varConflictNames.add(name);
+			continue;
 		}
 		privateNames.push({
 			flags: Number(part.slice(0, separator)),
@@ -54,6 +65,7 @@ export function decodeDirectEvalContext(encoded: string | undefined): DirectEval
 		allowSuperCall: (flags & 4) !== 0,
 		hasInstanceInitializer: (flags & 8) !== 0,
 		privateNames,
+		varConflictNames: [...varConflictNames],
 	};
 }
 

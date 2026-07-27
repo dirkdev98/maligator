@@ -41,8 +41,8 @@ globalThis.__compile = function __compile(
 		// the direct-eval intrinsic pushes) before the global.
 		// callerStrict: direct eval inherits the caller's strictness (a "use strict"
 		// prologue still promotes); indirect passes false (sloppy unless directive).
-		// inParamExpr: a parameter-expression eval declaring `arguments` is a
-		// SyntaxError.
+		// inParamExpr: retained as a positional ABI slot; parameter-environment
+		// conflicts are encoded in directEvalContext.
 		return compileSourceToBuffer(source, {
 			completionValue: true,
 			direct,

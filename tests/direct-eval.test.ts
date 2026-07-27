@@ -1,5 +1,12 @@
 import type { ESTree } from "meriyah";
 import { expect, test } from "vitest";
+import { compileSourceToBuffer } from "../src/compile.ts";
+import type { DirectEvalContext } from "../src/direct-eval-context.ts";
+import {
+	decodeDirectEvalContext,
+	encodeDirectEvalContext,
+} from "../src/direct-eval-context.ts";
+import { compileSemanticProgramToIr } from "../src/ir.ts";
 import { parseScript } from "../src/parser.ts";
 import {
 	analyzeSourceAndRunSemanticAnalysis,
@@ -14,6 +21,46 @@ function analyze(source: string, strict = true) {
 		parseScript(source, { strict }),
 	);
 	return program.files[0]!;
+}
+
+function generatedDirectEvalContext(source: string): DirectEvalContext {
+	const semantic = analyzeSourceAndRunSemanticAnalysis(
+		source,
+		"test.js",
+		parseScript(source, { strict: false }),
+	);
+	const program = compileSemanticProgramToIr(semantic);
+	const instructions = program.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	const intrinsic = instructions.find(
+		(instruction) =>
+			instruction.type === "loadIntrinsic" && instruction.intrinsic === "__directEval",
+	);
+	expect(intrinsic?.type).toBe("loadIntrinsic");
+	if (intrinsic?.type !== "loadIntrinsic") {
+		throw new Error("Expected a compiled direct eval");
+	}
+	const call = instructions.find(
+		(instruction) =>
+			instruction.type === "call" && instruction.registers[1] === intrinsic.registers[0],
+	);
+	expect(call?.type).toBe("call");
+	if (call?.type !== "call") {
+		throw new Error("Expected a direct eval call");
+	}
+	const encodedContext = instructions.find(
+		(instruction) =>
+			instruction.type === "createString" &&
+			instruction.registers[0] === call.registers[10],
+	);
+	expect(encodedContext?.type).toBe("createString");
+	if (encodedContext?.type !== "createString") {
+		throw new Error("Expected an encoded direct eval context");
+	}
+	return decodeDirectEvalContext(
+		String.fromCharCode(...program.stringConstants[encodedContext.stringIndex]!),
+	);
 }
 
 /** First function-defining node of the given type, depth-first. */
@@ -129,6 +176,7 @@ test("contextual eval parsing inherits super, new.target, and private names", ()
 		hasInstanceInitializer: false,
 		allowNewTarget: true,
 		privateNames: [{ name: "#value", flags: 2 }],
+		varConflictNames: [],
 	};
 	expect(() =>
 		parseScript("super.value; new.target; this.#value;", {
@@ -148,6 +196,7 @@ test("contextual eval parsing allows super calls only in a derived constructor",
 		hasInstanceInitializer: true,
 		allowNewTarget: true,
 		privateNames: [{ name: "#value", flags: 2 }],
+		varConflictNames: [],
 	};
 	expect(() =>
 		parseScript("super(); this.#value;", {
@@ -187,4 +236,96 @@ test("direct eval in an arrow captures lexical this and new.target", () => {
 	const call = findNode(file.ast, "CallExpression") as ESTree.CallExpression;
 	expect(file.directEvalThisBindings.get(call)?.scopedTo).toBe("captured");
 	expect(file.directEvalNewTargetBindings.get(call)?.scopedTo).toBe("captured");
+});
+
+test("direct eval context round-trips deduplicated var conflicts", () => {
+	const context = {
+		allowSuperProperty: true,
+		allowSuperCall: false,
+		hasInstanceInitializer: false,
+		allowNewTarget: true,
+		privateNames: [{ name: "#value", flags: 2 }],
+		varConflictNames: ["parameter", "lexical", "parameter"],
+	};
+	expect(decodeDirectEvalContext(encodeDirectEvalContext(context))).toEqual({
+		...context,
+		varConflictNames: ["parameter", "lexical"],
+	});
+});
+
+test("sloppy direct eval rejects var declarations that cross caller environments", () => {
+	const directEvalContext = encodeDirectEvalContext({
+		allowSuperProperty: false,
+		allowSuperCall: false,
+		hasInstanceInitializer: false,
+		allowNewTarget: false,
+		privateNames: [],
+		varConflictNames: ["parameter", "lexical"],
+	});
+	const compile = (source: string, callerStrict = false) =>
+		compileSourceToBuffer(source, { direct: true, callerStrict, directEvalContext });
+
+	expect(() => compile("var parameter")).toThrow(SyntaxError);
+	expect(() => compile("function lexical() {}")).toThrow(SyntaxError);
+	expect(() => compile("if (true) { var lexical; }")).toThrow(SyntaxError);
+	expect(() => compile("function nested() { var parameter; }")).not.toThrow();
+	expect(() => compile("var unrelated")).not.toThrow();
+	expect(() => compile('"use strict"; var parameter')).not.toThrow();
+	expect(() => compile("var parameter", true)).not.toThrow();
+});
+
+test("generated direct eval contexts model parameter and lexical conflicts", () => {
+	const parameterContext = generatedDirectEvalContext(
+		`function f(parameter = eval("ignored")) {}`,
+	);
+	expect(parameterContext.varConflictNames).toContain("parameter");
+	expect(parameterContext.varConflictNames).not.toContain("arguments");
+	expect(() =>
+		compileSourceToBuffer("var parameter", {
+			direct: true,
+			directEvalContext: encodeDirectEvalContext(parameterContext),
+		}),
+	).toThrow(SyntaxError);
+	expect(() =>
+		compileSourceToBuffer("var arguments", {
+			direct: true,
+			directEvalContext: encodeDirectEvalContext(parameterContext),
+		}),
+	).not.toThrow();
+
+	const lexicalContext = generatedDirectEvalContext(`{
+		let lexical;
+		eval("ignored");
+	}`);
+	expect(lexicalContext.varConflictNames).toContain("lexical");
+	expect(() =>
+		compileSourceToBuffer("var lexical", {
+			direct: true,
+			directEvalContext: encodeDirectEvalContext(lexicalContext),
+		}),
+	).toThrow(SyntaxError);
+});
+
+test("generated direct eval contexts preserve the simple catch exception", () => {
+	const simpleCatch = generatedDirectEvalContext(`
+		try { throw 1; } catch (caught) { eval("ignored"); }
+	`);
+	expect(simpleCatch.varConflictNames).not.toContain("caught");
+	expect(() =>
+		compileSourceToBuffer("var caught", {
+			direct: true,
+			directEvalContext: encodeDirectEvalContext(simpleCatch),
+		}),
+	).not.toThrow();
+
+	const destructuredCatch = generatedDirectEvalContext(`
+		try { throw {}; } catch ({ caught }) { eval("ignored"); }
+	`);
+	expect(destructuredCatch.varConflictNames).toContain("caught");
+	expect(() =>
+		compileSourceToBuffer("var caught", {
+			direct: true,
+			directEvalContext: encodeDirectEvalContext(destructuredCatch),
+		}),
+	).toThrow(SyntaxError);
 });
