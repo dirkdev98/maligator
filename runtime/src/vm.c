@@ -1776,7 +1776,7 @@ static void mal_vm_run_until_frame_count(
                     }
                     if (op == MAL_UNARY_INCREMENT || op == MAL_UNARY_DECREMENT) {
                         f64 unit = op == MAL_UNARY_INCREMENT ? 1.0 : -1.0;
-                        registers[instruction->as.unary.dst] = mal_value_from_f64_convert_nan(
+                        registers[instruction->as.unary.dst] = mal_ops_number_value(
                             mal_ops_number_as_f64(value) + unit);
                         MAL_VM_INTERPRETER_DIRECT_LEAF();
                         continue;
