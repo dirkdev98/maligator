@@ -1,4 +1,5 @@
 import {
+	Stats,
 	copyFileSync,
 	existsSync,
 	mkdirSync,
@@ -63,9 +64,19 @@ check(
 );
 
 const fileStat = statSync(textFile);
+check("stat returns a Stats instance", fileStat instanceof Stats);
 check("stat file isFile", fileStat.isFile());
 eq("stat file isDirectory", fileStat.isDirectory(), false);
 check("stat exposes finite mtimeMs", fileStat.mtimeMs > 0 && fileStat.mtimeMs < Infinity);
+check(
+	"stat exposes Date timestamps",
+	fileStat.ctime instanceof Date && fileStat.mtime instanceof Date,
+);
+eq(
+	"stat mtime Date uses integral milliseconds",
+	fileStat.mtime.getTime(),
+	Math.trunc(fileStat.mtimeMs),
+);
 check("stat exposes mode", fileStat.mode > 0);
 check("stat exposes size", fileStat.size > 0);
 check("stat exposes identity", fileStat.dev >= 0 && fileStat.ino > 0);

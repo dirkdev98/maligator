@@ -63,6 +63,8 @@ app.get("/redirect-target", (_request, response) => {
 	response.send("redirected");
 });
 
+app.use("/assets", express.static(`${__dirname}/public`));
+
 if (process.env.MAL_BENCH_CONTROL === "1") {
 	app.post("/__maligator_bench_exit", (_request, response) => {
 		response.end();

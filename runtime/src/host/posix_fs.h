@@ -25,6 +25,7 @@ typedef enum MalPosixFileType {
 } MalPosixFileType;
 
 typedef struct MalPosixStat {
+    f64 ctime_ms; // metadata-change time in milliseconds since the epoch
     f64 mtime_ms; // modification time in milliseconds since the epoch
     f64 dev;
     f64 ino;

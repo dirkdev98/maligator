@@ -94,7 +94,9 @@ const PATH: HostModuleSpec = {
 const FS: HostModuleSpec = {
 	id: "node:fs",
 	named: [
+		"Stats",
 		"copyFileSync",
+		"createReadStream",
 		"existsSync",
 		"mkdirSync",
 		"mkdtempSync",
@@ -104,9 +106,10 @@ const FS: HostModuleSpec = {
 		"renameSync",
 		"rmSync",
 		"statSync",
+		"stat",
 		"writeFileSync",
 	],
-	hasDefault: false,
+	hasDefault: true,
 	installer: hostInstallerSymbol("node:fs"),
 };
 
@@ -121,8 +124,22 @@ const CHILD_PROCESS: HostModuleSpec = {
 const CRYPTO: HostModuleSpec = {
 	id: "node:crypto",
 	named: ["createHash", "createHmac", "hash", "randomUUID", "timingSafeEqual"],
-	hasDefault: false,
+	hasDefault: true,
 	installer: hostInstallerSymbol("node:crypto"),
+};
+
+const PERF_HOOKS: HostModuleSpec = {
+	id: "node:perf_hooks",
+	named: ["performance"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:perf_hooks"),
+};
+
+const TLS: HostModuleSpec = {
+	id: "node:tls",
+	named: ["connect"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:tls"),
 };
 
 const EVENTS: HostModuleSpec = {
@@ -239,6 +256,8 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		FS,
 		CHILD_PROCESS,
 		CRYPTO,
+		PERF_HOOKS,
+		TLS,
 		EVENTS,
 		TTY,
 		UTIL,

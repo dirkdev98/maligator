@@ -460,8 +460,11 @@ test("resolves supported node:* imports to virtual host modules (no disk read) w
 	);
 });
 
-test("host catalog includes path and the curated crypto slice", () => {
-	write("catalog.mjs", `import "node:path";\nimport "node:crypto";\n`);
+test("host catalog includes path and postgres.js loading companions", () => {
+	write(
+		"catalog.mjs",
+		`import "node:path";\nimport "node:crypto";\nimport "node:perf_hooks";\nimport "node:tls";\n`,
+	);
 	const graph = buildModuleGraph(path.join(root, "catalog.mjs"), {
 		buildConfig: nodeOn,
 	});
@@ -479,7 +482,15 @@ test("host catalog includes path and the curated crypto slice", () => {
 		"randomUUID",
 		"timingSafeEqual",
 	]);
-	expect(cryptoSpec.hasDefault).toBe(false);
+	expect(cryptoSpec.hasDefault).toBe(true);
+	expect(graph.modules.get("node:perf_hooks")!.host).toMatchObject({
+		named: ["performance"],
+		hasDefault: true,
+	});
+	expect(graph.modules.get("node:tls")!.host).toMatchObject({
+		named: ["connect"],
+		hasDefault: true,
+	});
 });
 
 test("canonicalizes bare buffer and exposes the node:buffer constructor", () => {

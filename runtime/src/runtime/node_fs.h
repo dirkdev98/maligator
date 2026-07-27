@@ -7,11 +7,8 @@
  * marshalling — coercing arguments, building result values (strings, Stats /
  * Dirent objects, arrays), and translating errno into Node-shaped Errors — and
  * rejecting embedded NUL in paths before delegating syscalls to the host layer
- * (posix_fs.c). Only the *Sync methods
- * this slice needs: existsSync, readFileSync (UTF-8), writeFileSync (string or
- * Uint8Array), statSync, readdirSync ({ withFileTypes }), mkdirSync, and the
- * copy/realpath/mkdtemp/rm operations used by compiler caches. No async / fd /
- * stream API.
+ * (posix_fs.c). It provides the synchronous helpers used by compiler caches plus
+ * callback-style stat and a buffered Readable implementation of createReadStream.
  *
  * Keeping the whole surface in one translation unit preserves module dead-code
  * elimination: nothing else references this object, so unless a program imports

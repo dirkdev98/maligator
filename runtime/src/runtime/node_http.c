@@ -521,33 +521,21 @@ static MalValue http_ascii_value(MalVm *vm, const char *bytes, usize length) {
 }
 
 static MalValue http_server_socket_facade(MalVm *vm) {
-    bool shape_cached = vm->node_http_socket_shape != nullptr;
-    if (!shape_cached) {
-        MalString *keys[] = {
-            mal_intrinsic_ascii(vm, (const byte *) "encrypted"),
-            mal_intrinsic_ascii(vm, (const byte *) "readable"),
-            mal_intrinsic_ascii(vm, (const byte *) "writable"),
-        };
-        vm->node_http_socket_shape =
-            mal_shape_from_string_keys(keys, (u32) countof(keys));
+    MalObject *prototype = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE]);
+    MalValue socket = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    MalRootSpan root;
+    mal_gc_root(&root, &socket, 1);
+    mal_vm_call_value(vm,
+        vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR],
+        socket, nullptr, 0);
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        http_define_own(vm, socket, "encrypted", mal_value_new_boolean(false));
+        http_define_own(vm, socket, "readable", mal_value_new_boolean(true));
+        http_define_own(vm, socket, "writable", mal_value_new_boolean(true));
     }
-    MalValue values[] = {
-        mal_value_new_boolean(false),
-        mal_value_new_boolean(true),
-        mal_value_new_boolean(true),
-    };
-    // Keep the active realm's Object prototype. The slot values are immediates,
-    // and no GC safepoint occurs between allocation and the bulk fill.
-    MalObject *socket = mal_intrinsic_new_object(vm);
-    mal_object_set_shaped_values(
-        socket, vm->node_http_socket_shape, values, (u32) countof(values));
-    MAL_PERF_COUNT(http_bulk_shaped_objects);
-    MAL_PERF_ADD(http_bulk_shaped_slots, countof(values));
-    MAL_PERF_ADD(http_property_definitions_avoided, countof(values));
-    if (shape_cached) {
-        MAL_PERF_ADD(http_shape_transitions_avoided, countof(values));
-    }
-    return mal_value_from_object(socket);
+    mal_gc_unroot(&root);
+    return socket;
 }
 
 static void http_incoming_message_dispatch_shapes(MalVm *vm) {
@@ -961,6 +949,7 @@ static const char *http_status_reason(int status) {
         case 201: return "Created";
         case 202: return "Accepted";
         case 204: return "No Content";
+        case 206: return "Partial Content";
         case 301: return "Moved Permanently";
         case 302: return "Found";
         case 304: return "Not Modified";
@@ -969,6 +958,8 @@ static const char *http_status_reason(int status) {
         case 403: return "Forbidden";
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
+        case 412: return "Precondition Failed";
+        case 416: return "Range Not Satisfiable";
         case 500: return "Internal Server Error";
         case 501: return "Not Implemented";
         case 503: return "Service Unavailable";
@@ -1551,18 +1542,35 @@ static MalValue http_response_end(
         state->ending = false;
         return mal_value_new_undefined();
     }
+    bool head = state->method_len == 4 && memcmp(state->method, "HEAD", 4) == 0;
+    bool entity_forbidden = (status_number >= 100 && status_number < 200)
+        || status_number == 204 || status_number == 304;
+    i64 declared_content_length = entity_forbidden ? -1 : (i64) state->response_body_len;
+    if (head && !entity_forbidden) {
+        i64 content_length = http_response_header_byte_index(state, "content-length", 14);
+        if (content_length >= 0) {
+            f64 number;
+            if (!mal_vm_to_number(
+                    vm, state->response_headers[content_length].value, &number)
+                || !isfinite(number) || floor(number) != number || number < 0
+                || number > (f64) INT64_MAX) {
+                if (vm->completion.kind != MAL_COMPLETION_THROW) {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                                       "Invalid content-length header");
+                }
+                state->ending = false;
+                return mal_value_new_undefined();
+            }
+            declared_content_length = (i64) number;
+        }
+    }
     char *headers;
     usize headers_length;
     if (!http_response_serialize_headers(vm, state, &headers, &headers_length)) {
         state->ending = false;
         return mal_value_new_undefined();
     }
-    bool suppress_body = (status_number >= 100 && status_number < 200)
-        || status_number == 204 || status_number == 304
-        || (state->method_len == 4 && memcmp(state->method, "HEAD", 4) == 0);
-    bool head = state->method_len == 4 && memcmp(state->method, "HEAD", 4) == 0;
-    i64 declared_content_length = suppress_body && !head
-        ? -1 : (i64) state->response_body_len;
+    bool suppress_body = entity_forbidden || head;
     state->ended = true;
     state->ending = false;
     state->response_in_flight = true;

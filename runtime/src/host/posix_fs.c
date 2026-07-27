@@ -188,8 +188,10 @@ int mal_posix_fs_stat(const char *path, MalPosixStat *out) {
     out->size = (f64) st.st_size;
     out->mode = (u32) st.st_mode;
 #if defined(__APPLE__)
+    out->ctime_ms = (f64) st.st_ctimespec.tv_sec * 1000.0 + (f64) st.st_ctimespec.tv_nsec / 1.0e6;
     out->mtime_ms = (f64) st.st_mtimespec.tv_sec * 1000.0 + (f64) st.st_mtimespec.tv_nsec / 1.0e6;
 #else
+    out->ctime_ms = (f64) st.st_ctim.tv_sec * 1000.0 + (f64) st.st_ctim.tv_nsec / 1.0e6;
     out->mtime_ms = (f64) st.st_mtim.tv_sec * 1000.0 + (f64) st.st_mtim.tv_nsec / 1.0e6;
 #endif
     return 0;

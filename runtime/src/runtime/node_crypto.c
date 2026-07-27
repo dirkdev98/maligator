@@ -14,6 +14,7 @@
 #include "heap_symbol.h"
 #include "hex.h"
 #include "intrinsics.h"
+#include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
 #include "utf8.h"
@@ -686,6 +687,11 @@ static MalNativeFunctionObject *mal_node_crypto_function_with_slots(
 void mal_host_install_node_crypto(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     (void) launch;
+    MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_CRYPTO_MODULE];
+    if (!mal_value_is_undefined(cached)) {
+        mal_node_module_publish(vm, slots, count, cached);
+        return;
+    }
 
     MalValue roots[8];
     for (usize i = 0; i < countof(roots); i++) roots[i] = mal_value_new_undefined();
@@ -720,27 +726,34 @@ void mal_host_install_node_crypto(
         mal_intrinsic_ascii(vm, (const byte *) "timingSafeEqual"), 0,
         mal_node_crypto_timing_safe_equal));
 
+    roots[7] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
+        (const byte *) "createHash", roots[4], method_flags);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
+        (const byte *) "createHmac", roots[5], method_flags);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
+        (const byte *) "timingSafeEqual", roots[6], method_flags);
+
     MalObject *function_prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
-    for (i32 i = 0; i < count; i++) {
-        if (strcmp(slots[i].name, "createHash") == 0) {
-            vm->globals[slots[i].slot] = roots[4];
-        } else if (strcmp(slots[i].name, "createHmac") == 0) {
-            vm->globals[slots[i].slot] = roots[5];
-        } else if (strcmp(slots[i].name, "timingSafeEqual") == 0) {
-            vm->globals[slots[i].slot] = roots[6];
-        } else if (strcmp(slots[i].name, "hash") == 0) {
-            MalNativeFunctionObject *fn = mal_native_function_object_new_arity(&vm->heap,
-                function_prototype, mal_intrinsic_ascii(vm, (const byte *) "hash"), 3,
-                mal_node_crypto_hash);
-            vm->globals[slots[i].slot] = mal_value_from_native_function_object(fn);
-        } else if (strcmp(slots[i].name, "randomUUID") == 0) {
-            MalNativeFunctionObject *fn = mal_native_function_object_new_arity(&vm->heap,
-                function_prototype, mal_intrinsic_ascii(vm, (const byte *) "randomUUID"), 1,
-                mal_node_crypto_random_uuid);
-            vm->globals[slots[i].slot] = mal_value_from_native_function_object(fn);
-        }
-    }
+    MalValue scratch = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(&vm->heap, function_prototype,
+            mal_intrinsic_ascii(vm, (const byte *) "hash"), 3, mal_node_crypto_hash));
+    MalRootSpan scratch_root;
+    mal_gc_root(&scratch_root, &scratch, 1);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
+        (const byte *) "hash", scratch, method_flags);
+    mal_gc_unroot(&scratch_root);
+    scratch = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(&vm->heap, function_prototype,
+            mal_intrinsic_ascii(vm, (const byte *) "randomUUID"), 1,
+            mal_node_crypto_random_uuid));
+    mal_gc_root(&scratch_root, &scratch, 1);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]),
+        (const byte *) "randomUUID", scratch, method_flags);
+    mal_gc_unroot(&scratch_root);
+    vm->intrinsics[MAL_INTRINSIC_NODE_CRYPTO_MODULE] = roots[7];
+    mal_node_module_publish(vm, slots, count, roots[7]);
     mal_gc_unroot(&root);
 }
 

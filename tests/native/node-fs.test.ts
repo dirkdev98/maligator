@@ -12,7 +12,7 @@ import {
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-fs-"));
 
-describe("node:fs synchronous POSIX surface", () => {
+describe("node:fs POSIX surface", () => {
 	let bin: string;
 	beforeAll(() => {
 		bin = buildNativeBinary({
@@ -24,7 +24,7 @@ describe("node:fs synchronous POSIX surface", () => {
 		});
 	});
 
-	it("supports files, stats, directory entries, path validation, and errno errors", () => {
+	it("supports files, Date-backed stats, directory entries, path validation, and errno errors", () => {
 		assertResultPass(runToStdout(bin));
 	});
 

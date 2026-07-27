@@ -94,6 +94,15 @@ stated acceptance point without patching Express or anything in `node_modules`.
       interpreted modes, normal and GC-stress, with UBSan coverage. Its harness-only
       `node:assert/strict` dependency has the `equal`, `deepEqual`, and `match` subset
       used by this fixture; that module is not yet a general Node assertion surface.
+- [x] **Wave 5: serve static assets through the ecosystem stack.** Run
+      `express.static` through unmodified `serve-static`, `send`, `etag`,
+      `mime-types`, and `on-finished`. Callback-style `fs.stat`, Date-backed
+      `fs.Stats`, range-aware buffered `fs.createReadStream`, EventEmitter socket
+      facades, static HEAD content lengths, MIME metadata, validators, conditional
+      requests, byte ranges, directory redirects/indexes, dotfile rejection, and
+      404 fallthrough now pass in compiled/interpreted and normal/GC-stress modes.
+      The HTTP adapter and file Readable remain buffered; true incremental file and
+      response backpressure belongs with the remaining Wave 3 streaming work.
 - [x] **Benchmark native Express serving.** After the behavior baseline is green,
       add a representative unmodified-Express request mix to the consolidated
       `npm run bench` HTTP tracker. Record binary-size, throughput, and latency
@@ -142,6 +151,29 @@ The Node-only smoke runner additionally imports `node:assert/strict` and
 `node:http`. These are harness requirements, not additional Express production
 dependencies. Only the three strict assertion methods exercised by this runner are
 currently implemented.
+
+## Next ecosystem target: postgres.js
+
+The next compatibility target is the exact pinned `postgres@3.4.9` release, with
+staged acceptance rather than a package-specific shim:
+
+1. [x] Load and construct its unchanged ESM and CommonJS entry points, including
+       Node-compatible `fs`/`crypto` default imports, `node:perf_hooks`, and a loadable
+       `node:tls` boundary. The matrix passes compiled/interpreted execution and GC
+       stress with the web surface disabled. `tls.connect` still throws an explicit
+       unsupported error until the TLS milestone.
+2. Add reactor-backed `net.Socket`, Node timers/immediates, and a Node event-loop
+   personality independent of the web surface; accept a plaintext local startup
+   and simple query first.
+3. Complete the Buffer big-endian/64-bit wire primitives and crypto operations
+   required by PostgreSQL MD5 and SCRAM-SHA-256 authentication.
+4. Add `tls.connect` over an existing socket and accept the same query against a
+   TLS-required server.
+5. Cover pooling, cancellation, prepared statements, COPY streams, subscriptions,
+   reconnect timers, interpreted execution, and GC stress.
+
+Raw TCP/TLS are the architectural gates. Filesystem aliases or mocked database
+responses must not substitute for the driver's real wire protocol.
 
 ## Baseline workflow
 

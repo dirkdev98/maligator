@@ -76,6 +76,52 @@ async function main() {
 		assert.equal(redirected.status, 200);
 		assert.equal(redirected.body, "redirected");
 
+		const staticFile = await request(origin, "/assets/hello.txt");
+		assert.equal(staticFile.status, 200);
+		assert.equal(staticFile.body, "static payload\n");
+		assert.match(staticFile.headers["content-type"], /^text\/plain/);
+		assert.equal(staticFile.headers["content-length"], "15");
+		assert.match(staticFile.headers.etag, /^W\/"f-[0-9a-f]+"$/);
+		assert.match(staticFile.headers["last-modified"], / GMT$/);
+
+		const staticHead = await request(origin, "/assets/hello.txt", { method: "HEAD" });
+		assert.equal(staticHead.status, 200);
+		assert.equal(staticHead.body, "");
+		assert.equal(staticHead.headers["content-length"], "15");
+		assert.equal(staticHead.headers.etag, staticFile.headers.etag);
+
+		const notModified = await request(origin, "/assets/hello.txt", {
+			headers: { "if-none-match": staticFile.headers.etag },
+		});
+		assert.equal(notModified.status, 304);
+		assert.equal(notModified.body, "");
+
+		const range = await request(origin, "/assets/hello.txt", {
+			headers: { range: "bytes=7-13" },
+		});
+		assert.equal(range.status, 206);
+		assert.equal(range.body, "payload");
+		assert.equal(range.headers["content-range"], "bytes 7-13/15");
+		assert.equal(range.headers["content-length"], "7");
+
+		const unsatisfiable = await request(origin, "/assets/hello.txt", {
+			headers: { range: "bytes=99-100" },
+		});
+		assert.equal(unsatisfiable.status, 416);
+		assert.equal(unsatisfiable.headers["content-range"], "bytes */15");
+
+		const staticRedirect = await request(origin, "/assets");
+		assert.equal(staticRedirect.status, 301);
+		assert.equal(staticRedirect.headers.location, "/assets/");
+
+		const staticIndex = await request(origin, "/assets/");
+		assert.equal(staticIndex.status, 200);
+		assert.match(staticIndex.body, /<h1>Maligator static<\/h1>/);
+
+		const hidden = await request(origin, "/assets/.secret");
+		assert.equal(hidden.status, 404);
+		assert.deepEqual(hidden.body, { error: "Not found: GET /assets/.secret" });
+
 		const missing = await request(origin, "/missing");
 		assert.equal(missing.status, 404);
 		assert.deepEqual(missing.body, { error: "Not found: GET /missing" });
