@@ -66,6 +66,13 @@ check(
 		int32BitwiseAnd(2147483647, -2147483648) === 0,
 );
 check(
+	"int32 decimal formatting",
+	String(0) === "0" &&
+		String(-1) === "-1" &&
+		String(-2147483648) === "-2147483648" &&
+		String(2147483647) === "2147483647",
+);
+check(
 	"array length infinity",
 	throws(RangeError, () => new Array(Infinity)),
 );

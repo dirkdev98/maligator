@@ -301,9 +301,19 @@ MalString *mal_ops_to_string(MalHeap *heap, MalValue value) {
     }
 
     if (mal_value_is_int32(value)) {
-        byte buffer[16];
-        snprintf(buffer, sizeof(buffer), "%d", mal_value_to_i32(value));
-        return mal_ops_string_from_ascii(heap, buffer);
+        byte buffer[11];
+        byte *end = buffer + sizeof(buffer);
+        byte *cursor = end;
+        i32 integer = mal_value_to_i32(value);
+        u32 magnitude = integer < 0 ? (u32) -(i64) integer : (u32) integer;
+        do {
+            *--cursor = (byte) ('0' + magnitude % 10);
+            magnitude /= 10;
+        } while (magnitude != 0);
+        if (integer < 0) {
+            *--cursor = '-';
+        }
+        return mal_string_new_ascii(heap, cursor, (usize) (end - cursor));
     }
 
     if (mal_value_is_bigint(value)) {
