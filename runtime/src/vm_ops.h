@@ -257,6 +257,12 @@ static inline bool mal_vm_try_binary_number_fast(
         return false;
     }
 
+    if (op == MAL_BIN_BIT_AND && mal_value_is_int32(left) && mal_value_is_int32(right)) {
+        MAL_PERF_COUNT(binary_number_bitwise_hits);
+        *out = mal_value_from_i32(mal_value_to_i32(left) & mal_value_to_i32(right));
+        return true;
+    }
+
     f64 l = mal_ops_number_as_f64(left);
     f64 r = mal_ops_number_as_f64(right);
     switch (op) {

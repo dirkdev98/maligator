@@ -54,6 +54,17 @@ check(
 		Math.imul(Infinity, 3) === 0 &&
 		Math.imul(4294967295, 2) === -2,
 );
+
+function int32BitwiseAnd(left, right) {
+	return left & right;
+}
+
+check(
+	"int32 bitwise AND",
+	int32BitwiseAnd(-1, 1) === 1 &&
+		int32BitwiseAnd(-2147483648, 31) === 0 &&
+		int32BitwiseAnd(2147483647, -2147483648) === 0,
+);
 check(
 	"array length infinity",
 	throws(RangeError, () => new Array(Infinity)),
