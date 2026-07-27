@@ -1824,7 +1824,16 @@ static void mal_vm_run_until_frame_count(
                 }
                 MalInlineCache *ic = mal_vm_interp_ic_existing(
                     frame, instruction_pointer - 1);
-                if (ic != nullptr && mal_vm_property_try_load(vm, object, key, ic, &result)) {
+                bool cache_hit = false;
+                if (ic != nullptr) {
+                    MalObject *plain_object = mal_vm_as_object(object);
+                    cache_hit = plain_object != nullptr &&
+                        mal_vm_object_try_load(plain_object, key, ic, &result);
+                    if (!cache_hit) {
+                        cache_hit = mal_vm_property_try_load(vm, object, key, ic, &result);
+                    }
+                }
+                if (cache_hit) {
                     registers[instruction->as.load_property.dst] = result;
                     MAL_PERF_COUNT(interpreter_local_load_ic_hits);
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
@@ -1841,7 +1850,16 @@ static void mal_vm_run_until_frame_count(
                 MalValue result;
                 MalInlineCache *ic = mal_vm_interp_ic_existing(
                     frame, instruction_pointer - 1);
-                if (ic != nullptr && mal_vm_property_try_load(vm, object, key, ic, &result)) {
+                bool cache_hit = false;
+                if (ic != nullptr) {
+                    MalObject *plain_object = mal_vm_as_object(object);
+                    cache_hit = plain_object != nullptr &&
+                        mal_vm_object_try_load(plain_object, key, ic, &result);
+                    if (!cache_hit) {
+                        cache_hit = mal_vm_property_try_load(vm, object, key, ic, &result);
+                    }
+                }
+                if (cache_hit) {
                     registers[instruction->as.load_property_static.dst] = result;
                     MAL_PERF_COUNT(interpreter_local_load_ic_hits);
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
