@@ -373,11 +373,9 @@ export interface IRFunction {
 
 	/**
 	 * Set while compiling this function's parameter expressions (defaults / rest /
-	 * destructuring). A direct eval encountered here is in a parameter-expression
-	 * context: its declarations target the parameter environment, where declaring
-	 * `arguments` always conflicts (the param env carries an `arguments` binding),
-	 * so such an eval is treated as strict — which forbids declaring `arguments` /
-	 * `eval`, yielding the spec's SyntaxError without modeling the param env.
+	 * destructuring). A sloppy direct eval encountered here cannot hoist a var over
+	 * a parameter-environment binding. Non-arrow functions put their implicit
+	 * `arguments` binding there too; arrows only have explicit parameter bindings.
 	 */
 	inParameterExpression?: boolean;
 
@@ -11222,11 +11220,7 @@ function inheritedContextForDirectEval(
 			unit.node.type === "ArrowFunctionExpression")
 	) {
 		for (const binding of unit.bindings) {
-			if (
-				!binding.undeclared &&
-				binding.kind === "var" &&
-				binding.implicit !== "arguments"
-			) {
+			if (!binding.undeclared && binding.kind === "var") {
 				varConflictNames.add(binding.name);
 			}
 		}
@@ -11482,9 +11476,8 @@ function compileDirectEval(
 		registers: [callerStrict],
 		value: !isSloppyFunction(fn),
 	});
-	// Parameter-expression context: an eval here that DECLARES `arguments` is a
-	// SyntaxError (it would target the parameter environment, where `arguments` is
-	// already bound). Other sloppy behavior in a param eval stays sloppy.
+	// Retained in the intrinsic ABI; parameter-environment conflicts are encoded
+	// in inheritedContext so arrows and non-arrow functions remain distinct.
 	const inParamExpr = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "createBoolean",

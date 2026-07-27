@@ -279,7 +279,7 @@ test("generated direct eval contexts model parameter and lexical conflicts", () 
 		`function f(parameter = eval("ignored")) {}`,
 	);
 	expect(parameterContext.varConflictNames).toContain("parameter");
-	expect(parameterContext.varConflictNames).not.toContain("arguments");
+	expect(parameterContext.varConflictNames).toContain("arguments");
 	expect(() =>
 		compileSourceToBuffer("var parameter", {
 			direct: true,
@@ -291,7 +291,7 @@ test("generated direct eval contexts model parameter and lexical conflicts", () 
 			direct: true,
 			directEvalContext: encodeDirectEvalContext(parameterContext),
 		}),
-	).not.toThrow();
+	).toThrow(SyntaxError);
 
 	const lexicalContext = generatedDirectEvalContext(`{
 		let lexical;
@@ -304,6 +304,51 @@ test("generated direct eval contexts model parameter and lexical conflicts", () 
 			directEvalContext: encodeDirectEvalContext(lexicalContext),
 		}),
 	).toThrow(SyntaxError);
+});
+
+test.each([
+	["ordinary function", `function f(p = eval("ignored")) {}`],
+	["generator", `function *f(p = eval("ignored")) {}`],
+	["async generator", `async function *f(p = eval("ignored")) {}`],
+	["method", `({ f(p = eval("ignored")) {} });`],
+])("parameter eval in a non-arrow %s conflicts with implicit arguments", (_, source) => {
+	const context = generatedDirectEvalContext(source);
+	expect(context.varConflictNames).toContain("arguments");
+	expect(() =>
+		compileSourceToBuffer("var arguments", {
+			direct: true,
+			directEvalContext: encodeDirectEvalContext(context),
+		}),
+	).toThrow(SyntaxError);
+});
+
+test("parameter eval distinguishes arrow arguments from caller conflicts", () => {
+	const noArguments = generatedDirectEvalContext(
+		`const f = (p = eval("ignored")) => {};`,
+	);
+	expect(noArguments.varConflictNames).toEqual(["p"]);
+	expect(() =>
+		compileSourceToBuffer("var arguments", {
+			direct: true,
+			directEvalContext: encodeDirectEvalContext(noArguments),
+		}),
+	).not.toThrow();
+
+	const explicitArguments = generatedDirectEvalContext(
+		`const f = (arguments, p = eval("ignored")) => {};`,
+	);
+	expect(explicitArguments.varConflictNames).toContain("arguments");
+	expect(() =>
+		compileSourceToBuffer("var arguments", {
+			direct: true,
+			directEvalContext: encodeDirectEvalContext(explicitArguments),
+		}),
+	).toThrow(SyntaxError);
+
+	const bodyOnly = generatedDirectEvalContext(
+		`function f(p = eval("ignored")) { var bodyOnly; }`,
+	);
+	expect(bodyOnly.varConflictNames).not.toContain("bodyOnly");
 });
 
 test("generated direct eval contexts preserve the simple catch exception", () => {
