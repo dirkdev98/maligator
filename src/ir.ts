@@ -6399,7 +6399,11 @@ function compileFunctionDeclaration(
 		binding.usageNodes.length === 0 ||
 		(binding.usageNodes.length === 1 &&
 			(binding.usageNodes[0] === statement || binding.usageNodes[0] === statement.id));
-	if (onlyUsedByDeclaration && !isScriptGlobalProperty(fn.semanticFile, binding)) {
+	if (
+		onlyUsedByDeclaration &&
+		!isScriptGlobalProperty(fn.semanticFile, binding) &&
+		!(statement.id && isDirectEvalVarBinding(program, fn, statement.id))
+	) {
 		// Function is only used in its declaration, so we can skip it.
 		return;
 	}
@@ -10241,7 +10245,7 @@ function compileDeleteExpression(
 		// A `with`-intercepted name deletes the property off the active with-object
 		// that provides it (spec DeleteBinding on the object environment record),
 		// falling back to the static delete when no with-object has it.
-		if (identifierUsesDynamicEnvironment(program, fn, expression.argument)) {
+		if (fn.semanticFile.withDynamicNodes.has(expression.argument)) {
 			return compileWithDynamicDelete(program, fn, cursor, expression.argument);
 		}
 		return compileStaticIdentifierDelete(program, fn, cursor, expression.argument);
@@ -11482,7 +11486,9 @@ function visibleBindingsForDirectEval(
 				!result.has(binding.name) &&
 				!binding.undeclared &&
 				!binding.implicit &&
-				(!topLevelEval || !isScriptGlobalProperty(fn.semanticFile, binding))
+				(!topLevelEval ||
+					fn.semanticFile.evalDirect ||
+					!isScriptGlobalProperty(fn.semanticFile, binding))
 			) {
 				result.set(binding.name, binding);
 			}
@@ -11720,7 +11726,19 @@ function marshalDirectEvalInheritedContext(
 	}
 }
 
-function ensureDirectEvalPersistentScope(fn: IRFunction): number {
+function ensureDirectEvalPersistentScope(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+): number {
+	if (program.evalDirect && program.directEvalPersistentScopeBinding) {
+		return loadCapturedBinding(
+			program,
+			fn,
+			cursor,
+			program.directEvalPersistentScopeBinding,
+		);
+	}
 	if (fn.directEvalPersistentScopeRegister === undefined) {
 		const scope = nextRegisterDestination(fn);
 		const nullPrototype = nextRegisterDestination(fn);
@@ -11758,7 +11776,7 @@ function compileDirectEval(
 	const inheritedContext = inheritedContextForDirectEval(program, fn, callExpression);
 	const persistentScope =
 		!inheritedContext.varEnvironmentIsGlobal && isSloppyFunction(fn)
-			? ensureDirectEvalPersistentScope(fn)
+			? ensureDirectEvalPersistentScope(program, fn, cursor)
 			: undefined;
 
 	const scopeObject = nextRegisterDestination(fn);
@@ -11799,8 +11817,26 @@ function compileDirectEval(
 	);
 	// Marshal each visible binding's current value onto the scope object by name.
 	for (const [name, binding] of bindings) {
-		const location = getOrCreateBindingLocation(program, fn, binding);
-		const value = loadRegisterFromLocation(fn, cursor.block, location);
+		let value: number;
+		if (
+			program.evalDirect &&
+			!fn.semanticFile.strict &&
+			!program.directEvalContext.varEnvironmentIsGlobal &&
+			binding.kind === "var" &&
+			!binding.undeclared &&
+			!binding.implicit &&
+			fn.semanticFile.scopes[0]?.bindings.includes(binding)
+		) {
+			value = nextRegisterDestination(fn);
+			cursor.block.instructions.push({
+				type: "withGet",
+				registers: [value],
+				nameStringIndex: getOrCreateStringConstant(program, name),
+			});
+		} else {
+			const location = getOrCreateBindingLocation(program, fn, binding);
+			value = loadRegisterFromLocation(fn, cursor.block, location);
+		}
 		const key = compileStaticString(program, fn, cursor, name);
 		cursor.block.instructions.push({
 			type: "storeProperty",

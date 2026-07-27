@@ -355,6 +355,7 @@ function detectDirectEval(node: ESTree.CallExpression, file: SemanticFile): bool
 	// across a function boundary are captured and can be marshaled to eval.
 	const visibleNames = new Set<string>();
 	let scope: Scope | null | undefined = file.nodeToScope.get(node);
+	const directEvalIsStrict = scope?.strict ?? file.strict;
 	let variableEnvironmentRecorded = false;
 	while (scope) {
 		for (const binding of scope.bindings) {
@@ -371,7 +372,9 @@ function detectDirectEval(node: ESTree.CallExpression, file: SemanticFile): bool
 		if (FUNCTION_UNIT_NODE_TYPES.has(scope.node.type)) {
 			file.hasDirectEval.add(scope.node);
 			if (!variableEnvironmentRecorded) {
-				file.directEvalVariableEnvironments.add(scope.node);
+				if (scope.node.type !== "Program" && !directEvalIsStrict) {
+					file.directEvalVariableEnvironments.add(scope.node);
+				}
 				variableEnvironmentRecorded = true;
 			}
 		}
@@ -396,11 +399,26 @@ function markDirectEvalDynamicUsages(file: SemanticFile): void {
 			const bindingScope = bindingScopes.get(binding);
 			for (const usage of binding.usageNodes) {
 				if (usage.type !== "Identifier") continue;
+				const declaration = binding.declarationNode;
+				if (
+					!binding.undeclared &&
+					(usage === declaration ||
+						(declaration && "id" in declaration && declaration.id === usage))
+				) {
+					continue;
+				}
 				for (
 					let current: Scope | null | undefined = file.nodeToScope.get(usage);
 					current;
 					current = current.parent
 				) {
+					if (
+						binding.undeclared &&
+						file.directEvalVariableEnvironments.has(current.node)
+					) {
+						file.withDynamicNodes.add(usage);
+						break;
+					}
 					if (current === bindingScope) break;
 					if (file.directEvalVariableEnvironments.has(current.node)) {
 						file.withDynamicNodes.add(usage);

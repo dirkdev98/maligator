@@ -385,3 +385,39 @@ test("generated direct eval contexts preserve the simple catch exception", () =>
 		}),
 	).toThrow(SyntaxError);
 });
+
+test("dynamic eval var usage is limited to sloppy function activations", () => {
+	const file = analyze(
+		`
+			var outer;
+			eval("global");
+			function sloppy() {
+				function declared() {}
+				eval("local");
+				missing;
+				return () => outer;
+			}
+			function strict() {
+				"use strict";
+				eval("strict");
+				strictMissing;
+			}
+		`,
+		false,
+	);
+	expect(file.directEvalVariableEnvironments.size).toBe(1);
+
+	const bindings = file.scopes.flatMap((scope) => scope.bindings);
+	const missing = bindings.find((binding) => binding.name === "missing")!;
+	const strictMissing = bindings.find((binding) => binding.name === "strictMissing")!;
+	const declared = bindings.find((binding) => binding.name === "declared")!;
+	const outer = bindings.find((binding) => binding.name === "outer")!;
+	expect(missing.usageNodes.some((usage) => file.withDynamicNodes.has(usage))).toBe(true);
+	expect(strictMissing.usageNodes.some((usage) => file.withDynamicNodes.has(usage))).toBe(
+		false,
+	);
+	expect(declared.usageNodes.some((usage) => file.withDynamicNodes.has(usage))).toBe(
+		false,
+	);
+	expect(outer.usageNodes.some((usage) => file.withDynamicNodes.has(usage))).toBe(true);
+});
