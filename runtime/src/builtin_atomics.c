@@ -22,12 +22,16 @@
 
 // ValidateIntegerTypedArray: a (non-out-of-bounds) TypedArray whose element type
 // is one of the integer kinds (Float/Uint8Clamped are rejected with a TypeError).
-static MalTypedArrayObject *atomics_validate(MalVm *vm, MalValue value) {
+static MalTypedArrayObject *atomics_validate(MalVm *vm, MalValue value, bool writable) {
     if (!mal_value_is_typed_array_object(value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Atomics: argument is not a TypedArray");
         return nullptr;
     }
     MalTypedArrayObject *array = mal_value_to_typed_array_object(value);
+    if (writable && array->buffer->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Atomics: cannot write to an immutable buffer");
+        return nullptr;
+    }
     if (mal_typed_array_object_is_out_of_bounds(array)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Atomics: TypedArray is out of bounds");
         return nullptr;
@@ -144,7 +148,7 @@ static i128 atomics_apply_i128(AtomicsOp op, i128 old, i128 operand) {
 // Reads the old element (the return value), computes the new value, stores it
 // (the store re-truncates to the element width), and returns the old value.
 static MalValue atomics_rmw(MalVm *vm, const MalValue *args, i32 arg_count, AtomicsOp op) {
-    MalTypedArrayObject *array = atomics_validate(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    MalTypedArrayObject *array = atomics_validate(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), true);
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
@@ -232,7 +236,7 @@ static MalValue mal_atomics_load(MalVm *vm, MalValue this_value, const MalValue 
     (void) this_value;
     (void) new_target;
     (void) callee;
-    MalTypedArrayObject *array = atomics_validate(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    MalTypedArrayObject *array = atomics_validate(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), false);
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
@@ -248,7 +252,7 @@ static MalValue mal_atomics_store(MalVm *vm, MalValue this_value, const MalValue
     (void) this_value;
     (void) new_target;
     (void) callee;
-    MalTypedArrayObject *array = atomics_validate(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    MalTypedArrayObject *array = atomics_validate(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), true);
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
@@ -288,7 +292,7 @@ static MalValue mal_atomics_compare_exchange(MalVm *vm, MalValue this_value, con
     (void) this_value;
     (void) new_target;
     (void) callee;
-    MalTypedArrayObject *array = atomics_validate(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined());
+    MalTypedArrayObject *array = atomics_validate(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), true);
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
@@ -314,7 +318,7 @@ static MalValue mal_atomics_compare_exchange(MalVm *vm, MalValue this_value, con
         }
         MalValue old_value = mal_typed_array_object_get(vm, array, index);
         i128 old = mal_bigint_value(mal_value_to_bigint(old_value));
-        if (old == expected_big) {
+        if ((u64) (u128) old == (u64) (u128) expected_big) {
             mal_typed_array_object_set(vm, array, index,
                                        mal_value_from_bigint(mal_bigint_new(&vm->heap, replacement_big)));
         }

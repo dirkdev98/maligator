@@ -65,7 +65,7 @@ static bool mal_ta_species_constructor(MalVm *vm, MalTypedArrayObject *exemplar,
 // non-out-of-bounds TypedArray (TypedArrayCreate's ValidateTypedArray). When a
 // minimum length is given (>= 0; pass -1 to skip, as subarray does), the result
 // must be at least that long.
-static bool mal_ta_species_construct(MalVm *vm, MalValue species, const MalValue *args, i32 arg_count, i64 min_length, MalValue *out) {
+static bool mal_ta_species_construct(MalVm *vm, MalValue species, const MalValue *args, i32 arg_count, i64 min_length, bool writable, MalValue *out) {
     MalCompletion completion = mal_vm_construct_value(vm, species, args, arg_count);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
@@ -76,6 +76,10 @@ static bool mal_ta_species_construct(MalVm *vm, MalValue species, const MalValue
         return false;
     }
     MalTypedArrayObject *result = mal_value_to_typed_array_object(completion.value);
+    if (writable && result->buffer->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to an immutable buffer");
+        return false;
+    }
     if (mal_typed_array_object_is_out_of_bounds(result)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "TypedArray is out of bounds");
         return false;
@@ -89,13 +93,13 @@ static bool mal_ta_species_construct(MalVm *vm, MalValue species, const MalValue
 }
 
 // TypedArraySpeciesCreate(exemplar, «length»).
-static bool mal_ta_species_create(MalVm *vm, MalTypedArrayObject *exemplar, u32 length, MalValue *out) {
+static bool mal_ta_species_create(MalVm *vm, MalTypedArrayObject *exemplar, u32 length, bool writable, MalValue *out) {
     MalValue species;
     if (!mal_ta_species_constructor(vm, exemplar, &species)) {
         return false;
     }
     MalValue length_arg = mal_value_from_f64((f64) length);
-    return mal_ta_species_construct(vm, species, &length_arg, 1, (i64) length, out);
+    return mal_ta_species_construct(vm, species, &length_arg, 1, (i64) length, writable, out);
 }
 
 // RequireInternalSlot([[TypedArrayName]]) only — used by the getters and by
@@ -108,6 +112,14 @@ static MalTypedArrayObject *mal_ta_this_raw(MalVm *vm, MalValue this_value) {
     return mal_value_to_typed_array_object(this_value);
 }
 
+static bool mal_ta_revalidate(MalVm *vm, MalTypedArrayObject *array) {
+    if (mal_typed_array_object_is_out_of_bounds(array)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "TypedArray is out of bounds");
+        return false;
+    }
+    return true;
+}
+
 // ValidateTypedArray: RequireInternalSlot, then throw if the view is out of
 // bounds (detached buffer, or a resizable buffer shrunk past its extent). Most
 // prototype methods begin with this.
@@ -116,8 +128,16 @@ static MalTypedArrayObject *mal_ta_this(MalVm *vm, MalValue this_value) {
     if (array == nullptr) {
         return nullptr;
     }
-    if (mal_typed_array_object_is_out_of_bounds(array)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "TypedArray is out of bounds");
+    if (!mal_ta_revalidate(vm, array)) {
+        return nullptr;
+    }
+    return array;
+}
+
+static MalTypedArrayObject *mal_ta_this_writable(MalVm *vm, MalValue this_value) {
+    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    if (array != nullptr && array->buffer->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to an immutable buffer");
         return nullptr;
     }
     return array;
@@ -181,17 +201,70 @@ static bool mal_ta_copy_elements(MalVm *vm, MalTypedArrayObject *dst, u32 dst_st
     return true;
 }
 
+// SetTypedArrayFromTypedArray snapshots a same-buffer source before writing so
+// overlapping target stores cannot affect later source reads. Same-kind copies
+// preserve the exact element bits; cross-kind copies decode from the snapshot
+// and then apply the target kind's conversion.
+static bool mal_ta_set_from_same_buffer(
+    MalVm *vm,
+    MalTypedArrayObject *dst,
+    u32 dst_start,
+    MalTypedArrayObject *src,
+    u32 count
+) {
+    if (count == 0) {
+        return true;
+    }
+
+    u32 src_element_size = mal_typed_array_element_size(src->kind);
+    usize snapshot_size = (usize) count * src_element_size;
+    byte *snapshot = malloc(snapshot_size);
+    memcpy(snapshot, src->buffer->data + src->byte_offset, snapshot_size);
+
+    if (dst->kind == src->kind) {
+        u32 dst_element_size = mal_typed_array_element_size(dst->kind);
+        memcpy(
+            dst->buffer->data + dst->byte_offset + (usize) dst_start * dst_element_size,
+            snapshot,
+            snapshot_size);
+        free(snapshot);
+        return true;
+    }
+
+    MalArrayBufferObject snapshot_buffer = {
+        .data = snapshot,
+        .byte_length = (u32) snapshot_size,
+        .max_byte_length = (u32) snapshot_size,
+    };
+    MalTypedArrayObject snapshot_array = {
+        .buffer = &snapshot_buffer,
+        .kind = src->kind,
+        .length = count,
+    };
+    MalValue element_root[1] = {mal_value_new_undefined()};
+    MalRootSpan element_span;
+    mal_gc_root(&element_span, element_root, 1);
+    mal_gc_native_rooted_begin(vm);
+
+    bool ok = true;
+    for (u32 i = 0; i < count; i++) {
+        element_root[0] = mal_typed_array_object_get(vm, &snapshot_array, i);
+        mal_typed_array_object_set(vm, dst, dst_start + i, element_root[0]);
+        if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
+            ok = false;
+            break;
+        }
+    }
+
+    mal_gc_native_rooted_end(vm);
+    mal_gc_unroot(&element_span);
+    free(snapshot);
+    return ok;
+}
+
 static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     if (mal_value_is_undefined(new_target)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Constructor TypedArray requires 'new'");
-        return mal_value_new_undefined();
-    }
-
-    MalObject *prototype;
-    if (!mal_vm_get_prototype_from_constructor(
-            vm, new_target,
-            (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind),
-            &prototype)) {
         return mal_value_new_undefined();
     }
 
@@ -217,6 +290,10 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
         bool length_tracking = false;
         u32 length = 0;
         if (arg_count < 3 || mal_value_is_undefined(args[2])) {
+            if (byte_offset > buffer->byte_length) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "byteOffset exceeds buffer length");
+                return mal_value_new_undefined();
+            }
             if (buffer->resizable) {
                 length_tracking = true;
             } else {
@@ -230,12 +307,23 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
             if (!mal_ta_to_index(vm, args[2], &length)) {
                 return mal_value_new_undefined();
             }
+            if (buffer->detached) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot construct over a detached ArrayBuffer");
+                return mal_value_new_undefined();
+            }
             if ((u64) byte_offset + (u64) length * element_size > buffer->byte_length) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid typed array length");
                 return mal_value_new_undefined();
             }
         }
 
+        MalObject *prototype;
+        if (!mal_vm_get_prototype_from_constructor(
+                vm, new_target,
+                (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind),
+                &prototype)) {
+            return mal_value_new_undefined();
+        }
         MalTypedArrayObject *array = mal_typed_array_object_new(&vm->heap, prototype, buffer, kind, byte_offset, length, length_tracking);
         return mal_value_from_typed_array_object(array);
     }
@@ -243,11 +331,21 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
     // new T(typedArray): copy converting elements.
     if (mal_value_is_typed_array_object(arg)) {
         MalTypedArrayObject *source = mal_value_to_typed_array_object(arg);
+        if (!mal_ta_revalidate(vm, source)) {
+            return mal_value_new_undefined();
+        }
         if (mal_typed_array_is_bigint(kind) != mal_typed_array_is_bigint(source->kind)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot mix BigInt and non-BigInt typed arrays");
             return mal_value_new_undefined();
         }
         u32 length = mal_typed_array_object_length(source);
+        MalObject *prototype;
+        if (!mal_vm_get_prototype_from_constructor(
+                vm, new_target,
+                (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind),
+                &prototype)) {
+            return mal_value_new_undefined();
+        }
         MalValue result = mal_ta_create(vm, kind, length);
         MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
         mal_object_set_prototype(&array->object, prototype);
@@ -306,6 +404,14 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
                 values_span.count = (i32) count;
             }
 
+            MalObject *prototype;
+            if (!mal_vm_get_prototype_from_constructor(
+                    vm, new_target,
+                    (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind),
+                    &prototype)) {
+                result = mal_value_new_undefined();
+                goto iter_done;
+            }
             result = mal_ta_create(vm, kind, (u32) count);
             MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
             mal_object_set_prototype(&array->object, prototype);
@@ -343,6 +449,13 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
         }
         u32 length = (u32) length_number;
 
+        MalObject *prototype;
+        if (!mal_vm_get_prototype_from_constructor(
+                vm, new_target,
+                (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind),
+                &prototype)) {
+            return mal_value_new_undefined();
+        }
         MalValue result = mal_ta_create(vm, kind, length);
         MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
         mal_object_set_prototype(&array->object, prototype);
@@ -365,6 +478,13 @@ static MalValue mal_typed_array_construct(MalVm *vm, MalTypedArrayKind kind, con
         if (!mal_ta_to_index(vm, arg, &length)) {
             return mal_value_new_undefined();
         }
+    }
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, new_target,
+            (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind),
+            &prototype)) {
+        return mal_value_new_undefined();
     }
     MalValue result = mal_ta_create(vm, kind, length);
     mal_object_set_prototype(&mal_value_to_typed_array_object(result)->object, prototype);
@@ -439,7 +559,7 @@ static MalValue mal_ta_get_byte_offset(MalVm *vm, MalValue this_value, const Mal
         return mal_value_new_undefined();
     }
     // An out-of-bounds view reports a 0 offset.
-    u32 offset = mal_typed_array_object_length(array) == 0 && array->buffer->detached ? 0 : array->byte_offset;
+    u32 offset = mal_typed_array_object_is_out_of_bounds(array) ? 0 : array->byte_offset;
     return mal_value_from_i32((i32) offset);
 }
 
@@ -484,7 +604,7 @@ static MalValue mal_ta_at(MalVm *vm, MalValue this_value, const MalValue *args, 
 
 static MalValue mal_ta_fill(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
-    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    MalTypedArrayObject *array = mal_ta_this_writable(vm, this_value);
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
@@ -517,6 +637,9 @@ static MalValue mal_ta_fill(MalVm *vm, MalValue this_value, const MalValue *args
     if (!mal_ta_relative(vm, arg_count >= 3 ? args[2] : mal_value_new_undefined(), length, length, &end)) {
         return mal_value_new_undefined();
     }
+    if (!mal_ta_revalidate(vm, array)) {
+        return mal_value_new_undefined();
+    }
     // The view length is re-read after coercion (a resizable buffer may have
     // shrunk); clamp start/end so we never write past the current extent.
     u32 current = mal_typed_array_object_length(array);
@@ -541,6 +664,10 @@ static MalValue mal_ta_set(MalVm *vm, MalValue this_value, const MalValue *args,
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
+    if (array->buffer->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to an immutable buffer");
+        return mal_value_new_undefined();
+    }
     MalValue source = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     // ToIntegerOrInfinity(offset), then a negative offset is a RangeError.
     f64 offset_number;
@@ -551,11 +678,17 @@ static MalValue mal_ta_set(MalVm *vm, MalValue this_value, const MalValue *args,
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Start offset is negative");
         return mal_value_new_undefined();
     }
+    if (!mal_ta_revalidate(vm, array)) {
+        return mal_value_new_undefined();
+    }
     u32 offset = offset_number > 4294967295.0 ? UINT32_MAX : (u32) offset_number;
     u32 length = mal_typed_array_object_length(array);
 
     if (mal_value_is_typed_array_object(source)) {
         MalTypedArrayObject *src = mal_value_to_typed_array_object(source);
+        if (!mal_ta_revalidate(vm, src)) {
+            return mal_value_new_undefined();
+        }
         // A BigInt/non-BigInt mismatch is a TypeError (cannot coerce across).
         if (mal_typed_array_is_bigint(array->kind) != mal_typed_array_is_bigint(src->kind)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot mix BigInt and non-BigInt typed arrays");
@@ -564,6 +697,12 @@ static MalValue mal_ta_set(MalVm *vm, MalValue this_value, const MalValue *args,
         u32 src_length = mal_typed_array_object_length(src);
         if ((u64) offset + src_length > length) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Source is too large");
+            return mal_value_new_undefined();
+        }
+        if (array->buffer == src->buffer) {
+            if (!mal_ta_set_from_same_buffer(vm, array, offset, src, src_length)) {
+                return mal_value_new_undefined();
+            }
             return mal_value_new_undefined();
         }
         mal_ta_copy_elements(vm, array, offset, src, 0, src_length);
@@ -631,7 +770,7 @@ static MalValue mal_ta_subarray(MalVm *vm, MalValue this_value, const MalValue *
         mal_value_from_f64((f64) new_length),
     };
     MalValue result;
-    if (!mal_ta_species_construct(vm, species, ctor_args, length_tracking_to_end ? 2 : 3, -1, &result)) {
+    if (!mal_ta_species_construct(vm, species, ctor_args, length_tracking_to_end ? 2 : 3, -1, false, &result)) {
         return mal_value_new_undefined();
     }
     return result;
@@ -655,16 +794,24 @@ static MalValue mal_ta_slice(MalVm *vm, MalValue this_value, const MalValue *arg
     u32 new_length = end > start ? end - start : 0;
 
     MalValue result;
-    if (!mal_ta_species_create(vm, array, new_length, &result)) {
+    if (!mal_ta_species_create(vm, array, new_length, true, &result)) {
         return mal_value_new_undefined();
     }
-    mal_ta_copy_elements(vm, mal_value_to_typed_array_object(result), 0, array, start, new_length);
+    if (new_length > 0 && !mal_ta_revalidate(vm, array)) {
+        return mal_value_new_undefined();
+    }
+    u32 current = mal_typed_array_object_length(array);
+    u32 current_end = end < current ? end : current;
+    u32 copy_length = current_end > start ? current_end - start : 0;
+    if (!mal_ta_copy_elements(vm, mal_value_to_typed_array_object(result), 0, array, start, copy_length)) {
+        return mal_value_new_undefined();
+    }
     return result;
 }
 
 static MalValue mal_ta_copy_within(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
-    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    MalTypedArrayObject *array = mal_ta_this_writable(vm, this_value);
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
@@ -681,6 +828,13 @@ static MalValue mal_ta_copy_within(MalVm *vm, MalValue this_value, const MalValu
     if (!mal_ta_relative(vm, arg_count >= 3 ? args[2] : mal_value_new_undefined(), length, length, &end)) {
         return mal_value_new_undefined();
     }
+    u32 count = end > start ? end - start : 0;
+    if (count > length - target) {
+        count = length - target;
+    }
+    if (!mal_ta_revalidate(vm, array)) {
+        return mal_value_new_undefined();
+    }
     // Re-read the current length after coercion; clamp indices to the live
     // extent so a buffer that shrank during ToInteger can't drive an OOB move.
     u32 current = mal_typed_array_object_length(array);
@@ -693,9 +847,12 @@ static MalValue mal_ta_copy_within(MalVm *vm, MalValue this_value, const MalValu
     if (end > current) {
         end = current;
     }
-    u32 count = end > start ? end - start : 0;
-    if (count > current - target) {
-        count = current - target;
+    u32 live_count = end > start ? end - start : 0;
+    if (live_count > current - target) {
+        live_count = current - target;
+    }
+    if (count > live_count) {
+        count = live_count;
     }
     u32 element_size = mal_typed_array_element_size(array->kind);
     // memmove handles overlap; the element bits move verbatim.
@@ -730,6 +887,9 @@ static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args
             }
         }
         MalValue element = mal_typed_array_object_get(vm, array, i);
+        if (mal_value_is_nil(element)) {
+            continue;
+        }
         result = mal_vm_add(
             vm, result, mal_value_from_string(mal_ops_to_string(&vm->heap, element)));
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -737,10 +897,6 @@ static MalValue mal_ta_join(MalVm *vm, MalValue this_value, const MalValue *args
         }
     }
     return result;
-}
-
-static MalValue mal_ta_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    return mal_ta_join(vm, this_value, args, arg_count, new_target, callee);
 }
 
 // %TypedArray%.prototype.toLocaleString: each element formats through
@@ -767,6 +923,9 @@ static MalValue mal_ta_to_locale_string(MalVm *vm, MalValue this_value, const Ma
             }
         }
         MalValue element = mal_typed_array_object_get(vm, array, i);
+        if (mal_value_is_nil(element)) {
+            continue;
+        }
         MalValue method;
         if (!mal_vm_get_property(vm, element, to_locale_key, &method)) {
             return mal_value_new_undefined();
@@ -891,7 +1050,7 @@ static MalValue mal_ta_reverse(MalVm *vm, MalValue this_value, const MalValue *a
     (void) args;
     (void) arg_count;
     (void) new_target;
-    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    MalTypedArrayObject *array = mal_ta_this_writable(vm, this_value);
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
@@ -936,7 +1095,7 @@ static MalValue mal_ta_iterate(MalVm *vm, MalValue this_value, const MalValue *a
     MalTypedArrayObject *map_result = nullptr;
     if (op == MAL_TA_MAP) {
         // TypedArraySpeciesCreate(O, «len») runs before the callbacks.
-        if (!mal_ta_species_create(vm, array, length, &mapped)) {
+        if (!mal_ta_species_create(vm, array, length, true, &mapped)) {
             return mal_value_new_undefined();
         }
         map_result = mal_value_to_typed_array_object(mapped);
@@ -1025,7 +1184,7 @@ static MalValue mal_ta_iterate(MalVm *vm, MalValue this_value, const MalValue *a
             break;
         case MAL_TA_FILTER: {
             MalValue result;
-            if (!mal_ta_species_create(vm, array, (u32) kept_count, &result)) {
+            if (!mal_ta_species_create(vm, array, (u32) kept_count, true, &result)) {
                 break; // ret stays undefined; throw pending
             }
             obj_roots[1] = result;
@@ -1167,12 +1326,20 @@ static i32 mal_ta_default_compare(MalValue a, MalValue b) {
     if (x > y) {
         return 1;
     }
+    if (x == 0 && y == 0) {
+        if (signbit(x) && !signbit(y)) {
+            return -1;
+        }
+        if (!signbit(x) && signbit(y)) {
+            return 1;
+        }
+    }
     return 0;
 }
 
 static MalValue mal_ta_sort(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
-    MalTypedArrayObject *array = mal_ta_this(vm, this_value);
+    MalTypedArrayObject *array = mal_ta_this_writable(vm, this_value);
     if (array == nullptr) {
         return mal_value_new_undefined();
     }
@@ -1211,13 +1378,20 @@ static MalValue mal_ta_sort(MalVm *vm, MalValue this_value, const MalValue *args
                 MalRootSpan call_span;
                 mal_gc_root(&call_span, call_args, 2);
                 MalCompletion completion = mal_vm_call_value(vm, compare, mal_value_new_undefined(), call_args, 2);
-                mal_gc_unroot(&call_span);
                 if (completion.kind != MAL_COMPLETION_NORMAL) {
+                    mal_gc_unroot(&call_span);
                     vm->completion = completion;
                     ret = mal_value_new_undefined();
                     goto done;
                 }
-                f64 result = mal_ops_to_number(completion.value);
+                call_args[0] = completion.value;
+                f64 result;
+                if (!mal_vm_to_number(vm, completion.value, &result)) {
+                    mal_gc_unroot(&call_span);
+                    ret = mal_value_new_undefined();
+                    goto done;
+                }
+                mal_gc_unroot(&call_span);
                 order = isnan(result) ? 0 : (result < 0 ? -1 : result > 0 ? 1 : 0);
             } else {
                 order = mal_ta_default_compare(values[j], current);
@@ -1325,9 +1499,11 @@ static MalValue mal_ta_with(MalVm *vm, MalValue this_value, const MalValue *args
         value = mal_ops_number_value(number);
     }
 
-    // IsValidIntegerIndex: an out-of-range (or, after coercion, out-of-bounds)
-    // index is a RangeError.
-    if (mal_typed_array_object_is_out_of_bounds(array) || actual < 0 || actual >= (f64) length) {
+    // IsValidIntegerIndex observes the live post-coercion extent. The result
+    // still has the original captured length, so a newly-valid grown index can
+    // lie beyond it and simply replace no copied element.
+    u32 current_length = mal_typed_array_object_length(array);
+    if (mal_typed_array_object_is_out_of_bounds(array) || actual < 0 || actual >= (f64) current_length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid typed array index");
         return mal_value_new_undefined();
     }
@@ -1394,7 +1570,12 @@ static bool mal_ta_create_from_constructor(MalVm *vm, MalValue constructor, u32 
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Constructor did not produce a TypedArray");
         return false;
     }
-    if (mal_typed_array_object_length(mal_value_to_typed_array_object(completion.value)) < length) {
+    MalTypedArrayObject *result = mal_value_to_typed_array_object(completion.value);
+    if (result->buffer->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to an immutable buffer");
+        return false;
+    }
+    if (mal_typed_array_object_length(result) < length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Derived TypedArray is too small");
         return false;
     }
@@ -1469,7 +1650,7 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
 
     if (mal_value_is_callable(iterator_method)) {
         MalIteratorRecord record;
-        if (!mal_vm_get_iterator(vm, source, &record)) {
+        if (!mal_vm_get_iterator_from_method(vm, source, iterator_method, &record)) {
             goto done;
         }
         while (true) {
@@ -1500,17 +1681,37 @@ static MalValue mal_ta_from(MalVm *vm, MalValue this_value, const MalValue *args
         }
         length_number = mal_ops_number_to_length(length_number);
         u32 length = length_number > 4294967295.0 ? UINT32_MAX : (u32) length_number;
-        values = length > 0 ? malloc(sizeof(MalValue) * length) : nullptr;
-        values_span.slots = values;
+        MalValue result;
+        if (!mal_ta_create_from_constructor(vm, this_value, length, &result)) {
+            goto done;
+        }
+        extra[0] = result;
+        MalTypedArrayObject *array = mal_value_to_typed_array_object(result);
         for (u32 i = 0; i < length; i++) {
-            // Scan only already-filled entries while this get may collect.
-            values_span.count = (i32) i;
-            if (!mal_vm_get_property(vm, source, mal_key_index(i), &values[i])) {
+            MalValue element;
+            if (!mal_vm_get_property(vm, source, mal_key_index(i), &element)) {
+                goto done;
+            }
+            if (mal_value_is_callable(map_fn)) {
+                MalValue call_args[2] = {element, mal_value_from_i32((i32) i)};
+                MalRootSpan call_span;
+                mal_gc_root(&call_span, call_args, 2);
+                MalCompletion completion = mal_vm_call_value(vm, map_fn, this_arg, call_args, 2);
+                mal_gc_unroot(&call_span);
+                if (completion.kind != MAL_COMPLETION_NORMAL) {
+                    vm->completion = completion;
+                    goto done;
+                }
+                element = completion.value;
+            }
+            extra[1] = element;
+            mal_typed_array_object_set(vm, array, i, element);
+            if (vm->completion.kind != MAL_COMPLETION_NORMAL) {
                 goto done;
             }
         }
-        count = length;
-        values_span.count = (i32) count;
+        ret = result;
+        goto done;
     }
 
     MalValue result;
@@ -2125,7 +2326,12 @@ void mal_builtin_typed_array_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, ta_prototype, "slice", 2, mal_ta_slice);
     mal_intrinsic_define_method_n(vm, ta_prototype, "copyWithin", 2, mal_ta_copy_within);
     mal_intrinsic_define_method_n(vm, ta_prototype, "join", 1, mal_ta_join);
-    mal_intrinsic_define_method_n(vm, ta_prototype, "toString", 0, mal_ta_to_string);
+    MalPropertyLookup array_to_string = mal_object_get_own(
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]),
+        mal_intrinsic_string_key(vm, "toString"));
+    mal_intrinsic_define_data(
+        vm, ta_prototype, "toString", array_to_string.desc.value,
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_method_n(vm, ta_prototype, "toLocaleString", 0, mal_ta_to_locale_string);
     mal_intrinsic_define_method_n(vm, ta_prototype, "indexOf", 1, mal_ta_index_of);
     mal_intrinsic_define_method_n(vm, ta_prototype, "lastIndexOf", 1, mal_ta_last_index_of);

@@ -350,6 +350,10 @@ static MalValue mal_data_view_set(MalVm *vm, MalValue this_value, const MalValue
     if (view == nullptr) {
         return mal_value_new_undefined();
     }
+    if (view->buffer->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to an immutable buffer");
+        return mal_value_new_undefined();
+    }
 
     u64 index;
     if (!mal_data_view_to_index(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &index)) {

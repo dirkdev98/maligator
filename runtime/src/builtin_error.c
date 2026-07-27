@@ -721,11 +721,7 @@ static MalValue mal_builtin_error_stack_getter(MalVm *vm, MalValue this_value, c
     return result;
 }
 
-/**
- * set Error.prototype.stack(value): create/overwrite an own data property
- * "stack" on the receiver (matching the proposal's implementation-defined
- * behavior of installing the value as an own property).
- */
+/** set Error.prototype.stack(value), via SetterThatIgnoresPrototypeProperties. */
 static MalValue mal_builtin_error_stack_setter(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -734,8 +730,29 @@ static MalValue mal_builtin_error_stack_setter(MalVm *vm, MalValue this_value, c
         return mal_value_new_undefined();
     }
     MalValue value = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    MalPropertyDesc desc = mal_intrinsic_data_desc(value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
-    mal_object_define_own(mal_value_to_object(this_value), mal_intrinsic_string_key(vm, "stack"), &desc);
+    if (!mal_value_is_string(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Error.prototype.stack setter requires a string");
+        return mal_value_new_undefined();
+    }
+    if (this_value == vm->intrinsics[MAL_INTRINSIC_ERROR_PROTOTYPE]) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set Error.prototype.stack on its home object");
+        return mal_value_new_undefined();
+    }
+
+    MalKey key = mal_intrinsic_string_key(vm, "stack");
+    bool present;
+    MalPropertyDesc desc;
+    if (!mal_vm_get_own_property(vm, this_value, key, &present, &desc)) {
+        return mal_value_new_undefined();
+    }
+    if (!present) {
+        mal_vm_op_define_property(vm, this_value, key.value, value, true, true, true);
+        return mal_value_new_undefined();
+    }
+    if (!mal_vm_set_property(vm, this_value, key, value, this_value) &&
+        vm->completion.kind != MAL_COMPLETION_THROW) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot set Error.prototype.stack");
+    }
     return mal_value_new_undefined();
 }
 

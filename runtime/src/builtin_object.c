@@ -220,15 +220,26 @@ MalDefineOwnStatus mal_builtin_object_try_define_parsed(
     }
 
     // TypedArray [[DefineOwnProperty]] for an integer index (10.4.5.3): an
-    // out-of-bounds index is rejected; a valid one is a writable, enumerable,
-    // configurable data property (narrowing any attribute, or an accessor, is
-    // incompatible), and a [[Value]] writes the element — never the table.
+    // out-of-bounds index is rejected. Immutable-buffer elements are fixed data
+    // properties; mutable-buffer elements accept only the standard writable,
+    // enumerable, configurable descriptor and write [[Value]] to the buffer.
     if (target->header.type == MAL_HEAP_TYPED_ARRAY_OBJECT) {
         MalTypedArrayObject *typed_array = (MalTypedArrayObject *) target;
         if (key.kind == MAL_KEY_INDEX) {
             u32 index = mal_key_index_value(key);
             if (index >= mal_typed_array_object_length(typed_array)) {
                 return MAL_DEFINE_OWN_REJECTED;
+            }
+            if (typed_array->buffer->immutable) {
+                if (parse.has_get || parse.has_set ||
+                    (parse.has_configurable && (parse.desc.flags & MAL_PROPERTY_CONFIGURABLE)) ||
+                    (parse.has_enumerable && !(parse.desc.flags & MAL_PROPERTY_ENUMERABLE)) ||
+                    (parse.has_writable && (parse.desc.flags & MAL_PROPERTY_WRITABLE)) ||
+                    (parse.has_value && !mal_ops_same_value(
+                        parse.desc.value, mal_typed_array_object_get(vm, typed_array, index)))) {
+                    return MAL_DEFINE_OWN_REJECTED;
+                }
+                return MAL_DEFINE_OWN_APPLIED;
             }
             if (parse.has_get || parse.has_set ||
                 (parse.has_configurable && !(parse.desc.flags & MAL_PROPERTY_CONFIGURABLE)) ||
@@ -648,16 +659,20 @@ static MalValue mal_builtin_object_own_descriptor(MalVm *vm, MalValue target, Ma
         return mal_value_new_undefined();
     }
 
-    // TypedArray integer indices are exotic data properties { writable, enumerable,
-    // configurable }; an out-of-bounds numeric index has no descriptor (and is
-    // never an ordinary table property).
+    // TypedArray integer indices are exotic data properties. Immutable-buffer
+    // elements are non-writable and non-configurable; mutable-buffer elements
+    // are writable and configurable. Both are enumerable.
     if (mal_value_is_typed_array_object(target) && key.kind == MAL_KEY_INDEX) {
         MalTypedArrayObject *typed_array = mal_value_to_typed_array_object(target);
         u32 index = mal_key_index_value(key);
         if (index < mal_typed_array_object_length(typed_array)) {
+            MalPropertyFlags flags = MAL_PROPERTY_ENUMERABLE;
+            if (!typed_array->buffer->immutable) {
+                flags |= MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE;
+            }
             MalPropertyDesc desc = {
                 .value = mal_typed_array_object_get(vm, typed_array, index),
-                .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE,
+                .flags = flags,
             };
             return mal_builtin_object_descriptor_object(vm, desc);
         }

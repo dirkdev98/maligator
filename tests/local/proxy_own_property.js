@@ -888,8 +888,50 @@ check(
 		Reflect.set(typedTarget, "0", 21, typedReceiver) &&
 		typedReceiver[0] === 21 &&
 		typedTarget[0] === 0 &&
+		Reflect.set(typedTarget, "1", 22, typedReceiver) &&
+		!("1" in typedReceiver) &&
 		Reflect.set(typedTarget, "-1", 22, typedReceiver) &&
-		typedReceiver["-1"] === 22,
+		!("-1" in typedReceiver) &&
+		Reflect.set(typedTarget, "NaN", 23, typedReceiver) &&
+		!("NaN" in typedReceiver),
+);
+
+const immutableTyped = new Uint8Array(new Uint8Array([7]).buffer.transferToImmutable());
+const immutableDescriptor = Object.getOwnPropertyDescriptor(immutableTyped, "0");
+const immutableReflectDescriptor = Reflect.getOwnPropertyDescriptor(immutableTyped, "0");
+let immutableCoercions = 0;
+const immutableValue = {
+	valueOf() {
+		immutableCoercions++;
+		return 8;
+	},
+};
+check(
+	"immutable typed array indices expose fixed descriptors and reject Set",
+	immutableDescriptor.value === 7 &&
+		!immutableDescriptor.writable &&
+		immutableDescriptor.enumerable &&
+		!immutableDescriptor.configurable &&
+		immutableReflectDescriptor.value === 7 &&
+		!immutableReflectDescriptor.writable &&
+		immutableReflectDescriptor.enumerable &&
+		!immutableReflectDescriptor.configurable &&
+		!Reflect.set(immutableTyped, "0", immutableValue) &&
+		!Reflect.set(immutableTyped, "-1", immutableValue, {}) &&
+		immutableCoercions === 0 &&
+		immutableTyped[0] === 7 &&
+		throwsTypeError(() => {
+			"use strict";
+			immutableTyped[0] = 8;
+		}),
+);
+check(
+	"immutable typed array indices accept only compatible redefinitions",
+	Reflect.defineProperty(immutableTyped, "0", {}) &&
+		Reflect.defineProperty(immutableTyped, "0", { value: 7 }) &&
+		!Reflect.defineProperty(immutableTyped, "0", { value: 8 }) &&
+		!Reflect.defineProperty(immutableTyped, "0", { writable: true }) &&
+		!Reflect.defineProperty(immutableTyped, "0", { configurable: true }),
 );
 
 const receiverDescriptorTarget = { value: 1 };

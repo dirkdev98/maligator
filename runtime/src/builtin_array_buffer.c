@@ -354,11 +354,6 @@ static MalValue mal_builtin_array_buffer_transfer_impl(MalVm *vm, MalValue this_
     if (buffer == nullptr) {
         return mal_value_new_undefined();
     }
-    if (buffer->detached) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot transfer a detached ArrayBuffer");
-        return mal_value_new_undefined();
-    }
-
     // newLength: undefined keeps the current byte length; otherwise ToIndex (may
     // run user code that detaches the source). The detached/immutable checks
     // follow the coercion per ArrayBufferCopyAndDetach.
@@ -433,10 +428,6 @@ static MalValue mal_builtin_array_buffer_transfer_to_immutable(MalVm *vm, MalVal
     if (buffer == nullptr) {
         return mal_value_new_undefined();
     }
-    if (buffer->detached) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot transfer a detached ArrayBuffer");
-        return mal_value_new_undefined();
-    }
     u32 new_length = buffer->byte_length;
     if (arg_count >= 1 && !mal_value_is_undefined(args[0]) &&
         !mal_array_buffer_to_index_u32(vm, args[0], &new_length)) {
@@ -497,12 +488,10 @@ static MalValue mal_builtin_array_buffer_slice_to_immutable(MalVm *vm, MalValue 
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Source ArrayBuffer was detached during slice");
         return mal_value_new_undefined();
     }
-    u32 current = buffer->byte_length;
-    if (first > current) {
-        first = current;
-    }
-    if (final > current) {
-        final = current;
+    if (buffer->byte_length < final) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Source ArrayBuffer shrank below the resolved end");
+        return mal_value_new_undefined();
     }
     u32 new_length = final > first ? final - first : 0;
 

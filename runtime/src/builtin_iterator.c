@@ -7,6 +7,7 @@
 #include "gc.h"
 #include "heap_string.h"
 #include "map_object.h"
+#include "typed_array_object.h"
 #include "value_ops.h"
 
 MalNativeFunctionCallback mal_array_iterator_next_callback = nullptr;
@@ -154,6 +155,14 @@ static bool mal_builtin_iterator_array_advance(
         }
         // Hole / beyond the dense region (still < length): fall through so the
         // Get-based path reads it (prototype-aware → undefined for a clean hole).
+    }
+
+    if (mal_value_is_typed_array_object(iterator->target) &&
+        mal_typed_array_object_is_out_of_bounds(
+            mal_value_to_typed_array_object(iterator->target))) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "TypedArray iterator target is out of bounds");
+        return false;
     }
 
     // Length reads live each step, so growth during iteration is visited.

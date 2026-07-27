@@ -177,6 +177,11 @@ MalValue mal_typed_array_object_get(MalVm *vm, MalTypedArrayObject *array, u32 i
 void mal_typed_array_object_set(MalVm *vm, MalTypedArrayObject *array, u32 index, MalValue value) {
     u32 size = mal_typed_array_sizes[array->kind];
 
+    if (array->buffer->immutable) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot write to an immutable buffer");
+        return;
+    }
+
     // Coercion runs (and may throw) before the bounds check, as specced.
     u64 bits = 0;
     if (mal_typed_array_is_bigint(array->kind)) {

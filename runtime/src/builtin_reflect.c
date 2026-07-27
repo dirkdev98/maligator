@@ -302,32 +302,12 @@ static MalValue mal_reflect_get_own_property_descriptor(MalVm *vm, MalValue this
         return mal_value_new_undefined();
     }
 
-    if (mal_value_is_proxy_object(target)) {
-        bool present;
-        MalPropertyDesc desc;
-        if (!mal_proxy_get_own_property_descriptor(vm, mal_value_to_proxy_object(target), key, &present, &desc)) {
-            return mal_value_new_undefined();
-        }
-        return present ? mal_builtin_object_descriptor_object(vm, desc) : mal_value_new_undefined();
-    }
-
-    // Array length lives in the header rather than the property table.
-    if (mal_value_is_array_object(target) && mal_array_key_is_length(key)) {
-        MalArrayObject *array = mal_value_to_array_object(target);
-        MalPropertyDesc desc = {
-            .flags = array->length_writable ? MAL_PROPERTY_WRITABLE : MAL_PROPERTY_NONE,
-            .value = mal_value_from_u32(mal_array_object_length(array)),
-            .getter = mal_value_new_undefined(),
-            .setter = mal_value_new_undefined(),
-        };
-        return mal_builtin_object_descriptor_object(vm, desc);
-    }
-
-    MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(target), key);
-    if (!lookup.present) {
+    bool present;
+    MalPropertyDesc desc;
+    if (!mal_vm_get_own_property(vm, target, key, &present, &desc) || !present) {
         return mal_value_new_undefined();
     }
-    return mal_builtin_object_descriptor_object(vm, lookup.desc);
+    return mal_builtin_object_descriptor_object(vm, desc);
 }
 
 static MalValue mal_reflect_own_keys(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

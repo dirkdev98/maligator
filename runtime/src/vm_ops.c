@@ -371,9 +371,12 @@ bool mal_vm_get_own_property(
         MalTypedArrayObject *array = mal_value_to_typed_array_object(object_value);
         u32 index = mal_key_index_value(key);
         if (index < mal_typed_array_object_length(array)) {
+            MalPropertyFlags flags = MAL_PROPERTY_ENUMERABLE;
+            if (!array->buffer->immutable) {
+                flags |= MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE;
+            }
             *desc_out = (MalPropertyDesc) {
-                .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
-                    MAL_PROPERTY_CONFIGURABLE,
+                .flags = flags,
                 .value = mal_typed_array_object_get(vm, array, index),
                 .getter = mal_value_new_undefined(),
                 .setter = mal_value_new_undefined(),
@@ -2951,6 +2954,17 @@ bool mal_vm_get_property_with_receiver(MalVm *vm, MalValue object_value, MalKey 
         return true;
     }
 
+    // Integer-indexed exotic [[Get]] owns every canonical numeric key. Invalid
+    // and out-of-bounds indices return undefined without consulting the
+    // prototype chain.
+    if (mal_value_is_typed_array_object(object_value) &&
+        (key.kind == MAL_KEY_INDEX ||
+         (key.kind == MAL_KEY_STRING &&
+          mal_vm_string_is_canonical_numeric_index(
+              vm, mal_value_to_string(key.value))))) {
+        return true;
+    }
+
     // A String wrapper exposes its [[StringData]] code units as own integer-
     // indexed single-char data properties plus a non-writable, non-configurable
     // own `length`. Other wrapper kinds (Number/Boolean/Symbol/BigInt) are
@@ -3055,22 +3069,32 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
         return mal_proxy_set(vm, mal_value_to_proxy_object(target), key, value, receiver);
     }
 
-    // A TypedArray integer-indexed [[Set]] writes the element (a no-op when the
-    // index is out of bounds / the buffer detached) and never creates a table
-    // property, but only when the receiver is the TypedArray itself — a distinct
-    // receiver takes OrdinarySetWithOwnDescriptor below (writing to the receiver).
-    bool typed_array_canonical_string =
-        mal_value_is_typed_array_object(target) && key.kind == MAL_KEY_STRING &&
-        mal_vm_string_is_canonical_numeric_index(
-            vm, mal_value_to_string(key.value));
-    if (mal_value_is_typed_array_object(target) && target == receiver) {
+    // IntegerIndexedElementSet coerces the value before checking index validity.
+    // A valid index with a distinct receiver takes OrdinarySetWithOwnDescriptor
+    // below; an invalid index with a distinct receiver is a successful no-op.
+    if (mal_value_is_typed_array_object(target)) {
+        MalTypedArrayObject *array = mal_value_to_typed_array_object(target);
         if (key.kind == MAL_KEY_INDEX) {
+            if (array->buffer->immutable) {
+                return false;
+            }
             u32 index = mal_key_index_value(key);
-            mal_typed_array_object_set(vm, mal_value_to_typed_array_object(target), index, value);
-            return true;
-        } else if (typed_array_canonical_string) {
-            // An invalid integer-index key: [[Set]] is a no-op but returns true,
-            // never creating an ordinary property.
+            if (target == receiver) {
+                mal_typed_array_object_set(vm, array, index, value);
+                return true;
+            }
+            if (index >= mal_typed_array_object_length(array)) {
+                return true;
+            }
+        } else if (key.kind == MAL_KEY_STRING &&
+                   mal_vm_string_is_canonical_numeric_index(
+                       vm, mal_value_to_string(key.value))) {
+            if (array->buffer->immutable) {
+                return false;
+            }
+            if (target == receiver) {
+                mal_typed_array_object_set(vm, array, UINT32_MAX, value);
+            }
             return true;
         }
     }
@@ -3116,10 +3140,7 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
     }
     if (!own_present) {
         MalObject *parent = mal_object_get_prototype(mal_value_to_object(target));
-        // Integer-indexed [[Set]] with a distinct receiver calls
-        // OrdinarySetWithOwnDescriptor directly for any canonical numeric string;
-        // it does not consult the TypedArray's prototype after an invalid index.
-        if (!typed_array_canonical_string && parent != nullptr) {
+        if (parent != nullptr) {
             // OrdinarySetWithOwnDescriptor step 2 preserves Receiver while
             // dispatching the prototype's actual [[Set]] internal method.
             return mal_vm_set_property(
@@ -3958,13 +3979,27 @@ static void mal_vm_op_store_property_keyed(
     // (coerce, then write in-bounds; out-of-bounds is silently dropped) and
     // never define an ordinary property.
     if (mal_value_is_typed_array_object(object_value)) {
+        MalTypedArrayObject *array = mal_value_to_typed_array_object(object_value);
         if (key.kind == MAL_KEY_INDEX) {
-            mal_typed_array_object_set(vm, mal_value_to_typed_array_object(object_value), mal_key_index_value(key), value);
+            if (array->buffer->immutable) {
+                if (strict) {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
+                }
+                return;
+            }
+            mal_typed_array_object_set(vm, array, mal_key_index_value(key), value);
             return;
         } else if (key.kind == MAL_KEY_STRING &&
                    mal_vm_string_is_canonical_numeric_index(vm, mal_value_to_string(key.value))) {
-            // An invalid integer-index key (e.g. "-1"/"1.5"/"-0"): the write is a
-            // silently-dropped no-op, never an ordinary property.
+            if (array->buffer->immutable) {
+                if (strict) {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot assign to read only property");
+                }
+                return;
+            }
+            // Invalid integer indices still coerce the value before the bounds
+            // check, then drop the write without creating an ordinary property.
+            mal_typed_array_object_set(vm, array, UINT32_MAX, value);
             return;
         }
     }
