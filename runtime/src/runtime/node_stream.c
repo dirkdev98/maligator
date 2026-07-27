@@ -570,6 +570,10 @@ static void stream_end_readable(MalVm *vm, MalValue receiver) {
     }
 }
 
+void mal_node_stream_end_readable(MalVm *vm, MalValue receiver) {
+    stream_end_readable(vm, receiver);
+}
+
 static void stream_readable_drain(MalVm *vm, MalValue receiver) {
     MalValue roots[] = {
         receiver, stream_own(vm, receiver, "_malReadableQueue"),

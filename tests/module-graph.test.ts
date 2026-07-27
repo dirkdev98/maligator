@@ -182,7 +182,12 @@ test("traverses the complete pinned Express initialization graph", () => {
 	expect(graph.modules.has("node:http")).toBe(true);
 	expect(graph.modules.get("node:url")?.host?.named).toEqual(["Url", "parse", "format"]);
 	expect(graph.modules.get("node:querystring")?.host?.named).toEqual(["parse"]);
-	expect(graph.modules.get("node:net")?.host?.named).toEqual(["isIP"]);
+	expect(graph.modules.get("node:net")?.host?.named).toEqual([
+		"Socket",
+		"connect",
+		"createConnection",
+		"isIP",
+	]);
 	expect(graph.modules.get("node:os")?.host?.named).toEqual(["release"]);
 });
 

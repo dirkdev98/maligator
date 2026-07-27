@@ -10,16 +10,19 @@ import {
 } from "../../src/test-harness.ts";
 
 describe("postgres.js live database", () => {
-	it.skip("queries the opt-in local PostgreSQL instance", () => {
-		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-postgres-live-"));
-		const binary = buildNativeBinary({
-			fixture: "tests/fixtures/postgres-js/live.mjs",
-			name: "postgres-live",
-			mainFile: HOST_MAIN,
-			outDir,
-			nodeEnabled: true,
-			webPlatformEnabled: false,
-		});
-		assertResultPass(runToStdout(binary, { timeoutMs: 30_000 }));
-	});
+	it.runIf(process.env.MAL_POSTGRES_LIVE === "1")(
+		"queries the opt-in local PostgreSQL instance",
+		() => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-postgres-live-"));
+			const binary = buildNativeBinary({
+				fixture: "tests/fixtures/postgres-js/live.mjs",
+				name: "postgres-live",
+				mainFile: HOST_MAIN,
+				outDir,
+				nodeEnabled: true,
+				webPlatformEnabled: false,
+			});
+			assertResultPass(runToStdout(binary, { timeoutMs: 30_000 }));
+		},
+	);
 });

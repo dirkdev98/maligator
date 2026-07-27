@@ -165,8 +165,10 @@ staged acceptance rather than a package-specific shim:
 2. [x] Give Node-only products the host event-loop driver and timer globals, plus
        rooted, cancellable `setImmediate`/`clearImmediate` FIFO scheduling with a
        microtask checkpoint between callbacks.
-3. Add the neutral bounded TCP transport and reactor-backed `net.Socket`; accept a
-   plaintext local startup and simple query first.
+3. [x] Add the neutral bounded TCP transport and reactor-backed `net.Socket`; the
+       unchanged driver completes a plaintext local startup and simple query in
+       compiled/interpreted execution and GC stress. The external-service Vitest
+       lane remains explicitly skipped rather than entering deterministic gates.
 4. [x] Complete the Buffer big-endian/64-bit wire primitives used by postgres.js.
 5. Complete the crypto operations required by PostgreSQL MD5 and SCRAM-SHA-256
    authentication.

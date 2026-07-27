@@ -223,7 +223,7 @@ const QUERYSTRING: HostModuleSpec = {
 
 const NET: HostModuleSpec = {
 	id: "node:net",
-	named: ["isIP"],
+	named: ["Socket", "connect", "createConnection", "isIP"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:net"),
 };
