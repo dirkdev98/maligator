@@ -47,6 +47,18 @@ function throwAcrossBranch(condition) {
 check(throwAcrossBranch(true) === "truthy branch", "truthy branch exception");
 check(throwAcrossBranch(false) === "falsy branch", "falsy branch exception");
 
+let initializedLexical = 42;
+check(initializedLexical === 42, "initialized lexical TDZ guard");
+function readBeforeInitialization() {
+	try {
+		return value;
+	} catch (error) {
+		return error instanceof ReferenceError;
+	}
+	let value = 1;
+}
+check(readBeforeInitialization(), "uninitialized lexical TDZ guard");
+
 const evens = [];
 const odds = [];
 let allocationCount = 0;
@@ -66,5 +78,5 @@ for (let i = 0; i < 100; i++) {
 	check(odds[i].payload === `branch-${i * 2 + 1}`, `odd branch object ${i}`);
 }
 
-check(checks === 222, "all branch checks ran");
+check(checks === 224, "all branch checks ran");
 console.log("interpreter-branches PASS");

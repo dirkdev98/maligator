@@ -2170,6 +2170,11 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_init_global_vars(frame, instruction));
                 break;
             case MAL_OP_THROW_IF_TDZ:
+                if (!mal_value_is_empty(
+                        registers[instruction->as.throw_if_tdz.src])) {
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_throw_if_tdz(frame, instruction));
                 break;
             case MAL_OP_REQUIRE_COERCIBLE:
