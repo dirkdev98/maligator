@@ -22,14 +22,24 @@ check(net.isIP("localhost") === 0, "hostname is not an IP");
 check(net.isIP(123) === 0, "non-string is not an IP");
 
 const server = http.createServer((request, response) => {
-	check(request.method === "POST", "request method");
-	check(request.url === "/socket", "request path");
 	const chunks = [];
 	request.on("data", (chunk) => chunks.push(chunk));
 	request.on("end", () => {
-		check(Buffer.concat(chunks).toString("utf8") === "request-body", "request body");
+		const body = Buffer.concat(chunks);
+		check(request.method === "POST", "request method");
 		response.setHeader("Connection", "close");
-		response.end("socket-response");
+		if (request.url === "/socket") {
+			check(body.toString("utf8") === "request-body", "request body");
+			response.end("socket-response");
+			return;
+		}
+		if (request.url === "/large") {
+			check(body.length === 400000, "large request body");
+			response.end("b".repeat(200000));
+			return;
+		}
+		check(false, "request path");
+		response.end("unexpected");
 	});
 });
 
@@ -100,10 +110,58 @@ server.listen(0, "127.0.0.1", () => {
 		check(hadError === false, "normal close hadError");
 		check(socket.destroyed === true, "normal close destroyed");
 		check(socket.readyState === "closed", "closed ready state");
-		runCancellation(port);
+		runLarge(port);
 	});
 	check(socket.connect(port, "127.0.0.1") === socket, "connect return");
 });
+
+function runLarge(port) {
+	const socket = net.createConnection(port, "localhost");
+	const chunks = [];
+	let drained = 0;
+	let writeCallbacks = 0;
+	let dataEvents = 0;
+	let resumed = false;
+	socket.on("connect", () => {
+		const header =
+			"POST /large HTTP/1.1\r\n" +
+			"Host: localhost\r\n" +
+			"Content-Length: 400000\r\n" +
+			"Connection: close\r\n\r\n";
+		check(socket.write(header), "large header write return");
+		check(
+			socket.write(Buffer.alloc(400000, 0x61), () => writeCallbacks++) === false,
+			"large body applies backpressure",
+		);
+	});
+	socket.on("drain", () => drained++);
+	socket.on("data", (chunk) => {
+		dataEvents++;
+		chunks.push(chunk);
+		if (!resumed) {
+			check(socket.pause() === socket, "pause return");
+			setTimeout(() => {
+				resumed = true;
+				check(socket.resume() === socket, "resume return");
+			}, 5);
+		}
+	});
+	socket.on("error", (error) => {
+		console.log("FAIL: unexpected large socket error " + error.message);
+		failures++;
+	});
+	socket.on("close", (hadError) => {
+		const response = Buffer.concat(chunks).toString("utf8");
+		check(response.includes("HTTP/1.1 200 OK"), "large response status");
+		check(response.endsWith("b".repeat(200000)), "large response body");
+		check(writeCallbacks === 1, "large write callback count");
+		check(drained === 1, "one low-water drain event");
+		check(dataEvents > 1, "paused response resumes across read turns");
+		check(resumed, "resume timer ran");
+		check(hadError === false, "large close hadError");
+		runCancellation(port);
+	});
+}
 
 function runCancellation(port) {
 	const expected = new Error("cancelled");

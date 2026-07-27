@@ -5,10 +5,12 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "function_object.h"
+#include "dns.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "host.h"
@@ -30,12 +32,18 @@
 #define NET_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 #define NET_METHOD (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE)
+#define NET_WRITE_SEGMENT (64 * 1024)
+#define NET_WRITE_HIGH_WATER (256 * 1024)
+#define NET_WRITE_LOW_WATER (128 * 1024)
 
-typedef struct MalNodeNetWriteCallback {
+typedef struct MalNodeNetWrite {
     u64 token;
+    byte *bytes;
+    usize length;
+    usize offset;
     MalValue callback;
-    struct MalNodeNetWriteCallback *next;
-} MalNodeNetWriteCallback;
+    struct MalNodeNetWrite *next;
+} MalNodeNetWrite;
 
 typedef struct MalNodeNetSocketState {
     MalVm *vm;
@@ -45,9 +53,20 @@ typedef struct MalNodeNetSocketState {
 #endif
     MalHostHandle operation;
     MalValue destroy_error;
-    MalNodeNetWriteCallback *write_callbacks;
+    MalNodeNetWrite *write_head;
+    MalNodeNetWrite *write_tail;
+    struct sockaddr_storage *addresses;
+    socklen_t *address_lengths;
+    usize address_count;
+    usize address_index;
+    usize queued_write_bytes;
+    usize active_segment;
     u64 next_write_token;
     bool connected;
+    bool resolving;
+    bool write_in_flight;
+    bool backpressured;
+    bool read_paused;
     bool ending;
     bool destroyed;
     struct MalNodeNetSocketState *next;
@@ -118,12 +137,15 @@ static MalNodeNetSocketState **net_state_link(MalNodeNetSocketState *state) {
 }
 
 static void net_state_free(MalNodeNetSocketState *state) {
-    MalNodeNetWriteCallback *callback = state->write_callbacks;
-    while (callback != nullptr) {
-        MalNodeNetWriteCallback *next = callback->next;
-        free(callback);
-        callback = next;
+    MalNodeNetWrite *write = state->write_head;
+    while (write != nullptr) {
+        MalNodeNetWrite *next = write->next;
+        free(write->bytes);
+        free(write);
+        write = next;
     }
+    free(state->addresses);
+    free(state->address_lengths);
     free(state);
 }
 
@@ -226,7 +248,7 @@ static bool net_ascii_string(
         if (units[i] > 0x7f) {
             free(text);
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                               "Socket host must be an ASCII numeric address");
+                               "Socket host must be ASCII");
             return false;
         }
         text[i] = (char) units[i];
@@ -234,6 +256,19 @@ static bool net_ascii_string(
     text[length] = '\0';
     *out = text;
     return true;
+}
+
+static bool net_start_next_address(MalNodeNetSocketState *state) {
+    while (state->address_index < state->address_count) {
+        usize index = state->address_index++;
+        if (mal_tcp_connect_address_start(mal_host(state->vm),
+                (const struct sockaddr *) &state->addresses[index],
+                state->address_lengths[index], &state->operation)) {
+            state->resolving = false;
+            return true;
+        }
+    }
+    return false;
 }
 
 static MalValue net_socket_connect(
@@ -261,14 +296,6 @@ static MalValue net_socket_connect(
         : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "127.0.0.1"));
     char *host;
     if (!net_ascii_string(vm, host_value, &host)) return mal_value_new_undefined();
-    struct sockaddr_storage address;
-    socklen_t address_length;
-    if (!mal_net_parse_ip(host, (u16) port_number, &address, &address_length)) {
-        free(host);
-        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-                           "Socket host must be a numeric IP address");
-        return mal_value_new_undefined();
-    }
     MalNodeNetSocketState *state = calloc(1, sizeof(MalNodeNetSocketState));
     if (state == nullptr) {
         free(host);
@@ -282,8 +309,11 @@ static MalValue net_socket_connect(
 #if MAL_REALMS
     state->realm = vm->current_realm;
 #endif
-    bool started = mal_tcp_connect_start(
-        mal_host(vm), host, (u16) port_number, &state->operation);
+    char service[6];
+    snprintf(service, sizeof(service), "%u", (unsigned int) (u16) port_number);
+    state->resolving = true;
+    bool started = mal_dns_start(
+        mal_host(vm), host, service, &state->operation) == MAL_DNS_START_OK;
     free(host);
     if (!started) {
         free(state);
@@ -344,6 +374,38 @@ static bool net_chunk_bytes(
     return true;
 }
 
+static bool net_pump_writes(MalNodeNetSocketState *state) {
+    if (state->resolving || state->write_in_flight || state->write_head == nullptr) {
+        return true;
+    }
+    MalNodeNetWrite *write = state->write_head;
+    usize selected = write->length - write->offset;
+    if (selected > NET_WRITE_SEGMENT) selected = NET_WRITE_SEGMENT;
+    byte *segment = malloc(selected);
+    if (segment == nullptr) {
+        mal_vm_throw_allocation_error(state->vm);
+        return false;
+    }
+    memcpy(segment, write->bytes + write->offset, selected);
+    if (!mal_tcp_write_owned(
+            mal_host(state->vm), state->operation, segment, selected, write->token)) {
+        free(segment);
+        mal_vm_throw_error(state->vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                           "Socket transport rejected an accepted write");
+        return false;
+    }
+    state->active_segment = selected;
+    state->write_in_flight = true;
+    return true;
+}
+
+static void net_maybe_shutdown_write(MalNodeNetSocketState *state) {
+    if (state->ending && !state->resolving && !state->write_in_flight
+        && state->write_head == nullptr) {
+        (void) mal_tcp_shutdown_write(mal_host(state->vm), state->operation);
+    }
+}
+
 static MalValue net_socket_write(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -361,7 +423,6 @@ static MalValue net_socket_write(
     }
     MalValue callback = argc > 1 && mal_value_is_callable(args[argc - 1])
         ? args[argc - 1] : mal_value_new_undefined();
-    u64 token = state->next_write_token++;
     if (length == 0) {
         free(bytes);
         if (!mal_value_is_undefined(callback)) {
@@ -369,27 +430,24 @@ static MalValue net_socket_write(
         }
         return mal_value_new_boolean(true);
     }
-    MalNodeNetWriteCallback *entry = nullptr;
-    if (!mal_value_is_undefined(callback)) {
-        entry = malloc(sizeof(MalNodeNetWriteCallback));
-        if (entry == nullptr) {
-            free(bytes);
-            mal_vm_throw_allocation_error(vm);
-            return mal_value_new_boolean(false);
-        }
-        entry->token = token;
-        entry->callback = callback;
-    }
-    if (!mal_tcp_write_owned(mal_host(vm), state->operation, bytes, length, token)) {
+    MalNodeNetWrite *write = calloc(1, sizeof(MalNodeNetWrite));
+    if (write == nullptr) {
         free(bytes);
-        free(entry);
+        mal_vm_throw_allocation_error(vm);
         return mal_value_new_boolean(false);
     }
-    if (entry != nullptr) {
-        entry->next = state->write_callbacks;
-        state->write_callbacks = entry;
-    }
-    return mal_value_new_boolean(true);
+    write->token = state->next_write_token++;
+    write->bytes = bytes;
+    write->length = length;
+    write->callback = callback;
+    if (state->write_tail == nullptr) state->write_head = write;
+    else state->write_tail->next = write;
+    state->write_tail = write;
+    state->queued_write_bytes += length;
+    bool below_high_water = state->queued_write_bytes < NET_WRITE_HIGH_WATER;
+    if (!below_high_water) state->backpressured = true;
+    if (!net_pump_writes(state)) return mal_value_new_boolean(false);
+    return mal_value_new_boolean(below_high_water);
 }
 
 static MalValue net_socket_end(
@@ -406,7 +464,7 @@ static MalValue net_socket_end(
     }
     state->ending = true;
     net_set(vm, receiver, "writable", mal_value_new_boolean(false));
-    mal_tcp_shutdown_write(mal_host(vm), state->operation);
+    net_maybe_shutdown_write(state);
     return receiver;
 }
 
@@ -420,18 +478,91 @@ static MalValue net_socket_destroy(
     state->destroyed = true;
     state->destroy_error = argc > 0 ? args[0] : mal_value_new_undefined();
     net_set(vm, receiver, "destroyed", mal_value_new_boolean(true));
-    mal_tcp_cancel(mal_host(vm), state->operation);
+    if (state->resolving) {
+        if (!mal_dns_cancel(mal_host(vm), state->operation)) {
+            (void) mal_host_operation_cancel(&mal_host(vm)->tasks, state->operation);
+        }
+    } else {
+        mal_tcp_cancel(mal_host(vm), state->operation);
+    }
     return receiver;
 }
 
-static MalValue net_socket_option_noop(
+static MalValue net_call_readable_method(
+    MalVm *vm, MalValue receiver, const char *name) {
+    MalValue method;
+    MalValue prototype = vm->intrinsics[MAL_INTRINSIC_NODE_READABLE_PROTOTYPE];
+    if (!net_get(vm, prototype, name, &method)) return mal_value_new_undefined();
+    MalCompletion completion = mal_vm_call_value(
+        vm, method, receiver, nullptr, 0);
+    return completion.kind == MAL_COMPLETION_THROW
+        ? mal_value_new_undefined() : completion.value;
+}
+
+static MalValue net_socket_pause(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) args;
     (void) argc;
     (void) new_target;
     (void) callee;
+    MalNodeNetSocketState *state = net_state(receiver);
+    if (state != nullptr && !state->destroyed) {
+        state->read_paused = true;
+        if (!state->resolving) (void) mal_tcp_read_pause(mal_host(vm), state->operation);
+    }
+    return net_call_readable_method(vm, receiver, "pause");
+}
+
+static MalValue net_socket_resume(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    MalValue result = net_call_readable_method(vm, receiver, "resume");
+    MalNodeNetSocketState *state = net_state(receiver);
+    if (state != nullptr && !state->destroyed) {
+        state->read_paused = false;
+        if (!state->resolving) (void) mal_tcp_read_resume(mal_host(vm), state->operation);
+    }
+    return result;
+}
+
+static MalValue net_socket_set_keep_alive(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalNodeNetSocketState *state = net_state(receiver);
+    bool enabled = argc > 0 && mal_value_is_truthy(args[0]);
+    u32 delay = 0;
+    if (argc > 1 && !mal_value_is_undefined(args[1])) {
+        f64 number;
+        if (!mal_vm_to_number(vm, args[1], &number)) return mal_value_new_undefined();
+        if (isfinite(number) && number > 0) {
+            delay = number > UINT32_MAX ? UINT32_MAX : (u32) number;
+        }
+    }
+    if (state != nullptr && !state->resolving) {
+        (void) mal_tcp_set_keep_alive(
+            mal_host(vm), state->operation, enabled, delay);
+    }
+    return receiver;
+}
+
+static MalValue net_socket_set_no_delay(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalNodeNetSocketState *state = net_state(receiver);
+    bool enabled = argc < 1 || mal_value_is_undefined(args[0])
+        || mal_value_is_truthy(args[0]);
+    if (state != nullptr && !state->resolving) {
+        (void) mal_tcp_set_no_delay(mal_host(vm), state->operation, enabled);
+    }
     return receiver;
 }
 
@@ -460,25 +591,43 @@ static void net_scan_roots(MalVm *vm, void *data) {
         if (state->vm != vm) continue;
         mal_gc_mark_value(state->receiver);
         mal_gc_mark_value(state->destroy_error);
-        for (MalNodeNetWriteCallback *entry = state->write_callbacks;
-             entry != nullptr; entry = entry->next) {
-            mal_gc_mark_value(entry->callback);
+        for (MalNodeNetWrite *write = state->write_head;
+             write != nullptr; write = write->next) {
+            mal_gc_mark_value(write->callback);
         }
     }
 }
 
 static void net_write_complete(MalVm *vm, MalNodeNetSocketState *state, u64 token) {
-    MalNodeNetWriteCallback **link = &state->write_callbacks;
-    while (*link != nullptr && (*link)->token != token) link = &(*link)->next;
-    if (*link == nullptr) return;
-    MalNodeNetWriteCallback *entry = *link;
-    *link = entry->next;
-    MalValue callback = entry->callback;
-    free(entry);
-    MalRootSpan root;
-    mal_gc_root(&root, &callback, 1);
-    mal_vm_call_value(vm, callback, mal_value_new_undefined(), nullptr, 0);
-    mal_gc_unroot(&root);
+    MalNodeNetWrite *write = state->write_head;
+    if (write == nullptr || write->token != token || !state->write_in_flight) return;
+    write->offset += state->active_segment;
+    state->queued_write_bytes -= state->active_segment;
+    state->active_segment = 0;
+    state->write_in_flight = false;
+    if (write->offset == write->length) {
+        state->write_head = write->next;
+        if (state->write_head == nullptr) state->write_tail = nullptr;
+        MalValue callback = write->callback;
+        free(write->bytes);
+        free(write);
+        if (!mal_value_is_undefined(callback)) {
+            MalRootSpan root;
+            mal_gc_root(&root, &callback, 1);
+            mal_vm_call_value(vm, callback, mal_value_new_undefined(), nullptr, 0);
+            mal_gc_unroot(&root);
+        }
+    }
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+    if (state->backpressured
+        && state->queued_write_bytes <= NET_WRITE_LOW_WATER) {
+        state->backpressured = false;
+        net_emit(vm, state->receiver, "drain", nullptr, 0);
+    }
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        net_pump_writes(state);
+        net_maybe_shutdown_write(state);
+    }
 }
 
 static void net_dispatch_progress(
@@ -489,6 +638,11 @@ static void net_dispatch_progress(
         net_set(vm, state->receiver, "pending", mal_value_new_boolean(false));
         net_set(vm, state->receiver, "readyState", mal_value_from_string(
             mal_intrinsic_ascii(vm, (const byte *) "open")));
+        if (state->read_paused) {
+            (void) mal_tcp_read_pause(mal_host(vm), state->operation);
+        }
+        net_pump_writes(state);
+        net_maybe_shutdown_write(state);
         net_emit(vm, state->receiver, "connect", nullptr, 0);
         return;
     }
@@ -541,6 +695,35 @@ static void net_dispatch_terminal(
     mal_gc_unroot(&root);
 }
 
+static bool net_store_dns_addresses(
+    MalNodeNetSocketState *state, const MalDnsResult *result) {
+    usize count = mal_dns_result_address_count(result);
+    if (count == 0) return false;
+    struct sockaddr_storage *addresses = calloc(count, sizeof(*addresses));
+    socklen_t *lengths = calloc(count, sizeof(*lengths));
+    if (addresses == nullptr || lengths == nullptr) {
+        free(addresses);
+        free(lengths);
+        return false;
+    }
+    for (usize i = 0; i < count; i++) {
+        socklen_t length;
+        const struct sockaddr *address = mal_dns_result_address(result, i, &length);
+        if (address == nullptr || length > sizeof(addresses[i])) {
+            free(addresses);
+            free(lengths);
+            return false;
+        }
+        memcpy(&addresses[i], address, length);
+        lengths[i] = length;
+    }
+    state->addresses = addresses;
+    state->address_lengths = lengths;
+    state->address_count = count;
+    state->address_index = 0;
+    return true;
+}
+
 bool mal_node_net_drain(MalVm *vm) {
     MalHost *host = mal_host(vm);
     if (host == nullptr || mal_host_tasks_pending(&host->tasks) == 0) return false;
@@ -559,6 +742,58 @@ bool mal_node_net_drain(MalVm *vm) {
     MalRealm *saved_realm = vm->current_realm;
     mal_realm_switch(vm, state->realm);
 #endif
+    if (state->resolving) {
+        bool resolved = !state->destroyed && task.kind == MAL_HOST_TASK_TERMINAL
+            && task.result == MAL_HOST_TERMINAL_OK && data != nullptr
+            && net_store_dns_addresses(state, data);
+        mal_dns_result_release(data);
+        mal_host_task_release(&host->tasks, &task);
+        if (resolved && net_start_next_address(state)) {
+            net_pump_writes(state);
+            net_maybe_shutdown_write(state);
+#if MAL_REALMS
+            mal_realm_switch(vm, saved_realm);
+#endif
+            return true;
+        }
+        MalHostTask failed = {
+            .kind = MAL_HOST_TASK_TERMINAL,
+            .result = task.result == MAL_HOST_TERMINAL_CANCELLED
+                ? MAL_HOST_TERMINAL_CANCELLED : MAL_HOST_TERMINAL_ERROR,
+        };
+        MalTcpTerminal terminal = {.error = EHOSTUNREACH};
+        MalNodeNetSocketState **link = net_state_link(state);
+        if (*link == state) *link = state->next;
+        net_dispatch_terminal(vm, state, &failed, &terminal);
+        net_state_free(state);
+#if MAL_REALMS
+        mal_realm_switch(vm, saved_realm);
+#endif
+        return true;
+    }
+    if (task.kind == MAL_HOST_TASK_TERMINAL
+        && task.result == MAL_HOST_TERMINAL_ERROR && !state->connected
+        && state->address_index < state->address_count && !state->destroyed) {
+        mal_tcp_terminal_free(data);
+        mal_host_task_release(&host->tasks, &task);
+        if (net_start_next_address(state)) {
+            net_pump_writes(state);
+            net_maybe_shutdown_write(state);
+#if MAL_REALMS
+            mal_realm_switch(vm, saved_realm);
+#endif
+            return true;
+        }
+        MalTcpTerminal terminal = {.error = EHOSTUNREACH};
+        MalNodeNetSocketState **link = net_state_link(state);
+        if (*link == state) *link = state->next;
+        net_dispatch_terminal(vm, state, &task, &terminal);
+        net_state_free(state);
+#if MAL_REALMS
+        mal_realm_switch(vm, saved_realm);
+#endif
+        return true;
+    }
     if (task.kind == MAL_HOST_TASK_PROGRESS) {
         net_dispatch_progress(vm, state, data);
     } else {
@@ -621,9 +856,13 @@ void mal_host_install_node_net(
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
         (const byte *) "destroy", 1, net_socket_destroy);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
-        (const byte *) "setKeepAlive", 2, net_socket_option_noop);
+        (const byte *) "pause", 0, net_socket_pause);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
-        (const byte *) "setNoDelay", 1, net_socket_option_noop);
+        (const byte *) "resume", 0, net_socket_resume);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
+        (const byte *) "setKeepAlive", 2, net_socket_set_keep_alive);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
+        (const byte *) "setNoDelay", 1, net_socket_set_no_delay);
     roots[2] = net_constructor(vm, "Socket", net_socket_constructor, roots[1]);
     mal_object_set_prototype(mal_value_to_object(roots[2]), mal_value_to_object(
         vm->intrinsics[MAL_INTRINSIC_NODE_DUPLEX_CONSTRUCTOR]));

@@ -3,6 +3,8 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -31,6 +33,7 @@ typedef struct MalTcpConnection {
     MalTcpWrite *write_tail;
     usize queued_write_bytes;
     bool connecting;
+    bool read_paused;
     bool shutdown_requested;
     struct MalTcpConnection *next;
 } MalTcpConnection;
@@ -117,7 +120,8 @@ static void tcp_read_ready(void *data) {
         progress->kind = MAL_TCP_DATA;
         progress->bytes = bytes;
         progress->length = (usize) count;
-        if (!tcp_progress(connection, progress) || !tcp_arm_read(connection)) {
+        if (!tcp_progress(connection, progress)
+            || (!connection->read_paused && !tcp_arm_read(connection))) {
             tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
         }
         return;
@@ -137,6 +141,7 @@ static void tcp_read_ready(void *data) {
 }
 
 static bool tcp_arm_read(MalTcpConnection *connection) {
+    if (connection->read_paused) return true;
     connection->read_op = (MalOp) {
         .fd = connection->fd,
         .interest = MAL_IO_READ,
@@ -160,7 +165,8 @@ static void tcp_write_ready(void *data) {
             return;
         }
         progress->kind = MAL_TCP_CONNECTED;
-        if (!tcp_progress(connection, progress) || !tcp_arm_read(connection)) {
+        if (!tcp_progress(connection, progress)
+            || (!connection->read_paused && !tcp_arm_read(connection))) {
             tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ENOMEM);
             return;
         }
@@ -226,10 +232,10 @@ static bool tcp_flush(MalTcpConnection *connection) {
     return true;
 }
 
-bool mal_tcp_connect_start(
-    MalHost *host, const char *numeric_host, u16 port,
+bool mal_tcp_connect_address_start(
+    MalHost *host, const struct sockaddr *address, socklen_t length,
     MalHostHandle *operation) {
-    if (host == nullptr || numeric_host == nullptr || operation == nullptr
+    if (host == nullptr || address == nullptr || operation == nullptr
         || !mal_host_operation_start(&host->tasks, operation)) {
         return false;
     }
@@ -237,7 +243,7 @@ bool mal_tcp_connect_start(
     if (connection == nullptr) goto fail;
     connection->host = host;
     connection->operation = *operation;
-    connection->fd = mal_net_connect(numeric_host, port);
+    connection->fd = mal_net_connect_address(address, length);
     if (connection->fd < 0) goto fail_connection;
     connection->connecting = true;
     if (!tcp_arm_write(connection)
@@ -253,6 +259,17 @@ fail_connection:
 fail:
     (void) mal_host_operation_abort_start(&host->tasks, *operation);
     return false;
+}
+
+bool mal_tcp_connect_start(
+    MalHost *host, const char *numeric_host, u16 port,
+    MalHostHandle *operation) {
+    struct sockaddr_storage address;
+    socklen_t length;
+    return numeric_host != nullptr
+        && mal_net_parse_ip(numeric_host, port, &address, &length)
+        && mal_tcp_connect_address_start(
+            host, (const struct sockaddr *) &address, length, operation);
 }
 
 bool mal_tcp_write_owned(
@@ -285,6 +302,51 @@ bool mal_tcp_shutdown_write(MalHost *host, MalHostHandle operation) {
     connection->shutdown_requested = true;
     return connection->connecting || connection->write_head != nullptr
         || shutdown(connection->fd, SHUT_WR) == 0 || errno == ENOTCONN;
+}
+
+bool mal_tcp_read_pause(MalHost *host, MalHostHandle operation) {
+    MalTcpConnection *connection = host == nullptr ? nullptr : tcp_find(host, operation);
+    if (connection == nullptr) return false;
+    connection->read_paused = true;
+    return mal_reactor_cancel_op(&connection->host->reactor, &connection->read_op);
+}
+
+bool mal_tcp_read_resume(MalHost *host, MalHostHandle operation) {
+    MalTcpConnection *connection = host == nullptr ? nullptr : tcp_find(host, operation);
+    if (connection == nullptr) return false;
+    connection->read_paused = false;
+    return connection->connecting || connection->read_op.active
+        || tcp_arm_read(connection);
+}
+
+bool mal_tcp_set_keep_alive(
+    MalHost *host, MalHostHandle operation, bool enabled, u32 initial_delay_ms) {
+    MalTcpConnection *connection = host == nullptr ? nullptr : tcp_find(host, operation);
+    if (connection == nullptr) return false;
+    int value = enabled ? 1 : 0;
+    if (setsockopt(connection->fd, SOL_SOCKET, SO_KEEPALIVE,
+            &value, sizeof(value)) != 0) {
+        return false;
+    }
+    if (!enabled || initial_delay_ms == 0) return true;
+    int seconds = (int) ((initial_delay_ms + 999) / 1000);
+#if defined(TCP_KEEPALIVE)
+    return setsockopt(connection->fd, IPPROTO_TCP, TCP_KEEPALIVE,
+        &seconds, sizeof(seconds)) == 0;
+#elif defined(TCP_KEEPIDLE)
+    return setsockopt(connection->fd, IPPROTO_TCP, TCP_KEEPIDLE,
+        &seconds, sizeof(seconds)) == 0;
+#else
+    return true;
+#endif
+}
+
+bool mal_tcp_set_no_delay(MalHost *host, MalHostHandle operation, bool enabled) {
+    MalTcpConnection *connection = host == nullptr ? nullptr : tcp_find(host, operation);
+    if (connection == nullptr) return false;
+    int value = enabled ? 1 : 0;
+    return setsockopt(connection->fd, IPPROTO_TCP, TCP_NODELAY,
+        &value, sizeof(value)) == 0;
 }
 
 bool mal_tcp_cancel(MalHost *host, MalHostHandle operation) {

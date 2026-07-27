@@ -3,6 +3,8 @@
 #include "./defaults.h"
 #include "host_task.h"
 
+#include <sys/socket.h>
+
 typedef struct MalHost MalHost;
 
 typedef enum MalTcpProgressKind {
@@ -28,9 +30,17 @@ void mal_tcp_terminal_free(void *data);
 bool mal_tcp_connect_start(
     MalHost *host, const char *numeric_host, u16 port,
     MalHostHandle *operation);
+bool mal_tcp_connect_address_start(
+    MalHost *host, const struct sockaddr *address, socklen_t length,
+    MalHostHandle *operation);
 bool mal_tcp_write_owned(
     MalHost *host, MalHostHandle operation, byte *bytes, usize length,
     u64 write_token);
 bool mal_tcp_shutdown_write(MalHost *host, MalHostHandle operation);
+bool mal_tcp_read_pause(MalHost *host, MalHostHandle operation);
+bool mal_tcp_read_resume(MalHost *host, MalHostHandle operation);
+bool mal_tcp_set_keep_alive(
+    MalHost *host, MalHostHandle operation, bool enabled, u32 initial_delay_ms);
+bool mal_tcp_set_no_delay(MalHost *host, MalHostHandle operation, bool enabled);
 bool mal_tcp_cancel(MalHost *host, MalHostHandle operation);
 void mal_tcp_shutdown(MalHost *host);

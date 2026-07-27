@@ -137,6 +137,8 @@ int mal_net_connect_address(const struct sockaddr *address, socklen_t length) {
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
 #endif
+    int no_delay = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &no_delay, sizeof(no_delay));
     int r = connect(fd, address, length);
     if (r < 0 && errno != EINPROGRESS) {
         close(fd);
