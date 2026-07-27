@@ -494,7 +494,35 @@ MalTypeofResult mal_vm_typeof_result(MalValue value);
 
 /** Non-allocating canonical typeof predicate used by both execution backends. */
 static inline bool mal_vm_typeof_compare(MalValue value, MalTypeofResult expected) {
-    return mal_vm_typeof_result(value) == expected;
+    switch (expected) {
+        case MAL_TYPEOF_UNDEFINED:
+            return mal_value_is_undefined(value);
+        case MAL_TYPEOF_OBJECT: {
+            if (mal_value_is_null(value)) {
+                return true;
+            }
+            MalValue value_class = value & MAL_VALUE_CLASS_MASK;
+            if (value_class == MAL_VALUE_ARRAY) {
+                return true;
+            }
+            return value_class == MAL_VALUE_OBJECT && !mal_value_is_callable(value);
+        }
+        case MAL_TYPEOF_BOOLEAN:
+            return mal_value_is_boolean(value);
+        case MAL_TYPEOF_NUMBER:
+            return mal_ops_is_number(value);
+        case MAL_TYPEOF_STRING:
+            return mal_value_is_string(value);
+        case MAL_TYPEOF_SYMBOL:
+            return mal_value_is_symbol(value);
+        case MAL_TYPEOF_BIGINT:
+            return mal_value_is_bigint(value);
+        case MAL_TYPEOF_FUNCTION:
+            return mal_value_is_callable(value);
+        case MAL_TYPEOF_RESULT_COUNT:
+            return false;
+    }
+    return false;
 }
 
 void mal_op_typeof_compare(MalCallable *callable, const MalInstruction *instruction);

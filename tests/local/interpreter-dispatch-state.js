@@ -28,6 +28,29 @@ function leafConstants(seed) {
 
 check(leafConstants(5) === 22, "leaf result");
 
+const objectProxy = Proxy.revocable({}, {});
+const functionProxy = Proxy.revocable(function () {}, {});
+check(
+	typeof undefined === "undefined" &&
+		typeof null === "object" &&
+		typeof true === "boolean" &&
+		typeof 1.25 === "number" &&
+		typeof "text" === "string" &&
+		typeof Symbol("type") === "symbol" &&
+		typeof 1n === "bigint" &&
+		typeof function () {} === "function" &&
+		typeof [] === "object" &&
+		typeof objectProxy.proxy === "object" &&
+		typeof functionProxy.proxy === "function",
+	"typeof category comparisons",
+);
+objectProxy.revoke();
+functionProxy.revoke();
+check(
+	typeof objectProxy.proxy === "object" && typeof functionProxy.proxy === "function",
+	"typeof revoked proxies",
+);
+
 let loopChecksum = 0;
 for (let i = 0; i < 200; i++) {
 	if ((i & 1) === 0) loopChecksum += i;
