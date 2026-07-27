@@ -106,6 +106,7 @@ export function planTest262SharedHelpers(
 	file: Test262File,
 	strict: boolean,
 	loadHarness: (name: string) => string,
+	testContent = file.content,
 ): Test262SourcePlan {
 	const flags = file.frontmatter.flags ?? [];
 	if (flags.includes("module") || flags.includes("raw")) {
@@ -145,7 +146,7 @@ export function planTest262SharedHelpers(
 			};
 		});
 
-		const testSource = `;${file.content}`;
+		const testSource = `;${testContent}`;
 		const parsedTest = parseScript(testSource, { strict });
 		if (hasTopLevelLexicalDeclaration(parsedTest.ast)) {
 			return { kind: "legacy", reason: "test-top-level-lexical" };

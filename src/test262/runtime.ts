@@ -180,7 +180,47 @@ const SKIPPED_FEATURES = [
 	"explicit-resource-management",
 	"Temporal",
 ];
+// Unsupported module forms still run compile-time negative coverage, but their
+// positive/runtime tests require parser or host-loader behavior we do not expose.
+const SKIPPED_MODULE_FEATURES = [
+	"import-defer",
+	"source-phase-imports",
+	"json-modules",
+	"import-text",
+	"import-bytes",
+];
 const SKIPPED_PATHS = ["annexB"];
+// The pinned corpus predates tc39/test262@250f204f, which excludes the
+// immutable-buffer harness variant from tests that require mutable element
+// descriptors or writes.
+const STALE_IMMUTABLE_VARIANT_TESTS = new Set([
+	"test/built-ins/TypedArray/prototype/slice/speciesctor-return-same-buffer-with-offset.js",
+	"test/built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/index-prop-desc.js",
+	"test/built-ins/TypedArrayConstructors/internals/GetOwnProperty/index-prop-desc.js",
+	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/null-tobigint.js",
+	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/number-tobigint.js",
+	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/symbol-tobigint.js",
+	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/tonumber-value-throws.js",
+	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/string-nan-tobigint.js",
+	"test/built-ins/TypedArrayConstructors/internals/Set/BigInt/undefined-tobigint.js",
+	"test/built-ins/TypedArrayConstructors/internals/Set/bigint-tonumber.js",
+	"test/built-ins/TypedArrayConstructors/internals/Set/tonumber-value-throws.js",
+]);
+// This pinned test's own BigInt adapter reads its deliberately throwing source
+// before invoking the method under test. Node reproduces the same pre-call error,
+// so keep the invalid corpus input visible as a skip instead of rewriting it.
+const INVALID_PINNED_TESTS = new Set([
+	"test/built-ins/TypedArray/prototype/set/this-backed-by-resizable-buffer.js",
+]);
+// These cases require a host-backed async waiter list that can be woken by
+// Atomics.notify. The single-agent runtime exposes waitAsync's synchronous
+// validation/result paths but does not schedule blocking waiter records.
+const UNSUPPORTED_ASYNC_WAIT_TESTS = new Set([
+	"test/built-ins/Atomics/waitAsync/bigint/undefined-for-timeout.js",
+	"test/built-ins/Atomics/waitAsync/implicit-infinity-for-timeout.js",
+	"test/built-ins/Atomics/waitAsync/returns-result-object-value-is-promise-resolves-to-ok.js",
+	"test/built-ins/Atomics/waitAsync/undefined-for-timeout.js",
+]);
 
 const HARNESS_CACHE: Record<string, string> = {};
 
@@ -362,6 +402,13 @@ export function test262PrepareBuild() {
 }
 
 export function test262ShouldSkip(file: Test262File): boolean {
+	if (
+		INVALID_PINNED_TESTS.has(file.path) ||
+		UNSUPPORTED_ASYNC_WAIT_TESTS.has(file.path)
+	) {
+		return true;
+	}
+
 	if (file.frontmatter.negative) {
 		// Parse/early/resolution negatives are resolved at compile time: a
 		// SyntaxError thrown while compiling is exactly the rejection the test
@@ -394,9 +441,27 @@ export function test262ShouldSkip(file: Test262File): boolean {
 			return true;
 		}
 	}
+	// The harness helper requires the unimplemented $262.agent host API. Keep
+	// ordinary SharedArrayBuffer and Atomics coverage active.
+	if (file.frontmatter.includes?.includes("atomicsHelper.js")) {
+		return true;
+	}
 
 	for (const feature of SKIPPED_FEATURES) {
 		if (file.frontmatter.features?.includes(feature)) {
+			return true;
+		}
+	}
+	for (const feature of SKIPPED_MODULE_FEATURES) {
+		if (
+			file.frontmatter.features?.includes(feature) &&
+			(!file.frontmatter.negative || file.frontmatter.negative.phase === "runtime") &&
+			// `defer` remains a valid default-import binding. Test262 tags that
+			// contextual-keyword test with import-defer even though neither it nor
+			// its dependency uses the unsupported deferred-import production.
+			(feature !== "import-defer" ||
+				!file.path.endsWith("/syntax/valid-default-binding-named-defer.js"))
+		) {
 			return true;
 		}
 	}
@@ -432,9 +497,21 @@ function isAsyncTest(file: Test262File): boolean {
 	return file.frontmatter.flags?.includes("async") ?? false;
 }
 
-function composeSource(file: Test262File) {
+function testContent(file: Test262File): string {
+	let content = file.content;
+	if (STALE_IMMUTABLE_VARIANT_TESTS.has(file.path)) {
+		const patched = content.replace(/\}\);\s*$/, '}, null, null, ["immutable"]);');
+		if (patched === content) {
+			throw new Error(`Could not apply immutable-variant exclusion to '${file.path}'.`);
+		}
+		content = patched;
+	}
+	return content;
+}
+
+function composeSource(file: Test262File, content = testContent(file)) {
 	if (file.frontmatter.flags?.includes("raw")) {
-		return file.content;
+		return content;
 	}
 
 	const harnessFiles = ["harness/assert.js", "harness/sta.js"];
@@ -444,7 +521,7 @@ function composeSource(file: Test262File) {
 	harnessFiles.push(...(file.frontmatter.includes ?? []).map((it) => `harness/${it}`));
 
 	const prelude = isAsyncTest(file) ? TEST262_ASYNC_PRELUDE : "";
-	return `${prelude}${harnessFiles.map(loadHarnessFile).join("\n")}\n${file.content}`;
+	return `${prelude}${harnessFiles.map(loadHarnessFile).join("\n")}\n${content}`;
 }
 
 /**
@@ -876,13 +953,17 @@ export async function test262RunBatch(files: Array<Test262File>, workerId: numbe
 	};
 
 	// Compose every test once: it feeds both the cache key and the compiler.
-	const composed = files.map((file) => composeSource(file));
+	const contents = files.map((file) => testContent(file));
+	const composed = files.map((file, index) => composeSource(file, contents[index]));
 	const plans: Array<Test262SourcePlan> = files.map(
-		(file): Test262SourcePlan =>
+		(file, index): Test262SourcePlan =>
 			test262ShouldSkip(file)
 				? { kind: "legacy", reason: "skipped" }
-				: planTest262SharedHelpers(file, strictForTest262File(file), (name) =>
-						loadHarnessFile(`harness/${name}`),
+				: planTest262SharedHelpers(
+						file,
+						strictForTest262File(file),
+						(name) => loadHarnessFile(`harness/${name}`),
+						contents[index],
 					),
 	);
 

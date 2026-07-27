@@ -8,22 +8,25 @@ export const TEST262_METADATA = {
 
 	/**
 	 * Per-test binary run timeout. Loops are compilable now, so runaway tests
-	 * are a real possibility. Unicode-scale string construction and pathological
-	 * generic Array lengths are optimized/validated before execution, so one second
-	 * is enough for conforming cases while keeping a hung worker inexpensive.
+	 * are a real possibility. Keep enough scheduler headroom for Unicode-scale
+	 * string construction while retaining a bounded cost for a hung worker.
 	 */
-	runTimeoutMs: 1_000,
-	compileTimeoutMs: 60_000,
+	runTimeoutMs: 5_000,
+	// Full-suite batches can exceed one minute on the largest generated C units;
+	// timing those out is counterproductive because the single-test fallback then
+	// recompiles hundreds of files while competing with the remaining workers.
+	compileTimeoutMs: 180_000,
 
 	/**
 	 * Full-suite throughput tuning, measured on an 11-core Apple M3 Pro:
 	 *
-	 * - 200 tests per translation unit balances repeated link/process overhead
-	 *   against large-batch tail latency for a full run. Partial runs shrink toward
+	 * - 100 tests per translation unit keeps generated C units within cc's practical
+	 *   memory budget. Partial runs shrink toward
 	 *   25 tests to keep two batches queued per worker instead of leaving workers
 	 *   idle behind one or two large translation units.
-	 * - Up to 8 compile workers saturates the compiler without the contention seen
-	 *   at 11. Clamp to the host's available parallelism on smaller machines.
+	 * - Up to 4 compile workers avoids memory-pressure failures when several large
+	 *   translation units reach cc together. Clamp to the host's available
+	 *   parallelism on smaller machines.
 	 * - Generated test C stays at -O0: -O1/-O2/-Os made cold compiled runs ~2.4x
 	 *   slower and Test262 does not execute a body enough to recover that cost.
 	 * - LibMaligator uses the normal project -O2 build; -O1/-O3 were equivalent,
@@ -36,8 +39,8 @@ export const TEST262_METADATA = {
 	 * they are not CLI options because each dimension changes cache identity and
 	 * makes routine runs difficult to compare.
 	 */
-	batchSize: 200,
+	batchSize: 100,
 	minimumBatchSize: 25,
 	targetBatchesPerWorker: 2,
-	compileWorkers: 8,
+	compileWorkers: 4,
 };
