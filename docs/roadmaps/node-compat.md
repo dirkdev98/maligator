@@ -162,14 +162,17 @@ staged acceptance rather than a package-specific shim:
        `node:tls` boundary. The matrix passes compiled/interpreted execution and GC
        stress with the web surface disabled. `tls.connect` still throws an explicit
        unsupported error until the TLS milestone.
-2. Add reactor-backed `net.Socket`, Node timers/immediates, and a Node event-loop
-   personality independent of the web surface; accept a plaintext local startup
-   and simple query first.
-3. Complete the Buffer big-endian/64-bit wire primitives and crypto operations
-   required by PostgreSQL MD5 and SCRAM-SHA-256 authentication.
-4. Add `tls.connect` over an existing socket and accept the same query against a
+2. [x] Give Node-only products the host event-loop driver and timer globals, plus
+       rooted, cancellable `setImmediate`/`clearImmediate` FIFO scheduling with a
+       microtask checkpoint between callbacks.
+3. Add the neutral bounded TCP transport and reactor-backed `net.Socket`; accept a
+   plaintext local startup and simple query first.
+4. [x] Complete the Buffer big-endian/64-bit wire primitives used by postgres.js.
+5. Complete the crypto operations required by PostgreSQL MD5 and SCRAM-SHA-256
+   authentication.
+6. Add `tls.connect` over an existing socket and accept the same query against a
    TLS-required server.
-5. Cover pooling, cancellation, prepared statements, COPY streams, subscriptions,
+7. Cover pooling, cancellation, prepared statements, COPY streams, subscriptions,
    reconnect timers, interpreted execution, and GC stress.
 
 Raw TCP/TLS are the architectural gates. Filesystem aliases or mocked database

@@ -125,9 +125,12 @@ describe("command shell", () => {
 		});
 	});
 
-	it("selects the web host driver while retaining the lean synchronous driver", () => {
+	it("selects the event-loop driver for web or Node surfaces", () => {
 		const installation = developmentCompilerInstallation(path.join(repoRoot, "src"));
 		expect(applicationDriverPath(installation, true)).toBe(
+			path.join(repoRoot, "runtime/host_main.c"),
+		);
+		expect(applicationDriverPath(installation, false, true)).toBe(
 			path.join(repoRoot, "runtime/host_main.c"),
 		);
 		expect(applicationDriverPath(installation, false)).toBe(

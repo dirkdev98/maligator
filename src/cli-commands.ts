@@ -158,10 +158,11 @@ function selectToolchain(
 export function applicationDriverPath(
 	installation: CompilerInstallation,
 	webPlatform: boolean,
+	node = false,
 ): string {
 	return path.join(
 		installation.runtimeDirectory,
-		webPlatform ? "host_main.c" : "test262_main.c",
+		webPlatform || node ? "host_main.c" : "test262_main.c",
 	);
 }
 
@@ -295,6 +296,7 @@ function compileAndBuild(
 		mainFile: applicationDriverPath(
 			context.installation,
 			buildConfig.surface.webPlatform,
+			buildConfig.surface.node,
 		),
 		cacheSuffix: derivation.cacheSuffix,
 	});

@@ -3,6 +3,7 @@ tests/native/eval-gc-runtime-compilation-p0.test.ts
 tests/native/express-smoke.test.ts
 tests/native/gc.test.ts
 tests/native/global-property-cache.test.ts
+tests/native/node-scheduling.test.ts
 tests/native/postgres-load.test.ts
 tests/native/runtime-mechanics.test.ts
 tests/native/wire-loader.test.ts
