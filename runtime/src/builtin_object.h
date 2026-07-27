@@ -53,6 +53,11 @@ MalDefineOwnStatus mal_builtin_object_try_define_parsed(
     MalVm *vm, MalObject *target, MalKey key,
     const MalPropertyDescriptorParse *parsed);
 
+/** Dispatch [[DefineOwnProperty]] with an already converted descriptor. */
+bool mal_builtin_object_define_own_property_parsed(
+    MalVm *vm, MalValue target, MalKey key,
+    const MalPropertyDescriptorParse *parsed);
+
 /**
  * ToObject for a primitive: wrap a string/number/boolean/symbol/bigint in its
  * matching wrapper object (undefined/null/object return undefined). Used by the

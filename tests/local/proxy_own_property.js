@@ -133,6 +133,129 @@ try {
 }
 check("descriptor getter abrupt completion is preserved", descriptorAbruptPreserved);
 
+function integrityAbrupt(trapName) {
+	const marker = {};
+	const target = { x: 1 };
+	const handler = {
+		preventExtensions(seenTarget) {
+			Reflect.preventExtensions(seenTarget);
+			return true;
+		},
+	};
+	handler[trapName] = function () {
+		forceGc();
+		throw marker;
+	};
+	try {
+		Object.freeze(new Proxy(target, handler));
+	} catch (error) {
+		return error === marker;
+	}
+	return false;
+}
+
+check("freeze preserves ownKeys abrupt completion", integrityAbrupt("ownKeys"));
+check(
+	"freeze preserves defineProperty abrupt completion",
+	integrityAbrupt("defineProperty"),
+);
+
+const integrityOrder = [];
+const integrityDescriptors = {};
+const integrityTarget = { data: 1 };
+Object.defineProperty(integrityTarget, "accessor", {
+	get() {
+		return 2;
+	},
+	configurable: true,
+});
+const integrityProxy = new Proxy(integrityTarget, {
+	preventExtensions(target) {
+		integrityOrder.push("preventExtensions");
+		return Reflect.preventExtensions(target);
+	},
+	ownKeys(target) {
+		integrityOrder.push("ownKeys");
+		return Reflect.ownKeys(target);
+	},
+	getOwnPropertyDescriptor(target, key) {
+		integrityOrder.push("getOwnPropertyDescriptor:" + key);
+		return Reflect.getOwnPropertyDescriptor(target, key);
+	},
+	defineProperty(target, key, descriptor) {
+		integrityOrder.push("defineProperty:" + key);
+		integrityDescriptors[key] = descriptor;
+		return Reflect.defineProperty(target, key, descriptor);
+	},
+});
+Object.freeze(integrityProxy);
+check(
+	"freeze uses ordered internal methods and partial descriptors",
+	integrityOrder.join("|") ===
+		"preventExtensions|ownKeys|getOwnPropertyDescriptor:data|defineProperty:data|getOwnPropertyDescriptor:accessor|defineProperty:accessor" &&
+		integrityDescriptors.data.writable === false &&
+		integrityDescriptors.data.configurable === false &&
+		!("value" in integrityDescriptors.data) &&
+		integrityDescriptors.accessor.configurable === false &&
+		!("get" in integrityDescriptors.accessor),
+);
+check(
+	"TestIntegrityLevel observes proxy internal methods",
+	Object.isFrozen(integrityProxy) && Object.isSealed(integrityProxy),
+);
+
+const nestedPreventMarker = {};
+let nestedPreventAbrupt = false;
+try {
+	Object.seal(
+		new Proxy(
+			new Proxy(
+				{},
+				{
+					isExtensible() {
+						throw nestedPreventMarker;
+					},
+				},
+			),
+			{
+				preventExtensions() {
+					return true;
+				},
+			},
+		),
+	);
+} catch (error) {
+	nestedPreventAbrupt = error === nestedPreventMarker;
+}
+check(
+	"preventExtensions invariant preserves nested IsExtensible abrupt completion",
+	nestedPreventAbrupt,
+);
+
+function reviverProxyAbrupt(kind) {
+	const marker = {};
+	const handler = {};
+	handler[kind] = function () {
+		forceGc();
+		throw marker;
+	};
+	const replacement = new Proxy({ item: 1 }, handler);
+	try {
+		JSON.parse('["replace",null]', function (key, value) {
+			if (value === "replace") this[1] = replacement;
+			if (kind === "deleteProperty" && key === "item") return undefined;
+			return value;
+		});
+	} catch (error) {
+		return error === marker;
+	}
+	return false;
+}
+
+check("JSON.parse reviver ownKeys abrupt", reviverProxyAbrupt("ownKeys"));
+check("JSON.parse reviver defineProperty abrupt", reviverProxyAbrupt("defineProperty"));
+check("JSON.parse reviver deleteProperty abrupt", reviverProxyAbrupt("deleteProperty"));
+
 check(
 	"array non-configurable length is enforced by ownKeys",
 	throwsTypeError(() => Reflect.ownKeys(new Proxy([], { ownKeys: () => [] }))) &&

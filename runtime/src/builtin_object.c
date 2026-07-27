@@ -1,7 +1,6 @@
 #include "builtin_object.h"
 
 #include <math.h>
-#include <stdlib.h>
 
 #include "builtin_error.h"
 #include "arguments_object.h"
@@ -350,6 +349,45 @@ MalDefineOwnStatus mal_builtin_object_try_define(
         mal_builtin_object_try_define_parsed(vm, target, key, &parsed);
     mal_gc_unroot(&roots_span);
     return status;
+}
+
+bool mal_builtin_object_define_own_property_parsed(
+    MalVm *vm, MalValue target, MalKey key,
+    const MalPropertyDescriptorParse *parsed
+) {
+    if (mal_value_is_proxy_object(target)) {
+        return mal_proxy_define_own_property_parsed(
+            vm, mal_value_to_proxy_object(target), key, parsed);
+    }
+
+    bool present = false;
+    MalPropertyDesc current = {0};
+    // Script functions lazily materialize their non-configurable "prototype"
+    // property. Module namespace properties are synthetic descriptors.
+    if ((mal_value_is_function_object(target) ||
+         mal_value_is_module_namespace_object(target)) &&
+        !mal_vm_get_own_property(vm, target, key, &present, &current)) {
+        return false;
+    }
+    if (mal_value_is_module_namespace_object(target)) {
+        if (!present ||
+            (parsed->has_configurable &&
+             (parsed->desc.flags & MAL_PROPERTY_CONFIGURABLE)) ||
+            (parsed->has_enumerable &&
+             !(parsed->desc.flags & MAL_PROPERTY_ENUMERABLE)) ||
+            parsed->has_get || parsed->has_set ||
+            (parsed->has_writable &&
+             !(parsed->desc.flags & MAL_PROPERTY_WRITABLE))) {
+            return false;
+        }
+        return !parsed->has_value ||
+            mal_ops_same_value(parsed->desc.value, current.value);
+    }
+
+    MalDefineOwnStatus status = mal_builtin_object_try_define_parsed(
+        vm, mal_value_to_object(target), key, parsed);
+    return vm->completion.kind != MAL_COMPLETION_THROW &&
+        status == MAL_DEFINE_OWN_APPLIED;
 }
 
 /**
@@ -1236,123 +1274,152 @@ static MalValue mal_builtin_object_is_extensible(MalVm *vm, MalValue this_value,
 }
 
 /**
- * SetIntegrityLevel: clear CONFIGURABLE (and for freeze WRITABLE on data
- * properties) on every own property, then make the object non-extensible.
+ * SetIntegrityLevel: prevent extensions, snapshot [[OwnPropertyKeys]], then
+ * clear CONFIGURABLE (and for freeze WRITABLE on data properties) per key.
  */
-static MalValue mal_builtin_object_set_integrity(const MalValue *args, i32 arg_count, bool clear_writable) {
-    if (arg_count < 1 || !mal_value_is_object(args[0])) {
-        return arg_count > 0 ? args[0] : mal_value_new_undefined();
-    }
-
-    MalObject *object = mal_value_to_object(args[0]);
-    // Seal/freeze clears configurable (and writable) per element — attributes the
-    // dense vector cannot express. Demote a dense array's elements into the table
-    // first so the loop below can rewrite their descriptors.
-    if (mal_value_is_array_object(args[0])) {
-        mal_object_array_deoptimize(mal_value_to_array_object(args[0]));
-    }
-    MalTable *table = mal_object_properties(object);
-    usize count = mal_table_size(table);
-    MalKey *keys = malloc(sizeof(MalKey) * count);
-    usize key_count = 0;
-
-    MalPropertyIter iter;
-    mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_STORAGE_ORDER);
-
-    MalKey key;
-    MalPropertyDesc desc;
-    while (key_count < count && mal_property_iter_next(&iter, &key, &desc)) {
-        keys[key_count++] = key;
-    }
-
-    for (usize i = 0; i < key_count; i++) {
-        MalPropertyLookup lookup = mal_object_get_own(object, keys[i]);
-        if (!lookup.present) {
-            continue;
+static bool mal_builtin_object_set_integrity(
+    MalVm *vm, MalValue target, bool clear_writable
+) {
+    bool prevented;
+    if (mal_value_is_proxy_object(target)) {
+        if (!mal_proxy_prevent_extensions(
+                vm, mal_value_to_proxy_object(target), &prevented)) {
+            return false;
         }
+    } else {
+        mal_object_set_extensible(mal_value_to_object(target), false);
+        prevented = true;
+    }
+    if (!prevented) {
+        return false;
+    }
 
-        MalPropertyDesc frozen = lookup.desc;
-        frozen.flags &= ~MAL_PROPERTY_CONFIGURABLE;
-        if (clear_writable && !(frozen.flags & MAL_PROPERTY_ACCESSOR)) {
-            frozen.flags &= ~MAL_PROPERTY_WRITABLE;
+    MalRootedKeySnapshot keys;
+    mal_rooted_key_snapshot_init(&keys);
+    bool ok = mal_rooted_key_snapshot_own_keys(vm, target, &keys);
+    for (usize i = 0; ok && i < keys.count; i++) {
+        MalPropertyDescriptorParse update = {
+            .has_configurable = true,
+            .desc = mal_intrinsic_data_desc(
+                mal_value_new_undefined(), MAL_PROPERTY_NONE),
+        };
+        if (clear_writable) {
+            bool present;
+            MalPropertyDesc current;
+            if (!mal_vm_get_own_property(
+                    vm, target, keys.keys[i], &present, &current)) {
+                ok = false;
+                break;
+            }
+            if (!present) {
+                continue;
+            }
+            if (!(current.flags & MAL_PROPERTY_ACCESSOR)) {
+                update.has_writable = true;
+            }
         }
-
-        mal_property_write_entry(table, lookup.entry, &frozen);
+        if (!mal_builtin_object_define_own_property_parsed(
+                vm, target, keys.keys[i], &update)) {
+            if (vm->completion.kind != MAL_COMPLETION_THROW) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                    "Cannot set object integrity level");
+            }
+            ok = false;
+        }
     }
-
-    free(keys);
-
-    // An Array's exotic `length` lives in the header, not the table: freezing
-    // (clear_writable) makes it non-writable. It is already non-configurable, so
-    // sealing needs no change.
-    if (clear_writable && mal_value_is_array_object(args[0])) {
-        mal_value_to_array_object(args[0])->length_writable = false;
-    }
-
-    mal_object_set_extensible(object, false);
-    return args[0];
+    mal_rooted_key_snapshot_dispose(&keys);
+    return ok;
 }
 
 /**
  * TestIntegrityLevel: non-extensible with no configurable (and for frozen no
  * writable data) own properties.
  */
-static MalValue mal_builtin_object_test_integrity(const MalValue *args, i32 arg_count, bool check_writable) {
-    if (arg_count < 1 || !mal_value_is_object(args[0])) {
-        return mal_value_new_boolean(true);
+static bool mal_builtin_object_test_integrity(
+    MalVm *vm, MalValue target, bool check_writable, bool *result
+) {
+    bool extensible;
+    if (!mal_vm_is_extensible_object(vm, target, &extensible)) {
+        return false;
+    }
+    if (extensible) {
+        *result = false;
+        return true;
     }
 
-    MalObject *object = mal_value_to_object(args[0]);
-    if (mal_object_is_extensible(object)) {
-        return mal_value_new_boolean(false);
-    }
-
-    MalPropertyIter iter;
-    mal_property_iter_init(&iter, object, MAL_PROPERTY_ITER_STORAGE_ORDER);
-
-    MalKey key;
-    MalPropertyDesc desc;
-    while (mal_property_iter_next(&iter, &key, &desc)) {
-        if (desc.flags & MAL_PROPERTY_CONFIGURABLE) {
-            return mal_value_new_boolean(false);
+    MalRootedKeySnapshot keys;
+    mal_rooted_key_snapshot_init(&keys);
+    bool ok = mal_rooted_key_snapshot_own_keys(vm, target, &keys);
+    *result = true;
+    for (usize i = 0; ok && *result && i < keys.count; i++) {
+        bool present;
+        MalPropertyDesc desc;
+        if (!mal_vm_get_own_property(
+                vm, target, keys.keys[i], &present, &desc)) {
+            ok = false;
+            break;
         }
-        if (check_writable && !(desc.flags & MAL_PROPERTY_ACCESSOR) && (desc.flags & MAL_PROPERTY_WRITABLE)) {
-            return mal_value_new_boolean(false);
+        if (!present) {
+            continue;
+        }
+        if ((desc.flags & MAL_PROPERTY_CONFIGURABLE) ||
+            (check_writable && !(desc.flags & MAL_PROPERTY_ACCESSOR) &&
+             (desc.flags & MAL_PROPERTY_WRITABLE))) {
+            *result = false;
         }
     }
-
-    // An Array with a writable exotic `length` is not frozen (its length is
-    // always non-configurable, so it does not affect sealing).
-    if (check_writable && mal_value_is_array_object(args[0]) &&
-        mal_value_to_array_object(args[0])->length_writable) {
-        return mal_value_new_boolean(false);
-    }
-
-    return mal_value_new_boolean(true);
+    mal_rooted_key_snapshot_dispose(&keys);
+    return ok;
 }
 
 static MalValue mal_builtin_object_freeze(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
-    return mal_builtin_object_set_integrity(args, arg_count, true);
+    if (arg_count < 1 || !mal_value_is_object(args[0])) {
+        return arg_count > 0 ? args[0] : mal_value_new_undefined();
+    }
+    if (!mal_builtin_object_set_integrity(vm, args[0], true) &&
+        vm->completion.kind != MAL_COMPLETION_THROW) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Object.freeze could not prevent extensions");
+    }
+    return args[0];
 }
 
 static MalValue mal_builtin_object_seal(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
-    return mal_builtin_object_set_integrity(args, arg_count, false);
+    if (arg_count < 1 || !mal_value_is_object(args[0])) {
+        return arg_count > 0 ? args[0] : mal_value_new_undefined();
+    }
+    if (!mal_builtin_object_set_integrity(vm, args[0], false) &&
+        vm->completion.kind != MAL_COMPLETION_THROW) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Object.seal could not prevent extensions");
+    }
+    return args[0];
 }
 
 static MalValue mal_builtin_object_is_frozen(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
-    return mal_builtin_object_test_integrity(args, arg_count, true);
+    if (arg_count < 1 || !mal_value_is_object(args[0])) {
+        return mal_value_new_boolean(true);
+    }
+    bool result;
+    if (!mal_builtin_object_test_integrity(vm, args[0], true, &result)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(result);
 }
 
 static MalValue mal_builtin_object_is_sealed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) vm;
     (void) this_value;
-    return mal_builtin_object_test_integrity(args, arg_count, false);
+    if (arg_count < 1 || !mal_value_is_object(args[0])) {
+        return mal_value_new_boolean(true);
+    }
+    bool result;
+    if (!mal_builtin_object_test_integrity(vm, args[0], false, &result)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(result);
 }
 
 static bool mal_builtin_object_is_negative_zero(MalValue value) {

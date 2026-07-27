@@ -234,6 +234,11 @@ void mal_object_array_deoptimize(MalArrayObject *array) {
     // GC, so root the not-yet-migrated values across the migration.
     MalRootSpan span;
     mal_gc_root(&span, buffer, (i32) count);
+    // This is a representation change of properties that already exist, not an
+    // observable extension. Permit the table inserts even after
+    // [[PreventExtensions]] has run (for example, while freezing an array).
+    bool extensible = array->object.extensible;
+    array->object.extensible = true;
     for (u32 i = 0; i < count; i++) {
         if (mal_value_is_array_hole(buffer[i])) {
             continue;
@@ -242,6 +247,7 @@ void mal_object_array_deoptimize(MalArrayObject *array) {
         MalKey key = mal_key_index(i);
         mal_object_define_own(&array->object, key, &desc);
     }
+    array->object.extensible = extensible;
     mal_gc_unroot(&span);
     gc_free_raw(mal_gc_current_heap(), buffer); // dense vector lives in the RAW space
 }

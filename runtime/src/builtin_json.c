@@ -971,11 +971,21 @@ static MalValue mal_json_parse_value(MalJsonParser *parser) {
     return mal_json_parse_number(parser);
 }
 
-/** CreateDataProperty for an ordinary parsed holder: the parsed object/array
- * has only default writable/enumerable/configurable data properties, so a plain
- * [[DefineOwnProperty]] (array-aware for index keys) matches the spec here. */
+/** CreateDataProperty through the holder's actual [[DefineOwnProperty]]. */
 static bool mal_json_internalize_set(MalVm *vm, MalValue holder, MalKey key, MalValue value) {
-    return mal_vm_set_property(vm, holder, key, value, holder);
+    MalPropertyDescriptorParse desc = {
+        .has_value = true,
+        .has_writable = true,
+        .has_enumerable = true,
+        .has_configurable = true,
+        .desc = mal_intrinsic_data_desc(
+            value, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                MAL_PROPERTY_CONFIGURABLE),
+    };
+    (void) mal_builtin_object_define_own_property_parsed(vm, holder, key, &desc);
+    // InternalizeJSONProperty performs ? CreateDataProperty: a normal false is
+    // ignored, while an abrupt completion propagates.
+    return vm->completion.kind != MAL_COMPLETION_THROW;
 }
 
 /**
@@ -990,87 +1000,108 @@ static bool mal_json_internalize(MalVm *vm, MalValue reviver, MalValue holder, M
     // ("0","1",…) resolves to the dense array element — a raw MAL_KEY_STRING never
     // reaches the dense-element vector and would read undefined. `name` itself stays
     // the String for the reviver's key argument below.
-    MalValue value;
+    MalValue roots[4] = {
+        reviver, holder, name, mal_value_new_undefined(),
+    };
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 4);
+    bool ok = false;
     MalKey get_key;
-    if (!mal_vm_value_to_property_key(vm, name, &get_key)) {
-        return false;
+    if (!mal_vm_value_to_property_key(vm, roots[2], &get_key)) {
+        goto done;
     }
-    if (!mal_vm_get_property(vm, holder, get_key, &value)) {
-        return false;
+    if (!mal_vm_get_property(vm, roots[1], get_key, &roots[3])) {
+        goto done;
     }
 
-    if (mal_value_is_object(value)) {
+    if (mal_value_is_object(roots[3])) {
         bool is_array;
-        if (!mal_vm_is_array(vm, value, &is_array)) {
-            return false;
+        if (!mal_vm_is_array(vm, roots[3], &is_array)) {
+            goto done;
         }
         if (is_array) {
             u32 length;
-            if (!mal_builtin_array_this_length(vm, value, &length)) {
-                return false;
+            if (!mal_builtin_array_this_length(vm, roots[3], &length)) {
+                goto done;
             }
             for (u32 i = 0; i < length; i++) {
                 MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) i)));
                 MalValue new_element;
-                if (!mal_json_internalize(vm, reviver, value, key_string, &new_element)) {
-                    return false;
+                if (!mal_json_internalize(vm, roots[0], roots[3], key_string, &new_element)) {
+                    goto done;
                 }
                 MalKey element_key = mal_key_index(i);
                 if (mal_value_is_undefined(new_element)) {
-                    if (!mal_vm_delete_property(vm, value, element_key) && vm->completion.kind == MAL_COMPLETION_THROW) {
-                        return false;
+                    if (!mal_vm_delete_property(vm, roots[3], element_key) && vm->completion.kind == MAL_COMPLETION_THROW) {
+                        goto done;
                     }
-                } else if (!mal_json_internalize_set(vm, value, element_key, new_element)) {
-                    return false;
+                } else if (!mal_json_internalize_set(vm, roots[3], element_key, new_element)) {
+                    goto done;
                 }
             }
         } else {
-            // Snapshot the enumerable own keys before recursing.
+            // EnumerableOwnProperties snapshots [[OwnPropertyKeys]], then checks
+            // each string key's current [[GetOwnProperty]] descriptor.
+            MalRootedKeySnapshot own_keys;
             MalRootedKeySnapshot keys;
+            mal_rooted_key_snapshot_init(&own_keys);
             mal_rooted_key_snapshot_init(&keys);
-            MalPropertyIter iter;
-            mal_property_iter_init(&iter, mal_value_to_object(value), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
-            MalKey iter_key;
-            MalPropertyDesc desc;
-            while (mal_property_iter_next(&iter, &iter_key, &desc)) {
-                if (iter_key.kind == MAL_KEY_SYMBOL) {
+            bool keys_ok = mal_rooted_key_snapshot_own_keys(
+                vm, roots[3], &own_keys);
+            for (usize i = 0; keys_ok && i < own_keys.count; i++) {
+                if (own_keys.keys[i].kind == MAL_KEY_SYMBOL) {
                     continue;
                 }
-                mal_rooted_key_snapshot_append(&keys, iter_key);
+                bool present;
+                MalPropertyDesc desc;
+                if (!mal_vm_get_own_property(
+                        vm, roots[3], own_keys.keys[i], &present, &desc)) {
+                    keys_ok = false;
+                    break;
+                }
+                if (present && (desc.flags & MAL_PROPERTY_ENUMERABLE)) {
+                    mal_rooted_key_snapshot_append(&keys, own_keys.keys[i]);
+                }
             }
+            mal_rooted_key_snapshot_dispose(&own_keys);
 
-            bool ok = true;
-            for (usize i = 0; i < keys.count; i++) {
+            for (usize i = 0; keys_ok && i < keys.count; i++) {
                 MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, keys.keys[i].value));
                 MalValue new_element;
-                if (!mal_json_internalize(vm, reviver, value, key_string, &new_element)) {
-                    ok = false;
+                if (!mal_json_internalize(vm, roots[0], roots[3], key_string, &new_element)) {
+                    keys_ok = false;
                     break;
                 }
                 if (mal_value_is_undefined(new_element)) {
-                    if (!mal_vm_delete_property(vm, value, keys.keys[i]) && vm->completion.kind == MAL_COMPLETION_THROW) {
-                        ok = false;
+                    if (!mal_vm_delete_property(vm, roots[3], keys.keys[i]) && vm->completion.kind == MAL_COMPLETION_THROW) {
+                        keys_ok = false;
                         break;
                     }
-                } else if (!mal_json_internalize_set(vm, value, keys.keys[i], new_element)) {
-                    ok = false;
+                } else if (!mal_json_internalize_set(vm, roots[3], keys.keys[i], new_element)) {
+                    keys_ok = false;
                     break;
                 }
             }
             mal_rooted_key_snapshot_dispose(&keys);
-            if (!ok) {
-                return false;
+            if (!keys_ok) {
+                goto done;
             }
         }
     }
 
-    MalValue reviver_args[2] = {name, value};
-    MalCompletion completion = mal_vm_call_value(vm, reviver, holder, reviver_args, 2);
-    if (completion.kind == MAL_COMPLETION_THROW) {
-        return false;
+    MalValue reviver_args[2] = {roots[2], roots[3]};
+    MalCompletion completion = mal_vm_call_value(
+        vm, roots[0], roots[1], reviver_args, 2);
+    if (completion.kind != MAL_COMPLETION_NORMAL) {
+        vm->completion = completion;
+        goto done;
     }
     *out = completion.value;
-    return true;
+    ok = true;
+
+done:
+    mal_gc_unroot(&roots_span);
+    return ok;
 }
 
 static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

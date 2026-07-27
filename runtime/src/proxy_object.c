@@ -647,41 +647,8 @@ static bool mal_proxy_define_own_property_snapshot(
         return false;
     }
     if (mal_value_is_undefined(trap)) {
-        if (mal_value_is_proxy_object(target)) {
-            return mal_proxy_define_own_property_parsed(
-                vm, mal_value_to_proxy_object(target), key, parsed);
-        }
-
-        bool present = false;
-        MalPropertyDesc current = {0};
-        // Script functions lazily materialize their non-configurable
-        // "prototype" property. Module namespace [[DefineOwnProperty]] compares
-        // against its synthetic current descriptor.
-        if ((mal_value_is_function_object(target) ||
-             mal_value_is_module_namespace_object(target)) &&
-            !mal_vm_get_own_property(vm, target, key, &present, &current)) {
-            return false;
-        }
-        if (mal_value_is_module_namespace_object(target)) {
-            if (!present ||
-                (parsed->has_configurable &&
-                 (parsed->desc.flags & MAL_PROPERTY_CONFIGURABLE)) ||
-                (parsed->has_enumerable &&
-                 !(parsed->desc.flags & MAL_PROPERTY_ENUMERABLE)) ||
-                mal_proxy_descriptor_is_accessor(parsed) ||
-                (parsed->has_writable &&
-                 !(parsed->desc.flags & MAL_PROPERTY_WRITABLE))) {
-                return false;
-            }
-            return !parsed->has_value ||
-                mal_proxy_same_value(parsed->desc.value, current.value);
-        }
-        MalDefineOwnStatus status = mal_builtin_object_try_define_parsed(
-            vm, mal_value_to_object(target), key, parsed);
-        if (vm->completion.kind == MAL_COMPLETION_THROW) {
-            return false;
-        }
-        return status == MAL_DEFINE_OWN_APPLIED;
+        return mal_builtin_object_define_own_property_parsed(
+            vm, target, key, parsed);
     }
 
     MalValue call_roots[4] = {trap, target, key.value, descriptor_value};
@@ -1190,37 +1157,56 @@ bool mal_proxy_prevent_extensions(MalVm *vm, MalProxyObject *proxy, bool *out) {
     if (mal_proxy_check_revoked(vm, proxy)) {
         return false;
     }
-    MalValue trap;
-    if (!mal_proxy_get_trap(vm, proxy, "preventExtensions", &trap)) {
+    if (!mal_proxy_dispatch_enter(vm)) {
         return false;
     }
-    if (mal_value_is_undefined(trap)) {
-        if (mal_value_is_proxy_object(proxy->target)) {
-            return mal_proxy_prevent_extensions(vm, mal_value_to_proxy_object(proxy->target), out);
+    MalValue roots[3] = {
+        proxy->target, proxy->handler, mal_value_new_undefined(),
+    };
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 3);
+    bool ok = false;
+    if (!mal_proxy_get_trap_from_handler(
+            vm, roots[1], "preventExtensions", &roots[2])) {
+        goto done;
+    }
+    if (mal_value_is_undefined(roots[2])) {
+        if (mal_value_is_proxy_object(roots[0])) {
+            ok = mal_proxy_prevent_extensions(
+                vm, mal_value_to_proxy_object(roots[0]), out);
+        } else {
+            mal_object_set_extensible(mal_value_to_object(roots[0]), false);
+            *out = true;
+            ok = true;
         }
-        mal_object_set_extensible(mal_value_to_object(proxy->target), false);
-        *out = true;
-        return true;
+        goto done;
     }
 
-    MalValue args[1] = {proxy->target};
-    MalCompletion completion = mal_vm_call_value(vm, trap, proxy->handler, args, 1);
+    MalValue args[1] = {roots[0]};
+    MalCompletion completion = mal_vm_call_value(
+        vm, roots[2], roots[1], args, 1);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
-        return false;
+        goto done;
     }
-    bool result = mal_value_is_truthy(completion.value);
-
-    // Invariant: cannot report success while a non-proxy target is still
-    // extensible. (A proxy target enforces its own invariant.)
-    if (result && !mal_value_is_proxy_object(proxy->target) &&
-        mal_object_is_extensible(mal_value_to_object(proxy->target))) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "proxy preventExtensions trap reported success but the target is still extensible");
-        return false;
+    *out = mal_value_is_truthy(completion.value);
+    if (*out) {
+        bool target_extensible;
+        if (!mal_vm_is_extensible_object(vm, roots[0], &target_extensible)) {
+            goto done;
+        }
+        if (target_extensible) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "proxy preventExtensions trap reported success but the target is still extensible");
+            goto done;
+        }
     }
+    ok = true;
 
-    *out = result;
-    return true;
+done:
+    mal_gc_unroot(&roots_span);
+    mal_proxy_dispatch_leave(vm);
+    return ok;
 }
 
 // ---- apply / construct ----------------------------------------------------
