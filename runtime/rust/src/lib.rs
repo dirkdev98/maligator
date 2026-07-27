@@ -847,13 +847,36 @@ fn system_time_zone() -> &'static jiff::tz::TimeZone {
     TZ.get_or_init(jiff::tz::TimeZone::system)
 }
 
-/// Offset east-of-UTC, in milliseconds, of the system zone at the UTC instant
-/// `epoch_ms`. Out-of-range instants (beyond jiff's supported span) report 0.
-fn offset_ms_at(tz: &jiff::tz::TimeZone, epoch_ms: i64) -> i64 {
-    match jiff::Timestamp::from_millisecond(epoch_ms) {
-        Ok(ts) => tz.to_offset(ts).seconds() as i64 * 1000,
-        Err(_) => 0,
+/// Project an ECMAScript Date instant into Jiff's supported span. Gregorian
+/// calendars repeat every 400 years, including the weekday of each date, so
+/// this preserves recurring TZif/POSIX rules outside Jiff's year range.
+fn date_offset_timestamp(epoch_ms: i64) -> jiff::Timestamp {
+    if let Ok(timestamp) = jiff::Timestamp::from_millisecond(epoch_ms) {
+        return timestamp;
     }
+
+    const GREGORIAN_CYCLE_MS: i128 = 146_097 * 86_400_000;
+    let epoch_ms = epoch_ms as i128;
+    let boundary_ms = if epoch_ms < 0 {
+        jiff::Timestamp::MIN.as_millisecond() as i128
+    } else {
+        jiff::Timestamp::MAX.as_millisecond() as i128
+    };
+    let distance = (epoch_ms - boundary_ms).abs();
+    let cycles = (distance + GREGORIAN_CYCLE_MS - 1) / GREGORIAN_CYCLE_MS;
+    let mapped_ms = if epoch_ms < boundary_ms {
+        epoch_ms + cycles * GREGORIAN_CYCLE_MS
+    } else {
+        epoch_ms - cycles * GREGORIAN_CYCLE_MS
+    };
+    jiff::Timestamp::from_millisecond(mapped_ms as i64)
+        .expect("400-year projection must fit Jiff's timestamp range")
+}
+
+/// Offset east-of-UTC, in milliseconds, of the system zone at the UTC instant
+/// `epoch_ms` across the full ECMAScript Date range.
+fn offset_ms_at(tz: &jiff::tz::TimeZone, epoch_ms: i64) -> i64 {
+    tz.to_offset(date_offset_timestamp(epoch_ms)).seconds() as i64 * 1000
 }
 
 /// LocalTZA(epoch_ms): the system zone's offset (ms east of UTC) at that UTC
@@ -880,4 +903,17 @@ pub extern "C" fn mal_i18n_utc_from_local_ms(local_ms: i64) -> i64 {
 pub unsafe extern "C" fn mal_i18n_local_tz_name(buf: *mut u8, cap: i32) -> i32 {
     let name = system_time_zone().iana_name().unwrap_or("UTC");
     unsafe { ffi::write_utf8(name, buf, cap) }
+}
+
+#[cfg(test)]
+mod date_timezone_tests {
+    use super::offset_ms_at;
+
+    #[test]
+    fn named_zone_offsets_cover_ecmascript_date_extremes() {
+        let tz = jiff::tz::TimeZone::get("Europe/Amsterdam").unwrap();
+
+        assert_ne!(offset_ms_at(&tz, -8_640_000_000_000_000), 0);
+        assert_ne!(offset_ms_at(&tz, 8_640_000_000_000_000), 0);
+    }
 }

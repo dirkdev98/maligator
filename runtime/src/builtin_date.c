@@ -226,7 +226,8 @@ static f64 date_local_time(f64 t) {
 
 /** UTC(t): local -> UTC. The shim resolves DST gap/overlap disambiguation. */
 static f64 date_utc_from_local(f64 local) {
-    if (!isfinite(local) || fabs(local) > MAX_TIME) {
+    // A local wall time just outside the TimeClip range can map back into it.
+    if (!isfinite(local) || fabs(local) > MAX_TIME + MS_PER_DAY) {
         return local;
     }
     return (f64) mal_i18n_utc_from_local_ms((i64) local);
