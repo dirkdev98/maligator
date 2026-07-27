@@ -664,14 +664,97 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
     return serialized;
 }
 
+typedef enum MalJsonParseNodeKind {
+    MAL_JSON_PARSE_PRIMITIVE,
+    MAL_JSON_PARSE_ARRAY,
+    MAL_JSON_PARSE_OBJECT,
+} MalJsonParseNodeKind;
+
+typedef struct MalJsonParseNode MalJsonParseNode;
+
+typedef struct MalJsonParseChild {
+    MalKey key;
+    usize key_root_index;
+    MalJsonParseNode *node;
+} MalJsonParseChild;
+
+struct MalJsonParseNode {
+    MalJsonParseNodeKind kind;
+    usize value_root_index;
+    usize source_start;
+    usize source_end;
+    MalJsonParseChild *children;
+    usize child_count;
+    usize child_capacity;
+};
+
+typedef struct MalJsonParseState {
+    MalRootedValueList roots;
+} MalJsonParseState;
+
 typedef struct MalJsonParser {
     MalVm *vm;
     const c16 *code_units;
     usize length;
     usize position;
+    MalJsonParseState *state;
 } MalJsonParser;
 
-static MalValue mal_json_parse_value(MalJsonParser *parser);
+static MalValue mal_json_parse_value(
+    MalJsonParser *parser, MalJsonParseNode **node_out);
+
+static MalJsonParseNode *mal_json_parse_node_new(
+    MalJsonParser *parser, MalJsonParseNodeKind kind, MalValue value,
+    usize source_start
+) {
+    MalJsonParseNode *node = calloc(1, sizeof(MalJsonParseNode));
+    if (node == nullptr) {
+        abort();
+    }
+    node->kind = kind;
+    node->value_root_index = parser->state->roots.count;
+    node->source_start = source_start;
+    mal_rooted_value_list_append(&parser->state->roots, value);
+    return node;
+}
+
+static void mal_json_parse_node_append(
+    MalJsonParser *parser, MalJsonParseNode *parent, MalKey key,
+    MalJsonParseNode *child
+) {
+    if (parent->child_count == parent->child_capacity) {
+        usize capacity = parent->child_capacity == 0
+            ? 8 : parent->child_capacity * 2;
+        MalJsonParseChild *children = realloc(
+            parent->children, sizeof(MalJsonParseChild) * capacity);
+        if (children == nullptr) {
+            abort();
+        }
+        parent->children = children;
+        parent->child_capacity = capacity;
+    }
+    usize key_root_index = SIZE_MAX;
+    if (key.kind == MAL_KEY_STRING || key.kind == MAL_KEY_SYMBOL) {
+        key_root_index = parser->state->roots.count;
+        mal_rooted_value_list_append(&parser->state->roots, key.value);
+    }
+    parent->children[parent->child_count++] = (MalJsonParseChild) {
+        .key = key,
+        .key_root_index = key_root_index,
+        .node = child,
+    };
+}
+
+static void mal_json_parse_node_dispose(MalJsonParseNode *node) {
+    if (node == nullptr) {
+        return;
+    }
+    for (usize i = 0; i < node->child_count; i++) {
+        mal_json_parse_node_dispose(node->children[i].node);
+    }
+    free(node->children);
+    free(node);
+}
 
 static void mal_json_parse_error(MalJsonParser *parser) {
     mal_vm_throw_error(parser->vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Unexpected token in JSON");
@@ -853,26 +936,38 @@ static MalValue mal_json_parse_number(MalJsonParser *parser) {
     return mal_ops_number_value(strtod(buffer, nullptr));
 }
 
-static MalValue mal_json_parse_array(MalJsonParser *parser) {
+static MalValue mal_json_parse_array(
+    MalJsonParser *parser, usize source_start, MalJsonParseNode **node_out
+) {
     MalArrayObject *array = mal_intrinsic_new_array(parser->vm, 0);
+    MalValue array_value = mal_value_from_array_object(array);
+    MalJsonParseNode *node = mal_json_parse_node_new(
+        parser, MAL_JSON_PARSE_ARRAY, array_value, source_start);
+    *node_out = node;
 
     mal_json_skip_whitespace(parser);
     if (mal_json_consume(parser, ']')) {
-        return mal_value_from_array_object(array);
+        node->source_end = parser->position;
+        return array_value;
     }
 
     u32 index = 0;
     while (true) {
-        MalValue element = mal_json_parse_value(parser);
+        MalJsonParseNode *element_node = nullptr;
+        MalValue element = mal_json_parse_value(parser, &element_node);
         if (parser->vm->completion.kind == MAL_COMPLETION_THROW) {
             return mal_value_new_undefined();
         }
 
+        MalKey element_key = mal_key_index(index++);
+        array = mal_value_to_array_object(
+            parser->state->roots.values[node->value_root_index]);
         mal_array_object_store(
             array,
-            mal_key_index(index++),
+            element_key,
             element
         );
+        mal_json_parse_node_append(parser, node, element_key, element_node);
 
         mal_json_skip_whitespace(parser);
         if (mal_json_consume(parser, ',')) {
@@ -880,7 +975,8 @@ static MalValue mal_json_parse_array(MalJsonParser *parser) {
             continue;
         }
         if (mal_json_consume(parser, ']')) {
-            return mal_value_from_array_object(array);
+            node->source_end = parser->position;
+            return array_value;
         }
 
         mal_json_parse_error(parser);
@@ -888,12 +984,19 @@ static MalValue mal_json_parse_array(MalJsonParser *parser) {
     }
 }
 
-static MalValue mal_json_parse_object(MalJsonParser *parser) {
+static MalValue mal_json_parse_object(
+    MalJsonParser *parser, usize source_start, MalJsonParseNode **node_out
+) {
     MalObject *object = mal_intrinsic_new_object(parser->vm);
+    MalValue object_value = mal_value_from_object(object);
+    MalJsonParseNode *node = mal_json_parse_node_new(
+        parser, MAL_JSON_PARSE_OBJECT, object_value, source_start);
+    *node_out = node;
 
     mal_json_skip_whitespace(parser);
     if (mal_json_consume(parser, '}')) {
-        return mal_value_from_object(object);
+        node->source_end = parser->position;
+        return object_value;
     }
 
     while (true) {
@@ -907,18 +1010,25 @@ static MalValue mal_json_parse_object(MalJsonParser *parser) {
         if (parser->vm->completion.kind == MAL_COMPLETION_THROW) {
             return mal_value_new_undefined();
         }
+        MalRootSpan key_span;
+        mal_gc_root(&key_span, &key, 1);
 
         mal_json_skip_whitespace(parser);
         if (!mal_json_consume(parser, ':')) {
+            mal_gc_unroot(&key_span);
             mal_json_parse_error(parser);
             return mal_value_new_undefined();
         }
 
-        MalValue value = mal_json_parse_value(parser);
+        MalJsonParseNode *value_node = nullptr;
+        MalValue value = mal_json_parse_value(parser, &value_node);
         if (parser->vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_gc_unroot(&key_span);
             return mal_value_new_undefined();
         }
 
+        object = mal_value_to_object(
+            parser->state->roots.values[node->value_root_index]);
         MalKey property_key;
         mal_vm_value_to_property_key(parser->vm, key, &property_key);
         // CreateDataProperty: JSON members become own properties, never
@@ -928,13 +1038,16 @@ static MalValue mal_json_parse_object(MalJsonParser *parser) {
             MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE
         );
         mal_object_define_own(object, property_key, &desc);
+        mal_json_parse_node_append(parser, node, property_key, value_node);
+        mal_gc_unroot(&key_span);
 
         mal_json_skip_whitespace(parser);
         if (mal_json_consume(parser, ',')) {
             continue;
         }
         if (mal_json_consume(parser, '}')) {
-            return mal_value_from_object(object);
+            node->source_end = parser->position;
+            return object_value;
         }
 
         mal_json_parse_error(parser);
@@ -942,33 +1055,51 @@ static MalValue mal_json_parse_object(MalJsonParser *parser) {
     }
 }
 
-static MalValue mal_json_parse_value(MalJsonParser *parser) {
+static MalValue mal_json_parse_value(
+    MalJsonParser *parser, MalJsonParseNode **node_out
+) {
     mal_json_skip_whitespace(parser);
+    usize source_start = parser->position;
     if (parser->position >= parser->length) {
         mal_json_parse_error(parser);
         return mal_value_new_undefined();
     }
 
+    MalValue value;
     if (mal_json_consume(parser, '"')) {
-        return mal_json_parse_string(parser);
+        value = mal_json_parse_string(parser);
+        goto primitive;
     }
     if (mal_json_consume(parser, '[')) {
-        return mal_json_parse_array(parser);
+        return mal_json_parse_array(parser, source_start, node_out);
     }
     if (mal_json_consume(parser, '{')) {
-        return mal_json_parse_object(parser);
+        return mal_json_parse_object(parser, source_start, node_out);
     }
     if (mal_json_consume_keyword(parser, "null")) {
-        return mal_value_new_null();
+        value = mal_value_new_null();
+        goto primitive;
     }
     if (mal_json_consume_keyword(parser, "true")) {
-        return mal_value_new_boolean(true);
+        value = mal_value_new_boolean(true);
+        goto primitive;
     }
     if (mal_json_consume_keyword(parser, "false")) {
-        return mal_value_new_boolean(false);
+        value = mal_value_new_boolean(false);
+        goto primitive;
     }
 
-    return mal_json_parse_number(parser);
+    value = mal_json_parse_number(parser);
+
+primitive:
+    if (parser->vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    MalJsonParseNode *node = mal_json_parse_node_new(
+        parser, MAL_JSON_PARSE_PRIMITIVE, value, source_start);
+    node->source_end = parser->position;
+    *node_out = node;
+    return value;
 }
 
 /** CreateDataProperty through the holder's actual [[DefineOwnProperty]]. */
@@ -988,23 +1119,72 @@ static bool mal_json_internalize_set(MalVm *vm, MalValue holder, MalKey key, Mal
     return vm->completion.kind != MAL_COMPLETION_THROW;
 }
 
+static bool mal_json_parse_child_key_equals(
+    MalJsonParseState *state, const MalJsonParseChild *child, MalKey key
+) {
+    if (child->key.kind != key.kind) {
+        return false;
+    }
+    if (key.kind == MAL_KEY_INDEX) {
+        return mal_key_index_value(child->key) == mal_key_index_value(key);
+    }
+    MalValue child_value = state->roots.values[child->key_root_index];
+    if (key.kind == MAL_KEY_STRING) {
+        return mal_string_equals(
+            mal_value_to_string(child_value), mal_value_to_string(key.value));
+    }
+    return child_value == key.value;
+}
+
+static MalJsonParseNode *mal_json_parse_array_child(
+    MalJsonParseNode *node, u32 index
+) {
+    if (node == nullptr || node->kind != MAL_JSON_PARSE_ARRAY ||
+        index >= node->child_count) {
+        return nullptr;
+    }
+    return node->children[index].node;
+}
+
+static MalJsonParseNode *mal_json_parse_object_child(
+    MalJsonParseState *state, MalJsonParseNode *node, MalKey key
+) {
+    if (node == nullptr || node->kind != MAL_JSON_PARSE_OBJECT) {
+        return nullptr;
+    }
+    // JSON duplicate names overwrite earlier values. The parse record matching
+    // the resulting property is therefore the last child with that key.
+    for (usize i = node->child_count; i > 0; i--) {
+        MalJsonParseChild *child = &node->children[i - 1];
+        if (mal_json_parse_child_key_equals(state, child, key)) {
+            return child->node;
+        }
+    }
+    return nullptr;
+}
+
 /**
  * InternalizeJSONProperty(holder, name, reviver): recurse into the value's
  * elements/properties (deleting members the reviver maps to undefined, replacing
  * the rest), then call the reviver with (name, value) and `holder` as `this`.
  * Returns false with a pending throw on any abrupt completion.
  */
-static bool mal_json_internalize(MalVm *vm, MalValue reviver, MalValue holder, MalValue name, MalValue *out) {
+static bool mal_json_internalize(
+    MalVm *vm, MalValue reviver, MalValue holder, MalValue name,
+    MalJsonParseState *parse_state, MalJsonParseNode *parse_node,
+    MalValue *out
+) {
     // Get(holder, name): `name` is a String (ToString of the array index or the
     // object key). Canonicalize it to a property key so a numeric index string
     // ("0","1",…) resolves to the dense array element — a raw MAL_KEY_STRING never
     // reaches the dense-element vector and would read undefined. `name` itself stays
     // the String for the reviver's key argument below.
-    MalValue roots[4] = {
+    MalValue roots[6] = {
         reviver, holder, name, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
     };
     MalRootSpan roots_span;
-    mal_gc_root(&roots_span, roots, 4);
+    mal_gc_root(&roots_span, roots, 6);
     bool ok = false;
     MalKey get_key;
     if (!mal_vm_value_to_property_key(vm, roots[2], &get_key)) {
@@ -1012,6 +1192,10 @@ static bool mal_json_internalize(MalVm *vm, MalValue reviver, MalValue holder, M
     }
     if (!mal_vm_get_property(vm, roots[1], get_key, &roots[3])) {
         goto done;
+    }
+    if (parse_node != nullptr && !mal_ops_same_value(
+            roots[3], parse_state->roots.values[parse_node->value_root_index])) {
+        parse_node = nullptr;
     }
 
     if (mal_value_is_object(roots[3])) {
@@ -1027,7 +1211,11 @@ static bool mal_json_internalize(MalVm *vm, MalValue reviver, MalValue holder, M
             for (u32 i = 0; i < length; i++) {
                 MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, mal_value_from_i32((i32) i)));
                 MalValue new_element;
-                if (!mal_json_internalize(vm, roots[0], roots[3], key_string, &new_element)) {
+                MalJsonParseNode *element_node = mal_json_parse_array_child(
+                    parse_node, i);
+                if (!mal_json_internalize(
+                        vm, roots[0], roots[3], key_string,
+                        parse_state, element_node, &new_element)) {
                     goto done;
                 }
                 MalKey element_key = mal_key_index(i);
@@ -1068,7 +1256,11 @@ static bool mal_json_internalize(MalVm *vm, MalValue reviver, MalValue holder, M
             for (usize i = 0; keys_ok && i < keys.count; i++) {
                 MalValue key_string = mal_value_from_string(mal_ops_to_string(&vm->heap, keys.keys[i].value));
                 MalValue new_element;
-                if (!mal_json_internalize(vm, roots[0], roots[3], key_string, &new_element)) {
+                MalJsonParseNode *property_node = mal_json_parse_object_child(
+                    parse_state, parse_node, keys.keys[i]);
+                if (!mal_json_internalize(
+                        vm, roots[0], roots[3], key_string,
+                        parse_state, property_node, &new_element)) {
                     keys_ok = false;
                     break;
                 }
@@ -1089,9 +1281,20 @@ static bool mal_json_internalize(MalVm *vm, MalValue reviver, MalValue holder, M
         }
     }
 
-    MalValue reviver_args[2] = {roots[2], roots[3]};
+    roots[4] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    if (parse_node != nullptr && !mal_value_is_object(roots[3])) {
+        MalString *source = mal_value_to_string(parse_state->roots.values[0]);
+        roots[5] = mal_value_from_string(mal_string_new_slice(
+            &vm->heap, source, parse_node->source_start,
+            parse_node->source_end - parse_node->source_start));
+        mal_intrinsic_define_data(
+            vm, mal_value_to_object(roots[4]), "source", roots[5],
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
+                MAL_PROPERTY_CONFIGURABLE);
+    }
+    MalValue reviver_args[3] = {roots[2], roots[3], roots[4]};
     MalCompletion completion = mal_vm_call_value(
-        vm, roots[0], roots[1], reviver_args, 2);
+        vm, roots[0], roots[1], reviver_args, 3);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
         goto done;
@@ -1115,21 +1318,32 @@ static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const Mal
         return mal_value_new_undefined();
     }
 
+    MalJsonParseState parse_state = {0};
+    mal_rooted_value_list_init(&parse_state.roots);
+    mal_rooted_value_list_append(
+        &parse_state.roots, mal_value_from_string(text));
     MalJsonParser parser = {
         .vm = vm,
         .code_units = mal_string_code_units(text),
         .length = mal_string_length(text),
         .position = 0,
+        .state = &parse_state,
     };
 
-    MalValue result = mal_json_parse_value(&parser);
+    MalJsonParseNode *root_node = nullptr;
+    MalValue result = mal_json_parse_value(&parser, &root_node);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_json_parse_node_dispose(root_node);
+        mal_rooted_value_list_dispose(&parse_state.roots);
         return mal_value_new_undefined();
     }
+    result = parse_state.roots.values[root_node->value_root_index];
 
     mal_json_skip_whitespace(&parser);
     if (parser.position != parser.length) {
         mal_json_parse_error(&parser);
+        mal_json_parse_node_dispose(root_node);
+        mal_rooted_value_list_dispose(&parse_state.roots);
         return mal_value_new_undefined();
     }
 
@@ -1141,12 +1355,20 @@ static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const Mal
         MalValue empty_key = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
         mal_intrinsic_define_data(vm, root, "", result, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
         MalValue revived;
-        if (!mal_json_internalize(vm, reviver, mal_value_from_object(root), empty_key, &revived)) {
+        if (!mal_json_internalize(
+                vm, reviver, mal_value_from_object(root), empty_key,
+                &parse_state, root_node, &revived)) {
+            mal_json_parse_node_dispose(root_node);
+            mal_rooted_value_list_dispose(&parse_state.roots);
             return mal_value_new_undefined();
         }
+        mal_json_parse_node_dispose(root_node);
+        mal_rooted_value_list_dispose(&parse_state.roots);
         return revived;
     }
 
+    mal_json_parse_node_dispose(root_node);
+    mal_rooted_value_list_dispose(&parse_state.roots);
     return result;
 }
 
@@ -1191,21 +1413,40 @@ static MalValue mal_builtin_json_raw_json(MalVm *vm, MalValue this_value, const 
     }
 
     // Validate as a complete JSON text (rejecting trailing content).
-    MalJsonParser parser = {.vm = vm, .code_units = units, .length = length, .position = 0};
-    mal_json_parse_value(&parser);
+    MalJsonParseState parse_state = {0};
+    mal_rooted_value_list_init(&parse_state.roots);
+    mal_rooted_value_list_append(
+        &parse_state.roots, mal_value_from_string(text));
+    MalJsonParser parser = {
+        .vm = vm,
+        .code_units = units,
+        .length = length,
+        .position = 0,
+        .state = &parse_state,
+    };
+    MalJsonParseNode *root_node = nullptr;
+    mal_json_parse_value(&parser, &root_node);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_json_parse_node_dispose(root_node);
+        mal_rooted_value_list_dispose(&parse_state.roots);
         return mal_value_new_undefined();
     }
     mal_json_skip_whitespace(&parser);
     if (parser.position != length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Invalid raw JSON text");
+        mal_json_parse_node_dispose(root_node);
+        mal_rooted_value_list_dispose(&parse_state.roots);
         return mal_value_new_undefined();
     }
 
     MalObject *object = mal_object_new(&vm->heap, nullptr);
-    mal_intrinsic_define_data(vm, object, "rawJSON", mal_value_from_string(text), MAL_PROPERTY_ENUMERABLE);
+    mal_intrinsic_define_data(
+        vm, object, "rawJSON", parse_state.roots.values[0],
+        MAL_PROPERTY_ENUMERABLE);
     object->is_raw_json = true;
     object->extensible = false;
+    mal_json_parse_node_dispose(root_node);
+    mal_rooted_value_list_dispose(&parse_state.roots);
     return mal_value_from_object(object);
 }
 
