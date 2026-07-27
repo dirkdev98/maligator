@@ -53,7 +53,12 @@ describe("static arguments access", () => {
 		it(`${name} reports snapshot move costs`, () => {
 			const result = spawnSync(binary(), [], {
 				encoding: "utf8",
-				env: { ...process.env, MAL_PERF_STATS: "1" },
+				env: {
+					...process.env,
+					MAL_COROUTINE_STATS: "1",
+					MAL_GC_STATS: "1",
+					MAL_PERF_STATS: "1",
+				},
 			});
 			expect(result.status, result.stderr || result.stdout).toBe(0);
 			const line = result.stderr
@@ -62,9 +67,16 @@ describe("static arguments access", () => {
 			expect(line).toBeDefined();
 			const field = (key: string): number =>
 				Number(line?.match(new RegExp(`${key}=([0-9]+)`))?.[1] ?? -1);
-			expect(field("logical_values")).toBe(37);
-			expect(field("destination_writes")).toBe(37);
+			expect(field("logical_values")).toBe(38);
+			expect(field("destination_writes")).toBe(38);
 			expect(field("temporary_copies")).toBe(name === "interpreted" ? 2 : 0);
+			const coroutine = result.stderr
+				.split("\n")
+				.find((candidate) => candidate.startsWith("[coroutine-stats]"));
+			expect(coroutine).toBeDefined();
+			expect(Number(coroutine?.match(/requests=([0-9]+)/)?.[1] ?? -1)).toBe(
+				name === "compiled" ? 9 : 11,
+			);
 		});
 	}
 });

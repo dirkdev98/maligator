@@ -1335,7 +1335,7 @@ MalValue *mal_coroutine_alloc_registers(MalVm *vm, i32 slot_count);
 MalGeneratorObject *mal_vm_op_generator_start_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
     MalValue *registers, const MalValue *arguments, i32 argument_count,
-    i32 resume_ip, bool is_async_generator);
+    bool retain_arguments, i32 resume_ip, bool is_async_generator);
 
 // YIELD (compiled): record the yielded value, resume registers, and resume IP on
 // the coroutine, save the current env, mark SUSPENDED_YIELD, and (for an async
@@ -1362,7 +1362,7 @@ void mal_vm_op_coroutine_return_compiled(MalVm *vm, MalGeneratorObject *generato
 MalGeneratorObject *mal_vm_op_async_start_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
     MalValue *registers, const MalValue *arguments, i32 argument_count,
-    MalValue *out_promise);
+    bool retain_arguments, MalValue *out_promise);
 
 // AWAIT (compiled): record the resume registers, resume point, and env on the
 // async state, mark it suspended, then hook the settlement continuation on the

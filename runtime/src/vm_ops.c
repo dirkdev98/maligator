@@ -5365,9 +5365,9 @@ MalValue *mal_coroutine_alloc_registers(MalVm *vm, i32 slot_count) {
 }
 
 static MalValue *mal_compiled_coroutine_arguments(
-    MalVm *vm, i32 function_index, const MalValue *arguments, i32 argument_count
+    MalVm *vm, const MalValue *arguments, i32 argument_count, bool retain_arguments
 ) {
-    if (!vm->live_definition.functions[function_index].needs_arguments || argument_count == 0) {
+    if (!retain_arguments || argument_count == 0) {
         return nullptr;
     }
     MalValue *owned = mal_vm_alloc_coroutine_buffer(vm, argument_count);
@@ -5380,9 +5380,9 @@ static MalValue *mal_compiled_coroutine_arguments(
 MalGeneratorObject *mal_vm_op_generator_start_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
     MalValue *registers, const MalValue *arguments, i32 argument_count,
-    i32 resume_ip, bool is_async_generator) {
+    bool retain_arguments, i32 resume_ip, bool is_async_generator) {
     MalValue *owned_arguments = mal_compiled_coroutine_arguments(
-        vm, function_index, arguments, argument_count
+        vm, arguments, argument_count, retain_arguments
     );
     // The instance inherits the generator function's own .prototype (which
     // inherits %GeneratorPrototype% / %AsyncGeneratorPrototype%), else the
@@ -5541,9 +5541,9 @@ void mal_vm_op_coroutine_throw_compiled(MalVm *vm, MalGeneratorObject *generator
 MalGeneratorObject *mal_vm_op_async_start_compiled(
     MalVm *vm, MalValue callee, i32 function_index, MalValue this_value, MalEnv *env,
     MalValue *registers, const MalValue *arguments, i32 argument_count,
-    MalValue *out_promise) {
+    bool retain_arguments, MalValue *out_promise) {
     MalValue *owned_arguments = mal_compiled_coroutine_arguments(
-        vm, function_index, arguments, argument_count
+        vm, arguments, argument_count, retain_arguments
     );
     MalPromiseObject *promise = mal_promise_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
     MalValue promise_value = mal_value_from_promise_object(promise);

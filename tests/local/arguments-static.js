@@ -78,6 +78,9 @@ function* countGenerator() {
 function* indexGenerator() {
 	yield arguments[0];
 }
+function* missingIndexGenerator() {
+	yield arguments[2];
+}
 function* repeatedGenerator() {
 	const second = arguments[1] === undefined ? 4 : arguments[1];
 	yield (
@@ -141,6 +144,16 @@ assert(evalArguments(4, 6) === 6, "direct eval");
 assert(recursiveCount(1) === 2, "recursive snapshots");
 assert(countGenerator(1, 2, 3).next().value === 3, "generator count");
 assert(indexGenerator(8).next().value === 8, "generator index");
+const retainedGeneratorArgument = { retained: true };
+const partialIndexIterator = missingIndexGenerator(retainedGeneratorArgument);
+Object.defineProperty(Object.prototype, "2", {
+	configurable: true,
+	get() {
+		return this[0] === retainedGeneratorArgument ? 12 : -1;
+	},
+});
+assert(partialIndexIterator.next().value === 12, "generator partial index fallback");
+delete Object.prototype[2];
 assert(repeatedGenerator().next().value === 4, "omitted repeated generator");
 assert(repeatedGenerator(1, 6).next().value === 34, "wide repeated generator");
 

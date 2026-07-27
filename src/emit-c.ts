@@ -74,6 +74,8 @@ export interface CompiledFunction {
 interface CoroutineContext {
 	functionIndex: number;
 	selfSlot: number;
+	/** Runtime condition for copying call arguments into the suspended frame. */
+	retainArguments: string;
 	/** Async function (not a generator): returns its result promise, uses ASYNC_START/AWAIT. */
 	isAsyncFunction: boolean;
 	/** `async function*`: GENERATOR_START-based, but its yields await + settle requests. */
@@ -814,10 +816,30 @@ function emitResumableFunction(
 	// The root frame spans the whole buffer and is always published, so every exit
 	// past it must unlink it.
 	const gcUnlink = "mal_root_frame_head = __gc_frame.prev; ";
+	const argumentInstructions = fn.instructions.slice(fn.argumentSnapshotCount);
+	const retainsAllArguments = argumentInstructions.some(
+		(instruction) =>
+			instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
+			instruction.opcode === "CREATE_REST_ARGUMENTS" ||
+			instruction.opcode === "LOAD_ARGUMENT",
+	);
+	const maximumStaticArgumentIndex = argumentInstructions.reduce(
+		(maximum, instruction) =>
+			instruction.opcode === "LOAD_STATIC_ARGUMENT"
+				? Math.max(maximum, instruction.index)
+				: maximum,
+		-1,
+	);
+	const retainArguments = retainsAllArguments
+		? "arg_count > 0"
+		: maximumStaticArgumentIndex >= 0
+			? `arg_count > 0 && arg_count <= ${maximumStaticArgumentIndex}`
+			: "false";
 
 	const coro: CoroutineContext = {
 		functionIndex: index,
 		selfSlot,
+		retainArguments,
 		isAsyncFunction,
 		isAsyncGenerator,
 	};
@@ -2503,7 +2525,7 @@ function emitInstruction(
 				return null;
 			}
 			return [
-				`__coro = mal_vm_op_generator_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __gc_slots, args, arg_count, ${ip + 1}, ${coro.isAsyncGenerator});`,
+				`__coro = mal_vm_op_generator_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __gc_slots, args, arg_count, ${coro.retainArguments}, ${ip + 1}, ${coro.isAsyncGenerator});`,
 				`__gc_slots[${coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
 				`${gcUnlink}return mal_value_from_object((MalObject *) __coro);`,
 			];
@@ -2537,7 +2559,7 @@ function emitInstruction(
 				return null;
 			}
 			return [
-				`__coro = mal_vm_op_async_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __gc_slots, args, arg_count, &__async_result_promise);`,
+				`__coro = mal_vm_op_async_start_compiled(vm, callee, ${coro.functionIndex}, this_value, env, __gc_slots, args, arg_count, ${coro.retainArguments}, &__async_result_promise);`,
 				`__gc_slots[${coro.selfSlot}] = mal_value_from_object((MalObject *) __coro);`,
 			];
 		}

@@ -1,7 +1,7 @@
 // Suspendable-frame benchmark: generator delegation, sent values, explicit
 // return/finally cleanup, concurrent async calls, and both manual and for-await
-// async-generator consumption. `arguments` keeps the separate suspendable
-// argument buffer represented. Bounded and deterministic.
+// async-generator consumption. A supplied static `arguments[0]` read tracks
+// suspendable argument-buffer elision. Bounded and deterministic.
 
 const MOD = 1000000007;
 
