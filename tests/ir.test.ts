@@ -757,6 +757,48 @@ test("private names and initializer-free private field runs lower in bulk", () =
 	expect(scalarizedCount - vmInstructions.length).toBe(19);
 });
 
+test("private destructuring and loop targets lower to brand-checked stores", () => {
+	const program = compileScript(`
+		class C {
+			#field;
+			write(source) {
+				for (this.#field of source) break;
+				for (this.#field in source) break;
+				[this.#field] = source;
+				[...this.#field] = source;
+				({ value: this.#field } = source);
+				({ ...this.#field } = source);
+			}
+		}
+	`);
+	const instructions = instructionsOf(functionNamed(program, "write"));
+	expect(
+		instructions.filter((instruction) => instruction.type === "storePrivate"),
+	).toHaveLength(6);
+
+	const orderingProgram = compileScript(`
+		class Ordering {
+			#field;
+			write(source) {
+				({ value: this.#field } = source);
+			}
+		}
+	`);
+	const ordering = instructionsOf(functionNamed(orderingProgram, "write"));
+	const objectTargetReceiver = ordering.findIndex(
+		(instruction) => instruction.type === "loadThis",
+	);
+	const objectTargetRead = ordering.findIndex(
+		(instruction) => instruction.type === "loadProperty",
+	);
+	const objectTargetStore = ordering.findIndex(
+		(instruction) => instruction.type === "storePrivate",
+	);
+	expect(objectTargetReceiver).toBeGreaterThanOrEqual(0);
+	expect(objectTargetRead).toBeGreaterThan(objectTargetReceiver);
+	expect(objectTargetStore).toBeGreaterThan(objectTargetRead);
+});
+
 test("Annex B global var initialization remains an EMPTY scalar store", () => {
 	const program = compileScript("var before; { function annex() {} } var after;");
 	const instructions = instructionsOf(program.functions[0]!);

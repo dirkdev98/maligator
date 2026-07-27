@@ -82,4 +82,114 @@ try {
 } catch {}
 ok(brandEffects === 1, "method brand installs before fields");
 
+class PrivateTargets {
+	#field;
+
+	set #setter(value) {
+		this.setterValue = value;
+		return "ignored";
+	}
+
+	target(log) {
+		log.push("receiver");
+		return this;
+	}
+
+	write(source, log) {
+		const result = ({ value: this.target(log).#field } = source);
+		const setterResult = (this.#setter = 7);
+		return [result, setterResult, this.#field];
+	}
+
+	forOf(source) {
+		for (this.#field of source) break;
+	}
+
+	forIn(source) {
+		for (this.#field in source) break;
+	}
+
+	array(source) {
+		[this.#field] = source;
+	}
+
+	arrayRest(source) {
+		[...this.#field] = source;
+	}
+
+	object(source) {
+		({ value: this.#field } = source);
+	}
+
+	objectRest(source) {
+		({ ...this.#field } = source);
+	}
+}
+
+const target = new PrivateTargets();
+const assignmentLog = [];
+const assignmentSource = {
+	get value() {
+		assignmentLog.push("get");
+		return 42;
+	},
+};
+const assignmentValues = target.write(assignmentSource, assignmentLog);
+ok(assignmentLog.join(",") === "receiver,get", "private target precedes source getter");
+ok(assignmentValues[0] === assignmentSource, "destructuring returns its source");
+ok(assignmentValues[1] === 7, "private setter assignment returns its RHS");
+ok(assignmentValues[2] === 42 && target.setterValue === 7, "private stores values");
+
+for (const [method, source] of [
+	["forOf", [1]],
+	["forIn", { value: 1 }],
+	["array", [1]],
+	["arrayRest", [1]],
+	["object", { value: 1 }],
+	["objectRest", { value: 1 }],
+]) {
+	let threw = false;
+	try {
+		PrivateTargets.prototype[method].call({}, source);
+	} catch (error) {
+		threw = error instanceof TypeError;
+	}
+	ok(threw, method + " checks the private receiver");
+}
+
+const getterError = new Error("getter wins");
+try {
+	PrivateTargets.prototype.object.call(
+		{},
+		{
+			get value() {
+				throw getterError;
+			},
+		},
+	);
+	ok(false, "source getter should throw");
+} catch (error) {
+	ok(error === getterError, "private brand check follows source getter");
+}
+
+class LateStamp extends StampBase {
+	#field;
+
+	write(source) {
+		({ value: this.#field } = source);
+		return this.#field;
+	}
+}
+const lateReceiver = {};
+const lateSource = {
+	get value() {
+		new LateStamp(lateReceiver);
+		return "late";
+	},
+};
+ok(
+	LateStamp.prototype.write.call(lateReceiver, lateSource) === "late",
+	"source getter may install the brand before PutValue",
+);
+
 console.log("private-batch PASS");

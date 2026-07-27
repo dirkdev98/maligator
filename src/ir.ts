@@ -4248,6 +4248,27 @@ function emitThrowTypeError(
 	return error;
 }
 
+interface CompiledPrivateMemberReference {
+	object: number;
+	name: string;
+}
+
+/** Evaluate a private member reference without performing its later GetValue/PutValue. */
+function compilePrivateMemberReference(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	member: ESTree.MemberExpression,
+): CompiledPrivateMemberReference {
+	if (member.property.type !== "PrivateIdentifier") {
+		throw new Error("Expected a private member reference");
+	}
+	return {
+		object: compileExpression(program, fn, cursor, member.object),
+		name: `#${member.property.name}`,
+	};
+}
+
 /**
  * Compile a private member read `obj.#x`: a direct slot read for fields, the
  * shared function for methods, or a brand-checked getter call for accessors.
@@ -4878,6 +4899,18 @@ function compilePatternTarget(
 			break;
 		}
 		case "MemberExpression": {
+			if (target.property.type === "PrivateIdentifier") {
+				const reference = compilePrivateMemberReference(program, fn, cursor, target);
+				compilePrivateMemberStore(
+					program,
+					fn,
+					cursor,
+					reference.object,
+					reference.name,
+					value,
+				);
+				break;
+			}
 			const member = compileMemberObjectAndKey(program, fn, cursor, target);
 			if (member.object === -1 || member.key === -1) {
 				break;
@@ -5444,12 +5477,29 @@ function compileObjectPatternTarget(
 		if (property.type === "RestElement" || property.type === "SpreadElement") {
 			// Rest is last by grammar. The typings allow SpreadElement here,
 			// both shapes carry the target in argument.
+			const privateTarget = isAssign
+				? privateAssignmentMemberTarget(property.argument)
+				: undefined;
+			const privateReference = privateTarget
+				? compilePrivateMemberReference(program, fn, cursor, privateTarget)
+				: undefined;
 			const rest = nextRegisterDestination(fn);
 			cursor.block.instructions.push({
 				type: "copyDataProperties",
 				registers: [rest, value, ...consumedKeys],
 			});
-			compilePatternTarget(program, fn, cursor, property.argument, rest, isAssign);
+			if (privateReference) {
+				compilePrivateMemberStore(
+					program,
+					fn,
+					cursor,
+					privateReference.object,
+					privateReference.name,
+					rest,
+				);
+			} else {
+				compilePatternTarget(program, fn, cursor, property.argument, rest, isAssign);
+			}
 			continue;
 		}
 
@@ -5462,14 +5512,54 @@ function compileObjectPatternTarget(
 			continue;
 		}
 		consumedKeys.push(key);
+		// KeyedDestructuringAssignmentEvaluation evaluates a non-pattern target
+		// reference before GetV. Preserve the private receiver now, but defer the
+		// brand-checked PrivateSet until after the source getter and initializer.
+		const privateTarget = isAssign
+			? privateAssignmentMemberTarget(property.value)
+			: undefined;
+		const privateReference = privateTarget
+			? compilePrivateMemberReference(program, fn, cursor, privateTarget)
+			: undefined;
 
 		const propertyValue = nextRegisterDestination(fn);
 		cursor.block.instructions.push({
 			type: "loadProperty",
 			registers: [propertyValue, value, key],
 		});
-		compilePatternTarget(program, fn, cursor, property.value, propertyValue, isAssign);
+		if (privateReference) {
+			const assignedValue =
+				property.value.type === "AssignmentPattern" && property.value.right
+					? compileDefaultedValue(
+							program,
+							fn,
+							cursor,
+							propertyValue,
+							property.value.right,
+						)
+					: propertyValue;
+			compilePrivateMemberStore(
+				program,
+				fn,
+				cursor,
+				privateReference.object,
+				privateReference.name,
+				assignedValue,
+			);
+		} else {
+			compilePatternTarget(program, fn, cursor, property.value, propertyValue, isAssign);
+		}
 	}
+}
+
+function privateAssignmentMemberTarget(
+	target: ESTree.Node,
+): ESTree.MemberExpression | undefined {
+	const assignmentTarget = target.type === "AssignmentPattern" ? target.left : target;
+	return assignmentTarget.type === "MemberExpression" &&
+		assignmentTarget.property.type === "PrivateIdentifier"
+		? assignmentTarget
+		: undefined;
 }
 
 /**
@@ -5621,7 +5711,34 @@ function compileCapturedMemberReference(
 	target: ESTree.MemberExpression,
 	iteratorRegister: number,
 	doneRegister?: number,
-): CompiledMemberReference {
+): CompiledMemberReference | CompiledPrivateMemberReference {
+	if (target.property.type === "PrivateIdentifier") {
+		const objectSlot = fn.nextLocalIndex++;
+		compileWithIteratorCloseOnThrow(
+			program,
+			fn,
+			cursor,
+			iteratorRegister,
+			() => {
+				const reference = compilePrivateMemberReference(program, fn, cursor, target);
+				cursor.block.instructions.push({
+					type: "storeLocal",
+					registers: [reference.object],
+					index: objectSlot,
+				});
+			},
+			doneRegister,
+		);
+
+		const capturedObject = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "loadLocal",
+			registers: [capturedObject],
+			index: objectSlot,
+		});
+		return { object: capturedObject, name: `#${target.property.name}` };
+	}
+
 	let compiled: CompiledMemberReference = { object: -1, key: -1 };
 	let slots: { object: number; key: number; receiver?: number } | undefined;
 
@@ -5683,6 +5800,27 @@ function compileCapturedMemberReference(
 	return { object, key, receiver };
 }
 
+function compileCapturedMemberStore(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	reference: CompiledMemberReference | CompiledPrivateMemberReference,
+	value: number,
+): void {
+	if ("name" in reference) {
+		compilePrivateMemberStore(
+			program,
+			fn,
+			cursor,
+			reference.object,
+			reference.name,
+			value,
+		);
+	} else if (reference.object !== -1 && reference.key !== -1) {
+		compileMemberStore(cursor, reference, value);
+	}
+}
+
 function compileArrayPatternTarget(
 	program: IntermediateProgram,
 	fn: IRFunction,
@@ -5742,9 +5880,7 @@ function compileArrayPatternTarget(
 			);
 			fn.loops.pop();
 			if (capturedMember) {
-				if (capturedMember.object !== -1 && capturedMember.key !== -1) {
-					compileMemberStore(cursor, capturedMember, rest);
-				}
+				compileCapturedMemberStore(program, fn, cursor, capturedMember, rest);
 			} else {
 				compilePatternTarget(program, fn, cursor, element.argument, rest, isAssign);
 			}
@@ -5804,9 +5940,13 @@ function compileArrayPatternTarget(
 										assignmentPattern.right,
 									)
 								: elementValue;
-						if (capturedMember.object !== -1 && capturedMember.key !== -1) {
-							compileMemberStore(cursor, capturedMember, assignedValue);
-						}
+						compileCapturedMemberStore(
+							program,
+							fn,
+							cursor,
+							capturedMember,
+							assignedValue,
+						);
 					},
 					doneRegister,
 				);
