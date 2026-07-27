@@ -185,7 +185,9 @@ static f64 date_make_date(f64 day, f64 time) {
     if (!isfinite(day) || !isfinite(time)) {
         return NAN;
     }
-    return day * MS_PER_DAY + time;
+    // Keep multiplication and addition as separately rounded ECMAScript operators.
+    volatile f64 date = day * MS_PER_DAY;
+    return date + time;
 }
 
 /** TimeClip(§21.4.1.14). */
