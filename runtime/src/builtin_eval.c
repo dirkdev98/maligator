@@ -286,13 +286,13 @@ done:
 // global. Run via push + run_until_frame_count (not call_value) so the injection
 // lands between pushing the frame and executing its body.
 MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, bool caller_strict,
-                             bool in_param_expr, bool in_field_initializer, MalValue caller_this,
-                             MalValue caller_new_target, MalValue direct_eval_context,
-                             MalValue dirty_tracker) {
-    MalValue roots[6] = {
-        source, scope_object, caller_this, caller_new_target, direct_eval_context, dirty_tracker};
+                              bool in_param_expr, bool in_field_initializer, MalValue caller_this,
+                              MalValue caller_new_target, MalValue direct_eval_context,
+                              MalValue dirty_tracker, MalValue persistent_scope) {
+    MalValue roots[7] = {source, scope_object, caller_this, caller_new_target,
+                         direct_eval_context, dirty_tracker, persistent_scope};
     MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, 6);
+    mal_gc_root(&root_span, roots, 7);
     MalValue result = mal_value_new_undefined();
 
     MalLoadedDefinition *loaded = compile_source(vm, roots[0], true, caller_strict, in_param_expr,
@@ -307,7 +307,8 @@ MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, b
     }
     // Runs the entry with the caller scope injected into its with-stack and the
     // caller's this/new.target bound; leaves the completion in vm->completion.
-    result = mal_vm_run_entry_with_scope(vm, entry, roots[1], roots[2], roots[3], roots[5]);
+    result = mal_vm_run_entry_with_scope(
+        vm, entry, roots[1], roots[2], roots[3], roots[5], roots[6]);
 
 done:
     mal_gc_unroot(&root_span);
@@ -474,18 +475,20 @@ static MalValue mal_builtin_eval(MalVm *vm, MalValue this_value, const MalValue 
     return result;
 }
 
-// The direct-eval intrinsic (compiler-emitted callee for `eval(...)`). args[0] is
-// the source; args[1] is the scope object the caller marshaled from its visible
-// bindings. A non-string source passes through unchanged.
+// The direct-eval intrinsic (compiler-emitted callee for `eval(...)`). Its ABI is:
+// source, persistent var scope, caller strict, dirty tracker, caller this,
+// caller new.target, field-initializer flag, encoded context, and transient
+// caller scope, followed by a NUL-prefixed key used to inject the exact
+// persistent object into the eval entry.
 static MalValue mal_builtin_direct_eval(MalVm *vm, MalValue this_value, const MalValue *args,
                                         i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     (void) new_target;
     (void) callee;
     MalValue source = arg_count >= 1 ? args[0] : mal_value_new_undefined();
-    MalValue scope = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    MalValue persistent_scope = arg_count >= 2 ? args[1] : mal_value_new_undefined();
     bool caller_strict = arg_count >= 3 && mal_value_is_truthy(args[2]);
-    bool in_param_expr = arg_count >= 4 && mal_value_is_truthy(args[3]);
+    bool in_param_expr = false;
     if (!mal_value_is_string(source)) {
         return source;
     }
@@ -495,15 +498,20 @@ static MalValue mal_builtin_direct_eval(MalVm *vm, MalValue this_value, const Ma
     MalValue caller_new_target = arg_count >= 6 ? args[5] : mal_value_new_undefined();
     bool in_field_initializer = arg_count >= 7 && mal_value_is_truthy(args[6]);
     MalValue direct_eval_context = arg_count >= 8 ? args[7] : mal_value_new_undefined();
-    MalValue dirty_tracker = arg_count >= 9 ? args[8] : mal_value_new_undefined();
-    MalValue roots[6] = {
-        source, scope, caller_this, caller_new_target, direct_eval_context, dirty_tracker};
+    MalValue scope = arg_count >= 9 ? args[8] : mal_value_new_undefined();
+    MalValue dirty_tracker = arg_count >= 4 ? args[3] : mal_value_new_undefined();
+    MalValue roots[7] = {source, scope, caller_this, caller_new_target,
+                         direct_eval_context, dirty_tracker, persistent_scope};
     MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, 6);
+    mal_gc_root(&root_span, roots, 7);
+    if (arg_count >= 10 && mal_value_is_object(roots[1]) && mal_value_is_object(roots[6])) {
+        MalKey persistent_key = mal_key_from_value(args[9]);
+        mal_vm_set_property(vm, roots[1], persistent_key, roots[6], roots[1]);
+    }
     mal_gc_native_rooted_begin(vm);
     MalValue result = mal_vm_eval_direct(vm, roots[0], roots[1], caller_strict, in_param_expr,
-                                           in_field_initializer, roots[2], roots[3], roots[4],
-                                           roots[5]);
+                                            in_field_initializer, roots[2], roots[3], roots[4],
+                                            roots[5], roots[6]);
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&root_span);
     return result;

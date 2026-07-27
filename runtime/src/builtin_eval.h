@@ -62,7 +62,7 @@ MalCompletion mal_shadow_realm_eval_script(MalVm *vm, MalRealm *caller_realm,
 MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, bool caller_strict,
                              bool in_param_expr, bool in_field_initializer, MalValue caller_this,
                              MalValue caller_new_target, MalValue direct_eval_context,
-                             MalValue dirty_tracker);
+                             MalValue dirty_tracker, MalValue persistent_scope);
 
 /**
  * Which dynamic-function constructor is assembling source — selects the wrapper

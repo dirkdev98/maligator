@@ -70,6 +70,8 @@ export interface SemanticFile {
 	 * locals and is deliberately NOT flagged. Query via `functionHasDirectEval`.
 	 */
 	hasDirectEval: Set<ESTree.Node>;
+	/** Function units whose own variable environment can receive sloppy eval vars. */
+	directEvalVariableEnvironments: Set<ESTree.Node>;
 	/** This/new.target bindings conservatively captured for direct eval in arrows. */
 	directEvalThisBindings: Map<ESTree.CallExpression, Binding>;
 	directEvalNewTargetBindings: Map<ESTree.CallExpression, Binding>;
@@ -233,6 +235,7 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		withDynamicNodes: new Set(),
 		staticArgumentsAccesses: new Map(),
 		hasDirectEval: new Set(),
+		directEvalVariableEnvironments: new Set(),
 		directEvalThisBindings: new Map(),
 		directEvalNewTargetBindings: new Map(),
 		evalDirect: options.eval?.direct,
@@ -299,6 +302,7 @@ export function analyzeFile(file: SemanticFile) {
 			candidates.hasImplicitArguments ||= hasImplicitArguments;
 		}
 	}
+	markDirectEvalDynamicUsages(file);
 	if (candidates.hasImplicitArguments) {
 		semanticAnalysisWorkCounts.staticArgumentsTraversals++;
 		classifyStaticArgumentsUsage(file);
@@ -351,6 +355,7 @@ function detectDirectEval(node: ESTree.CallExpression, file: SemanticFile): bool
 	// across a function boundary are captured and can be marshaled to eval.
 	const visibleNames = new Set<string>();
 	let scope: Scope | null | undefined = file.nodeToScope.get(node);
+	let variableEnvironmentRecorded = false;
 	while (scope) {
 		for (const binding of scope.bindings) {
 			if (visibleNames.has(binding.name)) continue;
@@ -365,10 +370,46 @@ function detectDirectEval(node: ESTree.CallExpression, file: SemanticFile): bool
 		}
 		if (FUNCTION_UNIT_NODE_TYPES.has(scope.node.type)) {
 			file.hasDirectEval.add(scope.node);
+			if (!variableEnvironmentRecorded) {
+				file.directEvalVariableEnvironments.add(scope.node);
+				variableEnvironmentRecorded = true;
+			}
 		}
 		scope = scope.parent;
 	}
 	return argumentsBinding?.implicit === "arguments";
+}
+
+/**
+ * A sloppy eval can add a var binding to its containing function activation.
+ * References that would otherwise resolve outside that activation must probe the
+ * activation's dynamic eval environment first, including references in closures.
+ */
+function markDirectEvalDynamicUsages(file: SemanticFile): void {
+	if (file.directEvalVariableEnvironments.size === 0) return;
+	const bindingScopes = new Map<Binding, Scope>();
+	for (const scope of file.scopes) {
+		for (const binding of scope.bindings) bindingScopes.set(binding, scope);
+	}
+	for (const scope of file.scopes) {
+		for (const binding of scope.bindings) {
+			const bindingScope = bindingScopes.get(binding);
+			for (const usage of binding.usageNodes) {
+				if (usage.type !== "Identifier") continue;
+				for (
+					let current: Scope | null | undefined = file.nodeToScope.get(usage);
+					current;
+					current = current.parent
+				) {
+					if (current === bindingScope) break;
+					if (file.directEvalVariableEnvironments.has(current.node)) {
+						file.withDynamicNodes.add(usage);
+						break;
+					}
+				}
+			}
+		}
+	}
 }
 
 function ensureImplicitBinding(

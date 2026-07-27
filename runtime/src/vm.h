@@ -1955,7 +1955,7 @@ MalValue mal_vm_interpret_function(
  */
 MalValue mal_vm_run_entry_with_scope(MalVm *vm, i32 function_index, MalValue scope_object,
                                      MalValue this_value, MalValue new_target,
-                                     MalValue dirty_tracker);
+                                     MalValue dirty_tracker, MalValue persistent_scope);
 
 /**
  * `new callee(args)` as a value: allocate the instance, run the constructor

@@ -10,6 +10,7 @@ import {
 	directEvalHomeScopeKey,
 	directEvalInstanceInitializerScopeKey,
 	directEvalPrivateScopeKey,
+	directEvalPersistentScopeKey,
 	directEvalScopeObjectKey,
 	directEvalSuperConstructorScopeKey,
 	directEvalSuperNewTargetScopeKey,
@@ -60,6 +61,7 @@ export interface IntermediateProgram {
 	/** Internal values captured by a direct-eval entry for precise writeback. */
 	directEvalScopeObjectBinding?: Binding;
 	directEvalDirtyTrackerBinding?: Binding;
+	directEvalPersistentScopeBinding?: Binding;
 
 	/**
 	 * The functions that we have compiled.
@@ -370,6 +372,8 @@ export interface IRFunction {
 	 * undefined at entry. Undefined on every other function.
 	 */
 	completionRegister?: number;
+	/** Activation-owned object containing sloppy eval-created var bindings. */
+	directEvalPersistentScopeRegister?: number;
 
 	/**
 	 * Set while compiling this function's parameter expressions (defaults / rest /
@@ -1635,6 +1639,8 @@ export function compileSemanticProgramToIr(
 			allowNewTarget: false,
 			privateNames: [],
 			varConflictNames: [],
+			varEnvironmentNames: [],
+			varEnvironmentIsGlobal: false,
 		},
 
 		functions: [],
@@ -1906,10 +1912,14 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 				prologueCursor,
 				inheritedContextBindings,
 			);
+			emitDirectEvalVarDeclarations(program, fn, prologueCursor, initFile);
 			emitLexicalProviderCaptures(program, fn, prologueCursor, initFile.ast, false);
+			const bodyEntry = compileStatementsToBlock(program, fn, initFile.ast.body, true);
+			prologueCursor.block.instructions.push({ type: "jump", blocks: [bodyEntry] });
+		} else {
+			const bodyEntry = compileStatementsToBlock(program, fn, initFile.ast.body, true);
+			prologue.instructions.push({ type: "jump", blocks: [bodyEntry] });
 		}
-		const bodyEntry = compileStatementsToBlock(program, fn, initFile.ast.body, true);
-		prologue.instructions.push({ type: "jump", blocks: [bodyEntry] });
 	} else {
 		compileStatementsToBlock(program, fn, initFile.ast.body, true);
 	}
@@ -1928,6 +1938,94 @@ function compileFileInit(program: IntermediateProgram, initFile: SemanticFile) {
 	endFunction(fn);
 
 	return fn.functionIndex;
+}
+
+/** EvalDeclarationInstantiation for sloppy direct-eval vars not already present. */
+function emitDirectEvalVarDeclarations(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	cursor: IRCursor,
+	file: SemanticFile,
+): void {
+	if (
+		file.strict ||
+		program.directEvalContext.varEnvironmentIsGlobal ||
+		!program.directEvalPersistentScopeBinding
+	) {
+		return;
+	}
+	const existing = new Set(program.directEvalContext.varEnvironmentNames);
+	const scope = file.scopes.find((candidate) => candidate.node === file.ast);
+	const names = new Set(
+		scope?.bindings
+			.filter(
+				(binding) =>
+					binding.kind === "var" &&
+					!binding.undeclared &&
+					binding.implicit === undefined &&
+					!existing.has(binding.name),
+			)
+			.map((binding) => binding.name) ?? [],
+	);
+	if (names.size === 0) return;
+
+	const persistent = loadCapturedBinding(
+		program,
+		fn,
+		cursor,
+		program.directEvalPersistentScopeBinding,
+	);
+	for (const name of names) {
+		const base = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "withResolveBase",
+			registers: [base],
+			nameStringIndex: getOrCreateStringConstant(program, name),
+		});
+		const alreadyPersistent = nextRegisterDestination(fn);
+		cursor.block.instructions.push({
+			type: "binary",
+			registers: [alreadyPersistent, base, persistent],
+			operator: "===",
+		});
+		const skip: Extract<IRInstruction, { type: "jumpIf" }> = {
+			type: "jumpIf",
+			registers: [alreadyPersistent],
+			blocks: [-1],
+		};
+		const createJump: Extract<IRInstruction, { type: "jump" }> = {
+			type: "jump",
+			blocks: [-1],
+		};
+		cursor.block.instructions.push(skip, createJump);
+
+		const createIndex = fn.blocks.push({ instructions: [] }) - 1;
+		const createBlock = fn.blocks[createIndex]!;
+		const undefinedValue = nextRegisterDestination(fn);
+		createBlock.instructions.push({
+			type: "createUndefined",
+			registers: [undefinedValue],
+		});
+		storeDirectEvalScopeValue(
+			program,
+			fn,
+			{ block: createBlock },
+			persistent,
+			name,
+			undefinedValue,
+		);
+		const createJoin: Extract<IRInstruction, { type: "jump" }> = {
+			type: "jump",
+			blocks: [-1],
+		};
+		createBlock.instructions.push(createJoin);
+
+		const joinIndex = fn.blocks.push({ instructions: [] }) - 1;
+		skip.blocks[0] = joinIndex;
+		createJump.blocks[0] = createIndex;
+		createJoin.blocks[0] = joinIndex;
+		cursor.block = fn.blocks[joinIndex]!;
+	}
 }
 
 interface DirectEvalContextBinding {
@@ -1951,9 +2049,18 @@ function prepareDirectEvalClassContext(
 		fn,
 		"__eval_dirty",
 	);
+	program.directEvalPersistentScopeBinding = createCapturedBinding(
+		program,
+		fn,
+		"__eval_persistent",
+	);
 	bindings.push(
 		{ key: directEvalScopeObjectKey(), binding: program.directEvalScopeObjectBinding },
 		{ key: directEvalDirtyTrackerKey(), binding: program.directEvalDirtyTrackerBinding },
+		{
+			key: directEvalPersistentScopeKey(),
+			binding: program.directEvalPersistentScopeBinding,
+		},
 	);
 	let homeObjectBinding: Binding | undefined;
 	if (inherited.allowSuperProperty) {
@@ -4828,10 +4935,7 @@ function compileIdentifierTarget(
 	value: number,
 	isAssign = false,
 ) {
-	if (
-		fn.semanticFile.withDynamicNodes.has(identifier) ||
-		(program.evalDirect && identifierIsFree(fn, identifier))
-	) {
+	if (identifierUsesDynamicEnvironment(program, fn, identifier)) {
 		compileWithDynamicWrite(program, fn, cursor, identifier, value, isAssign);
 		return;
 	}
@@ -4901,9 +5005,6 @@ function compileWithDynamicAssignment(
 	left: ESTree.Identifier,
 ): number {
 	const nameStringIndex = getOrCreateStringConstant(program, left.name);
-
-	// Capture the reference base now (EMPTY when no active with-object provides
-	// the name → the static binding), plus the property key once.
 	const base = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "withResolveBase",
@@ -4916,25 +5017,79 @@ function compileWithDynamicAssignment(
 		registers: [key],
 		stringIndex: nameStringIndex,
 	});
+	const empty = nextRegisterDestination(fn);
+	cursor.block.instructions.push({ type: "isEmpty", registers: [empty, base] });
+	const missJump: Extract<IRInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [empty],
+		blocks: [-1],
+	};
+	const foundJump: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.instructions.push(missJump, foundJump);
+	const result = nextRegisterDestination(fn);
 
-	let value: number;
-	if (assignmentExpression.operator === "=") {
-		value = compileExpression(program, fn, cursor, assignmentExpression.right, left.name);
-	} else {
-		// Compound: read the current value from the captured base (or the static
-		// binding on a miss), then evaluate the RHS, then combine.
-		const current = compileWithBaseRead(program, fn, cursor, base, key, left);
-		const right = compileExpression(program, fn, cursor, assignmentExpression.right);
-		value = nextRegisterDestination(fn);
-		cursor.block.instructions.push({
+	const compileValue = (branch: IRCursor, current?: number): number => {
+		const right = compileExpression(
+			program,
+			fn,
+			branch,
+			assignmentExpression.right,
+			left.name,
+		);
+		if (assignmentExpression.operator === "=") return right;
+		const value = nextRegisterDestination(fn);
+		branch.block.instructions.push({
 			type: "binary",
-			registers: [value, current, right],
+			registers: [value, current!, right],
 			operator: assignmentOperatorToBinaryOperator(assignmentExpression.operator),
 		});
-	}
+		return value;
+	};
 
-	compileWithBaseStore(program, fn, cursor, base, key, left, value);
-	return value;
+	const foundIndex = fn.blocks.push({ instructions: [] }) - 1;
+	const foundCursor = { block: fn.blocks[foundIndex]! };
+	let foundCurrent: number | undefined;
+	if (assignmentExpression.operator !== "=") {
+		foundCurrent = nextRegisterDestination(fn);
+		foundCursor.block.instructions.push({
+			type: "loadProperty",
+			registers: [foundCurrent, base, key],
+		});
+	}
+	const foundValue = compileValue(foundCursor, foundCurrent);
+	compileWithBaseStore(program, fn, foundCursor, base, key, left, foundValue);
+	foundCursor.block.instructions.push({ type: "move", registers: [result, foundValue] });
+	const foundJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	foundCursor.block.instructions.push(foundJoin);
+
+	const missIndex = fn.blocks.push({ instructions: [] }) - 1;
+	const missCursor = { block: fn.blocks[missIndex]! };
+	const missCurrent =
+		assignmentExpression.operator === "="
+			? undefined
+			: compileStaticIdentifier(program, fn, missCursor, left);
+	const missValue = compileValue(missCursor, missCurrent);
+	compileStaticIdentifierTarget(program, fn, missCursor, left, missValue, true);
+	missCursor.block.instructions.push({ type: "move", registers: [result, missValue] });
+	const missJoin: Extract<IRInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	missCursor.block.instructions.push(missJoin);
+
+	const joinIndex = fn.blocks.push({ instructions: [] }) - 1;
+	missJump.blocks[0] = missIndex;
+	foundJump.blocks[0] = foundIndex;
+	foundJoin.blocks[0] = joinIndex;
+	missJoin.blocks[0] = joinIndex;
+	cursor.block = fn.blocks[joinIndex]!;
+	return result;
 }
 
 /**
@@ -6125,6 +6280,31 @@ function compileFunctionDeclaration(
 
 		functionIndex: fnIndex,
 	});
+	if (
+		statement.id &&
+		isNewDirectEvalVarBinding(program, fn, statement.id) &&
+		program.directEvalPersistentScopeBinding
+	) {
+		const persistent = loadCapturedBinding(
+			program,
+			fn,
+			{ block },
+			program.directEvalPersistentScopeBinding,
+		);
+		storeDirectEvalScopeValue(
+			program,
+			fn,
+			{ block },
+			persistent,
+			statement.id.name,
+			destination,
+		);
+		return;
+	}
+	if (statement.id && identifierUsesDynamicEnvironment(program, fn, statement.id)) {
+		compileWithDynamicWrite(program, fn, { block }, statement.id, destination);
+		return;
+	}
 
 	if (location.type === "globalProperty") {
 		block.instructions.push({
@@ -8139,6 +8319,20 @@ function compileVariableDeclaration(
 		if (!binding) {
 			continue;
 		}
+		if (
+			decl.id.type === "Identifier" &&
+			isNewDirectEvalVarBinding(program, fn, decl.id) &&
+			program.directEvalPersistentScopeBinding
+		) {
+			const persistent = loadCapturedBinding(
+				program,
+				fn,
+				cursor,
+				program.directEvalPersistentScopeBinding,
+			);
+			storeDirectEvalScopeValue(program, fn, cursor, persistent, binding.name, source);
+			continue;
+		}
 
 		// A `var x = init` whose `x` is intercepted by an active `with`-object runs
 		// its initializer as an assignment (PutValue), so it must set the with-object
@@ -8149,7 +8343,7 @@ function compileVariableDeclaration(
 		if (
 			decl.init &&
 			decl.id.type === "Identifier" &&
-			fn.semanticFile.withDynamicNodes.has(decl.id)
+			identifierUsesDynamicEnvironment(program, fn, decl.id)
 		) {
 			const nameStringIndex = getOrCreateStringConstant(program, binding.name);
 			const base = nextRegisterDestination(fn);
@@ -9222,26 +9416,15 @@ function compileIdentifierAssignment(
 	cursor: IRCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
-	if (fn.semanticFile.withDynamicNodes.has(assignmentExpression.left)) {
+	if (
+		assignmentExpression.left.type === "Identifier" &&
+		identifierUsesDynamicEnvironment(program, fn, assignmentExpression.left)
+	) {
 		// A `with`-intercepted assignment must capture the reference base (which
 		// with-object, if any, provides the name) BEFORE evaluating the right-hand
 		// side, then PutValue through that captured base (spec 11.13.1 / with
 		// S12.10) — so a RHS that deletes/mutates the binding still writes to the
 		// originally-resolved object.
-		return compileWithDynamicAssignment(
-			program,
-			fn,
-			cursor,
-			assignmentExpression,
-			assignmentExpression.left as ESTree.Identifier,
-		);
-	}
-
-	if (
-		program.evalDirect &&
-		assignmentExpression.left.type === "Identifier" &&
-		identifierIsFree(fn, assignmentExpression.left)
-	) {
 		return compileWithDynamicAssignment(
 			program,
 			fn,
@@ -9421,10 +9604,7 @@ function compileLogicalAssignment(
 
 		identifierBinding = binding;
 		nameHint = binding.name;
-		if (
-			fn.semanticFile.withDynamicNodes.has(left) ||
-			(program.evalDirect && identifierIsFree(fn, left))
-		) {
+		if (identifierUsesDynamicEnvironment(program, fn, left)) {
 			const nameStringIndex = getOrCreateStringConstant(program, left.name);
 			const base = nextRegisterDestination(fn);
 			cursor.block.instructions.push({
@@ -9921,7 +10101,7 @@ function compileDeleteExpression(
 		// A `with`-intercepted name deletes the property off the active with-object
 		// that provides it (spec DeleteBinding on the object environment record),
 		// falling back to the static delete when no with-object has it.
-		if (fn.semanticFile.withDynamicNodes.has(expression.argument)) {
+		if (identifierUsesDynamicEnvironment(program, fn, expression.argument)) {
 			return compileWithDynamicDelete(program, fn, cursor, expression.argument);
 		}
 		return compileStaticIdentifierDelete(program, fn, cursor, expression.argument);
@@ -10075,10 +10255,7 @@ function compileUpdateExpression(
 
 		// A with-intercepted update must retain the environment reference resolved
 		// before GetValue, even if its getter deletes the binding.
-		if (
-			fn.semanticFile.withDynamicNodes.has(expression.argument) ||
-			(program.evalDirect && identifierIsFree(fn, expression.argument))
-		) {
+		if (identifierUsesDynamicEnvironment(program, fn, expression.argument)) {
 			const nameStringIndex = getOrCreateStringConstant(
 				program,
 				expression.argument.name,
@@ -11173,7 +11350,7 @@ function visibleBindingsForDirectEval(
 		scope = scope.parent;
 	}
 	const argumentsBinding = fn.semanticFile.nodeToBinding.get(callNode);
-	if (argumentsBinding && !result.has("arguments")) {
+	if (argumentsBinding && !argumentsBinding.undeclared && !result.has("arguments")) {
 		result.set("arguments", argumentsBinding);
 	}
 	return result;
@@ -11212,6 +11389,20 @@ function inheritedContextForDirectEval(
 	const varConflictNames = new Set(
 		program.evalDirect ? program.directEvalContext.varConflictNames : [],
 	);
+	const varEnvironmentNames = new Set(
+		program.evalDirect ? program.directEvalContext.varEnvironmentNames : [],
+	);
+	for (const binding of visibleBindingsForDirectEval(fn, callNode).values()) {
+		if (binding.kind !== "var" || binding.undeclared) continue;
+		const ownerScope = fn.semanticFile.scopes.find((scope) =>
+			scope.bindings.includes(binding),
+		);
+		let ownerUnit: Scope | null | undefined = ownerScope;
+		while (ownerUnit && !FUNCTION_UNIT_NODE_TYPES.has(ownerUnit.node.type)) {
+			ownerUnit = ownerUnit.parent;
+		}
+		if (ownerUnit === unit) varEnvironmentNames.add(binding.name);
+	}
 	if (
 		fn.inParameterExpression &&
 		unit &&
@@ -11279,6 +11470,11 @@ function inheritedContextForDirectEval(
 		allowNewTarget,
 		privateNames,
 		varConflictNames: [...varConflictNames],
+		varEnvironmentNames: [...varEnvironmentNames],
+		varEnvironmentIsGlobal:
+			unit?.node.type === "Program" &&
+			!program.evalDirect &&
+			fn.semanticFile.type === "script",
 	};
 }
 
@@ -11384,6 +11580,21 @@ function marshalDirectEvalInheritedContext(
 	}
 }
 
+function ensureDirectEvalPersistentScope(fn: IRFunction): number {
+	if (fn.directEvalPersistentScopeRegister === undefined) {
+		const scope = nextRegisterDestination(fn);
+		const nullPrototype = nextRegisterDestination(fn);
+		fn.directEvalPersistentScopeRegister = scope;
+		fn.blocks[0]!.instructions.unshift(
+			{ type: "createObject", registers: [scope] },
+			{ type: "createNull", registers: [nullPrototype] },
+			{ type: "setPrototype", registers: [scope, nullPrototype], literal: false },
+			{ type: "withEnter", registers: [scope] },
+		);
+	}
+	return fn.directEvalPersistentScopeRegister;
+}
+
 /**
  * Compile a direct `eval(arg, ...)`: snapshot the caller's visible bindings into
  * a scope object, invoke the direct-eval intrinsic (which pushes the object as a
@@ -11405,6 +11616,10 @@ function compileDirectEval(
 ): number {
 	const bindings = visibleBindingsForDirectEval(fn, callExpression);
 	const inheritedContext = inheritedContextForDirectEval(program, fn, callExpression);
+	const persistentScope =
+		!inheritedContext.varEnvironmentIsGlobal && isSloppyFunction(fn)
+			? ensureDirectEvalPersistentScope(fn)
+			: undefined;
 
 	const scopeObject = nextRegisterDestination(fn);
 	cursor.block.instructions.push({ type: "createObject", registers: [scopeObject] });
@@ -11442,7 +11657,6 @@ function compileDirectEval(
 		directEvalDirtyTrackerKey(),
 		dirtyTracker,
 	);
-
 	// Marshal each visible binding's current value onto the scope object by name.
 	for (const [name, binding] of bindings) {
 		const location = getOrCreateBindingLocation(program, fn, binding);
@@ -11570,7 +11784,12 @@ function compileDirectEval(
 		cursor,
 		encodeDirectEvalContext(inheritedContext),
 	);
-
+	const persistentScopeKey = compileStaticString(
+		program,
+		fn,
+		cursor,
+		directEvalPersistentScopeKey(),
+	);
 	const result = nextRegisterDestination(fn);
 	cursor.block.instructions.push({
 		type: "call",
@@ -11579,14 +11798,15 @@ function compileDirectEval(
 			callee,
 			thisRegister,
 			source,
-			scopeObject,
+			persistentScope ?? scopeObject,
 			callerStrict,
-			inParamExpr,
+			dirtyTracker,
 			callerThis,
 			callerNewTarget,
 			inFieldInitializer,
 			inheritedContextRegister,
-			dirtyTracker,
+			scopeObject,
+			persistentScopeKey,
 		],
 	});
 
@@ -12007,10 +12227,7 @@ function compileIdentifier(
 	cursor: IRCursor,
 	identifier: ESTree.Identifier,
 ): number {
-	if (
-		fn.semanticFile.withDynamicNodes.has(identifier) ||
-		(program.evalDirect && identifierIsFree(fn, identifier))
-	) {
+	if (identifierUsesDynamicEnvironment(program, fn, identifier)) {
 		return compileWithDynamicRead(program, fn, cursor, identifier);
 	}
 	return compileStaticIdentifier(program, fn, cursor, identifier);
@@ -12022,7 +12239,50 @@ function compileIdentifier(
  * so they probe the caller scope object before the global.
  */
 function identifierIsFree(fn: IRFunction, identifier: ESTree.Identifier): boolean {
-	return fn.semanticFile.nodeToBinding.get(identifier)?.undeclared ?? true;
+	const binding = fn.semanticFile.nodeToBinding.get(identifier);
+	return !binding || binding.undeclared === true;
+}
+
+function isDirectEvalVarBinding(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	identifier: ESTree.Identifier,
+): boolean {
+	if (
+		!program.evalDirect ||
+		fn.semanticFile.strict ||
+		program.directEvalContext.varEnvironmentIsGlobal
+	) {
+		return false;
+	}
+	const binding = fn.semanticFile.nodeToBinding.get(identifier);
+	if (!binding || binding.kind !== "var" || binding.undeclared || binding.implicit) {
+		return false;
+	}
+	return fn.semanticFile.scopes[0]?.bindings.includes(binding) ?? false;
+}
+
+function isNewDirectEvalVarBinding(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	identifier: ESTree.Identifier,
+): boolean {
+	return (
+		isDirectEvalVarBinding(program, fn, identifier) &&
+		!program.directEvalContext.varEnvironmentNames.includes(identifier.name)
+	);
+}
+
+function identifierUsesDynamicEnvironment(
+	program: IntermediateProgram,
+	fn: IRFunction,
+	identifier: ESTree.Identifier,
+): boolean {
+	return (
+		fn.semanticFile.withDynamicNodes.has(identifier) ||
+		(program.evalDirect && identifierIsFree(fn, identifier)) ||
+		isDirectEvalVarBinding(program, fn, identifier)
+	);
 }
 
 /**

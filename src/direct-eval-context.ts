@@ -16,6 +16,8 @@ export interface DirectEvalContext {
 	allowNewTarget: boolean;
 	privateNames: Array<DirectEvalPrivateNameContext>;
 	varConflictNames: Array<string>;
+	varEnvironmentNames: Array<string>;
+	varEnvironmentIsGlobal: boolean;
 }
 
 export type DirectEvalPrivateSlot = "brand" | "field" | "method" | "get" | "set";
@@ -27,11 +29,13 @@ export function encodeDirectEvalContext(context: DirectEvalContext): string {
 		(context.allowSuperProperty ? 1 : 0) |
 		(context.allowNewTarget ? 2 : 0) |
 		(context.allowSuperCall ? 4 : 0) |
-		(context.hasInstanceInitializer ? 8 : 0);
+		(context.hasInstanceInitializer ? 8 : 0) |
+		(context.varEnvironmentIsGlobal ? 16 : 0);
 	return [
 		String(flags),
 		...context.privateNames.map((entry) => `${entry.flags}:${entry.name}`),
 		...[...new Set(context.varConflictNames)].map((name) => `v:${name}`),
+		...[...new Set(context.varEnvironmentNames)].map((name) => `b:${name}`),
 	].join(DIRECT_EVAL_CONTEXT_SEPARATOR);
 }
 
@@ -40,6 +44,7 @@ export function decodeDirectEvalContext(encoded: string | undefined): DirectEval
 	const flags = Number(parts[0]);
 	const privateNames: Array<DirectEvalPrivateNameContext> = [];
 	const varConflictNames = new Set<string>();
+	const varEnvironmentNames = new Set<string>();
 	for (let index = 1; index < parts.length; index++) {
 		const part = parts[index]!;
 		const separator = part.indexOf(":");
@@ -54,6 +59,14 @@ export function decodeDirectEvalContext(encoded: string | undefined): DirectEval
 			varConflictNames.add(name);
 			continue;
 		}
+		if (part.slice(0, separator) === "b") {
+			const name = part.slice(separator + 1);
+			if (!name) {
+				throw new SyntaxError("Invalid inherited direct-eval context");
+			}
+			varEnvironmentNames.add(name);
+			continue;
+		}
 		privateNames.push({
 			flags: Number(part.slice(0, separator)),
 			name: part.slice(separator + 1),
@@ -66,6 +79,8 @@ export function decodeDirectEvalContext(encoded: string | undefined): DirectEval
 		hasInstanceInitializer: (flags & 8) !== 0,
 		privateNames,
 		varConflictNames: [...varConflictNames],
+		varEnvironmentNames: [...varEnvironmentNames],
+		varEnvironmentIsGlobal: (flags & 16) !== 0,
 	};
 }
 
@@ -79,6 +94,10 @@ export function directEvalScopeObjectKey(): string {
 
 export function directEvalDirtyTrackerKey(): string {
 	return "\0maligator.eval.dirty";
+}
+
+export function directEvalPersistentScopeKey(): string {
+	return "\0maligator.eval.persistent";
 }
 
 export function directEvalSuperConstructorScopeKey(): string {

@@ -68,6 +68,7 @@ function analyzeModuleRecord(record: ModuleRecord): SemanticFile {
 		withDynamicNodes: new Set(),
 		staticArgumentsAccesses: new Map(),
 		hasDirectEval: new Set(),
+		directEvalVariableEnvironments: new Set(),
 		directEvalThisBindings: new Map(),
 		directEvalNewTargetBindings: new Map(),
 	};

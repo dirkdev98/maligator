@@ -177,6 +177,8 @@ test("contextual eval parsing inherits super, new.target, and private names", ()
 		allowNewTarget: true,
 		privateNames: [{ name: "#value", flags: 2 }],
 		varConflictNames: [],
+		varEnvironmentNames: [],
+		varEnvironmentIsGlobal: false,
 	};
 	expect(() =>
 		parseScript("super.value; new.target; this.#value;", {
@@ -197,6 +199,8 @@ test("contextual eval parsing allows super calls only in a derived constructor",
 		allowNewTarget: true,
 		privateNames: [{ name: "#value", flags: 2 }],
 		varConflictNames: [],
+		varEnvironmentNames: [],
+		varEnvironmentIsGlobal: false,
 	};
 	expect(() =>
 		parseScript("super(); this.#value;", {
@@ -246,10 +250,13 @@ test("direct eval context round-trips deduplicated var conflicts", () => {
 		allowNewTarget: true,
 		privateNames: [{ name: "#value", flags: 2 }],
 		varConflictNames: ["parameter", "lexical", "parameter"],
+		varEnvironmentNames: ["existing", "existing"],
+		varEnvironmentIsGlobal: false,
 	};
 	expect(decodeDirectEvalContext(encodeDirectEvalContext(context))).toEqual({
 		...context,
 		varConflictNames: ["parameter", "lexical"],
+		varEnvironmentNames: ["existing"],
 	});
 });
 
@@ -261,6 +268,8 @@ test("sloppy direct eval rejects var declarations that cross caller environments
 		allowNewTarget: false,
 		privateNames: [],
 		varConflictNames: ["parameter", "lexical"],
+		varEnvironmentNames: [],
+		varEnvironmentIsGlobal: false,
 	});
 	const compile = (source: string, callerStrict = false) =>
 		compileSourceToBuffer(source, { direct: true, callerStrict, directEvalContext });
@@ -327,6 +336,7 @@ test("parameter eval distinguishes arrow arguments from caller conflicts", () =>
 		`const f = (p = eval("ignored")) => {};`,
 	);
 	expect(noArguments.varConflictNames).toEqual(["p"]);
+	expect(noArguments.varEnvironmentNames).toEqual(["p"]);
 	expect(() =>
 		compileSourceToBuffer("var arguments", {
 			direct: true,
@@ -338,6 +348,7 @@ test("parameter eval distinguishes arrow arguments from caller conflicts", () =>
 		`const f = (arguments, p = eval("ignored")) => {};`,
 	);
 	expect(explicitArguments.varConflictNames).toContain("arguments");
+	expect(explicitArguments.varEnvironmentNames).toContain("arguments");
 	expect(() =>
 		compileSourceToBuffer("var arguments", {
 			direct: true,
