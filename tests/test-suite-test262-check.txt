@@ -49,7 +49,7 @@ test/language/expressions/function/scope-paramsbody-var-open.js
 test/staging/sm/Array/concat-spreadable-basic.js
 test/staging/sm/String/replace-math.js
 
-# Harness and Intl integration (43)
+# Harness and Intl integration (27)
 test/harness/assert-notsamevalue-tostring.js
 test/harness/assert-throws-custom-typeerror.js
 test/harness/assertRelativeDateMs.js
@@ -71,24 +71,8 @@ test/intl402/DurationFormat/prototype/format/not-a-constructor.js
 test/intl402/Intl/getCanonicalLocales/transformed-ext-invalid.js
 test/intl402/ListFormat/prototype/format/iterable-getiterator-throw.js
 test/intl402/Locale/prototype/hourCycle/branding.js
-test/intl402/NumberFormat/constructor-signDisplay-negative.js
-test/intl402/NumberFormat/constructor-signDisplay.js
-test/intl402/NumberFormat/default-minimum-singificant-digits.js
-test/intl402/NumberFormat/prototype/format/format-max-min-fraction-significant-digits.js
-test/intl402/NumberFormat/prototype/format/format-rounding-mode-half-expand.js
-test/intl402/NumberFormat/prototype/format/format-rounding-priority-auto.js
 test/intl402/NumberFormat/prototype/format/format-significant-digits-precision.js
-test/intl402/NumberFormat/prototype/format/format-significant-digits.js
-test/intl402/NumberFormat/prototype/format/signDisplay-de-DE.js
-test/intl402/NumberFormat/prototype/format/signDisplay-en-US.js
-test/intl402/NumberFormat/prototype/format/signDisplay-ja-JP.js
-test/intl402/NumberFormat/prototype/format/signDisplay-ko-KR.js
-test/intl402/NumberFormat/prototype/format/signDisplay-negative-de-DE.js
 test/intl402/NumberFormat/prototype/format/signDisplay-negative-en-US.js
-test/intl402/NumberFormat/prototype/format/signDisplay-negative-ja-JP.js
-test/intl402/NumberFormat/prototype/format/signDisplay-negative-ko-KR.js
-test/intl402/NumberFormat/prototype/format/signDisplay-rounding.js
-test/intl402/NumberFormat/significant-digits-options-get-sequence.js
 test/intl402/PluralRules/prototype/resolvedOptions/return-keys-order-default.js
 test/intl402/RelativeTimeFormat/prototype/format/en-us-numeric-always.js
 test/intl402/Segmenter/instance/prototype.js
@@ -222,10 +206,9 @@ test/language/statements/for-of/dstr/obj-prop-put-let.js
 test/language/statements/let/block-local-closure-set-before-initialization.js
 test/staging/sm/class/derivedConstructorArrowEvalSuperCall.js
 
-# Object, proxy, and coercion internals (22)
+# Object, proxy, and coercion internals (21)
 test/built-ins/Object/create/properties-arg-to-object.js
 test/built-ins/Object/defineProperties/15.2.3.7-2-16.js
-test/built-ins/Object/defineProperties/15.2.3.7-2-18.js
 test/built-ins/Object/defineProperties/15.2.3.7-5-b-70.js
 test/built-ins/Object/defineProperty/15.2.3.6-3-54.js
 test/built-ins/Object/defineProperty/15.2.3.6-4-329.js

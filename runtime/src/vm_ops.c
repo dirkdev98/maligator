@@ -3230,10 +3230,10 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
         bool applied = mal_object_define_own(
                            mal_value_to_object(receiver), key, &receiver_desc) ==
             MAL_DEFINE_OWN_APPLIED;
-        if (applied && target == receiver &&
-            mal_value_heap_type(target) == MAL_HEAP_ARGUMENTS_OBJECT) {
+        if (applied &&
+            mal_value_heap_type(receiver) == MAL_HEAP_ARGUMENTS_OBJECT) {
             MalArgumentsObject *arguments =
-                (MalArgumentsObject *) mal_value_to_object(target);
+                (MalArgumentsObject *) mal_value_to_object(receiver);
             i32 slot = mal_arguments_object_mapped_slot(arguments, key);
             if (slot >= 0) {
                 mal_gc_write_barrier(arguments->env->slots[slot]);
