@@ -7,7 +7,15 @@
 // <passed>/<total>" line the native runner asserts.
 
 import * as crypto from "node:crypto";
-import { createHash, createHmac, hash, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+	createHash,
+	createHmac,
+	hash,
+	pbkdf2Sync,
+	randomBytes,
+	randomUUID,
+	timingSafeEqual,
+} from "node:crypto";
 
 const results: Array<[string, boolean]> = [];
 function check(name: string, ok: boolean): void {
@@ -182,6 +190,94 @@ for (const [length, expected] of hmacKeyBoundaries) {
 	);
 }
 
+// --- PostgreSQL MD5 and SCRAM-SHA-256 primitives ---
+const postgresInner = createHash("md5").update("postgrespostgres").digest("hex");
+check(
+	"PostgreSQL MD5 inner digest",
+	postgresInner === "3175bce1d3201d16594cebf9d7eb3f9d",
+);
+check(
+	"PostgreSQL MD5 salted digest",
+	"md5" +
+		createHash("md5")
+			.update(
+				Buffer.concat([
+					Buffer.from(postgresInner),
+					Buffer.from([0x12, 0x34, 0x56, 0x78]),
+				]),
+			)
+			.digest("hex") ===
+		"md5b400a301a6904ae12fc76a8fff168215",
+);
+const rawSha256 = createHash("sha256").update("abc").digest();
+check(
+	"createHash sha256 raw Buffer digest",
+	Buffer.isBuffer(rawSha256) &&
+		rawSha256.toString("hex") ===
+			"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+);
+const rawHmac = createHmac("sha256", "key").update("abc").digest();
+check(
+	"createHmac raw Buffer digest",
+	Buffer.isBuffer(rawHmac) &&
+		rawHmac.toString("hex") ===
+			"9c196e32dc0175f86f4b1cb89289d6619de6bee699e4c378e68309ed97a1a6ab",
+);
+const pbkdf2Vectors: Array<[number, string]> = [
+	[1, "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"],
+	[2, "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43"],
+	[4096, "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a"],
+];
+for (const [iterations, expected] of pbkdf2Vectors) {
+	check(
+		"pbkdf2 sha256 iterations " + iterations,
+		pbkdf2Sync("password", Buffer.from("salt"), iterations, 32, "sha256").toString(
+			"hex",
+		) === expected,
+	);
+}
+const scramSalted = pbkdf2Sync(
+	"pencil",
+	Buffer.from("W22ZaJ0SNY7soEsUEjb6gQ==", "base64"),
+	4096,
+	32,
+	"sha256",
+);
+const scramClientKey = createHmac("sha256", scramSalted).update("Client Key").digest();
+const scramStoredKey = createHash("sha256").update(scramClientKey).digest();
+const scramMessage =
+	"n=*,r=fixed-client-nonce," +
+	"r=fixed-client-nonce-server,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096," +
+	"c=biws,r=fixed-client-nonce-server";
+const scramClientSignature = createHmac("sha256", scramStoredKey)
+	.update(scramMessage)
+	.digest();
+const scramProof = Buffer.allocUnsafe(32);
+for (let i = 0; i < scramProof.length; i++) {
+	scramProof[i] = (scramClientKey[i] ?? 0) ^ (scramClientSignature[i] ?? 0);
+}
+check(
+	"SCRAM client proof",
+	scramProof.toString("base64") === "J62lwuh1du5kcE8GnTagHEHw/62D0TieCdTIpDmjdmE=",
+);
+check(
+	"SCRAM server signature",
+	createHmac("sha256", createHmac("sha256", scramSalted).update("Server Key").digest())
+		.update(scramMessage)
+		.digest("base64") === "kry4hXu5SWE45huDYOSFspjkxKYla8Ka42woUjQ2XiU=",
+);
+const entropyA = randomBytes(18);
+const entropyB = randomBytes(18);
+check(
+	"randomBytes returns requested Buffer",
+	Buffer.isBuffer(entropyA) && entropyA.length === 18,
+);
+check("randomBytes samples differ", !timingSafeEqual(entropyA, entropyB));
+check(
+	"randomBytes zero length",
+	Buffer.isBuffer(randomBytes(0)) && randomBytes(0).length === 0,
+);
+
 const equalLeft = new Uint8Array([9, 1, 2, 3, 9]).subarray(1, 4);
 const equalRight = new DataView(new Uint8Array([8, 1, 2, 3, 8]).buffer, 1, 3);
 check("timingSafeEqual equal ArrayBufferViews", timingSafeEqual(equalLeft, equalRight));
@@ -200,6 +296,8 @@ check(
 	crypto.createHash === createHash &&
 		crypto.createHmac === createHmac &&
 		crypto.hash === hash &&
+		crypto.pbkdf2Sync === pbkdf2Sync &&
+		crypto.randomBytes === randomBytes &&
 		crypto.randomUUID === randomUUID &&
 		crypto.timingSafeEqual === timingSafeEqual,
 );
@@ -211,6 +309,10 @@ check(
 		createHmac.length === 3 &&
 		hash.name === "hash" &&
 		hash.length === 3 &&
+		pbkdf2Sync.name === "pbkdf2Sync" &&
+		pbkdf2Sync.length === 5 &&
+		randomBytes.name === "randomBytes" &&
+		randomBytes.length === 2 &&
 		randomUUID.name === "randomUUID" &&
 		randomUUID.length === 1 &&
 		timingSafeEqual.name === "timingSafeEqual" &&
@@ -307,7 +409,7 @@ throwsTypeError("rejects non-string output encoding", () =>
 );
 check("does not coerce object arguments", toStringCalls === 0);
 throwsTypeError("rejects non-hex output encoding", () => hash("sha256", "abc", "base64"));
-throwsTypeError("createHash rejects unsupported algorithm", () => createHash("sha256"));
+throwsTypeError("createHash rejects unsupported algorithm", () => createHash("sha512"));
 throwsTypeError("createHmac rejects unsupported algorithm", () =>
 	createHmac("sha1", "key"),
 );
@@ -323,7 +425,16 @@ throwsTypeError("stream update rejects ArrayBuffer", () =>
 throwsTypeError("stream update rejects unsupported encoding", () =>
 	createHash("sha1").update("61", "hex"),
 );
-throwsTypeError("digest requires base64", () => createHash("sha1").digest("hex"));
+throwsTypeError("digest rejects unsupported encoding", () =>
+	createHash("sha1").digest("base64url"),
+);
+throwsRangeError("randomBytes rejects negative size", () => randomBytes(-1));
+throwsRangeError("pbkdf2 rejects zero iterations", () =>
+	pbkdf2Sync("password", "salt", 0, 32, "sha256"),
+);
+throwsTypeError("pbkdf2 rejects unsupported digest", () =>
+	pbkdf2Sync("password", "salt", 1, 32, "sha1"),
+);
 const finalized = createHash("sha1");
 finalized.digest("base64");
 throwsError("finalized hash rejects update", () => finalized.update("again"));

@@ -484,6 +484,8 @@ test("host catalog includes path and postgres.js loading companions", () => {
 		"createHash",
 		"createHmac",
 		"hash",
+		"pbkdf2Sync",
+		"randomBytes",
 		"randomUUID",
 		"timingSafeEqual",
 	]);

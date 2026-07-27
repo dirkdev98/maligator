@@ -123,7 +123,15 @@ const CHILD_PROCESS: HostModuleSpec = {
 // Curated hashing helpers used by the runtime and pinned Express dependencies.
 const CRYPTO: HostModuleSpec = {
 	id: "node:crypto",
-	named: ["createHash", "createHmac", "hash", "randomUUID", "timingSafeEqual"],
+	named: [
+		"createHash",
+		"createHmac",
+		"hash",
+		"pbkdf2Sync",
+		"randomBytes",
+		"randomUUID",
+		"timingSafeEqual",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:crypto"),
 };
