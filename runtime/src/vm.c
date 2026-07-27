@@ -2252,7 +2252,10 @@ static void mal_vm_run_until_frame_count(
                 continue;
             }
             case MAL_OP_JUMP_IF: {
-                bool truthy = mal_value_is_truthy(registers[instruction->as.jump_if.cond]);
+                MalValue condition = registers[instruction->as.jump_if.cond];
+                bool truthy = mal_value_is_boolean(condition)
+                    ? mal_value_to_boolean(condition)
+                    : mal_value_is_truthy(condition);
                 bool backedge = truthy &&
                     instruction->as.jump_if.target_ip < instruction_pointer;
                 if (truthy) {
