@@ -158,6 +158,29 @@ check(
 		integers.toString("hex") === "7856341290abcdef" &&
 		integers.readUInt16LE(1) === 0x3456,
 );
+const postgresIntegers = Buffer.alloc(16);
+check(
+	"postgres integer primitives",
+	postgresIntegers.writeUInt16BE(0xabcd, 0) === 2 &&
+		postgresIntegers.writeUInt32BE(0xf1234567, 2) === 6 &&
+		postgresIntegers.writeBigInt64BE(-0x102030405060708n, 8) === 16 &&
+		postgresIntegers.readUInt16BE(0) === 0xabcd &&
+		postgresIntegers.readUInt32BE(2) === 0xf1234567 &&
+		postgresIntegers.readInt32BE(2) === -249346713 &&
+		postgresIntegers.readBigInt64BE(8) === -0x102030405060708n,
+);
+const copied = new Uint8Array(5);
+const copySource = Buffer.from("abcdef");
+check(
+	"copy supports ranges and Uint8Array targets",
+	copySource.copy(copied, 1, 2, 6) === 4 &&
+		copied.every((byte, index) => byte === [0, 99, 100, 101, 102][index]),
+);
+const overlap = Buffer.from("abcde");
+check(
+	"copy preserves overlapping bytes",
+	overlap.copy(overlap, 1, 0, 4) === 4 && overlap.toString() === "aabcd",
+);
 
 const empty = Buffer.alloc(0);
 check(

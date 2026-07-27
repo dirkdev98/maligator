@@ -9,10 +9,12 @@
 #include "ascii.h"
 #include "array_buffer_object.h"
 #include "base64.h"
+#include "builtin_bigint.h"
 #include "builtin_data_view.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "heap_bigint.h"
 #include "hex.h"
 #include "intrinsics.h"
 #include "object.h"
@@ -1075,6 +1077,163 @@ static MalValue mal_buffer_read_uint16_le(
     return mal_value_from_i32((i32) ((u8) data[0] | ((u16) (u8) data[1] << 8)));
 }
 
+static MalValue mal_buffer_read_uint16_be(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    MalTypedArrayObject *array = mal_buffer_receiver(vm, self);
+    if (array == nullptr) return mal_value_new_undefined();
+    u32 offset;
+    if (!mal_buffer_offset(vm, argc >= 1 ? args[0] : mal_value_from_i32(0),
+                           mal_typed_array_object_length(array), 2, &offset)) {
+        return mal_value_new_undefined();
+    }
+    const byte *data = mal_buffer_view_data(array) + offset;
+    return mal_value_from_i32((i32) (((u16) (u8) data[0] << 8) | (u8) data[1]));
+}
+
+static MalValue mal_buffer_read_uint32_be(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    MalTypedArrayObject *array = mal_buffer_receiver(vm, self);
+    if (array == nullptr) return mal_value_new_undefined();
+    u32 offset;
+    if (!mal_buffer_offset(vm, argc >= 1 ? args[0] : mal_value_from_i32(0),
+                           mal_typed_array_object_length(array), 4, &offset)) {
+        return mal_value_new_undefined();
+    }
+    const byte *data = mal_buffer_view_data(array) + offset;
+    u32 value = ((u32) (u8) data[0] << 24) | ((u32) (u8) data[1] << 16)
+        | ((u32) (u8) data[2] << 8) | (u8) data[3];
+    return mal_value_from_u32(value);
+}
+
+static MalValue mal_buffer_read_int32_be(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    MalValue value = mal_buffer_read_uint32_be(vm, self, args, argc, nt, callee);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    u32 bits = mal_value_is_int32(value)
+        ? (u32) mal_value_to_i32(value)
+        : (u32) mal_value_to_f64(value);
+    return mal_value_from_i32((i32) bits);
+}
+
+static MalValue mal_buffer_read_big_int64_be(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    MalTypedArrayObject *array = mal_buffer_receiver(vm, self);
+    if (array == nullptr) return mal_value_new_undefined();
+    u32 offset;
+    if (!mal_buffer_offset(vm, argc >= 1 ? args[0] : mal_value_from_i32(0),
+                           mal_typed_array_object_length(array), 8, &offset)) {
+        return mal_value_new_undefined();
+    }
+    const byte *data = mal_buffer_view_data(array) + offset;
+    u64 bits = 0;
+    for (u32 i = 0; i < 8; i++) bits = (bits << 8) | (u8) data[i];
+    i128 value = (i128) bits;
+    if ((bits & ((u64) 1 << 63)) != 0) value -= (i128) 1 << 64;
+    return mal_value_from_bigint(mal_bigint_new(&vm->heap, value));
+}
+
+static MalValue mal_buffer_copy(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    MalTypedArrayObject *source = mal_buffer_receiver(vm, self);
+    if (source == nullptr) return mal_value_new_undefined();
+    MalTypedArrayObject *target = mal_buffer_byte_view(
+        vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (target == nullptr) return mal_value_new_undefined();
+    u32 source_length = mal_typed_array_object_length(source);
+    u32 target_length = mal_typed_array_object_length(target);
+    u32 target_start;
+    u32 source_start;
+    u32 source_end;
+    if (!mal_buffer_range_index(vm, argc >= 2 ? args[1] : mal_value_new_undefined(),
+                                target_length, 0, &target_start)
+        || !mal_buffer_range_index(vm, argc >= 3 ? args[2] : mal_value_new_undefined(),
+                                   source_length, 0, &source_start)
+        || !mal_buffer_clamped(vm, argc >= 4 ? args[3] : mal_value_new_undefined(),
+                               source_length, source_length, &source_end)) {
+        return mal_value_new_undefined();
+    }
+    u32 count = source_end > source_start ? source_end - source_start : 0;
+    if (count > target_length - target_start) count = target_length - target_start;
+    if (count > 0) {
+        memmove(mal_buffer_view_data(target) + target_start,
+                mal_buffer_view_data(source) + source_start, count);
+    }
+    return mal_value_from_u32(count);
+}
+
+static MalValue mal_buffer_write_uint16_be(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    MalTypedArrayObject *array = mal_buffer_receiver(vm, self);
+    if (array == nullptr) return mal_value_new_undefined();
+    f64 number;
+    if (!mal_vm_to_number(vm, argc >= 1 ? args[0] : mal_value_new_undefined(), &number)) {
+        return mal_value_new_undefined();
+    }
+    if (isnan(number)) number = 0;
+    number = trunc(number);
+    if (!isfinite(number) || number < 0 || number > UINT16_MAX) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Buffer value is out of range");
+        return mal_value_new_undefined();
+    }
+    u32 offset;
+    if (!mal_buffer_offset(vm, argc >= 2 ? args[1] : mal_value_from_i32(0),
+                           mal_typed_array_object_length(array), 2, &offset)) {
+        return mal_value_new_undefined();
+    }
+    u16 value = (u16) number;
+    byte *data = mal_buffer_view_data(array) + offset;
+    data[0] = (byte) (value >> 8);
+    data[1] = (byte) value;
+    return mal_value_from_u32(offset + 2);
+}
+
+static MalValue mal_buffer_write_big_int64_be(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee
+) {
+    (void) nt;
+    (void) callee;
+    MalTypedArrayObject *array = mal_buffer_receiver(vm, self);
+    if (array == nullptr) return mal_value_new_undefined();
+    i128 value;
+    if (!mal_bigint_to_bigint(
+            vm, argc >= 1 ? args[0] : mal_value_new_undefined(), &value)) {
+        return mal_value_new_undefined();
+    }
+    const i128 minimum = -((i128) 1 << 63);
+    const i128 maximum = ((i128) 1 << 63) - 1;
+    if (value < minimum || value > maximum) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Buffer value is out of range");
+        return mal_value_new_undefined();
+    }
+    u32 offset;
+    if (!mal_buffer_offset(vm, argc >= 2 ? args[1] : mal_value_from_i32(0),
+                           mal_typed_array_object_length(array), 8, &offset)) {
+        return mal_value_new_undefined();
+    }
+    u64 bits = (u64) value;
+    byte *data = mal_buffer_view_data(array) + offset;
+    for (u32 i = 0; i < 8; i++) data[i] = (byte) (bits >> ((7 - i) * 8));
+    return mal_value_from_u32(offset + 8);
+}
+
 static MalValue mal_buffer_write_uint32(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, bool little_endian
 ) {
@@ -1217,12 +1376,25 @@ void mal_host_install_node_buffer(
     mal_buffer_define_method(vm, prototype, "slice", 2, mal_buffer_slice, roots[0]);
     mal_buffer_define_method(vm, prototype, "subarray", 2, mal_buffer_subarray, roots[0]);
     mal_buffer_define_method(vm, prototype, "write", 1, mal_buffer_write, roots[0]);
+    mal_buffer_define_method(vm, prototype, "copy", 1, mal_buffer_copy, roots[0]);
     mal_buffer_define_method(
         vm, prototype, "readUInt16LE", 1, mal_buffer_read_uint16_le, roots[0]);
+    mal_buffer_define_method(
+        vm, prototype, "readUInt16BE", 1, mal_buffer_read_uint16_be, roots[0]);
+    mal_buffer_define_method(
+        vm, prototype, "readUInt32BE", 1, mal_buffer_read_uint32_be, roots[0]);
+    mal_buffer_define_method(
+        vm, prototype, "readInt32BE", 1, mal_buffer_read_int32_be, roots[0]);
+    mal_buffer_define_method(
+        vm, prototype, "readBigInt64BE", 1, mal_buffer_read_big_int64_be, roots[0]);
+    mal_buffer_define_method(
+        vm, prototype, "writeUInt16BE", 2, mal_buffer_write_uint16_be, roots[0]);
     mal_buffer_define_method(
         vm, prototype, "writeUInt32LE", 2, mal_buffer_write_uint32_le, roots[0]);
     mal_buffer_define_method(
         vm, prototype, "writeUInt32BE", 2, mal_buffer_write_uint32_be, roots[0]);
+    mal_buffer_define_method(
+        vm, prototype, "writeBigInt64BE", 2, mal_buffer_write_big_int64_be, roots[0]);
 
     MalObject *module_default = mal_intrinsic_new_object(vm);
     roots[2] = mal_value_from_object(module_default);
