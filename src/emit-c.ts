@@ -402,7 +402,10 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 				if (
 					instruction.operator === "-" ||
 					instruction.operator === "+" ||
-					instruction.operator === "~"
+					instruction.operator === "~" ||
+					instruction.operator === "tonumeric" ||
+					instruction.operator === "increment" ||
+					instruction.operator === "decrement"
 				) {
 					numericUse.add(instruction.src);
 				} else {
@@ -1080,7 +1083,10 @@ function producedRep(
 			if (
 				instruction.operator === "-" ||
 				instruction.operator === "+" ||
-				instruction.operator === "~"
+				instruction.operator === "~" ||
+				instruction.operator === "tonumeric" ||
+				instruction.operator === "increment" ||
+				instruction.operator === "decrement"
 			) {
 				const src = reps[instruction.src] ?? null;
 				return src === null ? null : src === "number" ? "number" : "boxed";
@@ -2047,11 +2053,13 @@ function emitInstruction(
 				if (reps[src] !== "number") {
 					return null;
 				}
-				// Lattice marks dst `number` only for unary -, +, and ~ over a
-				// number. `~` is over ToInt32 (~to_i32 == bit_xor(., -1), the
-				// interpreter's MAL_UNARY_BIT_NOT), its int result held as a double.
+				// `~` is over ToInt32 (~to_i32 == bit_xor(., -1), the interpreter's
+				// MAL_UNARY_BIT_NOT), its int result held as a double.
 				if (operator === "~") {
 					return [`r${dst} = (f64) (~mal_ops_number_to_i32(${num(src)}));`];
+				}
+				if (operator === "increment" || operator === "decrement") {
+					return [`r${dst} = ${num(src)} ${operator === "increment" ? "+" : "-"} 1.0;`];
 				}
 				return [operator === "-" ? `r${dst} = -${num(src)};` : `r${dst} = ${num(src)};`];
 			}

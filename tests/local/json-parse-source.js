@@ -54,6 +54,18 @@ check(
 		descriptor.configurable,
 );
 
+let plainChecksum = 0;
+for (let i = 0; i < 50; i++) {
+	const plain = JSON.parse('{"items":[1,{"value":2},3],"label":"plain"}');
+	forceGc();
+	plainChecksum += plain.items[1].value + plain.label.length;
+}
+check("no-reviver parse survives collection", plainChecksum === 350);
+
+const raw = JSON.rawJSON('{"items":[1,true]}');
+forceGc();
+check("raw JSON validation retains its source", raw.rawJSON === '{"items":[1,true]}');
+
 if (results.every((entry) => entry[1])) {
 	console.log("json-parse-source PASS");
 } else {

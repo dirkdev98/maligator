@@ -239,6 +239,55 @@ check("regexp ToLength infinity", regexp.exec("a") === null && regexp.lastIndex 
 
 check("date integer fields", Date.UTC(2020.9, 1.9, 2.9) === Date.UTC(2020, 1, 2));
 
+check(
+	"strict update expressions preserve numeric domains and abrupt coercion",
+	(function () {
+		"use strict";
+		let negativeZero = -0;
+		const oldZero = negativeZero++;
+		let bigint = 4n;
+		const oldBigint = bigint++;
+		const marker = {};
+		const abrupt = {
+			[Symbol.toPrimitive]() {
+				throw marker;
+			},
+		};
+		let abruptValue = abrupt;
+		let sawMarker = false;
+		try {
+			abruptValue++;
+		} catch (error) {
+			sawMarker = error === marker;
+		}
+		let coercions = 0;
+		const holder = {
+			value: {
+				[Symbol.toPrimitive]() {
+					coercions++;
+					return 9;
+				},
+			},
+		};
+		const oldObject = holder.value++;
+		return (
+			Object.is(oldZero, -0) &&
+			negativeZero === 1 &&
+			oldBigint === 4n &&
+			bigint === 5n &&
+			throws(TypeError, () => {
+				let symbol = Symbol();
+				symbol++;
+			}) &&
+			sawMarker &&
+			abruptValue === abrupt &&
+			coercions === 1 &&
+			oldObject === 9 &&
+			holder.value === 10
+		);
+	})(),
+);
+
 for (const [name, passed] of results) {
 	if (!passed) console.log("FAIL: " + name);
 }

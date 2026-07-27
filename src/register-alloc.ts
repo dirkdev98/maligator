@@ -153,8 +153,8 @@ const USE_ONLY_FIRST_REGISTER = new Set([
  * The rep an IR instruction's result naturally has given current operand reps, or
  * null when an operand is still unknown (defer to a later fixpoint iteration).
  * Mirrors emit-c's `producedRep`: comparisons and `!` yield a boolean; native
- * arithmetic/bitwise/remainder over two numbers yields a number; unary `- + ~`
- * over a number yields a number; everything else is boxed.
+ * arithmetic/bitwise/remainder over two numbers yields a number; numeric unary
+ * operations over a number yield a number; everything else is boxed.
  */
 function producedRep(
 	instruction: IRInstruction,
@@ -189,7 +189,14 @@ function producedRep(
 			if (op === "!") {
 				return "boolean";
 			}
-			if (op === "-" || op === "+" || op === "~") {
+			if (
+				op === "-" ||
+				op === "+" ||
+				op === "~" ||
+				op === "tonumeric" ||
+				op === "increment" ||
+				op === "decrement"
+			) {
 				const src = repOf(instruction.registers[1]);
 				return src === null ? null : src === "number" ? "number" : "boxed";
 			}

@@ -218,18 +218,16 @@ static bool mal_ta_set_from_same_buffer(
 
     u32 src_element_size = mal_typed_array_element_size(src->kind);
     usize snapshot_size = (usize) count * src_element_size;
-    byte *snapshot = malloc(snapshot_size);
-    memcpy(snapshot, src->buffer->data + src->byte_offset, snapshot_size);
-
     if (dst->kind == src->kind) {
-        u32 dst_element_size = mal_typed_array_element_size(dst->kind);
-        memcpy(
-            dst->buffer->data + dst->byte_offset + (usize) dst_start * dst_element_size,
-            snapshot,
+        memmove(
+            dst->buffer->data + dst->byte_offset + (usize) dst_start * src_element_size,
+            src->buffer->data + src->byte_offset,
             snapshot_size);
-        free(snapshot);
         return true;
     }
+
+    byte *snapshot = malloc(snapshot_size);
+    memcpy(snapshot, src->buffer->data + src->byte_offset, snapshot_size);
 
     MalArrayBufferObject snapshot_buffer = {
         .data = snapshot,

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { compileSemanticProgramToVmDefinition } from "../src/compile-core.ts";
 import { emitBatch, emitVmDefinition } from "../src/emit-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "../src/lower-vm.ts";
+import { parseScript } from "../src/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
 
 const instructions: Array<VmInstruction> = [
 	{ opcode: "CREATE_F64", dst: 0, value: -0 },
@@ -207,5 +210,37 @@ describe("emit-vm instruction packing", () => {
 		expect(output).toContain("extern const u8 mal_compiler_wire_data[];");
 		expect(output).toContain(".data = mal_compiler_wire_data, .length = 825000");
 		expect(output).not.toContain('#embed "/unused/compiler.malw"');
+	});
+});
+
+describe("native update-expression representation", () => {
+	function emit(source: string): string {
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"update-expression-representation.js",
+			parseScript(source, { strict: false }),
+		);
+		return emitVmDefinition(compileSemanticProgramToVmDefinition(semantic), {
+			compiled: true,
+		});
+	}
+
+	it("keeps proven numeric loop updates on dense array paths", () => {
+		const output = emit(
+			`"use strict"; function sum(array) { let total = 0; for (let i = 0; i < array.length; i++) total += array[i]; return total; } globalThis.sum = sum;`,
+		);
+		expect(output).toContain("mal_vm_array_try_load");
+		expect(output).toContain("+ 1.0;");
+		expect(output).not.toContain("MAL_UNARY_TO_NUMERIC");
+		expect(output).not.toContain("MAL_UNARY_INCREMENT");
+	});
+
+	it("retains the boxed coercion path for unproven Number or BigInt operands", () => {
+		const output = emit(
+			`"use strict"; function increment(value) { return value++; } globalThis.increment = increment;`,
+		);
+		expect(output).toContain("MAL_UNARY_TO_NUMERIC");
+		expect(output).toContain("MAL_UNARY_INCREMENT");
+		expect(output).toContain("+ 1.0;");
 	});
 });

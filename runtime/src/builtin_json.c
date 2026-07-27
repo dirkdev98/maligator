@@ -707,6 +707,9 @@ static MalJsonParseNode *mal_json_parse_node_new(
     MalJsonParser *parser, MalJsonParseNodeKind kind, MalValue value,
     usize source_start
 ) {
+    if (parser->state == nullptr) {
+        return nullptr;
+    }
     MalJsonParseNode *node = calloc(1, sizeof(MalJsonParseNode));
     if (node == nullptr) {
         abort();
@@ -722,6 +725,9 @@ static void mal_json_parse_node_append(
     MalJsonParser *parser, MalJsonParseNode *parent, MalKey key,
     MalJsonParseNode *child
 ) {
+    if (parent == nullptr) {
+        return;
+    }
     if (parent->child_count == parent->child_capacity) {
         usize capacity = parent->child_capacity == 0
             ? 8 : parent->child_capacity * 2;
@@ -941,13 +947,18 @@ static MalValue mal_json_parse_array(
 ) {
     MalArrayObject *array = mal_intrinsic_new_array(parser->vm, 0);
     MalValue array_value = mal_value_from_array_object(array);
+    MalRootSpan array_span;
+    mal_gc_root(&array_span, &array_value, 1);
     MalJsonParseNode *node = mal_json_parse_node_new(
         parser, MAL_JSON_PARSE_ARRAY, array_value, source_start);
     *node_out = node;
 
     mal_json_skip_whitespace(parser);
     if (mal_json_consume(parser, ']')) {
-        node->source_end = parser->position;
+        if (node != nullptr) {
+            node->source_end = parser->position;
+        }
+        mal_gc_unroot(&array_span);
         return array_value;
     }
 
@@ -956,18 +967,22 @@ static MalValue mal_json_parse_array(
         MalJsonParseNode *element_node = nullptr;
         MalValue element = mal_json_parse_value(parser, &element_node);
         if (parser->vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_json_parse_node_dispose(element_node);
+            mal_gc_unroot(&array_span);
             return mal_value_new_undefined();
         }
+        MalRootSpan element_span;
+        mal_gc_root(&element_span, &element, 1);
 
         MalKey element_key = mal_key_index(index++);
-        array = mal_value_to_array_object(
-            parser->state->roots.values[node->value_root_index]);
+        array = mal_value_to_array_object(array_value);
         mal_array_object_store(
             array,
             element_key,
             element
         );
         mal_json_parse_node_append(parser, node, element_key, element_node);
+        mal_gc_unroot(&element_span);
 
         mal_json_skip_whitespace(parser);
         if (mal_json_consume(parser, ',')) {
@@ -975,11 +990,15 @@ static MalValue mal_json_parse_array(
             continue;
         }
         if (mal_json_consume(parser, ']')) {
-            node->source_end = parser->position;
+            if (node != nullptr) {
+                node->source_end = parser->position;
+            }
+            mal_gc_unroot(&array_span);
             return array_value;
         }
 
         mal_json_parse_error(parser);
+        mal_gc_unroot(&array_span);
         return mal_value_new_undefined();
     }
 }
@@ -989,13 +1008,18 @@ static MalValue mal_json_parse_object(
 ) {
     MalObject *object = mal_intrinsic_new_object(parser->vm);
     MalValue object_value = mal_value_from_object(object);
+    MalRootSpan object_span;
+    mal_gc_root(&object_span, &object_value, 1);
     MalJsonParseNode *node = mal_json_parse_node_new(
         parser, MAL_JSON_PARSE_OBJECT, object_value, source_start);
     *node_out = node;
 
     mal_json_skip_whitespace(parser);
     if (mal_json_consume(parser, '}')) {
-        node->source_end = parser->position;
+        if (node != nullptr) {
+            node->source_end = parser->position;
+        }
+        mal_gc_unroot(&object_span);
         return object_value;
     }
 
@@ -1003,11 +1027,13 @@ static MalValue mal_json_parse_object(
         mal_json_skip_whitespace(parser);
         if (!mal_json_consume(parser, '"')) {
             mal_json_parse_error(parser);
+            mal_gc_unroot(&object_span);
             return mal_value_new_undefined();
         }
 
         MalValue key = mal_json_parse_string(parser);
         if (parser->vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_gc_unroot(&object_span);
             return mal_value_new_undefined();
         }
         MalRootSpan key_span;
@@ -1017,18 +1043,22 @@ static MalValue mal_json_parse_object(
         if (!mal_json_consume(parser, ':')) {
             mal_gc_unroot(&key_span);
             mal_json_parse_error(parser);
+            mal_gc_unroot(&object_span);
             return mal_value_new_undefined();
         }
 
         MalJsonParseNode *value_node = nullptr;
         MalValue value = mal_json_parse_value(parser, &value_node);
         if (parser->vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_json_parse_node_dispose(value_node);
             mal_gc_unroot(&key_span);
+            mal_gc_unroot(&object_span);
             return mal_value_new_undefined();
         }
+        MalRootSpan value_span;
+        mal_gc_root(&value_span, &value, 1);
 
-        object = mal_value_to_object(
-            parser->state->roots.values[node->value_root_index]);
+        object = mal_value_to_object(object_value);
         MalKey property_key;
         mal_vm_value_to_property_key(parser->vm, key, &property_key);
         // CreateDataProperty: JSON members become own properties, never
@@ -1039,6 +1069,7 @@ static MalValue mal_json_parse_object(
         );
         mal_object_define_own(object, property_key, &desc);
         mal_json_parse_node_append(parser, node, property_key, value_node);
+        mal_gc_unroot(&value_span);
         mal_gc_unroot(&key_span);
 
         mal_json_skip_whitespace(parser);
@@ -1046,11 +1077,15 @@ static MalValue mal_json_parse_object(
             continue;
         }
         if (mal_json_consume(parser, '}')) {
-            node->source_end = parser->position;
+            if (node != nullptr) {
+                node->source_end = parser->position;
+            }
+            mal_gc_unroot(&object_span);
             return object_value;
         }
 
         mal_json_parse_error(parser);
+        mal_gc_unroot(&object_span);
         return mal_value_new_undefined();
     }
 }
@@ -1097,7 +1132,9 @@ primitive:
     }
     MalJsonParseNode *node = mal_json_parse_node_new(
         parser, MAL_JSON_PARSE_PRIMITIVE, value, source_start);
-    node->source_end = parser->position;
+    if (node != nullptr) {
+        node->source_end = parser->position;
+    }
     *node_out = node;
     return value;
 }
@@ -1317,40 +1354,54 @@ static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const Mal
     if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &text)) {
         return mal_value_new_undefined();
     }
+    MalValue text_value = mal_value_from_string(text);
+    MalRootSpan text_span;
+    mal_gc_root(&text_span, &text_value, 1);
+
+    MalValue reviver = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    bool track_source = mal_value_is_callable(reviver);
 
     MalJsonParseState parse_state = {0};
-    mal_rooted_value_list_init(&parse_state.roots);
-    mal_rooted_value_list_append(
-        &parse_state.roots, mal_value_from_string(text));
+    if (track_source) {
+        mal_rooted_value_list_init(&parse_state.roots);
+        mal_rooted_value_list_append(&parse_state.roots, text_value);
+    }
     MalJsonParser parser = {
         .vm = vm,
         .code_units = mal_string_code_units(text),
         .length = mal_string_length(text),
         .position = 0,
-        .state = &parse_state,
+        .state = track_source ? &parse_state : nullptr,
     };
 
     MalJsonParseNode *root_node = nullptr;
     MalValue result = mal_json_parse_value(&parser, &root_node);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         mal_json_parse_node_dispose(root_node);
-        mal_rooted_value_list_dispose(&parse_state.roots);
+        if (track_source) {
+            mal_rooted_value_list_dispose(&parse_state.roots);
+        }
+        mal_gc_unroot(&text_span);
         return mal_value_new_undefined();
     }
-    result = parse_state.roots.values[root_node->value_root_index];
+    if (track_source) {
+        result = parse_state.roots.values[root_node->value_root_index];
+    }
 
     mal_json_skip_whitespace(&parser);
     if (parser.position != parser.length) {
         mal_json_parse_error(&parser);
         mal_json_parse_node_dispose(root_node);
-        mal_rooted_value_list_dispose(&parse_state.roots);
+        if (track_source) {
+            mal_rooted_value_list_dispose(&parse_state.roots);
+        }
+        mal_gc_unroot(&text_span);
         return mal_value_new_undefined();
     }
 
     // A callable reviver walks the result bottom-up via InternalizeJSONProperty,
     // rooted in {"" : result}.
-    MalValue reviver = arg_count >= 2 ? args[1] : mal_value_new_undefined();
-    if (mal_value_is_callable(reviver)) {
+    if (track_source) {
         MalObject *root = mal_intrinsic_new_object(vm);
         MalValue empty_key = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
         mal_intrinsic_define_data(vm, root, "", result, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
@@ -1360,15 +1411,16 @@ static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const Mal
                 &parse_state, root_node, &revived)) {
             mal_json_parse_node_dispose(root_node);
             mal_rooted_value_list_dispose(&parse_state.roots);
+            mal_gc_unroot(&text_span);
             return mal_value_new_undefined();
         }
         mal_json_parse_node_dispose(root_node);
         mal_rooted_value_list_dispose(&parse_state.roots);
+        mal_gc_unroot(&text_span);
         return revived;
     }
 
-    mal_json_parse_node_dispose(root_node);
-    mal_rooted_value_list_dispose(&parse_state.roots);
+    mal_gc_unroot(&text_span);
     return result;
 }
 
@@ -1413,40 +1465,36 @@ static MalValue mal_builtin_json_raw_json(MalVm *vm, MalValue this_value, const 
     }
 
     // Validate as a complete JSON text (rejecting trailing content).
-    MalJsonParseState parse_state = {0};
-    mal_rooted_value_list_init(&parse_state.roots);
-    mal_rooted_value_list_append(
-        &parse_state.roots, mal_value_from_string(text));
+    MalValue text_value = mal_value_from_string(text);
+    MalRootSpan text_span;
+    mal_gc_root(&text_span, &text_value, 1);
     MalJsonParser parser = {
         .vm = vm,
         .code_units = units,
         .length = length,
         .position = 0,
-        .state = &parse_state,
+        .state = nullptr,
     };
     MalJsonParseNode *root_node = nullptr;
     mal_json_parse_value(&parser, &root_node);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        mal_json_parse_node_dispose(root_node);
-        mal_rooted_value_list_dispose(&parse_state.roots);
+        mal_gc_unroot(&text_span);
         return mal_value_new_undefined();
     }
     mal_json_skip_whitespace(&parser);
     if (parser.position != length) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Invalid raw JSON text");
-        mal_json_parse_node_dispose(root_node);
-        mal_rooted_value_list_dispose(&parse_state.roots);
+        mal_gc_unroot(&text_span);
         return mal_value_new_undefined();
     }
 
     MalObject *object = mal_object_new(&vm->heap, nullptr);
     mal_intrinsic_define_data(
-        vm, object, "rawJSON", parse_state.roots.values[0],
+        vm, object, "rawJSON", text_value,
         MAL_PROPERTY_ENUMERABLE);
     object->is_raw_json = true;
     object->extensible = false;
-    mal_json_parse_node_dispose(root_node);
-    mal_rooted_value_list_dispose(&parse_state.roots);
+    mal_gc_unroot(&text_span);
     return mal_value_from_object(object);
 }
 
