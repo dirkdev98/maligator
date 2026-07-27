@@ -245,6 +245,14 @@ check(
 		"use strict";
 		let negativeZero = -0;
 		const oldZero = negativeZero++;
+		let fraction = 1.5;
+		const oldFraction = fraction--;
+		let nan = NaN;
+		++nan;
+		let positiveInfinity = Infinity;
+		--positiveInfinity;
+		let negativeInfinity = -Infinity;
+		++negativeInfinity;
 		let bigint = 4n;
 		const oldBigint = bigint++;
 		const marker = {};
@@ -273,6 +281,11 @@ check(
 		return (
 			Object.is(oldZero, -0) &&
 			negativeZero === 1 &&
+			oldFraction === 1.5 &&
+			fraction === 0.5 &&
+			Number.isNaN(nan) &&
+			positiveInfinity === Infinity &&
+			negativeInfinity === -Infinity &&
 			oldBigint === 4n &&
 			bigint === 5n &&
 			throws(TypeError, () => {

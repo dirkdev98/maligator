@@ -1759,15 +1759,32 @@ static void mal_vm_run_until_frame_count(
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
                 continue;
             }
-            case MAL_OP_UNARY:
-                if (instruction->as.unary.op == MAL_UNARY_NOT) {
+            case MAL_OP_UNARY: {
+                MalUnaryOp op = instruction->as.unary.op;
+                MalValue value = registers[instruction->as.unary.src];
+                if (op == MAL_UNARY_NOT) {
                     registers[instruction->as.unary.dst] = mal_value_new_boolean(
-                        !mal_value_is_truthy(registers[instruction->as.unary.src]));
+                        !mal_value_is_truthy(value));
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
                     continue;
                 }
+                if (mal_ops_is_number(value)) {
+                    if (op == MAL_UNARY_TO_NUMERIC) {
+                        registers[instruction->as.unary.dst] = value;
+                        MAL_VM_INTERPRETER_DIRECT_LEAF();
+                        continue;
+                    }
+                    if (op == MAL_UNARY_INCREMENT || op == MAL_UNARY_DECREMENT) {
+                        f64 unit = op == MAL_UNARY_INCREMENT ? 1.0 : -1.0;
+                        registers[instruction->as.unary.dst] = mal_value_from_f64_convert_nan(
+                            mal_ops_number_as_f64(value) + unit);
+                        MAL_VM_INTERPRETER_DIRECT_LEAF();
+                        continue;
+                    }
+                }
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_unary(frame, instruction));
                 break;
+            }
             case MAL_OP_TYPEOF_COMPARE: {
                 bool result = mal_vm_typeof_compare(
                     registers[instruction->as.typeof_compare.src],
