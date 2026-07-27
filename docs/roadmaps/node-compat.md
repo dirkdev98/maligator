@@ -176,8 +176,11 @@ staged acceptance rather than a package-specific shim:
 6. [x] Add Rustls-backed `tls.connect` over an existing socket and accept the same
        SCRAM query through direct TLS with PostgreSQL ALPN, explicit CA verification,
        and the driver's `require` mode.
-7. Cover pooling, cancellation, prepared statements, COPY streams, subscriptions,
-   reconnect timers, interpreted execution, and GC stress.
+7. [x] Cover real prepared statements, concurrent pooling, cancellation, COPY
+       streams, LISTEN/NOTIFY subscriptions, endpoint failover, and timed idle
+       reconnection. The opt-in live PostgreSQL lane runs compiled/interpreted
+       execution in normal and GC-stress modes; deterministic stream/socket suites
+       cover writable string decoding, asynchronous `_final`, and half-close state.
 
 Raw TCP/TLS are the architectural gates. Filesystem aliases or mocked database
 responses must not substitute for the driver's real wire protocol.

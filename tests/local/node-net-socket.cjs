@@ -84,6 +84,7 @@ server.listen(0, "127.0.0.1", () => {
 		if (!ended) {
 			ended = true;
 			check(socket.end() === socket, "end return");
+			check(socket.readyState === "readOnly", "ended ready state");
 		}
 	});
 	socket.on("end", () => events.push("end"));

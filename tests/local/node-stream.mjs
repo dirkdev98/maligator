@@ -235,7 +235,7 @@ async function main() {
 	const deferredCallbacks = [];
 	let completeFirst;
 	deferred._transform = (chunk, encoding, done) => {
-		if (chunk === "a") completeFirst = done;
+		if (chunk.toString() === "a") completeFirst = done;
 		else done(null, chunk);
 	};
 	deferred.on("data", (chunk) => deferredOutput.push(chunk));
@@ -323,6 +323,65 @@ async function main() {
 		"buffer drain transition",
 	);
 
+	let decodedChunk;
+	let decodedEncoding;
+	const decodedWritable = new Writable({
+		write(chunk, encoding, done) {
+			decodedChunk = chunk;
+			decodedEncoding = encoding;
+			done();
+		},
+	});
+	decodedWritable.end("€");
+	await settle();
+	check(
+		Buffer.isBuffer(decodedChunk) &&
+			decodedChunk.toString() === "€" &&
+			decodedChunk.length === 3 &&
+			decodedEncoding === "buffer" &&
+			decodedWritable._writableState.decodeStrings,
+		"writable decodes strings to buffers by default",
+	);
+
+	let undecodedChunk;
+	let undecodedEncoding;
+	const undecodedWritable = new Writable({
+		decodeStrings: false,
+		write(chunk, encoding, done) {
+			undecodedChunk = chunk;
+			undecodedEncoding = encoding;
+			done();
+		},
+	});
+	undecodedWritable.end("text", "utf8");
+	await settle();
+	check(
+		undecodedChunk === "text" &&
+			undecodedEncoding === "utf8" &&
+			!undecodedWritable._writableState.decodeStrings,
+		"writable preserves strings when decodeStrings is false",
+	);
+
+	let finalDone;
+	let finalFinished = false;
+	const finalWritable = new Writable({
+		write(chunk, encoding, done) {
+			done();
+		},
+		final(done) {
+			finalDone = done;
+		},
+	});
+	finalWritable.on("finish", () => {
+		finalFinished = true;
+	});
+	finalWritable.end("value");
+	await settle();
+	check(!finalFinished, "writable finish waits for final callback");
+	finalDone();
+	await settle();
+	check(finalFinished, "writable final callback completes finish");
+
 	const multiSource = new Readable();
 	const firstDestination = new Writable();
 	const secondDestination = new Writable();
@@ -373,7 +432,7 @@ async function main() {
 	const queuedErrors = [];
 	let failQueued;
 	queuedFailure._transform = (chunk, encoding, done) => {
-		if (chunk === "first") failQueued = done;
+		if (chunk.toString() === "first") failQueued = done;
 		else done(null, chunk);
 	};
 	queuedFailure.on("error", () => {});

@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 import { readFileSync, mkdtempSync } from "node:fs";
-import { createServer } from "node:tls";
-import type { TLSSocket } from "node:tls";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createServer } from "node:tls";
+import type { TLSSocket } from "node:tls";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildNativeBinary, HOST_MAIN, STRESS_ENV } from "../../src/test-harness.ts";
 
@@ -15,7 +15,8 @@ const key = readFileSync("tests/fixtures/tls/localhost-server-key.pem", "utf8");
 async function run(binary: string, insecure: boolean, stress: boolean): Promise<string> {
 	const server = createServer({ cert: certificate, key }, (socket: TLSSocket) => {
 		socket.on("data", (chunk: Buffer) => {
-			if (chunk.toString("utf8") !== "ping") socket.destroy(new Error("unexpected request"));
+			if (chunk.toString("utf8") !== "ping")
+				socket.destroy(new Error("unexpected request"));
 			else socket.end("pong");
 		});
 	});
@@ -24,7 +25,8 @@ async function run(binary: string, insecure: boolean, stress: boolean): Promise<
 		server.listen(0, "127.0.0.1", resolve);
 	});
 	const address = server.address();
-	if (address === null || typeof address === "string") throw new Error("missing TLS port");
+	if (address === null || typeof address === "string")
+		throw new Error("missing TLS port");
 	try {
 		return await new Promise<string>((resolve, reject) => {
 			execFile(
@@ -48,8 +50,7 @@ async function run(binary: string, insecure: boolean, stress: boolean): Promise<
 								`${error.message} code=${String(error.code)} signal=${String(error.signal)}\n${stdout}\n${stderr}`,
 							),
 						);
-					}
-					else resolve(stdout);
+					} else resolve(stdout);
 				},
 			);
 		});

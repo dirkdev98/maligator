@@ -12,6 +12,7 @@
 #include "heap_string.h"
 #include "intrinsics.h"
 #include "microtask.h"
+#include "node_buffer.h"
 #include "node_events.h"
 #include "object.h"
 #include "object_ops.h"
@@ -176,6 +177,9 @@ static void stream_init_writable(MalVm *vm, MalValue receiver, MalValue options)
     roots[3] = stream_new_array(vm);
     roots[4] = stream_new_array(vm);
     bool object_mode = mal_value_is_truthy(stream_option(vm, roots[1], "objectMode"));
+    MalValue decode_strings = stream_option(vm, roots[1], "decodeStrings");
+    bool should_decode_strings = !mal_value_is_boolean(decode_strings)
+        || mal_value_to_boolean(decode_strings);
     f64 high_water_mark = object_mode ? 16 : 16384;
     MalValue option_hwm = stream_option(vm, roots[1], "highWaterMark");
     if (mal_ops_is_number(option_hwm)) {
@@ -191,6 +195,8 @@ static void stream_init_writable(MalVm *vm, MalValue receiver, MalValue options)
     stream_set(vm, roots[2], "finished", mal_value_new_boolean(false));
     stream_set(vm, roots[2], "destroyed", mal_value_new_boolean(false));
     stream_set(vm, roots[2], "objectMode", mal_value_new_boolean(object_mode));
+    stream_set(vm, roots[2], "decodeStrings",
+               mal_value_new_boolean(should_decode_strings));
     stream_set(vm, roots[2], "highWaterMark", mal_value_from_i32((i32) high_water_mark));
     stream_set(vm, roots[2], "length", mal_value_from_i32(0));
     stream_set(vm, roots[2], "needDrain", mal_value_new_boolean(false));
@@ -200,6 +206,7 @@ static void stream_init_writable(MalVm *vm, MalValue receiver, MalValue options)
     stream_set(vm, roots[0], "_malWriteIndex", mal_value_from_i32(0));
     stream_set(vm, roots[0], "_malWriteBusy", mal_value_new_boolean(false));
     stream_set(vm, roots[0], "_malEnding", mal_value_new_boolean(false));
+    stream_set(vm, roots[0], "_malFinalStarted", mal_value_new_boolean(false));
     stream_set(vm, roots[0], "_malFlushStarted", mal_value_new_boolean(false));
     stream_set(vm, roots[0], "_malFinishScheduled", mal_value_new_boolean(false));
     stream_set(vm, roots[0], "_malEndScheduled", mal_value_new_boolean(false));
@@ -1188,6 +1195,44 @@ static void stream_enqueue_write(
     mal_gc_unroot(&root);
 }
 
+static bool stream_decode_write_chunk(
+    MalVm *vm, MalValue state, MalValue *chunk, MalValue *encoding) {
+    if (!mal_value_is_string(*chunk)
+        || !stream_truthy_own(vm, state, "decodeStrings")) {
+        return true;
+    }
+    if (mal_value_is_undefined(
+            vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR])) {
+        mal_host_install_node_buffer(vm, nullptr, 0, nullptr);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return false;
+        }
+    }
+    MalValue roots[] = {
+        state, *chunk, *encoding,
+        vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR],
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!stream_get(vm, roots[3], "from", &roots[4])) {
+        mal_gc_unroot(&root);
+        return false;
+    }
+    MalCompletion completion = mal_vm_call_value(
+        vm, roots[4], roots[3], roots + 1, 2);
+    if (completion.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&root);
+        return false;
+    }
+    roots[5] = completion.value;
+    *chunk = roots[5];
+    *encoding = mal_value_from_string(
+        mal_intrinsic_ascii(vm, (const byte *) "buffer"));
+    mal_gc_unroot(&root);
+    return true;
+}
+
 static MalValue stream_write(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -1199,7 +1244,9 @@ static MalValue stream_write(
     }
     MalValue chunk = argc > 0 ? args[0] : mal_value_new_undefined();
     MalValue encoding = mal_value_from_string(
-        mal_intrinsic_ascii(vm, (const byte *) "buffer"));
+        mal_intrinsic_ascii(vm, mal_value_is_string(chunk)
+            ? (const byte *) "utf8"
+            : (const byte *) "buffer"));
     MalValue callback = mal_value_new_undefined();
     if (argc > 1 && mal_value_is_callable(args[1])) {
         callback = args[1];
@@ -1223,6 +1270,10 @@ static MalValue stream_write(
         && !mal_value_is_data_view_object(chunk)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                            "The chunk argument must be a string or byte view");
+        return mal_value_new_undefined();
+    }
+    if (!object_mode
+        && !stream_decode_write_chunk(vm, state, &chunk, &encoding)) {
         return mal_value_new_undefined();
     }
     if (stream_truthy_own(vm, receiver, "_malEnding")
@@ -1329,6 +1380,38 @@ static void stream_finish_if_ready(MalVm *vm, MalValue receiver) {
         }
         mal_gc_unroot(&root);
         return;
+    }
+    if (!transform && !stream_truthy_own(vm, receiver, "_malFinalStarted")) {
+        stream_set(vm, receiver, "_malFinalStarted", mal_value_new_boolean(true));
+        MalValue roots[] = {receiver, mal_value_new_undefined(), mal_value_new_undefined()};
+        MalRootSpan root;
+        mal_gc_root(&root, roots, countof(roots));
+        roots[2] = stream_new_done(
+            vm, roots[0], mal_value_new_undefined(), 2, 0);
+        stream_get(vm, roots[0], "_final", &roots[1]);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            MalValue error = vm->completion.value;
+            stream_clear_completion(vm);
+            stream_transform_done(
+                vm, mal_value_new_undefined(), &error, 1,
+                mal_value_new_undefined(), roots[2]);
+            mal_gc_unroot(&root);
+            return;
+        }
+        if (mal_value_is_callable(roots[1])) {
+            stream_set(vm, roots[0], "_malWriteBusy", mal_value_new_boolean(true));
+            mal_vm_call_value(vm, roots[1], roots[0], roots + 2, 1);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) {
+                MalValue error = vm->completion.value;
+                stream_clear_completion(vm);
+                stream_transform_done(
+                    vm, mal_value_new_undefined(), &error, 1,
+                    mal_value_new_undefined(), roots[2]);
+            }
+            mal_gc_unroot(&root);
+            return;
+        }
+        mal_gc_unroot(&root);
     }
     stream_schedule_finish(vm, receiver);
 }

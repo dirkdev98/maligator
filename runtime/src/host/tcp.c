@@ -70,7 +70,9 @@ static void tcp_destroy(MalTcpConnection *connection) {
     (void) mal_reactor_cancel_op(&connection->host->reactor, &connection->read_op);
     (void) mal_reactor_cancel_op(&connection->host->reactor, &connection->write_op);
     mal_net_close(connection->fd);
+#if MAL_NODE
     mal_tls_client_free(&connection->tls);
+#endif
     free(connection->tls_ciphertext);
     MalTcpWrite *write = connection->write_head;
     while (write != nullptr) {
@@ -119,6 +121,7 @@ static void tcp_read_ready(void *data) {
         count = read(connection->fd, bytes, MAL_TCP_IO_TURN);
     } while (count < 0 && errno == EINTR);
     if (count > 0) {
+#if MAL_NODE
         if (connection->tls != nullptr) {
             usize consumed = 0;
             int status = mal_tls_client_read_ciphertext(
@@ -181,6 +184,7 @@ static void tcp_read_ready(void *data) {
             }
             return;
         }
+#endif
         MalTcpProgress *progress = calloc(1, sizeof(MalTcpProgress));
         if (progress == nullptr) {
             free(bytes);
@@ -308,6 +312,7 @@ static bool tcp_flush_raw(MalTcpConnection *connection) {
     return true;
 }
 
+#if MAL_NODE
 static bool tcp_tls_fill_ciphertext(MalTcpConnection *connection) {
     if (connection->tls_ciphertext != nullptr
         || mal_tls_client_wants_write(connection->tls) <= 0) {
@@ -395,10 +400,15 @@ static bool tcp_flush_tls(MalTcpConnection *connection) {
     }
     return true;
 }
+#endif
 
 static bool tcp_flush(MalTcpConnection *connection) {
+#if MAL_NODE
     return connection->tls == nullptr
         ? tcp_flush_raw(connection) : tcp_flush_tls(connection);
+#else
+    return tcp_flush_raw(connection);
+#endif
 }
 
 bool mal_tcp_connect_address_start(
@@ -523,6 +533,7 @@ bool mal_tcp_start_tls(
     const byte *server_name, usize server_name_length,
     const byte *ca_pem, usize ca_pem_length,
     const byte *alpn, usize alpn_length, bool insecure) {
+#if MAL_NODE
     MalTcpConnection *connection = host == nullptr ? nullptr : tcp_find(host, operation);
     if (connection == nullptr || connection->connecting || connection->tls != nullptr
         || server_name == nullptr || server_name_length == 0) {
@@ -539,6 +550,18 @@ bool mal_tcp_start_tls(
         return false;
     }
     return true;
+#else
+    (void) host;
+    (void) operation;
+    (void) server_name;
+    (void) server_name_length;
+    (void) ca_pem;
+    (void) ca_pem_length;
+    (void) alpn;
+    (void) alpn_length;
+    (void) insecure;
+    return false;
+#endif
 }
 
 bool mal_tcp_cancel(MalHost *host, MalHostHandle operation) {

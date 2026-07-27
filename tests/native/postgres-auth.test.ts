@@ -9,7 +9,10 @@ import type { PostgresAuthMode } from "../helpers/postgres-auth-peer.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-postgres-auth-"));
 const tlsCa = readFileSync("tests/fixtures/tls/localhost-cert.pem", "utf8");
-const tlsCertificate = readFileSync("tests/fixtures/tls/localhost-server-cert.pem", "utf8");
+const tlsCertificate = readFileSync(
+	"tests/fixtures/tls/localhost-server-cert.pem",
+	"utf8",
+);
 const tlsKey = readFileSync("tests/fixtures/tls/localhost-server-key.pem", "utf8");
 
 function run(binary: string, port: number, env = process.env): Promise<string> {

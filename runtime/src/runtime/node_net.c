@@ -464,6 +464,8 @@ static MalValue net_socket_end(
     }
     state->ending = true;
     net_set(vm, receiver, "writable", mal_value_new_boolean(false));
+    net_set(vm, receiver, "readyState", mal_value_from_string(
+        mal_intrinsic_ascii(vm, (const byte *) "readOnly")));
     net_maybe_shutdown_write(state);
     return receiver;
 }
