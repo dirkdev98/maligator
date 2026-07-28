@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "http.h"
+#include "http_codec.h"
 
 typedef struct MalVm MalVm;
 typedef struct MalHttpConn MalHttpConn;
@@ -20,6 +21,14 @@ typedef struct MalHttpServer MalHttpServer;
 typedef void (*MalHttpServerCloseCallback)(void *data);
 typedef void (*MalHttpResponseCompleteCallback)(void *data, bool success);
 typedef void (*MalHttpResponseWriteCallback)(void *data, u64 token);
+typedef void (*MalHttpRequestDataCallback)(
+    void *data, byte *owned_bytes, usize length);
+typedef void (*MalHttpRequestEndCallback)(void *data, bool success);
+typedef void (*MalHttpServerStreamHandler)(
+    void *data,
+    MalVm *vm,
+    MalHttpConn *conn,
+    const MalHttpCodecHead *head);
 typedef void (*MalHttpServerHandler)(
     void *data,
     MalVm *vm,
@@ -45,6 +54,15 @@ MalHttpServer *mal_http_server_start_handler(
     const char *host,
     u16 port,
     MalHttpServerHandler handler,
+    void *data);
+
+/* Node-style streaming handler. The head is borrowed for the callback. Body
+ * buffers are transferred to the registered data callback under explicit credit. */
+MalHttpServer *mal_http_server_start_stream_handler(
+    MalVm *vm,
+    const char *host,
+    u16 port,
+    MalHttpServerStreamHandler handler,
     void *data);
 
 /* The bound port (host byte order). */
@@ -122,6 +140,14 @@ bool mal_http_conn_response_write_owned(
 void mal_http_conn_on_response_write(
     MalHttpConn *conn, MalHttpResponseWriteCallback callback, void *data);
 void mal_http_conn_abort(MalHttpConn *conn);
+void mal_http_conn_on_request_stream(
+    MalHttpConn *conn,
+    MalHttpRequestDataCallback data_callback,
+    MalHttpRequestEndCallback end_callback,
+    void *data);
+bool mal_http_conn_request_read_credit(MalHttpConn *conn, usize bytes);
+void mal_http_conn_request_discard(MalHttpConn *conn);
+void mal_http_conn_request_release(MalHttpConn *conn);
 
 /* Configure the next response before mal_http_conn_respond. The completion
  * callback runs from the reactor path after the bytes flush or the connection

@@ -344,6 +344,214 @@ describe("node:http request bridge", () => {
 		}
 	});
 
+	it("streams request bodies under read credit and preserves pipeline order", async () => {
+		const runs = [
+			{ binary: binaries[0]!, env: {} },
+			{ binary: binaries[1]!, env: {} },
+			{ binary: binaries[0]!, env: STRESS_ENV },
+		];
+		for (const { binary, env } of runs) {
+			const child = spawn(binary, [], {
+				stdio: ["ignore", "pipe", "pipe"],
+				env: { ...process.env, ...env },
+			});
+			let stderr = "";
+			child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+			const exit = new Promise<number | null>((resolve, reject) => {
+				const timer = setTimeout(() => reject(new Error("server did not exit")), 5000);
+				child.once("exit", (code) => {
+					clearTimeout(timer);
+					resolve(code);
+				});
+			});
+			try {
+				const port = await waitForPort(child);
+				const base = `http://127.0.0.1:${port}`;
+				const payload = Buffer.alloc(512 * 1024 + 123, 97);
+				const upload = await fetch(`${base}/stream-upload`, {
+					method: "POST",
+					body: payload,
+				});
+				expect(await upload.text()).toBe(`${payload.length}:97:97`);
+				expect(upload.headers.get("x-initial-complete")).toBe("false");
+				expect(upload.headers.get("x-final-complete")).toBe("true");
+				expect(Number(upload.headers.get("x-max-chunk"))).toBeLessThanOrEqual(64 * 1024);
+				expect(Number(upload.headers.get("x-chunk-count"))).toBeGreaterThan(8);
+				expect(upload.headers.get("x-data-while-paused")).toBe("false");
+
+				const chunked = await new Promise<string>((resolve, reject) => {
+					const socket = createConnection({ host: "127.0.0.1", port }, () => {
+						const parts = [
+							"POST /chunked-upload HTTP/1.1\r\nHost: 127.0.0.1\r\n",
+							"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r",
+							"\nabc\r\n4;ext=yes\r\n",
+							"defg\r\n0\r\nTrailer: ignored\r\n\r\n",
+						];
+						let index = 0;
+						const writePart = () => {
+							socket.write(parts[index++]!);
+							if (index < parts.length) setTimeout(writePart, 1);
+						};
+						writePart();
+					});
+					let response = "";
+					socket.setEncoding("utf8");
+					socket.on("data", (chunk: string) => (response += chunk));
+					socket.on("end", () => resolve(response));
+					socket.once("error", reject);
+				});
+				expect(chunked).toContain("HTTP/1.1 200 OK");
+				expect(chunked).toContain("\r\n\r\nabcdefg");
+
+				await new Promise<void>((resolve) => {
+					const socket = createConnection({ host: "127.0.0.1", port }, () => {
+						socket.write(
+							"POST /malformed-upload HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+								"Transfer-Encoding: chunked\r\n\r\nZ\r\ninvalid\r\n",
+						);
+					});
+					socket.once("close", () => resolve());
+					socket.once("error", () => resolve());
+				});
+				let malformed = "";
+				for (let attempt = 0; attempt < 100; attempt++) {
+					malformed = await fetch(`${base}/malformed-upload-status`).then((response) =>
+						response.text(),
+					);
+					if (malformed === "true:false:true") break;
+					await new Promise<void>((resolve) => {
+						setTimeout(resolve, 10);
+					});
+				}
+				expect(malformed).toBe("true:false:true");
+
+				const early = await new Promise<string>((resolve, reject) => {
+					const total = 32 * 1024;
+					const socket = createConnection({ host: "127.0.0.1", port }, () => {
+						socket.write(
+							`POST /early-upload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: ${total}\r\n\r\nhello`,
+						);
+					});
+					let response = "";
+					let sentRemainder = false;
+					socket.setEncoding("utf8");
+					socket.on("data", (chunk: string) => {
+						response += chunk;
+						if (!sentRemainder && response.includes("\r\n\r\nearly")) {
+							sentRemainder = true;
+							socket.write(Buffer.alloc(total - 5, 122));
+							socket.write(
+								"GET /early-upload-status HTTP/1.1\r\n" +
+									"Host: 127.0.0.1\r\nConnection: close\r\n\r\n",
+							);
+						}
+					});
+					socket.on("end", () => resolve(response));
+					socket.once("error", reject);
+				});
+				expect(early.match(/HTTP\/1\.1 200 OK/g)).toHaveLength(2);
+				expect(early.indexOf("early")).toBeLessThan(early.lastIndexOf("32768:true"));
+				expect(early).toContain("32768:true");
+
+				const unread = await new Promise<string>((resolve, reject) => {
+					const total = 8 * 1024;
+					const socket = createConnection({ host: "127.0.0.1", port }, () => {
+						socket.write(
+							`POST /early-unread HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: ${total}\r\n\r\nx`,
+						);
+					});
+					let response = "";
+					let sentRemainder = false;
+					socket.setEncoding("utf8");
+					socket.on("data", (chunk: string) => {
+						response += chunk;
+						if (!sentRemainder && response.includes("\r\n\r\nunread")) {
+							sentRemainder = true;
+							socket.write(Buffer.alloc(total - 1, 117));
+							socket.write(
+								"GET /early-unread-status HTTP/1.1\r\n" +
+									"Host: 127.0.0.1\r\nConnection: close\r\n\r\n",
+							);
+						}
+					});
+					socket.on("end", () => resolve(response));
+					socket.once("error", reject);
+				});
+				expect(unread.match(/HTTP\/1\.1 200 OK/g)).toHaveLength(2);
+				expect(unread).toContain("\r\n\r\ntrue");
+
+				await new Promise<void>((resolve, reject) => {
+					const socket = createConnection({ host: "127.0.0.1", port }, () => {
+						socket.write(
+							"POST /aborted-upload HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+								"Content-Length: 100\r\n\r\nhello",
+						);
+						setTimeout(() => {
+							socket.destroy();
+							resolve();
+						}, 20);
+					});
+					socket.once("error", reject);
+				});
+				let aborted = "";
+				for (let attempt = 0; attempt < 100; attempt++) {
+					aborted = await fetch(`${base}/aborted-upload-status`).then((response) =>
+						response.text(),
+					);
+					if (aborted.endsWith(":true")) break;
+					await new Promise<void>((resolve) => {
+						setTimeout(resolve, 10);
+					});
+				}
+				expect(aborted).toBe("5:true:false:true");
+
+				await new Promise<void>((resolve, reject) => {
+					const socket = createConnection({ host: "127.0.0.1", port }, () => {
+						socket.write(
+							"POST /destroyed-upload HTTP/1.1\r\nHost: 127.0.0.1\r\n" +
+								"Content-Length: 100\r\n\r\n01234567890123456789",
+						);
+					});
+					socket.once("close", () => resolve());
+					socket.once("error", reject);
+				});
+				let destroyed = "";
+				for (let attempt = 0; attempt < 100; attempt++) {
+					destroyed = await fetch(`${base}/destroyed-upload-status`).then((response) =>
+						response.text(),
+					);
+					if (destroyed === "true:true:true:1") break;
+					await new Promise<void>((resolve) => {
+						setTimeout(resolve, 10);
+					});
+				}
+				expect(destroyed).toBe("true:true:true:1");
+
+				const failedHandler = await fetch(`${base}/throw-during-upload`, {
+					method: "POST",
+					body: Buffer.alloc(128 * 1024, 120),
+				});
+				expect(failedHandler.status).toBe(500);
+				expect(await failedHandler.text()).toBe("request handler error");
+				const afterFailedHandler = await fetch(`${base}/metadata`, {
+					headers: { "x-test": "request-header" },
+				});
+				expect(afterFailedHandler.status).toBe(201);
+				expect(await afterFailedHandler.text()).toBe("ab");
+
+				const closingPayload = Buffer.alloc(64 * 1024 + 7, 99);
+				const close = await fetch(`${base}/close-during-upload`, {
+					method: "POST",
+					body: closingPayload,
+				});
+				expect(await close.text()).toBe(String(closingPayload.length));
+				expect(await exit, stderr).toBe(0);
+			} finally {
+				child.kill("SIGKILL");
+			}
+		}
+	});
+
 	it("keeps request and response state rooted under GC stress", async () => {
 		await withServer(binaries[0]!, STRESS_ENV, checkBridge);
 	});
@@ -406,8 +614,7 @@ describe("node:http request bridge", () => {
 		expect(field(line, "request_packed_headers")).toBeGreaterThan(80);
 		expect(field(line, "request_copy_operations")).toBe(
 			field(line, "request_state_allocations") * 2 +
-				field(line, "request_packed_headers") * 3 +
-				field(line, "request_body_allocations"),
+				field(line, "request_packed_headers") * 3,
 		);
 		expect(field(line, "request_copy_bytes")).toBeGreaterThan(
 			field(line, "request_copy_operations"),

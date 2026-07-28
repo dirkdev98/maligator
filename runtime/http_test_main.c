@@ -221,6 +221,57 @@ int main(void) {
         mal_http_codec_free(&codec);
     }
 
+    // 11. Full slabs preserve pause offsets and publish body before the zero-byte
+    // completion that guards a pipelined follow-up.
+    {
+        const char *wire =
+            "POST /body HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello"
+            "GET /next HTTP/1.1\r\nHost: example.test\r\n\r\n";
+        MalHttpCodec codec;
+        mal_http_codec_init(&codec, HTTP_REQUEST);
+        usize offset = 0;
+        usize consumed_now = 0;
+        MalHttpCodecResult result = mal_http_codec_execute(
+            &codec, (const byte *) wire, strlen(wire), &consumed_now);
+        offset += consumed_now;
+        check(result == MAL_HTTP_CODEC_EVENT
+                  && mal_http_codec_event(&codec) == MAL_HTTP_CODEC_EVENT_HEAD
+                  && offset == (usize) (strstr(wire, "\r\n\r\n") + 4 - wire),
+              "codec head pause reports the first body byte");
+        mal_http_codec_head_free(mal_http_codec_take_head(&codec));
+
+        result = mal_http_codec_execute(
+            &codec, (const byte *) wire + offset, strlen(wire) - offset,
+            &consumed_now);
+        offset += consumed_now;
+        usize body_length = 0;
+        byte *body = mal_http_codec_take_body(&codec, &body_length);
+        check(result == MAL_HTTP_CODEC_EVENT && body_length == 5
+                  && memcmp(body, "hello", 5) == 0,
+              "codec full slab publishes the bounded body");
+        free(body);
+
+        consumed_now = SIZE_MAX;
+        result = mal_http_codec_execute(
+            &codec, (const byte *) wire + offset, strlen(wire) - offset,
+            &consumed_now);
+        check(result == MAL_HTTP_CODEC_EVENT && consumed_now == 0
+                  && mal_http_codec_event(&codec) == MAL_HTTP_CODEC_EVENT_COMPLETE,
+              "codec publishes completion without consuming pipeline bytes");
+        mal_http_codec_clear_event(&codec);
+
+        result = mal_http_codec_execute(
+            &codec, (const byte *) wire + offset, strlen(wire) - offset,
+            &consumed_now);
+        MalHttpCodecHead *next = mal_http_codec_take_head(&codec);
+        check(result == MAL_HTTP_CODEC_EVENT && next != nullptr
+                  && codec_slice_eq(
+                      mal_http_codec_head_target(next), next->target_length, "/next"),
+              "codec resumes at the pipelined follow-up head");
+        mal_http_codec_head_free(next);
+        mal_http_codec_free(&codec);
+    }
+
     printf("httptest: %d/%d checks\n", g_pass, g_total);
     printf("httptest PASS %d/%d\n", g_pass, g_total);
     return g_pass == g_total ? 0 : 1;

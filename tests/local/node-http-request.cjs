@@ -5,6 +5,12 @@ let completedResponse;
 let streamEvents = [];
 let failedWriteEvents = [];
 let endBeforeDrainEvents = [];
+let earlyUploadTotal = 0;
+let earlyUploadEnded = false;
+let earlyUnreadEnded = false;
+let abortedUpload = "0:false:false:false";
+let destroyedUpload = "false:false:false:0";
+let malformedUpload = "false:false:false";
 
 Object.defineProperty(Object.prototype, "__httpSocketRealmMarker", {
 	value: "request-realm",
@@ -339,6 +345,169 @@ const server = http.createServer(function (request, response) {
 		return;
 	}
 
+	if (request.url === "/stream-upload") {
+		const chunks = [];
+		let total = 0;
+		let maxChunk = 0;
+		let paused = false;
+		let dataWhilePaused = false;
+		const initialComplete = request.complete;
+		request.on("data", (chunk) => {
+			if (paused) dataWhilePaused = true;
+			chunks.push(chunk);
+			total += chunk.length;
+			if (chunk.length > maxChunk) maxChunk = chunk.length;
+			if (chunks.length === 1) {
+				paused = true;
+				request.pause();
+				setTimeout(() => {
+					paused = false;
+					request.resume();
+				}, 20);
+			}
+		});
+		request.on("end", () => {
+			response.setHeader("X-Initial-Complete", String(initialComplete));
+			response.setHeader("X-Final-Complete", String(request.complete));
+			response.setHeader("X-Max-Chunk", String(maxChunk));
+			response.setHeader("X-Chunk-Count", String(chunks.length));
+			response.setHeader("X-Data-While-Paused", String(dataWhilePaused));
+			const body = Buffer.concat(chunks);
+			response.end(`${total}:${body[0]}:${body[body.length - 1]}`);
+		});
+		return;
+	}
+
+	if (request.url === "/chunked-upload") {
+		const chunks = [];
+		request.on("data", (chunk) => chunks.push(chunk));
+		request.on("end", () => response.end(Buffer.concat(chunks)));
+		return;
+	}
+
+	if (request.url === "/malformed-upload") {
+		let aborted = false;
+		let finished = false;
+		let closed = false;
+		const update = () => {
+			malformedUpload = `${aborted}:${finished}:${closed}`;
+		};
+		request.on("data", () => {});
+		request.on("aborted", () => {
+			aborted = true;
+			update();
+		});
+		response.on("finish", () => {
+			finished = true;
+			update();
+		});
+		response.on("close", () => {
+			closed = true;
+			update();
+		});
+		return;
+	}
+
+	if (request.url === "/malformed-upload-status") {
+		response.end(malformedUpload);
+		return;
+	}
+
+	if (request.url === "/early-upload") {
+		earlyUploadTotal = 0;
+		earlyUploadEnded = false;
+		request.on("data", (chunk) => (earlyUploadTotal += chunk.length));
+		request.on("end", () => (earlyUploadEnded = true));
+		response.end("early");
+		return;
+	}
+
+	if (request.url === "/early-upload-status") {
+		response.end(`${earlyUploadTotal}:${earlyUploadEnded}`);
+		return;
+	}
+
+	if (request.url === "/early-unread") {
+		earlyUnreadEnded = false;
+		request.on("end", () => (earlyUnreadEnded = true));
+		response.end("unread");
+		return;
+	}
+
+	if (request.url === "/early-unread-status") {
+		response.end(String(earlyUnreadEnded));
+		return;
+	}
+
+	if (request.url === "/aborted-upload") {
+		let total = 0;
+		let aborted = false;
+		let ended = false;
+		let closed = false;
+		const update = () => {
+			abortedUpload = `${total}:${aborted}:${ended}:${closed}`;
+		};
+		request.on("data", (chunk) => {
+			total += chunk.length;
+			update();
+		});
+		request.on("aborted", () => {
+			aborted = true;
+			update();
+		});
+		request.on("end", () => {
+			ended = true;
+			update();
+		});
+		request.on("close", () => {
+			closed = true;
+			update();
+		});
+		return;
+	}
+
+	if (request.url === "/aborted-upload-status") {
+		response.end(abortedUpload);
+		return;
+	}
+
+	if (request.url === "/destroyed-upload") {
+		let synchronous = false;
+		let aborted = false;
+		let errored = false;
+		let closes = 0;
+		const update = () => {
+			destroyedUpload = `${synchronous}:${aborted}:${errored}:${closes}`;
+		};
+		request.on("aborted", () => {
+			aborted = true;
+			update();
+		});
+		request.on("error", (error) => {
+			errored = error.message === "stop upload";
+			update();
+		});
+		request.on("close", () => {
+			closes++;
+			update();
+		});
+		request.on("data", () => {
+			const returned = request.destroy(new Error("stop upload"));
+			synchronous =
+				request.destroyed &&
+				request.readable === false &&
+				request._readableState.destroyed &&
+				returned === request;
+			update();
+		});
+		return;
+	}
+
+	if (request.url === "/destroyed-upload-status") {
+		response.end(destroyedUpload);
+		return;
+	}
+
 	if (request.url === "/no-body") {
 		response.statusCode = 204;
 		response.end("must-not-be-sent");
@@ -472,6 +641,24 @@ const server = http.createServer(function (request, response) {
 	if (request.url === "/throw-after-write") {
 		response.write("partial");
 		throw new Error("after write");
+	}
+
+	if (request.url === "/throw-during-upload") {
+		throw new Error("upload handler failed");
+	}
+
+	if (request.url === "/close-during-upload") {
+		let total = 0;
+		let closing = false;
+		request.on("data", (chunk) => {
+			total += chunk.length;
+			if (!closing) {
+				closing = true;
+				server.close();
+			}
+		});
+		request.on("end", () => response.end(String(total)));
+		return;
 	}
 
 	if (request.url === "/idle-stream") {
