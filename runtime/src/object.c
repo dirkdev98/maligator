@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>
 
 static u64 g_slot_coallocations = 0;
 static u64 g_slot_grow_migrations = 0;
@@ -51,15 +52,16 @@ MalObject *mal_object_try_new(MalHeap *heap, MalObject *prototype) {
     return object;
 }
 
-MalObject *mal_object_new_shaped_one(MalHeap *heap, MalObject *prototype, MalShape *shape,
-                                     MalValue value) {
-    assert(shape->inline_count == 1);
+MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,
+                                 const MalValue *values, u32 count) {
+    assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    assert(shape->inline_count == count);
     MalObject *object =
-        mal_heap_alloc(heap, sizeof(MalObject) + sizeof(MalValue), MAL_HEAP_OBJECT);
+        mal_heap_alloc(heap, sizeof(MalObject) + sizeof(MalValue) * count, MAL_HEAP_OBJECT);
     mal_object_init(heap, object, MAL_HEAP_OBJECT, prototype);
     object->shape = shape;
     object->slots = (MalValue *) (object + 1);
-    object->slots[0] = value;
+    memcpy(object->slots, values, sizeof(MalValue) * count);
     g_slot_coallocations++;
     return object;
 }

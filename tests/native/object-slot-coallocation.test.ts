@@ -12,7 +12,7 @@ import {
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-object-slot-coallocation-"));
 
-describe("one-slot shaped object coallocation", () => {
+describe("shaped object slot coallocation", () => {
 	let compiled: string;
 	let interpreted: string;
 

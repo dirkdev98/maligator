@@ -547,18 +547,8 @@ MalValue mal_vm_create_object_shaped(MalVm *vm, MalShape *shape, const MalValue 
     assert(shape->inline_count == count);
     MalObject *prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-    if (count == 1) {
-        return mal_value_from_object(
-            mal_object_new_shaped_one(&vm->heap, prototype, shape, values[0]));
-    }
-    MalObject *object = mal_object_new(&vm->heap, prototype);
-    object->shape = shape;
-    object->slots = malloc(sizeof(MalValue) * count);
-    object->slots_owned = true;
-    for (u32 i = 0; i < count; ++i) {
-        object->slots[i] = values[i];
-    }
-    return mal_value_from_object(object);
+    return mal_value_from_object(
+        mal_object_new_shaped(&vm->heap, prototype, shape, values, count));
 }
 
 void mal_op_create_object(MalCallable *callable, const MalInstruction *instruction) {
