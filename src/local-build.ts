@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { buildSuffix, ccExtraFlags } from "./build-flags.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
@@ -64,6 +64,9 @@ export function buildLoadDriver(
 			path.join(context.runtimeDirectory, "src/runtime"),
 			"-I",
 			path.join(context.runtimeDirectory, "rust/include"),
+			...(existsSync(path.join(context.runtimeDirectory, "vendor/llhttp/include"))
+				? ["-I", path.join(context.runtimeDirectory, "vendor/llhttp/include")]
+				: []),
 			path.join(context.runtimeDirectory, "load_main.c"),
 			...artifacts.linkArgs,
 			"-o",
@@ -103,6 +106,9 @@ export function buildLocalBinary(options: LocalBuildOptions): LocalBuildResult {
 			path.join(context.runtimeDirectory, "src/runtime"),
 			"-I",
 			path.join(context.runtimeDirectory, "rust/include"),
+			...(existsSync(path.join(context.runtimeDirectory, "vendor/llhttp/include"))
+				? ["-I", path.join(context.runtimeDirectory, "vendor/llhttp/include")]
+				: []),
 			cPath,
 			options.mainFile ?? path.join(context.runtimeDirectory, "test262_main.c"),
 			...artifacts.linkArgs,

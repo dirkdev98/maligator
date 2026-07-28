@@ -4,6 +4,7 @@
 		"scripts/test262.json",
 		"bench/baseline.json",
 		"runtime/rust/target",
+		"runtime/vendor",
 		"tests/wpt/fixtures"
 	],
 	"useTabs": true,

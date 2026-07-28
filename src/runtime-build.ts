@@ -21,9 +21,16 @@ import type { RustArtifacts } from "./rust-build.ts";
 
 function runtimeSourceHash(runtimeDirectory: string): string {
 	const root = path.resolve(runtimeDirectory);
+	const llhttp = path.join(root, "vendor/llhttp");
 	return hashDirectoryTrees({
 		root,
-		directories: [path.join(root, "src"), path.join(root, "rust/include")],
+		directories: [
+			path.join(root, "src"),
+			path.join(root, "rust/include"),
+			...(existsSync(llhttp)
+				? [path.join(llhttp, "include"), path.join(llhttp, "src")]
+				: []),
+		],
 		include: (entry) => /\.[ch]$/.test(entry.name),
 		compareNames: legacyLocaleNameComparator,
 	});
@@ -97,6 +104,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		...(compilerWire === undefined ? [] : [`-DMAL_COMPILER_WIRE="${compilerWire}"`]),
 	];
 	const sourceRoot = path.join(context.runtimeDirectory, "src");
+	const llhttpRoot = path.join(context.runtimeDirectory, "vendor/llhttp");
 	const includeArguments = [
 		"-I",
 		sourceRoot,
@@ -106,6 +114,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		path.join(sourceRoot, "runtime"),
 		"-I",
 		path.join(context.runtimeDirectory, "rust/include"),
+		...(existsSync(llhttpRoot) ? ["-I", path.join(llhttpRoot, "include")] : []),
 	];
 	const identityFlags = flags.map((flag) =>
 		flag.startsWith("-DMAL_COMPILER_WIRE=") ? "-DMAL_COMPILER_WIRE=<content>" : flag,
@@ -131,6 +140,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 			sourceRoot,
 			path.join(sourceRoot, "host"),
 			path.join(sourceRoot, "runtime"),
+			...(existsSync(llhttpRoot) ? [path.join(llhttpRoot, "src")] : []),
 		],
 		sourceHash: runtimeSourceHash(context.runtimeDirectory),
 		toolchainFingerprint: context.toolchain.fingerprint,
@@ -233,6 +243,7 @@ function buildRuntimeCache(
 	);
 	try {
 		const sourceRoot = path.join(context.runtimeDirectory, "src");
+		const llhttpSource = path.join(context.runtimeDirectory, "vendor/llhttp/src");
 		const archives = runtimeArchives(temporaryDirectory);
 		const layers = [
 			{ name: "engine", source: sourceRoot, archive: archives.engine },
@@ -246,28 +257,39 @@ function buildRuntimeCache(
 		for (const layer of layers) {
 			const objectDirectory = path.join(temporaryDirectory, "objects", layer.name);
 			mkdirSync(objectDirectory, { recursive: true });
-			const objects = readdirSync(layer.source)
+			const sources = readdirSync(layer.source)
 				.filter((name) => name.endsWith(".c"))
 				.sort()
-				.map((name) => {
-					const objectPath = path.join(objectDirectory, `${name.slice(0, -2)}.o`);
-					execFileSync(
-						context.toolchain.tools.cc.path,
-						[
-							"-std=c2x",
-							...layout.flags,
-							...layout.includeArguments,
-							"-I",
-							layer.source,
-							"-c",
-							path.join(layer.source, name),
-							"-o",
-							objectPath,
-						],
-						{ env: context.environment, stdio: verbose ? "inherit" : "pipe" },
-					);
-					return objectPath;
-				});
+				.map((name) => ({
+					name,
+					path: path.join(layer.source, name),
+				}));
+			if (layer.name === "host" && existsSync(llhttpSource)) {
+				for (const name of readdirSync(llhttpSource)
+					.filter((entry) => entry.endsWith(".c"))
+					.sort()) {
+					sources.push({ name: `llhttp-${name}`, path: path.join(llhttpSource, name) });
+				}
+			}
+			const objects = sources.map((source) => {
+				const objectPath = path.join(objectDirectory, `${source.name.slice(0, -2)}.o`);
+				execFileSync(
+					context.toolchain.tools.cc.path,
+					[
+						"-std=c2x",
+						...layout.flags,
+						...layout.includeArguments,
+						"-I",
+						layer.source,
+						"-c",
+						source.path,
+						"-o",
+						objectPath,
+					],
+					{ env: context.environment, stdio: verbose ? "inherit" : "pipe" },
+				);
+				return objectPath;
+			});
 			execFileSync(context.toolchain.tools.ar.path, ["rcs", layer.archive, ...objects], {
 				env: context.environment,
 				stdio: verbose ? "inherit" : "pipe",

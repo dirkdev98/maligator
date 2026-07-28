@@ -587,7 +587,7 @@ describe("native toolchain discovery", () => {
 			"-DMAL_REGEXP=0",
 			"-DMAL_NODE=1",
 		]);
-		expect(context.features.cargoFeatures).toEqual(["node-zlib"]);
+		expect(context.features.cargoFeatures).toEqual(["node-tls", "node-zlib"]);
 	});
 
 	it("invalidates changed and incomplete runtime artifacts", () => {

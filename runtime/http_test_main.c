@@ -1,7 +1,9 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "http.h"
+#include "http_codec.h"
 
 /*
  * Unit test for the HTTP/1.1 request parser. Pure
@@ -24,6 +26,10 @@ static void check(bool ok, const char *name) {
 
 static bool field_eq(const char *ptr, usize len, const char *want) {
     return len == strlen(want) && memcmp(ptr, want, len) == 0;
+}
+
+static bool codec_slice_eq(const byte *ptr, usize len, const char *want) {
+    return ptr != nullptr && len == strlen(want) && memcmp(ptr, want, len) == 0;
 }
 
 int main(void) {
@@ -101,6 +107,118 @@ int main(void) {
         mal_http_parse_request(r, strlen(r), &req, &consumed);
         check(req.chunked, "chunked detected");
         check(req.content_length == -1, "chunked has no content-length");
+    }
+
+    // 8. The llhttp codec yields fragmented heads, decoded body data, and
+    // message boundaries without buffering a whole request.
+    {
+        const char *wire =
+            "POST /one HTTP/1.1\r\nHost: example.test\r\nX-Dup: one\r\n"
+            "X-Dup: two\r\nTransfer-Encoding: chunked\r\n\r\n"
+            "2\r\nhe\r\n3\r\nllo\r\n0\r\nTrailer: value\r\n\r\n"
+            "GET /two HTTP/1.1\r\nHost: example.test\r\nConnection: close\r\n\r\n";
+        MalHttpCodec codec;
+        check(mal_http_codec_init(&codec, HTTP_REQUEST), "request codec initializes");
+        usize offset = 0;
+        usize heads = 0;
+        usize completes = 0;
+        char body[16] = {0};
+        usize body_length = 0;
+        usize turns = 0;
+        bool valid_heads = true;
+        while ((offset < strlen(wire) || completes < 2) && turns++ < 4096) {
+            usize supplied = offset < strlen(wire) ? 1 : 0;
+            usize consumed_now = 0;
+            MalHttpCodecResult result = mal_http_codec_execute(
+                &codec, (const byte *) wire + offset, supplied, &consumed_now);
+            if (result == MAL_HTTP_CODEC_ERROR || consumed_now > supplied) {
+                valid_heads = false;
+                break;
+            }
+            offset += consumed_now;
+            MalHttpCodecEventKind event = mal_http_codec_event(&codec);
+            if (event == MAL_HTTP_CODEC_EVENT_HEAD) {
+                MalHttpCodecHead *head = mal_http_codec_take_head(&codec);
+                if (heads == 0) {
+                    valid_heads = valid_heads
+                        && codec_slice_eq(
+                            mal_http_codec_head_method(head), head->method_length, "POST")
+                        && codec_slice_eq(
+                            mal_http_codec_head_target(head), head->target_length, "/one")
+                        && head->field_count == 4 && head->chunked
+                        && head->content_length == -1 && head->keep_alive;
+                } else {
+                    valid_heads = valid_heads
+                        && codec_slice_eq(
+                            mal_http_codec_head_method(head), head->method_length, "GET")
+                        && codec_slice_eq(
+                            mal_http_codec_head_target(head), head->target_length, "/two")
+                        && !head->keep_alive;
+                }
+                heads++;
+                mal_http_codec_head_free(head);
+            } else if (event == MAL_HTTP_CODEC_EVENT_BODY) {
+                usize length = 0;
+                byte *bytes = mal_http_codec_take_body(&codec, &length);
+                if (body_length + length > sizeof(body)) {
+                    valid_heads = false;
+                    free(bytes);
+                    break;
+                }
+                memcpy(body + body_length, bytes, length);
+                body_length += length;
+                free(bytes);
+            } else if (event == MAL_HTTP_CODEC_EVENT_COMPLETE) {
+                completes++;
+                mal_http_codec_clear_event(&codec);
+            } else if (supplied > 0 && consumed_now == 0) {
+                valid_heads = false;
+                break;
+            }
+        }
+        check(valid_heads, "fragmented codec heads preserve metadata");
+        check(heads == 2 && completes == 2, "codec preserves pipelined boundaries");
+        check(body_length == 5 && memcmp(body, "hello", 5) == 0,
+              "codec incrementally dechunks body bytes");
+        mal_http_codec_free(&codec);
+    }
+
+    // 9. Response parsing preserves the reason phrase and framing metadata.
+    {
+        const char *wire =
+            "HTTP/1.1 425 Custom Too Early\r\nContent-Length: 2\r\n\r\nok";
+        MalHttpCodec codec;
+        check(mal_http_codec_init(&codec, HTTP_RESPONSE), "response codec initializes");
+        usize consumed_now = 0;
+        MalHttpCodecResult result = mal_http_codec_execute(
+            &codec, (const byte *) wire, strlen(wire), &consumed_now);
+        check(result == MAL_HTTP_CODEC_EVENT
+                  && mal_http_codec_event(&codec) == MAL_HTTP_CODEC_EVENT_HEAD,
+              "response codec yields head before body");
+        MalHttpCodecHead *head = mal_http_codec_take_head(&codec);
+        check(head != nullptr && head->status_code == 425
+                  && codec_slice_eq(
+                      mal_http_codec_head_status(head), head->status_length,
+                      "Custom Too Early")
+                  && head->content_length == 2,
+              "response codec preserves status metadata");
+        mal_http_codec_head_free(head);
+        mal_http_codec_free(&codec);
+    }
+
+    // 10. Strict framing rejects request-smuggling ambiguity before publishing a head.
+    {
+        const char *wire =
+            "POST / HTTP/1.1\r\nContent-Length: 1\r\n"
+            "Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n";
+        MalHttpCodec codec;
+        mal_http_codec_init(&codec, HTTP_REQUEST);
+        usize consumed_now = 0;
+        check(mal_http_codec_execute(
+                  &codec, (const byte *) wire, strlen(wire), &consumed_now)
+                  == MAL_HTTP_CODEC_ERROR,
+              "codec rejects transfer-encoding plus content-length");
+        mal_http_codec_free(&codec);
     }
 
     printf("httptest: %d/%d checks\n", g_pass, g_total);
