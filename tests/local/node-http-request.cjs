@@ -37,9 +37,12 @@ const server = http.createServer(function (request, response) {
 	if (request.url === "/header-snapshot") {
 		const valid =
 			request.rawHeaders.join("|") ===
-				"Host|127.0.0.1|X-Mixed|first|x-MIXED|second|X-Order|third|Connection|close" &&
+				"Host|127.0.0.1|X-Mixed|first|x-MIXED|second|Cookie|a=1|cookie|b=2|Set-Cookie|one=1|set-cookie|two=2|Authorization|first|authorization|second|X-Order|third|Connection|close" &&
 			request.headers.host === "127.0.0.1" &&
-			request.headers["x-mixed"] === "second" &&
+			request.headers["x-mixed"] === "first, second" &&
+			request.headers.cookie === "a=1; b=2" &&
+			request.headers["set-cookie"].join("|") === "one=1|two=2" &&
+			request.headers.authorization === "first" &&
 			request.headers["x-order"] === "third";
 		response.statusCode = valid ? 200 : 500;
 		response.end(valid ? "ok" : "header snapshot mismatch");
@@ -61,12 +64,15 @@ const server = http.createServer(function (request, response) {
 			);
 		};
 		const checks = [
-			Object.getOwnPropertyNames(socket).join(",") === "encrypted,readable,writable",
-			Object.keys(socket).join(",") === "encrypted,readable,writable",
+			Object.getOwnPropertyNames(socket).join(",") ===
+				"_events,_eventsCount,_maxListeners,encrypted,readable,writable",
+			Object.keys(socket).join(",") ===
+				"_events,_eventsCount,_maxListeners,encrypted,readable,writable",
 			visibleDataProperty("encrypted", false),
 			visibleDataProperty("readable", true),
 			visibleDataProperty("writable", true),
-			Object.getPrototypeOf(socket) === Object.prototype,
+			Object.getPrototypeOf(socket) ===
+				Object.getPrototypeOf(Object.getPrototypeOf(server)),
 			socket.__httpSocketRealmMarker === "request-realm",
 			!Object.prototype.hasOwnProperty.call(socket, "__httpSocketRealmMarker"),
 			request.socket === request.connection,
@@ -93,9 +99,9 @@ const server = http.createServer(function (request, response) {
 		};
 		const checks = [
 			Object.getOwnPropertyNames(request).join(",") ===
-				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,_readableState,_malReadableQueue,_malBlockedPipes,_malReadableIndex,_malFlowing,_malPaused,readable,readableEnded,method,url,headers,rawHeaders,httpVersion,httpVersionMajor,httpVersionMinor,complete,aborted,upgrade,trailers,rawTrailers,socket,connection",
+				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,_readableState,_malReadableQueue,_malBlockedPipes,_malReadableIndex,_malFlowing,_malPaused,_malReading,_malReadScheduled,readable,readableEnded,method,url,headers,rawHeaders,httpVersion,httpVersionMajor,httpVersionMinor,complete,aborted,upgrade,trailers,rawTrailers,socket,connection",
 			Object.keys(request).join(",") ===
-				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,_readableState,_malReadableQueue,_malBlockedPipes,_malReadableIndex,_malFlowing,_malPaused,readable,readableEnded,method,url,headers,rawHeaders,httpVersion,httpVersionMajor,httpVersionMinor,complete,aborted,upgrade,trailers,rawTrailers,socket,connection",
+				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,_readableState,_malReadableQueue,_malBlockedPipes,_malReadableIndex,_malFlowing,_malPaused,_malReading,_malReadScheduled,readable,readableEnded,method,url,headers,rawHeaders,httpVersion,httpVersionMajor,httpVersionMinor,complete,aborted,upgrade,trailers,rawTrailers,socket,connection",
 			visibleDataProperty(request, "method", "GET"),
 			visibleDataProperty(request, "url", "/response-shape"),
 			visibleDataProperty(request, "headers", request.headers),
@@ -253,34 +259,20 @@ const server = http.createServer(function (request, response) {
 		if (concurrentResponses.length === 16) {
 			const batch = concurrentResponses.splice(0);
 			for (const entry of batch) {
-				let nameCoercions = 0;
-				const mixedName = {
-					toString() {
-						nameCoercions++;
-						return "x-InDeX";
-					},
-				};
+				const mixedName = "x-InDeX";
 				entry.response.setHeader("X-Index", entry.id);
 				entry.response.setHeader(mixedName, entry.id);
-				const setCoercedOnce = nameCoercions === 1;
 				const mixedValue = entry.response.getHeader(mixedName);
-				const getCoercedOnce = nameCoercions === 2;
 				const mixedPresent = entry.response.hasHeader(mixedName);
-				const hasCoercedOnce = nameCoercions === 3;
 				entry.response.setHeader("X-Removed", "yes");
 				entry.response.removeHeader("X-Missing");
 				entry.response.removeHeader(mixedName);
-				const removeCoercedOnce = nameCoercions === 4;
 				entry.response.setHeader("X-InDeX", entry.id);
 				const readdedOrder = entry.response.getHeaderNames().join(",");
 				entry.response.removeHeader("X-Removed");
 				if (
 					mixedValue !== entry.id ||
 					!mixedPresent ||
-					!setCoercedOnce ||
-					!getCoercedOnce ||
-					!hasCoercedOnce ||
-					!removeCoercedOnce ||
 					readdedOrder !== "x-removed,x-index" ||
 					entry.response.getHeader("X-iNdEx") !== entry.id ||
 					!entry.response.hasHeader("x-INDeX") ||

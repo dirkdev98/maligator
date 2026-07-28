@@ -73,9 +73,13 @@ stated acceptance point without patching Express or anything in `node_modules`.
       A buffered `http.request` client now covers localhost/numeric-IPv4 loopback,
       request headers and bodies, status/response headers, response bodies, and
       connection errors. Its URL/options overloads apply Node's option precedence,
-      and `http.get` returns the request after ending it exactly once. The remaining
-      slices are streaming/backpressure and richer socket, header, status,
-      DNS/address-family, and connection-reuse behavior. `ClientRequest.destroy()`
+      and `http.get` returns the request after ending it exactly once. Incoming
+      messages now preserve raw duplicate fields while applying Node's singleton,
+      comma-join, cookie, and `set-cookie` policies. The module exports the complete
+      status-code map and header validators, uses canonical or custom reason phrases,
+      and validates outgoing names and values synchronously. The remaining slices are
+      streaming/backpressure and richer socket, DNS/address-family, and
+      connection-reuse behavior. `ClientRequest.destroy()`
       and `abort()` now cancel the native operation, suppress a queued response, and
       publish idempotent Node-compatible abort/error/close terminal events under GC
       stress and UBSan.

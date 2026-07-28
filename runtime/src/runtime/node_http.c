@@ -33,6 +33,77 @@
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 #define HTTP_METHOD (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE)
 
+typedef struct MalNodeHttpStatus {
+    int code;
+    const char *reason;
+} MalNodeHttpStatus;
+
+static const MalNodeHttpStatus http_statuses[] = {
+    {100, "Continue"},
+    {101, "Switching Protocols"},
+    {102, "Processing"},
+    {103, "Early Hints"},
+    {200, "OK"},
+    {201, "Created"},
+    {202, "Accepted"},
+    {203, "Non-Authoritative Information"},
+    {204, "No Content"},
+    {205, "Reset Content"},
+    {206, "Partial Content"},
+    {207, "Multi-Status"},
+    {208, "Already Reported"},
+    {226, "IM Used"},
+    {300, "Multiple Choices"},
+    {301, "Moved Permanently"},
+    {302, "Found"},
+    {303, "See Other"},
+    {304, "Not Modified"},
+    {305, "Use Proxy"},
+    {307, "Temporary Redirect"},
+    {308, "Permanent Redirect"},
+    {400, "Bad Request"},
+    {401, "Unauthorized"},
+    {402, "Payment Required"},
+    {403, "Forbidden"},
+    {404, "Not Found"},
+    {405, "Method Not Allowed"},
+    {406, "Not Acceptable"},
+    {407, "Proxy Authentication Required"},
+    {408, "Request Timeout"},
+    {409, "Conflict"},
+    {410, "Gone"},
+    {411, "Length Required"},
+    {412, "Precondition Failed"},
+    {413, "Payload Too Large"},
+    {414, "URI Too Long"},
+    {415, "Unsupported Media Type"},
+    {416, "Range Not Satisfiable"},
+    {417, "Expectation Failed"},
+    {418, "I'm a Teapot"},
+    {421, "Misdirected Request"},
+    {422, "Unprocessable Entity"},
+    {423, "Locked"},
+    {424, "Failed Dependency"},
+    {425, "Too Early"},
+    {426, "Upgrade Required"},
+    {428, "Precondition Required"},
+    {429, "Too Many Requests"},
+    {431, "Request Header Fields Too Large"},
+    {451, "Unavailable For Legal Reasons"},
+    {500, "Internal Server Error"},
+    {501, "Not Implemented"},
+    {502, "Bad Gateway"},
+    {503, "Service Unavailable"},
+    {504, "Gateway Timeout"},
+    {505, "HTTP Version Not Supported"},
+    {506, "Variant Also Negotiates"},
+    {507, "Insufficient Storage"},
+    {508, "Loop Detected"},
+    {509, "Bandwidth Limit Exceeded"},
+    {510, "Not Extended"},
+    {511, "Network Authentication Required"},
+};
+
 typedef struct MalNodeHttpServerState {
     MalVm *vm;
     MalValue receiver;
@@ -544,8 +615,8 @@ static void http_incoming_message_dispatch_shapes(MalVm *vm) {
     static const char *source_names[] = {
         "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
         "_readableState", "_malReadableQueue", "_malBlockedPipes",
-        "_malReadableIndex", "_malFlowing", "_malPaused", "readable",
-        "readableEnded",
+        "_malReadableIndex", "_malFlowing", "_malPaused", "_malReading",
+        "_malReadScheduled", "readable", "readableEnded",
     };
     static const char *dispatch_names[] = {
         "method", "url", "headers", "rawHeaders", "httpVersion",
@@ -607,8 +678,12 @@ static void http_server_response_shapes(MalVm *vm) {
 
 static bool http_response_name(
     MalVm *vm, MalValue value, char **out, usize *out_length) {
-    MalString *string;
-    if (!mal_vm_to_string(vm, value, &string)) return false;
+    if (!mal_value_is_string(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Header name must be a valid HTTP token");
+        return false;
+    }
+    MalString *string = mal_value_to_string(value);
     usize length = mal_string_length(string);
     const c16 *units = mal_string_code_units(string);
     if (length == 0) {
@@ -645,8 +720,12 @@ static bool http_response_name(
 static bool http_response_name_view(
     MalVm *vm, MalValue value, MalNodeHttpResponseNameView *out) {
     MAL_PERF_COUNT(http_response_header_name_coercions);
-    MalString *string;
-    if (!mal_vm_to_string(vm, value, &string)) return false;
+    if (!mal_value_is_string(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Header name must be a valid HTTP token");
+        return false;
+    }
+    MalString *string = mal_value_to_string(value);
     usize length = mal_string_length(string);
     const c16 *units = mal_string_code_units(string);
     if (length == 0) {
@@ -670,6 +749,106 @@ static bool http_response_name_view(
     out->units = units;
     out->length = length;
     return true;
+}
+
+static bool http_header_value_valid(MalVm *vm, MalValue value) {
+    if (mal_value_is_array_object(value)) {
+        MalArrayObject *array = mal_value_to_array_object(value);
+        for (u32 i = 0; i < mal_array_object_length(array); i++) {
+            MalValue element = mal_value_new_undefined();
+            MalRootSpan root;
+            mal_gc_root(&root, &element, 1);
+            bool valid = mal_vm_get_property(vm, value, mal_key_index(i), &element)
+                && http_header_value_valid(vm, element);
+            mal_gc_unroot(&root);
+            if (!valid) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (mal_value_is_undefined(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Invalid value for HTTP header");
+        return false;
+    }
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < mal_string_length(string); i++) {
+        c16 unit = units[i];
+        if (unit != '\t' && (unit < 0x20 || unit == 0x7f || unit > 0xff)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "Invalid character in HTTP header value");
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool http_header_value_bytes(
+    MalVm *vm, MalValue value, byte **out, usize *out_length) {
+    if (mal_value_is_undefined(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Invalid value for HTTP header");
+        return false;
+    }
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    usize length = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        if (unit != '\t' && (unit < 0x20 || unit == 0x7f || unit > 0xff)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               "Invalid character in HTTP header value");
+            return false;
+        }
+    }
+    if (length == SIZE_MAX) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    byte *bytes = malloc(length + 1);
+    if (bytes == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    for (usize i = 0; i < length; i++) bytes[i] = (byte) units[i];
+    bytes[length] = '\0';
+    *out = bytes;
+    *out_length = length;
+    return true;
+}
+
+static MalValue http_validate_header_name(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    MalNodeHttpResponseNameView name;
+    MalValue value = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!http_response_name_view(vm, value, &name)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue http_validate_header_value(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    MalNodeHttpResponseNameView name;
+    MalValue name_value = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!http_response_name_view(vm, name_value, &name)
+        || !http_header_value_valid(
+            vm, argc > 1 ? args[1] : mal_value_new_undefined())) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_undefined();
 }
 
 static char *http_response_name_materialize(
@@ -735,6 +914,14 @@ static MalValue http_response_set_header(
     }
     MalNodeHttpResponseNameView name;
     if (!http_response_name_view(vm, args[0], &name)) {
+        return mal_value_new_undefined();
+    }
+    if (!http_header_value_valid(vm, args[1])) {
+        return mal_value_new_undefined();
+    }
+    if (state->ending || state->ended) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                           "ServerResponse is not writable");
         return mal_value_new_undefined();
     }
     i64 index = http_response_header_view_index(state, &name);
@@ -944,27 +1131,10 @@ static MalValue http_response_write(
 }
 
 static const char *http_status_reason(int status) {
-    switch (status) {
-        case 200: return "OK";
-        case 201: return "Created";
-        case 202: return "Accepted";
-        case 204: return "No Content";
-        case 206: return "Partial Content";
-        case 301: return "Moved Permanently";
-        case 302: return "Found";
-        case 304: return "Not Modified";
-        case 400: return "Bad Request";
-        case 401: return "Unauthorized";
-        case 403: return "Forbidden";
-        case 404: return "Not Found";
-        case 405: return "Method Not Allowed";
-        case 412: return "Precondition Failed";
-        case 416: return "Range Not Satisfiable";
-        case 500: return "Internal Server Error";
-        case 501: return "Not Implemented";
-        case 503: return "Service Unavailable";
-        default: return "Unknown";
+    for (usize i = 0; i < countof(http_statuses); i++) {
+        if (http_statuses[i].code == status) return http_statuses[i].reason;
     }
+    return "unknown";
 }
 
 static bool http_string_equal_ci(MalValue value, const char *ascii) {
@@ -996,6 +1166,84 @@ static bool http_block_append(
     return true;
 }
 
+static bool http_serialize_header_line(
+    MalVm *vm, char **block, usize *length, usize *capacity,
+    const char *name, usize name_length, MalValue value) {
+    byte *bytes;
+    usize value_length;
+    if (!http_header_value_bytes(vm, value, &bytes, &value_length)) return false;
+    bool appended = http_block_append(block, length, capacity, name, name_length)
+        && http_block_append(block, length, capacity, ": ", 2)
+        && http_block_append(
+            block, length, capacity, (const char *) bytes, value_length)
+        && http_block_append(block, length, capacity, "\r\n", 2);
+    free(bytes);
+    if (!appended) mal_vm_throw_allocation_error(vm);
+    return appended;
+}
+
+static bool http_serialize_header(
+    MalVm *vm, char **block, usize *length, usize *capacity,
+    const char *name, usize name_length, MalValue value) {
+    if (!mal_value_is_array_object(value)) {
+        return http_serialize_header_line(
+            vm, block, length, capacity, name, name_length, value);
+    }
+    MalArrayObject *array = mal_value_to_array_object(value);
+    u32 count = mal_array_object_length(array);
+    if (count == 0) return true;
+    bool cookie = name_length == 6 && memcmp(name, "cookie", 6) == 0;
+    if (!cookie) {
+        for (u32 i = 0; i < count; i++) {
+            MalValue element = mal_value_new_undefined();
+            MalRootSpan root;
+            mal_gc_root(&root, &element, 1);
+            bool serialized = mal_vm_get_property(
+                    vm, value, mal_key_index(i), &element)
+                && http_serialize_header_line(
+                    vm, block, length, capacity, name, name_length, element);
+            mal_gc_unroot(&root);
+            if (!serialized) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (!http_block_append(block, length, capacity, name, name_length)
+        || !http_block_append(block, length, capacity, ": ", 2)) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    for (u32 i = 0; i < count; i++) {
+        MalValue element = mal_value_new_undefined();
+        MalRootSpan root;
+        mal_gc_root(&root, &element, 1);
+        byte *bytes;
+        usize value_length;
+        bool converted = mal_vm_get_property(
+                vm, value, mal_key_index(i), &element)
+            && http_header_value_bytes(vm, element, &bytes, &value_length);
+        mal_gc_unroot(&root);
+        if (!converted) {
+            return false;
+        }
+        bool appended = (i == 0
+                || http_block_append(block, length, capacity, "; ", 2))
+            && http_block_append(
+                block, length, capacity, (const char *) bytes, value_length);
+        free(bytes);
+        if (!appended) {
+            mal_vm_throw_allocation_error(vm);
+            return false;
+        }
+    }
+    if (!http_block_append(block, length, capacity, "\r\n", 2)) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    return true;
+}
+
 static bool http_response_serialize_headers(
     MalVm *vm, MalNodeHttpRequestState *state, char **out, usize *out_length) {
     char *block = nullptr;
@@ -1011,38 +1259,10 @@ static bool http_response_serialize_headers(
                 && memcmp(header->name, "transfer-encoding", 17) == 0)) {
             continue;
         }
-        MalString *string;
-        if (!mal_vm_to_string(vm, header->value, &string)) {
+        if (!http_serialize_header(
+                vm, &block, &length, &capacity, header->name,
+                header->name_len, header->value)) {
             free(block);
-            return false;
-        }
-        usize value_length;
-        byte *value = mal_string_to_utf8(string, &value_length);
-        if (value == nullptr) {
-            free(block);
-            mal_vm_throw_allocation_error(vm);
-            return false;
-        }
-        bool valid = true;
-        for (usize j = 0; j < value_length; j++) {
-            if (value[j] == '\r' || value[j] == '\n') valid = false;
-        }
-        bool appended = valid
-            && http_block_append(&block, &length, &capacity,
-                                 header->name, header->name_len)
-            && http_block_append(&block, &length, &capacity, ": ", 2)
-            && http_block_append(&block, &length, &capacity,
-                                 (const char *) value, value_length)
-            && http_block_append(&block, &length, &capacity, "\r\n", 2);
-        free(value);
-        if (!appended) {
-            free(block);
-            if (valid) {
-                mal_vm_throw_allocation_error(vm);
-            } else {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                                   "Invalid HTTP header value");
-            }
             return false;
         }
     }
@@ -1262,36 +1482,19 @@ static bool http_client_serialize_headers(
             || (name_len == 14 && memcmp(name, "content-length", 14) == 0)
             || (name_len == 10 && memcmp(name, "connection", 10) == 0)
             || (name_len == 17 && memcmp(name, "transfer-encoding", 17) == 0);
-        if (managed) {
-            free(name);
-            continue;
-        }
-        MalString *value_string;
-        if (!mal_vm_to_string(vm, roots[3], &value_string)) {
+        if (!http_header_value_valid(vm, roots[3])) {
             free(name);
             ok = false;
             break;
         }
-        usize value_len;
-        byte *value = mal_string_to_utf8(value_string, &value_len);
-        bool valid = value != nullptr;
-        for (usize j = 0; valid && j < value_len; j++) {
-            if (value[j] == '\r' || value[j] == '\n') valid = false;
+        if (managed) {
+            free(name);
+            continue;
         }
-        ok = valid
-            && http_block_append(&block, &length, &capacity, name, name_len)
-            && http_block_append(&block, &length, &capacity, ": ", 2)
-            && http_block_append(&block, &length, &capacity,
-                                 (const char *) value, value_len)
-            && http_block_append(&block, &length, &capacity, "\r\n", 2);
-        free(value);
+        ok = http_serialize_header(
+            vm, &block, &length, &capacity, name, name_len, roots[3]);
         free(name);
-        if (!ok) {
-            if (valid) mal_vm_throw_allocation_error(vm);
-            else mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                                    "Invalid HTTP header value");
-            break;
-        }
+        if (!ok) break;
     }
 done:
     mal_gc_unroot(&root);
@@ -1564,9 +1767,31 @@ static MalValue http_response_end(
             declared_content_length = (i64) number;
         }
     }
+    MalValue status_message_value;
+    if (!mal_vm_get_property(
+            vm, receiver,
+            mal_intrinsic_string_key(vm, (const byte *) "statusMessage"),
+            &status_message_value)) {
+        state->ending = false;
+        return mal_value_new_undefined();
+    }
+    byte *status_message = nullptr;
+    const char *reason = http_status_reason((int) status_number);
+    if (!mal_value_is_undefined(status_message_value)) {
+        usize status_message_length;
+        if (!http_header_value_bytes(
+                vm, status_message_value, &status_message,
+                &status_message_length)) {
+            state->ending = false;
+            return mal_value_new_undefined();
+        }
+        (void) status_message_length;
+        reason = (const char *) status_message;
+    }
     char *headers;
     usize headers_length;
     if (!http_response_serialize_headers(vm, state, &headers, &headers_length)) {
+        free(status_message);
         state->ending = false;
         return mal_value_new_undefined();
     }
@@ -1586,11 +1811,12 @@ static MalValue http_response_end(
     mal_http_conn_on_response_complete(
         state->conn, http_response_complete, state);
     mal_http_conn_respond_framed(
-        state->conn, (int) status_number, http_status_reason((int) status_number),
+        state->conn, (int) status_number, reason,
         headers == nullptr ? "" : headers, headers_length,
         (const char *) state->response_body,
         suppress_body ? 0 : state->response_body_len, declared_content_length);
     state->conn = nullptr;
+    free(status_message);
     free(headers);
     return receiver;
 }
@@ -1620,6 +1846,81 @@ static void http_scan_roots(MalVm *vm, void *data) {
     }
 }
 
+static bool http_incoming_singleton_header(const char *name, usize length) {
+    static const char *singletons[] = {
+        "age", "authorization", "content-length", "content-type", "etag",
+        "expires", "from", "host", "if-modified-since", "if-unmodified-since",
+        "last-modified", "location", "max-forwards", "proxy-authorization",
+        "referer", "retry-after", "server", "user-agent",
+    };
+    for (usize i = 0; i < countof(singletons); i++) {
+        if (strlen(singletons[i]) == length
+            && memcmp(singletons[i], name, length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool http_incoming_header_add(
+    MalVm *vm, MalValue headers, MalValue lower_name,
+    const char *lower_bytes, usize name_length, MalValue value,
+    MalValue *scratch) {
+    MalObject *object = mal_value_to_object(headers);
+    MalKey key = mal_key_from_value(lower_name);
+    MalPropertyLookup existing = mal_object_get_own(object, key);
+    bool set_cookie = name_length == 10
+        && memcmp(lower_bytes, "set-cookie", 10) == 0;
+    if (set_cookie) {
+        if (!existing.present || !mal_value_is_array_object(existing.desc.value)) {
+            *scratch = mal_value_from_array_object(
+                mal_intrinsic_new_dense_array(vm, 0));
+            mal_object_set(object, key, *scratch);
+        } else {
+            *scratch = existing.desc.value;
+        }
+        MalArrayObject *cookies = mal_value_to_array_object(*scratch);
+        mal_array_object_store(
+            cookies, mal_key_index((i32) mal_array_object_length(cookies)), value);
+        return true;
+    }
+    if (!existing.present) {
+        mal_object_set(object, key, value);
+        return true;
+    }
+    if (http_incoming_singleton_header(lower_bytes, name_length)) return true;
+
+    const char *separator = name_length == 6
+            && memcmp(lower_bytes, "cookie", 6) == 0
+        ? "; " : ", ";
+    MalString *previous = mal_value_to_string(existing.desc.value);
+    MalString *next = mal_value_to_string(value);
+    usize previous_length = mal_string_length(previous);
+    usize value_length = mal_string_length(next);
+    if (value_length > SIZE_MAX - 2
+        || previous_length > SIZE_MAX - value_length - 2) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    usize joined_length = previous_length + 2 + value_length;
+    char *joined = malloc(joined_length == 0 ? 1 : joined_length);
+    if (joined == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    const c16 *previous_units = mal_string_code_units(previous);
+    const c16 *value_units = mal_string_code_units(next);
+    for (usize i = 0; i < previous_length; i++) joined[i] = (char) previous_units[i];
+    memcpy(joined + previous_length, separator, 2);
+    for (usize i = 0; i < value_length; i++) {
+        joined[previous_length + 2 + i] = (char) value_units[i];
+    }
+    *scratch = http_ascii_value(vm, joined, joined_length);
+    free(joined);
+    mal_object_set(object, key, *scratch);
+    return true;
+}
+
 static bool http_request_headers(
     MalVm *vm, MalNodeHttpRequestState *state,
     MalValue *headers_out, MalValue *raw_headers_out) {
@@ -1638,7 +1939,12 @@ static bool http_request_headers(
         MalNodeHttpCopiedHeader *header = &state->headers[i];
         roots[2] = http_ascii_value(vm, header->lower_name, header->name_len);
         roots[3] = http_ascii_value(vm, header->value, header->value_len);
-        mal_object_set(mal_value_to_object(roots[0]), mal_key_from_value(roots[2]), roots[3]);
+        if (!http_incoming_header_add(
+                vm, roots[0], roots[2], header->lower_name, header->name_len,
+                roots[3], &roots[4])) {
+            mal_gc_unroot(&root);
+            return false;
+        }
         roots[4] = http_ascii_value(vm, header->name, header->name_len);
         mal_array_object_store(
             raw,
@@ -1864,29 +2170,14 @@ static bool http_client_response_headers(
         }
         roots[2] = http_ascii_value(vm, lower, header->name_len);
         roots[3] = http_ascii_value(vm, header->value, header->value_len);
-        bool set_cookie = header->name_len == 10
-            && memcmp(lower, "set-cookie", 10) == 0;
-        free(lower);
-        if (set_cookie) {
-            MalPropertyLookup existing = mal_object_get_own(
-                mal_value_to_object(roots[0]), mal_key_from_value(roots[2]));
-            if (!existing.present || !mal_value_is_array_object(existing.desc.value)) {
-                roots[4] = mal_value_from_array_object(
-                    mal_intrinsic_new_dense_array(vm, 0));
-                mal_object_set(mal_value_to_object(roots[0]),
-                               mal_key_from_value(roots[2]), roots[4]);
-            } else {
-                roots[4] = existing.desc.value;
-            }
-            MalArrayObject *cookies = mal_value_to_array_object(roots[4]);
-            mal_array_object_store(
-                cookies,
-                mal_key_index((i32) mal_array_object_length(cookies)),
-                roots[3]);
-        } else {
-            mal_object_set(mal_value_to_object(roots[0]),
-                           mal_key_from_value(roots[2]), roots[3]);
+        if (!http_incoming_header_add(
+                vm, roots[0], roots[2], lower, header->name_len, roots[3],
+                &roots[4])) {
+            free(lower);
+            mal_gc_unroot(&root);
+            return false;
         }
+        free(lower);
         roots[4] = http_ascii_value(vm, header->name, header->name_len);
         mal_array_object_store(
             raw,
@@ -1977,7 +2268,9 @@ static void http_client_dispatch(
     http_define_own(vm, roots[3], "readable", mal_value_new_boolean(true));
     http_define_own(vm, roots[3], "writable", mal_value_new_boolean(false));
     http_define_own(vm, roots[0], "statusCode", mal_value_from_i32(result->status));
-    http_define_own(vm, roots[0], "statusMessage", mal_value_new_undefined());
+    http_define_own(vm, roots[0], "statusMessage",
+        http_ascii_value(
+            vm, result->status_message, result->status_message_len));
     http_define_own(vm, roots[0], "headers", roots[1]);
     http_define_own(vm, roots[0], "rawHeaders", roots[2]);
     http_define_own(vm, roots[0], "httpVersion",
@@ -2751,6 +3044,20 @@ static MalValue http_methods(MalVm *vm) {
     return value;
 }
 
+static MalValue http_status_codes(MalVm *vm) {
+    MalValue value = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    MalObject *object = mal_value_to_object(value);
+    for (usize i = 0; i < countof(http_statuses); i++) {
+        MalValue reason = mal_value_from_string(mal_intrinsic_ascii(
+            vm, (const byte *) http_statuses[i].reason));
+        mal_object_set(object, mal_key_index(http_statuses[i].code), reason);
+    }
+    mal_gc_unroot(&root);
+    return value;
+}
+
 static void http_install_exports(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module) {
     for (i32 i = 0; i < count; i++) {
@@ -2778,7 +3085,7 @@ void mal_host_install_node_http(
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return;
     }
-    MalValue roots[13] = {
+    MalValue roots[16] = {
         mal_value_from_object(mal_intrinsic_new_object(vm)),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
@@ -2786,6 +3093,8 @@ void mal_host_install_node_http(
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -2885,11 +3194,33 @@ void mal_host_install_node_http(
             http_get));
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
                               (const byte *) "get", roots[12], HTTP_VISIBLE);
+    roots[13] = http_status_codes(vm);
+    roots[14] = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "validateHeaderName"), 1,
+            http_validate_header_name));
+    mal_intrinsic_define_data(
+        vm, mal_value_to_object(roots[0]), (const byte *) "validateHeaderName",
+        roots[14], HTTP_VISIBLE);
+    roots[15] = mal_value_from_native_function_object(
+        mal_native_function_object_new_arity(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "validateHeaderValue"), 2,
+            http_validate_header_value));
+    mal_intrinsic_define_data(
+        vm, mal_value_to_object(roots[0]), (const byte *) "validateHeaderValue",
+        roots[15], HTTP_VISIBLE);
 
     static const char *names[] = {
-        "METHODS", "IncomingMessage", "ServerResponse", "Server", "ClientRequest",
+        "METHODS", "STATUS_CODES", "IncomingMessage", "ServerResponse", "Server",
+        "ClientRequest",
     };
-    MalValue values[] = {roots[8], roots[3], roots[4], roots[6], roots[10]};
+    MalValue values[] = {
+        roots[8], roots[13], roots[3], roots[4], roots[6], roots[10],
+    };
     for (usize i = 0; i < countof(names); i++) {
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
                                   (const byte *) names[i], values[i], HTTP_VISIBLE);

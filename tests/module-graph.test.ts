@@ -559,6 +559,7 @@ test("canonicalizes bare and node: HTTP specifiers to one host module", () => {
 	expect(graph.modules.get("node:http")?.host).toMatchObject({
 		named: [
 			"METHODS",
+			"STATUS_CODES",
 			"IncomingMessage",
 			"ServerResponse",
 			"Server",
@@ -566,6 +567,8 @@ test("canonicalizes bare and node: HTTP specifiers to one host module", () => {
 			"createServer",
 			"get",
 			"request",
+			"validateHeaderName",
+			"validateHeaderValue",
 		],
 		hasDefault: true,
 	});

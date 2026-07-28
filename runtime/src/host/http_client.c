@@ -46,6 +46,7 @@ void mal_http_client_result_free(void *data) {
         free(result->headers[i].name);
         free(result->headers[i].value);
     }
+    free(result->status_message);
     free(result->body);
     free(result->error);
     free(result);
@@ -142,6 +143,16 @@ static bool client_parse_head(
     }
     result->status = (bytes[9] - '0') * 100 + (bytes[10] - '0') * 10
         + (bytes[11] - '0');
+    if (line_end > bytes + 12) {
+        if (bytes[12] != ' ') return false;
+        result->status_message_len = (usize) (line_end - (bytes + 13));
+        result->status_message = client_copy(
+            bytes + 13, result->status_message_len);
+        if (result->status_message == nullptr) return false;
+    } else {
+        result->status_message = client_copy("", 0);
+        if (result->status_message == nullptr) return false;
+    }
 
     const char *cursor = line_end + 2;
     const char *head_end = bytes + header_length - 2;

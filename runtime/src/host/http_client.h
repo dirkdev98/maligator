@@ -15,6 +15,8 @@ typedef struct MalHttpClientHeader {
 typedef struct MalHttpClientResult {
     int status;
     int minor_version;
+    char *status_message;
+    usize status_message_len;
     MalHttpClientHeader headers[64];
     usize header_count;
     byte *body;

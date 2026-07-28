@@ -20,6 +20,11 @@ try {
 const checks = [
 	http === canonical,
 	http.METHODS.join(",") === expectedMethods,
+	http.STATUS_CODES[103] === "Early Hints",
+	http.STATUS_CODES[425] === "Too Early",
+	http.STATUS_CODES[511] === "Network Authentication Required",
+	http.validateHeaderName("x-valid") === undefined,
+	http.validateHeaderValue("x-valid", "value") === undefined,
 	Object.getPrototypeOf(http.IncomingMessage.prototype) === Stream.Readable.prototype,
 	Object.getPrototypeOf(http.ServerResponse.prototype) === Stream.prototype,
 	new http.IncomingMessage() instanceof Stream.Readable,

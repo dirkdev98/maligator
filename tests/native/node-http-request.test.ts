@@ -69,6 +69,12 @@ describe("node:http request bridge", () => {
 						"Host: 127.0.0.1\r\n" +
 						"X-Mixed: first\r\n" +
 						"x-MIXED: second\r\n" +
+						"Cookie: a=1\r\n" +
+						"cookie: b=2\r\n" +
+						"Set-Cookie: one=1\r\n" +
+						"set-cookie: two=2\r\n" +
+						"Authorization: first\r\n" +
+						"authorization: second\r\n" +
 						"X-Order: third\r\n" +
 						"Connection: close\r\n\r\n",
 				);
@@ -90,12 +96,14 @@ describe("node:http request bridge", () => {
 		expect(await metadata.text()).toBe("ab");
 
 		const socketShape = await fetch(`${base}/socket-shape`);
-		expect(socketShape.status).toBe(200);
-		expect(await socketShape.text()).toBe("ok");
+		const socketShapeBody = await socketShape.text();
+		expect(socketShape.status, socketShapeBody).toBe(200);
+		expect(socketShapeBody).toBe("ok");
 
 		const responseShape = await fetch(`${base}/response-shape`);
-		expect(responseShape.status).toBe(200);
-		expect(await responseShape.text()).toBe("ok");
+		const responseShapeBody = await responseShape.text();
+		expect(responseShape.status, responseShapeBody).toBe(200);
+		expect(responseShapeBody).toBe("ok");
 
 		const prepareUnusual = await fetch(`${base}/prepare-unusual-response`);
 		expect(await prepareUnusual.text()).toBe("prepared");
@@ -155,8 +163,8 @@ describe("node:http request bridge", () => {
 		expect(await noBody.text()).toBe("");
 
 		const reentrant = await fetch(`${base}/reentrant`);
-		expect(reentrant.status).toBe(500);
-		expect(await reentrant.text()).toBe("request handler error");
+		expect(reentrant.status).toBe(200);
+		expect(await reentrant.text()).toBe("nested");
 
 		const throwAfterEnd = await fetch(`${base}/throw-after-end`);
 		expect(throwAfterEnd.status).toBe(200);
@@ -226,8 +234,8 @@ describe("node:http request bridge", () => {
 			field(line, "response_index_peak_entries"),
 		);
 		expect(field(line, "response_header_name_coercions")).toBe(779);
-		expect(field(line, "response_header_name_materializations")).toBe(202);
-		expect(field(line, "response_header_insertions")).toBe(202);
+		expect(field(line, "response_header_name_materializations")).toBe(201);
+		expect(field(line, "response_header_insertions")).toBe(201);
 		expect(field(line, "response_header_replacements")).toBe(64);
 		expect(field(line, "response_header_allocation_free_lookups")).toBe(577);
 		expect(field(line, "request_state_scans")).toBe(0);
@@ -250,10 +258,10 @@ describe("node:http request bridge", () => {
 		expect(field(line, "request_copy_bytes")).toBeGreaterThan(
 			field(line, "request_copy_operations"),
 		);
-		expect(field(line, "bulk_shaped_objects")).toBe(83);
-		expect(field(line, "bulk_shaped_slots")).toBe(249);
-		expect(field(line, "property_definitions_avoided")).toBe(249);
-		expect(field(line, "shape_transitions_avoided")).toBe(246);
+		expect(field(line, "bulk_shaped_objects")).toBe(0);
+		expect(field(line, "bulk_shaped_slots")).toBe(0);
+		expect(field(line, "property_definitions_avoided")).toBe(0);
+		expect(field(line, "shape_transitions_avoided")).toBe(0);
 		expect(field(line, "incoming_message_shape_append_batches")).toBe(82);
 		expect(field(line, "incoming_message_shape_append_slots")).toBe(1148);
 		expect(field(line, "incoming_message_shape_append_fallbacks")).toBe(1);

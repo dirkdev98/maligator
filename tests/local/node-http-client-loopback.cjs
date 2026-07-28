@@ -36,10 +36,18 @@ const server = http.createServer((request, response) => {
 		if (request.url === "/echo?value=1") {
 			if (request.method !== "POST") fail("method");
 			if (request.headers["x-loopback"] !== "yes") fail("request header");
+			if (request.headers["x-request-dup"] !== "first, second") {
+				fail("duplicate request header");
+			}
+			if (request.headers.cookie !== "request=one; second=two") {
+				fail("request cookie header");
+			}
 			if (body !== "abcdef") fail("request body");
-			response.statusCode = 202;
+			response.statusCode = 425;
 			response.setHeader("Content-Type", "text/plain");
-			response.setHeader("Set-Cookie", "loopback=yes; HttpOnly");
+			response.setHeader("X-Response-Dup", ["first", "second"]);
+			response.setHeader("Cookie", ["response=one", "second=two"]);
+			response.setHeader("Set-Cookie", ["loopback=yes; HttpOnly", "second=yes"]);
 			response.end("received:" + body);
 			return;
 		}
@@ -58,6 +66,7 @@ const server = http.createServer((request, response) => {
 			return;
 		}
 		if (request.url === "/get") {
+			response.statusMessage = "Custom Get";
 			response.end("get-auto-end");
 			return;
 		}
@@ -84,16 +93,47 @@ server.listen(0, "127.0.0.1", () => {
 		() => http.request({ hostname: "example.com", port }),
 		/hostname/,
 	);
+	expectThrow(
+		"header name",
+		() => http.request({ hostname: "localhost", port, headers: { "bad name": "x" } }),
+		/header/i,
+	);
+	expectThrow(
+		"header value",
+		() => http.request({ hostname: "localhost", port, headers: { x: "bad\nvalue" } }),
+		/header/i,
+	);
+	expectThrow(
+		"undefined header value",
+		() => http.request({ hostname: "localhost", port, headers: { x: undefined } }),
+		/header/i,
+	);
 
 	const request = http.request(
 		`http://localhost:${port}/echo?value=1`,
-		{ method: "post", headers: { "X-Loopback": "yes" } },
+		{
+			method: "post",
+			headers: {
+				"X-Loopback": "yes",
+				"X-Request-Dup": ["first", "second"],
+				Cookie: ["request=one", "second=two"],
+			},
+		},
 		(response) => {
+			if (response.statusMessage !== "Too Early") fail("status message");
 			if (response.headers["content-type"] !== "text/plain") fail("response header");
-			if (response.headers["set-cookie"][0] !== "loopback=yes; HttpOnly") {
+			if (response.headers["x-response-dup"] !== "first, second") {
+				fail("duplicate response header");
+			}
+			if (response.headers.cookie !== "response=one; second=two") {
+				fail("response cookie header");
+			}
+			if (
+				response.headers["set-cookie"].join("|") !== "loopback=yes; HttpOnly|second=yes"
+			) {
 				fail("set-cookie");
 			}
-			read(response, 202, "received:abcdef", runUrlObject);
+			read(response, 425, "received:abcdef", runUrlObject);
 		},
 	);
 	request.on("error", (error) => fail("unexpected error: " + error.message));
@@ -148,12 +188,14 @@ server.listen(0, "127.0.0.1", () => {
 		const outgoing = http.get(
 			new URL(`https://example.com:${port}/ignored`),
 			{ protocol: "http:", hostname: "127.0.0.1", path: "/get" },
-			(response) =>
+			(response) => {
+				if (response.statusMessage !== "Custom Get") fail("custom status message");
 				read(response, 200, "get-auto-end", () => {
 					if (endCalls !== 1) fail("get end count");
 					http.ClientRequest.prototype.end = originalEnd;
 					closeServer();
-				}),
+				});
+			},
 		);
 		if (!(outgoing instanceof http.ClientRequest)) fail("get return");
 	}

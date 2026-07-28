@@ -204,6 +204,7 @@ const HTTP: HostModuleSpec = {
 	id: "node:http",
 	named: [
 		"METHODS",
+		"STATUS_CODES",
 		"IncomingMessage",
 		"ServerResponse",
 		"Server",
@@ -211,6 +212,8 @@ const HTTP: HostModuleSpec = {
 		"createServer",
 		"get",
 		"request",
+		"validateHeaderName",
+		"validateHeaderValue",
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:http"),
