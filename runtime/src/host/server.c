@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include "host.h"
@@ -18,6 +19,7 @@
 #define MAL_HTTP_READ_CREDIT_MAX (256 * 1024)
 #define MAL_HTTP_WRITE_TURN (64 * 1024)
 #define MAL_HTTP_WRITE_MAX (256 * 1024)
+#define MAL_HTTP_WRITE_IOV 16
 
 MalHttpHandler mal_http_handler = nullptr;
 
@@ -837,22 +839,9 @@ static void conn_write_cb(void *data) {
     usize turn = 0;
     while (c->write_head != nullptr && turn < MAL_HTTP_WRITE_TURN) {
         MalHttpWireWrite *write = c->write_head;
-        byte *bytes;
-        usize available;
-        bool data = false;
-        bool plain = false;
-        if (write->prefix_offset < write->prefix_length) {
-            bytes = write->prefix + write->prefix_offset;
-            available = write->prefix_length - write->prefix_offset;
-        } else if (write->offset < write->length) {
-            bytes = write->bytes + write->offset;
-            available = write->length - write->offset;
-            data = true;
-            plain = write->plain_length > 0;
-        } else if (write->suffix_offset < write->suffix_length) {
-            bytes = write->suffix + write->suffix_offset;
-            available = write->suffix_length - write->suffix_offset;
-        } else {
+        if (write->prefix_offset == write->prefix_length
+            && write->offset == write->length
+            && write->suffix_offset == write->suffix_length) {
             c->write_head = write->next;
             if (c->write_head == nullptr) c->write_tail = nullptr;
             bool final = write->final;
@@ -910,19 +899,56 @@ static void conn_write_cb(void *data) {
             }
             return;
         }
-        usize allowed = MAL_HTTP_WRITE_TURN - turn;
-        if (available > allowed) available = allowed;
-        ssize_t n = mal_net_write(c->fd, bytes, available);
+
+        struct iovec iov[MAL_HTTP_WRITE_IOV];
+        int iov_count = 0;
+        usize available = MAL_HTTP_WRITE_TURN - turn;
+        for (MalHttpWireWrite *cursor = write;
+             cursor != nullptr && available > 0 && iov_count < MAL_HTTP_WRITE_IOV;
+             cursor = cursor->next) {
+            byte *parts[] = {
+                cursor->prefix + cursor->prefix_offset,
+                cursor->bytes == nullptr ? nullptr : cursor->bytes + cursor->offset,
+                cursor->suffix + cursor->suffix_offset,
+            };
+            usize lengths[] = {
+                cursor->prefix_length - cursor->prefix_offset,
+                cursor->length - cursor->offset,
+                cursor->suffix_length - cursor->suffix_offset,
+            };
+            for (int part = 0;
+                 part < 3 && available > 0 && iov_count < MAL_HTTP_WRITE_IOV;
+                 part++) {
+                usize length = lengths[part] > available ? available : lengths[part];
+                if (length == 0) continue;
+                iov[iov_count++] = (struct iovec) {
+                    .iov_base = parts[part],
+                    .iov_len = length,
+                };
+                available -= length;
+            }
+        }
+        ssize_t n = mal_net_writev(c->fd, iov, iov_count);
         if (n > 0) {
             usize count = (usize) n;
             turn += count;
-            if (write->prefix_offset < write->prefix_length) {
-                write->prefix_offset += count;
-            } else if (data) {
-                write->offset += count;
-                if (plain) c->queued_plain_bytes -= count;
-            } else {
-                write->suffix_offset += count;
+            for (MalHttpWireWrite *cursor = write;
+                 cursor != nullptr && count > 0; cursor = cursor->next) {
+                usize prefix = cursor->prefix_length - cursor->prefix_offset;
+                usize consumed = prefix > count ? count : prefix;
+                cursor->prefix_offset += consumed;
+                count -= consumed;
+
+                usize body = cursor->length - cursor->offset;
+                consumed = body > count ? count : body;
+                cursor->offset += consumed;
+                if (cursor->plain_length > 0) c->queued_plain_bytes -= consumed;
+                count -= consumed;
+
+                usize suffix = cursor->suffix_length - cursor->suffix_offset;
+                consumed = suffix > count ? count : suffix;
+                cursor->suffix_offset += consumed;
+                count -= consumed;
             }
             continue;
         }

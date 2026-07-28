@@ -3,6 +3,7 @@
 #include "./defaults.h"
 
 #include <sys/socket.h>
+#include <sys/uio.h>
 
 /*
  * Non-blocking TCP socket helpers (host layer). Thin wrappers over POSIX sockets
@@ -50,3 +51,4 @@ void mal_net_close(int fd);
 
 /* Socket write that suppresses SIGPIPE when the peer has already closed. */
 ssize_t mal_net_write(int fd, const void *bytes, usize length);
+ssize_t mal_net_writev(int fd, const struct iovec *iov, int iov_count);

@@ -184,3 +184,15 @@ ssize_t mal_net_write(int fd, const void *bytes, usize length) {
     return send(fd, bytes, length, 0);
 #endif
 }
+
+ssize_t mal_net_writev(int fd, const struct iovec *iov, int iov_count) {
+    struct msghdr message = {
+        .msg_iov = (struct iovec *) iov,
+        .msg_iovlen = (usize) iov_count,
+    };
+#if defined(MSG_NOSIGNAL)
+    return sendmsg(fd, &message, MSG_NOSIGNAL);
+#else
+    return sendmsg(fd, &message, 0);
+#endif
+}
