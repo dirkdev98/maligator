@@ -1,3 +1,4 @@
+import net from "node:net";
 import postgres from "postgres";
 
 /* eslint-disable no-console, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- Native compatibility fixture values come from postgres.js. */
@@ -148,6 +149,50 @@ try {
 		await sessionSql.end({ timeout: 1 });
 	}
 	console.log("POSTGRES TYPES session-attrs");
+
+	let socketCalls = 0;
+	let debugCalls = 0;
+	let parameterCalls = 0;
+	let noticeMessage = "";
+	const hookedSql = postgres({
+		...common,
+		debug() {
+			debugCalls++;
+		},
+		fetch_types: false,
+		onnotice(notice) {
+			noticeMessage = notice.message;
+		},
+		onparameter() {
+			parameterCalls++;
+		},
+		socket({ host, port }) {
+			socketCalls++;
+			return new Promise((resolve, reject) => {
+				const socket = net.createConnection(port[0], host[0]);
+				socket.once("connect", () => {
+					resolve(socket);
+				});
+				socket.once("error", reject);
+			});
+		},
+	});
+	try {
+		await hookedSql`do $$ begin raise notice 'maligator-notice'; end $$`;
+		const [hooked] = await hookedSql`select 42 as value`;
+		check(
+			hooked.value === 42 &&
+				socketCalls === 1 &&
+				debugCalls >= 2 &&
+				parameterCalls > 0 &&
+				noticeMessage === "maligator-notice" &&
+				typeof hookedSql.parameters.server_version === "string",
+			"custom socket and lifecycle hooks",
+		);
+	} finally {
+		await hookedSql.end({ timeout: 1 });
+	}
+	console.log("POSTGRES TYPES hooks-custom-socket");
 
 	const [{ oid }] = await sql`select lo_create(0) as oid`;
 	try {

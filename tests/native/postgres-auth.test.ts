@@ -67,6 +67,12 @@ describe("postgres.js authentication", () => {
 		}
 	});
 
+	it("resolves synchronous and asynchronous password providers", async () => {
+		await check("cleartext", { PGPASSWORD_DYNAMIC: "sync" });
+		await check("md5", { PGPASSWORD_DYNAMIC: "async" });
+		await check("scram", { PGPASSWORD_DYNAMIC: "async" });
+	});
+
 	it("keeps SCRAM state rooted under GC stress", async () => {
 		await check("scram", STRESS_ENV);
 	});

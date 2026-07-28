@@ -192,6 +192,13 @@ staged acceptance rather than a package-specific shim:
        `target_session_attrs`, forced teardown, and large-object direct/stream APIs.
        Node Readables now schedule one bounded option-provided `_read` at a time;
        Date parsing accepts Node's PostgreSQL-style timestamp form.
+10. [x] Accept synchronous/asynchronous password providers, startup parameter,
+        notice and debug hooks, the exposed parameter map, and custom connected
+        sockets through the unchanged driver.
+11. [ ] Exercise logical replication subscriptions, prepared transactions,
+        server-negotiated TLS, and primary/standby selection against a dedicated
+        PostgreSQL topology; the local service currently has `wal_level=replica`,
+        `max_prepared_transactions=0`, and `ssl=off`.
 
 Raw TCP/TLS are the architectural gates. Filesystem aliases or mocked database
 responses must not substitute for the driver's real wire protocol.
