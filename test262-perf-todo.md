@@ -1,64 +1,35 @@
 # Test262 performance roadmap
 
-The 2026-07-14 full-suite profile showed compiled-mode C compilation dominating
-wall time. It predates later shared-helper emission, so capture a new cold baseline
-before re-ranking work. Artifact manifests already persist per-entry function,
-instruction, and opcode statistics.
+Capture a new cold full-suite baseline before re-ranking generated-code work; the
+previous profile predates shared-helper emission. Artifact manifests already retain
+per-entry code statistics, and strict and sloppy runs retain separate reports.
+Recoverable allocation failure is owned by the [GC roadmap](docs/roadmaps/gc.md).
 
-## P0 - Safety and bounded resources
+## Active measurement
 
-The maximum string length and checked string-builder/encoder arithmetic are
-implemented. Impossible lengths are catchable and the original replacement-growth
-reproducer passes.
+- [ ] Capture and analyze a current cold compiled-suite profile without updating the
+      committed verdict baseline.
 
-1. [ ] Design recoverable allocation failure for CELL, RAW, LOS, and direct native
-       allocations. Add a preallocated/non-allocating emergency exception and
-       deterministic fault-injection tests that prove OOM is catchable without GC
-       corruption or recursive allocation. The nullable CELL foundation, emergency
-       exception, and ordinary-object/materialization fault injection are complete;
-       remaining constructors plus RAW, LOS, GC-internal, and direct allocations are not.
+## Queued generated-code work
 
-## P1 - Generated code reduction
+- [ ] Evaluate resumable static call tables; add them only if they materially reduce
+      generated C or object size.
+- [ ] Extend existing shared-helper definition merging to other byte-identical
+      immutable bodies, constants, and debug tables without merging JavaScript
+      identity or mutable state.
+- [ ] Measure lower literal-template thresholds on medium definitions and use a cost
+      model rather than fixture-specific rules.
 
-2. [x] Bulk-lower private names and initializer-free instance fields while preserving identity,
-       declaration order, initializer effects, abrupt completion, and brand checks.
-3. [x] Bulk-lower contiguous uninitialized global declarations while preserving
-       declaration-instantiation checks and global observability.
-4. [x] Add conservative Number/Boolean/null/undefined constant folding and
-       dead-branch cleanup with exact NaN, negative-zero, overflow, and throwing
-       semantics. Keep BigInt, strings, exponentiation, and resumable functions on
-       their runtime paths until their host/resume contracts are explicit.
-5. [x] Add tagged immediate and static-key operands to avoid standalone constant
-       creation for calls, property operations, and construction.
-6. [ ] Evaluate resumable static call tables only after item 5 is measured; add them
-       only if they materially reduce generated C/object size further.
-7. [ ] Intern byte-identical immutable definitions, function bodies, constants, and
-       debug tables without merging JavaScript identity or mutable state.
-8. [ ] Measure a lower literal-template threshold and static property opcodes on
-       medium definitions; use a cost model rather than fixture-specific rules.
+## Queued profiling and scheduling
 
-## P2 - Measurement and scheduling
+- [ ] Use existing worker-count controls and batch reports to measure C compile/link
+      contention; limit concurrent links only if attribution confirms contention.
+- [ ] Add bounded targeted profiling flags, valid only with `--filter` or
+      `--manifest`, for timeout, RSS, CPU, GC statistics, and phase markers. Keep the
+      normal watchdog and an outer kill deadline.
 
-9. [x] Give C batches stable IDs and persist member paths, generated-C bytes,
-       logical/physical code totals, object bytes, cache state, worker, and phase
-       timings in each variant report.
-10. [ ] Preserve both strict and sloppy reports across an unfiltered dual run.
-        Acceptance: both report files remain available with their pass summaries.
-11. [ ] After item 9, measure C compile/link contention at controlled worker counts
-        and limit concurrent links only if attribution confirms contention.
-12. [ ] Add bounded targeted profiling flags, valid only with `--filter` or
-        `--manifest`, for timeout, RSS, CPU, GC statistics, and phase markers. Keep the
-        normal watchdog and an outer kill deadline.
+## Triggered work
 
-## P3 - Compiler cleanup
-
-13. [x] Avoid constructing semantic and IR debug renderings when `MAL_DEBUG` is
-        disabled; gate construction rather than only the logger call.
-14. [x] Replace compiled C emission's per-instruction handler scan with an interval
-        cursor/index. Preserve innermost-handler selection and add a generated
-        many-handler regression.
-
-## Revisit trigger
-
-- Exact timezone-offset caching measured at about 2% of the DST shard. Reconsider
-  only if Date profiling makes offset lookup a top-five self-time contributor.
+- Reconsider exact timezone-offset caching only if Date profiling makes offset
+  lookup a top-five self-time contributor; the previous measurement was about 2% of
+  the DST shard.

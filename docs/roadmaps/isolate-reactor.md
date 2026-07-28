@@ -1,9 +1,10 @@
 # Isolate, reactor, and host roadmap
 
-The engine/host/runtime split, completion reactor, timers, numeric IPv4 TCP client,
-HTTP server, WinterTC object surface, URL support, fibers, and reduction-budget
-scheduler substrate are implemented. Current native tests under `tests/native/`
-are the acceptance entry points.
+The engine/host/runtime split, completion reactor, timers, bounded DNS/TCP transport,
+incremental llhttp codec, streaming HTTP server/client paths, optional Rustls layer,
+partial WinterTC object surface, URL support, fibers, and reduction-budget scheduler
+substrate are implemented. Native tests under `tests/native/` and the curated
+server-main corpus under `tests/wpt/` are the current acceptance entry points.
 
 ## Host architecture checkpoint
 
@@ -12,11 +13,9 @@ The accepted contract is
 Its ownership, streaming, cancellation, event-loop, build, and verification gates
 are normative for host work.
 
-- [x] H0: fix the architecture: no Hyper dependency, llhttp HTTP/1, C-owned
-      sockets/DNS, optional Rustls FFI, neutral streaming APIs, raw headers, and
-      exactly one host task per runtime turn.
-- [ ] H1: implement the neutral task/stream substrate, exactly-once terminal state,
-      bounded DNS/IPv6/Happy Eyeballs, pumped turns, and runtime-owned timer state.
+## Active host work
+
+- [ ] Finish H1 with Happy Eyeballs, pumped turns, and runtime-owned timer state.
       Generation-checked operation handles, owned FIFO tasks, exactly-once terminal
       transitions, checked readiness registration, and independent read/write fd
       interests are implemented. The thread-safe completion queue, pollable wake
@@ -24,40 +23,31 @@ are normative for host work.
       with numeric-literal bypass, owned ordered IPv4/IPv6 results, queue saturation,
       cancellation, shutdown joining, and reactor-side completion ownership tests.
       Happy Eyeballs connection racing, bounded teardown for a system resolver stuck
-      inside `getaddrinfo`, one-turn dispatch, and timer ownership remain.
-- [ ] H2: replace the buffered project parser/server with the bounded llhttp HTTP/1
-      codec, raw-header transport, streaming server, and parser fuzzing.
-- [ ] H3: add the pooled outbound HTTP/1 client and build WinterTC and Node adapters
-      over the same host API, with no host auto-decompression.
-- [ ] H4: add optional Rustls through the existing Rust static library and pass the
-      production sanitizer, fuzz, leak, symbol/size, and benchmark gates.
+      inside `getaddrinfo`, a public one-turn pump, embedder access to the existing
+      wake source, and timer ownership remain.
+- [ ] Finish H2 hard limits, pipelining, and parser fuzzing around the implemented
+      shared llhttp codec and streaming server.
+- [ ] Finish H3 connection pooling and global WinterTC `fetch()` over the implemented
+      neutral streaming HTTP/1 client and Node adapter, with no host
+      auto-decompression.
+- [ ] Finish H4 production sanitizer, fuzz, leak, symbol/size, and benchmark gates for
+      the implemented optional Rustls layer.
 
-## Runtime surface
+WinterTC runtime semantics are owned by the
+[server-profile roadmap](wintertc.md). Node API semantics are owned by the
+[Node compatibility roadmap](node-compat.md); both depend on H1-H4 here.
 
-- [ ] Finish the small WinterTC residuals: `AbortSignal.any`, DOMException,
-      multi-value `Set-Cookie`, live `url.searchParams`, `request.json()` parse-error
-      rejection, remaining Headers normalization/combination behavior, and required
-      TypeErrors in timers and `Mal.serve`.
-- [ ] Encode non-ASCII console output as UTF-8.
-- [ ] Add a WPT harness for the web runtime surface.
-- [ ] Move runtime timer state out of `MalHost` into a runtime/embedder context.
+## Long-term actors
 
-## Outbound I/O
-
-- [ ] Complete H1-H4 above; outbound DNS, TCP, HTTP/1, optional TLS, and `fetch()`
-      are accepted only through the decision's neutral streaming host boundary.
-
-## Actors
-
-- [ ] Implement actor fibers with rooted mailboxes and `spawn`, `send`, and
-      `receive`.
+- [ ] Build rooted actor mailboxes and `spawn`, `send`, and `receive` semantics on
+      the existing fiber substrate.
 - [ ] Wire the existing reduction-budget scheduler into actor execution and prove a
       tight-loop actor cannot starve peers.
 - [ ] Copy messages with structured-clone semantics and support transferables for
       large buffers.
 - [ ] Add supervision primitives: link, monitor, kill, cancellation, and teardown.
 
-## SMP
+## Long-term SMP
 
 - [ ] Make current fiber, scheduler, GC, root, and hook globals thread-local or
       isolate-owned.
@@ -68,10 +58,10 @@ are normative for host work.
       global stop-the-world coordination.
 - [ ] Validate the x86_64 fiber switch on Linux.
 
-## Embedding targets
+## Long-term embedding targets
 
-- [ ] Add pumped reactor mode with a one-turn entry point and a pollable wake source
-      for foreign GUI loops.
+- [ ] Expose the H1 one-turn pump and wake source through an embedding API for foreign
+      GUI loops.
 - [ ] Drive a Rust GUI stack through the FFI as an embedding spike.
 - [ ] Build the scheduler/reactor/GC core without libc over a fixed arena.
 - [ ] Add a poll/ISR backend and fixed-size fiber stacks.
