@@ -58,6 +58,31 @@ check(
 		indexedCoercions === 1,
 );
 
+function indexedStore(object, key, value) {
+	object[key] = value;
+	return value;
+}
+
+const indexedStored = [];
+const indexedStoreOrder = [];
+indexedStore(indexedStored, 0, 10);
+indexedStore(
+	indexedStored,
+	{
+		[Symbol.toPrimitive]() {
+			indexedStoreOrder.push("key");
+			return "2";
+		},
+	},
+	(indexedStoreOrder.push("value"), 30),
+);
+check(
+	"guarded numeric property store",
+	indexedStored[0] === 10 &&
+		indexedStored[2] === 30 &&
+		indexedStoreOrder.join(",") === "value,key",
+);
+
 function fusedArithmetic(a, b, c) {
 	return a * b + c;
 }
@@ -81,6 +106,38 @@ check(
 		coercibleNumber("outer", 4),
 	) === 10 && fusionOrder.join(",") === "left,right,outer",
 );
+
+function recursiveNumeric(value, depth, recurse) {
+	const alias = value;
+	if (depth === 0) return alias * alias;
+	return recurse(depth === 2 ? "3" : alias - 1, depth - 1, recurse);
+}
+check(
+	"recursive numeric entry promotion and fallback",
+	recursiveNumeric(5, 3, recursiveNumeric) === 4 &&
+		recursiveNumeric(4n, 0, recursiveNumeric) === 16n,
+);
+
+let inheritedScalarWrites = 0;
+Object.defineProperty(Object.prototype, "freshScalarKey", {
+	configurable: true,
+	get() {
+		return 41;
+	},
+	set() {
+		inheritedScalarWrites++;
+	},
+});
+function inheritedScalarStore() {
+	const object = { own: 1 };
+	object.freshScalarKey = 9;
+	return object.freshScalarKey === 41 && !Object.hasOwn(object, "freshScalarKey");
+}
+check(
+	"mutable scalar replacement preserves inherited setters",
+	inheritedScalarStore() && inheritedScalarWrites === 1,
+);
+delete Object.prototype.freshScalarKey;
 
 const typed = new Uint8Array([1, 2, 3, 4]);
 check("typed array negative relative index", typed.slice(-2)[0] === 3);

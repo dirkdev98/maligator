@@ -82,16 +82,37 @@ test("a mutated record is scalar-replaced into per-key registers (T7.4)", () => 
 	expect(countOp(fn, "createObjectShaped")).toBe(0);
 });
 
-test("a mutated record adding a prototype-safe new key is scalar-replaced", () => {
+test("a mutated record adding a new key keeps ordinary prototype-aware Set", () => {
 	const fn = nested(`(function (){ const p = { x: 1 }; p.y = 9; return p.x + p.y; })();`);
-	expect(countOp(fn, "createObjectShaped")).toBe(0);
+	expect(countOp(fn, "createObjectShaped")).toBe(1);
 });
 
-test("a mutated empty object built up with safe keys is scalar-replaced", () => {
+test("a mutated empty object built up with new keys is not scalar-replaced", () => {
 	const fn = nested(
 		`(function (a){ const o = {}; o.x = a; o.y = a + 1; return o.x + o.y; })(0);`,
 	);
-	expect(countOp(fn, "createObject")).toBe(0);
+	expect(countOp(fn, "createObject")).toBe(1);
+	expect(countOp(fn, "createObjectShaped")).toBe(0);
+});
+
+test("an arbitrary inherited setter keeps a new-key store observable", () => {
+	const fn = nested(
+		`(function (){ const p = { x: 1 }; p.freshScalarKey = 9; return p.freshScalarKey; })();`,
+	);
+	expect(countOp(fn, "createObjectShaped")).toBe(1);
+});
+
+test("immutable scalar replacement preserves initializer snapshots and effects", () => {
+	const fn = nested(
+		`(function (seed){ let current = seed; const order = []; const p = { kept: (order.push("kept"), current), unread: (order.push("unread"), current = 99) }; return p.kept + current + order.length; })(1);`,
+	);
+	expect(countOp(fn, "createObjectShaped")).toBe(0);
+});
+
+test("mutable scalar replacement follows a single-assignment alias across a branch", () => {
+	const fn = nested(
+		`(function (flag){ const p = { value: 1 }; const alias = p; if (flag) alias.value = 9; return p.value; })(true);`,
+	);
 	expect(countOp(fn, "createObjectShaped")).toBe(0);
 });
 

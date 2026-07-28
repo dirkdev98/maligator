@@ -2045,10 +2045,7 @@ function foldScalarReplaceableObjectObservationsInFunction(
 			}
 		} else {
 			for (const key of storedKeys) {
-				if (
-					!ownKeys.has(key) &&
-					PROTOTYPE_POLLUTING_KEYS.has(decodeStringConstant(program, key))
-				) {
+				if (!ownKeys.has(key)) {
 					fact.valid = false;
 				}
 			}
@@ -2304,31 +2301,6 @@ function scalarReplaceObjectLiteralsInFunction(fn: IRFunction): boolean {
 }
 
 /**
- * Property names that exist on `Object.prototype` (and `Array.prototype` shares the
- * data-vs-accessor concern via `__proto__`). A property read of one of these on a
- * fresh object can resolve up the prototype chain (e.g. `o.toString`), and a write
- * to `__proto__` invokes the prototype's setter — so a key NOT present in an
- * object's own literal that names one of these cannot be modelled as a plain own
- * slot. Used to keep the mutable scalar-replacement sound when a store introduces a
- * key the literal did not declare. Keys that ARE in the literal are own data
- * properties (shadowing the prototype) and need no check.
- */
-const PROTOTYPE_POLLUTING_KEYS = new Set<string>([
-	"constructor",
-	"hasOwnProperty",
-	"isPrototypeOf",
-	"propertyIsEnumerable",
-	"toLocaleString",
-	"toString",
-	"valueOf",
-	"__proto__",
-	"__defineGetter__",
-	"__defineSetter__",
-	"__lookupGetter__",
-	"__lookupSetter__",
-]);
-
-/**
  * Scalar-replace a non-escaping object that IS mutated — the general (mutable)
  * extension of `optScalarReplaceObjectLiterals` (see docs/roadmaps/gc.md).
  *
@@ -2356,11 +2328,9 @@ const PROTOTYPE_POLLUTING_KEYS = new Set<string>([
  *    write (object operand), or such an alias `move`. Anything else — a dynamic
  *    key, the object as a stored value / call arg / return / `===` operand, a
  *    `delete`, an enumeration — means the identity or full contents escape;
- *  - every key is either declared by the literal (an own data slot, always safe)
- *    or a non-`Object.prototype` name (safe to model as `undefined`-until-written,
- *    because a missing own read returns `undefined` and a write creates an own
- *    data property — neither touches the prototype). A `__proto__`/`toString`/…
- *    key the literal did not declare bails.
+ *  - every key is declared by the literal, hence already an own data property.
+ *    A store introducing any new key must perform ordinary [[Set]] because user
+ *    code can install an inherited accessor under an arbitrary name.
  *
  * Gating mirrors the immutable pass: skipped under generator/async (a value live
  * across a suspension is frame-resident, C5) and `with`/direct-`eval` (C3).
@@ -2523,18 +2493,11 @@ function scalarReplaceMutableObjectsInFunction(
 				continue;
 			}
 
-			// Every key must be a literal own slot or a prototype-safe new key.
-			let keysSafe = true;
-			for (const { keyStringIndex } of [...reads, ...stores]) {
-				if (literalKeySet.has(keyStringIndex)) {
-					continue;
-				}
-				if (PROTOTYPE_POLLUTING_KEYS.has(decodeStringConstant(program, keyStringIndex))) {
-					keysSafe = false;
-					break;
-				}
-			}
-			if (!keysSafe) {
+			if (
+				[...reads, ...stores].some(
+					({ keyStringIndex }) => !literalKeySet.has(keyStringIndex),
+				)
+			) {
 				continue;
 			}
 

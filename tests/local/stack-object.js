@@ -66,6 +66,23 @@ function foldedTypeof() {
 	return typeof object;
 }
 
+function scalarInitializerOrder(seed) {
+	let current = seed;
+	const order = [];
+	const object = {
+		kept: (order.push("kept"), current),
+		unread: (order.push("unread"), (current = 99)),
+	};
+	return object.kept === seed && current === 99 && order.join(",") === "kept,unread";
+}
+
+function mutableScalarAlias(flag) {
+	const object = { value: 1 };
+	const alias = object;
+	if (flag) alias.value = 9;
+	return object.value;
+}
+
 function recursive(depth) {
 	const o = { depth, text: "depth:" + depth };
 	const nested = depth === 0 ? 0 : recursive(depth - 1);
@@ -129,6 +146,11 @@ check("empty observed object", emptyObserved(40));
 check("simultaneous stack sites", simultaneous(41));
 check("folded object observations", foldedObservations(42));
 check("folded standalone typeof", foldedTypeof() === "object");
+check("scalar initializer order", scalarInitializerOrder(43));
+check(
+	"mutable scalar alias branch",
+	mutableScalarAlias(false) === 1 && mutableScalarAlias(true) === 9,
+);
 check("recursion and reentrancy", recursive(6) === 70);
 check("branch normal", branchAndException(false) === 21);
 check("branch exception", branchAndException(true) === 28);
@@ -146,6 +168,11 @@ check(
 check(
 	"partial return identity",
 	partial !== partialAgain && partial.value === partial.value,
+);
+partial.value = 99;
+check(
+	"partial return independent storage",
+	partial.value === 99 && partialAgain.value === 23,
 );
 
 if (typeof __mal_fail_next_cell_allocation === "function") {

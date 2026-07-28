@@ -254,6 +254,25 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_array_try_load");
 	});
 
+	it("guards numeric property-key stores before dense array access", () => {
+		const output = emit(
+			`"use strict"; function store(array, index, value) { array[index] = value; } globalThis.store = store;`,
+		);
+		expect(output).toContain("MalValue p1 = arg_count > 1 ? args[1]");
+		expect(output).toContain("if (!mal_ops_is_number(p1))");
+		expect(output).toContain("mal_vm_array_try_store");
+	});
+
+	it("retains boxed recursive re-entry for promoted numeric parameters", () => {
+		const output = emit(
+			`"use strict"; function recurse(value, depth, callback) { if (depth === 0) return value * value; return callback(value - 1, depth - 1, callback); } globalThis.recurse = recurse;`,
+		);
+		expect(output).toContain("static MalValue mal_compiled_1_boxed(");
+		expect(output).toContain("return mal_compiled_1_boxed");
+		expect(output).toContain("!mal_ops_is_number(p0)");
+		expect(output).toContain("!mal_ops_is_number(p1)");
+	});
+
 	it("keeps one-use numeric arithmetic intermediates unboxed", () => {
 		const output = emit(
 			`"use strict"; function sum(object) { return object.a + object.b + object.c; } globalThis.sum = sum;`,
