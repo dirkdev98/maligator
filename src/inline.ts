@@ -32,6 +32,8 @@ import { log } from "./utils.ts";
 
 /** Max body size (real, non-marker instructions) of an inline target. */
 const MAX_INLINE_INSTRUCTIONS = 40;
+/** Bounded polymorphism for guarded user-method inlining. */
+const MAX_METHOD_INLINE_TARGETS = 4;
 
 /**
  * Instruction kinds that make a function unsafe to inline as-is: `this` /
@@ -572,24 +574,22 @@ export function debugSpeculativeInlineSites(program: IntermediateProgram): strin
 }
 
 // ---------------------------------------------------------------------------
-// Shape-guarded method inlining — ELIGIBILITY ANALYSIS ONLY (phase C).
+// Loaded-callee-guarded method inlining — ELIGIBILITY ANALYSIS ONLY (phase C).
 //
 // `obj.m(args)` can't be statically resolved (the method lives on obj's runtime prototype),
-// but the compiler knows the *candidate* when a method named `m` is defined exactly once in
-// the program (`defineProperty(proto, "m", createFunction F)`). A receiver-shape guard makes
-// inlining F sound: cache the shape whose `m` resolves to F, guard `recv.shape === cached`,
-// inline with `this` = the receiver (the splice already supports it), deopt on a miss. This
-// pass only detects the sites; the transform re-checks + guards.
+// but it knows bounded candidate bodies from program method definitions. The real property
+// Get remains observable; after argument evaluation, guards select a body from the actual
+// loaded callee's function index, inline with `this` = receiver, or call it normally on miss.
 // ---------------------------------------------------------------------------
 
 export interface MethodInlineSite {
 	/** The `call` instruction (`[dst, callee, this=receiver, ...args]`). */
 	call: IRInstruction;
-	/** functionIndex of the candidate method (guarded by the receiver shape at runtime). */
-	target: number;
+	/** Candidate function indices, guarded against the already-loaded callee. */
+	targets: Array<number>;
 	/** Register holding the receiver (also the call's `this`). */
 	receiverRegister: number;
-	/** The method name (its subject for the shape guard; for diagnostics). */
+	/** The method name, for candidate lookup and diagnostics. */
 	nameStringIndex: number;
 }
 
@@ -663,14 +663,14 @@ function isInlinableMethodTarget(fn: IRFunction): boolean {
 }
 
 /**
- * Map a method name to the function that uniquely defines it across the program
- * (`defineProperty(proto, createString name, createFunction F)`). A name defined by two
- * distinct functions is ambiguous and omitted — the shape guard would still be sound, but a
- * single candidate is the compile-time body we can splice.
+ * Map a method name to its bounded set of function definitions across the program
+ * (`defineProperty(proto, createString name, createFunction F)`). The real property Get
+ * remains at each call site; these are only candidate bodies for loaded-callee guards.
  */
-function methodDefinitionsByName(program: IntermediateProgram): Map<number, number> {
-	const found = new Map<number, number>();
-	const ambiguous = new Set<number>();
+function methodDefinitionsByName(
+	program: IntermediateProgram,
+): Map<number, Array<number>> {
+	const found = new Map<number, Array<number>>();
 	for (const fn of program.functions) {
 		for (const block of fn.blocks) {
 			const lastWriter = new Map<number, IRInstruction>();
@@ -685,11 +685,10 @@ function methodDefinitionsByName(program: IntermediateProgram): Map<number, numb
 						value.type === "createFunction"
 					) {
 						const name = key.stringIndex;
-						const existing = found.get(name);
-						if (existing !== undefined && existing !== value.functionIndex) {
-							ambiguous.add(name);
-						} else {
-							found.set(name, value.functionIndex);
+						const definitions = found.get(name) ?? [];
+						if (!definitions.includes(value.functionIndex)) {
+							definitions.push(value.functionIndex);
+							found.set(name, definitions);
 						}
 					}
 				}
@@ -700,15 +699,12 @@ function methodDefinitionsByName(program: IntermediateProgram): Map<number, numb
 			}
 		}
 	}
-	for (const name of ambiguous) {
-		found.delete(name);
-	}
 	return found;
 }
 
 /**
- * Find `obj.m(args)` sites whose method name has a unique program-wide definition F that is
- * an inlinable method target. `obj.m()` is a `call` whose callee is
+ * Find `obj.m(args)` sites whose method name has bounded, inlinable program definitions.
+ * `obj.m()` is a `call` whose callee is
  * `loadProperty(receiver, createString name)` and whose `this` is that same receiver.
  * Detection only.
  */
@@ -722,6 +718,7 @@ export function findMethodInlineSites(program: IntermediateProgram): ProgramMeth
 		const fn = targetOf.get(index);
 		return (
 			fn !== undefined &&
+			(fn.strict ?? fn.semanticFile.strict) &&
 			isInlinableMethodTarget(fn) &&
 			isEnvIndependent(fn) &&
 			multiBlockInlinable(fn) !== null
@@ -750,21 +747,21 @@ export function findMethodInlineSites(program: IntermediateProgram): ProgramMeth
 				if (key === undefined || key.type !== "createString") {
 					continue;
 				}
-				const target = methods.get(key.stringIndex);
-				if (target === undefined || target === fn.functionIndex || !eligible(target)) {
-					continue;
-				}
-				if (
-					!staticArgumentsAreSupplied(
-						targetOf.get(target)!,
-						instruction.registers.length - 3,
+				const targets = (methods.get(key.stringIndex) ?? [])
+					.filter(
+						(target) =>
+							target !== fn.functionIndex &&
+							eligible(target) &&
+							staticArgumentsAreSupplied(
+								targetOf.get(target)!,
+								instruction.registers.length - 3,
+							),
 					)
-				) {
-					continue;
-				}
+					.slice(0, MAX_METHOD_INLINE_TARGETS);
+				if (targets.length === 0) continue;
 				sites.push({
 					call: instruction,
-					target,
+					targets,
 					receiverRegister,
 					nameStringIndex: key.stringIndex,
 				});
@@ -788,7 +785,9 @@ export function debugMethodInlineSites(program: IntermediateProgram): string {
 		output += `fn#${fn.functionIndex}: ${sites.length} method call(s) → ${sites
 			.map(
 				(site) =>
-					`${decodeStringConstant(program, site.nameStringIndex)}=#${site.target}`,
+					`${decodeStringConstant(program, site.nameStringIndex)}=${site.targets
+						.map((target) => `#${target}`)
+						.join("|")}`,
 			)
 			.join(", ")}\n`;
 	}
@@ -1477,27 +1476,28 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * Splice `targetFn`'s body at `call` behind a `function_index(callee) === targetFn` guard,
- * deopting to the original call on a miss. `thisSource` maps the callee's `this` — null for a
- * plain call, the receiver register for a method (`obj.m()`, whose callee is already the
- * proto-resolved method, so the same index guard suffices — no shape / proto-validity check).
- * Shared by the speculative-global and method inliners; returns true if it rewrote the call.
+ * Splice candidate bodies at `call` behind function-index guards, deopting to the
+ * original call when none match. `thisSource` maps the callee's `this`; the real Get
+ * has already produced the guarded callee, so no receiver-shape assumption is needed.
  */
 function inlineGuardedCallSite(
 	program: IntermediateProgram,
 	fn: IRFunction,
 	call: IRInstruction,
-	targetFn: IRFunction,
+	targetFns: ReadonlyArray<IRFunction>,
 	thisSource: number | null,
 ): boolean {
 	if (
+		targetFns.length === 0 ||
 		guardedInlineSubstituted.has(call) ||
-		instructionCount(fn) >= MAX_CALLER_INSTRUCTIONS
+		instructionCount(fn) +
+			targetFns.reduce((sum, target) => sum + instructionCount(target), 0) >=
+			MAX_CALLER_INSTRUCTIONS
 	) {
 		return false;
 	}
-	const blocks = multiBlockInlinable(targetFn);
-	if (blocks === null) {
+	const targetBlocks = targetFns.map((target) => multiBlockInlinable(target));
+	if (targetBlocks.some((blocks) => blocks === null)) {
 		return false; // not a splice-able control-flow shape
 	}
 	// Locate the call by reference (earlier substitutions shift indices/blocks).
@@ -1534,39 +1534,52 @@ function inlineGuardedCallSite(
 		}
 	}
 
-	const offset = fn.nextRegisterDestination;
-	fn.nextRegisterDestination += targetFn.nextRegisterDestination;
-	const guardRegister = fn.nextRegisterDestination++;
-
 	const base = fn.blocks.length;
-	const deoptIndex = base + blocks.length;
+	let nextBlockIndex = base;
+	const layouts = targetFns.map((targetFn, targetIndex) => {
+		const blocks = targetBlocks[targetIndex]!;
+		const offset = fn.nextRegisterDestination;
+		fn.nextRegisterDestination += targetFn.nextRegisterDestination;
+		const guardRegister = fn.nextRegisterDestination++;
+		const entryIndex = nextBlockIndex;
+		nextBlockIndex += blocks.length;
+		return { targetFn, blocks, offset, guardRegister, entryIndex };
+	});
+	const deoptIndex = nextBlockIndex;
 	const joinIndex = deoptIndex + 1;
 
-	// Host: pre + guard + jumpIf(inline entry) + jump(deopt).
+	// Host: test each candidate against the already-loaded callee, then deopt.
 	host.instructions = [
 		...host.instructions.slice(0, index),
-		{
-			type: "guardFunctionIndex",
-			registers: [guardRegister, calleeRegister],
-			functionIndex: targetFn.functionIndex,
-		},
-		{ type: "jumpIf", registers: [guardRegister], blocks: [base] },
+		...layouts.flatMap(({ targetFn, guardRegister, entryIndex }) => [
+			{
+				type: "guardFunctionIndex" as const,
+				registers: [guardRegister, calleeRegister] as [number, number],
+				functionIndex: targetFn.functionIndex,
+			},
+			{
+				type: "jumpIf" as const,
+				registers: [guardRegister] as [number],
+				blocks: [entryIndex] as [number],
+			},
+		]),
 		{ type: "jump", blocks: [deoptIndex] },
 	];
-	// Inline blocks [base, deoptIndex): the guarded fast path (this → thisSource).
-	for (const inlinedBlock of buildInlinedBlocks(
-		program,
-		targetFn,
-		blocks,
-		args,
-		thisSource,
-		destination,
-		offset,
-		callSitePos,
-		base,
-		joinIndex,
-	)) {
-		fn.blocks.push(inlinedBlock);
+	for (const { targetFn, blocks, offset, entryIndex } of layouts) {
+		for (const inlinedBlock of buildInlinedBlocks(
+			program,
+			targetFn,
+			blocks,
+			args,
+			thisSource,
+			destination,
+			offset,
+			callSitePos,
+			entryIndex,
+			joinIndex,
+		)) {
+			fn.blocks.push(inlinedBlock);
+		}
 	}
 	// Deopt block: the original call verbatim, then jump to the join.
 	guardedInlineSubstituted.add(call);
@@ -1588,7 +1601,7 @@ export function optInlineSpeculative(program: IntermediateProgram): boolean {
 			const targetFn = targetOf.get(target);
 			if (
 				targetFn !== undefined &&
-				inlineGuardedCallSite(program, fn, call, targetFn, null)
+				inlineGuardedCallSite(program, fn, call, [targetFn], null)
 			) {
 				changed = true;
 			}
@@ -1605,13 +1618,12 @@ export function optInlineMethod(program: IntermediateProgram): boolean {
 		targetOf.set(fn.functionIndex, fn);
 	}
 	for (const fn of program.functions) {
-		for (const { call, target, receiverRegister } of byCaller.get(fn.functionIndex) ??
+		for (const { call, targets, receiverRegister } of byCaller.get(fn.functionIndex) ??
 			[]) {
-			const targetFn = targetOf.get(target);
-			if (
-				targetFn !== undefined &&
-				inlineGuardedCallSite(program, fn, call, targetFn, receiverRegister)
-			) {
+			const targetFns = targets
+				.map((target) => targetOf.get(target))
+				.filter((target): target is IRFunction => target !== undefined);
+			if (inlineGuardedCallSite(program, fn, call, targetFns, receiverRegister)) {
 				changed = true;
 			}
 		}

@@ -67,6 +67,22 @@ MAL_BUILTIN_MATH_UNARY(fround, (f64) (float) x)
 
 #undef MAL_BUILTIN_MATH_UNARY
 
+static MalValue mal_builtin_math_round(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target,
+    MalValue callee
+);
+
+static MalValue mal_builtin_math_round_number(f64 x) {
+    if (!isfinite(x) || x == 0.0 || fabs(x) >= 4503599627370496.0 /* 2^52 */) {
+        return mal_ops_number_value(x);
+    }
+    if (x < 0.0 && x >= -0.5) {
+        return mal_value_from_f64(-0.0);
+    }
+    f64 lower = floor(x);
+    return mal_ops_number_value(x - lower < 0.5 ? lower : lower + 1.0);
+}
+
 bool mal_builtin_math_unary_fast(
     MalValue callee, MalMathUnaryOp *cached_op, MalValue argument, MalValue *result
 ) {
@@ -111,6 +127,12 @@ bool mal_builtin_math_unary_fast(
         MAL_MATH_UNARY_CASE(LOG1P, log1p, log1p(x))
         MAL_MATH_UNARY_CASE(EXPM1, expm1, expm1(x))
         MAL_MATH_UNARY_CASE(FROUND, fround, (f64) (float) x)
+        case MAL_MATH_UNARY_ROUND:
+            if (callback == mal_builtin_math_round) {
+                *result = mal_builtin_math_round_number(x);
+                return true;
+            }
+            break;
         default: break;
     }
 #undef MAL_MATH_UNARY_CASE
@@ -148,6 +170,11 @@ bool mal_builtin_math_unary_fast(
     MAL_MATH_UNARY_RESOLVE(EXPM1, expm1, expm1(x))
     MAL_MATH_UNARY_RESOLVE(FROUND, fround, (f64) (float) x)
 #undef MAL_MATH_UNARY_RESOLVE
+    if (callback == mal_builtin_math_round) {
+        *cached_op = MAL_MATH_UNARY_ROUND;
+        *result = mal_builtin_math_round_number(x);
+        return true;
+    }
     *cached_op = MAL_MATH_UNARY_NONE;
     return false;
 }
@@ -165,25 +192,7 @@ static MalValue mal_builtin_math_round(MalVm *vm, MalValue this_value, const Mal
         return mal_value_new_nan();
     }
 
-    if (!isfinite(x) || x == 0.0) {
-        return mal_ops_number_value(x);
-    }
-    // Already integral, or so large that adding 0.5 changes nothing.
-    if (fabs(x) >= 4503599627370496.0 /* 2^52 */) {
-        return mal_ops_number_value(x);
-    }
-    // x in (-0.5, -0] and (0, 0.5) round to -0 / +0 respectively; the negative
-    // half-open range must yield -0.
-    if (x < 0.0 && x >= -0.5) {
-        return mal_value_from_f64(-0.0);
-    }
-    // Round half toward +Infinity. Computing floor(x) and the fractional part
-    // separately avoids the precision loss of floor(x + 0.5) (which can round
-    // a value just under 0.5 up to a full integer).
-    f64 lower = floor(x);
-    f64 frac = x - lower;
-    f64 result = frac < 0.5 ? lower : lower + 1.0;
-    return mal_ops_number_value(result);
+    return mal_builtin_math_round_number(x);
 }
 
 static MalValue mal_builtin_math_clz32(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -399,6 +408,48 @@ static MalValue mal_builtin_math_max(MalVm *vm, MalValue this_value, const MalVa
     (void) new_target;
     (void) callee;
     return mal_builtin_math_min_max(vm, args, arg_count, true);
+}
+
+static MalValue mal_builtin_math_min_max_two(f64 left, f64 right, bool is_max) {
+    if (isnan(left) || isnan(right)) return mal_value_new_nan();
+    if (left == 0.0 && right == 0.0) {
+        bool negative = is_max ? signbit(left) && signbit(right) : signbit(left) || signbit(right);
+        return negative ? mal_value_from_f64(-0.0) : mal_value_from_i32(0);
+    }
+    return mal_ops_number_value(is_max ? (left > right ? left : right) : (left < right ? left : right));
+}
+
+bool mal_builtin_math_binary_fast(
+    MalValue callee, MalMathBinaryOp *cached_op, MalValue left, MalValue right, MalValue *result
+) {
+    if (!mal_value_is_native_function_object(callee) || !mal_ops_is_number(left) ||
+        !mal_ops_is_number(right)) {
+        return false;
+    }
+    MalNativeFunctionCallback callback = mal_native_function_object_callback(
+        mal_value_to_native_function_object(callee));
+    f64 x = mal_ops_number_as_f64(left);
+    f64 y = mal_ops_number_as_f64(right);
+    if (*cached_op == MAL_MATH_BINARY_MIN && callback == mal_builtin_math_min) {
+        *result = mal_builtin_math_min_max_two(x, y, false);
+        return true;
+    }
+    if (*cached_op == MAL_MATH_BINARY_MAX && callback == mal_builtin_math_max) {
+        *result = mal_builtin_math_min_max_two(x, y, true);
+        return true;
+    }
+    if (callback == mal_builtin_math_min) {
+        *cached_op = MAL_MATH_BINARY_MIN;
+        *result = mal_builtin_math_min_max_two(x, y, false);
+        return true;
+    }
+    if (callback == mal_builtin_math_max) {
+        *cached_op = MAL_MATH_BINARY_MAX;
+        *result = mal_builtin_math_min_max_two(x, y, true);
+        return true;
+    }
+    *cached_op = MAL_MATH_BINARY_NONE;
+    return false;
 }
 
 static MalValue mal_builtin_math_f16round(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

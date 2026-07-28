@@ -179,6 +179,26 @@ test("methods that read classified frame arguments are guarded-inline candidates
 	expect([...findMethodInlineSites(ir).byCaller.values()].flat()).toHaveLength(2);
 });
 
+test("polymorphic strict methods inline behind loaded-callee guards", () => {
+	const source = `
+		class A { quote(value) { return value + 1; } }
+		class B { quote(value) { return value + 2; } }
+		class C { quote(value) { return value + 3; } }
+		function invoke(receiver, value) { return receiver.quote(value); }
+		globalThis.result = invoke(new A(), 1) + invoke(new B(), 1) + invoke(new C(), 1);
+	`;
+	const ir = optimizedProgram(source);
+	const instructions = ir.functions.flatMap((fn) =>
+		fn.blocks.flatMap((block) => block.instructions),
+	);
+	expect(
+		instructions.filter((instruction) => instruction.type === "guardFunctionIndex"),
+	).toHaveLength(3);
+	expect(
+		instructions.filter((instruction) => instruction.type === "call").length,
+	).toBeGreaterThan(0);
+});
+
 test("a generator target is not inlinable", () => {
 	expect(
 		nestedCount(`(function (){ const g = function*(){ return 1; }; return g(); })();`),

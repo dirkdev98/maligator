@@ -36,6 +36,7 @@ typedef enum MalMathUnaryOp {
     MAL_MATH_UNARY_LOG1P,
     MAL_MATH_UNARY_EXPM1,
     MAL_MATH_UNARY_FROUND,
+    MAL_MATH_UNARY_ROUND,
 } MalMathUnaryOp;
 
 /**
@@ -45,4 +46,15 @@ typedef enum MalMathUnaryOp {
  */
 bool mal_builtin_math_unary_fast(
     MalValue callee, MalMathUnaryOp *cached_op, MalValue argument, MalValue *result
+);
+
+typedef enum MalMathBinaryOp {
+    MAL_MATH_BINARY_NONE,
+    MAL_MATH_BINARY_MIN,
+    MAL_MATH_BINARY_MAX,
+} MalMathBinaryOp;
+
+/** Exact-callback fast path for two-number Math.min/Math.max calls. */
+bool mal_builtin_math_binary_fast(
+    MalValue callee, MalMathBinaryOp *cached_op, MalValue left, MalValue right, MalValue *result
 );

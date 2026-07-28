@@ -265,4 +265,12 @@ describe("native update-expression representation", () => {
 			/mal_ops_number_value\(__nf_\d+_value \+ mal_ops_number_as_f64/,
 		);
 	});
+
+	it("guards direct unary and binary Math calls by exact callbacks", () => {
+		const output = emit(
+			`"use strict"; function calculate(a, b) { return Math.round(a) + Math.max(a, b); } globalThis.calculate = calculate;`,
+		);
+		expect(output).toContain("mal_builtin_math_unary_fast");
+		expect(output).toContain("mal_builtin_math_binary_fast");
+	});
 });

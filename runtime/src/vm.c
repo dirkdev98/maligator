@@ -2218,6 +2218,7 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_GUARD_FUNCTION_INDEX:
                 registers[instruction->as.guard_function_index.dst] = mal_value_new_boolean(
                     mal_vm_callee_has_index(
+                        vm,
                         registers[instruction->as.guard_function_index.callee],
                         instruction->as.guard_function_index.function_index));
                 MAL_VM_INTERPRETER_DIRECT_LEAF();

@@ -1268,6 +1268,7 @@ function emitBody(
 	// the exact native callback, so mutation before or during argument evaluation falls
 	// back or invokes the already-loaded original method exactly as required.
 	const mathUnaryCalls = new Set<number>();
+	const mathBinaryCalls = new Set<number>();
 	{
 		const mathObjects = new Set<number>();
 		const mathCallees = new Set<number>();
@@ -1280,10 +1281,10 @@ function emitBody(
 			if (
 				instruction.opcode === "CALL" &&
 				mathCallees.has(instruction.callee) &&
-				mathObjects.has(instruction.thisValue) &&
-				instruction.arguments.length === 1
+				mathObjects.has(instruction.thisValue)
 			) {
-				mathUnaryCalls.add(ip);
+				if (instruction.arguments.length === 1) mathUnaryCalls.add(ip);
+				if (instruction.arguments.length === 2) mathBinaryCalls.add(ip);
 			}
 
 			const moveFromMathObject =
@@ -1458,6 +1459,7 @@ function emitBody(
 			stackObjectAccesses.get(ip),
 			stackObjectMaterializations.get(ip),
 			mathUnaryCalls.has(ip),
+			mathBinaryCalls.has(ip),
 			fn.mappedArguments,
 			fn.mappedArgumentSlots,
 		);
@@ -1493,6 +1495,7 @@ function emitInstruction(
 	stackObjectAccess: { site: StackObjectSite; slot: number } | undefined,
 	stackObjectMaterialization: StackObjectSite | undefined,
 	mathUnaryCall: boolean,
+	mathBinaryCall: boolean,
 	mappedArguments: boolean,
 	mappedArgumentSlots: Array<number>,
 ): Array<string> | null {
@@ -1717,7 +1720,7 @@ function emitInstruction(
 		case "GUARD_FUNCTION_INDEX":
 			// Speculative-inline guard → boolean-rep dst (a raw C bool feeding the jumpIf).
 			return [
-				`r${instruction.dst} = mal_vm_callee_has_index(${boxed(instruction.callee)}, ${instruction.functionIndex});`,
+				`r${instruction.dst} = mal_vm_callee_has_index(vm, ${boxed(instruction.callee)}, ${instruction.functionIndex});`,
 			];
 		case "LOAD_CALLEE":
 			// The invoked closure — used to initialize a named function expression's
@@ -2230,6 +2233,23 @@ function emitInstruction(
 					`static MalMathUnaryOp __math_${ip};`,
 					`MalValue __math_result_${ip};`,
 					`if (mal_builtin_math_unary_fast(${boxedOperand(instruction.callee)}, &__math_${ip}, ${boxedOperand(argument)}, &__math_result_${ip})) {`,
+					`  r${instruction.dst} = __math_result_${ip};`,
+					`} else {`,
+					`  static MalCallCache __cc_${ip};`,
+					`  MalCompletion ${tmp} = mal_vm_call_cached(vm, &__cc_${ip}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow}`,
+					`  r${instruction.dst} = ${tmp}.value;`,
+					`}`,
+					poll,
+				];
+			}
+			if (mathBinaryCall) {
+				const left = instruction.arguments[0]!;
+				const right = instruction.arguments[1]!;
+				return [
+					`static MalMathBinaryOp __math_${ip};`,
+					`MalValue __math_result_${ip};`,
+					`if (mal_builtin_math_binary_fast(${boxedOperand(instruction.callee)}, &__math_${ip}, ${boxedOperand(left)}, ${boxedOperand(right)}, &__math_result_${ip})) {`,
 					`  r${instruction.dst} = __math_result_${ip};`,
 					`} else {`,
 					`  static MalCallCache __cc_${ip};`,

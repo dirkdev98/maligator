@@ -17,10 +17,16 @@
  * simply takes the un-inlined path). The heap-type test is inline; the index accessor is the
  * only out-of-line bit and is reached only when the type already matched.
  */
-static inline bool mal_vm_callee_has_index(MalValue callee, i32 function_index) {
-    return mal_value_is_heap_type(callee, MAL_HEAP_FUNCTION_OBJECT) &&
-           mal_function_object_function_index((const MalFunctionObject *) mal_value_to_heap(callee)) ==
-               function_index;
+static inline bool mal_vm_callee_has_index(MalVm *vm, MalValue callee, i32 function_index) {
+    if (!mal_value_is_heap_type(callee, MAL_HEAP_FUNCTION_OBJECT)) return false;
+    const MalFunctionObject *function = (const MalFunctionObject *) mal_value_to_heap(callee);
+    if (mal_function_object_function_index(function) != function_index) return false;
+#if MAL_REALMS
+    return function->realm == nullptr || function->realm == vm->current_realm;
+#else
+    (void) vm;
+    return true;
+#endif
 }
 
 /**

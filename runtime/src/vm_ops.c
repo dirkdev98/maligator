@@ -1252,6 +1252,7 @@ void mal_op_load_captured(MalCallable *callable, const MalInstruction *instructi
 void mal_op_guard_function_index(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.guard_function_index.dst] = mal_value_new_boolean(
         mal_vm_callee_has_index(
+            callable->vm,
             callable->registers[instruction->as.guard_function_index.callee],
             instruction->as.guard_function_index.function_index
         )
