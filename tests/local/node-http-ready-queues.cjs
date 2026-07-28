@@ -7,7 +7,7 @@ const heldFinishOrder = [];
 const closing = [];
 const closeOrder = [];
 let writeErrorStarted = 0;
-let writeErrorFinishes = 0;
+let writeErrorCloses = 0;
 
 function finishHeld(index) {
 	const entry = held[index];
@@ -35,13 +35,15 @@ const server = http.createServer((request, response) => {
 
 	if (request.url === "/write-error") {
 		writeErrorStarted++;
-		response.once("finish", () => writeErrorFinishes++);
-		setTimeout(() => response.end("x".repeat(2 * 1024 * 1024)), 30);
+		response.once("close", () => writeErrorCloses++);
+		setTimeout(() => {
+			if (!response.destroyed) response.end("x".repeat(2 * 1024 * 1024));
+		}, 30);
 		return;
 	}
 
 	if (request.url === "/write-error-status") {
-		response.end(`${writeErrorStarted}:${writeErrorFinishes}`);
+		response.end(`${writeErrorStarted}:${writeErrorCloses}`);
 		return;
 	}
 

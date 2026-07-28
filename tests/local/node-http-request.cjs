@@ -2,6 +2,9 @@ const http = require("node:http");
 
 const concurrentResponses = [];
 let completedResponse;
+let streamEvents = [];
+let failedWriteEvents = [];
+let endBeforeDrainEvents = [];
 
 Object.defineProperty(Object.prototype, "__httpSocketRealmMarker", {
 	value: "request-realm",
@@ -339,6 +342,140 @@ const server = http.createServer(function (request, response) {
 	if (request.url === "/no-body") {
 		response.statusCode = 204;
 		response.end("must-not-be-sent");
+		return;
+	}
+
+	if (request.url === "/stream-backpressure") {
+		streamEvents = [];
+		const chunk = Buffer.alloc(64 * 1024, 120);
+		response.on("finish", () => streamEvents.push("finish"));
+		for (let i = 0; i < 4; i++) {
+			const accepted = response.write(chunk, () => streamEvents.push(`write:${i}`));
+			streamEvents.push(`return:${accepted}`);
+		}
+		response.once("drain", () => {
+			streamEvents.push("drain");
+			response.end("tail");
+		});
+		return;
+	}
+
+	if (request.url === "/stream-backpressure-events") {
+		response.end(streamEvents.join(","));
+		return;
+	}
+
+	if (request.url === "/end-before-drain") {
+		endBeforeDrainEvents = [];
+		const chunk = Buffer.alloc(64 * 1024, 120);
+		response.on("drain", () => endBeforeDrainEvents.push("drain"));
+		response.on("finish", () => endBeforeDrainEvents.push("finish"));
+		for (let i = 0; i < 4; i++) response.write(chunk);
+		response.end("tail", () => endBeforeDrainEvents.push("end"));
+		return;
+	}
+
+	if (request.url === "/end-before-drain-events") {
+		response.end(endBeforeDrainEvents.join(","));
+		return;
+	}
+
+	if (request.url === "/wire-stream") {
+		response.setHeader("Connection", "close");
+		response.write("ab");
+		response.write(Buffer.from("cde"));
+		response.end("f");
+		return;
+	}
+
+	if (request.url === "/fixed-stream") {
+		response.setHeader("Content-Length", "6");
+		response.write("ab");
+		response.end("cdef");
+		return;
+	}
+
+	if (request.url === "/failed-write") {
+		failedWriteEvents = [];
+		response.on("close", () => failedWriteEvents.push("close"));
+		const chunk = Buffer.alloc(256 * 1024, 120);
+		for (let i = 0; i < 16; i++) {
+			response.write(chunk, (error) => {
+				failedWriteEvents.push(`write:${i}:${error instanceof Error}`);
+			});
+		}
+		response.end("tail", (error) => {
+			failedWriteEvents.push(`end:${error instanceof Error}`);
+		});
+		return;
+	}
+
+	if (request.url === "/failed-write-events") {
+		response.end(failedWriteEvents.join(","));
+		return;
+	}
+
+	if (request.url === "/short-content-length") {
+		response.setHeader("Content-Length", "2");
+		response.end("x");
+		return;
+	}
+
+	if (request.url === "/long-content-length") {
+		response.setHeader("Content-Length", "1");
+		response.end("xx");
+		return;
+	}
+
+	if (request.url === "/head-explicit") {
+		response.setHeader("Content-Length", "2");
+		response.write("a");
+		response.end("b");
+		return;
+	}
+
+	if (request.url === "/reentrant-commit") {
+		Object.defineProperty(response, "statusCode", {
+			configurable: true,
+			get() {
+				response.write("nested");
+				return 200;
+			},
+		});
+		response.write("outer");
+		return;
+	}
+
+	if (request.url === "/remove-after-write") {
+		response.setHeader("X-Test", "yes");
+		response.write("a");
+		try {
+			response.removeHeader("X-Test");
+		} catch (error) {
+			response.end(error.message);
+		}
+		return;
+	}
+
+	if (request.url.startsWith("/invalid-content-length/")) {
+		response.setHeader("Content-Length", request.url.slice(24));
+		try {
+			response.end("x");
+		} catch (error) {
+			response.removeHeader("Content-Length");
+			response.statusCode = 500;
+			response.end(error.message);
+		}
+		return;
+	}
+
+	if (request.url === "/throw-after-write") {
+		response.write("partial");
+		throw new Error("after write");
+	}
+
+	if (request.url === "/idle-stream") {
+		response.write("idle");
 		return;
 	}
 

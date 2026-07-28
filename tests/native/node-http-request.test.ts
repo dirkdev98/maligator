@@ -154,7 +154,7 @@ describe("node:http request bridge", () => {
 			headers: { "x-test": "request-header" },
 		});
 		expect(head.status).toBe(201);
-		expect(head.headers.get("content-length")).toBe("2");
+		expect(head.headers.get("content-length")).toBeNull();
 		expect(await head.text()).toBe("");
 
 		const noBody = await fetch(`${base}/no-body`);
@@ -187,6 +187,160 @@ describe("node:http request bridge", () => {
 	it("dispatches requests and writes responses in compiled and interpreted modes", async () => {
 		for (const binary of binaries) {
 			await withServer(binary, {}, checkBridge);
+		}
+	});
+
+	it("streams responses with bounded backpressure and wire-correct framing", async () => {
+		const runs = [
+			{ binary: binaries[0]!, env: {} },
+			{ binary: binaries[1]!, env: {} },
+			{ binary: binaries[0]!, env: STRESS_ENV },
+		];
+		for (const { binary, env } of runs) {
+			const child = spawn(binary, [], {
+				stdio: ["ignore", "pipe", "pipe"],
+				env: { ...process.env, ...env },
+			});
+			let stderr = "";
+			child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+			const exit = new Promise<number | null>((resolve, reject) => {
+				const timer = setTimeout(() => reject(new Error("server did not exit")), 5000);
+				child.once("exit", (code) => {
+					clearTimeout(timer);
+					resolve(code);
+				});
+			});
+			try {
+				const port = await waitForPort(child);
+				const base = `http://127.0.0.1:${port}`;
+				const streamed = await fetch(`${base}/stream-backpressure`);
+				const body = Buffer.from(await streamed.arrayBuffer());
+				expect(body.length).toBe(4 * 64 * 1024 + 4);
+				expect(body.subarray(0, -4).every((byte) => byte === 120)).toBe(true);
+				expect(body.subarray(-4).toString()).toBe("tail");
+
+				const events = await fetch(`${base}/stream-backpressure-events`);
+				expect(await events.text()).toBe(
+					"return:true,return:true,return:true,return:false," +
+						"write:0,write:1,drain,write:2,write:3,finish",
+				);
+				const endedBeforeDrain = await fetch(`${base}/end-before-drain`);
+				expect((await endedBeforeDrain.arrayBuffer()).byteLength).toBe(4 * 64 * 1024 + 4);
+				const endEvents = await fetch(`${base}/end-before-drain-events`);
+				expect(await endEvents.text()).toBe("finish,end");
+
+				const wire = await new Promise<string>((resolve, reject) => {
+					const socket = createConnection({ host: "127.0.0.1", port }, () => {
+						socket.write(
+							"GET /wire-stream HTTP/1.1\r\n" +
+								"Host: 127.0.0.1\r\nConnection: close\r\n\r\n",
+						);
+					});
+					let response = "";
+					socket.setEncoding("utf8");
+					socket.on("data", (chunk: string) => (response += chunk));
+					socket.on("end", () => resolve(response));
+					socket.once("error", reject);
+				});
+				expect(wire).toContain("Transfer-Encoding: chunked\r\n");
+				expect(wire).not.toContain("Content-Length:");
+				expect(wire.slice(wire.indexOf("\r\n\r\n") + 4)).toBe(
+					"2\r\nab\r\n3\r\ncde\r\n1\r\nf\r\n0\r\n\r\n",
+				);
+
+				const halfClosed = await new Promise<string>((resolve, reject) => {
+					const socket = createConnection({ host: "127.0.0.1", port }, () => {
+						socket.end("GET /async HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+					});
+					let response = "";
+					socket.setEncoding("utf8");
+					socket.on("data", (chunk: string) => (response += chunk));
+					socket.on("end", () => resolve(response));
+					socket.once("error", reject);
+				});
+				expect(halfClosed).toContain("HTTP/1.1 200 OK");
+				expect(halfClosed).toContain("\r\n\r\nyes");
+
+				const fixed = await fetch(`${base}/fixed-stream`);
+				expect(fixed.headers.get("content-length")).toBe("6");
+				expect(fixed.headers.get("transfer-encoding")).toBeNull();
+				expect(await fixed.text()).toBe("abcdef");
+
+				const head = await fetch(`${base}/head-explicit`, { method: "HEAD" });
+				expect(head.headers.get("content-length")).toBe("2");
+				expect(await head.text()).toBe("");
+
+				const reentrant = await fetch(`${base}/reentrant-commit`);
+				expect(reentrant.status).toBe(500);
+				expect(await reentrant.text()).toBe("request handler error");
+				const removeAfterWrite = await fetch(`${base}/remove-after-write`);
+				expect(await removeAfterWrite.text()).toBe("aServerResponse is not writable");
+
+				for (const length of ["1e2", "9223372036854775808"]) {
+					const invalid = await fetch(`${base}/invalid-content-length/${length}`);
+					expect(invalid.status).toBe(500);
+					expect(await invalid.text()).toBe("Invalid content-length header");
+				}
+				for (const route of ["short-content-length", "long-content-length"]) {
+					await expect(
+						fetch(`${base}/${route}`).then((response) => response.text()),
+					).rejects.toThrow();
+				}
+
+				await new Promise<void>((resolve, reject) => {
+					const socket = createConnection({ host: "127.0.0.1", port }, () => {
+						socket.write("GET /failed-write HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+					});
+					socket.once("data", () => {
+						socket.destroy();
+						resolve();
+					});
+					socket.once("error", reject);
+				});
+				let failedWriteEvents = "";
+				for (let attempt = 0; attempt < 100; attempt++) {
+					const eventsResponse = await fetch(`${base}/failed-write-events`);
+					failedWriteEvents = await eventsResponse.text();
+					if (failedWriteEvents.endsWith(",close")) break;
+					await new Promise<void>((resolve) => {
+						setTimeout(resolve, 10);
+					});
+				}
+				const failedEvents = failedWriteEvents.split(",");
+				expect(failedEvents.at(-2)).toBe("end:true");
+				expect(failedEvents.at(-1)).toBe("close");
+				const writeEvents = failedEvents.slice(0, -2);
+				expect(writeEvents).toHaveLength(16);
+				expect(writeEvents.map((event) => Number(event.split(":")[1]))).toEqual(
+					Array.from({ length: 16 }, (_, index) => index),
+				);
+				expect(writeEvents.some((event) => event.endsWith(":true"))).toBe(true);
+
+				await expect(
+					fetch(`${base}/throw-after-write`).then((response) => response.text()),
+				).rejects.toThrow();
+				const afterFailure = await fetch(`${base}/metadata`, {
+					headers: { "x-test": "request-header" },
+				});
+				expect(afterFailure.status).toBe(201);
+				expect(await afterFailure.text()).toBe("ab");
+
+				await new Promise<void>((resolve, reject) => {
+					const socket = createConnection({ host: "127.0.0.1", port }, () => {
+						socket.write("GET /idle-stream HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+					});
+					socket.once("data", () => {
+						socket.destroy();
+						resolve();
+					});
+					socket.once("error", reject);
+				});
+				const close = await fetch(`${base}/close`);
+				expect(await close.text()).toBe("closed");
+				expect(await exit, stderr).toBe(0);
+			} finally {
+				child.kill("SIGKILL");
+			}
 		}
 	});
 

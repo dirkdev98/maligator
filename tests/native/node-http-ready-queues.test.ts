@@ -164,6 +164,10 @@ describe("node:http ready request queues", () => {
 			expect(field(line, "dispatch_enqueues")).toBe(field(line, "dispatch_dequeues"));
 			expect(field(line, "completion_enqueues")).toBe(field(line, "completion_dequeues"));
 			expect(field(line, "request_inserts")).toBe(field(line, "request_removes"));
+		} catch (error) {
+			throw new Error(
+				`${(error as Error).message}\nexit=${child.exitCode}\n${stdout}\n${stderr}`,
+			);
 		} finally {
 			child.kill("SIGKILL");
 		}

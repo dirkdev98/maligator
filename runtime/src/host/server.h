@@ -18,7 +18,8 @@ typedef struct MalHttpConn MalHttpConn;
 
 typedef struct MalHttpServer MalHttpServer;
 typedef void (*MalHttpServerCloseCallback)(void *data);
-typedef void (*MalHttpResponseCompleteCallback)(void *data);
+typedef void (*MalHttpResponseCompleteCallback)(void *data, bool success);
+typedef void (*MalHttpResponseWriteCallback)(void *data, u64 token);
 typedef void (*MalHttpServerHandler)(
     void *data,
     MalVm *vm,
@@ -97,6 +98,30 @@ void mal_http_conn_respond_framed(
     const char *body,
     usize body_len,
     i64 declared_content_length);
+
+/* Incremental response transport. Start commits the head and selects fixed-length
+ * or chunked framing. `expected_body_length` validates transferred bytes separately
+ * from framing (HEAD advertises a length but transfers none). Successful writes
+ * take ownership of `bytes`; each non-final token is reported after its bytes reach
+ * the socket. `end_stream` drives the response-complete callback after flush. */
+bool mal_http_conn_response_start(
+    MalHttpConn *conn,
+    int status,
+    const char *reason,
+    const char *headers,
+    usize headers_len,
+    i64 declared_content_length,
+    i64 expected_body_length,
+    bool chunked);
+bool mal_http_conn_response_write_owned(
+    MalHttpConn *conn,
+    byte *bytes,
+    usize length,
+    u64 token,
+    bool end_stream);
+void mal_http_conn_on_response_write(
+    MalHttpConn *conn, MalHttpResponseWriteCallback callback, void *data);
+void mal_http_conn_abort(MalHttpConn *conn);
 
 /* Configure the next response before mal_http_conn_respond. The completion
  * callback runs from the reactor path after the bytes flush or the connection
