@@ -181,6 +181,12 @@ staged acceptance rather than a package-specific shim:
        reconnection. The opt-in live PostgreSQL lane runs compiled/interpreted
        execution in normal and GC-stress modes; deterministic stream/socket suites
        cover writable string decoding, asynchronous `_final`, and half-close state.
+8. [x] Accept transactions, savepoint recovery, rollback, transaction pipelining,
+       query builders, callback and async-iterator cursors, instant iteration,
+       descriptions, values/raw result modes, simple multi-statements, nested unsafe
+       fragments, result metadata, and file queries. `node:fs` callback `readFile`
+       supplies the unchanged driver's file-query path with deferred Buffer/UTF-8
+       results and Node-shaped asynchronous errors.
 
 Raw TCP/TLS are the architectural gates. Filesystem aliases or mocked database
 responses must not substitute for the driver's real wire protocol.

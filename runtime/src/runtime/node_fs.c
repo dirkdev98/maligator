@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ascii.h"
 #include "array_buffer_object.h"
 #include "array_object.h"
 #include "date_object.h"
@@ -642,6 +643,117 @@ static MalValue node_fs_stat_task(
     return mal_value_new_undefined();
 }
 
+static MalValue node_fs_read_file_task(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) args;
+    (void) argc;
+    (void) nt;
+    MalNativeFunctionObject *task = mal_value_to_native_function_object(callee);
+    MalValue roots[] = {
+        mal_native_function_object_get_slot(task, 0),
+        mal_native_function_object_get_slot(task, 1),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    char *path = node_fs_path_cstr(vm, roots[1]);
+    if (path == nullptr) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    byte *data;
+    usize length;
+    int err = mal_posix_fs_read_file(path, &data, &length);
+    if (err == 0) {
+        bool encoded = mal_value_to_boolean(
+            mal_native_function_object_get_slot(task, 2));
+        if (encoded) {
+            roots[2] = node_fs_string_from_utf8(vm, data, length);
+            free(data);
+        } else {
+            roots[2] = mal_node_buffer_from_owned_bytes(vm, data, length);
+        }
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            MalValue callback_args[] = {mal_value_new_null(), roots[2]};
+            mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), callback_args, 2);
+        }
+    } else {
+        roots[2] = node_fs_errno_value(vm, err, "open", path);
+        MalValue callback_args[] = {roots[2]};
+        mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), callback_args, 1);
+    }
+    free(path);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static bool node_fs_read_file_encoding(
+    MalVm *vm, MalValue options, bool *encoded) {
+    *encoded = false;
+    if (mal_value_is_undefined(options) || mal_value_is_null(options)) return true;
+    if (mal_value_is_object(options)) {
+        MalValue encoding;
+        if (!mal_vm_get_property(vm, options,
+                mal_intrinsic_string_key(vm, (const byte *) "encoding"), &encoding)) {
+            return false;
+        }
+        return node_fs_read_file_encoding(vm, encoding, encoded);
+    }
+    if (!mal_value_is_string(options)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "readFile encoding must be a string or null");
+        return false;
+    }
+    MalString *encoding = mal_value_to_string(options);
+    if (!mal_string_equals_ascii_ci(encoding, "utf8")
+        && !mal_string_equals_ascii_ci(encoding, "utf-8")) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "readFile only supports utf8 encoding");
+        return false;
+    }
+    *encoded = true;
+    return true;
+}
+
+static MalValue node_fs_read_file(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    i32 callback_index = argc - 1;
+    if (callback_index < 1 || !mal_value_is_callable(args[callback_index])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "readFile callback must be a function");
+        return mal_value_new_undefined();
+    }
+    char *path = node_fs_path_cstr(vm, args[0]);
+    if (path == nullptr) return mal_value_new_undefined();
+    bool encoded;
+    MalValue options = callback_index > 1 ? args[1] : mal_value_new_undefined();
+    if (!node_fs_read_file_encoding(vm, options, &encoded)) {
+        free(path);
+        return mal_value_new_undefined();
+    }
+    MalValue slots[] = {
+        args[callback_index], node_fs_string_from_cstr(vm, path),
+        mal_value_new_boolean(encoded),
+    };
+    free(path);
+    MalRootSpan root;
+    mal_gc_root(&root, slots, countof(slots));
+    MalValue task = mal_value_from_native_function_object(
+        mal_native_function_object_new_with_slots(
+            &vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "readFileCallback"),
+            node_fs_read_file_task, slots, countof(slots)));
+    mal_vm_enqueue_reaction_job(vm, task, false, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined());
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
 static MalValue node_fs_stat(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) self;
@@ -865,6 +977,9 @@ static MalValue node_fs_export(
     if (strcmp(name, "readFileSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "readFileSync", 1, node_fs_read_file_sync);
     }
+    if (strcmp(name, "readFile") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "readFile", 3, node_fs_read_file);
+    }
     if (strcmp(name, "writeFileSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "writeFileSync", 2, node_fs_write_file_sync);
     }
@@ -935,7 +1050,7 @@ void mal_host_install_node_fs(
 
     static const char *names[] = {
         "Stats", "copyFileSync", "createReadStream", "existsSync", "mkdirSync",
-        "mkdtempSync", "readFileSync", "readdirSync", "realpathSync", "renameSync",
+        "mkdtempSync", "readFile", "readFileSync", "readdirSync", "realpathSync", "renameSync",
         "rmSync", "statSync", "stat", "writeFileSync",
     };
     MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));

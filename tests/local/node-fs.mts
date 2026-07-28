@@ -4,6 +4,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFile,
 	readFileSync,
 	readdirSync,
 	realpathSync,
@@ -62,6 +63,35 @@ check(
 	"readFileSync preserves arbitrary bytes",
 	binaryRead.every((byte, index) => byte === binary[index]),
 );
+
+const callbackOrder = ["before"];
+const asyncText = await new Promise<string>((resolve, reject) => {
+	readFile(textFile, "utf8", (error, value) => {
+		callbackOrder.push("callback");
+		if (error) reject(error);
+		else resolve(value);
+	});
+	callbackOrder.push("after");
+});
+eq("readFile decodes UTF-8", asyncText, "héllo 😀");
+eq("readFile callback is deferred", callbackOrder.join(","), "before,after,callback");
+const asyncBuffer = await new Promise<Buffer>((resolve, reject) => {
+	readFile(byteFile, (error, value) => {
+		if (error) reject(error);
+		else resolve(value);
+	});
+});
+check("readFile returns Buffer without encoding", Buffer.isBuffer(asyncBuffer));
+check(
+	"readFile Buffer preserves arbitrary bytes",
+	asyncBuffer.every((byte, index) => byte === binary[index]),
+);
+const asyncMissingCode = await new Promise<string>((resolve) => {
+	readFile(`${root}/async-missing`, "utf8", (error) => {
+		resolve((error as NodeJS.ErrnoException).code ?? "");
+	});
+});
+eq("readFile reports asynchronous errno", asyncMissingCode, "ENOENT");
 
 const fileStat = statSync(textFile);
 check("stat returns a Stats instance", fileStat instanceof Stats);

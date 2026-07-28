@@ -100,6 +100,7 @@ const FS: HostModuleSpec = {
 		"existsSync",
 		"mkdirSync",
 		"mkdtempSync",
+		"readFile",
 		"readFileSync",
 		"readdirSync",
 		"realpathSync",
