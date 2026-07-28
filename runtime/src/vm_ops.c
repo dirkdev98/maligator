@@ -60,14 +60,17 @@ MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right) {
 }
 
 static bool mal_vm_string_to_array_index(MalString *string, u32 *index_out) {
+    if (string->array_index_impossible) return false;
     usize length = mal_string_length(string);
     const c16 *code_units = mal_string_code_units(string);
 
     if (length == 0) {
+        string->array_index_impossible = true;
         return false;
     }
 
     if (length > 1 && code_units[0] == '0') {
+        string->array_index_impossible = true;
         return false;
     }
 
@@ -75,11 +78,13 @@ static bool mal_vm_string_to_array_index(MalString *string, u32 *index_out) {
     for (usize i = 0; i < length; i++) {
         c16 code_unit = code_units[i];
         if (code_unit < '0' || code_unit > '9') {
+            string->array_index_impossible = true;
             return false;
         }
 
         value = value * 10 + (u64) (code_unit - '0');
         if (value >= UINT32_MAX) {
+            string->array_index_impossible = true;
             return false;
         }
     }

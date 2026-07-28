@@ -17,6 +17,7 @@ typedef struct MalString {
     MalHeapHeader header;
     MalStringStorage storage;
     bool hash_valid;
+    bool array_index_impossible;
     union {
         /** Cached only for flat (owned/external) strings. */
         u64 hash;

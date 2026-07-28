@@ -40,6 +40,7 @@ void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_unit
     mal_heap_header_init(&string->header, MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_OWNED;
     string->hash_valid = false;
+    string->array_index_impossible = false;
     string->length = length;
     string->code_units = owned_code_units;
 }
@@ -49,6 +50,7 @@ void mal_string_init_external(MalString *string, const c16 *code_units, usize le
     mal_heap_header_init(&string->header, MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_EXTERNAL;
     string->hash_valid = false;
+    string->array_index_impossible = false;
     string->length = length;
     string->code_units = code_units;
 }
@@ -195,6 +197,7 @@ static MalString *mal_string_new_dependent_resolved(
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_DEPENDENT;
     string->hash_valid = false;
+    string->array_index_impossible = false;
     string->parent = flat_parent;
     string->length = length;
     string->code_units = code_units;
@@ -266,6 +269,7 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_CONS;
     string->hash_valid = false;
+    string->array_index_impossible = false;
     string->left = left;
     string->length = length;
     string->right = right;
@@ -293,6 +297,7 @@ MalString *mal_string_new_owned(MalHeap *heap, const c16 *code_units, usize leng
     mal_heap_header_init(&string->header, MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_OWNED;
     string->hash_valid = false;
+    string->array_index_impossible = false;
     string->length = length;
     string->code_units = code_units;
 
@@ -311,6 +316,7 @@ MalString *mal_string_new_ascii(MalHeap *heap, const byte *bytes, usize length) 
     mal_heap_header_init(&string->header, MAL_HEAP_STRING);
     string->storage = MAL_STRING_STORAGE_OWNED;
     string->hash_valid = false;
+    string->array_index_impossible = false;
     string->length = length;
     string->code_units = code_units;
 
