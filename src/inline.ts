@@ -858,6 +858,11 @@ export interface ProgramHofSites {
  */
 const hofSubstitutedCalls = new WeakSet<IRInstruction>();
 
+/** Caller registers that replace captured-slot traffic only while a generated HOF
+ * callback call is inlined. The guarded slow call still creates the real closure and
+ * uses the authoritative environment. */
+const hofCaptureOverrides = new WeakMap<IRInstruction, ReadonlyMap<string, number>>();
+
 /**
  * Decode a string-constant index to a JS string (constants are UTF-16 code-unit
  * arrays; method names are ASCII).
@@ -1095,7 +1100,22 @@ function inlineInstruction(
 	instruction: IRInstruction,
 	offset: number,
 	args: ReadonlyArray<number>,
+	captureOverrides?: ReadonlyMap<string, number>,
 ): IRInstruction {
+	if (
+		(instruction.type === "loadCaptured" || instruction.type === "storeCaptured") &&
+		instruction.functionIndex !== undefined &&
+		instruction.index !== undefined
+	) {
+		const shadow = captureOverrides?.get(
+			capturedSlotKey(instruction.functionIndex, instruction.index),
+		);
+		if (shadow !== undefined) {
+			return instruction.type === "loadCaptured"
+				? { type: "move", registers: [instruction.registers[0] + offset, shadow] }
+				: { type: "move", registers: [shadow, instruction.registers[0] + offset] };
+		}
+	}
 	if (instruction.type === "loadArgumentCount") {
 		return {
 			type: "createNumber",
@@ -1183,6 +1203,7 @@ function buildInlinedBlocks(
 	callSitePos: number,
 	blockBase: number,
 	joinIndex: number,
+	captureOverrides?: ReadonlyMap<string, number>,
 ): Array<IRBlock> {
 	const rewrap = (
 		instruction: Extract<IRInstruction, { type: "sourcePos" }>,
@@ -1249,7 +1270,7 @@ function buildInlinedBlocks(
 				);
 				continue;
 			}
-			instructions.push(inlineInstruction(instruction, offset, args));
+			instructions.push(inlineInstruction(instruction, offset, args, captureOverrides));
 		}
 		out.push({ instructions });
 	});
@@ -1332,6 +1353,7 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 			const callRegisters = (call as { registers: ReadonlyArray<number> }).registers;
 			const destination = callRegisters[0]!;
 			const args = callRegisters.slice(3);
+			const captureOverrides = hofCaptureOverrides.get(call);
 
 			// The source position active at the call (nearest preceding marker in the
 			// host block) roots the inlined frames in the caller.
@@ -1378,7 +1400,7 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 					inlined.push(
 						instruction.type === "sourcePos"
 							? rewrap(instruction)
-							: inlineInstruction(instruction, offset, args),
+							: inlineInstruction(instruction, offset, args, captureOverrides),
 					);
 				}
 				const returnInstruction = body[body.length - 1] as {
@@ -1428,6 +1450,7 @@ export function optInlineCalls(program: IntermediateProgram): boolean {
 				callSitePos,
 				base,
 				joinIndex,
+				captureOverrides,
 			)) {
 				fn.blocks.push(inlinedBlock);
 			}
@@ -1764,6 +1787,84 @@ const HOF_METHOD_SPECS: ReadonlyMap<string, HofMethodSpec> = new Map([
 	],
 ]);
 
+interface HofCaptureShadow {
+	readonly key: string;
+	readonly functionIndex: number;
+	readonly index: number;
+	readonly write: boolean;
+}
+
+/** Captures that can use a caller-local register on one guarded HOF fast path.
+ * A third function could observe the environment during re-entrant property access,
+ * so only slots accessed by the owner and this callback are eligible. */
+function hofCaptureShadows(
+	program: IntermediateProgram,
+	owner: IRFunction,
+	site: HofInlineSite,
+	callbackRegister: number,
+): Array<HofCaptureShadow> {
+	if ((owner.mappedArgumentSlots?.length ?? 0) > 0) {
+		return [];
+	}
+	const callbackUses = buildIRRegisterIndex(owner).uses.get(callbackRegister) ?? [];
+	if (
+		callbackUses.length !== 1 ||
+		callbackUses[0]!.instruction !== site.call ||
+		callbackUses[0]!.position !== 3
+	) {
+		return [];
+	}
+
+	const target = program.functions.find(
+		(candidate) => candidate.functionIndex === site.callbackTarget,
+	);
+	if (target === undefined) {
+		return [];
+	}
+	const candidates = new Map<string, HofCaptureShadow>();
+	for (const block of target.blocks) {
+		for (const instruction of block.instructions) {
+			if (
+				(instruction.type === "loadCaptured" || instruction.type === "storeCaptured") &&
+				instruction.functionIndex === owner.functionIndex &&
+				instruction.index !== undefined
+			) {
+				const key = capturedSlotKey(instruction.functionIndex, instruction.index);
+				const current = candidates.get(key);
+				candidates.set(key, {
+					key,
+					functionIndex: instruction.functionIndex,
+					index: instruction.index,
+					write: current?.write === true || instruction.type === "storeCaptured",
+				});
+			}
+		}
+	}
+
+	for (const fn of program.functions) {
+		if (
+			fn.functionIndex === owner.functionIndex ||
+			fn.functionIndex === target.functionIndex
+		) {
+			continue;
+		}
+		for (const block of fn.blocks) {
+			for (const instruction of block.instructions) {
+				if (
+					(instruction.type === "loadCaptured" || instruction.type === "storeCaptured") &&
+					instruction.functionIndex !== undefined &&
+					instruction.index !== undefined
+				) {
+					candidates.delete(
+						capturedSlotKey(instruction.functionIndex, instruction.index),
+					);
+				}
+			}
+		}
+	}
+	return [...candidates.values()];
+}
+
 /**
  * Inline `arr.method(cb)` array-iteration sites behind a runtime guard, for the
  * methods in HOF_METHOD_SPECS. Skips calls inside a try region and calls whose tail
@@ -1839,6 +1940,14 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 						callbackDefinition = candidate;
 					}
 				}
+			}
+			const captureShadows =
+				callbackDefinition === undefined
+					? []
+					: hofCaptureShadows(program, fn, site, callback);
+			const captureOverrides = new Map<string, number>();
+			for (const shadow of captureShadows) {
+				captureOverrides.set(shadow.key, fn.nextRegisterDestination++);
 			}
 
 			// Fresh registers for the guard + loop scaffolding.
@@ -1923,6 +2032,14 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 				{ type: "loadProperty", registers: [lengthReg, receiver, lengthKeyReg] },
 				{ type: "createNumber", registers: [oneReg], value: 1 },
 			];
+			for (const shadow of captureShadows) {
+				fastInitInstructions.push({
+					type: "loadCaptured",
+					registers: [captureOverrides.get(shadow.key)!],
+					functionIndex: shadow.functionIndex,
+					index: shadow.index,
+				});
+			}
 			if (spec.backward) {
 				fastInitInstructions.push({
 					type: "createNumber",
@@ -2009,32 +2126,36 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			}
 			// callBlock: elem = arr[i]; then call the callback. reduce threads the
 			// accumulator: `acc = cb(acc, elem, i, arr)`; the others: `r = cb(elem, i, arr)`.
+			const fastCallbackCall: IRInstruction = spec.accumulator
+				? {
+						type: "call",
+						registers: [
+							accumulatorReg,
+							callback,
+							undefinedReg,
+							accumulatorReg,
+							elementReg,
+							indexReg,
+							receiver,
+						],
+					}
+				: {
+						type: "call",
+						registers: [
+							callbackResult,
+							callback,
+							undefinedReg,
+							elementReg,
+							indexReg,
+							receiver,
+						],
+					};
+			if (captureOverrides.size > 0) {
+				hofCaptureOverrides.set(fastCallbackCall, captureOverrides);
+			}
 			const callTail: Array<IRInstruction> = [
 				{ type: "loadProperty", registers: [elementReg, receiver, indexReg] },
-				spec.accumulator
-					? {
-							type: "call",
-							registers: [
-								accumulatorReg,
-								callback,
-								undefinedReg,
-								accumulatorReg,
-								elementReg,
-								indexReg,
-								receiver,
-							],
-						}
-					: {
-							type: "call",
-							registers: [
-								callbackResult,
-								callback,
-								undefinedReg,
-								elementReg,
-								indexReg,
-								receiver,
-							],
-						},
+				fastCallbackCall,
 			];
 			if (spec.buildsResult === "map") {
 				// result[i] = cb(elem, i, arr) (index < preset length → fills in place).
@@ -2110,12 +2231,21 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 			});
 			// exitBlock (early-exit methods): dst = exit value; jump join.
 			if (spec.earlyExit) {
-				fn.blocks.push({
-					instructions: [
-						valueInstruction(spec.exitValue!, destination),
-						{ type: "jump", blocks: [join] },
-					],
-				});
+				const exitInstructions: Array<IRInstruction> = [
+					valueInstruction(spec.exitValue!, destination),
+				];
+				for (const shadow of captureShadows) {
+					if (shadow.write) {
+						exitInstructions.push({
+							type: "storeCaptured",
+							registers: [captureOverrides.get(shadow.key)!],
+							functionIndex: shadow.functionIndex,
+							index: shadow.index,
+						});
+					}
+				}
+				exitInstructions.push({ type: "jump", blocks: [join] });
+				fn.blocks.push({ instructions: exitInstructions });
 			}
 			// afterLoop: dst = result array (map/filter) / accumulator (reduce) / the
 			// method's default value.
@@ -2125,9 +2255,19 @@ export function optInlineHofCallbacks(program: IntermediateProgram): boolean {
 					: spec.accumulator
 						? { type: "move", registers: [destination, accumulatorReg] }
 						: valueInstruction(spec.defaultValue, destination);
-			fn.blocks.push({
-				instructions: [afterLoopValue, { type: "jump", blocks: [join] }],
-			});
+			const afterLoopInstructions: Array<IRInstruction> = [afterLoopValue];
+			for (const shadow of captureShadows) {
+				if (shadow.write) {
+					afterLoopInstructions.push({
+						type: "storeCaptured",
+						registers: [captureOverrides.get(shadow.key)!],
+						functionIndex: shadow.functionIndex,
+						index: shadow.index,
+					});
+				}
+			}
+			afterLoopInstructions.push({ type: "jump", blocks: [join] });
+			fn.blocks.push({ instructions: afterLoopInstructions });
 			// slowPath: run the original method. When the callback is a direct
 			// createFunction, re-create it here so the fast path's closure becomes dead
 			// (DCE'd → no allocation on the common path); else use the original call.

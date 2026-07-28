@@ -349,6 +349,32 @@ test("the forEach callback closure is sunk to the slow path (fast path allocates
 	expect(blocksWithClosure).toBe(1); // only the slow path creates the closure
 });
 
+test("the forEach fast path shadows an otherwise unobservable mutable capture", () => {
+	const source = `(function (){ let s = 0; const a = [1,2,3]; a.forEach(x => { s += x; }); return s; })();`;
+	const owner = optimizedNested(source);
+	const capturedLoads = countType(owner, "loadCaptured");
+	const capturedStores = countType(owner, "storeCaptured");
+	// One load initializes the fast-path shadow and one reads the final result. The
+	// two callback accesses themselves were rewritten to moves. Stores are the TDZ
+	// initialization, source initialization, and one fast-path commit.
+	expect(capturedLoads).toBe(2);
+	expect(capturedStores).toBe(3);
+});
+
+test("capture shadowing stays disabled when another closure can observe the slot", () => {
+	const source = `(function (){ let s = 0; globalThis.savedRead = () => s; const a = [1,2,3]; a.forEach(x => { s += x; }); return s; })();`;
+	const owner = optimizedNested(source);
+	// The callback's environment traffic remains together in its inlined loop block
+	// because the escaped observer can run re-entrantly while iteration is active.
+	expect(
+		owner.blocks.some(
+			(block) =>
+				block.instructions.some((instruction) => instruction.type === "loadCaptured") &&
+				block.instructions.some((instruction) => instruction.type === "storeCaptured"),
+		),
+	).toBe(true);
+});
+
 test("some/every/find/findIndex are each replaced by a guarded inlined loop", () => {
 	for (const method of ["some", "every", "find", "findIndex"]) {
 		const source = `(function (){ const a = [1,2,3]; return a.${method}(x => x > 1); })();`;
