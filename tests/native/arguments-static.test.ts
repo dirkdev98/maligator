@@ -68,15 +68,13 @@ describe("static arguments access", () => {
 			const field = (key: string): number =>
 				Number(line?.match(new RegExp(`${key}=([0-9]+)`))?.[1] ?? -1);
 			expect(field("logical_values")).toBe(38);
-			expect(field("destination_writes")).toBe(38);
+			expect(field("destination_writes")).toBe(name === "interpreted" ? 37 : 38);
 			expect(field("temporary_copies")).toBe(name === "interpreted" ? 2 : 0);
 			const coroutine = result.stderr
 				.split("\n")
 				.find((candidate) => candidate.startsWith("[coroutine-stats]"));
 			expect(coroutine).toBeDefined();
-			expect(Number(coroutine?.match(/requests=([0-9]+)/)?.[1] ?? -1)).toBe(
-				name === "compiled" ? 9 : 11,
-			);
+			expect(Number(coroutine?.match(/requests=([0-9]+)/)?.[1] ?? -1)).toBe(9);
 		});
 	}
 });

@@ -1314,7 +1314,7 @@ bool mal_vm_push_function_frame(
     const MalFunction *function = &vm->definition->functions[function_index];
     i32 register_count = function->register_count;
     i32 param_count = function->parameter_count;
-    bool wants_args = function->needs_arguments;
+    bool wants_args = arg_count > 0 && arg_count <= function->argument_retention_limit;
 
     // The frame array is fixed-capacity (never moves); refuse to overflow it
     // before mutating any value-stack state, so the bail is clean. In practice

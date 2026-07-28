@@ -4,7 +4,7 @@ import {
 	emitTypeofResult,
 	emitUnaryOperator,
 } from "./emit-vm.ts";
-import { decodeVmValueOperand } from "./lower-vm.ts";
+import { computeArgumentRetentionLimit, decodeVmValueOperand } from "./lower-vm.ts";
 import type { VmExceptionHandler, VmFunction, VmInstruction } from "./lower-vm.ts";
 
 /**
@@ -816,25 +816,13 @@ function emitResumableFunction(
 	// The root frame spans the whole buffer and is always published, so every exit
 	// past it must unlink it.
 	const gcUnlink = "mal_root_frame_head = __gc_frame.prev; ";
-	const argumentInstructions = fn.instructions.slice(fn.argumentSnapshotCount);
-	const retainsAllArguments = argumentInstructions.some(
-		(instruction) =>
-			instruction.opcode === "CREATE_ARGUMENTS_OBJECT" ||
-			instruction.opcode === "CREATE_REST_ARGUMENTS" ||
-			instruction.opcode === "LOAD_ARGUMENT",
-	);
-	const maximumStaticArgumentIndex = argumentInstructions.reduce(
-		(maximum, instruction) =>
-			instruction.opcode === "LOAD_STATIC_ARGUMENT"
-				? Math.max(maximum, instruction.index)
-				: maximum,
-		-1,
-	);
-	const retainArguments = retainsAllArguments
-		? "arg_count > 0"
-		: maximumStaticArgumentIndex >= 0
-			? `arg_count > 0 && arg_count <= ${maximumStaticArgumentIndex}`
-			: "false";
+	const argumentRetentionLimit = computeArgumentRetentionLimit(fn);
+	const retainArguments =
+		argumentRetentionLimit === 0x7fffffff
+			? "arg_count > 0"
+			: argumentRetentionLimit >= 0
+				? `arg_count > 0 && arg_count <= ${argumentRetentionLimit}`
+				: "false";
 
 	const coro: CoroutineContext = {
 		functionIndex: index,

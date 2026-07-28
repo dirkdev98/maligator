@@ -2,7 +2,7 @@ import path from "node:path";
 import type { IncludedAsset } from "./assets.ts";
 import { emitCompiledFunction } from "./emit-c.ts";
 import type { CompiledFunction } from "./emit-c.ts";
-import { compressPositions } from "./lower-vm.ts";
+import { compressPositions, computeArgumentRetentionLimit } from "./lower-vm.ts";
 import type { VmDefinition, VmFunction, VmInstruction } from "./lower-vm.ts";
 
 type VmBinaryOperator = Extract<VmInstruction, { opcode: "BINARY" }>["operator"];
@@ -152,6 +152,7 @@ function malFunctionRow(
 		`        .captured_count = ${fn.capturedCount},`,
 		`        .strict = ${fn.strict},`,
 		`        .needs_arguments = ${fn.needsArguments},`,
+		`        .argument_retention_limit = ${computeArgumentRetentionLimit(fn)},`,
 		`        .argument_snapshot_count = ${fn.argumentSnapshotCount},`,
 		`        .argument_snapshot_plan_count = ${argumentSnapshotPlanCount},`,
 		`        .argument_snapshot_plan = ${argumentSnapshotPlanSymbol},`,

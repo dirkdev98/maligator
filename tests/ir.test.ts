@@ -2,7 +2,10 @@ import { expect, test } from "vitest";
 import { executeIROptimizations } from "../src/ir-opt.ts";
 import { compileSemanticProgramToIr } from "../src/ir.ts";
 import type { IntermediateProgram, IRFunction, IRInstruction } from "../src/ir.ts";
-import { lowerIrProgramToVmDefinition } from "../src/lower-vm.ts";
+import {
+	computeArgumentRetentionLimit,
+	lowerIrProgramToVmDefinition,
+} from "../src/lower-vm.ts";
 import { parseScript } from "../src/parser.ts";
 import { allocateRegisters } from "../src/register-alloc.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/semantic-analysis.ts";
@@ -287,9 +290,11 @@ test("direct arguments reads avoid eager object materialization", () => {
 	const program = compileScript(`
 		function count(){ return arguments.length; }
 		function first(){ return arguments[0]; }
+		function third(){ return arguments[2]; }
 	`);
 	const count = functionNamed(program, "count");
 	const first = functionNamed(program, "first");
+	const third = functionNamed(program, "third");
 
 	expect(instructionsOf(count)).toContainEqual({
 		type: "loadArgumentCount",
@@ -316,6 +321,22 @@ test("direct arguments reads avoid eager object materialization", () => {
 	const definition = lowerIrProgramToVmDefinition(program);
 	expect(definition.functions[count.functionIndex]!.needsArguments).toBe(false);
 	expect(definition.functions[first.functionIndex]!.needsArguments).toBe(true);
+	expect(definition.functions[third.functionIndex]!.needsArguments).toBe(true);
+	expect(computeArgumentRetentionLimit(definition.functions[count.functionIndex]!)).toBe(
+		-1,
+	);
+	expect(computeArgumentRetentionLimit(definition.functions[first.functionIndex]!)).toBe(
+		0,
+	);
+	expect(computeArgumentRetentionLimit(definition.functions[third.functionIndex]!)).toBe(
+		2,
+	);
+	expect(
+		computeArgumentRetentionLimit({
+			argumentSnapshotCount: 0,
+			instructions: [{ opcode: "CREATE_ARGUMENTS_OBJECT", dst: 0 }],
+		}),
+	).toBe(0x7fffffff);
 	expect(definition.functions[count.functionIndex]!.argumentSnapshotCount).toBe(1);
 	expect(definition.functions[first.functionIndex]!.argumentSnapshotCount).toBe(1);
 });

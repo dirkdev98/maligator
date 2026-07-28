@@ -830,12 +830,11 @@ typedef struct MalFunction {
     i32 captured_count;
     bool strict;
 
-    /**
-     * The function retains its arguments after frame entry (materializes an
-     * `arguments` object, collects a rest parameter, or has a non-prefix raw
-     * read). Entry snapshots do not require a retained slice.
-     */
+    /** Whether any activation can retain supplied arguments after entry. */
     bool needs_arguments;
+    /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
+     * largest static index whose absence requires the supplied argument slice. */
+    i32 argument_retention_limit;
     bool mapped_arguments;
 
     /**

@@ -1065,6 +1065,23 @@ static void rd_instruction(Rd *r, MalInstruction *o, I32Builder *side_data) {
     }
 }
 
+static i32 argument_retention_limit(const MalFunction *fn) {
+    i32 limit = -1;
+    for (i32 i = fn->argument_snapshot_count; i < fn->instruction_count; i++) {
+        const MalInstruction *instruction = &fn->instructions[i];
+        if (instruction->opcode == MAL_OP_CREATE_ARGUMENTS_OBJECT ||
+            instruction->opcode == MAL_OP_CREATE_REST_ARGUMENTS ||
+            instruction->opcode == MAL_OP_LOAD_ARGUMENT) {
+            return INT32_MAX;
+        }
+        if (instruction->opcode == MAL_OP_LOAD_STATIC_ARGUMENT &&
+            instruction->as.load_static_argument.index > limit) {
+            limit = instruction->as.load_static_argument.index;
+        }
+    }
+    return limit;
+}
+
 static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool debug) {
     fn->name_string_index = rd_i32(r);
     u8 kind = rd_u8(r);
@@ -1138,6 +1155,13 @@ static void rd_function(MalLoadedDefinition *L, Rd *r, MalFunction *fn, bool deb
         rd_instruction(r, &instructions[i], &side_data);
     }
     fn->instructions = instructions;
+    fn->argument_retention_limit = -1;
+    if (r->ok) {
+        fn->argument_retention_limit = argument_retention_limit(fn);
+        if ((fn->argument_retention_limit >= 0) != fn->needs_arguments) {
+            r->ok = false;
+        }
+    }
     if ((u32) fn->argument_snapshot_count > instruction_count) {
         r->ok = false;
     }
