@@ -896,6 +896,18 @@ export type VmInstruction =
 			left: number;
 			right: number;
 			operator: IRBinaryOperator;
+			nativeNumericFusion?:
+				| { role: "start"; id: number }
+				| {
+						role: "finish";
+						id: number;
+						first: {
+							dst: number;
+							left: number;
+							right: number;
+							operator: IRBinaryOperator;
+						};
+				  };
 	  }
 	| {
 			opcode: "UNARY";
@@ -1875,14 +1887,32 @@ function lowerInstructionToVmInstruction(
 				excludedCount: instruction.registers.length - 2,
 				excluded: instruction.registers.slice(2),
 			};
-		case "binary":
+		case "binary": {
+			const fusion = instruction.nativeNumericFusion;
+			const nativeNumericFusion =
+				fusion?.role === "finish" && fusion.first.type === "binary"
+					? {
+							role: "finish" as const,
+							id: fusion.id,
+							first: {
+								dst: fusion.first.registers[0],
+								left: fusion.first.registers[1],
+								right: fusion.first.registers[2],
+								operator: fusion.first.operator,
+							},
+						}
+					: fusion?.role === "start"
+						? fusion
+						: undefined;
 			return {
 				opcode: "BINARY",
 				dst: instruction.registers[0],
 				left: instruction.registers[1],
 				right: instruction.registers[2],
 				operator: instruction.operator,
+				...(nativeNumericFusion === undefined ? {} : { nativeNumericFusion }),
 			};
+		}
 		case "unary":
 			return {
 				opcode: "UNARY",

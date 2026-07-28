@@ -266,9 +266,68 @@ export function executeIROptimizations(program: IntermediateProgram) {
 	if (residualFeatures.property) optStaticPropertyKeys(program);
 	if (residualFeatures.call) optImmediateCallOperands(program);
 	optDeadInstructionElimination(program);
+	annotateNativeNumericFusions(program);
 	annotateTerminalYieldSites(program);
 
 	if (debugEnabled) debugIntermediateProgram(program);
+}
+
+const NATIVE_NUMERIC_FUSION_OPERATORS = new Set<
+	Extract<IRInstruction, { type: "binary" }>["operator"]
+>(["+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>", ">>>"]);
+
+/** Mark pairs where a number-producing binary result has exactly one use in a
+ * later binary in the same block. The native backend keeps the first numeric
+ * result as an f64 while still executing both operations at their original
+ * observable positions; non-number operands retain the boxed path. */
+export function annotateNativeNumericFusions(program: IntermediateProgram): void {
+	let nextId = 0;
+	for (const fn of program.functions) {
+		if (fn.isGenerator || fn.isAsync) continue;
+		const index = buildIRRegisterIndex(fn, { locations: true });
+		const participating = new Set<IRInstruction>();
+		for (const block of fn.blocks) {
+			for (const first of block.instructions) {
+				if (
+					first.type !== "binary" ||
+					!NATIVE_NUMERIC_FUSION_OPERATORS.has(first.operator) ||
+					participating.has(first)
+				) {
+					continue;
+				}
+				const destination = first.registers[0];
+				if (index.uniqueDefinitions.get(destination) !== first) continue;
+				const uses = index.uses.get(destination);
+				if (uses?.length !== 1) continue;
+				const use = uses[0]!;
+				const finish = use.instruction;
+				if (
+					finish.type !== "binary" ||
+					(use.position !== 1 && use.position !== 2) ||
+					!NATIVE_NUMERIC_FUSION_OPERATORS.has(finish.operator) ||
+					participating.has(finish)
+				) {
+					continue;
+				}
+				const firstLocation = index.locations?.get(first);
+				const finishLocation = index.locations?.get(finish);
+				if (
+					firstLocation === undefined ||
+					finishLocation === undefined ||
+					firstLocation.blockIndex !== finishLocation.blockIndex ||
+					firstLocation.instructionIndex >= finishLocation.instructionIndex
+				) {
+					continue;
+				}
+
+				const id = nextId++;
+				first.nativeNumericFusion = { role: "start", id };
+				finish.nativeNumericFusion = { role: "finish", id, first };
+				participating.add(first);
+				participating.add(finish);
+			}
+		}
+	}
 }
 
 /**

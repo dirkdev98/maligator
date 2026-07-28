@@ -1396,6 +1396,13 @@ export type IRInstruction =
 				| "!=="
 				| "in"
 				| "instanceof";
+
+			/** Native-only hint for a one-use arithmetic pair. The first operation
+			 * still executes at its original position; its numeric result can remain
+			 * unboxed until the consuming operation. */
+			nativeNumericFusion?:
+				| { role: "start"; id: number }
+				| { role: "finish"; id: number; first: IRInstruction };
 	  }
 	| {
 			type: "unary";

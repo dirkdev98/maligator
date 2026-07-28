@@ -357,7 +357,9 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 			case "LOAD_PROPERTY":
 			case "LOAD_SUPER_PROPERTY":
 				disqualUse.add(instruction.object);
-				disqualUse.add(instruction.key);
+				// A numeric key enables the dense-array index path. Non-number callers
+				// take the boxed entry fallback before any body effects.
+				numericUse.add(instruction.key);
 				if (instruction.opcode === "LOAD_SUPER_PROPERTY") {
 					disqualUse.add(instruction.receiver);
 				}
@@ -367,7 +369,7 @@ function numericParamCandidates(fn: VmFunction): Set<number> {
 				break;
 			case "STORE_PROPERTY":
 				disqualUse.add(instruction.object);
-				disqualUse.add(instruction.key);
+				numericUse.add(instruction.key);
 				// value is a neutral boundary read
 				break;
 			case "STORE_PROPERTY_STATIC":
@@ -1156,14 +1158,27 @@ function consolidatedRegionDeclare(reg: RegionAccess, objExpr: string): Array<st
 		// variant (index 0 — the monomorphic / dominant shape) is a single compare to the base
 		// row, so the common case costs exactly the monomorphic form; only other shapes scan.
 		`const u32 *${reg.name}_slp;`,
+		`int ${reg.name}_v;`,
 		`if (${reg.name}_o && ${reg.name}_o->shape == ${reg.name}_sh[0]) {`,
+		`  ${reg.name}_v = 0;`,
 		`  ${reg.name}_slp = ${reg.name}_sl;`,
 		`} else {`,
-		`  int ${reg.name}_v = ${reg.name}_o ? mal_vm_object_region_variant(${reg.name}_o->shape, ${reg.name}_sh, ${reg.name}_n) : -1;`,
+		`  ${reg.name}_v = ${reg.name}_o ? mal_vm_object_region_variant(${reg.name}_o->shape, ${reg.name}_sh, ${reg.name}_n) : -1;`,
 		`  ${reg.name}_slp = ${reg.name}_v >= 0 ? &${reg.name}_sl[${reg.name}_v * ${reg.size}] : nullptr;`,
 		`}`,
 		`bool ${reg.name}_ok = ${reg.name}_slp != nullptr;`,
 	];
+}
+
+/** Revalidate the selected shape before every access after the first. Arbitrary
+ * operations between region members can invoke user code that reshapes or
+ * dictionarizes the receiver, invalidating both the slot row and slot storage. */
+function consolidatedRegionRevalidate(reg: RegionAccess): Array<string> {
+	return reg.declare
+		? []
+		: [
+				`${reg.name}_ok = ${reg.name}_slp != nullptr && ${reg.name}_o->shape == ${reg.name}_sh[${reg.name}_v];`,
+			];
 }
 
 /**
@@ -1304,17 +1319,16 @@ function emitBody(
 	}
 
 	// Guarded property-access regions. Group consecutive LOAD/STORE_PROPERTY on the same
-	// object register within a straight-line window under one hoisted receiver guard: an
+	// object register within a straight-line window under one shared receiver guard: an
 	// index-form (number-rep key) run guards a dense array (`mal_vm_as_array`), a string-key
 	// run guards a plain object (`mal_vm_as_object`). The first access declares the guard
 	// local, the rest reuse it, and each access omits the per-access throwCheck on a fast hit
 	// (a dense element / a monomorphic data-slot access runs no user code). A run is
 	// homogeneous in kind (array vs object need different guards) and bounded by a label
 	// (control could enter without passing the guard), a redefinition of the guarded
-	// register, or a control-flow terminator. The guard survives calls/allocations inside
-	// the run (the receiver's heap type is invariant, the collector is non-moving, the
-	// register keeps it rooted) and each access re-reads shape/elements fresh, so a run need
-	// not be safepoint-free.
+	// register, or a control-flow terminator. Consolidated object accesses revalidate the
+	// selected shape before each later direct slot access, because intervening coercion or
+	// calls may reshape/dictionarize the receiver while its identity stays stable.
 	const regionGuard = new Map<number, RegionAccess>();
 	{
 		// First collect maximal runs of same-kind, same-register accesses, then assign each
@@ -1394,6 +1408,20 @@ function emitBody(
 	}
 
 	const lines: Array<string> = [];
+	// Pair-fusion temporaries live for the whole C function so intervening property
+	// loads retain their original position and control-flow labels never jump over a
+	// declaration. Only boxed first results benefit from avoiding the box/unbox.
+	for (const instruction of fn.instructions) {
+		if (
+			instruction.opcode === "BINARY" &&
+			instruction.nativeNumericFusion?.role === "start" &&
+			reps[instruction.dst] !== "number"
+		) {
+			const id = instruction.nativeNumericFusion.id;
+			lines.push(`bool __nf_${id}_ok = false;`);
+			lines.push(`f64 __nf_${id}_value = 0.0;`);
+		}
+	}
 	// Statement-granular source position for this compiled frame: write it into
 	// the native frame whenever it changes, so a stack capture taken anywhere in
 	// this function (or in a callee/throw) reads the right line. The native frame
@@ -1794,6 +1822,7 @@ function emitInstruction(
 			// per-access IC. The run's last access commits the cache on the slow path.
 			return [
 				...(reg.declare ? consolidatedRegionDeclare(reg, boxed(instruction.object)) : []),
+				...consolidatedRegionRevalidate(reg),
 				`static MalInlineCache __ic_${ip};`,
 				`MalValue __v_${ip};`,
 				`if (${reg.name}_ok && ${key} == ${reg.name}_key[${reg.slotIndex}]) {`,
@@ -1863,6 +1892,7 @@ function emitInstruction(
 			// overwrite (the shape guard proved the slot writable-default), a miss the IC.
 			return [
 				...(reg.declare ? consolidatedRegionDeclare(reg, boxed(instruction.object)) : []),
+				...consolidatedRegionRevalidate(reg),
 				`static MalInlineCache __ic_${ip};`,
 				`if (${reg.name}_ok && ${key} == ${reg.name}_key[${reg.slotIndex}]) {`,
 				`  mal_perf_ic_store_region_hit();`,
@@ -1951,6 +1981,73 @@ function emitInstruction(
 			const rightIsNum = reps[right] === "number";
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
+			const fusion = instruction.nativeNumericFusion;
+
+			if (fusion?.role === "start" && reps[dst] !== "number") {
+				const nativeExpr = nativeNumberExpr(
+					operator,
+					leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`,
+					rightIsNum ? num(right) : `mal_ops_number_as_f64(${boxed(right)})`,
+				);
+				if (nativeExpr !== null) {
+					const guards: Array<string> = [];
+					if (!leftIsNum) guards.push(`mal_ops_is_number(${boxed(left)})`);
+					if (!rightIsNum) guards.push(`mal_ops_is_number(${boxed(right)})`);
+					const slow = `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`;
+					return [
+						`__nf_${fusion.id}_ok = ${guards.length === 0 ? "true" : guards.join(" && ")};`,
+						`if (__nf_${fusion.id}_ok) {`,
+						`  __nf_${fusion.id}_value = ${nativeExpr};`,
+						`} else {`,
+						`  r${dst} = ${slow};`,
+						`  ${throwCheck}`,
+						`}`,
+					];
+				}
+			}
+
+			if (fusion?.role === "finish" && reps[fusion.first.dst] !== "number") {
+				const first = fusion.first;
+				const firstOnLeft = left === first.dst;
+				const firstOnRight = right === first.dst;
+				const firstExpr = nativeNumberExpr(
+					first.operator,
+					reps[first.left] === "number"
+						? num(first.left)
+						: `mal_ops_number_as_f64(${boxed(first.left)})`,
+					reps[first.right] === "number"
+						? num(first.right)
+						: `mal_ops_number_as_f64(${boxed(first.right)})`,
+				);
+				if ((firstOnLeft || firstOnRight) && firstExpr !== null) {
+					const external = firstOnLeft ? right : left;
+					const externalExpr =
+						reps[external] === "number"
+							? num(external)
+							: `mal_ops_number_as_f64(${boxed(external)})`;
+					const nativeExpr = nativeNumberExpr(
+						operator,
+						firstOnLeft ? `__nf_${fusion.id}_value` : externalExpr,
+						firstOnRight ? `__nf_${fusion.id}_value` : externalExpr,
+					);
+					if (nativeExpr !== null) {
+						const guard =
+							reps[external] === "number"
+								? `__nf_${fusion.id}_ok`
+								: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
+						const slow = `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`;
+						return [
+							`if (${guard}) {`,
+							`  r${dst} = mal_ops_number_value(${nativeExpr});`,
+							`} else {`,
+							`  if (__nf_${fusion.id}_ok) r${first.dst} = mal_ops_number_value(__nf_${fusion.id}_value);`,
+							`  r${dst} = ${slow};`,
+							`  ${throwCheck}`,
+							`}`,
+						];
+					}
+				}
+			}
 
 			// The dst is `number`-rep only when the lattice proved both operands are
 			// numbers (see producedRep / producesNumberFromNumbers) — emit native

@@ -85,6 +85,32 @@ function loadArrayLength(value) {
 }
 
 const lengthArray = [1, 2, 3];
+
+function readAfterCoercion(target, coercer) {
+	const first = target.alpha + coercer;
+	return [first, target.beta];
+}
+
+const reshapeTarget = { alpha: 1, beta: 2 };
+const reshapeResult = readAfterCoercion(reshapeTarget, {
+	valueOf() {
+		delete reshapeTarget.beta;
+		return 3;
+	},
+});
+if (reshapeResult[0] !== 4 || reshapeResult[1] !== undefined)
+	throw new Error("stale consolidated region shape");
+
+function readPair(object) {
+	return object.alpha + object.beta;
+}
+
+const polymorphicObjects = [
+	{ alpha: 1, beta: 2 },
+	{ extra0: 0, alpha: 2, beta: 3 },
+	{ extra0: 0, extra1: 1, alpha: 3, beta: 4 },
+	{ extra0: 0, extra1: 1, extra2: 2, alpha: 4, beta: 5 },
+];
 let total = 0;
 for (let i = 0; i < 2000; i++) {
 	const object = objects[i % objects.length];
@@ -98,6 +124,7 @@ for (let i = 0; i < 2000; i++) {
 	if (loadNumberMethod(i) !== numberMethod) throw new Error("number method cache");
 	total += loadStringLength(i % 2 === 0 ? "s" : "stats");
 	total += loadArrayLength(lengthArray);
+	total += readPair(polymorphicObjects[i % polymorphicObjects.length]);
 }
 
 if (total <= 0) throw new Error("expected work");

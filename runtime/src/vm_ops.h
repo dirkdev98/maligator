@@ -732,11 +732,10 @@ void mal_vm_op_store_property_ic(MalVm *vm, MalValue object_value, MalValue key_
 
 /**
  * Consolidated-object-region shape match (native backend): the index of `shape` among the
- * region's `count` cached variant shapes, or -1. Called once per region entry; a hit means
- * every access in the run reads its slot from `slots[hit * k + i]` with no per-access shape
- * check. Shapes are interned/stable (the property IC relies on the same pointer identity),
- * so this needs no epoch guard — the cache holds only shapes/keys/slots, never a collectable
- * object pointer.
+ * region's `count` cached variant shapes, or -1. Called once per region entry; generated
+ * code revalidates that selected shape before later direct accesses because user code can
+ * reshape the receiver during the run. Shapes themselves are interned/stable, so the cache
+ * needs no epoch guard and holds no collectable object pointer.
  */
 static inline int mal_vm_object_region_variant(const MalShape *shape, const MalShape *const *shapes,
                                                u32 count) {
@@ -752,11 +751,10 @@ static inline int mal_vm_object_region_variant(const MalShape *shape, const MalS
  * Add `o`'s current shape as a new region variant on the slow path (after the run's per-site
  * ICs resolved). Succeeds — appending the shape, its per-site `slots`, and the shared `keys`,
  * and returning the new variant index — iff there is room (`*count < max`) and every site
- * monomorphically resolved a plain data slot on this shape. Else returns -1 (the run keeps
- * taking the per-site IC path). A load site records a shape data slot and a store site only a
- * default-writable one (see mal_vm_op_{load,store}_property_ic), so `slot != MAL_IC_VALUE_SLOT`
- * on the matched shape makes the region's direct read / barriered overwrite sound; the shape
- * guard (shape encodes attrs) keeps it so.
+ * resolved a plain data slot on this shape in either its primary or polymorphic entries.
+ * Else returns -1 (the run keeps taking the per-site IC path). A load site records a shape
+ * data slot and a store site only a default-writable one, so a real slot on the matched shape
+ * makes the region's direct read / barriered overwrite sound.
  */
 int mal_vm_object_region_add_variant(const MalObject *o, const MalInlineCache *const *ics, u32 k,
                                      const MalShape **shapes, u32 *slots, MalValue *keys, u32 *count, u32 max);

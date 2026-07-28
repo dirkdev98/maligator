@@ -243,4 +243,26 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("MAL_UNARY_INCREMENT");
 		expect(output).toContain("+ 1.0;");
 	});
+
+	it("guards numeric property-key parameters before using dense array access", () => {
+		const output = emit(
+			`"use strict"; function load(array, index) { return array[index]; } globalThis.load = load;`,
+		);
+		expect(output).toContain("MalValue p1 = arg_count > 1 ? args[1]");
+		expect(output).toContain("if (!mal_ops_is_number(p1))");
+		expect(output).toContain("return mal_compiled_1_boxed");
+		expect(output).toContain("mal_vm_array_try_load");
+	});
+
+	it("keeps one-use numeric arithmetic intermediates unboxed", () => {
+		const output = emit(
+			`"use strict"; function sum(object) { return object.a + object.b + object.c; } globalThis.sum = sum;`,
+		);
+		expect(output).toContain("bool __nf_");
+		expect(output).toContain("f64 __nf_");
+		expect(output).toContain("mal_ops_number_as_f64");
+		expect(output).toMatch(
+			/mal_ops_number_value\(__nf_\d+_value \+ mal_ops_number_as_f64/,
+		);
+	});
 });

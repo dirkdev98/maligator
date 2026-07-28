@@ -32,6 +32,56 @@ check("string positions do not count from end", "abc".startsWith("b", -2) === fa
 check("array negative relative index", [1, 2, 3, 4].slice(-2)[0] === 3);
 check("array at infinity", [1, 2, 3].at(Infinity) === undefined);
 
+function indexedLoad(object, key) {
+	return object[key];
+}
+
+const indexed = [10, 20];
+indexed[1.5] = 15;
+const indexedSymbol = Symbol("indexed");
+indexed[indexedSymbol] = 30;
+let indexedCoercions = 0;
+const indexedObjectKey = {
+	[Symbol.toPrimitive]() {
+		indexedCoercions++;
+		return "0";
+	},
+};
+check(
+	"guarded numeric property key",
+	indexedLoad(indexed, 1) === 20 &&
+		indexedLoad(indexed, -0) === 10 &&
+		indexedLoad(indexed, 1.5) === 15 &&
+		indexedLoad(indexed, "1") === 20 &&
+		indexedLoad(indexed, indexedSymbol) === 30 &&
+		indexedLoad(indexed, indexedObjectKey) === 10 &&
+		indexedCoercions === 1,
+);
+
+function fusedArithmetic(a, b, c) {
+	return a * b + c;
+}
+
+check("fused numeric arithmetic", fusedArithmetic(2, 3, 4) === 10);
+check("fused bigint fallback", fusedArithmetic(2n, 3n, 4n) === 10n);
+const fusionOrder = [];
+function coercibleNumber(name, value) {
+	return {
+		valueOf() {
+			fusionOrder.push(name);
+			return value;
+		},
+	};
+}
+check(
+	"fused arithmetic coercion order",
+	fusedArithmetic(
+		coercibleNumber("left", 2),
+		coercibleNumber("right", 3),
+		coercibleNumber("outer", 4),
+	) === 10 && fusionOrder.join(",") === "left,right,outer",
+);
+
 const typed = new Uint8Array([1, 2, 3, 4]);
 check("typed array negative relative index", typed.slice(-2)[0] === 3);
 check("typed array at infinity", typed.at(Infinity) === undefined);

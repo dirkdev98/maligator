@@ -3875,22 +3875,38 @@ int mal_vm_object_region_add_variant(const MalObject *o, const MalInlineCache *c
         return -1;
     }
     const MalShape *shape = o->shape;
-    // Every site must have monomorphically resolved a plain data slot on THIS shape. A
-    // value-slot entry (watched intrinsic) or a site that cached a different shape (dictionary
-    // / miss / a shape not yet in this run) disqualifies it — the run keeps the per-site IC.
+    // Every site must have resolved a plain data slot on THIS shape, either as its primary
+    // entry or in the fixed-key polymorphic overflow. A value-slot/special entry or an
+    // unresolved shape disqualifies it — the run keeps the per-site IC path.
+    u32 resolved_slots[k];
     for (u32 i = 0; i < k; i++) {
-        if (ics[i]->mode != MAL_IC_MODE_SHAPE || ics[i]->shape != shape ||
-            ics[i]->slot == MAL_IC_VALUE_SLOT) {
+        const MalInlineCache *ic = ics[i];
+        if (ic->mode != MAL_IC_MODE_SHAPE || ic->slot == MAL_IC_VALUE_SLOT ||
+            (*count > 0 && ic->key != keys[i])) {
             return -1;
         }
+        bool found = false;
+        if (ic->shape == shape) {
+            resolved_slots[i] = ic->slot;
+            found = true;
+        } else {
+            for (u8 p = 0; p < ic->poly_count; p++) {
+                if (ic->poly_shape[p] == shape) {
+                    resolved_slots[i] = ic->poly_slot[p];
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) return -1;
     }
     u32 v = *count;
     // Per-variant slots; keys are shared across variants (same access sites → same keys) and
     // cached as a unit with the slots so a computed-key site whose key drifts fails the fast
     // path's key compare and never reads a slot cached for a different key.
     for (u32 i = 0; i < k; i++) {
-        slots[v * k + i] = ics[i]->slot;
-        keys[i] = ics[i]->key;
+        slots[v * k + i] = resolved_slots[i];
+        if (v == 0) keys[i] = ics[i]->key;
     }
     shapes[v] = shape;
     *count = v + 1;
