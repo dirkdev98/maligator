@@ -157,4 +157,101 @@ try {
 delete Array.prototype[4];
 check(caughtError === setterError, "fallback throw resumes at catch");
 
+let iteratedSum = 0;
+const iterated = [1, 2, 3, 4];
+for (let repeat = 0; repeat < 500; repeat++) {
+	for (const value of iterated) iteratedSum += value;
+}
+check(iteratedSum === 5000, "dense for-of values");
+
+const growing = [1, 2];
+const grownValues = [];
+for (const value of growing) {
+	grownValues.push(value);
+	if (value === 1) growing.push(3);
+}
+check(grownValues.join(",") === "1,2,3", "for-of reads live growing length");
+
+const shrinking = [1, 2, 3];
+const shrunkValues = [];
+for (const value of shrinking) {
+	shrunkValues.push(value);
+	shrinking.length = 1;
+}
+check(shrunkValues.join(",") === "1", "for-of reads live shrinking length");
+
+let iteratorHoleGets = 0;
+const iteratorPrototype = Object.create(Array.prototype, {
+	1: {
+		configurable: true,
+		get() {
+			iteratorHoleGets++;
+			return 91;
+		},
+	},
+});
+const iteratorHole = [90, , 92];
+Object.setPrototypeOf(iteratorHole, iteratorPrototype);
+const iteratorHoleValues = [];
+for (const value of iteratorHole) iteratorHoleValues.push(value);
+check(
+	iteratorHoleValues.join(",") === "90,91,92" && iteratorHoleGets === 1,
+	"for-of hole uses prototype Get",
+);
+
+const builtinArrayIteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]());
+const originalArrayIteratorNext = builtinArrayIteratorPrototype.next;
+let patchedNextCalls = 0;
+builtinArrayIteratorPrototype.next = function () {
+	patchedNextCalls++;
+	return originalArrayIteratorNext.call(this);
+};
+let patchedIteratorSum = 0;
+for (const value of [4, 5]) patchedIteratorSum += value;
+builtinArrayIteratorPrototype.next = originalArrayIteratorNext;
+check(
+	patchedIteratorSum === 9 && patchedNextCalls === 3,
+	"for-of honors captured patched iterator next",
+);
+
+let customNextCalls = 0;
+let customCloseCalls = 0;
+const customIterable = [1, 2, 3];
+customIterable[Symbol.iterator] = function () {
+	let index = 0;
+	return {
+		next() {
+			customNextCalls++;
+			return index < 3 ? { value: ++index, done: false } : { done: true };
+		},
+		return() {
+			customCloseCalls++;
+			return { done: true };
+		},
+	};
+};
+for (const value of customIterable) {
+	if (value === 2) break;
+}
+check(
+	customNextCalls === 2 && customCloseCalls === 1,
+	"for-of custom iterator and close fallback",
+);
+
+let proxyGets = 0;
+const proxiedArray = new Proxy([6, 7], {
+	get(target, key, receiver) {
+		proxyGets++;
+		return Reflect.get(target, key, receiver);
+	},
+});
+let proxySum = 0;
+for (const value of proxiedArray) proxySum += value;
+check(proxySum === 13 && proxyGets >= 6, "for-of proxy fallback");
+
+class DenseArraySubclass extends Array {}
+let subclassSum = 0;
+for (const value of new DenseArraySubclass(8, 9)) subclassSum += value;
+check(subclassSum === 17, "for-of dense Array subclass");
+
 console.log("interpreter-dense-array PASS " + checks);

@@ -102,6 +102,8 @@ typedef struct MalPerfStats {
     u64 interpreter_local_store_ic_hits;
     u64 interpreter_load_ic_sync_fallbacks;
     u64 interpreter_store_ic_sync_fallbacks;
+    u64 interpreter_iterator_dense_hits;
+    u64 interpreter_iterator_sync_fallbacks;
 
     u64 argument_snapshot_logical_values;
     u64 argument_snapshot_destination_writes;

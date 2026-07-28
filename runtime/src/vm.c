@@ -1952,9 +1952,24 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_ITERATOR_NEXT:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_CALL(mal_op_iterator_next(frame, instruction));
                 break;
-            case MAL_OP_ITERATOR_STEP:
+            case MAL_OP_ITERATOR_STEP: {
+                MalIteratorRecord record = {
+                    .iterator = registers[instruction->as.iterator_step.iterator],
+                    .next_method = registers[instruction->as.iterator_step.next],
+                };
+                MalValue value;
+                bool done;
+                if (mal_vm_iterator_try_dense_array_step(&record, &value, &done)) {
+                    registers[instruction->as.iterator_step.value_dst] = value;
+                    registers[instruction->as.iterator_step.done_dst] = mal_value_new_boolean(done);
+                    MAL_PERF_COUNT(interpreter_iterator_dense_hits);
+                    MAL_VM_INTERPRETER_DIRECT_LEAF();
+                    continue;
+                }
+                MAL_PERF_COUNT(interpreter_iterator_sync_fallbacks);
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_iterator_step(frame, instruction));
                 break;
+            }
             case MAL_OP_ITERATOR_CLOSE:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_iterator_close(frame, instruction));
                 break;

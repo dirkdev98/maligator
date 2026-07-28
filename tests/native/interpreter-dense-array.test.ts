@@ -14,10 +14,17 @@ function field(line: string, name: string): number {
 
 describe("interpreter-local dense array accesses", () => {
 	let expected: string;
+	let compiled: string;
 	let interpreted: string;
 
 	beforeAll(() => {
 		expected = execFileSync(process.execPath, [fixture], { encoding: "utf-8" });
+		compiled = buildNativeBinary({
+			fixture,
+			name: "compiled-dense-array",
+			compiled: true,
+			outDir,
+		});
 		interpreted = buildNativeBinary({
 			fixture,
 			name: "interpreter-dense-array",
@@ -26,6 +33,10 @@ describe("interpreter-local dense array accesses", () => {
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 	}, 600_000);
+
+	it("preserves guarded for-of semantics in compiled code", () => {
+		expect(runToStdout(compiled, { env: { MAL_HOST_GC: "1" } })).toBe(expected);
+	});
 
 	it("preserves dense hits and all guarded fallbacks", () => {
 		expect(runToStdout(interpreted, { env: { MAL_HOST_GC: "1" } })).toBe(expected);
@@ -56,5 +67,8 @@ describe("interpreter-local dense array accesses", () => {
 		expect(field(stats, "load_ic_sync_fallbacks")).toBeLessThan(1000);
 		expect(field(stats, "store_ic_sync_fallbacks")).toBeGreaterThan(0);
 		expect(field(stats, "store_ic_sync_fallbacks")).toBeLessThan(1000);
+		expect(field(stats, "iterator_dense_hits")).toBeGreaterThan(2000);
+		expect(field(stats, "iterator_sync_fallbacks")).toBeGreaterThan(0);
+		expect(field(stats, "iterator_sync_fallbacks")).toBeLessThan(50);
 	});
 });

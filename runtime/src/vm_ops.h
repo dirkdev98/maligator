@@ -1075,17 +1075,14 @@ static inline void mal_vm_array_fast_store_index(MalVm *vm, MalValue object_valu
 }
 
 /**
- * Inline iterator step for the native backend: a built-in Array-values iterator whose
- * `next` is still the original, over a real dense array, yields the next element
- * straight from the vector with no call — eliminating the iteratorStep + advance
- * dispatch the general path performs per element (the for-of / spread hot path). A
- * done state, a hole / out-of-dense index, a patched next, or any other iterator falls
- * back to the general step (observably identical). Mirrors the runtime fast path in
- * mal_builtin_iterator_array_advance. The extra C frame this adds on the slow path is
- * bounded by the native stack-overflow guard (mal_vm_enter_compiled), so deep
- * recursion through a for-of unwinds with a clean RangeError.
+ * Non-calling dense Array-values step shared by native code and interpreter dispatch.
+ * The actual iterator record proves the observed @@iterator and captured next method
+ * are still the builtins. Length and dense storage are read fresh on every step; a
+ * hole or non-array target misses so the generic path performs the prototype-aware Get.
  */
-static inline bool mal_vm_iterator_step_fast(MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out) {
+static inline bool mal_vm_iterator_try_dense_array_step(
+    const MalIteratorRecord *record, MalValue *value_out, bool *done_out
+) {
     if (mal_value_is_iterator_object(record->iterator) &&
         mal_value_is_native_function_object(record->next_method) &&
         mal_native_function_object_callback(mal_value_to_native_function_object(record->next_method)) ==
@@ -1093,6 +1090,11 @@ static inline bool mal_vm_iterator_step_fast(MalVm *vm, const MalIteratorRecord 
         MalIteratorObject *iterator = mal_value_to_iterator_object(record->iterator);
         if (iterator->kind == MAL_ITERATOR_ARRAY_VALUES &&
             mal_value_is_heap_type(iterator->target, MAL_HEAP_ARRAY_OBJECT)) {
+            if (iterator->done) {
+                *value_out = mal_value_new_undefined();
+                *done_out = true;
+                return true;
+            }
             MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(iterator->target);
             u64 index = iterator->index;
             if (index >= array->length) {
@@ -1110,6 +1112,14 @@ static inline bool mal_vm_iterator_step_fast(MalVm *vm, const MalIteratorRecord 
             }
             // Hole / beyond the dense region (still < length): fall back for the Get.
         }
+    }
+    return false;
+}
+
+/** Inline iterator step for native code, with the complete protocol as fallback. */
+static inline bool mal_vm_iterator_step_fast(MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out) {
+    if (mal_vm_iterator_try_dense_array_step(record, value_out, done_out)) {
+        return true;
     }
     return mal_vm_iterator_step(vm, record, value_out, done_out);
 }

@@ -149,7 +149,8 @@ static void mal_perf_stats_print(void) {
         "state_syncs=%llu state_reloads=%llu normal_helper_continuations=%llu "
         "strict_direct_hits=%llu "
         "strict_string_fallbacks=%llu local_load_ic_hits=%llu local_store_ic_hits=%llu "
-        "load_ic_sync_fallbacks=%llu store_ic_sync_fallbacks=%llu\n",
+        "load_ic_sync_fallbacks=%llu store_ic_sync_fallbacks=%llu "
+        "iterator_dense_hits=%llu iterator_sync_fallbacks=%llu\n",
         (unsigned long long) mal_perf_stats.interpreter_direct_leaf_executions,
         (unsigned long long) mal_perf_stats.interpreter_boundary_dispatches,
         (unsigned long long) mal_perf_stats.interpreter_state_syncs,
@@ -160,7 +161,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.interpreter_local_load_ic_hits,
         (unsigned long long) mal_perf_stats.interpreter_local_store_ic_hits,
         (unsigned long long) mal_perf_stats.interpreter_load_ic_sync_fallbacks,
-        (unsigned long long) mal_perf_stats.interpreter_store_ic_sync_fallbacks
+        (unsigned long long) mal_perf_stats.interpreter_store_ic_sync_fallbacks,
+        (unsigned long long) mal_perf_stats.interpreter_iterator_dense_hits,
+        (unsigned long long) mal_perf_stats.interpreter_iterator_sync_fallbacks
     );
     fprintf(
         stderr,
