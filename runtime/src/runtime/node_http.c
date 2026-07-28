@@ -896,19 +896,46 @@ static MalValue http_ascii_value(MalVm *vm, const char *bytes, usize length) {
 static MalValue http_server_socket_facade(MalVm *vm) {
     MalObject *prototype = mal_value_to_object(
         vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE]);
-    MalValue socket = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
-    mal_gc_root(&root, &socket, 1);
-    mal_vm_call_value(vm,
-        vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR],
-        socket, nullptr, 0);
-    if (vm->completion.kind != MAL_COMPLETION_THROW) {
-        http_define_own(vm, socket, "encrypted", mal_value_new_boolean(false));
-        http_define_own(vm, socket, "readable", mal_value_new_boolean(true));
-        http_define_own(vm, socket, "writable", mal_value_new_boolean(true));
+    mal_gc_root(&root, roots, countof(roots));
+    roots[0] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    roots[1] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    if (vm->node_http_socket_shape == nullptr) {
+        static const char *names[] = {
+            "_events", "_eventsCount", "_maxListeners",
+            "encrypted", "readable", "writable",
+        };
+        MalShape *shape = mal_shape_empty();
+        for (usize i = 0; i < countof(names); i++) {
+            shape = mal_shape_add_property(
+                shape, mal_intrinsic_string_key(vm, (const byte *) names[i]),
+                HTTP_VISIBLE);
+        }
+        vm->node_http_socket_shape = shape;
+    }
+    MalValue values[] = {
+        roots[1], mal_value_from_i32(0), mal_value_new_undefined(),
+        mal_value_new_boolean(false), mal_value_new_boolean(true),
+        mal_value_new_boolean(true),
+    };
+    if (mal_object_try_append_shaped_values(
+            mal_value_to_object(roots[0]), mal_shape_empty(),
+            vm->node_http_socket_shape, values, (u32) countof(values))) {
+        MAL_PERF_COUNT(http_bulk_shaped_objects);
+        MAL_PERF_ADD(http_bulk_shaped_slots, countof(values));
+        MAL_PERF_ADD(http_property_definitions_avoided, countof(values));
+        MAL_PERF_ADD(http_shape_transitions_avoided, countof(values));
+    } else {
+        http_define_own(vm, roots[0], "_events", values[0]);
+        http_define_own(vm, roots[0], "_eventsCount", values[1]);
+        http_define_own(vm, roots[0], "_maxListeners", values[2]);
+        http_define_own(vm, roots[0], "encrypted", values[3]);
+        http_define_own(vm, roots[0], "readable", values[4]);
+        http_define_own(vm, roots[0], "writable", values[5]);
     }
     mal_gc_unroot(&root);
-    return socket;
+    return roots[0];
 }
 
 static void http_incoming_message_dispatch_shapes(MalVm *vm) {

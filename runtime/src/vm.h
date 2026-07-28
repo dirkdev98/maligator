@@ -1231,7 +1231,7 @@ typedef struct MalVm {
     struct MalShape *regexp_result_indices_shape;
     struct MalShape *regexp_indices_shape;
 
-    /** Shared `{ encrypted, readable, writable }` node:http socket facade layout. */
+    /** Shared EventEmitter plus `{ encrypted, readable, writable }` socket layout. */
     struct MalShape *node_http_socket_shape;
 
     /** Canonical node:http IncomingMessage layout before/after dispatch fields. */
