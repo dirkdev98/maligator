@@ -10,6 +10,18 @@
 static_assert(MAL_SHAPE_FIND_CALLER_COUNT == MAL_PERF_SHAPE_CALLER_COUNT, "shape caller stats mismatch");
 
 #define MAL_SHAPE_TRANSITION_INDEX_THRESHOLD 8
+#define MAL_SHAPE_FIND_CACHE_SIZE 1024
+#define MAL_SHAPE_FIND_CACHE_THRESHOLD 4
+
+typedef struct MalShapeFindCacheEntry {
+    const MalShape *shape;
+    MalValue key;
+    u64 hash;
+    i32 result;
+} MalShapeFindCacheEntry;
+
+static _Thread_local MalShapeFindCacheEntry
+    mal_shape_find_cache[MAL_SHAPE_FIND_CACHE_SIZE];
 
 /** A transition edge: parent + (key, attrs) -> child. */
 struct MalShapeTransition {
@@ -43,6 +55,45 @@ static bool mal_shape_transition_hash(MalKey key, u8 attrs, u64 *out) {
     hash ^= (u64) attrs + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
     *out = hash;
     return true;
+}
+
+static bool mal_shape_find_hash(MalKey key, u64 *out) {
+    if (mal_value_is_string(key.value)) {
+        MalString *string = mal_value_to_string(key.value);
+        if (mal_string_storage(string) == MAL_STRING_STORAGE_CONS) return false;
+        *out = mal_string_hash(string);
+        return true;
+    }
+    *out = key.value;
+    return true;
+}
+
+static MalShapeFindCacheEntry *mal_shape_find_cache_entry(
+    const MalShape *shape, u64 hash) {
+    uintptr_t pointer = (uintptr_t) shape >> 4;
+    usize slot = (usize) (pointer ^ hash ^ (hash >> 32))
+        & (MAL_SHAPE_FIND_CACHE_SIZE - 1);
+    return &mal_shape_find_cache[slot];
+}
+
+static void mal_shape_find_record_cached(
+    const MalShape *shape, MalKey key, MalShapeFindCaller caller, i32 result) {
+    if (!mal_perf_stats_enabled) return;
+    MalPerfShapeStats *stats = &mal_perf_stats.shapes[caller];
+    stats->calls++;
+    stats->widths += shape->inline_count;
+    stats->comparisons++;
+    if (result >= 0) {
+        stats->hits++;
+        if (shape->props[result].key == key.value) stats->pointer_hits++;
+        else stats->content_hits++;
+    } else {
+        stats->misses++;
+    }
+    if (shape->inline_count > stats->max_width) {
+        stats->max_width = shape->inline_count;
+    }
+    if (stats->max_comparisons == 0) stats->max_comparisons = 1;
 }
 
 static MalShapeTransitionIndex *mal_shape_transition_index_new(u32 capacity) {
@@ -151,6 +202,17 @@ bool mal_shape_attrs_are_default(u8 attrs) {
 }
 
 i32 mal_shape_find(const MalShape *shape, MalKey key, MalShapeFindCaller caller) {
+    u64 hash = 0;
+    MalShapeFindCacheEntry *cached = nullptr;
+    if (shape->inline_count >= MAL_SHAPE_FIND_CACHE_THRESHOLD
+        && mal_shape_find_hash(key, &hash)) {
+        cached = mal_shape_find_cache_entry(shape, hash);
+        if (cached->shape == shape && cached->hash == hash
+            && mal_key_value_equals(cached->key, key.value)) {
+            mal_shape_find_record_cached(shape, key, caller, cached->result);
+            return cached->result;
+        }
+    }
     for (u32 i = 0; i < shape->inline_count; ++i) {
         if (mal_key_value_equals(shape->props[i].key, key.value)) {
             if (mal_perf_stats_enabled) {
@@ -165,6 +227,14 @@ i32 mal_shape_find(const MalShape *shape, MalKey key, MalShapeFindCaller caller)
                 if (shape->props[i].key == key.value) stats->pointer_hits++;
                 else stats->content_hits++;
             }
+            if (cached != nullptr) {
+                *cached = (MalShapeFindCacheEntry) {
+                    .shape = shape,
+                    .key = shape->props[i].key,
+                    .hash = hash,
+                    .result = (i32) i,
+                };
+            }
             return (i32) i;
         }
     }
@@ -176,6 +246,16 @@ i32 mal_shape_find(const MalShape *shape, MalKey key, MalShapeFindCaller caller)
         stats->comparisons += shape->inline_count;
         if (shape->inline_count > stats->max_width) stats->max_width = shape->inline_count;
         if (shape->inline_count > stats->max_comparisons) stats->max_comparisons = shape->inline_count;
+    }
+    if (cached != nullptr && mal_value_is_string(key.value)
+        && mal_value_to_string(key.value)->header.storage
+            == MAL_HEAP_STORAGE_IMMORTAL) {
+        *cached = (MalShapeFindCacheEntry) {
+            .shape = shape,
+            .key = key.value,
+            .hash = hash,
+            .result = -1,
+        };
     }
     return -1;
 }
