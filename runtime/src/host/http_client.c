@@ -7,12 +7,30 @@
 #include <unistd.h>
 
 #include "host.h"
-#include "http.h"
 #include "net.h"
 #include "reactor.h"
 
+#define MAL_HTTP_CLIENT_IO_TURN (64 * 1024)
 #define MAL_HTTP_CLIENT_READ_INIT 4096
-#define MAL_HTTP_CLIENT_HEADERS_MAX (64 * 1024)
+#define MAL_HTTP_CLIENT_READ_MAX (256 * 1024)
+#define MAL_HTTP_CLIENT_WRITE_MAX (256 * 1024)
+
+typedef struct MalHttpClientWireWrite {
+    byte prefix[32];
+    usize prefix_length;
+    usize prefix_offset;
+    byte *bytes;
+    usize length;
+    usize offset;
+    byte suffix[8];
+    usize suffix_length;
+    usize suffix_offset;
+    usize plain_length;
+    u64 token;
+    bool notify;
+    bool end_stream;
+    struct MalHttpClientWireWrite *next;
+} MalHttpClientWireWrite;
 
 typedef struct MalHttpClient {
     MalHost *host;
@@ -20,16 +38,34 @@ typedef struct MalHttpClient {
     int fd;
     MalOp read_op;
     MalOp write_op;
-    byte *request;
-    usize request_len;
-    usize request_sent;
-    byte *response;
-    usize response_len;
-    usize response_capacity;
+
+    MalHttpCodec codec;
+    byte *read_buffer;
+    usize read_length;
+    usize read_capacity;
+    usize read_credit;
+
+    MalHttpClientWireWrite *write_head;
+    MalHttpClientWireWrite *write_tail;
+    usize queued_plain_bytes;
+    i64 request_remaining;
+
     bool connecting;
+    bool read_ended;
+    bool request_chunked;
+    bool request_final_queued;
+    bool request_complete;
+    bool response_head_seen;
+    bool response_has_body;
+    bool response_complete;
     bool head_request;
+    bool retained_work;
     struct MalHttpClient *next;
 } MalHttpClient;
+
+static void client_read_ready(void *data);
+static void client_write_ready(void *data);
+static void client_process_response(MalHttpClient *client);
 
 static char *client_copy(const char *bytes, usize length) {
     char *copy = malloc(length + 1);
@@ -42,14 +78,25 @@ static char *client_copy(const char *bytes, usize length) {
 void mal_http_client_result_free(void *data) {
     MalHttpClientResult *result = data;
     if (result == nullptr) return;
-    for (usize i = 0; i < result->header_count; i++) {
-        free(result->headers[i].name);
-        free(result->headers[i].value);
-    }
-    free(result->status_message);
-    free(result->body);
     free(result->error);
     free(result);
+}
+
+void mal_http_client_progress_free(void *data) {
+    MalHttpClientProgress *progress = data;
+    if (progress == nullptr) return;
+    mal_http_codec_head_free(progress->head);
+    free(progress->bytes);
+    free(progress);
+}
+
+static MalHttpClient *client_find(MalHost *host, MalHostHandle operation) {
+    if (host == nullptr || operation == 0) return nullptr;
+    for (MalHttpClient *client = host->http_clients;
+         client != nullptr; client = client->next) {
+        if (client->operation == operation) return client;
+    }
+    return nullptr;
 }
 
 static void client_destroy(MalHttpClient *client) {
@@ -59,9 +106,19 @@ static void client_destroy(MalHttpClient *client) {
     if (*link == client) *link = client->next;
     (void) mal_reactor_cancel_op(&client->host->reactor, &client->read_op);
     (void) mal_reactor_cancel_op(&client->host->reactor, &client->write_op);
-    mal_net_close(client->fd);
-    free(client->request);
-    free(client->response);
+    if (client->fd >= 0) mal_net_close(client->fd);
+    mal_http_codec_free(&client->codec);
+    free(client->read_buffer);
+    MalHttpClientWireWrite *write = client->write_head;
+    while (write != nullptr) {
+        MalHttpClientWireWrite *next = write->next;
+        free(write->bytes);
+        free(write);
+        write = next;
+    }
+    if (client->retained_work) {
+        (void) mal_reactor_release_work(&client->host->reactor);
+    }
     free(client);
 }
 
@@ -77,234 +134,250 @@ static void client_complete(
 }
 
 static void client_fail(MalHttpClient *client, const char *message) {
-    MalHttpClientResult *result = calloc(1, sizeof(MalHttpClientResult));
+    MalHttpClientResult *result = calloc(1, sizeof(*result));
     if (result != nullptr) result->error = client_copy(message, strlen(message));
     client_complete(client, MAL_HOST_TERMINAL_ERROR, result);
 }
 
-static bool client_ci_equal(
-    const char *left, usize left_len, const char *right) {
-    usize right_len = strlen(right);
-    if (left_len != right_len) return false;
-    for (usize i = 0; i < left_len; i++) {
-        char a = left[i];
-        char b = right[i];
-        if (a >= 'A' && a <= 'Z') a = (char) (a + 0x20);
-        if (b >= 'A' && b <= 'Z') b = (char) (b + 0x20);
-        if (a != b) return false;
+static bool client_progress(
+    MalHttpClient *client, MalHttpClientProgress *progress) {
+    if (mal_host_operation_progress(
+            &client->host->tasks, client->operation, progress,
+            mal_http_client_progress_free)) {
+        return true;
     }
+    mal_http_client_progress_free(progress);
+    return false;
+}
+
+static void client_maybe_complete(MalHttpClient *client) {
+    if (client->request_complete && client->response_complete) {
+        client_complete(client, MAL_HOST_TERMINAL_OK, nullptr);
+    }
+}
+
+static bool client_arm_read(MalHttpClient *client) {
+    if (client->read_op.active || client->read_ended
+        || (client->response_complete && client->request_complete)) {
+        return true;
+    }
+    client->read_op = (MalOp) {
+        .fd = client->fd,
+        .interest = MAL_IO_READ,
+        .waker = {.fn = client_read_ready, .data = client},
+    };
+    return mal_reactor_add_op(&client->host->reactor, &client->read_op);
+}
+
+static bool client_arm_write(MalHttpClient *client) {
+    if (client->write_op.active) return true;
+    client->write_op = (MalOp) {
+        .fd = client->fd,
+        .interest = MAL_IO_WRITE,
+        .waker = {.fn = client_write_ready, .data = client},
+    };
+    return mal_reactor_add_op(&client->host->reactor, &client->write_op);
+}
+
+static void client_queue_write(
+    MalHttpClient *client, MalHttpClientWireWrite *write) {
+    if (client->write_tail == nullptr) client->write_head = write;
+    else client->write_tail->next = write;
+    client->write_tail = write;
+}
+
+static void client_consume_read(MalHttpClient *client, usize consumed) {
+    if (consumed == 0) return;
+    usize remaining = client->read_length - consumed;
+    memmove(client->read_buffer, client->read_buffer + consumed, remaining);
+    client->read_length = remaining;
+}
+
+static bool client_publish_head(
+    MalHttpClient *client, MalHttpCodecHead *head) {
+    MalHttpClientProgress *progress = calloc(1, sizeof(*progress));
+    if (progress == nullptr) return false;
+    progress->kind = MAL_HTTP_CLIENT_PROGRESS_RESPONSE_HEAD;
+    progress->head = head;
+    if (!client_progress(client, progress)) return false;
+    client->response_head_seen = true;
+    client->response_has_body = !client->head_request
+        && !((head->status_code >= 100 && head->status_code < 200)
+             || head->status_code == 204 || head->status_code == 304);
     return true;
 }
 
-static const byte *client_header_end(const byte *bytes, usize length) {
-    for (usize i = 0; i + 3 < length; i++) {
-        if (bytes[i] == '\r' && bytes[i + 1] == '\n'
-            && bytes[i + 2] == '\r' && bytes[i + 3] == '\n') {
-            return bytes + i + 4;
-        }
-    }
-    return nullptr;
-}
-
-static const char *client_crlf(const char *bytes, usize length) {
-    for (usize i = 0; i + 1 < length; i++) {
-        if (bytes[i] == '\r' && bytes[i + 1] == '\n') return bytes + i;
-    }
-    return nullptr;
-}
-
-static bool client_parse_decimal(const char *bytes, usize length, usize *value) {
-    if (length == 0) return false;
-    usize parsed = 0;
-    for (usize i = 0; i < length; i++) {
-        if (bytes[i] < '0' || bytes[i] > '9') return false;
-        usize digit = (usize) (bytes[i] - '0');
-        if (parsed > (SIZE_MAX - digit) / 10) return false;
-        parsed = parsed * 10 + digit;
-    }
-    *value = parsed;
-    return true;
-}
-
-static bool client_parse_head(
-    MalHttpClient *client, MalHttpClientResult *result, usize header_length,
-    usize *content_length, bool *has_content_length, bool *chunked) {
-    const char *bytes = (const char *) client->response;
-    const char *line_end = client_crlf(bytes, header_length);
-    if (line_end == nullptr || line_end >= bytes + header_length
-        || line_end - bytes < 12 || memcmp(bytes, "HTTP/1.", 7) != 0
-        || bytes[7] < '0' || bytes[7] > '9' || bytes[8] != ' ') {
-        return false;
-    }
-    result->minor_version = bytes[7] - '0';
-    if (bytes[9] < '0' || bytes[9] > '9' || bytes[10] < '0' || bytes[10] > '9'
-        || bytes[11] < '0' || bytes[11] > '9') {
-        return false;
-    }
-    result->status = (bytes[9] - '0') * 100 + (bytes[10] - '0') * 10
-        + (bytes[11] - '0');
-    if (line_end > bytes + 12) {
-        if (bytes[12] != ' ') return false;
-        result->status_message_len = (usize) (line_end - (bytes + 13));
-        result->status_message = client_copy(
-            bytes + 13, result->status_message_len);
-        if (result->status_message == nullptr) return false;
-    } else {
-        result->status_message = client_copy("", 0);
-        if (result->status_message == nullptr) return false;
-    }
-
-    const char *cursor = line_end + 2;
-    const char *head_end = bytes + header_length - 2;
-    while (cursor < head_end) {
-        const char *end = client_crlf(cursor, (usize) (head_end - cursor));
-        if (end == nullptr || end > head_end) return false;
-        const char *colon = memchr(cursor, ':', (usize) (end - cursor));
-        if (colon == nullptr || colon == cursor
-            || result->header_count == countof(result->headers)) {
+static bool client_handle_response_event(MalHttpClient *client) {
+    MalHttpCodecEventKind event = mal_http_codec_event(&client->codec);
+    if (event == MAL_HTTP_CODEC_EVENT_HEAD) {
+        MalHttpCodecHead *head = mal_http_codec_take_head(&client->codec);
+        if (head == nullptr || head->upgrade || head->status_code == 101) {
+            mal_http_codec_head_free(head);
             return false;
         }
-        const char *value = colon + 1;
-        while (value < end && (*value == ' ' || *value == '\t')) value++;
-        const char *value_end = end;
-        while (value_end > value
-               && (value_end[-1] == ' ' || value_end[-1] == '\t')) value_end--;
-        MalHttpClientHeader *header = &result->headers[result->header_count++];
-        header->name_len = (usize) (colon - cursor);
-        header->value_len = (usize) (value_end - value);
-        header->name = client_copy(cursor, header->name_len);
-        header->value = client_copy(value, header->value_len);
-        if (header->name == nullptr || header->value == nullptr) return false;
-        if (client_ci_equal(header->name, header->name_len, "content-length")) {
-            if (*has_content_length
-                || !client_parse_decimal(header->value, header->value_len,
-                                         content_length)) {
-                return false;
-            }
-            *has_content_length = true;
+        if (head->status_code >= 100 && head->status_code < 200) {
+            mal_http_codec_head_free(head);
+            return true;
         }
-        if (client_ci_equal(header->name, header->name_len, "transfer-encoding")
-            ) {
-            if (*chunked
-                || !client_ci_equal(header->value, header->value_len, "chunked")) {
-                return false;
-            }
-            *chunked = true;
-        }
-        cursor = end + 2;
+        return client_publish_head(client, head);
     }
-    if (*chunked && *has_content_length) return false;
+    if (event == MAL_HTTP_CODEC_EVENT_BODY) {
+        usize length = 0;
+        byte *bytes = mal_http_codec_take_body(&client->codec, &length);
+        if (bytes == nullptr || !client->response_head_seen
+            || length > client->read_credit) {
+            free(bytes);
+            return false;
+        }
+        client->read_credit -= length;
+        MalHttpClientProgress *progress = calloc(1, sizeof(*progress));
+        if (progress == nullptr) {
+            free(bytes);
+            return false;
+        }
+        progress->kind = MAL_HTTP_CLIENT_PROGRESS_RESPONSE_BODY;
+        progress->bytes = bytes;
+        progress->length = length;
+        return client_progress(client, progress);
+    }
+    if (event == MAL_HTTP_CODEC_EVENT_COMPLETE) {
+        mal_http_codec_clear_event(&client->codec);
+        if (!client->response_head_seen) return true;
+        MalHttpClientProgress *progress = calloc(1, sizeof(*progress));
+        if (progress == nullptr) return false;
+        progress->kind = MAL_HTTP_CLIENT_PROGRESS_RESPONSE_COMPLETE;
+        if (!client_progress(client, progress)) return false;
+        client->response_complete = true;
+        return true;
+    }
     return true;
 }
 
-/* 0 = incomplete, 1 = complete, -1 = malformed/allocation failure. */
-static int client_try_response(MalHttpClient *client, bool eof) {
-    const byte *body_start = client_header_end(client->response, client->response_len);
-    if (body_start == nullptr) {
-        return eof || client->response_len > MAL_HTTP_CLIENT_HEADERS_MAX ? -1 : 0;
+static void client_process_response(MalHttpClient *client) {
+    usize turn = 0;
+    while (turn < MAL_HTTP_CLIENT_IO_TURN && !client->response_complete) {
+        if (mal_http_codec_event(&client->codec) != MAL_HTTP_CODEC_EVENT_NONE) {
+            if (!client_handle_response_event(client)) {
+                client_fail(client, "Malformed HTTP response");
+                return;
+            }
+            if (client->response_complete) {
+                if (client->request_complete) {
+                    client_maybe_complete(client);
+                }
+                return;
+            }
+            continue;
+        }
+        bool body_blocked = client->response_head_seen
+            && client->response_has_body && client->read_credit == 0;
+        if (body_blocked) return;
+        usize supplied = client->read_length;
+        if (supplied > MAL_HTTP_CODEC_BODY_MAX) supplied = MAL_HTTP_CODEC_BODY_MAX;
+        if (supplied > MAL_HTTP_CLIENT_IO_TURN - turn) {
+            supplied = MAL_HTTP_CLIENT_IO_TURN - turn;
+        }
+        if (client->response_head_seen && client->response_has_body
+            && supplied > client->read_credit) {
+            supplied = client->read_credit;
+        }
+        usize consumed = 0;
+        MalHttpCodecResult result = mal_http_codec_execute(
+            &client->codec, client->read_buffer, supplied, &consumed);
+        if (consumed > supplied) {
+            client_fail(client, "Malformed HTTP response");
+            return;
+        }
+        client_consume_read(client, consumed);
+        turn += consumed;
+        if (result == MAL_HTTP_CODEC_ERROR) {
+            client_fail(client, "Malformed HTTP response");
+            return;
+        }
+        if (result == MAL_HTTP_CODEC_EVENT || consumed > 0) continue;
+        if (client->read_ended) {
+            result = mal_http_codec_finish(&client->codec);
+            if (result == MAL_HTTP_CODEC_ERROR) {
+                client_fail(client, "Truncated HTTP response");
+                return;
+            }
+            if (result == MAL_HTTP_CODEC_EVENT) continue;
+            client_fail(client, "Truncated HTTP response");
+            return;
+        }
+        if (!client_arm_read(client)) {
+            client_fail(client, "Failed to wait for HTTP response");
+        }
+        return;
     }
-    usize header_length = (usize) (body_start - client->response);
-    MalHttpClientResult *result = calloc(1, sizeof(MalHttpClientResult));
-    if (result == nullptr) return -1;
-    usize content_length = 0;
-    bool has_content_length = false;
-    bool chunked = false;
-    if (!client_parse_head(client, result, header_length, &content_length,
-                           &has_content_length, &chunked)) {
-        mal_http_client_result_free(result);
-        return -1;
+    if (!client->response_complete && !client_arm_read(client)) {
+        client_fail(client, "Failed to continue HTTP response");
     }
-    usize available = client->response_len - header_length;
-    usize body_length = available;
-    usize raw_consumed = available;
-    byte *decoded = nullptr;
-    const byte *body_bytes = body_start;
-    bool no_body = client->head_request || (result->status >= 100 && result->status < 200)
-        || result->status == 204 || result->status == 304;
-    if (result->status >= 100 && result->status < 200) {
-        mal_http_client_result_free(result);
-        return -1;
-    }
-    if (no_body) {
-        body_length = 0;
-    } else if (chunked) {
-        decoded = malloc(available == 0 ? 1 : available);
-        if (decoded == nullptr) {
-            mal_http_client_result_free(result);
-            return -1;
-        }
-        if (available > 0) memcpy(decoded, body_start, available);
-        MalHttpParse parsed = mal_http_dechunk(
-            (char *) decoded, available, &body_length, &raw_consumed);
-        if (parsed == MAL_HTTP_INCOMPLETE && !eof) {
-            free(decoded);
-            mal_http_client_result_free(result);
-            return 0;
-        }
-        if (parsed != MAL_HTTP_OK) {
-            free(decoded);
-            mal_http_client_result_free(result);
-            return -1;
-        }
-        body_bytes = decoded;
-    } else if (has_content_length) {
-        if (available < content_length && !eof) {
-            mal_http_client_result_free(result);
-            return 0;
-        }
-        if (available < content_length) {
-            mal_http_client_result_free(result);
-            return -1;
-        }
-        body_length = content_length;
-    } else if (!eof) {
-        mal_http_client_result_free(result);
-        return 0;
-    }
-    (void) raw_consumed;
-    if (body_length > 0) {
-        result->body = malloc(body_length);
-        if (result->body == nullptr) {
-            free(decoded);
-            mal_http_client_result_free(result);
-            return -1;
-        }
-        memcpy(result->body, body_bytes, body_length);
-    }
-    free(decoded);
-    result->body_len = body_length;
-    client_complete(client, MAL_HOST_TERMINAL_OK, result);
-    return 1;
 }
 
 static void client_read_ready(void *data) {
     MalHttpClient *client = data;
-    bool eof = false;
-    for (;;) {
-        if (client->response_len == client->response_capacity) {
-            usize capacity = client->response_capacity == 0
-                ? MAL_HTTP_CLIENT_READ_INIT : client->response_capacity * 2;
-            if (capacity < client->response_capacity) {
-                client_fail(client, "HTTP response is too large");
+    if (client->response_complete) {
+        byte discard[4096];
+        usize turn = 0;
+        while (turn < MAL_HTTP_CLIENT_IO_TURN) {
+            ssize_t count = read(client->fd, discard, sizeof(discard));
+            if (count > 0) {
+                turn += (usize) count;
+                continue;
+            }
+            if (count == 0) {
+                client_fail(
+                    client, "HTTP peer closed before request upload completed");
                 return;
             }
-            byte *grown = realloc(client->response, capacity);
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (!client_arm_read(client)) {
+                    client_fail(client, "Failed to monitor HTTP peer");
+                }
+                return;
+            }
+            client_fail(client, "HTTP response read failed");
+            return;
+        }
+        if (!client_arm_read(client)) {
+            client_fail(client, "Failed to monitor HTTP peer");
+        }
+        return;
+    }
+    usize turn = 0;
+    while (turn < MAL_HTTP_CLIENT_IO_TURN) {
+        if (client->read_length == client->read_capacity) {
+            usize capacity = client->read_capacity == 0
+                ? MAL_HTTP_CLIENT_READ_INIT : client->read_capacity * 2;
+            if (capacity > MAL_HTTP_CLIENT_IO_TURN) capacity = MAL_HTTP_CLIENT_IO_TURN;
+            if (capacity <= client->read_capacity) {
+                client_fail(client, "HTTP response staging limit exceeded");
+                return;
+            }
+            byte *grown = realloc(client->read_buffer, capacity);
             if (grown == nullptr) {
                 client_fail(client, "HTTP response allocation failed");
                 return;
             }
-            client->response = grown;
-            client->response_capacity = capacity;
+            client->read_buffer = grown;
+            client->read_capacity = capacity;
+        }
+        usize available = client->read_capacity - client->read_length;
+        if (available > MAL_HTTP_CLIENT_IO_TURN - turn) {
+            available = MAL_HTTP_CLIENT_IO_TURN - turn;
         }
         ssize_t count = read(
-            client->fd, client->response + client->response_len,
-            client->response_capacity - client->response_len);
+            client->fd, client->read_buffer + client->read_length, available);
         if (count > 0) {
-            client->response_len += (usize) count;
+            usize length = (usize) count;
+            client->read_length += length;
+            turn += length;
             continue;
         }
         if (count == 0) {
-            eof = true;
+            client->read_ended = true;
             break;
         }
         if (errno == EINTR) continue;
@@ -312,19 +385,7 @@ static void client_read_ready(void *data) {
         client_fail(client, "HTTP response read failed");
         return;
     }
-    int parsed = client_try_response(client, eof);
-    if (parsed != 0) {
-        if (parsed < 0) client_fail(client, "Malformed HTTP response");
-        return;
-    }
-    client->read_op = (MalOp) {
-        .fd = client->fd,
-        .interest = MAL_IO_READ,
-        .waker = {.fn = client_read_ready, .data = client},
-    };
-    if (!mal_reactor_add_op(&client->host->reactor, &client->read_op)) {
-        client_fail(client, "Failed to wait for HTTP response");
-    }
+    client_process_response(client);
 }
 
 static void client_write_ready(void *data) {
@@ -336,23 +397,80 @@ static void client_write_ready(void *data) {
             return;
         }
         client->connecting = false;
+        if (!client_arm_read(client)) {
+            client_fail(client, "Failed to wait for HTTP response");
+            return;
+        }
     }
-    while (client->request_sent < client->request_len) {
-        ssize_t count = mal_net_write(
-            client->fd, client->request + client->request_sent,
-            client->request_len - client->request_sent);
+    usize turn = 0;
+    while (client->write_head != nullptr && turn < MAL_HTTP_CLIENT_IO_TURN) {
+        MalHttpClientWireWrite *write = client->write_head;
+        byte *bytes;
+        usize available;
+        bool body = false;
+        if (write->prefix_offset < write->prefix_length) {
+            bytes = write->prefix + write->prefix_offset;
+            available = write->prefix_length - write->prefix_offset;
+        } else if (write->offset < write->length) {
+            bytes = write->bytes + write->offset;
+            available = write->length - write->offset;
+            body = write->plain_length > 0;
+        } else if (write->suffix_offset < write->suffix_length) {
+            bytes = write->suffix + write->suffix_offset;
+            available = write->suffix_length - write->suffix_offset;
+        } else {
+            client->write_head = write->next;
+            if (client->write_head == nullptr) client->write_tail = nullptr;
+            bool notify = write->notify;
+            bool end_stream = write->end_stream;
+            u64 token = write->token;
+            usize plain_length = write->plain_length;
+            free(write->bytes);
+            free(write);
+            if (notify) {
+                MalHttpClientProgress *progress = calloc(1, sizeof(*progress));
+                if (progress == nullptr) {
+                    client_fail(client, "HTTP write completion allocation failed");
+                    return;
+                }
+                progress->kind = MAL_HTTP_CLIENT_PROGRESS_WRITE_COMPLETE;
+                progress->token = token;
+                progress->length = plain_length;
+                progress->end_stream = end_stream;
+                if (!client_progress(client, progress)) {
+                    client_fail(client, "HTTP write completion queue failed");
+                    return;
+                }
+            }
+            if (end_stream) {
+                client->request_complete = true;
+                client_maybe_complete(client);
+                return;
+            }
+            continue;
+        }
+        if (available > MAL_HTTP_CLIENT_IO_TURN - turn) {
+            available = MAL_HTTP_CLIENT_IO_TURN - turn;
+        }
+        ssize_t count = mal_net_write(client->fd, bytes, available);
         if (count > 0) {
-            client->request_sent += (usize) count;
+            usize length = (usize) count;
+            turn += length;
+            if (write->prefix_offset < write->prefix_length) {
+                write->prefix_offset += length;
+            } else if (body) {
+                write->offset += length;
+                client->queued_plain_bytes -= length;
+            } else if (write->offset < write->length) {
+                write->offset += length;
+            } else {
+                write->suffix_offset += length;
+            }
             continue;
         }
         if (count < 0 && errno == EINTR) continue;
         if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            client->write_op = (MalOp) {
-                .fd = client->fd,
-                .interest = MAL_IO_WRITE,
-                .waker = {.fn = client_write_ready, .data = client},
-            };
-            if (!mal_reactor_add_op(&client->host->reactor, &client->write_op)) {
+            if (!client_arm_write(client)) {
                 client_fail(client, "Failed to continue HTTP request");
             }
             return;
@@ -360,63 +478,172 @@ static void client_write_ready(void *data) {
         client_fail(client, "HTTP request write failed");
         return;
     }
-    free(client->request);
-    client->request = nullptr;
-    client->request_len = 0;
-    client_read_ready(client);
+    if (client->write_head != nullptr && !client_arm_write(client)) {
+        client_fail(client, "Failed to continue HTTP request");
+    }
 }
 
 bool mal_http_client_start(
-    MalHost *host, const char *host_name, u16 port, byte *request_bytes,
-    usize request_len, bool head_request, MalHostHandle *operation) {
-    if (host == nullptr || host_name == nullptr || request_bytes == nullptr
-        || request_len == 0 || operation == nullptr
+    MalHost *host, const char *host_name, u16 port, byte *request_head,
+    usize request_head_len, i64 content_length, bool head_request,
+    MalHostHandle *operation) {
+    if (host == nullptr || host_name == nullptr || request_head == nullptr
+        || request_head_len == 0 || content_length < -1 || operation == nullptr
         || !mal_host_operation_start(&host->tasks, operation)) {
         return false;
     }
-    MalHttpClient *client = calloc(1, sizeof(MalHttpClient));
+    MalHttpClient *client = calloc(1, sizeof(*client));
     if (client == nullptr) goto fail;
-    client->fd = -1;
     client->host = host;
     client->operation = *operation;
-    client->request = request_bytes;
-    client->request_len = request_len;
+    client->fd = -1;
     client->head_request = head_request;
+    client->request_chunked = content_length < 0;
+    client->request_remaining = content_length;
+    if (!mal_reactor_retain_work(&host->reactor)) goto fail_client;
+    client->retained_work = true;
+    if (!mal_http_codec_init(&client->codec, HTTP_RESPONSE)) goto fail_client;
+    mal_http_codec_set_skip_body(&client->codec, head_request);
+
+    const char *framing = client->request_chunked
+        ? "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        : nullptr;
+    char fixed_framing[128];
+    int framing_length = client->request_chunked
+        ? (int) strlen(framing)
+        : snprintf(
+            fixed_framing, sizeof(fixed_framing),
+            "Content-Length: %lld\r\nConnection: close\r\n\r\n",
+            (long long) content_length);
+    if (framing_length < 0
+        || request_head_len > SIZE_MAX - (usize) framing_length) {
+        goto fail_client;
+    }
+    usize head_length = request_head_len + (usize) framing_length;
+    byte *head_bytes = malloc(head_length);
+    MalHttpClientWireWrite *head = calloc(1, sizeof(*head));
+    if (head_bytes == nullptr || head == nullptr) {
+        free(head_bytes);
+        free(head);
+        goto fail_client;
+    }
+    memcpy(head_bytes, request_head, request_head_len);
+    memcpy(
+        head_bytes + request_head_len,
+        client->request_chunked ? framing : fixed_framing,
+        (usize) framing_length);
+    head->bytes = head_bytes;
+    head->length = head_length;
+    client_queue_write(client, head);
+
     client->fd = mal_net_connect(host_name, port);
     if (client->fd < 0) goto fail_client;
     client->connecting = true;
-    client->write_op = (MalOp) {
-        .fd = client->fd,
-        .interest = MAL_IO_WRITE,
-        .waker = {.fn = client_write_ready, .data = client},
-    };
-    if (!mal_reactor_add_op(&host->reactor, &client->write_op)
-        || !mal_host_operation_activate(&host->tasks, *operation)) {
-        goto fail_client;
-    }
     client->next = host->http_clients;
     host->http_clients = client;
+    if (!client_arm_write(client)
+        || !mal_host_operation_activate(&host->tasks, *operation)) {
+        goto fail_linked;
+    }
+    free(request_head);
     return true;
 
+fail_linked:
+    client_destroy(client);
+    (void) mal_host_operation_abort_start(&host->tasks, *operation);
+    return false;
 fail_client:
-    client->request = nullptr;
     client_destroy(client);
 fail:
     (void) mal_host_operation_abort_start(&host->tasks, *operation);
     return false;
 }
 
+MalHttpClientWriteResult mal_http_client_write_owned(
+    MalHost *host, MalHostHandle operation, byte *bytes, usize length,
+    u64 token, bool end_stream) {
+    MalHttpClient *client = client_find(host, operation);
+    if (client == nullptr || bytes == nullptr || client->request_final_queued) {
+        return MAL_HTTP_CLIENT_WRITE_CLOSED;
+    }
+    if (length > MAL_HTTP_CLIENT_WRITE_MAX - client->queued_plain_bytes) {
+        return MAL_HTTP_CLIENT_WRITE_WOULD_BLOCK;
+    }
+    if (client->request_remaining >= 0
+        && ((u64) length > (u64) client->request_remaining
+            || (end_stream && (u64) length != (u64) client->request_remaining))) {
+        return MAL_HTTP_CLIENT_WRITE_CLOSED;
+    }
+    MalHttpClientWireWrite *write = calloc(1, sizeof(*write));
+    if (write == nullptr) return MAL_HTTP_CLIENT_WRITE_WOULD_BLOCK;
+    write->bytes = bytes;
+    write->length = length;
+    write->plain_length = length;
+    write->token = token;
+    write->notify = true;
+    write->end_stream = end_stream;
+    if (client->request_chunked) {
+        if (length > 0) {
+            int prefix_length = snprintf(
+                (char *) write->prefix, sizeof(write->prefix), "%zx\r\n", length);
+            if (prefix_length < 0 || (usize) prefix_length >= sizeof(write->prefix)) {
+                write->bytes = nullptr;
+                free(write);
+                return MAL_HTTP_CLIENT_WRITE_CLOSED;
+            }
+            write->prefix_length = (usize) prefix_length;
+            const char *suffix = end_stream ? "\r\n0\r\n\r\n" : "\r\n";
+            write->suffix_length = end_stream ? 7 : 2;
+            memcpy(write->suffix, suffix, write->suffix_length);
+        } else if (end_stream) {
+            memcpy(write->suffix, "0\r\n\r\n", 5);
+            write->suffix_length = 5;
+        }
+    }
+    client->queued_plain_bytes += length;
+    if (client->request_remaining >= 0) client->request_remaining -= (i64) length;
+    if (end_stream) client->request_final_queued = true;
+    bool was_empty = client->write_tail == nullptr;
+    client_queue_write(client, write);
+    if (was_empty && !client->connecting) client_write_ready(client);
+    return MAL_HTTP_CLIENT_WRITE_ACCEPTED;
+}
+
+bool mal_http_client_read_credit(
+    MalHost *host, MalHostHandle operation, usize bytes) {
+    MalHttpClient *client = client_find(host, operation);
+    if (client == nullptr || bytes == 0 || client->response_complete
+        || bytes > MAL_HTTP_CLIENT_READ_MAX - client->read_credit) {
+        return false;
+    }
+    client->read_credit += bytes;
+    client_process_response(client);
+    return true;
+}
+
+bool mal_http_client_response_complete_ack(
+    MalHost *host, MalHostHandle operation) {
+    MalHttpClient *client = client_find(host, operation);
+    if (client == nullptr) return true;
+    if (!client->response_complete || client->request_complete) return false;
+    if (client->read_ended) {
+        client_fail(client, "HTTP peer closed before request upload completed");
+        return true;
+    }
+    if (!client_arm_read(client)) {
+        client_fail(client, "Failed to monitor HTTP peer");
+    }
+    return true;
+}
+
 bool mal_http_client_cancel(MalHost *host, MalHostHandle operation) {
     if (host == nullptr || operation == 0) return false;
-    for (MalHttpClient *client = host->http_clients;
-         client != nullptr; client = client->next) {
-        if (client->operation != operation) continue;
+    MalHttpClient *client = client_find(host, operation);
+    if (client != nullptr) {
         if (!mal_host_operation_cancel(&host->tasks, operation)) return false;
         client_destroy(client);
         return true;
     }
-    /* Completion may already have closed the transport and queued its terminal
-     * task. Cancellation remains valid so the runtime can suppress that result. */
     return mal_host_operation_cancel(&host->tasks, operation);
 }
 

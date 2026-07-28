@@ -29,6 +29,31 @@ function read(response, expectedStatus, expectedBody, callback) {
 }
 
 const server = http.createServer((request, response) => {
+	if (request.url === "/stream") {
+		let total = 0;
+		request.on("data", (chunk) => {
+			if (chunk.length > 0 && chunk[0] !== 117) fail("stream upload bytes");
+			total += chunk.length;
+		});
+		request.on("end", () => {
+			if (total !== 768 * 1024) fail("stream upload length");
+			response.setHeader("Content-Length", String(768 * 1024));
+			const chunk = Buffer.alloc(256 * 1024, 114);
+			response.write(chunk);
+			response.write(chunk);
+			response.end(chunk);
+		});
+		return;
+	}
+	if (request.url === "/early") {
+		response.end("early response");
+		return;
+	}
+	if (request.url === "/head") {
+		response.setHeader("Content-Length", "1024");
+		response.end();
+		return;
+	}
 	const chunks = [];
 	request.on("data", (chunk) => chunks.push(chunk));
 	request.on("end", () => {
@@ -193,11 +218,119 @@ server.listen(0, "127.0.0.1", () => {
 				read(response, 200, "get-auto-end", () => {
 					if (endCalls !== 1) fail("get end count");
 					http.ClientRequest.prototype.end = originalEnd;
-					closeServer();
+					runHead();
 				});
 			},
 		);
 		if (!(outgoing instanceof http.ClientRequest)) fail("get return");
+	}
+
+	function runHead() {
+		const outgoing = http.request(
+			{
+				hostname: "127.0.0.1",
+				port,
+				path: "/head",
+				method: "HEAD",
+			},
+			(response) => {
+				let length = 0;
+				response.on("data", (chunk) => (length += chunk.length));
+				response.on("end", () => {
+					if (length !== 0) fail("HEAD response body");
+					if (!response.complete) fail("HEAD response completion");
+					runStreaming();
+				});
+			},
+		);
+		outgoing.on("error", (error) => fail("HEAD error: " + error.message));
+		outgoing.end();
+	}
+
+	function runStreaming() {
+		let responseEnded = false;
+		let requestClosed = false;
+		let responseLength = 0;
+		let responseChunks = 0;
+		let writeCallbacks = 0;
+		let finishCallbacks = 0;
+		let drains = 0;
+		const outgoing = http.request(
+			{
+				hostname: "127.0.0.1",
+				port,
+				path: "/stream",
+				method: "POST",
+				headers: { "Content-Length": String(768 * 1024) },
+			},
+			(response) => {
+				if (response.statusCode !== 200) fail("stream response status");
+				response.on("data", (chunk) => {
+					if (chunk.length > 0 && chunk[0] !== 114) fail("stream response bytes");
+					responseLength += chunk.length;
+					responseChunks++;
+				});
+				response.on("end", () => {
+					responseEnded = true;
+					if (responseLength !== 768 * 1024) fail("stream response length");
+					if (responseChunks < 2) fail("stream response chunks");
+					maybeContinue();
+				});
+			},
+		);
+		outgoing.on("error", (error) => fail("stream error: " + error.message));
+		outgoing.on("drain", () => drains++);
+		outgoing.on("close", () => {
+			requestClosed = true;
+			if (writeCallbacks !== 1) fail("stream write callback");
+			if (finishCallbacks !== 1) fail("stream finish callback");
+			if (drains !== 1) fail("stream drain count");
+			maybeContinue();
+		});
+		if (outgoing.write(Buffer.alloc(384 * 1024, 117), () => writeCallbacks++) !== false) {
+			fail("stream write backpressure");
+		}
+		outgoing.end(Buffer.alloc(384 * 1024, 117), () => finishCallbacks++);
+
+		function maybeContinue() {
+			if (responseEnded && requestClosed) runEarlyResponse();
+		}
+	}
+
+	function runEarlyResponse() {
+		const chunks = [];
+		let responseEnded = false;
+		let requestClosed = false;
+		const outgoing = http.request(
+			{
+				hostname: "127.0.0.1",
+				port,
+				path: "/early",
+				method: "POST",
+				headers: { "Content-Length": String(32 * 1024) },
+			},
+			(response) => {
+				outgoing.end(Buffer.alloc(32 * 1024 - 5, 101));
+				response.on("data", (chunk) => chunks.push(chunk));
+				response.on("end", () => {
+					responseEnded = true;
+					if (Buffer.concat(chunks).toString("utf8") !== "early response") {
+						fail("early response body");
+					}
+					maybeClose();
+				});
+			},
+		);
+		outgoing.on("error", (error) => fail("early response error: " + error.message));
+		outgoing.on("close", () => {
+			requestClosed = true;
+			maybeClose();
+		});
+		outgoing.write("hello");
+
+		function maybeClose() {
+			if (responseEnded && requestClosed) closeServer();
+		}
 	}
 
 	function closeServer() {

@@ -166,6 +166,9 @@ static int codec_headers_complete(llhttp_t *parser) {
         ? (i64) parser->content_length : -1;
     head->keep_alive = llhttp_should_keep_alive(parser) != 0;
     head->upgrade = parser->upgrade != 0;
+    if (parser->type == HTTP_RESPONSE && codec->skip_body) {
+        parser->flags |= F_SKIPBODY;
+    }
     for (usize i = 0; i < head->field_count; i++) {
         if (head->fields[i].value_offset == SIZE_MAX) {
             head->fields[i].value_offset = head->arena_length;
@@ -222,6 +225,10 @@ bool mal_http_codec_init(MalHttpCodec *codec, llhttp_type_t type) {
     llhttp_init(&codec->parser, type, &codec->settings);
     codec->parser.data = codec;
     return true;
+}
+
+void mal_http_codec_set_skip_body(MalHttpCodec *codec, bool skip_body) {
+    if (codec != nullptr) codec->skip_body = skip_body;
 }
 
 void mal_http_codec_head_free(MalHttpCodecHead *head) {

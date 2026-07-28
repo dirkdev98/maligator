@@ -17,6 +17,7 @@ function finish() {
 let abortRequest;
 let destroyRequest;
 const destroyError = new Error("destroy requested");
+const responseDestroyError = new Error("response destroy requested");
 
 const server = http.createServer((request, response) => {
 	if (request.url === "/abort") {
@@ -40,6 +41,11 @@ const server = http.createServer((request, response) => {
 	}
 	if (request.url === "/normal") {
 		response.end("normal response");
+		return;
+	}
+	if (request.url === "/destroy-response") {
+		response.statusCode = 204;
+		response.end();
 		return;
 	}
 	response.statusCode = 404;
@@ -107,7 +113,7 @@ function runDestroy(port) {
 	destroyRequest.on("close", () => {
 		events.push("close");
 		check(events.join(",") === "finish,error,close", "destroy terminal event order");
-		runNormal(port);
+		runDestroyResponse(port);
 	});
 	destroyRequest.end();
 }
@@ -139,12 +145,46 @@ function runNormal(port) {
 	}
 }
 
+function runDestroyResponse(port) {
+	const responseEvents = [];
+	const requestEvents = [];
+	const request = http.request(
+		`http://127.0.0.1:${port}/destroy-response`,
+		(response) => {
+			response.on("error", (error) => {
+				check(error === responseDestroyError, "response destroy error identity");
+				responseEvents.push("error");
+			});
+			response.on("aborted", () => responseEvents.push("aborted"));
+			response.on("close", () => {
+				responseEvents.push("close");
+				check(response.destroyed, "response destroy marks destroyed");
+				check(
+					responseEvents.join(",") === "error,aborted,close",
+					"response destroy events",
+				);
+			});
+			response.destroy(responseDestroyError);
+		},
+	);
+	request.on("error", () => check(false, "response destroy request error"));
+	request.on("close", () => {
+		requestEvents.push("close");
+		check(requestEvents.join(",") === "close", "response destroy request close");
+		runNormal(port);
+	});
+	request.end();
+}
+
 function runRefused(port) {
 	const events = [];
+	let requestError;
+	const writeErrors = [];
 	const request = http.request(`http://127.0.0.1:${port}/closed`);
 	request.on("response", () => check(false, "refused response"));
 	request.on("error", (error) => {
 		check(error instanceof Error, "refused error object");
+		requestError = error;
 		events.push("error");
 	});
 	request.on("close", () => {
@@ -152,7 +192,18 @@ function runRefused(port) {
 		check(events.join(",") === "error,close", "refused terminal event order");
 		check(request.destroyed, "refused request destroyed");
 		check(request.writableFinished, "refused write side finished");
+		check(writeErrors.length === 2, "refused write callback count");
+		check(
+			writeErrors[0] === requestError && writeErrors[1] === requestError,
+			"refused write callback error",
+		);
 		finish();
+	});
+	request.write("body", (error) => {
+		writeErrors.push(error);
+	});
+	request.write("again", (error) => {
+		writeErrors.push(error);
 	});
 	request.end();
 }

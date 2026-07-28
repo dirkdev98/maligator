@@ -61,9 +61,11 @@ typedef struct MalHttpCodec {
     bool complete_pending;
     bool skip_header_bytes;
     bool header_name_open;
+    bool skip_body;
 } MalHttpCodec;
 
 bool mal_http_codec_init(MalHttpCodec *codec, llhttp_type_t type);
+void mal_http_codec_set_skip_body(MalHttpCodec *codec, bool skip_body);
 void mal_http_codec_free(MalHttpCodec *codec);
 
 /* Execute at most one bounded input slice. `consumed` is always relative to the
