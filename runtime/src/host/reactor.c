@@ -227,8 +227,13 @@ static MalReactorFd *mal_reactor_get_fd(MalReactor *r, int fd) {
     return state;
 }
 
-static MalReactorToken *mal_reactor_token(MalReactorFd *state) {
-    MalReactorToken *token = malloc(sizeof(MalReactorToken));
+static MalReactorToken *mal_reactor_token(MalReactor *r, MalReactorFd *state) {
+    MalReactorToken *token = r->free_tokens;
+    if (token != nullptr) {
+        r->free_tokens = token->next;
+    } else {
+        token = malloc(sizeof(MalReactorToken));
+    }
     if (token == nullptr) {
         return nullptr;
     }
@@ -247,17 +252,26 @@ static void mal_reactor_retire_token(MalReactor *r, MalReactorToken *token) {
     r->retired_tokens = token;
 }
 
-static void mal_reactor_free_retired_tokens(MalReactor *r) {
+static void mal_reactor_recycle_retired_tokens(MalReactor *r) {
     while (r->retired_tokens != nullptr) {
         MalReactorToken *token = r->retired_tokens;
         r->retired_tokens = token->next;
+        token->next = r->free_tokens;
+        r->free_tokens = token;
+    }
+}
+
+static void mal_reactor_free_token_list(MalReactorToken *token) {
+    while (token != nullptr) {
+        MalReactorToken *next = token->next;
         free(token);
+        token = next;
     }
 }
 
 #if MAL_REACTOR_KQUEUE
 static bool mal_backend_add_interest(MalReactor *r, MalReactorFd *state, MalIoInterest interest) {
-    MalReactorToken *token = mal_reactor_token(state);
+    MalReactorToken *token = mal_reactor_token(r, state);
     if (token == nullptr) {
         return false;
     }
@@ -306,7 +320,7 @@ static bool mal_backend_sync(MalReactor *r, MalReactorFd *state) {
         return true;
     }
 
-    MalReactorToken *token = mal_reactor_token(state);
+    MalReactorToken *token = mal_reactor_token(r, state);
     if (token == nullptr) {
         return false;
     }
@@ -438,7 +452,7 @@ static void mal_backend_wait(MalReactor *r, i64 timeout_ns) {
         }
     }
 #endif
-    mal_reactor_free_retired_tokens(r);
+    mal_reactor_recycle_retired_tokens(r);
 }
 
 /* ---------------------------------------------------------------------------
@@ -462,6 +476,7 @@ void mal_reactor_init(MalReactor *r) {
     r->ready_op_count = 0;
     r->fds = nullptr;
     r->retired_tokens = nullptr;
+    r->free_tokens = nullptr;
     r->next_generation = 0;
     (void) mal_backend_add_wake(r);
 }
@@ -483,7 +498,10 @@ void mal_reactor_free(MalReactor *r) {
     r->timers = nullptr;
     r->timer_count = 0;
     r->timer_cap = 0;
-    mal_reactor_free_retired_tokens(r);
+    mal_reactor_free_token_list(r->retired_tokens);
+    r->retired_tokens = nullptr;
+    mal_reactor_free_token_list(r->free_tokens);
+    r->free_tokens = nullptr;
     while (r->ready_ops != nullptr) {
         MalOp *op = r->ready_ops;
         r->ready_ops = op->_ready_next;

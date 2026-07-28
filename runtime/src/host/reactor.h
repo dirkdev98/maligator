@@ -87,6 +87,7 @@ struct MalReactor {
     /* Reactor-owned readiness registrations and deferred backend event tokens. */
     MalReactorFd *fds;
     MalReactorToken *retired_tokens;
+    MalReactorToken *free_tokens;
     u64 next_generation;
 };
 
