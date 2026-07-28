@@ -1057,6 +1057,52 @@ function writeRegisters(instruction: VmInstruction): Array<number> {
 	}
 }
 
+/** Whether this instruction can synchronously capture the current JS stack,
+ * directly or by re-entering user code. The whitelist is intentionally narrow;
+ * unknown/helper operations publish the pending source position. */
+function nativeInstructionMayCaptureStack(
+	instruction: VmInstruction,
+	reps: Array<RegisterRep>,
+): boolean {
+	switch (instruction.opcode) {
+		case "MOVE":
+		case "CREATE_UNDEFINED":
+		case "CREATE_NULL":
+		case "CREATE_EMPTY":
+		case "CREATE_BOOLEAN":
+		case "CREATE_NUMBER":
+		case "CREATE_F64":
+		case "CREATE_STRING":
+		case "CREATE_BIGINT":
+		case "LOAD_ARGUMENT_COUNT":
+		case "LOAD_ARGUMENT":
+		case "LOAD_NEW_TARGET":
+		case "LOAD_CALLEE":
+		case "GUARD_FUNCTION_INDEX":
+		case "LOAD_CAPTURED":
+		case "STORE_CAPTURED":
+		case "LOAD_GLOBAL":
+		case "STORE_GLOBAL":
+		case "LOAD_INTRINSIC":
+		case "IS_EMPTY":
+		case "TYPEOF_COMPARE":
+		case "JUMP":
+		case "JUMP_IF":
+		case "CATCH":
+			return false;
+		case "BINARY":
+			return !(
+				(reps[instruction.left] === "number" && reps[instruction.right] === "number") ||
+				instruction.operator === "===" ||
+				instruction.operator === "!=="
+			);
+		case "UNARY":
+			return !(reps[instruction.src] === "number" || instruction.operator === "!");
+		default:
+			return true;
+	}
+}
+
 /**
  * The rep an instruction's result naturally has, given current operand reps, or
  * null when an operand is still unknown (defer to a later fixpoint iteration).
@@ -1423,25 +1469,14 @@ function emitBody(
 			lines.push(`f64 __nf_${id}_value = 0.0;`);
 		}
 	}
-	// Statement-granular source position for this compiled frame: write it into
-	// the native frame whenever it changes, so a stack capture taken anywhere in
-	// this function (or in a callee/throw) reads the right line. The native frame
-	// is guaranteed present (enter_compiled pushed it before this function ran).
-	let lastPos = -1;
+	// Publish source positions only before operations that can synchronously capture
+	// this frame. Pure arithmetic/control-flow transitions need no native-frame write.
+	let lastPublishedPos = -1;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
-			// Control can arrive from a jump with a different last-written
-			// position, so force the next change to re-emit.
-			lastPos = -1;
-		}
-
-		if (debug) {
-			const pos = fn.positions[ip] ?? -1;
-			if (pos !== -1 && pos !== lastPos) {
-				lines.push(`    vm->native_frames[vm->native_frame_count - 1].pos_id = ${pos};`);
-				lastPos = pos;
-			}
+			// Control can arrive with a different published position.
+			lastPublishedPos = -1;
 		}
 
 		const emitted = emitInstruction(
@@ -1465,6 +1500,13 @@ function emitBody(
 		);
 		if (emitted === null) {
 			return null;
+		}
+		if (debug && nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps)) {
+			const pos = fn.positions[ip] ?? -1;
+			if (pos !== -1 && pos !== lastPublishedPos) {
+				lines.push(`    vm->native_frames[vm->native_frame_count - 1].pos_id = ${pos};`);
+				lastPublishedPos = pos;
+			}
 		}
 		for (const line of emitted) {
 			lines.push(`    ${line}`);
@@ -1591,8 +1633,10 @@ function emitInstruction(
 			// helper throws (setting the completion) only on the empty sentinel; a
 			// throw propagates out, exactly like the interpreter op.
 			return [
-				`mal_vm_op_throw_if_tdz(vm, ${boxed(instruction.src)}, ${instruction.nameStringIndex});`,
-				throwCheck,
+				`if (mal_value_is_empty(${boxed(instruction.src)})) {`,
+				`  mal_vm_op_throw_if_tdz(vm, ${boxed(instruction.src)}, ${instruction.nameStringIndex});`,
+				`  ${throwCheck}`,
+				`}`,
 			];
 		case "IS_EMPTY":
 			// Tests for the TDZ sentinel (used by default-value / with fallbacks).

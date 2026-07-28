@@ -32,8 +32,6 @@ import { log } from "./utils.ts";
 
 /** Max body size (real, non-marker instructions) of an inline target. */
 const MAX_INLINE_INSTRUCTIONS = 40;
-/** Bounded polymorphism for guarded user-method inlining. */
-const MAX_METHOD_INLINE_TARGETS = 4;
 
 /**
  * Instruction kinds that make a function unsafe to inline as-is: `this` /
@@ -718,6 +716,7 @@ export function findMethodInlineSites(program: IntermediateProgram): ProgramMeth
 		const fn = targetOf.get(index);
 		return (
 			fn !== undefined &&
+			!fn.classContext?.isConstructor &&
 			(fn.strict ?? fn.semanticFile.strict) &&
 			isInlinableMethodTarget(fn) &&
 			isEnvIndependent(fn) &&
@@ -747,7 +746,11 @@ export function findMethodInlineSites(program: IntermediateProgram): ProgramMeth
 				if (key === undefined || key.type !== "createString") {
 					continue;
 				}
-				const targets = (methods.get(key.stringIndex) ?? [])
+				const definitions = methods.get(key.stringIndex) ?? [];
+				// Multiple same-name bodies require a dedicated polymorphic CFG transform.
+				// Keep the original call fallback rather than selecting a candidate.
+				if (definitions.length !== 1) continue;
+				const targets = definitions
 					.filter(
 						(target) =>
 							target !== fn.functionIndex &&
@@ -757,7 +760,7 @@ export function findMethodInlineSites(program: IntermediateProgram): ProgramMeth
 								instruction.registers.length - 3,
 							),
 					)
-					.slice(0, MAX_METHOD_INLINE_TARGETS);
+					.slice(0, 1);
 				if (targets.length === 0) continue;
 				sites.push({
 					call: instruction,

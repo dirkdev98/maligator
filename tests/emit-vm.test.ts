@@ -273,4 +273,14 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_builtin_math_unary_fast");
 		expect(output).toContain("mal_builtin_math_binary_fast");
 	});
+
+	it("publishes positions at observable seams and guards residual TDZ helpers", () => {
+		const output = emit(
+			`"use strict"; globalThis.read = function read() { return value; }; let value = 1;`,
+		);
+		expect(output).toContain("vm->native_frames[vm->native_frame_count - 1].pos_id");
+		expect(output).not.toContain("__current_pos_id");
+		expect(output).toContain("if (mal_value_is_empty(");
+		expect(output).toContain("mal_vm_op_throw_if_tdz");
+	});
 });

@@ -1473,17 +1473,17 @@ function eliminateRedundantTdzChecksInFunction(fn: IRFunction) {
 		}
 	}
 
-	// Blocks reached by a non-local edge (exception handler / tryEnd marker) are
-	// pinned to "nothing initialized": a throw can arrive before any store ran.
+	// Exception handlers and protected-range continuation markers are pinned to
+	// "nothing initialized". The latter can merge compiler-generated exceptional
+	// continuation shapes that this local CFG analysis does not model explicitly.
 	const pinnedEmpty = new Set<number>();
 	const checkedSlots = new Set<number>();
 	for (const block of blocks) {
 		const regToSlot = new Map<number, number>();
 		for (const instr of block.instructions) {
 			if (instr.type === "tryBegin") {
-				for (const target of instr.blocks) {
-					pinnedEmpty.add(target);
-				}
+				pinnedEmpty.add(instr.blocks[0]);
+				pinnedEmpty.add(instr.blocks[1]);
 			} else if (instr.type === "loadLocal") {
 				regToSlot.set(instr.registers[0], instr.index);
 			} else if (instr.type === "throwIfTdz") {

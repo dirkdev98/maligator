@@ -31,6 +31,14 @@ function invoke(receiver, value) {
 	return receiver.quote(value);
 }
 
+class UniqueCalculator {
+	compute(value) {
+		return value + 1;
+	}
+}
+
+check(new UniqueCalculator().compute(4) === 5, "unique class method");
+
 const polymorphic = [new AddOne(), new AddTwo(), new AddThree()];
 let sum = 0;
 for (let i = 0; i < 300; i++) sum += invoke(polymorphic[i % 3], 10);

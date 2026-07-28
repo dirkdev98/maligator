@@ -71,6 +71,33 @@ test("TDZ optimization keeps handler checks conservative", () => {
 	]);
 });
 
+test("TDZ optimization keeps protected range ends conservative", () => {
+	const fn = fakeFunction([
+		[
+			{ type: "createNumber", registers: [0], value: 1 },
+			{ type: "storeLocal", registers: [0], index: 7 },
+			{ type: "jump", blocks: [1] },
+		],
+		[
+			{ type: "tryBegin", blocks: [2, 3] },
+			{ type: "jump", blocks: [3] },
+		],
+		[
+			{ type: "loadLocal", registers: [1], index: 7 },
+			{ type: "throwIfTdz", registers: [1], nameStringIndex: 0 },
+			{ type: "return", registers: [1] },
+		],
+		[
+			{ type: "loadLocal", registers: [2], index: 7 },
+			{ type: "throwIfTdz", registers: [2], nameStringIndex: 0 },
+		],
+	]);
+
+	irOptTestHooks.eliminateRedundantTdzChecksInFunction(fn);
+	expect(fn.blocks[2]!.instructions).toHaveLength(3);
+	expect(fn.blocks[3]!.instructions).toHaveLength(2);
+});
+
 test("TDZ optimization leaves with-scoped functions unchanged", () => {
 	const instructions: Array<IRInstruction> = [
 		{ type: "createNumber", registers: [0], value: 1 },

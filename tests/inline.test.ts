@@ -179,7 +179,7 @@ test("methods that read classified frame arguments are guarded-inline candidates
 	expect([...findMethodInlineSites(ir).byCaller.values()].flat()).toHaveLength(2);
 });
 
-test("polymorphic strict methods inline behind loaded-callee guards", () => {
+test("ambiguous polymorphic methods retain the original call fallback", () => {
 	const source = `
 		class A { quote(value) { return value + 1; } }
 		class B { quote(value) { return value + 2; } }
@@ -193,10 +193,19 @@ test("polymorphic strict methods inline behind loaded-callee guards", () => {
 	);
 	expect(
 		instructions.filter((instruction) => instruction.type === "guardFunctionIndex"),
-	).toHaveLength(3);
+	).toHaveLength(0);
 	expect(
 		instructions.filter((instruction) => instruction.type === "call").length,
 	).toBeGreaterThan(0);
+});
+
+test("a unique strict class method inlines behind a loaded-callee guard", () => {
+	expect(
+		programCountType(
+			`class Calculator { compute(value) { return value + 1; } } globalThis.result = new Calculator().compute(2);`,
+			"guardFunctionIndex",
+		),
+	).toBe(1);
 });
 
 test("a generator target is not inlinable", () => {
