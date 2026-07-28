@@ -48,6 +48,8 @@ typedef struct MalOp {
     MalWaker waker;
     bool active; /* true while registered; cleared when it fires or is cancelled */
     MalReactor *_reactor;
+    struct MalOp *_ready_next;
+    bool _queued_ready;
 } MalOp;
 
 /* A pending timer. One-shot: fires its waker once CLOCK_MONOTONIC passes the
@@ -76,6 +78,11 @@ struct MalReactor {
 
     /* Count of registered fd ops (so the scheduler knows when work remains). */
     i32 pending_ops;
+
+    /* Ops queued to run before the next backend wait. */
+    MalOp *ready_ops;
+    MalOp *ready_ops_tail;
+    i32 ready_op_count;
 
     /* Reactor-owned readiness registrations and deferred backend event tokens. */
     MalReactorFd *fds;
@@ -106,6 +113,10 @@ bool mal_reactor_wake(MalReactor *r);
  * idempotent for an inactive op and always detaches an active op, with false
  * reporting that backend cleanup failed. */
 bool mal_reactor_add_op(MalReactor *r, MalOp *op);
+/* Queue an op's waker without waiting for fd readiness. This preserves the
+ * reactor callback boundary for optimistic I/O; a callback that encounters
+ * EAGAIN can re-register the op through mal_reactor_add_op. */
+bool mal_reactor_defer_op(MalReactor *r, MalOp *op);
 bool mal_reactor_cancel_op(MalReactor *r, MalOp *op);
 
 /* Register / cancel a one-shot timer. */

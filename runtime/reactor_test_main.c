@@ -122,6 +122,31 @@ static bool reactor_cancellation(void) {
     return ok;
 }
 
+static bool reactor_deferred_op(void) {
+    MalReactor reactor;
+    int first_wakes = 0;
+    int cancelled_wakes = 0;
+    mal_reactor_init(&reactor);
+    MalOp first = {
+        .fd = 0,
+        .interest = MAL_IO_WRITE,
+        .waker = {.fn = count_wake, .data = &first_wakes},
+    };
+    MalOp cancelled = {
+        .fd = 0,
+        .interest = MAL_IO_WRITE,
+        .waker = {.fn = count_wake, .data = &cancelled_wakes},
+    };
+    bool ok = mal_reactor_defer_op(&reactor, &first) &&
+        mal_reactor_defer_op(&reactor, &cancelled) && first_wakes == 0 &&
+        mal_reactor_cancel_op(&reactor, &cancelled);
+    mal_reactor_wait(&reactor);
+    ok = ok && first_wakes == 1 && cancelled_wakes == 0 && !first.active &&
+        !cancelled.active && !mal_reactor_has_pending(&reactor);
+    mal_reactor_free(&reactor);
+    return ok;
+}
+
 typedef struct RearmContext {
     MalReactor *reactor;
     MalOp op;
@@ -1147,6 +1172,7 @@ int main(void) {
         {"pipe reader woken by fd readiness, got byte", pipe_ok},
         {"same fd supports independent read and write ops", reactor_concurrent_interests()},
         {"cancelled readiness does not wake", reactor_cancellation()},
+        {"deferred ops preserve cancellation and callback boundaries", reactor_deferred_op()},
         {"one-shot readiness rearms without duplicate wake", reactor_rearm_is_one_shot()},
         {"backend registration failure leaves op inactive", reactor_registration_failure()},
         {"callback cancellation permits owner free", reactor_callback_can_free_owner()},

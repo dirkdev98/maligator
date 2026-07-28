@@ -182,6 +182,13 @@ static bool conn_arm_write(MalHttpConn *c) {
     return mal_reactor_add_op(conn_reactor(c), &c->write_op);
 }
 
+static bool conn_defer_write(MalHttpConn *c) {
+    c->write_op.fd = c->fd;
+    c->write_op.interest = MAL_IO_WRITE;
+    c->write_op.waker = (MalWaker) {.fn = conn_write_cb, .data = c};
+    return mal_reactor_defer_op(conn_reactor(c), &c->write_op);
+}
+
 static bool conn_size_add(usize *total, usize added) {
     if (added > SIZE_MAX - *total) return false;
     *total += added;
@@ -193,7 +200,7 @@ static bool conn_queue_write(MalHttpConn *c, MalHttpWireWrite *write) {
     if (was_empty) c->write_head = write;
     else c->write_tail->next = write;
     c->write_tail = write;
-    if (was_empty && !c->write_op.active && !conn_arm_write(c)) {
+    if (was_empty && !c->write_op.active && !conn_defer_write(c)) {
         c->write_head = nullptr;
         c->write_tail = nullptr;
         return false;
@@ -929,7 +936,7 @@ static void conn_write_cb(void *data) {
         conn_close(c);
         return;
     }
-    if (c->write_head != nullptr && !conn_arm_write(c)) conn_close(c);
+    if (c->write_head != nullptr && !conn_defer_write(c)) conn_close(c);
 }
 
 static void server_accept_cb(void *data) {

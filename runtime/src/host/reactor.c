@@ -457,6 +457,9 @@ void mal_reactor_init(MalReactor *r) {
     r->timer_cap = 0;
     r->next_timer_sequence = 0;
     r->pending_ops = 0;
+    r->ready_ops = nullptr;
+    r->ready_ops_tail = nullptr;
+    r->ready_op_count = 0;
     r->fds = nullptr;
     r->retired_tokens = nullptr;
     r->next_generation = 0;
@@ -481,6 +484,16 @@ void mal_reactor_free(MalReactor *r) {
     r->timer_count = 0;
     r->timer_cap = 0;
     mal_reactor_free_retired_tokens(r);
+    while (r->ready_ops != nullptr) {
+        MalOp *op = r->ready_ops;
+        r->ready_ops = op->_ready_next;
+        op->active = false;
+        op->_reactor = nullptr;
+        op->_ready_next = nullptr;
+        op->_queued_ready = false;
+    }
+    r->ready_ops_tail = nullptr;
+    r->ready_op_count = 0;
     while (r->fds != nullptr) {
         MalReactorFd *state = r->fds;
         r->fds = state->next;
@@ -575,7 +588,7 @@ bool mal_reactor_wake(MalReactor *r) {
 
 bool mal_reactor_add_op(MalReactor *r, MalOp *op) {
     if (r->backend_fd < 0 || op->fd < 0 || op->waker.fn == nullptr || op->active ||
-        op->_reactor != nullptr ||
+        op->_reactor != nullptr || op->_queued_ready ||
         (op->interest != MAL_IO_READ && op->interest != MAL_IO_WRITE)) {
         return false;
     }
@@ -613,12 +626,56 @@ bool mal_reactor_add_op(MalReactor *r, MalOp *op) {
     return true;
 }
 
+bool mal_reactor_defer_op(MalReactor *r, MalOp *op) {
+    if (r->backend_fd < 0 || op->fd < 0 || op->waker.fn == nullptr || op->active ||
+        op->_reactor != nullptr || op->_queued_ready ||
+        (op->interest != MAL_IO_READ && op->interest != MAL_IO_WRITE) ||
+        r->ready_op_count == INT_MAX || r->pending_ops == INT_MAX) {
+        return false;
+    }
+    op->active = true;
+    op->_reactor = r;
+    op->_ready_next = nullptr;
+    op->_queued_ready = true;
+    if (r->ready_ops_tail == nullptr) {
+        r->ready_ops = op;
+    } else {
+        r->ready_ops_tail->_ready_next = op;
+    }
+    r->ready_ops_tail = op;
+    r->ready_op_count++;
+    r->pending_ops++;
+    return true;
+}
+
 bool mal_reactor_cancel_op(MalReactor *r, MalOp *op) {
     if (!op->active) {
         return op->_reactor == nullptr;
     }
     if (op->_reactor != r) {
         return false;
+    }
+    if (op->_queued_ready) {
+        MalOp **link = &r->ready_ops;
+        MalOp *previous = nullptr;
+        while (*link != nullptr && *link != op) {
+            previous = *link;
+            link = &(*link)->_ready_next;
+        }
+        if (*link != op) {
+            return false;
+        }
+        *link = op->_ready_next;
+        if (r->ready_ops_tail == op) {
+            r->ready_ops_tail = previous;
+        }
+        op->active = false;
+        op->_reactor = nullptr;
+        op->_ready_next = nullptr;
+        op->_queued_ready = false;
+        r->ready_op_count--;
+        r->pending_ops--;
+        return true;
     }
     MalReactorFd *state = mal_reactor_find_fd(r, op->fd);
     if (state == nullptr) {
@@ -643,6 +700,26 @@ bool mal_reactor_cancel_op(MalReactor *r, MalOp *op) {
 }
 
 void mal_reactor_wait(MalReactor *r) {
+    i32 ready_count = r->ready_op_count;
+    for (i32 i = 0; i < ready_count && r->ready_ops != nullptr; i++) {
+        MalOp *op = r->ready_ops;
+        r->ready_ops = op->_ready_next;
+        if (r->ready_ops == nullptr) {
+            r->ready_ops_tail = nullptr;
+        }
+        op->active = false;
+        op->_reactor = nullptr;
+        op->_ready_next = nullptr;
+        op->_queued_ready = false;
+        r->ready_op_count--;
+        r->pending_ops--;
+        MalWaker waker = op->waker;
+        waker.fn(waker.data);
+    }
+    if (ready_count > 0) {
+        return;
+    }
+
     i64 timeout;
     if (r->timer_count > 0) {
         i64 now = mal_reactor_now_ns();
