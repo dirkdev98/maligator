@@ -294,6 +294,8 @@ static f64 date_parse_iso(const c16 *u, usize len) {
     i32 month = 1, date = 1, hour = 0, minute = 0, second = 0, ms = 0;
     bool has_time = false;
     bool has_tz = false;
+    bool has_full_date = false;
+    bool postgres_style = false;
     f64 tz_offset_ms = 0.0;
 
     // Year: a leading sign introduces the 6-digit expanded form (±YYYYYY).
@@ -334,11 +336,15 @@ static f64 date_parse_iso(const c16 *u, usize len) {
             if (!date_read_digits(&c, 2, &date)) {
                 return NAN;
             }
+            has_full_date = true;
         }
     }
 
-    // Optional "T"HH:mm[:ss[.sss]] and a timezone designator.
-    if (date_cursor_peek(&c) == 'T') {
+    // Node also accepts PostgreSQL's ISO-like output, which uses a space before
+    // the time, variable fractional precision, and compact timezone offsets.
+    if (date_cursor_peek(&c) == 'T'
+        || (has_full_date && date_cursor_peek(&c) == ' ')) {
+        postgres_style = date_cursor_peek(&c) == ' ';
         c.i++;
         has_time = true;
         if (!date_read_digits(&c, 2, &hour) || !date_cursor_eat(&c, ':') || !date_read_digits(&c, 2, &minute)) {
@@ -349,7 +355,21 @@ static f64 date_parse_iso(const c16 *u, usize len) {
                 return NAN;
             }
             if (date_cursor_eat(&c, '.')) {
-                if (!date_read_digits(&c, 3, &ms)) {
+                if (postgres_style) {
+                    i32 digits = 0;
+                    while (!date_cursor_eof(&c)
+                           && date_cursor_peek(&c) >= '0'
+                           && date_cursor_peek(&c) <= '9') {
+                        if (digits < 3) ms = ms * 10 + (date_cursor_peek(&c) - '0');
+                        digits++;
+                        c.i++;
+                    }
+                    if (digits == 0) return NAN;
+                    while (digits < 3) {
+                        ms *= 10;
+                        digits++;
+                    }
+                } else if (!date_read_digits(&c, 3, &ms)) {
                     return NAN;
                 }
             }
@@ -359,8 +379,15 @@ static f64 date_parse_iso(const c16 *u, usize len) {
         } else if (date_cursor_peek(&c) == '+' || date_cursor_peek(&c) == '-') {
             i32 sign = date_cursor_peek(&c) == '-' ? -1 : 1;
             c.i++;
-            i32 oh, om;
-            if (!date_read_digits(&c, 2, &oh) || !date_cursor_eat(&c, ':') || !date_read_digits(&c, 2, &om)) {
+            i32 oh, om = 0;
+            if (!date_read_digits(&c, 2, &oh)) {
+                return NAN;
+            }
+            if (date_cursor_eat(&c, ':')) {
+                if (!date_read_digits(&c, 2, &om)) return NAN;
+            } else if (postgres_style && c.i + 2 <= c.len) {
+                if (!date_read_digits(&c, 2, &om)) return NAN;
+            } else if (!postgres_style) {
                 return NAN;
             }
             if (oh > 23 || om > 59) {

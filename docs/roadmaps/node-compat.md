@@ -187,6 +187,11 @@ staged acceptance rather than a package-specific shim:
        fragments, result metadata, and file queries. `node:fs` callback `readFile`
        supplies the unchanged driver's file-query path with deferred Buffer/UTF-8
        results and Node-shaped asynchronous errors.
+9. [x] Accept fetched array OIDs, nested arrays, JSONB, bytea, timestamps, BigInt
+       and custom types, built-in/custom transforms, undefined mapping,
+       `target_session_attrs`, forced teardown, and large-object direct/stream APIs.
+       Node Readables now schedule one bounded option-provided `_read` at a time;
+       Date parsing accepts Node's PostgreSQL-style timestamp form.
 
 Raw TCP/TLS are the architectural gates. Filesystem aliases or mocked database
 responses must not substitute for the driver's real wire protocol.

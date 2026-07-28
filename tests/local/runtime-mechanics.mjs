@@ -6,6 +6,11 @@ import urlModule, { Url, parse as parseUrl } from "node:url";
 
 const checks = [];
 
+checks.push(
+	Date.parse("2024-01-02 03:04:05+00") === Date.UTC(2024, 0, 2, 3, 4, 5),
+	Date.parse("2024-01-02 03:04:05.123456+0130") === Date.UTC(2024, 0, 2, 1, 34, 5, 123),
+);
+
 function checkAccessor(target, key, getName, setName, enumerable = false) {
 	const descriptor = Object.getOwnPropertyDescriptor(target, key);
 	checks.push(

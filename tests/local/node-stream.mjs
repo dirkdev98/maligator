@@ -300,6 +300,28 @@ async function main() {
 		"duplex combines independent sides",
 	);
 
+	const pulled = [];
+	const pullSizes = [];
+	let pullValue = 0;
+	const customReadable = new Readable({
+		highWaterMark: 2,
+		read(size) {
+			pullSizes.push(size);
+			pullValue++;
+			Promise.resolve().then(() => {
+				this.push(pullValue <= 3 ? String(pullValue) : null);
+			});
+		},
+	});
+	customReadable.on("data", (chunk) => pulled.push(chunk.toString()));
+	await settle();
+	check(
+		pulled.join() === "1,2,3" &&
+			pullSizes.join() === "2,2,2,2" &&
+			customReadable.readableEnded,
+		"custom readable schedules one bounded pull at a time",
+	);
+
 	const backpressured = new Writable({ highWaterMark: 2 });
 	const backpressureOrder = [];
 	let releaseBackpressure;
