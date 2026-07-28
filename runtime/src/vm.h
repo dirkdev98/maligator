@@ -1235,8 +1235,23 @@ typedef struct MalVm {
     struct MalShape *node_http_socket_shape;
 
     /** Canonical node:http IncomingMessage layout before/after dispatch fields. */
+    struct MalShape *node_http_readable_state_shape;
     struct MalShape *node_http_incoming_message_source_shape;
     struct MalShape *node_http_incoming_message_final_shape;
+
+    /** Prototype shapes guarding direct construction of canonical HTTP streams. */
+    struct MalShape *node_http_object_prototype_shape;
+    struct MalShape *node_http_event_emitter_prototype_shape;
+    struct MalShape *node_http_stream_prototype_shape;
+    struct MalShape *node_http_readable_prototype_shape;
+    struct MalShape *node_http_incoming_message_prototype_shape;
+    struct MalShape *node_http_server_response_prototype_shape;
+    usize node_http_object_prototype_properties;
+    usize node_http_event_emitter_prototype_properties;
+    usize node_http_stream_prototype_properties;
+    usize node_http_readable_prototype_properties;
+    usize node_http_incoming_message_prototype_properties;
+    usize node_http_server_response_prototype_properties;
 
     /** Canonical node:http ServerResponse parent/constructor/dispatch layouts. */
     struct MalShape *node_http_server_response_parent_shape;

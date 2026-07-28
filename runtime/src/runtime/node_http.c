@@ -1005,6 +1005,208 @@ static void http_server_response_shapes(MalVm *vm) {
     vm->node_http_server_response_dispatch_shape = shape;
 }
 
+static void http_initialize_shaped_object(
+    MalVm *vm, MalValue object, MalShape *shape,
+    const char *const *names, const MalValue *values, usize count) {
+    if (mal_object_try_append_shaped_values(
+            mal_value_to_object(object), mal_shape_empty(), shape,
+            values, (u32) count)) {
+        MAL_PERF_COUNT(http_bulk_shaped_objects);
+        MAL_PERF_ADD(http_bulk_shaped_slots, count);
+        MAL_PERF_ADD(http_property_definitions_avoided, count);
+        MAL_PERF_ADD(http_shape_transitions_avoided, count);
+        return;
+    }
+    for (usize i = 0; i < count; i++) {
+        http_define_own(vm, object, names[i], values[i]);
+    }
+}
+
+static MalShape *http_readable_state_shape(MalVm *vm) {
+    if (vm->node_http_readable_state_shape != nullptr) {
+        return vm->node_http_readable_state_shape;
+    }
+    static const char *names[] = {
+        "encoding", "decoder", "ended", "endEmitted", "destroyed",
+        "objectMode", "highWaterMark", "reading",
+    };
+    MalShape *shape = mal_shape_empty();
+    for (usize i = 0; i < countof(names); i++) {
+        shape = mal_shape_add_property(
+            shape, mal_intrinsic_string_key(vm, (const byte *) names[i]),
+            HTTP_VISIBLE);
+    }
+    vm->node_http_readable_state_shape = shape;
+    return shape;
+}
+
+static usize http_object_property_count(const MalObject *object) {
+    return (usize) object->shape->inline_count
+        + (object->overflow == nullptr ? 0 : mal_table_size(object->overflow));
+}
+
+static bool http_prototype_shape_matches(
+    MalValue value, MalShape *shape, usize property_count) {
+    return mal_value_is_object(value) && mal_value_to_object(value)->shape == shape
+        && http_object_property_count(mal_value_to_object(value)) == property_count;
+}
+
+static bool http_can_construct_canonical(
+    MalVm *vm, MalValue prototype_value, bool readable) {
+    MalValue object_prototype = vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE];
+    MalValue event_prototype =
+        vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE];
+    MalValue stream_prototype = vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_PROTOTYPE];
+    MalValue readable_prototype =
+        vm->intrinsics[MAL_INTRINSIC_NODE_READABLE_PROTOTYPE];
+    MalValue expected = readable
+        ? vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_PROTOTYPE]
+        : vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_PROTOTYPE];
+    if (!mal_value_is_object(prototype_value)
+        || mal_value_to_object(prototype_value) != mal_value_to_object(expected)
+        || !http_prototype_shape_matches(
+            object_prototype, vm->node_http_object_prototype_shape,
+            vm->node_http_object_prototype_properties)
+        || !http_prototype_shape_matches(
+            event_prototype, vm->node_http_event_emitter_prototype_shape,
+            vm->node_http_event_emitter_prototype_properties)
+        || !http_prototype_shape_matches(
+            stream_prototype, vm->node_http_stream_prototype_shape,
+            vm->node_http_stream_prototype_properties)
+        || !http_prototype_shape_matches(
+            expected, readable
+                ? vm->node_http_incoming_message_prototype_shape
+                : vm->node_http_server_response_prototype_shape,
+            readable
+                ? vm->node_http_incoming_message_prototype_properties
+                : vm->node_http_server_response_prototype_properties)) {
+        return false;
+    }
+    MalObject *object = mal_value_to_object(object_prototype);
+    MalObject *events = mal_value_to_object(event_prototype);
+    MalObject *stream = mal_value_to_object(stream_prototype);
+    MalObject *prototype = mal_value_to_object(expected);
+    if (mal_object_get_prototype(events) != object
+        || mal_object_get_prototype(stream) != events) {
+        return false;
+    }
+    if (!readable) {
+        return mal_object_get_prototype(prototype) == stream;
+    }
+    if (!http_prototype_shape_matches(
+            readable_prototype, vm->node_http_readable_prototype_shape,
+            vm->node_http_readable_prototype_properties)) {
+        return false;
+    }
+    MalObject *readable_object = mal_value_to_object(readable_prototype);
+    return mal_object_get_prototype(prototype) == readable_object
+        && mal_object_get_prototype(readable_object) == stream;
+}
+
+static MalValue http_new_incoming_message(MalVm *vm) {
+    MalValue constructor =
+        vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR];
+    MalValue prototype_value = mal_vm_function_prototype(
+        vm, constructor);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    if (!http_can_construct_canonical(vm, prototype_value, true)) {
+        return mal_vm_construct_value(vm, constructor, nullptr, 0).value;
+    }
+    MalObject *prototype = mal_value_is_object(prototype_value)
+        ? mal_value_to_object(prototype_value)
+        : mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    MalValue roots[] = {
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[0] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    roots[1] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    roots[3] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
+    roots[4] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
+
+    static const char *state_names[] = {
+        "encoding", "decoder", "ended", "endEmitted", "destroyed",
+        "objectMode", "highWaterMark", "reading",
+    };
+    MalValue state_values[] = {
+        mal_value_new_null(), mal_value_new_null(), mal_value_new_boolean(false),
+        mal_value_new_boolean(false), mal_value_new_boolean(false),
+        mal_value_new_boolean(false), mal_value_from_i32(16384),
+        mal_value_new_boolean(false),
+    };
+    http_initialize_shaped_object(
+        vm, roots[2], http_readable_state_shape(vm),
+        state_names, state_values, countof(state_values));
+
+    http_incoming_message_dispatch_shapes(vm);
+    static const char *request_names[] = {
+        "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
+        "_readableState", "_malReadableQueue", "_malBlockedPipes",
+        "_malReadableIndex", "_malFlowing", "_malPaused", "_malReading",
+        "_malReadScheduled", "readable", "readableEnded",
+    };
+    MalValue request_values[] = {
+        roots[1], mal_value_from_i32(0), mal_value_new_undefined(),
+        mal_value_new_boolean(false), mal_value_from_i32(STREAM_READABLE),
+        roots[2], roots[3], roots[4], mal_value_from_i32(0),
+        mal_value_new_boolean(false), mal_value_new_boolean(true),
+        mal_value_new_boolean(false), mal_value_new_boolean(false),
+        mal_value_new_boolean(true), mal_value_new_boolean(false),
+    };
+    http_initialize_shaped_object(
+        vm, roots[0], vm->node_http_incoming_message_source_shape,
+        request_names, request_values, countof(request_values));
+    MalValue result = roots[0];
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue http_new_server_response(MalVm *vm) {
+    MalValue constructor =
+        vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR];
+    MalValue prototype_value = mal_vm_function_prototype(
+        vm, constructor);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    if (!http_can_construct_canonical(vm, prototype_value, false)) {
+        return mal_vm_construct_value(vm, constructor, nullptr, 0).value;
+    }
+    MalObject *prototype = mal_value_is_object(prototype_value)
+        ? mal_value_to_object(prototype_value)
+        : mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[0] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    roots[1] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    http_server_response_shapes(vm);
+    static const char *names[] = {
+        "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
+        "statusCode", "statusMessage", "headersSent", "finished", "writableEnded",
+        "writableFinished",
+    };
+    MalValue values[] = {
+        roots[1], mal_value_from_i32(0), mal_value_new_undefined(),
+        mal_value_new_boolean(false), mal_value_from_i32(STREAM_LEGACY),
+        mal_value_from_i32(200), mal_value_new_undefined(),
+        mal_value_new_boolean(false), mal_value_new_boolean(false),
+        mal_value_new_boolean(false), mal_value_new_boolean(false),
+    };
+    http_initialize_shaped_object(
+        vm, roots[0], vm->node_http_server_response_constructor_shape,
+        names, values, countof(values));
+    MalValue result = roots[0];
+    mal_gc_unroot(&root);
+    return result;
+}
+
 static bool http_response_name(
     MalVm *vm, MalValue value, char **out, usize *out_length) {
     if (!mal_value_is_string(value)) {
@@ -2884,16 +3086,10 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
     };
     MalRootSpan request_values_root;
     mal_gc_root(&request_values_root, request_values, countof(request_values));
-    MalCompletion request_completion = mal_vm_construct_value(
-        vm, vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR],
-        nullptr, 0);
-    if (request_completion.kind == MAL_COMPLETION_THROW) goto fail;
-    state->request = request_completion.value;
-    MalCompletion response_completion = mal_vm_construct_value(
-        vm, vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR],
-        nullptr, 0);
-    if (response_completion.kind == MAL_COMPLETION_THROW) goto fail;
-    state->response = response_completion.value;
+    state->request = http_new_incoming_message(vm);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
+    state->response = http_new_server_response(vm);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto fail;
     if (!http_response_index_insert(state) || !http_request_index_insert(state)) {
         mal_vm_throw_allocation_error(vm);
         goto fail;
@@ -4331,6 +4527,31 @@ void mal_host_install_node_http(
     vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR] = roots[6];
     vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_PROTOTYPE] = roots[5];
     vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_MODULE] = roots[0];
+    vm->node_http_object_prototype_shape = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])->shape;
+    vm->node_http_event_emitter_prototype_shape = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE])->shape;
+    vm->node_http_stream_prototype_shape = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_PROTOTYPE])->shape;
+    vm->node_http_readable_prototype_shape = mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_NODE_READABLE_PROTOTYPE])->shape;
+    vm->node_http_incoming_message_prototype_shape =
+        mal_value_to_object(roots[1])->shape;
+    vm->node_http_server_response_prototype_shape =
+        mal_value_to_object(roots[2])->shape;
+    vm->node_http_object_prototype_properties = http_object_property_count(
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
+    vm->node_http_event_emitter_prototype_properties = http_object_property_count(
+        mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE]));
+    vm->node_http_stream_prototype_properties = http_object_property_count(
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_PROTOTYPE]));
+    vm->node_http_readable_prototype_properties = http_object_property_count(
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_READABLE_PROTOTYPE]));
+    vm->node_http_incoming_message_prototype_properties =
+        http_object_property_count(mal_value_to_object(roots[1]));
+    vm->node_http_server_response_prototype_properties =
+        http_object_property_count(mal_value_to_object(roots[2]));
     if (!http_roots_installed) {
         mal_gc_register_root_source(http_scan_roots, nullptr);
         mal_host_register_macrotask_drain(mal_node_http_drain);

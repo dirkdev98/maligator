@@ -619,10 +619,10 @@ describe("node:http request bridge", () => {
 		expect(field(line, "request_copy_bytes")).toBeGreaterThan(
 			field(line, "request_copy_operations"),
 		);
-		expect(field(line, "bulk_shaped_objects")).toBe(0);
-		expect(field(line, "bulk_shaped_slots")).toBe(0);
-		expect(field(line, "property_definitions_avoided")).toBe(0);
-		expect(field(line, "shape_transitions_avoided")).toBe(0);
+		expect(field(line, "bulk_shaped_objects")).toBe(83);
+		expect(field(line, "bulk_shaped_slots")).toBe(498);
+		expect(field(line, "property_definitions_avoided")).toBe(498);
+		expect(field(line, "shape_transitions_avoided")).toBe(498);
 		expect(field(line, "incoming_message_shape_append_batches")).toBe(82);
 		expect(field(line, "incoming_message_shape_append_slots")).toBe(1148);
 		expect(field(line, "incoming_message_shape_append_fallbacks")).toBe(1);

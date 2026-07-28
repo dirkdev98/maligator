@@ -25,14 +25,6 @@
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 #define STREAM_METHOD (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE)
 
-enum {
-    STREAM_LEGACY,
-    STREAM_READABLE,
-    STREAM_WRITABLE,
-    STREAM_DUPLEX,
-    STREAM_TRANSFORM,
-};
-
 static MalKey stream_key(MalVm *vm, const char *name) {
     return mal_intrinsic_string_key(vm, (const byte *) name);
 }
