@@ -669,7 +669,7 @@ test("register allocation keeps distinct call operands live through the instruct
 	expect(new Set(call.registers.slice(1)).size).toBe(3);
 });
 
-test("register allocation does not reuse registers in a non-SSA function", () => {
+test("register allocation safely reuses registers in a non-SSA function", () => {
 	const fn = {
 		parameterCount: 0,
 		nextRegisterDestination: 5,
@@ -687,7 +687,7 @@ test("register allocation does not reuse registers in a non-SSA function", () =>
 	} as unknown as IRFunction;
 	allocateRegisters({ functions: [fn] } as unknown as IntermediateProgram);
 
-	expect(fn.nextRegisterDestination).toBe(5);
+	expect(fn.nextRegisterDestination).toBe(4);
 });
 
 test("register allocation does not reuse a loop temporary for a loop-carried value", () => {

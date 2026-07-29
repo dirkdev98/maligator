@@ -21,8 +21,8 @@
  * would drop a live root, so we never risk it.
  */
 
+import { definedRegisters, usedRegisters } from "./ir-register-index.ts";
 import type { IRFunction, IRInstruction, IntermediateProgram } from "./ir.ts";
-import { definedRegister } from "./register-alloc.ts";
 import { log } from "./utils.ts";
 
 /**
@@ -76,35 +76,6 @@ const GC_FREE_INSTRUCTION_TYPES = new Set<IRInstruction["type"]>([
 /** Whether GC can run at this instruction (so live values must be rooted). */
 export function isSafepoint(instruction: IRInstruction): boolean {
 	return !GC_FREE_INSTRUCTION_TYPES.has(instruction.type);
-}
-
-/**
- * Registers an instruction reads. `definedRegister` identifies the single
- * written register (`registers[0]`, except for the source-only ops); every other
- * non-negative register entry is a use. A register that is both written and read
- * (e.g. an aliased `r = r + x` after allocation) appears as a use via its
- * non-zero-index occurrence, which is correct for liveness.
- */
-function usedRegisters(instruction: IRInstruction): Array<number> {
-	if (!("registers" in instruction)) {
-		return [];
-	}
-	const registers = instruction.registers as ReadonlyArray<number>;
-	const def = definedRegister(instruction);
-	const uses: Array<number> = [];
-	for (let i = 0; i < registers.length; ++i) {
-		const register = registers[i];
-		if (register === undefined || register < 0) {
-			continue;
-		}
-		// registers[0] is the definition, not a use, unless this is a source-only
-		// op (def === null), where registers[0] IS a use.
-		if (i === 0 && def !== null) {
-			continue;
-		}
-		uses.push(register);
-	}
-	return uses;
 }
 
 /** Block-index targets of a control-flow branch (jump / jumpIf). */
@@ -218,23 +189,17 @@ export function findBackEdges(fn: IRFunction): {
 }
 
 /**
- * Normal control-flow successors of every block. Exceptional edges are applied
- * at their exact instruction positions by `transferBlock`, rather than at block
- * granularity, so markers in the middle of a block retain precise boundaries.
+ * Fallthrough successors of every block. Branch and exceptional edges are
+ * applied at their exact instruction positions by `transferBlock`; placing a
+ * mid-block jumpIf target in block live-out would let later definitions
+ * incorrectly kill values needed only on the taken edge.
  */
-function computeNormalSuccessors(fn: IRFunction): Array<Array<number>> {
+function computeFallthroughSuccessors(fn: IRFunction): Array<Array<number>> {
 	const blockCount = fn.blocks.length;
 	const isValid = (index: number) => index >= 0 && index < blockCount;
 
 	return fn.blocks.map((block, index) => {
 		const successors = new Set<number>();
-		for (const instruction of block.instructions) {
-			for (const target of jumpTargets(instruction)) {
-				if (isValid(target)) {
-					successors.add(target);
-				}
-			}
-		}
 		const last = block.instructions[block.instructions.length - 1];
 		const leavesUnconditionally =
 			last !== undefined &&
@@ -244,6 +209,26 @@ function computeNormalSuccessors(fn: IRFunction): Array<Array<number>> {
 		}
 		return [...successors];
 	});
+}
+
+/** Apply exact branch targets and terminating control flow at an instruction. */
+export function applyInstructionSuccessorLiveness(
+	instruction: IRInstruction,
+	live: Set<number>,
+	liveInByBlock: ReadonlyArray<Set<number>>,
+): void {
+	if (
+		instruction.type === "jump" ||
+		instruction.type === "return" ||
+		instruction.type === "throw"
+	) {
+		live.clear();
+	}
+	for (const target of jumpTargets(instruction)) {
+		const targetLiveIn = liveInByBlock[target];
+		if (targetLiveIn === undefined) continue;
+		for (const register of targetLiveIn) live.add(register);
+	}
 }
 
 /** Instructions that can transfer to an active exception handler. */
@@ -322,10 +307,8 @@ function transferBlock(
 	const instructions = fn.blocks[blockIndex]!.instructions;
 	for (let i = instructions.length - 1; i >= 0; --i) {
 		const instruction = instructions[i]!;
-		const def = definedRegister(instruction);
-		if (def !== null) {
-			live.delete(def);
-		}
+		applyInstructionSuccessorLiveness(instruction, live, liveInByBlock);
+		for (const definition of definedRegisters(instruction)) live.delete(definition);
 		const handler = handlerByInstruction[blockIndex]![i];
 		if (handler !== null && handler !== undefined) {
 			for (const register of liveInByBlock[handler]!) {
@@ -424,15 +407,21 @@ function isBackEdgeBranch(instruction: IRInstruction, blockIndex: number): boole
 	return false;
 }
 
-interface SolvedLiveness {
+export interface RegisterLiveness {
 	liveInByBlock: Array<Set<number>>;
 	liveOutByBlock: Array<Set<number>>;
+	/** Innermost exceptional successor at each instruction, when it can throw. */
 	handlerByInstruction: Array<Array<number | null>>;
+	usedFallback: boolean;
+	complexityEstimate: number | null;
+	registerCount: number;
 }
 
-function solveLiveness(fn: IRFunction): SolvedLiveness {
+function solveLiveness(
+	fn: IRFunction,
+): Omit<RegisterLiveness, "usedFallback" | "complexityEstimate" | "registerCount"> {
 	const blockCount = fn.blocks.length;
-	const successors = computeNormalSuccessors(fn);
+	const successors = computeFallthroughSuccessors(fn);
 	const { handlerByInstruction, handlerDependencies } = deriveExceptionalControlFlow(fn);
 	const liveInByBlock: Array<Set<number>> = fn.blocks.map(() => new Set<number>());
 	const liveOutByBlock: Array<Set<number>> = fn.blocks.map(() => new Set<number>());
@@ -441,6 +430,11 @@ function solveLiveness(fn: IRFunction): SolvedLiveness {
 	for (let index = 0; index < blockCount; ++index) {
 		for (const successor of successors[index]!) {
 			predecessors[successor]!.add(index);
+		}
+		for (const instruction of fn.blocks[index]!.instructions) {
+			for (const target of jumpTargets(instruction)) {
+				if (target >= 0 && target < blockCount) predecessors[target]!.add(index);
+			}
 		}
 		for (const handler of handlerDependencies[index]!) {
 			predecessors[handler]!.add(index);
@@ -474,8 +468,47 @@ function solveLiveness(fn: IRFunction): SolvedLiveness {
 			}
 		}
 	}
+	// Expose conventional liveness after each block's final instruction. The
+	// solver itself must seed transfer with fallthrough only so mid-block branch
+	// targets remain attached to their exact instruction.
+	for (let index = 0; index < blockCount; index++) {
+		const last = fn.blocks[index]!.instructions.at(-1);
+		if (last !== undefined) {
+			applyInstructionSuccessorLiveness(last, liveOutByBlock[index]!, liveInByBlock);
+		}
+	}
 
 	return { liveInByBlock, liveOutByBlock, handlerByInstruction };
+}
+
+/**
+ * Shared CFG solution for consumers that need block liveness and exact
+ * instruction-positioned exception edges. A fallback result deliberately has
+ * empty sets: consumers must use their own conservative dense/all-register path.
+ */
+export function computeRegisterLiveness(
+	fn: IRFunction,
+	options: LivenessOptions = {},
+): RegisterLiveness {
+	const stats = analysisStats(fn);
+	const complexityEstimate = complexityEstimateFor(fn, stats);
+	if (fallbackRequired(complexityEstimate, options)) {
+		return {
+			liveInByBlock: fn.blocks.map(() => new Set<number>()),
+			liveOutByBlock: fn.blocks.map(() => new Set<number>()),
+			handlerByInstruction: fn.blocks.map((block) => block.instructions.map(() => null)),
+			usedFallback: true,
+			complexityEstimate,
+			registerCount: stats.registerCount,
+		};
+	}
+
+	return {
+		...solveLiveness(fn),
+		usedFallback: false,
+		complexityEstimate,
+		registerCount: stats.registerCount,
+	};
 }
 
 function allRegisters(registerCount: number): Set<number> {
@@ -505,7 +538,7 @@ interface CollectedSafepoints {
 
 function collectSafepoints(
 	fn: IRFunction,
-	solved: SolvedLiveness,
+	solved: RegisterLiveness,
 	detailed: boolean,
 ): CollectedSafepoints {
 	// Re-walk each block backward, seeded by its live-out, to record every
@@ -518,6 +551,7 @@ function collectSafepoints(
 		const instructions = fn.blocks[index]!.instructions;
 		for (let i = instructions.length - 1; i >= 0; --i) {
 			const instruction = instructions[i]!;
+			applyInstructionSuccessorLiveness(instruction, live, solved.liveInByBlock);
 			// `live` here is the set live immediately AFTER this instruction.
 			const allocOrCall = isSafepoint(instruction);
 			const loopPoll = isBackEdgeBranch(instruction, index);
@@ -566,10 +600,7 @@ function collectSafepoints(
 					});
 				}
 			}
-			const def = definedRegister(instruction);
-			if (def !== null) {
-				live.delete(def);
-			}
+			for (const definition of definedRegisters(instruction)) live.delete(definition);
 			const handler = solved.handlerByInstruction[index]![i];
 			if (handler !== null && handler !== undefined) {
 				for (const register of solved.liveInByBlock[handler]!) {
@@ -599,21 +630,19 @@ export function computeSafepointRoots(
 	fn: IRFunction,
 	options: LivenessOptions = {},
 ): SafepointRoots {
-	const stats = analysisStats(fn);
-	const complexityEstimate = complexityEstimateFor(fn, stats);
-	if (fallbackRequired(complexityEstimate, options)) {
+	const solved = computeRegisterLiveness(fn, options);
+	if (solved.usedFallback) {
 		return {
-			registers: allRegisters(stats.registerCount),
+			registers: allRegisters(solved.registerCount),
 			usedFallback: true,
-			complexityEstimate,
+			complexityEstimate: solved.complexityEstimate,
 		};
 	}
 
-	const solved = solveLiveness(fn);
 	return {
 		registers: collectSafepoints(fn, solved, false).liveOrUsedAtSafepoint,
 		usedFallback: false,
-		complexityEstimate,
+		complexityEstimate: solved.complexityEstimate,
 	};
 }
 
@@ -622,10 +651,9 @@ export function computeFunctionLiveness(
 	fn: IRFunction,
 	options: LivenessOptions = {},
 ): FunctionLiveness {
-	const stats = analysisStats(fn);
-	const complexityEstimate = complexityEstimateFor(fn, stats);
-	if (fallbackRequired(complexityEstimate, options)) {
-		const registers = allRegisters(stats.registerCount);
+	const solved = computeRegisterLiveness(fn, options);
+	if (solved.usedFallback) {
+		const registers = allRegisters(solved.registerCount);
 		const { backEdges, headerBlocks } = findBackEdges(fn);
 		return {
 			liveInByBlock: fn.blocks.map(() => new Set<number>()),
@@ -636,11 +664,10 @@ export function computeFunctionLiveness(
 			backEdges,
 			headerBlocks,
 			usedFallback: true,
-			complexityEstimate,
+			complexityEstimate: solved.complexityEstimate,
 		};
 	}
 
-	const solved = solveLiveness(fn);
 	const { liveAcrossSafepoint, liveOrUsedAtSafepoint, safepoints } = collectSafepoints(
 		fn,
 		solved,
@@ -657,7 +684,7 @@ export function computeFunctionLiveness(
 		backEdges,
 		headerBlocks,
 		usedFallback: false,
-		complexityEstimate,
+		complexityEstimate: solved.complexityEstimate,
 	};
 }
 

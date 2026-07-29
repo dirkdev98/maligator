@@ -26,6 +26,7 @@ const NO_DESTINATION = new Set<IRInstruction["type"]>([
 	"withExit",
 	"checkSuperClass",
 	"requireCoercible",
+	"setThis",
 	"throwIfTdz",
 ]);
 
@@ -44,6 +45,35 @@ export function destinationCount(instruction: IRInstruction): number {
 		return 0;
 	}
 	return TWO_DESTINATIONS.has(instruction.type) ? 2 : 1;
+}
+
+/** Every non-sentinel register written by an instruction. */
+export function definedRegisters(instruction: IRInstruction): Array<number> {
+	if (!("registers" in instruction)) return [];
+	const definitions: Array<number> = [];
+	const count = Math.min(destinationCount(instruction), instruction.registers.length);
+	for (let position = 0; position < count; position++) {
+		const register = instruction.registers[position];
+		if (register !== undefined && register >= 0) definitions.push(register);
+	}
+	return definitions;
+}
+
+/** The first non-sentinel destination, retained for single-result consumers. */
+export function definedRegister(instruction: IRInstruction): number | null {
+	return definedRegisters(instruction)[0] ?? null;
+}
+
+/** Every non-sentinel source register read by an instruction. */
+export function usedRegisters(instruction: IRInstruction): Array<number> {
+	if (!("registers" in instruction)) return [];
+	const uses: Array<number> = [];
+	const destinations = destinationCount(instruction);
+	for (let position = destinations; position < instruction.registers.length; position++) {
+		const register = instruction.registers[position];
+		if (register !== undefined && register >= 0) uses.push(register);
+	}
+	return uses;
 }
 
 export interface IRInstructionLocation {

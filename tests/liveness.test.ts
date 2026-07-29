@@ -4,6 +4,7 @@ import type { IRFunction } from "../src/ir.ts";
 import {
 	computeFunctionLiveness,
 	computeProgramLiveness,
+	computeRegisterLiveness,
 	computeSafepointRoots,
 	estimateLivenessComplexity,
 	findBackEdges,
@@ -160,6 +161,32 @@ test("a register carried across an allocation-free loop is live at the back-edge
 	const loopPolls = liveness.safepoints.filter((sp) => sp.kind === "loop-poll");
 	expect(loopPolls.length).toBe(1);
 	expect(loopPolls[0]!.live.has(5)).toBe(true);
+});
+
+test("mid-block branch live-ins are applied at the branch, not block exit", () => {
+	const fn = fakeFn([
+		[
+			{ type: "jumpIf", registers: [0], blocks: [1] },
+			{ type: "createUndefined", registers: [2] },
+			{ type: "return", registers: [2] },
+		],
+		[{ type: "return", registers: [2] }],
+	]);
+
+	const liveness = computeRegisterLiveness(fn);
+	expect([...liveness.liveInByBlock[0]!].sort((a, b) => a - b)).toEqual([0, 2]);
+});
+
+test("dual destinations are killed while all following operands remain live", () => {
+	const fn = fakeFn([
+		[
+			{ type: "iteratorStep", registers: [2, 3, 0, 1] },
+			{ type: "return", registers: [2] },
+		],
+	]);
+
+	const liveness = computeRegisterLiveness(fn);
+	expect([...liveness.liveInByBlock[0]!].sort((a, b) => a - b)).toEqual([0, 1]);
 });
 
 test("exception edges keep a try-body value live for the handler (soundness)", () => {

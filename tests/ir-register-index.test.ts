@@ -51,6 +51,8 @@ test("excludes multiply-defined registers and snapshots require an explicit rebu
 
 test("classifies withExit as having no destination", () => {
 	const withExit: IRInstruction = { type: "withExit", registers: [] };
+	const setThis: IRInstruction = { type: "setThis", registers: [1] };
 
 	expect(destinationCount(withExit)).toBe(0);
+	expect(destinationCount(setThis)).toBe(0);
 });

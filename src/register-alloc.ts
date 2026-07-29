@@ -1,6 +1,14 @@
+import { definedRegisters, usedRegisters } from "./ir-register-index.ts";
 import { debugIntermediateProgram } from "./ir.ts";
 import type { IntermediateProgram, IRBlock, IRFunction, IRInstruction } from "./ir.ts";
+import {
+	applyInstructionSuccessorLiveness,
+	computeRegisterLiveness,
+	findBackEdges,
+} from "./liveness.ts";
 import { debugEnabled } from "./utils.ts";
+
+export { definedRegister } from "./ir-register-index.ts";
 
 /**
  * Optimize from virtual registers to VM registers.
@@ -109,47 +117,6 @@ function reversePostorderBlocks(fn: IRFunction): Array<IRBlock> {
 }
 
 /**
- * IR instructions whose registers[0] is a *source*, not a freshly written
- * destination. Everything else that writes registers[0] is treated as a
- * definition; conservatively over-treating a source as a definition only costs
- * an unboxing, but missing a real definition would be unsound, so this list is
- * kept to clearly source-only ops.
- */
-const USE_ONLY_FIRST_REGISTER = new Set([
-	"return",
-	"throw",
-	"jump",
-	"jumpIf",
-	"storeLocal",
-	"storeGlobal",
-	"storeCaptured",
-	"storeProperty",
-	"storePropertyStatic",
-	"storeSuperProperty",
-	"storeGlobalProperty",
-	"mergeDataProperties",
-	"defineAccessor",
-	"defineProperty",
-	"definePrivate",
-	"initPrivateFields",
-	"storePrivate",
-	"setPrototype",
-	"setFunctionName",
-	"iteratorClose",
-	"withEnter",
-	"checkSuperClass",
-	"requireCoercible",
-	"setThis",
-	// A temporal-dead-zone guard: throws if its operand is the TDZ sentinel and
-	// otherwise passes the value through unchanged (lowers to THROW_IF_TDZ { src },
-	// no destination — like requireCoercible). Modelling it as a definition would
-	// inflate the operand's def count and defeat every single-assignment analysis
-	// (inliner callee resolution, escape, scalar replacement) for the `let`/`const`
-	// bindings that emit a `throwIfTdz` on every read.
-	"throwIfTdz",
-]);
-
-/**
  * The rep an IR instruction's result naturally has given current operand reps, or
  * null when an operand is still unknown (defer to a later fixpoint iteration).
  * Mirrors emit-c's `producedRep`: comparisons and `!` yield a boolean; native
@@ -215,22 +182,13 @@ function joinReps(current: RegisterRep | null, produced: RegisterRep): RegisterR
 	return current === produced ? current : "boxed";
 }
 
-/** The virtual register an instruction defines (writes), or null. */
-export function definedRegister(instruction: IRInstruction): number | null {
-	if (!("registers" in instruction) || USE_ONLY_FIRST_REGISTER.has(instruction.type)) {
-		return null;
-	}
-	const dst = instruction.registers[0];
-	return dst !== undefined && dst >= 0 ? dst : null;
-}
-
 /**
  * Forward fixpoint over virtual registers (top = unknown, then {number, boolean},
  * bottom = boxed): a register's rep is the join of the reps its definitions
  * produce. `producedRep` depends on operand reps, so iterate to a fixpoint; reps
  * only move down the lattice, so it converges. Parameters hold boxed incoming
  * arguments, so they start (and stay) `boxed`; a register never resolved (only
- * ever a non-first / iterator output, or unwritten) defaults to `boxed`.
+ * ever unwritten) defaults to `boxed`.
  */
 export function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
 	const reps = new Map<number, RegisterRep | null>();
@@ -254,19 +212,18 @@ export function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
 		changed = false;
 		for (const block of fn.blocks) {
 			for (const instruction of block.instructions) {
-				const dst = definedRegister(instruction);
-				if (dst === null || dst < fn.parameterCount) {
-					continue;
-				}
 				const produced = producedRep(instruction, repOf);
 				// An operand still unknown: leave for a later iteration.
 				if (produced === null) {
 					continue;
 				}
-				const joined = joinReps(reps.get(dst) ?? null, produced);
-				if (joined !== reps.get(dst)) {
-					reps.set(dst, joined);
-					changed = true;
+				for (const dst of definedRegisters(instruction)) {
+					if (dst < fn.parameterCount) continue;
+					const joined = joinReps(reps.get(dst) ?? null, produced);
+					if (joined !== reps.get(dst)) {
+						reps.set(dst, joined);
+						changed = true;
+					}
 				}
 			}
 		}
@@ -279,6 +236,224 @@ export function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
 	return resolved;
 }
 
+const INTERFERENCE_COMPLEXITY_LIMIT = 1_000_000;
+
+function allVirtualRegisters(fn: IRFunction): Array<number> {
+	const registers = new Set<number>();
+	for (let register = 0; register < fn.parameterCount; register++)
+		registers.add(register);
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!("registers" in instruction)) continue;
+			for (const register of instruction.registers) {
+				if (register >= 0) registers.add(register);
+			}
+		}
+	}
+	return [...registers].sort((a, b) => a - b);
+}
+
+/** Entry snapshots must remain a dense physical range immediately after parameters. */
+function argumentSnapshotPrecolors(fn: IRFunction): Map<number, number> {
+	const precolors = new Map<number, number>();
+	let snapshotIndex = 0;
+	let scanningSnapshots = true;
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (
+				instruction.type !== "loadArgumentCount" &&
+				instruction.type !== "loadArgument"
+			) {
+				scanningSnapshots = false;
+				break;
+			}
+			const register = instruction.registers[0];
+			const color = fn.parameterCount + snapshotIndex++;
+			const existing = precolors.get(register);
+			if (existing !== undefined && existing !== color) {
+				throw new Error("Argument snapshot register has conflicting destinations");
+			}
+			precolors.set(register, color);
+		}
+		if (!scanningSnapshots) break;
+	}
+	return precolors;
+}
+
+function basePrecolors(fn: IRFunction): Map<number, number> {
+	const precolors = argumentSnapshotPrecolors(fn);
+	for (let register = 0; register < fn.parameterCount; register++) {
+		const existing = precolors.get(register);
+		if (existing !== undefined && existing !== register) {
+			throw new Error("Argument snapshot destination aliases a parameter register");
+		}
+		precolors.set(register, register);
+	}
+	return precolors;
+}
+
+function rewriteRegisters(fn: IRFunction, colors: ReadonlyMap<number, number>): void {
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!("registers" in instruction)) continue;
+			for (let position = 0; position < instruction.registers.length; position++) {
+				const register = instruction.registers[position]!;
+				if (register < 0) continue;
+				const color = colors.get(register);
+				if (color === undefined)
+					throw new Error(`Unallocated virtual register ${register}`);
+				instruction.registers[position] = color;
+			}
+		}
+	}
+}
+
+function registerCountForColors(colors: Iterable<number>): number {
+	let highest = -1;
+	for (const color of colors) highest = Math.max(highest, color);
+	return highest + 1;
+}
+
+/** No-coalescing fallback that still compacts sparse virtual numbering safely. */
+function allocateDense(fn: IRFunction, registers: ReadonlyArray<number>): void {
+	const colors = basePrecolors(fn);
+	const occupied = new Set(colors.values());
+	let nextColor = 0;
+	for (const register of registers) {
+		if (colors.has(register)) continue;
+		while (occupied.has(nextColor)) nextColor++;
+		colors.set(register, nextColor);
+		occupied.add(nextColor);
+	}
+	rewriteRegisters(fn, colors);
+	fn.nextRegisterDestination = registerCountForColors(occupied);
+}
+
+function interferenceComplexityIsHigh(fn: IRFunction, registerCount: number): boolean {
+	let estimate = 0;
+	for (const block of fn.blocks) {
+		for (const instruction of block.instructions) {
+			if (!("registers" in instruction)) continue;
+			const operands = new Set(instruction.registers.filter((register) => register >= 0));
+			const definitions = definedRegisters(instruction).length;
+			estimate += (operands.size * (operands.size - 1)) / 2;
+			estimate += definitions * registerCount;
+			if (!Number.isSafeInteger(estimate) || estimate > INTERFERENCE_COMPLEXITY_LIMIT) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+function allocateWithInterference(fn: IRFunction): void {
+	const registers = allVirtualRegisters(fn);
+	if (interferenceComplexityIsHigh(fn, registers.length)) {
+		allocateDense(fn, registers);
+		return;
+	}
+
+	const liveness = computeRegisterLiveness(fn);
+	if (liveness.usedFallback) {
+		allocateDense(fn, registers);
+		return;
+	}
+
+	const virtualReps = inferVirtualReps(fn);
+	const repOf = (register: number): RegisterRep => virtualReps.get(register) ?? "boxed";
+	const graph = new Map<number, Set<number>>(
+		registers.map((register) => [register, new Set<number>()]),
+	);
+	const addEdge = (left: number, right: number): void => {
+		if (left === right || repOf(left) !== repOf(right)) return;
+		graph.get(left)!.add(right);
+		graph.get(right)!.add(left);
+	};
+	const addClique = (values: Iterable<number>): void => {
+		const distinct = [...new Set(values)];
+		for (let left = 0; left < distinct.length; left++) {
+			for (let right = left + 1; right < distinct.length; right++) {
+				addEdge(distinct[left]!, distinct[right]!);
+			}
+		}
+	};
+
+	for (let blockIndex = 0; blockIndex < fn.blocks.length; blockIndex++) {
+		const live = new Set(liveness.liveOutByBlock[blockIndex]);
+		const instructions = fn.blocks[blockIndex]!.instructions;
+		for (
+			let instructionIndex = instructions.length - 1;
+			instructionIndex >= 0;
+			--instructionIndex
+		) {
+			const instruction = instructions[instructionIndex]!;
+			applyInstructionSuccessorLiveness(instruction, live, liveness.liveInByBlock);
+			const definitions = definedRegisters(instruction);
+			const uses = usedRegisters(instruction);
+			const handler = liveness.handlerByInstruction[blockIndex]![instructionIndex];
+			const liveAcross = new Set(live);
+			if (handler !== null && handler !== undefined) {
+				for (const register of liveness.liveInByBlock[handler]!) liveAcross.add(register);
+			}
+
+			// VM instructions may not support destructive source/destination aliases.
+			// Distinct sources and simultaneous destinations must also remain distinct.
+			addClique([...definitions, ...uses]);
+			for (const definition of definitions) {
+				for (const register of liveAcross) addEdge(definition, register);
+			}
+
+			for (const definition of definitions) live.delete(definition);
+			if (handler !== null && handler !== undefined) {
+				for (const register of liveness.liveInByBlock[handler]!) live.add(register);
+			}
+			for (const use of uses) live.add(use);
+		}
+	}
+
+	const colors = basePrecolors(fn);
+	const colorReps = new Map<number, RegisterRep>();
+	for (const [register, color] of colors) {
+		const rep = repOf(register);
+		const existing = colorReps.get(color);
+		if (existing !== undefined && existing !== rep) {
+			throw new Error(`Precolored register ${color} has incompatible representations`);
+		}
+		colorReps.set(color, rep);
+	}
+	const reservedColors = new Set<number>();
+	for (let color = 0; color < fn.parameterCount; color++) reservedColors.add(color);
+
+	const ordered = registers
+		.filter((register) => !colors.has(register))
+		.sort((left, right) => {
+			const degree = graph.get(right)!.size - graph.get(left)!.size;
+			return degree !== 0 ? degree : left - right;
+		});
+	for (const register of ordered) {
+		const rep = repOf(register);
+		const forbidden = new Set<number>();
+		for (const neighbor of graph.get(register)!) {
+			const color = colors.get(neighbor);
+			if (color !== undefined) forbidden.add(color);
+		}
+
+		let color = 0;
+		while (
+			reservedColors.has(color) ||
+			forbidden.has(color) ||
+			(colorReps.has(color) && colorReps.get(color) !== rep)
+		) {
+			color++;
+		}
+		colors.set(register, color);
+		colorReps.set(color, rep);
+	}
+
+	rewriteRegisters(fn, colors);
+	fn.nextRegisterDestination = registerCountForColors(colorReps.keys());
+}
+
 /**
  * Allocate registers for a function. Rep-aware: a freed physical register is
  * only reused for a virtual register of the same representation, so each
@@ -287,8 +462,8 @@ export function inferVirtualReps(fn: IRFunction): Map<number, RegisterRep> {
  * boolean/object/argument poison a register it shares.
  */
 function allocateRegistersForFunction(fn: IRFunction) {
-	// Iterate in reverse postorder so a register's definition is seen before its
-	// uses (see reversePostorderBlocks); the last-use/free model below depends on it.
+	// The single-definition path below depends on definitions preceding uses. The
+	// interference path uses CFG liveness and does not depend on this order.
 	const orderedBlocks = reversePostorderBlocks(fn);
 
 	// Use referential equality to track last use of virtual registers
@@ -298,8 +473,7 @@ function allocateRegistersForFunction(fn: IRFunction) {
 
 	for (const block of orderedBlocks) {
 		for (const instruction of block.instructions) {
-			const defined = definedRegister(instruction);
-			if (defined !== null) {
+			for (const defined of definedRegisters(instruction)) {
 				registerDefinitionCounts.set(
 					defined,
 					(registerDefinitionCounts.get(defined) ?? 0) + 1,
@@ -320,6 +494,15 @@ function allocateRegistersForFunction(fn: IRFunction) {
 		}
 	}
 
+	const hasMultipleDefinitions = [...registerDefinitionCounts.values()].some(
+		(count) => count > 1,
+	);
+	const hasBackEdge = findBackEdges(fn).backEdges.length > 0;
+	if (hasMultipleDefinitions || hasBackEdge) {
+		allocateWithInterference(fn);
+		return;
+	}
+
 	const virtualReps = inferVirtualReps(fn);
 	const repOf = (register: number): RegisterRep => virtualReps.get(register) ?? "boxed";
 
@@ -330,26 +513,8 @@ function allocateRegistersForFunction(fn: IRFunction) {
 		boolean: [],
 	};
 	let highestUsedRegister = -1;
-	// Last-static-use reuse is only sound for SSA-like functions. Locals become
-	// multi-defined registers (declaration initialization plus later assignments),
-	// whose disjoint CFG live ranges require interference analysis we do not yet do.
-	const hasMultipleDefinitions = [...registerDefinitionCounts.values()].some(
-		(count) => count > 1,
-	);
-	const hasBackEdge = fn.blocks.some((block, from) =>
-		block.instructions.some(
-			(instruction) =>
-				(instruction.type === "jump" || instruction.type === "jumpIf") &&
-				instruction.blocks.some((to) => to >= 0 && to <= from),
-		),
-	);
 
-	// A loop executes the same static definitions repeatedly, so a temporary that
-	// appears dead can overwrite a loop-carried value assigned its physical register.
-	// Keep cyclic functions uncoalesced until allocation uses CFG interference.
 	const isFreeable = (virtualRegister: number, instruction: IRInstruction) =>
-		!hasMultipleDefinitions &&
-		!hasBackEdge &&
 		virtualRegister >= fn.parameterCount &&
 		instruction === registerLastUsedIn.get(virtualRegister) &&
 		(registerUsedInMultipleBlocks.get(virtualRegister)?.size ?? 0) <= 1;
