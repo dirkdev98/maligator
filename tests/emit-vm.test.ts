@@ -309,6 +309,45 @@ describe("native update-expression representation", () => {
 		expect(dynamicOutput).toMatch(/&& .* == __rg\d+_key\[/);
 	});
 
+	it("revalidates consolidated regions only after observable gaps", () => {
+		const pureOutput = emit(
+			`"use strict"; function read(object) { return object.a + object.b; } globalThis.read = read;`,
+		);
+		expect(pureOutput).toContain("mal_perf_ic_load_region_hit");
+		expect(pureOutput).not.toMatch(/__rg\d+_ok = __rg\d+_slp != nullptr &&/);
+
+		const effectfulOutput = emit(
+			`"use strict"; function read(object, callback) { const first = object.a; callback(); return first + object.b; } globalThis.read = read;`,
+		);
+		expect(effectfulOutput).toMatch(/__rg\d+_ok = __rg\d+_slp != nullptr &&/);
+	});
+
+	it("checks completion only inside speculative numeric slow paths", () => {
+		const output = emit(
+			`"use strict"; function calculate(value) { return value + 1 < 10; } globalThis.calculate = calculate;`,
+		);
+		expect(output).toMatch(
+			/if \(mal_ops_is_number\([^\n]+\) \{[\s\S]*?\} else \{[\s\S]*?mal_vm_binary_op[\s\S]*?completion\.kind/,
+		);
+		expect(output).not.toMatch(
+			/\?[^\n]*mal_vm_binary_op[^\n]*;\n\s+if \(vm->completion\.kind/,
+		);
+	});
+
+	it("returns directly from non-constructible functions", () => {
+		const output = emit(
+			`"use strict"; const explicit = (value) => value + 1; const fallthrough = () => {}; globalThis.keep = [explicit, fallthrough];`,
+		);
+		const explicit = output.slice(
+			output.indexOf("static MalValue mal_compiled_1("),
+			output.indexOf("static MalValue mal_compiled_2("),
+		);
+		expect(explicit).toMatch(/return r\d+;/);
+		expect(explicit).not.toContain("mal_ops_construct_result");
+		const fallthrough = output.slice(output.indexOf("static MalValue mal_compiled_2("));
+		expect(fallthrough).toContain("return MAL_VALUE_UNDEFINED;");
+	});
+
 	it("guards direct unary and binary Math calls by exact callbacks", () => {
 		const output = emit(
 			`"use strict"; function calculate(a, b) { return Math.round(a) + Math.max(a, b); } globalThis.calculate = calculate;`,

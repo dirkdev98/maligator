@@ -767,7 +767,9 @@ export function emitCompiledFunction(
 	lines.push(
 		thisSlot >= 0
 			? `    ${gcUnlink}return mal_vm_op_derived_construct_return(vm, MAL_VALUE_UNDEFINED, __gc_slots[${thisSlot}]);`
-			: `    ${gcUnlink}return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`,
+			: !fn.hasPrototype
+				? `    ${gcUnlink}return MAL_VALUE_UNDEFINED;`
+				: `    ${gcUnlink}return mal_ops_construct_result(MAL_VALUE_UNDEFINED, this_value, new_target);`,
 	);
 	// Shared throw-exit: unlink the root frame and leave the compiled frame with the
 	// throw pending (the dispatch caller observes vm->completion). Reached only by
@@ -1173,6 +1175,7 @@ interface RegionAccess {
 	kind: "array" | "object";
 	declare: boolean;
 	consolidated: boolean;
+	revalidate: boolean;
 	slotIndex: number;
 	size: number;
 	commitIps: Array<number> | null;
@@ -1220,7 +1223,7 @@ function consolidatedRegionDeclare(reg: RegionAccess, objExpr: string): Array<st
  * operations between region members can invoke user code that reshapes or
  * dictionarizes the receiver, invalidating both the slot row and slot storage. */
 function consolidatedRegionRevalidate(reg: RegionAccess): Array<string> {
-	return reg.declare
+	return reg.declare || !reg.revalidate
 		? []
 		: [
 				`${reg.name}_ok = ${reg.name}_slp != nullptr && ${reg.name}_o->shape == ${reg.name}_sh[${reg.name}_v];`,
@@ -1441,11 +1444,19 @@ function emitBody(
 			// arrays and single object accesses keep the per-access guarded form.
 			const consolidated = run.kind === "object" && run.ips.length >= 2;
 			run.ips.forEach((ip, i) => {
+				const previousIp = run.ips[i - 1];
+				const revalidate =
+					consolidated &&
+					previousIp !== undefined &&
+					fn.instructions
+						.slice(previousIp + 1, ip)
+						.some((instruction) => nativeInstructionMayCaptureStack(instruction, reps));
 				regionGuard.set(ip, {
 					name,
 					kind: run.kind,
 					declare: i === 0,
 					consolidated,
+					revalidate,
 					slotIndex: i,
 					size: run.ips.length,
 					commitIps: consolidated && i === run.ips.length - 1 ? run.ips : null,
@@ -1497,6 +1508,7 @@ function emitBody(
 			mathBinaryCalls.has(ip),
 			fn.mappedArguments,
 			fn.mappedArgumentSlots,
+			fn.hasPrototype,
 		);
 		if (emitted === null) {
 			return null;
@@ -1540,6 +1552,7 @@ function emitInstruction(
 	mathBinaryCall: boolean,
 	mappedArguments: boolean,
 	mappedArgumentSlots: Array<number>,
+	hasPrototype: boolean,
 ): Array<string> | null {
 	// Read register r as a boxed MalValue (boxing a number-rep double or a
 	// boolean-rep bool).
@@ -1830,6 +1843,7 @@ function emitInstruction(
 						: "object",
 				declare: true,
 				consolidated: false,
+				revalidate: false,
 				slotIndex: 0,
 				size: 1,
 				commitIps: null,
@@ -1911,6 +1925,7 @@ function emitInstruction(
 						: "object",
 				declare: true,
 				consolidated: false,
+				revalidate: false,
 				slotIndex: 0,
 				size: 1,
 				commitIps: null,
@@ -2163,6 +2178,20 @@ function emitInstruction(
 				// case only for the relational operators (see RELATIONAL_COMPARE).
 				if (!bothBoxed || RELATIONAL_COMPARE.has(operator)) {
 					const fastBool = `${numericOf(left)} ${compare} ${numericOf(right)}`;
+					if (binaryOpCanThrow(operator)) {
+						return [
+							`if (${numberGuard}) {`,
+							dstIsBool
+								? `  r${dst} = ${fastBool};`
+								: `  r${dst} = mal_value_new_boolean(${fastBool});`,
+							`} else {`,
+							dstIsBool
+								? `  r${dst} = mal_value_to_boolean(${slow});`
+								: `  r${dst} = ${slow};`,
+							`  ${completionCheck}`,
+							`}`,
+						];
+					}
 					return [
 						dstIsBool
 							? `r${dst} = ${numberGuard} ? (${fastBool}) : mal_value_to_boolean(${slow});`
@@ -2204,11 +2233,17 @@ function emitInstruction(
 					if (numberGuard === "") {
 						return [`r${dst} = ${fast};`];
 					}
-					const lowered = [`r${dst} = ${numberGuard} ? ${fast} : ${slow};`];
 					if (binaryOpCanThrow(operator)) {
-						lowered.push(completionCheck);
+						return [
+							`if (${numberGuard}) {`,
+							`  r${dst} = ${fast};`,
+							`} else {`,
+							`  r${dst} = ${slow};`,
+							`  ${completionCheck}`,
+							`}`,
+						];
 					}
-					return lowered;
+					return [`r${dst} = ${numberGuard} ? ${fast} : ${slow};`];
 				}
 			}
 
@@ -2465,6 +2500,9 @@ function emitInstruction(
 					throwCheck,
 					`${gcUnlink}return ${ret};`,
 				];
+			}
+			if (!hasPrototype) {
+				return [...materialize, `${gcUnlink}return ${value};`];
 			}
 			// Route through mal_ops_construct_result so a [[Construct]] invocation
 			// (new_target set) substitutes `this` for a non-object completion; a
