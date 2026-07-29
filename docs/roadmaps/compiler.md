@@ -7,22 +7,35 @@ unfinished compiler/runtime optimization work; Test262 corpus build throughput a
 artifact size remain in the [Test262 performance roadmap](../../test262-perf-todo.md).
 
 `bench/baseline.json` is the sole committed source for performance history. Keep
-changing measurements out of this document. The initial queue below comes from a
-focused compiled benchmark investigation at `c03a40f`: module-local const helpers
-reached zero collections, while residual object allocation and fast-path overhead
-remained material in the stack-object and language lanes.
+changing measurements out of this document. The current queue reflects compiled
+investigations through `e02d78d`. Module-local const helpers eliminate their hot
+allocations; partial-return helpers now retain stack materialization when called in a
+loop; and opt-in workload counters are compiled out unless `MAL_PERF_STATS=1` was set
+at build time.
+
+The latest attribution changes the order of work. Removing a large fraction of
+managed allocation from the stack-object lane produced a smaller wall-time gain, so
+allocation is not its only limiter. The language lane overwhelmingly takes existing
+property-cache hit paths, creates its dynamic normalized records as empty objects,
+and retains bounded polymorphic method and exception-heavy call boundaries. Prioritize
+hit-path specialization and call/control-flow analysis before new allocation regions.
 
 ## Active measurement foundation
 
 - [ ] Split the language lane into loops, objects, arrays, allocation, intrinsics,
       control flow, and application phase metrics while retaining its aggregate
       checksum and wall-time regression signal.
-- [ ] Emit structured optimization remarks for allocation, call, property, and
-      boxing sites. Give each site a stable source location and identity through
-      inlining, and record the applied transform or precise rejection reason.
-- [ ] Attribute heap allocations, materializations, calls, property-cache paths,
-      boxing fallbacks, and safepoints to those site identities. Reset counters after
-      runtime initialization and collect them in separately instrumented binaries.
+- [ ] Extend the source-aware residual object and partial-escape inline reports into
+      structured optimization remarks for every allocation, call, property, and
+      boxing site. Preserve a stable identity through inlining and record each
+      applied transform or precise rejection reason.
+- [ ] Extend the workload-only aggregate allocation, call-cache, and property-cache
+      counters to stable source sites, boxing fallbacks, and safepoints. Keep all
+      runtime storage and increments behind the build-time `MAL_PERF_STATS` gate and
+      collect them only in separately instrumented binaries.
+- [ ] Report substitution-stage reasons for calls that eligibility analysis still
+      labels inlinable, including inner closures, exception regions, relocation,
+      expansion limits, and escape-cost barriers.
 - [ ] Record pass-by-pass IR deltas for allocation sites, dynamic calls, boxed
       operations, property helpers, and safepoints. Add bounded optimization
       ablations so benchmark deltas can be assigned to individual transforms.
@@ -35,20 +48,23 @@ remained material in the stack-object and language lanes.
 
 ## Active allocation elimination
 
-- [ ] Make inlining preserve or improve escape decisions. In particular, do not turn
-      `bench/stack-object.js`'s rare partial return into a heap allocation on every
-      loop iteration when the standalone callee can use stack state and materialize
-      only the escaping result.
+- [ ] Generalize the implemented hot-loop partial-return inline barrier into an
+      allocation-aware inlining cost model that compares the caller clone with the
+      standalone callee rather than relying on one partial-escape pattern.
 - [ ] Replace function-wide cycle rejection for partial escape with site-local
       lifetime and control-flow proof. Prefer path-sensitive scalar replacement and
       allocation sinking on rare escape edges over constructing a stack object when
       identity is otherwise unobserved.
-- [ ] Re-run escape and scalar analyses after inlining, or preserve equivalent facts
-      on cloned IR, and include transformed clones rather than retained unused
-      helper bodies in optimization diagnostics.
+- [ ] Preserve escape and scalar facts through every cloned IR path or re-run the
+      analyses after inlining. Extend the source-aware residual report beyond object
+      sites so retained unused helper bodies cannot obscure transformed hot clones.
 - [ ] Extend native closed fixed-shape stack objects to further proven local classes.
       Calls, stores, captures, suspension, and dynamic-shape operations remain heap
       escapes until a narrower proof handles them soundly.
+- [ ] Materialize only on a guarded fallback for local fixed-shape objects whose sole
+      blocker is an inherited watched data-property read. Measure the repeated
+      `toString` observations in the stack-object lane before accepting the added
+      guard and fallback.
 
 ## Queued shape and value analysis
 
@@ -56,6 +72,10 @@ remained material in the stack-object and language lanes.
       joins, and bounded call results. Use it to version hot loops once and replace
       repeated region guards, static-key comparisons, and cache probes with direct
       known-slot access.
+- [ ] Infer and bulk-construct the result shape of object rest/spread normalization
+      when source shapes and excluded keys are bounded. Avoid building every
+      normalized application record through the empty-object path while retaining a
+      generic fallback for dynamic sources.
 - [ ] Propagate stable field value classes through proven shapes and stores. Keep
       numeric values unboxed across property arithmetic only behind a sound guard and
       fallback/deoptimization contract.
@@ -79,7 +99,8 @@ remained material in the stack-object and language lanes.
       `sort` call boundaries.
 - [ ] Lower local throw/catch regions to ordinary control flow only when effect and
       exception analysis proves the value, handler, and completion ordering cannot
-      be observed outside the region.
+      be observed outside the region. Use the split control-flow phase to establish
+      whether this is preferable to extending exception-aware inlining first.
 
 ## Queued generated-output work
 
@@ -102,8 +123,8 @@ tradeoff.
 ## Triggered work
 
 - Measure region allocation and drop-insertion free lists only after broader stack
-  allocation lands; add neither without an attributed allocation-rate or wall-time
-  win.
+  allocation lands; the current allocation-to-wall-time result strengthens the
+  requirement for an attributed wall-time win before adding either.
 - Revisit loaded-field numeric layout changes after shared fallback/deoptimization
   machinery exists and direct-slot specialization establishes the remaining cost.
 - Revisit array-literal scalar replacement and full no-iterator `for-of` only with a

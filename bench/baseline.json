@@ -1,59 +1,6 @@
 {
   "entries": [
     {
-      "commit": "25c2fff",
-      "dirty": false,
-      "size": {
-        "full": {
-          "binaryBytes": 14849296,
-          "runtimeArchiveBytes": 106944,
-          "hostArchiveBytes": 21080,
-          "engineArchiveBytes": 2658168,
-          "rustArchiveBytes": 21746656
-        },
-        "no-eval": {
-          "binaryBytes": 13131912,
-          "runtimeArchiveBytes": 106944,
-          "hostArchiveBytes": 21080,
-          "engineArchiveBytes": 954128,
-          "rustArchiveBytes": 21746656
-        },
-        "no-intl": {
-          "binaryBytes": 4317848,
-          "runtimeArchiveBytes": 106944,
-          "hostArchiveBytes": 21080,
-          "engineArchiveBytes": 2554432,
-          "rustArchiveBytes": 8344256
-        },
-        "no-web": {
-          "binaryBytes": 14282584,
-          "runtimeArchiveBytes": 78720,
-          "hostArchiveBytes": 21080,
-          "engineArchiveBytes": 2658168,
-          "rustArchiveBytes": 21106552
-        },
-        "no-regexp": {
-          "binaryBytes": 14261776,
-          "runtimeArchiveBytes": 106944,
-          "hostArchiveBytes": 21080,
-          "engineArchiveBytes": 2618832,
-          "rustArchiveBytes": 20761016
-        },
-        "minimal": {
-          "binaryBytes": 2033480,
-          "runtimeArchiveBytes": 78720,
-          "hostArchiveBytes": 21080,
-          "engineArchiveBytes": 850392,
-          "rustArchiveBytes": 7703680
-        }
-      },
-      "language": {
-        "malMs": 305.349417,
-        "nodeMs": 104.137208,
-        "ratio": 2.9321836341147156
-      }
-    },
-    {
       "commit": "e843ed6",
       "dirty": false,
       "size": {
@@ -7262,6 +7209,72 @@
             }
           }
         }
+      }
+    },
+    {
+      "commit": "e02d78d",
+      "dirty": true,
+      "language": {
+        "malMs": 282.812541,
+        "nodeMs": 116.669916,
+        "ratio": 2.4240399813093205,
+        "collections": 3,
+        "allocatedMb": 27.65045166015625,
+        "emptyObjects": 17280,
+        "shapedObjects": 3364,
+        "stackObjects": 0,
+        "stackMaterializations": 0,
+        "callProbes": 81749,
+        "callMisses": 68,
+        "loadMonoHits": 1882301,
+        "loadRegionHits": 13537320,
+        "loadInheritedHits": 62401,
+        "loadWatchedHits": 2864109,
+        "loadFallbacks": 55600,
+        "storeMonoHits": 0,
+        "storeRegionHits": 4505539,
+        "storeFallbacks": 17285
+      },
+      "module": {
+        "malMs": 153.501042,
+        "nodeMs": 157.268667,
+        "ratio": 0.9760433844079064,
+        "collections": 0,
+        "peakLiveKb": 0
+      },
+      "stackObject": {
+        "compiled": {
+          "wallMs": 536.67975,
+          "collections": 106,
+          "allocatedMb": 437.1451873779297,
+          "peakLiveKb": 90.234375,
+          "maxPauseMs": 2.213,
+          "instructionCount": 0,
+          "bytecodeBytes": 0,
+          "binaryBytes": 14354672,
+          "objectSlotCoallocations": 3650000,
+          "objectSlotGrowMigrations": 0,
+          "objectSlotDictionaryMigrations": 59,
+          "stackObjectMaterializations": 1,
+          "checksum": 812707571
+        },
+        "interpreted": {
+          "wallMs": 1654.558333,
+          "collections": 134,
+          "allocatedMb": 551.5860595703125,
+          "peakLiveKb": 90.234375,
+          "maxPauseMs": 2.253,
+          "instructionCount": 921,
+          "bytecodeBytes": 18860,
+          "binaryBytes": 14284728,
+          "objectSlotCoallocations": 6150000,
+          "objectSlotGrowMigrations": 0,
+          "objectSlotDictionaryMigrations": 59,
+          "stackObjectMaterializations": 0,
+          "checksum": 812707571
+        },
+        "nodeMs": 91.375583,
+        "checksum": 812707571
       }
     }
   ]
