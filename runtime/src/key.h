@@ -3,6 +3,8 @@
 #include <stdlib.h>
 
 #include "defaults.h"
+#include "heap_string.h"
+#include "perf_stats.h"
 #include "value.h"
 
 /** Equality domain for a stored key. */
@@ -95,4 +97,16 @@ static inline u32 mal_key_index_value(MalKey key) {
 }
 
 /** String keys compare by code units; all other key values compare by bits. */
-bool mal_key_value_equals(MalValue left, MalValue right);
+static inline bool mal_key_value_equals(MalValue left, MalValue right) {
+    MAL_PERF_COUNT(key_equals_calls);
+    if (left == right) {
+        MAL_PERF_COUNT(key_pointer_hits);
+        return true;
+    }
+    if (mal_value_is_string(left) && mal_value_is_string(right)) {
+        MAL_PERF_COUNT(key_string_fallbacks);
+        return mal_string_equals(mal_value_to_string(left), mal_value_to_string(right));
+    }
+    MAL_PERF_COUNT(key_non_string_misses);
+    return false;
+}
